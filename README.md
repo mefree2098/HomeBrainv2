@@ -13,7 +13,7 @@ HomeBrain is a local-first home automation and voice-assistant platform. It comb
 - Wake-word training and distribution using OpenWakeWord plus Piper-generated training data
 - Optional local speech-to-text with Whisper
 - Optional local LLM support with Ollama
-- An optional iOS app in [`HomeBrainApp`](HomeBrainApp)
+- An optional iOS app in [`HomeBrainApp`](HomeBrainApp) with workflow runtime controls, richer workflow editing, settings, and platform administration surfaces
 
 ## Supported Hardware
 
@@ -70,6 +70,7 @@ Important:
 - The installer uses committed npm lockfiles for deterministic clean deployments
 - Browser sessions use `HttpOnly` cookies; tokens are not stored in browser `localStorage`
 - The native iOS app remains a bearer-token client with a 365-day refresh-session lifetime
+- Stateful workflow countdowns auto-cancel when their device or sensor trigger stops matching before the workflow finishes
 
 ## Documentation
 

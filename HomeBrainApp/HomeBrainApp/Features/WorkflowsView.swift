@@ -112,6 +112,17 @@ private enum WorkflowStudioTab: String, CaseIterable, Identifiable {
     }
 }
 
+private enum WorkflowEditorError: LocalizedError {
+    case invalidJSON(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidJSON(let label):
+            return "\(label) must be valid JSON."
+        }
+    }
+}
+
 struct WorkflowsView: View {
     @EnvironmentObject private var session: SessionStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -159,12 +170,29 @@ struct WorkflowsView: View {
     @State private var actionValue = ""
     @State private var createCategory = "custom"
     @State private var createPriority = 5
+    @State private var createCooldown = 0
+    @State private var triggerDeviceId = ""
+    @State private var triggerProperty = "status"
+    @State private var triggerOperator = "eq"
+    @State private var triggerValue = "true"
+    @State private var triggerHoldSeconds = 0
+    @State private var triggerTime = "07:00"
+    @State private var triggerScheduleCron = "0 7 * * 1-5"
+    @State private var triggerAlarmStates = "armedStay, armedAway"
+    @State private var delaySeconds = 0
+    @State private var deviceActionName = "turn_off"
+    @State private var useTriggeringDeviceTarget = true
+    @State private var useAdvancedTriggerJSON = false
+    @State private var useAdvancedActionsJSON = false
+    @State private var triggerConditionsJSON = "{}"
+    @State private var actionsJSON = "[]"
     @State private var editingWorkflow: WorkflowItem?
 
     @State private var now = Date()
 
     private let triggerTypes = ["manual", "time", "schedule", "device_state", "sensor", "security_alarm_status"]
-    private let actionTypes = ["notification", "device_control", "scene_activate", "delay"]
+    private let actionTypes = ["notification", "device_control", "scene_activate", "delay", "condition", "workflow_control", "variable_control", "repeat", "isy_network_resource", "http_request"]
+    private let triggerOperators = ["eq", "neq", "gt", "gte", "lt", "lte", "contains"]
     private let categories = ["security", "comfort", "energy", "convenience", "custom"]
     private let runtimeLogLimitOptions = [10, 25, 50]
     private let runtimeWindowOptions: [(hours: Int, label: String)] = [
@@ -641,31 +669,99 @@ struct WorkflowsView: View {
     private var createSheet: some View {
         NavigationStack {
             Form {
-                TextField("Name", text: $createName)
-                TextField("Description", text: $createDescription)
+                Section("Basics") {
+                    TextField("Name", text: $createName)
+                    TextField("Description", text: $createDescription, axis: .vertical)
+                        .lineLimit(2, reservesSpace: true)
 
-                Picker("Trigger", selection: $triggerType) {
-                    ForEach(triggerTypes, id: \.self) { type in
-                        Text(type.replacingOccurrences(of: "_", with: " ").capitalized).tag(type)
+                    Picker("Category", selection: $createCategory) {
+                        ForEach(categories, id: \.self) { category in
+                            Text(category.capitalized).tag(category)
+                        }
+                    }
+
+                    Stepper("Priority: \(createPriority)", value: $createPriority, in: 1...10)
+                    Stepper("Cooldown: \(createCooldown) min", value: $createCooldown, in: 0...1440)
+                }
+
+                Section("Trigger") {
+                    Picker("Trigger", selection: $triggerType) {
+                        ForEach(triggerTypes, id: \.self) { type in
+                            Text(type.replacingOccurrences(of: "_", with: " ").capitalized).tag(type)
+                        }
+                    }
+
+                    if triggerType == "time" {
+                        TextField("Time (HH:mm)", text: $triggerTime)
+                            .textInputAutocapitalization(.never)
+                    } else if triggerType == "schedule" {
+                        TextField("Cron", text: $triggerScheduleCron)
+                            .textInputAutocapitalization(.never)
+                    } else if triggerType == "device_state" || triggerType == "sensor" {
+                        TextField("Device ID", text: $triggerDeviceId)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        TextField("Property", text: $triggerProperty)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        Picker("Operator", selection: $triggerOperator) {
+                            ForEach(triggerOperators, id: \.self) { item in
+                                Text(item).tag(item)
+                            }
+                        }
+                        TextField("Value", text: $triggerValue)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        Stepper("Hold: \(triggerHoldSeconds) sec", value: $triggerHoldSeconds, in: 0...86400)
+                    } else if triggerType == "security_alarm_status" {
+                        TextField("Alarm states", text: $triggerAlarmStates)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
+
+                    Toggle("Raw trigger JSON", isOn: $useAdvancedTriggerJSON)
+                    if useAdvancedTriggerJSON {
+                        TextField("Trigger conditions JSON", text: $triggerConditionsJSON, axis: .vertical)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .lineLimit(4, reservesSpace: true)
                     }
                 }
 
-                Picker("Action", selection: $actionType) {
-                    ForEach(actionTypes, id: \.self) { type in
-                        Text(type.replacingOccurrences(of: "_", with: " ").capitalized).tag(type)
+                Section("Actions") {
+                    Stepper("Delay before action: \(delaySeconds) sec", value: $delaySeconds, in: 0...86400)
+
+                    Picker("Action", selection: $actionType) {
+                        ForEach(actionTypes, id: \.self) { type in
+                            Text(type.replacingOccurrences(of: "_", with: " ").capitalized).tag(type)
+                        }
+                    }
+
+                    if actionType == "device_control" {
+                        Toggle("Use triggering device", isOn: $useTriggeringDeviceTarget)
+                        TextField("Device action", text: $deviceActionName)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
+
+                    if actionType != "delay" || delaySeconds == 0 {
+                        TextField("Target", text: $target)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        TextField("Value", text: $actionValue, axis: .vertical)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .lineLimit(2, reservesSpace: true)
+                    }
+
+                    Toggle("Raw actions JSON", isOn: $useAdvancedActionsJSON)
+                    if useAdvancedActionsJSON {
+                        TextField("Actions JSON", text: $actionsJSON, axis: .vertical)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .lineLimit(6, reservesSpace: true)
                     }
                 }
-
-                Picker("Category", selection: $createCategory) {
-                    ForEach(categories, id: \.self) { category in
-                        Text(category.capitalized).tag(category)
-                    }
-                }
-
-                Stepper("Priority: \(createPriority)", value: $createPriority, in: 1...10)
-
-                TextField("Target (device/scene id if needed)", text: $target)
-                TextField("Action value (optional)", text: $actionValue)
             }
             .hbFormStyle()
             .navigationTitle(editingWorkflow == nil ? "Create Workflow" : "Edit Workflow")
@@ -1057,6 +1153,54 @@ struct WorkflowsView: View {
         }
     }
 
+    private func workflowTriggerSummary(_ workflow: WorkflowItem) -> String {
+        let conditions = workflow.triggerConditions
+        switch workflow.triggerType {
+        case "time":
+            let hour = JSON.int(conditions, "hour", fallback: 7)
+            let minute = JSON.int(conditions, "minute", fallback: 0)
+            return String(format: "Trigger details: %02d:%02d", hour, minute)
+        case "schedule":
+            return "Trigger details: \(JSON.string(conditions, "cron", fallback: "schedule"))"
+        case "device_state", "sensor":
+            let deviceId = JSON.string(conditions, "deviceId", fallback: "device")
+            let property = JSON.string(conditions, "property", fallback: "status")
+            let triggerOperator = JSON.string(conditions, "operator", fallback: "eq")
+            let value = editorString(from: conditions["value"] ?? conditions["state"], fallback: "true")
+            let hold = JSON.int(conditions, "forSeconds", fallback: JSON.int(conditions, "holdSeconds"))
+            return "Trigger details: \(deviceId) \(property) \(triggerOperator) \(value)\(hold > 0 ? " for \(hold)s" : "")"
+        case "security_alarm_status":
+            let states = (conditions["states"] as? [String])?.joined(separator: ", ") ?? "alarm state"
+            return "Trigger details: \(states)"
+        default:
+            return "Trigger details: manual"
+        }
+    }
+
+    private func workflowActionSummary(_ workflow: WorkflowItem) -> String? {
+        guard !workflow.actions.isEmpty else {
+            return nil
+        }
+
+        let labels = workflow.actions.prefix(3).map { action -> String in
+            let type = JSON.string(action, "type", fallback: "action")
+            let parameters = JSON.object(action["parameters"])
+            switch type {
+            case "delay":
+                return "delay \(JSON.int(parameters, "seconds", fallback: 10))s"
+            case "device_control":
+                return JSON.string(parameters, "action", fallback: type).replacingOccurrences(of: "_", with: " ")
+            case "notification":
+                return "notify"
+            default:
+                return type.replacingOccurrences(of: "_", with: " ")
+            }
+        }
+
+        let suffix = workflow.actions.count > 3 ? " +\(workflow.actions.count - 3)" : ""
+        return "Actions: \(labels.joined(separator: " -> "))\(suffix)"
+    }
+
     private func workflowCard(for workflow: WorkflowItem) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
@@ -1100,8 +1244,20 @@ struct WorkflowsView: View {
             ) {
                 runtimeMetricCard(title: "Trigger", value: workflow.triggerType.replacingOccurrences(of: "_", with: " "), subtitle: "")
                 runtimeMetricCard(title: "Steps", value: "\(workflow.actionCount)", subtitle: "")
+                runtimeMetricCard(title: "Source", value: workflow.source.replacingOccurrences(of: "_", with: " "), subtitle: "")
+                runtimeMetricCard(title: "Cooldown", value: workflow.cooldown > 0 ? "\(workflow.cooldown)m" : "None", subtitle: "")
                 runtimeMetricCard(title: "Last Run", value: workflow.lastRun, subtitle: "")
                 runtimeMetricCard(title: "Runs", value: "\(workflow.executionCount)", subtitle: "")
+            }
+
+            Text(workflowTriggerSummary(workflow))
+                .font(.caption)
+                .foregroundStyle(HBPalette.textSecondary)
+
+            if let actionSummary = workflowActionSummary(workflow), !actionSummary.isEmpty {
+                Text(actionSummary)
+                    .font(.caption)
+                    .foregroundStyle(HBPalette.textSecondary)
             }
 
             if workflow.voiceAliases.isEmpty {
@@ -1619,6 +1775,195 @@ struct WorkflowsView: View {
         }
     }
 
+    private func parseEditorJSONObject(_ text: String, label: String, fallback: [String: Any]) throws -> [String: Any] {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return fallback
+        }
+
+        guard let data = trimmed.data(using: .utf8),
+              let parsed = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) as? [String: Any] else {
+            throw WorkflowEditorError.invalidJSON(label)
+        }
+        return parsed
+    }
+
+    private func parseEditorJSONArray(_ text: String, label: String, fallback: [[String: Any]]) throws -> [[String: Any]] {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return fallback
+        }
+
+        guard let data = trimmed.data(using: .utf8),
+              let parsed = try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) as? [[String: Any]] else {
+            throw WorkflowEditorError.invalidJSON(label)
+        }
+        return parsed
+    }
+
+    private func editorScalarValue(_ value: String) -> Any {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = trimmed.lowercased()
+
+        if normalized == "true" || normalized == "on" || normalized == "yes" {
+            return true
+        }
+        if normalized == "false" || normalized == "off" || normalized == "no" {
+            return false
+        }
+        if normalized == "null" || normalized == "none" {
+            return NSNull()
+        }
+        if let intValue = Int(trimmed) {
+            return intValue
+        }
+        if let doubleValue = Double(trimmed) {
+            return doubleValue
+        }
+        return trimmed
+    }
+
+    private func parseTimeInput(_ value: String) -> (hour: Int, minute: Int) {
+        let parts = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: ":")
+            .map(String.init)
+        guard parts.count >= 2,
+              let hour = Int(parts[0]),
+              let minute = Int(parts[1]) else {
+            return (7, 0)
+        }
+        return (
+            min(max(hour, 0), 23),
+            min(max(minute, 0), 59)
+        )
+    }
+
+    private func buildTriggerConditionsPayload() throws -> [String: Any] {
+        if useAdvancedTriggerJSON {
+            return try parseEditorJSONObject(triggerConditionsJSON, label: "Trigger conditions JSON", fallback: [:])
+        }
+
+        switch triggerType {
+        case "time":
+            let parsed = parseTimeInput(triggerTime)
+            return ["hour": parsed.hour, "minute": parsed.minute]
+        case "schedule":
+            let cron = triggerScheduleCron.trimmingCharacters(in: .whitespacesAndNewlines)
+            return cron.isEmpty ? [:] : ["cron": cron]
+        case "device_state", "sensor":
+            var conditions: [String: Any] = [
+                "property": triggerProperty.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "status" : triggerProperty,
+                "operator": triggerOperator,
+                "value": editorScalarValue(triggerValue)
+            ]
+            let deviceId = triggerDeviceId.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !deviceId.isEmpty {
+                conditions["deviceId"] = deviceId
+            }
+            if triggerProperty == "status" {
+                if let boolValue = conditions["value"] as? Bool {
+                    conditions["state"] = boolValue ? "on" : "off"
+                }
+            }
+            if triggerHoldSeconds > 0 {
+                conditions["forSeconds"] = triggerHoldSeconds
+            }
+            return conditions
+        case "security_alarm_status":
+            let states = triggerAlarmStates
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            return states.isEmpty ? [:] : ["states": states]
+        default:
+            return [:]
+        }
+    }
+
+    private func buildPrimaryActionPayload() -> [String: Any] {
+        let trimmedTarget = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedValue = actionValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        var parameters: [String: Any] = [:]
+        var resolvedTarget: Any = trimmedTarget.isEmpty ? NSNull() : trimmedTarget
+
+        switch actionType {
+        case "notification":
+            resolvedTarget = trimmedTarget.isEmpty ? "system" : trimmedTarget
+            parameters["message"] = trimmedValue.isEmpty ? "Workflow triggered from iOS" : trimmedValue
+        case "device_control":
+            if useTriggeringDeviceTarget && (triggerType == "device_state" || triggerType == "sensor") {
+                resolvedTarget = ["kind": "context", "key": "triggeringDeviceId"]
+            }
+            let actionName = deviceActionName.trimmingCharacters(in: .whitespacesAndNewlines)
+            parameters["action"] = actionName.isEmpty ? (trimmedValue.isEmpty ? "toggle" : trimmedValue) : actionName
+            if !trimmedValue.isEmpty {
+                parameters["value"] = editorScalarValue(trimmedValue)
+            }
+        case "delay":
+            let seconds = delaySeconds > 0 ? delaySeconds : (Int(trimmedValue) ?? 10)
+            parameters["seconds"] = max(seconds, 1)
+        case "scene_activate":
+            resolvedTarget = trimmedTarget.isEmpty ? trimmedValue : trimmedTarget
+        case "http_request":
+            if !trimmedValue.isEmpty {
+                parameters["url"] = trimmedValue
+            }
+        default:
+            if !trimmedValue.isEmpty {
+                parameters["value"] = editorScalarValue(trimmedValue)
+            }
+        }
+
+        return [
+            "type": actionType,
+            "target": resolvedTarget,
+            "parameters": parameters
+        ]
+    }
+
+    private func buildActionsPayload() throws -> [[String: Any]] {
+        if useAdvancedActionsJSON {
+            let actions = try parseEditorJSONArray(actionsJSON, label: "Actions JSON", fallback: [])
+            if actions.isEmpty {
+                throw WorkflowEditorError.invalidJSON("Actions JSON")
+            }
+            return actions
+        }
+
+        var actions: [[String: Any]] = []
+        if delaySeconds > 0 && actionType != "delay" {
+            actions.append([
+                "type": "delay",
+                "target": NSNull(),
+                "parameters": ["seconds": delaySeconds]
+            ])
+        }
+        actions.append(buildPrimaryActionPayload())
+        return actions
+    }
+
+    private func buildManualWorkflowPayload(enabled: Bool) throws -> [String: Any] {
+        let trigger = [
+            "type": triggerType,
+            "conditions": try buildTriggerConditionsPayload()
+        ] as [String: Any]
+        let actions = try buildActionsPayload()
+
+        return [
+            "name": createName.trimmingCharacters(in: .whitespacesAndNewlines),
+            "description": createDescription,
+            "source": "manual",
+            "enabled": enabled,
+            "category": createCategory,
+            "priority": createPriority,
+            "cooldown": createCooldown,
+            "trigger": trigger,
+            "actions": actions,
+            "graph": ["nodes": [], "edges": []]
+        ]
+    }
+
     private func createManualWorkflow() async {
         if let editingWorkflow {
             await updateWorkflow(editingWorkflow)
@@ -1626,40 +1971,7 @@ struct WorkflowsView: View {
         }
 
         do {
-            var actionParameters: [String: Any] = [:]
-
-            switch actionType {
-            case "notification":
-                actionParameters["message"] = actionValue.isEmpty ? "Workflow triggered from iOS" : actionValue
-            case "device_control":
-                actionParameters["action"] = actionValue.isEmpty ? "toggle" : actionValue
-            case "delay":
-                actionParameters["seconds"] = Int(actionValue) ?? 10
-            default:
-                break
-            }
-
-            var action: [String: Any] = [
-                "type": actionType,
-                "parameters": actionParameters
-            ]
-            if !target.isEmpty {
-                action["target"] = target
-            }
-
-            let payload: [String: Any] = [
-                "name": createName,
-                "description": createDescription,
-                "source": "manual",
-                "enabled": true,
-                "category": createCategory,
-                "priority": createPriority,
-                "cooldown": 0,
-                "trigger": ["type": triggerType, "conditions": [:]],
-                "actions": [action],
-                "graph": ["nodes": [], "edges": []]
-            ]
-
+            let payload = try buildManualWorkflowPayload(enabled: true)
             _ = try await session.apiClient.post("/api/workflows", body: payload)
             selectedTab = .workflows
             showCreateSheet = false
@@ -1672,13 +1984,7 @@ struct WorkflowsView: View {
 
     private func updateWorkflow(_ workflow: WorkflowItem) async {
         do {
-            let payload: [String: Any] = [
-                "name": createName,
-                "description": createDescription,
-                "category": createCategory,
-                "priority": createPriority
-            ]
-
+            let payload = try buildManualWorkflowPayload(enabled: workflow.enabled)
             _ = try await session.apiClient.put("/api/workflows/\(workflow.id)", body: payload)
             selectedTab = .workflows
             showCreateSheet = false
@@ -1750,16 +2056,110 @@ struct WorkflowsView: View {
         }
     }
 
+    private func editorString(from value: Any?, fallback: String = "") -> String {
+        guard let value, !(value is NSNull) else {
+            return fallback
+        }
+        if let boolValue = value as? Bool {
+            return boolValue ? "true" : "false"
+        }
+        if let numberValue = value as? NSNumber {
+            return numberValue.stringValue
+        }
+        if let stringValue = value as? String {
+            return stringValue
+        }
+        return JSON.prettyString(value)
+    }
+
+    private func isTriggeringDeviceTarget(_ value: Any?) -> Bool {
+        let object = JSON.object(value)
+        let kind = JSON.string(object, "kind", fallback: JSON.string(object, "type")).lowercased()
+        let key = JSON.string(object, "key", fallback: JSON.string(object, "contextKey"))
+        return kind == "context" && key == "triggeringDeviceId"
+    }
+
+    private func targetString(from value: Any?) -> String {
+        if isTriggeringDeviceTarget(value) {
+            return ""
+        }
+        if let stringValue = value as? String {
+            return stringValue
+        }
+        guard let value, !(value is NSNull) else {
+            return ""
+        }
+        return JSON.prettyString(value)
+    }
+
+    private func populateEditorFields(from workflow: WorkflowItem) {
+        let conditions = workflow.triggerConditions
+        triggerConditionsJSON = JSON.prettyString(conditions.isEmpty ? [:] : conditions)
+        actionsJSON = JSON.prettyString(workflow.actions)
+        useAdvancedTriggerJSON = !conditions.isEmpty
+        useAdvancedActionsJSON = !workflow.actions.isEmpty
+
+        switch workflow.triggerType {
+        case "time":
+            let hour = JSON.int(conditions, "hour", fallback: 7)
+            let minute = JSON.int(conditions, "minute", fallback: 0)
+            triggerTime = String(format: "%02d:%02d", hour, minute)
+        case "schedule":
+            triggerScheduleCron = JSON.string(conditions, "cron", fallback: triggerScheduleCron)
+        case "device_state", "sensor":
+            triggerDeviceId = JSON.string(conditions, "deviceId")
+            triggerProperty = JSON.string(conditions, "property", fallback: "status")
+            triggerOperator = JSON.string(conditions, "operator", fallback: "eq")
+            triggerValue = editorString(from: conditions["value"] ?? conditions["state"], fallback: "true")
+            triggerHoldSeconds = JSON.int(conditions, "forSeconds", fallback: JSON.int(conditions, "holdSeconds"))
+        case "security_alarm_status":
+            let states = (conditions["states"] as? [String]) ?? []
+            triggerAlarmStates = states.isEmpty ? triggerAlarmStates : states.joined(separator: ", ")
+        default:
+            break
+        }
+
+        var primaryAction = workflow.actions.first ?? [:]
+        if JSON.string(primaryAction, "type") == "delay", workflow.actions.count > 1 {
+            delaySeconds = JSON.int(JSON.object(primaryAction["parameters"]), "seconds")
+            primaryAction = workflow.actions[1]
+        } else {
+            delaySeconds = JSON.string(primaryAction, "type") == "delay"
+                ? JSON.int(JSON.object(primaryAction["parameters"]), "seconds")
+                : 0
+        }
+
+        if !primaryAction.isEmpty {
+            actionType = JSON.string(primaryAction, "type", fallback: "notification")
+            let parameters = JSON.object(primaryAction["parameters"])
+            target = targetString(from: primaryAction["target"])
+            useTriggeringDeviceTarget = isTriggeringDeviceTarget(primaryAction["target"])
+
+            switch actionType {
+            case "notification":
+                actionValue = JSON.string(parameters, "message")
+            case "device_control":
+                deviceActionName = JSON.string(parameters, "action", fallback: "turn_off")
+                actionValue = editorString(from: parameters["value"])
+            case "delay":
+                actionValue = "\(delaySeconds)"
+            case "http_request":
+                actionValue = JSON.string(parameters, "url", fallback: editorString(from: parameters["value"]))
+            default:
+                actionValue = editorString(from: parameters["value"])
+            }
+        }
+    }
+
     private func beginEditing(_ workflow: WorkflowItem) {
         editingWorkflow = workflow
         createName = workflow.name
         createDescription = workflow.details
         createCategory = workflow.category
         createPriority = workflow.priority
-        target = ""
-        actionValue = ""
+        createCooldown = workflow.cooldown
         triggerType = workflow.triggerType
-        actionType = "notification"
+        populateEditorFields(from: workflow)
         showCreateSheet = true
     }
 
@@ -1773,6 +2173,22 @@ struct WorkflowsView: View {
         actionValue = ""
         createCategory = "custom"
         createPriority = 5
+        createCooldown = 0
+        triggerDeviceId = ""
+        triggerProperty = "status"
+        triggerOperator = "eq"
+        triggerValue = "true"
+        triggerHoldSeconds = 0
+        triggerTime = "07:00"
+        triggerScheduleCron = "0 7 * * 1-5"
+        triggerAlarmStates = "armedStay, armedAway"
+        delaySeconds = 0
+        deviceActionName = "turn_off"
+        useTriggeringDeviceTarget = true
+        useAdvancedTriggerJSON = false
+        useAdvancedActionsJSON = false
+        triggerConditionsJSON = "{}"
+        actionsJSON = "[]"
     }
 
     private func activitySummary(for event: PlatformEventItem) -> String {

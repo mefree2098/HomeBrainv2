@@ -1,4 +1,5 @@
 const Automation = require('../models/Automation');
+const AutomationHistory = require('../models/AutomationHistory');
 const Device = require('../models/Device');
 const SecurityAlarm = require('../models/SecurityAlarm');
 const automationService = require('./automationService');
@@ -6,6 +7,7 @@ const automationRuntimeService = require('./automationRuntimeService');
 const deviceService = require('./deviceService');
 const weatherService = require('./weatherService');
 const { applyFlattenedUpdates, resolveDeviceProperty } = require('../utils/devicePropertyResolver');
+const { setWorkflowStopRequest } = require('./workflowExecutionService');
 
 const WEEKDAY_TO_NUMBER = {
   sunday: 0,
@@ -578,6 +580,73 @@ class AutomationSchedulerService {
     }
   }
 
+  async autoCancelWorkflowExecutionsForTriggerReset(automation, triggerContext = {}) {
+    if (!automation?.workflowId) {
+      return 0;
+    }
+
+    const runningExecutions = await AutomationHistory.find({
+      automationId: automation._id,
+      workflowId: automation.workflowId,
+      status: 'running'
+    });
+
+    let cancelledCount = 0;
+    for (const history of runningExecutions) {
+      const historyId = history?._id?.toString?.();
+      if (!historyId) {
+        continue;
+      }
+
+      const workflowId = history?.workflowId?.toString?.() || automation.workflowId?.toString?.() || null;
+      const context = automationRuntimeService.buildExecutionContextFromHistory(history, {
+        triggerContext: {
+          ...(history.triggerContext || {}),
+          ...triggerContext
+        }
+      });
+      const message = 'Workflow auto-cancelled because its trigger state changed before it completed.';
+
+      await automationRuntimeService.recordExecutionStopRequested(context, {
+        requestedBy: 'automation scheduler',
+        reason: 'trigger_state_changed',
+        message
+      });
+
+      setWorkflowStopRequest({
+        historyId,
+        correlationId: history.correlationId || null,
+        workflowId
+      });
+      cancelledCount += 1;
+
+      if (!automationService.isExecutionActive(historyId)) {
+        const refreshedHistory = await AutomationHistory.findById(history._id);
+        if (refreshedHistory && refreshedHistory.status === 'running') {
+          const cancellationError = new Error(message);
+          cancellationError.code = 'WORKFLOW_EXECUTION_CANCELLED';
+          cancellationError.isCancelled = true;
+          await refreshedHistory.markCompleted('cancelled', cancellationError);
+          await automationRuntimeService.recordExecutionCompleted(context, {
+            status: 'cancelled',
+            successfulActions: refreshedHistory.successfulActions || 0,
+            failedActions: refreshedHistory.failedActions || 0,
+            durationMs: refreshedHistory.durationMs || null,
+            message
+          });
+        }
+      }
+    }
+
+    if (cancelledCount > 0) {
+      console.log(
+        `AutomationSchedulerService: auto-cancelled ${cancelledCount} running workflow execution(s) for automation ${automation.name || automation._id}`
+      );
+    }
+
+    return cancelledCount;
+  }
+
   async evaluateDeviceStateTrigger(automation, now = new Date(), runtimeContext = {}) {
     const conditions = automation?.trigger?.conditions || {};
     const deviceId = conditions.deviceId;
@@ -615,7 +684,8 @@ class AutomationSchedulerService {
       : {
           met: previousState === true,
           eligible: previousState === true,
-          matchedSince: previousState === true ? now.getTime() : null
+          matchedSince: previousState === true ? now.getTime() : null,
+          value: null
         };
 
     const holdSeconds = this.normalizeHoldDurationSeconds(conditions);
@@ -633,31 +703,55 @@ class AutomationSchedulerService {
       ? Boolean(met && matchedSince !== null && (nowMs - matchedSince) >= (holdSeconds * 1000))
       : met;
 
-    this.triggerStateCache.set(cacheKey, {
-      met,
-      eligible,
-      matchedSince
-    });
+    const shouldRun = eligible && previous.eligible !== true;
+    const suppressRunForCooldown = runtimeContext?.suppressRunForCooldown === true;
+    const preservePreCooldownEdge = suppressRunForCooldown && previous.eligible !== true && met === true;
+    const nextState = preservePreCooldownEdge
+      ? {
+          met: previous.met === true,
+          eligible: previous.eligible === true,
+          matchedSince: previous.matchedSince ?? null,
+          value: leftValue
+        }
+      : {
+          met,
+          eligible,
+          matchedSince,
+          value: leftValue
+        };
+
+    this.triggerStateCache.set(cacheKey, nextState);
 
     if (this.isStartupPrimeSource(runtimeContext)) {
       return false;
     }
 
+    const triggerContext = {
+      triggeringDeviceId: refreshedDevice._id?.toString?.() || deviceId.toString(),
+      triggeringDeviceName: refreshedDevice.name || '',
+      triggeringDeviceRoom: refreshedDevice.room || '',
+      triggerProperty: propertyKey,
+      triggerValue: leftValue
+    };
+
+    if (holdSeconds > 0) {
+      triggerContext.triggerHoldSeconds = holdSeconds;
+    }
+
+    if (previous.eligible === true && met === false) {
+      await this.autoCancelWorkflowExecutionsForTriggerReset(automation, {
+        ...triggerContext,
+        triggerPreviousValue: previous.value ?? null,
+        autoCancelReason: 'trigger_state_changed'
+      });
+    }
+
+    if (suppressRunForCooldown) {
+      return false;
+    }
+
     // Run on edge transition false -> true so we don't fire repeatedly every tick.
-    const shouldRun = eligible && previous.eligible !== true;
     if (shouldRun) {
-      const triggerContext = {
-        triggeringDeviceId: refreshedDevice._id?.toString?.() || deviceId.toString(),
-        triggeringDeviceName: refreshedDevice.name || '',
-        triggeringDeviceRoom: refreshedDevice.room || '',
-        triggerProperty: propertyKey,
-        triggerValue: leftValue
-      };
-
-      if (holdSeconds > 0) {
-        triggerContext.triggerHoldSeconds = holdSeconds;
-      }
-
       this.setPendingTriggerContext(automation._id.toString(), triggerContext);
     }
 
@@ -767,11 +861,13 @@ class AutomationSchedulerService {
     if (!automation?.enabled) {
       return false;
     }
-    if (this.shouldSkipForCooldown(automation, now)) {
+
+    const triggerType = automation?.trigger?.type;
+    const isResetAwareStateTrigger = triggerType === 'device_state' || triggerType === 'sensor';
+    if (!isResetAwareStateTrigger && this.shouldSkipForCooldown(automation, now)) {
       return false;
     }
 
-    const triggerType = automation?.trigger?.type;
     if (triggerType === 'time') {
       return this.shouldRunTimeTrigger(automation, now);
     }
@@ -782,7 +878,10 @@ class AutomationSchedulerService {
       return this.shouldRunScheduleTrigger(automation, now);
     }
     if (triggerType === 'device_state' || triggerType === 'sensor') {
-      return this.evaluateDeviceStateTrigger(automation, now, runtimeContext);
+      return this.evaluateDeviceStateTrigger(automation, now, {
+        ...runtimeContext,
+        suppressRunForCooldown: this.shouldSkipForCooldown(automation, now)
+      });
     }
     if (triggerType === 'security_alarm_status') {
       return this.evaluateSecurityAlarmTrigger(automation, runtimeContext);

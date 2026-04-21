@@ -82,6 +82,10 @@ Use:
 
 If something is complicated, build it in `Workflows` first. In normal use, treat `Workflows` as the source of truth.
 
+For state-triggered workflows, HomeBrain now also treats the original trigger state as the cancellation guard. If a running workflow was started because a device or sensor matched a condition, and that condition stops matching during a delay or later step, the scheduler requests cancellation for the running workflow execution. This is designed for countdown automations such as bathroom fans, appliance-finished monitors, and similar stateful timers.
+
+The iOS app can manage the same workflow shape: state trigger fields, hold time, cooldown, delay-then-action flows, triggering-device targets, and raw trigger/action JSON for web-authored workflows are available in Workflow Studio. Settings also links through to the platform administration surfaces that exist as first-class iOS screens.
+
 ## Updating HomeBrain
 
 Two supported paths:

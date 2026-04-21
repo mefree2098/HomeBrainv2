@@ -165,14 +165,20 @@ nonisolated struct WorkflowItem: Identifiable {
     var priority: Int
     var executionCount: Int
     var lastRun: String
+    var source: String
+    var cooldown: Int
     var triggerType: String
+    var triggerConditions: [String: Any]
+    var actions: [[String: Any]]
     var actionCount: Int
+    var graph: [String: Any]
     var voiceAliases: [String]
     var lastErrorMessage: String?
 
     nonisolated static func from(_ object: [String: Any]) -> WorkflowItem {
         let trigger = JSON.object(object["trigger"])
         let lastError = JSON.object(object["lastError"])
+        let actions = JSON.array(object["actions"])
         return WorkflowItem(
             id: JSON.id(object),
             name: JSON.string(object, "name", fallback: "Untitled Workflow"),
@@ -182,8 +188,13 @@ nonisolated struct WorkflowItem: Identifiable {
             priority: JSON.int(object, "priority", fallback: 5),
             executionCount: JSON.int(object, "executionCount"),
             lastRun: JSON.displayDate(from: object["lastRun"]),
+            source: JSON.string(object, "source", fallback: "manual"),
+            cooldown: JSON.int(object, "cooldown"),
             triggerType: JSON.string(trigger, "type", fallback: "manual"),
-            actionCount: JSON.array(object["actions"]).count,
+            triggerConditions: JSON.object(trigger["conditions"]),
+            actions: actions,
+            actionCount: actions.count,
+            graph: JSON.object(object["graph"]),
             voiceAliases: (object["voiceAliases"] as? [String]) ?? [],
             lastErrorMessage: JSON.optionalString(lastError, "message")
         )

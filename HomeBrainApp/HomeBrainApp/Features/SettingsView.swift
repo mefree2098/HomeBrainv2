@@ -1,5 +1,41 @@
 import SwiftUI
 
+private enum SettingsParitySurface: String, CaseIterable, Identifiable {
+    case senseEnergy
+    case rainMachine
+    case ollama
+    case whisper
+    case platformDeploy
+    case operations
+    case ssl
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .senseEnergy: return "Sense Energy"
+        case .rainMachine: return "RainMachine"
+        case .ollama: return "Ollama / LLM"
+        case .whisper: return "Whisper STT"
+        case .platformDeploy: return "Platform Deploy"
+        case .operations: return "Operations"
+        case .ssl: return "SSL Certificates"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .senseEnergy: return "bolt.fill"
+        case .rainMachine: return "cloud.rain"
+        case .ollama: return "brain"
+        case .whisper: return "cpu"
+        case .platformDeploy: return "arrow.up.forward.app"
+        case .operations: return "waveform.path.ecg"
+        case .ssl: return "lock.shield"
+        }
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject private var session: SessionStore
 
@@ -7,6 +43,7 @@ struct SettingsView: View {
     @State private var errorMessage: String?
     @State private var infoMessage = ""
     @State private var showingOpenClawSettings = false
+    @State private var presentedSettingsSurface: SettingsParitySurface?
 
     @State private var serverURL = ""
     @State private var authSessionMaxAgeDays = 365
@@ -49,6 +86,10 @@ struct SettingsView: View {
 
     private let llmProviders = ["openai", "codex", "anthropic", "local"]
     private let sttProviders = ["openai", "local"]
+
+    private var isAdmin: Bool {
+        session.currentUser?.role == "admin"
+    }
 
     var body: some View {
         VStack(spacing: 12) {
@@ -232,15 +273,28 @@ struct SettingsView: View {
                         TextField("Harmony Hub Addresses", text: $harmonyHubAddresses)
                     }
 
-                    Section("OpenClaw") {
-                        Text("Configure the external OpenClaw admin integration, rotate its HomeBrain token, and download the Jetson deployment bundle from here.")
-                            .font(.footnote)
-                            .foregroundStyle(HBPalette.textSecondary)
+                    if isAdmin {
+                        Section("OpenClaw") {
+                            Text("Configure the external OpenClaw admin integration, rotate its HomeBrain token, and download the Jetson deployment bundle from here.")
+                                .font(.footnote)
+                                .foregroundStyle(HBPalette.textSecondary)
 
-                        Button("Open OpenClaw Settings") {
-                            showingOpenClawSettings = true
+                            Button("Open OpenClaw Settings") {
+                                showingOpenClawSettings = true
+                            }
+                            .buttonStyle(.bordered)
                         }
-                        .buttonStyle(.bordered)
+
+                        Section("Platform Areas") {
+                            ForEach(SettingsParitySurface.allCases) { surface in
+                                Button {
+                                    presentedSettingsSurface = surface
+                                } label: {
+                                    Label(surface.title, systemImage: surface.icon)
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
                     }
 
                     Section("Hardware Orbs") {
@@ -438,6 +492,41 @@ struct SettingsView: View {
         .sheet(isPresented: $showingOpenClawSettings) {
             OpenClawIntegrationView()
                 .environmentObject(session)
+        }
+        .sheet(item: $presentedSettingsSurface) { surface in
+            NavigationStack {
+                settingsSurfaceView(surface)
+                    .navigationTitle(surface.title)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") {
+                                presentedSettingsSurface = nil
+                            }
+                        }
+                    }
+            }
+            .environmentObject(session)
+        }
+    }
+
+    @ViewBuilder
+    private func settingsSurfaceView(_ surface: SettingsParitySurface) -> some View {
+        switch surface {
+        case .senseEnergy:
+            SenseEnergyView()
+        case .rainMachine:
+            RainMachineView()
+        case .ollama:
+            OllamaView()
+        case .whisper:
+            WhisperView()
+        case .platformDeploy:
+            PlatformDeployView()
+        case .operations:
+            OperationsView()
+        case .ssl:
+            SSLView()
         }
     }
 

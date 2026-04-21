@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const mongoose = require('mongoose');
 
 const Automation = require('../models/Automation');
+const AutomationHistory = require('../models/AutomationHistory');
 const Device = require('../models/Device');
 const SecurityAlarm = require('../models/SecurityAlarm');
 const automationSchedulerService = require('../services/automationSchedulerService');
@@ -10,6 +11,10 @@ const automationRuntimeService = require('../services/automationRuntimeService')
 const automationService = require('../services/automationService');
 const deviceService = require('../services/deviceService');
 const weatherService = require('../services/weatherService');
+const {
+  clearWorkflowStopRequest,
+  resolveWorkflowStopRequest
+} = require('../services/workflowExecutionService');
 
 test('shouldRunAutomation triggers on security alarm state changes that match configured states', async (t) => {
   const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
@@ -206,6 +211,199 @@ test('device_state triggers prime current truthy state on scheduler startup with
   deviceStatus = true;
   assert.equal(
     await automationSchedulerService.shouldRunAutomation(automation, new Date('2026-03-31T23:13:00.000Z'), { source: 'scheduler_interval' }),
+    true
+  );
+});
+
+test('device_state trigger reset auto-cancels running workflow executions even during cooldown', async (t) => {
+  const automationId = new mongoose.Types.ObjectId();
+  const workflowId = new mongoose.Types.ObjectId();
+  const historyId = new mongoose.Types.ObjectId();
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const correlationId = 'auto-cancel-reset-correlation';
+
+  const originalFindById = Device.findById;
+  const originalAutomationHistoryFind = AutomationHistory.find;
+  const originalAutomationHistoryFindById = AutomationHistory.findById;
+  const originalIsExecutionActive = automationService.isExecutionActive;
+  const originalRecordExecutionStopRequested = automationRuntimeService.recordExecutionStopRequested;
+  const originalRecordExecutionCompleted = automationRuntimeService.recordExecutionCompleted;
+
+  let deviceStatus = false;
+  let historyQuery = null;
+  const stopRequests = [];
+
+  Device.findById = () => ({
+    lean: async () => ({
+      _id: deviceId,
+      name: 'Guest Bathroom Fan',
+      room: 'Guest Bathroom',
+      status: deviceStatus
+    })
+  });
+  AutomationHistory.find = async (query) => {
+    historyQuery = query;
+    return [{
+      _id: historyId,
+      automationId,
+      automationName: 'Guest Bathroom Fan Countdown',
+      workflowId,
+      workflowName: 'Guest Bathroom Fan Countdown',
+      triggerType: 'device_state',
+      triggerSource: 'scheduler',
+      triggerContext: {
+        triggeringDeviceId: deviceId
+      },
+      status: 'running',
+      correlationId,
+      totalActions: 2,
+      successfulActions: 0,
+      failedActions: 0
+    }];
+  };
+  AutomationHistory.findById = async () => {
+    throw new Error('findById should not be needed for active in-memory executions');
+  };
+  automationService.isExecutionActive = () => true;
+  automationRuntimeService.recordExecutionStopRequested = async (context, payload) => {
+    stopRequests.push({ context, payload });
+  };
+  automationRuntimeService.recordExecutionCompleted = async () => {
+    throw new Error('active executions should stop themselves through the stop request');
+  };
+
+  automationSchedulerService.triggerStateCache.clear();
+  automationSchedulerService.pendingTriggerContexts.clear();
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    AutomationHistory.find = originalAutomationHistoryFind;
+    AutomationHistory.findById = originalAutomationHistoryFindById;
+    automationService.isExecutionActive = originalIsExecutionActive;
+    automationRuntimeService.recordExecutionStopRequested = originalRecordExecutionStopRequested;
+    automationRuntimeService.recordExecutionCompleted = originalRecordExecutionCompleted;
+    clearWorkflowStopRequest({
+      historyId: historyId.toString(),
+      correlationId,
+      workflowId: workflowId.toString()
+    });
+    automationSchedulerService.triggerStateCache.clear();
+    automationSchedulerService.pendingTriggerContexts.clear();
+  });
+
+  const automation = {
+    _id: automationId,
+    name: 'Guest Bathroom Fan Countdown',
+    workflowId,
+    enabled: true,
+    cooldown: 30,
+    trigger: {
+      type: 'device_state',
+      conditions: {
+        deviceId,
+        property: 'status',
+        operator: 'eq',
+        value: true
+      }
+    }
+  };
+
+  assert.equal(
+    await automationSchedulerService.shouldRunAutomation(automation, new Date('2026-04-21T10:00:00.000Z')),
+    false
+  );
+
+  deviceStatus = true;
+  assert.equal(
+    await automationSchedulerService.shouldRunAutomation(automation, new Date('2026-04-21T10:01:00.000Z')),
+    true
+  );
+
+  automation.lastRun = new Date('2026-04-21T10:01:01.000Z');
+  deviceStatus = false;
+  assert.equal(
+    await automationSchedulerService.shouldRunAutomation(automation, new Date('2026-04-21T10:01:30.000Z')),
+    false
+  );
+
+  assert.equal(stopRequests.length, 1);
+  assert.deepEqual(historyQuery, {
+    automationId,
+    workflowId,
+    status: 'running'
+  });
+  assert.equal(stopRequests[0].context.historyId, historyId.toString());
+  assert.equal(stopRequests[0].context.workflowId, workflowId.toString());
+  assert.equal(stopRequests[0].context.triggerContext.triggeringDeviceId, deviceId);
+  assert.equal(stopRequests[0].context.triggerContext.triggerValue, false);
+  assert.equal(stopRequests[0].context.triggerContext.triggerPreviousValue, true);
+  assert.equal(stopRequests[0].payload.requestedBy, 'automation scheduler');
+  assert.equal(stopRequests[0].payload.reason, 'trigger_state_changed');
+  assert.equal(
+    resolveWorkflowStopRequest({
+      historyId: historyId.toString(),
+      correlationId,
+      workflowId: workflowId.toString()
+    }),
+    true
+  );
+});
+
+test('device_state cooldown does not consume a true edge before it can run', async (t) => {
+  const automationId = new mongoose.Types.ObjectId().toString();
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const originalFindById = Device.findById;
+  let deviceStatus = false;
+
+  Device.findById = () => ({
+    lean: async () => ({
+      _id: deviceId,
+      name: 'Garage Fan',
+      room: 'Garage',
+      status: deviceStatus
+    })
+  });
+
+  automationSchedulerService.triggerStateCache.clear();
+  automationSchedulerService.pendingTriggerContexts.clear();
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    automationSchedulerService.triggerStateCache.clear();
+    automationSchedulerService.pendingTriggerContexts.clear();
+  });
+
+  const automation = {
+    _id: { toString: () => automationId },
+    name: 'Garage Fan Countdown',
+    enabled: true,
+    cooldown: 30,
+    lastRun: new Date('2026-04-21T10:00:00.000Z'),
+    trigger: {
+      type: 'device_state',
+      conditions: {
+        deviceId,
+        property: 'status',
+        operator: 'eq',
+        value: true
+      }
+    }
+  };
+
+  assert.equal(
+    await automationSchedulerService.shouldRunAutomation(automation, new Date('2026-04-21T10:00:30.000Z')),
+    false
+  );
+
+  deviceStatus = true;
+  assert.equal(
+    await automationSchedulerService.shouldRunAutomation(automation, new Date('2026-04-21T10:01:00.000Z')),
+    false
+  );
+  assert.deepEqual(automationSchedulerService.consumePendingTriggerContext(automationId), {});
+
+  assert.equal(
+    await automationSchedulerService.shouldRunAutomation(automation, new Date('2026-04-21T10:31:00.000Z')),
     true
   );
 });

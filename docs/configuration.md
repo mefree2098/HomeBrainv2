@@ -123,6 +123,12 @@ Recommended order:
 3. Build routines in `Workflows`
 4. Treat `Automations` as runtime internals rather than a separate user-facing editor
 
+Runtime behavior:
+
+- `device_state` and `sensor` workflows run on the false-to-true trigger edge so they do not repeat every scheduler tick.
+- If a running workflow was started by a state trigger and that trigger stops matching before the workflow finishes, HomeBrain records a stop request and cancels the workflow. This is what keeps countdown routines, such as bathroom fan auto-off timers, from completing after the switch has already been turned back off.
+- The native iOS workflow editor can create countdown workflows with a hold time, delay, triggering-device target, cooldown, and full raw trigger/action JSON for workflows originally built in the web editor.
+
 ## 9. Operations And Deploy
 
 Open:
