@@ -65,28 +65,49 @@ const PANEL_BUILD_TARGETS = Object.freeze({
     artifactRelativePath: path.join('.pio', 'build', 'elecrow-crowpanel-2_1', 'firmware.bin')
   })
 });
-const PANEL_USB_PORT_NAME_PATTERNS = Object.freeze([
+const PANEL_USB_NATIVE_PORT_NAME_PATTERNS = Object.freeze([
   /^ttyACM/i,
-  /^ttyUSB/i,
   /^cu\.usbmodem/i,
-  /^tty\.usbmodem/i,
+  /^tty\.usbmodem/i
+]);
+const PANEL_USB_BRIDGE_PORT_NAME_PATTERNS = Object.freeze([
+  /^ttyUSB/i,
   /^cu\.usbserial/i,
   /^tty\.usbserial/i
 ]);
-const PANEL_USB_PORT_TEXT_PATTERNS = Object.freeze([
+const PANEL_USB_PORT_NAME_PATTERNS = Object.freeze([
+  ...PANEL_USB_NATIVE_PORT_NAME_PATTERNS,
+  ...PANEL_USB_BRIDGE_PORT_NAME_PATTERNS
+]);
+const PANEL_USB_STRONG_TEXT_PATTERNS = Object.freeze([
   /esp32/i,
   /esp32-s3/i,
   /espressif/i,
   /usb jtag/i,
-  /usb serial/i,
-  /usb-serial/i,
+  /elecrow/i,
+  /crowpanel/i
+]);
+const PANEL_USB_BRIDGE_TEXT_PATTERNS = Object.freeze([
   /cp210/i,
   /ch340/i,
   /wchusbserial/i,
   /usbmodem/i,
   /ttyacm/i
 ]);
+const PANEL_USB_GENERIC_TEXT_PATTERNS = Object.freeze([
+  /usb serial/i,
+  /usb-serial/i
+]);
+const PANEL_USB_EXCLUDED_TEXT_PATTERNS = Object.freeze([
+  /insteon/i,
+  /powerlinc/i,
+  /smartlabs/i,
+  /\bplm\b/i
+]);
 const ESPRESSIF_USB_VENDOR_ID = '303a';
+const PANEL_USB_LIKELY_SCORE_THRESHOLD = 25;
+const PANEL_USB_STRONG_AUTO_SELECT_SCORE = 70;
+const PANEL_USB_AUTO_SELECT_SCORE_GAP = 25;
 
 function normalizeTimestamp(value) {
   if (!value) {
@@ -777,25 +798,66 @@ function scorePanelUsbPort(port = {}) {
   const baseName = path.basename(trimString(port.path || port.stablePath));
   let score = 0;
 
+  if (/bluetooth/i.test(text) || PANEL_USB_EXCLUDED_TEXT_PATTERNS.some((pattern) => pattern.test(text))) {
+    return 0;
+  }
+
   if (normalizeUsbVendorId(port.vendorId) === ESPRESSIF_USB_VENDOR_ID) {
-    score += 80;
+    score += 90;
   }
 
-  if (PANEL_USB_PORT_NAME_PATTERNS.some((pattern) => pattern.test(baseName))) {
-    score += 30;
+  if (PANEL_USB_NATIVE_PORT_NAME_PATTERNS.some((pattern) => pattern.test(baseName))) {
+    score += 45;
   }
 
-  PANEL_USB_PORT_TEXT_PATTERNS.forEach((pattern) => {
+  if (PANEL_USB_BRIDGE_PORT_NAME_PATTERNS.some((pattern) => pattern.test(baseName))) {
+    score += 8;
+  }
+
+  PANEL_USB_STRONG_TEXT_PATTERNS.forEach((pattern) => {
     if (pattern.test(text)) {
-      score += 12;
+      score += 35;
     }
   });
 
-  if (/bluetooth/i.test(text)) {
-    score -= 100;
-  }
+  PANEL_USB_BRIDGE_TEXT_PATTERNS.forEach((pattern) => {
+    if (pattern.test(text)) {
+      score += 18;
+    }
+  });
+
+  PANEL_USB_GENERIC_TEXT_PATTERNS.forEach((pattern) => {
+    if (pattern.test(text)) {
+      score += 8;
+    }
+  });
 
   return Math.max(0, score);
+}
+
+function selectProvisioningUsbPort(ports = []) {
+  if (ports.length === 1) {
+    return ports[0];
+  }
+
+  const likelyPorts = ports.filter((port) => port.likelyPanel);
+  if (likelyPorts.length === 1) {
+    return likelyPorts[0];
+  }
+
+  if (likelyPorts.length > 1) {
+    const [bestPort, nextPort] = likelyPorts;
+    if (
+      bestPort
+      && nextPort
+      && bestPort.score >= PANEL_USB_STRONG_AUTO_SELECT_SCORE
+      && bestPort.score - nextPort.score >= PANEL_USB_AUTO_SELECT_SCORE_GAP
+    ) {
+      return bestPort;
+    }
+  }
+
+  return null;
 }
 
 function normalizeSerialPortRecord(port = {}) {
@@ -822,7 +884,7 @@ function normalizeSerialPortRecord(port = {}) {
       || normalized.manufacturer
       || normalized.stablePath
       || normalized.path,
-    likelyPanel: score > 0,
+    likelyPanel: score >= PANEL_USB_LIKELY_SCORE_THRESHOLD,
     score
   };
 }
@@ -1632,10 +1694,7 @@ class WallPanelService {
       }
       return (left.stablePath || left.path).localeCompare(right.stablePath || right.path);
     });
-    const likelyPorts = ports.filter((port) => port.likelyPanel);
-    const selectedPort = likelyPorts.length === 1
-      ? likelyPorts[0]
-      : (ports.length === 1 ? ports[0] : null);
+    const selectedPort = selectProvisioningUsbPort(ports);
     const serialTransport = this.getSerialTransportDiagnostics();
 
     return {
@@ -1669,17 +1728,18 @@ class WallPanelService {
       throw createError(400, `USB serial port "${requestedPath}" was not found on this HomeBrain host`);
     }
 
+    const selectedPort = selectProvisioningUsbPort(ports);
+    if (selectedPort) {
+      return selectedPort;
+    }
+
     const likelyPorts = ports.filter((port) => port.likelyPanel);
-    if (likelyPorts.length === 1) {
-      return likelyPorts[0];
-    }
-
-    if (ports.length === 1) {
-      return ports[0];
-    }
-
     if (likelyPorts.length > 1) {
       throw createError(400, 'Multiple likely hardware orb USB ports are connected. Choose the port in the provisioning dialog and try again.');
+    }
+
+    if (ports.length > 1) {
+      throw createError(400, 'Multiple USB serial ports are connected, but HomeBrain could not identify one as the hardware orb. Choose the port in the provisioning dialog and try again.');
     }
 
     throw createError(400, 'No hardware orb USB serial port was detected. Plug the new orb into this HomeBrain server and try again.');

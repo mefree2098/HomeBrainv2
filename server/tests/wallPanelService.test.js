@@ -1368,6 +1368,53 @@ test('listProvisioningUsbPorts selects a single Espressif USB serial candidate',
   assert.equal(result.selectedPort.likelyPanel, true);
 });
 
+test('listProvisioningUsbPorts ignores FTDI-style PLM serial ports when selecting the orb USB port', async () => {
+  const service = new WallPanelService();
+  service._serialPortModule = {
+    list: async () => [
+      {
+        path: '/dev/ttyUSB0',
+        manufacturer: 'FTDI',
+        friendlyName: 'USB Serial Port',
+        vendorId: '0403',
+        productId: '6001'
+      },
+      {
+        path: '/dev/ttyACM0',
+        manufacturer: 'Espressif',
+        friendlyName: 'USB JTAG/serial debug unit',
+        vendorId: '303A',
+        productId: '1001'
+      }
+    ]
+  };
+  service.getSerialByIdEntries = async () => [
+    {
+      symlinkPath: '/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_A10XYZ-if00-port0',
+      resolvedPath: '/dev/ttyUSB0',
+      friendlyName: 'usb-FTDI_FT232R_USB_UART_A10XYZ-if00-port0'
+    },
+    {
+      symlinkPath: '/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_ABC-if00',
+      resolvedPath: '/dev/ttyACM0',
+      friendlyName: 'usb-Espressif_USB_JTAG_serial_debug_unit_ABC-if00'
+    }
+  ];
+  service.scanFallbackSerialDevices = async () => [];
+
+  const result = await service.listProvisioningUsbPorts();
+  const plmPort = result.ports.find((port) => port.path === '/dev/ttyUSB0');
+
+  assert.equal(result.count, 2);
+  assert.equal(result.selectedPort.path, '/dev/ttyACM0');
+  assert.equal(result.selectedPort.stablePath, '/dev/serial/by-id/usb-Espressif_USB_JTAG_serial_debug_unit_ABC-if00');
+  assert.equal(result.selectedPort.likelyPanel, true);
+  assert.equal(plmPort.likelyPanel, false);
+
+  const resolved = await service.resolveProvisioningUsbPort();
+  assert.equal(resolved.path, '/dev/ttyACM0');
+});
+
 test('flashPanelInitialFirmware uploads to the selected USB port with per-panel build env', async (t) => {
   withPanelWifiBuildSettings(t);
   const originalFindById = WallPanel.findById;
