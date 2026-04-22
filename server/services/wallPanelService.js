@@ -46,6 +46,7 @@ const PANEL_OTA_BUILD_STALE_MS = Math.max(
 );
 
 const PANEL_MODE_ORDER = Object.freeze(['thermostat', 'room', 'home', 'media', 'quiet']);
+const PANEL_MODE_SET = new Set(PANEL_MODE_ORDER);
 const THERMOSTAT_MODES = Object.freeze(['auto', 'cool', 'heat', 'off']);
 const ROOM_DEVICE_TYPES = new Set(['light', 'switch', 'speaker', 'lock', 'garage']);
 const ACTIVE_OTA_STATUSES = new Set(['queued', 'building', 'ready', 'flashing', 'downloading', 'installing', 'rebooting']);
@@ -608,15 +609,32 @@ function buildOrientationSnapshot(panel) {
   };
 }
 
+function normalizePanelModeOrder(input) {
+  if (!Array.isArray(input)) {
+    return [...PANEL_MODE_ORDER];
+  }
+
+  const seen = new Set();
+  const modeOrder = [];
+  for (const value of input) {
+    const modeId = trimString(value).toLowerCase();
+    if (!PANEL_MODE_SET.has(modeId) || seen.has(modeId)) {
+      continue;
+    }
+    seen.add(modeId);
+    modeOrder.push(modeId);
+  }
+
+  return modeOrder.length > 0 ? modeOrder : [...PANEL_MODE_ORDER];
+}
+
 function buildDefaultSettings(overrides = {}) {
   const input = overrides && typeof overrides === 'object' ? overrides : {};
   return {
     integrationKind: 'elecrow-wall-panel',
     theme: 'homebrain-ios-future',
     pollingIntervalMs: resolvePanelPollIntervalMs(input.pollingIntervalMs),
-    modeOrder: Array.isArray(input.modeOrder) && input.modeOrder.length > 0
-      ? input.modeOrder.map((value) => trimString(value)).filter(Boolean)
-      : [...PANEL_MODE_ORDER],
+    modeOrder: normalizePanelModeOrder(input.modeOrder),
     registered: normalizeBoolean(input.registered, false),
     registrationExpires: input.registrationExpires
       ? new Date(input.registrationExpires)

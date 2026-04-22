@@ -100,7 +100,7 @@ private enum SettingsWebArea: String, CaseIterable, Identifiable {
         case .apiKeys: return "OpenAI, Anthropic, ElevenLabs, SmartThings"
         case .aiProviders: return "OpenAI, Codex, Anthropic, local LLM"
         case .llmPriority: return "Provider fallback order"
-        case .hardwareOrbs: return "Orb provisioning and mount alignment"
+        case .hardwareOrbs: return "Orb provisioning, categories, and mount alignment"
         case .security: return "Security mode and refresh-session lifetime"
         case .resources: return "CPU, memory, disk, GPU, deploy health"
         case .maintenance: return "Sync, reset, backup, diagnostics"
@@ -148,6 +148,7 @@ private enum HardwareOrbSettingsTab: String, CaseIterable, Identifiable {
     case fleet
     case firmware
     case provisioning
+    case categories
     case alignment
 
     var id: String { rawValue }
@@ -156,8 +157,9 @@ private enum HardwareOrbSettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .fleet: return "Fleet"
         case .firmware: return "Firmware"
-        case .provisioning: return "Provisioning"
-        case .alignment: return "Alignment"
+        case .provisioning: return "Setup"
+        case .categories: return "Categories"
+        case .alignment: return "Align"
         }
     }
 }
@@ -1039,6 +1041,8 @@ struct SettingsView: View {
             hardwareOrbFirmwareContent
         case .provisioning:
             hardwareOrbProvisioningContent
+        case .categories:
+            hardwareOrbCategoriesContent
         case .alignment:
             hardwareOrbAlignmentContent
         }
@@ -1218,6 +1222,62 @@ struct SettingsView: View {
                         copyHardwareOrbText(packet.headerSnippet, label: "Firmware header snippet")
                     }
                 }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var hardwareOrbCategoriesContent: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Turn orb categories on or off and choose the swipe order. The first enabled category is the default surface.")
+                .font(.footnote)
+                .foregroundStyle(HBPalette.textSecondary)
+
+            hardwareOrbPicker
+
+            if let hardwareOrb = selectedHardwareOrb {
+                HardwareOrbValueRow(title: "Default", value: hardwareOrb.defaultModeCategoryLabel)
+
+                ForEach(HardwareOrbModeCategory.orderedForDisplay(modeOrder: hardwareOrb.modeOrder)) { category in
+                    let enabledIndex = hardwareOrb.modeOrder.firstIndex(of: category.id)
+                    HardwareOrbCategoryRow(
+                        category: category,
+                        enabledIndex: enabledIndex,
+                        enabledCount: hardwareOrb.modeOrder.count,
+                        isSaving: savingHardwareOrbIDs.contains(hardwareOrb.id),
+                        onToggle: { enabled in
+                            Task {
+                                await setHardwareOrbCategory(
+                                    hardwareOrb,
+                                    categoryID: category.id,
+                                    enabled: enabled
+                                )
+                            }
+                        },
+                        onMoveUp: {
+                            Task {
+                                await moveHardwareOrbCategory(
+                                    hardwareOrb,
+                                    categoryID: category.id,
+                                    direction: -1
+                                )
+                            }
+                        },
+                        onMoveDown: {
+                            Task {
+                                await moveHardwareOrbCategory(
+                                    hardwareOrb,
+                                    categoryID: category.id,
+                                    direction: 1
+                                )
+                            }
+                        }
+                    )
+                }
+            } else {
+                Text("No hardware orb is selected.")
+                    .font(.subheadline)
+                    .foregroundStyle(HBPalette.textSecondary)
             }
         }
         .padding(.vertical, 4)
@@ -1704,6 +1764,87 @@ struct SettingsView: View {
         } catch {
             hardwareOrbs = previousHardwareOrbs
             hardwareOrbLoadError = error.localizedDescription
+        }
+    }
+
+    private func setHardwareOrbCategory(
+        _ hardwareOrb: HardwareOrbRecord,
+        categoryID: String,
+        enabled: Bool
+    ) async {
+        var nextModeOrder = HardwareOrbModeCategory.normalizedOrder(hardwareOrb.modeOrder)
+        let isEnabled = nextModeOrder.contains(categoryID)
+
+        if enabled {
+            guard !isEnabled else {
+                return
+            }
+            nextModeOrder.append(categoryID)
+        } else {
+            guard isEnabled, nextModeOrder.count > 1 else {
+                return
+            }
+            nextModeOrder.removeAll { $0 == categoryID }
+        }
+
+        await saveHardwareOrbModeOrder(hardwareOrb, modeOrder: nextModeOrder)
+    }
+
+    private func moveHardwareOrbCategory(
+        _ hardwareOrb: HardwareOrbRecord,
+        categoryID: String,
+        direction: Int
+    ) async {
+        var nextModeOrder = HardwareOrbModeCategory.normalizedOrder(hardwareOrb.modeOrder)
+        guard let fromIndex = nextModeOrder.firstIndex(of: categoryID) else {
+            return
+        }
+
+        let toIndex = fromIndex + direction
+        guard nextModeOrder.indices.contains(toIndex) else {
+            return
+        }
+
+        let moved = nextModeOrder.remove(at: fromIndex)
+        nextModeOrder.insert(moved, at: toIndex)
+        await saveHardwareOrbModeOrder(hardwareOrb, modeOrder: nextModeOrder)
+    }
+
+    private func saveHardwareOrbModeOrder(_ hardwareOrb: HardwareOrbRecord, modeOrder: [String]) async {
+        let normalizedModeOrder = HardwareOrbModeCategory.normalizedOrder(modeOrder)
+        guard normalizedModeOrder != hardwareOrb.modeOrder else {
+            return
+        }
+
+        let previousHardwareOrbs = hardwareOrbs
+        updateHardwareOrb(id: hardwareOrb.id) { current in
+            var updated = current
+            updated.modeOrder = normalizedModeOrder
+            return updated
+        }
+
+        savingHardwareOrbIDs.insert(hardwareOrb.id)
+        defer { savingHardwareOrbIDs.remove(hardwareOrb.id) }
+
+        do {
+            let response = try await session.apiClient.put(
+                "/api/panels/\(settingsPathComponent(hardwareOrb.id))",
+                body: [
+                    "settings": [
+                        "modeOrder": normalizedModeOrder
+                    ]
+                ]
+            )
+            let object = JSON.object(response)
+            if let refreshed = HardwareOrbRecord.from(JSON.object(object["panel"])) {
+                updateHardwareOrb(id: refreshed.id) { _ in refreshed }
+            }
+            infoMessage = "\(hardwareOrb.name) category order saved."
+            errorMessage = nil
+            hardwareOrbLoadError = nil
+        } catch {
+            hardwareOrbs = previousHardwareOrbs
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -2259,6 +2400,86 @@ private struct HardwareOrbOTA {
     }
 }
 
+private struct HardwareOrbModeCategory: Identifiable {
+    let id: String
+    let label: String
+    let details: String
+
+    static let all: [HardwareOrbModeCategory] = [
+        HardwareOrbModeCategory(
+            id: "thermostat",
+            label: "Thermostat",
+            details: "Temperature, HVAC mode, and bedtime long-press."
+        ),
+        HardwareOrbModeCategory(
+            id: "room",
+            label: "Room",
+            details: "Primary room light or switch control."
+        ),
+        HardwareOrbModeCategory(
+            id: "home",
+            label: "Home",
+            details: "Security state and alarm shortcuts."
+        ),
+        HardwareOrbModeCategory(
+            id: "media",
+            label: "Media",
+            details: "Harmony hub power and volume control."
+        ),
+        HardwareOrbModeCategory(
+            id: "quiet",
+            label: "Quiet",
+            details: "Bedtime, morning, lock-up, and night-light actions."
+        )
+    ]
+
+    static let defaultOrder = all.map(\.id)
+
+    static func category(for id: String) -> HardwareOrbModeCategory? {
+        all.first { $0.id == id }
+    }
+
+    static func normalizedOrder(_ value: Any?) -> [String] {
+        let rawValues: [String]
+        if let values = value as? [String] {
+            rawValues = values
+        } else if let values = value as? [Any] {
+            rawValues = values.compactMap { value in
+                if value is NSNull {
+                    return nil
+                }
+                if let stringValue = value as? String {
+                    return stringValue
+                }
+                return String(describing: value)
+            }
+        } else {
+            rawValues = []
+        }
+
+        let allowedIDs = Set(defaultOrder)
+        var seen = Set<String>()
+        let modeOrder = rawValues.compactMap { value -> String? in
+            let modeID = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard allowedIDs.contains(modeID), !seen.contains(modeID) else {
+                return nil
+            }
+            seen.insert(modeID)
+            return modeID
+        }
+
+        return modeOrder.isEmpty ? defaultOrder : modeOrder
+    }
+
+    static func orderedForDisplay(modeOrder: [String]) -> [HardwareOrbModeCategory] {
+        let normalizedModeOrder = normalizedOrder(modeOrder)
+        let enabledIDs = Set(normalizedModeOrder)
+        let enabledCategories = normalizedModeOrder.compactMap { category(for: $0) }
+        let disabledCategories = all.filter { !enabledIDs.contains($0.id) }
+        return enabledCategories + disabledCategories
+    }
+}
+
 private struct HardwareOrbRecord: Identifiable {
     static let mountOffsetMinimumTenths = -150
     static let mountOffsetMaximumTenths = 150
@@ -2279,6 +2500,7 @@ private struct HardwareOrbRecord: Identifiable {
     let latestFirmwareVersion: String
     let updateAvailable: Bool
     let ota: HardwareOrbOTA
+    var modeOrder: [String]
 
     var statusLabel: String {
         status.isEmpty ? "Unknown" : status.capitalized
@@ -2290,6 +2512,19 @@ private struct HardwareOrbRecord: Identifiable {
 
     var formattedMountOffset: String {
         Self.formattedMountOffset(mountOffsetTenths)
+    }
+
+    var enabledModeCategories: [HardwareOrbModeCategory] {
+        modeOrder.compactMap { HardwareOrbModeCategory.category(for: $0) }
+    }
+
+    var defaultModeCategoryLabel: String {
+        enabledModeCategories.first?.label ?? "Thermostat"
+    }
+
+    var modeCategorySummary: String {
+        let labels = enabledModeCategories.map(\.label)
+        return labels.isEmpty ? "Thermostat > Room > Home > Media > Quiet" : labels.joined(separator: " > ")
     }
 
     var firmwareVersionDisplay: String {
@@ -2336,7 +2571,8 @@ private struct HardwareOrbRecord: Identifiable {
             firmwareVersion: JSON.string(object, "firmwareVersion"),
             latestFirmwareVersion: JSON.string(object, "latestFirmwareVersion"),
             updateAvailable: JSON.bool(object, "updateAvailable"),
-            ota: HardwareOrbOTA.from(JSON.object(object["ota"]))
+            ota: HardwareOrbOTA.from(JSON.object(object["ota"])),
+            modeOrder: HardwareOrbModeCategory.normalizedOrder(settings["modeOrder"])
         )
     }
 
@@ -2450,6 +2686,11 @@ private struct HardwareOrbFleetRow: View {
             .font(.caption)
             .foregroundStyle(HBPalette.textSecondary)
 
+            Text("Default \(hardwareOrb.defaultModeCategoryLabel) · \(hardwareOrb.modeCategorySummary)")
+                .font(.caption)
+                .foregroundStyle(HBPalette.textSecondary)
+                .lineLimit(2)
+
             if hardwareOrb.requiresFirmwareUpdate || hardwareOrb.isOtaBusy {
                 Text(hardwareOrb.isOtaBusy ? "OTA: \(hardwareOrb.ota.statusLabel)" : "Newer firmware available")
                     .font(.caption)
@@ -2488,6 +2729,7 @@ private struct HardwareOrbFirmwareStatusView: View {
             HardwareOrbValueRow(title: "Target Firmware", value: hardwareOrb.ota.targetVersion.isEmpty ? "No pending OTA job" : hardwareOrb.ota.targetVersion)
             HardwareOrbValueRow(title: "OTA State", value: hardwareOrb.ota.statusLabel)
             HardwareOrbValueRow(title: "Last Firmware Update", value: hardwareOrb.ota.lastActivityText)
+            HardwareOrbValueRow(title: "Default Category", value: hardwareOrb.defaultModeCategoryLabel)
             HardwareOrbValueRow(title: "Last Seen", value: settingsFormatDateTime(hardwareOrb.lastSeen))
 
             if hardwareOrb.requiresFirmwareUpdate {
@@ -2513,6 +2755,97 @@ private struct HardwareOrbValueRow: View {
                 .font(.caption)
                 .multilineTextAlignment(.trailing)
         }
+    }
+}
+
+private struct HardwareOrbCategoryRow: View {
+    let category: HardwareOrbModeCategory
+    let enabledIndex: Int?
+    let enabledCount: Int
+    let isSaving: Bool
+    let onToggle: (Bool) -> Void
+    let onMoveUp: () -> Void
+    let onMoveDown: () -> Void
+
+    private var isEnabled: Bool {
+        enabledIndex != nil
+    }
+
+    private var isDefault: Bool {
+        enabledIndex == 0
+    }
+
+    private var isLastEnabled: Bool {
+        guard let enabledIndex else {
+            return false
+        }
+        return enabledIndex == enabledCount - 1
+    }
+
+    private var isOnlyEnabled: Bool {
+        isEnabled && enabledCount <= 1
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(enabledIndex.map { "\($0 + 1)" } ?? "Off")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(isEnabled ? HBPalette.accentBlue : HBPalette.textSecondary)
+                .frame(width: 44, height: 32)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(isEnabled ? HBPalette.accentBlue.opacity(0.12) : HBPalette.panelSoft.opacity(0.62))
+                )
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(category.label)
+                        .font(.subheadline.weight(.semibold))
+                    if isDefault {
+                        Text("Default")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(HBPalette.accentBlue)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(HBPalette.accentBlue.opacity(0.12), in: Capsule())
+                    }
+                }
+                Text(category.details)
+                    .font(.caption)
+                    .foregroundStyle(HBPalette.textSecondary)
+            }
+
+            Spacer(minLength: 8)
+
+            HStack(spacing: 6) {
+                Button {
+                    onMoveUp()
+                } label: {
+                    Image(systemName: "arrow.up")
+                }
+                .buttonStyle(.bordered)
+                .disabled(isSaving || !isEnabled || isDefault)
+                .accessibilityLabel("Move \(category.label) earlier")
+
+                Button {
+                    onMoveDown()
+                } label: {
+                    Image(systemName: "arrow.down")
+                }
+                .buttonStyle(.bordered)
+                .disabled(isSaving || !isEnabled || isLastEnabled)
+                .accessibilityLabel("Move \(category.label) later")
+
+                Toggle("", isOn: Binding(
+                    get: { isEnabled },
+                    set: { onToggle($0) }
+                ))
+                .labelsHidden()
+                .disabled(isSaving || isOnlyEnabled)
+                .accessibilityLabel("\(isEnabled ? "Disable" : "Enable") \(category.label)")
+            }
+        }
+        .padding(.vertical, 6)
     }
 }
 

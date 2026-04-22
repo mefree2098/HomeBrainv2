@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from "react"
 import {
   AlertCircle,
+  ArrowDown,
+  ArrowUp,
   CheckCircle,
   Copy,
   Cpu,
+  GripVertical,
   Home,
   Loader2,
   Moon,
@@ -49,6 +52,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Progress } from "@/components/ui/progress"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { useToast } from "@/hooks/useToast"
 
 type HarmonyHubSnapshot = {
@@ -76,6 +80,7 @@ type PanelDraft = {
   hardwareProfile: WallPanelRecord["hardwareProfile"]
   powerSource: WallPanelRecord["powerSource"]
   mountOffsetTenths: number
+  modeOrder: PanelModeId[]
   thermostatDeviceId: string
   sensorDeviceId: string
   thermostatBedtimeSceneId: string
@@ -128,6 +133,38 @@ const MOUNT_OFFSET_STEP_TENTHS = 5
 const MOUNT_OFFSET_MIN_TENTHS = -150
 const MOUNT_OFFSET_MAX_TENTHS = 150
 
+const PANEL_MODE_CATEGORIES = [
+  {
+    id: "thermostat",
+    label: "Thermostat",
+    description: "Temperature, HVAC mode, and bedtime long-press."
+  },
+  {
+    id: "room",
+    label: "Room",
+    description: "Primary room light or switch control."
+  },
+  {
+    id: "home",
+    label: "Home",
+    description: "Security state and alarm shortcuts."
+  },
+  {
+    id: "media",
+    label: "Media",
+    description: "Harmony hub power and volume control."
+  },
+  {
+    id: "quiet",
+    label: "Quiet",
+    description: "Bedtime, morning, lock-up, and night-light actions."
+  }
+] as const
+
+type PanelModeId = typeof PANEL_MODE_CATEGORIES[number]["id"]
+const DEFAULT_PANEL_MODE_ORDER = PANEL_MODE_CATEGORIES.map((category) => category.id) as PanelModeId[]
+const PANEL_MODE_ID_SET = new Set<string>(DEFAULT_PANEL_MODE_ORDER)
+
 const sortPanels = (panels: WallPanelRecord[]) =>
   [...panels].sort((left, right) => {
     const roomCompare = (left.room || "").localeCompare(right.room || "")
@@ -138,6 +175,20 @@ const sortPanels = (panels: WallPanelRecord[]) =>
   })
 
 const normalizeString = (value: string | undefined | null) => (value || "").trim()
+const normalizeModeOrder = (value: string[] | undefined | null) => {
+  const seen = new Set<string>()
+  const modeOrder = (Array.isArray(value) ? value : [])
+    .map((entry) => normalizeString(entry).toLowerCase())
+    .filter((entry): entry is PanelModeId => {
+      if (!PANEL_MODE_ID_SET.has(entry) || seen.has(entry)) {
+        return false
+      }
+      seen.add(entry)
+      return true
+    })
+
+  return modeOrder.length > 0 ? modeOrder : [...DEFAULT_PANEL_MODE_ORDER]
+}
 const clampMountOffsetTenths = (value: number) =>
   Math.max(MOUNT_OFFSET_MIN_TENTHS, Math.min(MOUNT_OFFSET_MAX_TENTHS, Math.round(value)))
 
@@ -236,6 +287,7 @@ const toPanelDraft = (panel: WallPanelRecord): PanelDraft => ({
   hardwareProfile: panel.hardwareProfile || "elecrow-crowpanel-2.1-rotary",
   powerSource: panel.powerSource || "wired",
   mountOffsetTenths: getMountOffsetTenths(panel),
+  modeOrder: normalizeModeOrder(panel.settings?.modeOrder),
   thermostatDeviceId: normalizeString(panel.settings?.thermostat?.deviceId),
   sensorDeviceId: normalizeString(panel.settings?.thermostat?.sensorDeviceId),
   thermostatBedtimeSceneId: normalizeString(panel.settings?.thermostat?.bedtimeSceneId),
@@ -266,6 +318,7 @@ const buildUpdatePayload = (draft: PanelDraft) => ({
   hardwareProfile: draft.hardwareProfile,
   powerSource: draft.powerSource,
   settings: {
+    modeOrder: normalizeModeOrder(draft.modeOrder),
     mountAlignment: {
       offsetTenths: clampMountOffsetTenths(draft.mountOffsetTenths)
     },
@@ -590,6 +643,50 @@ export function HardwareOrbsTab() {
 
   const mutateSelectedDraft = (updater: (current: PanelDraft) => PanelDraft) => {
     setDraft((current) => (current ? updater(current) : current))
+  }
+
+  const orderedModeCategories = useMemo(() => {
+    const modeOrder = normalizeModeOrder(draft?.modeOrder)
+    const enabledIds = new Set(modeOrder)
+    const enabledCategories = modeOrder
+      .map((modeId) => PANEL_MODE_CATEGORIES.find((category) => category.id === modeId))
+      .filter((category): category is typeof PANEL_MODE_CATEGORIES[number] => Boolean(category))
+    const disabledCategories = PANEL_MODE_CATEGORIES.filter((category) => !enabledIds.has(category.id))
+    return [...enabledCategories, ...disabledCategories]
+  }, [draft?.modeOrder])
+
+  const setModeCategoryEnabled = (modeId: PanelModeId, enabled: boolean) => {
+    mutateSelectedDraft((current) => {
+      const modeOrder = normalizeModeOrder(current.modeOrder)
+      const alreadyEnabled = modeOrder.includes(modeId)
+
+      if (enabled) {
+        return alreadyEnabled ? current : { ...current, modeOrder: [...modeOrder, modeId] }
+      }
+
+      if (!alreadyEnabled || modeOrder.length <= 1) {
+        return current
+      }
+
+      return { ...current, modeOrder: modeOrder.filter((entry) => entry !== modeId) }
+    })
+  }
+
+  const moveModeCategory = (modeId: PanelModeId, direction: -1 | 1) => {
+    mutateSelectedDraft((current) => {
+      const modeOrder = normalizeModeOrder(current.modeOrder)
+      const fromIndex = modeOrder.indexOf(modeId)
+      const toIndex = fromIndex + direction
+
+      if (fromIndex < 0 || toIndex < 0 || toIndex >= modeOrder.length) {
+        return current
+      }
+
+      const nextOrder = [...modeOrder]
+      const [moved] = nextOrder.splice(fromIndex, 1)
+      nextOrder.splice(toIndex, 0, moved)
+      return { ...current, modeOrder: nextOrder }
+    })
   }
 
   const replacePanel = (nextPanel: WallPanelRecord) => {
@@ -1485,6 +1582,88 @@ export function HardwareOrbsTab() {
                       </SelectContent>
                     </Select>
                   </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <GripVertical className="h-5 w-5 text-cyan-500" />
+                    Orb Categories
+                  </CardTitle>
+                  <CardDescription>
+                    Turn surfaces on or off and set the swipe order. The first enabled surface is the default when the orb opens.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  {orderedModeCategories.map((category) => {
+                    const modeOrder = normalizeModeOrder(draft.modeOrder)
+                    const enabledIndex = modeOrder.indexOf(category.id)
+                    const enabled = enabledIndex >= 0
+                    const firstEnabled = enabledIndex === 0
+                    const lastEnabled = enabledIndex === modeOrder.length - 1
+                    const onlyEnabled = enabled && modeOrder.length === 1
+
+                    return (
+                      <div
+                        key={category.id}
+                        className={`flex flex-col gap-3 rounded-xl border p-4 transition-colors md:flex-row md:items-center md:justify-between ${
+                          enabled
+                            ? "border-cyan-300/40 bg-cyan-500/[0.06]"
+                            : "border-border/60 bg-background/70"
+                        }`}
+                      >
+                        <div className="flex min-w-0 items-start gap-3">
+                          <div className={`mt-0.5 flex h-9 w-14 shrink-0 items-center justify-center rounded-lg border text-xs font-medium ${
+                            enabled
+                              ? "border-cyan-300/50 bg-cyan-500/10 text-cyan-700 dark:text-cyan-200"
+                              : "border-border/70 bg-muted/40 text-muted-foreground"
+                          }`}>
+                            {enabled ? enabledIndex + 1 : "Off"}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-medium">{category.label}</p>
+                              {firstEnabled ? <Badge variant="secondary">Default</Badge> : null}
+                            </div>
+                            <p className="mt-1 text-sm text-muted-foreground">{category.description}</p>
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2 self-end md:self-center">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            className="h-9 w-9"
+                            onClick={() => moveModeCategory(category.id, -1)}
+                            disabled={!enabled || firstEnabled}
+                            aria-label={`Move ${category.label} earlier`}
+                            title={`Move ${category.label} earlier`}
+                          >
+                            <ArrowUp className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            className="h-9 w-9"
+                            onClick={() => moveModeCategory(category.id, 1)}
+                            disabled={!enabled || lastEnabled}
+                            aria-label={`Move ${category.label} later`}
+                            title={`Move ${category.label} later`}
+                          >
+                            <ArrowDown className="h-4 w-4" />
+                          </Button>
+                          <Switch
+                            checked={enabled}
+                            disabled={onlyEnabled}
+                            onCheckedChange={(checked) => setModeCategoryEnabled(category.id, checked === true)}
+                            aria-label={`${enabled ? "Disable" : "Enable"} ${category.label}`}
+                          />
+                        </div>
+                      </div>
+                    )
+                  })}
                 </CardContent>
               </Card>
 

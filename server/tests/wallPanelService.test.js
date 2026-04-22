@@ -529,6 +529,107 @@ test('updatePanel clamps persisted mount alignment offsets to the supported rang
   assert.equal(panelDoc.settings.mountAlignment.offsetTenths, 150);
 });
 
+test('updatePanel normalizes optional orb category order', async (t) => {
+  const originalFindById = WallPanel.findById;
+
+  const panelDoc = {
+    _id: 'panel-category-order',
+    name: 'Bedroom Orb',
+    room: 'Bedroom',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'online',
+    settings: {
+      registrationCode: 'HBWP-ABCD-EF12-3456',
+      claimToken: '',
+      claimTokenExpires: null,
+      modeOrder: ['thermostat', 'room', 'home', 'media', 'quiet']
+    },
+    async save() {
+      return this;
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+  });
+
+  WallPanel.findById = async () => panelDoc;
+
+  const result = await wallPanelService.updatePanel('panel-category-order', {
+    settings: {
+      modeOrder: ['quiet', 'thermostat', 'quiet', 'unknown', 'room']
+    }
+  });
+
+  assert.deepEqual(result.settings.modeOrder, ['quiet', 'thermostat', 'room']);
+  assert.deepEqual(panelDoc.settings.modeOrder, ['quiet', 'thermostat', 'room']);
+});
+
+test('getPanelState uses the saved enabled category order', async (t) => {
+  const originalFindById = WallPanel.findById;
+  const originalDeviceFind = Device.find;
+  const originalDeviceFindOne = Device.findOne;
+  const originalSceneFind = Scene.find;
+  const originalGetAlarmStatus = securityAlarmService.getAlarmStatus;
+  const originalGetDeviceById = deviceService.getDeviceById;
+  const originalGetHubSnapshot = harmonyService.getHubSnapshot;
+  const originalFetchDashboardWeather = weatherService.fetchDashboardWeather;
+
+  const panelDoc = {
+    _id: 'panel-category-state',
+    name: 'Bedroom Orb',
+    room: 'Bedroom',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'online',
+    firmwareVersion: '0.1.0',
+    settings: {
+      registrationCode: 'HBWP-ABCD-EF12-3456',
+      claimToken: '',
+      claimTokenExpires: null,
+      modeOrder: ['quiet', 'room']
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+    Device.find = originalDeviceFind;
+    Device.findOne = originalDeviceFindOne;
+    Scene.find = originalSceneFind;
+    securityAlarmService.getAlarmStatus = originalGetAlarmStatus;
+    deviceService.getDeviceById = originalGetDeviceById;
+    harmonyService.getHubSnapshot = originalGetHubSnapshot;
+    weatherService.fetchDashboardWeather = originalFetchDashboardWeather;
+  });
+
+  WallPanel.findById = async () => panelDoc;
+  Device.findOne = async () => null;
+  Device.find = () => ({
+    sort: async () => []
+  });
+  Scene.find = async () => [];
+  securityAlarmService.getAlarmStatus = async () => ({
+    alarmState: 'disarmed',
+    isArmed: false,
+    isTriggered: false
+  });
+  deviceService.getDeviceById = async () => null;
+  harmonyService.getHubSnapshot = async () => null;
+  weatherService.fetchDashboardWeather = async () => null;
+
+  const result = await wallPanelService.getPanelState('panel-category-state', {
+    registrationCode: 'HBWP-ABCD-EF12-3456'
+  }, 'https://example.com');
+
+  assert.deepEqual(result.modeOrder, ['quiet', 'room']);
+  assert.equal(result.modeOrder[0], 'quiet');
+});
+
 test('getPanelState prefers a LAN OTA download URL when the panel and hub share a private subnet', async (t) => {
   const originalFindById = WallPanel.findById;
   const originalDeviceFind = Device.find;

@@ -1638,6 +1638,8 @@ bool parseState(JsonDocument& document) {
         return true;
       }
     }
+
+    gCurrentModeIndex = 0;
   }
 
   if (gCurrentModeIndex >= gState.modeCount) {
