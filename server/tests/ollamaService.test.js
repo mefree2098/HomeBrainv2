@@ -88,6 +88,38 @@ test('listOllamaProcesses detects HomeBrain-managed serve processes and macOS ap
   );
 });
 
+test('listOllamaProcesses falls back to the Ollama API port listener', async () => {
+  const service = new OllamaService();
+  const commands = [];
+
+  service.runShellCommand = async (command) => {
+    commands.push(command);
+    if (command === 'ps -eo pid=,user=,command=') {
+      return { stdout: '301 homebrain node server.js\n' };
+    }
+    if (command === "ss -H -ltnp 'sport = :11434'") {
+      return {
+        stdout: 'LISTEN 0 4096 127.0.0.1:11434 0.0.0.0:* users:(("ollama",pid=4242,fd=3))'
+      };
+    }
+    if (command === 'ps -p 4242 -o pid=,user=,command=') {
+      return { stdout: '4242 homebrain /usr/local/bin/ollama\n' };
+    }
+    throw new Error(`unexpected command: ${command}`);
+  };
+
+  const processes = await service.listOllamaProcesses();
+
+  assert.deepEqual(processes, [
+    {
+      pid: 4242,
+      user: 'homebrain',
+      command: '/usr/local/bin/ollama'
+    }
+  ]);
+  assert.equal(commands.includes("ss -H -ltnp 'sport = :11434'"), true);
+});
+
 test('startService does not spawn a second process when an owned Ollama process already exists', async (t) => {
   const service = new OllamaService();
   const originalGetConfig = OllamaConfig.getConfig;
@@ -308,6 +340,41 @@ test('stopService falls back to the external system stop when the tracked pid is
   assert.equal(result.success, true);
   assert.equal(stopSystemCalled, true);
   assert.equal(terminateCalled, false);
+});
+
+test('stopService uses pkill fallback when the API is up but process discovery is empty', async (t) => {
+  const service = new OllamaService();
+  const originalGetConfig = OllamaConfig.getConfig;
+  const config = {
+    servicePid: null,
+    serviceOwner: null,
+    serviceStatus: 'running',
+    lastError: null,
+    save: async () => {},
+    setError: async () => {}
+  };
+
+  OllamaConfig.getConfig = async () => config;
+  t.after(() => {
+    OllamaConfig.getConfig = originalGetConfig;
+  });
+
+  service.syncApiUrl = () => {};
+  service.getCurrentUser = () => 'homebrain';
+  service.listOllamaProcesses = async () => [];
+  service.checkServiceStatus = async () => ({ running: true, error: null });
+
+  let pkillCalled = false;
+  service.stopServiceWithPkill = async () => {
+    pkillCalled = true;
+    return { success: true, message: 'Service stopped' };
+  };
+  service.finalizeStoppedState = async () => ({ success: true, message: 'Service stopped' });
+
+  const result = await service.stopService();
+
+  assert.equal(result.success, true);
+  assert.equal(pkillCalled, true);
 });
 
 test('runNonInteractiveSudoCommand reports NoNewPrivileges with a repair hint', async () => {

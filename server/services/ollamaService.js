@@ -800,6 +800,33 @@ function matchesOllamaProcessCommand(command = '') {
   return false;
 }
 
+function parseOllamaPortPidFromSs(stdout = '') {
+  const match = String(stdout || '').match(/\bpid=(\d+)\b/);
+  if (!match) {
+    return null;
+  }
+
+  const pid = Number.parseInt(match[1], 10);
+  return Number.isFinite(pid) && pid > 0 ? pid : null;
+}
+
+function parseOllamaPortPidFromLsof(stdout = '') {
+  const lines = String(stdout || '').split(LOG_LINE_SPLIT_REGEX).map(line => line.trim()).filter(Boolean);
+  for (const line of lines) {
+    if (/^COMMAND\s+PID\s+/i.test(line)) {
+      continue;
+    }
+
+    const parts = line.split(/\s+/);
+    const pid = Number.parseInt(parts[1], 10);
+    if (Number.isFinite(pid) && pid > 0) {
+      return pid;
+    }
+  }
+
+  return null;
+}
+
 function getManualOllamaStopHint(platform = process.platform) {
   if (platform === 'darwin') {
     return 'pkill -x Ollama';
@@ -1043,6 +1070,20 @@ class OllamaService {
   syncApiUrl(config) {
     if (config?.configuration?.apiUrl) {
       this.apiUrl = config.configuration.apiUrl;
+    }
+  }
+
+  getOllamaApiPort() {
+    try {
+      const parsed = new URL(this.apiUrl);
+      if (parsed.port) {
+        const port = Number.parseInt(parsed.port, 10);
+        return Number.isFinite(port) && port > 0 ? port : 11434;
+      }
+
+      return parsed.protocol === 'https:' ? 443 : 80;
+    } catch (_error) {
+      return 11434;
     }
   }
 
@@ -2413,7 +2454,18 @@ class OllamaService {
 
         const status = await this.checkServiceStatus();
         if (status.running) {
-          return this.finalizeStoppedState(config, 'Service stopped');
+          this.addOperationLog(
+            'service',
+            'Ollama API is responding but no process was detected. Attempting command-line stop fallback.'
+          );
+          const pkillResult = await this.stopServiceWithPkill();
+          if (pkillResult.success) {
+            return this.finalizeStoppedState(config, pkillResult.message || 'Service stopped');
+          }
+
+          await config.setError(pkillResult.message || 'Failed to stop Ollama service');
+          await config.save();
+          return pkillResult;
         }
 
         config.serviceStatus = 'stopped';
@@ -2575,7 +2627,7 @@ class OllamaService {
         maxBuffer: MAX_LOG_BYTES * 4
       });
       const lines = stdout.split('\n').map(line => line.trim()).filter(Boolean);
-      return lines.map((line) => {
+      const processes = lines.map((line) => {
         const match = line.match(/^(\d+)\s+(\S+)\s+(.*)$/);
         if (!match) {
           return null;
@@ -2591,9 +2643,72 @@ class OllamaService {
           command
         };
       }).filter(Boolean);
+
+      if (processes.length > 0) {
+        return processes;
+      }
     } catch (error) {
-      return [];
+      // Fall through to listener-based discovery below.
     }
+
+    const listener = await this.findOllamaPortProcess();
+    return listener ? [listener] : [];
+  }
+
+  async findOllamaPortProcess() {
+    const port = this.getOllamaApiPort();
+    const pidCommands = [
+      {
+        command: `ss -H -ltnp 'sport = :${port}'`,
+        parse: parseOllamaPortPidFromSs
+      },
+      {
+        command: `lsof -nP -iTCP:${port} -sTCP:LISTEN`,
+        parse: parseOllamaPortPidFromLsof
+      }
+    ];
+
+    for (const candidate of pidCommands) {
+      let pid = null;
+      try {
+        const { stdout } = await this.runShellCommand(candidate.command, {
+          timeout: 3000,
+          maxBuffer: MAX_LOG_BYTES
+        });
+        pid = candidate.parse(stdout);
+      } catch (_error) {
+        continue;
+      }
+
+      if (!pid) {
+        continue;
+      }
+
+      try {
+        const { stdout } = await this.runShellCommand(`ps -p ${pid} -o pid=,user=,command=`, {
+          timeout: 2000,
+          maxBuffer: MAX_LOG_BYTES
+        });
+        const match = stdout.trim().match(/^(\d+)\s+(\S+)\s+(.*)$/);
+        if (match) {
+          return {
+            pid: Number(match[1]),
+            user: match[2],
+            command: match[3]
+          };
+        }
+      } catch (_error) {
+        // Return the listener even when process metadata is restricted.
+      }
+
+      return {
+        pid,
+        user: 'unknown',
+        command: `listener on ${this.apiUrl}`
+      };
+    }
+
+    return null;
   }
 
   getCurrentUser() {
@@ -3602,6 +3717,10 @@ class OllamaService {
             config.servicePid = externalProcess.pid;
             config.serviceOwner = externalProcess.user;
             serviceRunning = true;
+          } else {
+            serviceRunning = true;
+            config.servicePid = null;
+            config.serviceOwner = config.serviceOwner || 'unknown';
           }
         }
       } else {
