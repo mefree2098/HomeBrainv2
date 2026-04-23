@@ -650,6 +650,119 @@ function shellEscape(value = '') {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
+function trimEnvValue(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function resolveCurrentUserHomeDir() {
+  const explicitHome = trimEnvValue(process.env.HOME);
+  if (explicitHome) {
+    return explicitHome;
+  }
+
+  try {
+    const homeDir = trimEnvValue(os.homedir());
+    if (homeDir) {
+      return homeDir;
+    }
+  } catch (error) {
+    // Fall through to os.userInfo().
+  }
+
+  try {
+    const userInfoHome = trimEnvValue(os.userInfo().homedir);
+    if (userInfoHome) {
+      return userInfoHome;
+    }
+  } catch (error) {
+    // Leave HOME unset if the OS cannot resolve it.
+  }
+
+  return '';
+}
+
+function resolveCurrentUsernameForEnv() {
+  const explicitUser = trimEnvValue(process.env.USER)
+    || trimEnvValue(process.env.LOGNAME)
+    || trimEnvValue(process.env.SUDO_USER);
+  if (explicitUser) {
+    return explicitUser;
+  }
+
+  try {
+    return trimEnvValue(os.userInfo().username);
+  } catch (error) {
+    return '';
+  }
+}
+
+function extractConfiguredModelStoreRoots(config = null) {
+  const roots = new Set();
+  const configuredModels = Array.isArray(config?.installedModels) ? config.installedModels : [];
+
+  for (const model of configuredModels) {
+    const modelStoreRoots = Array.isArray(model?.details?.modelStoreRoots)
+      ? model.details.modelStoreRoots
+      : [];
+
+    for (const root of modelStoreRoots) {
+      const normalizedRoot = normalizeOllamaRootPath(root);
+      if (normalizedRoot) {
+        roots.add(normalizedRoot);
+      }
+    }
+  }
+
+  return Array.from(roots);
+}
+
+function deriveOllamaModelsPath(config = null) {
+  const configuredModelPath = trimEnvValue(process.env.OLLAMA_MODELS);
+  if (configuredModelPath) {
+    return configuredModelPath;
+  }
+
+  const modelStoreRoots = extractConfiguredModelStoreRoots(config);
+  if (modelStoreRoots.length === 1) {
+    return path.join(modelStoreRoots[0], 'models');
+  }
+
+  return '';
+}
+
+function buildOllamaProcessEnv(overrides = {}, config = null) {
+  const env = {
+    ...process.env,
+    ...overrides
+  };
+
+  if (!trimEnvValue(env.HOME)) {
+    const homeDir = resolveCurrentUserHomeDir();
+    if (homeDir) {
+      env.HOME = homeDir;
+    }
+  }
+
+  const username = resolveCurrentUsernameForEnv();
+  if (username) {
+    if (!trimEnvValue(env.USER)) {
+      env.USER = username;
+    }
+    if (!trimEnvValue(env.LOGNAME)) {
+      env.LOGNAME = username;
+    }
+  }
+
+  if (!trimEnvValue(env.OLLAMA_MODELS)) {
+    const modelsPath = deriveOllamaModelsPath(config);
+    if (modelsPath) {
+      env.OLLAMA_MODELS = modelsPath;
+    }
+  }
+
+  return env;
+}
+
 function summarizeCommandOutput(stdout = '', stderr = '', maxLines = 3) {
   const lines = `${stderr || ''}\n${stdout || ''}`
     .split(LOG_LINE_SPLIT_REGEX)
@@ -1269,10 +1382,9 @@ class OllamaService {
     }
 
     return new Promise((resolve, reject) => {
-      const env = {
-        ...process.env,
+      const env = buildOllamaProcessEnv({
         OLLAMA_HOST: this.getOllamaHostForEnv()
-      };
+      }, config);
 
       const child = this.spawnChildProcess(binaryPath, ['pull', modelName], { env });
       let timedOut = false;
@@ -1338,10 +1450,9 @@ class OllamaService {
       throw new Error('Ollama binary not found');
     }
 
-    const env = {
-      ...process.env,
+    const env = buildOllamaProcessEnv({
       OLLAMA_HOST: this.getOllamaHostForEnv()
-    };
+    }, config);
 
     await this.runShellCommand(`${shellEscape(binaryPath)} rm ${shellEscape(modelName)}`, {
       env,
@@ -1390,6 +1501,9 @@ class OllamaService {
 
     try {
       const { stdout } = await this.runShellCommand(`${shellEscape(binaryPath)} list`, {
+        env: buildOllamaProcessEnv({
+          OLLAMA_HOST: this.getOllamaHostForEnv()
+        }, config),
         timeout: 10000,
         maxBuffer: MAX_LOG_BYTES * 2
       });
@@ -1566,7 +1680,10 @@ class OllamaService {
       ];
       for (const command of versionCommands) {
         try {
-          const { stdout, stderr } = await this.runShellCommand(command, { timeout: 5000 });
+          const { stdout, stderr } = await this.runShellCommand(command, {
+            env: buildOllamaProcessEnv({}, config),
+            timeout: 5000
+          });
           const version = this.extractVersionFromOutput(stdout, stderr);
           console.log(`Ollama is installed, version: ${version}`);
           return { isInstalled: true, version };
@@ -2174,11 +2291,10 @@ class OllamaService {
         }
       }
 
-      const childEnv = {
-        ...process.env,
+      const childEnv = buildOllamaProcessEnv({
         OLLAMA_HOST: this.getOllamaHostForEnv(),
         OLLAMA_KEEP_ALIVE: process.env.HOMEBRAIN_OLLAMA_KEEP_ALIVE?.trim() || DEFAULT_MANAGED_OLLAMA_KEEP_ALIVE
-      };
+      }, config);
 
       if (process.platform === 'linux' && process.arch === 'arm64') {
         childEnv.OLLAMA_MAX_LOADED_MODELS = process.env.HOMEBRAIN_OLLAMA_MAX_LOADED_MODELS?.trim() || '1';
@@ -3828,6 +3944,7 @@ module.exports._private = {
   parseOllamaPullProgressEvent,
   parseCliPullProgressLine,
   buildAvailableModelVariantEntries,
+  buildOllamaProcessEnv,
   extractOllamaApiPayloadMessage,
   isGenericHttpStatusMessage,
   findRelevantOllamaDiagnosticLine

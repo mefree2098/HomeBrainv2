@@ -331,6 +331,35 @@ test('buildServiceRestartCommand removes invalid sudo fragments and forces non-i
   );
 });
 
+test('buildServiceRestartCommand does not revive the host Ollama service by default', { concurrency: false }, async (t) => {
+  const originalRestartOllama = process.env.HOMEBRAIN_DEPLOY_RESTART_OLLAMA;
+  const originalOllamaRestartCommand = process.env.HOMEBRAIN_DEPLOY_OLLAMA_RESTART_CMD;
+
+  delete process.env.HOMEBRAIN_DEPLOY_RESTART_OLLAMA;
+  delete process.env.HOMEBRAIN_DEPLOY_OLLAMA_RESTART_CMD;
+
+  t.after(() => {
+    if (originalRestartOllama === undefined) {
+      delete process.env.HOMEBRAIN_DEPLOY_RESTART_OLLAMA;
+    } else {
+      process.env.HOMEBRAIN_DEPLOY_RESTART_OLLAMA = originalRestartOllama;
+    }
+
+    if (originalOllamaRestartCommand === undefined) {
+      delete process.env.HOMEBRAIN_DEPLOY_OLLAMA_RESTART_CMD;
+    } else {
+      process.env.HOMEBRAIN_DEPLOY_OLLAMA_RESTART_CMD = originalOllamaRestartCommand;
+    }
+  });
+
+  const service = await createTempService(t);
+
+  const result = service.buildServiceRestartCommand();
+
+  assert.equal(service.restartOllamaOnDeploy, false);
+  assert.equal(result.fullCommand.includes('ollama'), false);
+});
+
 test('normalizeRestartCommandSegments adds --no-block to systemctl start and restart commands', { concurrency: false }, async (t) => {
   const service = await createTempService(t);
 

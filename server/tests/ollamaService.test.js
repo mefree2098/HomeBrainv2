@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { Readable } = require('node:stream');
+const { EventEmitter } = require('node:events');
 const axios = require('axios');
 
 const ollamaServiceModule = require('../services/ollamaService');
@@ -28,6 +29,45 @@ test('privileged helper candidates prefer the installed system helper path', () 
   assert.notEqual(systemIndex, -1);
   assert.notEqual(repoIndex, -1);
   assert.equal(systemIndex < repoIndex, true);
+});
+
+test('buildOllamaProcessEnv supplies HOME and preserves the discovered model store', { concurrency: false }, (t) => {
+  const originalHome = process.env.HOME;
+  const originalOllamaModels = process.env.OLLAMA_MODELS;
+
+  t.after(() => {
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+
+    if (originalOllamaModels === undefined) {
+      delete process.env.OLLAMA_MODELS;
+    } else {
+      process.env.OLLAMA_MODELS = originalOllamaModels;
+    }
+  });
+
+  delete process.env.HOME;
+  delete process.env.OLLAMA_MODELS;
+
+  const env = _private.buildOllamaProcessEnv(
+    { OLLAMA_HOST: '127.0.0.1:11434' },
+    {
+      installedModels: [
+        {
+          details: {
+            modelStoreRoots: ['/usr/share/ollama/.ollama']
+          }
+        }
+      ]
+    }
+  );
+
+  assert.equal(Boolean(env.HOME), true);
+  assert.equal(env.OLLAMA_HOST, '127.0.0.1:11434');
+  assert.equal(env.OLLAMA_MODELS, '/usr/share/ollama/.ollama/models');
 });
 
 test('listOllamaProcesses detects HomeBrain-managed serve processes and macOS app processes', async () => {
@@ -86,6 +126,75 @@ test('startService does not spawn a second process when an owned Ollama process 
   assert.equal(spawnCalled, false);
   assert.equal(config.servicePid, 4242);
   assert.equal(config.serviceOwner, 'matt');
+  assert.equal(config.serviceStatus, 'running');
+});
+
+test('startService supplies HOME to the managed Ollama process when systemd omits it', { concurrency: false }, async (t) => {
+  const service = new OllamaService();
+  const originalGetConfig = OllamaConfig.getConfig;
+  const originalHome = process.env.HOME;
+  const originalOllamaModels = process.env.OLLAMA_MODELS;
+  const config = {
+    servicePid: null,
+    serviceOwner: null,
+    serviceStatus: 'stopped',
+    installedModels: [
+      {
+        details: {
+          modelStoreRoots: ['/usr/share/ollama/.ollama']
+        }
+      }
+    ],
+    lastError: null,
+    save: async () => {},
+    setError: async () => {}
+  };
+
+  OllamaConfig.getConfig = async () => config;
+  delete process.env.HOME;
+  delete process.env.OLLAMA_MODELS;
+
+  t.after(() => {
+    OllamaConfig.getConfig = originalGetConfig;
+
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+
+    if (originalOllamaModels === undefined) {
+      delete process.env.OLLAMA_MODELS;
+    } else {
+      process.env.OLLAMA_MODELS = originalOllamaModels;
+    }
+  });
+
+  service.syncApiUrl = () => {};
+  service.resolveOllamaBinary = async () => '/usr/local/bin/ollama';
+  service.checkServiceStatus = async () => ({ running: false, error: null });
+  service.listOllamaProcesses = async () => [];
+  service.getCurrentUser = () => 'homebrain';
+  service.waitForServiceReady = async () => true;
+
+  let capturedEnv = null;
+  service.spawnChildProcess = (_command, _args, options = {}) => {
+    const child = new EventEmitter();
+    capturedEnv = options.env || null;
+    child.pid = 4242;
+    child.unref = () => {};
+    process.nextTick(() => child.emit('spawn'));
+    return child;
+  };
+
+  const result = await service.startService();
+
+  assert.equal(result.success, true);
+  assert.equal(Boolean(capturedEnv?.HOME), true);
+  assert.equal(capturedEnv.OLLAMA_HOST, 'localhost:11434');
+  assert.equal(capturedEnv.OLLAMA_MODELS, '/usr/share/ollama/.ollama/models');
+  assert.equal(config.servicePid, 4242);
+  assert.equal(config.serviceOwner, 'homebrain');
   assert.equal(config.serviceStatus, 'running');
 });
 
