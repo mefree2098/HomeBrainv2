@@ -230,6 +230,64 @@ test('startService supplies HOME to the managed Ollama process when systemd omit
   assert.equal(config.serviceStatus, 'running');
 });
 
+test('recoverManagedServiceAfterStartup restarts a previously managed runtime after HomeBrain restart', async (t) => {
+  const service = new OllamaService();
+  const originalGetConfig = OllamaConfig.getConfig;
+  const config = {
+    serviceStatus: 'running',
+    servicePid: 1234,
+    serviceOwner: 'root',
+    save: async () => {}
+  };
+
+  OllamaConfig.getConfig = async () => config;
+  t.after(() => {
+    OllamaConfig.getConfig = originalGetConfig;
+  });
+
+  service.syncApiUrl = () => {};
+  service.checkServiceStatus = async () => ({ running: false, error: 'Service not running' });
+
+  let started = false;
+  service.startService = async () => {
+    started = true;
+    return { success: true, message: 'Service started' };
+  };
+
+  const result = await service.recoverManagedServiceAfterStartup();
+
+  assert.equal(started, true);
+  assert.equal(result.recovered, true);
+  assert.deepEqual(result.result, { success: true, message: 'Service started' });
+});
+
+test('recoverManagedServiceAfterStartup leaves a manually stopped runtime stopped', async (t) => {
+  const service = new OllamaService();
+  const originalGetConfig = OllamaConfig.getConfig;
+  const config = {
+    serviceStatus: 'stopped',
+    save: async () => {}
+  };
+
+  OllamaConfig.getConfig = async () => config;
+  t.after(() => {
+    OllamaConfig.getConfig = originalGetConfig;
+  });
+
+  let started = false;
+  service.startService = async () => {
+    started = true;
+    return { success: true };
+  };
+
+  const result = await service.recoverManagedServiceAfterStartup();
+
+  assert.equal(started, false);
+  assert.equal(result.recovered, false);
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, 'previous_status_stopped');
+});
+
 test('install prefers the privileged helper flow when it is available', async (t) => {
   const service = new OllamaService();
   const originalGetConfig = OllamaConfig.getConfig;
