@@ -473,7 +473,9 @@ ExecStart=${node_bin} scripts/run-with-modern-node.js node server/server.js
 Restart=always
 RestartSec=5
 TimeoutStopSec=15s
-KillMode=mixed
+# HomeBrain may own long-lived child services, such as managed Ollama.
+# Restart only the Node process so those children survive deploy restarts.
+KillMode=process
 NoNewPrivileges=false
 
 [Install]

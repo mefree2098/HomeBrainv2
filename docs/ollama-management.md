@@ -10,11 +10,12 @@ On Linux and Jetson hosts, the Ollama page in HomeBrain owns these jobs:
 - stops any foreign/system-managed Ollama runtime before changing versions
 - starts a single HomeBrain-managed `ollama serve` process after install or update
 - leaves the host `ollama.service` alone during normal HomeBrain deploy restarts
+- keeps the managed Ollama runtime alive when the HomeBrain service itself restarts
 - refuses to continue if Ollama is still running elsewhere, to avoid duplicate instances
 
 That means the goal is not "any Ollama process is fine." The goal is one Ollama runtime, managed predictably by HomeBrain.
 
-Deploys intentionally do not restart the host `ollama.service` by default. Set `HOMEBRAIN_DEPLOY_RESTART_OLLAMA=true` and `HOMEBRAIN_DEPLOY_OLLAMA_RESTART_CMD` only when you explicitly want deploys to run a custom Ollama restart command.
+Deploys intentionally do not restart the host `ollama.service` by default. The generated `homebrain.service` also uses `KillMode=process` so a HomeBrain restart does not terminate the managed `ollama serve` child process. Set `HOMEBRAIN_DEPLOY_RESTART_OLLAMA=true` and `HOMEBRAIN_DEPLOY_OLLAMA_RESTART_CMD` only when you explicitly want deploys to run a custom Ollama restart command.
 
 ## Privileged Helper
 
