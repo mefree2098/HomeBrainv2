@@ -399,6 +399,18 @@ test('installServiceHelpers runs setup-services install-service with non-interac
   });
 });
 
+test('setup-services keeps HomeBrain-managed child services alive across restarts', async () => {
+  const setupServicesPath = path.resolve(__dirname, '..', '..', 'scripts', 'setup-services.sh');
+  const script = await fsp.readFile(setupServicesPath, 'utf8');
+  const serviceUnitStart = script.indexOf('Description=HomeBrain Smart Home Hub');
+  const serviceUnitEnd = script.indexOf('[Install]', serviceUnitStart);
+  const serviceUnit = script.slice(serviceUnitStart, serviceUnitEnd);
+
+  assert.match(serviceUnit, /ExecStart=.*server\/server\.js/);
+  assert.match(serviceUnit, /KillMode=process/);
+  assert.doesNotMatch(serviceUnit, /KillMode=mixed/);
+});
+
 test('installServiceHelpers skips when helper installation lacks passwordless sudo', { concurrency: false }, async (t) => {
   const service = await createTempService(t);
   const scriptsDir = path.join(service.projectRoot, 'scripts');
