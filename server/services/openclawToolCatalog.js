@@ -407,7 +407,14 @@ async function handleDevices(input, context) {
           action: input.action,
           value: input.value
         }
-      }, () => deviceService.controlDevice(getEntityId(device), input.action, input.value));
+      }, () => deviceService.controlDevice(getEntityId(device), input.action, input.value, {
+        command: {
+          source: 'openclaw',
+          triggerSource: 'openclaw',
+          reason: `OpenClaw device control: ${input.action}`,
+          actor: context?.actor || 'openclaw'
+        }
+      }));
       return toolSuccess(`Executed "${input.action}" on "${getEntityName(updatedDevice)}"`, {
         device: updatedDevice
       });
@@ -487,7 +494,14 @@ async function handleScenes(input, context) {
           sceneId: getEntityId(scene),
           sceneName: getEntityName(scene)
         }
-      }, () => sceneService.activateScene(getEntityId(scene)));
+      }, () => sceneService.activateScene(getEntityId(scene), {
+        command: {
+          source: 'openclaw',
+          triggerSource: 'openclaw',
+          reason: `OpenClaw scene activation: ${getEntityName(scene)}`,
+          actor: context?.actor || 'openclaw'
+        }
+      }));
       return toolSuccess(`Activated scene "${getEntityName(scene)}"`, result);
     }
     default:

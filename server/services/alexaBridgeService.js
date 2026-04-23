@@ -779,7 +779,15 @@ class AlexaBridgeService {
 
     if (namespace === 'Alexa.SceneController' && name === 'Activate') {
       if (record.exposure.entityType === 'scene') {
-        await sceneService.activateScene(record.exposure.entityId);
+        await sceneService.activateScene(record.exposure.entityId, {
+          command: {
+            source: 'alexa',
+            triggerSource: 'alexa',
+            reason: 'Alexa scene activation',
+            actor: 'alexa',
+            correlationId: normalized.endpointId
+          }
+        });
       } else if (record.exposure.entityType === 'workflow') {
         void workflowService.executeWorkflow(record.exposure.entityId, {
           triggerType: 'manual',
@@ -832,30 +840,40 @@ class AlexaBridgeService {
     const deviceId = record.exposure.entityId;
     const currentProperties = record.endpoint?.state?.properties || [];
     const isHarmonyDevice = deviceService.isHarmonyDevice(record.entity);
+    const commandOptions = {
+      command: {
+        source: 'alexa',
+        triggerSource: 'alexa',
+        reason: `Alexa directive ${namespace}.${name}`,
+        actor: 'alexa',
+        correlationId: record.endpoint?.endpointId || null
+      }
+    };
 
     if (namespace === 'Alexa.PowerController') {
       const controlOptions = isHarmonyDevice
         ? {
+            ...commandOptions,
             // Alexa control responses need to come back fast and should not be
             // blocked on an immediate Harmony hub re-poll after the command has
             // already been accepted.
             skipIntegrationRefresh: true,
             skipPostActionVerification: true
           }
-        : undefined;
+        : commandOptions;
       await deviceService.controlDevice(deviceId, name === 'TurnOn' ? 'turn_on' : 'turn_off', undefined, controlOptions);
       return;
     }
 
     if (namespace === 'Alexa.BrightnessController') {
       if (name === 'SetBrightness') {
-        await deviceService.controlDevice(deviceId, 'set_brightness', payload.brightness);
+        await deviceService.controlDevice(deviceId, 'set_brightness', payload.brightness, commandOptions);
         return;
       }
 
       if (name === 'AdjustBrightness') {
         const current = Number(getPropertyValue(currentProperties, 'Alexa.BrightnessController', 'brightness') || 0);
-        await deviceService.controlDevice(deviceId, 'set_brightness', Math.max(0, Math.min(100, current + Number(payload.brightnessDelta || 0))));
+        await deviceService.controlDevice(deviceId, 'set_brightness', Math.max(0, Math.min(100, current + Number(payload.brightnessDelta || 0))), commandOptions);
         return;
       }
     }
@@ -865,37 +883,37 @@ class AlexaBridgeService {
       if (!color) {
         throw new Error('Alexa color payload is invalid');
       }
-      await deviceService.controlDevice(deviceId, 'set_color', color);
+      await deviceService.controlDevice(deviceId, 'set_color', color, commandOptions);
       return;
     }
 
     if (namespace === 'Alexa.ColorTemperatureController') {
       const current = Number(getPropertyValue(currentProperties, 'Alexa.ColorTemperatureController', 'colorTemperatureInKelvin') || 4000);
       if (name === 'SetColorTemperature') {
-        await deviceService.controlDevice(deviceId, 'set_color_temperature', payload.colorTemperatureInKelvin);
+        await deviceService.controlDevice(deviceId, 'set_color_temperature', payload.colorTemperatureInKelvin, commandOptions);
         return;
       }
 
       if (name === 'IncreaseColorTemperature') {
-        await deviceService.controlDevice(deviceId, 'set_color_temperature', current + 500);
+        await deviceService.controlDevice(deviceId, 'set_color_temperature', current + 500, commandOptions);
         return;
       }
 
       if (name === 'DecreaseColorTemperature') {
-        await deviceService.controlDevice(deviceId, 'set_color_temperature', current - 500);
+        await deviceService.controlDevice(deviceId, 'set_color_temperature', current - 500, commandOptions);
         return;
       }
     }
 
     if (namespace === 'Alexa.ThermostatController') {
       if (name === 'SetTargetTemperature') {
-        await deviceService.controlDevice(deviceId, 'set_temperature', payload.targetSetpoint?.value);
+        await deviceService.controlDevice(deviceId, 'set_temperature', payload.targetSetpoint?.value, commandOptions);
         return;
       }
 
       if (name === 'AdjustTargetTemperature') {
         const current = Number(getPropertyValue(currentProperties, 'Alexa.ThermostatController', 'targetSetpoint')?.value || record.entity?.targetTemperature || 0);
-        await deviceService.controlDevice(deviceId, 'set_temperature', current + Number(payload.targetSetpointDelta?.value || 0));
+        await deviceService.controlDevice(deviceId, 'set_temperature', current + Number(payload.targetSetpointDelta?.value || 0), commandOptions);
         return;
       }
 
@@ -904,13 +922,13 @@ class AlexaBridgeService {
         if (!mode) {
           throw new Error('Alexa thermostat mode payload is invalid');
         }
-        await deviceService.controlDevice(deviceId, 'set_mode', mode);
+        await deviceService.controlDevice(deviceId, 'set_mode', mode, commandOptions);
         return;
       }
     }
 
     if (namespace === 'Alexa.LockController') {
-      await deviceService.controlDevice(deviceId, name === 'Lock' ? 'lock' : 'unlock');
+      await deviceService.controlDevice(deviceId, name === 'Lock' ? 'lock' : 'unlock', undefined, commandOptions);
       return;
     }
 
@@ -960,7 +978,14 @@ class AlexaBridgeService {
     const result = await executeActionSequence([buildGroupControlAction(groupName, actionName, value)], {
       context: {
         source: 'alexa',
-        endpointId: record.endpoint.endpointId
+        endpointId: record.endpoint.endpointId,
+        commandContext: {
+          source: 'alexa',
+          triggerSource: 'alexa',
+          reason: `Alexa group directive ${namespace}.${name}`,
+          actor: 'alexa',
+          correlationId: record.endpoint.endpointId
+        }
       }
     });
 

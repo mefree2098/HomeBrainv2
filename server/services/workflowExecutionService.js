@@ -6,6 +6,7 @@ const deviceService = require('./deviceService');
 const deviceGroupService = require('./deviceGroupService');
 const sceneService = require('./sceneService');
 const insteonService = require('./insteonService');
+const deviceCommandCoordinatorService = require('./deviceCommandCoordinatorService');
 const { resolveDeviceProperty } = require('../utils/devicePropertyResolver');
 
 const MAX_DELAY_SECONDS = Math.max(
@@ -76,6 +77,87 @@ function sanitizeString(value) {
 
 function getDeviceSource(device) {
   return sanitizeString(device?.properties?.source).toLowerCase();
+}
+
+function buildDeviceCommandMetadata(context = {}, overrides = {}) {
+  const commandContext = context.commandContext && typeof context.commandContext === 'object'
+    ? context.commandContext
+    : {};
+
+  return {
+    ...commandContext,
+    workflowId: context.workflowId || commandContext.workflowId || null,
+    executionHistoryId: context.executionHistoryId || commandContext.executionHistoryId || null,
+    executionCorrelationId: context.executionCorrelationId || commandContext.executionCorrelationId || null,
+    correlationId: context.executionCorrelationId || commandContext.correlationId || null,
+    ...overrides
+  };
+}
+
+async function executeWithDeviceCommandAdmission(device, actionName, value, context, overrides, executor) {
+  const admission = await deviceCommandCoordinatorService.admitCommand({
+    device,
+    action: actionName,
+    value,
+    metadata: buildDeviceCommandMetadata(context, overrides)
+  });
+
+  try {
+    return await executor(admission);
+  } catch (error) {
+    if (admission?.accepted && !admission.disabled) {
+      try {
+        await deviceCommandCoordinatorService.releaseCommand(admission.command?.commandId, {
+          reason: error?.message || 'Workflow device command failed'
+        });
+      } catch (releaseError) {
+        console.warn(`WorkflowExecutionService: Failed to release device command claim: ${releaseError.message}`);
+      }
+    }
+    throw error;
+  }
+}
+
+async function admitDeviceCommandGroup(devices = [], actionName, value, context, overrides = {}) {
+  const admissions = [];
+
+  try {
+    for (const device of devices) {
+      // eslint-disable-next-line no-await-in-loop
+      const admission = await deviceCommandCoordinatorService.admitCommand({
+        device,
+        action: actionName,
+        value,
+        metadata: buildDeviceCommandMetadata(context, {
+          ...overrides,
+          reason: overrides.reason || `Device group action ${actionName} for ${device?.name || device?._id || 'device'}`
+        })
+      });
+      admissions.push(admission);
+    }
+    return admissions;
+  } catch (error) {
+    await Promise.all(admissions.map((admission) => (
+      admission?.accepted && !admission.disabled
+        ? deviceCommandCoordinatorService.releaseCommand(admission.command?.commandId, {
+          reason: error?.message || 'Device group command admission failed'
+        }).catch((releaseError) => {
+          console.warn(`WorkflowExecutionService: Failed to release device group command claim: ${releaseError.message}`);
+        })
+        : Promise.resolve()
+    )));
+    throw error;
+  }
+}
+
+async function releaseDeviceCommandAdmissions(admissions = [], reason = 'Device group command released') {
+  await Promise.all(admissions.map((admission) => (
+    admission?.accepted && !admission.disabled
+      ? deviceCommandCoordinatorService.releaseCommand(admission.command?.commandId, { reason }).catch((error) => {
+        console.warn(`WorkflowExecutionService: Failed to release device group command claim: ${error.message}`);
+      })
+      : Promise.resolve()
+  )));
 }
 
 function getDeviceGroupConcurrency(devices = []) {
@@ -1145,6 +1227,14 @@ async function resolveWorkflowReference(parameters = {}, options = {}) {
 async function executeDeviceControlForResolvedDevice(device, target, actionName, value, executionOptions = {}) {
   const source = getDeviceSource(device);
   let controlResult = null;
+  const context = executionOptions?.context && typeof executionOptions.context === 'object'
+    ? executionOptions.context
+    : {};
+  const commandMetadata = buildDeviceCommandMetadata(context, {
+    reason: executionOptions?.reason
+      || `Workflow action ${actionName} for ${device?.name || target}`,
+    actionType: 'device_control'
+  });
   const insteonOptions = {
     ...getInsteonCommandRetryOptions(executionOptions?.action, source),
     ...(executionOptions?.insteon && typeof executionOptions.insteon === 'object'
@@ -1156,30 +1246,56 @@ async function executeDeviceControlForResolvedDevice(device, target, actionName,
     switch (actionName) {
       case 'turn_on':
       case 'turnon':
-        controlResult = await insteonService.turnOn(
-          target.toString(),
-          value != null ? Number(value) : 100,
-          insteonOptions
+        controlResult = await executeWithDeviceCommandAdmission(
+          device,
+          actionName,
+          value,
+          context,
+          commandMetadata,
+          () => insteonService.turnOn(
+            target.toString(),
+            value != null ? Number(value) : 100,
+            insteonOptions
+          )
         );
         break;
       case 'turn_off':
       case 'turnoff':
-        controlResult = await insteonService.turnOff(target.toString(), insteonOptions);
+        controlResult = await executeWithDeviceCommandAdmission(
+          device,
+          actionName,
+          value,
+          context,
+          commandMetadata,
+          () => insteonService.turnOff(target.toString(), insteonOptions)
+        );
         break;
       case 'set_brightness':
       case 'setbrightness':
-        controlResult = await insteonService.setBrightness(
-          target.toString(),
-          value != null ? Number(value) : 100,
-          insteonOptions
+        controlResult = await executeWithDeviceCommandAdmission(
+          device,
+          actionName,
+          value,
+          context,
+          commandMetadata,
+          () => insteonService.setBrightness(
+            target.toString(),
+            value != null ? Number(value) : 100,
+            insteonOptions
+          )
         );
         break;
       default:
-        controlResult = await deviceService.controlDevice(target.toString(), actionName, value);
+        controlResult = await deviceService.controlDevice(target.toString(), actionName, value, {
+          command: commandMetadata,
+          insteon: insteonOptions
+        });
         break;
     }
   } else {
-    controlResult = await deviceService.controlDevice(target.toString(), actionName, value);
+    controlResult = await deviceService.controlDevice(target.toString(), actionName, value, {
+      command: commandMetadata
+    });
   }
 
   const controlMessage = typeof controlResult?.message === 'string' && controlResult.message.trim()
@@ -1223,6 +1339,7 @@ async function executeResolvedDeviceGroupUnit({
   actionName,
   value,
   insteonGroupOptions,
+  context = {},
   allowManagedInsteonGroup = true
 }) {
   if (!Array.isArray(devices) || devices.length === 0) {
@@ -1230,7 +1347,12 @@ async function executeResolvedDeviceGroupUnit({
   }
 
   if (allowManagedInsteonGroup) {
+    let groupAdmissions = [];
     try {
+      groupAdmissions = await admitDeviceCommandGroup(devices, actionName, value, context, {
+        actionType: 'device_group_control',
+        reason: `Device group "${groupName}" ${actionName}`
+      });
       const broadcastResult = await insteonService.tryControlDeviceGroup(
         groupRecord,
         devices,
@@ -1265,7 +1387,13 @@ async function executeResolvedDeviceGroupUnit({
           }
         };
       }
+
+      await releaseDeviceCommandAdmissions(groupAdmissions, 'Managed INSTEON group broadcast was not used');
     } catch (error) {
+      await releaseDeviceCommandAdmissions(groupAdmissions, error.message || 'Managed INSTEON group broadcast failed');
+      if (error?.code === 'DEVICE_COMMAND_BLOCKED') {
+        throw error;
+      }
       console.warn(
         `WorkflowExecutionService: Managed INSTEON group broadcast failed for "${groupName}", falling back to per-device control: ${error.message}`
       );
@@ -1287,7 +1415,8 @@ async function executeResolvedDeviceGroupUnit({
         value,
         {
           action,
-          insteon: insteonGroupOptions
+          insteon: insteonGroupOptions,
+          context
         }
       );
 
@@ -1343,7 +1472,7 @@ async function executeResolvedDeviceGroupUnit({
   };
 }
 
-async function executeDeviceGroupControl(groupTarget, action) {
+async function executeDeviceGroupControl(groupTarget, action, context = {}) {
   const requestedGroupName = sanitizeString(groupTarget?.group);
   if (!requestedGroupName) {
     throw new Error('Device group target is required');
@@ -1370,6 +1499,7 @@ async function executeDeviceGroupControl(groupTarget, action) {
       actionName,
       value,
       insteonGroupOptions,
+      context,
       allowManagedInsteonGroup: unit?.allowManagedInsteonGroup !== false
     });
   }
@@ -1390,6 +1520,7 @@ async function executeDeviceGroupControl(groupTarget, action) {
           ...insteonGroupOptions,
           deviceGroup: unit.groupName
         },
+        context,
         allowManagedInsteonGroup: unit.allowManagedInsteonGroup
       });
       unitResults.push(result);
@@ -1463,7 +1594,7 @@ async function executeDeviceControl(action, context = {}) {
   const rawTarget = getActionTargetCandidate(action, ['deviceId']);
   const groupTarget = normalizeDeviceGroupTarget(rawTarget);
   if (groupTarget) {
-    return executeDeviceGroupControl(groupTarget, action);
+    return executeDeviceGroupControl(groupTarget, action, context);
   }
 
   const target = resolveActionTargetReference(rawTarget, context);
@@ -1479,7 +1610,8 @@ async function executeDeviceControl(action, context = {}) {
   const actionName = getActionName(action);
   const value = getActionValue(actionName, action?.parameters || {});
   return executeDeviceControlForResolvedDevice(device, target, actionName, value, {
-    action
+    action,
+    context
   });
 }
 
@@ -1491,7 +1623,13 @@ async function executeSceneActivate(action, context = {}) {
   if (!sceneId) {
     throw new Error('Scene target is required');
   }
-  const result = await sceneService.activateScene(sceneId.toString());
+  const result = await sceneService.activateScene(sceneId.toString(), {
+    context,
+    command: buildDeviceCommandMetadata(context, {
+      source: context.commandContext?.source || 'workflow',
+      reason: `Workflow scene activation for scene ${sceneId}`
+    })
+  });
   return {
     target: sceneId.toString(),
     message: result?.message || 'Scene activated'

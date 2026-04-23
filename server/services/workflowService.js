@@ -652,7 +652,10 @@ class WorkflowService {
       throw new Error('Workflow text description is required');
     }
 
-    const creation = await automationService.createAutomationFromText(text.trim(), roomContext);
+    const creation = await automationService.createAutomationFromText(text.trim(), roomContext, {
+      source,
+      triggerSource: source
+    });
     if (creation?.handledDirectCommand) {
       void eventStreamService.publishSafe({
         type: 'workflow.command_handled',

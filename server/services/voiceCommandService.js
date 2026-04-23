@@ -1079,7 +1079,7 @@ RULES
     return action.value;
   }
 
-  async executeDeviceAction(action, context) {
+  async executeDeviceAction(action, context, commandContext = {}) {
     const result = {
       type: 'device_control',
       deviceId: action.deviceId,
@@ -1103,15 +1103,20 @@ RULES
     const normalizedAction = (action.action || '').toLowerCase();
     const mappedAction = ACTION_MAP[normalizedAction] || ACTION_MAP[normalizedAction.replace(/[^a-z]/g, '')] || ACTION_MAP[normalizedAction.replace(/-/g, '_')] || null;
     const value = this.normalizeActionValue(action, deviceRecord);
-    const source = (deviceRecord?.properties?.source || '').toLowerCase();
 
     try {
-      if (source === 'insteon') {
-        await this.executeInsteonAction(deviceRecord, normalizedAction, value);
-      } else {
-        const actionName = mappedAction || normalizedAction.replace(/[^a-z]/g, '');
-        await deviceService.controlDevice(deviceRecord._id.toString(), actionName, value);
-      }
+      const actionName = mappedAction || normalizedAction.replace(/[^a-z]/g, '');
+      await deviceService.controlDevice(deviceRecord._id.toString(), actionName, value, {
+        command: {
+          source: 'voice',
+          triggerSource: 'voice',
+          reason: commandContext.commandText
+            ? `Voice command: ${commandContext.commandText}`
+            : `Voice command for ${deviceRecord.name}`,
+          actor: commandContext.wakeWord || commandContext.room || 'voice',
+          ...commandContext
+        }
+      });
 
       result.success = true;
       const valueText = value != null ? ` (${value})` : '';
@@ -1150,7 +1155,7 @@ RULES
     }
   }
 
-  async executeSceneAction(action) {
+  async executeSceneAction(action, commandContext = {}) {
     const result = {
       type: 'scene_activate',
       sceneId: action.sceneId,
@@ -1159,7 +1164,17 @@ RULES
     };
 
     try {
-      const activation = await sceneService.activateScene(action.sceneId);
+      const activation = await sceneService.activateScene(action.sceneId, {
+        command: {
+          source: 'voice',
+          triggerSource: 'voice',
+          reason: commandContext.commandText
+            ? `Voice scene command: ${commandContext.commandText}`
+            : 'Voice scene activation',
+          actor: commandContext.wakeWord || commandContext.room || 'voice',
+          ...commandContext
+        }
+      });
       result.success = true;
       result.message = activation?.message || 'Scene activated';
       return result;
@@ -1321,14 +1336,14 @@ RULES
     }
   }
 
-  async executeActions(actions, context, room) {
+  async executeActions(actions, context, room, commandContext = {}) {
     const entities = { devices: [], scenes: [], actions: [] };
     const executionResults = [];
 
     for (const action of actions) {
       if (!action || typeof action !== 'object') continue;
       if (action.type === 'device_control' && action.deviceId) {
-        const deviceResult = await this.executeDeviceAction(action, context);
+        const deviceResult = await this.executeDeviceAction(action, context, commandContext);
         executionResults.push(deviceResult);
         if (deviceResult.deviceId) {
           entities.devices.push({
@@ -1338,7 +1353,7 @@ RULES
           });
         }
       } else if (action.type === 'scene_activate' && action.sceneId) {
-        const sceneResult = await this.executeSceneAction(action);
+        const sceneResult = await this.executeSceneAction(action, commandContext);
         executionResults.push(sceneResult);
         if (sceneResult.sceneId) {
           const scene = context.sceneMap.get(sceneResult.sceneId);
@@ -1735,7 +1750,13 @@ RULES
 
     const hasExecutableActions = Array.isArray(interpretation.actions) && interpretation.actions.length > 0;
     const execution = hasExecutableActions
-      ? await this.executeActions(interpretation.actions || [], context, room)
+      ? await this.executeActions(interpretation.actions || [], context, room, {
+        commandText,
+        room,
+        wakeWord,
+        source: 'voice',
+        triggerSource: 'voice'
+      })
       : {
         status: 'success',
         results: [],

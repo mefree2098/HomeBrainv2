@@ -379,7 +379,14 @@ class AlexaCustomSkillService {
       throw new Error(`I could not find a scene named ${name}.`);
     }
 
-    await sceneService.activateScene(scene._id);
+    await sceneService.activateScene(scene._id, {
+      command: {
+        source: 'alexa',
+        triggerSource: 'alexa_custom_skill',
+        reason: `Alexa custom skill scene activation: ${scene.name}`,
+        actor: 'alexa_custom_skill'
+      }
+    });
     return scene.name;
   }
 

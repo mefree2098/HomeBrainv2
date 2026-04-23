@@ -59,6 +59,7 @@ class SettingsService {
         'anthropicApiKey', 'anthropicModel',
         'codexPath', 'codexHome', 'codexHomeProfile', 'codexAwsVolumeRoot', 'codexModel',
         'localLlmEndpoint', 'localLlmModel', 'homebrainLocalLlmModel', 'spamFilterLocalLlmModel', 'llmPriorityList',
+        'deviceCommandCoordinator',
         // SmartThings OAuth Settings
         'smartthingsClientId', 'smartthingsClientSecret', 'smartthingsRedirectUri', 'smartthingsUseOAuth',
         // Voice/Discovery Preferences

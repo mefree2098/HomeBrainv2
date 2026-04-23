@@ -49,6 +49,7 @@ const telemetryRoutes = require("./routes/telemetryRoutes");
 const openclawRoutes = require("./routes/openclawRoutes");
 const openclawMcpRoutes = require("./routes/openclawMcpRoutes");
 const codexSkillRoutes = require("./routes/codexSkillRoutes");
+const deviceCommandCoordinatorRoutes = require("./routes/deviceCommandCoordinatorRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
 const deviceWebSocket = require("./websocket/deviceWebSocket");
 const deviceUpdateEmitter = require("./services/deviceUpdateEmitter");
@@ -388,6 +389,7 @@ app.use('/api/users', userRoutes);
 // Device Routes
 app.use('/api/devices', deviceRoutes);
 app.use('/api/device-groups', deviceGroupRoutes);
+app.use('/api/device-command-coordinator', deviceCommandCoordinatorRoutes);
 app.use('/api/telemetry', telemetryRoutes);
 // Scene Routes
 app.use('/api/scenes', sceneRoutes);

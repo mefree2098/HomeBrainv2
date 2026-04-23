@@ -148,6 +148,7 @@ import { SenseIntegrationCard } from "@/components/sense/SenseIntegrationCard"
 import { TempestIntegrationCard } from "@/components/weather/TempestIntegrationCard"
 import { RainMachineIntegrationCard } from "@/components/rainmachine/RainMachineIntegrationCard"
 import { HardwareOrbsTab } from "@/components/settings/HardwareOrbsTab"
+import { DeviceCommandCoordinatorTab } from "@/components/settings/DeviceCommandCoordinatorTab"
 import { CodexSkillIntegration } from "./CodexSkillIntegration"
 import { OpenClawIntegration } from "./OpenClawIntegration"
 
@@ -192,6 +193,7 @@ const SETTINGS_MAIN_TABS = new Set([
   "voice",
   "integrations",
   "hardware-orbs",
+  "command-coordinator",
   "security",
   "resources",
   "maintenance"
@@ -3918,6 +3920,7 @@ export function Settings() {
             <TabsTrigger value="voice">Voice & Audio</TabsTrigger>
             <TabsTrigger value="integrations">Integrations</TabsTrigger>
             <TabsTrigger value="hardware-orbs">Hardware Orbs</TabsTrigger>
+            <TabsTrigger value="command-coordinator">Command Control</TabsTrigger>
             <TabsTrigger value="security">Security</TabsTrigger>
             <TabsTrigger value="resources">System Resources</TabsTrigger>
             <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
@@ -7232,6 +7235,10 @@ export function Settings() {
 
           <TabsContent value="hardware-orbs" className="space-y-6">
             <HardwareOrbsTab />
+          </TabsContent>
+
+          <TabsContent value="command-coordinator" className="space-y-6">
+            <DeviceCommandCoordinatorTab />
           </TabsContent>
 
           <TabsContent value="security" className="space-y-6">

@@ -259,7 +259,10 @@ router.post('/create-from-text', admin, async (req, res) => {
       });
     }
     
-    const result = await automationService.createAutomationFromText(text.trim());
+    const result = await automationService.createAutomationFromText(text.trim(), null, {
+      source: 'manual',
+      triggerSource: 'manual'
+    });
 
     if (result?.handledDirectCommand) {
       console.log('AutomationRoutes: Request was handled as a direct device command; no automation created.');

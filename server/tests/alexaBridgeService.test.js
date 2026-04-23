@@ -288,6 +288,13 @@ test('executeDirective uses fast Harmony power control for Alexa responses', asy
     'turn_on',
     undefined,
     {
+      command: {
+        source: 'alexa',
+        triggerSource: 'alexa',
+        reason: 'Alexa directive Alexa.PowerController.TurnOn',
+        actor: 'alexa',
+        correlationId: null
+      },
       skipIntegrationRefresh: true,
       skipPostActionVerification: true
     }
