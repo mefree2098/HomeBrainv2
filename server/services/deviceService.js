@@ -10,6 +10,7 @@ const ecobeeService = require('./ecobeeService');
 const rainMachineService = require('./rainMachineService');
 const deviceEnergySampleService = require('./deviceEnergySampleService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
+const deviceCommandCoordinatorService = require('./deviceCommandCoordinatorService');
 const {
   ensureUniquePlatformIdentity
 } = require('./deviceIdentityService');
@@ -435,6 +436,8 @@ class DeviceService {
    * @returns {Promise<Object>} Updated device
    */
   async controlDevice(deviceId, action, value, options = {}) {
+    let coordinatorAdmission = null;
+
     try {
       console.log('DeviceService: Controlling device:', deviceId, 'action:', action, 'value:', value);
 
@@ -448,6 +451,45 @@ class DeviceService {
       if (!normalizedAction) {
         throw new Error(`Unknown action: ${action}`);
       }
+
+      const commandMetadata = {
+        ...(options?.command && typeof options.command === 'object' ? options.command : {}),
+        ...(options?.commandMetadata && typeof options.commandMetadata === 'object' ? options.commandMetadata : {})
+      };
+      [
+        'source',
+        'commandSource',
+        'priority',
+        'commandPriority',
+        'ttlSeconds',
+        'commandTtlSeconds',
+        'reason',
+        'commandReason',
+        'actor',
+        'requestedBy',
+        'workflowId',
+        'workflowName',
+        'workflowPriority',
+        'automationId',
+        'automationName',
+        'sceneId',
+        'sceneName',
+        'triggerType',
+        'triggerSource',
+        'correlationId',
+        'executionCorrelationId'
+      ].forEach((key) => {
+        if (Object.prototype.hasOwnProperty.call(options || {}, key)) {
+          commandMetadata[key] = options[key];
+        }
+      });
+
+      coordinatorAdmission = await deviceCommandCoordinatorService.admitCommand({
+        device,
+        action: normalizedAction,
+        value,
+        metadata: commandMetadata
+      });
 
       const isSmartThings = this.isSmartThingsDevice(device);
       const isHarmony = this.isHarmonyDevice(device);
@@ -508,7 +550,7 @@ class DeviceService {
       }
 
       if (isInsteon) {
-        const updatedDevice = await this.controlInsteonDevice(device, normalizedAction, value);
+        const updatedDevice = await this.controlInsteonDevice(device, normalizedAction, value, options);
         console.log('DeviceService: Successfully controlled device:', updatedDevice?.name || device.name, 'action:', action);
         return updatedDevice;
       }
@@ -776,10 +818,22 @@ class DeviceService {
       console.log('DeviceService: Successfully controlled device:', updatedDevice.name, 'action:', action);
       return updatedDevice;
     } catch (error) {
+      if (coordinatorAdmission?.accepted && !coordinatorAdmission.disabled) {
+        try {
+          await deviceCommandCoordinatorService.releaseCommand(coordinatorAdmission.command?.commandId, {
+            reason: error?.message || 'Device command failed'
+          });
+        } catch (releaseError) {
+          console.warn(`DeviceService: Failed to release command coordinator claim: ${releaseError.message}`);
+        }
+      }
       const message = error instanceof Error ? error.message : String(error || 'Failed to control device');
       console.error('DeviceService: Error controlling device:', message);
       if (error?.stack) {
         console.error(error.stack);
+      }
+      if (error?.code || error?.status || error?.details) {
+        throw error;
       }
       throw new Error(message || 'Failed to control device');
     }
@@ -1165,7 +1219,7 @@ class DeviceService {
     };
   }
 
-  async controlInsteonDevice(device, normalizedAction, value) {
+  async controlInsteonDevice(device, normalizedAction, value, options = {}) {
     const insteonAddress = device?.properties?.insteonAddress;
     if (!insteonAddress) {
       throw new Error('Insteon address is not configured for this device');
@@ -1174,6 +1228,9 @@ class DeviceService {
     const insteonService = getInsteonService();
     const deviceId = device?._id?.toString ? device._id.toString() : String(device._id);
     const persistedBrightness = Number(device?.brightness);
+    const insteonOptions = options?.insteon && typeof options.insteon === 'object'
+      ? options.insteon
+      : {};
     const fallbackBrightness = Number.isFinite(persistedBrightness) && persistedBrightness > 0
       ? Math.max(0, Math.min(100, Math.round(persistedBrightness)))
       : 100;
@@ -1181,9 +1238,9 @@ class DeviceService {
     switch (normalizedAction) {
       case 'toggle':
         if (device.status) {
-          await insteonService.turnOff(deviceId);
+          await insteonService.turnOff(deviceId, insteonOptions);
         } else {
-          await insteonService.turnOn(deviceId, fallbackBrightness);
+          await insteonService.turnOn(deviceId, fallbackBrightness, insteonOptions);
         }
         break;
 
@@ -1195,12 +1252,12 @@ class DeviceService {
         const brightness = boundedRequestedBrightness && boundedRequestedBrightness > 0
           ? boundedRequestedBrightness
           : 100;
-        await insteonService.turnOn(deviceId, brightness);
+        await insteonService.turnOn(deviceId, brightness, insteonOptions);
         break;
       }
 
       case 'turnoff':
-        await insteonService.turnOff(deviceId);
+        await insteonService.turnOff(deviceId, insteonOptions);
         break;
 
       case 'setbrightness': {
@@ -1208,7 +1265,7 @@ class DeviceService {
         if (!Number.isFinite(numericBrightness) || numericBrightness < 0 || numericBrightness > 100) {
           throw new Error('Brightness must be between 0 and 100');
         }
-        await insteonService.setBrightness(deviceId, Math.round(numericBrightness));
+        await insteonService.setBrightness(deviceId, Math.round(numericBrightness), insteonOptions);
         break;
       }
 

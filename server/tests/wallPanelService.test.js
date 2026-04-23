@@ -850,9 +850,30 @@ test('executeAction delegates thermostat and scene actions to existing services'
     value: 63
   });
 
-  assert.deepEqual(calls[0], ['device', 'thermo-1', 'set_temperature', 71]);
-  assert.deepEqual(calls[1], ['scene', 'scene-1']);
-  assert.deepEqual(calls[2], ['device', 'light-1', 'set_brightness', 63]);
+  assert.deepEqual(calls[0], ['device', 'thermo-1', 'set_temperature', 71, {
+    command: {
+      source: 'panel',
+      triggerSource: 'wall_panel',
+      reason: 'Wall panel Bedroom Orb thermostat.set_temperature',
+      actor: 'wall-panel:panel-4'
+    }
+  }]);
+  assert.deepEqual(calls[1], ['scene', 'scene-1', {
+    command: {
+      source: 'panel',
+      triggerSource: 'wall_panel',
+      reason: 'Wall panel Bedroom Orb scene.activate',
+      actor: 'wall-panel:panel-4'
+    }
+  }]);
+  assert.deepEqual(calls[2], ['device', 'light-1', 'set_brightness', 63, {
+    command: {
+      source: 'panel',
+      triggerSource: 'wall_panel',
+      reason: 'Wall panel Bedroom Orb device.control',
+      actor: 'wall-panel:panel-4'
+    }
+  }]);
 });
 
 test('getPanelProvisioning exposes the setup token for admin UI flows', async (t) => {

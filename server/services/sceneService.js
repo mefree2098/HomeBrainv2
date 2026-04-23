@@ -293,7 +293,7 @@ class SceneService {
    * @param {string} sceneId - The scene ID to activate
    * @returns {Promise<Object>} Updated scene object and activation results
    */
-  async activateScene(sceneId) {
+  async activateScene(sceneId, options = {}) {
     try {
       console.log(`SceneService: Activating scene with ID: ${sceneId}`);
       
@@ -320,7 +320,18 @@ class SceneService {
       const { executeActionSequence } = require('./workflowExecutionService');
       const execution = await executeActionSequence(workflowActions, {
         context: {
-          sceneId: sceneId.toString()
+          ...(options.context && typeof options.context === 'object' ? options.context : {}),
+          sceneId: sceneId.toString(),
+          commandContext: {
+            ...(options.context?.commandContext && typeof options.context.commandContext === 'object'
+              ? options.context.commandContext
+              : {}),
+            ...(options.command && typeof options.command === 'object' ? options.command : {}),
+            source: options.command?.source || options.context?.commandContext?.source || 'scene',
+            sceneId: sceneId.toString(),
+            sceneName: scene.name,
+            reason: options.command?.reason || `Scene "${scene.name}" activation`
+          }
         }
       });
       await this._populateSceneDocument(updatedScene);

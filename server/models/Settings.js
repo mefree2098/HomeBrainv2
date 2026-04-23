@@ -273,6 +273,10 @@ const SettingsSchema = new mongoose.Schema({
       message: 'Invalid LLM provider in priority list'
     }
   },
+  deviceCommandCoordinator: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null
+  },
 
   // Security Settings
   enableSecurityMode: {

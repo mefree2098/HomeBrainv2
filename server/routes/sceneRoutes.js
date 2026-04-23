@@ -8,6 +8,10 @@ const admin = requireAdmin();
 
 router.use(auth);
 
+function actorFromRequest(req) {
+  return String(req.user?.email || req.user?._id || req.user?.id || 'unknown');
+}
+
 /**
  * GET /api/scenes
  * Get all scenes
@@ -213,7 +217,13 @@ router.post('/activate', async (req, res) => {
       });
     }
     
-    const result = await sceneService.activateScene(sceneId);
+    const result = await sceneService.activateScene(sceneId, {
+      command: {
+        source: req.body.source || 'manual',
+        reason: req.body.reason || 'Scene activated from HomeBrain UI/API',
+        actor: actorFromRequest(req)
+      }
+    });
     
     console.log(`SceneRoutes: Scene activated successfully: ${result.scene.name}`);
     res.status(200).json({
@@ -229,7 +239,12 @@ router.post('/activate', async (req, res) => {
     console.error('SceneRoutes: Error activating scene:', error.message);
     console.error('SceneRoutes: Full error:', error);
     
-    if (error.message.includes('not found')) {
+    if (error.status) {
+      res.status(error.status).json({
+        success: false,
+        error: error.message
+      });
+    } else if (error.message.includes('not found')) {
       res.status(404).json({
         success: false,
         error: error.message

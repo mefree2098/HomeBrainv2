@@ -3214,6 +3214,14 @@ class WallPanelService {
     const type = trimString(request.type).toLowerCase();
     const targetId = toId(request.targetId || request.deviceId || request.sceneId || request.activityId);
     const actor = `wall-panel:${panel.id}`;
+    const commandOptions = {
+      command: {
+        source: 'panel',
+        triggerSource: 'wall_panel',
+        reason: `Wall panel ${panel.name || panel.id} ${type}`,
+        actor
+      }
+    };
 
     if (!type) {
       throw createError(400, 'Action type is required');
@@ -3228,7 +3236,7 @@ class WallPanelService {
         if (!deviceId || !Number.isFinite(value)) {
           throw createError(400, 'Thermostat setpoint requires a device and numeric value');
         }
-        result = await deviceService.controlDevice(deviceId, 'set_temperature', value);
+        result = await deviceService.controlDevice(deviceId, 'set_temperature', value, commandOptions);
         break;
       }
 
@@ -3238,7 +3246,7 @@ class WallPanelService {
         if (!deviceId || !THERMOSTAT_MODES.includes(value)) {
           throw createError(400, 'Thermostat mode must be auto, cool, heat, or off');
         }
-        result = await deviceService.controlDevice(deviceId, 'set_mode', value);
+        result = await deviceService.controlDevice(deviceId, 'set_mode', value, commandOptions);
         break;
       }
 
@@ -3247,7 +3255,7 @@ class WallPanelService {
         if (!sceneId) {
           throw createError(400, 'Scene activation requires a scene ID');
         }
-        result = await sceneService.activateScene(sceneId);
+        result = await sceneService.activateScene(sceneId, commandOptions);
         break;
       }
 
@@ -3257,7 +3265,7 @@ class WallPanelService {
         if (!deviceId || !action) {
           throw createError(400, 'Device control requires device ID and action');
         }
-        result = await deviceService.controlDevice(deviceId, action, request.value);
+        result = await deviceService.controlDevice(deviceId, action, request.value, commandOptions);
         break;
       }
 

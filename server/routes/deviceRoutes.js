@@ -8,6 +8,10 @@ const { requireUser, requireAdmin } = require('./middlewares/auth');
 router.use(requireUser());
 const admin = requireAdmin();
 
+function actorFromRequest(req) {
+  return String(req.user?.email || req.user?._id || req.user?.id || 'unknown');
+}
+
 /**
  * GET /api/devices
  * Get all devices with optional filters
@@ -266,7 +270,13 @@ router.post('/control', async (req, res) => {
       });
     }
     
-    const device = await deviceService.controlDevice(deviceId, action, value);
+    const device = await deviceService.controlDevice(deviceId, action, value, {
+      command: {
+        source: req.body.source || 'manual',
+        reason: req.body.reason || 'Manual device control from HomeBrain UI/API',
+        actor: actorFromRequest(req)
+      }
+    });
     
     console.log('POST /api/devices/control - Successfully controlled device:', device.name, 'action:', action);
     res.status(200).json({
@@ -278,13 +288,13 @@ router.post('/control', async (req, res) => {
     console.error('POST /api/devices/control - Error:', error.message);
     console.error(error.stack);
     
-    const statusCode = error.message === 'Device not found' ? 404 :
+    const statusCode = error.status || (error.message === 'Device not found' ? 404 :
                        error.message.includes('Device ID and action are required') ||
                        error.message.includes('offline') ||
                        error.message.includes('only available') ||
                        error.message.includes('not supported') ||
                        error.message.includes('must be') ||
-                       error.message.includes('Unknown action') ? 400 : 500;
+                       error.message.includes('Unknown action') ? 400 : 500);
     res.status(statusCode).json({
       success: false,
       error: error.message || 'Failed to control device'
@@ -310,7 +320,13 @@ router.post('/:id/control', async (req, res) => {
       });
     }
     
-    const device = await deviceService.controlDevice(req.params.id, action, value);
+    const device = await deviceService.controlDevice(req.params.id, action, value, {
+      command: {
+        source: req.body.source || 'manual',
+        reason: req.body.reason || 'Manual device control from HomeBrain UI/API',
+        actor: actorFromRequest(req)
+      }
+    });
     
     console.log('POST /api/devices/:id/control - Successfully controlled device:', device.name, 'action:', action);
     res.status(200).json({
@@ -322,13 +338,13 @@ router.post('/:id/control', async (req, res) => {
     console.error('POST /api/devices/:id/control - Error:', error.message);
     console.error(error.stack);
     
-    const statusCode = error.message === 'Device not found' ? 404 :
+    const statusCode = error.status || (error.message === 'Device not found' ? 404 :
                        error.message.includes('Action is required') ||
                        error.message.includes('offline') ||
                        error.message.includes('only available') ||
                        error.message.includes('not supported') ||
                        error.message.includes('must be') ||
-                       error.message.includes('Unknown action') ? 400 : 500;
+                       error.message.includes('Unknown action') ? 400 : 500);
     res.status(statusCode).json({
       success: false,
       error: error.message || 'Failed to control device'

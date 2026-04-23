@@ -423,6 +423,34 @@ function deriveExecutionStatusFromActionResults(actionResults = []) {
   };
 }
 
+function deriveCommandSourceForExecution({ triggerType, triggerSource, workflowId }) {
+  const normalizedType = sanitizeString(triggerType).toLowerCase();
+  const normalizedSource = sanitizeString(triggerSource).toLowerCase();
+
+  if (normalizedType === 'security_alarm_status' || normalizedSource.includes('security')) {
+    return 'security';
+  }
+  if (normalizedSource.includes('voice')) {
+    return 'voice';
+  }
+  if (normalizedSource.includes('alexa')) {
+    return 'alexa';
+  }
+  if (normalizedSource.includes('openclaw')) {
+    return 'openclaw';
+  }
+  if (normalizedSource.includes('panel') || normalizedSource.includes('wall-panel')) {
+    return 'panel';
+  }
+  if (normalizedSource === 'manual') {
+    return 'manual';
+  }
+  if (workflowId) {
+    return 'workflow';
+  }
+  return 'automation';
+}
+
 function buildExecutionStatsMatch(automationIds, dateRange = null) {
   const match = {
     automationId: { $in: automationIds }
@@ -1732,7 +1760,14 @@ async function generateAutomationDraftsFromText(text, roomContext = null, option
             await deviceService.controlDevice(
               directDevice.id,
               inferredAction.action,
-              inferredAction.value != null ? inferredAction.value : undefined
+              inferredAction.value != null ? inferredAction.value : undefined,
+              {
+                command: {
+                  source: options.source || options.triggerSource || 'manual',
+                  triggerSource: options.triggerSource || options.source || 'manual',
+                  reason: `Direct natural-language command: ${text.trim().slice(0, 180)}`
+                }
+              }
             );
 
             console.log(`AutomationService: Executed direct device action (${inferredAction.action}) on ${directDevice.name} instead of creating automation.`);
@@ -1956,11 +1991,13 @@ async function generateAutomationDraftsFromText(text, roomContext = null, option
 /**
  * Create automation from natural language text with self-healing
  */
-async function createAutomationFromText(text, roomContext = null) {
+async function createAutomationFromText(text, roomContext = null, options = {}) {
   try {
     const draftResult = await generateAutomationDraftsFromText(text, roomContext, {
       mode: 'create',
-      allowDirectCommand: true
+      allowDirectCommand: true,
+      source: options.source || options.triggerSource || 'manual',
+      triggerSource: options.triggerSource || options.source || 'manual'
     });
 
     if (draftResult?.handledDirectCommand) {
@@ -2558,7 +2595,26 @@ async function executeAutomation(id, options = {}) {
       ...triggerContext,
       ...(workflowId ? { workflowId } : {}),
       ...(historyId ? { executionHistoryId: historyId } : {}),
-      ...(correlationId ? { executionCorrelationId: correlationId } : {})
+      ...(correlationId ? { executionCorrelationId: correlationId } : {}),
+      commandContext: {
+        ...(triggerContext.commandContext && typeof triggerContext.commandContext === 'object'
+          ? triggerContext.commandContext
+          : {}),
+        source: triggerContext.commandContext?.source || deriveCommandSourceForExecution({
+          triggerType,
+          triggerSource,
+          workflowId
+        }),
+        workflowId,
+        workflowName: workflowId ? automation.name : null,
+        workflowPriority: workflowId ? automation.priority : null,
+        automationId: automation._id?.toString?.() || null,
+        automationName: automation.name,
+        triggerType,
+        triggerSource,
+        correlationId,
+        reason: triggerContext.commandContext?.reason || `${workflowId ? 'Workflow' : 'Automation'} "${automation.name}" action`
+      }
     };
 
     if (historyId) {
