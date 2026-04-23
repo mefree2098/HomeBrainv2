@@ -1124,6 +1124,73 @@ class OllamaService {
     }
   }
 
+  scheduleStartupRecovery() {
+    if (process.env.NODE_ENV === 'test') {
+      return null;
+    }
+
+    const configured = String(process.env.HOMEBRAIN_OLLAMA_STARTUP_RECOVERY || '').trim().toLowerCase();
+    if (['0', 'false', 'no', 'off'].includes(configured)) {
+      return null;
+    }
+
+    const delayMs = Math.max(
+      0,
+      Number.parseInt(process.env.HOMEBRAIN_OLLAMA_STARTUP_RECOVERY_DELAY_MS || '10000', 10) || 10000
+    );
+
+    const timer = setTimeout(() => {
+      this.recoverManagedServiceAfterStartup()
+        .then((result) => {
+          if (result?.recovered) {
+            console.log('Ollama managed service recovered after HomeBrain startup');
+          }
+        })
+        .catch((error) => {
+          console.warn(`Ollama managed service startup recovery failed: ${error.message}`);
+        });
+    }, delayMs);
+
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
+
+    return timer;
+  }
+
+  async recoverManagedServiceAfterStartup() {
+    const config = await OllamaConfig.getConfig().catch(() => null);
+    if (!config) {
+      return { recovered: false, skipped: true, reason: 'config_unavailable' };
+    }
+
+    this.syncApiUrl(config);
+
+    if (config.serviceStatus !== 'running') {
+      return {
+        recovered: false,
+        skipped: true,
+        reason: `previous_status_${config.serviceStatus || 'unknown'}`
+      };
+    }
+
+    const status = await this.checkServiceStatus();
+    if (status.running) {
+      return { recovered: false, skipped: true, reason: 'already_running' };
+    }
+
+    this.addOperationLog(
+      'service',
+      'Previously managed Ollama service is down after HomeBrain startup. Recovering managed service.'
+    );
+
+    const result = await this.startService();
+    return {
+      recovered: true,
+      result
+    };
+  }
+
   async buildOllamaApiRequestError(actionLabel, modelName, error) {
     const status = Number.isFinite(Number(error?.response?.status))
       ? Number(error.response.status)
@@ -4054,7 +4121,10 @@ class OllamaService {
   }
 }
 
-module.exports = new OllamaService();
+const ollamaService = new OllamaService();
+ollamaService.scheduleStartupRecovery();
+
+module.exports = ollamaService;
 module.exports.OllamaService = OllamaService;
 module.exports._private = {
   matchesOllamaProcessCommand,

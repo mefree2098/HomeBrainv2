@@ -140,7 +140,7 @@ bash scripts/setup-services.sh refresh-privileges
 
 On Linux and Jetson hosts, HomeBrain treats Ollama as a host-level dependency with a HomeBrain-managed runtime. The UI uses a narrow privileged helper to install, update, and stop Ollama when needed, then starts a single managed `ollama serve` process again.
 
-HomeBrain deploys restart the HomeBrain service only. They do not restart the host `ollama.service` by default, because doing so hands runtime ownership back to systemd. The generated `homebrain.service` uses `KillMode=process` so that HomeBrain-managed `ollama serve` survives the HomeBrain restart.
+HomeBrain deploys restart the HomeBrain service only. They do not restart the host `ollama.service` by default, because doing so hands runtime ownership back to systemd. The generated `homebrain.service` uses `KillMode=process`, and backend startup recovers managed Ollama when the persisted state says it was running before HomeBrain restarted.
 
 Important paths:
 
