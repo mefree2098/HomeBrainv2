@@ -87,9 +87,10 @@ class PlatformDeployService {
     // that serve dist directly. Keep this opt-in only.
     this.autoCleanClientDist = process.env.HOMEBRAIN_DEPLOY_AUTOCLEAN_CLIENT_DIST === 'true';
     this.autoRecoverDirtyRepo = process.env.HOMEBRAIN_DEPLOY_AUTO_STASH_DIRTY !== 'false';
-    this.restartOllamaOnDeploy = process.env.HOMEBRAIN_DEPLOY_RESTART_OLLAMA !== 'false';
-    this.defaultOllamaRestartCommand = process.env.HOMEBRAIN_DEPLOY_OLLAMA_RESTART_CMD
-      || 'sudo -n systemctl restart --no-block ollama';
+    // HomeBrain's Ollama page owns the runtime handoff. Restarting the host
+    // ollama.service during deploy resurrects an external manager.
+    this.restartOllamaOnDeploy = process.env.HOMEBRAIN_DEPLOY_RESTART_OLLAMA === 'true';
+    this.defaultOllamaRestartCommand = process.env.HOMEBRAIN_DEPLOY_OLLAMA_RESTART_CMD || '';
     this.customRestartCommand = process.env.HOMEBRAIN_DEPLOY_RESTART_CMD || '';
     this.coreRestartCommand = process.env.HOMEBRAIN_DEPLOY_CORE_RESTART_CMD
       || 'sudo -n systemctl daemon-reload || true; sudo -n systemctl start --no-block homebrain-restart-helper';

@@ -62,6 +62,25 @@ resolve_node_bin() {
   command -v node 2>/dev/null || true
 }
 
+resolve_user_home() {
+  local username="$1"
+  local home_dir=""
+
+  if command -v getent >/dev/null 2>&1; then
+    home_dir="$(getent passwd "${username}" | cut -d: -f6 || true)"
+  fi
+
+  if [[ -z "${home_dir}" && "${username}" == "${USER:-}" && -n "${HOME:-}" ]]; then
+    home_dir="${HOME}"
+  fi
+
+  if [[ -z "${home_dir}" ]]; then
+    home_dir="/home/${username}"
+  fi
+
+  echo "${home_dir}"
+}
+
 run_modern_npm() {
   local quoted_args=()
   local arg
@@ -430,6 +449,9 @@ install_service() {
     exit 1
   fi
 
+  local homebrain_home
+  homebrain_home="$(resolve_user_home "${HOMEBRAIN_USER}")"
+
   print_status "Writing ${SERVICE_PATH}"
   sudo tee "$SERVICE_PATH" >/dev/null <<EOF
 [Unit]
@@ -443,6 +465,9 @@ Type=simple
 User=${HOMEBRAIN_USER}
 WorkingDirectory=${HOMEBRAIN_DIR}/server
 Environment=NODE_ENV=production
+Environment="HOME=${homebrain_home}"
+Environment="USER=${HOMEBRAIN_USER}"
+Environment="LOGNAME=${HOMEBRAIN_USER}"
 Environment=WAKEWORD_PIPER_EXEC=${HOMEBRAIN_DIR}/server/.wakeword-venv/bin/piper
 ExecStart=${node_bin} scripts/run-with-modern-node.js node server/server.js
 Restart=always
