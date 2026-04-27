@@ -1,6 +1,15 @@
 const { EventEmitter } = require('events');
 
 class DeviceUpdateEmitter extends EventEmitter {
+  constructor() {
+    super();
+    const maxListeners = Math.max(
+      10,
+      Number.parseInt(process.env.HOMEBRAIN_DEVICE_UPDATE_MAX_LISTENERS, 10) || 100
+    );
+    this.setMaxListeners(maxListeners);
+  }
+
   normalizeDevice(device) {
     if (!device) {
       return null;

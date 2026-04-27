@@ -8,6 +8,15 @@ const DEFAULT_REPLAY_LIMIT = 100;
 const MAX_REPLAY_LIMIT = 500;
 
 class EventStreamService extends EventEmitter {
+  constructor() {
+    super();
+    const maxListeners = Math.max(
+      10,
+      Number.parseInt(process.env.HOMEBRAIN_EVENT_STREAM_MAX_LISTENERS, 10) || 100
+    );
+    this.setMaxListeners(maxListeners);
+  }
+
   async nextSequence() {
     const collection = mongoose.connection.collection(COUNTER_COLLECTION);
     const result = await collection.findOneAndUpdate(
