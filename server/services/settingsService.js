@@ -65,7 +65,10 @@ class SettingsService {
         // Voice/Discovery Preferences
         'voiceRegion', 'autoDiscoveryEnabled',
         // Auth session lifetime
-        'authSessionMaxAgeDays'
+        'authSessionMaxAgeDays',
+        // Whole-device restart schedule
+        'deviceRestartScheduleEnabled', 'deviceRestartScheduleFrequency',
+        'deviceRestartScheduleDayOfWeek', 'deviceRestartScheduleTime'
       ];
       const sensitiveFields = new Set([
         'elevenlabsApiKey',
@@ -134,6 +137,43 @@ class SettingsService {
         Object.prototype.hasOwnProperty.call(sanitizedUpdates, 'codexAwsVolumeRoot')
       ) {
         delete sanitizedUpdates.codexAwsVolumeRoot;
+      }
+
+      if (typeof sanitizedUpdates.deviceRestartScheduleFrequency === 'string') {
+        const normalizedFrequency = sanitizedUpdates.deviceRestartScheduleFrequency.trim().toLowerCase();
+        const validFrequencies = new Set(['daily', 'weekly', 'biweekly']);
+        if (validFrequencies.has(normalizedFrequency)) {
+          sanitizedUpdates.deviceRestartScheduleFrequency = normalizedFrequency;
+        } else {
+          delete sanitizedUpdates.deviceRestartScheduleFrequency;
+        }
+      }
+
+      if (Object.prototype.hasOwnProperty.call(sanitizedUpdates, 'deviceRestartScheduleDayOfWeek')) {
+        const normalizedDay = Number(sanitizedUpdates.deviceRestartScheduleDayOfWeek);
+        sanitizedUpdates.deviceRestartScheduleDayOfWeek = Number.isFinite(normalizedDay)
+          ? Math.min(6, Math.max(0, Math.trunc(normalizedDay)))
+          : 0;
+      }
+
+      if (typeof sanitizedUpdates.deviceRestartScheduleTime === 'string') {
+        const trimmedScheduleTime = sanitizedUpdates.deviceRestartScheduleTime.trim();
+        const match = trimmedScheduleTime.match(/^(\d{1,2}):(\d{2})$/);
+        const hour = match ? Number(match[1]) : NaN;
+        const minute = match ? Number(match[2]) : NaN;
+        if (
+          match &&
+          Number.isInteger(hour) &&
+          Number.isInteger(minute) &&
+          hour >= 0 &&
+          hour <= 23 &&
+          minute >= 0 &&
+          minute <= 59
+        ) {
+          sanitizedUpdates.deviceRestartScheduleTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+        } else {
+          delete sanitizedUpdates.deviceRestartScheduleTime;
+        }
       }
       
       console.log('SettingsService: Sanitized update keys:', Object.keys(sanitizedUpdates));

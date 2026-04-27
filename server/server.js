@@ -65,6 +65,7 @@ const tempestService = require("./services/tempestService");
 const rainMachineService = require("./services/rainMachineService");
 const senseService = require("./services/senseService");
 const platformDeployService = require("./services/platformDeployService");
+const deviceRestartService = require("./services/deviceRestartService");
 const smartThingsService = require("./services/smartThingsService");
 const ecobeeService = require("./services/ecobeeService");
 const axiomIngressSyncService = require("./services/axiomIngressSyncService");
@@ -301,19 +302,30 @@ const dbReady = connectDB();
 
 void dbReady
   .then(async () => {
-    const result = await adminBootstrapService.ensureBootstrapState({ actor: 'system:server-startup' });
-    const details = [
-      `email=${result.email || 'none'}`,
-      `created=${result.created ? 'yes' : 'no'}`,
-      `updated=${result.updated ? 'yes' : 'no'}`,
-      `skipped=${result.skipped ? 'yes' : 'no'}`,
-      `reason=${result.reason || 'none'}`,
-      `changes=${result.changes.length > 0 ? result.changes.join(',') : 'none'}`
-    ].join(' ');
-    console.log(`Default admin bootstrap summary: ${details}`);
+    try {
+      const result = await adminBootstrapService.ensureBootstrapState({ actor: 'system:server-startup' });
+      const details = [
+        `email=${result.email || 'none'}`,
+        `created=${result.created ? 'yes' : 'no'}`,
+        `updated=${result.updated ? 'yes' : 'no'}`,
+        `skipped=${result.skipped ? 'yes' : 'no'}`,
+        `reason=${result.reason || 'none'}`,
+        `changes=${result.changes.length > 0 ? result.changes.join(',') : 'none'}`
+      ].join(' ');
+      console.log(`Default admin bootstrap summary: ${details}`);
+    } catch (error) {
+      console.warn(`Default admin bootstrap failed: ${error.message}`);
+    }
+
+    try {
+      await deviceRestartService.initialize();
+      console.log('Device restart scheduler initialized successfully');
+    } catch (error) {
+      console.warn(`Device restart scheduler startup failed: ${error.message}`);
+    }
   })
   .catch((error) => {
-    console.warn(`Default admin bootstrap failed: ${error.message}`);
+    console.warn(`Database startup tasks skipped: ${error.message}`);
   });
 
 app.on("error", (error) => {
@@ -663,6 +675,12 @@ async function gracefulShutdown(signal) {
     automationSchedulerService.stop();
   } catch (error) {
     console.error('Error stopping automation scheduler service:', error.message);
+  }
+
+  try {
+    deviceRestartService.stop();
+  } catch (error) {
+    console.error('Error stopping device restart scheduler:', error.message);
   }
 
   try {

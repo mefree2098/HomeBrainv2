@@ -544,6 +544,7 @@ EOF
 
   sudo systemctl daemon-reload
   sudo systemctl enable "${SERVICE_NAME}"
+  configure_deploy_sudoers
   print_success "Service installed and enabled."
 }
 
@@ -602,6 +603,10 @@ configure_deploy_sudoers() {
     "${OLLAMA_HELPER_INSTALL_PATH} update"
     "${OLLAMA_HELPER_INSTALL_PATH} stop-system"
     "${OLLAMA_HELPER_INSTALL_PATH} probe"
+    "/usr/sbin/reboot"
+    "/sbin/reboot"
+    "/usr/bin/reboot"
+    "/bin/reboot"
   )
   local setup_services_path="${HOMEBRAIN_DIR}/scripts/setup-services.sh"
 

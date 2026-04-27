@@ -57,10 +57,49 @@ export interface DisasterRecoveryRestoreJob {
   } | null;
 }
 
+export interface DeviceRestartStatusResponse {
+  success: boolean;
+  schedule?: {
+    enabled?: boolean;
+    frequency?: 'daily' | 'weekly' | 'biweekly';
+    dayOfWeek?: number;
+    time?: string;
+    timeZone?: string;
+    nextRunAt?: string | null;
+    lastTriggeredAt?: string | null;
+  };
+}
+
 function parseDownloadFilename(value: string | null | undefined, fallback: string) {
   const match = String(value || '').match(/filename="?([^"]+)"?/i);
   return match?.[1] || fallback;
 }
+
+export const getDeviceRestartStatus = async () => {
+  try {
+    const response = await api.get('/api/maintenance/device-restart');
+    return response.data as DeviceRestartStatusResponse;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const triggerDeviceReboot = async () => {
+  try {
+    const response = await api.post('/api/maintenance/device-restart/reboot');
+    return response.data as {
+      success: boolean;
+      message?: string;
+      command?: string;
+      source?: string;
+      requestedAt?: string;
+    };
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
 
 // Description: Clear all fake/demo data from the system
 // Endpoint: DELETE /api/maintenance/fake-data

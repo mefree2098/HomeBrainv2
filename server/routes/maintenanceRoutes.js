@@ -2,9 +2,44 @@ const express = require('express');
 const fs = require('fs');
 const router = express.Router();
 const maintenanceService = require('../services/maintenanceService');
+const deviceRestartService = require('../services/deviceRestartService');
 const { requireAdmin } = require('./middlewares/auth');
 
 router.use(requireAdmin());
+
+function getMaintenanceActor(req) {
+  return String(req.user?.email || req.user?._id || req.user?.id || 'unknown-admin');
+}
+
+router.get('/device-restart', async (req, res) => {
+  try {
+    return res.status(200).json(deviceRestartService.getStatus());
+  } catch (error) {
+    console.error('MaintenanceRoutes: Error fetching device restart status:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch device restart status',
+      error: error.message
+    });
+  }
+});
+
+router.post('/device-restart/reboot', async (req, res) => {
+  try {
+    console.log('MaintenanceRoutes: POST /device-restart/reboot - Dispatching whole-device reboot');
+    const result = await deviceRestartService.requestManualReboot({
+      actor: getMaintenanceActor(req)
+    });
+    return res.status(202).json(result);
+  } catch (error) {
+    console.error('MaintenanceRoutes: Error dispatching whole-device reboot:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to dispatch whole-device reboot',
+      error: error.message
+    });
+  }
+});
 
 // Description: Clear all fake/demo data from the system
 // Endpoint: DELETE /api/maintenance/fake-data
