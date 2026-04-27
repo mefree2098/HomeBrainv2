@@ -84,6 +84,7 @@ constexpr int kUltraFastEncoderDeltaThreshold = 1;
 constexpr unsigned long kEncoderAccelerationFastMs = 95;
 constexpr unsigned long kEncoderAccelerationFasterMs = 55;
 constexpr unsigned long kEncoderAccelerationFastestMs = 28;
+constexpr uint8_t kEncoderAccelerationScalePercent = 50;
 constexpr int kPanelHttpConnectTimeoutMs = 3000;
 constexpr int kPanelHttpTimeoutMs = 5000;
 constexpr int kOtaHttpConnectTimeoutMs = 4000;
@@ -4585,14 +4586,20 @@ int encoderStepAmount(const ModeSnapshot& mode, int direction, int turnCount, un
     return baseStep * effectiveTurns;
   }
 
+  auto scaledAcceleratedStep = [&](int multiplier, int capMultiplier) {
+    const int acceleratedStep = min(baseStep * effectiveTurns * multiplier, baseStep * capMultiplier);
+    const int scaledStep = (acceleratedStep * kEncoderAccelerationScalePercent + 99) / 100;
+    return max(baseStep * effectiveTurns, scaledStep);
+  };
+
   if (effectiveTurns >= 6 || elapsedMs <= kEncoderAccelerationFastestMs) {
-    return min(baseStep * effectiveTurns * 10, baseStep * 30);
+    return scaledAcceleratedStep(10, 30);
   }
   if (effectiveTurns >= 3 || elapsedMs <= kEncoderAccelerationFasterMs) {
-    return min(baseStep * effectiveTurns * 5, baseStep * 24);
+    return scaledAcceleratedStep(5, 24);
   }
   if (effectiveTurns >= 2 || elapsedMs <= kEncoderAccelerationFastMs) {
-    return min(baseStep * effectiveTurns * 3, baseStep * 18);
+    return scaledAcceleratedStep(3, 18);
   }
 
   return baseStep * effectiveTurns;

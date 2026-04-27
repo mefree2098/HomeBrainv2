@@ -40,7 +40,9 @@ import {
   Copy,
   HardDrive,
   Wrench,
-  Tv
+  Tv,
+  Power,
+  CalendarClock
 } from "lucide-react"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
@@ -107,7 +109,10 @@ import {
   downloadDisasterRecoveryBackup,
   uploadDisasterRecoveryBackup,
   getLatestDisasterRecoveryRestoreJob,
+  getDeviceRestartStatus,
+  triggerDeviceReboot,
   type DisasterRecoveryRestoreJob,
+  type DeviceRestartStatusResponse,
   type InsteonMaintenanceSyncResponse,
   type InsteonMaintenanceSyncRunSnapshot
 } from "@/api/maintenance"
@@ -212,6 +217,22 @@ const SETTINGS_INTEGRATION_TABS = new Set([
   "ai",
   "priority"
 ])
+
+const DEVICE_RESTART_FREQUENCIES = [
+  { value: "daily", label: "Daily" },
+  { value: "weekly", label: "Weekly" },
+  { value: "biweekly", label: "Every 2 weeks" }
+]
+
+const DEVICE_RESTART_DAYS = [
+  { value: 0, label: "Sunday" },
+  { value: 1, label: "Monday" },
+  { value: 2, label: "Tuesday" },
+  { value: 3, label: "Wednesday" },
+  { value: 4, label: "Thursday" },
+  { value: 5, label: "Friday" },
+  { value: 6, label: "Saturday" }
+]
 
 const formatInsteonConnectionTarget = (target: {
   label?: string;
@@ -467,6 +488,8 @@ export function Settings() {
   const [restoringBackup, setRestoringBackup] = useState(false)
   const [selectedRestoreBackup, setSelectedRestoreBackup] = useState<File | null>(null)
   const [latestRestoreJob, setLatestRestoreJob] = useState<DisasterRecoveryRestoreJob | null>(null)
+  const [deviceRestartStatus, setDeviceRestartStatus] = useState<DeviceRestartStatusResponse | null>(null)
+  const [rebootingDevice, setRebootingDevice] = useState(false)
   const [healthData, setHealthData] = useState(null)
   const [llmPriorityList, setLlmPriorityList] = useState<string[]>(['local', 'codex', 'openai', 'anthropic'])
   const [savingPriority, setSavingPriority] = useState(false)
@@ -518,7 +541,13 @@ export function Settings() {
       localLlmEndpoint: "http://localhost:11434",
       homebrainLocalLlmModel: "llama2-7b",
       spamFilterLocalLlmModel: "llama2-7b",
-      enableSecurityMode: false
+      enableSecurityMode: false,
+      deviceRestartScheduleEnabled: false,
+      deviceRestartScheduleFrequency: "weekly",
+      deviceRestartScheduleDayOfWeek: 0,
+      deviceRestartScheduleTime: "03:00",
+      deviceRestartScheduleNextRunAt: "",
+      deviceRestartScheduleLastTriggeredAt: ""
     }
   })
 
@@ -716,6 +745,15 @@ export function Settings() {
   const codexCustomHomeValue = (watch("codexHome") || "").toString()
   const codexModelValue = (watch("codexModel") || DEFAULT_CODEX_MODEL).toString()
   const effectiveCodexHomeValue = resolveDraftCodexHome(codexCustomHomeValue)
+  const deviceRestartScheduleEnabled = watch("deviceRestartScheduleEnabled") === true
+  const deviceRestartScheduleFrequency = (watch("deviceRestartScheduleFrequency") || "weekly").toString()
+  const deviceRestartScheduleDayOfWeek = Number(watch("deviceRestartScheduleDayOfWeek") ?? 0)
+  const deviceRestartNextRunAt =
+    deviceRestartStatus?.schedule?.nextRunAt || watch("deviceRestartScheduleNextRunAt")
+  const deviceRestartLastTriggeredAt =
+    deviceRestartStatus?.schedule?.lastTriggeredAt || watch("deviceRestartScheduleLastTriggeredAt")
+  const deviceRestartTimeZone =
+    deviceRestartStatus?.schedule?.timeZone || (watch("timezone") || "America/New_York").toString()
 
   // Load settings on component mount
   useEffect(() => {
@@ -775,6 +813,19 @@ export function Settings() {
           }, { showToast: false }).catch((codexError: any) => {
             console.error("Failed to load Codex models:", codexError)
           })
+
+          try {
+            const restartStatus = await getDeviceRestartStatus()
+            setDeviceRestartStatus(restartStatus)
+            if (restartStatus.schedule?.nextRunAt) {
+              setValue("deviceRestartScheduleNextRunAt", restartStatus.schedule.nextRunAt)
+            }
+            if (restartStatus.schedule?.lastTriggeredAt) {
+              setValue("deviceRestartScheduleLastTriggeredAt", restartStatus.schedule.lastTriggeredAt)
+            }
+          } catch (restartStatusError) {
+            console.warn("Failed to load device restart status:", restartStatusError)
+          }
           
           toast({
             title: "Settings Loaded",
@@ -1345,6 +1396,8 @@ export function Settings() {
       }
 
       delete settingsToSave.localLlmModel
+      delete settingsToSave.deviceRestartScheduleNextRunAt
+      delete settingsToSave.deviceRestartScheduleLastTriggeredAt
       settingsToSave.spamFilterLocalLlmModel = settingsToSave.homebrainLocalLlmModel
 
       const normalizedCodexHome = (settingsToSave.codexHome || "").toString().trim()
@@ -1371,6 +1424,20 @@ export function Settings() {
           response.settings?.isyPassword && String(response.settings.isyPassword).trim()
         ))
         setValue("isyPassword", "")
+        try {
+          const restartStatus = await getDeviceRestartStatus()
+          setDeviceRestartStatus(restartStatus)
+          if (restartStatus.schedule?.nextRunAt) {
+            setValue("deviceRestartScheduleNextRunAt", restartStatus.schedule.nextRunAt)
+          } else {
+            setValue("deviceRestartScheduleNextRunAt", "")
+          }
+          if (restartStatus.schedule?.lastTriggeredAt) {
+            setValue("deviceRestartScheduleLastTriggeredAt", restartStatus.schedule.lastTriggeredAt)
+          }
+        } catch (restartStatusError) {
+          console.warn("Failed to refresh device restart status:", restartStatusError)
+        }
         toast({
           title: "Settings Saved",
           description: response.message || "Your settings have been saved successfully"
@@ -3641,6 +3708,33 @@ export function Settings() {
       setResettingSettings(false);
     }
   };
+
+  const handleManualDeviceReboot = async () => {
+    const confirmed = window.confirm(
+      "Reboot the entire HomeBrain device now? This runs sudo reboot on the host."
+    )
+    if (!confirmed) {
+      return
+    }
+
+    setRebootingDevice(true)
+    try {
+      const response = await triggerDeviceReboot()
+      toast({
+        title: "Device reboot dispatched",
+        description: response.message || "HomeBrain issued the whole-device reboot command."
+      })
+    } catch (error) {
+      console.error("Device reboot failed:", error)
+      toast({
+        title: "Reboot failed",
+        description: error.message || "Failed to dispatch the device reboot command.",
+        variant: "destructive"
+      })
+    } finally {
+      setRebootingDevice(false)
+    }
+  }
 
   const handleClearSTIntegration = async () => {
     setClearingSTIntegration(true);
@@ -7274,6 +7368,119 @@ export function Settings() {
           </TabsContent>
 
           <TabsContent value="maintenance" className="space-y-6">
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <CalendarClock className="h-5 w-5 text-sky-600" />
+                  Device Restart
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-5">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="font-medium">Scheduled whole-device restart</p>
+                    <p className="text-sm text-muted-foreground">
+                      Runs a host reboot at the selected cadence using the {deviceRestartTimeZone} timezone.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={deviceRestartScheduleEnabled}
+                    onCheckedChange={(checked) => setValue("deviceRestartScheduleEnabled", checked)}
+                  />
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-3">
+                  <div>
+                    <label className="text-sm font-medium">Frequency</label>
+                    <Select
+                      value={deviceRestartScheduleFrequency}
+                      onValueChange={(value) => setValue("deviceRestartScheduleFrequency", value)}
+                      disabled={!deviceRestartScheduleEnabled}
+                    >
+                      <SelectTrigger className="mt-1">
+                        <SelectValue placeholder="Select frequency" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {DEVICE_RESTART_FREQUENCIES.map((frequency) => (
+                          <SelectItem key={frequency.value} value={frequency.value}>
+                            {frequency.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium">Day</label>
+                    <Select
+                      value={String(Number.isFinite(deviceRestartScheduleDayOfWeek) ? deviceRestartScheduleDayOfWeek : 0)}
+                      onValueChange={(value) => setValue("deviceRestartScheduleDayOfWeek", Number(value))}
+                      disabled={!deviceRestartScheduleEnabled || deviceRestartScheduleFrequency === "daily"}
+                    >
+                      <SelectTrigger className="mt-1">
+                        <SelectValue placeholder="Select day" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {DEVICE_RESTART_DAYS.map((day) => (
+                          <SelectItem key={day.value} value={String(day.value)}>
+                            {day.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium">Time</label>
+                    <Input
+                      type="time"
+                      {...register("deviceRestartScheduleTime")}
+                      disabled={!deviceRestartScheduleEnabled}
+                      className="mt-1"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
+                  <div className="rounded-lg border border-border/60 bg-slate-50/80 p-3 dark:bg-slate-950/40">
+                    <p className="text-xs font-medium uppercase text-muted-foreground">Next restart</p>
+                    <p className="mt-1 text-sm font-medium">
+                      {deviceRestartScheduleEnabled && deviceRestartNextRunAt
+                        ? formatHarmonyTimestamp(deviceRestartNextRunAt)
+                        : "Disabled"}
+                    </p>
+                  </div>
+
+                  <div className="rounded-lg border border-border/60 bg-slate-50/80 p-3 dark:bg-slate-950/40">
+                    <p className="text-xs font-medium uppercase text-muted-foreground">Last scheduled restart</p>
+                    <p className="mt-1 text-sm font-medium">
+                      {deviceRestartLastTriggeredAt ? formatHarmonyTimestamp(deviceRestartLastTriggeredAt) : "Never"}
+                    </p>
+                  </div>
+
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    onClick={handleManualDeviceReboot}
+                    disabled={rebootingDevice}
+                    className="w-full md:w-auto"
+                  >
+                    {rebootingDevice ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                        Dispatching...
+                      </>
+                    ) : (
+                      <>
+                        <Power className="h-4 w-4 mr-2" />
+                        Reboot Device Now
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">

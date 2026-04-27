@@ -293,6 +293,46 @@ const SettingsSchema = new mongoose.Schema({
     max: 3650,
     default: 365
   },
+  deviceRestartScheduleEnabled: {
+    type: Boolean,
+    default: false
+  },
+  deviceRestartScheduleFrequency: {
+    type: String,
+    enum: ['daily', 'weekly', 'biweekly'],
+    default: 'weekly'
+  },
+  deviceRestartScheduleDayOfWeek: {
+    type: Number,
+    min: 0,
+    max: 6,
+    default: 0
+  },
+  deviceRestartScheduleTime: {
+    type: String,
+    default: '03:00'
+  },
+  deviceRestartScheduleNextRunAt: {
+    type: Date,
+    default: null
+  },
+  deviceRestartScheduleLastTriggeredAt: {
+    type: Date,
+    default: null
+  },
+  deviceRestartLastRequestedAt: {
+    type: Date,
+    default: null
+  },
+  deviceRestartLastRequestedBy: {
+    type: String,
+    default: ''
+  },
+  deviceRestartLastRequestSource: {
+    type: String,
+    enum: ['manual', 'scheduled', ''],
+    default: ''
+  },
   
   // Metadata
   lastModified: {

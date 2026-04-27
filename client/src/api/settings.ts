@@ -61,6 +61,10 @@ export const updateSettings = async (settings: {
   spamFilterLocalLlmModel?: string;
   voiceRegion?: string;
   autoDiscoveryEnabled?: boolean;
+  deviceRestartScheduleEnabled?: boolean;
+  deviceRestartScheduleFrequency?: 'daily' | 'weekly' | 'biweekly';
+  deviceRestartScheduleDayOfWeek?: number;
+  deviceRestartScheduleTime?: string;
 }) => {
   try {
     const response = await api.put('/api/settings', settings);
