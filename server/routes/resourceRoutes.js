@@ -1,10 +1,20 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const { requireUser } = require('./middlewares/auth');
 const resourceMonitorService = require('../services/resourceMonitorService');
 
 // Create auth middleware instance
 const auth = requireUser();
+const processDiagnosticsRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_RESOURCE_PROCESS_RATE_LIMIT_WINDOW_MS || 60_000)),
+  limit: Math.max(10, Number(process.env.HOMEBRAIN_RESOURCE_PROCESS_RATE_LIMIT_MAX || 120)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'Too many process diagnostic requests. Please retry shortly.'
+  }
+});
 
 // Description: Get current system resource utilization
 // Endpoint: GET /api/resources/utilization
@@ -157,6 +167,24 @@ router.get('/process', auth, async (req, res) => {
     res.status(200).json(processInfo);
   } catch (error) {
     console.error('Error fetching process info:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Description: Get highest-memory processes
+// Endpoint: GET /api/resources/processes
+// Request: { limit?: number }
+// Response: { processes: Array<{ pid, command, rssBytes, cpuPercent, memoryPercent }> }
+router.get('/processes', processDiagnosticsRateLimit, auth, async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit, 10) || 10;
+    console.log(`GET /api/resources/processes - Fetching process breakdown (limit: ${limit})`);
+
+    const processBreakdown = await resourceMonitorService.getProcessBreakdown({ limit });
+
+    res.status(200).json(processBreakdown);
+  } catch (error) {
+    console.error('Error fetching process breakdown:', error);
     res.status(500).json({ error: error.message });
   }
 });

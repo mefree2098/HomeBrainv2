@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const telemetryService = require('../services/telemetryService');
+const { TelemetryService } = telemetryService;
 
 const {
   buildSourceTimelineEvents,
@@ -360,4 +361,69 @@ test('normalizeDiskCapacity maps resource monitor disk output into free and tota
   assert.equal(disk.freeGB, 0.33);
   assert.equal(disk.freeLabel, '336M');
   assert.equal(disk.available, true);
+});
+
+test('TelemetryService limits concurrent device snapshot writes', async () => {
+  const service = new TelemetryService({ deviceSnapshotConcurrency: 2 });
+  let activeWrites = 0;
+  let maxActiveWrites = 0;
+
+  service.recordDeviceSnapshot = async (device) => {
+    activeWrites += 1;
+    maxActiveWrites = Math.max(maxActiveWrites, activeWrites);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    activeWrites -= 1;
+    return { inserted: device.inserted };
+  };
+
+  const summary = await service.recordDeviceSnapshots([
+    { _id: 'a', inserted: true },
+    { _id: 'b', inserted: false },
+    { _id: 'c', inserted: true },
+    { _id: 'd', inserted: true }
+  ]);
+
+  assert.equal(maxActiveWrites, 2);
+  assert.deepEqual(summary, {
+    insertedCount: 3,
+    skippedCount: 1
+  });
+});
+
+test('TelemetryService coalesces queued device updates before flushing', async () => {
+  const service = new TelemetryService({
+    deviceSnapshotConcurrency: 1,
+    deviceSnapshotFlushDelayMs: 1000
+  });
+  const flushedBatches = [];
+
+  service.recordDeviceSnapshots = async (devices) => {
+    flushedBatches.push(devices);
+    return {
+      insertedCount: devices.length,
+      skippedCount: 0
+    };
+  };
+
+  const firstQueue = service.enqueueDeviceSnapshots([
+    { _id: 'device-1', name: 'Old Name' },
+    { _id: 'device-2', name: 'Kitchen' }
+  ]);
+  const secondQueue = service.enqueueDeviceSnapshots([
+    { _id: 'device-1', name: 'New Name' }
+  ]);
+
+  assert.equal(firstQueue.queuedCount, 2);
+  assert.equal(secondQueue.pendingCount, 2);
+
+  const summary = await service.flushPendingDeviceSnapshots();
+  service.shutdown();
+
+  assert.deepEqual(summary, {
+    insertedCount: 2,
+    skippedCount: 0,
+    pendingCount: 0
+  });
+  assert.equal(flushedBatches.length, 1);
+  assert.deepEqual(flushedBatches[0].map((device) => device.name), ['New Name', 'Kitchen']);
 });

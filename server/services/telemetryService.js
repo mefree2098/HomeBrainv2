@@ -1391,10 +1391,56 @@ function normalizeChartType(value) {
   return SUPPORTED_CHART_TYPES.has(normalized) ? normalized : 'area';
 }
 
+async function mapSettledWithConcurrency(items = [], concurrency = 8, worker) {
+  const list = Array.isArray(items) ? items : [];
+  const limit = clampInteger(concurrency, 8, 1, 32);
+  const results = new Array(list.length);
+  let nextIndex = 0;
+
+  async function runWorker() {
+    while (nextIndex < list.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+
+      try {
+        results[index] = {
+          status: 'fulfilled',
+          value: await worker(list[index], index)
+        };
+      } catch (reason) {
+        results[index] = {
+          status: 'rejected',
+          reason
+        };
+      }
+    }
+  }
+
+  const workerCount = Math.min(limit, list.length);
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+
+  return results;
+}
+
 class TelemetryService {
-  constructor() {
+  constructor(options = {}) {
     this.initialized = false;
     this.handleDeviceUpdates = this.handleDeviceUpdates.bind(this);
+    this.deviceSnapshotConcurrency = clampInteger(
+      options.deviceSnapshotConcurrency ?? process.env.HOMEBRAIN_TELEMETRY_DEVICE_SNAPSHOT_CONCURRENCY,
+      8,
+      1,
+      32
+    );
+    this.deviceSnapshotFlushDelayMs = clampInteger(
+      options.deviceSnapshotFlushDelayMs ?? process.env.HOMEBRAIN_TELEMETRY_DEVICE_SNAPSHOT_FLUSH_DELAY_MS,
+      100,
+      0,
+      5000
+    );
+    this.pendingDeviceSnapshots = new Map();
+    this.deviceSnapshotFlushTimer = null;
+    this.deviceSnapshotFlushInFlight = false;
   }
 
   initialize() {
@@ -1410,23 +1456,115 @@ class TelemetryService {
   }
 
   shutdown() {
-    if (!this.initialized) {
-      return;
+    if (this.initialized) {
+      deviceUpdateEmitter.removeListener('devices:update', this.handleDeviceUpdates);
+      this.initialized = false;
     }
 
-    deviceUpdateEmitter.removeListener('devices:update', this.handleDeviceUpdates);
-    this.initialized = false;
+    if (this.deviceSnapshotFlushTimer) {
+      clearTimeout(this.deviceSnapshotFlushTimer);
+      this.deviceSnapshotFlushTimer = null;
+    }
+    this.pendingDeviceSnapshots.clear();
   }
 
   handleDeviceUpdates(devices = []) {
-    void this.recordDeviceSnapshots(devices).catch((error) => {
-      console.warn(`TelemetryService: failed to record device telemetry: ${error.message}`);
-    });
+    try {
+      this.enqueueDeviceSnapshots(devices);
+    } catch (error) {
+      console.warn(`TelemetryService: failed to queue device telemetry: ${error.message}`);
+    }
   }
 
   async backfillExistingDeviceTelemetry() {
     const devices = await Device.find({}).lean();
     return this.recordDeviceSnapshots(devices);
+  }
+
+  enqueueDeviceSnapshots(devices = []) {
+    if (!Array.isArray(devices)) {
+      return {
+        queuedCount: 0,
+        pendingCount: this.pendingDeviceSnapshots.size
+      };
+    }
+
+    let queuedCount = 0;
+    devices.forEach((device) => {
+      const deviceId = String(device?._id || device?.id || '').trim();
+      if (!deviceId) {
+        return;
+      }
+
+      this.pendingDeviceSnapshots.set(deviceId, device);
+      queuedCount += 1;
+    });
+
+    if (queuedCount > 0) {
+      this.scheduleDeviceSnapshotFlush();
+    }
+
+    return {
+      queuedCount,
+      pendingCount: this.pendingDeviceSnapshots.size
+    };
+  }
+
+  scheduleDeviceSnapshotFlush() {
+    if (this.deviceSnapshotFlushTimer || this.deviceSnapshotFlushInFlight) {
+      return;
+    }
+
+    this.deviceSnapshotFlushTimer = setTimeout(() => {
+      this.deviceSnapshotFlushTimer = null;
+      void this.flushPendingDeviceSnapshots().catch((error) => {
+        console.warn(`TelemetryService: failed to record queued device telemetry: ${error.message}`);
+      });
+    }, this.deviceSnapshotFlushDelayMs);
+
+    if (typeof this.deviceSnapshotFlushTimer.unref === 'function') {
+      this.deviceSnapshotFlushTimer.unref();
+    }
+  }
+
+  async flushPendingDeviceSnapshots() {
+    if (this.deviceSnapshotFlushTimer) {
+      clearTimeout(this.deviceSnapshotFlushTimer);
+      this.deviceSnapshotFlushTimer = null;
+    }
+
+    if (this.deviceSnapshotFlushInFlight) {
+      return {
+        insertedCount: 0,
+        skippedCount: 0,
+        pendingCount: this.pendingDeviceSnapshots.size
+      };
+    }
+
+    if (this.pendingDeviceSnapshots.size === 0) {
+      return {
+        insertedCount: 0,
+        skippedCount: 0,
+        pendingCount: 0
+      };
+    }
+
+    const devices = Array.from(this.pendingDeviceSnapshots.values());
+    this.pendingDeviceSnapshots.clear();
+    this.deviceSnapshotFlushInFlight = true;
+
+    try {
+      const summary = await this.recordDeviceSnapshots(devices);
+      return {
+        ...summary,
+        pendingCount: this.pendingDeviceSnapshots.size
+      };
+    } finally {
+      this.deviceSnapshotFlushInFlight = false;
+      if (this.pendingDeviceSnapshots.size > 0) {
+        this.scheduleDeviceSnapshotFlush();
+      }
+    }
   }
 
   async recordDeviceSnapshots(devices = []) {
@@ -1443,8 +1581,10 @@ class TelemetryService {
       dedupedDevices.set(deviceId, device);
     });
 
-    const results = await Promise.allSettled(
-      Array.from(dedupedDevices.values()).map((device) => this.recordDeviceSnapshot(device))
+    const results = await mapSettledWithConcurrency(
+      Array.from(dedupedDevices.values()),
+      this.deviceSnapshotConcurrency,
+      (device) => this.recordDeviceSnapshot(device)
     );
 
     return results.reduce((summary, result) => {
@@ -2520,6 +2660,7 @@ module.exports.__private__ = {
   inferMetricLabel,
   inferMetricUnit,
   isBinaryMetric,
+  mapSettledWithConcurrency,
   mergePointsByTimestamp,
   normalizeDiskCapacity,
   pickFeaturedMetricKeys,

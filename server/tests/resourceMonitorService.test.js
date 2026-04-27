@@ -4,7 +4,10 @@ const os = require('os');
 
 const {
   ResourceMonitorService,
+  buildMemoryUsageFromMemInfo,
+  parseLinuxMemInfo,
   parseJetsonGpuLoad,
+  parseProcessList,
   parseTegrastatsGpuPercent
 } = require('../services/resourceMonitorService');
 
@@ -23,6 +26,63 @@ test('parseJetsonGpuLoad normalizes Jetson sysfs load values', () => {
 test('parseTegrastatsGpuPercent extracts GR3D load percentages', () => {
   assert.equal(parseTegrastatsGpuPercent('RAM 220/4096MB GR3D_FREQ 76%@1109 APE 25'), 76);
   assert.equal(parseTegrastatsGpuPercent('RAM 220/4096MB CPU [1%@729]'), null);
+});
+
+test('buildMemoryUsageFromMemInfo uses MemAvailable instead of raw free memory on Linux', () => {
+  const memInfo = [
+    'MemTotal:        8000000 kB',
+    'MemFree:          500000 kB',
+    'MemAvailable:    2500000 kB',
+    'Buffers:          100000 kB',
+    'Cached:          1200000 kB',
+    'SReclaimable:     200000 kB',
+    'SwapTotal:       1000000 kB',
+    'SwapFree:         750000 kB'
+  ].join('\n');
+
+  const parsed = parseLinuxMemInfo(memInfo);
+  assert.equal(parsed.MemTotal, 8_000_000 * 1024);
+  assert.equal(parsed.MemAvailable, 2_500_000 * 1024);
+
+  const memory = buildMemoryUsageFromMemInfo(memInfo);
+  assert.equal(memory.source, 'proc-meminfo');
+  assert.equal(memory.total, 8_000_000 * 1024);
+  assert.equal(memory.free, 2_500_000 * 1024);
+  assert.equal(memory.systemFree, 500_000 * 1024);
+  assert.equal(memory.used, 5_500_000 * 1024);
+  assert.equal(memory.usagePercent, 68.75);
+  assert.equal(memory.swapUsed, 250_000 * 1024);
+});
+
+test('getMemoryUsage reads Linux MemAvailable when procfs is present', () => {
+  const service = new ResourceMonitorService({
+    platform: () => 'linux',
+    readFileSync: (filePath) => {
+      assert.equal(filePath, '/proc/meminfo');
+      return 'MemTotal: 4096000 kB\nMemFree: 128000 kB\nMemAvailable: 1024000 kB\n';
+    }
+  });
+
+  const memory = service.getMemoryUsage();
+
+  assert.equal(memory.source, 'proc-meminfo');
+  assert.equal(memory.freeGB, 0.98);
+  assert.equal(memory.usagePercent, 75);
+});
+
+test('parseProcessList returns the highest-memory process rows', () => {
+  const rows = parseProcessList([
+    'PID PPID COMMAND RSS VSZ %CPU %MEM',
+    '101 1 node 524288 1048576 12.5 6.4',
+    '202 1 mongod 262144 2097152 2.1 3.2'
+  ].join('\n'), 1);
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].pid, 101);
+  assert.equal(rows[0].command, 'node');
+  assert.equal(rows[0].rssBytes, 524288 * 1024);
+  assert.equal(rows[0].cpuPercent, 12.5);
+  assert.equal(rows[0].memoryPercent, 6.4);
 });
 
 test('getGPUUsage reads Orin GPU load from modern sysfs paths', async () => {

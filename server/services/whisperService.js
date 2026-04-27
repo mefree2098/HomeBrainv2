@@ -19,6 +19,10 @@ const SERVER_SCRIPT = path.join(__dirname, '..', 'scripts', 'whisper_server.py')
 const DOWNLOAD_SCRIPT = path.join(__dirname, '..', 'scripts', 'download_whisper_model.py');
 const DEFAULT_MODEL_DIR = path.join(__dirname, '..', 'data', 'whisper', 'models');
 const LOG_LIMIT = 500;
+const COMMAND_OUTPUT_LIMIT_BYTES = Math.max(
+  16 * 1024,
+  Number.parseInt(process.env.WHISPER_COMMAND_OUTPUT_LIMIT_BYTES, 10) || 256 * 1024
+);
 
 // Default LD paths that make Jetson happy (CT2 in /usr/local/lib; CUDA in /usr/local/cuda*/lib64)
 const DEFAULT_LD_LIBRARY_PATHS = [
@@ -59,6 +63,45 @@ function pcmToWav(pcmBuffer, sampleRate, channels, bitsPerSample = 16) {
 
 function formatSpawnError(command, args, error) {
   return new Error(`Failed to execute ${command} ${args.join(' ')}: ${error.message || error}`);
+}
+
+function createBoundedTextBuffer(limitBytes = COMMAND_OUTPUT_LIMIT_BYTES) {
+  const maxBytes = Math.max(1024, Number.parseInt(limitBytes, 10) || COMMAND_OUTPUT_LIMIT_BYTES);
+  const chunks = [];
+  let totalBytes = 0;
+  let truncated = false;
+
+  return {
+    append(chunk) {
+      const text = chunk.toString();
+      const chunkBytes = Buffer.byteLength(text);
+      chunks.push(text);
+      totalBytes += chunkBytes;
+
+      while (totalBytes > maxBytes && chunks.length > 0) {
+        truncated = true;
+        const overflow = totalBytes - maxBytes;
+        const firstChunk = chunks[0];
+        const firstBytes = Buffer.byteLength(firstChunk);
+
+        if (firstBytes <= overflow) {
+          chunks.shift();
+          totalBytes -= firstBytes;
+          continue;
+        }
+
+        chunks[0] = Buffer.from(firstChunk).subarray(overflow).toString();
+        totalBytes = maxBytes;
+      }
+    },
+
+    value() {
+      const output = chunks.join('');
+      return truncated
+        ? `[output truncated to last ${Math.round(maxBytes / 1024)} KiB]\n${output}`
+        : output;
+    }
+  };
 }
 
 function dedupePath(list) {
@@ -1155,7 +1198,12 @@ class WhisperService {
   }
 
   async _runCommand(command, args, options = {}) {
-    const { streamOutput = false, streamPrefix = '', ...spawnOptions } = options;
+    const {
+      streamOutput = false,
+      streamPrefix = '',
+      maxOutputBytes = COMMAND_OUTPUT_LIMIT_BYTES,
+      ...spawnOptions
+    } = options;
     const emitLine = (line, isError = false) => {
       const text = String(line || '').trim();
       if (!text) return;
@@ -1171,23 +1219,26 @@ class WhisperService {
 
     return new Promise((resolve, reject) => {
       const child = spawn(command, args, { ...spawnOptions, stdio: ['ignore', 'pipe', 'pipe'] });
-      const stdout = [];
-      const stderr = [];
+      const stdout = createBoundedTextBuffer(maxOutputBytes);
+      const stderr = createBoundedTextBuffer(maxOutputBytes);
       child.stdout.on('data', (d) => {
-        stdout.push(d.toString());
+        stdout.append(d);
         if (streamOutput) emitChunk(d, false);
       });
       child.stderr.on('data', (d) => {
-        stderr.push(d.toString());
+        stderr.append(d);
         if (streamOutput) emitChunk(d, true);
       });
       child.on('error', (error) => reject(formatSpawnError(command, args, error)));
       child.on('close', (code) => {
-        if (code === 0) resolve({ stdout: stdout.join(''), stderr: stderr.join('') });
+        const stdoutText = stdout.value();
+        const stderrText = stderr.value();
+
+        if (code === 0) resolve({ stdout: stdoutText, stderr: stderrText });
         else {
-          const error = new Error(`${command} ${args.join(' ')} exited with code ${code}\n${stderr.join('')}`);
-          error.stdout = stdout.join('');
-          error.stderr = stderr.join('');
+          const error = new Error(`${command} ${args.join(' ')} exited with code ${code}\n${stderrText}`);
+          error.stdout = stdoutText;
+          error.stderr = stderrText;
           reject(error);
         }
       });
