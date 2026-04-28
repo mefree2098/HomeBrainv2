@@ -88,6 +88,7 @@ final class SessionStore: ObservableObject {
         }
 
         if currentUser != nil && !accessTokenRequiresRefresh(accessToken) {
+            authError = nil
             return
         }
 
@@ -95,6 +96,7 @@ final class SessionStore: ObservableObject {
             try await ensureValidAccessToken()
 
             if currentUser != nil {
+                authError = nil
                 return
             }
 
@@ -102,6 +104,7 @@ final class SessionStore: ObservableObject {
             let object = JSON.object(response)
             if let user = AppUser.from(object) {
                 if user.hasHomeBrainAccess {
+                    authError = nil
                     currentUser = user
                     persistCurrentUser(user)
                 } else {

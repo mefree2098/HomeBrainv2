@@ -20,6 +20,15 @@ struct RootView: View {
         .task {
             await session.bootstrap()
         }
+        .onChange(of: session.backendRecoveryGeneration) { _, generation in
+            guard generation > 0, !session.isAuthenticated else {
+                return
+            }
+
+            Task {
+                await session.bootstrap()
+            }
+        }
         .onChange(of: session.isAuthenticated) { _, isAuthenticated in
             if isAuthenticated && uiPreview.isEnabled && !uiPreview.isForcedByLaunch {
                 uiPreview.exit()

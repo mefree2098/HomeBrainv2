@@ -688,6 +688,8 @@ struct DashboardView: View {
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     @State private var isLoading = true
+    @State private var isDashboardLoadInFlight = false
+    @State private var isSecurityStatusRefreshInFlight = false
     @State private var errorMessage: String?
 
     @State private var devices: [DeviceItem] = []
@@ -6058,6 +6060,12 @@ struct DashboardView: View {
     }
 
     private func loadDashboard() async {
+        guard !isDashboardLoadInFlight else {
+            return
+        }
+        isDashboardLoadInFlight = true
+        defer { isDashboardLoadInFlight = false }
+
         if previewMode {
             errorMessage = nil
             infoMessage = nil
@@ -6268,6 +6276,12 @@ struct DashboardView: View {
     }
 
     private func refreshSecurityStatus() async {
+        guard !isSecurityStatusRefreshInFlight else {
+            return
+        }
+        isSecurityStatusRefreshInFlight = true
+        defer { isSecurityStatusRefreshInFlight = false }
+
         if previewMode {
             systemStatus = "Online"
             return
@@ -6303,10 +6317,14 @@ struct DashboardView: View {
     }
 
     private func listenForDashboardDeviceUpdates() async {
+        var reconnectAttempt = 0
+
         while !Task.isCancelled {
             guard let streamURL = session.apiClient.streamURL("/api/devices/stream") else {
                 return
             }
+
+            var streamOpenedAt: Date?
 
             do {
                 let accessToken = try await session.validAccessToken()
@@ -6331,6 +6349,7 @@ struct DashboardView: View {
                 }
 
                 session.reportBackendRequestSucceeded()
+                streamOpenedAt = Date()
 
                 var eventName = "message"
                 var dataLines: [String] = []
@@ -6362,6 +6381,24 @@ struct DashboardView: View {
                 }
 
                 await handleDashboardDeviceStreamEvent(name: eventName, dataLines: dataLines)
+
+                guard !Task.isCancelled else {
+                    return
+                }
+
+                session.reportTransientBackendFailure(
+                    APIError.transientBackendUnavailable(message: "Live device updates are reconnecting."),
+                    path: "/api/devices/stream"
+                )
+                let delayAttempt = dashboardStreamReconnectDelayAttempt(
+                    current: reconnectAttempt,
+                    streamOpenedAt: streamOpenedAt
+                )
+                reconnectAttempt = nextDashboardStreamReconnectAttempt(
+                    current: reconnectAttempt,
+                    streamOpenedAt: streamOpenedAt
+                )
+                await sleepBeforeDashboardStreamReconnect(attempt: delayAttempt)
             } catch {
                 if Task.isCancelled {
                     return
@@ -6372,8 +6409,42 @@ struct DashboardView: View {
                 }
 
                 session.reportTransientBackendFailure(error, path: "/api/devices/stream")
-                try? await Task.sleep(for: .seconds(5))
+                let delayAttempt = dashboardStreamReconnectDelayAttempt(
+                    current: reconnectAttempt,
+                    streamOpenedAt: streamOpenedAt
+                )
+                reconnectAttempt = nextDashboardStreamReconnectAttempt(
+                    current: reconnectAttempt,
+                    streamOpenedAt: streamOpenedAt
+                )
+                await sleepBeforeDashboardStreamReconnect(attempt: delayAttempt)
             }
+        }
+    }
+
+    private func dashboardStreamReconnectDelayAttempt(current: Int, streamOpenedAt: Date?) -> Int {
+        if let streamOpenedAt, Date().timeIntervalSince(streamOpenedAt) >= 30 {
+            return 0
+        }
+
+        return current
+    }
+
+    private func nextDashboardStreamReconnectAttempt(current: Int, streamOpenedAt: Date?) -> Int {
+        if let streamOpenedAt, Date().timeIntervalSince(streamOpenedAt) >= 30 {
+            return 0
+        }
+
+        return min(current + 1, 4)
+    }
+
+    private func sleepBeforeDashboardStreamReconnect(attempt: Int) async {
+        let delays: [TimeInterval] = [2, 5, 10, 20, 30]
+        let delay = delays[min(attempt, delays.count - 1)]
+        do {
+            try await Task.sleep(for: .seconds(delay))
+        } catch {
+            // The enclosing SwiftUI task owns cancellation.
         }
     }
 

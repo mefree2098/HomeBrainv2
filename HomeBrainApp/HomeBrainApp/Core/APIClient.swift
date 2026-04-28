@@ -155,7 +155,7 @@ final class APIClient {
 
             sessionStore.reportTransientBackendFailure(error, path: path)
             if shouldRetryTransientRequest(method: method, attempt: transientAttempt) {
-                await sleepBeforeTransientRetry(attempt: transientAttempt)
+                try await sleepBeforeTransientRetry(attempt: transientAttempt)
                 return try await dataRequest(
                     path: path,
                     method: method,
@@ -185,7 +185,7 @@ final class APIClient {
             )
 
             if shouldRetryTransientRequest(method: method, attempt: transientAttempt) {
-                await sleepBeforeTransientRetry(attempt: transientAttempt)
+                try await sleepBeforeTransientRetry(attempt: transientAttempt)
                 return try await dataRequest(
                     path: path,
                     method: method,
@@ -328,9 +328,9 @@ final class APIClient {
         method == .get && attempt < Self.transientRetryDelays.count
     }
 
-    private func sleepBeforeTransientRetry(attempt: Int) async {
+    private func sleepBeforeTransientRetry(attempt: Int) async throws {
         let delay = Self.transientRetryDelays[min(attempt, Self.transientRetryDelays.count - 1)]
-        try? await Task.sleep(for: .seconds(delay))
+        try await Task.sleep(for: .seconds(delay))
     }
 
     private func transientBackendMessage() -> String {

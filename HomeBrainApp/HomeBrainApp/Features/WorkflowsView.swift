@@ -136,6 +136,7 @@ struct WorkflowsView: View {
     @State private var activityEvents: [PlatformEventItem] = []
 
     @State private var isLoading = true
+    @State private var isWorkflowScreenRefreshInFlight = false
     @State private var runtimeRefreshing = false
     @State private var errorMessage: String?
 
@@ -1454,6 +1455,12 @@ struct WorkflowsView: View {
     }
 
     private func refreshWorkflowScreen(silent: Bool) async {
+        guard !isWorkflowScreenRefreshInFlight else {
+            return
+        }
+        isWorkflowScreenRefreshInFlight = true
+        defer { isWorkflowScreenRefreshInFlight = false }
+
         if !silent {
             isLoading = workflows.isEmpty
             runtimeRefreshing = true
