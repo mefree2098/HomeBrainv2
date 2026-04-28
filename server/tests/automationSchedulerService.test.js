@@ -539,6 +539,90 @@ test('schedule triggers can fire at sunset using weather-derived solar time', as
   assert.match(context.triggeringScheduleTime, /^2026-03-31T18:55:00\.000Z$/);
 });
 
+test('solar schedule triggers catch up within the scheduler grace window and dedupe the target minute', async (t) => {
+  const originalFetchDashboardWeather = weatherService.fetchDashboardWeather;
+  const originalScheduleGraceMs = automationSchedulerService.scheduleGraceMs;
+  const automationId = new mongoose.Types.ObjectId().toString();
+
+  weatherService.fetchDashboardWeather = async () => ({
+    location: {
+      timezone: 'UTC'
+    },
+    today: {
+      sunrise: '2026-03-31T06:14',
+      sunset: '2026-03-31T18:40'
+    }
+  });
+
+  automationSchedulerService.pendingTriggerContexts.clear();
+  automationSchedulerService.recentRuns.clear();
+  automationSchedulerService.scheduleGraceMs = 5 * 60 * 1000;
+  automationSchedulerService.solarContextCache = {
+    key: null,
+    value: null,
+    promise: null
+  };
+
+  t.after(() => {
+    weatherService.fetchDashboardWeather = originalFetchDashboardWeather;
+    automationSchedulerService.pendingTriggerContexts.clear();
+    automationSchedulerService.recentRuns.clear();
+    automationSchedulerService.scheduleGraceMs = originalScheduleGraceMs;
+    automationSchedulerService.solarContextCache = {
+      key: null,
+      value: null,
+      promise: null
+    };
+  });
+
+  const automation = {
+    _id: { toString: () => automationId },
+    name: 'Exterior lights at sunset',
+    enabled: true,
+    cooldown: 0,
+    trigger: {
+      type: 'schedule',
+      conditions: {
+        event: 'sunset',
+        offset: 15
+      }
+    }
+  };
+
+  assert.equal(await automationSchedulerService.shouldRunAutomation(
+    automation,
+    new Date('2026-03-31T18:56:30Z')
+  ), true);
+
+  const context = automationSchedulerService.consumePendingTriggerContext(automationId);
+  assert.match(context.triggeringScheduleTime, /^2026-03-31T18:55:00\.000Z$/);
+  assert.equal(context.triggeringScheduleLatenessMs, 90000);
+  assert.equal(
+    automationSchedulerService.isAlreadyExecutedForCurrentMinute(
+      automationId,
+      'schedule',
+      new Date('2026-03-31T18:56:30Z'),
+      context
+    ),
+    false
+  );
+  assert.equal(
+    automationSchedulerService.isAlreadyExecutedForCurrentMinute(
+      automationId,
+      'schedule',
+      new Date('2026-03-31T18:57:00Z'),
+      context
+    ),
+    true
+  );
+
+  automation.lastRun = new Date('2026-03-31T18:56:45Z');
+  assert.equal(await automationSchedulerService.shouldRunAutomation(
+    automation,
+    new Date('2026-03-31T18:57:30Z')
+  ), false);
+});
+
 test('security alarm triggers prime matched startup state without rerunning until the state changes again', async (t) => {
   const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
   let alarmState = 'armedStay';

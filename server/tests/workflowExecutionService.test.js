@@ -13,6 +13,7 @@ const Device = require('../models/Device');
 const insteonService = require('../services/insteonService');
 const Automation = require('../models/Automation');
 const deviceGroupService = require('../services/deviceGroupService');
+const deviceService = require('../services/deviceService');
 
 test('condition edge=change executes onFalseActions when condition transitions to false', async () => {
   const stateKey = `test-condition-false-${Date.now()}`;
@@ -417,6 +418,117 @@ test('device_control action passes Insteon retry parameters through to command e
   assert.equal(result.actionResults[0].success, true);
   assert.equal(result.actionResults[0].details.commandAttempts, 3);
   assert.equal(result.actionResults[0].details.commandRetryCount, 2);
+});
+
+test('device_control action retries transient workflow failures and records attempts', async (t) => {
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const originalFindById = Device.findById;
+  const originalControlDevice = deviceService.controlDevice;
+  let attempts = 0;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    deviceService.controlDevice = originalControlDevice;
+  });
+
+  Device.findById = () => ({
+    lean: async () => ({
+      _id: deviceId,
+      name: 'Desk Lamp',
+      type: 'light',
+      status: false,
+      isOnline: true,
+      properties: {
+        source: 'mock'
+      }
+    })
+  });
+
+  deviceService.controlDevice = async () => {
+    attempts += 1;
+    if (attempts === 1) {
+      const error = new Error('Transient command timeout');
+      error.code = 'ETIMEDOUT';
+      throw error;
+    }
+    return {
+      message: 'Device turned on',
+      details: {
+        controlMethod: 'mock'
+      }
+    };
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'device_control',
+      target: deviceId,
+      parameters: {
+        action: 'turn_on',
+        actionRetryCount: 1,
+        actionRetryDelayMs: 1
+      }
+    }
+  ], { context: {} });
+
+  assert.equal(attempts, 2);
+  assert.equal(result.status, 'success');
+  assert.equal(result.actionResults.length, 1);
+  assert.equal(result.actionResults[0].success, true);
+  assert.equal(result.actionResults[0].details.workflowRetry.attempts, 2);
+  assert.equal(result.actionResults[0].details.workflowRetry.failures.length, 1);
+  assert.equal(result.actionResults[0].details.workflowRetry.failures[0].willRetry, true);
+});
+
+test('critical action failure stops the remaining workflow actions', async (t) => {
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const originalFindById = Device.findById;
+  const originalControlDevice = deviceService.controlDevice;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    deviceService.controlDevice = originalControlDevice;
+  });
+
+  Device.findById = () => ({
+    lean: async () => ({
+      _id: deviceId,
+      name: 'Theater Activity',
+      type: 'switch',
+      status: false,
+      isOnline: true,
+      properties: {
+        source: 'mock'
+      }
+    })
+  });
+
+  deviceService.controlDevice = async () => {
+    const error = new Error('Transient command timeout');
+    error.code = 'ETIMEDOUT';
+    throw error;
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'device_control',
+      target: deviceId,
+      parameters: {
+        action: 'turn_on',
+        actionRetryCount: 0,
+        critical: true
+      }
+    },
+    {
+      type: 'notification',
+      parameters: { message: 'should not run' }
+    }
+  ], { context: {} });
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.actionResults.length, 1);
+  assert.equal(result.actionResults[0].success, false);
+  assert.equal(result.actionResults[0].details.workflowControl.stoppedAfterFailure, true);
 });
 
 test('device_control action can target a device group', async (t) => {

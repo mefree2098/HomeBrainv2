@@ -17,6 +17,10 @@ const DEFAULT_DISCOVERY_CACHE_MS = Number(process.env.HARMONY_DISCOVERY_CACHE_MS
 const DEFAULT_DISCOVERY_INCOMING_PORT = Number(process.env.HARMONY_DISCOVERY_INCOMING_PORT || 61991);
 const DEFAULT_DISCOVERY_TARGET_PORT = Number(process.env.HARMONY_DISCOVERY_TARGET_PORT || 5224);
 const DEFAULT_DISCOVERY_INTERVAL_MS = Number(process.env.HARMONY_DISCOVERY_INTERVAL_MS || 1000);
+const DEFAULT_CLIENT_OPERATION_TIMEOUT_MS = Math.max(
+  1000,
+  Number(process.env.HARMONY_CLIENT_OPERATION_TIMEOUT_MS) || 12000
+);
 const MAX_HOLD_COMMAND_MS = 5000;
 const HARMONY_ENTITY_TYPES = {
   ACTIVITY: 'activity',
@@ -199,6 +203,40 @@ const HARMONY_CONTROL_MATCHERS = Object.freeze([
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeTimeoutMs(value, fallback = DEFAULT_CLIENT_OPERATION_TIMEOUT_MS) {
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return Math.max(1, Math.round(numeric));
+  }
+  return fallback;
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  const boundedTimeoutMs = normalizeTimeoutMs(timeoutMs);
+  let timeout = null;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      const error = new Error(message || `Harmony operation timed out after ${boundedTimeoutMs}ms`);
+      error.code = 'HARMONY_OPERATION_TIMEOUT';
+      error.status = 504;
+      reject(error);
+    }, boundedTimeoutMs);
+
+    if (typeof timeout.unref === 'function') {
+      timeout.unref();
+    }
+  });
+
+  return Promise.race([
+    Promise.resolve(promise).finally(() => {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+    }),
+    timeoutPromise
+  ]);
 }
 
 function normalizeHost(value) {
@@ -430,6 +468,10 @@ class HarmonyService {
     this.backgroundMonitorIntervalMs = Math.max(
       5000,
       Number(process.env.HARMONY_BACKGROUND_MONITOR_INTERVAL_MS || 15000)
+    );
+    this.clientOperationTimeoutMs = normalizeTimeoutMs(
+      options.clientOperationTimeoutMs,
+      DEFAULT_CLIENT_OPERATION_TIMEOUT_MS
     );
   }
 
@@ -1002,23 +1044,37 @@ class HarmonyService {
     return discovered.map((hub) => ({ ...hub }));
   }
 
-  async withClient(hubIp, operation) {
+  async withClient(hubIp, operation, operationOptions = {}) {
     const normalizedHubIp = normalizeHost(hubIp);
     if (!normalizedHubIp) {
       throw new Error('Harmony hub IP/host is required');
     }
 
     const metadata = this.hubMetadata.get(normalizedHubIp);
-    const options = metadata?.remoteId ? { remoteId: metadata.remoteId } : {};
-    const client = await this.getHarmonyClientImpl(normalizedHubIp, options);
+    const clientOptions = metadata?.remoteId ? { remoteId: metadata.remoteId } : {};
+    const timeoutMs = normalizeTimeoutMs(operationOptions.timeoutMs, this.clientOperationTimeoutMs);
+    const operationName = operationOptions.operationName || 'Harmony client operation';
+    let client = null;
 
     try {
-      return await operation(client, normalizedHubIp);
+      client = await withTimeout(
+        this.getHarmonyClientImpl(normalizedHubIp, clientOptions),
+        timeoutMs,
+        `${operationName} timed out connecting to Harmony hub ${normalizedHubIp} after ${timeoutMs}ms`
+      );
+
+      return await withTimeout(
+        Promise.resolve().then(() => operation(client, normalizedHubIp)),
+        timeoutMs,
+        `${operationName} timed out waiting for Harmony hub ${normalizedHubIp} after ${timeoutMs}ms`
+      );
     } finally {
-      try {
-        client.end();
-      } catch (error) {
-        console.warn(`HarmonyService: failed to close client for ${normalizedHubIp}: ${error.message}`);
+      if (client) {
+        try {
+          client.end();
+        } catch (error) {
+          console.warn(`HarmonyService: failed to close client for ${normalizedHubIp}: ${error.message}`);
+        }
       }
     }
   }
@@ -1645,6 +1701,9 @@ class HarmonyService {
           }))
           : devices
       };
+    }, {
+      operationName: 'Harmony hub snapshot',
+      timeoutMs: options.timeoutMs
     });
   }
 
@@ -2076,7 +2135,11 @@ class HarmonyService {
 
       for (const hubIp of hubIps) {
         try {
-          const currentActivityId = await this.withClient(hubIp, (client) => client.getCurrentActivity());
+          const currentActivityId = await this.withClient(
+            hubIp,
+            (client) => client.getCurrentActivity(),
+            { operationName: 'Harmony activity state sync', timeoutMs: options.timeoutMs }
+          );
           const stateResult = await this.updateHubActivityState(hubIp, currentActivityId, true);
           const normalizedCurrentActivityId = currentActivityId != null ? currentActivityId.toString() : '-1';
           const activityLabel = await this.getActivityLabelForHub(hubIp, normalizedCurrentActivityId);
@@ -2128,7 +2191,7 @@ class HarmonyService {
     }
   }
 
-  async startActivity(hubIp, activityId) {
+  async startActivity(hubIp, activityId, options = {}) {
     const normalizedHubIp = normalizeHost(hubIp);
     const normalizedActivityId = activityId != null ? activityId.toString() : '';
 
@@ -2136,7 +2199,11 @@ class HarmonyService {
       throw new Error('Harmony hub and activity are required');
     }
 
-    await this.withClient(normalizedHubIp, (client) => client.startActivity(normalizedActivityId));
+    await this.withClient(
+      normalizedHubIp,
+      (client) => client.startActivity(normalizedActivityId),
+      { operationName: 'Harmony activity start', timeoutMs: options.timeoutMs }
+    );
     await this.updateHubActivityState(normalizedHubIp, normalizedActivityId, true);
     await this.mergeKnownHubs([{
       ip: normalizedHubIp,
@@ -2167,13 +2234,17 @@ class HarmonyService {
     };
   }
 
-  async turnOffHub(hubIp) {
+  async turnOffHub(hubIp, options = {}) {
     const normalizedHubIp = normalizeHost(hubIp);
     if (!normalizedHubIp) {
       throw new Error('Harmony hub is required');
     }
 
-    await this.withClient(normalizedHubIp, (client) => client.turnOff());
+    await this.withClient(
+      normalizedHubIp,
+      (client) => client.turnOff(),
+      { operationName: 'Harmony hub power off', timeoutMs: options.timeoutMs }
+    );
     await this.updateHubActivityState(normalizedHubIp, '-1', true);
     await this.mergeKnownHubs([{
       ip: normalizedHubIp,
@@ -2249,6 +2320,9 @@ class HarmonyService {
         repeatCount: sendCount,
         desiredState
       };
+    }, {
+      operationName: 'Harmony power command',
+      timeoutMs: options.timeoutMs
     });
 
     void eventStreamService.publishSafe({
@@ -2274,7 +2348,7 @@ class HarmonyService {
     };
   }
 
-  async sendDeviceCommand(hubIp, deviceIdOrName, commandName, holdMs = 0) {
+  async sendDeviceCommand(hubIp, deviceIdOrName, commandName, holdMs = 0, options = {}) {
     const normalizedHubIp = normalizeHost(hubIp);
     const normalizedDeviceKey = normalizeCommandName(deviceIdOrName);
     const normalizedCommandKey = normalizeCommandName(commandName);
@@ -2313,6 +2387,9 @@ class HarmonyService {
         command: targetCommand.name,
         holdMs: holdDuration
       };
+    }, {
+      operationName: 'Harmony device command',
+      timeoutMs: options.timeoutMs
     });
 
     void eventStreamService.publishSafe({

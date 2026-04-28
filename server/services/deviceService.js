@@ -498,6 +498,7 @@ class DeviceService {
       const isInsteon = this.isInsteonDevice(device);
       const skipIntegrationRefresh = options?.skipIntegrationRefresh === true;
       const skipPostActionVerification = options?.skipPostActionVerification === true;
+      const requirePostActionVerification = options?.requirePostActionVerification === true;
 
       if (isSmartThings && !skipIntegrationRefresh) {
         await this.ensureSmartThingsState({ immediate: true });
@@ -781,6 +782,23 @@ class DeviceService {
           const remoteUpdate = await this.pollHarmonyState(device, expectedStatus);
           if (remoteUpdate) {
             Object.assign(updateData, remoteUpdate);
+          }
+          if (requirePostActionVerification) {
+            if (!remoteUpdate) {
+              throw new Error('Unable to verify Harmony activity state after command');
+            }
+            if (expectedStatus !== undefined && remoteUpdate.status !== expectedStatus) {
+              const error = new Error(
+                `Harmony activity verification failed: expected ${expectedStatus ? 'on' : 'off'} but hub reported ${remoteUpdate.status ? 'on' : 'off'}`
+              );
+              error.details = {
+                expectedStatus,
+                actualStatus: remoteUpdate.status,
+                harmonyHubIp: device?.properties?.harmonyHubIp || null,
+                harmonyActivityId: device?.properties?.harmonyActivityId || null
+              };
+              throw error;
+            }
           }
         }
 
