@@ -618,6 +618,7 @@ final class VoiceAssistantManager: ObservableObject {
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.timeoutInterval = 6
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         if let accessToken = try? await sessionStore.validAccessToken() {

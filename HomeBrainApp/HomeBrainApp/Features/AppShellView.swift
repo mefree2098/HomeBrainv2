@@ -246,6 +246,8 @@ struct AppShellView: View {
     @State private var resourceStripMetrics: [ResourceStripMetric] = defaultResourceStripMetrics()
     @State private var resourceStripLoading = true
     @State private var resourceStripRefreshing = false
+    @State private var headerSummaryRefreshInFlight = false
+    @State private var resourceStripRefreshInFlight = false
     @State private var previewVoiceEnabled = false
     @State private var containerWidth: CGFloat = 0
     @StateObject private var dashboardChrome = DashboardChromeState()
@@ -1559,6 +1561,12 @@ struct AppShellView: View {
     }
 
     private func refreshHeaderSummary() async {
+        guard !headerSummaryRefreshInFlight else {
+            return
+        }
+        headerSummaryRefreshInFlight = true
+        defer { headerSummaryRefreshInFlight = false }
+
         do {
             let response = try await session.apiClient.get("/api/devices")
             let root = JSON.object(response)
@@ -1584,6 +1592,12 @@ struct AppShellView: View {
     }
 
     private func refreshResourceStrip(initialLoad: Bool) async {
+        guard !resourceStripRefreshInFlight else {
+            return
+        }
+        resourceStripRefreshInFlight = true
+        defer { resourceStripRefreshInFlight = false }
+
         if initialLoad {
             resourceStripLoading = true
         } else {

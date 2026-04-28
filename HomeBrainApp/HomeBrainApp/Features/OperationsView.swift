@@ -10,6 +10,7 @@ struct OperationsView: View {
     @State private var resourceUtilization: [String: Any] = [:]
 
     @State private var isLoading = true
+    @State private var isLoadInFlight = false
     @State private var errorMessage: String?
 
     private let timer = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
@@ -171,6 +172,12 @@ struct OperationsView: View {
     }
 
     private func loadOperations() async {
+        guard !isLoadInFlight else {
+            return
+        }
+        isLoadInFlight = true
+        defer { isLoadInFlight = false }
+
         isLoading = true
         errorMessage = nil
 
