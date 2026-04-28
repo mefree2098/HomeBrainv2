@@ -25,6 +25,10 @@ const WEEKDAY_TO_NUMBER = {
   saturday: 6,
   sat: 6
 };
+const DEFAULT_SCHEDULE_GRACE_MS = Math.max(
+  60 * 1000,
+  Number(process.env.AUTOMATION_SCHEDULER_SCHEDULE_GRACE_MS) || 5 * 60 * 1000
+);
 
 function normalizeMinuteKey(date) {
   return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}-${date.getHours()}-${date.getMinutes()}`;
@@ -260,6 +264,7 @@ class AutomationSchedulerService {
       promise: null
     };
     this.lastSolarWarningAt = 0;
+    this.scheduleGraceMs = DEFAULT_SCHEDULE_GRACE_MS;
   }
 
   shouldLogSecurityAlarmEvaluation(runtimeContext = {}) {
@@ -357,13 +362,43 @@ class AutomationSchedulerService {
     return (now.getTime() - lastRunMs) < (cooldownMinutes * 60 * 1000);
   }
 
-  isAlreadyExecutedForCurrentMinute(automationId, triggerType, now) {
-    const key = `${automationId}:${triggerType}:${normalizeMinuteKey(now)}`;
+  isAlreadyExecutedForCurrentMinute(automationId, triggerType, now, triggerContext = {}) {
+    let keyDate = now;
+    if (triggerContext?.triggeringScheduleTime) {
+      const scheduleDate = new Date(triggerContext.triggeringScheduleTime);
+      if (!Number.isNaN(scheduleDate.getTime())) {
+        keyDate = scheduleDate;
+      }
+    }
+
+    const key = `${automationId}:${triggerType}:${normalizeMinuteKey(keyDate)}`;
     if (this.recentRuns.has(key)) {
       return true;
     }
     this.recentRuns.set(key, Date.now());
     return false;
+  }
+
+  isWithinScheduleGraceWindow(targetDate, now) {
+    const targetMs = targetDate instanceof Date ? targetDate.getTime() : Number.NaN;
+    const nowMs = now instanceof Date ? now.getTime() : Number.NaN;
+    if (!Number.isFinite(targetMs) || !Number.isFinite(nowMs)) {
+      return false;
+    }
+
+    const ageMs = nowMs - targetMs;
+    return ageMs >= 0 && ageMs < this.scheduleGraceMs;
+  }
+
+  hasRunForScheduleTarget(automation, targetDate) {
+    const lastRunMs = automation?.lastRun ? new Date(automation.lastRun).getTime() : Number.NaN;
+    const targetMs = targetDate instanceof Date ? targetDate.getTime() : Number.NaN;
+    if (!Number.isFinite(lastRunMs) || !Number.isFinite(targetMs)) {
+      return false;
+    }
+
+    const replayWindowMs = Math.max(this.scheduleGraceMs + this.intervalMs, 60 * 1000);
+    return lastRunMs >= targetMs && lastRunMs < (targetMs + replayWindowMs);
   }
 
   shouldRunTimeTrigger(automation, now) {
@@ -458,16 +493,9 @@ class AutomationSchedulerService {
       : 0;
     const solarDate = buildDateFromTimeZoneParts(solarParts, timeZone);
     const targetDate = new Date(solarDate.getTime() + (offsetMinutes * 60 * 1000));
-    const targetParts = extractDatePartsForTimeZone(targetDate, timeZone);
     const nowParts = extractDatePartsForTimeZone(now, timeZone);
 
-    if (
-      targetParts.year !== nowParts.year
-      || targetParts.month !== nowParts.month
-      || targetParts.day !== nowParts.day
-      || targetParts.hour !== nowParts.hour
-      || targetParts.minute !== nowParts.minute
-    ) {
+    if (!this.isWithinScheduleGraceWindow(targetDate, now)) {
       return false;
     }
 
@@ -476,10 +504,15 @@ class AutomationSchedulerService {
       return false;
     }
 
+    if (this.hasRunForScheduleTarget(automation, targetDate)) {
+      return false;
+    }
+
     this.setPendingTriggerContext(automation._id.toString(), {
       triggeringScheduleEvent: event,
       triggeringScheduleTime: targetDate.toISOString(),
-      triggeringScheduleOffsetMinutes: offsetMinutes
+      triggeringScheduleOffsetMinutes: offsetMinutes,
+      triggeringScheduleLatenessMs: Math.max(0, now.getTime() - targetDate.getTime())
     });
     console.log(
       `AutomationSchedulerService: solar schedule matched ${event}${offsetMinutes ? ` (${offsetMinutes >= 0 ? '+' : ''}${offsetMinutes}m)` : ''} for automation ${automation.name || automation._id}`
@@ -915,7 +948,7 @@ class AutomationSchedulerService {
           ...(executionContext?.reason ? { schedulerReason: executionContext.reason } : {})
         };
 
-        if (this.isAlreadyExecutedForCurrentMinute(automation._id.toString(), automation.trigger.type, now)) {
+        if (this.isAlreadyExecutedForCurrentMinute(automation._id.toString(), automation.trigger.type, now, triggerContext)) {
           if (automation?.trigger?.type === 'security_alarm_status' || executionContext?.source === 'security_alarm') {
             await automationRuntimeService.publishAutomationEvent('automation.trigger.skipped', {
               automationId: automation?._id?.toString?.() || null,

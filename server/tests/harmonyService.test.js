@@ -261,6 +261,56 @@ test('sendPowerCommand resolves Harmony power commands and repeats explicit powe
   ]);
 });
 
+test('withClient times out stalled Harmony operations and closes the client', async () => {
+  const fakeClient = {
+    ended: false,
+    end() {
+      this.ended = true;
+    }
+  };
+  const service = new HarmonyService({
+    clientOperationTimeoutMs: 20,
+    getHarmonyClient: async () => fakeClient
+  });
+
+  await assert.rejects(
+    () => service.withClient(
+      '192.168.1.50',
+      () => new Promise(() => {}),
+      { operationName: 'test Harmony command' }
+    ),
+    (error) => {
+      assert.equal(error.code, 'HARMONY_OPERATION_TIMEOUT');
+      assert.equal(error.status, 504);
+      assert.match(error.message, /test Harmony command timed out waiting/);
+      return true;
+    }
+  );
+  assert.equal(fakeClient.ended, true);
+});
+
+test('withClient times out stalled Harmony connections before an operation starts', async () => {
+  const service = new HarmonyService({
+    clientOperationTimeoutMs: 20,
+    getHarmonyClient: async () => new Promise(() => {})
+  });
+
+  await assert.rejects(
+    () => service.withClient(
+      '192.168.1.50',
+      () => {
+        throw new Error('operation should not start');
+      },
+      { operationName: 'test Harmony connection' }
+    ),
+    (error) => {
+      assert.equal(error.code, 'HARMONY_OPERATION_TIMEOUT');
+      assert.match(error.message, /test Harmony connection timed out connecting/);
+      return true;
+    }
+  );
+});
+
 test('syncDevices updates Harmony raw device metadata while preserving custom device options', async (t) => {
   const originalFind = Device.find;
   const originalCreate = Device.create;

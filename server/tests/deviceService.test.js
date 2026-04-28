@@ -193,6 +193,64 @@ test('controlDevice skips Harmony refresh and verification when fast control opt
   assert.equal(emitted.length >= 1, true);
 });
 
+test('controlDevice can require Harmony activity post-action verification', async (t) => {
+  const originalFindById = Device.findById;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalEnsureHarmonyState = deviceService.ensureHarmonyState;
+  const originalRefreshHarmonyOnlineStatus = deviceService.refreshHarmonyOnlineStatus;
+  const originalControlHarmonyDevice = deviceService.controlHarmonyDevice;
+  const originalPollHarmonyState = deviceService.pollHarmonyState;
+  const originalEmit = deviceUpdateEmitter.emit;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    deviceService.ensureHarmonyState = originalEnsureHarmonyState;
+    deviceService.refreshHarmonyOnlineStatus = originalRefreshHarmonyOnlineStatus;
+    deviceService.controlHarmonyDevice = originalControlHarmonyDevice;
+    deviceService.pollHarmonyState = originalPollHarmonyState;
+    deviceUpdateEmitter.emit = originalEmit;
+  });
+
+  const harmonyDevice = {
+    _id: 'device-harmony-verify',
+    name: 'Bedroom Fire TV',
+    type: 'switch',
+    status: false,
+    isOnline: true,
+    properties: {
+      source: 'harmony',
+      harmonyHubIp: '192.168.1.50',
+      harmonyActivityId: '987654'
+    }
+  };
+
+  let persisted = false;
+  Device.findById = async () => ({ ...harmonyDevice });
+  Device.findByIdAndUpdate = async () => {
+    persisted = true;
+    return { ...harmonyDevice, status: true };
+  };
+  deviceService.ensureHarmonyState = async () => {};
+  deviceService.refreshHarmonyOnlineStatus = async () => true;
+  deviceService.controlHarmonyDevice = async (_device, _action, _value, updateData) => {
+    updateData.isOnline = true;
+  };
+  deviceService.pollHarmonyState = async () => ({
+    status: false,
+    isOnline: true
+  });
+  deviceUpdateEmitter.emit = () => {};
+
+  await assert.rejects(
+    () => deviceService.controlDevice('device-harmony-verify', 'turn_on', undefined, {
+      requirePostActionVerification: true
+    }),
+    /Harmony activity verification failed/
+  );
+  assert.equal(persisted, false);
+});
+
 test('controlDevice routes RainMachine zone start actions through the RainMachine service', async (t) => {
   const originalFindById = Device.findById;
   const originalEnsureRainMachineState = deviceService.ensureRainMachineState;

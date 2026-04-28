@@ -40,6 +40,20 @@ const DEFAULT_WORKFLOW_INSTEON_COMMAND_TIMEOUT_MS = Math.max(
   500,
   Number(process.env.WORKFLOW_INSTEON_COMMAND_TIMEOUT_MS || 1500)
 );
+const MAX_WORKFLOW_ACTION_RETRY_COUNT = 4;
+const MAX_WORKFLOW_ACTION_RETRY_DELAY_MS = 30_000;
+const DEFAULT_WORKFLOW_ACTION_RETRY_COUNT = Math.max(
+  0,
+  Math.min(MAX_WORKFLOW_ACTION_RETRY_COUNT, Math.round(Number(process.env.WORKFLOW_ACTION_RETRY_COUNT || 2)))
+);
+const DEFAULT_WORKFLOW_ACTION_RETRY_DELAY_MS = Math.max(
+  0,
+  Math.min(MAX_WORKFLOW_ACTION_RETRY_DELAY_MS, Math.round(Number(process.env.WORKFLOW_ACTION_RETRY_DELAY_MS || 2000)))
+);
+const DEFAULT_WORKFLOW_ACTION_RETRY_BACKOFF = Math.max(
+  1,
+  Math.min(5, Number(process.env.WORKFLOW_ACTION_RETRY_BACKOFF || 2))
+);
 const RESUME_META_KEY = '__resumeMeta';
 const RESUME_DELAY_KEY = '__resumeDelayState';
 const RESUME_REPEAT_KEY = '__resumeRepeatState';
@@ -447,6 +461,250 @@ function getInsteonCommandRetryOptions(action, source = '', defaults = {}) {
       : {}),
     verificationMode: verificationMode || defaultVerificationMode || 'fast'
   };
+}
+
+function readFirstNumber(source = {}, keys = []) {
+  if (!source || typeof source !== 'object') {
+    return null;
+  }
+
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) {
+      continue;
+    }
+    const value = Number(source[key]);
+    if (Number.isFinite(value)) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function readFirstBoolean(source = {}, keys = []) {
+  if (!source || typeof source !== 'object') {
+    return null;
+  }
+
+  for (const key of keys) {
+    if (!Object.prototype.hasOwnProperty.call(source, key)) {
+      continue;
+    }
+    const value = source[key];
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (normalized === 'true') {
+        return true;
+      }
+      if (normalized === 'false') {
+        return false;
+      }
+    }
+  }
+
+  return null;
+}
+
+function normalizeRetryCount(value, fallback = 0) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(MAX_WORKFLOW_ACTION_RETRY_COUNT, Math.round(numeric)));
+}
+
+function normalizeRetryDelayMs(value, fallback = DEFAULT_WORKFLOW_ACTION_RETRY_DELAY_MS) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(MAX_WORKFLOW_ACTION_RETRY_DELAY_MS, Math.round(numeric)));
+}
+
+function isRetryableActionByDefault(action) {
+  switch (String(action?.type || '').trim().toLowerCase()) {
+    case 'device_control':
+    case 'scene_activate':
+      return true;
+    default:
+      return false;
+  }
+}
+
+function resolveActionRetryPolicy(action) {
+  const parameters = action?.parameters && typeof action.parameters === 'object'
+    ? action.parameters
+    : {};
+  const disabled = parameters.disableActionRetry === true
+    || readFirstBoolean(parameters, ['retryOnFailure', 'actionRetry', 'workflowRetry', 'retryable']) === false;
+
+  if (disabled) {
+    return {
+      enabled: false,
+      retries: 0,
+      maxAttempts: 1,
+      initialDelayMs: 0,
+      backoff: 1
+    };
+  }
+
+  const explicitRetryCount = readFirstNumber(parameters, [
+    'workflowRetryCount',
+    'actionRetryCount',
+    'workflowRetries',
+    'actionRetries',
+    'retryAttempts'
+  ]);
+  const optedIn = readFirstBoolean(parameters, [
+    'retryOnFailure',
+    'actionRetry',
+    'workflowRetry',
+    'retryable'
+  ]) === true;
+  const defaultRetryable = isRetryableActionByDefault(action);
+
+  if (!defaultRetryable && !optedIn && explicitRetryCount === null) {
+    return {
+      enabled: false,
+      retries: 0,
+      maxAttempts: 1,
+      initialDelayMs: 0,
+      backoff: 1
+    };
+  }
+
+  const retries = normalizeRetryCount(
+    explicitRetryCount === null ? DEFAULT_WORKFLOW_ACTION_RETRY_COUNT : explicitRetryCount,
+    DEFAULT_WORKFLOW_ACTION_RETRY_COUNT
+  );
+  const initialDelayMs = normalizeRetryDelayMs(
+    readFirstNumber(parameters, [
+      'workflowRetryDelayMs',
+      'actionRetryDelayMs',
+      'retryDelayMs'
+    ]),
+    DEFAULT_WORKFLOW_ACTION_RETRY_DELAY_MS
+  );
+  const backoffRaw = readFirstNumber(parameters, [
+    'workflowRetryBackoff',
+    'actionRetryBackoff',
+    'retryBackoff'
+  ]);
+  const backoff = Number.isFinite(backoffRaw)
+    ? Math.max(1, Math.min(5, Number(backoffRaw)))
+    : DEFAULT_WORKFLOW_ACTION_RETRY_BACKOFF;
+
+  return {
+    enabled: retries > 0,
+    retries,
+    maxAttempts: retries + 1,
+    initialDelayMs,
+    backoff
+  };
+}
+
+function getRetryDelayForAttempt(policy = {}, attempt = 1) {
+  const initialDelayMs = normalizeRetryDelayMs(policy.initialDelayMs, DEFAULT_WORKFLOW_ACTION_RETRY_DELAY_MS);
+  if (initialDelayMs <= 0) {
+    return 0;
+  }
+
+  const exponent = Math.max(0, Math.round(attempt) - 1);
+  const delay = initialDelayMs * (Number(policy.backoff) || 1) ** exponent;
+  return Math.max(0, Math.min(MAX_WORKFLOW_ACTION_RETRY_DELAY_MS, Math.round(delay)));
+}
+
+function sanitizeRetryFailure(error, attempt, durationMs, retryDelayMs = 0, willRetry = false) {
+  const status = Number(error?.status || error?.response?.status);
+  return {
+    attempt,
+    durationMs,
+    message: error?.message || 'Action failed',
+    ...(error?.code ? { code: String(error.code) } : {}),
+    ...(Number.isInteger(status) ? { status } : {}),
+    retryDelayMs,
+    willRetry
+  };
+}
+
+function hasConfigurationFailureMessage(message = '') {
+  const normalized = String(message || '').trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  return [
+    ' is required',
+    'not found',
+    'unsupported action',
+    'unknown action',
+    'only available',
+    'must be',
+    'not configured',
+    'was not found'
+  ].some((token) => normalized.includes(token));
+}
+
+function isRetryableActionError(error, action, policy = {}) {
+  if (!policy.enabled || isWorkflowExecutionCancelledError(error)) {
+    return false;
+  }
+
+  if (hasConfigurationFailureMessage(error?.message)) {
+    return false;
+  }
+
+  const actionType = String(action?.type || '').trim().toLowerCase();
+  if (actionType === 'http_request') {
+    const status = Number(error?.status || error?.response?.status);
+    if (Number.isInteger(status)) {
+      return status === 408 || status === 429 || status >= 500;
+    }
+    return ['ECONNABORTED', 'ECONNRESET', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN'].includes(error?.code);
+  }
+
+  return true;
+}
+
+function decorateDetailsWithRetry(details, retryDetails) {
+  const base = details && typeof details === 'object' ? { ...details } : {};
+  return {
+    ...base,
+    details: {
+      ...(base.details && typeof base.details === 'object' ? base.details : {}),
+      workflowRetry: retryDetails
+    }
+  };
+}
+
+function attachRetryDetailsToError(error, retryDetails) {
+  if (!error || typeof error !== 'object') {
+    return error;
+  }
+
+  error.details = {
+    ...(error.details && typeof error.details === 'object' ? error.details : {}),
+    workflowRetry: retryDetails
+  };
+  return error;
+}
+
+function shouldStopSequenceAfterFailure(action) {
+  const parameters = action?.parameters && typeof action.parameters === 'object'
+    ? action.parameters
+    : {};
+
+  if (parameters.continueOnFailure === true || parameters.continueOnError === true) {
+    return false;
+  }
+
+  return parameters.stopOnFailure === true
+    || parameters.stopWorkflowOnFailure === true
+    || parameters.critical === true
+    || parameters.required === true;
 }
 
 function humanizeActionToken(value = '') {
@@ -1294,7 +1552,8 @@ async function executeDeviceControlForResolvedDevice(device, target, actionName,
     }
   } else {
     controlResult = await deviceService.controlDevice(target.toString(), actionName, value, {
-      command: commandMetadata
+      command: commandMetadata,
+      requirePostActionVerification: source === 'harmony'
     });
   }
 
@@ -1717,7 +1976,9 @@ async function executeHttpRequest(action) {
       );
 
   if (!isExpected) {
-    throw new Error(`HTTP ${method} ${url} returned unexpected status ${status}`);
+    const error = new Error(`HTTP ${method} ${url} returned unexpected status ${status}`);
+    error.status = status;
+    throw error;
   }
 
   return {
@@ -2364,6 +2625,63 @@ async function executeAction(action, context = {}, options = {}) {
   }
 }
 
+async function executeActionWithRetry(action, context = {}, options = {}) {
+  const policy = resolveActionRetryPolicy(action);
+  const failures = [];
+  const maxAttempts = Math.max(1, Number(policy.maxAttempts) || 1);
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const attemptStartedAt = Date.now();
+    try {
+      const details = await executeAction(action, context, options);
+      if (failures.length === 0) {
+        return details;
+      }
+
+      return decorateDetailsWithRetry(details, {
+        attempts: attempt,
+        maxAttempts,
+        retries: attempt - 1,
+        failures
+      });
+    } catch (error) {
+      if (isWorkflowExecutionCancelledError(error)) {
+        throw error;
+      }
+
+      const shouldRetry = attempt < maxAttempts && isRetryableActionError(error, action, policy);
+      const retryDelayMs = shouldRetry ? getRetryDelayForAttempt(policy, attempt) : 0;
+      failures.push(sanitizeRetryFailure(
+        error,
+        attempt,
+        Date.now() - attemptStartedAt,
+        retryDelayMs,
+        shouldRetry
+      ));
+
+      if (!shouldRetry) {
+        attachRetryDetailsToError(error, {
+          attempts: attempt,
+          maxAttempts,
+          retries: Math.max(0, attempt - 1),
+          failures
+        });
+        throw error;
+      }
+
+      console.warn(
+        `WorkflowExecutionService: ${action?.type || 'action'} attempt ${attempt}/${maxAttempts} failed (${error.message}); retrying${retryDelayMs > 0 ? ` in ${retryDelayMs}ms` : ''}.`
+      );
+      if (retryDelayMs > 0) {
+        await sleepWithStopCheck(retryDelayMs, context);
+      }
+      ensureWorkflowNotStopped(context);
+    }
+  }
+
+  throw new Error('Action retry policy exhausted unexpectedly');
+}
+
 async function executeActionSequence(actions = [], options = {}) {
   const context = options.context && typeof options.context === 'object'
     ? { ...options.context }
@@ -2433,7 +2751,7 @@ async function executeActionSequence(actions = [], options = {}) {
         resumeState: buildResumeStateSnapshot(pendingActionsBefore, context)
       });
 
-      const details = await executeAction(action, context, {
+      const details = await executeActionWithRetry(action, context, {
         depth,
         workflowControlDepth,
         runtime,
@@ -2539,6 +2857,29 @@ async function executeActionSequence(actions = [], options = {}) {
         throw error;
       }
 
+      const stopAfterFailure = shouldStopSequenceAfterFailure(action);
+      const errorDetails = error?.details && typeof error.details === 'object'
+        ? {
+            ...error.details,
+            ...(stopAfterFailure
+              ? {
+                  workflowControl: {
+                    ...((error.details.workflowControl && typeof error.details.workflowControl === 'object')
+                      ? error.details.workflowControl
+                      : {}),
+                    stoppedAfterFailure: true
+                  }
+                }
+              : {})
+          }
+        : (stopAfterFailure
+            ? {
+                workflowControl: {
+                  stoppedAfterFailure: true
+                }
+              }
+            : null);
+
       const resultEntry = {
         actionIndex: effectiveActionIndex,
         parentActionIndex: effectiveParentActionIndex,
@@ -2549,8 +2890,8 @@ async function executeActionSequence(actions = [], options = {}) {
         error: error.message || 'Action failed',
         executedAt: new Date(),
         durationMs: Date.now() - startedAt,
-        ...(error?.details && typeof error.details === 'object'
-          ? { details: error.details }
+        ...(errorDetails && typeof errorDetails === 'object'
+          ? { details: errorDetails }
           : {})
       };
 
@@ -2567,6 +2908,10 @@ async function executeActionSequence(actions = [], options = {}) {
         startedAt: startedAtDate,
         resumeState: buildResumeStateSnapshot(afterCurrentActions, context)
       });
+
+      if (stopAfterFailure) {
+        halt = true;
+      }
     }
   }
 
