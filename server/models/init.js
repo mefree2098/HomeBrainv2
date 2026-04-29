@@ -31,6 +31,7 @@ require('./SenseIntegration');
 require('./SenseMonitorSnapshot');
 require('./SenseTrendSnapshot');
 require('./TelemetrySample');
+require('./TelemetrySourceSummary');
 require('./SSLCertificate');
 require('./OllamaConfig');
 require('./ReverseProxyRoute');

@@ -11,6 +11,7 @@ const SecurityAlarm = require('../models/SecurityAlarm');
 const Settings = require('../models/Settings');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const TelemetrySample = require('../models/TelemetrySample');
+const TelemetrySourceSummary = require('../models/TelemetrySourceSummary');
 const smartThingsService = require('./smartThingsService');
 const harmonyService = require('./harmonyService');
 const insteonService = require('./insteonService');
@@ -25,6 +26,14 @@ const {
 
 const DEFAULT_INSTEON_SYNC_RUN_RETENTION = 20;
 const DEFAULT_INSTEON_SYNC_RUN_LOG_LIMIT = 1000;
+
+async function getEstimatedCollectionCount(model) {
+  try {
+    return await model.estimatedDocumentCount();
+  } catch (error) {
+    return model.countDocuments();
+  }
+}
 
 class MaintenanceService {
   constructor() {
@@ -1412,16 +1421,17 @@ class MaintenanceService {
         voiceSystem: { devices: 0, online: 0, listening: 0 }
       };
 
-      // Check database collections
-      health.database.collections.devices = await Device.countDocuments();
-      health.database.collections.scenes = await Scene.countDocuments();
-      health.database.collections.automations = await Automation.countDocuments();
-      health.database.collections.automationHistory = await AutomationHistory.countDocuments();
-      health.database.collections.voiceDevices = await VoiceDevice.countDocuments();
-      health.database.collections.voiceCommands = await VoiceCommand.countDocuments();
-      health.database.collections.eventStream = await EventStreamEvent.countDocuments();
-      health.database.collections.telemetrySamples = await TelemetrySample.countDocuments();
-      health.database.collections.userProfiles = await UserProfile.countDocuments();
+      // Health only needs inventory-scale counts, so avoid exact collection scans here.
+      health.database.collections.devices = await getEstimatedCollectionCount(Device);
+      health.database.collections.scenes = await getEstimatedCollectionCount(Scene);
+      health.database.collections.automations = await getEstimatedCollectionCount(Automation);
+      health.database.collections.automationHistory = await getEstimatedCollectionCount(AutomationHistory);
+      health.database.collections.voiceDevices = await getEstimatedCollectionCount(VoiceDevice);
+      health.database.collections.voiceCommands = await getEstimatedCollectionCount(VoiceCommand);
+      health.database.collections.eventStream = await getEstimatedCollectionCount(EventStreamEvent);
+      health.database.collections.telemetrySamples = await getEstimatedCollectionCount(TelemetrySample);
+      health.database.collections.telemetrySourceSummaries = await getEstimatedCollectionCount(TelemetrySourceSummary);
+      health.database.collections.userProfiles = await getEstimatedCollectionCount(UserProfile);
 
       // Check device statistics
       health.devices.total = await Device.countDocuments();

@@ -6,6 +6,7 @@ const { TelemetryService } = telemetryService;
 
 const {
   buildSourceTimelineEvents,
+  buildSourceSummaryFromSnapshot,
   buildMetricDescriptors,
   downsamplePoints,
   extractDeviceMetrics,
@@ -13,6 +14,8 @@ const {
   mergePointsByTimestamp,
   normalizeDiskCapacity,
   pickFeaturedMetricKeys,
+  resolveTelemetrySourceKey,
+  summarizeSourceBreakdowns,
   summarizeStorageCollections
 } = telemetryService.__private__;
 
@@ -338,6 +341,80 @@ test('summarizeStorageCollections totals footprint across telemetry collections'
   assert.equal(summary.storageSizeBytes, 10240);
   assert.equal(summary.indexSizeBytes, 2560);
   assert.equal(summary.footprintBytes, 12800);
+});
+
+test('buildSourceSummaryFromSnapshot produces chartable source metadata without sample scans', () => {
+  const summary = buildSourceSummaryFromSnapshot({
+    sourceKey: 'device:abc',
+    sourceType: 'device',
+    sourceId: 'abc',
+    sourceName: 'Kitchen Switch',
+    sourceCategory: 'switch',
+    sourceRoom: 'Kitchen',
+    sourceOrigin: 'smartthings',
+    streamType: 'device_state',
+    streamCounts: {
+      device_state: 12
+    },
+    sampleCount: 12,
+    metricKeys: ['status', 'power_w', 'online'],
+    lastValues: {
+      status: 1,
+      online: 1,
+      power_w: 42.5
+    },
+    lastSampleAt: new Date('2026-04-01T00:00:00.000Z')
+  });
+
+  assert.equal(summary.sourceKey, 'device:abc');
+  assert.equal(summary.sampleCount, 12);
+  assert.deepEqual(summary.streamCounts, { device_state: 12 });
+  assert.equal(summary.lastValues.status, 1);
+  assert.equal(summary.lastValues.power_w, 42.5);
+  assert.deepEqual(summary.featuredMetricKeys, ['power_w', 'status', 'online']);
+});
+
+test('summarizeSourceBreakdowns derives overview counts from source summaries', () => {
+  const summary = summarizeSourceBreakdowns([
+    {
+      sourceType: 'device',
+      sampleCount: 10,
+      streamCounts: {
+        device_state: 10
+      },
+      lastSampleAt: new Date('2026-04-01T00:00:00.000Z')
+    },
+    {
+      sourceType: 'tempest_station',
+      sampleCount: 7,
+      streamCounts: {
+        tempest_observation: 5,
+        tempest_device_state: 2
+      },
+      lastSampleAt: new Date('2026-04-02T00:00:00.000Z')
+    }
+  ]);
+
+  assert.equal(summary.totalSamples, 17);
+  assert.deepEqual(summary.sourceTypeCounts, {
+    device: 10,
+    tempest_station: 7
+  });
+  assert.deepEqual(summary.streamCounts, {
+    device_state: 10,
+    tempest_observation: 5,
+    tempest_device_state: 2
+  });
+  assert.equal(summary.lastSampleAt.toISOString(), '2026-04-02T00:00:00.000Z');
+});
+
+test('resolveTelemetrySourceKey rejects object-shaped query payloads before Mongo lookups', () => {
+  assert.equal(resolveTelemetrySourceKey({ sourceKey: ' device:abc ' }), 'device:abc');
+  assert.equal(resolveTelemetrySourceKey({ sourceKey: ['device:abc', 'device:def'] }), 'device:abc');
+  assert.equal(resolveTelemetrySourceKey({ sourceType: 'device', sourceId: 'abc' }), 'device:abc');
+  assert.equal(resolveTelemetrySourceKey({ sourceKey: { $ne: '' } }), '');
+  assert.equal(resolveTelemetrySourceKey({ sourceType: 'device', sourceId: { $ne: '' } }), '');
+  assert.equal(resolveTelemetrySourceKey({ sourceKey: 'device:abc$ne' }), '');
 });
 
 test('normalizeDiskCapacity maps resource monitor disk output into free and total values', () => {

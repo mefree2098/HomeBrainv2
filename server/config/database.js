@@ -7,6 +7,9 @@ const DEFAULT_SERVER_SELECTION_TIMEOUT_MS = 5000;
 const DEFAULT_HEARTBEAT_FREQUENCY_MS = 5000;
 const DEFAULT_CONNECT_RETRY_DELAY_MS = 2000;
 const DEFAULT_MAX_CONNECT_RETRY_DELAY_MS = 30000;
+const DEFAULT_MAX_POOL_SIZE = 25;
+const DEFAULT_MIN_POOL_SIZE = 0;
+const DEFAULT_MAX_CONNECTING = 2;
 
 let connectionLoopPromise = null;
 let listenersAttached = false;
@@ -19,6 +22,11 @@ let activeConnectOptions = null;
 function parsePositiveInt(value, fallback) {
   const parsed = Number.parseInt(String(value ?? ''), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseNonNegativeInt(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 function wait(delayMs) {
@@ -49,6 +57,7 @@ function isDatabaseReady() {
 
 function buildConnectOptions(overrides = {}) {
   return {
+    ...overrides,
     serverSelectionTimeoutMS: parsePositiveInt(
       overrides.serverSelectionTimeoutMS ?? process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS,
       DEFAULT_SERVER_SELECTION_TIMEOUT_MS
@@ -57,7 +66,18 @@ function buildConnectOptions(overrides = {}) {
       overrides.heartbeatFrequencyMS ?? process.env.MONGODB_HEARTBEAT_FREQUENCY_MS,
       DEFAULT_HEARTBEAT_FREQUENCY_MS
     ),
-    ...overrides
+    maxPoolSize: parsePositiveInt(
+      overrides.maxPoolSize ?? process.env.MONGODB_MAX_POOL_SIZE,
+      DEFAULT_MAX_POOL_SIZE
+    ),
+    minPoolSize: parseNonNegativeInt(
+      overrides.minPoolSize ?? process.env.MONGODB_MIN_POOL_SIZE,
+      DEFAULT_MIN_POOL_SIZE
+    ),
+    maxConnecting: parsePositiveInt(
+      overrides.maxConnecting ?? process.env.MONGODB_MAX_CONNECTING,
+      DEFAULT_MAX_CONNECTING
+    )
   };
 }
 
