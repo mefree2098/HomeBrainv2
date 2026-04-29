@@ -10,6 +10,7 @@ const SenseTrendSnapshot = require('../models/SenseTrendSnapshot');
 const { sendLLMRequestWithFallback } = require('./llmService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const resourceMonitorService = require('./resourceMonitorService');
+const TelemetrySourceSummary = require('../models/TelemetrySourceSummary');
 
 const RETENTION_DAYS = Math.max(
   1,
@@ -288,6 +289,11 @@ const TELEMETRY_STORAGE_COLLECTIONS = [
     model: TelemetrySample
   },
   {
+    key: 'telemetry_source_summaries',
+    label: 'Telemetry Source Summaries',
+    model: TelemetrySourceSummary
+  },
+  {
     key: 'device_energy_samples',
     label: 'Device Energy History',
     model: DeviceEnergySample
@@ -502,6 +508,96 @@ function asPlainMetrics(value) {
   }
 
   return typeof value === 'object' ? value : {};
+}
+
+function asPlainNumberMap(value) {
+  const output = {};
+  Object.entries(asPlainMetrics(value)).forEach(([key, rawValue]) => {
+    const numeric = Number(rawValue);
+    if (Number.isFinite(numeric)) {
+      output[key] = numeric;
+    }
+  });
+  return output;
+}
+
+function normalizeMetricKeys(keys = []) {
+  return Array.from(new Set((Array.isArray(keys) ? keys : [])
+    .flatMap((entry) => Array.isArray(entry) ? entry : [entry])
+    .map((entry) => String(entry || '').trim())
+    .filter(Boolean)))
+    .sort();
+}
+
+function flattenMetricKeySets(metricKeySets = []) {
+  return normalizeMetricKeys((Array.isArray(metricKeySets) ? metricKeySets : []).flatMap((entry) => (
+    Array.isArray(entry) ? entry : []
+  )));
+}
+
+function buildSourceSummaryFromSnapshot(snapshot = {}) {
+  if (!snapshot?.sourceKey) {
+    return null;
+  }
+
+  const metricKeys = normalizeMetricKeys(snapshot.metricKeys);
+  const descriptors = buildMetricDescriptors(metricKeys);
+  const lastValues = asPlainNumberMap(snapshot.lastValues);
+
+  return {
+    sourceKey: snapshot.sourceKey,
+    sourceType: snapshot.sourceType,
+    sourceId: snapshot.sourceId,
+    name: snapshot.sourceName || 'Unnamed Source',
+    category: snapshot.sourceCategory || '',
+    room: snapshot.sourceRoom || '',
+    origin: snapshot.sourceOrigin || '',
+    streamType: snapshot.streamType || '',
+    sampleCount: Number(snapshot.sampleCount || 0),
+    streamCounts: asPlainNumberMap(snapshot.streamCounts),
+    metricCount: descriptors.length,
+    lastSampleAt: snapshot.lastSampleAt || null,
+    availableMetrics: descriptors,
+    featuredMetricKeys: pickFeaturedMetricKeys(descriptors),
+    lastValues: descriptors.reduce((acc, descriptor) => {
+      acc[descriptor.key] = typeof lastValues[descriptor.key] === 'number'
+        ? lastValues[descriptor.key]
+        : null;
+      return acc;
+    }, {})
+  };
+}
+
+function summarizeSourceBreakdowns(sources = []) {
+  const summary = {
+    totalSamples: 0,
+    streamCounts: {},
+    sourceTypeCounts: {},
+    lastSampleAt: null
+  };
+
+  (Array.isArray(sources) ? sources : []).forEach((source) => {
+    const sampleCount = Math.max(0, Number(source?.sampleCount) || 0);
+    summary.totalSamples += sampleCount;
+
+    if (source?.sourceType) {
+      summary.sourceTypeCounts[source.sourceType] = (summary.sourceTypeCounts[source.sourceType] || 0) + sampleCount;
+    }
+
+    Object.entries(source?.streamCounts || {}).forEach(([streamType, count]) => {
+      const numericCount = Math.max(0, Number(count) || 0);
+      if (streamType && numericCount > 0) {
+        summary.streamCounts[streamType] = (summary.streamCounts[streamType] || 0) + numericCount;
+      }
+    });
+
+    const sampleAt = parseOptionalDate(source?.lastSampleAt);
+    if (sampleAt && (!summary.lastSampleAt || sampleAt > summary.lastSampleAt)) {
+      summary.lastSampleAt = sampleAt;
+    }
+  });
+
+  return summary;
 }
 
 function buildNumericMetricMap(input = {}) {
@@ -1693,10 +1789,12 @@ class TelemetryService {
         );
       }
 
+      await this.updateSourceSummaryMetadata(payload);
       return { inserted: false, skipped: true };
     }
 
-    await TelemetrySample.create(payload);
+    const sample = await TelemetrySample.create(payload);
+    await this.updateSourceSummaryForSample({ ...payload, _id: sample._id }, { sampleInserted: true });
     return { inserted: true };
   }
 
@@ -1716,7 +1814,7 @@ class TelemetryService {
       return { inserted: false, skipped: true };
     }
 
-    await TelemetrySample.updateOne(
+    const result = await TelemetrySample.updateOne(
       {
         sourceKey: `tempest_station:${sourceId}`,
         streamType: 'tempest_observation',
@@ -1748,6 +1846,23 @@ class TelemetryService {
       { upsert: true }
     );
 
+    if (result?.upsertedCount || result?.upsertedId) {
+      await this.updateSourceSummaryForSample({
+        sourceType: 'tempest_station',
+        sourceId,
+        sourceKey: `tempest_station:${sourceId}`,
+        sourceName: String(device?.name || observation?.stationName || '').trim(),
+        sourceCategory: 'weather_station',
+        sourceRoom: String(device?.room || '').trim(),
+        sourceOrigin: 'tempest',
+        streamType: 'tempest_observation',
+        metricKeys: Object.keys(metrics).sort(),
+        metrics,
+        recordedAt,
+        _id: result.upsertedId?._id || result.upsertedId || null
+      }, { sampleInserted: true });
+    }
+
     return { inserted: true };
   }
 
@@ -1768,7 +1883,7 @@ class TelemetryService {
       return { inserted: false, skipped: true };
     }
 
-    await TelemetrySample.updateOne(
+    const result = await TelemetrySample.updateOne(
       {
         sourceKey: `rainmachine_report:${controllerId}:daily_stats`,
         streamType: 'rainmachine_daily_stat',
@@ -1798,6 +1913,23 @@ class TelemetryService {
       { upsert: true }
     );
 
+    if (result?.upsertedCount || result?.upsertedId) {
+      await this.updateSourceSummaryForSample({
+        sourceType: 'rainmachine_report',
+        sourceId: controllerId,
+        sourceKey: `rainmachine_report:${controllerId}:daily_stats`,
+        sourceName: `${controllerName} Daily Stats`,
+        sourceCategory: 'irrigation_report',
+        sourceRoom: String(controller?.room || '').trim(),
+        sourceOrigin: 'rainmachine',
+        streamType: 'rainmachine_daily_stat',
+        metricKeys: Object.keys(metrics).sort(),
+        metrics,
+        recordedAt,
+        _id: result.upsertedId?._id || result.upsertedId || null
+      }, { sampleInserted: true });
+    }
+
     return { inserted: true };
   }
 
@@ -1818,7 +1950,7 @@ class TelemetryService {
       return { inserted: false, skipped: true };
     }
 
-    await TelemetrySample.updateOne(
+    const result = await TelemetrySample.updateOne(
       {
         sourceKey: `rainmachine_report:${controllerId}:watering_log`,
         streamType: 'rainmachine_watering_log',
@@ -1850,6 +1982,23 @@ class TelemetryService {
       { upsert: true }
     );
 
+    if (result?.upsertedCount || result?.upsertedId) {
+      await this.updateSourceSummaryForSample({
+        sourceType: 'rainmachine_report',
+        sourceId: controllerId,
+        sourceKey: `rainmachine_report:${controllerId}:watering_log`,
+        sourceName: `${controllerName} Watering Log`,
+        sourceCategory: 'irrigation_report',
+        sourceRoom: String(controller?.room || '').trim(),
+        sourceOrigin: 'rainmachine',
+        streamType: 'rainmachine_watering_log',
+        metricKeys: Object.keys(metrics).sort(),
+        metrics,
+        recordedAt,
+        _id: result.upsertedId?._id || result.upsertedId || null
+      }, { sampleInserted: true });
+    }
+
     return { inserted: true };
   }
 
@@ -1875,7 +2024,7 @@ class TelemetryService {
       durationMs: details?.durationMs ?? null
     });
 
-    await TelemetrySample.updateOne(
+    const result = await TelemetrySample.updateOne(
       {
         sourceKey: `workflow:${sourceId}`,
         streamType: 'workflow_execution',
@@ -1914,7 +2063,125 @@ class TelemetryService {
       { upsert: true }
     );
 
+    if (result?.upsertedCount || result?.upsertedId) {
+      await this.updateSourceSummaryForSample({
+        sourceType: 'workflow',
+        sourceId,
+        sourceKey: `workflow:${sourceId}`,
+        sourceName: String(context?.workflowName || context?.automationName || 'Workflow').trim(),
+        sourceCategory: 'workflow',
+        sourceRoom: '',
+        sourceOrigin: 'workflow_runtime',
+        streamType: 'workflow_execution',
+        metricKeys: Object.keys(metrics).sort(),
+        metrics,
+        recordedAt,
+        _id: result.upsertedId?._id || result.upsertedId || null
+      }, { sampleInserted: true });
+    }
+
     return { inserted: true };
+  }
+
+  async updateSourceSummaryMetadata(payload = {}) {
+    const sourceKey = String(payload?.sourceKey || '').trim();
+    if (!sourceKey) {
+      return { updated: false };
+    }
+
+    await TelemetrySourceSummary.updateOne(
+      { sourceKey },
+      {
+        $set: {
+          sourceType: payload.sourceType,
+          sourceId: String(payload.sourceId || '').trim(),
+          sourceName: String(payload.sourceName || '').trim(),
+          sourceCategory: String(payload.sourceCategory || '').trim(),
+          sourceRoom: String(payload.sourceRoom || '').trim(),
+          sourceOrigin: String(payload.sourceOrigin || '').trim(),
+          updatedAt: new Date()
+        },
+        $setOnInsert: {
+          sourceKey,
+          sampleCount: 0,
+          metricKeys: normalizeMetricKeys(payload.metricKeys || Object.keys(asPlainMetrics(payload.metrics))),
+          streamCounts: {},
+          lastValues: {},
+          createdAt: new Date()
+        }
+      },
+      { upsert: true }
+    );
+
+    return { updated: true };
+  }
+
+  async updateSourceSummaryForSample(payload = {}, options = {}) {
+    const sourceKey = String(payload?.sourceKey || '').trim();
+    const streamType = String(payload?.streamType || '').trim();
+    const sourceId = String(payload?.sourceId || '').trim();
+    const sourceType = String(payload?.sourceType || '').trim();
+    const recordedAt = parseOptionalDate(payload?.recordedAt) || new Date();
+    const metrics = asPlainNumberMap(payload?.metrics);
+    const metricKeys = normalizeMetricKeys(payload?.metricKeys || Object.keys(metrics));
+
+    if (!sourceKey || !sourceId || !sourceType || !streamType) {
+      return { updated: false };
+    }
+
+    const now = new Date();
+    const update = {
+      $set: {
+        sourceType,
+        sourceId,
+        sourceName: String(payload.sourceName || '').trim(),
+        sourceCategory: String(payload.sourceCategory || '').trim(),
+        sourceRoom: String(payload.sourceRoom || '').trim(),
+        sourceOrigin: String(payload.sourceOrigin || '').trim(),
+        updatedAt: now
+      },
+      $setOnInsert: {
+        sourceKey,
+        sampleCount: 0,
+        streamCounts: {},
+        lastValues: {},
+        createdAt: now
+      },
+      $addToSet: {
+        metricKeys: { $each: metricKeys }
+      }
+    };
+
+    if (options.sampleInserted !== false) {
+      update.$inc = {
+        sampleCount: 1,
+        [`streamCounts.${streamType}`]: 1
+      };
+    }
+
+    await TelemetrySourceSummary.updateOne({ sourceKey }, update, { upsert: true });
+
+    await TelemetrySourceSummary.updateOne(
+      {
+        sourceKey,
+        $or: [
+          { lastSampleAt: { $exists: false } },
+          { lastSampleAt: null },
+          { lastSampleAt: { $lte: recordedAt } }
+        ]
+      },
+      {
+        $set: {
+          streamType,
+          lastSampleAt: recordedAt,
+          latestSampleId: payload?._id || null,
+          lastValues: metrics,
+          updatedAt: now
+        }
+      }
+    );
+
+    return { updated: true };
   }
 
   async buildSourceSummaryFromLatest(entry) {
@@ -1956,6 +2223,122 @@ class TelemetryService {
       availableMetrics: descriptors,
       featuredMetricKeys,
       lastValues
+    };
+  }
+
+  async rebuildSourceSummaries() {
+    const latestBySource = await TelemetrySample.aggregate([
+      { $sort: { sourceKey: 1, recordedAt: -1 } },
+      {
+        $group: {
+          _id: '$sourceKey',
+          sampleCount: { $sum: 1 },
+          lastSample: { $first: '$$ROOT' },
+          metricKeySets: { $addToSet: '$metricKeys' }
+        }
+      }
+    ]).allowDiskUse(true);
+
+    const streamCountsBySource = await TelemetrySample.aggregate([
+      {
+        $group: {
+          _id: {
+            sourceKey: '$sourceKey',
+            streamType: '$streamType'
+          },
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $group: {
+          _id: '$_id.sourceKey',
+          streams: {
+            $push: {
+              k: '$_id.streamType',
+              v: '$count'
+            }
+          }
+        }
+      }
+    ]).allowDiskUse(true);
+
+    const streamCountMap = new Map(streamCountsBySource.map((entry) => [
+      entry._id,
+      Object.fromEntries((entry.streams || [])
+        .filter((stream) => stream?.k)
+        .map((stream) => [stream.k, Number(stream.v || 0)]))
+    ]));
+    const rebuiltAt = new Date();
+    const operations = latestBySource
+      .map((entry) => {
+        const sample = entry?.lastSample || {};
+        const sourceKey = String(entry?._id || sample.sourceKey || '').trim();
+        if (!sourceKey) {
+          return null;
+        }
+
+        const metrics = asPlainNumberMap(sample.metrics);
+        const metricKeys = flattenMetricKeySets(entry.metricKeySets);
+
+        return {
+          updateOne: {
+            filter: { sourceKey },
+            update: {
+              $set: {
+                sourceKey,
+                sourceType: sample.sourceType,
+                sourceId: String(sample.sourceId || '').trim(),
+                sourceName: String(sample.sourceName || '').trim(),
+                sourceCategory: String(sample.sourceCategory || '').trim(),
+                sourceRoom: String(sample.sourceRoom || '').trim(),
+                sourceOrigin: String(sample.sourceOrigin || '').trim(),
+                streamType: sample.streamType,
+                streamCounts: streamCountMap.get(sourceKey) || {},
+                metricKeys,
+                sampleCount: Number(entry.sampleCount || 0),
+                lastValues: metrics,
+                lastSampleAt: sample.recordedAt || null,
+                latestSampleId: sample._id || null,
+                rebuiltAt,
+                updatedAt: rebuiltAt
+              },
+              $setOnInsert: {
+                createdAt: rebuiltAt
+              }
+            },
+            upsert: true
+          }
+        };
+      })
+      .filter(Boolean);
+
+    await TelemetrySourceSummary.deleteMany({});
+    if (operations.length > 0) {
+      await TelemetrySourceSummary.bulkWrite(operations, { ordered: false });
+    }
+
+    return {
+      sourceCount: operations.length,
+      rebuiltAt
+    };
+  }
+
+  async ensureSourceSummaries() {
+    const summaryCount = await TelemetrySourceSummary.estimatedDocumentCount();
+    if (summaryCount > 0) {
+      return { rebuilt: false, summaryCount };
+    }
+
+    const sampleCount = await TelemetrySample.estimatedDocumentCount();
+    if (sampleCount <= 0) {
+      return { rebuilt: false, summaryCount: 0 };
+    }
+
+    const result = await this.rebuildSourceSummaries();
+    return {
+      rebuilt: true,
+      summaryCount: result.sourceCount,
+      rebuiltAt: result.rebuiltAt
     };
   }
 
@@ -2028,21 +2411,15 @@ class TelemetryService {
   }
 
   async listSourceSummaries() {
-    const latestBySource = await TelemetrySample.aggregate([
-      { $sort: { recordedAt: -1 } },
-      {
-        $group: {
-          _id: '$sourceKey',
-          sampleCount: { $sum: 1 },
-          lastSample: { $first: '$$ROOT' }
-        }
-      },
-      { $sort: { 'lastSample.recordedAt': -1 } }
-    ]);
+    await this.ensureSourceSummaries();
 
-    return (await Promise.all(
-      latestBySource.map((entry) => this.buildSourceSummaryFromLatest(entry))
-    )).filter(Boolean);
+    const snapshots = await TelemetrySourceSummary.find({})
+      .sort({ lastSampleAt: -1 })
+      .lean();
+
+    return snapshots
+      .map((snapshot) => buildSourceSummaryFromSnapshot(snapshot))
+      .filter(Boolean);
   }
 
   async getTempestObservationWindowAggregate(stationId, startAt) {
@@ -2396,37 +2773,20 @@ class TelemetryService {
   }
 
   async getOverview() {
-    const [totalSamples, lastSample, streamBreakdown, sourceTypeBreakdown, sources, storage, disk] = await Promise.all([
-      TelemetrySample.countDocuments({}),
-      TelemetrySample.findOne({}).sort({ recordedAt: -1 }).select('recordedAt').lean(),
-      TelemetrySample.aggregate([
-        { $group: { _id: '$streamType', count: { $sum: 1 } } }
-      ]),
-      TelemetrySample.aggregate([
-        { $group: { _id: '$sourceType', count: { $sum: 1 } } }
-      ]),
+    const [sources, storage, disk] = await Promise.all([
       this.listSourceSummaries(),
       this.getStorageFootprint(),
       resourceMonitorService.getDiskUsage()
     ]);
+    const sourceBreakdowns = summarizeSourceBreakdowns(sources);
 
     return {
       retentionDays: RETENTION_DAYS,
-      totalSamples,
+      totalSamples: sourceBreakdowns.totalSamples,
       sourceCount: sources.length,
-      lastSampleAt: lastSample?.recordedAt || null,
-      streamCounts: streamBreakdown.reduce((acc, entry) => {
-        if (entry?._id) {
-          acc[entry._id] = Number(entry.count || 0);
-        }
-        return acc;
-      }, {}),
-      sourceTypeCounts: sourceTypeBreakdown.reduce((acc, entry) => {
-        if (entry?._id) {
-          acc[entry._id] = Number(entry.count || 0);
-        }
-        return acc;
-      }, {}),
+      lastSampleAt: sourceBreakdowns.lastSampleAt,
+      streamCounts: sourceBreakdowns.streamCounts,
+      sourceTypeCounts: sourceBreakdowns.sourceTypeCounts,
       storage,
       disk: normalizeDiskCapacity(disk),
       sources
@@ -2441,9 +2801,17 @@ class TelemetryService {
       throw new Error('A telemetry source is required.');
     }
 
+    await this.ensureSourceSummaries();
+
+    const snapshot = await TelemetrySourceSummary.findOne({ sourceKey: resolvedSourceKey }).lean();
+    const sourceSummary = buildSourceSummaryFromSnapshot(snapshot);
+    if (sourceSummary) {
+      return sourceSummary;
+    }
+
     const latestEntry = await TelemetrySample.aggregate([
       { $match: { sourceKey: resolvedSourceKey } },
-      { $sort: { recordedAt: -1 } },
+      { $sort: { sourceKey: 1, recordedAt: -1 } },
       {
         $group: {
           _id: '$sourceKey',
@@ -2537,7 +2905,8 @@ class TelemetryService {
         rainMachineDailyStatResult,
         rainMachineWateringDayResult,
         senseMonitorSnapshotResult,
-        senseTrendSnapshotResult
+        senseTrendSnapshotResult,
+        sourceSummaryResult
       ] = await Promise.all([
         TelemetrySample.deleteMany({}),
         DeviceEnergySample.deleteMany({}),
@@ -2546,7 +2915,8 @@ class TelemetryService {
         RainMachineDailyStat.deleteMany({}),
         RainMachineWateringDay.deleteMany({}),
         SenseMonitorSnapshot.deleteMany({}),
-        SenseTrendSnapshot.deleteMany({})
+        SenseTrendSnapshot.deleteMany({}),
+        TelemetrySourceSummary.deleteMany({})
       ]);
 
       return {
@@ -2558,12 +2928,14 @@ class TelemetryService {
         rainMachineDailyStatsDeleted: rainMachineDailyStatResult.deletedCount || 0,
         rainMachineWateringDaysDeleted: rainMachineWateringDayResult.deletedCount || 0,
         senseMonitorSnapshotsDeleted: senseMonitorSnapshotResult.deletedCount || 0,
-        senseTrendSnapshotsDeleted: senseTrendSnapshotResult.deletedCount || 0
+        senseTrendSnapshotsDeleted: senseTrendSnapshotResult.deletedCount || 0,
+        sourceSummariesDeleted: sourceSummaryResult.deletedCount || 0
       };
     }
 
     const summary = await this.resolveSourceSummary({ sourceKey: resolvedSourceKey });
     const telemetryResult = await TelemetrySample.deleteMany({ sourceKey: summary.sourceKey });
+    const sourceSummaryResult = await TelemetrySourceSummary.deleteOne({ sourceKey: summary.sourceKey });
 
     let energyDeleted = 0;
     let tempestObservationsDeleted = 0;
@@ -2641,7 +3013,8 @@ class TelemetryService {
       rainMachineDailyStatsDeleted,
       rainMachineWateringDaysDeleted,
       senseMonitorSnapshotsDeleted,
-      senseTrendSnapshotsDeleted
+      senseTrendSnapshotsDeleted,
+      sourceSummariesDeleted: sourceSummaryResult.deletedCount || 0
     };
   }
 }
@@ -2652,17 +3025,21 @@ module.exports = telemetryService;
 module.exports.TelemetryService = TelemetryService;
 module.exports.__private__ = {
   buildSourceTimelineEvents,
+  buildSourceSummaryFromSnapshot,
   buildMetricDescriptors,
   buildMetricStats,
   downsamplePoints,
   extractDeviceMetrics,
   extractTempestMetrics,
+  flattenMetricKeySets,
   inferMetricLabel,
   inferMetricUnit,
   isBinaryMetric,
   mapSettledWithConcurrency,
   mergePointsByTimestamp,
   normalizeDiskCapacity,
+  normalizeMetricKeys,
   pickFeaturedMetricKeys,
+  summarizeSourceBreakdowns,
   summarizeStorageCollections
 };

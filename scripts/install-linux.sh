@@ -18,11 +18,57 @@ NODE_MAJOR="${NODE_MAJOR:-22}"
 MONGODB_VERSION="${MONGODB_VERSION:-6.0}"
 INSTALL_WAKEWORD_DEPS="${INSTALL_WAKEWORD_DEPS:-1}"
 ENABLE_FIREWALL="${ENABLE_FIREWALL:-0}"
+MONGODB_SERVICE_DROPIN_DIR="/etc/systemd/system/mongod.service.d"
+MONGODB_RESOURCE_GUARD_PATH="${MONGODB_SERVICE_DROPIN_DIR}/10-homebrain-resource-guard.conf"
 
 print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[OK]${NC} $1"; }
 print_warning() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+is_linux_arm64_host() {
+  local arch_name
+  arch_name="$(uname -m)"
+  [[ "${arch_name}" =~ ^(aarch64|arm64)$ ]]
+}
+
+resolve_mongodb_cache_gb() {
+  local configured="${HOMEBRAIN_MONGODB_WIREDTIGER_CACHE_GB:-}"
+  if [[ -n "${configured}" ]]; then
+    if [[ "${configured}" =~ ^([1-9][0-9]*([.][0-9]+)?|0[.][0-9]*[1-9][0-9]*)$ ]]; then
+      echo "${configured}"
+      return
+    fi
+
+    print_warning "Ignoring invalid HOMEBRAIN_MONGODB_WIREDTIGER_CACHE_GB=${configured}; expected a positive number."
+  fi
+
+  echo "1.0"
+}
+
+configure_mongodb_resource_guard() {
+  if ! is_linux_arm64_host && [[ -z "${HOMEBRAIN_MONGODB_WIREDTIGER_CACHE_GB:-}" ]]; then
+    return
+  fi
+
+  local mongod_bin cache_gb
+  mongod_bin="$(command -v mongod 2>/dev/null || true)"
+  if [[ -z "${mongod_bin}" ]]; then
+    print_warning "MongoDB resource guard skipped because mongod is not installed yet."
+    return
+  fi
+
+  cache_gb="$(resolve_mongodb_cache_gb)"
+  print_status "Writing MongoDB WiredTiger cache guard (${cache_gb} GB)..."
+  sudo install -d -m 0755 "${MONGODB_SERVICE_DROPIN_DIR}"
+  sudo tee "${MONGODB_RESOURCE_GUARD_PATH}" >/dev/null <<EOF
+[Service]
+ExecStart=
+ExecStart=${mongod_bin} --config /etc/mongod.conf --wiredTigerCacheSizeGB ${cache_gb}
+EOF
+  sudo systemctl daemon-reload
+  print_success "MongoDB resource guard written to ${MONGODB_RESOURCE_GUARD_PATH}."
+}
 
 check_prerequisites() {
   if [[ $EUID -eq 0 ]]; then
@@ -146,6 +192,7 @@ install_mongodb() {
   print_status "Ensuring MongoDB ${MONGODB_VERSION}..."
 
   if command -v mongod >/dev/null 2>&1; then
+    configure_mongodb_resource_guard
     sudo systemctl enable --now mongod
     print_success "MongoDB is already installed."
     return
@@ -179,6 +226,7 @@ install_mongodb() {
   echo "${repo_line}" | sudo tee "${listfile}" >/dev/null
   sudo apt-get update
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y mongodb-org
+  configure_mongodb_resource_guard
   sudo systemctl enable --now mongod
   print_success "MongoDB installed and started."
 }

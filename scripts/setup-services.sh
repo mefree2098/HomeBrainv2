@@ -27,6 +27,8 @@ RESTORE_HELPER_INSTALL_PATH="${HOMEBRAIN_HELPER_INSTALL_DIR}/restore-homebrain-b
 OLLAMA_PRIVILEGE_OVERRIDE_PATH="${SERVICE_DROPIN_DIR}/99-ollama-helper.conf"
 OLLAMA_SERVICE_DROPIN_DIR="/etc/systemd/system/ollama.service.d"
 OLLAMA_RESOURCE_GUARD_PATH="${OLLAMA_SERVICE_DROPIN_DIR}/10-homebrain-resource-guard.conf"
+MONGODB_SERVICE_DROPIN_DIR="/etc/systemd/system/mongod.service.d"
+MONGODB_RESOURCE_GUARD_PATH="${MONGODB_SERVICE_DROPIN_DIR}/10-homebrain-resource-guard.conf"
 CADDY_SERVICE_NAME="${CADDY_SERVICE_NAME:-caddy-api}"
 CADDY_SERVICE_PATH="/etc/systemd/system/${CADDY_SERVICE_NAME}.service"
 CADDY_BOOTSTRAP_PATH="${CADDY_BOOTSTRAP_PATH:-/etc/caddy/Caddyfile}"
@@ -40,6 +42,27 @@ print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[OK]${NC} $1"; }
 print_warning() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+
+is_linux_arm64_host() {
+  local os_name arch_name
+  os_name="$(uname -s)"
+  arch_name="$(uname -m)"
+  [[ "${os_name}" == "Linux" && "${arch_name}" =~ ^(aarch64|arm64)$ ]]
+}
+
+resolve_mongodb_cache_gb() {
+  local configured="${HOMEBRAIN_MONGODB_WIREDTIGER_CACHE_GB:-}"
+  if [[ -n "${configured}" ]]; then
+    if [[ "${configured}" =~ ^([1-9][0-9]*([.][0-9]+)?|0[.][0-9]*[1-9][0-9]*)$ ]]; then
+      echo "${configured}"
+      return
+    fi
+
+    print_warning "Ignoring invalid HOMEBRAIN_MONGODB_WIREDTIGER_CACHE_GB=${configured}; expected a positive number."
+  fi
+
+  echo "1.0"
+}
 
 require_repo() {
   if [[ ! -f "${HOMEBRAIN_DIR}/package.json" || ! -d "${HOMEBRAIN_DIR}/server" || ! -d "${HOMEBRAIN_DIR}/client" ]]; then
@@ -542,6 +565,8 @@ TimeoutStartSec=30min
 WantedBy=multi-user.target
 EOF
 
+  configure_mongodb_resource_guard
+
   sudo systemctl daemon-reload
   sudo systemctl enable "${SERVICE_NAME}"
   configure_deploy_sudoers
@@ -575,11 +600,7 @@ install_ollama_privileged_helper() {
 }
 
 configure_ollama_resource_guard() {
-  local os_name arch_name
-  os_name="$(uname -s)"
-  arch_name="$(uname -m)"
-
-  if [[ "${os_name}" != "Linux" || ! "${arch_name}" =~ ^(aarch64|arm64)$ ]]; then
+  if ! is_linux_arm64_host; then
     return
   fi
 
@@ -593,6 +614,31 @@ Environment="OLLAMA_NUM_PARALLEL=${HOMEBRAIN_OLLAMA_NUM_PARALLEL:-1}"
 EOF
   sudo systemctl daemon-reload
   print_success "Ollama resource guard written to ${OLLAMA_RESOURCE_GUARD_PATH}."
+}
+
+configure_mongodb_resource_guard() {
+  if ! is_linux_arm64_host && [[ -z "${HOMEBRAIN_MONGODB_WIREDTIGER_CACHE_GB:-}" ]]; then
+    return
+  fi
+
+  local mongod_bin cache_gb
+  mongod_bin="$(command -v mongod 2>/dev/null || true)"
+  if [[ -z "${mongod_bin}" ]]; then
+    print_warning "MongoDB resource guard skipped because mongod is not installed."
+    return
+  fi
+
+  cache_gb="$(resolve_mongodb_cache_gb)"
+
+  print_status "Writing MongoDB WiredTiger cache guard (${cache_gb} GB)..."
+  sudo install -d -m 0755 "${MONGODB_SERVICE_DROPIN_DIR}"
+  sudo tee "${MONGODB_RESOURCE_GUARD_PATH}" >/dev/null <<EOF
+[Service]
+ExecStart=
+ExecStart=${mongod_bin} --config /etc/mongod.conf --wiredTigerCacheSizeGB ${cache_gb}
+EOF
+  sudo systemctl daemon-reload
+  print_success "MongoDB resource guard written to ${MONGODB_RESOURCE_GUARD_PATH}. Restart mongod for it to take effect."
 }
 
 configure_deploy_sudoers() {
@@ -613,11 +659,13 @@ configure_deploy_sudoers() {
   if [[ -x /bin/bash ]]; then
     deploy_commands+=("/bin/bash ${setup_services_path} install-service")
     deploy_commands+=("/bin/bash ${setup_services_path} refresh-privileges")
+    deploy_commands+=("/bin/bash ${setup_services_path} configure-mongodb")
   fi
 
   if [[ -x /usr/bin/bash && /usr/bin/bash != /bin/bash ]]; then
     deploy_commands+=("/usr/bin/bash ${setup_services_path} install-service")
     deploy_commands+=("/usr/bin/bash ${setup_services_path} refresh-privileges")
+    deploy_commands+=("/usr/bin/bash ${setup_services_path} configure-mongodb")
   fi
 
   print_status "Refreshing HomeBrain sudoers access for service management and Ollama updates..."
@@ -632,6 +680,7 @@ refresh_privileges() {
   configure_homebrain_ollama_privilege_override
   install_ollama_privileged_helper
   configure_ollama_resource_guard
+  configure_mongodb_resource_guard
   configure_deploy_sudoers
 }
 
@@ -1014,6 +1063,7 @@ Usage: $0 <command>
 Commands:
   install-service   Write /etc/systemd/system/homebrain.service plus restart/restore helpers
   refresh-privileges Install the Ollama helper and refresh HomeBrain sudoers
+  configure-mongodb Write the MongoDB WiredTiger cache guard
   setup-caddy       Install Caddy as the native public edge service
   start             Start MongoDB and HomeBrain
   stop              Stop HomeBrain
@@ -1031,6 +1081,7 @@ main() {
   case "${1:-}" in
     install-service) install_service ;;
     refresh-privileges) refresh_privileges ;;
+    configure-mongodb) configure_mongodb_resource_guard ;;
     setup-caddy) setup_caddy ;;
     start) start_services ;;
     stop) stop_services ;;
