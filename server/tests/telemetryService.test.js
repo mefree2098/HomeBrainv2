@@ -15,6 +15,7 @@ const {
   normalizeDiskCapacity,
   pickFeaturedMetricKeys,
   resolveTelemetrySourceKey,
+  shouldRebuildSourceSummaries,
   summarizeSourceBreakdowns,
   summarizeStorageCollections
 } = telemetryService.__private__;
@@ -406,6 +407,34 @@ test('summarizeSourceBreakdowns derives overview counts from source summaries', 
     tempest_device_state: 2
   });
   assert.equal(summary.lastSampleAt.toISOString(), '2026-04-02T00:00:00.000Z');
+});
+
+test('shouldRebuildSourceSummaries catches metadata-only and drifted summary totals', () => {
+  assert.equal(shouldRebuildSourceSummaries({
+    summaryCount: 0,
+    sampleCount: 12,
+    summarySampleCount: 0
+  }), true);
+  assert.equal(shouldRebuildSourceSummaries({
+    summaryCount: 4,
+    sampleCount: 1393075,
+    summarySampleCount: 0
+  }), true);
+  assert.equal(shouldRebuildSourceSummaries({
+    summaryCount: 4,
+    sampleCount: 10000,
+    summarySampleCount: 9950
+  }), false);
+  assert.equal(shouldRebuildSourceSummaries({
+    summaryCount: 4,
+    sampleCount: 10000,
+    summarySampleCount: 8000
+  }), true);
+  assert.equal(shouldRebuildSourceSummaries({
+    summaryCount: 4,
+    sampleCount: 0,
+    summarySampleCount: 8000
+  }), false);
 });
 
 test('resolveTelemetrySourceKey rejects object-shaped query payloads before Mongo lookups', () => {

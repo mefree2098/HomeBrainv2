@@ -627,6 +627,26 @@ function summarizeSourceBreakdowns(sources = []) {
   return summary;
 }
 
+function shouldRebuildSourceSummaries({ summaryCount, sampleCount, summarySampleCount } = {}) {
+  const normalizedSummaryCount = toNonNegativeInteger(summaryCount);
+  const normalizedSampleCount = toNonNegativeInteger(sampleCount);
+  const normalizedSummarySampleCount = toNonNegativeInteger(summarySampleCount);
+
+  if (normalizedSampleCount <= 0) {
+    return false;
+  }
+
+  if (normalizedSummaryCount <= 0) {
+    return true;
+  }
+
+  const allowedDrift = normalizedSampleCount >= 100
+    ? Math.ceil(normalizedSampleCount * 0.01)
+    : 0;
+
+  return Math.abs(normalizedSampleCount - normalizedSummarySampleCount) > allowedDrift;
+}
+
 function buildNumericMetricMap(input = {}) {
   const metrics = {};
   Object.entries(asPlainMetrics(input)).forEach(([key, value]) => {
@@ -2338,8 +2358,27 @@ class TelemetryService {
         };
       })
       .filter(Boolean);
+    const rebuiltSourceKeys = operations
+      .map((operation) => operation.updateOne.filter.sourceKey)
+      .filter(Boolean);
 
-    await TelemetrySourceSummary.deleteMany({});
+    await TelemetrySourceSummary.updateMany(
+      rebuiltSourceKeys.length > 0
+        ? { sourceKey: { $nin: rebuiltSourceKeys }, sampleCount: { $gt: 0 } }
+        : { sampleCount: { $gt: 0 } },
+      {
+        $set: {
+          sampleCount: 0,
+          streamCounts: {},
+          lastValues: {},
+          lastSampleAt: null,
+          latestSampleId: null,
+          rebuiltAt,
+          updatedAt: rebuiltAt
+        }
+      }
+    );
+
     if (operations.length > 0) {
       await TelemetrySourceSummary.bulkWrite(operations, { ordered: false });
     }
@@ -2352,13 +2391,31 @@ class TelemetryService {
 
   async ensureSourceSummaries() {
     const summaryCount = await TelemetrySourceSummary.estimatedDocumentCount();
-    if (summaryCount > 0) {
-      return { rebuilt: false, summaryCount };
-    }
-
     const sampleCount = await TelemetrySample.estimatedDocumentCount();
     if (sampleCount <= 0) {
-      return { rebuilt: false, summaryCount: 0 };
+      return { rebuilt: false, summaryCount, sampleCount };
+    }
+
+    let summarySampleCount = 0;
+    if (summaryCount > 0) {
+      const [totals] = await TelemetrySourceSummary.aggregate([
+        {
+          $group: {
+            _id: null,
+            sampleCount: { $sum: '$sampleCount' }
+          }
+        }
+      ]);
+      summarySampleCount = toNonNegativeInteger(totals?.sampleCount);
+    }
+
+    if (!shouldRebuildSourceSummaries({ summaryCount, sampleCount, summarySampleCount })) {
+      return {
+        rebuilt: false,
+        summaryCount,
+        sampleCount,
+        summarySampleCount
+      };
     }
 
     const result = await this.rebuildSourceSummaries();
@@ -3071,6 +3128,7 @@ module.exports.__private__ = {
   normalizeTelemetryLookupText,
   pickFeaturedMetricKeys,
   resolveTelemetrySourceKey,
+  shouldRebuildSourceSummaries,
   summarizeSourceBreakdowns,
   summarizeStorageCollections
 };
