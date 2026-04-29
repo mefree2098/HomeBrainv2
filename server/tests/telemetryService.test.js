@@ -14,6 +14,7 @@ const {
   mergePointsByTimestamp,
   normalizeDiskCapacity,
   pickFeaturedMetricKeys,
+  resolveTelemetrySourceKey,
   summarizeSourceBreakdowns,
   summarizeStorageCollections
 } = telemetryService.__private__;
@@ -405,6 +406,15 @@ test('summarizeSourceBreakdowns derives overview counts from source summaries', 
     tempest_device_state: 2
   });
   assert.equal(summary.lastSampleAt.toISOString(), '2026-04-02T00:00:00.000Z');
+});
+
+test('resolveTelemetrySourceKey rejects object-shaped query payloads before Mongo lookups', () => {
+  assert.equal(resolveTelemetrySourceKey({ sourceKey: ' device:abc ' }), 'device:abc');
+  assert.equal(resolveTelemetrySourceKey({ sourceKey: ['device:abc', 'device:def'] }), 'device:abc');
+  assert.equal(resolveTelemetrySourceKey({ sourceType: 'device', sourceId: 'abc' }), 'device:abc');
+  assert.equal(resolveTelemetrySourceKey({ sourceKey: { $ne: '' } }), '');
+  assert.equal(resolveTelemetrySourceKey({ sourceType: 'device', sourceId: { $ne: '' } }), '');
+  assert.equal(resolveTelemetrySourceKey({ sourceKey: 'device:abc$ne' }), '');
 });
 
 test('normalizeDiskCapacity maps resource monitor disk output into free and total values', () => {

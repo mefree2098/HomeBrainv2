@@ -329,6 +329,7 @@ const TELEMETRY_STORAGE_COLLECTIONS = [
     model: SenseTrendSnapshot
   }
 ];
+const TELEMETRY_LOOKUP_TEXT_PATTERN = /^[A-Za-z0-9:_./-]{1,240}$/;
 
 function clampInteger(value, fallback, minimum, maximum) {
   const numeric = Number(value);
@@ -519,6 +520,32 @@ function asPlainNumberMap(value) {
     }
   });
   return output;
+}
+
+function normalizeTelemetryLookupText(value) {
+  if (Array.isArray(value)) {
+    return normalizeTelemetryLookupText(value[0]);
+  }
+
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    const normalized = String(value).trim();
+    return TELEMETRY_LOOKUP_TEXT_PATTERN.test(normalized) ? normalized : '';
+  }
+
+  return '';
+}
+
+function resolveTelemetrySourceKey({ sourceKey, sourceType, sourceId } = {}) {
+  const directSourceKey = normalizeTelemetryLookupText(sourceKey);
+  if (directSourceKey) {
+    return directSourceKey;
+  }
+
+  const normalizedSourceType = normalizeTelemetryLookupText(sourceType);
+  const normalizedSourceId = normalizeTelemetryLookupText(sourceId);
+  return normalizedSourceType && normalizedSourceId
+    ? `${normalizedSourceType}:${normalizedSourceId}`
+    : '';
 }
 
 function normalizeMetricKeys(keys = []) {
@@ -2624,7 +2651,11 @@ class TelemetryService {
   }
 
   async getTempestModuleTelemetry({ sourceId, sourceKey } = {}) {
-    const resolvedSourceKey = sourceKey || (sourceId ? `tempest_station:${sourceId}` : '');
+    const resolvedSourceKey = resolveTelemetrySourceKey({
+      sourceKey,
+      sourceType: 'tempest_station',
+      sourceId
+    });
     if (!resolvedSourceKey) {
       throw new Error('A telemetry source is required.');
     }
@@ -2794,8 +2825,7 @@ class TelemetryService {
   }
 
   async resolveSourceSummary({ sourceKey, sourceType, sourceId } = {}) {
-    const resolvedSourceKey = sourceKey
-      || (sourceType && sourceId ? `${sourceType}:${sourceId}` : '');
+    const resolvedSourceKey = resolveTelemetrySourceKey({ sourceKey, sourceType, sourceId });
 
     if (!resolvedSourceKey) {
       throw new Error('A telemetry source is required.');
@@ -2893,8 +2923,7 @@ class TelemetryService {
   }
 
   async clearData({ sourceKey, sourceType, sourceId } = {}) {
-    const resolvedSourceKey = sourceKey
-      || (sourceType && sourceId ? `${sourceType}:${sourceId}` : '');
+    const resolvedSourceKey = resolveTelemetrySourceKey({ sourceKey, sourceType, sourceId });
 
     if (!resolvedSourceKey) {
       const [
@@ -3039,7 +3068,9 @@ module.exports.__private__ = {
   mergePointsByTimestamp,
   normalizeDiskCapacity,
   normalizeMetricKeys,
+  normalizeTelemetryLookupText,
   pickFeaturedMetricKeys,
+  resolveTelemetrySourceKey,
   summarizeSourceBreakdowns,
   summarizeStorageCollections
 };
