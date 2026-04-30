@@ -80,6 +80,10 @@ function inferClientName(clientType, userAgent) {
     return detectPlatformLabel(userAgent) || 'iOS device';
   }
 
+  if (clientType === 'watchos') {
+    return 'Apple Watch';
+  }
+
   if (clientType === 'web') {
     const browser = detectBrowserLabel(userAgent);
     const platform = detectPlatformLabel(userAgent);

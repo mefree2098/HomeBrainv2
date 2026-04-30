@@ -102,6 +102,20 @@ test('session lifetime keeps iOS at 365 days while browser sessions default to 3
 
   assert.equal(await authSessionService.getSessionLifetimeDays('web'), 30);
   assert.equal(await authSessionService.getSessionLifetimeDays('ios'), 365);
+  assert.equal(await authSessionService.getSessionLifetimeDays('watchos'), 365);
+});
+
+test('UserSession accepts watchOS client sessions', async () => {
+  const session = new UserSession({
+    userId: '507f1f77bcf86cd799439011',
+    sessionId: 'watch-session-1',
+    tokenHash: 'token-hash',
+    clientType: 'watchos',
+    clientName: 'Apple Watch',
+    expiresAt: new Date(Date.now() + 86_400_000)
+  });
+
+  await session.validate();
 });
 
 test('browser-like requests cannot spoof iOS session metadata', () => {

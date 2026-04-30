@@ -21,7 +21,7 @@ const schema = new mongoose.Schema({
   },
   clientType: {
     type: String,
-    enum: ['ios', 'web', 'android', 'desktop', 'api', 'unknown'],
+    enum: ['ios', 'watchos', 'web', 'android', 'desktop', 'api', 'unknown'],
     default: 'unknown'
   },
   clientName: {
