@@ -4,6 +4,11 @@ const { validatePassword, isPasswordHash } = require('../utils/password.js');
 const {randomUUID} = require("crypto");
 const { ROLES } = require('../../shared/config/roles.js');
 const { DEFAULT_USER_PLATFORMS, normalizeUserPlatforms } = require('../utils/userPlatforms');
+const {
+  DEFAULT_WATCH_PREFERENCES,
+  WATCH_SECTIONS,
+  normalizeWatchPreferences
+} = require('../utils/watchPreferences');
 
 const platformsSchema = new mongoose.Schema({
   homebrain: {
@@ -13,6 +18,32 @@ const platformsSchema = new mongoose.Schema({
   axiom: {
     type: Boolean,
     default: DEFAULT_USER_PLATFORMS.axiom,
+  },
+}, {
+  _id: false,
+});
+
+const watchPreferencesSchema = new mongoose.Schema({
+  sections: {
+    type: [String],
+    enum: WATCH_SECTIONS,
+    default: () => [...DEFAULT_WATCH_PREFERENCES.sections],
+  },
+  primaryRoom: {
+    type: String,
+    default: '',
+    trim: true,
+    maxlength: 120,
+  },
+  lightDeviceIds: {
+    type: [String],
+    default: [],
+  },
+  defaultLightBrightness: {
+    type: Number,
+    min: 1,
+    max: 100,
+    default: DEFAULT_WATCH_PREFERENCES.defaultLightBrightness,
   },
 }, {
   _id: false,
@@ -55,6 +86,10 @@ const schema = new mongoose.Schema({
     type: platformsSchema,
     default: () => ({ ...DEFAULT_USER_PLATFORMS }),
   },
+  watchPreferences: {
+    type: watchPreferencesSchema,
+    default: () => normalizeWatchPreferences(),
+  },
   role: {
     type: String,
     enum: [ROLES.ADMIN, ROLES.USER],
@@ -72,6 +107,7 @@ const schema = new mongoose.Schema({
 
 schema.pre('validate', function normalizePlatforms() {
   this.platforms = normalizeUserPlatforms(this.platforms);
+  this.watchPreferences = normalizeWatchPreferences(this.watchPreferences);
 });
 
 function sanitizeUserDocument(_doc, ret) {
