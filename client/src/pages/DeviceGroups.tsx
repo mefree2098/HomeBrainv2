@@ -45,6 +45,7 @@ import { Label } from "@/components/ui/label"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+import { Toggle } from "@/components/ui/toggle"
 import { useAlexaExposureRegistry } from "@/hooks/useAlexaExposureRegistry"
 import { useToast } from "@/hooks/useToast"
 
@@ -107,6 +108,8 @@ export function DeviceGroups() {
   const [childGroupSearch, setChildGroupSearch] = useState("")
   const [deviceRoomFilter, setDeviceRoomFilter] = useState("all")
   const [deviceSourceFilter, setDeviceSourceFilter] = useState(ALL_DEVICE_SOURCES_VALUE)
+  const [showSelectedDevicesOnly, setShowSelectedDevicesOnly] = useState(false)
+  const [showSelectedChildGroupsOnly, setShowSelectedChildGroupsOnly] = useState(false)
   const [detailName, setDetailName] = useState("")
   const [detailDescription, setDetailDescription] = useState("")
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>([])
@@ -177,6 +180,8 @@ export function DeviceGroups() {
     setChildGroupSearch("")
     setDeviceRoomFilter("all")
     setDeviceSourceFilter(ALL_DEVICE_SOURCES_VALUE)
+    setShowSelectedDevicesOnly(false)
+    setShowSelectedChildGroupsOnly(false)
   }, [
     selectedGroupId,
     selectedGroup?.childGroupIds,
@@ -211,38 +216,49 @@ export function DeviceGroups() {
     )).sort((left, right) => left.localeCompare(right))
   }, [devices])
 
+  const selectedDeviceIdSet = useMemo(() => new Set(selectedDeviceIds), [selectedDeviceIds])
+  const selectedChildGroupIdSet = useMemo(() => new Set(selectedChildGroupIds), [selectedChildGroupIds])
+
   const filteredDevices = useMemo(() => {
     const search = deviceSearch.trim().toLowerCase()
     return devices.filter((device) => {
-        if (deviceRoomFilter !== "all" && device.room !== deviceRoomFilter) {
-          return false
-        }
+      if (showSelectedDevicesOnly && !selectedDeviceIdSet.has(device._id)) {
+        return false
+      }
 
-        if (deviceSourceFilter !== ALL_DEVICE_SOURCES_VALUE && getDeviceSource(device) !== deviceSourceFilter) {
-          return false
-        }
+      if (deviceRoomFilter !== "all" && device.room !== deviceRoomFilter) {
+        return false
+      }
 
-        if (!search) {
-          return true
-        }
+      if (deviceSourceFilter !== ALL_DEVICE_SOURCES_VALUE && getDeviceSource(device) !== deviceSourceFilter) {
+        return false
+      }
 
-        const source = getDeviceSource(device)
-        const haystack = [
-          device.name,
-          device.room,
-          device.type,
-          source,
-          getDeviceSourceLabel(source),
-          ...normalizeGroupEntries(device.groups)
-        ].join(" ").toLowerCase()
-        return haystack.includes(search)
-      })
-    }, [deviceRoomFilter, deviceSearch, deviceSourceFilter, devices])
+      if (!search) {
+        return true
+      }
+
+      const source = getDeviceSource(device)
+      const haystack = [
+        device.name,
+        device.room,
+        device.type,
+        source,
+        getDeviceSourceLabel(source),
+        ...normalizeGroupEntries(device.groups)
+      ].join(" ").toLowerCase()
+      return haystack.includes(search)
+    })
+  }, [deviceRoomFilter, deviceSearch, deviceSourceFilter, devices, selectedDeviceIdSet, showSelectedDevicesOnly])
 
   const filteredChildGroups = useMemo(() => {
     const search = childGroupSearch.trim().toLowerCase()
     return groups.filter((group) => {
       if (group._id === selectedGroupId) {
+        return false
+      }
+
+      if (showSelectedChildGroupsOnly && !selectedChildGroupIdSet.has(group._id)) {
         return false
       }
 
@@ -258,10 +274,7 @@ export function DeviceGroups() {
       ].join(" ").toLowerCase()
       return haystack.includes(search)
     })
-  }, [childGroupSearch, groups, selectedGroupId])
-
-  const selectedDeviceIdSet = useMemo(() => new Set(selectedDeviceIds), [selectedDeviceIds])
-  const selectedChildGroupIdSet = useMemo(() => new Set(selectedChildGroupIds), [selectedChildGroupIds])
+  }, [childGroupSearch, groups, selectedChildGroupIdSet, selectedGroupId, showSelectedChildGroupsOnly])
 
   const detailDirty = Boolean(
     selectedGroup
@@ -783,14 +796,27 @@ export function DeviceGroups() {
                         Use child groups to build a HomeBrain master group that fans out to platform-specific subgroups.
                       </div>
                     </div>
-                    <div className="relative w-full lg:max-w-xs">
-                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                      <Input
-                        value={childGroupSearch}
-                        onChange={(event) => setChildGroupSearch(event.target.value)}
-                        placeholder="Search child groups"
-                        className="pl-9"
-                      />
+                    <div className="flex w-full flex-col gap-2 sm:flex-row lg:max-w-xl">
+                      <div className="relative min-w-0 flex-1">
+                        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          value={childGroupSearch}
+                          onChange={(event) => setChildGroupSearch(event.target.value)}
+                          placeholder="Search child groups"
+                          className="pl-9"
+                        />
+                      </div>
+                      <Toggle
+                        type="button"
+                        pressed={showSelectedChildGroupsOnly}
+                        onPressedChange={setShowSelectedChildGroupsOnly}
+                        variant="outline"
+                        className="h-10 shrink-0 whitespace-nowrap rounded-xl px-4"
+                        aria-label="Show selected child groups"
+                      >
+                        <CheckSquare className="h-4 w-4" />
+                        Show selected
+                      </Toggle>
                     </div>
                   </div>
 
@@ -842,7 +868,7 @@ export function DeviceGroups() {
                   </ScrollArea>
                 </div>
 
-                <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px_220px]">
+                <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px_220px_auto]">
                   <div className="relative">
                     <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
@@ -868,6 +894,17 @@ export function DeviceGroups() {
                     value={deviceSourceFilter}
                     onValueChange={setDeviceSourceFilter}
                   />
+                  <Toggle
+                    type="button"
+                    pressed={showSelectedDevicesOnly}
+                    onPressedChange={setShowSelectedDevicesOnly}
+                    variant="outline"
+                    className="h-10 whitespace-nowrap rounded-xl px-4"
+                    aria-label="Show selected devices"
+                  >
+                    <CheckSquare className="h-4 w-4" />
+                    Show selected
+                  </Toggle>
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/70 bg-muted/15 px-4 py-3 text-sm">
