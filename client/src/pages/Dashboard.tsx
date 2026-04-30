@@ -43,6 +43,14 @@ import { QuickActions } from "@/components/dashboard/QuickActions"
 import { SecurityAlarmWidget } from "@/components/dashboard/SecurityAlarmWidget"
 import { VoiceCommandPanel } from "@/components/dashboard/VoiceCommandPanel"
 import { WeatherWidget } from "@/components/dashboard/WeatherWidget"
+import {
+  ALL_DEVICE_SOURCES_VALUE,
+  DevicePicker,
+  DeviceSourceFilterSelect,
+  filterDevicesForDevicePicker,
+  getDeviceSource,
+  getDeviceSourceLabel
+} from "@/components/devices/DevicePicker"
 import { getDevices, controlDevice } from "@/api/devices"
 import { getScenes, activateScene } from "@/api/scenes"
 import { getVoiceDevices } from "@/api/voice"
@@ -267,6 +275,7 @@ export function Dashboard() {
   const [pendingWidgetDeviceId, setPendingWidgetDeviceId] = useState("")
   const [pendingWidgetDeviceIds, setPendingWidgetDeviceIds] = useState<string[]>([])
   const [pendingWidgetDeviceSearch, setPendingWidgetDeviceSearch] = useState("")
+  const [pendingWidgetDeviceSource, setPendingWidgetDeviceSource] = useState(ALL_DEVICE_SOURCES_VALUE)
   const [pendingWeatherLocationMode, setPendingWeatherLocationMode] = useState<DashboardWeatherLocationMode>("saved")
   const [pendingWeatherLocationQuery, setPendingWeatherLocationQuery] = useState("")
   const [selectedSecurityDeviceId, setSelectedSecurityDeviceId] = useState<string | null>(null)
@@ -553,13 +562,11 @@ export function Dashboard() {
   }, [devices])
 
   const filteredPendingDevices = useMemo(() => {
-    const query = pendingWidgetDeviceSearch.trim().toLowerCase()
-    const matches = query
-      ? sortedDevices.filter((device) => {
-          const haystack = [device.name, device.room, device.type].join(" ").toLowerCase()
-          return haystack.includes(query)
-        })
-      : sortedDevices
+    const matches = filterDevicesForDevicePicker(
+      sortedDevices,
+      pendingWidgetDeviceSearch,
+      pendingWidgetDeviceSource
+    ) as Device[]
 
     const pinnedDeviceIds = new Set([
       ...(pendingWidgetDeviceId ? [pendingWidgetDeviceId] : []),
@@ -575,7 +582,7 @@ export function Dashboard() {
     ))
 
     return [...pinnedDevices, ...matches]
-  }, [pendingWidgetDeviceId, pendingWidgetDeviceIds, pendingWidgetDeviceSearch, sortedDevices])
+  }, [pendingWidgetDeviceId, pendingWidgetDeviceIds, pendingWidgetDeviceSearch, pendingWidgetDeviceSource, sortedDevices])
 
   const togglePendingWidgetDeviceSelection = useCallback((deviceId: string, nextValue: boolean) => {
     setPendingWidgetDeviceIds((previous) => {
@@ -904,6 +911,7 @@ export function Dashboard() {
     setPendingWidgetDeviceId("")
     setPendingWidgetDeviceIds([])
     setPendingWidgetDeviceSearch("")
+    setPendingWidgetDeviceSource(ALL_DEVICE_SOURCES_VALUE)
     setPendingWeatherLocationMode("saved")
     setPendingWeatherLocationQuery("")
     setIsAddWidgetOpen(true)
@@ -964,6 +972,7 @@ export function Dashboard() {
     setPendingWidgetDeviceId("")
     setPendingWidgetDeviceIds([])
     setPendingWidgetDeviceSearch("")
+    setPendingWidgetDeviceSource(ALL_DEVICE_SOURCES_VALUE)
     setPendingWeatherLocationMode("saved")
     setPendingWeatherLocationQuery("")
     setIsAddWidgetOpen(false)
@@ -1382,6 +1391,7 @@ export function Dashboard() {
                     setPendingWidgetDeviceIds([])
                   }
                   setPendingWidgetDeviceSearch("")
+                  setPendingWidgetDeviceSource(ALL_DEVICE_SOURCES_VALUE)
                   if (nextType !== "weather") {
                     setPendingWeatherLocationMode("saved")
                     setPendingWeatherLocationQuery("")
@@ -1432,43 +1442,38 @@ export function Dashboard() {
 
             {pendingWidgetType === "device" && (
               <div className="space-y-2">
-                <Label htmlFor="widget-device-search">Search Devices</Label>
-                <Input
-                  id="widget-device-search"
-                  value={pendingWidgetDeviceSearch}
-                  onChange={(event) => setPendingWidgetDeviceSearch(event.target.value)}
-                  placeholder="Search by name, room, or type"
-                />
                 <Label htmlFor="widget-device">Device</Label>
-                <Select value={pendingWidgetDeviceId} onValueChange={setPendingWidgetDeviceId}>
-                  <SelectTrigger id="widget-device">
-                    <SelectValue placeholder="Select a device" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {filteredPendingDevices.length > 0 ? filteredPendingDevices.map((device) => (
-                      <SelectItem key={device._id} value={device._id}>
-                        {device.name} · {device.room}
-                      </SelectItem>
-                    )) : (
-                      <SelectItem value="__no_device_match__" disabled>
-                        No devices match your search
-                      </SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
+                <DevicePicker
+                  devices={sortedDevices}
+                  value={pendingWidgetDeviceId}
+                  onValueChange={setPendingWidgetDeviceId}
+                  placeholder="Select a device"
+                  triggerClassName="min-h-10"
+                />
               </div>
             )}
 
             {pendingWidgetType === "devices" && (
               <div className="space-y-3">
-                <div className="space-y-2">
-                  <Label htmlFor="widget-devices-search">Search Devices</Label>
-                  <Input
-                    id="widget-devices-search"
-                    value={pendingWidgetDeviceSearch}
-                    onChange={(event) => setPendingWidgetDeviceSearch(event.target.value)}
-                    placeholder="Search by name, room, or type"
-                  />
+                <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_220px]">
+                  <div className="space-y-2">
+                    <Label htmlFor="widget-devices-search">Search Devices</Label>
+                    <Input
+                      id="widget-devices-search"
+                      value={pendingWidgetDeviceSearch}
+                      onChange={(event) => setPendingWidgetDeviceSearch(event.target.value)}
+                      placeholder="Search by name, room, type, or source"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="widget-devices-source">Source</Label>
+                    <DeviceSourceFilterSelect
+                      id="widget-devices-source"
+                      devices={sortedDevices}
+                      value={pendingWidgetDeviceSource}
+                      onValueChange={setPendingWidgetDeviceSource}
+                    />
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
@@ -1493,7 +1498,7 @@ export function Dashboard() {
                         <div className="min-w-0">
                           <p className="text-sm font-medium text-foreground">{device.name}</p>
                           <p className="text-xs text-muted-foreground">
-                            {device.room || "Unassigned"} · {device.type}
+                            {device.room || "Unassigned"} · {device.type} · {getDeviceSourceLabel(getDeviceSource(device))}
                           </p>
                         </div>
                       </label>

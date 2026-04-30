@@ -716,6 +716,7 @@ struct DashboardView: View {
     @State private var pendingWidgetDeviceID = ""
     @State private var pendingWidgetDeviceIDs: [String] = []
     @State private var pendingWidgetDeviceSearch = ""
+    @State private var pendingWidgetDeviceSource = DeviceItem.allSelectionSourcesValue
     @State private var pendingWeatherLocationMode: DashboardWeatherLocationMode = .saved
     @State private var pendingWeatherLocationQuery = ""
     @State private var dashboardNameAction: DashboardNameAction?
@@ -828,13 +829,8 @@ struct DashboardView: View {
         let query = pendingWidgetDeviceSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let matches: [DeviceItem]
 
-        if query.isEmpty {
-            matches = sortedDevices
-        } else {
-            matches = sortedDevices.filter { device in
-                let haystack = "\(device.name) \(device.room) \(device.type)".lowercased()
-                return haystack.contains(query)
-            }
+        matches = sortedDevices.filter { device in
+            device.matchesSelectionFilters(searchText: query, sourceFilter: pendingWidgetDeviceSource)
         }
 
         let pinnedIDs = Set([pendingWidgetDeviceID].filter { !$0.isEmpty } + pendingWidgetDeviceIDs)
@@ -1501,10 +1497,16 @@ struct DashboardView: View {
                             .textInputAutocapitalization(.never)
                             .disableAutocorrection(true)
 
+                        Picker("Source", selection: $pendingWidgetDeviceSource) {
+                            ForEach(DeviceItem.selectionSourceOptions(for: sortedDevices)) { option in
+                                Text(option.label).tag(option.value)
+                            }
+                        }
+
                         Picker("Device", selection: $pendingWidgetDeviceID) {
                             Text("Select a device").tag("")
                             ForEach(filteredPendingDevices) { device in
-                                Text("\(device.name) · \(device.room)").tag(device.id)
+                                Text("\(device.name) · \(device.room) · \(device.selectionSourceLabel)").tag(device.id)
                             }
                         }
 
@@ -1521,6 +1523,12 @@ struct DashboardView: View {
                         TextField("Search devices", text: $pendingWidgetDeviceSearch)
                             .textInputAutocapitalization(.never)
                             .disableAutocorrection(true)
+
+                        Picker("Source", selection: $pendingWidgetDeviceSource) {
+                            ForEach(DeviceItem.selectionSourceOptions(for: sortedDevices)) { option in
+                                Text(option.label).tag(option.value)
+                            }
+                        }
 
                         Text("\(pendingWidgetDeviceIDs.count) selected")
                             .font(.system(size: 13, weight: .medium, design: .rounded))
@@ -1548,6 +1556,9 @@ struct DashboardView: View {
                                             Text("\(device.room) • \(device.type)")
                                                 .font(.system(size: 12, weight: .medium, design: .rounded))
                                                 .foregroundStyle(HBPalette.textSecondary)
+                                            Text(device.selectionSourceLabel)
+                                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                                .foregroundStyle(HBPalette.textMuted)
                                         }
                                         Spacer()
                                     }
@@ -1585,9 +1596,10 @@ struct DashboardView: View {
                 }
                 if newValue != .devices {
                     pendingWidgetDeviceIDs = []
-                }
-                pendingWidgetDeviceSearch = ""
-                if newValue != .weather {
+                    }
+                    pendingWidgetDeviceSearch = ""
+                    pendingWidgetDeviceSource = DeviceItem.allSelectionSourcesValue
+                    if newValue != .weather {
                     pendingWeatherLocationMode = .saved
                     pendingWeatherLocationQuery = ""
                 }
@@ -5780,10 +5792,11 @@ struct DashboardView: View {
         pendingWidgetType = .hero
         pendingWidgetTitle = DashboardWidgetType.hero.title
         pendingWidgetSize = .full
-        pendingWidgetDeviceID = ""
-        pendingWidgetDeviceIDs = []
-        pendingWidgetDeviceSearch = ""
-        pendingWeatherLocationMode = .saved
+            pendingWidgetDeviceID = ""
+            pendingWidgetDeviceIDs = []
+            pendingWidgetDeviceSearch = ""
+            pendingWidgetDeviceSource = DeviceItem.allSelectionSourcesValue
+            pendingWeatherLocationMode = .saved
         pendingWeatherLocationQuery = ""
         showingAddWidgetSheet = true
     }
@@ -5879,9 +5892,10 @@ struct DashboardView: View {
 
         dashboardViews[viewIndex].widgets.append(widget)
         dashboardDirty = true
-        pendingWidgetDeviceIDs = []
-        pendingWidgetDeviceSearch = ""
-        showingAddWidgetSheet = false
+            pendingWidgetDeviceIDs = []
+            pendingWidgetDeviceSearch = ""
+            pendingWidgetDeviceSource = DeviceItem.allSelectionSourcesValue
+            showingAddWidgetSheet = false
     }
 
     private func saveDashboardViews() async {

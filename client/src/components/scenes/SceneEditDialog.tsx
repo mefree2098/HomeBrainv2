@@ -10,6 +10,7 @@ import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Layers3, Plus, Trash2 } from "lucide-react"
 import type { DeviceGroupSummary, DeviceRecord } from "@/api/devices"
+import { DevicePicker } from "@/components/devices/DevicePicker"
 
 type DeviceAction = {
   deviceId: string
@@ -130,17 +131,6 @@ export function SceneEditDialog({ open, onOpenChange, scene, devices, groups, on
 
   const getDeviceById = (deviceId: string) => devices.find((device) => device._id === deviceId)
   const getGroupById = (groupId: string) => groups.find((group) => group._id === groupId)
-
-  const devicesByRoom = useMemo(() => {
-    return devices.reduce((acc, device) => {
-      const room = String(device.room || "Unassigned")
-      if (!acc[room]) {
-        acc[room] = []
-      }
-      acc[room].push(device)
-      return acc
-    }, {} as Record<string, DeviceRecord[]>)
-  }, [devices])
 
   const sortedGroups = useMemo(() => {
     return [...groups].sort((left, right) => left.name.localeCompare(right.name))
@@ -356,28 +346,12 @@ export function SceneEditDialog({ open, onOpenChange, scene, devices, groups, on
                     <div className="flex-1 space-y-3">
                       <div className="space-y-2">
                         <Label>Device</Label>
-                        <Select
+                        <DevicePicker
+                          devices={devices}
                           value={deviceAction.deviceId}
                           onValueChange={(value) => handleDeviceChange(index, value)}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {Object.entries(devicesByRoom).map(([room, roomDevices]) => (
-                              <div key={room}>
-                                <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
-                                  {room}
-                                </div>
-                                {roomDevices.map((roomDevice) => (
-                                  <SelectItem key={roomDevice._id} value={roomDevice._id}>
-                                    {roomDevice.name} ({roomDevice.type})
-                                  </SelectItem>
-                                ))}
-                              </div>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                          placeholder="Select device"
+                        />
                       </div>
 
                       <div className="space-y-2">
