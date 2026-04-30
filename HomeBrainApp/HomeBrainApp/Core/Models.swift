@@ -112,6 +112,115 @@ nonisolated struct DeviceItem: Identifiable {
     }
 }
 
+extension DeviceItem {
+    nonisolated struct SelectionSourceOption: Identifiable {
+        let value: String
+        let label: String
+        var id: String { value }
+    }
+
+    nonisolated static let allSelectionSourcesValue = "all"
+
+    nonisolated var selectionSource: String {
+        if let source = properties["source"] as? String {
+            let normalized = source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if !normalized.isEmpty {
+                return normalized
+            }
+        }
+
+        if properties["smartThingsDeviceId"] != nil || properties["smartThingsId"] != nil {
+            return "smartthings"
+        }
+        if properties["harmonyDeviceId"] != nil || properties["harmonyHubIp"] != nil {
+            return "harmony"
+        }
+        if properties["insteonAddress"] != nil || properties["insteonDeviceId"] != nil {
+            return "insteon"
+        }
+        if properties["senseDeviceId"] != nil || properties["senseMonitorId"] != nil {
+            return "sense"
+        }
+
+        return "local"
+    }
+
+    nonisolated var selectionSourceLabel: String {
+        DeviceItem.selectionSourceLabel(selectionSource)
+    }
+
+    nonisolated var selectionSearchText: String {
+        [
+            name,
+            room,
+            type,
+            selectionSource,
+            selectionSourceLabel,
+            id
+        ].joined(separator: " ").lowercased()
+    }
+
+    nonisolated func matchesSelectionFilters(searchText: String, sourceFilter: String) -> Bool {
+        let normalizedSource = sourceFilter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !normalizedSource.isEmpty,
+           normalizedSource != DeviceItem.allSelectionSourcesValue,
+           selectionSource != normalizedSource {
+            return false
+        }
+
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else {
+            return true
+        }
+
+        return selectionSearchText.contains(query)
+    }
+
+    nonisolated static func selectionSourceLabel(_ source: String) -> String {
+        switch source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "alexa":
+            return "Alexa"
+        case "ecobee":
+            return "Ecobee"
+        case "harmony":
+            return "Harmony"
+        case "homebrain", "local":
+            return "HomeBrain"
+        case "insteon":
+            return "INSTEON"
+        case "isy":
+            return "ISY"
+        case "rainmachine":
+            return "RainMachine"
+        case "sense":
+            return "Sense"
+        case "smartthings":
+            return "SmartThings"
+        case "tempest":
+            return "Tempest"
+        case "voice":
+            return "Voice"
+        case let value where !value.isEmpty:
+            return value
+                .replacingOccurrences(of: "_", with: " ")
+                .replacingOccurrences(of: "-", with: " ")
+                .capitalized
+        default:
+            return "Unknown"
+        }
+    }
+
+    nonisolated static func selectionSourceOptions(for devices: [DeviceItem]) -> [SelectionSourceOption] {
+        let sources = Set(devices.map(\.selectionSource))
+        let sortedSources = sources.sorted {
+            selectionSourceLabel($0).localizedCaseInsensitiveCompare(selectionSourceLabel($1)) == .orderedAscending
+        }
+
+        return [SelectionSourceOption(value: allSelectionSourcesValue, label: "All sources")]
+            + sortedSources.map { SelectionSourceOption(value: $0, label: selectionSourceLabel($0)) }
+    }
+}
+
 nonisolated struct SceneItem: Identifiable {
     let id: String
     var name: String

@@ -22,6 +22,12 @@ import {
   type DeviceRecord
 } from "@/api/devices"
 import { AlexaExposureControl } from "@/components/alexa/AlexaExposureControl"
+import {
+  ALL_DEVICE_SOURCES_VALUE,
+  DeviceSourceFilterSelect,
+  getDeviceSource,
+  getDeviceSourceLabel
+} from "@/components/devices/DevicePicker"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -100,6 +106,7 @@ export function DeviceGroups() {
   const [deviceSearch, setDeviceSearch] = useState("")
   const [childGroupSearch, setChildGroupSearch] = useState("")
   const [deviceRoomFilter, setDeviceRoomFilter] = useState("all")
+  const [deviceSourceFilter, setDeviceSourceFilter] = useState(ALL_DEVICE_SOURCES_VALUE)
   const [detailName, setDetailName] = useState("")
   const [detailDescription, setDetailDescription] = useState("")
   const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>([])
@@ -169,6 +176,7 @@ export function DeviceGroups() {
     setDeviceSearch("")
     setChildGroupSearch("")
     setDeviceRoomFilter("all")
+    setDeviceSourceFilter(ALL_DEVICE_SOURCES_VALUE)
   }, [
     selectedGroupId,
     selectedGroup?.childGroupIds,
@@ -206,25 +214,30 @@ export function DeviceGroups() {
   const filteredDevices = useMemo(() => {
     const search = deviceSearch.trim().toLowerCase()
     return devices.filter((device) => {
-      if (deviceRoomFilter !== "all" && device.room !== deviceRoomFilter) {
-        return false
-      }
+        if (deviceRoomFilter !== "all" && device.room !== deviceRoomFilter) {
+          return false
+        }
 
-      if (!search) {
-        return true
-      }
+        if (deviceSourceFilter !== ALL_DEVICE_SOURCES_VALUE && getDeviceSource(device) !== deviceSourceFilter) {
+          return false
+        }
 
-      const source = String(device?.properties?.source || "local")
-      const haystack = [
-        device.name,
-        device.room,
-        device.type,
-        source,
-        ...normalizeGroupEntries(device.groups)
-      ].join(" ").toLowerCase()
-      return haystack.includes(search)
-    })
-  }, [deviceRoomFilter, deviceSearch, devices])
+        if (!search) {
+          return true
+        }
+
+        const source = getDeviceSource(device)
+        const haystack = [
+          device.name,
+          device.room,
+          device.type,
+          source,
+          getDeviceSourceLabel(source),
+          ...normalizeGroupEntries(device.groups)
+        ].join(" ").toLowerCase()
+        return haystack.includes(search)
+      })
+    }, [deviceRoomFilter, deviceSearch, deviceSourceFilter, devices])
 
   const filteredChildGroups = useMemo(() => {
     const search = childGroupSearch.trim().toLowerCase()
@@ -829,7 +842,7 @@ export function DeviceGroups() {
                   </ScrollArea>
                 </div>
 
-                <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
+                <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px_220px]">
                   <div className="relative">
                     <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
@@ -850,6 +863,11 @@ export function DeviceGroups() {
                       ))}
                     </SelectContent>
                   </Select>
+                  <DeviceSourceFilterSelect
+                    devices={devices}
+                    value={deviceSourceFilter}
+                    onValueChange={setDeviceSourceFilter}
+                  />
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border/70 bg-muted/15 px-4 py-3 text-sm">
@@ -865,7 +883,7 @@ export function DeviceGroups() {
                   <div className="space-y-2 p-3">
                     {filteredDevices.length > 0 ? filteredDevices.map((device) => {
                       const checked = selectedDeviceIdSet.has(device._id)
-                      const source = String(device?.properties?.source || "local")
+                      const source = getDeviceSource(device)
                       const otherGroups = normalizeGroupEntries(device.groups).filter((entry) => entry.toLowerCase() !== selectedGroup.normalizedName)
 
                       return (
@@ -886,7 +904,7 @@ export function DeviceGroups() {
                               <span className="font-medium">{device.name}</span>
                               <Badge variant="outline">{device.room}</Badge>
                               <Badge variant="secondary">{device.type}</Badge>
-                              <Badge variant="outline">{source}</Badge>
+                              <Badge variant="outline">{getDeviceSourceLabel(source)}</Badge>
                             </div>
                             <div className="mt-1 text-xs text-muted-foreground">
                               {otherGroups.length > 0

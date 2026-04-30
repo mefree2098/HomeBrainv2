@@ -128,6 +128,7 @@ struct WorkflowsView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     @State private var workflows: [WorkflowItem] = []
+    @State private var devices: [DeviceItem] = []
     @State private var stats: [String: Any] = [:]
     @State private var runningExecutions: [WorkflowExecutionHistoryItem] = []
     @State private var runtimeHistory: [WorkflowExecutionHistoryItem] = []
@@ -173,6 +174,8 @@ struct WorkflowsView: View {
     @State private var createPriority = 5
     @State private var createCooldown = 0
     @State private var triggerDeviceId = ""
+    @State private var triggerDeviceSearch = ""
+    @State private var triggerDeviceSource = DeviceItem.allSelectionSourcesValue
     @State private var triggerProperty = "status"
     @State private var triggerOperator = "eq"
     @State private var triggerValue = "true"
@@ -182,6 +185,8 @@ struct WorkflowsView: View {
     @State private var triggerAlarmStates = "armedStay, armedAway"
     @State private var delaySeconds = 0
     @State private var deviceActionName = "turn_off"
+    @State private var targetDeviceSearch = ""
+    @State private var targetDeviceSource = DeviceItem.allSelectionSourcesValue
     @State private var useTriggeringDeviceTarget = true
     @State private var useAdvancedTriggerJSON = false
     @State private var useAdvancedActionsJSON = false
@@ -230,6 +235,22 @@ struct WorkflowsView: View {
         let start = ((runtimePagination.page - 1) * runtimePagination.limit) + 1
         let end = min(runtimePagination.total, start + max(runtimeHistory.count - 1, 0))
         return "Showing \(start)-\(end) of \(runtimePagination.total) logs."
+    }
+
+    private var sortedDevices: [DeviceItem] {
+        devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var filteredTriggerDevices: [DeviceItem] {
+        sortedDevices.filter {
+            $0.matchesSelectionFilters(searchText: triggerDeviceSearch, sourceFilter: triggerDeviceSource)
+        }
+    }
+
+    private var filteredTargetDevices: [DeviceItem] {
+        sortedDevices.filter {
+            $0.matchesSelectionFilters(searchText: targetDeviceSearch, sourceFilter: targetDeviceSource)
+        }
     }
 
     var body: some View {
@@ -699,9 +720,20 @@ struct WorkflowsView: View {
                         TextField("Cron", text: $triggerScheduleCron)
                             .textInputAutocapitalization(.never)
                     } else if triggerType == "device_state" || triggerType == "sensor" {
-                        TextField("Device ID", text: $triggerDeviceId)
+                        TextField("Search devices", text: $triggerDeviceSearch)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
+                        Picker("Source", selection: $triggerDeviceSource) {
+                            ForEach(DeviceItem.selectionSourceOptions(for: sortedDevices)) { option in
+                                Text(option.label).tag(option.value)
+                            }
+                        }
+                        Picker("Device", selection: $triggerDeviceId) {
+                            Text("Select a device").tag("")
+                            ForEach(filteredTriggerDevices) { device in
+                                Text("\(device.name) · \(device.room) · \(device.selectionSourceLabel)").tag(device.id)
+                            }
+                        }
                         TextField("Property", text: $triggerProperty)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
@@ -740,15 +772,34 @@ struct WorkflowsView: View {
 
                     if actionType == "device_control" {
                         Toggle("Use triggering device", isOn: $useTriggeringDeviceTarget)
+                        if !useTriggeringDeviceTarget {
+                            TextField("Search devices", text: $targetDeviceSearch)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                            Picker("Source", selection: $targetDeviceSource) {
+                                ForEach(DeviceItem.selectionSourceOptions(for: sortedDevices)) { option in
+                                    Text(option.label).tag(option.value)
+                                }
+                            }
+                            Picker("Device", selection: $target) {
+                                Text("Select a device").tag("")
+                                ForEach(filteredTargetDevices) { device in
+                                    Text("\(device.name) · \(device.room) · \(device.selectionSourceLabel)").tag(device.id)
+                                }
+                            }
+                        }
                         TextField("Device action", text: $deviceActionName)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                     }
 
-                    if actionType != "delay" || delaySeconds == 0 {
+                    if actionType != "device_control" && (actionType != "delay" || delaySeconds == 0) {
                         TextField("Target", text: $target)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
+                    }
+
+                    if actionType != "delay" || delaySeconds == 0 {
                         TextField("Value", text: $actionValue, axis: .vertical)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
@@ -1467,9 +1518,10 @@ struct WorkflowsView: View {
             errorMessage = nil
         }
 
-        do {
-            async let workflowsTask = session.apiClient.get("/api/workflows")
-            async let statsTask = session.apiClient.get("/api/workflows/stats")
+            do {
+                async let workflowsTask = session.apiClient.get("/api/workflows")
+                async let devicesTask = session.apiClient.get("/api/devices")
+                async let statsTask = session.apiClient.get("/api/workflows/stats")
             async let runningTask = session.apiClient.get("/api/workflows/running", query: [URLQueryItem(name: "limit", value: "20")])
             async let historyTask = session.apiClient.get("/api/workflows/runtime-history", query: [
                 URLQueryItem(name: "limit", value: "\(runtimeLogLimit)"),
@@ -1484,17 +1536,21 @@ struct WorkflowsView: View {
                 URLQueryItem(name: "category", value: "automation")
             ])
 
-            let workflowsResponse = try await workflowsTask
-            let statsResponse = try await statsTask
+                let workflowsResponse = try await workflowsTask
+                let devicesResponse = try await devicesTask
+                let statsResponse = try await statsTask
             let runningResponse = try await runningTask
             let historyResponse = try await historyTask
             let telemetryResponse = try await telemetryTask
             let eventsResponse = try await eventsTask
 
-            workflows = JSON.array(JSON.object(workflowsResponse)["workflows"])
-                .map(WorkflowItem.from)
-                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-            stats = JSON.object(JSON.object(statsResponse)["stats"])
+                workflows = JSON.array(JSON.object(workflowsResponse)["workflows"])
+                    .map(WorkflowItem.from)
+                    .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+                devices = JSON.array(JSON.object(JSON.object(devicesResponse)["data"])["devices"])
+                    .map(DeviceItem.from)
+                    .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+                stats = JSON.object(JSON.object(statsResponse)["stats"])
             runningExecutions = JSON.array(JSON.object(runningResponse)["executions"]).map(WorkflowExecutionHistoryItem.from)
             runtimeHistory = JSON.array(JSON.object(historyResponse)["history"]).map(WorkflowExecutionHistoryItem.from)
             runtimePagination = WorkflowRuntimePaginationItem.from(JSON.object(JSON.object(historyResponse)["pagination"]))
@@ -2188,10 +2244,14 @@ struct WorkflowsView: View {
         triggerHoldSeconds = 0
         triggerTime = "07:00"
         triggerScheduleCron = "0 7 * * 1-5"
-        triggerAlarmStates = "armedStay, armedAway"
-        delaySeconds = 0
-        deviceActionName = "turn_off"
-        useTriggeringDeviceTarget = true
+            triggerAlarmStates = "armedStay, armedAway"
+            delaySeconds = 0
+            deviceActionName = "turn_off"
+            triggerDeviceSearch = ""
+            triggerDeviceSource = DeviceItem.allSelectionSourcesValue
+            targetDeviceSearch = ""
+            targetDeviceSource = DeviceItem.allSelectionSourcesValue
+            useTriggeringDeviceTarget = true
         useAdvancedTriggerJSON = false
         useAdvancedActionsJSON = false
         triggerConditionsJSON = "{}"

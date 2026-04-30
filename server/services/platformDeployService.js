@@ -13,6 +13,17 @@ const adminBootstrapService = require('./adminBootstrapService');
 const alexaBrokerService = require('./alexaBrokerService');
 
 const MAX_LOG_TAIL_BYTES = 64 * 1024;
+const INTERRUPTED_JOB_RECONCILE_GRACE_MS = Math.max(
+  30 * 1000,
+  Number(process.env.HOMEBRAIN_DEPLOY_INTERRUPTED_JOB_GRACE_MS || 5 * 60 * 1000)
+);
+const DEPENDENCY_ARTIFACT_PATHS = Object.freeze([
+  'node_modules',
+  path.join('client', 'node_modules'),
+  path.join('server', 'node_modules'),
+  path.join('broker', 'node_modules'),
+  path.join('lambda', 'node_modules')
+]);
 
 const DEPLOY_PRESETS = Object.freeze({
   safe: Object.freeze({
@@ -542,6 +553,96 @@ class PlatformDeployService {
     return { checked: true, repaired: true, missing: false };
   }
 
+  getDependencyArtifactPaths() {
+    return DEPENDENCY_ARTIFACT_PATHS
+      .map((relativePath) => ({
+        relativePath,
+        absolutePath: path.join(this.projectRoot, relativePath)
+      }))
+      .filter((entry) => fs.existsSync(entry.absolutePath));
+  }
+
+  async ensureWritableDependencyArtifacts({ jobId = null } = {}) {
+    const log = async (message) => {
+      if (!jobId) return;
+      await this.appendJobLog(
+        jobId,
+        `[${new Date().toISOString()}] [Ensure dependency permissions] ${message}\n`
+      );
+    };
+
+    const artifacts = this.getDependencyArtifactPaths();
+    if (artifacts.length === 0) {
+      await log('No dependency artifacts exist yet; skipping permission check.');
+      return { checked: false, repaired: false, missing: true };
+    }
+
+    const getCheckTargets = () => {
+      const targets = [];
+      artifacts.forEach((artifact) => {
+        targets.push(artifact);
+        const binPath = path.join(artifact.absolutePath, '.bin');
+        if (fs.existsSync(binPath)) {
+          targets.push({
+            relativePath: path.join(artifact.relativePath, '.bin'),
+            absolutePath: binPath
+          });
+        }
+      });
+      return targets;
+    };
+
+    const findNonWritable = async () => {
+      const paths = [];
+      for (const target of getCheckTargets()) {
+        if (!(await this.isPathWritable(target.absolutePath, { probeCreate: true }))) {
+          paths.push(target);
+        }
+      }
+      return paths;
+    };
+
+    let nonWritablePaths = await findNonWritable();
+    if (nonWritablePaths.length === 0) {
+      await log(`Dependency artifacts are writable: ${artifacts.map((entry) => entry.relativePath).join(', ')}.`);
+      return { checked: true, repaired: false, missing: false };
+    }
+
+    await log(
+      `Detected non-writable dependency artifact(s): ${nonWritablePaths.map((entry) => entry.relativePath).join(', ')}. Attempting sudo ownership repair.`
+    );
+
+    const user = trimStdout((await this.runCommand('id', ['-un'])).stdout);
+    const group = trimStdout((await this.runCommand('id', ['-gn'])).stdout);
+    if (!user || !group) {
+      throw new Error('Unable to determine deploy user and group for dependency ownership repair.');
+    }
+
+    const artifactArgs = artifacts.map((entry) => entry.relativePath);
+    try {
+      await this.runCommand('sudo', ['-n', 'chown', '-R', `${user}:${group}`, ...artifactArgs], {
+        cwd: this.projectRoot,
+        captureStdout: false
+      });
+      await this.runCommand('sudo', ['-n', 'chmod', '-R', 'u+rwX', ...artifactArgs], {
+        cwd: this.projectRoot,
+        captureStdout: false
+      });
+    } catch (error) {
+      throw new Error(`Unable to repair dependency artifact permissions: ${error.message}`);
+    }
+
+    nonWritablePaths = await findNonWritable();
+    if (nonWritablePaths.length > 0) {
+      throw new Error(
+        `Dependency artifacts remain non-writable after repair: ${nonWritablePaths.map((entry) => entry.relativePath).join(', ')}`
+      );
+    }
+
+    await log(`Dependency artifact permissions repaired for ${artifactArgs.join(', ')}.`);
+    return { checked: true, repaired: true, missing: false };
+  }
+
   async cleanupClientDistArtifacts({ jobId = null } = {}) {
     const log = async (message) => {
       if (!jobId) return;
@@ -823,7 +924,7 @@ class PlatformDeployService {
       : null;
 
     if (!restartStep) {
-      return job;
+      return this.reconcileInterruptedRunningJob(job, { repoStatus, runtime });
     }
 
     const resolvedPendingRestart = pendingRestart === undefined
@@ -877,6 +978,49 @@ class PlatformDeployService {
       `[${new Date().toISOString()}] [Restart services] Reconciled stale running deploy job: ${errorMessage}\n`
     );
     await this.markStep(job.id, 'Restart services', 'failed', errorMessage);
+    return this.finalizeJobFailure(job.id, errorMessage, {
+      job,
+      repoAfter: resolvedRepoStatus || job.repoAfter || null
+    });
+  }
+
+  async reconcileInterruptedRunningJob(job, { repoStatus = null, runtime = null } = {}) {
+    const runningStep = Array.isArray(job.steps)
+      ? job.steps.find((step) => step.status === 'running')
+      : null;
+    if (!runningStep) {
+      return job;
+    }
+
+    const stepUpdatedAtMs = parseTimestampMs(runningStep.updatedAt || job.updatedAt || job.startedAt);
+    const jobStartedAtMs = parseTimestampMs(job.startedAt || job.createdAt || job.updatedAt);
+    if (stepUpdatedAtMs === null || jobStartedAtMs === null) {
+      return job;
+    }
+
+    const resolvedRepoStatus = repoStatus || await this.getRepoStatus().catch(() => null);
+    const resolvedRuntime = runtime || await this.getRuntimeInfo(resolvedRepoStatus).catch(() => null);
+    const runtimeBootedAtMs = parseTimestampMs(resolvedRuntime?.bootedAt);
+    if (runtimeBootedAtMs === null) {
+      return job;
+    }
+
+    const bootedAfterJobStarted = runtimeBootedAtMs > jobStartedAtMs;
+    const bootedAfterStepWasAbandoned = runtimeBootedAtMs > stepUpdatedAtMs;
+    const abandonedLongEnough = Date.now() - stepUpdatedAtMs >= INTERRUPTED_JOB_RECONCILE_GRACE_MS;
+    if (!bootedAfterJobStarted || !bootedAfterStepWasAbandoned || !abandonedLongEnough) {
+      return job;
+    }
+
+    const runtimeShortCommit = resolvedRuntime?.loadedShortCommit
+      || (resolvedRuntime?.loadedCommit ? resolvedRuntime.loadedCommit.slice(0, 7) : 'unknown');
+    const errorMessage = `Deployment was interrupted while "${runningStep.name}" was running; backend restarted at ${resolvedRuntime.bootedAt} on commit ${runtimeShortCommit}. Run the deploy again to finish any remaining steps.`;
+
+    await this.appendJobLog(
+      job.id,
+      `[${new Date().toISOString()}] [${runningStep.name}] Reconciled abandoned running deploy job: ${errorMessage}\n`
+    );
+    await this.markStep(job.id, runningStep.name, 'failed', errorMessage);
     return this.finalizeJobFailure(job.id, errorMessage, {
       job,
       repoAfter: resolvedRepoStatus || job.repoAfter || null
@@ -1545,6 +1689,9 @@ class PlatformDeployService {
       }
 
       if (job.options.installDependencies) {
+        await runCustomStep('Ensure dependency permissions', async () => {
+          await this.ensureWritableDependencyArtifacts({ jobId });
+        });
         await runNpmStep('Install root dependencies', ['ci', '--include=dev', '--no-audit', '--no-fund']);
         await runNpmStep('Install server dependencies', ['ci', '--include=dev', '--include=optional', '--no-audit', '--no-fund', '--prefix', 'server']);
         await runNpmStep('Install client dependencies', ['ci', '--include=dev', '--no-audit', '--no-fund', '--prefix', 'client']);

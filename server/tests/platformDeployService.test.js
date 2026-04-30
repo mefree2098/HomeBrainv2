@@ -60,6 +60,24 @@ function createRunningJob(jobId, repoStatus) {
   };
 }
 
+function createRunningInstallJob(jobId, repoStatus) {
+  return {
+    ...createRunningJob(jobId, repoStatus),
+    currentStep: 'Install root dependencies',
+    steps: [
+      {
+        name: 'Install root dependencies',
+        status: 'running',
+        updatedAt: '2026-03-23T12:00:00.000Z'
+      }
+    ],
+    createdAt: '2026-03-23T11:58:00.000Z',
+    updatedAt: '2026-03-23T12:00:00.000Z',
+    startedAt: '2026-03-23T11:58:00.000Z',
+    repoAfter: null
+  };
+}
+
 async function createTempService(t, options = {}) {
   const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'homebrain-platform-deploy-'));
   t.after(async () => {
@@ -310,6 +328,80 @@ test('getLatestJob reconciles a stale running restart step as failed when runtim
     publishedEvents.some((event) => event.type === 'deploy.failed'),
     true
   );
+});
+
+test('getLatestJob fails an abandoned non-restart step after the backend restarted without completing it', { concurrency: false }, async (t) => {
+  const publishedEvents = [];
+  const originalPublishSafe = eventStreamService.publishSafe;
+  eventStreamService.publishSafe = async (payload) => {
+    publishedEvents.push(payload);
+  };
+
+  t.after(() => {
+    eventStreamService.publishSafe = originalPublishSafe;
+  });
+
+  const service = await createTempService(t);
+  const repoStatus = createRepoStatus('fedcba9876543210', 'fedcba9');
+  const jobId = 'job-install-abandoned';
+
+  await service.writeJob(createRunningInstallJob(jobId, repoStatus));
+  await service.writeLatestJobRef(jobId);
+
+  service.getRepoStatus = async () => repoStatus;
+  service.getRuntimeInfo = async () => ({
+    pid: 6262,
+    bootedAt: '2026-03-23T12:20:00.000Z',
+    uptimeSeconds: 6,
+    loadedBranch: 'main',
+    loadedCommit: repoStatus.commit,
+    loadedShortCommit: repoStatus.shortCommit,
+    repoMatchesRuntime: true
+  });
+
+  const latest = await service.getLatestJob();
+
+  assert.equal(latest.status, 'failed');
+  assert.equal(latest.currentStep, 'failed');
+  assert.match(latest.error, /interrupted while "Install root dependencies" was running/i);
+  assert.equal(latest.steps.find((step) => step.name === 'Install root dependencies')?.status, 'failed');
+  assert.equal(
+    publishedEvents.some((event) => event.type === 'deploy.failed'),
+    true
+  );
+});
+
+test('ensureWritableDependencyArtifacts repairs existing node_modules trees before npm install', { concurrency: false }, async (t) => {
+  const service = await createTempService(t);
+  await fsp.mkdir(path.join(service.projectRoot, 'node_modules', '.bin'), { recursive: true });
+  await fsp.mkdir(path.join(service.projectRoot, 'client', 'node_modules'), { recursive: true });
+
+  const commands = [];
+  let writable = false;
+  service.isPathWritable = async () => writable;
+  service.runCommand = async (command, args) => {
+    commands.push({ command, args });
+    if (command === 'id' && args[0] === '-un') {
+      return { stdout: 'matt', stderr: '' };
+    }
+    if (command === 'id' && args[0] === '-gn') {
+      return { stdout: 'staff', stderr: '' };
+    }
+    if (command === 'sudo' && args[1] === 'chmod') {
+      writable = true;
+    }
+    return { stdout: '', stderr: '' };
+  };
+
+  const result = await service.ensureWritableDependencyArtifacts();
+  const chownCall = commands.find((call) => call.command === 'sudo' && call.args[1] === 'chown');
+  const chmodCall = commands.find((call) => call.command === 'sudo' && call.args[1] === 'chmod');
+
+  assert.equal(result.repaired, true);
+  assert.deepEqual(chownCall?.args.slice(0, 4), ['-n', 'chown', '-R', 'matt:staff']);
+  assert.equal(chownCall?.args.includes('node_modules'), true);
+  assert.equal(chownCall?.args.includes(path.join('client', 'node_modules')), true);
+  assert.equal(chmodCall?.args.includes('u+rwX'), true);
 });
 
 test('buildServiceRestartCommand removes invalid sudo fragments and forces non-interactive sudo', { concurrency: false }, async (t) => {

@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { getDevices, updateDevice } from "@/api/devices"
+import { DevicePicker } from "@/components/devices/DevicePicker"
 import { Input as BaseInput } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -716,6 +717,13 @@ export function Settings() {
   const switchDevices = availableSmartThingsDevices
     .filter((device: any) => hasSwitchCapability(device))
     .sort((a: any, b: any) => getDeviceDisplayName(a).localeCompare(getDeviceDisplayName(b)))
+  const switchPickerDevices = switchDevices.map((device: any) => ({
+    _id: device.deviceId,
+    name: getDeviceDisplayName(device),
+    type: "switch",
+    room: device.roomName || device.room || device.locationName || "SmartThings",
+    properties: { source: "smartthings" }
+  }))
   const allSthmSwitchesSelected =
     Boolean(sthmConfig.disarmDeviceId) && Boolean(sthmConfig.armStayDeviceId) && Boolean(sthmConfig.armAwayDeviceId)
   const lastSthmState = smartthingsStatus?.sthm?.lastArmState
@@ -6391,117 +6399,93 @@ export function Settings() {
                   </div>
 
                   <div className="grid gap-4 md:grid-cols-2">
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">Disarm Switch</label>
-                      <Select
-                        value={disarmSelectValue}
-                        onValueChange={(value) =>
-                          setSthmConfig((prev) => ({
-                            ...prev,
-                            disarmDeviceId: value === STHM_NOT_CONFIGURED ? "" : value
-                          }))
-                        }
-                        disabled={!smartthingsStatus?.isConnected || loadingSmartThingsDevices || switchDevices.length === 0}
-                      >
-                        <SelectTrigger className="mt-1">
-                          <SelectValue placeholder={smartthingsStatus?.isConnected ? "Select virtual switch" : "Connect SmartThings first"} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value={STHM_NOT_CONFIGURED}>Not configured</SelectItem>
-                          {switchDevices.map((device: any) => (
-                            <SelectItem key={device.deviceId} value={device.deviceId}>
-                              {getDeviceDisplayName(device)}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">Disarm Switch</label>
+                        <DevicePicker
+                          devices={switchPickerDevices}
+                          value={disarmSelectValue}
+                          onValueChange={(value) =>
+                            setSthmConfig((prev) => ({
+                              ...prev,
+                              disarmDeviceId: value === STHM_NOT_CONFIGURED ? "" : value
+                            }))
+                          }
+                          disabled={!smartthingsStatus?.isConnected || loadingSmartThingsDevices || switchDevices.length === 0}
+                          placeholder={smartthingsStatus?.isConnected ? "Select virtual switch" : "Connect SmartThings first"}
+                          additionalGroups={[{
+                            key: "none",
+                            items: [{ value: STHM_NOT_CONFIGURED, label: "Not configured", keywords: ["none", "not configured"] }]
+                          }]}
+                        />
                       <p className="text-xs text-muted-foreground">
                         Link to the switch that turns on when STHM is disarmed.
                       </p>
                     </div>
 
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">Arm Stay Switch</label>
-                      <Select
-                        value={armStaySelectValue}
-                        onValueChange={(value) =>
-                          setSthmConfig((prev) => ({
-                            ...prev,
-                            armStayDeviceId: value === STHM_NOT_CONFIGURED ? "" : value
-                          }))
-                        }
-                        disabled={!smartthingsStatus?.isConnected || loadingSmartThingsDevices || switchDevices.length === 0}
-                      >
-                        <SelectTrigger className="mt-1">
-                          <SelectValue placeholder={smartthingsStatus?.isConnected ? "Select virtual switch" : "Connect SmartThings first"} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value={STHM_NOT_CONFIGURED}>Not configured</SelectItem>
-                          {switchDevices.map((device: any) => (
-                            <SelectItem key={device.deviceId} value={device.deviceId}>
-                              {getDeviceDisplayName(device)}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">Arm Stay Switch</label>
+                        <DevicePicker
+                          devices={switchPickerDevices}
+                          value={armStaySelectValue}
+                          onValueChange={(value) =>
+                            setSthmConfig((prev) => ({
+                              ...prev,
+                              armStayDeviceId: value === STHM_NOT_CONFIGURED ? "" : value
+                            }))
+                          }
+                          disabled={!smartthingsStatus?.isConnected || loadingSmartThingsDevices || switchDevices.length === 0}
+                          placeholder={smartthingsStatus?.isConnected ? "Select virtual switch" : "Connect SmartThings first"}
+                          additionalGroups={[{
+                            key: "none",
+                            items: [{ value: STHM_NOT_CONFIGURED, label: "Not configured", keywords: ["none", "not configured"] }]
+                          }]}
+                        />
                       <p className="text-xs text-muted-foreground">
                         Link to the switch that should be on while STHM is Armed (Stay).
                       </p>
                     </div>
 
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">Silence Switch</label>
-                      <Select
-                        value={silenceSelectValue}
-                        onValueChange={(value) =>
-                          setSthmConfig((prev) => ({
-                            ...prev,
-                            silenceDeviceId: value === STHM_NOT_CONFIGURED ? "" : value
-                          }))
-                        }
-                        disabled={!smartthingsStatus?.isConnected || loadingSmartThingsDevices || switchDevices.length === 0}
-                      >
-                        <SelectTrigger className="mt-1">
-                          <SelectValue placeholder={smartthingsStatus?.isConnected ? "Select virtual switch" : "Connect SmartThings first"} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value={STHM_NOT_CONFIGURED}>Not configured</SelectItem>
-                          {switchDevices.map((device: any) => (
-                            <SelectItem key={device.deviceId} value={device.deviceId}>
-                              {getDeviceDisplayName(device)}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">Silence Switch</label>
+                        <DevicePicker
+                          devices={switchPickerDevices}
+                          value={silenceSelectValue}
+                          onValueChange={(value) =>
+                            setSthmConfig((prev) => ({
+                              ...prev,
+                              silenceDeviceId: value === STHM_NOT_CONFIGURED ? "" : value
+                            }))
+                          }
+                          disabled={!smartthingsStatus?.isConnected || loadingSmartThingsDevices || switchDevices.length === 0}
+                          placeholder={smartthingsStatus?.isConnected ? "Select virtual switch" : "Connect SmartThings first"}
+                          additionalGroups={[{
+                            key: "none",
+                            items: [{ value: STHM_NOT_CONFIGURED, label: "Not configured", keywords: ["none", "not configured"] }]
+                          }]}
+                        />
                       <p className="text-xs text-muted-foreground">
                         Optional. Link to a switch that triggers your SmartThings silence/reset routine after HomeBrain disarms and quiets alarm outputs.
                       </p>
                     </div>
 
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">Arm Away Switch</label>
-                      <Select
-                        value={armAwaySelectValue}
-                        onValueChange={(value) =>
-                          setSthmConfig((prev) => ({
-                            ...prev,
-                            armAwayDeviceId: value === STHM_NOT_CONFIGURED ? "" : value
-                          }))
-                        }
-                        disabled={!smartthingsStatus?.isConnected || loadingSmartThingsDevices || switchDevices.length === 0}
-                      >
-                        <SelectTrigger className="mt-1">
-                          <SelectValue placeholder={smartthingsStatus?.isConnected ? "Select virtual switch" : "Connect SmartThings first"} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value={STHM_NOT_CONFIGURED}>Not configured</SelectItem>
-                          {switchDevices.map((device: any) => (
-                            <SelectItem key={device.deviceId} value={device.deviceId}>
-                              {getDeviceDisplayName(device)}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">Arm Away Switch</label>
+                        <DevicePicker
+                          devices={switchPickerDevices}
+                          value={armAwaySelectValue}
+                          onValueChange={(value) =>
+                            setSthmConfig((prev) => ({
+                              ...prev,
+                              armAwayDeviceId: value === STHM_NOT_CONFIGURED ? "" : value
+                            }))
+                          }
+                          disabled={!smartthingsStatus?.isConnected || loadingSmartThingsDevices || switchDevices.length === 0}
+                          placeholder={smartthingsStatus?.isConnected ? "Select virtual switch" : "Connect SmartThings first"}
+                          additionalGroups={[{
+                            key: "none",
+                            items: [{ value: STHM_NOT_CONFIGURED, label: "Not configured", keywords: ["none", "not configured"] }]
+                          }]}
+                        />
                       <p className="text-xs text-muted-foreground">
                         Link to the switch that should be on while STHM is Armed (Away).
                       </p>

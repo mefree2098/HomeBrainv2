@@ -38,6 +38,7 @@ import {
   type WallPanelUsbPort
 } from "@/api/panels"
 import { getScenes, type SceneRecord } from "@/api/scenes"
+import { DevicePicker } from "@/components/devices/DevicePicker"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -1678,48 +1679,38 @@ export function HardwareOrbsTab() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-4 md:grid-cols-3">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">Thermostat device</label>
-                    <Select
-                      value={draft.thermostatDeviceId || SELECT_NONE}
-                      onValueChange={(value) =>
-                        mutateSelectedDraft((current) => ({ ...current, thermostatDeviceId: value === SELECT_NONE ? "" : value }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Choose a thermostat" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value={SELECT_NONE}>Not configured</SelectItem>
-                        {thermostatCandidates.map((device) => (
-                          <SelectItem key={getDeviceId(device)} value={getDeviceId(device)}>
-                            {getDeviceLabel(device)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">Temperature sensor</label>
-                    <Select
-                      value={draft.sensorDeviceId || SELECT_NONE}
-                      onValueChange={(value) =>
-                        mutateSelectedDraft((current) => ({ ...current, sensorDeviceId: value === SELECT_NONE ? "" : value }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Optional sensor override" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value={SELECT_NONE}>Use thermostat reading</SelectItem>
-                        {sensorCandidates.map((device) => (
-                          <SelectItem key={getDeviceId(device)} value={getDeviceId(device)}>
-                            {getDeviceLabel(device)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Thermostat device</label>
+                      <DevicePicker
+                        devices={thermostatCandidates}
+                        value={draft.thermostatDeviceId || SELECT_NONE}
+                        onValueChange={(value) =>
+                          mutateSelectedDraft((current) => ({ ...current, thermostatDeviceId: value === SELECT_NONE ? "" : value }))
+                        }
+                        placeholder="Choose a thermostat"
+                        searchPlaceholder="Search thermostats..."
+                        additionalGroups={[{
+                          key: "none",
+                          items: [{ value: SELECT_NONE, label: "Not configured", keywords: ["none", "not configured"] }]
+                        }]}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Temperature sensor</label>
+                      <DevicePicker
+                        devices={sensorCandidates}
+                        value={draft.sensorDeviceId || SELECT_NONE}
+                        onValueChange={(value) =>
+                          mutateSelectedDraft((current) => ({ ...current, sensorDeviceId: value === SELECT_NONE ? "" : value }))
+                        }
+                        placeholder="Optional sensor override"
+                        searchPlaceholder="Search sensors..."
+                        additionalGroups={[{
+                          key: "none",
+                          items: [{ value: SELECT_NONE, label: "Use thermostat reading", keywords: ["none", "thermostat", "reading"] }]
+                        }]}
+                      />
+                    </div>
                   <div className="space-y-2">
                     <label className="text-sm font-medium">Long-press bedtime scene</label>
                     <Select
@@ -1755,30 +1746,24 @@ export function HardwareOrbsTab() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">Light or switch</label>
-                    <Select
-                      value={draft.roomLightDeviceId || SELECT_NONE}
-                      onValueChange={(value) =>
-                        mutateSelectedDraft((current) => ({
-                          ...current,
-                          roomLightDeviceId: value === SELECT_NONE ? "" : value
-                        }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Choose the room light" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value={SELECT_NONE}>Not configured</SelectItem>
-                        {lightSurfaceCandidates.map((device) => (
-                          <SelectItem key={getDeviceId(device)} value={getDeviceId(device)}>
-                            {getDeviceLabel(device)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Light or switch</label>
+                      <DevicePicker
+                        devices={lightSurfaceCandidates}
+                        value={draft.roomLightDeviceId || SELECT_NONE}
+                        onValueChange={(value) =>
+                          mutateSelectedDraft((current) => ({
+                            ...current,
+                            roomLightDeviceId: value === SELECT_NONE ? "" : value
+                          }))
+                        }
+                        placeholder="Choose the room light"
+                        additionalGroups={[{
+                          key: "none",
+                          items: [{ value: SELECT_NONE, label: "Not configured", keywords: ["none", "not configured"] }]
+                        }]}
+                      />
+                    </div>
                   <div className="rounded-xl border border-border/60 bg-background/70 p-4">
                     <p className="text-sm font-medium">How this surface behaves</p>
                     <p className="mt-2 text-sm text-muted-foreground">
@@ -1989,27 +1974,21 @@ export function HardwareOrbsTab() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">Night-light device</label>
-                    <Select
-                      value={draft.quietNightLightDeviceId || SELECT_NONE}
-                      onValueChange={(value) =>
-                        mutateSelectedDraft((current) => ({ ...current, quietNightLightDeviceId: value === SELECT_NONE ? "" : value }))
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Optional device" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value={SELECT_NONE}>Not configured</SelectItem>
-                        {quietNightLightCandidates.map((device) => (
-                          <SelectItem key={getDeviceId(device)} value={getDeviceId(device)}>
-                            {getDeviceLabel(device)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium">Night-light device</label>
+                      <DevicePicker
+                        devices={quietNightLightCandidates}
+                        value={draft.quietNightLightDeviceId || SELECT_NONE}
+                        onValueChange={(value) =>
+                          mutateSelectedDraft((current) => ({ ...current, quietNightLightDeviceId: value === SELECT_NONE ? "" : value }))
+                        }
+                        placeholder="Optional device"
+                        additionalGroups={[{
+                          key: "none",
+                          items: [{ value: SELECT_NONE, label: "Not configured", keywords: ["none", "not configured"] }]
+                        }]}
+                      />
+                    </div>
                 </CardContent>
               </Card>
 
