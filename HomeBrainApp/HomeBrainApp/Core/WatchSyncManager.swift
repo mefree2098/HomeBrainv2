@@ -80,10 +80,11 @@ final class WatchSyncManager: NSObject, ObservableObject {
 
             let session = WCSession.default
             try session.updateApplicationContext(payload)
+            session.transferUserInfo(payload)
             if session.isReachable {
-                session.sendMessage(payload, replyHandler: nil) { [weak self] error in
+                session.sendMessage(payload, replyHandler: nil) { error in
                     Task { @MainActor in
-                        self?.lastErrorMessage = error.localizedDescription
+                        print("Watch session immediate delivery failed: \(error.localizedDescription)")
                     }
                 }
             }
@@ -112,10 +113,11 @@ final class WatchSyncManager: NSObject, ObservableObject {
 
         let session = WCSession.default
         try? session.updateApplicationContext(payload)
+        session.transferUserInfo(payload)
         if session.isReachable {
-            session.sendMessage(payload, replyHandler: nil) { [weak self] error in
+            session.sendMessage(payload, replyHandler: nil) { error in
                 Task { @MainActor in
-                    self?.lastErrorMessage = error.localizedDescription
+                    print("Watch session clear immediate delivery failed: \(error.localizedDescription)")
                 }
             }
         }
@@ -201,6 +203,13 @@ extension WatchSyncManager: WCSessionDelegate {
     ) {
         Task { @MainActor in
             handleWatchMessage(message, replyHandler: replyHandler)
+            updateState(from: session)
+        }
+    }
+
+    nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+        Task { @MainActor in
+            handleWatchMessage(userInfo)
             updateState(from: session)
         }
     }
