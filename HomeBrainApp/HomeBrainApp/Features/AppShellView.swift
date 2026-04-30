@@ -117,6 +117,7 @@ struct AppShellView: View {
         case dashboard
         case weather
         case senseEnergy
+        case watchApp
         case rainMachine
         case dataPlatform
         case views
@@ -139,6 +140,7 @@ struct AppShellView: View {
             case .dashboard: return "Dashboard"
             case .weather: return "Weather"
             case .senseEnergy: return "Sense Energy"
+            case .watchApp: return "Watch App"
             case .rainMachine: return "RainMachine"
             case .dataPlatform: return "Data Platform"
             case .views: return "Views"
@@ -161,6 +163,7 @@ struct AppShellView: View {
             case .dashboard: return "Residence Overview"
             case .weather: return "Weather Command Deck"
             case .senseEnergy: return "Energy Command Deck"
+            case .watchApp: return "Wrist Control"
             case .rainMachine: return "Irrigation Command Deck"
             case .dataPlatform: return "Telemetry Atlas"
             case .views: return "Device Dashboards"
@@ -183,6 +186,7 @@ struct AppShellView: View {
             case .dashboard: return "Live Command Deck"
             case .weather: return "Atmospheric Systems"
             case .senseEnergy: return "Power Intelligence"
+            case .watchApp: return "Apple Watch"
             case .rainMachine: return "Irrigation Systems"
             case .dataPlatform: return "Historical Intelligence"
             case .views: return "Room Presets"
@@ -205,6 +209,7 @@ struct AppShellView: View {
             case .dashboard: return "house"
             case .weather: return "cloud.sun"
             case .senseEnergy: return "bolt.fill"
+            case .watchApp: return "applewatch"
             case .rainMachine: return "cloud.rain"
             case .dataPlatform: return "chart.xyaxis.line"
             case .views: return "rectangle.3.group"
@@ -1468,6 +1473,12 @@ struct AppShellView: View {
                 UIPreviewModuleView(section: section)
             } else {
                 SenseEnergyView()
+            }
+        case .watchApp:
+            if previewMode {
+                UIPreviewModuleView(section: section)
+            } else {
+                WatchAppView()
             }
         case .rainMachine:
             if previewMode {

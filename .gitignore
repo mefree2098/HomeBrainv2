@@ -38,6 +38,8 @@ client/dist/
 
 HomeBrainApp/**/xcuserdata/
 HomeBrainApp/**/.DS_Store
+HomeBrainWatch/**/xcuserdata/
+HomeBrainWatch/**/.DS_Store
 
 node_modules/
 uploads

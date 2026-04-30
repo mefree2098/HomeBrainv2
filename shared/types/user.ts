@@ -1,6 +1,13 @@
 export type UserRole = "admin" | "user"
 export type UserPlatform = "homebrain" | "axiom"
 export type UserPlatforms = Record<UserPlatform, boolean>
+export type WatchSection = "security" | "lights" | "power" | "weather"
+export type WatchPreferences = {
+  sections: WatchSection[]
+  primaryRoom: string
+  lightDeviceIds: string[]
+  defaultLightBrightness: number
+}
 
 export const USER_ROLES = ["admin", "user"] as const
 export const USER_PLATFORMS = ["homebrain", "axiom"] as const
@@ -30,5 +37,6 @@ export type User = {
   lastLoginAt: string
   isActive: boolean
   platforms: UserPlatforms
+  watchPreferences?: WatchPreferences
   defaultRedirectUrl?: string | null
 }

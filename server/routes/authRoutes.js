@@ -16,7 +16,7 @@ const {
 } = require('../utils/authCookies');
 
 const router = express.Router();
-const TOKEN_JSON_CLIENT_TYPES = new Set(['ios', 'android', 'desktop', 'api']);
+const TOKEN_JSON_CLIENT_TYPES = new Set(['ios', 'android', 'desktop', 'api', 'watchos']);
 
 function trimString(value, fallback = '') {
   return typeof value === 'string' ? value.trim() : fallback;

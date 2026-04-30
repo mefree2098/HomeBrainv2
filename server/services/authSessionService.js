@@ -10,7 +10,7 @@ const DEFAULT_SESSION_MAX_AGE_DAYS = 30;
 const DEFAULT_IOS_SESSION_MAX_AGE_DAYS = 365;
 const MIN_SESSION_MAX_AGE_DAYS = 1;
 const MAX_SESSION_MAX_AGE_DAYS = 3650;
-const SESSION_CLIENT_TYPES = new Set(['ios', 'web', 'android', 'desktop', 'api', 'unknown']);
+const SESSION_CLIENT_TYPES = new Set(['ios', 'watchos', 'web', 'android', 'desktop', 'api', 'unknown']);
 
 function trimString(value, fallback = '') {
   return typeof value === 'string' ? value.trim() : fallback;
@@ -138,7 +138,7 @@ async function getSettingsSessionLifetimeDays(fallback) {
 async function getSessionLifetimeDays(clientType = 'unknown') {
   const normalizedClientType = normalizeClientType(clientType);
 
-  if (normalizedClientType === 'ios') {
+  if (normalizedClientType === 'ios' || normalizedClientType === 'watchos') {
     const iosEnvOverride = trimString(process.env.AUTH_IOS_SESSION_MAX_AGE_DAYS);
     if (iosEnvOverride) {
       return clampNumber(
