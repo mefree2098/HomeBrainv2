@@ -75,7 +75,7 @@ export function WatchApp() {
   const { toast } = useToast()
   const [draftConfig, setDraftConfig] = useState<WatchConfig>(DEFAULT_WATCH_CONFIG)
   const [availableRooms, setAvailableRooms] = useState<WatchRoomSummary[]>([])
-  const [selectedRoomDevices, setSelectedRoomDevices] = useState<WatchLightDevice[]>([])
+  const [availableLightDevices, setAvailableLightDevices] = useState<WatchLightDevice[]>([])
   const [dashboard, setDashboard] = useState<WatchDashboard | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -85,6 +85,25 @@ export function WatchApp() {
     () => availableRooms.find((room) => room.name === draftConfig.primaryRoom) || null,
     [availableRooms, draftConfig.primaryRoom]
   )
+
+  const lightDevicesByRoom = useMemo(() => {
+    const groups = new Map<string, WatchLightDevice[]>()
+    for (const device of availableLightDevices) {
+      const room = device.room || "Unassigned"
+      groups.set(room, [...(groups.get(room) || []), device])
+    }
+    return Array.from(groups.entries())
+      .map(([room, devices]) => ({
+        room,
+        devices: devices.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }))
+      }))
+      .sort((left, right) => left.room.localeCompare(right.room, undefined, { sensitivity: "base" }))
+  }, [availableLightDevices])
+
+  const selectedLightDevices = useMemo(() => {
+    const selectedIds = new Set(draftConfig.lightDeviceIds)
+    return availableLightDevices.filter((device) => selectedIds.has(device.id))
+  }, [availableLightDevices, draftConfig.lightDeviceIds])
 
   const loadData = async (options: { quiet?: boolean } = {}) => {
     if (options.quiet) {
@@ -101,7 +120,7 @@ export function WatchApp() {
 
       setDraftConfig(configResponse.config || DEFAULT_WATCH_CONFIG)
       setAvailableRooms(configResponse.availableRooms || [])
-      setSelectedRoomDevices(configResponse.selectedRoomDevices || [])
+      setAvailableLightDevices(configResponse.availableLightDevices || configResponse.selectedRoomDevices || [])
       setDashboard(dashboardResponse.dashboard || null)
     } catch (error) {
       toast({
@@ -142,13 +161,24 @@ export function WatchApp() {
     })
   }
 
+  const updateRoomLightDevice = (room: string, deviceId: string) => {
+    const roomDeviceIds = new Set((lightDevicesByRoom.find((entry) => entry.room === room)?.devices || []).map((device) => device.id))
+    setDraftConfig((current) => {
+      const nextIds = current.lightDeviceIds.filter((id) => !roomDeviceIds.has(id))
+      if (deviceId !== "__all__") {
+        nextIds.push(deviceId)
+      }
+      return { ...current, lightDeviceIds: nextIds }
+    })
+  }
+
   const handleSave = async () => {
     setSaving(true)
     try {
       const response = await updateWatchConfig(draftConfig)
       setDraftConfig(response.config)
       setAvailableRooms(response.availableRooms || [])
-      setSelectedRoomDevices(response.selectedRoomDevices || [])
+      setAvailableLightDevices(response.availableLightDevices || response.selectedRoomDevices || [])
       const dashboardResponse = await getWatchDashboard()
       setDashboard(dashboardResponse.dashboard || null)
       toast({
@@ -253,7 +283,7 @@ export function WatchApp() {
                   value={draftConfig.primaryRoom || "__none"}
                   onValueChange={(value) => {
                     if (value !== "__none") {
-                      setDraftConfig((current) => ({ ...current, primaryRoom: value, lightDeviceIds: [] }))
+                      setDraftConfig((current) => ({ ...current, primaryRoom: value }))
                     }
                   }}
                 >
@@ -289,6 +319,47 @@ export function WatchApp() {
                 />
               </div>
 
+              <div className="space-y-3">
+                <label className="text-sm font-medium">Watch device per room</label>
+                <div className="grid gap-3 md:grid-cols-2">
+                  {lightDevicesByRoom.length === 0 ? (
+                    <div className="rounded-xl border border-border/60 bg-muted/20 px-3 py-3 text-sm text-muted-foreground">
+                      No compatible light devices found.
+                    </div>
+                  ) : (
+                    lightDevicesByRoom.map(({ room, devices }) => {
+                      const selectedDevice = devices.find((device) => draftConfig.lightDeviceIds.includes(device.id))
+                      return (
+                        <div key={room} className="rounded-xl border border-border/60 bg-background/70 px-3 py-3">
+                          <div className="mb-2 flex items-center justify-between gap-3">
+                            <p className="text-sm font-medium">{room}</p>
+                            <Badge variant="outline">{devices.length}</Badge>
+                          </div>
+                          <Select value={selectedDevice?.id || "__all__"} onValueChange={(value) => updateRoomLightDevice(room, value)}>
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__all__">All room lights</SelectItem>
+                              {devices.map((device) => (
+                                <SelectItem key={device.id} value={device.id}>
+                                  {device.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            {selectedDevice
+                              ? `${selectedDevice.isOnline ? "Online" : "Offline"} / ${selectedDevice.isOn ? "On" : "Off"}`
+                              : "All room lights"}
+                          </p>
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+              </div>
+
               <div className="rounded-xl border border-border/60 bg-muted/20 px-3 py-3">
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-sm font-medium">{selectedRoom?.name || draftConfig.primaryRoom || "No room selected"}</p>
@@ -297,13 +368,13 @@ export function WatchApp() {
                   </Badge>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {(selectedRoomDevices.length > 0 ? selectedRoomDevices.slice(0, 6) : lights?.devices?.slice(0, 6) || []).map((device) => (
+                  {(selectedLightDevices.length > 0 ? selectedLightDevices.slice(0, 6) : lights?.devices?.slice(0, 6) || []).map((device) => (
                     <Badge key={device.id} variant={device.isOn ? "default" : "outline"} className="max-w-full truncate">
                       {device.name}
                     </Badge>
                   ))}
-                  {selectedRoomDevices.length === 0 && !lights?.devices?.length ? (
-                    <span className="text-sm text-muted-foreground">No devices selected.</span>
+                  {selectedLightDevices.length === 0 && !lights?.devices?.length ? (
+                    <span className="text-sm text-muted-foreground">All room lights.</span>
                   ) : null}
                 </div>
               </div>

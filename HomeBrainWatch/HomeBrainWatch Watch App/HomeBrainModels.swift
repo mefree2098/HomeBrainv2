@@ -116,6 +116,21 @@ struct WatchLightDevice: Codable, Identifiable, Equatable {
     let dimmable: Bool
 }
 
+struct WatchLightRoom: Codable, Identifiable, Equatable {
+    var id: String { name }
+    let available: Bool?
+    let name: String
+    let room: String?
+    let totalCount: Int?
+    let onCount: Int?
+    let onlineCount: Int?
+    let dimmableCount: Int?
+    let averageBrightness: Int?
+    let defaultLightBrightness: Int?
+    let devices: [WatchLightDevice]?
+    let error: String?
+}
+
 struct WatchSecuritySection: Codable, Equatable {
     let available: Bool
     let alarmState: String?
@@ -143,6 +158,7 @@ struct WatchLightsSection: Codable, Equatable {
     let averageBrightness: Int?
     let defaultLightBrightness: Int?
     let devices: [WatchLightDevice]?
+    let rooms: [WatchLightRoom]?
     let error: String?
 }
 

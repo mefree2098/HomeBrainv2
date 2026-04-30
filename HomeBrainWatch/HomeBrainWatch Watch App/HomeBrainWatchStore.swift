@@ -143,13 +143,13 @@ final class HomeBrainWatchStore: ObservableObject {
         commandInFlight = nil
     }
 
-    func controlLights(action: String, brightness: Int? = nil) async {
+    func controlLights(room: String? = nil, action: String, brightness: Int? = nil) async {
         commandInFlight = "lights-\(action)"
         errorMessage = nil
 
         do {
             _ = try await withValidAccessToken { client, token in
-                try await client.controlLights(action: action, brightness: brightness, accessToken: token)
+                try await client.controlLights(room: room, action: action, brightness: brightness, accessToken: token)
             }
             await refreshDashboard()
         } catch {

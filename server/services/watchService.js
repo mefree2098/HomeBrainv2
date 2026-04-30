@@ -166,16 +166,13 @@ function summarizeLightDevice(device) {
   };
 }
 
-function buildLightSection(config, lightDevices = []) {
-  const room = normalizeString(config?.primaryRoom);
+function getConfiguredLightDevices(config, lightDevices = []) {
   const allowedIds = new Set(Array.isArray(config?.lightDeviceIds) ? config.lightDeviceIds : []);
-  const roomDevices = lightDevices.filter((device) => {
-    if (room && normalizeString(device?.room) !== room) {
-      return false;
-    }
 
-    return allowedIds.size === 0 || allowedIds.has(getDocumentId(device));
-  });
+  return lightDevices.filter((device) => allowedIds.size === 0 || allowedIds.has(getDocumentId(device)));
+}
+
+function buildRoomLightSection(room, config, roomDevices = []) {
   const devices = roomDevices.map(summarizeLightDevice).filter((device) => device.id);
   const onDevices = devices.filter((device) => device.isOn);
   const dimmableDevices = devices.filter((device) => device.dimmable);
@@ -188,6 +185,7 @@ function buildLightSection(config, lightDevices = []) {
 
   return {
     available: devices.length > 0,
+    name: room,
     room,
     totalCount: devices.length,
     onCount: onDevices.length,
@@ -196,6 +194,37 @@ function buildLightSection(config, lightDevices = []) {
     averageBrightness,
     defaultLightBrightness: config.defaultLightBrightness,
     devices
+  };
+}
+
+function buildLightRooms(config, lightDevices = []) {
+  const grouped = new Map();
+
+  for (const device of getConfiguredLightDevices(config, lightDevices)) {
+    const room = normalizeString(device?.room) || 'Unassigned';
+    const devices = grouped.get(room) || [];
+    devices.push(device);
+    grouped.set(room, devices);
+  }
+
+  return Array.from(grouped.entries())
+    .map(([room, devices]) => buildRoomLightSection(room, config, devices))
+    .sort((left, right) => left.name.localeCompare(right.name, undefined, {
+      sensitivity: 'base'
+    }));
+}
+
+function buildLightSection(config, lightDevices = []) {
+  const rooms = buildLightRooms(config, lightDevices);
+  const requestedRoom = normalizeString(config?.primaryRoom);
+  const selectedRoom = rooms.find((room) => room.name === requestedRoom)
+    || rooms[0]
+    || buildRoomLightSection(requestedRoom, config, []);
+
+  return {
+    ...selectedRoom,
+    room: selectedRoom.room || selectedRoom.name || requestedRoom,
+    rooms
   };
 }
 
@@ -251,7 +280,7 @@ function buildPowerSectionFromDashboard(dashboard) {
     dayKwh: Number.isFinite(Number(trends.day?.consumptionTotalKwh)) ? Number(trends.day.consumptionTotalKwh) : null,
     projectedMonthUsd: Number.isFinite(Number(costs.projectedMonthUsd)) ? Number(costs.projectedMonthUsd) : null,
     activeDevices: (Array.isArray(dashboard?.activeDevices) ? dashboard.activeDevices : [])
-      .slice(0, 4)
+      .slice(0, 6)
       .map((device) => ({
         name: normalizeString(device?.name) || 'Device',
         powerW: Number.isFinite(Number(device?.powerW)) ? Number(device.powerW) : 0,
@@ -307,14 +336,22 @@ class WatchService {
       ...normalized,
       primaryRoom: resolvePrimaryRoom(normalized, availableRooms)
     };
-    const selectedRoomDevices = lightDevices
-      .filter((device) => !config.primaryRoom || normalizeString(device?.room) === config.primaryRoom)
+    const availableLightDevices = lightDevices
       .map(summarizeLightDevice)
       .filter((device) => device.id);
+    const selectedIds = new Set(config.lightDeviceIds);
+    const selectedRoomDevices = availableLightDevices.filter((device) => {
+      if (selectedIds.size > 0) {
+        return selectedIds.has(device.id);
+      }
+
+      return !config.primaryRoom || device.room === config.primaryRoom;
+    });
 
     return {
       config,
       availableRooms,
+      availableLightDevices,
       selectedRoomDevices
     };
   }
@@ -504,6 +541,7 @@ module.exports = watchService;
 module.exports.WatchService = WatchService;
 module.exports.__private__ = {
   buildAvailableRooms,
+  buildLightRooms,
   buildLightSection,
   buildPowerSectionFromDashboard,
   buildWeatherSectionFromPayload,
