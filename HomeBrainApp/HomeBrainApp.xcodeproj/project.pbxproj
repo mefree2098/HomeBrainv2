@@ -6,8 +6,37 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		A1B2C3D42FA5000000000001 /* HomeBrainWatch Watch App.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = A1B2C3D42FA5000000000004 /* HomeBrainWatch Watch App.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		A1B2C3D42FA5000000000002 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 14B6716A2F50F83300C98D01 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A1B2C3D42FA5000000000007;
+			remoteInfo = "HomeBrainWatch Watch App";
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A1B2C3D42FA5000000000003 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				A1B2C3D42FA5000000000001 /* HomeBrainWatch Watch App.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		14B671722F50F83300C98D01 /* HomeBrainApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HomeBrainApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1B2C3D42FA5000000000004 /* HomeBrainWatch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "HomeBrainWatch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -16,10 +45,22 @@
 			path = HomeBrainApp;
 			sourceTree = "<group>";
 		};
+		A1B2C3D42FA5000000000005 /* HomeBrainWatch Watch App */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "../HomeBrainWatch/HomeBrainWatch Watch App";
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		14B6716F2F50F83300C98D01 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1B2C3D42FA5000000000006 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -33,6 +74,7 @@
 			isa = PBXGroup;
 			children = (
 				14B671742F50F83300C98D01 /* HomeBrainApp */,
+				A1B2C3D42FA5000000000005 /* HomeBrainWatch Watch App */,
 				14B671732F50F83300C98D01 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +83,7 @@
 			isa = PBXGroup;
 			children = (
 				14B671722F50F83300C98D01 /* HomeBrainApp.app */,
+				A1B2C3D42FA5000000000004 /* HomeBrainWatch Watch App.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -55,10 +98,12 @@
 				14B6716E2F50F83300C98D01 /* Sources */,
 				14B6716F2F50F83300C98D01 /* Frameworks */,
 				14B671702F50F83300C98D01 /* Resources */,
+				A1B2C3D42FA5000000000003 /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				A1B2C3D42FA500000000000A /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				14B671742F50F83300C98D01 /* HomeBrainApp */,
@@ -68,6 +113,28 @@
 			);
 			productName = HomeBrainApp;
 			productReference = 14B671722F50F83300C98D01 /* HomeBrainApp.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A1B2C3D42FA5000000000007 /* HomeBrainWatch Watch App */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1B2C3D42FA500000000000D /* Build configuration list for PBXNativeTarget "HomeBrainWatch Watch App" */;
+			buildPhases = (
+				A1B2C3D42FA5000000000009 /* Sources */,
+				A1B2C3D42FA5000000000006 /* Frameworks */,
+				A1B2C3D42FA5000000000008 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A1B2C3D42FA5000000000005 /* HomeBrainWatch Watch App */,
+			);
+			name = "HomeBrainWatch Watch App";
+			packageProductDependencies = (
+			);
+			productName = "HomeBrainWatch Watch App";
+			productReference = A1B2C3D42FA5000000000004 /* HomeBrainWatch Watch App.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -82,6 +149,9 @@
 				TargetAttributes = {
 					14B671712F50F83300C98D01 = {
 						CreatedOnToolsVersion = 26.0;
+					};
+					A1B2C3D42FA5000000000007 = {
+						CreatedOnToolsVersion = 26.4;
 					};
 				};
 			};
@@ -100,12 +170,20 @@
 			projectRoot = "";
 			targets = (
 				14B671712F50F83300C98D01 /* HomeBrainApp */,
+				A1B2C3D42FA5000000000007 /* HomeBrainWatch Watch App */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		14B671702F50F83300C98D01 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A1B2C3D42FA5000000000008 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -122,7 +200,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A1B2C3D42FA5000000000009 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A1B2C3D42FA500000000000A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A1B2C3D42FA5000000000007 /* HomeBrainWatch Watch App */;
+			targetProxy = A1B2C3D42FA5000000000002 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		14B6717D2F50F83400C98D01 /* Debug */ = {
@@ -326,6 +419,79 @@
 			};
 			name = Release;
 		};
+		A1B2C3D42FA500000000000B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3P6SLH7MFX;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = HomeBrainWatch;
+				INFOPLIST_KEY_NSAppTransportSecurity = "{NSAllowsArbitraryLoads = YES; NSAllowsLocalNetworking = YES;}";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "HomeBrainWatch connects to your HomeBrain hub on your local network.";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = NTechR.HomeBrainApp;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = NTechR.HomeBrainApp.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Debug;
+		};
+		A1B2C3D42FA500000000000C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3P6SLH7MFX;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = HomeBrainWatch;
+				INFOPLIST_KEY_NSAppTransportSecurity = "{NSAllowsArbitraryLoads = YES; NSAllowsLocalNetworking = YES;}";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "HomeBrainWatch connects to your HomeBrain hub on your local network.";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
+				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = NTechR.HomeBrainApp;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = NTechR.HomeBrainApp.watchkitapp;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 4;
+				VALIDATE_PRODUCT = YES;
+				WATCHOS_DEPLOYMENT_TARGET = 26.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -343,6 +509,15 @@
 			buildConfigurations = (
 				14B671802F50F83400C98D01 /* Debug */,
 				14B671812F50F83400C98D01 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A1B2C3D42FA500000000000D /* Build configuration list for PBXNativeTarget "HomeBrainWatch Watch App" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1B2C3D42FA500000000000B /* Debug */,
+				A1B2C3D42FA500000000000C /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

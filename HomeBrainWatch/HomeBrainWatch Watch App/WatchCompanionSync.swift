@@ -3,6 +3,7 @@ import WatchConnectivity
 
 final class WatchCompanionSync: NSObject, WCSessionDelegate {
     private weak var store: HomeBrainWatchStore?
+    private var pendingSessionRequest = false
 
     init(store: HomeBrainWatchStore) {
         self.store = store
@@ -33,34 +34,40 @@ final class WatchCompanionSync: NSObject, WCSessionDelegate {
 
         let session = WCSession.default
         guard session.activationState == .activated else {
+            pendingSessionRequest = true
             Task { @MainActor in
                 store?.companionStatusMessage = "Waiting for iPhone connection..."
             }
             return
         }
 
+        let request: [String: Any] = [
+            "type": "homebrain.watch.requestSession",
+            "watchDeviceId": store?.deviceID ?? ""
+        ]
+
         guard session.isReachable else {
             if !session.receivedApplicationContext.isEmpty {
                 handle(session.receivedApplicationContext)
             } else {
+                session.transferUserInfo(request)
                 Task { @MainActor in
-                    store?.companionStatusMessage = "Open HomeBrain on iPhone, then try again."
+                    store?.companionStatusMessage = "Sync requested. Open HomeBrain on iPhone if it does not finish."
                 }
             }
             return
         }
 
-        session.sendMessage([
-            "type": "homebrain.watch.requestSession",
-            "watchDeviceId": store?.deviceID ?? ""
-        ], replyHandler: { [weak self] reply in
+        session.sendMessage(request, replyHandler: { [weak self] reply in
             guard let message = reply["message"] as? String else { return }
             Task { @MainActor in
                 self?.store?.companionStatusMessage = message
             }
         }, errorHandler: { [weak self] error in
+            session.transferUserInfo(request)
             Task { @MainActor in
-                self?.store?.companionStatusMessage = error.localizedDescription
+                print("Watch session request immediate delivery failed: \(error.localizedDescription)")
+                self?.store?.companionStatusMessage = "Sync requested. Open HomeBrain on iPhone if it does not finish."
             }
         })
     }
@@ -81,6 +88,9 @@ final class WatchCompanionSync: NSObject, WCSessionDelegate {
                 store?.companionStatusMessage = error.localizedDescription
             } else if !session.receivedApplicationContext.isEmpty {
                 store?.applyCompanionPayload(session.receivedApplicationContext)
+            } else if pendingSessionRequest {
+                pendingSessionRequest = false
+                requestSessionSync()
             }
         }
     }
@@ -96,5 +106,9 @@ final class WatchCompanionSync: NSObject, WCSessionDelegate {
 
     func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
         handle(message)
+    }
+
+    func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any] = [:]) {
+        handle(userInfo)
     }
 }
