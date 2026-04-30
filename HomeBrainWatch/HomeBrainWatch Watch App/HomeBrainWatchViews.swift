@@ -206,17 +206,26 @@ struct SecurityPage: View {
                 HeaderBlock(title: "Security", subtitle: security?.stateLabel ?? "Unavailable", symbol: "shield.lefthalf.filled", tint: security?.isTriggered == true ? .red : .green)
 
                 WatchPanel {
-                    HStack(alignment: .firstTextBaseline) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(security?.stateLabel ?? "--")
-                                .font(.system(size: 24, weight: .bold, design: .rounded))
-                            Text(security?.isOnline == false ? "Offline" : "Online")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .firstTextBaseline) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(security?.stateLabel ?? "--")
+                                    .font(.system(size: 24, weight: .bold, design: .rounded))
+                                Text(security?.isOnline == false ? "Offline" : "Online")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: security?.isTriggered == true ? "exclamationmark.triangle.fill" : "checkmark.seal.fill")
+                                .foregroundStyle(security?.isTriggered == true ? .red : .green)
                         }
-                        Spacer()
-                        Image(systemName: security?.isTriggered == true ? "exclamationmark.triangle.fill" : "checkmark.seal.fill")
-                            .foregroundStyle(security?.isTriggered == true ? .red : .green)
+
+                        VStack(spacing: 7) {
+                            SecurityButton(action: .armStay, pendingAction: $pendingAction)
+                            SecurityButton(action: .armAway, pendingAction: $pendingAction)
+                            SecurityButton(action: .disarm, pendingAction: $pendingAction)
+                        }
+                        .disabled(store.commandInFlight != nil || security?.available != true)
                     }
                 }
 
@@ -228,13 +237,6 @@ struct SecurityPage: View {
                     MetricChip(title: "Locks", value: "\(security?.unlockedDoorCount ?? 0) open")
                     MetricChip(title: "Sensors", value: "\(security?.sensorCount ?? 0)")
                 }
-
-                VStack(spacing: 7) {
-                    SecurityButton(action: .armStay, pendingAction: $pendingAction)
-                    SecurityButton(action: .armAway, pendingAction: $pendingAction)
-                    SecurityButton(action: .disarm, pendingAction: $pendingAction)
-                }
-                .disabled(store.commandInFlight != nil)
 
                 if let message = security?.error ?? store.errorMessage {
                     Text(message)
@@ -292,23 +294,66 @@ struct LightsPage: View {
     @ObservedObject var store: HomeBrainWatchStore
     let lights: WatchLightsSection?
     @State private var brightness: Double = 70
+    @State private var selectedRoomName = ""
+
+    private var roomOptions: [WatchLightRoom] {
+        if let rooms = lights?.rooms, !rooms.isEmpty {
+            return rooms
+        }
+
+        guard let lights else {
+            return []
+        }
+
+        let fallbackName = lights.room?.isEmpty == false ? lights.room! : "Lights"
+        return [
+            WatchLightRoom(
+                available: lights.available,
+                name: fallbackName,
+                room: fallbackName,
+                totalCount: lights.totalCount,
+                onCount: lights.onCount,
+                onlineCount: lights.onlineCount,
+                dimmableCount: lights.dimmableCount,
+                averageBrightness: lights.averageBrightness,
+                defaultLightBrightness: lights.defaultLightBrightness,
+                devices: lights.devices,
+                error: lights.error
+            )
+        ]
+    }
+
+    private var selectedRoom: WatchLightRoom? {
+        roomOptions.first { $0.name == selectedRoomName }
+            ?? roomOptions.first { $0.name == lights?.room }
+            ?? roomOptions.first
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 10) {
-                HeaderBlock(title: "Lights", subtitle: lights?.room ?? "No room", symbol: "lightbulb.fill", tint: .yellow)
+                HeaderBlock(title: "Lights", subtitle: selectedRoom?.name ?? lights?.room ?? "No room", symbol: "lightbulb.fill", tint: .yellow)
+
+                if roomOptions.count > 1 {
+                    Picker("Room", selection: $selectedRoomName) {
+                        ForEach(roomOptions) { room in
+                            Text(room.name).tag(room.name)
+                        }
+                    }
+                    .pickerStyle(.navigationLink)
+                }
 
                 WatchPanel {
                     HStack(alignment: .center) {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text("\(lights?.onCount ?? 0)/\(lights?.totalCount ?? 0)")
+                            Text("\(selectedRoom?.onCount ?? 0)/\(selectedRoom?.totalCount ?? 0)")
                                 .font(.system(size: 28, weight: .bold, design: .rounded))
                             Text("lights on")
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Text("\(lights?.averageBrightness ?? 0)%")
+                        Text("\(selectedRoom?.averageBrightness ?? 0)%")
                             .font(.headline)
                             .foregroundStyle(.yellow)
                     }
@@ -316,15 +361,15 @@ struct LightsPage: View {
 
                 HStack(spacing: 8) {
                     Button("On") {
-                        Task { await store.controlLights(action: "turn_on", brightness: Int(brightness.rounded())) }
+                        Task { await store.controlLights(room: selectedRoom?.name, action: "turn_on", brightness: Int(brightness.rounded())) }
                     }
                     .tint(.yellow)
                     Button("Off") {
-                        Task { await store.controlLights(action: "turn_off") }
+                        Task { await store.controlLights(room: selectedRoom?.name, action: "turn_off") }
                     }
                     .tint(.gray)
                 }
-                .disabled(store.commandInFlight != nil || lights?.available != true)
+                .disabled(store.commandInFlight != nil || selectedRoom?.available != true)
 
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
@@ -338,20 +383,31 @@ struct LightsPage: View {
                     }
                     Slider(value: $brightness, in: 1...100, step: 1)
                     Button {
-                        Task { await store.controlLights(action: "set_brightness", brightness: Int(brightness.rounded())) }
+                        Task { await store.controlLights(room: selectedRoom?.name, action: "set_brightness", brightness: Int(brightness.rounded())) }
                     } label: {
                         Label("Set", systemImage: "slider.horizontal.3")
                     }
-                    .disabled(store.commandInFlight != nil || lights?.available != true || lights?.dimmableCount == 0)
+                    .disabled(store.commandInFlight != nil || selectedRoom?.available != true || selectedRoom?.dimmableCount == 0)
                 }
 
-                ForEach((lights?.devices ?? []).prefix(4)) { device in
+                HStack(spacing: 8) {
+                    MetricChip(title: "Online", value: "\(selectedRoom?.onlineCount ?? 0)")
+                    MetricChip(title: "Dimmable", value: "\(selectedRoom?.dimmableCount ?? 0)")
+                }
+
+                ForEach((selectedRoom?.devices ?? []).prefix(5)) { device in
                     MiniStatusRow(
                         symbol: device.isOn ? "lightbulb.fill" : "lightbulb",
                         title: device.name,
                         value: device.isOnline ? (device.isOn ? "On" : "Off") : "Offline",
                         tint: device.isOn ? .yellow : .secondary
                     )
+                }
+
+                if roomOptions.isEmpty {
+                    Text("No watch light devices configured.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
 
                 if let message = lights?.error ?? store.errorMessage {
@@ -363,8 +419,31 @@ struct LightsPage: View {
             .padding(.vertical, 8)
         }
         .onAppear {
-            brightness = Double(lights?.defaultLightBrightness ?? lights?.averageBrightness ?? 70)
+            syncLightState()
         }
+        .onChange(of: selectedRoomName) { _, _ in
+            syncBrightnessFromSelectedRoom()
+        }
+        .onChange(of: lights?.room ?? "") { _, _ in
+            syncLightState()
+        }
+    }
+
+    private func syncLightState() {
+        let names = roomOptions.map(\.name)
+        if !names.contains(selectedRoomName) {
+            selectedRoomName = names.first { $0 == lights?.room } ?? names.first ?? ""
+        }
+        syncBrightnessFromSelectedRoom()
+    }
+
+    private func syncBrightnessFromSelectedRoom() {
+        let suggested = selectedRoom?.defaultLightBrightness
+            ?? selectedRoom?.averageBrightness
+            ?? lights?.defaultLightBrightness
+            ?? lights?.averageBrightness
+            ?? 70
+        brightness = Double(max(1, min(100, suggested)))
     }
 }
 
@@ -388,15 +467,30 @@ struct PowerPage: View {
 
                 HStack(spacing: 8) {
                     MetricChip(title: "Always", value: formatWatts(power?.alwaysOnW))
-                    MetricChip(title: "Today", value: formatKwh(power?.dayKwh))
+                    MetricChip(title: "Net", value: formatWatts(power?.netW))
                 }
                 HStack(spacing: 8) {
                     MetricChip(title: "Solar", value: formatWatts(power?.solarW))
-                    MetricChip(title: "Active", value: "\(power?.activeDeviceCount ?? 0)")
+                    MetricChip(title: "Today", value: formatKwh(power?.dayKwh))
+                }
+                HStack(spacing: 8) {
+                    MetricChip(title: "Cost", value: formatCurrencyPerHour(power?.currentCostUsdPerHour))
+                    MetricChip(title: "Month", value: formatCurrency(power?.projectedMonthUsd))
                 }
 
-                ForEach((power?.activeDevices ?? []).prefix(3)) { device in
-                    MiniStatusRow(symbol: "bolt.circle.fill", title: device.name, value: formatWatts(device.powerW), tint: .cyan)
+                MiniStatusRow(symbol: "number.circle.fill", title: "Active devices", value: "\(power?.activeDeviceCount ?? 0)", tint: .cyan)
+
+                ForEach((power?.activeDevices ?? []).prefix(5)) { device in
+                    MiniStatusRow(
+                        symbol: "bolt.circle.fill",
+                        title: device.name,
+                        value: "\(formatWatts(device.powerW)) \(formatPercent(device.sharePct))",
+                        tint: .cyan
+                    )
+                }
+
+                if let observedAt = power?.observedAt {
+                    MiniStatusRow(symbol: "clock.fill", title: "Updated", value: formatTime(observedAt), tint: .secondary)
                 }
 
                 if let message = power?.error {
@@ -434,8 +528,16 @@ struct WeatherPage: View {
                     MetricChip(title: "Low", value: formatTemp(weather?.lowF))
                 }
                 HStack(spacing: 8) {
+                    MetricChip(title: "Feels", value: formatTemp(weather?.apparentTemperatureF))
+                    MetricChip(title: "Humidity", value: formatPercent(weather?.humidity))
+                }
+                HStack(spacing: 8) {
                     MetricChip(title: "Rain", value: formatPercent(weather?.precipitationChance))
                     MetricChip(title: "Wind", value: formatMph(weather?.windSpeedMph))
+                }
+
+                if let fetchedAt = weather?.fetchedAt {
+                    MiniStatusRow(symbol: "clock.fill", title: "Updated", value: formatTime(fetchedAt), tint: .secondary)
                 }
 
                 if let message = weather?.error {
@@ -594,6 +696,28 @@ func formatPercent(_ value: Double?) -> String {
 func formatMph(_ value: Double?) -> String {
     guard let value, value.isFinite else { return "-- mph" }
     return "\(Int(value.rounded())) mph"
+}
+
+func formatCurrency(_ value: Double?) -> String {
+    guard let value, value.isFinite else { return "--" }
+    let formatter = NumberFormatter()
+    formatter.numberStyle = .currency
+    formatter.maximumFractionDigits = value >= 10 ? 0 : 2
+    return formatter.string(from: NSNumber(value: value)) ?? String(format: "$%.2f", value)
+}
+
+func formatCurrencyPerHour(_ value: Double?) -> String {
+    guard let value, value.isFinite else { return "--/hr" }
+    return "\(formatCurrency(value))/hr"
+}
+
+func formatTime(_ value: String?) -> String {
+    guard let value, !value.isEmpty else { return "--" }
+    let iso = ISO8601DateFormatter()
+    if let date = iso.date(from: value) {
+        return DateFormatter.localizedString(from: date, dateStyle: .none, timeStyle: .short)
+    }
+    return value
 }
 
 func weatherSymbol(for icon: String?) -> String {

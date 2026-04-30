@@ -53,12 +53,24 @@ private struct WatchRoomOption: Identifiable, Hashable {
     var id: String { name }
 }
 
+private struct WatchLightOption: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let room: String
+    let isOn: Bool
+    let isOnline: Bool
+    let brightness: Int?
+    let dimmable: Bool
+}
+
 struct WatchAppView: View {
     @EnvironmentObject private var session: SessionStore
     @EnvironmentObject private var watchSync: WatchSyncManager
 
     @State private var enabledSections = Set(IOSWatchSection.allCases)
     @State private var availableRooms: [WatchRoomOption] = []
+    @State private var availableLightDevices: [WatchLightOption] = []
+    @State private var selectedDeviceByRoom: [String: String] = [:]
     @State private var primaryRoom = ""
     @State private var defaultBrightness = 70.0
     @State private var isLoading = false
@@ -66,8 +78,16 @@ struct WatchAppView: View {
     @State private var statusMessage: String?
     @State private var errorMessage: String?
 
-    private var selectedRoomLabel: String {
-        primaryRoom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Auto-select room" : primaryRoom
+    private var lightRooms: [String] {
+        let rooms = Set(availableLightDevices.map(\.room))
+        return Array(rooms).sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    private var selectedLightDeviceIds: [String] {
+        lightRooms.compactMap { room in
+            let id = selectedDeviceByRoom[room] ?? ""
+            return id.isEmpty ? nil : id
+        }
     }
 
     private var watchStatusText: String {
@@ -196,7 +216,7 @@ struct WatchAppView: View {
                 panelHeading("Room Lights", symbol: "lightbulb.2.fill", tint: HBPalette.accentYellow)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Primary room")
+                    Text("Default room")
                         .font(.system(size: 12, weight: .bold, design: .rounded))
                         .textCase(.uppercase)
                         .tracking(2.0)
@@ -213,6 +233,8 @@ struct WatchAppView: View {
                     .padding(14)
                     .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
                 }
+
+                controlledDevicesSection
 
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -231,6 +253,91 @@ struct WatchAppView: View {
                 }
 
                 saveButton
+            }
+        }
+    }
+
+    private var controlledDevicesSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Watch device per room")
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .textCase(.uppercase)
+                .tracking(2.0)
+                .foregroundStyle(HBPalette.textMuted)
+
+            if lightRooms.isEmpty {
+                HBCardRow {
+                    HStack(spacing: 10) {
+                        Image(systemName: "lightbulb.slash")
+                            .foregroundStyle(HBPalette.accentOrange)
+                        Text("No compatible light devices found.")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                    }
+                }
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 260), spacing: 12)], spacing: 12) {
+                    ForEach(lightRooms, id: \.self) { room in
+                        roomDevicePicker(room)
+                    }
+                }
+            }
+        }
+    }
+
+    private func roomDevicePicker(_ room: String) -> some View {
+        let devices = devices(for: room)
+        let selection = Binding<String>(
+            get: { selectedDeviceByRoom[room] ?? "" },
+            set: { newValue in
+                if newValue.isEmpty {
+                    selectedDeviceByRoom.removeValue(forKey: room)
+                } else {
+                    selectedDeviceByRoom[room] = newValue
+                }
+            }
+        )
+
+        return HBCardRow {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(room)
+                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                    Spacer()
+                    Text("\(devices.count)")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textMuted)
+                }
+
+                Picker("Light", selection: selection) {
+                    Text("All room lights").tag("")
+                    ForEach(devices) { device in
+                        Text(device.name).tag(device.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                if let device = selectedDevice(for: room) {
+                    HStack(spacing: 8) {
+                        Image(systemName: device.isOn ? "lightbulb.fill" : "lightbulb")
+                            .foregroundStyle(device.isOn ? HBPalette.accentYellow : HBPalette.textMuted)
+                        Text(deviceStatusText(device))
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(device.isOnline ? HBPalette.textSecondary : HBPalette.accentOrange)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        Image(systemName: "square.grid.2x2")
+                            .foregroundStyle(HBPalette.textMuted)
+                        Text("All room lights")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                    }
+                }
             }
         }
     }
@@ -302,6 +409,73 @@ struct WatchAppView: View {
         }
     }
 
+    private func devices(for room: String) -> [WatchLightOption] {
+        availableLightDevices
+            .filter { $0.room == room }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private func selectedDevice(for room: String) -> WatchLightOption? {
+        guard let selectedId = selectedDeviceByRoom[room], !selectedId.isEmpty else {
+            return nil
+        }
+        return availableLightDevices.first { $0.id == selectedId }
+    }
+
+    private func deviceStatusText(_ device: WatchLightOption) -> String {
+        var parts = [device.isOnline ? "Online" : "Offline", device.isOn ? "On" : "Off"]
+        if let brightness = device.brightness, device.isOn {
+            parts.append("\(brightness)%")
+        }
+        if device.dimmable {
+            parts.append("Dimmable")
+        }
+        return parts.joined(separator: " / ")
+    }
+
+    private func parseLightOptions(from root: [String: Any]) -> [WatchLightOption] {
+        let rawDevices = JSON.array(root["availableLightDevices"]).isEmpty
+            ? JSON.array(root["selectedRoomDevices"])
+            : JSON.array(root["availableLightDevices"])
+
+        return rawDevices.compactMap { device in
+            let id = JSON.string(device, "id")
+            guard !id.isEmpty else {
+                return nil
+            }
+
+            let brightness = JSON.int(device, "brightness", fallback: -1)
+            return WatchLightOption(
+                id: id,
+                name: JSON.string(device, "name", fallback: "Unnamed light"),
+                room: JSON.string(device, "room", fallback: "Unassigned"),
+                isOn: JSON.bool(device, "isOn"),
+                isOnline: JSON.bool(device, "isOnline", fallback: true),
+                brightness: brightness >= 0 ? brightness : nil,
+                dimmable: JSON.bool(device, "dimmable")
+            )
+        }
+        .sorted {
+            if $0.room == $1.room {
+                return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
+            return $0.room.localizedCaseInsensitiveCompare($1.room) == .orderedAscending
+        }
+    }
+
+    private func selectedDeviceMap(selectedIds: [String], devices: [WatchLightOption]) -> [String: String] {
+        let selected = Set(selectedIds)
+        guard !selected.isEmpty else {
+            return [:]
+        }
+
+        var result: [String: String] = [:]
+        for device in devices where selected.contains(device.id) && result[device.room] == nil {
+            result[device.room] = device.id
+        }
+        return result
+    }
+
     private func loadConfig() async {
         guard session.isAuthenticated else {
             return
@@ -320,6 +494,7 @@ struct WatchAppView: View {
             enabledSections = Set(sections.isEmpty ? IOSWatchSection.allCases : sections)
             primaryRoom = JSON.string(config, "primaryRoom")
             defaultBrightness = Double(JSON.int(config, "defaultLightBrightness", fallback: 70))
+            let selectedIds = config["lightDeviceIds"] as? [String] ?? []
             availableRooms = JSON.array(root["availableRooms"]).map { room in
                 WatchRoomOption(
                     name: JSON.string(room, "name", fallback: "Unassigned"),
@@ -327,6 +502,8 @@ struct WatchAppView: View {
                     onCount: JSON.int(room, "onCount")
                 )
             }
+            availableLightDevices = parseLightOptions(from: root)
+            selectedDeviceByRoom = selectedDeviceMap(selectedIds: selectedIds, devices: availableLightDevices)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -348,6 +525,7 @@ struct WatchAppView: View {
                 .filter { enabledSections.contains($0) }
                 .map(\.rawValue),
             "primaryRoom": primaryRoom,
+            "lightDeviceIds": selectedLightDeviceIds,
             "defaultLightBrightness": Int(defaultBrightness.rounded())
         ]
 
@@ -357,6 +535,9 @@ struct WatchAppView: View {
             let config = JSON.object(root["config"])
             primaryRoom = JSON.string(config, "primaryRoom", fallback: primaryRoom)
             defaultBrightness = Double(JSON.int(config, "defaultLightBrightness", fallback: Int(defaultBrightness.rounded())))
+            let selectedIds = config["lightDeviceIds"] as? [String] ?? selectedLightDeviceIds
+            availableLightDevices = parseLightOptions(from: root)
+            selectedDeviceByRoom = selectedDeviceMap(selectedIds: selectedIds, devices: availableLightDevices)
             statusMessage = "Watch layout saved."
             _ = await watchSync.syncNow()
         } catch {

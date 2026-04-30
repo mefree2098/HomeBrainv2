@@ -34,6 +34,7 @@ struct SecurityCommandRequest: Encodable {
 }
 
 struct LightCommandRequest: Encodable {
+    let room: String?
     let action: String
     let brightness: Int?
 }
@@ -104,12 +105,12 @@ final class HomeBrainAPIClient {
         return response.security
     }
 
-    func controlLights(action: String, brightness: Int?, accessToken: String) async throws -> WatchLightsSection {
+    func controlLights(room: String?, action: String, brightness: Int?, accessToken: String) async throws -> WatchLightsSection {
         let response: WatchLightsResponse = try await send(
             path: "/api/watch/lights",
             method: "POST",
             token: accessToken,
-            body: LightCommandRequest(action: action, brightness: brightness),
+            body: LightCommandRequest(room: room, action: action, brightness: brightness),
             responseType: WatchLightsResponse.self
         )
 

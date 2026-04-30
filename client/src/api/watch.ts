@@ -28,6 +28,20 @@ export type WatchLightDevice = {
   dimmable: boolean
 }
 
+export type WatchLightRoom = {
+  available: boolean
+  name: string
+  room: string
+  totalCount: number
+  onCount: number
+  onlineCount: number
+  dimmableCount: number
+  averageBrightness: number
+  defaultLightBrightness: number
+  devices: WatchLightDevice[]
+  error?: string
+}
+
 export type WatchSecuritySection = {
   available: boolean
   alarmState?: string
@@ -55,6 +69,7 @@ export type WatchLightsSection = {
   averageBrightness: number
   defaultLightBrightness: number
   devices: WatchLightDevice[]
+  rooms?: WatchLightRoom[]
   error?: string
 }
 
@@ -131,6 +146,7 @@ export const getWatchConfig = async () => {
       success: boolean
       config: WatchConfig
       availableRooms: WatchRoomSummary[]
+      availableLightDevices: WatchLightDevice[]
       selectedRoomDevices: WatchLightDevice[]
     }
   } catch (error) {
@@ -147,6 +163,7 @@ export const updateWatchConfig = async (config: WatchConfig) => {
       message: string
       config: WatchConfig
       availableRooms: WatchRoomSummary[]
+      availableLightDevices: WatchLightDevice[]
       selectedRoomDevices: WatchLightDevice[]
     }
   } catch (error) {
