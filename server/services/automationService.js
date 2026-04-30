@@ -2821,7 +2821,12 @@ async function resumeRunningExecutions(options = {}) {
   runningHistories.forEach((history) => {
     const historyId = history?._id?.toString?.() || null;
     const automationId = history?.automationId?.toString?.() || null;
-    if (!historyId || !automationId || activeResumeExecutionIds.has(historyId)) {
+    if (
+      !historyId
+      || !automationId
+      || activeResumeExecutionIds.has(historyId)
+      || activeExecutionIds.has(historyId)
+    ) {
       skippedCount += 1;
       return;
     }

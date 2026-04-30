@@ -420,6 +420,58 @@ test('device_control action passes Insteon retry parameters through to command e
   assert.equal(result.actionResults[0].details.commandRetryCount, 2);
 });
 
+test('device_control action gives Harmony workflow verification an extended timeout', async (t) => {
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const originalFindById = Device.findById;
+  const originalControlDevice = deviceService.controlDevice;
+  let receivedOptions = null;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    deviceService.controlDevice = originalControlDevice;
+  });
+
+  Device.findById = () => ({
+    lean: async () => ({
+      _id: deviceId,
+      name: 'Bedroom Fire TV',
+      type: 'switch',
+      status: false,
+      isOnline: true,
+      properties: {
+        source: 'harmony',
+        harmonyHubIp: '192.168.1.50',
+        harmonyActivityId: '987654'
+      }
+    })
+  });
+
+  deviceService.controlDevice = async (_target, _action, _value, options) => {
+    receivedOptions = options;
+    return {
+      message: 'Harmony activity started',
+      details: {
+        source: 'harmony'
+      }
+    };
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'device_control',
+      target: deviceId,
+      parameters: {
+        action: 'turn_on'
+      }
+    }
+  ], { context: {} });
+
+  assert.equal(receivedOptions.requirePostActionVerification, true);
+  assert.equal(receivedOptions.harmonyVerificationTimeoutMs, 45_000);
+  assert.equal(receivedOptions.harmonyVerificationIntervalMs, 3_000);
+  assert.equal(result.status, 'success');
+});
+
 test('device_control action retries transient workflow failures and records attempts', async (t) => {
   const deviceId = new mongoose.Types.ObjectId().toString();
   const originalFindById = Device.findById;
@@ -1026,4 +1078,49 @@ test('delay action resume state uses the remaining countdown after a restart', a
   assert.equal(actionStarts[0].timer.durationMs, 30_000);
   assert.equal(result.actionResults.length, 1);
   assert.equal(result.actionResults[0].message, 'Delay complete (30s)');
+});
+
+test('delay action resume state completes immediately when restart missed the deadline', async (t) => {
+  const originalSetTimeout = global.setTimeout;
+  const realDateNow = Date.now;
+  const actionStarts = [];
+  const now = new Date('2026-04-05T16:00:00.000Z');
+  let timeoutCalls = 0;
+
+  t.after(() => {
+    global.setTimeout = originalSetTimeout;
+    Date.now = realDateNow;
+  });
+
+  Date.now = () => now.getTime();
+  global.setTimeout = () => {
+    timeoutCalls += 1;
+    return 0;
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'delay',
+      parameters: {
+        seconds: 120,
+        __resumeDelayState: {
+          durationMs: 120_000,
+          endsAt: new Date(now.getTime() - 60_000).toISOString()
+        }
+      }
+    }
+  ], {
+    context: {},
+    runtime: {
+      onActionStart: async (payload) => {
+        actionStarts.push(payload);
+      }
+    }
+  });
+
+  assert.equal(timeoutCalls, 0);
+  assert.equal(actionStarts.length, 1);
+  assert.equal(actionStarts[0].timer, null);
+  assert.equal(result.actionResults.length, 1);
+  assert.equal(result.actionResults[0].message, 'Delay complete (0s)');
 });

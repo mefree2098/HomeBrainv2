@@ -244,11 +244,88 @@ test('controlDevice can require Harmony activity post-action verification', asyn
 
   await assert.rejects(
     () => deviceService.controlDevice('device-harmony-verify', 'turn_on', undefined, {
-      requirePostActionVerification: true
+      requirePostActionVerification: true,
+      harmonyVerificationTimeoutMs: 0
     }),
     /Harmony activity verification failed/
   );
   assert.equal(persisted, false);
+});
+
+test('controlDevice waits for Harmony activity verification to settle when required', async (t) => {
+  const originalFindById = Device.findById;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalEnsureHarmonyState = deviceService.ensureHarmonyState;
+  const originalRefreshHarmonyOnlineStatus = deviceService.refreshHarmonyOnlineStatus;
+  const originalControlHarmonyDevice = deviceService.controlHarmonyDevice;
+  const originalPollHarmonyState = deviceService.pollHarmonyState;
+  const originalEmit = deviceUpdateEmitter.emit;
+  const originalSetTimeout = global.setTimeout;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    deviceService.ensureHarmonyState = originalEnsureHarmonyState;
+    deviceService.refreshHarmonyOnlineStatus = originalRefreshHarmonyOnlineStatus;
+    deviceService.controlHarmonyDevice = originalControlHarmonyDevice;
+    deviceService.pollHarmonyState = originalPollHarmonyState;
+    deviceUpdateEmitter.emit = originalEmit;
+    global.setTimeout = originalSetTimeout;
+  });
+
+  const harmonyDevice = {
+    _id: 'device-harmony-delayed-verify',
+    name: 'Bedroom Fire TV',
+    type: 'switch',
+    status: false,
+    isOnline: true,
+    properties: {
+      source: 'harmony',
+      harmonyHubIp: '192.168.1.50',
+      harmonyActivityId: '987654'
+    }
+  };
+
+  let pollCalls = 0;
+  const timeoutDelays = [];
+  let persistedUpdate = null;
+
+  Device.findById = async () => ({ ...harmonyDevice });
+  Device.findByIdAndUpdate = async (_id, update) => {
+    persistedUpdate = update;
+    return { ...harmonyDevice, ...update };
+  };
+  deviceService.ensureHarmonyState = async () => {};
+  deviceService.refreshHarmonyOnlineStatus = async () => true;
+  deviceService.controlHarmonyDevice = async (_device, _action, _value, updateData) => {
+    updateData.isOnline = true;
+  };
+  deviceService.pollHarmonyState = async () => {
+    pollCalls += 1;
+    return {
+      status: pollCalls >= 2,
+      isOnline: true
+    };
+  };
+  deviceUpdateEmitter.emit = () => {};
+  global.setTimeout = (handler, delay, ...args) => {
+    timeoutDelays.push(delay);
+    if (typeof handler === 'function') {
+      handler(...args);
+    }
+    return 0;
+  };
+
+  const updated = await deviceService.controlDevice('device-harmony-delayed-verify', 'turn_on', undefined, {
+    requirePostActionVerification: true,
+    harmonyVerificationTimeoutMs: 10_000,
+    harmonyVerificationIntervalMs: 2_500
+  });
+
+  assert.equal(pollCalls, 2);
+  assert.deepEqual(timeoutDelays, [2_500]);
+  assert.equal(updated.status, true);
+  assert.equal(persistedUpdate.status, true);
 });
 
 test('controlDevice routes RainMachine zone start actions through the RainMachine service', async (t) => {

@@ -9,6 +9,14 @@ const insteonService = require('./insteonService');
 const deviceCommandCoordinatorService = require('./deviceCommandCoordinatorService');
 const { resolveDeviceProperty } = require('../utils/devicePropertyResolver');
 
+function parseBoundedMs(value, fallback, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, Math.round(parsed)));
+}
+
 const MAX_DELAY_SECONDS = Math.max(
   600,
   Number(process.env.WORKFLOW_MAX_DELAY_SECONDS || 24 * 60 * 60)
@@ -53,6 +61,18 @@ const DEFAULT_WORKFLOW_ACTION_RETRY_DELAY_MS = Math.max(
 const DEFAULT_WORKFLOW_ACTION_RETRY_BACKOFF = Math.max(
   1,
   Math.min(5, Number(process.env.WORKFLOW_ACTION_RETRY_BACKOFF || 2))
+);
+const DEFAULT_WORKFLOW_HARMONY_VERIFY_TIMEOUT_MS = parseBoundedMs(
+  process.env.WORKFLOW_HARMONY_VERIFY_TIMEOUT_MS,
+  45_000,
+  0,
+  120_000
+);
+const DEFAULT_WORKFLOW_HARMONY_VERIFY_INTERVAL_MS = parseBoundedMs(
+  process.env.WORKFLOW_HARMONY_VERIFY_INTERVAL_MS,
+  3_000,
+  500,
+  15_000
 );
 const RESUME_META_KEY = '__resumeMeta';
 const RESUME_DELAY_KEY = '__resumeDelayState';
@@ -1553,7 +1573,13 @@ async function executeDeviceControlForResolvedDevice(device, target, actionName,
   } else {
     controlResult = await deviceService.controlDevice(target.toString(), actionName, value, {
       command: commandMetadata,
-      requirePostActionVerification: source === 'harmony'
+      requirePostActionVerification: source === 'harmony',
+      ...(source === 'harmony'
+        ? {
+            harmonyVerificationTimeoutMs: DEFAULT_WORKFLOW_HARMONY_VERIFY_TIMEOUT_MS,
+            harmonyVerificationIntervalMs: DEFAULT_WORKFLOW_HARMONY_VERIFY_INTERVAL_MS
+          }
+        : {})
     });
   }
 

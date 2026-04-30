@@ -540,6 +540,7 @@ app.set('deviceWebSocket', deviceWebSocket);
 // Initialize Discovery service
 const discoveryService = new DiscoveryService();
 app.locals.discoveryService = discoveryService;
+let automationRuntimeServicesStarted = false;
 
 async function initializeDiscoveryService() {
   try {
@@ -557,19 +558,33 @@ async function initializeDiscoveryService() {
   }
 }
 
-void initializeDiscoveryService();
-alexaBridgeService.start();
-automationService.resumeRunningExecutions({ reason: 'server_startup' })
-  .then((result) => {
+async function startAutomationRuntimeServices() {
+  if (automationRuntimeServicesStarted) {
+    return;
+  }
+
+  automationRuntimeServicesStarted = true;
+
+  try {
+    const result = await automationService.resumeRunningExecutions({ reason: 'server_startup' });
     if (result?.launchedCount > 0) {
       console.log(`Automation runtime resume launched ${result.launchedCount} persisted execution(s) on startup`);
     }
-  })
-  .catch((error) => {
+  } catch (error) {
     console.warn(`Automation runtime startup resume failed: ${error.message}`);
+  }
+
+  automationSchedulerService.start();
+  platformUpdateMonitorService.start();
+}
+
+void initializeDiscoveryService();
+alexaBridgeService.start();
+void dbReady
+  .then(() => startAutomationRuntimeServices())
+  .catch((error) => {
+    console.warn(`Automation runtime services startup skipped: ${error.message}`);
   });
-automationSchedulerService.start();
-platformUpdateMonitorService.start();
 
 // Initialize Remote Update Service
 (async () => {

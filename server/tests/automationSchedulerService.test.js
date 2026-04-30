@@ -669,15 +669,43 @@ test('security alarm triggers prime matched startup state without rerunning unti
   );
 });
 
+test('tick queues a highest-priority follow-up when an evaluation is already running', async (t) => {
+  const originalRunning = automationSchedulerService.running;
+  const originalPendingTickContext = automationSchedulerService.pendingTickContext;
+
+  automationSchedulerService.running = true;
+  automationSchedulerService.pendingTickContext = null;
+
+  t.after(() => {
+    automationSchedulerService.running = originalRunning;
+    automationSchedulerService.pendingTickContext = originalPendingTickContext;
+  });
+
+  await automationSchedulerService.tick({ source: 'scheduler_interval' });
+  assert.equal(automationSchedulerService.pendingTickContext.source, 'scheduler_interval');
+
+  await automationSchedulerService.tick({ source: 'device_update', reason: 'realtime-device-update' });
+  assert.equal(automationSchedulerService.pendingTickContext.source, 'device_update');
+
+  await automationSchedulerService.tick({ source: 'security_alarm', reason: 'alarm-state-change' });
+  assert.equal(automationSchedulerService.pendingTickContext.source, 'security_alarm');
+
+  await automationSchedulerService.tick({ source: 'scheduler_interval' });
+  assert.equal(automationSchedulerService.pendingTickContext.source, 'security_alarm');
+});
+
 test('tick launches matching automations without waiting for long-running executions to finish', async (t) => {
   const originalFind = Automation.find;
   const originalShouldRunAutomation = automationSchedulerService.shouldRunAutomation;
   const originalConsumePendingTriggerContext = automationSchedulerService.consumePendingTriggerContext;
   const originalIsAlreadyExecutedForCurrentMinute = automationSchedulerService.isAlreadyExecutedForCurrentMinute;
   const originalExecuteAutomation = automationService.executeAutomation;
+  const originalResumeRunningExecutions = automationService.resumeRunningExecutions;
+  const originalLastResumeWatchdogAt = automationSchedulerService.lastResumeWatchdogAt;
 
   const launched = [];
   const pendingResolves = [];
+  const resumeCalls = [];
 
   Automation.find = () => ({
     lean: async () => ([
@@ -699,6 +727,11 @@ test('tick launches matching automations without waiting for long-running execut
   automationSchedulerService.shouldRunAutomation = async () => true;
   automationSchedulerService.consumePendingTriggerContext = () => ({});
   automationSchedulerService.isAlreadyExecutedForCurrentMinute = () => false;
+  automationSchedulerService.lastResumeWatchdogAt = 0;
+  automationService.resumeRunningExecutions = async (options = {}) => {
+    resumeCalls.push(options);
+    return { launchedCount: 0 };
+  };
   automationService.executeAutomation = async (id) => {
     launched.push(id);
     return new Promise((resolve) => {
@@ -712,10 +745,14 @@ test('tick launches matching automations without waiting for long-running execut
     automationSchedulerService.consumePendingTriggerContext = originalConsumePendingTriggerContext;
     automationSchedulerService.isAlreadyExecutedForCurrentMinute = originalIsAlreadyExecutedForCurrentMinute;
     automationService.executeAutomation = originalExecuteAutomation;
+    automationService.resumeRunningExecutions = originalResumeRunningExecutions;
+    automationSchedulerService.lastResumeWatchdogAt = originalLastResumeWatchdogAt;
     pendingResolves.splice(0).forEach((resolve) => resolve({ success: true }));
   });
 
   await automationSchedulerService.tick({ source: 'security_alarm', reason: 'test' });
 
+  assert.equal(resumeCalls.length, 1);
+  assert.equal(resumeCalls[0].reason, 'scheduler_watchdog');
   assert.deepEqual(launched, ['automation-1', 'automation-2']);
 });

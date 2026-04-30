@@ -15,6 +15,29 @@ const {
   ensureUniquePlatformIdentity
 } = require('./deviceIdentityService');
 const MAX_HARMONY_COMMAND_HOLD_MS = 5000;
+const MAX_HARMONY_ACTIVITY_VERIFY_TIMEOUT_MS = 120_000;
+const MAX_HARMONY_ACTIVITY_VERIFY_INTERVAL_MS = 15_000;
+
+function parseBoundedMs(value, fallback, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, Math.round(parsed)));
+}
+
+const DEFAULT_HARMONY_ACTIVITY_VERIFY_TIMEOUT_MS = parseBoundedMs(
+  process.env.HARMONY_ACTIVITY_VERIFY_TIMEOUT_MS,
+  30_000,
+  0,
+  MAX_HARMONY_ACTIVITY_VERIFY_TIMEOUT_MS
+);
+const DEFAULT_HARMONY_ACTIVITY_VERIFY_INTERVAL_MS = parseBoundedMs(
+  process.env.HARMONY_ACTIVITY_VERIFY_INTERVAL_MS,
+  3_000,
+  500,
+  MAX_HARMONY_ACTIVITY_VERIFY_INTERVAL_MS
+);
 
 const escapeRegex = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const HARMONY_VISIBLE_DEVICE_QUERY = Object.freeze({
@@ -33,6 +56,10 @@ const getInsteonService = () => {
 
 function isDatabaseReadyForPresenceChecks() {
   return mongoose.connection?.readyState === 1;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function normalizeDeviceGroups(groups) {
@@ -499,6 +526,18 @@ class DeviceService {
       const skipIntegrationRefresh = options?.skipIntegrationRefresh === true;
       const skipPostActionVerification = options?.skipPostActionVerification === true;
       const requirePostActionVerification = options?.requirePostActionVerification === true;
+      const harmonyVerificationTimeoutMs = parseBoundedMs(
+        options?.harmonyVerificationTimeoutMs,
+        DEFAULT_HARMONY_ACTIVITY_VERIFY_TIMEOUT_MS,
+        0,
+        MAX_HARMONY_ACTIVITY_VERIFY_TIMEOUT_MS
+      );
+      const harmonyVerificationIntervalMs = parseBoundedMs(
+        options?.harmonyVerificationIntervalMs,
+        DEFAULT_HARMONY_ACTIVITY_VERIFY_INTERVAL_MS,
+        500,
+        MAX_HARMONY_ACTIVITY_VERIFY_INTERVAL_MS
+      );
 
       if (isSmartThings && !skipIntegrationRefresh) {
         await this.ensureSmartThingsState({ immediate: true });
@@ -779,13 +818,25 @@ class DeviceService {
         }
 
         if (!skipPostActionVerification && this.isHarmonyActivityDevice(device)) {
-          const remoteUpdate = await this.pollHarmonyState(device, expectedStatus);
+          const verification = await this.waitForHarmonyActivityState(device, expectedStatus, {
+            timeoutMs: requirePostActionVerification ? harmonyVerificationTimeoutMs : 0,
+            intervalMs: harmonyVerificationIntervalMs
+          });
+          const remoteUpdate = verification.remoteUpdate;
           if (remoteUpdate) {
             Object.assign(updateData, remoteUpdate);
           }
           if (requirePostActionVerification) {
             if (!remoteUpdate) {
-              throw new Error('Unable to verify Harmony activity state after command');
+              const error = new Error('Unable to verify Harmony activity state after command');
+              error.details = {
+                harmonyHubIp: device?.properties?.harmonyHubIp || null,
+                harmonyActivityId: device?.properties?.harmonyActivityId || null,
+                verificationAttempts: verification.attempts,
+                verificationElapsedMs: verification.elapsedMs,
+                verificationTimeoutMs: verification.timeoutMs
+              };
+              throw error;
             }
             if (expectedStatus !== undefined && remoteUpdate.status !== expectedStatus) {
               const error = new Error(
@@ -795,7 +846,10 @@ class DeviceService {
                 expectedStatus,
                 actualStatus: remoteUpdate.status,
                 harmonyHubIp: device?.properties?.harmonyHubIp || null,
-                harmonyActivityId: device?.properties?.harmonyActivityId || null
+                harmonyActivityId: device?.properties?.harmonyActivityId || null,
+                verificationAttempts: verification.attempts,
+                verificationElapsedMs: verification.elapsedMs,
+                verificationTimeoutMs: verification.timeoutMs
               };
               throw error;
             }
@@ -1436,6 +1490,54 @@ class DeviceService {
     } catch (error) {
       console.warn(`DeviceService: Unable to fetch Harmony state for hub ${harmonyHubIp}: ${error.message}`);
       return null;
+    }
+  }
+
+  async waitForHarmonyActivityState(device, expectedStatus, options = {}) {
+    const timeoutMs = parseBoundedMs(
+      options.timeoutMs,
+      DEFAULT_HARMONY_ACTIVITY_VERIFY_TIMEOUT_MS,
+      0,
+      MAX_HARMONY_ACTIVITY_VERIFY_TIMEOUT_MS
+    );
+    const intervalMs = parseBoundedMs(
+      options.intervalMs,
+      DEFAULT_HARMONY_ACTIVITY_VERIFY_INTERVAL_MS,
+      500,
+      MAX_HARMONY_ACTIVITY_VERIFY_INTERVAL_MS
+    );
+    const startedAt = Date.now();
+    let attempts = 0;
+    let remoteUpdate = null;
+
+    while (true) {
+      attempts += 1;
+      // eslint-disable-next-line no-await-in-loop
+      const nextUpdate = await this.pollHarmonyState(device, expectedStatus);
+      if (nextUpdate) {
+        remoteUpdate = nextUpdate;
+        if (expectedStatus === undefined || nextUpdate.status === expectedStatus) {
+          return {
+            remoteUpdate,
+            attempts,
+            elapsedMs: Date.now() - startedAt,
+            timeoutMs
+          };
+        }
+      }
+
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs >= timeoutMs) {
+        return {
+          remoteUpdate,
+          attempts,
+          elapsedMs,
+          timeoutMs
+        };
+      }
+
+      // eslint-disable-next-line no-await-in-loop
+      await sleep(Math.min(intervalMs, timeoutMs - elapsedMs));
     }
   }
 

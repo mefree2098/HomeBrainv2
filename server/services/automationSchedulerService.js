@@ -265,6 +265,14 @@ class AutomationSchedulerService {
     };
     this.lastSolarWarningAt = 0;
     this.scheduleGraceMs = DEFAULT_SCHEDULE_GRACE_MS;
+    this.pendingTickContext = null;
+    const resumeWatchdogIntervalMs = Number(
+      process.env.AUTOMATION_RUNTIME_RESUME_WATCHDOG_INTERVAL_MS || 60 * 1000
+    );
+    this.resumeWatchdogIntervalMs = Number.isFinite(resumeWatchdogIntervalMs)
+      ? Math.max(30 * 1000, resumeWatchdogIntervalMs)
+      : 60 * 1000;
+    this.lastResumeWatchdogAt = 0;
   }
 
   shouldLogSecurityAlarmEvaluation(runtimeContext = {}) {
@@ -299,6 +307,91 @@ class AutomationSchedulerService {
       .catch((error) => {
         console.error(`AutomationSchedulerService: failed executing ${automation._id}:`, error.message);
       });
+  }
+
+  getTickPriority(executionContext = {}) {
+    const source = typeof executionContext?.source === 'string'
+      ? executionContext.source.trim().toLowerCase()
+      : '';
+
+    if (source.includes('security_alarm') || source.includes('alarm')) {
+      return 3;
+    }
+    if (source.includes('webhook')) {
+      return 2;
+    }
+    if (source.includes('device_update')) {
+      return 1;
+    }
+    return 0;
+  }
+
+  queuePendingTick(executionContext = {}) {
+    const nextContext = executionContext && typeof executionContext === 'object'
+      ? { ...executionContext }
+      : {};
+    const nextPriority = this.getTickPriority(nextContext);
+    const currentPriority = this.getTickPriority(this.pendingTickContext || {});
+
+    if (!this.pendingTickContext || nextPriority >= currentPriority) {
+      this.pendingTickContext = nextContext;
+    }
+  }
+
+  flushPendingTick() {
+    const pendingContext = this.pendingTickContext;
+    this.pendingTickContext = null;
+
+    if (!pendingContext) {
+      return;
+    }
+
+    const followUpContext = {
+      ...pendingContext,
+      queuedAfterBusyTick: true
+    };
+    const runFollowUp = () => {
+      void this.tick(followUpContext);
+    };
+
+    if (typeof setImmediate === 'function') {
+      setImmediate(runFollowUp);
+    } else {
+      setTimeout(runFollowUp, 0);
+    }
+  }
+
+  async maybeResumeOrphanedExecutions(now = new Date()) {
+    const nowMs = now instanceof Date && Number.isFinite(now.getTime())
+      ? now.getTime()
+      : Date.now();
+
+    if (
+      this.lastResumeWatchdogAt > 0
+      && nowMs - this.lastResumeWatchdogAt < this.resumeWatchdogIntervalMs
+    ) {
+      return {
+        skipped: true,
+        reason: 'watchdog_interval'
+      };
+    }
+
+    this.lastResumeWatchdogAt = nowMs;
+
+    try {
+      const result = await automationService.resumeRunningExecutions({ reason: 'scheduler_watchdog' });
+      if (result?.launchedCount > 0) {
+        console.log(
+          `AutomationSchedulerService: resume watchdog relaunched ${result.launchedCount} orphaned execution(s)`
+        );
+      }
+      return result;
+    } catch (error) {
+      console.warn(`AutomationSchedulerService: resume watchdog failed: ${error.message}`);
+      return {
+        error: error.message
+      };
+    }
   }
 
   start() {
@@ -924,6 +1017,7 @@ class AutomationSchedulerService {
 
   async tick(executionContext = {}) {
     if (this.running) {
+      this.queuePendingTick(executionContext);
       return;
     }
 
@@ -932,6 +1026,7 @@ class AutomationSchedulerService {
 
     try {
       this.cleanupRecentRuns(now.getTime());
+      await this.maybeResumeOrphanedExecutions(now);
       const automations = await Automation.find({
         enabled: true,
         'trigger.type': { $in: ['time', 'schedule', 'device_state', 'sensor', 'security_alarm_status'] }
@@ -976,6 +1071,7 @@ class AutomationSchedulerService {
       console.error('AutomationSchedulerService: tick failed:', error.message);
     } finally {
       this.running = false;
+      this.flushPendingTick();
     }
   }
 }
