@@ -103,16 +103,7 @@ struct WatchDashboardRootView: View {
     var body: some View {
         Group {
             if let dashboard = store.dashboard {
-                TabView {
-                    OverviewPage(store: store, dashboard: dashboard)
-
-                    ForEach(dashboard.config.sections) { section in
-                        sectionPage(section, dashboard: dashboard)
-                    }
-
-                    AccountPage(store: store, dashboard: dashboard)
-                }
-                .tabViewStyle(.verticalPage)
+                OverviewPage(store: store, dashboard: dashboard)
             } else {
                 LoadingPage(store: store)
             }
@@ -124,19 +115,6 @@ struct WatchDashboardRootView: View {
         }
     }
 
-    @ViewBuilder
-    private func sectionPage(_ section: WatchSection, dashboard: WatchDashboard) -> some View {
-        switch section {
-        case .security:
-            SecurityPage(store: store, security: dashboard.sections.security)
-        case .lights:
-            LightsPage(store: store, lights: dashboard.sections.lights)
-        case .power:
-            PowerPage(power: dashboard.sections.power)
-        case .weather:
-            WeatherPage(weather: dashboard.sections.weather)
-        }
-    }
 }
 
 struct LoadingPage: View {
@@ -170,17 +148,13 @@ struct OverviewPage: View {
             VStack(alignment: .leading, spacing: 10) {
                 HeaderBlock(title: "HomeBrain", subtitle: dashboard.user.name.isEmpty ? dashboard.user.email : dashboard.user.name, symbol: "house.fill", tint: .cyan)
 
-                if let security = dashboard.sections.security {
-                    MiniStatusRow(symbol: "shield.fill", title: "Security", value: security.stateLabel ?? "--", tint: security.isTriggered == true ? .red : .green)
-                }
-                if let lights = dashboard.sections.lights {
-                    MiniStatusRow(symbol: "lightbulb.fill", title: lights.room ?? "Lights", value: "\(lights.onCount ?? 0)/\(lights.totalCount ?? 0) on", tint: .yellow)
-                }
-                if let power = dashboard.sections.power {
-                    MiniStatusRow(symbol: "bolt.fill", title: "Power", value: formatWatts(power.powerW), tint: .cyan)
-                }
-                if let weather = dashboard.sections.weather {
-                    MiniStatusRow(symbol: "cloud.sun.fill", title: "Weather", value: formatTemp(weather.temperatureF), tint: .blue)
+                ForEach(dashboard.config.sections) { section in
+                    NavigationLink {
+                        sectionPage(section)
+                    } label: {
+                        DashboardLinkRow(summary: summary(for: section))
+                    }
+                    .buttonStyle(.plain)
                 }
 
                 Button {
@@ -189,8 +163,71 @@ struct OverviewPage: View {
                     Label(store.isLoading ? "Refreshing" : "Refresh", systemImage: "arrow.clockwise")
                 }
                 .disabled(store.isLoading)
+
+                NavigationLink {
+                    AccountPage(store: store, dashboard: dashboard)
+                } label: {
+                    DashboardLinkRow(
+                        summary: DashboardSummary(
+                            symbol: "person.crop.circle.fill",
+                            title: "Account",
+                            value: store.serverURL,
+                            tint: .purple
+                        )
+                    )
+                }
+                .buttonStyle(.plain)
             }
             .padding(.vertical, 8)
+        }
+    }
+
+    @ViewBuilder
+    private func sectionPage(_ section: WatchSection) -> some View {
+        switch section {
+        case .security:
+            SecurityPage(store: store, security: dashboard.sections.security)
+        case .lights:
+            LightsPage(store: store, lights: dashboard.sections.lights)
+        case .power:
+            PowerPage(power: dashboard.sections.power)
+        case .weather:
+            WeatherPage(weather: dashboard.sections.weather)
+        }
+    }
+
+    private func summary(for section: WatchSection) -> DashboardSummary {
+        switch section {
+        case .security:
+            let security = dashboard.sections.security
+            return DashboardSummary(
+                symbol: "shield.fill",
+                title: "Security",
+                value: security?.stateLabel ?? "Open controls",
+                tint: security?.isTriggered == true ? .red : .green
+            )
+        case .lights:
+            let lights = dashboard.sections.lights
+            return DashboardSummary(
+                symbol: "lightbulb.fill",
+                title: "Lights",
+                value: "\(lights?.onCount ?? 0)/\(lights?.totalCount ?? 0) on",
+                tint: .yellow
+            )
+        case .power:
+            return DashboardSummary(
+                symbol: "bolt.fill",
+                title: "Power",
+                value: formatWatts(dashboard.sections.power?.powerW),
+                tint: .cyan
+            )
+        case .weather:
+            return DashboardSummary(
+                symbol: "cloud.sun.fill",
+                title: "Weather",
+                value: formatTemp(dashboard.sections.weather?.temperatureF),
+                tint: .blue
+            )
         }
     }
 }
@@ -569,6 +606,46 @@ struct AccountPage: View {
             }
             .padding(.vertical, 8)
         }
+    }
+}
+
+struct DashboardSummary {
+    let symbol: String
+    let title: String
+    let value: String
+    let tint: Color
+}
+
+struct DashboardLinkRow: View {
+    let summary: DashboardSummary
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Image(systemName: summary.symbol)
+                .foregroundStyle(summary.tint)
+                .frame(width: 22)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(summary.title)
+                    .font(.system(size: 15, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.primary)
+                Text(summary.value)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+
+            Spacer(minLength: 0)
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }
 
