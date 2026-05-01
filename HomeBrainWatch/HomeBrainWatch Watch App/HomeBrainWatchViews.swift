@@ -130,8 +130,12 @@ struct LoadingPage: View {
                     .font(.footnote)
                     .foregroundStyle(.red)
                     .multilineTextAlignment(.center)
-                Button("Sign Out") {
-                    store.signOut()
+                HStack {
+                    Spacer()
+                    Button("Sign Out") {
+                        store.signOut()
+                    }
+                    Spacer()
                 }
             }
         }
@@ -157,12 +161,16 @@ struct OverviewPage: View {
                     .buttonStyle(.plain)
                 }
 
-                Button {
-                    Task { await store.refreshDashboard() }
-                } label: {
-                    Label(store.isLoading ? "Refreshing" : "Refresh", systemImage: "arrow.clockwise")
+                HStack {
+                    Spacer()
+                    Button {
+                        Task { await store.refreshDashboard() }
+                    } label: {
+                        Label(store.isLoading ? "Refreshing" : "Refresh", systemImage: "arrow.clockwise")
+                    }
+                    .disabled(store.isLoading)
+                    Spacer()
                 }
-                .disabled(store.isLoading)
 
                 NavigationLink {
                     AccountPage(store: store, dashboard: dashboard)
@@ -598,10 +606,14 @@ struct AccountPage: View {
                 HeaderBlock(title: "Account", subtitle: dashboard.user.email, symbol: "person.crop.circle.fill", tint: .purple)
                 MiniStatusRow(symbol: "network", title: "Server", value: store.serverURL, tint: .cyan)
                 MiniStatusRow(symbol: "rectangle.grid.2x2.fill", title: "Screens", value: "\(dashboard.config.sections.count)", tint: .purple)
-                Button(role: .destructive) {
-                    store.signOut()
-                } label: {
-                    Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                HStack {
+                    Spacer()
+                    Button(role: .destructive) {
+                        store.signOut()
+                    } label: {
+                        Label("Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                    }
+                    Spacer()
                 }
             }
             .padding(.vertical, 8)
