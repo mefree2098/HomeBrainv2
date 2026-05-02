@@ -11,6 +11,7 @@ const DEFAULT_IOS_SESSION_MAX_AGE_DAYS = 365;
 const MIN_SESSION_MAX_AGE_DAYS = 1;
 const MAX_SESSION_MAX_AGE_DAYS = 3650;
 const SESSION_CLIENT_TYPES = new Set(['ios', 'watchos', 'web', 'android', 'desktop', 'api', 'unknown']);
+const SHARED_REFRESH_TOKEN_CLIENT_TYPES = new Set(['ios', 'watchos']);
 
 function trimString(value, fallback = '') {
   return typeof value === 'string' ? value.trim() : fallback;
@@ -174,6 +175,10 @@ function decodeTokenExpiration(token) {
   return Number.isFinite(exp) && exp > 0 ? new Date(exp * 1000) : null;
 }
 
+function isValidDate(value) {
+  return value instanceof Date && Number.isFinite(value.getTime());
+}
+
 function toSanitizedSession(session, currentSessionId = '') {
   const safe = session.toSanitized();
   return {
@@ -240,6 +245,22 @@ async function buildTokensForSession(user, sessionId, clientType = 'unknown') {
     refreshExpiresAt: decodeTokenExpiration(refreshToken) || refreshExpiresAt,
     refreshMaxAgeMs: Math.max(refreshExpiresAt.getTime() - Date.now(), 0)
   };
+}
+
+function buildTokensWithExistingRefreshToken(user, session, refreshToken) {
+  const refreshExpiresAt = decodeTokenExpiration(refreshToken)
+    || (isValidDate(session.expiresAt) ? session.expiresAt : buildExpiryForDays(DEFAULT_SESSION_MAX_AGE_DAYS));
+
+  return {
+    accessToken: generateAccessToken(user, { sessionId: session.sessionId }),
+    refreshToken,
+    refreshExpiresAt,
+    refreshMaxAgeMs: Math.max(refreshExpiresAt.getTime() - Date.now(), 0)
+  };
+}
+
+function shouldReuseRefreshToken(clientType) {
+  return SHARED_REFRESH_TOKEN_CLIENT_TYPES.has(normalizeClientType(clientType));
 }
 
 async function issueSession(user, req, options = {}) {
@@ -403,7 +424,9 @@ async function refreshSession(refreshToken, req = null) {
     appVersion: requestMetadata.appVersion || session.appVersion,
     userAgent: requestMetadata.userAgent || session.userAgent
   };
-  const tokens = await buildTokensForSession(user, session.sessionId, metadata.clientType);
+  const tokens = shouldReuseRefreshToken(metadata.clientType)
+    ? buildTokensWithExistingRefreshToken(user, session, refreshToken)
+    : await buildTokensForSession(user, session.sessionId, metadata.clientType);
 
   await persistSession(session, metadata, tokens.refreshToken, tokens.refreshExpiresAt);
 

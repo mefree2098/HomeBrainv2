@@ -174,7 +174,7 @@ router.get('/process', auth, async (req, res) => {
 // Description: Get highest-memory processes
 // Endpoint: GET /api/resources/processes
 // Request: { limit?: number }
-// Response: { processes: Array<{ pid, command, rssBytes, cpuPercent, memoryPercent }> }
+// Response: { processes: Array<{ pid, command, commandLine, rssBytes, cpuPercent, memoryPercent }> }
 router.get('/processes', processDiagnosticsRateLimit, auth, async (req, res) => {
   try {
     const limit = parseInt(req.query.limit, 10) || 10;

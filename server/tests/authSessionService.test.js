@@ -70,6 +70,20 @@ function buildRequest(deviceId, clientName = 'Hallway iPad') {
   };
 }
 
+function buildWebRequest(deviceId, clientName = 'Safari on Mac') {
+  return {
+    headers: {
+      origin: 'https://homebrain.example.com',
+      'sec-fetch-site': 'same-origin',
+      'x-homebrain-client-type': 'web',
+      'x-homebrain-client-name': clientName,
+      'x-homebrain-device-id': deviceId,
+      'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Safari/605.1.15'
+    },
+    ip: '192.168.1.30'
+  };
+}
+
 function refreshLifetimeInDays(token) {
   const decoded = jwt.decode(token);
   const issuedAt = Number(decoded?.iat || 0);
@@ -243,7 +257,7 @@ test('issueSession supports at least 20 simultaneous device sessions for one use
   assert.equal(new Set(sessions.map((entry) => entry.sessionId)).size, 20);
 });
 
-test('refreshSession rotates tokens without creating a new device session', async (t) => {
+test('refreshSession reuses iOS refresh tokens without creating a new device session', async (t) => {
   const originalJwtSecret = process.env.JWT_SECRET;
   const originalRefreshSecret = process.env.REFRESH_TOKEN_SECRET;
   const originalGetSettings = Settings.getSettings;
@@ -291,8 +305,71 @@ test('refreshSession rotates tokens without creating a new device session', asyn
 
   const initial = await authSessionService.issueSession(user, buildRequest('device-1'));
   const refreshed = await authSessionService.refreshSession(initial.tokens.refreshToken, buildRequest('device-1'));
+  const refreshedAgain = await authSessionService.refreshSession(
+    initial.tokens.refreshToken,
+    buildRequest('device-1', 'Apple Watch')
+  );
+
+  assert.equal(sessions.length, 1);
+  assert.equal(initial.session.sessionId, refreshed.session.sessionId);
+  assert.equal(initial.tokens.refreshToken, refreshed.tokens.refreshToken);
+  assert.equal(initial.tokens.refreshToken, refreshedAgain.tokens.refreshToken);
+});
+
+test('refreshSession rotates web refresh tokens without creating a new device session', async (t) => {
+  const originalJwtSecret = process.env.JWT_SECRET;
+  const originalRefreshSecret = process.env.REFRESH_TOKEN_SECRET;
+  const originalGetSettings = Settings.getSettings;
+  const originalUserGet = UserService.get;
+  const originalFindOne = UserSession.findOne;
+  const originalFind = UserSession.find;
+  const originalSave = UserSession.prototype.save;
+
+  const sessions = [];
+  const user = {
+    _id: '507f1f77bcf86cd799439011',
+    role: 'admin',
+    isActive: true,
+    toJSON() {
+      return { _id: this._id, role: this.role };
+    }
+  };
+
+  t.after(() => {
+    process.env.JWT_SECRET = originalJwtSecret;
+    process.env.REFRESH_TOKEN_SECRET = originalRefreshSecret;
+    Settings.getSettings = originalGetSettings;
+    UserService.get = originalUserGet;
+    UserSession.findOne = originalFindOne;
+    UserSession.find = originalFind;
+    UserSession.prototype.save = originalSave;
+  });
+
+  process.env.JWT_SECRET = 'test-jwt-secret';
+  process.env.REFRESH_TOKEN_SECRET = 'test-refresh-secret';
+
+  Settings.getSettings = async () => ({ authSessionMaxAgeDays: 365 });
+  UserService.get = async () => user;
+  UserSession.findOne = (query) => buildQueryExecutor(sessions, query, 'one');
+  UserSession.find = (query) => buildQueryExecutor(sessions, query, 'many');
+  UserSession.prototype.save = async function save() {
+    const index = sessions.findIndex((entry) => entry.sessionId === this.sessionId);
+    if (index >= 0) {
+      sessions[index] = this;
+    } else {
+      sessions.push(this);
+    }
+    return this;
+  };
+
+  const initial = await authSessionService.issueSession(user, buildWebRequest('browser-1'));
+  const refreshed = await authSessionService.refreshSession(initial.tokens.refreshToken, buildWebRequest('browser-1'));
 
   assert.equal(sessions.length, 1);
   assert.equal(initial.session.sessionId, refreshed.session.sessionId);
   assert.notEqual(initial.tokens.refreshToken, refreshed.tokens.refreshToken);
+  await assert.rejects(
+    () => authSessionService.refreshSession(initial.tokens.refreshToken, buildWebRequest('browser-1')),
+    /Invalid refresh token/
+  );
 });

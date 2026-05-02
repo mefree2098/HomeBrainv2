@@ -72,17 +72,33 @@ test('getMemoryUsage reads Linux MemAvailable when procfs is present', () => {
 
 test('parseProcessList returns the highest-memory process rows', () => {
   const rows = parseProcessList([
-    'PID PPID COMMAND RSS VSZ %CPU %MEM',
-    '101 1 node 524288 1048576 12.5 6.4',
-    '202 1 mongod 262144 2097152 2.1 3.2'
+    'PID PPID RSS VSZ %CPU %MEM COMMAND',
+    '101 1 524288 1048576 12.5 6.4 /usr/bin/node server.js',
+    '202 1 262144 2097152 2.1 3.2 /usr/bin/mongod --config /etc/mongod.conf'
   ].join('\n'), 1);
 
   assert.equal(rows.length, 1);
   assert.equal(rows[0].pid, 101);
   assert.equal(rows[0].command, 'node');
+  assert.equal(rows[0].executable, '/usr/bin/node');
+  assert.equal(rows[0].commandLine, '/usr/bin/node server.js');
   assert.equal(rows[0].rssBytes, 524288 * 1024);
   assert.equal(rows[0].cpuPercent, 12.5);
   assert.equal(rows[0].memoryPercent, 6.4);
+});
+
+test('parseProcessList keeps spaced command lines from shifting numeric columns', () => {
+  const rows = parseProcessList([
+    'PID PPID RSS VSZ %CPU %MEM COMMAND',
+    '303 1 131072 524288 4.9 1.6 PM2 v6.0.14: God Daemon (/home/matt/.pm2)'
+  ].join('\n'));
+
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].pid, 303);
+  assert.equal(rows[0].command, 'PM2');
+  assert.equal(rows[0].commandLine, 'PM2 v6.0.14: God Daemon (/home/matt/.pm2)');
+  assert.equal(rows[0].cpuPercent, 4.9);
+  assert.equal(rows[0].memoryPercent, 1.6);
 });
 
 test('getGPUUsage reads Orin GPU load from modern sysfs paths', async () => {
