@@ -137,20 +137,28 @@ function parseProcessList(rawValue, limit = 10) {
   const maxRows = Math.max(1, Math.min(50, Number.parseInt(limit, 10) || 10));
 
   return String(rawValue || '')
-    .trim()
     .split('\n')
-    .slice(1)
-    .map((line) => line.trim().split(/\s+/))
-    .filter((parts) => parts.length >= 7)
-    .map((parts) => {
-      const [pid, ppid, command, rss, vsz, cpuPercent, memoryPercent] = parts;
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^PID\s+PPID\s+/i.test(line))
+    .map((line) => {
+      const match = line.match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s+([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s+(.+)$/);
+      if (!match) {
+        return null;
+      }
+
+      const [, pid, ppid, rss, vsz, cpuPercent, memoryPercent, rawCommandLine] = match;
       const rssKB = Number.parseInt(rss, 10) || 0;
       const vszKB = Number.parseInt(vsz, 10) || 0;
+      const commandLine = rawCommandLine.trim();
+      const executable = commandLine.split(/\s+/)[0] || commandLine;
 
       return {
         pid: Number.parseInt(pid, 10) || 0,
         ppid: Number.parseInt(ppid, 10) || 0,
-        command,
+        command: path.basename(executable) || executable,
+        executable,
+        commandLine,
         rssKB,
         rssBytes: rssKB * 1024,
         rssGB: parseFloat(((rssKB * 1024) / (1024 ** 3)).toFixed(3)),
@@ -160,6 +168,7 @@ function parseProcessList(rawValue, limit = 10) {
         memoryPercent: Number.parseFloat(memoryPercent) || 0
       };
     })
+    .filter(Boolean)
     .filter((entry) => entry.pid > 0)
     .slice(0, maxRows);
 }
@@ -793,13 +802,13 @@ class ResourceMonitorService {
   async getProcessBreakdown(options = {}) {
     const limit = Math.max(1, Math.min(50, Number.parseInt(options?.limit, 10) || 10));
     const command = this.platform() === 'linux'
-      ? 'ps -eo pid,ppid,comm,rss,vsz,pcpu,pmem --sort=-rss'
-      : 'ps -axo pid,ppid,comm,rss,vsz,%cpu,%mem -r';
+      ? 'ps -eo pid=,ppid=,rss=,vsz=,pcpu=,pmem=,args= --sort=-rss'
+      : 'ps -axo pid=,ppid=,rss=,vsz=,%cpu=,%mem=,command= -r';
 
     try {
       const { stdout } = await this.execAsync(command, {
         timeout: 2000,
-        maxBuffer: 128 * 1024
+        maxBuffer: 512 * 1024
       });
 
       return {
