@@ -486,7 +486,7 @@ Requires=mongod.service
 [Service]
 Type=simple
 User=${HOMEBRAIN_USER}
-WorkingDirectory=${HOMEBRAIN_DIR}/server
+WorkingDirectory=${HOMEBRAIN_DIR}
 Environment=NODE_ENV=production
 Environment="HOME=${homebrain_home}"
 Environment="USER=${HOMEBRAIN_USER}"
