@@ -1,6 +1,7 @@
 const fs = require('fs');
 const { spawn } = require('child_process');
 const Settings = require('../models/Settings');
+const defaultEventStreamService = require('./eventStreamService');
 
 const MAX_TIMER_DELAY_MS = 24 * 60 * 60 * 1000;
 const TIMER_DUE_TOLERANCE_MS = 1000;
@@ -153,6 +154,7 @@ function normalizeRestartSchedule(settings = {}) {
   const timeZone = normalizeTimeZone(settings.timezone);
   const lastTriggeredAt = getDateOrNull(settings.deviceRestartScheduleLastTriggeredAt);
   const nextRunAt = getDateOrNull(settings.deviceRestartScheduleNextRunAt);
+  const lastRequestedAt = getDateOrNull(settings.deviceRestartLastRequestedAt);
 
   return {
     enabled: settings.deviceRestartScheduleEnabled === true,
@@ -163,7 +165,14 @@ function normalizeRestartSchedule(settings = {}) {
     minute: parsedTime.minute,
     timeZone,
     lastTriggeredAt,
-    nextRunAt
+    nextRunAt,
+    lastRequestedAt,
+    lastRequestedBy: typeof settings.deviceRestartLastRequestedBy === 'string' && settings.deviceRestartLastRequestedBy.trim()
+      ? settings.deviceRestartLastRequestedBy.trim()
+      : null,
+    lastRequestSource: typeof settings.deviceRestartLastRequestSource === 'string' && settings.deviceRestartLastRequestSource.trim()
+      ? settings.deviceRestartLastRequestSource.trim()
+      : null
   };
 }
 
@@ -247,6 +256,9 @@ class DeviceRestartService {
     this.spawnProcess = options.spawnProcess || spawn;
     this.rebootBinary = options.rebootBinary || '';
     this.rebootBinaryCandidates = options.rebootBinaryCandidates || REBOOT_BINARY_CANDIDATES;
+    this.eventStreamService = Object.prototype.hasOwnProperty.call(options, 'eventStreamService')
+      ? options.eventStreamService
+      : defaultEventStreamService;
     this.timer = null;
     this.currentSchedule = normalizeRestartSchedule({});
     this.initialized = false;
@@ -370,11 +382,43 @@ class DeviceRestartService {
     return found || 'reboot';
   }
 
-  dispatchRebootCommand(options = {}) {
+  async publishRebootRequestedEvent(payload = {}) {
+    if (!this.eventStreamService || typeof this.eventStreamService.publishSafe !== 'function') {
+      return null;
+    }
+
+    return this.eventStreamService.publishSafe({
+      type: 'system.reboot.requested',
+      source: 'device_restart',
+      category: 'maintenance',
+      severity: 'warn',
+      payload: {
+        actor: payload.actor || 'unknown-admin',
+        requestSource: payload.source || 'manual',
+        requestedAt: dateToIso(payload.requestedAt),
+        targetRunAt: dateToIso(payload.targetRunAt),
+        command: payload.command || null,
+        pid: process.pid,
+        processUptimeSeconds: Math.round(process.uptime())
+      },
+      tags: ['maintenance', 'device-restart', 'reboot']
+    });
+  }
+
+  async dispatchRebootCommand(options = {}) {
     const rebootBinary = this.resolveRebootBinary();
     const command = 'sudo';
     const args = ['-n', rebootBinary];
     const requestedAt = options.requestedAt instanceof Date ? options.requestedAt : new Date();
+    const commandLine = `${command} -n ${rebootBinary}`;
+
+    await this.publishRebootRequestedEvent({
+      actor: options.actor || 'unknown-admin',
+      source: options.source || 'manual',
+      requestedAt,
+      targetRunAt: options.targetRunAt,
+      command: commandLine
+    });
 
     let child;
     try {
@@ -392,7 +436,7 @@ class DeviceRestartService {
     return {
       success: true,
       message: 'Whole-device reboot command dispatched.',
-      command: `${command} -n ${rebootBinary}`,
+      command: commandLine,
       source: options.source || 'manual',
       requestedAt: requestedAt.toISOString()
     };
@@ -409,6 +453,11 @@ class DeviceRestartService {
         timeZone: this.currentSchedule.timeZone,
         nextRunAt: dateToIso(this.currentSchedule.nextRunAt),
         lastTriggeredAt: dateToIso(this.currentSchedule.lastTriggeredAt)
+      },
+      lastRequest: {
+        requestedAt: dateToIso(this.currentSchedule.lastRequestedAt),
+        requestedBy: this.currentSchedule.lastRequestedBy || null,
+        source: this.currentSchedule.lastRequestSource || null
       }
     };
   }
