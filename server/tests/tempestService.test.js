@@ -379,3 +379,63 @@ test('testConnection uses the persisted Tempest token when no explicit token is 
   assert.equal(result.success, true);
   assert.deepEqual(result.stations, []);
 });
+
+test('refreshRuntime coalesces concurrent refreshes and honors caller cooldowns', async (t) => {
+  const originalGetIntegration = TempestIntegration.getIntegration;
+  const originalSyncStations = tempestService.syncStations;
+  const originalEnsureRealtimeConnections = tempestService.ensureRealtimeConnections;
+  const originalRefreshRuntimePromise = tempestService.refreshRuntimePromise;
+  const originalLastRefreshRuntimeAt = tempestService.lastRefreshRuntimeAt;
+  const originalLastRefreshRuntimeResult = tempestService.lastRefreshRuntimeResult;
+
+  t.after(() => {
+    TempestIntegration.getIntegration = originalGetIntegration;
+    tempestService.syncStations = originalSyncStations;
+    tempestService.ensureRealtimeConnections = originalEnsureRealtimeConnections;
+    tempestService.refreshRuntimePromise = originalRefreshRuntimePromise;
+    tempestService.lastRefreshRuntimeAt = originalLastRefreshRuntimeAt;
+    tempestService.lastRefreshRuntimeResult = originalLastRefreshRuntimeResult;
+  });
+
+  tempestService.refreshRuntimePromise = null;
+  tempestService.lastRefreshRuntimeAt = 0;
+  tempestService.lastRefreshRuntimeResult = null;
+
+  TempestIntegration.getIntegration = async () => ({
+    token: 'persisted-tempest-token',
+    enabled: true
+  });
+
+  let syncCalls = 0;
+  tempestService.syncStations = async ({ reason }) => {
+    syncCalls += 1;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    return {
+      success: true,
+      reason,
+      integration: {
+        token: 'persisted-tempest-token',
+        enabled: true
+      }
+    };
+  };
+  tempestService.ensureRealtimeConnections = async () => {};
+
+  const [first, second] = await Promise.all([
+    tempestService.refreshRuntime({ reason: 'weather-manual-refresh', minIntervalMs: 300000 }),
+    tempestService.refreshRuntime({ reason: 'weather-manual-refresh', minIntervalMs: 300000 })
+  ]);
+
+  assert.equal(syncCalls, 1);
+  assert.equal(first.reason, 'weather-manual-refresh');
+  assert.deepEqual(second, first);
+
+  const skipped = await tempestService.refreshRuntime({
+    reason: 'weather-manual-refresh',
+    minIntervalMs: 300000
+  });
+
+  assert.equal(syncCalls, 1);
+  assert.equal(skipped.skipped, true);
+  assert.equal(skipped.reason, 'refresh-cooldown');
+});

@@ -162,6 +162,9 @@ class TempestService {
     this.udpSocket = null;
     this.udpListening = false;
     this.udpConfigKey = '';
+    this.refreshRuntimePromise = null;
+    this.lastRefreshRuntimeAt = 0;
+    this.lastRefreshRuntimeResult = null;
   }
 
   async initialize() {
@@ -206,22 +209,55 @@ class TempestService {
     }
   }
 
-  async refreshRuntime({ reason = 'manual' } = {}) {
-    const integration = await TempestIntegration.getIntegration();
-    const resolvedToken = this.resolveToken(null, integration);
+  async refreshRuntime({ reason = 'manual', minIntervalMs = 0 } = {}) {
+    const normalizedMinIntervalMs = Math.max(0, Number(minIntervalMs) || 0);
+    const now = Date.now();
 
-    if (!integration.enabled || !resolvedToken) {
-      this.stopRealtime();
+    if (
+      normalizedMinIntervalMs > 0
+      && this.lastRefreshRuntimeAt > 0
+      && (now - this.lastRefreshRuntimeAt) < normalizedMinIntervalMs
+    ) {
       return {
         success: true,
         skipped: true,
-        reason: !integration.enabled ? 'integration-disabled' : 'missing-token'
+        reason: 'refresh-cooldown',
+        lastRefreshRuntimeAt: new Date(this.lastRefreshRuntimeAt).toISOString(),
+        previous: this.lastRefreshRuntimeResult || null
       };
     }
 
-    const syncResult = await this.syncStations({ integration, reason });
-    await this.ensureRealtimeConnections(syncResult.integration || integration);
-    return syncResult;
+    if (this.refreshRuntimePromise) {
+      return this.refreshRuntimePromise;
+    }
+
+    this.refreshRuntimePromise = (async () => {
+      const integration = await TempestIntegration.getIntegration();
+      const resolvedToken = this.resolveToken(null, integration);
+
+      if (!integration.enabled || !resolvedToken) {
+        this.stopRealtime();
+        return {
+          success: true,
+          skipped: true,
+          reason: !integration.enabled ? 'integration-disabled' : 'missing-token'
+        };
+      }
+
+      const syncResult = await this.syncStations({ integration, reason });
+      await this.ensureRealtimeConnections(syncResult.integration || integration);
+      return syncResult;
+    })()
+      .then((result) => {
+        this.lastRefreshRuntimeAt = Date.now();
+        this.lastRefreshRuntimeResult = result;
+        return result;
+      })
+      .finally(() => {
+        this.refreshRuntimePromise = null;
+      });
+
+    return this.refreshRuntimePromise;
   }
 
   async shutdown() {

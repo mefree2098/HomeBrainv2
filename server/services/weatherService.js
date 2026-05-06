@@ -10,11 +10,14 @@ const DEFAULT_GEOCODE_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 const DEFAULT_FORECAST_STALE_IF_ERROR_MS = 30 * 60 * 1000;
 const DEFAULT_AIR_QUALITY_STALE_IF_ERROR_MS = 30 * 60 * 1000;
 const DEFAULT_GEOCODE_STALE_IF_ERROR_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_DASHBOARD_WEATHER_CACHE_TTL_MS = 60 * 1000;
+const DEFAULT_WEATHER_TEMPEST_SYNC_COOLDOWN_MS = 5 * 60 * 1000;
 const WEATHER_CACHE_COORDINATE_PRECISION = 2;
 const WEATHER_RECOVERY_COORDINATE_PRECISION = 1;
 const forecastCache = new Map();
 const airQualityCache = new Map();
 const geocodeCache = new Map();
+const dashboardWeatherCache = new Map();
 const PERSISTED_WEATHER_CACHE_KIND_FORECAST = 'forecast';
 const PERSISTED_WEATHER_CACHE_KIND_AIR_QUALITY = 'air_quality';
 
@@ -166,6 +169,14 @@ const GEOCODE_STALE_IF_ERROR_MS = parsePositiveInteger(
   process.env.WEATHER_GEOCODE_STALE_IF_ERROR_MS,
   DEFAULT_GEOCODE_STALE_IF_ERROR_MS
 );
+const DASHBOARD_WEATHER_CACHE_TTL_MS = parsePositiveInteger(
+  process.env.WEATHER_DASHBOARD_CACHE_TTL_MS,
+  DEFAULT_DASHBOARD_WEATHER_CACHE_TTL_MS
+);
+const WEATHER_TEMPEST_SYNC_COOLDOWN_MS = parsePositiveInteger(
+  process.env.WEATHER_TEMPEST_SYNC_COOLDOWN_MS,
+  DEFAULT_WEATHER_TEMPEST_SYNC_COOLDOWN_MS
+);
 
 function normalizeCoordinates(latitude, longitude) {
   const lat = toNumber(latitude);
@@ -196,6 +207,14 @@ function buildForecastCacheKey(location, precision = WEATHER_CACHE_COORDINATE_PR
 
 function buildAirQualityCacheKey(location, precision = WEATHER_CACHE_COORDINATE_PRECISION) {
   return buildForecastCacheKey(location, precision);
+}
+
+function buildDashboardWeatherCacheKey(location) {
+  return [
+    buildForecastCacheKey(location),
+    location?.source || 'unknown',
+    location?.name || ''
+  ].join('|');
 }
 
 function buildRecoveryCacheKeys(location, kind) {
@@ -626,13 +645,7 @@ async function resolveWeatherLocation({ latitude, longitude, address, label }) {
   throw new Error('No weather location is configured. Add an address in Settings or choose a custom/auto weather source.');
 }
 
-async function fetchDashboardWeather(options = {}) {
-  const location = await resolveWeatherLocation(options);
-  if (parseBooleanFlag(options.forceTempestSync)) {
-    await tempestService.refreshRuntime({ reason: 'weather-manual-refresh' }).catch((error) => {
-      console.warn(`WeatherService: Tempest refresh failed before weather fetch: ${error.message}`);
-    });
-  }
+async function buildDashboardWeatherPayload(location) {
   const forecastCacheKey = buildForecastCacheKey(location);
   const airQualityCacheKey = buildAirQualityCacheKey(location);
   const forecastRecoveryKeys = buildRecoveryCacheKeys(location, PERSISTED_WEATHER_CACHE_KIND_FORECAST);
@@ -746,6 +759,29 @@ async function fetchDashboardWeather(options = {}) {
   };
 }
 
+async function fetchDashboardWeather(options = {}) {
+  const location = await resolveWeatherLocation(options);
+  const forceTempestSync = parseBooleanFlag(options.forceTempestSync);
+
+  if (forceTempestSync) {
+    await tempestService.refreshRuntime({
+      reason: 'weather-manual-refresh',
+      minIntervalMs: WEATHER_TEMPEST_SYNC_COOLDOWN_MS
+    }).catch((error) => {
+      console.warn(`WeatherService: Tempest refresh failed before weather fetch: ${error.message}`);
+    });
+
+    return buildDashboardWeatherPayload(location);
+  }
+
+  return readThroughCache(
+    dashboardWeatherCache,
+    buildDashboardWeatherCacheKey(location),
+    DASHBOARD_WEATHER_CACHE_TTL_MS,
+    () => buildDashboardWeatherPayload(location)
+  );
+}
+
 async function fetchWeatherDashboard(options = {}) {
   const [forecast, tempest] = await Promise.all([
     fetchDashboardWeather(options),
@@ -792,6 +828,7 @@ module.exports = {
     forecastCache.clear();
     airQualityCache.clear();
     geocodeCache.clear();
+    dashboardWeatherCache.clear();
     weatherCacheStore.resetForTests();
   }
 };
