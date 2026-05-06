@@ -10,6 +10,12 @@ const DEFAULT_HISTORY_LIMIT = 50;
 const MAX_HISTORY_LIMIT = 100;
 const DEFAULT_HISTORY_PAGE = 1;
 const MAX_HISTORY_HOURS = 24 * 365;
+const MAX_COMPACT_MEMBERS = clampInteger(
+  process.env.AUTOMATION_ACTION_RESULT_MEMBER_LIMIT,
+  80,
+  1,
+  500
+);
 
 function clampInteger(value, fallback, minimum, maximum) {
   const numeric = Number(value);
@@ -208,10 +214,218 @@ function sanitizeResumeState(resumeState) {
   };
 }
 
+function pickDefined(source = {}, keys = []) {
+  const result = {};
+  keys.forEach((key) => {
+    if (Object.prototype.hasOwnProperty.call(source, key) && source[key] !== undefined) {
+      result[key] = source[key];
+    }
+  });
+  return result;
+}
+
+function compactDeviceControlDetails(details = {}) {
+  if (!details || typeof details !== 'object') {
+    return undefined;
+  }
+
+  const compacted = pickDefined(details, [
+    '_id',
+    'id',
+    'name',
+    'type',
+    'room',
+    'source',
+    'controlMethod',
+    'action',
+    'success',
+    'status',
+    'brightness',
+    'level',
+    'confirmed',
+    'confirmedStatus',
+    'confirmedBrightness',
+    'confirmedLevel',
+    'confirmedReads',
+    'commandAcknowledged',
+    'hubAcknowledged',
+    'hubResponseReceived',
+    'verificationMode',
+    'commandAttempts',
+    'commandRetryCount',
+    'insteonAddress',
+    'insteonAddressNormalized',
+    'deviceModel',
+    'deviceCategory',
+    'deviceSubcategory',
+    'harmonyActivityId',
+    'harmonyActivityLabel',
+    'harmonyDeviceId',
+    'harmonyDeviceLabel'
+  ]);
+
+  if (details.details && typeof details.details === 'object') {
+    const nested = compactDeviceControlDetails(details.details);
+    if (nested && Object.keys(nested).length > 0) {
+      compacted.details = nested;
+    }
+  }
+
+  return Object.keys(compacted).length > 0 ? compacted : undefined;
+}
+
+function compactRetryFailure(failure = {}) {
+  if (!failure || typeof failure !== 'object') {
+    return null;
+  }
+
+  return pickDefined(failure, [
+    'attempt',
+    'durationMs',
+    'message',
+    'code',
+    'status',
+    'retryDelayMs',
+    'willRetry'
+  ]);
+}
+
+function compactWorkflowRetry(retry = {}) {
+  if (!retry || typeof retry !== 'object') {
+    return undefined;
+  }
+
+  const compacted = pickDefined(retry, [
+    'attempts',
+    'maxAttempts',
+    'retries'
+  ]);
+
+  if (Array.isArray(retry.failures)) {
+    compacted.failures = retry.failures
+      .map(compactRetryFailure)
+      .filter(Boolean);
+  }
+
+  return Object.keys(compacted).length > 0 ? compacted : undefined;
+}
+
+function compactGroupMember(member = {}) {
+  if (!member || typeof member !== 'object') {
+    return null;
+  }
+
+  const compacted = pickDefined(member, [
+    'deviceId',
+    'deviceName',
+    'room',
+    'success',
+    'message',
+    'error'
+  ]);
+  const memberDetails = compactDeviceControlDetails(member.details);
+  if (memberDetails) {
+    compacted.details = memberDetails;
+  }
+  return compacted;
+}
+
+function compactGroupUnit(unit = {}) {
+  if (!unit || typeof unit !== 'object') {
+    return null;
+  }
+
+  const compacted = pickDefined(unit, [
+    'group',
+    'executionMode',
+    'totalTargets',
+    'successfulTargets',
+    'failedTargets',
+    'message'
+  ]);
+
+  if (Array.isArray(unit.members)) {
+    compacted.members = unit.members
+      .slice(0, MAX_COMPACT_MEMBERS)
+      .map(compactGroupMember)
+      .filter(Boolean);
+    if (unit.members.length > MAX_COMPACT_MEMBERS) {
+      compacted.membersTruncated = unit.members.length - MAX_COMPACT_MEMBERS;
+    }
+  }
+
+  return compacted;
+}
+
+function compactActionResultDetails(details = {}) {
+  if (!details || typeof details !== 'object') {
+    return undefined;
+  }
+
+  if (details.kind === 'device_group') {
+    const compacted = pickDefined(details, [
+      'kind',
+      'group',
+      'executionMode',
+      'concurrency',
+      'unitCount',
+      'totalTargets',
+      'successfulTargets',
+      'failedTargets',
+      'controlMethod',
+      'verificationMode',
+      'commandVariant',
+      'insteonPlmGroup',
+      'sceneSynchronized'
+    ]);
+
+    if (Array.isArray(details.members)) {
+      compacted.members = details.members
+        .slice(0, MAX_COMPACT_MEMBERS)
+        .map(compactGroupMember)
+        .filter(Boolean);
+      if (details.members.length > MAX_COMPACT_MEMBERS) {
+        compacted.membersTruncated = details.members.length - MAX_COMPACT_MEMBERS;
+      }
+    }
+
+    if (Array.isArray(details.units)) {
+      compacted.units = details.units
+        .slice(0, MAX_COMPACT_MEMBERS)
+        .map(compactGroupUnit)
+        .filter(Boolean);
+      if (details.units.length > MAX_COMPACT_MEMBERS) {
+        compacted.unitsTruncated = details.units.length - MAX_COMPACT_MEMBERS;
+      }
+    }
+
+    const workflowRetry = compactWorkflowRetry(details.workflowRetry);
+    if (workflowRetry) {
+      compacted.workflowRetry = workflowRetry;
+    }
+
+    return compacted;
+  }
+
+  const compacted = compactDeviceControlDetails(details) || {};
+  const workflowRetry = compactWorkflowRetry(details.workflowRetry);
+  if (workflowRetry) {
+    compacted.workflowRetry = workflowRetry;
+  }
+
+  return Object.keys(compacted).length > 0 ? compacted : undefined;
+}
+
 function sanitizeActionResult(actionResult) {
   if (!actionResult || typeof actionResult !== 'object') {
     return null;
   }
+
+  const rawDetails = actionResult.details && typeof actionResult.details === 'object'
+    ? actionResult.details
+    : undefined;
+  const shouldCompactDetails = String(actionResult.actionType || '').trim().toLowerCase() === 'device_control';
+  const details = shouldCompactDetails ? compactActionResultDetails(rawDetails) : rawDetails;
 
   return {
     actionIndex: Number.isInteger(actionResult.actionIndex) ? actionResult.actionIndex : 0,
@@ -223,7 +437,7 @@ function sanitizeActionResult(actionResult) {
     success: actionResult.success !== false,
     message: typeof actionResult.message === 'string' ? actionResult.message : undefined,
     error: typeof actionResult.error === 'string' ? actionResult.error : undefined,
-    details: actionResult.details && typeof actionResult.details === 'object' ? actionResult.details : undefined,
+    details,
     conditionMet: typeof actionResult.conditionMet === 'boolean' ? actionResult.conditionMet : undefined,
     conditionOutcome: typeof actionResult.conditionOutcome === 'string' ? actionResult.conditionOutcome : undefined,
     executedAt: actionResult.executedAt ? new Date(actionResult.executedAt) : new Date(),

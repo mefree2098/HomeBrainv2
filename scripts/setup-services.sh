@@ -479,9 +479,12 @@ install_service() {
   sudo tee "$SERVICE_PATH" >/dev/null <<EOF
 [Unit]
 Description=HomeBrain Smart Home Hub
-After=network-online.target mongod.service
+After=local-fs.target network-online.target mongod.service
 Wants=network-online.target
 Requires=mongod.service
+RequiresMountsFor=${HOMEBRAIN_DIR}
+StartLimitIntervalSec=300
+StartLimitBurst=30
 
 [Service]
 Type=simple
@@ -494,7 +497,7 @@ Environment="LOGNAME=${HOMEBRAIN_USER}"
 Environment=WAKEWORD_PIPER_EXEC=${HOMEBRAIN_DIR}/server/.wakeword-venv/bin/piper
 ExecStart=${node_bin} scripts/run-with-modern-node.js node server/server.js
 Restart=always
-RestartSec=5
+RestartSec=10
 TimeoutStopSec=15s
 # HomeBrain may own long-lived child services, such as managed Ollama.
 # Restart only the Node process so those children survive deploy restarts.

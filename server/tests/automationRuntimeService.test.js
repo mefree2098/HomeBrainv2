@@ -227,6 +227,186 @@ test('recordActionCompleted persists the resumable checkpoint and action result'
   assert.equal(published[0].type, 'automation.action.completed');
 });
 
+test('recordActionCompleted compacts bulky device details before persisting action results', async (t) => {
+  const originalUpdateOne = AutomationHistory.updateOne;
+  const originalPublishSafe = eventStreamService.publishSafe;
+  const updates = [];
+
+  AutomationHistory.updateOne = async (query, update) => {
+    updates.push({ query, update });
+    return { acknowledged: true };
+  };
+  eventStreamService.publishSafe = async (payload) => payload;
+
+  t.after(() => {
+    AutomationHistory.updateOne = originalUpdateOne;
+    eventStreamService.publishSafe = originalPublishSafe;
+  });
+
+  await automationRuntimeService.recordActionCompleted({
+    automationId: 'automation-1',
+    automationName: 'Alarm Armed: Turn Off Interior',
+    workflowId: 'workflow-1',
+    workflowName: 'Alarm Armed: Turn Off Interior',
+    historyId: 'history-1',
+    correlationId: 'corr-1',
+    triggerType: 'security_alarm_status',
+    triggerSource: 'scheduler'
+  }, {
+    actionIndex: 0,
+    actionType: 'device_control',
+    target: { kind: 'device_group', group: 'Interior Lights' },
+    durationMs: 140_000,
+    success: false,
+    message: 'Executed turn_off on device group "Interior Lights" with 1 failure',
+    error: 'SmartThings API request failed',
+    actionResult: {
+      actionIndex: 0,
+      actionType: 'device_control',
+      target: { kind: 'device_group', group: 'Interior Lights' },
+      parameters: { action: 'turn_off' },
+      success: false,
+      error: 'SmartThings API request failed',
+      details: {
+        kind: 'device_group',
+        group: 'Interior Lights',
+        executionMode: 'parallel',
+        totalTargets: 1,
+        successfulTargets: 0,
+        failedTargets: 1,
+        members: [
+          {
+            deviceId: 'device-1',
+            deviceName: 'Vault Under Shelf Lights',
+            room: 'Vault',
+            success: false,
+            error: 'SmartThings API request failed',
+            details: {
+              source: 'smartthings',
+              _id: 'device-1',
+              name: 'Vault Under Shelf Lights',
+              type: 'switch',
+              room: 'Vault',
+              status: false,
+              properties: {
+                smartThingsAttributeMetadata: {
+                  firmwareUpdate: {
+                    lastUpdateStatusReason: 'TOO_MANY_CLIENTS'
+                  }
+                },
+                smartThingsStatus: {
+                  components: {
+                    main: {
+                      switch: {
+                        switch: { value: 'off' }
+                      }
+                    }
+                  }
+                }
+              },
+              smartThingsComponents: [{ id: 'main', capabilities: [{ id: 'switch' }] }],
+              smartThingsStatus: {
+                components: {
+                  main: {
+                    switch: {
+                      switch: { value: 'off' }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        workflowRetry: {
+          attempts: 3,
+          maxAttempts: 3,
+          retries: 2,
+          failures: [
+            {
+              attempt: 1,
+              durationMs: 1000,
+              message: 'SmartThings API request failed',
+              status: 422,
+              retryDelayMs: 0,
+              willRetry: true,
+              details: {
+                responseBody: 'large body omitted'
+              }
+            }
+          ]
+        }
+      }
+    }
+  });
+
+  const result = updates[0].update.$push.actionResults;
+
+  assert.equal(result.details.kind, 'device_group');
+  assert.equal(result.details.members[0].deviceId, 'device-1');
+  assert.equal(result.details.members[0].details.source, 'smartthings');
+  assert.equal(result.details.members[0].details.status, false);
+  assert.equal(result.details.members[0].details.properties, undefined);
+  assert.equal(result.details.members[0].details.smartThingsComponents, undefined);
+  assert.equal(result.details.members[0].details.smartThingsStatus, undefined);
+  assert.equal(result.details.workflowRetry.failures[0].status, 422);
+  assert.equal(result.details.workflowRetry.failures[0].details, undefined);
+});
+
+test('recordActionCompleted preserves non-device action details', async (t) => {
+  const originalUpdateOne = AutomationHistory.updateOne;
+  const originalPublishSafe = eventStreamService.publishSafe;
+  const updates = [];
+
+  AutomationHistory.updateOne = async (query, update) => {
+    updates.push({ query, update });
+    return { acknowledged: true };
+  };
+  eventStreamService.publishSafe = async (payload) => payload;
+
+  t.after(() => {
+    AutomationHistory.updateOne = originalUpdateOne;
+    eventStreamService.publishSafe = originalPublishSafe;
+  });
+
+  await automationRuntimeService.recordActionCompleted({
+    automationId: 'automation-1',
+    automationName: 'Webhook Notify',
+    workflowId: 'workflow-1',
+    workflowName: 'Webhook Notify',
+    historyId: 'history-1',
+    correlationId: 'corr-1',
+    triggerType: 'manual',
+    triggerSource: 'manual'
+  }, {
+    actionIndex: 0,
+    actionType: 'http_request',
+    target: 'https://example.test/hook',
+    durationMs: 123,
+    success: true,
+    message: 'HTTP POST https://example.test/hook -> 204',
+    actionResult: {
+      actionIndex: 0,
+      actionType: 'http_request',
+      target: 'https://example.test/hook',
+      parameters: { method: 'POST' },
+      success: true,
+      message: 'HTTP POST https://example.test/hook -> 204',
+      details: {
+        status: 204,
+        responseTimeMs: 118,
+        diagnostic: {
+          requestId: 'req-1'
+        }
+      }
+    }
+  });
+
+  const result = updates[0].update.$push.actionResults;
+
+  assert.equal(result.details.status, 204);
+  assert.equal(result.details.diagnostic.requestId, 'req-1');
+});
+
 test('getWorkflowExecutionHistory returns paginated workflow runtime history for a time window', async (t) => {
   const originalCountDocuments = AutomationHistory.countDocuments;
   const originalFind = AutomationHistory.find;

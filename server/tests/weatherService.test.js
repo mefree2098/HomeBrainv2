@@ -238,6 +238,7 @@ test('fetchWeatherDashboard forces a Tempest runtime refresh when requested', as
   });
 
   let refreshCalls = 0;
+  let refreshArgs = null;
 
   axios.get = async (url) => {
     if (url.includes('api.open-meteo.com/v1/forecast')) {
@@ -278,8 +279,9 @@ test('fetchWeatherDashboard forces a Tempest runtime refresh when requested', as
     throw new Error(`Unexpected axios request: ${url}`);
   };
 
-  tempestService.refreshRuntime = async () => {
+  tempestService.refreshRuntime = async (args) => {
     refreshCalls += 1;
+    refreshArgs = args;
     return { success: true };
   };
   tempestService.getSelectedStationSnapshot = async () => ({
@@ -326,6 +328,8 @@ test('fetchWeatherDashboard forces a Tempest runtime refresh when requested', as
   });
 
   assert.equal(refreshCalls, 1);
+  assert.equal(refreshArgs?.reason, 'weather-manual-refresh');
+  assert.equal(refreshArgs?.minIntervalMs, 5 * 60 * 1000);
   assert.equal(payload.tempest.available, true);
 });
 

@@ -12,3 +12,13 @@ test('setup-services writes a HomeBrain unit that starts from the repo root', ()
   assert.doesNotMatch(script, /WorkingDirectory=\$\{HOMEBRAIN_DIR\}\/server/);
   assert.match(script, /ExecStart=\$\{node_bin\} scripts\/run-with-modern-node\.js node server\/server\.js/);
 });
+
+test('setup-services waits for the app mount and avoids tight reboot crash loops', () => {
+  const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
+
+  assert.match(script, /After=local-fs\.target network-online\.target mongod\.service/);
+  assert.match(script, /RequiresMountsFor=\$\{HOMEBRAIN_DIR\}/);
+  assert.match(script, /StartLimitIntervalSec=300/);
+  assert.match(script, /StartLimitBurst=30/);
+  assert.match(script, /RestartSec=10/);
+});

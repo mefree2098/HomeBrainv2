@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const deviceService = require('../services/deviceService');
 const deviceEnergySampleService = require('../services/deviceEnergySampleService');
+const { serializeDevices } = require('../services/devicePayloadService');
 const { requireUser, requireAdmin } = require('./middlewares/auth');
 
 // Apply authentication middleware to all device routes
@@ -10,6 +11,11 @@ const admin = requireAdmin();
 
 function actorFromRequest(req) {
   return String(req.user?.email || req.user?._id || req.user?.id || 'unknown');
+}
+
+function shouldIncludeRawDevicePayload(req) {
+  return req.user?.role === 'admin'
+    && (req.query.includeRaw === '1' || req.query.includeRaw === 'true');
 }
 
 /**
@@ -33,12 +39,15 @@ router.get('/', async (req, res) => {
       refreshSmartThings,
       includeExcludedHarmony
     });
+    const serializedDevices = serializeDevices(devices, {
+      includeRaw: shouldIncludeRawDevicePayload(req)
+    });
     
-    console.log(`GET /api/devices - Successfully returned ${devices.length} devices`);
+    console.log(`GET /api/devices - Successfully returned ${serializedDevices.length} devices`);
     res.status(200).json({
       success: true,
       message: 'Devices fetched successfully',
-      data: { devices }
+      data: { devices: serializedDevices }
     });
   } catch (error) {
     console.error('GET /api/devices - Error:', error.message);
@@ -85,12 +94,20 @@ router.get('/by-room', async (req, res) => {
     console.log('GET /api/devices/by-room');
     
     const rooms = await deviceService.getDevicesByRoom();
+    const serializedRooms = Array.isArray(rooms)
+      ? rooms.map((room) => ({
+        ...room,
+        devices: serializeDevices(room.devices, {
+          includeRaw: shouldIncludeRawDevicePayload(req)
+        })
+      }))
+      : [];
     
-    console.log(`GET /api/devices/by-room - Successfully returned ${rooms.length} rooms with devices`);
+    console.log(`GET /api/devices/by-room - Successfully returned ${serializedRooms.length} rooms with devices`);
     res.status(200).json({
       success: true,
       message: 'Devices by room fetched successfully',
-      data: { rooms }
+      data: { rooms: serializedRooms }
     });
   } catch (error) {
     console.error('GET /api/devices/by-room - Error:', error.message);

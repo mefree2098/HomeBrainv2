@@ -27,7 +27,7 @@ import {
   CheckCircle2,
   AlertCircle
 } from "lucide-react"
-import { getDeviceGroups, getDevices, getDevicesByRoom, controlDevice, type DeviceGroupSummary } from "@/api/devices"
+import { getDeviceGroups, getDevices, controlDevice, type DeviceGroupSummary } from "@/api/devices"
 import { DeviceDetailsDialog } from "@/components/devices/DeviceDetailsDialog"
 import { useAlexaExposureRegistry } from "@/hooks/useAlexaExposureRegistry"
 import { useToast } from "@/hooks/useToast"
@@ -507,14 +507,14 @@ export function Devices({
     const fetchDevices = async () => {
       try {
         console.log('Fetching devices data')
-        const [allDevices, byRoom, groupsResponse] = await Promise.all([
+        const [allDevices, groupsResponse] = await Promise.all([
           getDevices(),
-          getDevicesByRoom(),
           getDeviceGroups()
         ])
+        const deviceList = Array.isArray(allDevices?.devices) ? allDevices.devices : []
         
-        setDevices(allDevices.devices)
-        setRoomDevices(byRoom.rooms)
+        setDevices(deviceList)
+        setRoomDevices(buildRoomsFromDevices(deviceList))
         setDeviceGroups(Array.isArray(groupsResponse?.groups) ? groupsResponse.groups : [])
       } catch (error) {
         console.error('Failed to fetch devices:', error)
@@ -529,7 +529,7 @@ export function Devices({
     }
 
     fetchDevices()
-  }, [toast])
+  }, [buildRoomsFromDevices, toast])
 
   useDeviceRealtime(applyIncomingDevices)
 
@@ -546,10 +546,13 @@ export function Devices({
 
   useEffect(() => {
     const interval = setInterval(() => {
+      if (document.visibilityState !== 'visible') {
+        return
+      }
       refreshDevicesSnapshot().catch((error) => {
         console.warn('Device polling refresh failed:', error)
       })
-    }, 6000)
+    }, 60_000)
 
     return () => clearInterval(interval)
   }, [refreshDevicesSnapshot])

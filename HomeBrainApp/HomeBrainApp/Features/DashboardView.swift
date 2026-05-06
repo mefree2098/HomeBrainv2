@@ -1159,12 +1159,12 @@ struct DashboardView: View {
         .task(id: dashboardWeatherRefreshTaskKey) {
             guard !previewMode, scenePhase == .active, !visibleWeatherWidgets.isEmpty else { return }
 
-            await refreshVisibleWeatherWidgets(force: true)
+            await refreshVisibleWeatherWidgets(force: true, forceTempestSync: false)
 
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
                 guard !Task.isCancelled else { break }
-                await refreshVisibleWeatherWidgets(force: true)
+                await refreshVisibleWeatherWidgets(force: true, forceTempestSync: false)
             }
         }
         .task(id: dashboardEnergyRefreshTaskKey) {
@@ -1778,22 +1778,22 @@ struct DashboardView: View {
         }
     }
 
-    private func refreshWeather(for widget: DashboardWidgetItem) async {
+    private func refreshWeather(for widget: DashboardWidgetItem, forceTempestSync: Bool = true) async {
         weatherRequestKeyByWidgetID.removeValue(forKey: widget.id)
-        await loadWeather(for: widget, force: true)
+        await loadWeather(for: widget, force: true, forceTempestSync: forceTempestSync)
     }
 
-    private func refreshVisibleWeatherWidgets(force: Bool) async {
+    private func refreshVisibleWeatherWidgets(force: Bool, forceTempestSync: Bool = false) async {
         for widget in visibleWeatherWidgets {
             if force {
-                await refreshWeather(for: widget)
+                await refreshWeather(for: widget, forceTempestSync: forceTempestSync)
             } else {
                 await loadWeather(for: widget, force: false)
             }
         }
     }
 
-    private func loadWeather(for widget: DashboardWidgetItem, force: Bool = false) async {
+    private func loadWeather(for widget: DashboardWidgetItem, force: Bool = false, forceTempestSync: Bool = false) async {
         let taskKey = weatherTaskKey(for: widget)
 
         if !force,
@@ -1847,7 +1847,7 @@ struct DashboardView: View {
                 query.append(URLQueryItem(name: "label", value: "Current location"))
             }
 
-            if force {
+            if forceTempestSync {
                 query.append(URLQueryItem(name: "forceTempestSync", value: "true"))
             }
 
