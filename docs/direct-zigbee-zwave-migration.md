@@ -122,6 +122,6 @@ The native catalog maps these categories to direct Zigbee/Z-Wave feature support
 - [x] Client lint/build.
 - [x] iOS generic build.
 - [x] npm audit/security check.
-- [ ] Commit/push through protected-main flow.
-- [ ] Safe deploy via HomeBrain live skill.
-- [ ] Post-deploy live health and adapter status verification.
+- [x] Commit/push through protected-main flow: PR #63 merged to `main` at `7019231`.
+- [x] Safe deploy via HomeBrain live skill: job `1f5d3775-d027-4e4c-8462-5932403afb1b` completed on 2026-05-07.
+- [x] Post-deploy live health and adapter status verification: production health is green, Matter controller starts, and MG24/Thread status safely reports no stick present yet.
