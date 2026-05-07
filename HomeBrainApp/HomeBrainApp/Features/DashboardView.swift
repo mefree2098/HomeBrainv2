@@ -748,7 +748,11 @@ struct DashboardView: View {
     @State private var securitySensorSelectionProfileId: String? = nil
     @State private var isPresentingSecuritySensorPicker = false
     @State private var securityAudioPlayer: AVPlayer?
+    @State private var securityEffectPlayer: AVPlayer?
     @State private var securitySpeechSynthesizer = AVSpeechSynthesizer()
+    @State private var lastSecurityCountdownEffectSecond: Int?
+    @State private var playedSecurityFinalBeeps = false
+    @State private var lastSecurityAlarmEffectState: String?
 
     @StateObject private var locationManager = DashboardLocationManager()
 
@@ -6278,6 +6282,7 @@ struct DashboardView: View {
         securityExitDelaySeconds = JSON.int(statusObject, "exitDelaySeconds", fallback: 30)
         securitySecondsUntilArmed = JSON.int(statusObject, "secondsUntilArmed")
         systemStatus = isOnline ? "Online" : "Offline"
+        playSecurityStatusEffects(alarmState: alarmState, secondsUntilArmed: securitySecondsUntilArmed)
     }
 
     private func freshRequestTimestampQueryItem() -> URLQueryItem {
@@ -7381,6 +7386,7 @@ struct DashboardView: View {
             )
             if stay {
                 playSecurityPrompt("The security system is now armed for stay. Have a good night.", audioKey: "armedStay")
+                playSecurityEffect(audioKey: "securityConfirmationChime")
             } else {
                 let audioKey = securityExitDelaySeconds == 30 ? "armingAway30" : nil
                 playSecurityPrompt("Arming away in \(securityExitDelaySeconds) seconds. Please leave the premises now.", audioKey: audioKey)
@@ -7407,6 +7413,46 @@ struct DashboardView: View {
         securitySpeechSynthesizer.speak(utterance)
     }
 
+    private func playSecurityEffect(audioKey: String) {
+        guard let path = securityAudioPrompts[audioKey],
+              let url = session.apiClient.mediaURL(path) else {
+            return
+        }
+
+        let player = AVPlayer(url: url)
+        securityEffectPlayer = player
+        player.play()
+    }
+
+    private func playSecurityStatusEffects(alarmState: String, secondsUntilArmed: Int) {
+        let normalizedState = alarmState
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "_", with: "")
+            .replacingOccurrences(of: "-", with: "")
+
+        if normalizedState != "arming" {
+            lastSecurityCountdownEffectSecond = nil
+            playedSecurityFinalBeeps = false
+        } else if secondsUntilArmed > 0 && secondsUntilArmed <= 10 && lastSecurityCountdownEffectSecond != secondsUntilArmed {
+            lastSecurityCountdownEffectSecond = secondsUntilArmed
+            if secondsUntilArmed <= 3 && !playedSecurityFinalBeeps {
+                playedSecurityFinalBeeps = true
+                playSecurityEffect(audioKey: "armingFinalBeeps")
+            } else {
+                playSecurityEffect(audioKey: "armingCountdownBeep")
+            }
+        }
+
+        if lastSecurityAlarmEffectState != normalizedState {
+            lastSecurityAlarmEffectState = normalizedState
+            if normalizedState == "triggered" {
+                playSecurityEffect(audioKey: "securityAlertPulse")
+            }
+        }
+    }
+
     private func disarmSecurity() async {
         if previewMode {
             securityStatus = "disarmed"
@@ -7417,6 +7463,7 @@ struct DashboardView: View {
         do {
             _ = try await session.apiClient.post("/api/security-alarm/disarm", body: [:])
             playSecurityPrompt("The security system is now disarmed. Have a great day.", audioKey: "disarmed")
+            playSecurityEffect(audioKey: "securityConfirmationChime")
             await refreshSecurityStatus()
         } catch {
             errorMessage = error.localizedDescription
@@ -7436,6 +7483,7 @@ struct DashboardView: View {
                 body: ["reason": "false_alarm"]
             )
             playSecurityPrompt("Alarm dismissed as a false alarm. The siren has been silenced.", audioKey: "alarmDismissedFalseAlarm")
+            playSecurityEffect(audioKey: "securityConfirmationChime")
             await refreshSecurityStatus()
         } catch {
             errorMessage = error.localizedDescription

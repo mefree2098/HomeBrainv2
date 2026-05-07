@@ -1,4 +1,4 @@
-# Direct Zigbee/Z-Wave Migration Tracker
+# Direct Zigbee/Z-Wave/Matter Migration Tracker
 
 Last updated: 2026-05-07
 
@@ -6,8 +6,10 @@ Last updated: 2026-05-07
 
 - [x] Amazon ASIN `B0BW171KP3` researched: Zooz ZST39 LR, 800-series Z-Wave Long Range S2 USB stick.
 - [x] Amazon ASIN `B09KXTCMSC` researched: SONOFF ZBDongle-P, Zigbee 3.0 USB coordinator.
+- [x] Amazon ASIN `B0FMJD288B` researched: SONOFF Zigbee/Thread USB Dongle Plus MG24 / Dongle-PMG24 class device using Silicon Labs EFR32MG24 with CP210x USB serial bridge.
 - [x] Note the protocol labels in the original request are reversed. HomeBrain support is implemented by actual detected hardware identity.
-- [ ] Verify physical USB detection on the Jetson after deployment with real sticks inserted.
+- [x] Matter hardware note: sticks have not arrived yet, so local and production behavior must be safe when no USB radio is present.
+- [ ] Verify physical USB detection on the Jetson after deployment with real Zigbee/Z-Wave/MG24 sticks inserted.
 
 References:
 
@@ -15,6 +17,10 @@ References:
 - Zooz ZST39 product page/manual: https://www.getzooz.com/zooz-zst39-z-wave-long-range-usb-stick/
 - SONOFF ZBDongle-P product page: https://sonoff.tech/product/gateway-and-sensors/sonoff-zigbee-3-0-usb-dongle-plus-p/
 - SONOFF ZBDongle-P hardware specification: https://dongle.sonoff.tech/guide/zbdongle-p/hardware_specification-2/
+- SONOFF MG24 product page: https://sonoff.tech/en-us/products/sonoff-zigbee-thread-usb-dongle-dongle-plus-mg24/58
+- CSA Matter 1.5.1 release: https://csa-iot.org/newsroom/matter-1-5-1-enhancing-camera-performance-and-expanding-device-flexibility/
+- OpenThread Border Router setup: https://openthread.io/guides/border-router/prepare
+- matter.js controller reference: https://github.com/matter-js/matter
 
 ## Controller Support
 
@@ -25,6 +31,20 @@ References:
 - [x] Device event normalization into HomeBrain device records.
 - [x] Command routing for direct HomeBrain Zigbee and Z-Wave devices.
 - [x] Safe behavior when hardware or optional driver packages are missing.
+
+## Matter / Thread Support
+
+- [x] Add native Matter source `homebrain-matter`.
+- [x] Add Matter status/config API: controller status, commissioned nodes, sessions, capabilities.
+- [x] Add Thread status API for SONOFF MG24 detection, OTBR REST reachability, active dataset availability, and setup guidance.
+- [x] Add Linux/Jetson serial autodiscovery for SONOFF MG24/EFR32MG24/CP210x without confusing it with Zooz Z-Wave.
+- [x] Add Matter commissioning API for QR/manual setup codes, known IP address, IP auto-discovery, Thread, Wi-Fi, Ethernet, and BLE-capable flows.
+- [x] Use OpenThread Border Router dataset when available, with manual dataset override for Thread commissioning.
+- [x] Add Matter device catalog mapping for lights, plugs, dimmers, color/color temperature, contact/motion/temp/humidity/illuminance sensors, batteries, locks, closures/shades/garage, thermostats, fans, power/energy, smoke/CO/water, valves, cameras/doorbells, speakers/chimes, health/firmware.
+- [x] Normalize Matter endpoints into HomeBrain `Device` records with source, node/endpoint identity, feature labels, state cache, battery, energy/power hooks, and command support.
+- [x] Route HomeBrain device commands to Matter On/Off, level, color temperature, lock/unlock, closure open/close, and alarm/silence when exposed.
+- [x] Safe startup when Matter runtime, OTBR, BLE, or USB hardware is missing.
+- [ ] Verify Matter commissioning against real devices once the MG24 stick and target Matter devices are physically present.
 
 ## Live SmartThings Inventory Covered
 
@@ -67,6 +87,8 @@ The native catalog maps these categories to direct Zigbee/Z-Wave feature support
 - [x] Existing HomeBrain device keeps name, room, groups, favorites/Alexa exposure where possible.
 - [x] SmartThings integration remains installed; migrated device source becomes `homebrain-zigbee` or `homebrain-zwave`.
 - [x] Post-migration validation compares core state and battery/support data.
+- [x] Matter web onboarding panel supports setup code, transport, known IP, room/name, Wi-Fi credentials, and Thread dataset override.
+- [x] Matter iOS onboarding panel mirrors web controls and status.
 
 ## HomeBrain Security Center
 
@@ -76,6 +98,8 @@ The native catalog maps these categories to direct Zigbee/Z-Wave feature support
 - [x] Triggered alarm dismiss supports reason: false alarm or custom.
 - [x] Dismiss turns off HomeBrain-native sirens and still attempts SmartThings siren cleanup if that platform is enabled.
 - [x] Security status includes platform states, countdowns, siren cleanup result, and dismissal audit.
+- [x] HomeBrain-native security sensors are source-agnostic: Matter, Zigbee, Z-Wave, INSTEON, weather/platform sensors, and explicit `includeInSecurityCenter` sensors can participate.
+- [x] Matter locks, closures, contact/motion/smoke/CO/water/battery sensors flow into the Security Center.
 
 ## Audio Prompts
 
@@ -85,6 +109,12 @@ The native catalog maps these categories to direct Zigbee/Z-Wave feature support
 - [x] Generate Hannah: alarm triggered.
 - [x] Generate Hannah: alarm dismissed / false alarm confirmation.
 - [x] Wire prompt metadata into web and iOS clients.
+- [x] Generate ElevenLabs SFX: countdown beep.
+- [x] Generate ElevenLabs SFX: final arming beeps.
+- [x] Generate ElevenLabs SFX: confirmation chime.
+- [x] Generate ElevenLabs SFX: restrained alert pulse.
+- [x] Web countdown and triggered-state SFX playback.
+- [x] iOS countdown and triggered-state SFX playback.
 
 ## Verification/Ship
 

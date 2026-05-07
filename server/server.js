@@ -10,6 +10,7 @@ const userRoutes = require("./routes/userRoutes");
 const oidcRoutes = require("./routes/oidcRoutes");
 const deviceRoutes = require("./routes/deviceRoutes");
 const directRadioRoutes = require("./routes/directRadioRoutes");
+const matterRoutes = require("./routes/matterRoutes");
 const deviceGroupRoutes = require("./routes/deviceGroupRoutes");
 const sceneRoutes = require("./routes/sceneRoutes");
 const automationRoutes = require("./routes/automationRoutes");
@@ -78,6 +79,7 @@ const alexaBridgeService = require("./services/alexaBridgeService");
 const alexaBrokerService = require("./services/alexaBrokerService");
 const platformUpdateMonitorService = require("./services/platformUpdateMonitorService");
 const directRadioService = require("./services/directRadioService");
+const matterService = require("./services/matterService");
 const telemetryService = require("./services/telemetryService");
 const openclawMcpService = require("./services/openclawMcpService");
 const { sendNotFound, sendUnhandledError } = require("./utils/apiErrorResponses");
@@ -404,6 +406,7 @@ app.use('/api/users', userRoutes);
 // Device Routes
 app.use('/api/devices', deviceRoutes);
 app.use('/api/direct-radios', directRadioRoutes);
+app.use('/api/matter', matterRoutes);
 app.use('/api/device-groups', deviceGroupRoutes);
 app.use('/api/device-command-coordinator', deviceCommandCoordinatorRoutes);
 app.use('/api/telemetry', telemetryRoutes);
@@ -597,6 +600,16 @@ async function startAutomationRuntimeServices() {
     .catch((error) => {
       console.warn(`Direct radio startup skipped: ${error.message}`);
     });
+
+  matterService.start()
+    .then((status) => {
+      const matterReady = status?.controllerStarted ? 'ready' : 'not ready';
+      const threadReady = status?.thread?.readyForThreadCommissioning ? 'Thread ready' : 'Thread waiting';
+      console.log(`Matter startup complete: controller ${matterReady}, ${threadReady}`);
+    })
+    .catch((error) => {
+      console.warn(`Matter startup skipped: ${error.message}`);
+    });
 }
 
 void initializeDiscoveryService();
@@ -729,6 +742,12 @@ async function gracefulShutdown(signal) {
     await directRadioService.shutdown();
   } catch (error) {
     console.error('Error stopping direct radio service:', error.message);
+  }
+
+  try {
+    await matterService.shutdown();
+  } catch (error) {
+    console.error('Error stopping Matter service:', error.message);
   }
 
   console.log('Preserving running automation executions for resume after restart');

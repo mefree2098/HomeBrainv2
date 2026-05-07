@@ -29,6 +29,7 @@ server/data/voice-acknowledgments/
 server/data/whisper/
 server/data/platform-deploy/
 server/data/direct-radios/
+server/data/matter/
 server/data/wall-panel-ota/
 server/data/weather-provider-cache.json
 server/public/downloads/

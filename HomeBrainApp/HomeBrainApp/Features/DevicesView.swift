@@ -29,6 +29,22 @@ struct DevicesView: View {
     @State private var highlightedDeviceID: String?
     @State private var pendingMigrationDeviceIds: Set<String> = []
     @State private var migrationFeedback: [String: String] = [:]
+    @State private var matterControllerReady = false
+    @State private var matterRcpDetected = false
+    @State private var matterOtbrOnline = false
+    @State private var matterThreadReady = false
+    @State private var matterLatestSessionStatus: String?
+    @State private var matterStatusMessage: String?
+    @State private var matterIsLoading = false
+    @State private var matterIsCommissioning = false
+    @State private var matterSetupCode = ""
+    @State private var matterTransport = "thread"
+    @State private var matterKnownAddress = ""
+    @State private var matterRoom = "Unassigned"
+    @State private var matterDeviceName = ""
+    @State private var matterWifiSsid = ""
+    @State private var matterWifiPassword = ""
+    @State private var matterThreadDataset = ""
 
     @State private var showCreateSheet = false
     @State private var newName = ""
@@ -110,6 +126,8 @@ struct DevicesView: View {
                                         Task { await loadDevices(showLoading: true) }
                                     }
                                 }
+
+                                matterControllerPanel
 
                                 if let embeddedFocusedDevice {
                                     focusedDeviceCard(embeddedFocusedDevice)
@@ -499,6 +517,128 @@ struct DevicesView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(HBPalette.panelStroke.opacity(0.6), lineWidth: 1)
         )
+    }
+
+    private var matterControllerPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 8) {
+                Image(systemName: "network")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(HBPalette.accentBlue)
+                Text("Matter & Thread")
+                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+                Spacer(minLength: 0)
+                Button {
+                    Task { await loadMatterStatus() }
+                } label: {
+                    if matterIsLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 13, weight: .bold))
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(matterIsLoading)
+            }
+
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                matterStatusBadge(title: "Controller", value: matterControllerReady ? "Ready" : "Waiting", good: matterControllerReady)
+                matterStatusBadge(title: "MG24", value: matterRcpDetected ? "Detected" : "Not plugged in", good: matterRcpDetected)
+                matterStatusBadge(title: "OTBR", value: matterOtbrOnline ? "Online" : "Offline", good: matterOtbrOnline)
+                matterStatusBadge(title: "Thread", value: matterThreadReady ? "Ready" : "Needs setup", good: matterThreadReady)
+            }
+
+            TextField("Matter QR or manual code", text: $matterSetupCode)
+                .textFieldStyle(.roundedBorder)
+
+            HStack(spacing: 8) {
+                Picker("Transport", selection: $matterTransport) {
+                    Text("Thread").tag("thread")
+                    Text("IP").tag("ip")
+                    Text("Wi-Fi").tag("wifi")
+                    Text("Ethernet").tag("ethernet")
+                    Text("BLE").tag("ble")
+                }
+                .pickerStyle(.menu)
+
+                TextField("Known IP", text: $matterKnownAddress)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            HStack(spacing: 8) {
+                TextField("Room", text: $matterRoom)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Name", text: $matterDeviceName)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            if matterTransport == "wifi" {
+                HStack(spacing: 8) {
+                    TextField("Wi-Fi SSID", text: $matterWifiSsid)
+                        .textFieldStyle(.roundedBorder)
+                    SecureField("Password", text: $matterWifiPassword)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+
+            if matterTransport == "thread" {
+                TextField("Thread dataset override", text: $matterThreadDataset)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            Button {
+                Task { await startMatterCommissioning() }
+            } label: {
+                if matterIsCommissioning {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(maxWidth: .infinity)
+                } else {
+                    Label("Add Matter Device", systemImage: "plus.circle")
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .buttonStyle(HBPrimaryButtonStyle())
+            .disabled(matterIsCommissioning || matterSetupCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+            if let matterStatusMessage {
+                Text(matterStatusMessage)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let matterLatestSessionStatus {
+                Text("Latest Matter session: \(matterLatestSessionStatus)")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+            }
+        }
+        .padding(14)
+        .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(HBPalette.panelStroke.opacity(0.6), lineWidth: 1)
+        )
+    }
+
+    private func matterStatusBadge(title: String, value: String, good: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .textCase(.uppercase)
+                .tracking(1.4)
+                .foregroundStyle(HBPalette.textMuted)
+            Text(value)
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(good ? HBPalette.accentGreen : HBPalette.textSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
     }
 
     private func statusBadge(for device: DeviceItem) -> some View {
@@ -936,6 +1076,7 @@ struct DevicesView: View {
             let data = JSON.object(object["data"])
             let list = JSON.array(data["devices"]).map(DeviceItem.from)
             devices = list.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            await loadMatterStatus()
 
             if let profilesResponse = try? await profilesTask {
                 applyFavoriteContext(FavoritesSupport.deviceContext(fromProfilesPayload: profilesResponse))
@@ -947,6 +1088,103 @@ struct DevicesView: View {
         }
 
         isLoading = false
+    }
+
+    private func loadMatterStatus() async {
+        guard !previewMode else {
+            matterControllerReady = false
+            matterRcpDetected = false
+            matterOtbrOnline = false
+            matterThreadReady = false
+            matterLatestSessionStatus = nil
+            matterStatusMessage = "Matter hardware has not been connected in preview mode."
+            return
+        }
+
+        matterIsLoading = true
+        defer { matterIsLoading = false }
+
+        do {
+            async let statusTask = session.apiClient.get("/api/matter/status")
+            async let sessionsTask = session.apiClient.get("/api/matter/commissioning-sessions")
+
+            let statusResponse = try await statusTask
+            let statusRoot = JSON.object(statusResponse)
+            let status = JSON.object(statusRoot["status"])
+            let thread = JSON.object(status["thread"])
+            let otbr = JSON.object(thread["otbr"])
+
+            matterControllerReady = JSON.bool(status, "controllerStarted")
+            matterRcpDetected = JSON.bool(thread, "rcpDetected")
+            matterOtbrOnline = JSON.bool(otbr, "online")
+            matterThreadReady = JSON.bool(thread, "readyForThreadCommissioning")
+
+            if let sessionsResponse = try? await sessionsTask {
+                let sessionsRoot = JSON.object(sessionsResponse)
+                let sessions = JSON.array(sessionsRoot["sessions"])
+                matterLatestSessionStatus = sessions.first.flatMap { JSON.optionalString($0, "status") }
+            }
+
+            if let startError = JSON.optionalString(status, "startError"), !startError.isEmpty {
+                matterStatusMessage = startError
+            } else if !matterRcpDetected {
+                matterStatusMessage = "The SONOFF MG24 Thread stick is not plugged in yet."
+            } else if !matterThreadReady {
+                matterStatusMessage = "Thread devices need OpenThread Border Router and an active Thread dataset."
+            } else {
+                matterStatusMessage = nil
+            }
+        } catch {
+            matterStatusMessage = error.localizedDescription
+        }
+    }
+
+    private func startMatterCommissioning() async {
+        let setupCode = matterSetupCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !setupCode.isEmpty else {
+            matterStatusMessage = "Enter a Matter setup code first."
+            return
+        }
+
+        matterIsCommissioning = true
+        defer { matterIsCommissioning = false }
+
+        do {
+            var payload: [String: Any] = [
+                "setupCode": setupCode,
+                "transport": matterTransport,
+                "room": matterRoom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Unassigned" : matterRoom
+            ]
+            if !matterKnownAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                payload["knownAddress"] = matterKnownAddress
+            }
+            if !matterDeviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                payload["name"] = matterDeviceName
+            }
+            if matterTransport == "wifi" {
+                payload["wifiSsid"] = matterWifiSsid
+                payload["wifiCredentials"] = matterWifiPassword
+            }
+            if matterTransport == "thread", !matterThreadDataset.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                payload["threadOperationalDataset"] = matterThreadDataset
+            }
+
+            let response = try await session.apiClient.post("/api/matter/commissioning/start", body: payload)
+            let root = JSON.object(response)
+            let sessionObject = JSON.object(root["session"])
+            let steps = JSON.array(sessionObject["manualSteps"]).compactMap { $0 as? String }
+            matterLatestSessionStatus = JSON.optionalString(sessionObject, "status")
+            matterStatusMessage = steps.first ?? "Matter commissioning started. Keep the device in pairing mode."
+            matterSetupCode = ""
+            matterKnownAddress = ""
+            matterDeviceName = ""
+            matterWifiPassword = ""
+            matterThreadDataset = ""
+            await loadMatterStatus()
+        } catch {
+            matterStatusMessage = error.localizedDescription
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func applyFavoriteContext(_ context: FavoriteDeviceContext) {

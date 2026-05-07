@@ -67,6 +67,13 @@ const getDirectRadioService = () => {
   }
   return cachedDirectRadioService;
 };
+let cachedMatterService = null;
+const getMatterService = () => {
+  if (!cachedMatterService) {
+    cachedMatterService = require('./matterService');
+  }
+  return cachedMatterService;
+};
 
 function isDatabaseReadyForPresenceChecks() {
   return mongoose.connection?.readyState === 1;
@@ -645,6 +652,7 @@ class DeviceService {
       const isRainMachine = this.isRainMachineDevice(device);
       const isInsteon = this.isInsteonDevice(device);
       const isDirectRadio = this.isDirectRadioDevice(device);
+      const isMatter = this.isMatterDevice(device);
       const skipIntegrationRefresh = options?.skipIntegrationRefresh === true;
       const skipPostActionVerification = options?.skipPostActionVerification === true;
       const requirePostActionVerification = options?.requirePostActionVerification === true;
@@ -711,6 +719,11 @@ class DeviceService {
             || device?.properties?.homebrainDirect?.nodeId
             || 'unknown-direct-device';
           console.warn(`DeviceService: Direct radio device ${directIdentity} reports offline; attempting command anyway`);
+        } else if (isMatter) {
+          const matterIdentity = device?.properties?.matter?.nodeId
+            ? `${device.properties.matter.nodeId}/${device.properties.matter.endpointId || 1}`
+            : 'unknown-matter-device';
+          console.warn(`DeviceService: Matter device ${matterIdentity} reports offline; attempting command anyway`);
         } else {
           throw new Error('Device is offline and cannot be controlled');
         }
@@ -770,9 +783,14 @@ class DeviceService {
             || directFeatures.includes('alarm')
             || directFeatures.includes('chime')
             || /\b(siren|alarm|sounder|chime)\b/i.test(`${device.name || ''} ${device.model || ''} ${device.brand || ''}`)
+          ) || isMatter && (
+            device?.properties?.supportsAlarm === true
+            || (Array.isArray(device?.properties?.matterFeatures)
+              && device.properties.matterFeatures.some((feature) => ['chime', 'smoke', 'carbonMonoxide'].includes(feature)))
+            || /\b(siren|alarm|sounder|chime)\b/i.test(`${device.name || ''} ${device.model || ''} ${device.brand || ''}`)
           );
           if (!supportsAlarmControl) {
-            throw new Error('Alarm silence control is only available for alarm-capable direct-radio devices');
+            throw new Error('Alarm silence control is only available for alarm-capable HomeBrain-native devices');
           }
           updateData.status = false;
           commandValue = false;
@@ -980,6 +998,24 @@ class DeviceService {
         if (updateData.isOnline === undefined) {
           updateData.isOnline = true;
         }
+      } else if (isMatter) {
+        await getMatterService().controlDevice(device, normalizedAction, commandValue, updateData);
+
+        optimisticPayload = buildOptimisticPayload();
+        if (optimisticPayload.length > 0) {
+          deviceUpdateEmitter.emit('devices:update', optimisticPayload);
+        }
+
+        if (!skipPostActionVerification) {
+          const remoteUpdate = await getMatterService().refreshMatterDeviceState(device);
+          if (remoteUpdate) {
+            Object.assign(updateData, remoteUpdate);
+          }
+        }
+
+        if (updateData.isOnline === undefined) {
+          updateData.isOnline = true;
+        }
       } else if (isHarmony) {
         await this.controlHarmonyDevice(device, normalizedAction, commandValue, updateData);
 
@@ -1044,7 +1080,7 @@ class DeviceService {
       );
 
       if (updatedDevice) {
-        if (isSmartThings || isDirectRadio) {
+        if (isSmartThings || isDirectRadio || isMatter) {
           try {
             await deviceEnergySampleService.recordSamplesForDevices([updatedDevice]);
           } catch (error) {
@@ -1223,6 +1259,12 @@ class DeviceService {
           && device.properties.directRadioFeatures.includes('brightness'));
     }
 
+    if (this.isMatterDevice(device)) {
+      return Boolean(device?.properties?.supportsBrightness)
+        || (Array.isArray(device?.properties?.matterFeatures)
+          && device.properties.matterFeatures.includes('brightness'));
+    }
+
     return Boolean(device?.properties?.supportsBrightness);
   }
 
@@ -1250,6 +1292,12 @@ class DeviceService {
           && device.properties.directRadioFeatures.includes('color'));
     }
 
+    if (this.isMatterDevice(device)) {
+      return Boolean(device?.properties?.supportsColor)
+        || (Array.isArray(device?.properties?.matterFeatures)
+          && device.properties.matterFeatures.includes('color'));
+    }
+
     return Boolean(device?.properties?.supportsColor);
   }
 
@@ -1275,6 +1323,12 @@ class DeviceService {
       return Boolean(device?.properties?.supportsColorTemperature)
         || (Array.isArray(device?.properties?.directRadioFeatures)
           && device.properties.directRadioFeatures.includes('colorTemperature'));
+    }
+
+    if (this.isMatterDevice(device)) {
+      return Boolean(device?.properties?.supportsColorTemperature)
+        || (Array.isArray(device?.properties?.matterFeatures)
+          && device.properties.matterFeatures.includes('colorTemperature'));
     }
 
     return false;
@@ -1339,6 +1393,13 @@ class DeviceService {
       || source === 'zwave'
       || protocol === 'zigbee'
       || protocol === 'zwave';
+  }
+
+  isMatterDevice(device) {
+    const source = (device?.properties?.source || '').toString().trim().toLowerCase();
+    return source === 'homebrain-matter'
+      || source === 'matter'
+      || Boolean(device?.properties?.matter?.nodeId);
   }
 
   isInsteonDevice(device) {
