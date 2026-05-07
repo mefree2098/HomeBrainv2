@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react"
 import {
   AlertTriangle,
   Battery,
@@ -14,6 +14,7 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -74,6 +75,10 @@ type AlarmStatus = {
     homebrain?: boolean
     smartthings?: boolean
   }
+  pinSettings?: {
+    requireForArm?: boolean
+    requireForDisarm?: boolean
+  }
   exitDelaySeconds?: number
   entryDelaySeconds?: number
   pendingArmMode?: string | null
@@ -109,6 +114,14 @@ type AlarmStatus = {
   lastSyncWithSmartThings?: string | null
   batteryLevel?: number | null
   signalStrength?: number | null
+}
+
+type SecurityPinPromptAction = "armStay" | "armAway" | "disarm" | "dismiss"
+
+type SecurityPinPrompt = {
+  action: SecurityPinPromptAction
+  title: string
+  description: string
 }
 
 const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_POLLING_DEBUG === "true"
@@ -349,6 +362,9 @@ export function SecurityAlarmWidget({
   const [sensorSelectorOpen, setSensorSelectorOpen] = useState(false)
   const [dismissReason, setDismissReason] = useState<"false_alarm" | "test" | "manual" | "custom">("false_alarm")
   const [customDismissReason, setCustomDismissReason] = useState("")
+  const [securityPinPrompt, setSecurityPinPrompt] = useState<SecurityPinPrompt | null>(null)
+  const [securityPinValue, setSecurityPinValue] = useState("")
+  const [securityPinSubmitting, setSecurityPinSubmitting] = useState(false)
   const lastCountdownEffectSecondRef = useRef<number | null>(null)
   const playedFinalBeepsRef = useRef(false)
   const lastAlarmStateEffectRef = useRef<string | null>(null)
@@ -478,11 +494,35 @@ export function SecurityAlarmWidget({
     }
   }
 
+  const closeSecurityPinPrompt = () => {
+    setSecurityPinPrompt(null)
+    setSecurityPinValue("")
+    setSecurityPinSubmitting(false)
+  }
+
+  const requestSecurityPin = (prompt: SecurityPinPrompt) => {
+    setSecurityPinValue("")
+    setSecurityPinPrompt(prompt)
+  }
+
   const handleArmStay = async () => {
+    if (alarmStatus?.pinSettings?.requireForArm) {
+      requestSecurityPin({
+        action: "armStay",
+        title: "Enter Security PIN",
+        description: "A PIN is required to arm stay."
+      })
+      return
+    }
+
+    await performArmStay()
+  }
+
+  const performArmStay = async (pin?: string) => {
     setArming(true)
     try {
       if (DEBUG_MODE) console.log("Arming security system in stay mode")
-      const response = await armSecuritySystem("stay")
+      const response = await armSecuritySystem("stay", pin ? { pin } : {})
 
       if (response.success) {
         speakSecurityPrompt(
@@ -495,7 +535,9 @@ export function SecurityAlarmWidget({
           description: "Security system armed in stay mode"
         })
         await fetchAlarmStatus()
+        return true
       }
+      return false
     } catch (error: any) {
       console.error("Failed to arm security system:", error)
       toast({
@@ -503,17 +545,31 @@ export function SecurityAlarmWidget({
         description: error.message || "Failed to arm security system",
         variant: "destructive"
       })
+      return false
     } finally {
       setArming(false)
     }
   }
 
   const handleArmAway = async () => {
+    if (alarmStatus?.pinSettings?.requireForArm) {
+      requestSecurityPin({
+        action: "armAway",
+        title: "Enter Security PIN",
+        description: "A PIN is required to arm away."
+      })
+      return
+    }
+
+    await performArmAway()
+  }
+
+  const performArmAway = async (pin?: string) => {
     setArming(true)
     try {
       if (DEBUG_MODE) console.log("Arming security system in away mode")
       const delaySeconds = Math.max(0, Math.min(300, Math.round(alarmStatus?.exitDelaySeconds ?? 30)))
-      const response = await armSecuritySystem("away", { exitDelaySeconds: delaySeconds })
+      const response = await armSecuritySystem("away", { exitDelaySeconds: delaySeconds, ...(pin ? { pin } : {}) })
 
       if (response.success) {
         const promptUrl = delaySeconds === 30 ? alarmStatus?.audioPrompts?.armingAway30 : undefined
@@ -528,7 +584,9 @@ export function SecurityAlarmWidget({
             : "Security system armed in away mode"
         })
         await fetchAlarmStatus()
+        return true
       }
+      return false
     } catch (error: any) {
       console.error("Failed to arm security system:", error)
       toast({
@@ -536,16 +594,30 @@ export function SecurityAlarmWidget({
         description: error.message || "Failed to arm security system",
         variant: "destructive"
       })
+      return false
     } finally {
       setArming(false)
     }
   }
 
   const handleDisarm = async () => {
+    if (alarmStatus?.pinSettings?.requireForDisarm) {
+      requestSecurityPin({
+        action: "disarm",
+        title: "Enter Security PIN",
+        description: "A PIN is required to disarm the security system."
+      })
+      return
+    }
+
+    await performDisarm()
+  }
+
+  const performDisarm = async (pin?: string) => {
     setDisarming(true)
     try {
       if (DEBUG_MODE) console.log("Disarming security system")
-      const response = await disarmSecuritySystem()
+      const response = await disarmSecuritySystem(pin ? { pin } : {})
 
       if (response.success) {
         speakSecurityPrompt(
@@ -558,7 +630,9 @@ export function SecurityAlarmWidget({
           description: "Security system disarmed"
         })
         await fetchAlarmStatus()
+        return true
       }
+      return false
     } catch (error: any) {
       console.error("Failed to disarm security system:", error)
       toast({
@@ -566,6 +640,7 @@ export function SecurityAlarmWidget({
         description: error.message || "Failed to disarm security system",
         variant: "destructive"
       })
+      return false
     } finally {
       setDisarming(false)
     }
@@ -606,12 +681,26 @@ export function SecurityAlarmWidget({
   }
 
   const handleDismiss = async () => {
+    if (alarmStatus?.pinSettings?.requireForDisarm) {
+      requestSecurityPin({
+        action: "dismiss",
+        title: "Enter Security PIN",
+        description: "A PIN is required to dismiss and silence a triggered alarm."
+      })
+      return
+    }
+
+    await performDismiss()
+  }
+
+  const performDismiss = async (pin?: string) => {
     setDismissing(true)
     try {
       if (DEBUG_MODE) console.log("Dismissing triggered alarm")
       const response = await dismissTriggeredAlarm({
         reason: dismissReason,
-        customReason: dismissReason === "custom" ? customDismissReason : undefined
+        customReason: dismissReason === "custom" ? customDismissReason : undefined,
+        ...(pin ? { pin } : {})
       })
 
       if (response.success) {
@@ -627,7 +716,9 @@ export function SecurityAlarmWidget({
           description: "Triggered alarm has been dismissed"
         })
         await fetchAlarmStatus()
+        return true
       }
+      return false
     } catch (error: any) {
       console.error("Failed to dismiss triggered alarm:", error)
       toast({
@@ -635,8 +726,47 @@ export function SecurityAlarmWidget({
         description: error.message || "Failed to dismiss triggered alarm",
         variant: "destructive"
       })
+      return false
     } finally {
       setDismissing(false)
+    }
+  }
+
+  const handleSecurityPinSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const prompt = securityPinPrompt
+    const pin = securityPinValue.trim()
+
+    if (!prompt) {
+      return
+    }
+
+    if (!pin) {
+      toast({
+        title: "PIN required",
+        description: "Enter a security PIN to continue.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setSecurityPinSubmitting(true)
+    try {
+      let completed = false
+      if (prompt.action === "armStay") {
+        completed = await performArmStay(pin)
+      } else if (prompt.action === "armAway") {
+        completed = await performArmAway(pin)
+      } else if (prompt.action === "disarm") {
+        completed = await performDisarm(pin)
+      } else {
+        completed = await performDismiss(pin)
+      }
+      if (completed) {
+        closeSecurityPinPrompt()
+      }
+    } finally {
+      setSecurityPinSubmitting(false)
     }
   }
 
@@ -1200,6 +1330,46 @@ export function SecurityAlarmWidget({
 
         </>
       ) : null}
+      <Dialog
+        open={securityPinPrompt !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeSecurityPinPrompt()
+          }
+        }}
+      >
+        <DialogContent className="w-[min(92vw,26rem)]">
+          <form onSubmit={handleSecurityPinSubmit} className="space-y-4">
+            <DialogHeader>
+              <DialogTitle>{securityPinPrompt?.title || "Enter Security PIN"}</DialogTitle>
+              <DialogDescription>
+                {securityPinPrompt?.description || "Enter a security PIN to continue."}
+              </DialogDescription>
+            </DialogHeader>
+
+            <Input
+              value={securityPinValue}
+              onChange={(event) => setSecurityPinValue(event.target.value.replace(/\D+/g, "").slice(0, 8))}
+              placeholder="PIN"
+              type="password"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              autoFocus
+              className="h-12 rounded-full text-center text-lg tracking-[0.3em]"
+            />
+
+            <DialogFooter>
+              <Button type="button" variant="ghost" onClick={closeSecurityPinPrompt}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={securityPinSubmitting || !securityPinValue.trim()}>
+                {securityPinSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Continue
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

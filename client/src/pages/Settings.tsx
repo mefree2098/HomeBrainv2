@@ -43,7 +43,8 @@ import {
   Wrench,
   Tv,
   Power,
-  CalendarClock
+  CalendarClock,
+  Plus
 } from "lucide-react"
 import { useToast } from "@/hooks/useToast"
 import { useForm } from "react-hook-form"
@@ -240,6 +241,72 @@ const DEVICE_RESTART_DAYS = [
 ]
 
 const SECURITY_EXIT_DELAY_OPTIONS = [0, 15, 30, 45, 60, 90, 120]
+
+type SecurityPinFormEntry = {
+  id?: string
+  name: string
+  pin: string
+  enabled: boolean
+  existing?: boolean
+}
+
+const normalizeSecurityPinEntries = (pins: any): SecurityPinFormEntry[] => {
+  if (!Array.isArray(pins)) {
+    return []
+  }
+
+  return pins.map((pin) => ({
+    id: typeof pin?.id === "string" ? pin.id : typeof pin?._id === "string" ? pin._id : undefined,
+    name: typeof pin?.name === "string" ? pin.name : "",
+    pin: "",
+    enabled: pin?.enabled !== false,
+    existing: Boolean(pin?.id || pin?._id)
+  }))
+}
+
+const normalizeSecurityPinsForSave = (pins: any): Array<{ id?: string; name: string; pin?: string; enabled: boolean }> => {
+  if (!Array.isArray(pins)) {
+    return []
+  }
+
+  const names = new Set<string>()
+  return pins
+    .filter((pin) => pin && typeof pin === "object")
+    .map((pin) => ({
+      id: typeof pin.id === "string" && pin.id.trim() ? pin.id.trim() : undefined,
+      name: typeof pin.name === "string" ? pin.name.trim().replace(/\s+/g, " ") : "",
+      pin: typeof pin.pin === "string" ? pin.pin.trim() : "",
+      enabled: pin.enabled !== false,
+      existing: Boolean(pin.existing || pin.id)
+    }))
+    .filter((pin) => pin.name || pin.pin || pin.id)
+    .map((pin) => {
+      if (!pin.name) {
+        throw new Error("Each security PIN needs a name.")
+      }
+
+      const nameKey = pin.name.toLowerCase()
+      if (names.has(nameKey)) {
+        throw new Error("Security PIN names must be unique.")
+      }
+      names.add(nameKey)
+
+      if (pin.pin && !/^\d{4,8}$/.test(pin.pin)) {
+        throw new Error("Security PINs must be 4-8 digits.")
+      }
+
+      if (!pin.existing && !pin.pin) {
+        throw new Error(`Enter a PIN for ${pin.name}.`)
+      }
+
+      return {
+        ...(pin.id ? { id: pin.id } : {}),
+        name: pin.name,
+        ...(pin.pin ? { pin: pin.pin } : {}),
+        enabled: pin.enabled
+      }
+    })
+}
 
 const formatInsteonConnectionTarget = (target: {
   label?: string;
@@ -552,6 +619,9 @@ export function Settings() {
       securityHomeBrainEnabled: true,
       securitySmartThingsEnabled: true,
       securityArmAwayExitDelaySeconds: 30,
+      securityPinRequireForArm: false,
+      securityPinRequireForDisarm: false,
+      securityPins: [],
       deviceRestartScheduleEnabled: false,
       deviceRestartScheduleFrequency: "weekly",
       deviceRestartScheduleDayOfWeek: 0,
@@ -777,10 +847,36 @@ export function Settings() {
     0,
     Math.min(300, Number(watch("securityArmAwayExitDelaySeconds") ?? 30) || 0)
   )
+  const securityPinRequireForArm = watch("securityPinRequireForArm") === true
+  const securityPinRequireForDisarm = watch("securityPinRequireForDisarm") === true
+  const securityPins = Array.isArray(watch("securityPins"))
+    ? (watch("securityPins") as SecurityPinFormEntry[])
+    : []
   const securityExitDelayOptions = Array.from(new Set([
     ...SECURITY_EXIT_DELAY_OPTIONS,
     securityArmAwayExitDelaySeconds
   ])).sort((left, right) => left - right)
+
+  const setSecurityPins = (pins: SecurityPinFormEntry[]) => {
+    setValue("securityPins", pins, { shouldDirty: true })
+  }
+
+  const addSecurityPin = () => {
+    setSecurityPins([
+      ...securityPins,
+      { name: "", pin: "", enabled: true, existing: false }
+    ])
+  }
+
+  const updateSecurityPin = (index: number, changes: Partial<SecurityPinFormEntry>) => {
+    setSecurityPins(securityPins.map((pin, pinIndex) => (
+      pinIndex === index ? { ...pin, ...changes } : pin
+    )))
+  }
+
+  const removeSecurityPin = (index: number) => {
+    setSecurityPins(securityPins.filter((_, pinIndex) => pinIndex !== index))
+  }
 
   // Load settings on component mount
   useEffect(() => {
@@ -827,12 +923,16 @@ export function Settings() {
             const securityResponse = await getSecuritySettings()
             const securitySettings = securityResponse?.settings || {}
             const securityPlatforms = securitySettings.enabledPlatforms || {}
+            const securityPinSettings = securitySettings.pinSettings || {}
             setValue("securityHomeBrainEnabled", securityPlatforms.homebrain !== false)
             setValue("securitySmartThingsEnabled", securityPlatforms.smartthings !== false)
             setValue(
               "securityArmAwayExitDelaySeconds",
               Math.max(0, Math.min(300, Number(securitySettings.exitDelaySeconds ?? 30) || 0))
             )
+            setValue("securityPinRequireForArm", securityPinSettings.requireForArm === true)
+            setValue("securityPinRequireForDisarm", securityPinSettings.requireForDisarm === true)
+            setValue("securityPins", normalizeSecurityPinEntries(securitySettings.pins))
           } catch (securitySettingsError) {
             console.warn("Failed to load security settings:", securitySettingsError)
           }
@@ -1437,6 +1537,14 @@ export function Settings() {
       }
 
       delete settingsToSave.localLlmModel
+      const securityPinsToSave = normalizeSecurityPinsForSave(settingsToSave.securityPins)
+      if (
+        (settingsToSave.securityPinRequireForArm === true || settingsToSave.securityPinRequireForDisarm === true) &&
+        !securityPinsToSave.some((pin) => pin.enabled !== false)
+      ) {
+        throw new Error("Add at least one enabled security PIN before requiring PIN entry.")
+      }
+
       const securitySettingsToSave = {
         enabledPlatforms: {
           homebrain: settingsToSave.securityHomeBrainEnabled !== false,
@@ -1445,11 +1553,19 @@ export function Settings() {
         exitDelaySeconds: Math.max(
           0,
           Math.min(300, Number(settingsToSave.securityArmAwayExitDelaySeconds ?? 30) || 0)
-        )
+        ),
+        pinSettings: {
+          requireForArm: settingsToSave.securityPinRequireForArm === true,
+          requireForDisarm: settingsToSave.securityPinRequireForDisarm === true
+        },
+        pins: securityPinsToSave
       }
       delete settingsToSave.securityHomeBrainEnabled
       delete settingsToSave.securitySmartThingsEnabled
       delete settingsToSave.securityArmAwayExitDelaySeconds
+      delete settingsToSave.securityPinRequireForArm
+      delete settingsToSave.securityPinRequireForDisarm
+      delete settingsToSave.securityPins
       delete settingsToSave.deviceRestartScheduleNextRunAt
       delete settingsToSave.deviceRestartScheduleLastTriggeredAt
       settingsToSave.spamFilterLocalLlmModel = settingsToSave.homebrainLocalLlmModel
@@ -1483,6 +1599,10 @@ export function Settings() {
             "securityArmAwayExitDelaySeconds",
             Math.max(0, Math.min(300, Number(securityResponse.settings.exitDelaySeconds ?? 30) || 0))
           )
+          const securityPinSettings = securityResponse.settings.pinSettings || {}
+          setValue("securityPinRequireForArm", securityPinSettings.requireForArm === true)
+          setValue("securityPinRequireForDisarm", securityPinSettings.requireForDisarm === true)
+          setValue("securityPins", normalizeSecurityPinEntries(securityResponse.settings.pins))
         }
         setIsyPasswordConfigured(Boolean(
           response.settings?.isyPassword && String(response.settings.isyPassword).trim()
@@ -7442,6 +7562,88 @@ export function Settings() {
                       </SelectContent>
                     </Select>
                   </div>
+                </div>
+                <div className="rounded-lg border border-border/60 bg-slate-50/80 p-3 dark:bg-slate-950/40">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="font-medium">Security PINs</p>
+                      <p className="text-sm text-muted-foreground">
+                        Named PINs show who armed or disarmed the alarm.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      <label className="flex items-center gap-2 text-sm font-medium">
+                        <Switch
+                          checked={securityPinRequireForArm}
+                          onCheckedChange={(checked) => setValue("securityPinRequireForArm", checked)}
+                          aria-label="Require PIN to arm"
+                        />
+                        Require to arm
+                      </label>
+                      <label className="flex items-center gap-2 text-sm font-medium">
+                        <Switch
+                          checked={securityPinRequireForDisarm}
+                          onCheckedChange={(checked) => setValue("securityPinRequireForDisarm", checked)}
+                          aria-label="Require PIN to disarm"
+                        />
+                        Require to disarm
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 space-y-2">
+                    {securityPins.length > 0 ? (
+                      securityPins.map((pin, index) => (
+                        <div
+                          key={pin.id || `new-pin-${index}`}
+                          className="grid gap-2 rounded-lg border border-border/50 bg-background/70 p-3 md:grid-cols-[minmax(10rem,1fr)_minmax(9rem,0.75fr)_auto_auto] md:items-center"
+                        >
+                          <Input
+                            value={pin.name}
+                            onChange={(event) => updateSecurityPin(index, { name: event.target.value })}
+                            placeholder="Name"
+                            aria-label={`Security PIN ${index + 1} name`}
+                          />
+                          <Input
+                            value={pin.pin}
+                            onChange={(event) => updateSecurityPin(index, { pin: event.target.value.replace(/\D+/g, "").slice(0, 8) })}
+                            placeholder={pin.existing ? "Leave blank to keep" : "4-8 digit PIN"}
+                            type="password"
+                            inputMode="numeric"
+                            autoComplete="new-password"
+                            aria-label={`Security PIN ${index + 1}`}
+                          />
+                          <label className="flex items-center gap-2 text-sm font-medium">
+                            <Switch
+                              checked={pin.enabled !== false}
+                              onCheckedChange={(checked) => updateSecurityPin(index, { enabled: checked })}
+                              aria-label={`Enable security PIN ${index + 1}`}
+                            />
+                            Enabled
+                          </label>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => removeSecurityPin(index)}
+                            className="gap-2 text-red-600 hover:text-red-700 dark:text-red-300 dark:hover:text-red-200"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Remove
+                          </Button>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="rounded-lg border border-dashed border-border/60 bg-background/60 px-3 py-4 text-sm text-muted-foreground">
+                        No security PINs configured.
+                      </div>
+                    )}
+                  </div>
+
+                  <Button type="button" variant="outline" onClick={addSecurityPin} className="mt-3 gap-2">
+                    <Plus className="h-4 w-4" />
+                    Add PIN
+                  </Button>
                 </div>
                 <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800">
                   <p className="text-sm text-yellow-800 dark:text-yellow-200">

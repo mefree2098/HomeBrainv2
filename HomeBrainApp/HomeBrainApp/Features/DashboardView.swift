@@ -682,6 +682,13 @@ struct DashboardView: View {
         var id: String { widget.id }
     }
 
+    private enum DashboardSecurityPinAction {
+        case armStay
+        case armAway
+        case disarm
+        case dismiss
+    }
+
     @EnvironmentObject private var session: SessionStore
     @EnvironmentObject private var dashboardChrome: DashboardChromeState
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -704,6 +711,11 @@ struct DashboardView: View {
     @State private var securityAudioPrompts: [String: String] = [:]
     @State private var securityExitDelaySeconds = 30
     @State private var securitySecondsUntilArmed = 0
+    @State private var securityRequirePinForArm = false
+    @State private var securityRequirePinForDisarm = false
+    @State private var securityPinAction: DashboardSecurityPinAction?
+    @State private var securityPinEntry = ""
+    @State private var isSubmittingSecurityPin = false
     @State private var systemStatus = "Online"
     @State private var favoriteDeviceIds: Set<String> = []
     @State private var favoritesProfileId: String?
@@ -784,6 +796,18 @@ struct DashboardView: View {
             set: { presented in
                 if !presented {
                     weatherInfoTopic = nil
+                }
+            }
+        )
+    }
+    private var isPresentingSecurityPinSheet: Binding<Bool> {
+        Binding(
+            get: { securityPinAction != nil },
+            set: { presented in
+                if !presented {
+                    securityPinAction = nil
+                    securityPinEntry = ""
+                    isSubmittingSecurityPin = false
                 }
             }
         )
@@ -1209,6 +1233,11 @@ struct DashboardView: View {
         }
         .sheet(isPresented: $showingAddWidgetSheet) {
             dashboardAddWidgetSheet
+        }
+        .sheet(isPresented: isPresentingSecurityPinSheet) {
+            securityPinSheet
+                .presentationDetents([.height(280)])
+                .presentationDragIndicator(.visible)
         }
         .alert(dashboardNameAlertTitle, isPresented: dashboardNameAlertBinding(), actions: {
             TextField("Dashboard name", text: $pendingDashboardName)
@@ -2425,6 +2454,87 @@ struct DashboardView: View {
                 securityPrimaryActionSlot(compact: compact)
                 securitySyncAction(compact: compact)
             }
+        }
+    }
+
+    private var securityPinSheet: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(securityPinPromptTitle)
+                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+                Text(securityPinPromptMessage)
+                    .font(.subheadline)
+                    .foregroundStyle(HBPalette.textSecondary)
+            }
+
+            SecureField("PIN", text: $securityPinEntry)
+                .keyboardType(.numberPad)
+                .textContentType(.oneTimeCode)
+                .font(.system(size: 24, weight: .bold, design: .rounded))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 16)
+                .frame(height: 54)
+                .background(HBGlassBackground(cornerRadius: 18, variant: .panelSoft))
+                .onChange(of: securityPinEntry) { _, newValue in
+                    let filtered = String(newValue.filter(\.isNumber).prefix(8))
+                    if filtered != newValue {
+                        securityPinEntry = filtered
+                    }
+                }
+
+            HStack(spacing: 12) {
+                Button("Cancel") {
+                    securityPinAction = nil
+                    securityPinEntry = ""
+                }
+                .buttonStyle(HBSecondaryButtonStyle(compact: true))
+
+                Button {
+                    Task { await submitSecurityPinAction() }
+                } label: {
+                    if isSubmittingSecurityPin {
+                        ProgressView()
+                            .frame(maxWidth: .infinity)
+                    } else {
+                        Text("Continue")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(HBPrimaryButtonStyle(compact: true))
+                .disabled(securityPinEntry.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSubmittingSecurityPin)
+            }
+        }
+        .padding(22)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(HBGlassBackground(cornerRadius: 0, variant: .panel))
+    }
+
+    private var securityPinPromptTitle: String {
+        switch securityPinAction {
+        case .armStay, .armAway:
+            return "Enter Security PIN"
+        case .disarm:
+            return "Disarm Security System"
+        case .dismiss:
+            return "Dismiss Alarm"
+        case nil:
+            return "Enter Security PIN"
+        }
+    }
+
+    private var securityPinPromptMessage: String {
+        switch securityPinAction {
+        case .armStay:
+            return "A PIN is required to arm stay."
+        case .armAway:
+            return "A PIN is required to arm away."
+        case .disarm:
+            return "A PIN is required to disarm the security system."
+        case .dismiss:
+            return "A PIN is required to dismiss and silence a triggered alarm."
+        case nil:
+            return "Enter a security PIN to continue."
         }
     }
 
@@ -6268,6 +6378,7 @@ struct DashboardView: View {
         )
         let isOnline = JSON.bool(statusObject, "isOnline", fallback: true)
         let promptObject = JSON.object(statusObject["audioPrompts"])
+        let pinSettings = JSON.object(statusObject["pinSettings"])
 
         securityStatus = alarmState
         securityZonesActive = activeSensors
@@ -6281,6 +6392,8 @@ struct DashboardView: View {
         }
         securityExitDelaySeconds = JSON.int(statusObject, "exitDelaySeconds", fallback: 30)
         securitySecondsUntilArmed = JSON.int(statusObject, "secondsUntilArmed")
+        securityRequirePinForArm = JSON.bool(pinSettings, "requireForArm")
+        securityRequirePinForDisarm = JSON.bool(pinSettings, "requireForDisarm")
         systemStatus = isOnline ? "Online" : "Offline"
         playSecurityStatusEffects(alarmState: alarmState, secondsUntilArmed: securitySecondsUntilArmed)
     }
@@ -7369,17 +7482,30 @@ struct DashboardView: View {
     }
 
     private func armSecurity(stay: Bool) async {
+        if securityRequirePinForArm {
+            securityPinAction = stay ? .armStay : .armAway
+            securityPinEntry = ""
+            return
+        }
+
+        _ = await performArmSecurity(stay: stay, pin: nil)
+    }
+
+    private func performArmSecurity(stay: Bool, pin: String?) async -> Bool {
         if previewMode {
             securityStatus = stay ? "armedStay" : "armedAway"
             systemStatus = "Online"
-            return
+            return true
         }
 
         do {
             let mode = stay ? "stay" : "away"
-            let body: [String: Any] = stay
+            var body: [String: Any] = stay
                 ? ["mode": mode]
                 : ["mode": mode, "exitDelaySeconds": securityExitDelaySeconds]
+            if let pin, !pin.isEmpty {
+                body["pin"] = pin
+            }
             _ = try await session.apiClient.post(
                 "/api/security-alarm/arm",
                 body: body
@@ -7392,8 +7518,10 @@ struct DashboardView: View {
                 playSecurityPrompt("Arming away in \(securityExitDelaySeconds) seconds. Please leave the premises now.", audioKey: audioKey)
             }
             await refreshSecurityStatus()
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
     }
 
@@ -7454,39 +7582,103 @@ struct DashboardView: View {
     }
 
     private func disarmSecurity() async {
-        if previewMode {
-            securityStatus = "disarmed"
-            systemStatus = "Online"
+        if securityRequirePinForDisarm {
+            securityPinAction = .disarm
+            securityPinEntry = ""
             return
         }
 
+        _ = await performDisarmSecurity(pin: nil)
+    }
+
+    private func performDisarmSecurity(pin: String?) async -> Bool {
+        if previewMode {
+            securityStatus = "disarmed"
+            systemStatus = "Online"
+            return true
+        }
+
         do {
-            _ = try await session.apiClient.post("/api/security-alarm/disarm", body: [:])
+            var body: [String: Any] = [:]
+            if let pin, !pin.isEmpty {
+                body["pin"] = pin
+            }
+            _ = try await session.apiClient.post("/api/security-alarm/disarm", body: body)
             playSecurityPrompt("The security system is now disarmed. Have a great day.", audioKey: "disarmed")
             playSecurityEffect(audioKey: "securityConfirmationChime")
             await refreshSecurityStatus()
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
         }
     }
 
     private func dismissSecurityAlarm() async {
-        if previewMode {
-            securityStatus = "disarmed"
-            systemStatus = "Online"
+        if securityRequirePinForDisarm {
+            securityPinAction = .dismiss
+            securityPinEntry = ""
             return
         }
 
+        _ = await performDismissSecurityAlarm(pin: nil)
+    }
+
+    private func performDismissSecurityAlarm(pin: String?) async -> Bool {
+        if previewMode {
+            securityStatus = "disarmed"
+            systemStatus = "Online"
+            return true
+        }
+
         do {
+            var body: [String: Any] = ["reason": "false_alarm"]
+            if let pin, !pin.isEmpty {
+                body["pin"] = pin
+            }
             _ = try await session.apiClient.post(
                 "/api/security-alarm/dismiss",
-                body: ["reason": "false_alarm"]
+                body: body
             )
             playSecurityPrompt("Alarm dismissed as a false alarm. The siren has been silenced.", audioKey: "alarmDismissedFalseAlarm")
             playSecurityEffect(audioKey: "securityConfirmationChime")
             await refreshSecurityStatus()
+            return true
         } catch {
             errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    private func submitSecurityPinAction() async {
+        guard let action = securityPinAction else {
+            return
+        }
+
+        let pin = securityPinEntry.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !pin.isEmpty else {
+            errorMessage = "Enter a security PIN to continue."
+            return
+        }
+
+        isSubmittingSecurityPin = true
+        defer { isSubmittingSecurityPin = false }
+
+        let succeeded: Bool
+        switch action {
+        case .armStay:
+            succeeded = await performArmSecurity(stay: true, pin: pin)
+        case .armAway:
+            succeeded = await performArmSecurity(stay: false, pin: pin)
+        case .disarm:
+            succeeded = await performDisarmSecurity(pin: pin)
+        case .dismiss:
+            succeeded = await performDismissSecurityAlarm(pin: pin)
+        }
+
+        if succeeded {
+            securityPinAction = nil
+            securityPinEntry = ""
         }
     }
 

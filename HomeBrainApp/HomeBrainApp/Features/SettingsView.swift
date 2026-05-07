@@ -164,6 +164,29 @@ private enum HardwareOrbSettingsTab: String, CaseIterable, Identifiable {
     }
 }
 
+private struct SecurityPinDraft: Identifiable, Equatable {
+    var id: String
+    var name: String
+    var pin: String
+    var enabled: Bool
+    var existing: Bool
+
+    static func empty() -> SecurityPinDraft {
+        SecurityPinDraft(id: UUID().uuidString, name: "", pin: "", enabled: true, existing: false)
+    }
+
+    static func from(_ object: [String: Any]) -> SecurityPinDraft {
+        let resolvedID = JSON.string(object, "id", fallback: JSON.string(object, "_id", fallback: UUID().uuidString))
+        return SecurityPinDraft(
+            id: resolvedID,
+            name: JSON.string(object, "name"),
+            pin: "",
+            enabled: JSON.bool(object, "enabled", fallback: true),
+            existing: true
+        )
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject private var session: SessionStore
 
@@ -210,6 +233,9 @@ struct SettingsView: View {
     @State private var securityHomeBrainEnabled = true
     @State private var securitySmartThingsEnabled = true
     @State private var securityArmAwayExitDelaySeconds = 30
+    @State private var securityRequirePinForArm = false
+    @State private var securityRequirePinForDisarm = false
+    @State private var securityPinDrafts: [SecurityPinDraft] = []
     @State private var autoDiscoveryEnabled = false
 
     @State private var llmProvider = "openai"
@@ -659,6 +685,39 @@ struct SettingsView: View {
                 }
             }
             .pickerStyle(.menu)
+
+            Toggle("Require PIN to Arm", isOn: $securityRequirePinForArm)
+            Toggle("Require PIN to Disarm", isOn: $securityRequirePinForDisarm)
+
+            if securityPinDrafts.isEmpty {
+                Text("No security PINs configured.")
+                    .font(.footnote)
+                    .foregroundStyle(HBPalette.textSecondary)
+            } else {
+                ForEach($securityPinDrafts) { $pin in
+                    VStack(alignment: .leading, spacing: 8) {
+                        TextField("PIN Name", text: $pin.name)
+                            .textInputAutocapitalization(.words)
+                        SecureField(pin.existing ? "Leave blank to keep PIN" : "4-8 digit PIN", text: $pin.pin)
+                            .keyboardType(.numberPad)
+                        Toggle("Enabled", isOn: $pin.enabled)
+                    }
+                    .padding(.vertical, 4)
+                    .swipeActions {
+                        Button(role: .destructive) {
+                            securityPinDrafts.removeAll { $0.id == pin.id }
+                        } label: {
+                            Label("Remove", systemImage: "trash")
+                        }
+                    }
+                }
+            }
+
+            Button {
+                securityPinDrafts.append(SecurityPinDraft.empty())
+            } label: {
+                Label("Add Security PIN", systemImage: "plus")
+            }
 
             Stepper(value: $authSessionMaxAgeDays, in: 30...3650, step: 30) {
                 HStack {
@@ -1426,12 +1485,16 @@ struct SettingsView: View {
             let object = JSON.object(response)
             let settings = JSON.object(object["settings"])
             let platforms = JSON.object(settings["enabledPlatforms"])
+            let pinSettings = JSON.object(settings["pinSettings"])
             securityHomeBrainEnabled = JSON.bool(platforms, "homebrain", fallback: true)
             securitySmartThingsEnabled = JSON.bool(platforms, "smartthings", fallback: true)
             securityArmAwayExitDelaySeconds = min(
                 300,
                 max(0, JSON.int(settings, "exitDelaySeconds", fallback: securityArmAwayExitDelaySeconds))
             )
+            securityRequirePinForArm = JSON.bool(pinSettings, "requireForArm")
+            securityRequirePinForDisarm = JSON.bool(pinSettings, "requireForDisarm")
+            securityPinDrafts = JSON.array(settings["pins"]).map(SecurityPinDraft.from)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1493,23 +1556,102 @@ struct SettingsView: View {
     }
 
     private func saveSecurityAlarmSettings() async throws {
+        let pinsPayload = try securityPinsPayload()
+        if (securityRequirePinForArm || securityRequirePinForDisarm)
+            && !pinsPayload.contains(where: { JSON.bool($0, "enabled", fallback: true) }) {
+            throw NSError(
+                domain: "HomeBrainSettings",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Add at least one enabled security PIN before requiring PIN entry."]
+            )
+        }
+
         let payload: [String: Any] = [
             "enabledPlatforms": [
                 "homebrain": securityHomeBrainEnabled,
                 "smartthings": securitySmartThingsEnabled
             ],
-            "exitDelaySeconds": min(300, max(0, securityArmAwayExitDelaySeconds))
+            "exitDelaySeconds": min(300, max(0, securityArmAwayExitDelaySeconds)),
+            "pinSettings": [
+                "requireForArm": securityRequirePinForArm,
+                "requireForDisarm": securityRequirePinForDisarm
+            ],
+            "pins": pinsPayload
         ]
         let response = try await session.apiClient.put("/api/security-alarm/settings", body: payload)
         let object = JSON.object(response)
         let settings = JSON.object(object["settings"])
         let platforms = JSON.object(settings["enabledPlatforms"])
+        let pinSettings = JSON.object(settings["pinSettings"])
         securityHomeBrainEnabled = JSON.bool(platforms, "homebrain", fallback: securityHomeBrainEnabled)
         securitySmartThingsEnabled = JSON.bool(platforms, "smartthings", fallback: securitySmartThingsEnabled)
         securityArmAwayExitDelaySeconds = min(
             300,
             max(0, JSON.int(settings, "exitDelaySeconds", fallback: securityArmAwayExitDelaySeconds))
         )
+        securityRequirePinForArm = JSON.bool(pinSettings, "requireForArm", fallback: securityRequirePinForArm)
+        securityRequirePinForDisarm = JSON.bool(pinSettings, "requireForDisarm", fallback: securityRequirePinForDisarm)
+        securityPinDrafts = JSON.array(settings["pins"]).map(SecurityPinDraft.from)
+    }
+
+    private func securityPinsPayload() throws -> [[String: Any]] {
+        var seenNames = Set<String>()
+        var payload: [[String: Any]] = []
+
+        for draft in securityPinDrafts {
+            let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let pin = draft.pin.trimmingCharacters(in: .whitespacesAndNewlines)
+            if name.isEmpty && pin.isEmpty && !draft.existing {
+                continue
+            }
+            if name.isEmpty {
+                throw NSError(
+                    domain: "HomeBrainSettings",
+                    code: 2,
+                    userInfo: [NSLocalizedDescriptionKey: "Each security PIN needs a name."]
+                )
+            }
+
+            let nameKey = name.lowercased()
+            if seenNames.contains(nameKey) {
+                throw NSError(
+                    domain: "HomeBrainSettings",
+                    code: 3,
+                    userInfo: [NSLocalizedDescriptionKey: "Security PIN names must be unique."]
+                )
+            }
+            seenNames.insert(nameKey)
+
+            if !pin.isEmpty && pin.range(of: #"^\d{4,8}$"#, options: .regularExpression) == nil {
+                throw NSError(
+                    domain: "HomeBrainSettings",
+                    code: 4,
+                    userInfo: [NSLocalizedDescriptionKey: "Security PINs must be 4-8 digits."]
+                )
+            }
+
+            if !draft.existing && pin.isEmpty {
+                throw NSError(
+                    domain: "HomeBrainSettings",
+                    code: 5,
+                    userInfo: [NSLocalizedDescriptionKey: "Enter a PIN for \(name)."]
+                )
+            }
+
+            var item: [String: Any] = [
+                "name": name,
+                "enabled": draft.enabled
+            ]
+            if draft.existing {
+                item["id"] = draft.id
+            }
+            if !pin.isEmpty {
+                item["pin"] = pin
+            }
+            payload.append(item)
+        }
+
+        return payload
     }
 
     private func testOpenAI() async {

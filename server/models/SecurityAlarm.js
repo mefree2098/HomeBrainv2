@@ -48,6 +48,17 @@ const SecurityAlarmSchema = new mongoose.Schema({
     }
   },
 
+  pinSettings: {
+    requireForArm: {
+      type: Boolean,
+      default: false
+    },
+    requireForDisarm: {
+      type: Boolean,
+      default: false
+    }
+  },
+
   pendingArmMode: {
     type: String,
     enum: ['stay', 'away', null],
@@ -217,6 +228,21 @@ const SecurityAlarmSchema = new mongoose.Schema({
   }
 }, {
   timestamps: true
+});
+
+SecurityAlarmSchema.set('toJSON', {
+  transform: (doc, ret) => {
+    if (Array.isArray(ret.userCodes)) {
+      ret.userCodes = ret.userCodes.map((entry) => ({
+        _id: entry._id,
+        id: entry._id?.toString?.() || entry.id,
+        userId: entry.userId,
+        name: entry.name,
+        enabled: entry.enabled !== false
+      }));
+    }
+    return ret;
+  }
 });
 
 // Index for faster queries
