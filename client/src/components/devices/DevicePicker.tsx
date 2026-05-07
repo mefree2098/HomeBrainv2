@@ -13,8 +13,18 @@ import { Button } from "@/components/ui/button"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
+import {
+  ALL_DEVICE_SOURCES_VALUE,
+  buildDeviceSourceOptions as buildSourceOptions,
+  deviceMatchesSourceFilter,
+  getDeviceSource,
+  getDeviceSourceFacets,
+  getDeviceSourceLabel,
+  getDeviceSourceSearchText,
+  sourceListMatchesFilter
+} from "@/lib/deviceSources"
 
-export const ALL_DEVICE_SOURCES_VALUE = "all"
+export { ALL_DEVICE_SOURCES_VALUE, getDeviceSource, getDeviceSourceLabel }
 
 export type DevicePickerDevice = {
   _id?: string
@@ -64,57 +74,10 @@ type DeviceSourceFilterSelectProps = {
   disabled?: boolean
 }
 
-const SOURCE_LABELS: Record<string, string> = {
-  alexa: "Alexa",
-  ecobee: "Ecobee",
-  harmony: "Harmony",
-  homebrain: "HomeBrain",
-  insteon: "INSTEON",
-  isy: "ISY",
-  local: "HomeBrain",
-  manual: "Manual",
-  rainmachine: "RainMachine",
-  sense: "Sense",
-  smartthings: "SmartThings",
-  tempest: "Tempest",
-  voice: "Voice"
-}
-
 const normalizeString = (value: unknown) => String(value || "").trim()
 
 export function getDevicePickerId(device: DevicePickerDevice | null | undefined) {
   return normalizeString(device?._id || device?.id)
-}
-
-export function getDeviceSource(device: DevicePickerDevice | null | undefined) {
-  const properties = device?.properties || {}
-  const explicitSource = normalizeString(device?.source || properties.source).toLowerCase()
-  if (explicitSource) {
-    return explicitSource
-  }
-
-  if (properties.smartThingsDeviceId || properties.smartThingsId) {
-    return "smartthings"
-  }
-  if (properties.harmonyDeviceId || properties.harmonyHubIp) {
-    return "harmony"
-  }
-  if (properties.insteonAddress || properties.insteonDeviceId) {
-    return "insteon"
-  }
-  if (properties.senseDeviceId || properties.senseMonitorId) {
-    return "sense"
-  }
-
-  return "local"
-}
-
-export function getDeviceSourceLabel(source: string | null | undefined) {
-  const normalized = normalizeString(source).toLowerCase()
-  if (!normalized) {
-    return "Unknown"
-  }
-  return SOURCE_LABELS[normalized] || normalized.replace(/[_-]/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
 export function getDevicePickerLabel(device: DevicePickerDevice | null | undefined) {
@@ -134,18 +97,17 @@ export function getDevicePickerSearchText(device: DevicePickerDevice | null | un
     getDevicePickerLabel(device),
     getDevicePickerDescription(device),
     getDeviceSource(device),
+    ...getDeviceSourceFacets(device),
+    getDeviceSourceSearchText(getDeviceSource(device)),
     ...(Array.isArray(device?.groups) ? device.groups : []),
     getDevicePickerId(device)
   ].join(" ").toLowerCase()
 }
 
 export function buildDeviceSourceOptions(devices: DevicePickerDevice[]) {
-  const sources = Array.from(new Set(devices.map(getDeviceSource).filter(Boolean)))
-    .sort((left, right) => getDeviceSourceLabel(left).localeCompare(getDeviceSourceLabel(right)))
-
   return [
     { value: ALL_DEVICE_SOURCES_VALUE, label: "All sources" },
-    ...sources.map((source) => ({ value: source, label: getDeviceSourceLabel(source) }))
+    ...buildSourceOptions(devices)
   ]
 }
 
@@ -158,7 +120,7 @@ export function filterDevicesForDevicePicker(
   const normalizedSource = normalizeString(sourceFilter).toLowerCase()
 
   return devices.filter((device) => {
-    if (normalizedSource && normalizedSource !== ALL_DEVICE_SOURCES_VALUE && getDeviceSource(device) !== normalizedSource) {
+    if (normalizedSource && !deviceMatchesSourceFilter(device, normalizedSource)) {
       return false
     }
 
@@ -244,11 +206,11 @@ export function DevicePicker({
           keywords: [
             getDevicePickerLabel(device),
             getDevicePickerDescription(device),
-            getDeviceSource(device),
+            ...getDeviceSourceFacets(device),
             getDevicePickerId(device),
             ...(Array.isArray(device.groups) ? device.groups : [])
           ].filter(Boolean),
-          sources: [getDeviceSource(device)]
+          sources: getDeviceSourceFacets(device)
         })).filter((item) => item.value)
       }))
       .filter((group) => group.items.length > 0)
@@ -263,7 +225,7 @@ export function DevicePicker({
       .map((group) => ({
         ...group,
         items: group.items.filter((item) => (
-          !Array.isArray(item.sources) || item.sources.includes(sourceFilter)
+          sourceListMatchesFilter(item.sources, sourceFilter)
         ))
       }))
       .filter((group) => group.items.length > 0)

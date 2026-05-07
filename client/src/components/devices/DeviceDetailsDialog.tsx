@@ -32,6 +32,7 @@ import {
   type TelemetrySeriesPayload,
   type TelemetryTimelineEvent
 } from "@/api/telemetry"
+import { getDeviceSource, getDeviceSourceLabel } from "@/lib/deviceSources"
 import { type AlexaExposureSummary } from "@/api/alexa"
 import { AlexaExposureControl } from "@/components/alexa/AlexaExposureControl"
 import { Badge } from "@/components/ui/badge"
@@ -213,27 +214,7 @@ function getSmartThingsCapabilities(device: DeviceLike | null): string[] {
 }
 
 function getSourceLabel(device: DeviceLike | null): string {
-  const source = (
-    (device?.properties as Record<string, unknown> | undefined)?.source
-    || ""
-  ).toString().trim().toLowerCase()
-
-  if (!source) {
-    return "Unknown"
-  }
-
-  if (source === "homebrain-zigbee") {
-    return "HomeBrain Zigbee"
-  }
-  if (source === "homebrain-zwave") {
-    return "HomeBrain Z-Wave"
-  }
-
-  return source
-    .split(/[\s_-]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ")
+  return getDeviceSourceLabel(getDeviceSource(device || undefined))
 }
 
 function isSmartThingsBackedDevice(device: DeviceLike | null): boolean {

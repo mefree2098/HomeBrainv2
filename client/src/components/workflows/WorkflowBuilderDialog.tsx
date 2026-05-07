@@ -29,6 +29,7 @@ import { Textarea } from "@/components/ui/textarea";
 import type { DeviceGroupSummary } from "@/api/devices";
 import type { Workflow, WorkflowAction, WorkflowActionTarget, WorkflowTriggerType } from "@/api/workflows";
 import { DevicePicker } from "@/components/devices/DevicePicker";
+import { getDeviceSource, getDeviceSourceFacets } from "@/lib/deviceSources";
 import {
   getHarmonyCommandMetadata,
   getHarmonyPowerCommands,
@@ -645,12 +646,6 @@ function buildGraph(triggerType: WorkflowTriggerType, actions: WorkflowAction[])
   return { nodes, edges };
 }
 
-function getDeviceSource(device: DeviceLite | null | undefined) {
-  return String(
-    ((device?.properties as Record<string, unknown> | undefined)?.source as string | undefined) || "local"
-  ).trim().toLowerCase();
-}
-
 function getHarmonyCommandOptions(device: DeviceLite | null | undefined) {
   return isHarmonyCommandDevice(device) ? getHarmonyCommandMetadata(device) : [];
 }
@@ -1118,7 +1113,7 @@ export function WorkflowBuilderDialog({
         group.description || "",
         ...group.devices.map((device) => device.name)
       ].filter(Boolean),
-      sources: Array.from(new Set(group.devices.map(getDeviceSource)))
+      sources: Array.from(new Set(group.devices.flatMap(getDeviceSourceFacets)))
     })),
     [actionableDeviceGroups]
   );

@@ -1172,7 +1172,7 @@ struct DevicesView: View {
             let response = try await session.apiClient.post("/api/matter/commissioning/start", body: payload)
             let root = JSON.object(response)
             let sessionObject = JSON.object(root["session"])
-            let steps = JSON.array(sessionObject["manualSteps"]).compactMap { $0 as? String }
+            let steps = JSON.stringArray(sessionObject["manualSteps"])
             matterLatestSessionStatus = JSON.optionalString(sessionObject, "status")
             matterStatusMessage = steps.first ?? "Matter commissioning started. Keep the device in pairing mode."
             matterSetupCode = ""

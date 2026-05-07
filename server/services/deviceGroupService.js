@@ -6,6 +6,7 @@ const Workflow = require('../models/Workflow');
 const Automation = require('../models/Automation');
 const insteonService = require('./insteonService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
+const { getDeviceSourceFacets } = require('./deviceSourceCatalog');
 
 const DEVICE_GROUP_TARGET_KINDS = new Set(['device_group', 'group']);
 
@@ -175,8 +176,7 @@ function buildDeviceFacetSummary(devices = []) {
       types.add(device.type);
     }
 
-    const source = sanitizeString(device?.properties?.source || 'local').toLowerCase();
-    if (source) {
+    for (const source of getDeviceSourceFacets(device)) {
       sources.add(source);
     }
   });
