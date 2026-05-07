@@ -84,6 +84,10 @@ import {
   getSmartThingsSthmDiagnostics
 } from "@/api/smartThings"
 import {
+  getSecuritySettings,
+  updateSecuritySettings
+} from "@/api/security"
+import {
   getEcobeeStatus,
   configureEcobeeOAuth,
   getEcobeeAuthUrl,
@@ -234,6 +238,8 @@ const DEVICE_RESTART_DAYS = [
   { value: 5, label: "Friday" },
   { value: 6, label: "Saturday" }
 ]
+
+const SECURITY_EXIT_DELAY_OPTIONS = [0, 15, 30, 45, 60, 90, 120]
 
 const formatInsteonConnectionTarget = (target: {
   label?: string;
@@ -543,6 +549,9 @@ export function Settings() {
       homebrainLocalLlmModel: "llama2-7b",
       spamFilterLocalLlmModel: "llama2-7b",
       enableSecurityMode: false,
+      securityHomeBrainEnabled: true,
+      securitySmartThingsEnabled: true,
+      securityArmAwayExitDelaySeconds: 30,
       deviceRestartScheduleEnabled: false,
       deviceRestartScheduleFrequency: "weekly",
       deviceRestartScheduleDayOfWeek: 0,
@@ -762,6 +771,16 @@ export function Settings() {
     deviceRestartStatus?.schedule?.lastTriggeredAt || watch("deviceRestartScheduleLastTriggeredAt")
   const deviceRestartTimeZone =
     deviceRestartStatus?.schedule?.timeZone || (watch("timezone") || "America/New_York").toString()
+  const securityHomeBrainEnabled = watch("securityHomeBrainEnabled") !== false
+  const securitySmartThingsEnabled = watch("securitySmartThingsEnabled") !== false
+  const securityArmAwayExitDelaySeconds = Math.max(
+    0,
+    Math.min(300, Number(watch("securityArmAwayExitDelaySeconds") ?? 30) || 0)
+  )
+  const securityExitDelayOptions = Array.from(new Set([
+    ...SECURITY_EXIT_DELAY_OPTIONS,
+    securityArmAwayExitDelaySeconds
+  ])).sort((left, right) => left - right)
 
   // Load settings on component mount
   useEffect(() => {
@@ -803,6 +822,20 @@ export function Settings() {
 
           setValue("homebrainLocalLlmModel", resolvedHomeBrainModel)
           setValue("spamFilterLocalLlmModel", resolvedSpamFilterModel)
+
+          try {
+            const securityResponse = await getSecuritySettings()
+            const securitySettings = securityResponse?.settings || {}
+            const securityPlatforms = securitySettings.enabledPlatforms || {}
+            setValue("securityHomeBrainEnabled", securityPlatforms.homebrain !== false)
+            setValue("securitySmartThingsEnabled", securityPlatforms.smartthings !== false)
+            setValue(
+              "securityArmAwayExitDelaySeconds",
+              Math.max(0, Math.min(300, Number(securitySettings.exitDelaySeconds ?? 30) || 0))
+            )
+          } catch (securitySettingsError) {
+            console.warn("Failed to load security settings:", securitySettingsError)
+          }
 
           const loadedCodexHomeProfile = (response.settings.codexHomeProfile || "local").toString().trim().toLowerCase()
           const loadedCodexHome = loadedCodexHomeProfile === "custom"
@@ -1404,6 +1437,19 @@ export function Settings() {
       }
 
       delete settingsToSave.localLlmModel
+      const securitySettingsToSave = {
+        enabledPlatforms: {
+          homebrain: settingsToSave.securityHomeBrainEnabled !== false,
+          smartthings: settingsToSave.securitySmartThingsEnabled !== false
+        },
+        exitDelaySeconds: Math.max(
+          0,
+          Math.min(300, Number(settingsToSave.securityArmAwayExitDelaySeconds ?? 30) || 0)
+        )
+      }
+      delete settingsToSave.securityHomeBrainEnabled
+      delete settingsToSave.securitySmartThingsEnabled
+      delete settingsToSave.securityArmAwayExitDelaySeconds
       delete settingsToSave.deviceRestartScheduleNextRunAt
       delete settingsToSave.deviceRestartScheduleLastTriggeredAt
       settingsToSave.spamFilterLocalLlmModel = settingsToSave.homebrainLocalLlmModel
@@ -1428,6 +1474,16 @@ export function Settings() {
       const response = await updateSettings(settingsToSave);
       
       if (response.success) {
+        const securityResponse = await updateSecuritySettings(securitySettingsToSave)
+        if (securityResponse?.settings) {
+          const securityPlatforms = securityResponse.settings.enabledPlatforms || {}
+          setValue("securityHomeBrainEnabled", securityPlatforms.homebrain !== false)
+          setValue("securitySmartThingsEnabled", securityPlatforms.smartthings !== false)
+          setValue(
+            "securityArmAwayExitDelaySeconds",
+            Math.max(0, Math.min(300, Number(securityResponse.settings.exitDelaySeconds ?? 30) || 0))
+          )
+        }
         setIsyPasswordConfigured(Boolean(
           response.settings?.isyPassword && String(response.settings.isyPassword).trim()
         ))
@@ -7336,6 +7392,56 @@ export function Settings() {
                     </p>
                   </div>
                   <Switch checked={watch("enableSecurityMode")} onCheckedChange={(checked) => setValue("enableSecurityMode", checked)} />
+                </div>
+                <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto] md:items-end">
+                  <div className="flex items-center justify-between rounded-lg border border-border/60 bg-slate-50/80 px-3 py-3 dark:bg-slate-950/40">
+                    <div>
+                      <p className="font-medium">HomeBrain Security</p>
+                      <p className="text-sm text-muted-foreground">
+                        Native Zigbee, Z-Wave, Thread, Matter, and local devices
+                      </p>
+                    </div>
+                    <Switch
+                      checked={securityHomeBrainEnabled}
+                      disabled={!securitySmartThingsEnabled}
+                      onCheckedChange={(checked) => setValue("securityHomeBrainEnabled", checked)}
+                      aria-label="Enable HomeBrain security"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between rounded-lg border border-border/60 bg-slate-50/80 px-3 py-3 dark:bg-slate-950/40">
+                    <div>
+                      <p className="font-medium">SmartThings Security</p>
+                      <p className="text-sm text-muted-foreground">
+                        Existing SmartThings STHM bridge and alarm outputs
+                      </p>
+                    </div>
+                    <Switch
+                      checked={securitySmartThingsEnabled}
+                      disabled={!securityHomeBrainEnabled}
+                      onCheckedChange={(checked) => setValue("securitySmartThingsEnabled", checked)}
+                      aria-label="Enable SmartThings security"
+                    />
+                  </div>
+
+                  <div className="min-w-[11rem]">
+                    <label className="text-sm font-medium">Arm Away Delay</label>
+                    <Select
+                      value={String(securityArmAwayExitDelaySeconds)}
+                      onValueChange={(value) => setValue("securityArmAwayExitDelaySeconds", Number(value))}
+                    >
+                      <SelectTrigger className="mt-1">
+                        <SelectValue placeholder="Select delay" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {securityExitDelayOptions.map((seconds) => (
+                          <SelectItem key={seconds} value={String(seconds)}>
+                            {seconds === 0 ? "No delay" : `${seconds} seconds`}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
                 <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800">
                   <p className="text-sm text-yellow-800 dark:text-yellow-200">

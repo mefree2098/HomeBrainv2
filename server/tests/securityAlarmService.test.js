@@ -599,6 +599,92 @@ test('armAlarm starts an away exit-delay countdown before final arming', async (
   assert.equal(result.saveCount, 1);
 });
 
+test('updateSecuritySettings stores platform selection and default exit delay', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+
+  const alarm = {
+    alarmState: 'disarmed',
+    exitDelay: 30,
+    entryDelay: 30,
+    enabledPlatforms: {
+      homebrain: true,
+      smartthings: true
+    },
+    zones: [],
+    saveCount: 0,
+    save: async function save() {
+      this.saveCount += 1;
+      return this;
+    }
+  };
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+  });
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+
+  const result = await securityAlarmService.updateSecuritySettings({
+    enabledPlatforms: {
+      homebrain: true,
+      smartthings: false
+    },
+    exitDelaySeconds: 65
+  });
+
+  assert.equal(result.alarm.enabledPlatforms.homebrain, true);
+  assert.equal(result.alarm.enabledPlatforms.smartthings, false);
+  assert.equal(result.alarm.exitDelay, 65);
+  assert.equal(result.settings.exitDelaySeconds, 65);
+  assert.equal(result.settings.enabledPlatforms.homebrain, true);
+  assert.equal(result.settings.enabledPlatforms.smartthings, false);
+  assert.equal(alarm.saveCount, 1);
+});
+
+test('updateSecuritySettings keeps one security platform enabled and clamps timing defaults', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+
+  const alarm = {
+    alarmState: 'disarmed',
+    exitDelay: 30,
+    entryDelay: 30,
+    enabledPlatforms: {
+      homebrain: true,
+      smartthings: false
+    },
+    zones: [],
+    save: async function save() {
+      return this;
+    }
+  };
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+  });
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+
+  await assert.rejects(
+    () => securityAlarmService.updateSecuritySettings({
+      enabledPlatforms: {
+        homebrain: false,
+        smartthings: false
+      }
+    }),
+    /At least one security platform must remain enabled/
+  );
+
+  const result = await securityAlarmService.updateSecuritySettings({
+    exitDelaySeconds: 999,
+    entryDelaySeconds: -10
+  });
+
+  assert.equal(result.settings.enabledPlatforms.homebrain, true);
+  assert.equal(result.settings.enabledPlatforms.smartthings, false);
+  assert.equal(result.settings.exitDelaySeconds, 300);
+  assert.equal(result.settings.entryDelaySeconds, 0);
+});
+
 test('dismissAlarm records a reason and silences HomeBrain-native alarm outputs', async (t) => {
   const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
   const originalDeviceFind = Device.find;

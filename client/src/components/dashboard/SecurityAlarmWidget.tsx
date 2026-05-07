@@ -18,7 +18,6 @@ import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import { controlDevice } from "@/api/devices"
 import { getSecurityVisibleSensors, updateSecurityVisibleSensors } from "@/api/profiles"
@@ -27,8 +26,7 @@ import {
   disarmSecuritySystem,
   dismissTriggeredAlarm,
   getSecurityStatus,
-  syncSecurityWithSmartThings,
-  updateSecurityPlatforms
+  syncSecurityWithSmartThings
 } from "@/api/security"
 import { useToast } from "@/hooks/useToast"
 
@@ -349,10 +347,8 @@ export function SecurityAlarmWidget({
   const [pendingDoorIds, setPendingDoorIds] = useState<string[]>([])
   const [selectedSensorKeys, setSelectedSensorKeys] = useState<string[] | null>(null)
   const [sensorSelectorOpen, setSensorSelectorOpen] = useState(false)
-  const [exitDelaySeconds, setExitDelaySeconds] = useState(30)
   const [dismissReason, setDismissReason] = useState<"false_alarm" | "test" | "manual" | "custom">("false_alarm")
   const [customDismissReason, setCustomDismissReason] = useState("")
-  const [platformUpdating, setPlatformUpdating] = useState<"homebrain" | "smartthings" | null>(null)
   const lastCountdownEffectSecondRef = useRef<number | null>(null)
   const playedFinalBeepsRef = useRef(false)
   const lastAlarmStateEffectRef = useRef<string | null>(null)
@@ -384,12 +380,6 @@ export function SecurityAlarmWidget({
     const interval = setInterval(fetchAlarmStatus, 30000)
     return () => clearInterval(interval)
   }, [])
-
-  useEffect(() => {
-    if (typeof alarmStatus?.exitDelaySeconds === "number") {
-      setExitDelaySeconds(Math.max(0, Math.min(300, Math.round(alarmStatus.exitDelaySeconds))))
-    }
-  }, [alarmStatus?.exitDelaySeconds])
 
   useEffect(() => {
     if (!alarmStatus?.isArming) {
@@ -522,7 +512,7 @@ export function SecurityAlarmWidget({
     setArming(true)
     try {
       if (DEBUG_MODE) console.log("Arming security system in away mode")
-      const delaySeconds = Math.max(0, Math.min(300, Math.round(exitDelaySeconds)))
+      const delaySeconds = Math.max(0, Math.min(300, Math.round(alarmStatus?.exitDelaySeconds ?? 30)))
       const response = await armSecuritySystem("away", { exitDelaySeconds: delaySeconds })
 
       if (response.success) {
@@ -650,39 +640,6 @@ export function SecurityAlarmWidget({
     }
   }
 
-  const handlePlatformToggle = async (platform: "homebrain" | "smartthings", enabled: boolean) => {
-    const currentPlatforms = alarmStatus?.enabledPlatforms || { homebrain: true, smartthings: true }
-    const nextPlatforms = {
-      homebrain: platform === "homebrain" ? enabled : currentPlatforms.homebrain !== false,
-      smartthings: platform === "smartthings" ? enabled : currentPlatforms.smartthings !== false
-    }
-
-    setPlatformUpdating(platform)
-    try {
-      const response = await updateSecurityPlatforms(nextPlatforms)
-      if (response.success) {
-        setAlarmStatus((current) => current
-          ? { ...current, enabledPlatforms: nextPlatforms }
-          : current
-        )
-        toast({
-          title: "Security platforms updated",
-          description: `${platform === "homebrain" ? "HomeBrain" : "SmartThings"} security is now ${enabled ? "enabled" : "disabled"}`
-        })
-        await fetchAlarmStatus()
-      }
-    } catch (error: any) {
-      console.error("Failed to update security platforms:", error)
-      toast({
-        title: "Platform update failed",
-        description: error.message || "Failed to update security platforms",
-        variant: "destructive"
-      })
-    } finally {
-      setPlatformUpdating(null)
-    }
-  }
-
   const handleOpenSensor = (sensor: SecuritySensor) => {
     if (!sensor.localDeviceId) {
       return
@@ -728,7 +685,7 @@ export function SecurityAlarmWidget({
 
   const compact = size === "small"
   const medium = size === "medium"
-  const isNarrow = compact || medium
+  const isNarrow = compact
   const sensors = Array.isArray(alarmStatus?.sensors) ? alarmStatus.sensors : []
   const doorLocks = Array.isArray(alarmStatus?.doorLocks) ? alarmStatus.doorLocks : []
   const hasCustomSensorSelection = selectedSensorKeys !== null
@@ -765,7 +722,6 @@ export function SecurityAlarmWidget({
   const isArmingAway = alarmStatus?.alarmState === "arming"
   const canArm = alarmStatus?.alarmState === "disarmed" && !arming && !disarming && !dismissing
   const enabledPlatforms = alarmStatus?.enabledPlatforms || { homebrain: true, smartthings: true }
-  const homebrainSecurityEnabled = enabledPlatforms.homebrain !== false
   const smartThingsSecurityEnabled = enabledPlatforms.smartthings !== false
   const canSync = !syncing && smartThingsSecurityEnabled
 
@@ -793,10 +749,10 @@ export function SecurityAlarmWidget({
   const sensorScrollAreaClassName = compact
     ? "max-h-44"
     : medium
-      ? "max-h-52"
+      ? "max-h-44"
       : size === "large"
-        ? "max-h-60"
-        : "max-h-72"
+        ? "max-h-52"
+        : "max-h-56"
   const doorLockScrollAreaClassName = compact
     ? "max-h-28"
     : medium
@@ -862,28 +818,6 @@ export function SecurityAlarmWidget({
                     Arms in {Math.max(0, alarmStatus.secondsUntilArmed || 0)} seconds
                   </p>
                 ) : null}
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  <label className="inline-flex h-8 items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 text-[11px] font-semibold text-foreground/85 dark:bg-slate-950/10">
-                    HomeBrain
-                    <Switch
-                      checked={homebrainSecurityEnabled}
-                      disabled={platformUpdating !== null}
-                      onCheckedChange={(checked) => handlePlatformToggle("homebrain", checked)}
-                      className="h-5 w-9 [&>span]:h-4 [&>span]:w-4 [&>span]:data-[state=checked]:translate-x-4"
-                      aria-label="Toggle HomeBrain security"
-                    />
-                  </label>
-                  <label className="inline-flex h-8 items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 text-[11px] font-semibold text-foreground/85 dark:bg-slate-950/10">
-                    SmartThings
-                    <Switch
-                      checked={smartThingsSecurityEnabled}
-                      disabled={platformUpdating !== null}
-                      onCheckedChange={(checked) => handlePlatformToggle("smartthings", checked)}
-                      className="h-5 w-9 [&>span]:h-4 [&>span]:w-4 [&>span]:data-[state=checked]:translate-x-4"
-                      aria-label="Toggle SmartThings security"
-                    />
-                  </label>
-                </div>
               </div>
 
               <div className={cn(
@@ -915,20 +849,6 @@ export function SecurityAlarmWidget({
                       />
                     ) : null}
                   </div>
-                ) : alarmStatus.alarmState === "disarmed" ? (
-                  <label className="flex w-full items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-[11px] font-semibold text-foreground/85 dark:bg-slate-950/10">
-                    Exit
-                    <Input
-                      type="number"
-                      min={0}
-                      max={300}
-                      value={exitDelaySeconds}
-                      onChange={(event) => setExitDelaySeconds(Number(event.target.value))}
-                      className="h-7 min-w-0 flex-1 rounded-full border-white/15 bg-white/12 px-2 text-center text-xs"
-                      aria-label="Away exit delay seconds"
-                    />
-                    sec
-                  </label>
                 ) : null}
                 <div className={cn("grid w-full gap-2", compact ? "grid-cols-1" : "grid-cols-2")}>
                   {isTriggered ? (
@@ -1000,23 +920,25 @@ export function SecurityAlarmWidget({
                   )}
                 </div>
 
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={handleSync}
-                  disabled={!canSync}
-                  className={cn(
-                    isNarrow ? "w-full justify-center" : "self-end",
-                    alarmActionButtonClassName({ tone: "sync" })
-                  )}
-                >
-                  {syncing ? (
-                    <Loader2 className="animate-spin" />
-                  ) : (
-                    <RefreshCw />
-                  )}
-                  Sync
-                </Button>
+                {smartThingsSecurityEnabled ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={handleSync}
+                    disabled={!canSync}
+                    className={cn(
+                      isNarrow ? "w-full justify-center" : "self-end",
+                      alarmActionButtonClassName({ tone: "sync" })
+                    )}
+                  >
+                    {syncing ? (
+                      <Loader2 className="animate-spin" />
+                    ) : (
+                      <RefreshCw />
+                    )}
+                    Sync
+                  </Button>
+                ) : null}
               </div>
             </div>
 
