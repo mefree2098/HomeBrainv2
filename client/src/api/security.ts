@@ -1,5 +1,20 @@
 import api from './api';
 
+export type SecurityPinSettings = {
+  requireForArm?: boolean;
+  requireForDisarm?: boolean;
+};
+
+export type SecurityPinMetadata = {
+  id?: string;
+  name: string;
+  enabled?: boolean;
+};
+
+export type SecurityPinDraft = SecurityPinMetadata & {
+  pin?: string;
+};
+
 // Description: Get security alarm system information
 // Endpoint: GET /api/security-alarm
 // Request: {}
@@ -53,7 +68,7 @@ export const getSecurityStatus = async () => {
 // Description: Get security platform and default timing settings
 // Endpoint: GET /api/security-alarm/settings
 // Request: {}
-// Response: { success: boolean, settings: { enabledPlatforms: { homebrain: boolean, smartthings: boolean }, exitDelaySeconds: number, entryDelaySeconds: number } }
+// Response: { success: boolean, settings: { enabledPlatforms: { homebrain: boolean, smartthings: boolean }, exitDelaySeconds: number, entryDelaySeconds: number, pinSettings: object, pins: Array } }
 export const getSecuritySettings = async () => {
   try {
     const response = await api.get('/api/security-alarm/settings');
@@ -66,9 +81,9 @@ export const getSecuritySettings = async () => {
 
 // Description: Arm the security system
 // Endpoint: POST /api/security-alarm/arm
-// Request: { mode: 'stay' | 'away', exitDelaySeconds?: number }
+// Request: { mode: 'stay' | 'away', exitDelaySeconds?: number, pin?: string }
 // Response: { success: boolean, message: string, alarm: { _id: string, alarmState: string } }
-export const armSecuritySystem = async (mode: 'stay' | 'away', options: { exitDelaySeconds?: number } = {}) => {
+export const armSecuritySystem = async (mode: 'stay' | 'away', options: { exitDelaySeconds?: number; pin?: string } = {}) => {
   try {
     const response = await api.post('/api/security-alarm/arm', { mode, ...options });
     return response.data;
@@ -80,11 +95,11 @@ export const armSecuritySystem = async (mode: 'stay' | 'away', options: { exitDe
 
 // Description: Disarm the security system
 // Endpoint: POST /api/security-alarm/disarm
-// Request: {}
+// Request: { pin?: string }
 // Response: { success: boolean, message: string, alarm: { _id: string, alarmState: string } }
-export const disarmSecuritySystem = async () => {
+export const disarmSecuritySystem = async (options: { pin?: string } = {}) => {
   try {
-    const response = await api.post('/api/security-alarm/disarm');
+    const response = await api.post('/api/security-alarm/disarm', options);
     return response.data;
   } catch (error) {
     console.error(error);
@@ -94,9 +109,9 @@ export const disarmSecuritySystem = async () => {
 
 // Description: Dismiss an active triggered alarm
 // Endpoint: POST /api/security-alarm/dismiss
-// Request: { reason?: 'false_alarm' | 'test' | 'manual' | 'custom', customReason?: string }
+// Request: { reason?: 'false_alarm' | 'test' | 'manual' | 'custom', customReason?: string, pin?: string }
 // Response: { success: boolean, message: string, alarm: { _id: string, alarmState: string } }
-export const dismissTriggeredAlarm = async (payload: { reason?: 'false_alarm' | 'test' | 'manual' | 'custom'; customReason?: string } = {}) => {
+export const dismissTriggeredAlarm = async (payload: { reason?: 'false_alarm' | 'test' | 'manual' | 'custom'; customReason?: string; pin?: string } = {}) => {
   try {
     const response = await api.post('/api/security-alarm/dismiss', payload);
     return response.data;
@@ -122,7 +137,7 @@ export const updateSecurityPlatforms = async (platforms: { homebrain?: boolean; 
 
 // Description: Update security platform and default timing settings
 // Endpoint: PUT /api/security-alarm/settings
-// Request: { enabledPlatforms?: { homebrain?: boolean, smartthings?: boolean }, homebrain?: boolean, smartthings?: boolean, exitDelaySeconds?: number, entryDelaySeconds?: number }
+// Request: { enabledPlatforms?: { homebrain?: boolean, smartthings?: boolean }, homebrain?: boolean, smartthings?: boolean, exitDelaySeconds?: number, entryDelaySeconds?: number, pinSettings?: object, pins?: Array }
 // Response: { success: boolean, message: string, settings: object, alarm: object }
 export const updateSecuritySettings = async (settings: {
   enabledPlatforms?: { homebrain?: boolean; smartthings?: boolean };
@@ -130,6 +145,8 @@ export const updateSecuritySettings = async (settings: {
   smartthings?: boolean;
   exitDelaySeconds?: number;
   entryDelaySeconds?: number;
+  pinSettings?: SecurityPinSettings;
+  pins?: SecurityPinDraft[];
 }) => {
   try {
     const response = await api.put('/api/security-alarm/settings', settings);

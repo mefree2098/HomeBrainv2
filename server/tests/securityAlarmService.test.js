@@ -685,6 +685,200 @@ test('updateSecuritySettings keeps one security platform enabled and clamps timi
   assert.equal(result.settings.entryDelaySeconds, 0);
 });
 
+test('updateSecuritySettings stores named hashed security PINs without exposing codes', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+
+  const alarm = {
+    alarmState: 'disarmed',
+    exitDelay: 30,
+    entryDelay: 30,
+    enabledPlatforms: {
+      homebrain: true,
+      smartthings: false
+    },
+    pinSettings: {
+      requireForArm: false,
+      requireForDisarm: false
+    },
+    userCodes: [],
+    zones: [],
+    save: async function save() {
+      return this;
+    }
+  };
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+  });
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+
+  await assert.rejects(
+    () => securityAlarmService.updateSecuritySettings({
+      pinSettings: {
+        requireForDisarm: true
+      },
+      pins: []
+    }),
+    /At least one enabled security PIN is required/
+  );
+
+  const result = await securityAlarmService.updateSecuritySettings({
+    pinSettings: {
+      requireForArm: true,
+      requireForDisarm: true
+    },
+    pins: [
+      { name: 'Matt', pin: '1234', enabled: true },
+      { name: 'Guest', pin: '9876', enabled: false }
+    ]
+  });
+
+  assert.equal(result.settings.pinSettings.requireForArm, true);
+  assert.equal(result.settings.pinSettings.requireForDisarm, true);
+  assert.deepEqual(result.settings.pins.map((pin) => ({
+    name: pin.name,
+    enabled: pin.enabled,
+    code: pin.code
+  })), [
+    { name: 'Matt', enabled: true, code: undefined },
+    { name: 'Guest', enabled: false, code: undefined }
+  ]);
+  assert.equal(alarm.userCodes.length, 2);
+  assert.match(alarm.userCodes[0].code, /^\$2/);
+  assert.notEqual(alarm.userCodes[0].code, '1234');
+});
+
+test('armAlarm requires a valid PIN when arm PIN enforcement is enabled and records the PIN name', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+
+  const alarm = {
+    alarmState: 'disarmed',
+    exitDelay: 30,
+    entryDelay: 30,
+    enabledPlatforms: {
+      homebrain: true,
+      smartthings: false
+    },
+    pinSettings: {
+      requireForArm: false,
+      requireForDisarm: false
+    },
+    userCodes: [],
+    zones: [],
+    save: async function save() {
+      return this;
+    },
+    arm: async function arm(mode, actor) {
+      this.alarmState = mode === 'away' ? 'armedAway' : 'armedStay';
+      this.armedBy = actor;
+      this.lastArmed = new Date();
+      return this;
+    }
+  };
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+  });
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+
+  await securityAlarmService.updateSecuritySettings({
+    pinSettings: {
+      requireForArm: true
+    },
+    pins: [
+      { name: 'Anna', pin: '2468', enabled: true }
+    ]
+  });
+
+  await assert.rejects(
+    () => securityAlarmService.armAlarm('stay', 'api-user'),
+    /Security PIN is required/
+  );
+
+  await assert.rejects(
+    () => securityAlarmService.armAlarm('stay', 'api-user', { pin: '1111' }),
+    /Invalid security PIN/
+  );
+
+  const result = await securityAlarmService.armAlarm('stay', 'api-user', { pin: '2468' });
+
+  assert.equal(result.alarmState, 'armedStay');
+  assert.equal(result.armedBy, 'Anna');
+});
+
+test('disarmAlarm and dismissAlarm require valid disarm PINs and preserve named attribution', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+  const originalClearTriggeredAlarm = securityAlarmService.clearTriggeredAlarm;
+
+  const alarm = {
+    alarmState: 'armedStay',
+    exitDelay: 30,
+    entryDelay: 30,
+    enabledPlatforms: {
+      homebrain: true,
+      smartthings: false
+    },
+    pinSettings: {
+      requireForArm: false,
+      requireForDisarm: false
+    },
+    userCodes: [],
+    zones: [],
+    save: async function save() {
+      return this;
+    },
+    disarm: async function disarm(actor) {
+      this.alarmState = 'disarmed';
+      this.disarmedBy = actor;
+      this.lastDisarmed = new Date();
+      return this;
+    }
+  };
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+    securityAlarmService.clearTriggeredAlarm = originalClearTriggeredAlarm;
+  });
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+  securityAlarmService.clearTriggeredAlarm = async () => ({
+    smartthings: { attempted: false },
+    homebrain: { attempted: false },
+    silencedOutputs: [],
+    failedOutputs: []
+  });
+
+  await securityAlarmService.updateSecuritySettings({
+    pinSettings: {
+      requireForDisarm: true
+    },
+    pins: [
+      { name: 'Parent', pin: '1357', enabled: true }
+    ]
+  });
+
+  await assert.rejects(
+    () => securityAlarmService.disarmAlarm('api-user', { pin: '2468' }),
+    /Invalid security PIN/
+  );
+
+  let result = await securityAlarmService.disarmAlarm('api-user', { pin: '1357' });
+  assert.equal(result.alarmState, 'disarmed');
+  assert.equal(result.disarmedBy, 'Parent');
+
+  alarm.alarmState = 'triggered';
+  result = await securityAlarmService.dismissAlarm('api-user', {
+    pin: '1357',
+    reason: 'false_alarm'
+  });
+
+  assert.equal(result.alarmState, 'disarmed');
+  assert.equal(result.disarmedBy, 'Parent');
+  assert.equal(result.dismissedBy, 'Parent');
+});
+
 test('dismissAlarm records a reason and silences HomeBrain-native alarm outputs', async (t) => {
   const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
   const originalDeviceFind = Device.find;

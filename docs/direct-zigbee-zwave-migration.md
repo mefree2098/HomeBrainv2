@@ -100,6 +100,7 @@ The native catalog maps these categories to direct Zigbee/Z-Wave feature support
 - [x] Security status includes platform states, countdowns, siren cleanup result, and dismissal audit.
 - [x] HomeBrain-native security sensors are source-agnostic: Matter, Zigbee, Z-Wave, INSTEON, weather/platform sensors, and explicit `includeInSecurityCenter` sensors can participate.
 - [x] Matter locks, closures, contact/motion/smoke/CO/water/battery sensors flow into the Security Center.
+- [x] Security settings support named, hashed PINs with independent require-to-arm and require-to-disarm policies; web and iOS prompt for PINs and record the matching PIN name for arm/disarm/dismiss attribution.
 
 ## Audio Prompts
 

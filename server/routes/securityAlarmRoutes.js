@@ -18,6 +18,19 @@ const securityAlarmActionRateLimit = rateLimit({
   }
 });
 
+const getSecurityAlarmErrorStatus = (error) => {
+  if (Number.isInteger(error?.statusCode)) {
+    return error.statusCode;
+  }
+  if (error?.message === 'Alarm is not currently triggered') {
+    return 409;
+  }
+  if (error?.message === 'At least one security platform must remain enabled') {
+    return 400;
+  }
+  return 500;
+};
+
 /**
  * GET /api/security-alarm
  * Get alarm system information
@@ -102,14 +115,13 @@ router.get('/settings', securityAlarmActionRateLimit, auth, async (req, res) => 
  * POST /api/security-alarm/arm
  * Arm the security system
  */
-router.post('/arm', auth, async (req, res) => {
+router.post('/arm', securityAlarmActionRateLimit, auth, async (req, res) => {
   try {
     console.log('POST /api/security-alarm/arm - Arming security system');
     
-    const { mode, exitDelaySeconds, exitDelay } = req.body;
+    const { mode, exitDelaySeconds, exitDelay, pin, securityPin } = req.body;
     const userId = req.user?.id || req.user?._id;
     
-    console.log('Request body:', req.body);
     console.log('User ID:', userId);
     console.log('Arm mode:', mode);
     
@@ -123,7 +135,8 @@ router.post('/arm', auth, async (req, res) => {
     
     const alarm = await securityAlarmService.armAlarm(mode, userId, {
       exitDelaySeconds,
-      exitDelay
+      exitDelay,
+      pin: pin ?? securityPin
     });
     
     console.log(`Successfully armed security system in ${mode} mode`);
@@ -136,7 +149,7 @@ router.post('/arm', auth, async (req, res) => {
   } catch (error) {
     console.error('Error in POST /api/security-alarm/arm:', error.message);
     console.error('Full error:', error);
-    res.status(500).json({
+    res.status(getSecurityAlarmErrorStatus(error)).json({
       success: false,
       message: error.message || 'Failed to arm security system',
       error: error.message
@@ -148,14 +161,16 @@ router.post('/arm', auth, async (req, res) => {
  * POST /api/security-alarm/disarm
  * Disarm the security system
  */
-router.post('/disarm', auth, async (req, res) => {
+router.post('/disarm', securityAlarmActionRateLimit, auth, async (req, res) => {
   try {
     console.log('POST /api/security-alarm/disarm - Disarming security system');
     
     const userId = req.user?.id || req.user?._id;
     console.log('User ID:', userId);
     
-    const alarm = await securityAlarmService.disarmAlarm(userId);
+    const alarm = await securityAlarmService.disarmAlarm(userId, {
+      pin: req.body?.pin ?? req.body?.securityPin
+    });
     
     console.log('Successfully disarmed security system');
     res.status(200).json({
@@ -167,7 +182,7 @@ router.post('/disarm', auth, async (req, res) => {
   } catch (error) {
     console.error('Error in POST /api/security-alarm/disarm:', error.message);
     console.error('Full error:', error);
-    res.status(500).json({
+    res.status(getSecurityAlarmErrorStatus(error)).json({
       success: false,
       message: error.message || 'Failed to disarm security system',
       error: error.message
@@ -179,7 +194,7 @@ router.post('/disarm', auth, async (req, res) => {
  * POST /api/security-alarm/dismiss
  * Dismiss an active triggered alarm
  */
-router.post('/dismiss', auth, async (req, res) => {
+router.post('/dismiss', securityAlarmActionRateLimit, auth, async (req, res) => {
   try {
     console.log('POST /api/security-alarm/dismiss - Dismissing triggered alarm');
 
@@ -189,7 +204,8 @@ router.post('/dismiss', auth, async (req, res) => {
     const alarm = await securityAlarmService.dismissAlarm(userId, {
       reason: req.body?.reason,
       customReason: req.body?.customReason,
-      reasonText: req.body?.reasonText
+      reasonText: req.body?.reasonText,
+      pin: req.body?.pin ?? req.body?.securityPin
     });
 
     console.log('Successfully dismissed triggered alarm');
@@ -201,8 +217,7 @@ router.post('/dismiss', auth, async (req, res) => {
   } catch (error) {
     console.error('Error in POST /api/security-alarm/dismiss:', error.message);
     console.error('Full error:', error);
-    const statusCode = error.message === 'Alarm is not currently triggered' ? 409 : 500;
-    res.status(statusCode).json({
+    res.status(getSecurityAlarmErrorStatus(error)).json({
       success: false,
       message: error.message || 'Failed to dismiss triggered alarm',
       error: error.message
@@ -255,7 +270,9 @@ router.put('/settings', securityAlarmActionRateLimit, auth, async (req, res) => 
       exitDelaySeconds: req.body?.exitDelaySeconds,
       exitDelay: req.body?.exitDelay,
       entryDelaySeconds: req.body?.entryDelaySeconds,
-      entryDelay: req.body?.entryDelay
+      entryDelay: req.body?.entryDelay,
+      pinSettings: req.body?.pinSettings,
+      pins: req.body?.pins
     });
 
     res.status(200).json({
@@ -267,8 +284,7 @@ router.put('/settings', securityAlarmActionRateLimit, auth, async (req, res) => 
   } catch (error) {
     console.error('Error in PUT /api/security-alarm/settings:', error.message);
     console.error('Full error:', error);
-    const statusCode = error.message === 'At least one security platform must remain enabled' ? 400 : 500;
-    res.status(statusCode).json({
+    res.status(getSecurityAlarmErrorStatus(error)).json({
       success: false,
       message: error.message || 'Failed to update security settings',
       error: error.message

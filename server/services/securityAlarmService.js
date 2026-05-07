@@ -1,5 +1,6 @@
 const SecurityAlarm = require('../models/SecurityAlarm');
 const Device = require('../models/Device');
+const bcrypt = require('bcrypt');
 const smartThingsService = require('./smartThingsService');
 const deviceService = require('./deviceService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
@@ -77,6 +78,13 @@ const BATTERY_PROPERTY_KEYS = [
 
 const SECURITY_STATUS_DEVICE_PROJECTION = 'name type room status isOnline lastSeen properties brand model';
 const DEFAULT_ARM_AWAY_EXIT_DELAY_SECONDS = 30;
+const SECURITY_PIN_MIN_LENGTH = 4;
+const SECURITY_PIN_MAX_LENGTH = 8;
+const SECURITY_PIN_NAME_MAX_LENGTH = 80;
+const SECURITY_PIN_HASH_ROUNDS = Math.max(
+  10,
+  Math.min(14, Number(process.env.SECURITY_ALARM_PIN_HASH_ROUNDS || 12) || 12)
+);
 
 const SECURITY_AUDIO_PROMPTS = Object.freeze({
   armingAway30: '/audio/security/arming-away-30.mp3',
@@ -110,6 +118,12 @@ const toNumber = (value) => {
 };
 
 const uniqueStrings = (values) => Array.from(new Set(values.filter(Boolean)));
+
+const buildSecurityAlarmError = (message, statusCode = 400) => {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+};
 
 const findNestedBatteryLevel = (value, depth = 0) => {
   if (!value || typeof value !== 'object' || depth > 5) {
@@ -416,14 +430,202 @@ class SecurityAlarmService {
     return Math.max(0, Math.min(300, Math.round(resolved)));
   }
 
+  getPinSettings(alarm) {
+    const pinSettings = alarm?.pinSettings && typeof alarm.pinSettings === 'object'
+      ? alarm.pinSettings
+      : {};
+
+    return {
+      requireForArm: pinSettings.requireForArm === true,
+      requireForDisarm: pinSettings.requireForDisarm === true
+    };
+  }
+
+  getSanitizedPins(alarm) {
+    const userCodes = Array.isArray(alarm?.userCodes) ? alarm.userCodes : [];
+
+    return userCodes.map((entry) => {
+      const id = normalizeString(entry?._id?.toString?.() || entry?.id);
+      return {
+        id,
+        name: normalizeString(entry?.name) || 'Security PIN',
+        enabled: entry?.enabled !== false
+      };
+    }).filter((entry) => entry.id || entry.name);
+  }
+
   getSecuritySettingsFromAlarm(alarm) {
     const enabledPlatforms = this.getEnabledPlatforms(alarm);
 
     return {
       enabledPlatforms,
       exitDelaySeconds: this.normalizeExitDelaySeconds(alarm?.exitDelay, DEFAULT_ARM_AWAY_EXIT_DELAY_SECONDS),
-      entryDelaySeconds: this.normalizeExitDelaySeconds(alarm?.entryDelay, 30)
+      entryDelaySeconds: this.normalizeExitDelaySeconds(alarm?.entryDelay, 30),
+      pinSettings: this.getPinSettings(alarm),
+      pins: this.getSanitizedPins(alarm)
     };
+  }
+
+  normalizePinName(value) {
+    return normalizeString(value).replace(/\s+/g, ' ').slice(0, SECURITY_PIN_NAME_MAX_LENGTH);
+  }
+
+  validatePinValue(pin) {
+    if (!/^\d+$/.test(pin)) {
+      throw buildSecurityAlarmError('Security PIN must contain digits only', 400);
+    }
+
+    if (pin.length < SECURITY_PIN_MIN_LENGTH || pin.length > SECURITY_PIN_MAX_LENGTH) {
+      throw buildSecurityAlarmError(
+        `Security PIN must be ${SECURITY_PIN_MIN_LENGTH}-${SECURITY_PIN_MAX_LENGTH} digits`,
+        400
+      );
+    }
+  }
+
+  hasExplicitPinValue(pinRecord) {
+    return Object.prototype.hasOwnProperty.call(pinRecord, 'pin')
+      || Object.prototype.hasOwnProperty.call(pinRecord, 'code')
+      || Object.prototype.hasOwnProperty.call(pinRecord, 'securityPin');
+  }
+
+  normalizePinSettings(settings, currentSettings) {
+    const pinSource = settings.pinSettings && typeof settings.pinSettings === 'object'
+      ? settings.pinSettings
+      : settings;
+
+    return {
+      requireForArm: typeof pinSource.requireForArm === 'boolean'
+        ? pinSource.requireForArm
+        : typeof pinSource.requirePinForArm === 'boolean'
+          ? pinSource.requirePinForArm
+          : currentSettings.requireForArm,
+      requireForDisarm: typeof pinSource.requireForDisarm === 'boolean'
+        ? pinSource.requireForDisarm
+        : typeof pinSource.requirePinForDisarm === 'boolean'
+          ? pinSource.requirePinForDisarm
+          : currentSettings.requireForDisarm
+    };
+  }
+
+  async normalizePinRecords(alarm, pinRecords) {
+    if (!Array.isArray(pinRecords)) {
+      return Array.isArray(alarm?.userCodes) ? alarm.userCodes : [];
+    }
+
+    const existingById = new Map();
+    const existingCodes = Array.isArray(alarm?.userCodes) ? alarm.userCodes : [];
+    existingCodes.forEach((entry) => {
+      const id = normalizeString(entry?._id?.toString?.() || entry?.id);
+      if (id) {
+        existingById.set(id, entry);
+      }
+    });
+
+    const usedNames = new Set();
+    const normalizedRecords = [];
+
+    for (const pinRecord of pinRecords) {
+      if (!pinRecord || typeof pinRecord !== 'object') {
+        continue;
+      }
+      if (pinRecord.remove === true || pinRecord.deleted === true) {
+        continue;
+      }
+
+      const id = normalizeString(pinRecord.id || pinRecord._id);
+      const existing = id ? existingById.get(id) : null;
+      const name = this.normalizePinName(pinRecord.name);
+      if (!name) {
+        throw buildSecurityAlarmError('Each security PIN needs a name', 400);
+      }
+
+      const normalizedNameKey = name.toLowerCase();
+      if (usedNames.has(normalizedNameKey)) {
+        throw buildSecurityAlarmError('Security PIN names must be unique', 400);
+      }
+      usedNames.add(normalizedNameKey);
+
+      const enabled = pinRecord.enabled !== false;
+      const rawPin = normalizeString(pinRecord.pin ?? pinRecord.securityPin ?? pinRecord.code ?? '');
+      let code = existing?.code || '';
+
+      if (this.hasExplicitPinValue(pinRecord) && rawPin) {
+        this.validatePinValue(rawPin);
+        code = await bcrypt.hash(rawPin, SECURITY_PIN_HASH_ROUNDS);
+      }
+
+      if (!code) {
+        throw buildSecurityAlarmError(`Enter a PIN for ${name}`, 400);
+      }
+
+      normalizedRecords.push({
+        ...(existing?._id ? { _id: existing._id } : {}),
+        ...(existing?.userId ? { userId: existing.userId } : {}),
+        code,
+        name,
+        enabled
+      });
+    }
+
+    return normalizedRecords;
+  }
+
+  hasEnabledPin(alarm) {
+    return Array.isArray(alarm?.userCodes)
+      && alarm.userCodes.some((entry) => entry?.enabled !== false && normalizeString(entry?.code));
+  }
+
+  async verifySecurityPin(alarm, action, options = {}) {
+    const pinSettings = this.getPinSettings(alarm);
+    const requirePin = action === 'arm'
+      ? pinSettings.requireForArm
+      : pinSettings.requireForDisarm;
+    const pin = normalizeString(options.pin ?? options.securityPin ?? options.code ?? '');
+
+    if (!pin) {
+      if (requirePin) {
+        throw buildSecurityAlarmError('Security PIN is required', 401);
+      }
+      return null;
+    }
+
+    const enabledPins = Array.isArray(alarm?.userCodes)
+      ? alarm.userCodes.filter((entry) => entry?.enabled !== false && normalizeString(entry?.code))
+      : [];
+
+    for (const entry of enabledPins) {
+      const storedCode = normalizeString(entry?.code);
+      let matches = false;
+
+      try {
+        matches = storedCode.startsWith('$2')
+          ? await bcrypt.compare(pin, storedCode)
+          : pin === storedCode;
+      } catch (error) {
+        matches = false;
+      }
+
+      if (matches) {
+        if (!storedCode.startsWith('$2')) {
+          entry.code = await bcrypt.hash(pin, SECURITY_PIN_HASH_ROUNDS);
+        }
+        return {
+          id: normalizeString(entry?._id?.toString?.() || entry?.id),
+          name: this.normalizePinName(entry?.name) || 'Security PIN'
+        };
+      }
+    }
+
+    throw buildSecurityAlarmError('Invalid security PIN', 401);
+  }
+
+  resolveSecurityActor(userId, pinRecord, fallback = 'system') {
+    if (pinRecord?.name) {
+      return pinRecord.name;
+    }
+
+    return normalizeString(userId?.toString?.() || userId) || fallback;
   }
 
   getAudioPrompts(alarm) {
@@ -1132,6 +1334,9 @@ class SecurityAlarmService {
         throw new Error('Alarm is already armed');
       }
 
+      const pinRecord = await this.verifySecurityPin(alarm, 'arm', options);
+      const actor = this.resolveSecurityActor(userId, pinRecord);
+
       if (mode === 'away') {
         const exitDelaySeconds = this.normalizeExitDelaySeconds(
           options.exitDelaySeconds ?? options.exitDelay,
@@ -1144,7 +1349,7 @@ class SecurityAlarmService {
           alarm.pendingArmMode = 'away';
           alarm.pendingArmStartedAt = new Date();
           alarm.pendingArmReadyAt = new Date(Date.now() + exitDelaySeconds * 1000);
-          alarm.armedBy = userId || 'system';
+          alarm.armedBy = actor;
           alarm.audioPrompts = this.getAudioPrompts(alarm);
           await alarm.save();
           this.schedulePendingArm(alarm);
@@ -1157,7 +1362,7 @@ class SecurityAlarmService {
       await this.sendSmartThingsArmCommand(alarm, mode);
 
       // Update local alarm state
-      await alarm.arm(mode, userId);
+      await alarm.arm(mode, actor);
       alarm.audioPrompts = this.getAudioPrompts(alarm);
       if (typeof alarm.save === 'function') {
         await alarm.save();
@@ -1179,7 +1384,7 @@ class SecurityAlarmService {
    * @param {string} userId - User ID who is disarming the system
    * @returns {Promise<Object>} Updated alarm system
    */
-  async disarmAlarm(userId) {
+  async disarmAlarm(userId, options = {}) {
     try {
       console.log('SecurityAlarmService: Disarming alarm');
 
@@ -1192,6 +1397,9 @@ class SecurityAlarmService {
       if (alarm.alarmState === 'disarmed') {
         throw new Error('Alarm is already disarmed');
       }
+
+      const pinRecord = await this.verifySecurityPin(alarm, 'disarm', options);
+      const actor = this.resolveSecurityActor(userId, pinRecord);
 
       let sirenSilenceResult = null;
       if (alarmWasTriggered) {
@@ -1212,7 +1420,7 @@ class SecurityAlarmService {
 
       // Update local alarm state
       this.clearPendingArmTimer(alarm);
-      await alarm.disarm(userId);
+      await alarm.disarm(actor);
       alarm.audioPrompts = this.getAudioPrompts(alarm);
       if (sirenSilenceResult) {
         alarm.lastSirenSilenceResult = sirenSilenceResult;
@@ -1252,11 +1460,13 @@ class SecurityAlarmService {
       const dismissalReasonText = dismissalReason === 'custom'
         ? normalizeString(options.customReason || options.reasonText || '').slice(0, 500)
         : normalizeString(options.customReason || options.reasonText || '').slice(0, 500);
+      const pinRecord = await this.verifySecurityPin(alarm, 'disarm', options);
+      const actor = this.resolveSecurityActor(userId, pinRecord, 'system:dismiss');
       const sirenSilenceResult = await this.clearTriggeredAlarm(alarm);
 
-      await alarm.disarm(userId || 'system:dismiss');
+      await alarm.disarm(actor);
       alarm.lastDismissed = new Date();
-      alarm.dismissedBy = userId || 'system:dismiss';
+      alarm.dismissedBy = actor;
       alarm.dismissalReason = dismissalReason;
       alarm.dismissalReasonText = dismissalReasonText;
       alarm.lastSirenSilenceResult = sirenSilenceResult;
@@ -1353,6 +1563,7 @@ class SecurityAlarmService {
         isArming: alarm.alarmState === 'arming',
         isTriggered: alarm.alarmState === 'triggered',
         enabledPlatforms,
+        pinSettings: this.getPinSettings(alarm),
         exitDelaySeconds: this.normalizeExitDelaySeconds(alarm.exitDelay, DEFAULT_ARM_AWAY_EXIT_DELAY_SECONDS),
         entryDelaySeconds: this.normalizeExitDelaySeconds(alarm.entryDelay, 30),
         pendingArmMode: alarm.pendingArmMode || null,
@@ -1609,6 +1820,7 @@ class SecurityAlarmService {
       }
 
       const previousSettings = this.getSecuritySettingsFromAlarm(alarm);
+      const previousPinSettings = this.getPinSettings(alarm);
       alarm.enabledPlatforms = nextPlatforms;
 
       if (
@@ -1631,13 +1843,41 @@ class SecurityAlarmService {
         );
       }
 
+      if (
+        Object.prototype.hasOwnProperty.call(settings, 'pins') ||
+        Object.prototype.hasOwnProperty.call(settings, 'userCodes')
+      ) {
+        alarm.userCodes = await this.normalizePinRecords(
+          alarm,
+          settings.pins ?? settings.userCodes
+        );
+      }
+
+      if (
+        Object.prototype.hasOwnProperty.call(settings, 'pinSettings') ||
+        Object.prototype.hasOwnProperty.call(settings, 'requireForArm') ||
+        Object.prototype.hasOwnProperty.call(settings, 'requireForDisarm') ||
+        Object.prototype.hasOwnProperty.call(settings, 'requirePinForArm') ||
+        Object.prototype.hasOwnProperty.call(settings, 'requirePinForDisarm')
+      ) {
+        alarm.pinSettings = this.normalizePinSettings(settings, previousPinSettings);
+      }
+
+      const nextPinSettings = this.getPinSettings(alarm);
+      if ((nextPinSettings.requireForArm || nextPinSettings.requireForDisarm) && !this.hasEnabledPin(alarm)) {
+        throw buildSecurityAlarmError('At least one enabled security PIN is required before PIN enforcement can be enabled', 400);
+      }
+
       await alarm.save();
       const updatedSettings = this.getSecuritySettingsFromAlarm(alarm);
       if (
         previousSettings.enabledPlatforms.homebrain !== updatedSettings.enabledPlatforms.homebrain ||
         previousSettings.enabledPlatforms.smartthings !== updatedSettings.enabledPlatforms.smartthings ||
         previousSettings.exitDelaySeconds !== updatedSettings.exitDelaySeconds ||
-        previousSettings.entryDelaySeconds !== updatedSettings.entryDelaySeconds
+        previousSettings.entryDelaySeconds !== updatedSettings.entryDelaySeconds ||
+        previousSettings.pinSettings.requireForArm !== updatedSettings.pinSettings.requireForArm ||
+        previousSettings.pinSettings.requireForDisarm !== updatedSettings.pinSettings.requireForDisarm ||
+        JSON.stringify(previousSettings.pins) !== JSON.stringify(updatedSettings.pins)
       ) {
         requestSecurityAlarmAutomationEvaluation('security settings updated');
       }
