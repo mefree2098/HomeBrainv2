@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const fsp = require('fs/promises');
+const mongoose = require('mongoose');
 const os = require('os');
 const path = require('path');
 const Device = require('../models/Device');
@@ -55,6 +56,16 @@ function uniqueStrings(values) {
 
 function normalizeSourceText(value) {
   return trimString(value).toLowerCase();
+}
+
+function normalizeObjectId(value, label = 'Device id') {
+  const id = trimString(value);
+  if (!/^[0-9a-fA-F]{24}$/.test(id) || !mongoose.Types.ObjectId.isValid(id)) {
+    const error = new Error(`${label} is invalid`);
+    error.status = 400;
+    throw error;
+  }
+  return id;
 }
 
 function ensureDirSync(dirPath) {
@@ -1001,7 +1012,8 @@ class DirectRadioService {
   }
 
   async getMigrationPlan(deviceId, options = {}) {
-    const device = await Device.findById(deviceId).lean();
+    const safeDeviceId = normalizeObjectId(deviceId);
+    const device = await Device.findById(safeDeviceId).lean();
     if (!device) {
       const error = new Error('Device not found');
       error.status = 404;
@@ -1011,7 +1023,8 @@ class DirectRadioService {
   }
 
   async startMigration({ deviceId, protocol, durationSeconds, dskPin } = {}) {
-    const device = await Device.findById(deviceId).lean();
+    const safeDeviceId = normalizeObjectId(deviceId);
+    const device = await Device.findById(safeDeviceId).lean();
     if (!device) {
       const error = new Error('Device not found');
       error.status = 404;

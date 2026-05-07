@@ -1,4 +1,5 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const securityAlarmService = require('../services/securityAlarmService');
 const settingsService = require('../services/settingsService');
@@ -6,6 +7,16 @@ const { requireUser } = require('./middlewares/auth');
 
 // Create auth middleware instance
 const auth = requireUser();
+const securityAlarmActionRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_SECURITY_ALARM_RATE_LIMIT_WINDOW_MS || 60_000)),
+  limit: Math.max(20, Number(process.env.HOMEBRAIN_SECURITY_ALARM_RATE_LIMIT_MAX || 180)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many security alarm requests. Please retry shortly.'
+  }
+});
 
 /**
  * GET /api/security-alarm
@@ -178,7 +189,7 @@ router.post('/dismiss', auth, async (req, res) => {
  * PUT /api/security-alarm/platforms
  * Select which security platforms are active
  */
-router.put('/platforms', auth, async (req, res) => {
+router.put('/platforms', securityAlarmActionRateLimit, auth, async (req, res) => {
   try {
     console.log('PUT /api/security-alarm/platforms - Updating security platform selection');
 

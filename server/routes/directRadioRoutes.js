@@ -1,9 +1,21 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const directRadioService = require('../services/directRadioService');
 const { requireAdmin } = require('./middlewares/auth');
 
 const router = express.Router();
-router.use(requireAdmin());
+const directRadioRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_DIRECT_RADIO_RATE_LIMIT_WINDOW_MS || 60_000)),
+  limit: Math.max(20, Number(process.env.HOMEBRAIN_DIRECT_RADIO_RATE_LIMIT_MAX || 180)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many direct radio requests. Please retry shortly.'
+  }
+});
+
+router.use(directRadioRateLimit, requireAdmin());
 
 function sendError(res, error, fallbackMessage) {
   const status = error.status || error.statusCode || 500;
