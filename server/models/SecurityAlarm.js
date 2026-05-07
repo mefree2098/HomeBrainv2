@@ -32,9 +32,36 @@ const SecurityAlarmSchema = new mongoose.Schema({
   
   exitDelay: {
     type: Number,
-    default: 60, // seconds  
+    default: 30, // seconds
     min: 0,
     max: 300
+  },
+
+  enabledPlatforms: {
+    homebrain: {
+      type: Boolean,
+      default: true
+    },
+    smartthings: {
+      type: Boolean,
+      default: true
+    }
+  },
+
+  pendingArmMode: {
+    type: String,
+    enum: ['stay', 'away', null],
+    default: null
+  },
+
+  pendingArmReadyAt: {
+    type: Date,
+    default: null
+  },
+
+  pendingArmStartedAt: {
+    type: Date,
+    default: null
   },
   
   // Monitoring zones
@@ -90,6 +117,37 @@ const SecurityAlarmSchema = new mongoose.Schema({
   disarmedBy: {
     type: String,
     default: null
+  },
+
+  lastDismissed: {
+    type: Date,
+    default: null
+  },
+
+  dismissedBy: {
+    type: String,
+    default: null
+  },
+
+  dismissalReason: {
+    type: String,
+    enum: ['false_alarm', 'test', 'manual', 'custom', null],
+    default: null
+  },
+
+  dismissalReasonText: {
+    type: String,
+    default: ''
+  },
+
+  lastSirenSilenceResult: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null
+  },
+
+  audioPrompts: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
   },
   
   // User access codes (hashed)
@@ -198,6 +256,9 @@ SecurityAlarmSchema.methods.arm = function(mode, userId) {
   
   this.lastArmed = new Date();
   this.armedBy = userId || 'system';
+  this.pendingArmMode = null;
+  this.pendingArmReadyAt = null;
+  this.pendingArmStartedAt = null;
   
   return this.save();
 };
@@ -209,6 +270,9 @@ SecurityAlarmSchema.methods.disarm = function(userId) {
   this.alarmState = 'disarmed';
   this.lastDisarmed = new Date();
   this.disarmedBy = userId || 'system';
+  this.pendingArmMode = null;
+  this.pendingArmReadyAt = null;
+  this.pendingArmStartedAt = null;
   
   // Clear any bypassed zones
   this.zones.forEach(zone => {

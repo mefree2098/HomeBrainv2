@@ -1,4 +1,5 @@
 import Charts
+import AVFoundation
 import Combine
 import CoreLocation
 import SwiftUI
@@ -700,6 +701,9 @@ struct DashboardView: View {
     @State private var securityZonesActive = 0
     @State private var securitySensors: [DashboardSecuritySensorItem] = []
     @State private var securityDoorLocks: [DashboardSecurityDoorLockItem] = []
+    @State private var securityAudioPrompts: [String: String] = [:]
+    @State private var securityExitDelaySeconds = 30
+    @State private var securitySecondsUntilArmed = 0
     @State private var systemStatus = "Online"
     @State private var favoriteDeviceIds: Set<String> = []
     @State private var favoritesProfileId: String?
@@ -743,6 +747,8 @@ struct DashboardView: View {
     @State private var securityVisibleSensorIDs: [String]? = nil
     @State private var securitySensorSelectionProfileId: String? = nil
     @State private var isPresentingSecuritySensorPicker = false
+    @State private var securityAudioPlayer: AVPlayer?
+    @State private var securitySpeechSynthesizer = AVSpeechSynthesizer()
 
     @StateObject private var locationManager = DashboardLocationManager()
 
@@ -2289,7 +2295,7 @@ struct DashboardView: View {
     }
 
     private var isSecurityArmed: Bool {
-        isSecurityStayArmed || isSecurityAwayArmed
+        isSecurityStayArmed || isSecurityAwayArmed || securityAlarmStateKey == "arming"
     }
 
     private var isSecurityTriggered: Bool {
@@ -2325,7 +2331,9 @@ struct DashboardView: View {
         case "triggered":
             return "Immediate attention required"
         case "arming":
-            return "System is arming"
+            return securitySecondsUntilArmed > 0
+                ? "Arms away in \(securitySecondsUntilArmed) seconds"
+                : "System is arming"
         case "disarming":
             return "System is disarming"
         default:
@@ -2337,7 +2345,7 @@ struct DashboardView: View {
         switch securityAlarmStateKey {
         case "armedstay", "armedhome":
             return HBPalette.accentYellow
-        case "armedaway", "triggered":
+        case "armedaway", "arming", "triggered":
             return HBPalette.accentRed
         default:
             return HBPalette.accentSlate
@@ -6255,12 +6263,20 @@ struct DashboardView: View {
             fallback: zoneObjects.filter { JSON.bool($0, "active") }.count
         )
         let isOnline = JSON.bool(statusObject, "isOnline", fallback: true)
+        let promptObject = JSON.object(statusObject["audioPrompts"])
 
         securityStatus = alarmState
         securityZonesActive = activeSensors
         securityZonesTotal = totalSensors
         securitySensors = sensorObjects.compactMap { DashboardSecuritySensorItem.from($0) }
         securityDoorLocks = doorLockObjects.compactMap { DashboardSecurityDoorLockItem.from($0) }
+        securityAudioPrompts = promptObject.reduce(into: [String: String]()) { result, entry in
+            if let value = entry.value as? String, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                result[entry.key] = value
+            }
+        }
+        securityExitDelaySeconds = JSON.int(statusObject, "exitDelaySeconds", fallback: 30)
+        securitySecondsUntilArmed = JSON.int(statusObject, "secondsUntilArmed")
         systemStatus = isOnline ? "Online" : "Offline"
     }
 
@@ -7355,14 +7371,40 @@ struct DashboardView: View {
         }
 
         do {
+            let mode = stay ? "stay" : "away"
+            let body: [String: Any] = stay
+                ? ["mode": mode]
+                : ["mode": mode, "exitDelaySeconds": securityExitDelaySeconds]
             _ = try await session.apiClient.post(
                 "/api/security-alarm/arm",
-                body: ["mode": stay ? "stay" : "away"]
+                body: body
             )
+            if stay {
+                playSecurityPrompt("The security system is now armed for stay. Have a good night.", audioKey: "armedStay")
+            } else {
+                let audioKey = securityExitDelaySeconds == 30 ? "armingAway30" : nil
+                playSecurityPrompt("Arming away in \(securityExitDelaySeconds) seconds. Please leave the premises now.", audioKey: audioKey)
+            }
             await refreshSecurityStatus()
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func playSecurityPrompt(_ message: String, audioKey: String? = nil) {
+        if let audioKey,
+           let path = securityAudioPrompts[audioKey],
+           let url = session.apiClient.mediaURL(path) {
+            let player = AVPlayer(url: url)
+            securityAudioPlayer = player
+            player.play()
+            return
+        }
+
+        let utterance = AVSpeechUtterance(string: message)
+        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        securitySpeechSynthesizer.speak(utterance)
     }
 
     private func disarmSecurity() async {
@@ -7374,6 +7416,7 @@ struct DashboardView: View {
 
         do {
             _ = try await session.apiClient.post("/api/security-alarm/disarm", body: [:])
+            playSecurityPrompt("The security system is now disarmed. Have a great day.", audioKey: "disarmed")
             await refreshSecurityStatus()
         } catch {
             errorMessage = error.localizedDescription
@@ -7388,7 +7431,11 @@ struct DashboardView: View {
         }
 
         do {
-            _ = try await session.apiClient.post("/api/security-alarm/dismiss", body: [:])
+            _ = try await session.apiClient.post(
+                "/api/security-alarm/dismiss",
+                body: ["reason": "false_alarm"]
+            )
+            playSecurityPrompt("Alarm dismissed as a false alarm. The siren has been silenced.", audioKey: "alarmDismissedFalseAlarm")
             await refreshSecurityStatus()
         } catch {
             errorMessage = error.localizedDescription

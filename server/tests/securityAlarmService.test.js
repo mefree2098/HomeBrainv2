@@ -466,3 +466,125 @@ test('disarmAlarm also triggers silence automations and silences SmartThings ala
   assert.equal(captured.silenceTriggers, 1);
   assert.deepEqual(captured.silenced, ['smartthings-siren-2']);
 });
+
+test('armAlarm starts an away exit-delay countdown before final arming', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+  const originalIsSmartThingsConfiguredForSthm = securityAlarmService.isSmartThingsConfiguredForSthm;
+
+  const alarm = {
+    _id: 'alarm-away-test',
+    alarmState: 'disarmed',
+    exitDelay: 30,
+    enabledPlatforms: {
+      homebrain: true,
+      smartthings: false
+    },
+    pendingArmMode: null,
+    pendingArmReadyAt: null,
+    pendingArmStartedAt: null,
+    zones: [],
+    saveCount: 0,
+    save: async function save() {
+      this.saveCount += 1;
+      return this;
+    },
+    arm: async function arm(mode, userId) {
+      this.alarmState = mode === 'away' ? 'armedAway' : 'armedStay';
+      this.armedBy = userId;
+      return this;
+    }
+  };
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+    securityAlarmService.isSmartThingsConfiguredForSthm = originalIsSmartThingsConfiguredForSthm;
+    securityAlarmService.clearPendingArmTimer(alarm);
+  });
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+  securityAlarmService.isSmartThingsConfiguredForSthm = async () => false;
+
+  const result = await securityAlarmService.armAlarm('away', 'user-arm', { exitDelaySeconds: 45 });
+
+  assert.equal(result.alarmState, 'arming');
+  assert.equal(result.exitDelay, 45);
+  assert.equal(result.pendingArmMode, 'away');
+  assert.equal(result.armedBy, 'user-arm');
+  assert.ok(result.pendingArmStartedAt instanceof Date);
+  assert.ok(result.pendingArmReadyAt instanceof Date);
+  assert.ok(result.pendingArmReadyAt.getTime() > result.pendingArmStartedAt.getTime());
+  assert.equal(result.saveCount, 1);
+});
+
+test('dismissAlarm records a reason and silences HomeBrain-native alarm outputs', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+  const originalDeviceFind = Device.find;
+  const originalControlDevice = deviceService.controlDevice;
+
+  const alarm = {
+    alarmState: 'triggered',
+    enabledPlatforms: {
+      homebrain: true,
+      smartthings: false
+    },
+    zones: [],
+    saveCount: 0,
+    disarm: async function disarm(userId) {
+      this.alarmState = 'disarmed';
+      this.disarmedBy = userId;
+      return this;
+    },
+    save: async function save() {
+      this.saveCount += 1;
+      return this;
+    }
+  };
+  const capturedControls = [];
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+    Device.find = originalDeviceFind;
+    deviceService.controlDevice = originalControlDevice;
+  });
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+  Device.find = () => ({
+    lean: async () => ([
+      {
+        _id: 'siren-direct-1',
+        name: 'HomeBrain Siren',
+        type: 'switch',
+        properties: {
+          source: 'homebrain-zwave',
+          homebrainDirect: { protocol: 'zwave', nodeId: 12 },
+          directRadioFeatures: ['alarm', 'switch'],
+          supportsAlarm: true
+        }
+      }
+    ])
+  });
+  deviceService.controlDevice = async (deviceId, action, value, options = {}) => {
+    capturedControls.push({ deviceId, action, value, reason: options.command?.reason });
+    return { _id: deviceId, name: 'HomeBrain Siren' };
+  };
+
+  const result = await securityAlarmService.dismissAlarm('user-dismiss', {
+    reason: 'custom',
+    customReason: 'Smoke machine test'
+  });
+
+  assert.equal(result.alarmState, 'disarmed');
+  assert.equal(result.dismissalReason, 'custom');
+  assert.equal(result.dismissalReasonText, 'Smoke machine test');
+  assert.equal(result.disarmedBy, 'user-dismiss');
+  assert.equal(result.dismissedBy, 'user-dismiss');
+  assert.equal(result.saveCount, 1);
+  assert.deepEqual(capturedControls, [{
+    deviceId: 'siren-direct-1',
+    action: 'alarm_off',
+    value: null,
+    reason: 'dismiss_triggered_alarm'
+  }]);
+  assert.equal(result.lastSirenSilenceResult.homebrain.silencedOutputs.length, 1);
+  assert.equal(result.lastSirenSilenceResult.smartthings.attempted, false);
+});

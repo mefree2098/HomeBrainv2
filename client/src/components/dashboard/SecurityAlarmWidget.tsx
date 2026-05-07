@@ -14,8 +14,11 @@ import {
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import { controlDevice } from "@/api/devices"
 import { getSecurityVisibleSensors, updateSecurityVisibleSensors } from "@/api/profiles"
@@ -24,7 +27,8 @@ import {
   disarmSecuritySystem,
   dismissTriggeredAlarm,
   getSecurityStatus,
-  syncSecurityWithSmartThings
+  syncSecurityWithSmartThings,
+  updateSecurityPlatforms
 } from "@/api/security"
 import { useToast } from "@/hooks/useToast"
 
@@ -66,12 +70,29 @@ type DoorLock = {
 type AlarmStatus = {
   alarmState: string
   isArmed: boolean
+  isArming?: boolean
   isTriggered: boolean
+  enabledPlatforms?: {
+    homebrain?: boolean
+    smartthings?: boolean
+  }
+  exitDelaySeconds?: number
+  entryDelaySeconds?: number
+  pendingArmMode?: string | null
+  pendingArmStartedAt?: string | null
+  pendingArmReadyAt?: string | null
+  secondsUntilArmed?: number
   lastArmed?: string | null
   lastDisarmed?: string | null
   lastTriggered?: string | null
+  lastDismissed?: string | null
   armedBy?: string | null
   disarmedBy?: string | null
+  dismissedBy?: string | null
+  dismissalReason?: string | null
+  dismissalReasonText?: string | null
+  lastSirenSilenceResult?: Record<string, unknown> | null
+  audioPrompts?: Record<string, string>
   zoneCount: number
   activeZones: number
   bypassedZones: number
@@ -93,6 +114,22 @@ type AlarmStatus = {
 }
 
 const DEBUG_MODE = import.meta.env.DEV && import.meta.env.VITE_POLLING_DEBUG === "true"
+
+const speakSecurityPrompt = (message: string, audioUrl?: string | null) => {
+  if (audioUrl && typeof Audio !== "undefined") {
+    const audio = new Audio(audioUrl)
+    audio.play().catch(() => {
+      if (typeof window !== "undefined" && "speechSynthesis" in window) {
+        window.speechSynthesis.speak(new SpeechSynthesisUtterance(message))
+      }
+    })
+    return
+  }
+
+  if (typeof window !== "undefined" && "speechSynthesis" in window) {
+    window.speechSynthesis.speak(new SpeechSynthesisUtterance(message))
+  }
+}
 
 const normalizeSensorSelection = (sensorKeys: string[] | null | undefined) => {
   if (sensorKeys === undefined || sensorKeys === null) {
@@ -230,6 +267,7 @@ const alarmStateTone = (alarmState?: string | null) => {
         accentClassName: "bg-amber-500 dark:bg-amber-200"
       }
     case "armedAway":
+    case "arming":
       return {
         shellClassName: "border-red-500/40 bg-gradient-to-br from-rose-600/85 via-red-600/72 to-red-900/72 shadow-[0_18px_40px_-22px_rgba(220,38,38,0.95)] dark:border-red-300/28",
         titleClassName: "text-white/80",
@@ -302,6 +340,10 @@ export function SecurityAlarmWidget({
   const [pendingDoorIds, setPendingDoorIds] = useState<string[]>([])
   const [selectedSensorKeys, setSelectedSensorKeys] = useState<string[] | null>(null)
   const [sensorSelectorOpen, setSensorSelectorOpen] = useState(false)
+  const [exitDelaySeconds, setExitDelaySeconds] = useState(30)
+  const [dismissReason, setDismissReason] = useState<"false_alarm" | "test" | "manual" | "custom">("false_alarm")
+  const [customDismissReason, setCustomDismissReason] = useState("")
+  const [platformUpdating, setPlatformUpdating] = useState<"homebrain" | "smartthings" | null>(null)
 
   const fetchAlarmStatus = async () => {
     try {
@@ -330,6 +372,21 @@ export function SecurityAlarmWidget({
     const interval = setInterval(fetchAlarmStatus, 30000)
     return () => clearInterval(interval)
   }, [])
+
+  useEffect(() => {
+    if (typeof alarmStatus?.exitDelaySeconds === "number") {
+      setExitDelaySeconds(Math.max(0, Math.min(300, Math.round(alarmStatus.exitDelaySeconds))))
+    }
+  }, [alarmStatus?.exitDelaySeconds])
+
+  useEffect(() => {
+    if (!alarmStatus?.isArming) {
+      return
+    }
+
+    const interval = setInterval(fetchAlarmStatus, 1000)
+    return () => clearInterval(interval)
+  }, [alarmStatus?.isArming])
 
   useEffect(() => {
     let cancelled = false
@@ -393,6 +450,10 @@ export function SecurityAlarmWidget({
       const response = await armSecuritySystem("stay")
 
       if (response.success) {
+        speakSecurityPrompt(
+          "The security system is now armed for stay. Have a good night.",
+          alarmStatus?.audioPrompts?.armedStay
+        )
         toast({
           title: "Armed Stay",
           description: "Security system armed in stay mode"
@@ -415,12 +476,20 @@ export function SecurityAlarmWidget({
     setArming(true)
     try {
       if (DEBUG_MODE) console.log("Arming security system in away mode")
-      const response = await armSecuritySystem("away")
+      const delaySeconds = Math.max(0, Math.min(300, Math.round(exitDelaySeconds)))
+      const response = await armSecuritySystem("away", { exitDelaySeconds: delaySeconds })
 
       if (response.success) {
+        const promptUrl = delaySeconds === 30 ? alarmStatus?.audioPrompts?.armingAway30 : undefined
+        speakSecurityPrompt(
+          `Arming away in ${delaySeconds} seconds. Please leave the premises now.`,
+          promptUrl
+        )
         toast({
-          title: "Armed Away",
-          description: "Security system armed in away mode"
+          title: delaySeconds > 0 ? "Arming Away" : "Armed Away",
+          description: delaySeconds > 0
+            ? `Security system will arm away in ${delaySeconds} seconds`
+            : "Security system armed in away mode"
         })
         await fetchAlarmStatus()
       }
@@ -443,6 +512,10 @@ export function SecurityAlarmWidget({
       const response = await disarmSecuritySystem()
 
       if (response.success) {
+        speakSecurityPrompt(
+          "The security system is now disarmed. Have a great day.",
+          alarmStatus?.audioPrompts?.disarmed
+        )
         toast({
           title: "Disarmed",
           description: "Security system disarmed"
@@ -499,9 +572,18 @@ export function SecurityAlarmWidget({
     setDismissing(true)
     try {
       if (DEBUG_MODE) console.log("Dismissing triggered alarm")
-      const response = await dismissTriggeredAlarm()
+      const response = await dismissTriggeredAlarm({
+        reason: dismissReason,
+        customReason: dismissReason === "custom" ? customDismissReason : undefined
+      })
 
       if (response.success) {
+        speakSecurityPrompt(
+          dismissReason === "false_alarm"
+            ? "Alarm dismissed as a false alarm. The siren has been silenced."
+            : "Alarm dismissed. The siren has been silenced.",
+          dismissReason === "false_alarm" ? alarmStatus?.audioPrompts?.alarmDismissedFalseAlarm : undefined
+        )
         toast({
           title: "Alarm Dismissed",
           description: "Triggered alarm has been dismissed"
@@ -517,6 +599,39 @@ export function SecurityAlarmWidget({
       })
     } finally {
       setDismissing(false)
+    }
+  }
+
+  const handlePlatformToggle = async (platform: "homebrain" | "smartthings", enabled: boolean) => {
+    const currentPlatforms = alarmStatus?.enabledPlatforms || { homebrain: true, smartthings: true }
+    const nextPlatforms = {
+      homebrain: platform === "homebrain" ? enabled : currentPlatforms.homebrain !== false,
+      smartthings: platform === "smartthings" ? enabled : currentPlatforms.smartthings !== false
+    }
+
+    setPlatformUpdating(platform)
+    try {
+      const response = await updateSecurityPlatforms(nextPlatforms)
+      if (response.success) {
+        setAlarmStatus((current) => current
+          ? { ...current, enabledPlatforms: nextPlatforms }
+          : current
+        )
+        toast({
+          title: "Security platforms updated",
+          description: `${platform === "homebrain" ? "HomeBrain" : "SmartThings"} security is now ${enabled ? "enabled" : "disabled"}`
+        })
+        await fetchAlarmStatus()
+      }
+    } catch (error: any) {
+      console.error("Failed to update security platforms:", error)
+      toast({
+        title: "Platform update failed",
+        description: error.message || "Failed to update security platforms",
+        variant: "destructive"
+      })
+    } finally {
+      setPlatformUpdating(null)
     }
   }
 
@@ -599,8 +714,12 @@ export function SecurityAlarmWidget({
   const isStayArmed = alarmStatus?.alarmState === "armedStay"
   const isAwayArmed = alarmStatus?.alarmState === "armedAway"
   const isTriggered = alarmStatus?.alarmState === "triggered"
+  const isArmingAway = alarmStatus?.alarmState === "arming"
   const canArm = alarmStatus?.alarmState === "disarmed" && !arming && !disarming && !dismissing
-  const canSync = !syncing
+  const enabledPlatforms = alarmStatus?.enabledPlatforms || { homebrain: true, smartthings: true }
+  const homebrainSecurityEnabled = enabledPlatforms.homebrain !== false
+  const smartThingsSecurityEnabled = enabledPlatforms.smartthings !== false
+  const canSync = !syncing && smartThingsSecurityEnabled
 
   const attentionSensorCount = typeof alarmStatus?.attentionSensorCount === "number"
     ? alarmStatus.attentionSensorCount
@@ -690,12 +809,79 @@ export function SecurityAlarmWidget({
                 <p className={cn("mt-1.5 text-xs font-medium", alarmTone.detailClassName)}>
                   {alarmStatusDetail} • {systemStatus}
                 </p>
+                {isArmingAway ? (
+                  <p className={cn("mt-2 text-xs font-semibold", alarmTone.detailClassName)}>
+                    Arms in {Math.max(0, alarmStatus.secondsUntilArmed || 0)} seconds
+                  </p>
+                ) : null}
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <label className="inline-flex h-8 items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 text-[11px] font-semibold text-foreground/85 dark:bg-slate-950/10">
+                    HomeBrain
+                    <Switch
+                      checked={homebrainSecurityEnabled}
+                      disabled={platformUpdating !== null}
+                      onCheckedChange={(checked) => handlePlatformToggle("homebrain", checked)}
+                      className="h-5 w-9 [&>span]:h-4 [&>span]:w-4 [&>span]:data-[state=checked]:translate-x-4"
+                      aria-label="Toggle HomeBrain security"
+                    />
+                  </label>
+                  <label className="inline-flex h-8 items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 text-[11px] font-semibold text-foreground/85 dark:bg-slate-950/10">
+                    SmartThings
+                    <Switch
+                      checked={smartThingsSecurityEnabled}
+                      disabled={platformUpdating !== null}
+                      onCheckedChange={(checked) => handlePlatformToggle("smartthings", checked)}
+                      className="h-5 w-9 [&>span]:h-4 [&>span]:w-4 [&>span]:data-[state=checked]:translate-x-4"
+                      aria-label="Toggle SmartThings security"
+                    />
+                  </label>
+                </div>
               </div>
 
               <div className={cn(
                 "flex w-full shrink-0 flex-col gap-2",
                 isNarrow ? "items-stretch max-w-none" : "max-w-[13.5rem] items-end"
               )}>
+                {isTriggered ? (
+                  <div className="w-full space-y-2">
+                    <Select
+                      value={dismissReason}
+                      onValueChange={(value) => setDismissReason(value as "false_alarm" | "test" | "manual" | "custom")}
+                    >
+                      <SelectTrigger className="h-9 rounded-full border-white/15 bg-white/12 px-3 text-xs">
+                        <SelectValue placeholder="Reason" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="false_alarm">False alarm</SelectItem>
+                        <SelectItem value="test">Test</SelectItem>
+                        <SelectItem value="manual">Manual</SelectItem>
+                        <SelectItem value="custom">Custom</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {dismissReason === "custom" ? (
+                      <Input
+                        value={customDismissReason}
+                        onChange={(event) => setCustomDismissReason(event.target.value)}
+                        placeholder="Custom reason"
+                        className="h-9 rounded-full border-white/15 bg-white/12 px-3 text-xs"
+                      />
+                    ) : null}
+                  </div>
+                ) : alarmStatus.alarmState === "disarmed" ? (
+                  <label className="flex w-full items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1.5 text-[11px] font-semibold text-foreground/85 dark:bg-slate-950/10">
+                    Exit
+                    <Input
+                      type="number"
+                      min={0}
+                      max={300}
+                      value={exitDelaySeconds}
+                      onChange={(event) => setExitDelaySeconds(Number(event.target.value))}
+                      className="h-7 min-w-0 flex-1 rounded-full border-white/15 bg-white/12 px-2 text-center text-xs"
+                      aria-label="Away exit delay seconds"
+                    />
+                    sec
+                  </label>
+                ) : null}
                 <div className={cn("grid w-full gap-2", compact ? "grid-cols-1" : "grid-cols-2")}>
                   {isTriggered ? (
                     <Button
@@ -715,7 +901,7 @@ export function SecurityAlarmWidget({
                       )}
                       Dismiss
                     </Button>
-                  ) : isStayArmed || isAwayArmed ? (
+                  ) : isStayArmed || isAwayArmed || isArmingAway ? (
                     <Button
                       size="sm"
                       variant="destructive"

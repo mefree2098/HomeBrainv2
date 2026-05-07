@@ -88,6 +88,14 @@ final class APIClient {
         return buildURL(path: path, query: resolvedQuery)
     }
 
+    func mediaURL(_ path: String) -> URL? {
+        if let absoluteURL = URL(string: path), absoluteURL.scheme != nil {
+            return absoluteURL
+        }
+
+        return buildURL(path: path, query: [])
+    }
+
     private func request(
         path: String,
         method: HTTPMethod,

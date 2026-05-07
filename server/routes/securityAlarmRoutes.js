@@ -1,4 +1,5 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const securityAlarmService = require('../services/securityAlarmService');
 const settingsService = require('../services/settingsService');
@@ -6,6 +7,16 @@ const { requireUser } = require('./middlewares/auth');
 
 // Create auth middleware instance
 const auth = requireUser();
+const securityAlarmActionRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_SECURITY_ALARM_RATE_LIMIT_WINDOW_MS || 60_000)),
+  limit: Math.max(20, Number(process.env.HOMEBRAIN_SECURITY_ALARM_RATE_LIMIT_MAX || 180)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many security alarm requests. Please retry shortly.'
+  }
+});
 
 /**
  * GET /api/security-alarm
@@ -70,7 +81,7 @@ router.post('/arm', auth, async (req, res) => {
   try {
     console.log('POST /api/security-alarm/arm - Arming security system');
     
-    const { mode } = req.body;
+    const { mode, exitDelaySeconds, exitDelay } = req.body;
     const userId = req.user?.id || req.user?._id;
     
     console.log('Request body:', req.body);
@@ -85,7 +96,10 @@ router.post('/arm', auth, async (req, res) => {
       });
     }
     
-    const alarm = await securityAlarmService.armAlarm(mode, userId);
+    const alarm = await securityAlarmService.armAlarm(mode, userId, {
+      exitDelaySeconds,
+      exitDelay
+    });
     
     console.log(`Successfully armed security system in ${mode} mode`);
     res.status(200).json({
@@ -147,7 +161,11 @@ router.post('/dismiss', auth, async (req, res) => {
     const userId = req.user?.id || req.user?._id;
     console.log('User ID:', userId);
 
-    const alarm = await securityAlarmService.dismissAlarm(userId);
+    const alarm = await securityAlarmService.dismissAlarm(userId, {
+      reason: req.body?.reason,
+      customReason: req.body?.customReason,
+      reasonText: req.body?.reasonText
+    });
 
     console.log('Successfully dismissed triggered alarm');
     res.status(200).json({
@@ -162,6 +180,36 @@ router.post('/dismiss', auth, async (req, res) => {
     res.status(statusCode).json({
       success: false,
       message: error.message || 'Failed to dismiss triggered alarm',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * PUT /api/security-alarm/platforms
+ * Select which security platforms are active
+ */
+router.put('/platforms', securityAlarmActionRateLimit, auth, async (req, res) => {
+  try {
+    console.log('PUT /api/security-alarm/platforms - Updating security platform selection');
+
+    const alarm = await securityAlarmService.updateSecurityPlatforms({
+      homebrain: req.body?.homebrain,
+      smartthings: req.body?.smartthings
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Security platforms updated',
+      alarm
+    });
+  } catch (error) {
+    console.error('Error in PUT /api/security-alarm/platforms:', error.message);
+    console.error('Full error:', error);
+    const statusCode = error.message === 'At least one security platform must remain enabled' ? 400 : 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Failed to update security platforms',
       error: error.message
     });
   }

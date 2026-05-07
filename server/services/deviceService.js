@@ -60,6 +60,13 @@ const getInsteonService = () => {
   }
   return cachedInsteonService;
 };
+let cachedDirectRadioService = null;
+const getDirectRadioService = () => {
+  if (!cachedDirectRadioService) {
+    cachedDirectRadioService = require('./directRadioService');
+  }
+  return cachedDirectRadioService;
+};
 
 function isDatabaseReadyForPresenceChecks() {
   return mongoose.connection?.readyState === 1;
@@ -637,6 +644,7 @@ class DeviceService {
       const isEcobee = this.isEcobeeDevice(device);
       const isRainMachine = this.isRainMachineDevice(device);
       const isInsteon = this.isInsteonDevice(device);
+      const isDirectRadio = this.isDirectRadioDevice(device);
       const skipIntegrationRefresh = options?.skipIntegrationRefresh === true;
       const skipPostActionVerification = options?.skipPostActionVerification === true;
       const requirePostActionVerification = options?.requirePostActionVerification === true;
@@ -698,6 +706,11 @@ class DeviceService {
         } else if (isInsteon) {
           const insteonAddress = device?.properties?.insteonAddress || 'unknown-device';
           console.warn(`DeviceService: Insteon device ${insteonAddress} reports offline; attempting command anyway`);
+        } else if (isDirectRadio) {
+          const directIdentity = device?.properties?.homebrainDirect?.ieeeAddr
+            || device?.properties?.homebrainDirect?.nodeId
+            || 'unknown-direct-device';
+          console.warn(`DeviceService: Direct radio device ${directIdentity} reports offline; attempting command anyway`);
         } else {
           throw new Error('Device is offline and cannot be controlled');
         }
@@ -745,6 +758,26 @@ class DeviceService {
           }
           commandValue = updateData.status;
           break;
+
+        case 'alarmoff':
+        case 'turnoffalarm':
+        case 'silencealarm': {
+          const directFeatures = Array.isArray(device?.properties?.directRadioFeatures)
+            ? device.properties.directRadioFeatures
+            : [];
+          const supportsAlarmControl = isDirectRadio && (
+            device?.properties?.supportsAlarm === true
+            || directFeatures.includes('alarm')
+            || directFeatures.includes('chime')
+            || /\b(siren|alarm|sounder|chime)\b/i.test(`${device.name || ''} ${device.model || ''} ${device.brand || ''}`)
+          );
+          if (!supportsAlarmControl) {
+            throw new Error('Alarm silence control is only available for alarm-capable direct-radio devices');
+          }
+          updateData.status = false;
+          commandValue = false;
+          break;
+        }
 
         case 'setbrightness': {
           if (!supportsBrightnessControl) {
@@ -931,6 +964,22 @@ class DeviceService {
         if (updateData.isOnline === undefined) {
           updateData.isOnline = true;
         }
+      } else if (isDirectRadio) {
+        await getDirectRadioService().controlDevice(device, normalizedAction, commandValue, updateData);
+
+        optimisticPayload = buildOptimisticPayload();
+        if (optimisticPayload.length > 0) {
+          deviceUpdateEmitter.emit('devices:update', optimisticPayload);
+        }
+
+        const remoteUpdate = await getDirectRadioService().refreshDirectDeviceState(device);
+        if (remoteUpdate) {
+          Object.assign(updateData, remoteUpdate);
+        }
+
+        if (updateData.isOnline === undefined) {
+          updateData.isOnline = true;
+        }
       } else if (isHarmony) {
         await this.controlHarmonyDevice(device, normalizedAction, commandValue, updateData);
 
@@ -995,11 +1044,11 @@ class DeviceService {
       );
 
       if (updatedDevice) {
-        if (isSmartThings) {
+        if (isSmartThings || isDirectRadio) {
           try {
             await deviceEnergySampleService.recordSamplesForDevices([updatedDevice]);
           } catch (error) {
-            console.warn(`DeviceService: Failed to persist SmartThings energy sample after control: ${error.message}`);
+            console.warn(`DeviceService: Failed to persist device energy sample after control: ${error.message}`);
           }
         }
 
@@ -1168,6 +1217,12 @@ class DeviceService {
       return true;
     }
 
+    if (this.isDirectRadioDevice(device)) {
+      return Boolean(device?.properties?.supportsBrightness)
+        || (Array.isArray(device?.properties?.directRadioFeatures)
+          && device.properties.directRadioFeatures.includes('brightness'));
+    }
+
     return Boolean(device?.properties?.supportsBrightness);
   }
 
@@ -1189,6 +1244,12 @@ class DeviceService {
       return true;
     }
 
+    if (this.isDirectRadioDevice(device)) {
+      return Boolean(device?.properties?.supportsColor)
+        || (Array.isArray(device?.properties?.directRadioFeatures)
+          && device.properties.directRadioFeatures.includes('color'));
+    }
+
     return Boolean(device?.properties?.supportsColor);
   }
 
@@ -1207,7 +1268,13 @@ class DeviceService {
 
     if (this.isSmartThingsDevice(device)) {
       const capabilities = this.getSmartThingsCapabilitySet(device);
-      return capabilities.has('colortemperature');
+      return capabilities.has('colorTemperature') || capabilities.has('colortemperature');
+    }
+
+    if (this.isDirectRadioDevice(device)) {
+      return Boolean(device?.properties?.supportsColorTemperature)
+        || (Array.isArray(device?.properties?.directRadioFeatures)
+          && device.properties.directRadioFeatures.includes('colorTemperature'));
     }
 
     return false;
@@ -1261,6 +1328,17 @@ class DeviceService {
     const source = (device?.properties?.source || '').toString().toLowerCase();
     return (source === 'smartthings' || !!device?.properties?.smartThingsDeviceId)
       && !!device?.properties?.smartThingsDeviceId;
+  }
+
+  isDirectRadioDevice(device) {
+    const source = (device?.properties?.source || '').toString().trim().toLowerCase();
+    const protocol = (device?.properties?.homebrainDirect?.protocol || '').toString().trim().toLowerCase();
+    return source === 'homebrain-zigbee'
+      || source === 'homebrain-zwave'
+      || source === 'zigbee'
+      || source === 'zwave'
+      || protocol === 'zigbee'
+      || protocol === 'zwave';
   }
 
   isInsteonDevice(device) {
