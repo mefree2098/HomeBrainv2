@@ -17,6 +17,7 @@ struct DevicesView: View {
 
     @State private var searchText = ""
     @State private var typeFilter = "all"
+    @State private var sourceFilter = DeviceItem.allSelectionSourcesValue
 
     @State private var lightBrightnessDrafts: [String: Double] = [:]
     @State private var lightColorDrafts: [String: String] = [:]
@@ -28,7 +29,10 @@ struct DevicesView: View {
     @State private var pendingFavoriteDeviceIds: Set<String> = []
     @State private var highlightedDeviceID: String?
     @State private var pendingMigrationDeviceIds: Set<String> = []
+    @State private var pendingMigrationPlanDeviceIds: Set<String> = []
     @State private var migrationFeedback: [String: String] = [:]
+    @State private var migrationPlans: [String: DirectRadioMigrationPlanRecord] = [:]
+    @State private var migrationPlanErrors: [String: String] = [:]
     @State private var matterControllerReady = false
     @State private var matterRcpDetected = false
     @State private var matterOtbrOnline = false
@@ -80,9 +84,10 @@ struct DevicesView: View {
 
     private var filteredDevices: [DeviceItem] {
         devices.filter { device in
-            let matchesSearch = searchText.isEmpty
-                || device.name.localizedCaseInsensitiveContains(searchText)
-                || device.room.localizedCaseInsensitiveContains(searchText)
+            let matchesSearchAndSource = device.matchesSelectionFilters(
+                searchText: searchText,
+                sourceFilter: sourceFilter
+            )
             let matchesType: Bool
             if typeFilter == "all" {
                 matchesType = true
@@ -91,8 +96,14 @@ struct DevicesView: View {
             } else {
                 matchesType = device.type == typeFilter
             }
-            return matchesSearch && matchesType
+            return matchesSearchAndSource && matchesType
         }
+    }
+
+    private var sourceFilterLabel: String {
+        DeviceItem.selectionSourceOptions(for: devices)
+            .first(where: { $0.value == sourceFilter })?
+            .label ?? "All sources"
     }
 
     private var thermostatDevices: [DeviceItem] {
@@ -273,6 +284,7 @@ struct DevicesView: View {
                         HBBadge(text: "\(filteredDevices.count) matched")
                         HBBadge(text: "\(devices.filter(\.isOnline).count) online")
                         HBBadge(text: typeFilter == "all" ? "All types" : typeFilter.capitalized)
+                        HBBadge(text: sourceFilter == DeviceItem.allSelectionSourcesValue ? "All sources" : sourceFilterLabel)
                         if !searchText.isEmpty {
                             HBBadge(text: "Search active")
                         }
@@ -308,9 +320,22 @@ struct DevicesView: View {
                         }
                         .pickerStyle(.menu)
                         .tint(HBPalette.accentBlue)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Source")
+                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .foregroundStyle(HBPalette.textSecondary)
+                            Picker("Source", selection: $sourceFilter) {
+                                ForEach(DeviceItem.selectionSourceOptions(for: devices)) { option in
+                                    Text(option.label).tag(option.value)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .tint(HBPalette.accentBlue)
+                        }
                     }
                 } else {
-                    HStack {
+                    HStack(spacing: 14) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Filter Matrix")
                                 .font(.system(size: 11, weight: .bold, design: .rounded))
@@ -329,6 +354,19 @@ struct DevicesView: View {
                         }
                         .pickerStyle(.menu)
                         .tint(HBPalette.accentBlue)
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Source")
+                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .foregroundStyle(HBPalette.textSecondary)
+                            Picker("Source", selection: $sourceFilter) {
+                                ForEach(DeviceItem.selectionSourceOptions(for: devices)) { option in
+                                    Text(option.label).tag(option.value)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .tint(HBPalette.accentBlue)
+                        }
                     }
                 }
             }
@@ -462,6 +500,9 @@ struct DevicesView: View {
 
     private func directRadioMigrationPanel(for device: DeviceItem) -> some View {
         let isPending = pendingMigrationDeviceIds.contains(device.id)
+        let planLoading = pendingMigrationPlanDeviceIds.contains(device.id)
+        let plan = migrationPlans[device.id]
+        let planError = migrationPlanErrors[device.id]
         let feedback = migrationFeedback[device.id]
 
         return VStack(alignment: .leading, spacing: 10) {
@@ -484,6 +525,23 @@ struct DevicesView: View {
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            if planLoading {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Loading migration plan...")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+            } else if let planError {
+                Text(planError)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(HBPalette.accentRed)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let plan {
+                directRadioMigrationPlanSummary(plan)
+            }
+
             HStack(spacing: 8) {
                 Button {
                     Task { await startDirectRadioMigration(device, protocolName: "zigbee") }
@@ -492,7 +550,7 @@ struct DevicesView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                .disabled(isPending)
+                .disabled(isPending || plan?.supported == false)
 
                 Button {
                     Task { await startDirectRadioMigration(device, protocolName: "zwave") }
@@ -501,7 +559,7 @@ struct DevicesView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                .disabled(isPending)
+                .disabled(isPending || plan?.supported == false)
             }
 
             if let feedback {
@@ -517,6 +575,62 @@ struct DevicesView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(HBPalette.panelStroke.opacity(0.6), lineWidth: 1)
         )
+        .task(id: device.id) {
+            await loadDirectRadioMigrationPlan(for: device)
+        }
+    }
+
+    private func directRadioMigrationPlanSummary(_ plan: DirectRadioMigrationPlanRecord) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Recommended radio")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .textCase(.uppercase)
+                        .tracking(1.6)
+                        .foregroundStyle(HBPalette.textMuted)
+                    Text(plan.recommendedProtocolLabel)
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                }
+                Spacer()
+                Text(plan.supported ? "\(plan.nativeFeatureCount)/\(max(plan.featureSupport.count, 1)) native" : "Blocked")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(plan.supported ? HBPalette.accentGreen : HBPalette.accentRed)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(HBPalette.panelSoft.opacity(0.72), in: Capsule())
+            }
+
+            if !plan.warnings.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(plan.warnings.prefix(3).enumerated()), id: \.offset) { _, warning in
+                        Text(warning)
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.accentOrange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            if !plan.manualSteps.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Manual steps")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .textCase(.uppercase)
+                        .tracking(1.6)
+                        .foregroundStyle(HBPalette.textMuted)
+                    ForEach(Array(plan.manualSteps.prefix(4).enumerated()), id: \.offset) { index, step in
+                        Text("\(index + 1). \(step)")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .background(HBPalette.panelSoft.opacity(0.5), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var matterControllerPanel: some View {
@@ -1360,6 +1474,33 @@ struct DevicesView: View {
         }
     }
 
+    private func loadDirectRadioMigrationPlan(for device: DeviceItem) async {
+        guard isSmartThingsBackedDevice(device),
+              migrationPlans[device.id] == nil,
+              migrationPlanErrors[device.id] == nil,
+              !pendingMigrationPlanDeviceIds.contains(device.id) else {
+            return
+        }
+
+        pendingMigrationPlanDeviceIds.insert(device.id)
+        defer {
+            pendingMigrationPlanDeviceIds.remove(device.id)
+        }
+
+        if previewMode {
+            migrationPlans[device.id] = DirectRadioMigrationPlanRecord.preview(for: device)
+            return
+        }
+
+        do {
+            let response = try await session.apiClient.get("/api/direct-radios/migration-plan/\(device.id)")
+            let root = JSON.object(response)
+            migrationPlans[device.id] = DirectRadioMigrationPlanRecord.from(JSON.object(root["plan"]))
+        } catch {
+            migrationPlanErrors[device.id] = error.localizedDescription
+        }
+    }
+
     private func handleDeviceControl(deviceId: String, action: String, value: Any? = nil) async {
         pendingControls.insert(deviceId)
         controlFeedback.removeValue(forKey: deviceId)
@@ -1842,6 +1983,81 @@ struct DevicesView: View {
             }
         }
         return false
+    }
+}
+
+private struct DirectRadioMigrationFeatureSupportRecord: Identifiable {
+    let id: String
+    let label: String
+    let supported: Bool
+    let support: String
+
+    static func from(_ object: [String: Any]) -> DirectRadioMigrationFeatureSupportRecord {
+        let key = JSON.string(object, "key", fallback: UUID().uuidString)
+        return DirectRadioMigrationFeatureSupportRecord(
+            id: key,
+            label: JSON.string(object, "label", fallback: key),
+            supported: JSON.bool(object, "supported"),
+            support: JSON.string(object, "support")
+        )
+    }
+}
+
+private struct DirectRadioMigrationPlanRecord {
+    let recommendedProtocol: String
+    let inferredProtocol: String
+    let supported: Bool
+    let features: [String]
+    let featureSupport: [DirectRadioMigrationFeatureSupportRecord]
+    let manualSteps: [String]
+    let warnings: [String]
+    let targetSource: String
+
+    var recommendedProtocolLabel: String {
+        switch recommendedProtocol {
+        case "zigbee":
+            return "HomeBrain Zigbee"
+        case "zwave", "z-wave":
+            return "HomeBrain Z-Wave"
+        default:
+            return "Choose manually"
+        }
+    }
+
+    var nativeFeatureCount: Int {
+        featureSupport.filter { $0.supported }.count
+    }
+
+    static func from(_ object: [String: Any]) -> DirectRadioMigrationPlanRecord {
+        DirectRadioMigrationPlanRecord(
+            recommendedProtocol: JSON.string(object, "recommendedProtocol", fallback: "unknown"),
+            inferredProtocol: JSON.string(object, "inferredProtocol", fallback: "unknown"),
+            supported: JSON.bool(object, "supported"),
+            features: JSON.stringArray(object["features"]),
+            featureSupport: JSON.array(object["featureSupport"]).map(DirectRadioMigrationFeatureSupportRecord.from),
+            manualSteps: JSON.stringArray(object["manualSteps"]),
+            warnings: JSON.stringArray(object["warnings"]),
+            targetSource: JSON.string(object, "targetSource")
+        )
+    }
+
+    static func preview(for device: DeviceItem) -> DirectRadioMigrationPlanRecord {
+        DirectRadioMigrationPlanRecord(
+            recommendedProtocol: "unknown",
+            inferredProtocol: "unknown",
+            supported: true,
+            features: [device.type],
+            featureSupport: [
+                DirectRadioMigrationFeatureSupportRecord(id: "state", label: "State", supported: true, support: "native")
+            ],
+            manualSteps: [
+                "Start the migration window.",
+                "Reset or exclude the device from SmartThings.",
+                "Put the device into pairing or inclusion mode near the HomeBrain radio."
+            ],
+            warnings: [],
+            targetSource: ""
+        )
     }
 }
 

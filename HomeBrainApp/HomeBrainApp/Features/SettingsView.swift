@@ -95,7 +95,7 @@ private enum SettingsWebArea: String, CaseIterable, Identifiable {
         case .sense: return "Sense Energy monitor setup and sync"
         case .tempest: return "Tempest station setup and weather fusion"
         case .rainMachine: return "RainMachine controller setup and sync"
-        case .deviceIntegrations: return "INSTEON, SmartThings, Harmony"
+        case .deviceIntegrations: return "INSTEON, SmartThings, Harmony, Zigbee, Z-Wave"
         case .ecobee: return "Ecobee OAuth and thermostat sync"
         case .apiKeys: return "OpenAI, Anthropic, ElevenLabs, SmartThings"
         case .aiProviders: return "OpenAI, Codex, Anthropic, local LLM"
@@ -2272,6 +2272,160 @@ private struct SettingsEndpointActionButton: View {
     }
 }
 
+private struct DirectRadioScoreSet {
+    let zigbee: Int
+    let zwave: Int
+
+    static func from(_ object: [String: Any]) -> DirectRadioScoreSet {
+        DirectRadioScoreSet(
+            zigbee: JSON.int(object, "zigbee"),
+            zwave: JSON.int(object, "zwave")
+        )
+    }
+}
+
+private struct DirectRadioSerialPortRecord: Identifiable {
+    let id: String
+    let path: String
+    let rawPath: String
+    let stablePath: String
+    let realPath: String
+    let manufacturer: String
+    let vendorId: String
+    let productId: String
+    let serialNumber: String
+    let preferredProtocol: String
+    let likelyZigbee: Bool
+    let likelyZWave: Bool
+    let scores: DirectRadioScoreSet
+
+    static func from(_ object: [String: Any]) -> DirectRadioSerialPortRecord {
+        let path = JSON.string(object, "path")
+        return DirectRadioSerialPortRecord(
+            id: path.isEmpty ? UUID().uuidString : path,
+            path: path,
+            rawPath: JSON.string(object, "rawPath"),
+            stablePath: JSON.string(object, "stablePath"),
+            realPath: JSON.string(object, "realPath"),
+            manufacturer: JSON.string(object, "manufacturer"),
+            vendorId: JSON.string(object, "vendorId"),
+            productId: JSON.string(object, "productId"),
+            serialNumber: JSON.string(object, "serialNumber"),
+            preferredProtocol: JSON.string(object, "preferredProtocol"),
+            likelyZigbee: JSON.bool(object, "likelyZigbee"),
+            likelyZWave: JSON.bool(object, "likelyZWave"),
+            scores: DirectRadioScoreSet.from(JSON.object(object["scores"]))
+        )
+    }
+}
+
+private struct DirectRadioControllerRecord {
+    let protocolName: String
+    let expectedHardware: String
+    let source: String
+    let detectedPort: String
+    let configuredPort: String
+    let started: Bool
+    let error: String
+    let diagnostics: [String]
+    let permitJoinUntil: String
+    let inclusionUntil: String
+    let exclusionUntil: String
+    let pairedCount: Int
+    let lastStartResult: String
+
+    var isReady: Bool {
+        started && !detectedPort.isEmpty && error.isEmpty
+    }
+
+    var activeWindow: String {
+        if !permitJoinUntil.isEmpty { return permitJoinUntil }
+        if !inclusionUntil.isEmpty { return inclusionUntil }
+        if !exclusionUntil.isEmpty { return exclusionUntil }
+        return ""
+    }
+
+    static func from(_ object: [String: Any], protocolName: String) -> DirectRadioControllerRecord {
+        DirectRadioControllerRecord(
+            protocolName: protocolName,
+            expectedHardware: JSON.string(object, "expectedHardware"),
+            source: JSON.string(object, "source"),
+            detectedPort: JSON.string(object, "detectedPort"),
+            configuredPort: JSON.string(object, "configuredPort"),
+            started: JSON.bool(object, "started"),
+            error: JSON.string(object, "error"),
+            diagnostics: JSON.stringArray(object["diagnostics"]),
+            permitJoinUntil: JSON.string(object, "permitJoinUntil"),
+            inclusionUntil: JSON.string(object, "inclusionUntil"),
+            exclusionUntil: JSON.string(object, "exclusionUntil"),
+            pairedCount: protocolName == "zigbee"
+                ? JSON.int(object, "pairedDeviceCount")
+                : JSON.int(object, "pairedNodeCount"),
+            lastStartResult: JSON.string(object, "lastStartResult")
+        )
+    }
+}
+
+private struct DirectRadioControllerSet {
+    let zigbee: DirectRadioControllerRecord
+    let zwave: DirectRadioControllerRecord
+
+    static func from(_ object: [String: Any]) -> DirectRadioControllerSet {
+        DirectRadioControllerSet(
+            zigbee: DirectRadioControllerRecord.from(JSON.object(object["zigbee"]), protocolName: "zigbee"),
+            zwave: DirectRadioControllerRecord.from(JSON.object(object["zwave"]), protocolName: "zwave")
+        )
+    }
+}
+
+private struct DirectRadioStatusSnapshot {
+    let enabled: Bool
+    let dataDir: String
+    let serialPorts: [DirectRadioSerialPortRecord]
+    let diagnostics: [String]
+    let controllers: DirectRadioControllerSet
+
+    static func from(_ object: [String: Any]) -> DirectRadioStatusSnapshot {
+        DirectRadioStatusSnapshot(
+            enabled: JSON.bool(object, "enabled"),
+            dataDir: JSON.string(object, "dataDir"),
+            serialPorts: JSON.array(object["serialPorts"]).map(DirectRadioSerialPortRecord.from),
+            diagnostics: JSON.stringArray(object["diagnostics"]),
+            controllers: DirectRadioControllerSet.from(JSON.object(object["controllers"]))
+        )
+    }
+}
+
+private struct DirectRadioLogEntryRecord: Identifiable {
+    let id: String
+    let timestamp: String
+    let level: String
+    let protocolName: String
+    let stage: String
+    let operation: String
+    let target: String
+    let message: String
+    let details: [String: Any]
+
+    var displayTime: String {
+        JSON.displayDate(from: timestamp)
+    }
+
+    static func from(_ object: [String: Any]) -> DirectRadioLogEntryRecord {
+        DirectRadioLogEntryRecord(
+            id: JSON.string(object, "id", fallback: UUID().uuidString),
+            timestamp: JSON.string(object, "timestamp"),
+            level: JSON.string(object, "level", fallback: "info"),
+            protocolName: JSON.string(object, "protocol", fallback: "system"),
+            stage: JSON.string(object, "stage"),
+            operation: JSON.string(object, "operation"),
+            target: JSON.string(object, "target"),
+            message: JSON.string(object, "message"),
+            details: JSON.object(object["details"])
+        )
+    }
+}
+
 private struct SettingsDeviceIntegrationsPane: View {
     @EnvironmentObject private var session: SessionStore
 
@@ -2285,6 +2439,11 @@ private struct SettingsDeviceIntegrationsPane: View {
     @State private var activeAction = ""
     @State private var message = ""
     @State private var resultPayload: Any?
+    @State private var directRadioStatus: DirectRadioStatusSnapshot?
+    @State private var directRadioLogs: [DirectRadioLogEntryRecord] = []
+    @State private var directRadioLoading = false
+    @State private var directRadioLogsLoading = false
+    @State private var directRadioLiveLogs = true
 
     var body: some View {
         Form {
@@ -2321,6 +2480,10 @@ private struct SettingsDeviceIntegrationsPane: View {
                 actionButton("Resume Runtime Monitoring", key: "insteon-resume", method: .post, path: "/api/insteon/maintenance/runtime-monitoring/start", body: ["immediate": true])
             }
 
+            directRadioOperationsSection
+            directRadioSerialPortsSection
+            directRadioLogsSection
+
             if !message.isEmpty {
                 Section("Message") {
                     Text(message)
@@ -2339,6 +2502,213 @@ private struct SettingsDeviceIntegrationsPane: View {
             }
         }
         .hbFormStyle()
+        .task {
+            await loadDirectRadioStatusAndLogs()
+        }
+        .task(id: directRadioLiveLogs) {
+            guard directRadioLiveLogs else { return }
+            await pollDirectRadioLogs()
+        }
+    }
+
+    private var directRadioOperationsSection: some View {
+        Section("Zigbee / Z-Wave") {
+            if directRadioLoading {
+                ProgressView("Loading radio status...")
+            } else if let status = directRadioStatus {
+                directRadioControllerRow(status.controllers.zigbee)
+                directRadioControllerRow(status.controllers.zwave)
+
+                if !status.diagnostics.isEmpty {
+                    ForEach(status.diagnostics, id: \.self) { diagnostic in
+                        Label(diagnostic, systemImage: "exclamationmark.triangle")
+                            .font(.footnote)
+                            .foregroundStyle(HBPalette.accentOrange)
+                    }
+                }
+
+                Text(status.enabled ? "Direct radio runtime is enabled." : "Direct radio runtime is disabled.")
+                    .font(.footnote)
+                    .foregroundStyle(HBPalette.textSecondary)
+            } else {
+                Text("Radio status has not loaded yet.")
+                    .font(.footnote)
+                    .foregroundStyle(HBPalette.textSecondary)
+            }
+
+            actionButton("Refresh Radio Status", key: "direct-radio-status", method: .get, path: "/api/direct-radios/status")
+            actionButton("Scan Zigbee/Z-Wave USB Ports", key: "direct-radio-ports", method: .get, path: "/api/direct-radios/serial-ports")
+            actionButton("Open Zigbee Pairing", key: "direct-radio-zigbee-pair", method: .post, path: "/api/direct-radios/pairing/start", body: ["protocol": "zigbee", "durationSeconds": 180])
+            actionButton("Start Z-Wave Inclusion", key: "direct-radio-zwave-pair", method: .post, path: "/api/direct-radios/pairing/start", body: ["protocol": "zwave", "durationSeconds": 180])
+            actionButton("Start Z-Wave Exclusion", key: "direct-radio-zwave-exclusion", method: .post, path: "/api/direct-radios/exclusion/start", body: ["durationSeconds": 120])
+            actionButton("Stop Pairing / Exclusion", key: "direct-radio-stop", method: .post, path: "/api/direct-radios/pairing/stop", body: ["protocol": "all"])
+        }
+    }
+
+    @ViewBuilder
+    private var directRadioSerialPortsSection: some View {
+        if let status = directRadioStatus {
+            Section("Direct Radio USB Ports") {
+                if status.serialPorts.isEmpty {
+                    Text("No serial ports found.")
+                        .font(.footnote)
+                        .foregroundStyle(HBPalette.textSecondary)
+                } else {
+                    ForEach(status.serialPorts) { port in
+                        directRadioSerialPortRow(port)
+                    }
+                }
+            }
+        }
+    }
+
+    private var directRadioLogsSection: some View {
+        Section("Direct Radio Logs") {
+            Toggle("Live Updates", isOn: $directRadioLiveLogs)
+
+            HStack {
+                Button {
+                    Task { await loadDirectRadioLogs() }
+                } label: {
+                    if directRadioLogsLoading {
+                        ProgressView()
+                    } else {
+                        Label("Replay Latest", systemImage: "arrow.clockwise")
+                    }
+                }
+                .disabled(directRadioLogsLoading)
+
+                Button(role: .destructive) {
+                    Task { await clearDirectRadioLogs() }
+                } label: {
+                    Label("Clear Logs", systemImage: "trash")
+                }
+                .disabled(!activeAction.isEmpty)
+            }
+
+            if directRadioLogs.isEmpty {
+                Text("No direct radio logs yet.")
+                    .font(.footnote)
+                    .foregroundStyle(HBPalette.textSecondary)
+            } else {
+                ForEach(directRadioLogs.prefix(80)) { entry in
+                    directRadioLogRow(entry)
+                }
+            }
+        }
+    }
+
+    private func directRadioControllerRow(_ controller: DirectRadioControllerRecord) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label(controller.protocolName == "zigbee" ? "Zigbee" : "Z-Wave", systemImage: controller.protocolName == "zigbee" ? "dot.radiowaves.left.and.right" : "wave.3.right")
+                    .font(.headline)
+                Spacer()
+                Text(controller.isReady ? "Online" : controller.started ? "Starting" : "Offline")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(controller.isReady ? HBPalette.accentGreen : HBPalette.accentOrange)
+            }
+
+            Text(controller.expectedHardware)
+                .font(.caption)
+                .foregroundStyle(HBPalette.textSecondary)
+
+            if !controller.detectedPort.isEmpty {
+                Text(controller.detectedPort)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(HBPalette.textSecondary)
+                    .textSelection(.enabled)
+            } else {
+                Text("No matching USB adapter detected.")
+                    .font(.caption)
+                    .foregroundStyle(HBPalette.accentOrange)
+            }
+
+            HStack(spacing: 12) {
+                Text("\(controller.pairedCount) paired")
+                if !controller.activeWindow.isEmpty {
+                    Text("Window open until \(JSON.displayDate(from: controller.activeWindow))")
+                }
+                if !controller.lastStartResult.isEmpty {
+                    Text(controller.lastStartResult)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(HBPalette.textSecondary)
+
+            if !controller.error.isEmpty {
+                Text(controller.error)
+                    .font(.caption)
+                    .foregroundStyle(HBPalette.accentRed)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func directRadioSerialPortRow(_ port: DirectRadioSerialPortRecord) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(port.preferredProtocol.isEmpty ? "Serial Port" : port.preferredProtocol.uppercased())
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(port.preferredProtocol == "zigbee" ? HBPalette.accentGreen : port.preferredProtocol == "zwave" ? HBPalette.accentBlue : HBPalette.textSecondary)
+                Spacer()
+                Text("ZB \(port.scores.zigbee) / ZW \(port.scores.zwave)")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(HBPalette.textMuted)
+            }
+
+            Text(port.path)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+                .foregroundStyle(HBPalette.textSecondary)
+
+            let descriptor = [port.manufacturer, port.vendorId, port.productId, port.serialNumber]
+                .filter { !$0.isEmpty }
+                .joined(separator: " · ")
+            if !descriptor.isEmpty {
+                Text(descriptor)
+                    .font(.caption2)
+                    .foregroundStyle(HBPalette.textMuted)
+            }
+        }
+        .padding(.vertical, 3)
+    }
+
+    private func directRadioLogRow(_ entry: DirectRadioLogEntryRecord) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(entry.protocolName.uppercased())
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(entry.protocolName == "zigbee" ? HBPalette.accentGreen : entry.protocolName == "zwave" ? HBPalette.accentBlue : HBPalette.textMuted)
+                Text(entry.level.uppercased())
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(entry.level == "error" ? HBPalette.accentRed : entry.level == "warn" ? HBPalette.accentOrange : HBPalette.textMuted)
+                Spacer()
+                Text(entry.displayTime)
+                    .font(.caption2)
+                    .foregroundStyle(HBPalette.textMuted)
+            }
+
+            Text(entry.message)
+                .font(.subheadline.weight(.semibold))
+
+            let metadata = [entry.stage, entry.operation, entry.target]
+                .filter { !$0.isEmpty }
+                .joined(separator: " · ")
+            if !metadata.isEmpty {
+                Text(metadata)
+                    .font(.caption)
+                    .foregroundStyle(HBPalette.textSecondary)
+            }
+
+            if !entry.details.isEmpty {
+                Text(JSON.prettyString(entry.details))
+                    .font(.system(.caption2, design: .monospaced))
+                    .lineLimit(5)
+                    .foregroundStyle(HBPalette.textMuted)
+            }
+        }
+        .padding(.vertical, 5)
     }
 
     private func actionButton(
@@ -2383,8 +2753,71 @@ private struct SettingsDeviceIntegrationsPane: View {
             resultPayload = response
             let object = JSON.object(response)
             message = JSON.string(object, "message", fallback: "Action completed.")
+            await refreshAfterAction(path: path)
         } catch {
             message = error.localizedDescription
+        }
+    }
+
+    private func refreshAfterAction(path: String) async {
+        if path.contains("/api/direct-radios") {
+            await loadDirectRadioStatusAndLogs()
+        }
+    }
+
+    private func loadDirectRadioStatusAndLogs() async {
+        await loadDirectRadioStatus()
+        await loadDirectRadioLogs()
+    }
+
+    private func loadDirectRadioStatus() async {
+        directRadioLoading = true
+        defer { directRadioLoading = false }
+
+        do {
+            let response = try await session.apiClient.get("/api/direct-radios/status")
+            let root = JSON.object(response)
+            directRadioStatus = DirectRadioStatusSnapshot.from(JSON.object(root["status"]))
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    private func loadDirectRadioLogs() async {
+        directRadioLogsLoading = true
+        defer { directRadioLogsLoading = false }
+
+        do {
+            let response = try await session.apiClient.get(
+                "/api/direct-radios/logs/latest",
+                query: [URLQueryItem(name: "limit", value: "120")]
+            )
+            let root = JSON.object(response)
+            directRadioLogs = JSON.array(root["logs"])
+                .map(DirectRadioLogEntryRecord.from)
+                .sorted { $0.timestamp > $1.timestamp }
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    private func clearDirectRadioLogs() async {
+        activeAction = "direct-radio-clear-logs"
+        defer { activeAction = "" }
+
+        do {
+            resultPayload = try await session.apiClient.post("/api/direct-radios/logs/clear")
+            message = "Direct radio logs cleared."
+            await loadDirectRadioLogs()
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    private func pollDirectRadioLogs() async {
+        while !Task.isCancelled && directRadioLiveLogs {
+            await loadDirectRadioLogs()
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
         }
     }
 }

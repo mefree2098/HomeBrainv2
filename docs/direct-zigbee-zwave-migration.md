@@ -28,6 +28,7 @@ References:
 - [x] Linux/Jetson serial autodiscovery for Zooz ZST39 LR.
 - [x] Runtime status API for adapter presence, driver health, and paired-node counts.
 - [x] Web admin radio diagnostics/logging panel for Zigbee and Z-Wave with live SSE log replay, adapter health, serial-port scoring, pairing controls, and actionable USB visibility diagnostics.
+- [x] iPhone/iPad native radio diagnostics/logging parity: Settings exposes Zigbee/Z-Wave controller health, scored serial ports, replay/live-updating logs, pairing/inclusion/exclusion controls, stop controls, and log clearing.
 - [x] Permit-join / inclusion and exclusion / leave APIs.
 - [x] Device event normalization into HomeBrain device records.
 - [x] Command routing for direct HomeBrain Zigbee and Z-Wave devices.
@@ -84,6 +85,8 @@ The native catalog maps these categories to direct Zigbee/Z-Wave feature support
 - [x] Web device detail action: "Migrate to HomeBrain".
 - [x] iOS device detail action: "Migrate to HomeBrain".
 - [x] Migration plan API explains protocol, supported features, and manual intervention.
+- [x] iOS migration cards show the same migration plan details as web: recommended radio, native support count, warnings, and manual reset/inclusion steps.
+- [x] iOS device/workflow/dashboard source filters include Zigbee, Z-Wave, Thread, and Matter even before devices exist.
 - [x] Pairing workflow guides user through exclusion/reset/pairing steps when automation cannot do it.
 - [x] Existing HomeBrain device keeps name, room, groups, favorites/Alexa exposure where possible.
 - [x] SmartThings integration remains installed; migrated device source becomes `homebrain-zigbee` or `homebrain-zwave`.
