@@ -692,11 +692,14 @@ router.get('/:deviceId/tts', async (req, res) => {
       return;
     }
 
-    const audioBuffer = await elevenLabsService.textToSpeech(String(text), String(voiceId));
+    const speech = await elevenLabsService.textToSpeechDetailed(String(text), String(voiceId));
+    const audioBuffer = speech.audioBuffer;
 
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Content-Length', audioBuffer.length);
     res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-ElevenLabs-Cache', speech.cacheHit ? 'hit' : 'miss');
+    res.setHeader('X-ElevenLabs-Emotion-Tagging', speech.tagger?.status || 'unknown');
     res.status(200).send(audioBuffer);
   } catch (error) {
     console.error(`GET /api/remote-devices/${deviceId}/tts - Error:`, error.message);

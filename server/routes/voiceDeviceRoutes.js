@@ -208,12 +208,14 @@ router.post(['/browser/acknowledgment', '/browser/acknowledgment/'], requireUser
       return;
     }
 
-    const audioBuffer = await elevenLabsService.textToSpeech(acknowledgment.text, acknowledgment.voiceId);
+    const speech = await elevenLabsService.textToSpeechDetailed(acknowledgment.text, acknowledgment.voiceId);
+    const audioBuffer = speech.audioBuffer;
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Content-Length', audioBuffer.length);
     res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('X-Acknowledgment-Source', 'tts');
+    res.setHeader('X-Acknowledgment-Source', speech.cacheHit ? 'elevenlabs-cache' : 'tts');
     res.setHeader('X-Acknowledgment-Voice', acknowledgment.voiceId);
+    res.setHeader('X-ElevenLabs-Emotion-Tagging', speech.tagger?.status || 'unknown');
     return res.status(200).send(audioBuffer);
   } catch (error) {
     console.error('POST /api/voice/browser/acknowledgment - Error:', error.message);

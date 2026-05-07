@@ -47,7 +47,7 @@ export const validateElevenLabsVoiceId = async (voiceId: string) => {
 
 // Description: Convert text to speech using ElevenLabs TTS
 // Endpoint: POST /api/elevenlabs/text-to-speech
-// Request: { text: string, voiceId: string, options?: { stability?: number, similarity_boost?: number, style?: number, use_speaker_boost?: boolean, model_id?: string } }
+// Request: { text: string, voiceId: string, options?: { stability?: number, similarity_boost?: number, style?: number, use_speaker_boost?: boolean, model_id?: string, emotionTagging?: boolean, cache?: boolean, codexModel?: string } }
 // Response: Audio file (audio/mpeg) as blob
 export const textToSpeechElevenLabs = async (data: {
   text: string;
@@ -58,6 +58,9 @@ export const textToSpeechElevenLabs = async (data: {
     style?: number;
     use_speaker_boost?: boolean;
     model_id?: string;
+    emotionTagging?: boolean;
+    cache?: boolean;
+    codexModel?: string;
   };
 }) => {
   console.log('Converting text to speech with ElevenLabs:', data);
