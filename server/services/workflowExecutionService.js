@@ -483,6 +483,59 @@ function getInsteonCommandRetryOptions(action, source = '', defaults = {}) {
   };
 }
 
+function isAckOnlyInsteonVerificationMode(value = '') {
+  return ['ack', 'ack_only', 'none', 'async', 'broadcast_ack']
+    .includes(String(value || '').trim().toLowerCase());
+}
+
+function shouldRequireInsteonConfirmation(action, options = {}) {
+  const parameters = action?.parameters && typeof action.parameters === 'object'
+    ? action.parameters
+    : {};
+
+  if (
+    parameters.requireConfirmation === false
+    || parameters.requireConfirmed === false
+    || parameters.allowUnconfirmed === true
+  ) {
+    return false;
+  }
+
+  return !isAckOnlyInsteonVerificationMode(options?.verificationMode);
+}
+
+function assertInsteonControlConfirmed(device, actionName, controlResult, options = {}, action = {}) {
+  if (!shouldRequireInsteonConfirmation(action, options)) {
+    return;
+  }
+
+  const details = controlResult?.details && typeof controlResult.details === 'object'
+    ? controlResult.details
+    : {};
+  const confirmed = controlResult?.confirmed === true || details.confirmed === true;
+  if (confirmed) {
+    return;
+  }
+
+  const warning = controlResult?.warning
+    || details.confirmationWarning
+    || details.commandWarning
+    || 'status verification did not confirm the requested state';
+  const deviceName = device?.name || device?._id || 'device';
+  const error = new Error(`Insteon ${actionName} for ${deviceName} was acknowledged but not confirmed: ${warning}`);
+  error.code = 'INSTEON_CONFIRMATION_REQUIRED';
+  error.details = {
+    source: 'insteon',
+    deviceId: device?._id?.toString?.() || String(device?._id || ''),
+    deviceName: device?.name || null,
+    action: actionName,
+    verificationMode: options?.verificationMode || null,
+    confirmed: false,
+    control: details
+  };
+  throw error;
+}
+
 function readFirstNumber(source = {}, keys = []) {
   if (!source || typeof source !== 'object') {
     return null;
@@ -1570,10 +1623,11 @@ async function executeDeviceControlForResolvedDevice(device, target, actionName,
         });
         break;
     }
+    assertInsteonControlConfirmed(device, actionName, controlResult, insteonOptions, executionOptions?.action);
   } else {
     controlResult = await deviceService.controlDevice(target.toString(), actionName, value, {
       command: commandMetadata,
-      requirePostActionVerification: source === 'harmony',
+      requirePostActionVerification: source === 'harmony' || source === 'smartthings',
       ...(source === 'harmony'
         ? {
             harmonyVerificationTimeoutMs: DEFAULT_WORKFLOW_HARMONY_VERIFY_TIMEOUT_MS,
@@ -1631,7 +1685,10 @@ async function executeResolvedDeviceGroupUnit({
     throw new Error(`Device group "${groupName}" has no matching devices`);
   }
 
-  if (allowManagedInsteonGroup) {
+  const allowManagedBroadcast = allowManagedInsteonGroup
+    && isAckOnlyInsteonVerificationMode(insteonGroupOptions?.verificationMode);
+
+  if (allowManagedBroadcast) {
     let groupAdmissions = [];
     try {
       groupAdmissions = await admitDeviceCommandGroup(devices, actionName, value, context, {
@@ -1769,7 +1826,7 @@ async function executeDeviceGroupControl(groupTarget, action, context = {}) {
   const value = getActionValue(actionName, action?.parameters || {});
   const insteonGroupOptions = {
     ...getInsteonCommandRetryOptions(action, 'insteon', {
-      verificationMode: 'ack'
+      verificationMode: 'fast'
     }),
     deviceGroup: rootGroupName
   };

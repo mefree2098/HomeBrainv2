@@ -328,6 +328,82 @@ test('controlDevice waits for Harmony activity verification to settle when requi
   assert.equal(persistedUpdate.status, true);
 });
 
+test('controlDevice rejects stale SmartThings post-action verification when required', async (t) => {
+  const originalFindById = Device.findById;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalEnsureSmartThingsState = deviceService.ensureSmartThingsState;
+  const originalRefreshSmartThingsOnlineStatus = deviceService.refreshSmartThingsOnlineStatus;
+  const originalControlSmartThingsDevice = deviceService.controlSmartThingsDevice;
+  const originalPollSmartThingsState = deviceService.pollSmartThingsState;
+  const originalEmit = deviceUpdateEmitter.emit;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    deviceService.ensureSmartThingsState = originalEnsureSmartThingsState;
+    deviceService.refreshSmartThingsOnlineStatus = originalRefreshSmartThingsOnlineStatus;
+    deviceService.controlSmartThingsDevice = originalControlSmartThingsDevice;
+    deviceService.pollSmartThingsState = originalPollSmartThingsState;
+    deviceUpdateEmitter.emit = originalEmit;
+  });
+
+  const smartThingsDevice = {
+    _id: 'device-smartthings-stale',
+    name: 'Driveway Lights',
+    type: 'light',
+    status: false,
+    brightness: 0,
+    isOnline: true,
+    properties: {
+      source: 'smartthings',
+      smartThingsDeviceId: 'smartthings-driveway',
+      smartThingsCapabilities: ['switch']
+    }
+  };
+
+  let persisted = false;
+  Device.findById = async () => ({ ...smartThingsDevice });
+  Device.findByIdAndUpdate = async () => {
+    persisted = true;
+    return { ...smartThingsDevice, status: true };
+  };
+  deviceService.ensureSmartThingsState = async () => {};
+  deviceService.refreshSmartThingsOnlineStatus = async () => true;
+  deviceService.controlSmartThingsDevice = async (_device, _action, _value, updateData) => {
+    updateData.status = true;
+  };
+  deviceService.pollSmartThingsState = async () => ({
+    status: true,
+    isOnline: true,
+    lastSeen: new Date('2025-12-08T03:48:58.309Z'),
+    'properties.smartThingsAttributeMetadata': {
+      byComponent: {
+        main: {
+          switch: {
+            switch: {
+              value: 'on',
+              timestamp: '2025-12-08T03:48:58.309Z'
+            }
+          }
+        }
+      }
+    },
+    'properties.smartThingsHealthState': {
+      state: 'ONLINE',
+      lastUpdatedDate: '2025-12-08T03:48:58.309Z'
+    }
+  });
+  deviceUpdateEmitter.emit = () => {};
+
+  await assert.rejects(
+    () => deviceService.controlDevice('device-smartthings-stale', 'turn_on', undefined, {
+      requirePostActionVerification: true
+    }),
+    /SmartThings verification returned stale state/
+  );
+  assert.equal(persisted, false);
+});
+
 test('controlDevice routes RainMachine zone start actions through the RainMachine service', async (t) => {
   const originalFindById = Device.findById;
   const originalEnsureRainMachineState = deviceService.ensureRainMachineState;
