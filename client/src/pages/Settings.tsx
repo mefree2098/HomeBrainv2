@@ -160,6 +160,7 @@ import { TempestIntegrationCard } from "@/components/weather/TempestIntegrationC
 import { RainMachineIntegrationCard } from "@/components/rainmachine/RainMachineIntegrationCard"
 import { HardwareOrbsTab } from "@/components/settings/HardwareOrbsTab"
 import { DeviceCommandCoordinatorTab } from "@/components/settings/DeviceCommandCoordinatorTab"
+import { DirectRadioAdminCard } from "@/components/settings/DirectRadioAdminCard"
 import { CodexSkillIntegration } from "./CodexSkillIntegration"
 import { OpenClawIntegration } from "./OpenClawIntegration"
 
@@ -5236,6 +5237,8 @@ export function Settings() {
               </TabsContent>
 
               <TabsContent value="devices" className="space-y-6">
+            <DirectRadioAdminCard />
+
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">

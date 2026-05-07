@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const Device = require('../models/Device');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
+const directRadioEngineLogService = require('./directRadioEngineLogService');
 const {
   DIRECT_RADIO_SOURCES,
   buildDirectFeatureProperties,
@@ -22,7 +23,12 @@ const ZWAVE_DIR = path.join(DATA_DIR, 'zwave');
 const CONFIG_PATH = path.join(DATA_DIR, 'controller-config.json');
 const DEFAULT_PAIRING_SECONDS = 120;
 const MAX_PAIRING_SECONDS = 900;
+const DEFAULT_HARDWARE_SCAN_INTERVAL_MS = 60_000;
 const DIRECT_DEVICE_PROJECTION = 'name type room groups status brightness color colorTemperature temperature targetTemperature isOnline lastSeen properties brand model';
+const FALLBACK_SERIAL_DEVICE_PATTERNS = [
+  /^ttyUSB\d+$/i,
+  /^ttyACM\d+$/i
+];
 
 function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -48,6 +54,14 @@ function boundedSeconds(value, fallback = DEFAULT_PAIRING_SECONDS) {
     return fallback;
   }
   return Math.max(5, Math.min(MAX_PAIRING_SECONDS, Math.round(parsed)));
+}
+
+function boundedIntervalMs(value, fallback = DEFAULT_HARDWARE_SCAN_INTERVAL_MS) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(15_000, Math.min(10 * 60_000, Math.round(parsed)));
 }
 
 function uniqueStrings(values) {
@@ -118,6 +132,83 @@ function resolveLocalSerialById() {
   }
 }
 
+function resolveRealPath(serialPath) {
+  const normalizedPath = trimString(serialPath);
+  if (!normalizedPath) {
+    return '';
+  }
+
+  try {
+    return fs.realpathSync(normalizedPath);
+  } catch (_error) {
+    return normalizedPath;
+  }
+}
+
+function buildFallbackSerialPort(pathValue, stableLink = null) {
+  const resolvedPath = resolveRealPath(pathValue);
+  const stablePath = trimString(stableLink?.stablePath);
+  const label = trimString(stableLink?.label) || (stablePath ? path.basename(stablePath) : path.basename(pathValue));
+
+  return {
+    path: resolvedPath || pathValue,
+    pnpId: label,
+    friendlyName: label,
+    description: label,
+    stablePath,
+    realPath: resolvedPath
+  };
+}
+
+function hasPortCandidate(candidates, serialPath) {
+  const normalizedPath = trimString(serialPath);
+  if (!normalizedPath) {
+    return true;
+  }
+
+  const resolvedPath = resolveRealPath(normalizedPath);
+  return candidates.some((candidate) => {
+    const candidatePath = trimString(candidate?.path || candidate?.comName || candidate?.device || candidate?.pnpId);
+    const candidateStablePath = trimString(candidate?.stablePath);
+    const candidateRealPath = resolveRealPath(candidatePath);
+    return candidatePath === normalizedPath
+      || candidateStablePath === normalizedPath
+      || candidateRealPath === resolvedPath
+      || (candidateRealPath && resolvedPath && candidateRealPath === resolvedPath);
+  });
+}
+
+function listFallbackSerialDevicePaths() {
+  try {
+    return fs.readdirSync('/dev')
+      .filter((fileName) => FALLBACK_SERIAL_DEVICE_PATTERNS.some((pattern) => pattern.test(fileName)))
+      .map((fileName) => path.join('/dev', fileName))
+      .sort((left, right) => left.localeCompare(right));
+  } catch (_error) {
+    return [];
+  }
+}
+
+function addFallbackSerialPortCandidates(rawPorts = [], stableLinks = resolveLocalSerialById()) {
+  const candidates = Array.isArray(rawPorts) ? [...rawPorts] : [];
+
+  stableLinks.forEach((stableLink) => {
+    const candidatePath = stableLink.realPath || stableLink.stablePath;
+    if (candidatePath && !hasPortCandidate(candidates, candidatePath)) {
+      candidates.push(buildFallbackSerialPort(candidatePath, stableLink));
+    }
+  });
+
+  listFallbackSerialDevicePaths().forEach((serialPath) => {
+    if (!hasPortCandidate(candidates, serialPath)) {
+      const stableLink = stableLinks.find((entry) => entry.realPath && resolveRealPath(serialPath) === entry.realPath);
+      candidates.push(buildFallbackSerialPort(serialPath, stableLink || null));
+    }
+  });
+
+  return candidates;
+}
+
 function normalizeSerialPort(rawPort = {}, stableLinks = resolveLocalSerialById()) {
   const pathValue = trimString(rawPort.path || rawPort.comName || rawPort.device || rawPort.pnpId);
   let realPath = '';
@@ -165,6 +256,29 @@ function normalizeSerialPort(rawPort = {}, stableLinks = resolveLocalSerialById(
   };
 }
 
+function enrichSerialPortForDirectRadios(port) {
+  const zigbeeScore = scorePortForProtocol(port, 'zigbee');
+  const zwaveScore = scorePortForProtocol(port, 'zwave');
+  const likelyZigbee = zigbeeScore >= 8;
+  const likelyZWave = zwaveScore >= 8;
+  const preferredProtocol = zigbeeScore > zwaveScore
+    ? 'zigbee'
+    : zwaveScore > zigbeeScore
+      ? 'zwave'
+      : null;
+
+  return {
+    ...port,
+    scores: {
+      zigbee: zigbeeScore,
+      zwave: zwaveScore
+    },
+    likelyZigbee,
+    likelyZWave,
+    preferredProtocol
+  };
+}
+
 function scorePortForProtocol(port, protocol) {
   const descriptor = port?.descriptor || '';
   const vendorId = trimString(port?.vendorId).toLowerCase();
@@ -207,6 +321,21 @@ function choosePortForProtocol(ports, protocol, usedPaths = new Set()) {
   }
 
   return null;
+}
+
+function describeSerialEndpoints(ports = []) {
+  const visible = ports
+    .map((port) => trimString(port?.path || port?.stablePath || port?.rawPath || port?.realPath))
+    .filter(Boolean);
+
+  if (visible.length === 0) {
+    return 'no serial endpoints';
+  }
+
+  const preview = visible.slice(0, 6).join(', ');
+  return visible.length > 6
+    ? `${preview}, and ${visible.length - 6} more`
+    : preview;
 }
 
 function protocolSource(protocol) {
@@ -370,6 +499,8 @@ class DirectRadioService {
       zigbee: null,
       zwave: null
     };
+    this.lastSerialScanSummary = '';
+    this.hardwareMonitorTimer = null;
     this.zigbee = {
       controller: null,
       converters: null,
@@ -388,6 +519,19 @@ class DirectRadioService {
       pendingDsk: null
     };
     this.activeMigrations = new Map();
+  }
+
+  publishLog(input = {}) {
+    return directRadioEngineLogService.publish(input);
+  }
+
+  log(level, protocol, message, details = {}) {
+    return this.publishLog({
+      level,
+      protocol,
+      message,
+      details
+    });
   }
 
   async start(options = {}) {
@@ -409,12 +553,16 @@ class DirectRadioService {
     }
 
     this.started = true;
+    this.log('info', 'system', 'Starting direct radio runtime', {
+      force: options.force === true
+    });
     ensureDirSync(DATA_DIR);
     ensureDirSync(ZIGBEE_DIR);
     ensureDirSync(ZWAVE_DIR);
     await this.ensureControllerConfig();
 
     if (!parseEnabledFlag(process.env.HOMEBRAIN_DIRECT_RADIOS_ENABLED, true)) {
+      this.log('warn', 'system', 'Direct radio runtime is disabled by configuration');
       return this.getStatus();
     }
 
@@ -430,7 +578,38 @@ class DirectRadioService {
       await this.startZWave(this.detected.zwave.path);
     }
 
-    return this.getStatus();
+    const status = await this.getStatus();
+    this.ensureHardwareMonitor();
+    this.log('info', 'system', 'Direct radio startup check complete', {
+      zigbeeStarted: status.controllers?.zigbee?.started === true,
+      zwaveStarted: status.controllers?.zwave?.started === true,
+      zigbeePort: status.controllers?.zigbee?.detectedPort || null,
+      zwavePort: status.controllers?.zwave?.detectedPort || null
+    });
+    return status;
+  }
+
+  ensureHardwareMonitor() {
+    if (this.hardwareMonitorTimer || !parseEnabledFlag(process.env.HOMEBRAIN_DIRECT_RADIOS_ENABLED, true)) {
+      return;
+    }
+
+    const intervalMs = boundedIntervalMs(process.env.HOMEBRAIN_DIRECT_RADIO_SCAN_INTERVAL_MS);
+    this.hardwareMonitorTimer = setInterval(() => {
+      if (this.zigbee.started && this.zwave.started) {
+        return;
+      }
+
+      void this.refreshHardwareStatus({ log: false }).catch((error) => {
+        this.log('warn', 'system', 'Direct radio hardware monitor refresh failed', {
+          error: error.message
+        });
+      });
+    }, intervalMs);
+
+    if (typeof this.hardwareMonitorTimer.unref === 'function') {
+      this.hardwareMonitorTimer.unref();
+    }
   }
 
   async ensureControllerConfig() {
@@ -465,7 +644,11 @@ class DirectRadioService {
     return next;
   }
 
-  async detectSerialPorts() {
+  async detectSerialPorts(options = {}) {
+    const logScan = options.log !== false;
+    if (logScan) {
+      this.log('info', 'system', 'Scanning serial ports for Zigbee and Z-Wave adapters');
+    }
     let SerialPortModule;
     try {
       SerialPortModule = require('serialport');
@@ -475,6 +658,11 @@ class DirectRadioService {
       this.detected.zwave = null;
       this.zigbee.error = `serialport unavailable: ${error.message}`;
       this.zwave.error = `serialport unavailable: ${error.message}`;
+      if (logScan) {
+        this.log('error', 'system', 'Serial port module unavailable for direct radio scan', {
+          error: error.message
+        });
+      }
       return this.serialPorts;
     }
 
@@ -485,11 +673,20 @@ class DirectRadioService {
       this.serialPorts = [];
       this.zigbee.error = `Failed to list serial ports: ${error.message}`;
       this.zwave.error = `Failed to list serial ports: ${error.message}`;
+      if (logScan) {
+        this.log('error', 'system', 'Failed to list serial ports for direct radio scan', {
+          error: error.message
+        });
+      }
       return this.serialPorts;
     }
 
     const stableLinks = resolveLocalSerialById();
-    this.serialPorts = rawPorts.map((port) => normalizeSerialPort(port, stableLinks));
+    const rawCandidates = addFallbackSerialPortCandidates(rawPorts, stableLinks);
+    this.serialPorts = rawCandidates
+      .map((port) => normalizeSerialPort(port, stableLinks))
+      .filter((port) => Boolean(port.path))
+      .map(enrichSerialPortForDirectRadios);
 
     const used = new Set();
     const configuredZigbee = trimString(process.env.HOMEBRAIN_ZIGBEE_PORT);
@@ -509,11 +706,74 @@ class DirectRadioService {
       used.add(this.detected.zwave.path);
     }
 
+    const scanSummary = JSON.stringify({
+      ports: this.serialPorts.map((port) => ({
+        path: port.path,
+        stablePath: port.stablePath,
+        preferredProtocol: port.preferredProtocol,
+        scores: port.scores
+      })),
+      zigbeePort: this.detected.zigbee?.path || null,
+      zwavePort: this.detected.zwave?.path || null
+    });
+    const scanChanged = this.lastSerialScanSummary !== scanSummary;
+    this.lastSerialScanSummary = scanSummary;
+
+    if (logScan || scanChanged) {
+      this.log('info', 'system', 'Serial port scan complete', {
+        serialPortCount: this.serialPorts.length,
+        zigbeePort: this.detected.zigbee?.path || null,
+        zigbeeScore: this.detected.zigbee?.scores?.zigbee ?? this.detected.zigbee?.score ?? null,
+        zwavePort: this.detected.zwave?.path || null,
+        zwaveScore: this.detected.zwave?.scores?.zwave ?? this.detected.zwave?.score ?? null,
+        likelyDirectRadioPorts: this.serialPorts
+          .filter((port) => port.likelyZigbee || port.likelyZWave)
+          .map((port) => ({
+            path: port.path,
+            stablePath: port.stablePath,
+            preferredProtocol: port.preferredProtocol,
+            scores: port.scores
+          }))
+      });
+    }
+
     return this.serialPorts;
+  }
+
+  async refreshHardwareStatus(options = {}) {
+    await this.start();
+
+    if (!parseEnabledFlag(process.env.HOMEBRAIN_DIRECT_RADIOS_ENABLED, true)) {
+      return this.getStatus();
+    }
+
+    await this.detectSerialPorts({ log: options.log !== false });
+
+    const shouldStartZigbee = parseEnabledFlag(process.env.HOMEBRAIN_ZIGBEE_ENABLED, true);
+    const shouldStartZWave = parseEnabledFlag(process.env.HOMEBRAIN_ZWAVE_ENABLED, true);
+
+    if (shouldStartZigbee && this.detected.zigbee?.path && !this.zigbee.started) {
+      this.log('info', 'zigbee', 'Detected Zigbee adapter during refresh; attempting coordinator start', {
+        serialPath: this.detected.zigbee.path
+      });
+      await this.startZigbee(this.detected.zigbee.path);
+    }
+
+    if (shouldStartZWave && this.detected.zwave?.path && !this.zwave.started) {
+      this.log('info', 'zwave', 'Detected Z-Wave adapter during refresh; attempting controller start', {
+        serialPath: this.detected.zwave.path
+      });
+      await this.startZWave(this.detected.zwave.path);
+    }
+
+    return this.getStatus();
   }
 
   async startZigbee(serialPath) {
     try {
+      this.log('info', 'zigbee', 'Starting Zigbee coordinator', {
+        serialPath
+      });
       const { Controller } = require('zigbee-herdsman');
       this.zigbee.converters = require('zigbee-herdsman-converters');
       const config = await this.ensureControllerConfig();
@@ -542,38 +802,70 @@ class DirectRadioService {
       });
 
       controller.on('deviceJoined', (payload) => {
+        this.log('info', 'zigbee', 'Zigbee device joined', {
+          ieeeAddr: payload?.device?.ieeeAddr || null,
+          modelID: payload?.device?.modelID || null
+        });
         void this.handleZigbeeDeviceChanged(payload?.device, 'deviceJoined');
       });
       controller.on('deviceInterview', (payload) => {
+        this.log(payload?.status === 'successful' ? 'info' : 'warn', 'zigbee', 'Zigbee device interview update', {
+          status: payload?.status || null,
+          ieeeAddr: payload?.device?.ieeeAddr || null,
+          modelID: payload?.device?.modelID || null
+        });
         if (payload?.status === 'successful') {
           void this.handleZigbeeDeviceChanged(payload.device, 'deviceInterview');
         }
       });
       controller.on('deviceAnnounce', (payload) => {
+        this.log('info', 'zigbee', 'Zigbee device announced', {
+          ieeeAddr: payload?.device?.ieeeAddr || null,
+          networkAddress: payload?.device?.networkAddress || null
+        });
         void this.handleZigbeeDeviceChanged(payload?.device, 'deviceAnnounce');
       });
       controller.on('message', (payload) => {
+        this.log('info', 'zigbee', 'Zigbee message received', {
+          ieeeAddr: payload?.device?.ieeeAddr || null,
+          cluster: payload?.cluster || null,
+          type: payload?.type || null
+        });
         void this.handleZigbeeDeviceChanged(payload?.device, 'message');
       });
       controller.on('adapterDisconnected', () => {
         this.zigbee.started = false;
         this.zigbee.error = 'Zigbee adapter disconnected';
+        this.log('error', 'zigbee', 'Zigbee adapter disconnected', {
+          serialPath
+        });
       });
 
       this.zigbee.controller = controller;
       this.zigbee.lastStartResult = await controller.start();
       this.zigbee.started = true;
       this.zigbee.error = null;
+      this.log('info', 'zigbee', 'Zigbee coordinator started', {
+        serialPath,
+        lastStartResult: this.zigbee.lastStartResult || null
+      });
       await this.syncZigbeeDevices();
     } catch (error) {
       this.zigbee.started = false;
       this.zigbee.error = error.message;
+      this.log('error', 'zigbee', 'Zigbee coordinator failed to start', {
+        serialPath,
+        error: error.message
+      });
       console.warn(`DirectRadioService: Zigbee controller failed to start: ${error.message}`);
     }
   }
 
   async startZWave(serialPath) {
     try {
+      this.log('info', 'zwave', 'Starting Z-Wave controller', {
+        serialPath
+      });
       const zwave = require('zwave-js');
       const config = await this.ensureControllerConfig();
       const keyBuffer = (hex) => Buffer.from(hex, 'hex');
@@ -598,31 +890,60 @@ class DirectRadioService {
       driver.on('driver ready', () => {
         this.zwave.started = true;
         this.zwave.error = null;
+        this.log('info', 'zwave', 'Z-Wave driver ready', {
+          serialPath,
+          homeId: driver.controller?.homeId || null
+        });
         void this.syncZWaveNodes();
       });
       driver.on('all nodes ready', () => {
+        this.log('info', 'zwave', 'All Z-Wave nodes ready', {
+          nodeCount: driver.controller?.nodes?.size ?? null
+        });
         void this.syncZWaveNodes();
       });
       driver.on('node added', (node) => {
+        this.log('info', 'zwave', 'Z-Wave node added', {
+          nodeId: node?.id || null
+        });
         void this.handleZWaveNodeChanged(node, 'node added');
       });
       driver.on('node ready', (node) => {
+        this.log('info', 'zwave', 'Z-Wave node ready', {
+          nodeId: node?.id || null,
+          manufacturer: node?.manufacturer || null,
+          productLabel: node?.productLabel || null
+        });
         void this.handleZWaveNodeChanged(node, 'node ready');
       });
       driver.on('node value updated', (node) => {
+        this.log('info', 'zwave', 'Z-Wave node value updated', {
+          nodeId: node?.id || null
+        });
         void this.handleZWaveNodeChanged(node, 'node value updated');
       });
       driver.on('error', (error) => {
         this.zwave.error = error.message;
+        this.log('error', 'zwave', 'Z-Wave driver error', {
+          serialPath,
+          error: error.message
+        });
       });
 
       this.zwave.driver = driver;
       await driver.start();
       this.zwave.started = true;
       this.zwave.error = null;
+      this.log('info', 'zwave', 'Z-Wave controller started', {
+        serialPath
+      });
     } catch (error) {
       this.zwave.started = false;
       this.zwave.error = error.message;
+      this.log('error', 'zwave', 'Z-Wave controller failed to start', {
+        serialPath,
+        error: error.message
+      });
       console.warn(`DirectRadioService: Z-Wave controller failed to start: ${error.message}`);
     }
   }
@@ -644,13 +965,20 @@ class DirectRadioService {
         this.zwave.pendingDsk = dsk;
         const configuredPin = trimString(this.zwave.s2DskPin || process.env.HOMEBRAIN_ZWAVE_S2_DSK_PIN);
         if (/^\d{5}$/.test(configuredPin)) {
+          this.log('info', 'zwave', 'Z-Wave S2 DSK PIN supplied from configuration', {
+            dsk
+          });
           return configuredPin;
         }
+        this.log('warn', 'zwave', 'Z-Wave S2 DSK PIN required', {
+          dsk
+        });
         console.warn(`DirectRadioService: Z-Wave S2 DSK PIN required for ${dsk}`);
         return false;
       },
       abort: () => {
         this.zwave.pendingDsk = null;
+        this.log('warn', 'zwave', 'Z-Wave inclusion user callback aborted');
       }
     };
   }
@@ -661,6 +989,9 @@ class DirectRadioService {
 
   async syncZigbeeDevices() {
     const devices = this.zigbee.controller?.getDevices?.() || [];
+    this.log('info', 'zigbee', 'Synchronizing Zigbee device inventory', {
+      reportedDeviceCount: devices.length
+    });
     for (const zigbeeDevice of devices) {
       if (zigbeeDevice?.type === 'Coordinator') {
         continue;
@@ -673,9 +1004,13 @@ class DirectRadioService {
   async syncZWaveNodes() {
     const nodes = this.getZWaveController()?.nodes;
     if (!nodes || typeof nodes.values !== 'function') {
+      this.log('warn', 'zwave', 'Z-Wave node sync skipped because controller nodes are unavailable');
       return;
     }
 
+    this.log('info', 'zwave', 'Synchronizing Z-Wave node inventory', {
+      reportedNodeCount: nodes.size ?? null
+    });
     for (const node of nodes.values()) {
       if (!node || node.isControllerNode) {
         continue;
@@ -846,6 +1181,11 @@ class DirectRadioService {
     if (!normalized) {
       return null;
     }
+    this.log('info', 'zigbee', 'Zigbee device state normalized', {
+      reason,
+      ieeeAddr: normalized.identity?.id || null,
+      features: normalized.update?.properties?.directRadioFeatures || []
+    });
     return this.upsertDirectDevice(normalized.identity, normalized.update);
   }
 
@@ -854,6 +1194,11 @@ class DirectRadioService {
     if (!normalized) {
       return null;
     }
+    this.log('info', 'zwave', 'Z-Wave node state normalized', {
+      reason,
+      nodeId: normalized.identity?.id || null,
+      features: normalized.update?.properties?.directRadioFeatures || []
+    });
     return this.upsertDirectDevice(normalized.identity, normalized.update);
   }
 
@@ -881,6 +1226,11 @@ class DirectRadioService {
       ? await Device.findByIdAndUpdate(existing._id, payload, { returnDocument: 'after', runValidators: true })
       : await new Device(payload).save();
 
+    this.log('info', identity.protocol, existing ? 'Direct radio device updated' : 'Direct radio device created', {
+      deviceId: device?._id?.toString?.() || null,
+      name: device?.name || update?.name || null,
+      identity: identity.id
+    });
     this.emitDeviceUpdate(device);
     return device;
   }
@@ -944,6 +1294,12 @@ class DirectRadioService {
     migration.status = 'completed';
     migration.completedAt = new Date().toISOString();
     migration.directIdentity = identity;
+    this.log('info', identity.protocol, 'SmartThings migration completed on direct radio', {
+      migrationId,
+      deviceId: updated?._id?.toString?.() || existing._id?.toString?.() || null,
+      identity: identity.id,
+      validation
+    });
     this.emitDeviceUpdate(updated);
     return updated;
   }
@@ -1080,23 +1436,44 @@ class DirectRadioService {
     const seconds = boundedSeconds(options.durationSeconds);
     if (protocol === 'zigbee') {
       if (!this.zigbee.controller || !this.zigbee.started) {
+        this.log('warn', 'zigbee', 'Cannot open Zigbee permit-join because the coordinator is not ready', {
+          requestedSeconds: seconds,
+          detectedPort: this.detected.zigbee?.path || null,
+          error: this.zigbee.error || null
+        });
         const error = new Error('Zigbee controller is not ready. Plug in the SONOFF ZBDongle-P or set HOMEBRAIN_ZIGBEE_PORT.');
         error.status = 503;
         throw error;
       }
+      this.log('info', 'zigbee', 'Opening Zigbee permit-join window', {
+        durationSeconds: seconds,
+        serialPath: this.detected.zigbee?.path || null
+      });
       await this.zigbee.controller.permitJoin(seconds);
       this.zigbee.permitJoinUntil = new Date(Date.now() + seconds * 1000).toISOString();
+      this.log('info', 'zigbee', 'Zigbee permit-join window is open', {
+        expiresAt: this.zigbee.permitJoinUntil
+      });
       return { protocol, mode: 'permit_join', expiresAt: this.zigbee.permitJoinUntil };
     }
 
     if (protocol === 'zwave') {
       const controller = this.getZWaveController();
       if (!controller || !this.zwave.started) {
+        this.log('warn', 'zwave', 'Cannot open Z-Wave inclusion because the controller is not ready', {
+          requestedSeconds: seconds,
+          detectedPort: this.detected.zwave?.path || null,
+          error: this.zwave.error || null
+        });
         const error = new Error('Z-Wave controller is not ready. Plug in the Zooz ZST39 LR stick or set HOMEBRAIN_ZWAVE_PORT.');
         error.status = 503;
         throw error;
       }
       const zwave = require('zwave-js');
+      this.log('info', 'zwave', 'Opening Z-Wave inclusion window', {
+        durationSeconds: seconds,
+        serialPath: this.detected.zwave?.path || null
+      });
       await controller.beginInclusion({ strategy: zwave.InclusionStrategy.Default });
       this.zwave.inclusionUntil = new Date(Date.now() + seconds * 1000).toISOString();
       const stopTimer = setTimeout(() => {
@@ -1107,6 +1484,9 @@ class DirectRadioService {
       if (typeof stopTimer.unref === 'function') {
         stopTimer.unref();
       }
+      this.log('info', 'zwave', 'Z-Wave inclusion window is open', {
+        expiresAt: this.zwave.inclusionUntil
+      });
       return { protocol, mode: 'inclusion', expiresAt: this.zwave.inclusionUntil };
     }
 
@@ -1125,6 +1505,10 @@ class DirectRadioService {
 
     const controller = this.getZWaveController();
     if (!controller || !this.zwave.started) {
+      this.log('warn', 'zwave', 'Cannot open Z-Wave exclusion because the controller is not ready', {
+        detectedPort: this.detected.zwave?.path || null,
+        error: this.zwave.error || null
+      });
       const error = new Error('Z-Wave controller is not ready.');
       error.status = 503;
       throw error;
@@ -1132,6 +1516,10 @@ class DirectRadioService {
 
     const seconds = boundedSeconds(options.durationSeconds);
     const zwave = require('zwave-js');
+    this.log('info', 'zwave', 'Opening Z-Wave exclusion window', {
+      durationSeconds: seconds,
+      serialPath: this.detected.zwave?.path || null
+    });
     await controller.beginExclusion({ strategy: zwave.ExclusionStrategy.ExcludeOnly });
     this.zwave.exclusionUntil = new Date(Date.now() + seconds * 1000).toISOString();
     const stopTimer = setTimeout(() => {
@@ -1140,6 +1528,9 @@ class DirectRadioService {
     if (typeof stopTimer.unref === 'function') {
       stopTimer.unref();
     }
+    this.log('info', 'zwave', 'Z-Wave exclusion window is open', {
+      expiresAt: this.zwave.exclusionUntil
+    });
     return { protocol, mode: 'exclusion', expiresAt: this.zwave.exclusionUntil };
   }
 
@@ -1147,6 +1538,7 @@ class DirectRadioService {
     if ((protocol === 'zigbee' || protocol === 'all') && this.zigbee.controller && this.zigbee.started) {
       await this.zigbee.controller.permitJoin(0);
       this.zigbee.permitJoinUntil = null;
+      this.log('info', 'zigbee', 'Zigbee permit-join window closed');
     }
 
     if ((protocol === 'zwave' || protocol === 'all') && this.getZWaveController()) {
@@ -1159,6 +1551,7 @@ class DirectRadioService {
       }
       this.zwave.inclusionUntil = null;
       this.zwave.exclusionUntil = null;
+      this.log('info', 'zwave', 'Z-Wave inclusion/exclusion windows closed');
     }
 
     return this.getStatus();
@@ -1212,6 +1605,13 @@ class DirectRadioService {
       throw new Error('Zigbee device endpoint is not ready');
     }
 
+    this.log('info', 'zigbee', 'Sending Zigbee device command', {
+      deviceId: device?._id?.toString?.() || null,
+      name: device?.name || null,
+      action: normalizedAction,
+      value: commandValue ?? null
+    });
+
     switch (normalizedAction) {
       case 'toggle':
       case 'turnon':
@@ -1257,6 +1657,11 @@ class DirectRadioService {
 
     updateData.isOnline = true;
     updateData.lastSeen = new Date();
+    this.log('info', 'zigbee', 'Zigbee device command accepted', {
+      deviceId: device?._id?.toString?.() || null,
+      name: device?.name || null,
+      action: normalizedAction
+    });
   }
 
   async setZWaveValue(node, valueDef, value, options = {}) {
@@ -1275,6 +1680,13 @@ class DirectRadioService {
       throw new Error('Z-Wave node is not ready');
     }
     const zwave = require('zwave-js');
+    this.log('info', 'zwave', 'Sending Z-Wave device command', {
+      deviceId: device?._id?.toString?.() || null,
+      name: device?.name || null,
+      nodeId: device?.properties?.homebrainDirect?.nodeId || null,
+      action: normalizedAction,
+      value: commandValue ?? null
+    });
 
     switch (normalizedAction) {
       case 'toggle':
@@ -1334,6 +1746,11 @@ class DirectRadioService {
 
     updateData.isOnline = true;
     updateData.lastSeen = new Date();
+    this.log('info', 'zwave', 'Z-Wave device command accepted', {
+      deviceId: device?._id?.toString?.() || null,
+      name: device?.name || null,
+      action: normalizedAction
+    });
   }
 
   async refreshDirectDeviceState(device) {
@@ -1353,24 +1770,104 @@ class DirectRadioService {
     return normalized?.update || null;
   }
 
+  getDetectedPortDetails(protocol) {
+    const detectedPath = this.detected?.[protocol]?.path;
+    if (!detectedPath) {
+      return null;
+    }
+
+    const match = this.serialPorts.find((port) => (
+      port.path === detectedPath
+      || port.stablePath === detectedPath
+      || port.rawPath === detectedPath
+      || port.realPath === detectedPath
+    ));
+
+    return match || {
+      path: detectedPath,
+      configured: this.detected?.[protocol]?.configured === true,
+      scores: {
+        [protocol]: this.detected?.[protocol]?.score ?? null
+      }
+    };
+  }
+
+  buildControllerDiagnostics(protocol, portDetails = null) {
+    const controller = protocol === 'zigbee' ? this.zigbee : this.zwave;
+    const detected = this.detected?.[protocol];
+    const configuredPort = trimString(protocol === 'zigbee'
+      ? process.env.HOMEBRAIN_ZIGBEE_PORT
+      : process.env.HOMEBRAIN_ZWAVE_PORT);
+    const protocolEnabled = parseEnabledFlag(protocol === 'zigbee'
+      ? process.env.HOMEBRAIN_ZIGBEE_ENABLED
+      : process.env.HOMEBRAIN_ZWAVE_ENABLED, true);
+    const label = protocol === 'zigbee' ? 'Zigbee' : 'Z-Wave';
+    const expected = protocol === 'zigbee'
+      ? 'SONOFF ZBDongle-P / TI CC2652P coordinator'
+      : 'Zooz ZST39 LR / 800-series Z-Wave stick';
+    const likelyCount = this.serialPorts.filter((port) => (
+      protocol === 'zigbee' ? port.likelyZigbee : port.likelyZWave
+    )).length;
+    const diagnostics = [];
+
+    if (!parseEnabledFlag(process.env.HOMEBRAIN_DIRECT_RADIOS_ENABLED, true)) {
+      diagnostics.push('Direct Zigbee/Z-Wave radios are disabled by HOMEBRAIN_DIRECT_RADIOS_ENABLED.');
+      return diagnostics;
+    }
+
+    if (!protocolEnabled) {
+      diagnostics.push(`${label} runtime is disabled by configuration.`);
+      return diagnostics;
+    }
+
+    if (!detected?.path) {
+      diagnostics.push(`No ${label} USB adapter detected. Expected ${expected}; HomeBrain currently sees ${describeSerialEndpoints(this.serialPorts)}.`);
+      diagnostics.push('Check the Jetson USB connection, container/device passthrough if applicable, and read permissions for the HomeBrain service user. Stable USB adapters should appear under /dev/serial/by-id/.');
+      return diagnostics;
+    }
+
+    if (!configuredPort && likelyCount === 0 && portDetails?.path) {
+      diagnostics.push(`${label} is using ${portDetails.path}, but the serial descriptor did not strongly identify the expected adapter. If this is correct, set ${protocol === 'zigbee' ? 'HOMEBRAIN_ZIGBEE_PORT' : 'HOMEBRAIN_ZWAVE_PORT'} to the stable /dev/serial/by-id path.`);
+    }
+
+    if (!controller.started) {
+      diagnostics.push(controller.error
+        ? `${label} adapter was detected at ${detected.path}, but the controller did not start: ${controller.error}`
+        : `${label} adapter was detected at ${detected.path}, but the controller is not started yet.`);
+    }
+
+    if (controller.error && controller.started) {
+      diagnostics.push(`${label} controller last reported: ${controller.error}`);
+    }
+
+    return diagnostics;
+  }
+
   async getStatus() {
     const zigbeeDevices = this.zigbee.controller?.getDevices?.() || [];
     const zwaveNodes = this.getZWaveController()?.nodes;
     const activeMigrations = Array.from(this.activeMigrations.values())
       .filter((migration) => migration.expiresAt > Date.now() && migration.status === 'pairing');
+    const zigbeePortDetails = this.getDetectedPortDetails('zigbee');
+    const zwavePortDetails = this.getDetectedPortDetails('zwave');
+    const zigbeeDiagnostics = this.buildControllerDiagnostics('zigbee', zigbeePortDetails);
+    const zwaveDiagnostics = this.buildControllerDiagnostics('zwave', zwavePortDetails);
 
     return {
       enabled: parseEnabledFlag(process.env.HOMEBRAIN_DIRECT_RADIOS_ENABLED, true),
       dataDir: DATA_DIR,
       serialPorts: this.serialPorts,
+      diagnostics: [...zigbeeDiagnostics, ...zwaveDiagnostics],
       controllers: {
         zigbee: {
           expectedHardware: 'SONOFF ZBDongle-P / TI CC2652P Z-Stack coordinator',
           source: DIRECT_RADIO_SOURCES.zigbee,
           detectedPort: this.detected.zigbee?.path || null,
+          detectedPortDetails: zigbeePortDetails,
           configuredPort: trimString(process.env.HOMEBRAIN_ZIGBEE_PORT) || null,
           started: this.zigbee.started,
           error: this.zigbee.error,
+          diagnostics: zigbeeDiagnostics,
           permitJoinUntil: this.zigbee.permitJoinUntil,
           lastStartResult: this.zigbee.lastStartResult,
           pairedDeviceCount: zigbeeDevices.filter((device) => device?.type !== 'Coordinator').length
@@ -1379,9 +1876,11 @@ class DirectRadioService {
           expectedHardware: 'Zooz ZST39 LR / 800-series Z-Wave SerialAPI USB stick',
           source: DIRECT_RADIO_SOURCES.zwave,
           detectedPort: this.detected.zwave?.path || null,
+          detectedPortDetails: zwavePortDetails,
           configuredPort: trimString(process.env.HOMEBRAIN_ZWAVE_PORT) || null,
           started: this.zwave.started,
           error: this.zwave.error,
+          diagnostics: zwaveDiagnostics,
           inclusionUntil: this.zwave.inclusionUntil,
           exclusionUntil: this.zwave.exclusionUntil,
           pendingDsk: this.zwave.pendingDsk,
@@ -1393,6 +1892,10 @@ class DirectRadioService {
   }
 
   async shutdown() {
+    if (this.hardwareMonitorTimer) {
+      clearInterval(this.hardwareMonitorTimer);
+      this.hardwareMonitorTimer = null;
+    }
     await this.stopPairing('all').catch(() => {});
     if (this.zigbee.controller) {
       try {
@@ -1416,7 +1919,9 @@ class DirectRadioService {
 const directRadioService = new DirectRadioService();
 directRadioService.DirectRadioService = DirectRadioService;
 directRadioService._test = {
+  addFallbackSerialPortCandidates,
   choosePortForProtocol,
+  enrichSerialPortForDirectRadios,
   normalizeSerialPort,
   scorePortForProtocol
 };

@@ -1,0 +1,111 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+const directRadioService = require('../services/directRadioService');
+
+const {
+  DirectRadioService,
+  choosePortForProtocol,
+  enrichSerialPortForDirectRadios,
+  normalizeSerialPort,
+  scorePortForProtocol
+} = {
+  DirectRadioService: directRadioService.DirectRadioService,
+  ...directRadioService._test
+};
+
+test('direct radio serial scoring identifies SONOFF Zigbee and Zooz Z-Wave adapters separately', () => {
+  const zigbee = enrichSerialPortForDirectRadios(normalizeSerialPort({
+    path: '/dev/ttyUSB0',
+    manufacturer: 'ITEAD',
+    product: 'SONOFF Zigbee 3.0 USB Dongle Plus ZBDongle-P',
+    vendorId: '10C4',
+    productId: 'EA60'
+  }, []));
+  const zwave = enrichSerialPortForDirectRadios(normalizeSerialPort({
+    path: '/dev/ttyACM0',
+    manufacturer: 'Zooz',
+    product: 'ZST39 LR 800 Series Z-Wave SerialAPI USB Stick',
+    vendorId: '10C4',
+    productId: 'EA60'
+  }, []));
+
+  assert.equal(zigbee.likelyZigbee, true);
+  assert.equal(zigbee.likelyZWave, false);
+  assert.equal(zigbee.preferredProtocol, 'zigbee');
+  assert.equal(zwave.likelyZWave, true);
+  assert.equal(zwave.likelyZigbee, false);
+  assert.equal(zwave.preferredProtocol, 'zwave');
+});
+
+test('direct radio autodetection does not assign the same serial endpoint to both protocols', () => {
+  const ports = [
+    enrichSerialPortForDirectRadios(normalizeSerialPort({
+      path: '/dev/ttyUSB0',
+      product: 'SONOFF Zigbee 3.0 USB Dongle Plus ZBDongle-P'
+    }, [])),
+    enrichSerialPortForDirectRadios(normalizeSerialPort({
+      path: '/dev/ttyACM0',
+      product: 'Zooz ZST39 LR Z-Wave SerialAPI USB Stick'
+    }, []))
+  ];
+  const used = new Set();
+  const zigbee = choosePortForProtocol(ports, 'zigbee', used);
+  used.add(zigbee.path);
+  const zwave = choosePortForProtocol(ports, 'zwave', used);
+
+  assert.equal(zigbee.path, '/dev/ttyUSB0');
+  assert.equal(zwave.path, '/dev/ttyACM0');
+  assert.notEqual(zigbee.path, zwave.path);
+});
+
+test('direct radio scoring treats generic CP210x as weak without protocol identity', () => {
+  const generic = normalizeSerialPort({
+    path: '/dev/ttyUSB1',
+    manufacturer: 'Silicon Labs',
+    product: 'CP2102 USB to UART Bridge Controller',
+    vendorId: '10C4',
+    productId: 'EA60'
+  }, []);
+
+  assert.ok(scorePortForProtocol(generic, 'zigbee') > 0);
+  assert.ok(scorePortForProtocol(generic, 'zigbee') < 8);
+  assert.ok(scorePortForProtocol(generic, 'zwave') > 0);
+  assert.ok(scorePortForProtocol(generic, 'zwave') < 8);
+});
+
+test('direct radio status explains when HomeBrain sees serial endpoints but no native radio stick', async (t) => {
+  const originalDirectEnabled = process.env.HOMEBRAIN_DIRECT_RADIOS_ENABLED;
+  const originalZigbeePort = process.env.HOMEBRAIN_ZIGBEE_PORT;
+  const originalZWavePort = process.env.HOMEBRAIN_ZWAVE_PORT;
+  delete process.env.HOMEBRAIN_DIRECT_RADIOS_ENABLED;
+  delete process.env.HOMEBRAIN_ZIGBEE_PORT;
+  delete process.env.HOMEBRAIN_ZWAVE_PORT;
+  t.after(() => {
+    if (originalDirectEnabled === undefined) delete process.env.HOMEBRAIN_DIRECT_RADIOS_ENABLED;
+    else process.env.HOMEBRAIN_DIRECT_RADIOS_ENABLED = originalDirectEnabled;
+    if (originalZigbeePort === undefined) delete process.env.HOMEBRAIN_ZIGBEE_PORT;
+    else process.env.HOMEBRAIN_ZIGBEE_PORT = originalZigbeePort;
+    if (originalZWavePort === undefined) delete process.env.HOMEBRAIN_ZWAVE_PORT;
+    else process.env.HOMEBRAIN_ZWAVE_PORT = originalZWavePort;
+  });
+
+  const service = new DirectRadioService();
+  service.serialPorts = [
+    enrichSerialPortForDirectRadios(normalizeSerialPort({
+      path: '/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AG0KWFQA-if00-port0',
+      manufacturer: 'FTDI',
+      product: 'FT232R USB UART',
+      vendorId: '0403',
+      productId: '6001'
+    }, []))
+  ];
+
+  const status = await service.getStatus();
+
+  assert.equal(status.controllers.zigbee.detectedPort, null);
+  assert.equal(status.controllers.zwave.detectedPort, null);
+  assert.ok(status.controllers.zigbee.diagnostics.some((entry) => /No Zigbee USB adapter detected/i.test(entry)));
+  assert.ok(status.controllers.zwave.diagnostics.some((entry) => /No Z-Wave USB adapter detected/i.test(entry)));
+  assert.ok(status.diagnostics.some((entry) => entry.includes('/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AG0KWFQA-if00-port0')));
+});
