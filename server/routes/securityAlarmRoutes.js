@@ -74,6 +74,31 @@ router.get('/status', auth, async (req, res) => {
 });
 
 /**
+ * GET /api/security-alarm/settings
+ * Get security platform and timing settings
+ */
+router.get('/settings', securityAlarmActionRateLimit, auth, async (req, res) => {
+  try {
+    console.log('GET /api/security-alarm/settings - Fetching security settings');
+
+    const settings = await securityAlarmService.getSecuritySettings();
+
+    res.status(200).json({
+      success: true,
+      settings
+    });
+  } catch (error) {
+    console.error('Error in GET /api/security-alarm/settings:', error.message);
+    console.error('Full error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to fetch security settings',
+      error: error.message
+    });
+  }
+});
+
+/**
  * POST /api/security-alarm/arm
  * Arm the security system
  */
@@ -210,6 +235,42 @@ router.put('/platforms', securityAlarmActionRateLimit, auth, async (req, res) =>
     res.status(statusCode).json({
       success: false,
       message: error.message || 'Failed to update security platforms',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * PUT /api/security-alarm/settings
+ * Update security platform and timing settings
+ */
+router.put('/settings', securityAlarmActionRateLimit, auth, async (req, res) => {
+  try {
+    console.log('PUT /api/security-alarm/settings - Updating security settings');
+
+    const result = await securityAlarmService.updateSecuritySettings({
+      enabledPlatforms: req.body?.enabledPlatforms,
+      homebrain: req.body?.homebrain,
+      smartthings: req.body?.smartthings,
+      exitDelaySeconds: req.body?.exitDelaySeconds,
+      exitDelay: req.body?.exitDelay,
+      entryDelaySeconds: req.body?.entryDelaySeconds,
+      entryDelay: req.body?.entryDelay
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Security settings updated',
+      settings: result.settings,
+      alarm: result.alarm
+    });
+  } catch (error) {
+    console.error('Error in PUT /api/security-alarm/settings:', error.message);
+    console.error('Full error:', error);
+    const statusCode = error.message === 'At least one security platform must remain enabled' ? 400 : 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Failed to update security settings',
       error: error.message
     });
   }

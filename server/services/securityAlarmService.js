@@ -416,6 +416,16 @@ class SecurityAlarmService {
     return Math.max(0, Math.min(300, Math.round(resolved)));
   }
 
+  getSecuritySettingsFromAlarm(alarm) {
+    const enabledPlatforms = this.getEnabledPlatforms(alarm);
+
+    return {
+      enabledPlatforms,
+      exitDelaySeconds: this.normalizeExitDelaySeconds(alarm?.exitDelay, DEFAULT_ARM_AWAY_EXIT_DELAY_SECONDS),
+      entryDelaySeconds: this.normalizeExitDelaySeconds(alarm?.entryDelay, 30)
+    };
+  }
+
   getAudioPrompts(alarm) {
     return {
       ...SECURITY_AUDIO_PROMPTS,
@@ -1092,6 +1102,17 @@ class SecurityAlarmService {
     }
   }
 
+  async getSecuritySettings() {
+    try {
+      console.log('SecurityAlarmService: Getting security settings');
+      const alarm = await SecurityAlarm.getMainAlarm();
+      return this.getSecuritySettingsFromAlarm(alarm);
+    } catch (error) {
+      console.error('SecurityAlarmService: Error getting security settings:', error.message);
+      throw new Error('Failed to get security settings');
+    }
+  }
+
   /**
    * Arm the security system
    * @param {string} mode - 'stay' or 'away'
@@ -1561,24 +1582,72 @@ class SecurityAlarmService {
   async updateSecurityPlatforms(platforms = {}) {
     try {
       console.log('SecurityAlarmService: Updating enabled security platforms');
+      const result = await this.updateSecuritySettings({ enabledPlatforms: platforms });
+      return result.alarm;
+    } catch (error) {
+      console.error('SecurityAlarmService: Error updating security platforms:', error.message);
+      throw error;
+    }
+  }
+
+  async updateSecuritySettings(settings = {}) {
+    try {
+      console.log('SecurityAlarmService: Updating security settings');
 
       const alarm = await SecurityAlarm.getMainAlarm();
       const currentPlatforms = this.getEnabledPlatforms(alarm);
+      const platformSource = settings.enabledPlatforms && typeof settings.enabledPlatforms === 'object'
+        ? settings.enabledPlatforms
+        : settings;
       const nextPlatforms = {
-        homebrain: typeof platforms.homebrain === 'boolean' ? platforms.homebrain : currentPlatforms.homebrain,
-        smartthings: typeof platforms.smartthings === 'boolean' ? platforms.smartthings : currentPlatforms.smartthings
+        homebrain: typeof platformSource.homebrain === 'boolean' ? platformSource.homebrain : currentPlatforms.homebrain,
+        smartthings: typeof platformSource.smartthings === 'boolean' ? platformSource.smartthings : currentPlatforms.smartthings
       };
 
       if (!nextPlatforms.homebrain && !nextPlatforms.smartthings) {
         throw new Error('At least one security platform must remain enabled');
       }
 
+      const previousSettings = this.getSecuritySettingsFromAlarm(alarm);
       alarm.enabledPlatforms = nextPlatforms;
+
+      if (
+        Object.prototype.hasOwnProperty.call(settings, 'exitDelaySeconds') ||
+        Object.prototype.hasOwnProperty.call(settings, 'exitDelay')
+      ) {
+        alarm.exitDelay = this.normalizeExitDelaySeconds(
+          settings.exitDelaySeconds ?? settings.exitDelay,
+          previousSettings.exitDelaySeconds
+        );
+      }
+
+      if (
+        Object.prototype.hasOwnProperty.call(settings, 'entryDelaySeconds') ||
+        Object.prototype.hasOwnProperty.call(settings, 'entryDelay')
+      ) {
+        alarm.entryDelay = this.normalizeExitDelaySeconds(
+          settings.entryDelaySeconds ?? settings.entryDelay,
+          previousSettings.entryDelaySeconds
+        );
+      }
+
       await alarm.save();
-      requestSecurityAlarmAutomationEvaluation('security platform selection updated');
-      return alarm;
+      const updatedSettings = this.getSecuritySettingsFromAlarm(alarm);
+      if (
+        previousSettings.enabledPlatforms.homebrain !== updatedSettings.enabledPlatforms.homebrain ||
+        previousSettings.enabledPlatforms.smartthings !== updatedSettings.enabledPlatforms.smartthings ||
+        previousSettings.exitDelaySeconds !== updatedSettings.exitDelaySeconds ||
+        previousSettings.entryDelaySeconds !== updatedSettings.entryDelaySeconds
+      ) {
+        requestSecurityAlarmAutomationEvaluation('security settings updated');
+      }
+
+      return {
+        alarm,
+        settings: updatedSettings
+      };
     } catch (error) {
-      console.error('SecurityAlarmService: Error updating security platforms:', error.message);
+      console.error('SecurityAlarmService: Error updating security settings:', error.message);
       throw error;
     }
   }

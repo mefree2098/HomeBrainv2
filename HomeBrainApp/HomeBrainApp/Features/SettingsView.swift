@@ -101,7 +101,7 @@ private enum SettingsWebArea: String, CaseIterable, Identifiable {
         case .aiProviders: return "OpenAI, Codex, Anthropic, local LLM"
         case .llmPriority: return "Provider fallback order"
         case .hardwareOrbs: return "Orb provisioning, categories, and mount alignment"
-        case .security: return "Security mode and refresh-session lifetime"
+        case .security: return "Security platforms, away delay, and sessions"
         case .resources: return "CPU, memory, disk, GPU, deploy health"
         case .maintenance: return "Sync, reset, backup, diagnostics"
         case .platformAdmin: return "Deploy, SSL, operations, model services"
@@ -207,6 +207,9 @@ struct SettingsView: View {
     @State private var enableVoiceConfirmation = true
     @State private var enableNotifications = true
     @State private var enableSecurityMode = false
+    @State private var securityHomeBrainEnabled = true
+    @State private var securitySmartThingsEnabled = true
+    @State private var securityArmAwayExitDelaySeconds = 30
     @State private var autoDiscoveryEnabled = false
 
     @State private var llmProvider = "openai"
@@ -232,9 +235,36 @@ struct SettingsView: View {
 
     private let llmProviders = ["openai", "codex", "anthropic", "local"]
     private let sttProviders = ["openai", "local"]
+    private let securityExitDelayOptions = [0, 15, 30, 45, 60, 90, 120]
 
     private var isAdmin: Bool {
         session.currentUser?.role == "admin"
+    }
+
+    private var securityHomeBrainBinding: Binding<Bool> {
+        Binding {
+            securityHomeBrainEnabled
+        } set: { newValue in
+            if !newValue && !securitySmartThingsEnabled {
+                return
+            }
+            securityHomeBrainEnabled = newValue
+        }
+    }
+
+    private var securitySmartThingsBinding: Binding<Bool> {
+        Binding {
+            securitySmartThingsEnabled
+        } set: { newValue in
+            if !newValue && !securityHomeBrainEnabled {
+                return
+            }
+            securitySmartThingsEnabled = newValue
+        }
+    }
+
+    private var securityDelayPickerOptions: [Int] {
+        Array(Set(securityExitDelayOptions + [securityArmAwayExitDelaySeconds])).sorted()
     }
 
     private var selectedHardwareOrb: HardwareOrbRecord? {
@@ -618,6 +648,17 @@ struct SettingsView: View {
     private var settingsSecuritySection: some View {
         Section("Security") {
             Toggle("Enable Security Mode", isOn: $enableSecurityMode)
+            Toggle("HomeBrain Security", isOn: securityHomeBrainBinding)
+                .disabled(!securitySmartThingsEnabled)
+            Toggle("SmartThings Security", isOn: securitySmartThingsBinding)
+                .disabled(!securityHomeBrainEnabled)
+
+            Picker("Arm Away Delay", selection: $securityArmAwayExitDelaySeconds) {
+                ForEach(securityDelayPickerOptions, id: \.self) { seconds in
+                    Text(seconds == 0 ? "No delay" : "\(seconds) seconds").tag(seconds)
+                }
+            }
+            .pickerStyle(.menu)
 
             Stepper(value: $authSessionMaxAgeDays, in: 30...3650, step: 30) {
                 HStack {
@@ -895,22 +936,7 @@ struct SettingsView: View {
 
         case .security:
             Form {
-                Section("Security") {
-                    Toggle("Enable Security Mode", isOn: $enableSecurityMode)
-                    Stepper(value: $authSessionMaxAgeDays, in: 30...3650, step: 30) {
-                        HStack {
-                            Text("Session Lifetime")
-                            Spacer()
-                            Text("\(authSessionMaxAgeDays) days")
-                                .foregroundStyle(HBPalette.textSecondary)
-                        }
-                    }
-
-                    Text("iOS refresh sessions remain configurable up to 365 days and beyond; browser defaults are handled separately by the backend.")
-                        .font(.footnote)
-                        .foregroundStyle(HBPalette.textSecondary)
-                }
-
+                settingsSecuritySection
                 settingsSessionsSection
                 settingsSaveRefreshSection
             }
@@ -1384,6 +1410,7 @@ struct SettingsView: View {
             }
 
             serverURL = session.serverURLString
+            await loadSecurityAlarmSettings()
             await loadAuthSessions()
             await loadHardwareOrbs()
         } catch {
@@ -1391,6 +1418,23 @@ struct SettingsView: View {
         }
 
         isLoading = false
+    }
+
+    private func loadSecurityAlarmSettings() async {
+        do {
+            let response = try await session.apiClient.get("/api/security-alarm/settings")
+            let object = JSON.object(response)
+            let settings = JSON.object(object["settings"])
+            let platforms = JSON.object(settings["enabledPlatforms"])
+            securityHomeBrainEnabled = JSON.bool(platforms, "homebrain", fallback: true)
+            securitySmartThingsEnabled = JSON.bool(platforms, "smartthings", fallback: true)
+            securityArmAwayExitDelaySeconds = min(
+                300,
+                max(0, JSON.int(settings, "exitDelaySeconds", fallback: securityArmAwayExitDelaySeconds))
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func saveSettings() async {
@@ -1433,6 +1477,7 @@ struct SettingsView: View {
             let object = JSON.object(response)
             infoMessage = JSON.string(object, "message", fallback: "Settings saved.")
             errorMessage = nil
+            try await saveSecurityAlarmSettings()
 
             let priorityValues = llmPriority
                 .split(separator: ",")
@@ -1445,6 +1490,26 @@ struct SettingsView: View {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func saveSecurityAlarmSettings() async throws {
+        let payload: [String: Any] = [
+            "enabledPlatforms": [
+                "homebrain": securityHomeBrainEnabled,
+                "smartthings": securitySmartThingsEnabled
+            ],
+            "exitDelaySeconds": min(300, max(0, securityArmAwayExitDelaySeconds))
+        ]
+        let response = try await session.apiClient.put("/api/security-alarm/settings", body: payload)
+        let object = JSON.object(response)
+        let settings = JSON.object(object["settings"])
+        let platforms = JSON.object(settings["enabledPlatforms"])
+        securityHomeBrainEnabled = JSON.bool(platforms, "homebrain", fallback: securityHomeBrainEnabled)
+        securitySmartThingsEnabled = JSON.bool(platforms, "smartthings", fallback: securitySmartThingsEnabled)
+        securityArmAwayExitDelaySeconds = min(
+            300,
+            max(0, JSON.int(settings, "exitDelaySeconds", fallback: securityArmAwayExitDelaySeconds))
+        )
     }
 
     private func testOpenAI() async {

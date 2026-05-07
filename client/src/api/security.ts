@@ -50,6 +50,20 @@ export const getSecurityStatus = async () => {
   }
 };
 
+// Description: Get security platform and default timing settings
+// Endpoint: GET /api/security-alarm/settings
+// Request: {}
+// Response: { success: boolean, settings: { enabledPlatforms: { homebrain: boolean, smartthings: boolean }, exitDelaySeconds: number, entryDelaySeconds: number } }
+export const getSecuritySettings = async () => {
+  try {
+    const response = await api.get('/api/security-alarm/settings');
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
 // Description: Arm the security system
 // Endpoint: POST /api/security-alarm/arm
 // Request: { mode: 'stay' | 'away', exitDelaySeconds?: number }
@@ -99,6 +113,26 @@ export const dismissTriggeredAlarm = async (payload: { reason?: 'false_alarm' | 
 export const updateSecurityPlatforms = async (platforms: { homebrain?: boolean; smartthings?: boolean }) => {
   try {
     const response = await api.put('/api/security-alarm/platforms', platforms);
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+// Description: Update security platform and default timing settings
+// Endpoint: PUT /api/security-alarm/settings
+// Request: { enabledPlatforms?: { homebrain?: boolean, smartthings?: boolean }, homebrain?: boolean, smartthings?: boolean, exitDelaySeconds?: number, entryDelaySeconds?: number }
+// Response: { success: boolean, message: string, settings: object, alarm: object }
+export const updateSecuritySettings = async (settings: {
+  enabledPlatforms?: { homebrain?: boolean; smartthings?: boolean };
+  homebrain?: boolean;
+  smartthings?: boolean;
+  exitDelaySeconds?: number;
+  entryDelaySeconds?: number;
+}) => {
+  try {
+    const response = await api.put('/api/security-alarm/settings', settings);
     return response.data;
   } catch (error) {
     console.error(error);
