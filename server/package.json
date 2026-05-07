@@ -28,7 +28,7 @@
     "acme-client": "^5.4.0",
     "axios": "^1.16.0",
     "bcrypt": "^6.0.0",
-    "body-parser": "^1.20.2",
+    "body-parser": "^2.2.2",
     "chart.js": "^4.4.1",
     "connect-flash": "^0.1.1",
     "connect-mongo": "^5.1.0",
