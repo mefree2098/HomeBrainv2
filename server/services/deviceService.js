@@ -17,6 +17,7 @@ const {
 const MAX_HARMONY_COMMAND_HOLD_MS = 5000;
 const MAX_HARMONY_ACTIVITY_VERIFY_TIMEOUT_MS = 120_000;
 const MAX_HARMONY_ACTIVITY_VERIFY_INTERVAL_MS = 15_000;
+const MAX_SMARTTHINGS_POST_COMMAND_STATE_AGE_MS = 24 * 60 * 60 * 1000;
 
 function parseBoundedMs(value, fallback, min, max) {
   const parsed = Number(value);
@@ -37,6 +38,12 @@ const DEFAULT_HARMONY_ACTIVITY_VERIFY_INTERVAL_MS = parseBoundedMs(
   3_000,
   500,
   MAX_HARMONY_ACTIVITY_VERIFY_INTERVAL_MS
+);
+const DEFAULT_SMARTTHINGS_POST_COMMAND_STATE_AGE_MS = parseBoundedMs(
+  process.env.SMARTTHINGS_POST_COMMAND_STATE_MAX_AGE_MS,
+  10 * 60 * 1000,
+  0,
+  MAX_SMARTTHINGS_POST_COMMAND_STATE_AGE_MS
 );
 
 const escapeRegex = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -60,6 +67,113 @@ function isDatabaseReadyForPresenceChecks() {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function readTimestampMs(value) {
+  if (!value) {
+    return null;
+  }
+  const date = value instanceof Date ? value : new Date(value);
+  const time = date.getTime();
+  return Number.isFinite(time) ? time : null;
+}
+
+function getNestedValue(source, path) {
+  if (!source || typeof source !== 'object') {
+    return undefined;
+  }
+  return path.reduce((current, key) => (
+    current && typeof current === 'object' ? current[key] : undefined
+  ), source);
+}
+
+function getSmartThingsVerificationTimestampMs(remoteUpdate = {}) {
+  const metadata = remoteUpdate?.['properties.smartThingsAttributeMetadata']
+    || remoteUpdate?.properties?.smartThingsAttributeMetadata
+    || {};
+  const healthState = remoteUpdate?.['properties.smartThingsHealthState']
+    || remoteUpdate?.properties?.smartThingsHealthState
+    || {};
+
+  const candidates = [
+    getNestedValue(metadata, ['byComponent', 'main', 'switch', 'switch', 'timestamp']),
+    getNestedValue(metadata, ['switch', 'switch', 'timestamp']),
+    getNestedValue(metadata, ['byComponent', 'main', 'switchLevel', 'level', 'timestamp']),
+    getNestedValue(metadata, ['switchLevel', 'level', 'timestamp']),
+    healthState.lastUpdatedDate,
+    remoteUpdate.lastSeen
+  ]
+    .map(readTimestampMs)
+    .filter((value) => Number.isFinite(value));
+
+  return candidates.length > 0 ? Math.max(...candidates) : null;
+}
+
+function assertSmartThingsPostActionVerified(device, remoteUpdate, expectedStatus, options = {}) {
+  if (!remoteUpdate || typeof remoteUpdate !== 'object') {
+    const error = new Error('Unable to verify SmartThings state after command');
+    error.details = {
+      source: 'smartthings',
+      deviceId: device?._id?.toString?.() || String(device?._id || ''),
+      deviceName: device?.name || null,
+      expectedStatus
+    };
+    throw error;
+  }
+
+  if (expectedStatus !== undefined) {
+    if (remoteUpdate.status === undefined) {
+      const error = new Error('SmartThings verification did not return switch state after command');
+      error.details = {
+        source: 'smartthings',
+        deviceId: device?._id?.toString?.() || String(device?._id || ''),
+        deviceName: device?.name || null,
+        expectedStatus
+      };
+      throw error;
+    }
+
+    if (remoteUpdate.status !== expectedStatus) {
+      const error = new Error(
+        `SmartThings verification failed: expected ${expectedStatus ? 'on' : 'off'} but API reported ${remoteUpdate.status ? 'on' : 'off'}`
+      );
+      error.details = {
+        source: 'smartthings',
+        deviceId: device?._id?.toString?.() || String(device?._id || ''),
+        deviceName: device?.name || null,
+        expectedStatus,
+        actualStatus: remoteUpdate.status
+      };
+      throw error;
+    }
+  }
+
+  const maxStateAgeMs = parseBoundedMs(
+    options.maxStateAgeMs,
+    DEFAULT_SMARTTHINGS_POST_COMMAND_STATE_AGE_MS,
+    0,
+    MAX_SMARTTHINGS_POST_COMMAND_STATE_AGE_MS
+  );
+  if (maxStateAgeMs <= 0) {
+    return;
+  }
+
+  const verifiedAtMs = getSmartThingsVerificationTimestampMs(remoteUpdate);
+  const nowMs = Date.now();
+  if (!Number.isFinite(verifiedAtMs) || nowMs - verifiedAtMs > maxStateAgeMs) {
+    const ageMs = Number.isFinite(verifiedAtMs) ? nowMs - verifiedAtMs : null;
+    const error = new Error('SmartThings verification returned stale state after command');
+    error.details = {
+      source: 'smartthings',
+      deviceId: device?._id?.toString?.() || String(device?._id || ''),
+      deviceName: device?.name || null,
+      expectedStatus,
+      verifiedAt: Number.isFinite(verifiedAtMs) ? new Date(verifiedAtMs).toISOString() : null,
+      stateAgeMs: ageMs,
+      maxStateAgeMs
+    };
+    throw error;
+  }
 }
 
 function normalizeDeviceGroups(groups) {
@@ -751,6 +865,7 @@ class DeviceService {
       const expectedStatus = Object.prototype.hasOwnProperty.call(updateData, 'status')
         ? !!updateData.status
         : undefined;
+      const commandStartedAt = new Date();
 
       const buildOptimisticPayload = () => {
         const base =
@@ -804,6 +919,13 @@ class DeviceService {
         const remoteUpdate = await this.pollSmartThingsState(device, expectedStatus);
         if (remoteUpdate) {
           Object.assign(updateData, remoteUpdate);
+        }
+
+        if (requirePostActionVerification) {
+          assertSmartThingsPostActionVerified(device, remoteUpdate, expectedStatus, {
+            commandStartedAt,
+            maxStateAgeMs: options?.smartThingsVerificationMaxStateAgeMs
+          });
         }
 
         if (updateData.isOnline === undefined) {

@@ -285,10 +285,12 @@ test('device_control action can target the triggering device from execution cont
   insteonService.turnOff = async (target) => {
     receivedTarget = target;
     return {
+      confirmed: true,
       message: 'Device turned off via Insteon PLM 11.22.33 (confirmed OFF with 2 reads)',
       details: {
         controlMethod: 'insteon_plm_direct',
         insteonAddress: '11.22.33',
+        confirmed: true,
         confirmedLevel: 0
       }
     };
@@ -338,6 +340,12 @@ test('device_control action resolves direct targets from mongoose action subdocu
 
   insteonService.turnOff = async (target) => {
     receivedTarget = target;
+    return {
+      confirmed: true,
+      details: {
+        confirmed: true
+      }
+    };
   };
 
   const automation = new Automation({
@@ -388,10 +396,12 @@ test('device_control action passes Insteon retry parameters through to command e
   insteonService.turnOff = async (_target, options) => {
     receivedOptions = options;
     return {
+      confirmed: true,
       message: 'Device turned off via Insteon PLM 11.22.33 after 3 command attempts',
       details: {
         controlMethod: 'insteon_plm_direct',
         insteonAddress: '11.22.33',
+        confirmed: true,
         commandAttempts: 3,
         commandRetryCount: 2
       }
@@ -469,6 +479,55 @@ test('device_control action gives Harmony workflow verification an extended time
   assert.equal(receivedOptions.requirePostActionVerification, true);
   assert.equal(receivedOptions.harmonyVerificationTimeoutMs, 45_000);
   assert.equal(receivedOptions.harmonyVerificationIntervalMs, 3_000);
+  assert.equal(result.status, 'success');
+});
+
+test('device_control action requires SmartThings post-command verification in workflows', async (t) => {
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const originalFindById = Device.findById;
+  const originalControlDevice = deviceService.controlDevice;
+  let receivedOptions = null;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    deviceService.controlDevice = originalControlDevice;
+  });
+
+  Device.findById = () => ({
+    lean: async () => ({
+      _id: deviceId,
+      name: 'Driveway Lights',
+      type: 'light',
+      status: false,
+      isOnline: true,
+      properties: {
+        source: 'smartthings',
+        smartThingsDeviceId: 'smartthings-driveway'
+      }
+    })
+  });
+
+  deviceService.controlDevice = async (_target, _action, _value, options) => {
+    receivedOptions = options;
+    return {
+      message: 'SmartThings command verified',
+      details: {
+        source: 'smartthings'
+      }
+    };
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'device_control',
+      target: deviceId,
+      parameters: {
+        action: 'turn_on'
+      }
+    }
+  ], { context: {} });
+
+  assert.equal(receivedOptions.requirePostActionVerification, true);
   assert.equal(result.status, 'success');
 });
 
@@ -653,8 +712,10 @@ test('device_control action can target a device group', async (t) => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     inFlight -= 1;
     return {
+      confirmed: true,
       message: `Device turned off via Insteon PLM ${target}`,
       details: {
+        confirmed: true,
         controlMethod: 'insteon_plm_direct'
       }
     };
@@ -672,13 +733,91 @@ test('device_control action can target a device group', async (t) => {
   assert.ok(maxInFlight > 1);
   assert.deepEqual(
     receivedOptions.map((entry) => entry?.verificationMode),
-    ['ack', 'ack']
+    ['fast', 'fast']
   );
   assert.equal(result.actionResults.length, 1);
   assert.equal(result.actionResults[0].success, true);
   assert.equal(result.actionResults[0].details.group, 'Interior Lights');
   assert.equal(result.actionResults[0].details.executionMode, 'parallel');
   assert.equal(result.actionResults[0].details.successfulTargets, 2);
+});
+
+test('device_control action fails grouped Insteon commands that are not confirmed', async (t) => {
+  const originalResolveGroupExecutionPlanByName = deviceGroupService.resolveGroupExecutionPlanByName;
+  const originalTryControlDeviceGroup = insteonService.tryControlDeviceGroup;
+  const originalTurnOn = insteonService.turnOn;
+
+  t.after(() => {
+    deviceGroupService.resolveGroupExecutionPlanByName = originalResolveGroupExecutionPlanByName;
+    insteonService.tryControlDeviceGroup = originalTryControlDeviceGroup;
+    insteonService.turnOn = originalTurnOn;
+  });
+
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const groupDevice = {
+    _id: deviceId,
+    name: 'Front Porch Lights',
+    type: 'light',
+    room: 'Outside',
+    groups: ['Exterior Lights'],
+    properties: {
+      source: 'insteon',
+      insteonAddress: '38.A6.29'
+    }
+  };
+
+  deviceGroupService.resolveGroupExecutionPlanByName = async () => ({
+    rootGroup: {
+      _id: new mongoose.Types.ObjectId().toString(),
+      name: 'Exterior Lights',
+      normalizedName: 'exterior lights'
+    },
+    devices: [groupDevice],
+    units: [
+      {
+        groupId: new mongoose.Types.ObjectId().toString(),
+        groupName: 'Exterior Lights',
+        groupRecord: {
+          _id: new mongoose.Types.ObjectId().toString(),
+          name: 'Exterior Lights',
+          normalizedName: 'exterior lights'
+        },
+        devices: [groupDevice],
+        allowManagedInsteonGroup: true
+      }
+    ],
+    containsNestedGroups: false
+  });
+  insteonService.tryControlDeviceGroup = async () => null;
+  insteonService.turnOn = async () => ({
+    confirmed: false,
+    warning: 'state confirmation timed out',
+    message: 'Device turned on via Insteon PLM 38.A6.29 (command acknowledged; status verification pending)',
+    details: {
+      source: 'insteon',
+      confirmed: false,
+      verificationMode: 'fast',
+      confirmationWarning: 'state confirmation timed out'
+    }
+  });
+
+  const result = await executeActionSequence([
+    {
+      type: 'device_control',
+      target: { kind: 'device_group', group: 'Exterior Lights' },
+      parameters: {
+        action: 'turn_on',
+        disableActionRetry: true
+      }
+    }
+  ], { context: {} });
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.actionResults.length, 1);
+  assert.equal(result.actionResults[0].success, false);
+  assert.match(result.actionResults[0].error, /acknowledged but not confirmed/);
+  assert.equal(result.actionResults[0].details.failedTargets, 1);
+  assert.equal(result.actionResults[0].details.members[0].success, false);
 });
 
 test('device_control action uses managed INSTEON group broadcast when the device group has only linked INSTEON members', async (t) => {
@@ -769,7 +908,7 @@ test('device_control action uses managed INSTEON group broadcast when the device
     {
       type: 'device_control',
       target: { kind: 'device_group', group: 'Interior Lights' },
-      parameters: { action: 'turn_off' }
+      parameters: { action: 'turn_off', verificationMode: 'ack' }
     }
   ], { context: {} });
 
@@ -903,7 +1042,7 @@ test('device_control action can execute a nested master group across subgroup un
     {
       type: 'device_control',
       target: { kind: 'device_group', group: 'Whole Home Lighting' },
-      parameters: { action: 'turn_off' }
+      parameters: { action: 'turn_off', verificationMode: 'ack' }
     }
   ], { context: {} });
 
