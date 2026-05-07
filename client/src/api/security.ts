@@ -52,11 +52,11 @@ export const getSecurityStatus = async () => {
 
 // Description: Arm the security system
 // Endpoint: POST /api/security-alarm/arm
-// Request: { mode: 'stay' | 'away' }
+// Request: { mode: 'stay' | 'away', exitDelaySeconds?: number }
 // Response: { success: boolean, message: string, alarm: { _id: string, alarmState: string } }
-export const armSecuritySystem = async (mode: 'stay' | 'away') => {
+export const armSecuritySystem = async (mode: 'stay' | 'away', options: { exitDelaySeconds?: number } = {}) => {
   try {
-    const response = await api.post('/api/security-alarm/arm', { mode });
+    const response = await api.post('/api/security-alarm/arm', { mode, ...options });
     return response.data;
   } catch (error) {
     console.error(error);
@@ -80,11 +80,25 @@ export const disarmSecuritySystem = async () => {
 
 // Description: Dismiss an active triggered alarm
 // Endpoint: POST /api/security-alarm/dismiss
-// Request: {}
+// Request: { reason?: 'false_alarm' | 'test' | 'manual' | 'custom', customReason?: string }
 // Response: { success: boolean, message: string, alarm: { _id: string, alarmState: string } }
-export const dismissTriggeredAlarm = async () => {
+export const dismissTriggeredAlarm = async (payload: { reason?: 'false_alarm' | 'test' | 'manual' | 'custom'; customReason?: string } = {}) => {
   try {
-    const response = await api.post('/api/security-alarm/dismiss');
+    const response = await api.post('/api/security-alarm/dismiss', payload);
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+// Description: Select enabled security platforms
+// Endpoint: PUT /api/security-alarm/platforms
+// Request: { homebrain?: boolean, smartthings?: boolean }
+// Response: { success: boolean, message: string, alarm: { _id: string, enabledPlatforms: object } }
+export const updateSecurityPlatforms = async (platforms: { homebrain?: boolean; smartthings?: boolean }) => {
+  try {
+    const response = await api.put('/api/security-alarm/platforms', platforms);
     return response.data;
   } catch (error) {
     console.error(error);

@@ -70,7 +70,7 @@ router.post('/arm', auth, async (req, res) => {
   try {
     console.log('POST /api/security-alarm/arm - Arming security system');
     
-    const { mode } = req.body;
+    const { mode, exitDelaySeconds, exitDelay } = req.body;
     const userId = req.user?.id || req.user?._id;
     
     console.log('Request body:', req.body);
@@ -85,7 +85,10 @@ router.post('/arm', auth, async (req, res) => {
       });
     }
     
-    const alarm = await securityAlarmService.armAlarm(mode, userId);
+    const alarm = await securityAlarmService.armAlarm(mode, userId, {
+      exitDelaySeconds,
+      exitDelay
+    });
     
     console.log(`Successfully armed security system in ${mode} mode`);
     res.status(200).json({
@@ -147,7 +150,11 @@ router.post('/dismiss', auth, async (req, res) => {
     const userId = req.user?.id || req.user?._id;
     console.log('User ID:', userId);
 
-    const alarm = await securityAlarmService.dismissAlarm(userId);
+    const alarm = await securityAlarmService.dismissAlarm(userId, {
+      reason: req.body?.reason,
+      customReason: req.body?.customReason,
+      reasonText: req.body?.reasonText
+    });
 
     console.log('Successfully dismissed triggered alarm');
     res.status(200).json({
@@ -162,6 +169,36 @@ router.post('/dismiss', auth, async (req, res) => {
     res.status(statusCode).json({
       success: false,
       message: error.message || 'Failed to dismiss triggered alarm',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * PUT /api/security-alarm/platforms
+ * Select which security platforms are active
+ */
+router.put('/platforms', auth, async (req, res) => {
+  try {
+    console.log('PUT /api/security-alarm/platforms - Updating security platform selection');
+
+    const alarm = await securityAlarmService.updateSecurityPlatforms({
+      homebrain: req.body?.homebrain,
+      smartthings: req.body?.smartthings
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Security platforms updated',
+      alarm
+    });
+  } catch (error) {
+    console.error('Error in PUT /api/security-alarm/platforms:', error.message);
+    console.error('Full error:', error);
+    const statusCode = error.message === 'At least one security platform must remain enabled' ? 400 : 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Failed to update security platforms',
       error: error.message
     });
   }

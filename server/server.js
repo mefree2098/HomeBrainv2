@@ -9,6 +9,7 @@ const authRoutes = require("./routes/authRoutes");
 const userRoutes = require("./routes/userRoutes");
 const oidcRoutes = require("./routes/oidcRoutes");
 const deviceRoutes = require("./routes/deviceRoutes");
+const directRadioRoutes = require("./routes/directRadioRoutes");
 const deviceGroupRoutes = require("./routes/deviceGroupRoutes");
 const sceneRoutes = require("./routes/sceneRoutes");
 const automationRoutes = require("./routes/automationRoutes");
@@ -76,6 +77,7 @@ const automationSchedulerService = require("./services/automationSchedulerServic
 const alexaBridgeService = require("./services/alexaBridgeService");
 const alexaBrokerService = require("./services/alexaBrokerService");
 const platformUpdateMonitorService = require("./services/platformUpdateMonitorService");
+const directRadioService = require("./services/directRadioService");
 const telemetryService = require("./services/telemetryService");
 const openclawMcpService = require("./services/openclawMcpService");
 const { sendNotFound, sendUnhandledError } = require("./utils/apiErrorResponses");
@@ -401,6 +403,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 // Device Routes
 app.use('/api/devices', deviceRoutes);
+app.use('/api/direct-radios', directRadioRoutes);
 app.use('/api/device-groups', deviceGroupRoutes);
 app.use('/api/device-command-coordinator', deviceCommandCoordinatorRoutes);
 app.use('/api/telemetry', telemetryRoutes);
@@ -483,6 +486,12 @@ if (fs.existsSync(updatesPath)) {
   app.use('/downloads', express.static(updatesPath));
 }
 
+const securityAudioPath = path.join(__dirname, 'public', 'audio', 'security');
+if (fs.existsSync(securityAudioPath)) {
+  console.log(`Serving security audio prompts from ${securityAudioPath} at /audio/security`);
+  app.use('/audio/security', express.static(securityAudioPath));
+}
+
 // Serve built client app in production (fallback for SPA routes)
 const clientDistPath = path.join(__dirname, '..', 'client', 'dist');
 if (fs.existsSync(clientDistPath)) {
@@ -490,7 +499,7 @@ if (fs.existsSync(clientDistPath)) {
   app.use(express.static(clientDistPath));
 
   app.get('/{*splat}', (req, res, next) => {
-    if (req.path.startsWith('/api/') || req.path.startsWith('/downloads/')) {
+    if (req.path.startsWith('/api/') || req.path.startsWith('/downloads/') || req.path.startsWith('/audio/security/')) {
       return next();
     }
 
@@ -578,6 +587,16 @@ async function startAutomationRuntimeServices() {
 
   automationSchedulerService.start();
   platformUpdateMonitorService.start();
+
+  directRadioService.start()
+    .then((status) => {
+      const zigbeeReady = status?.controllers?.zigbee?.started ? 'ready' : 'not ready';
+      const zwaveReady = status?.controllers?.zwave?.started ? 'ready' : 'not ready';
+      console.log(`Direct radio startup complete: Zigbee ${zigbeeReady}, Z-Wave ${zwaveReady}`);
+    })
+    .catch((error) => {
+      console.warn(`Direct radio startup skipped: ${error.message}`);
+    });
 }
 
 void initializeDiscoveryService();
@@ -704,6 +723,12 @@ async function gracefulShutdown(signal) {
     await platformUpdateMonitorService.stop({ disconnectInsteon: true });
   } catch (error) {
     console.error('Error stopping platform update monitor service:', error.message);
+  }
+
+  try {
+    await directRadioService.shutdown();
+  } catch (error) {
+    console.error('Error stopping direct radio service:', error.message);
   }
 
   console.log('Preserving running automation executions for resume after restart');

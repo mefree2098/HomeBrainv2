@@ -27,6 +27,8 @@ struct DevicesView: View {
     @State private var favoritesProfileId: String?
     @State private var pendingFavoriteDeviceIds: Set<String> = []
     @State private var highlightedDeviceID: String?
+    @State private var pendingMigrationDeviceIds: Set<String> = []
+    @State private var migrationFeedback: [String: String] = [:]
 
     @State private var showCreateSheet = false
     @State private var newName = ""
@@ -361,6 +363,12 @@ struct DevicesView: View {
                             background: HBPalette.panelSoft.opacity(0.88),
                             stroke: HBPalette.panelStrokeStrong
                         )
+                        HBBadge(
+                            text: device.selectionSourceLabel,
+                            foreground: HBPalette.textPrimary,
+                            background: HBPalette.panelSoft.opacity(0.88),
+                            stroke: HBPalette.panelStrokeStrong
+                        )
                         if supportsLightFade(device) && device.type != "thermostat" {
                             HBBadge(
                                 text: "Dimmable",
@@ -389,6 +397,10 @@ struct DevicesView: View {
                 }
 
                 controlFeedbackView(for: device)
+
+                if isSmartThingsBackedDevice(device) {
+                    directRadioMigrationPanel(for: device)
+                }
 
                 Text(voiceHint(for: device))
                     .font(.system(size: 13, weight: .medium, design: .rounded))
@@ -428,6 +440,65 @@ struct DevicesView: View {
         .buttonStyle(.plain)
         .disabled(isPending)
         .accessibilityLabel(isFavorite ? "Remove \(device.name) from favorites" : "Add \(device.name) to favorites")
+    }
+
+    private func directRadioMigrationPanel(for device: DeviceItem) -> some View {
+        let isPending = pendingMigrationDeviceIds.contains(device.id)
+        let feedback = migrationFeedback[device.id]
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(HBPalette.accentBlue)
+                Text("Migrate to HomeBrain")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+                Spacer(minLength: 0)
+                if isPending {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+
+            Text("Start pairing, then put the device into reset or inclusion mode. Z-Wave devices should run exclusion first.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Button {
+                    Task { await startDirectRadioMigration(device, protocolName: "zigbee") }
+                } label: {
+                    Label("Zigbee", systemImage: "dot.radiowaves.left.and.right")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                .disabled(isPending)
+
+                Button {
+                    Task { await startDirectRadioMigration(device, protocolName: "zwave") }
+                } label: {
+                    Label("Z-Wave", systemImage: "wave.3.right")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                .disabled(isPending)
+            }
+
+            if let feedback {
+                Text(feedback)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(HBPalette.panelStroke.opacity(0.6), lineWidth: 1)
+        )
     }
 
     private func statusBadge(for device: DeviceItem) -> some View {
@@ -1003,6 +1074,50 @@ struct DevicesView: View {
                 )
             }
         } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func startDirectRadioMigration(_ device: DeviceItem, protocolName: String) async {
+        if pendingMigrationDeviceIds.contains(device.id) {
+            return
+        }
+
+        pendingMigrationDeviceIds.insert(device.id)
+        migrationFeedback[device.id] = protocolName == "zwave"
+            ? "Starting Z-Wave exclusion, then HomeBrain inclusion."
+            : "Starting Zigbee permit-join."
+
+        defer {
+            pendingMigrationDeviceIds.remove(device.id)
+        }
+
+        if previewMode {
+            migrationFeedback[device.id] = "Migration pairing window started. Put the device into pairing mode."
+            return
+        }
+
+        do {
+            if protocolName == "zwave" {
+                _ = try? await session.apiClient.post(
+                    "/api/direct-radios/exclusion/start",
+                    body: ["durationSeconds": 120]
+                )
+            }
+
+            _ = try await session.apiClient.post(
+                "/api/direct-radios/migrations",
+                body: [
+                    "deviceId": device.id,
+                    "protocol": protocolName,
+                    "durationSeconds": 180
+                ]
+            )
+            migrationFeedback[device.id] = protocolName == "zwave"
+                ? "HomeBrain is listening. Run the lock or device inclusion sequence now."
+                : "HomeBrain is listening. Hold the device reset button until it blinks, then keep it nearby."
+        } catch {
+            migrationFeedback[device.id] = "Migration could not start: \(error.localizedDescription)"
             errorMessage = error.localizedDescription
         }
     }

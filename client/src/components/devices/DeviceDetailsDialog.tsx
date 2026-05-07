@@ -20,6 +20,12 @@ import {
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
 import { controlDevice, getDeviceEnergyHistory, type DeviceEnergySample, updateDevice } from "@/api/devices"
 import {
+  getDirectRadioMigrationPlan,
+  startDirectRadioMigration,
+  startZWaveExclusion,
+  type DirectRadioMigrationPlan
+} from "@/api/directRadios"
+import {
   getTelemetrySeries,
   type TelemetryMetricDescriptor,
   type TelemetryMetricStats,
@@ -216,11 +222,24 @@ function getSourceLabel(device: DeviceLike | null): string {
     return "Unknown"
   }
 
+  if (source === "homebrain-zigbee") {
+    return "HomeBrain Zigbee"
+  }
+  if (source === "homebrain-zwave") {
+    return "HomeBrain Z-Wave"
+  }
+
   return source
     .split(/[\s_-]+/)
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ")
+}
+
+function isSmartThingsBackedDevice(device: DeviceLike | null): boolean {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  const source = (properties?.source || "").toString().trim().toLowerCase()
+  return source === "smartthings" || Boolean(properties?.smartThingsDeviceId)
 }
 
 function getFormattedInsteonAddress(device: DeviceLike | null): string | null {
@@ -746,6 +765,10 @@ export function DeviceDetailsDialog({
   const [selectedHarmonyCommand, setSelectedHarmonyCommand] = useState("")
   const [harmonyHoldMs, setHarmonyHoldMs] = useState(0)
   const [sendingHarmonyCommand, setSendingHarmonyCommand] = useState(false)
+  const [migrationPlan, setMigrationPlan] = useState<DirectRadioMigrationPlan | null>(null)
+  const [migrationLoading, setMigrationLoading] = useState(false)
+  const [migrationStarting, setMigrationStarting] = useState<"zigbee" | "zwave" | null>(null)
+  const [migrationError, setMigrationError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<"overview" | "controls" | "alexa" | "history">("overview")
   const { toast } = useToast()
   const { isAdmin } = useAuth()
@@ -753,6 +776,7 @@ export function DeviceDetailsDialog({
   const liveSnapshot = useMemo(() => getLiveEnergySnapshot(device), [device])
   const insteonAddress = useMemo(() => getFormattedInsteonAddress(device), [device])
   const harmonyCommandDevice = useMemo(() => isHarmonyCommandDevice(device), [device])
+  const smartThingsBacked = useMemo(() => isSmartThingsBackedDevice(device), [device])
   const harmonyPowerCommands = useMemo(() => getHarmonyPowerCommands(device), [device])
   const harmonyCommands = useMemo(() => getHarmonyCommandMetadata(device), [device])
   const groupedHarmonyCommands = useMemo(() => groupHarmonyCommands(harmonyCommands), [harmonyCommands])
@@ -836,6 +860,45 @@ export function DeviceDetailsDialog({
 
     setActiveTab("overview")
   }, [device?._id, open])
+
+  useEffect(() => {
+    if (!open || !device?._id || !smartThingsBacked) {
+      setMigrationPlan(null)
+      setMigrationError(null)
+      setMigrationLoading(false)
+      return
+    }
+
+    let cancelled = false
+    const loadMigrationPlan = async () => {
+      setMigrationLoading(true)
+      setMigrationError(null)
+      try {
+        const response = await getDirectRadioMigrationPlan(device._id)
+        if (!cancelled) {
+          setMigrationPlan(response.plan)
+        }
+      } catch (loadError) {
+        const message = loadError instanceof Error
+          ? loadError.message
+          : "Failed to load migration plan."
+        if (!cancelled) {
+          setMigrationError(message)
+          setMigrationPlan(null)
+        }
+      } finally {
+        if (!cancelled) {
+          setMigrationLoading(false)
+        }
+      }
+    }
+
+    void loadMigrationPlan()
+
+    return () => {
+      cancelled = true
+    }
+  }, [device?._id, open, smartThingsBacked])
 
   useEffect(() => {
     if (!open || !device?._id || !liveSnapshot.supportsEnergyMonitoring) {
@@ -1267,6 +1330,42 @@ export function DeviceDetailsDialog({
       })
     } finally {
       setSendingHarmonyCommand(false)
+    }
+  }
+
+  const handleStartDirectMigration = async (protocol: "zigbee" | "zwave") => {
+    if (!device?._id) {
+      return
+    }
+
+    setMigrationStarting(protocol)
+    try {
+      if (protocol === "zwave") {
+        await startZWaveExclusion(120).catch(() => null)
+      }
+      const response = await startDirectRadioMigration({
+        deviceId: device._id,
+        protocol,
+        durationSeconds: 180
+      })
+      setMigrationPlan(response.plan || migrationPlan)
+      toast({
+        title: "Migration started",
+        description: protocol === "zigbee"
+          ? "Zigbee permit-join is open. Put the device into pairing mode now."
+          : "Z-Wave inclusion is open. Exclude/reset the device, then trigger inclusion."
+      })
+    } catch (startError) {
+      const message = startError instanceof Error
+        ? startError.message
+        : "Failed to start HomeBrain migration."
+      toast({
+        title: "Migration unavailable",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setMigrationStarting(null)
     }
   }
 
@@ -1841,6 +1940,91 @@ export function DeviceDetailsDialog({
                   </div>
 
                   <div className="space-y-5">
+                    {smartThingsBacked ? (
+                      <Card className="border-white/10 bg-black/20">
+                        <CardHeader className="pb-4">
+                          <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Migrate to HomeBrain</CardTitle>
+                          <CardDescription>
+                            Move this SmartThings device onto the HomeBrain Zigbee or Z-Wave controller while preserving its HomeBrain identity.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          {migrationLoading ? (
+                            <div className="flex items-center gap-2 rounded-[1.15rem] border border-white/10 bg-white/[0.04] px-4 py-3 text-sm text-muted-foreground">
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              Loading migration plan...
+                            </div>
+                          ) : migrationError ? (
+                            <div className="rounded-[1.15rem] border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+                              {migrationError}
+                            </div>
+                          ) : migrationPlan ? (
+                            <>
+                              <div className="rounded-[1.15rem] border border-white/10 bg-white/[0.04] p-4">
+                                <p className="section-kicker text-white/45">Recommended radio</p>
+                                <p className="mt-2 text-xl font-semibold text-white">
+                                  {migrationPlan.recommendedProtocol === "zigbee"
+                                    ? "HomeBrain Zigbee"
+                                    : migrationPlan.recommendedProtocol === "zwave"
+                                      ? "HomeBrain Z-Wave"
+                                      : "Choose manually"}
+                                </p>
+                                <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                                  {migrationPlan.supported
+                                    ? `${migrationPlan.featureSupport.filter((feature) => feature.supported).length} native feature paths are ready for this device.`
+                                    : "This looks like a virtual or cloud device, so direct radio migration is blocked."}
+                                </p>
+                              </div>
+
+                              {migrationPlan.warnings.length > 0 ? (
+                                <div className="space-y-2 rounded-[1.15rem] border border-amber-400/18 bg-amber-400/[0.08] p-4 text-sm leading-relaxed text-amber-50/88">
+                                  {migrationPlan.warnings.slice(0, 3).map((warning) => (
+                                    <p key={warning}>{warning}</p>
+                                  ))}
+                                </div>
+                              ) : null}
+
+                              <div className="space-y-2">
+                                <p className="section-kicker text-white/45">Manual steps</p>
+                                <div className="space-y-2 text-sm leading-relaxed text-muted-foreground">
+                                  {migrationPlan.manualSteps.slice(0, 4).map((step, index) => (
+                                    <p key={`${step}-${index}`}>{index + 1}. {step}</p>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="border-white/10 bg-white/[0.04] text-white/90 hover:bg-white/[0.08]"
+                                  onClick={() => handleStartDirectMigration("zigbee")}
+                                  disabled={!migrationPlan.supported || migrationStarting !== null}
+                                >
+                                  {migrationStarting === "zigbee" ? (
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  ) : null}
+                                  Zigbee
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="border-white/10 bg-white/[0.04] text-white/90 hover:bg-white/[0.08]"
+                                  onClick={() => handleStartDirectMigration("zwave")}
+                                  disabled={!migrationPlan.supported || migrationStarting !== null}
+                                >
+                                  {migrationStarting === "zwave" ? (
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  ) : null}
+                                  Z-Wave
+                                </Button>
+                              </div>
+                            </>
+                          ) : null}
+                        </CardContent>
+                      </Card>
+                    ) : null}
+
                     <Card className="border-white/10 bg-black/20">
                       <CardHeader className="pb-4">
                         <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Workflow groups</CardTitle>

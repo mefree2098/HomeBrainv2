@@ -186,6 +186,10 @@ extension DeviceItem {
             return "Harmony"
         case "homebrain", "local":
             return "HomeBrain"
+        case "homebrain-zigbee", "zigbee":
+            return "HomeBrain Zigbee"
+        case "homebrain-zwave", "zwave":
+            return "HomeBrain Z-Wave"
         case "insteon":
             return "INSTEON"
         case "isy":
