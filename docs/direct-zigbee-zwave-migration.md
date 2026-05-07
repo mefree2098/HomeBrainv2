@@ -27,6 +27,7 @@ References:
 - [x] Linux/Jetson serial autodiscovery for SONOFF ZBDongle-P.
 - [x] Linux/Jetson serial autodiscovery for Zooz ZST39 LR.
 - [x] Runtime status API for adapter presence, driver health, and paired-node counts.
+- [x] Web admin radio diagnostics/logging panel for Zigbee and Z-Wave with live SSE log replay, adapter health, serial-port scoring, pairing controls, and actionable USB visibility diagnostics.
 - [x] Permit-join / inclusion and exclusion / leave APIs.
 - [x] Device event normalization into HomeBrain device records.
 - [x] Command routing for direct HomeBrain Zigbee and Z-Wave devices.

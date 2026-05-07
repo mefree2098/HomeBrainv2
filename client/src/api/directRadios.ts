@@ -1,13 +1,79 @@
 import api from './api';
 
+export type DirectRadioProtocol = 'zigbee' | 'zwave';
+export type DirectRadioLogProtocol = DirectRadioProtocol | 'system';
+
+export type DirectRadioSerialPort = {
+  path?: string;
+  rawPath?: string | null;
+  stablePath?: string | null;
+  realPath?: string | null;
+  manufacturer?: string | null;
+  vendorId?: string | null;
+  productId?: string | null;
+  serialNumber?: string | null;
+  pnpId?: string | null;
+  friendlyName?: string | null;
+  descriptor?: string | null;
+  scores?: {
+    zigbee?: number | null;
+    zwave?: number | null;
+  };
+  likelyZigbee?: boolean;
+  likelyZWave?: boolean;
+  preferredProtocol?: DirectRadioProtocol | null;
+};
+
+export type DirectRadioControllerStatus = {
+  expectedHardware: string;
+  source: string;
+  detectedPort: string | null;
+  detectedPortDetails?: DirectRadioSerialPort | null;
+  configuredPort: string | null;
+  started: boolean;
+  error: string | null;
+  diagnostics?: string[];
+  permitJoinUntil?: string | null;
+  inclusionUntil?: string | null;
+  exclusionUntil?: string | null;
+  pendingDsk?: string | null;
+  lastStartResult?: unknown;
+  pairedDeviceCount?: number;
+  pairedNodeCount?: number;
+};
+
+export type DirectRadioStatus = {
+  enabled: boolean;
+  dataDir: string;
+  serialPorts: DirectRadioSerialPort[];
+  diagnostics?: string[];
+  controllers: {
+    zigbee: DirectRadioControllerStatus;
+    zwave: DirectRadioControllerStatus;
+  };
+  migrations: unknown[];
+};
+
+export type DirectRadioLogEntry = {
+  id: string;
+  timestamp: string;
+  level: 'info' | 'warn' | 'error';
+  protocol: DirectRadioLogProtocol;
+  stage?: string | null;
+  operation?: string | null;
+  target?: string | null;
+  message: string;
+  details?: Record<string, unknown>;
+};
+
 export type DirectRadioMigrationPlan = {
   deviceId: string | null;
   smartThingsDeviceId: string | null;
   name: string;
   room: string | null;
   currentSource: string;
-  recommendedProtocol: 'zigbee' | 'zwave' | 'unknown';
-  inferredProtocol: 'zigbee' | 'zwave' | 'unknown';
+  recommendedProtocol: DirectRadioProtocol | 'unknown';
+  inferredProtocol: DirectRadioProtocol | 'unknown';
   supported: boolean;
   cloudOrVirtualOnly: boolean;
   features: string[];
@@ -25,11 +91,83 @@ export type DirectRadioMigrationPlan = {
 export const getDirectRadioStatus = async () => {
   try {
     const response = await api.get('/api/direct-radios/status');
-    return response.data;
+    return response.data as { success: boolean; status: DirectRadioStatus };
   } catch (error) {
     console.error('Error fetching direct radio status:', error);
     throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
+};
+
+export const getDirectRadioSerialPorts = async () => {
+  try {
+    const response = await api.get('/api/direct-radios/serial-ports');
+    return response.data as { success: boolean; serialPorts: DirectRadioSerialPort[] };
+  } catch (error) {
+    console.error('Error fetching direct radio serial ports:', error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const getDirectRadioEngineLogs = async (limit = 200) => {
+  try {
+    const response = await api.get('/api/direct-radios/logs/latest', {
+      params: { limit }
+    });
+    return response.data as { success: boolean; logs: DirectRadioLogEntry[]; count: number };
+  } catch (error) {
+    console.error('Error fetching direct radio logs:', error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const clearDirectRadioEngineLogs = async () => {
+  try {
+    const response = await api.post('/api/direct-radios/logs/clear');
+    return response.data as { success: boolean; cleared: number };
+  } catch (error) {
+    console.error('Error clearing direct radio logs:', error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const openDirectRadioEngineLogStream = (
+  options: { limit?: number } = {},
+  handlers: {
+    onLog: (entry: DirectRadioLogEntry) => void;
+    onReady?: () => void;
+    onError?: (error: Event) => void;
+  }
+) => {
+  const params = new URLSearchParams();
+  if (typeof options.limit === 'number' && options.limit > 0) {
+    params.set('limit', String(options.limit));
+  }
+
+  const url = params.toString()
+    ? `/api/direct-radios/logs/stream?${params.toString()}`
+    : '/api/direct-radios/logs/stream';
+  const stream = new EventSource(url, { withCredentials: true });
+
+  stream.addEventListener('log', (raw) => {
+    const message = raw as MessageEvent<string>;
+    try {
+      handlers.onLog(JSON.parse(message.data) as DirectRadioLogEntry);
+    } catch (error) {
+      console.error('Failed to parse direct radio log stream payload:', error);
+    }
+  });
+
+  stream.addEventListener('ready', () => {
+    handlers.onReady?.();
+  });
+
+  stream.onerror = (error) => {
+    handlers.onError?.(error);
+  };
+
+  return () => {
+    stream.close();
+  };
 };
 
 export const getDirectRadioMigrationPlan = async (deviceId: string, protocol?: string) => {
@@ -45,7 +183,7 @@ export const getDirectRadioMigrationPlan = async (deviceId: string, protocol?: s
 
 export const startDirectRadioMigration = async (payload: {
   deviceId: string;
-  protocol: 'zigbee' | 'zwave';
+  protocol: DirectRadioProtocol;
   durationSeconds?: number;
   dskPin?: string;
 }) => {
@@ -59,7 +197,7 @@ export const startDirectRadioMigration = async (payload: {
 };
 
 export const startDirectRadioPairing = async (payload: {
-  protocol: 'zigbee' | 'zwave';
+  protocol: DirectRadioProtocol;
   durationSeconds?: number;
 }) => {
   try {
@@ -67,6 +205,16 @@ export const startDirectRadioPairing = async (payload: {
     return response.data;
   } catch (error) {
     console.error('Error starting direct radio pairing:', error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const stopDirectRadioPairing = async (protocol: DirectRadioProtocol | 'all' = 'all') => {
+  try {
+    const response = await api.post('/api/direct-radios/pairing/stop', { protocol });
+    return response.data as { success: boolean; status: DirectRadioStatus };
+  } catch (error) {
+    console.error('Error stopping direct radio pairing:', error);
     throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };

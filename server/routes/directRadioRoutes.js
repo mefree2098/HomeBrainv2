@@ -1,9 +1,11 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const directRadioService = require('../services/directRadioService');
+const directRadioEngineLogService = require('../services/directRadioEngineLogService');
 const { requireAdmin } = require('./middlewares/auth');
 
 const router = express.Router();
+const DIRECT_RADIO_LOG_HEARTBEAT_MS = 25_000;
 const directRadioRateLimit = rateLimit({
   windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_DIRECT_RADIO_RATE_LIMIT_WINDOW_MS || 60_000)),
   limit: Math.max(20, Number(process.env.HOMEBRAIN_DIRECT_RADIO_RATE_LIMIT_MAX || 180)),
@@ -26,10 +28,18 @@ function sendError(res, error, fallbackMessage) {
   });
 }
 
+function parsePositiveInt(value, fallback, maximum = 1000) {
+  const numeric = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return fallback;
+  }
+
+  return Math.min(maximum, numeric);
+}
+
 router.get('/status', async (_req, res) => {
   try {
-    await directRadioService.start();
-    const status = await directRadioService.getStatus();
+    const status = await directRadioService.refreshHardwareStatus({ log: false });
     res.status(200).json({
       success: true,
       status
@@ -41,7 +51,7 @@ router.get('/status', async (_req, res) => {
 
 router.get('/serial-ports', async (_req, res) => {
   try {
-    const serialPorts = await directRadioService.detectSerialPorts();
+    const serialPorts = await directRadioService.detectSerialPorts({ log: true });
     res.status(200).json({
       success: true,
       serialPorts
@@ -49,6 +59,93 @@ router.get('/serial-ports', async (_req, res) => {
   } catch (error) {
     sendError(res, error, 'Failed to list serial ports');
   }
+});
+
+router.get('/logs/latest', async (req, res) => {
+  try {
+    const limit = parsePositiveInt(req.query.limit, 200);
+    const logs = directRadioEngineLogService.latest({ limit });
+    res.status(200).json({
+      success: true,
+      logs,
+      count: logs.length
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to get direct radio logs');
+  }
+});
+
+router.post('/logs/clear', async (_req, res) => {
+  try {
+    const cleared = directRadioEngineLogService.latest({ limit: 2000 }).length;
+    directRadioEngineLogService.reset();
+    res.status(200).json({
+      success: true,
+      cleared
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to clear direct radio logs');
+  }
+});
+
+router.get('/logs/stream', async (req, res) => {
+  const limit = parsePositiveInt(req.query.limit, 200);
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  const writeLog = (entry) => {
+    try {
+      res.write(`id: ${entry.id}\n`);
+      res.write('event: log\n');
+      res.write(`data: ${JSON.stringify(entry)}\n\n`);
+    } catch (error) {
+      console.warn('GET /api/direct-radios/logs/stream - Failed to write log:', error.message);
+    }
+  };
+
+  try {
+    directRadioEngineLogService.latest({ limit }).forEach(writeLog);
+  } catch (error) {
+    console.error('GET /api/direct-radios/logs/stream - Failed initial replay:', error.message);
+  }
+
+  res.write('event: ready\n');
+  res.write(`data: ${JSON.stringify({ connectedAt: new Date().toISOString() })}\n\n`);
+
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(':\n\n');
+    } catch (_error) {
+      clearInterval(heartbeat);
+    }
+  }, DIRECT_RADIO_LOG_HEARTBEAT_MS);
+
+  const listener = (entry) => writeLog(entry);
+  directRadioEngineLogService.on('log', listener);
+
+  let closed = false;
+  const cleanup = () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    clearInterval(heartbeat);
+    directRadioEngineLogService.removeListener('log', listener);
+    try {
+      res.end();
+    } catch (_error) {
+      // No-op.
+    }
+  };
+
+  req.on('close', cleanup);
+  req.on('end', cleanup);
+  res.on('close', cleanup);
+  res.on('error', cleanup);
 });
 
 router.post('/pairing/start', async (req, res) => {
