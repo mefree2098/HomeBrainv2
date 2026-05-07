@@ -121,12 +121,77 @@ extension DeviceItem {
 
     nonisolated static let allSelectionSourcesValue = "all"
 
+    private nonisolated static let defaultSelectionSourceValues = [
+        "homebrain-zigbee",
+        "homebrain-zwave",
+        "homebrain-thread",
+        "homebrain-matter",
+        "ecobee",
+        "harmony",
+        "insteon",
+        "rainmachine",
+        "sense",
+        "smartthings",
+        "tempest"
+    ]
+
+    private nonisolated static func canonicalSelectionSource(_ source: String) -> String {
+        switch source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "zigbee":
+            return "homebrain-zigbee"
+        case "zwave", "z-wave":
+            return "homebrain-zwave"
+        case "thread":
+            return "homebrain-thread"
+        case "matter":
+            return "homebrain-matter"
+        case "homebrain", "manual":
+            return "local"
+        case let value:
+            return value
+        }
+    }
+
+    private nonisolated var selectionTransportTokens: Set<String> {
+        var tokens = Set<String>()
+
+        let matter = JSON.object(properties["matter"])
+        for raw in [
+            JSON.string(matter, "transport"),
+            JSON.string(properties, "matterTransport"),
+            JSON.string(properties, "transport"),
+            JSON.string(properties, "networkTransport")
+        ] {
+            let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if !normalized.isEmpty {
+                tokens.insert(normalized)
+            }
+        }
+
+        return tokens
+    }
+
     nonisolated var selectionSource: String {
         if let source = properties["source"] as? String {
-            let normalized = source.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let normalized = DeviceItem.canonicalSelectionSource(source)
             if !normalized.isEmpty {
                 return normalized
             }
+        }
+
+        let direct = JSON.object(properties["homebrainDirect"])
+        switch JSON.string(direct, "protocol").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "zigbee":
+            return "homebrain-zigbee"
+        case "zwave", "z-wave":
+            return "homebrain-zwave"
+        default:
+            break
+        }
+
+        let matter = JSON.object(properties["matter"])
+        if matter["nodeId"] != nil || properties["matterNodeId"] != nil || properties["matterFeatures"] != nil {
+            return "homebrain-matter"
         }
 
         if properties["smartThingsDeviceId"] != nil || properties["smartThingsId"] != nil {
@@ -140,6 +205,15 @@ extension DeviceItem {
         }
         if properties["senseDeviceId"] != nil || properties["senseMonitorId"] != nil {
             return "sense"
+        }
+        if properties["ecobeeThermostatIdentifier"] != nil || properties["ecobeeDeviceId"] != nil {
+            return "ecobee"
+        }
+        if properties["rainmachine"] != nil {
+            return "rainmachine"
+        }
+        if properties["tempestStationId"] != nil || properties["tempestDeviceId"] != nil {
+            return "tempest"
         }
 
         return "local"
@@ -161,10 +235,10 @@ extension DeviceItem {
     }
 
     nonisolated func matchesSelectionFilters(searchText: String, sourceFilter: String) -> Bool {
-        let normalizedSource = sourceFilter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedSource = DeviceItem.canonicalSelectionSource(sourceFilter)
         if !normalizedSource.isEmpty,
            normalizedSource != DeviceItem.allSelectionSourcesValue,
-           selectionSource != normalizedSource {
+           !(selectionSource == normalizedSource || (normalizedSource == "homebrain-thread" && selectionTransportTokens.contains("thread"))) {
             return false
         }
 
@@ -187,13 +261,15 @@ extension DeviceItem {
         case "homebrain", "local":
             return "HomeBrain"
         case "homebrain-zigbee", "zigbee":
-            return "HomeBrain Zigbee"
+            return "Zigbee"
         case "homebrain-zwave", "zwave":
-            return "HomeBrain Z-Wave"
+            return "Z-Wave"
+        case "homebrain-thread", "thread":
+            return "Thread"
         case "homebrain-matter", "matter":
-            return "HomeBrain Matter"
+            return "Matter"
         case "insteon":
-            return "INSTEON"
+            return "Insteon"
         case "isy":
             return "ISY"
         case "rainmachine":
@@ -217,7 +293,7 @@ extension DeviceItem {
     }
 
     nonisolated static func selectionSourceOptions(for devices: [DeviceItem]) -> [SelectionSourceOption] {
-        let sources = Set(devices.map(\.selectionSource))
+        let sources = Set(defaultSelectionSourceValues + devices.map(\.selectionSource))
         let sortedSources = sources.sorted {
             selectionSourceLabel($0).localizedCaseInsensitiveCompare(selectionSourceLabel($1)) == .orderedAscending
         }

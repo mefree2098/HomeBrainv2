@@ -14,6 +14,10 @@ const deviceCommandCoordinatorService = require('./deviceCommandCoordinatorServi
 const {
   ensureUniquePlatformIdentity
 } = require('./deviceIdentityService');
+const {
+  buildDeviceSourceFilterQuery,
+  canonicalizeDeviceSource
+} = require('./deviceSourceCatalog');
 const MAX_HARMONY_COMMAND_HOLD_MS = 5000;
 const MAX_HARMONY_ACTIVITY_VERIFY_TIMEOUT_MS = 120_000;
 const MAX_HARMONY_ACTIVITY_VERIFY_INTERVAL_MS = 15_000;
@@ -46,7 +50,6 @@ const DEFAULT_SMARTTHINGS_POST_COMMAND_STATE_AGE_MS = parseBoundedMs(
   MAX_SMARTTHINGS_POST_COMMAND_STATE_AGE_MS
 );
 
-const escapeRegex = (value = '') => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const HARMONY_VISIBLE_DEVICE_QUERY = Object.freeze({
   $or: [
     { 'properties.harmonyExcludeFromHomeBrain': { $exists: false } },
@@ -315,16 +318,7 @@ class DeviceService {
       if (filters.status !== undefined) query.status = filters.status;
       if (filters.isOnline !== undefined) query.isOnline = filters.isOnline;
       if (filters.source) {
-        const normalizedSource = String(filters.source).trim().toLowerCase();
-        if (normalizedSource === 'unknown') {
-          query.$or = [
-            { 'properties.source': { $exists: false } },
-            { 'properties.source': null },
-            { 'properties.source': '' }
-          ];
-        } else {
-          query['properties.source'] = new RegExp(`^${escapeRegex(normalizedSource)}$`, 'i');
-        }
+        Object.assign(query, buildDeviceSourceFilterQuery(filters.source));
       }
       
       const visibilityQuery = buildVisibleDeviceQuery(query, options);
@@ -1385,20 +1379,17 @@ class DeviceService {
   }
 
   isDirectRadioDevice(device) {
-    const source = (device?.properties?.source || '').toString().trim().toLowerCase();
+    const source = canonicalizeDeviceSource(device?.properties?.source || '');
     const protocol = (device?.properties?.homebrainDirect?.protocol || '').toString().trim().toLowerCase();
     return source === 'homebrain-zigbee'
       || source === 'homebrain-zwave'
-      || source === 'zigbee'
-      || source === 'zwave'
       || protocol === 'zigbee'
       || protocol === 'zwave';
   }
 
   isMatterDevice(device) {
-    const source = (device?.properties?.source || '').toString().trim().toLowerCase();
+    const source = canonicalizeDeviceSource(device?.properties?.source || '');
     return source === 'homebrain-matter'
-      || source === 'matter'
       || Boolean(device?.properties?.matter?.nodeId);
   }
 

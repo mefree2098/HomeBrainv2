@@ -5,6 +5,10 @@ const deviceService = require('./deviceService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const Settings = require('../models/Settings');
+const {
+  canonicalizeDeviceSource,
+  getDeviceSource
+} = require('./deviceSourceCatalog');
 
 const STATUS_STALE_THRESHOLD_MS = Number(process.env.SECURITY_ALARM_STATUS_STALE_MS || 60000);
 const ONLINE_GRACE_PERIOD_MS = Number(process.env.SECURITY_ALARM_ONLINE_GRACE_MS || 120000);
@@ -491,16 +495,15 @@ class SecurityAlarmService {
   }
 
   getSecurityDeviceSourceLabel(source) {
-    switch (normalizeString(source).toLowerCase()) {
+    switch (canonicalizeDeviceSource(source)) {
       case 'homebrain-matter':
-      case 'matter':
         return 'HomeBrain Matter';
       case 'homebrain-zigbee':
-      case 'zigbee':
         return 'HomeBrain Zigbee';
       case 'homebrain-zwave':
-      case 'zwave':
         return 'HomeBrain Z-Wave';
+      case 'homebrain-thread':
+        return 'HomeBrain Thread';
       case 'smartthings':
         return 'SmartThings';
       case 'insteon':
@@ -527,7 +530,7 @@ class SecurityAlarmService {
     const localDeviceId = normalizeString(device?._id?.toString?.() || device?._id || device?.id);
     const resolvedDeviceId = localDeviceId || normalizeString(zone?.deviceId);
     const smartThingsDeviceId = normalizeString(device?.properties?.smartThingsDeviceId);
-    const source = normalizeString(device?.properties?.source).toLowerCase() || null;
+    const source = device ? getDeviceSource(device) : null;
     const sensorType = inferSensorType(device, zone);
     const batteryLevel = extractBatteryLevel(device);
     const batteryState = getBatteryState(batteryLevel);
@@ -591,7 +594,7 @@ class SecurityAlarmService {
   buildDoorLockSummary(device) {
     const localDeviceId = normalizeString(device?._id?.toString?.() || device?._id || device?.id);
     const smartThingsDeviceId = normalizeString(device?.properties?.smartThingsDeviceId);
-    const source = normalizeString(device?.properties?.source).toLowerCase() || null;
+    const source = device ? getDeviceSource(device) : null;
     const isLocked = Boolean(device?.status);
     const isOnline = device?.isOnline !== false;
 

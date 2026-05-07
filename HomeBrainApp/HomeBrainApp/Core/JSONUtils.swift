@@ -9,6 +9,16 @@ nonisolated enum JSON {
         value as? [[String: Any]] ?? []
     }
 
+    static func stringArray(_ value: Any?) -> [String] {
+        if let raw = value as? [String] {
+            return raw
+        }
+        if let raw = value as? [Any] {
+            return raw.compactMap { $0 as? String }
+        }
+        return []
+    }
+
     static func string(_ object: [String: Any], _ key: String, fallback: String = "") -> String {
         if let raw = object[key] as? String {
             return raw

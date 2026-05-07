@@ -51,6 +51,13 @@ import {
   isHarmonyCommandDevice,
   isHarmonyExcludedFromHomeBrain
 } from "@/lib/harmony"
+import {
+  ALL_DEVICE_SOURCES_VALUE,
+  buildDeviceSourceOptions,
+  deviceMatchesSourceFilter,
+  getDeviceSource,
+  getDeviceSourceLabel
+} from "@/lib/deviceSources"
 
 const THERMOSTAT_MODES = ['auto', 'cool', 'heat', 'off'] as const
 const HARMONY_CARD_COMMANDS = [
@@ -323,39 +330,6 @@ const supportsEnergyMonitoring = (device: any): boolean => {
   )
 }
 
-const DEFAULT_SOURCE_OPTIONS = ['insteon', 'smartthings', 'harmony', 'ecobee']
-
-const getDeviceSource = (device: any): string => {
-  const sourceValue = (
-    device?.properties?.source ??
-    device?.source ??
-    ''
-  ).toString().trim().toLowerCase()
-  return sourceValue || 'unknown'
-}
-
-const formatSourceLabel = (source: string): string => {
-  if (!source || source === 'unknown') {
-    return 'Unknown'
-  }
-
-  if (source === 'homebrain-matter' || source === 'matter') {
-    return 'HomeBrain Matter'
-  }
-  if (source === 'homebrain-zigbee' || source === 'zigbee') {
-    return 'HomeBrain Zigbee'
-  }
-  if (source === 'homebrain-zwave' || source === 'zwave') {
-    return 'HomeBrain Z-Wave'
-  }
-
-  return source
-    .split(/[\s_-]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ')
-}
-
 const supportsHarmonyPowerControl = (device: any): boolean => {
   if (!isHarmonyCommandDevice(device)) {
     return false
@@ -437,7 +411,7 @@ export function Devices({
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState("")
   const [filterType, setFilterType] = useState("all")
-  const [filterSource, setFilterSource] = useState("all")
+  const [filterSource, setFilterSource] = useState(ALL_DEVICE_SOURCES_VALUE)
   const [sortMode, setSortMode] = useState("default")
   const [viewMode, setViewMode] = useState("grid")
   const [activeTab, setActiveTab] = useState("all")
@@ -1342,29 +1316,22 @@ export function Devices({
     )
   }
 
-  const sourceOptions = Array.from(new Set([
-    ...DEFAULT_SOURCE_OPTIONS,
-    ...devices.map(getDeviceSource)
-  ]))
-    .filter((source) => source !== 'unknown')
-    .sort((a, b) => a.localeCompare(b))
-
-  if (devices.some((device: any) => getDeviceSource(device) === 'unknown')) {
-    sourceOptions.push('unknown')
-  }
+  const sourceOptions = buildDeviceSourceOptions(
+    devices,
+    devices.some((device: any) => getDeviceSource(device) === 'unknown')
+  )
 
   const matchesDeviceFilters = (device: any) => {
     const lowerSearch = searchTerm.toLowerCase()
     const deviceName = (device?.name || '').toString().toLowerCase()
     const deviceRoom = (device?.room || '').toString().toLowerCase()
-    const deviceSource = getDeviceSource(device)
     const matchesSearch = deviceName.includes(lowerSearch) || deviceRoom.includes(lowerSearch)
     const matchesType =
       filterType === "all" ||
       (filterType === "light"
         ? supportsLightFade(device)
         : device.type === filterType)
-    const matchesSource = filterSource === "all" || deviceSource === filterSource
+    const matchesSource = deviceMatchesSourceFilter(device, filterSource)
 
     return !isHarmonyExcludedFromHomeBrain(device) && matchesSearch && matchesType && matchesSource
   }
@@ -1582,7 +1549,7 @@ export function Devices({
                 : (device.status ? "On" : "Off")}
             </Badge>
             <Badge variant="outline">
-              {formatSourceLabel(getDeviceSource(device))}
+              {getDeviceSourceLabel(getDeviceSource(device))}
             </Badge>
             {renderAlexaStatusBadge(device)}
           </div>
@@ -1753,10 +1720,10 @@ export function Devices({
                 <SelectValue placeholder="Filter by source" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All Sources</SelectItem>
+                <SelectItem value={ALL_DEVICE_SOURCES_VALUE}>All Sources</SelectItem>
                 {sourceOptions.map((source) => (
-                  <SelectItem key={source} value={source}>
-                    {formatSourceLabel(source)}
+                  <SelectItem key={source.value} value={source.value}>
+                    {source.label}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -1806,7 +1773,7 @@ export function Devices({
                           <div className="min-w-0">
                             <h3 className="break-words font-medium">{device.name}</h3>
                             <p className="text-sm text-muted-foreground">
-                              {device.room} • {device.type} • {formatSourceLabel(getDeviceSource(device))}
+                              {device.room} • {device.type} • {getDeviceSourceLabel(getDeviceSource(device))}
                             </p>
                           </div>
                         </div>
@@ -1923,7 +1890,7 @@ export function Devices({
                               <div className="min-w-0">
                                 <span className="block break-words text-sm font-medium leading-snug">{device.name}</span>
                                 <p className="text-xs text-muted-foreground">
-                                  {formatSourceLabel(getDeviceSource(device))}
+                                  {getDeviceSourceLabel(getDeviceSource(device))}
                                 </p>
                               </div>
                             </div>
