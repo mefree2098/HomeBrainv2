@@ -31,6 +31,8 @@ This is where you configure:
 - wake-word sensitivity
 - wake-word models and Piper voices
 
+ElevenLabs TTS uses the production `eleven_v3` model by default. HomeBrain asks the configured Codex LLM to add minimal ElevenLabs inline emotion/delivery tags before first generation, then stores the resulting MP3 under `server/data/elevenlabs-cache` so the same text, voice, model, and voice settings can be replayed without spending another ElevenLabs generation. Set `HOMEBRAIN_ELEVENLABS_CACHE_DIR` to move the cache or `HOMEBRAIN_ELEVENLABS_CACHE_DISABLED=1` to disable it for diagnostics.
+
 Recommended beginner path:
 
 1. Leave advanced values alone at first

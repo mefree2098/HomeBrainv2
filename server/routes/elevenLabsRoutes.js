@@ -132,7 +132,8 @@ router.post('/text-to-speech', auth, async (req, res) => {
 
     console.log(`Generating speech for voice ${voiceId}: "${text.substring(0, 100)}${text.length > 100 ? '...' : ''}"`);
     
-    const audioBuffer = await elevenLabsService.textToSpeech(text, voiceId, options);
+    const speech = await elevenLabsService.textToSpeechDetailed(text, voiceId, options);
+    const audioBuffer = speech.audioBuffer;
     
     console.log(`Successfully generated ${audioBuffer.length} bytes of audio data`);
     
@@ -141,7 +142,10 @@ router.post('/text-to-speech', auth, async (req, res) => {
       'Content-Type': 'audio/mpeg',
       'Content-Length': audioBuffer.length,
       'Cache-Control': 'public, max-age=31536000', // Cache for 1 year
-      'Content-Disposition': 'inline; filename="speech.mp3"'
+      'Content-Disposition': 'inline; filename="speech.mp3"',
+      'X-ElevenLabs-Cache': speech.cacheHit ? 'hit' : 'miss',
+      'X-ElevenLabs-Model': speech.modelId || 'unknown',
+      'X-ElevenLabs-Emotion-Tagging': speech.tagger?.status || 'unknown'
     });
     
     res.status(200).send(audioBuffer);
@@ -201,12 +205,13 @@ router.post('/preview', auth, async (req, res) => {
 
     console.log(`Generating preview for voice ${voiceId}`);
     
-    const audioBuffer = await elevenLabsService.textToSpeech(previewText, voiceId, {
+    const speech = await elevenLabsService.textToSpeechDetailed(previewText, voiceId, {
       stability: 0.5,
       similarity_boost: 0.75,
-      style: 0.0,
+      style: 0.25,
       use_speaker_boost: true
     });
+    const audioBuffer = speech.audioBuffer;
     
     console.log(`Successfully generated preview audio (${audioBuffer.length} bytes)`);
     
@@ -215,7 +220,10 @@ router.post('/preview', auth, async (req, res) => {
       'Content-Type': 'audio/mpeg',
       'Content-Length': audioBuffer.length,
       'Cache-Control': 'public, max-age=86400', // Cache for 1 day
-      'Content-Disposition': 'inline; filename="voice-preview.mp3"'
+      'Content-Disposition': 'inline; filename="voice-preview.mp3"',
+      'X-ElevenLabs-Cache': speech.cacheHit ? 'hit' : 'miss',
+      'X-ElevenLabs-Model': speech.modelId || 'unknown',
+      'X-ElevenLabs-Emotion-Tagging': speech.tagger?.status || 'unknown'
     });
     
     res.status(200).send(audioBuffer);
@@ -260,9 +268,10 @@ router.get('/status', auth, async (req, res) => {
   try {
     console.log('GET /api/elevenlabs/status - Checking ElevenLabs integration status');
     
-    const hasApiKey = !!process.env.ELEVENLABS_API_KEY;
+    const hasApiKey = await elevenLabsService.hasConfiguredApiKey();
     let apiKeyValid = false;
     let totalVoices = 0;
+    const cache = await elevenLabsService.getCacheStatus();
     
     if (hasApiKey) {
       try {
@@ -281,7 +290,13 @@ router.get('/status', auth, async (req, res) => {
       apiKeyValid: apiKeyValid,
       totalVoices: totalVoices,
       service: 'ElevenLabs',
-      baseUrl: process.env.ELEVENLABS_BASE_URL || 'https://api.elevenlabs.io/v1'
+      baseUrl: process.env.ELEVENLABS_BASE_URL || 'https://api.elevenlabs.io/v1',
+      defaultModel: 'eleven_v3',
+      emotionTagging: {
+        enabledByDefault: true,
+        provider: 'codex'
+      },
+      cache
     };
     
     console.log('ElevenLabs integration status:', status);
