@@ -169,6 +169,89 @@ test('getAlarmStatus returns security sensors and door lock summaries', async (t
   assert.equal(garageLock.smartThingsDeviceId, 'smartthings-lock-2');
 });
 
+test('getAlarmStatus includes Matter and source-agnostic sensors in HomeBrain security routines', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+  const originalDeviceFind = Device.find;
+  const originalEnsureSmartThingsState = deviceService.ensureSmartThingsState;
+  const originalIsSmartThingsConfiguredForSthm = securityAlarmService.isSmartThingsConfiguredForSthm;
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+    Device.find = originalDeviceFind;
+    deviceService.ensureSmartThingsState = originalEnsureSmartThingsState;
+    securityAlarmService.isSmartThingsConfiguredForSthm = originalIsSmartThingsConfiguredForSthm;
+  });
+
+  const now = new Date('2026-05-07T12:00:00.000Z');
+  const alarm = {
+    alarmState: 'armedStay',
+    enabledPlatforms: {
+      homebrain: true,
+      smartthings: false
+    },
+    lastArmed: now,
+    lastDisarmed: null,
+    lastTriggered: null,
+    zones: [],
+    isOnline: true,
+    lastSyncWithSmartThings: null,
+    batteryLevel: null,
+    signalStrength: null,
+    save: async function save() {
+      return this;
+    }
+  };
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+  securityAlarmService.isSmartThingsConfiguredForSthm = async () => false;
+  deviceService.ensureSmartThingsState = async () => {};
+  Device.find = () => ({
+    lean: async () => ([
+      {
+        _id: 'matter-contact',
+        name: 'Matter Patio Contact',
+        type: 'sensor',
+        room: 'Patio',
+        status: true,
+        isOnline: true,
+        lastSeen: now,
+        properties: {
+          source: 'homebrain-matter',
+          matterFeatures: ['contact', 'battery'],
+          matterBatteryLevel: 97,
+          matter: {
+            nodeId: '1234',
+            endpointId: 1,
+            deviceTypeNames: ['Contact Sensor']
+          }
+        }
+      },
+      {
+        _id: 'tempest-lightning',
+        name: 'Tempest Lightning Alert',
+        type: 'sensor',
+        room: 'Outside',
+        status: false,
+        isOnline: true,
+        lastSeen: now,
+        properties: {
+          source: 'tempest',
+          includeInSecurityCenter: true
+        }
+      }
+    ])
+  });
+
+  const status = await securityAlarmService.getAlarmStatus();
+
+  assert.equal(status.enabledPlatforms.homebrain, true);
+  assert.equal(status.enabledPlatforms.smartthings, false);
+  assert.equal(status.sensorCount, 2);
+  assert.equal(status.activeSensorCount, 1);
+  assert.equal(status.sensors.some((sensor) => sensor.sourceLabel === 'HomeBrain Matter'), true);
+  assert.equal(status.sensors.some((sensor) => sensor.deviceId === 'tempest-lightning'), true);
+});
+
 test('getAlarmStatus can force-refresh SmartThings door locks for dashboard consumers', async (t) => {
   const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
   const originalDeviceFind = Device.find;

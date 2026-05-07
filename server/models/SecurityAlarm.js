@@ -76,7 +76,7 @@ const SecurityAlarmSchema = new mongoose.Schema({
     },
     deviceType: {
       type: String,
-      enum: ['doorWindow', 'motion', 'glass', 'smoke', 'co', 'flood', 'panic'],
+      enum: ['doorWindow', 'motion', 'glass', 'smoke', 'co', 'flood', 'panic', 'security'],
       required: true
     },
     enabled: {

@@ -28,7 +28,15 @@ const SECURITY_CAPABILITIES = new Set([
   'accelerationSensor',
   'shock',
   'shockSensor',
-  'alarm'
+  'alarm',
+  'doorState',
+  'doorControl',
+  'booleanState',
+  'occupancy',
+  'occupancySensing',
+  'lock',
+  'smokeCoAlarm',
+  'smokeCOAlarm'
 ]);
 
 const SENSOR_TYPE_LABELS = {
@@ -55,6 +63,7 @@ const SECURITY_KEYWORD_PATTERNS = [
 const BATTERY_PROPERTY_KEYS = [
   'homeBrainBatteryLevel',
   'directBatteryLevel',
+  'matterBatteryLevel',
   'smartThingsBatteryLevel',
   'batteryLevel',
   'battery',
@@ -67,10 +76,14 @@ const DEFAULT_ARM_AWAY_EXIT_DELAY_SECONDS = 30;
 
 const SECURITY_AUDIO_PROMPTS = Object.freeze({
   armingAway30: '/audio/security/arming-away-30.mp3',
+  armingCountdownBeep: '/audio/security/arming-countdown-beep.mp3',
+  armingFinalBeeps: '/audio/security/arming-final-beeps.mp3',
   armedStay: '/audio/security/armed-stay.mp3',
   disarmed: '/audio/security/disarmed.mp3',
   alarmTriggered: '/audio/security/alarm-triggered.mp3',
-  alarmDismissedFalseAlarm: '/audio/security/alarm-dismissed-false-alarm.mp3'
+  alarmDismissedFalseAlarm: '/audio/security/alarm-dismissed-false-alarm.mp3',
+  securityConfirmationChime: '/audio/security/security-confirmation-chime.mp3',
+  securityAlertPulse: '/audio/security/security-alert-pulse.mp3'
 });
 
 const normalizeString = (value) => {
@@ -123,18 +136,26 @@ const getDeviceLookupKeys = (device) => uniqueStrings([
   normalizeString(device?.properties?.smartThingsDeviceId),
   normalizeString(device?.properties?.insteonAddress),
   normalizeString(device?.properties?.ecobeeSensorId),
-  normalizeString(device?.properties?.ecobeeSensorKey)
+  normalizeString(device?.properties?.ecobeeSensorKey),
+  normalizeString(device?.properties?.matter?.nodeId && device?.properties?.matter?.endpointId
+    ? `${device.properties.matter.nodeId}/${device.properties.matter.endpointId}`
+    : '')
 ]);
 
 const getDeviceCapabilities = (device) => uniqueStrings([
   ...(Array.isArray(device?.properties?.smartThingsCapabilities) ? device.properties.smartThingsCapabilities : []),
   ...(Array.isArray(device?.properties?.smartthingsCapabilities) ? device.properties.smartthingsCapabilities : []),
-  ...(Array.isArray(device?.properties?.directRadioFeatures) ? device.properties.directRadioFeatures : [])
+  ...(Array.isArray(device?.properties?.directRadioFeatures) ? device.properties.directRadioFeatures : []),
+  ...(Array.isArray(device?.properties?.matterFeatures) ? device.properties.matterFeatures : []),
+  ...(Array.isArray(device?.properties?.capabilities) ? device.properties.capabilities : []),
+  ...(Array.isArray(device?.capabilities) ? device.capabilities : [])
 ].map((value) => normalizeString(value)));
 
 const getDeviceCategories = (device) => uniqueStrings([
   ...(Array.isArray(device?.properties?.smartThingsCategories) ? device.properties.smartThingsCategories : []),
-  ...(Array.isArray(device?.properties?.smartthingsCategories) ? device.properties.smartthingsCategories : [])
+  ...(Array.isArray(device?.properties?.smartthingsCategories) ? device.properties.smartthingsCategories : []),
+  ...(Array.isArray(device?.properties?.matter?.deviceTypeNames) ? device.properties.matter.deviceTypeNames : []),
+  ...(Array.isArray(device?.properties?.matterCategories) ? device.properties.matterCategories : [])
 ].map((value) => normalizeString(value).toLowerCase()));
 
 const extractBatteryLevel = (device) => {
@@ -156,7 +177,9 @@ const extractBatteryLevel = (device) => {
 
   const nestedBattery = findNestedBatteryLevel(device?.properties?.smartThingsAttributeValues)
     ?? findNestedBatteryLevel(device?.properties?.directRadioState)
-    ?? findNestedBatteryLevel(device?.properties?.homebrainDirect);
+    ?? findNestedBatteryLevel(device?.properties?.homebrainDirect)
+    ?? findNestedBatteryLevel(device?.properties?.matterState)
+    ?? findNestedBatteryLevel(device?.properties?.matter);
   if (nestedBattery !== null) {
     return Math.max(0, Math.min(100, Math.round(nestedBattery)));
   }
@@ -184,7 +207,12 @@ const inferSensorTypeFromKeywords = (device, zone) => {
     device?.model,
     device?.brand,
     device?.properties?.smartThingsDeviceTypeName,
-    device?.properties?.smartThingsPresentationId
+    device?.properties?.smartThingsPresentationId,
+    device?.properties?.source,
+    device?.properties?.matter?.productName,
+    device?.properties?.matter?.endpointName,
+    ...(Array.isArray(device?.properties?.matter?.deviceTypeNames) ? device.properties.matter.deviceTypeNames : []),
+    ...(Array.isArray(device?.properties?.matterFeatures) ? device.properties.matterFeatures : [])
   ]
     .filter((value) => typeof value === 'string' && value.trim().length > 0)
     .join(' ');
@@ -208,7 +236,7 @@ const inferSensorType = (device, zone) => {
   if (capabilities.includes('contactSensor') || capabilities.includes('contact')) {
     return 'doorWindow';
   }
-  if (capabilities.includes('motionSensor') || capabilities.includes('motion')) {
+  if (capabilities.includes('motionSensor') || capabilities.includes('motion') || capabilities.includes('occupancy')) {
     return 'motion';
   }
   if (capabilities.includes('waterSensor') || capabilities.includes('water')) {
@@ -232,6 +260,9 @@ const inferSensorType = (device, zone) => {
   }
   if (capabilities.includes('alarm')) {
     return 'panic';
+  }
+  if (capabilities.includes('doorState') || capabilities.includes('doorControl')) {
+    return 'doorWindow';
   }
 
   return inferSensorTypeFromKeywords(device, zone);
@@ -278,13 +309,26 @@ const looksLikeSecuritySensor = (device) => {
     return false;
   }
 
+  if (device?.properties?.securitySensor === true || device?.properties?.includeInSecurityCenter === true) {
+    return true;
+  }
+
+  const deviceType = normalizeString(device?.type).toLowerCase();
+  if (deviceType === 'lock') {
+    return false;
+  }
+
   const capabilities = getDeviceCapabilities(device);
   if (capabilities.some((capability) => SECURITY_CAPABILITIES.has(capability))) {
     return true;
   }
 
-  if (normalizeString(device?.type).toLowerCase() !== 'sensor') {
+  if (deviceType !== 'sensor' && deviceType !== 'garage' && deviceType !== 'camera') {
     return false;
+  }
+
+  if (deviceType === 'garage') {
+    return true;
   }
 
   return inferSensorTypeFromKeywords(device, null) !== 'security'
@@ -317,7 +361,7 @@ const looksLikeHomeBrainAlarmOutput = (device) => {
 
   const source = normalizeString(device?.properties?.source).toLowerCase();
   const protocol = normalizeString(device?.properties?.homebrainDirect?.protocol).toLowerCase();
-  if (!source.startsWith('homebrain-') && protocol !== 'zigbee' && protocol !== 'zwave') {
+  if (!source.startsWith('homebrain-') && source !== 'matter' && protocol !== 'zigbee' && protocol !== 'zwave') {
     return false;
   }
 
@@ -331,7 +375,8 @@ const looksLikeHomeBrainAlarmOutput = (device) => {
     device?.type,
     device?.brand,
     device?.model,
-    ...(Array.isArray(device?.properties?.directRadioFeatures) ? device.properties.directRadioFeatures : [])
+    ...(Array.isArray(device?.properties?.directRadioFeatures) ? device.properties.directRadioFeatures : []),
+    ...(Array.isArray(device?.properties?.matterFeatures) ? device.properties.matterFeatures : [])
   ]
     .map((entry) => normalizeString(entry).toLowerCase())
     .filter(Boolean)
@@ -445,10 +490,44 @@ class SecurityAlarmService {
     return alarm;
   }
 
+  getSecurityDeviceSourceLabel(source) {
+    switch (normalizeString(source).toLowerCase()) {
+      case 'homebrain-matter':
+      case 'matter':
+        return 'HomeBrain Matter';
+      case 'homebrain-zigbee':
+      case 'zigbee':
+        return 'HomeBrain Zigbee';
+      case 'homebrain-zwave':
+      case 'zwave':
+        return 'HomeBrain Z-Wave';
+      case 'smartthings':
+        return 'SmartThings';
+      case 'insteon':
+        return 'INSTEON';
+      case 'ecobee':
+        return 'Ecobee';
+      case 'rainmachine':
+        return 'RainMachine';
+      case 'tempest':
+        return 'Tempest';
+      case 'homebrain':
+      case 'local':
+        return 'HomeBrain';
+      case '':
+        return 'Unknown';
+      default:
+        return normalizeString(source)
+          .replace(/[_-]+/g, ' ')
+          .replace(/\b\w/g, (letter) => letter.toUpperCase());
+    }
+  }
+
   buildSecuritySensorSummary({ device, zone }) {
     const localDeviceId = normalizeString(device?._id?.toString?.() || device?._id || device?.id);
     const resolvedDeviceId = localDeviceId || normalizeString(zone?.deviceId);
     const smartThingsDeviceId = normalizeString(device?.properties?.smartThingsDeviceId);
+    const source = normalizeString(device?.properties?.source).toLowerCase() || null;
     const sensorType = inferSensorType(device, zone);
     const batteryLevel = extractBatteryLevel(device);
     const batteryState = getBatteryState(batteryLevel);
@@ -487,6 +566,8 @@ class SecurityAlarmService {
       deviceId: resolvedDeviceId,
       localDeviceId: localDeviceId || null,
       smartThingsDeviceId: smartThingsDeviceId || null,
+      source,
+      sourceLabel: this.getSecurityDeviceSourceLabel(source),
       zoneDeviceId: normalizeString(zone?.deviceId) || null,
       name: normalizeString(zone?.name) || normalizeString(device?.name) || 'Unnamed security sensor',
       room: normalizeString(device?.room) || null,
@@ -510,6 +591,7 @@ class SecurityAlarmService {
   buildDoorLockSummary(device) {
     const localDeviceId = normalizeString(device?._id?.toString?.() || device?._id || device?.id);
     const smartThingsDeviceId = normalizeString(device?.properties?.smartThingsDeviceId);
+    const source = normalizeString(device?.properties?.source).toLowerCase() || null;
     const isLocked = Boolean(device?.status);
     const isOnline = device?.isOnline !== false;
 
@@ -517,6 +599,8 @@ class SecurityAlarmService {
       deviceId: localDeviceId,
       localDeviceId: localDeviceId || null,
       smartThingsDeviceId: smartThingsDeviceId || null,
+      source,
+      sourceLabel: this.getSecurityDeviceSourceLabel(source),
       name: normalizeString(device?.name) || 'Unnamed door lock',
       room: normalizeString(device?.room) || null,
       isLocked,
@@ -815,16 +899,18 @@ class SecurityAlarmService {
 
   async silenceHomeBrainAlarmOutputs() {
     try {
-      const directRadioDevices = await Device.find(
+      const homeBrainDevices = await Device.find(
         {
           $or: [
-            { 'properties.source': { $in: ['homebrain-zigbee', 'homebrain-zwave'] } },
-            { 'properties.homebrainDirect.protocol': { $in: ['zigbee', 'zwave'] } }
+            { 'properties.source': /^homebrain-/i },
+            { 'properties.source': /^matter$/i },
+            { 'properties.homebrainDirect.protocol': { $in: ['zigbee', 'zwave'] } },
+            { 'properties.supportsAlarm': true }
           ]
         },
         'name type status isOnline properties'
       ).lean();
-      const alarmOutputs = directRadioDevices.filter((device) => looksLikeHomeBrainAlarmOutput(device));
+      const alarmOutputs = homeBrainDevices.filter((device) => looksLikeHomeBrainAlarmOutput(device));
 
       if (alarmOutputs.length === 0) {
         return { silenced: [], failed: [] };
@@ -844,7 +930,7 @@ class SecurityAlarmService {
               priority: 'critical'
             }
           });
-          return { deviceId: localDeviceId, name: deviceName, via: 'direct-radio.alarm_off' };
+          return { deviceId: localDeviceId, name: deviceName, via: 'homebrain.alarm_off' };
         } catch (alarmOffError) {
           await deviceService.controlDevice(localDeviceId, 'turn_off', false, {
             skipIntegrationRefresh: true,
@@ -857,7 +943,7 @@ class SecurityAlarmService {
               fallbackError: alarmOffError.message
             }
           });
-          return { deviceId: localDeviceId, name: deviceName, via: 'direct-radio.turn_off' };
+          return { deviceId: localDeviceId, name: deviceName, via: 'homebrain.turn_off' };
         }
       }));
 

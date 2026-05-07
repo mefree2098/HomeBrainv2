@@ -190,6 +190,8 @@ extension DeviceItem {
             return "HomeBrain Zigbee"
         case "homebrain-zwave", "zwave":
             return "HomeBrain Z-Wave"
+        case "homebrain-matter", "matter":
+            return "HomeBrain Matter"
         case "insteon":
             return "INSTEON"
         case "isy":

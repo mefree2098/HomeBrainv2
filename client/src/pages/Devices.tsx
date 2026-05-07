@@ -25,9 +25,20 @@ import {
   Plus,
   Loader2,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Cable,
+  Cpu,
+  Network,
+  Radio,
+  Wifi
 } from "lucide-react"
 import { getDeviceGroups, getDevices, controlDevice, type DeviceGroupSummary } from "@/api/devices"
+import {
+  getMatterCommissioningSessions,
+  getMatterStatus,
+  startMatterCommissioning,
+  type MatterTransport
+} from "@/api/matter"
 import { DeviceDetailsDialog } from "@/components/devices/DeviceDetailsDialog"
 import { useAlexaExposureRegistry } from "@/hooks/useAlexaExposureRegistry"
 import { useToast } from "@/hooks/useToast"
@@ -277,6 +288,8 @@ const supportsLightFade = (device: any): boolean => {
   }
 
   return Boolean(device?.properties?.supportsBrightness)
+    || (Array.isArray(device?.properties?.matterFeatures)
+      && device.properties.matterFeatures.includes('brightness'))
 }
 
 const supportsLightColor = (device: any): boolean => {
@@ -289,6 +302,8 @@ const supportsLightColor = (device: any): boolean => {
   }
 
   return Boolean(device?.properties?.supportsColor)
+    || (Array.isArray(device?.properties?.matterFeatures)
+      && device.properties.matterFeatures.includes('color'))
 }
 
 const supportsEnergyMonitoring = (device: any): boolean => {
@@ -303,6 +318,8 @@ const supportsEnergyMonitoring = (device: any): boolean => {
   return Boolean(
     device?.properties?.smartThingsAttributeValues?.powerMeter?.power != null
     || device?.properties?.smartThingsAttributeValues?.energyMeter?.energy != null
+    || (Array.isArray(device?.properties?.matterFeatures)
+      && device.properties.matterFeatures.some((feature: string) => feature === 'power' || feature === 'energy'))
   )
 }
 
@@ -320,6 +337,16 @@ const getDeviceSource = (device: any): string => {
 const formatSourceLabel = (source: string): string => {
   if (!source || source === 'unknown') {
     return 'Unknown'
+  }
+
+  if (source === 'homebrain-matter' || source === 'matter') {
+    return 'HomeBrain Matter'
+  }
+  if (source === 'homebrain-zigbee' || source === 'zigbee') {
+    return 'HomeBrain Zigbee'
+  }
+  if (source === 'homebrain-zwave' || source === 'zwave') {
+    return 'HomeBrain Z-Wave'
   }
 
   return source
@@ -421,6 +448,18 @@ export function Devices({
   const [pendingControls, setPendingControls] = useState<Record<string, boolean>>({})
   const [controlFeedback, setControlFeedback] = useState<Record<string, 'success' | 'error'>>({})
   const [controlErrorMessages, setControlErrorMessages] = useState<Record<string, string>>({})
+  const [matterStatus, setMatterStatus] = useState<any | null>(null)
+  const [matterSessions, setMatterSessions] = useState<any[]>([])
+  const [matterLoading, setMatterLoading] = useState(false)
+  const [matterCommissioning, setMatterCommissioning] = useState(false)
+  const [matterSetupCode, setMatterSetupCode] = useState("")
+  const [matterTransport, setMatterTransport] = useState<MatterTransport>("thread")
+  const [matterKnownAddress, setMatterKnownAddress] = useState("")
+  const [matterRoom, setMatterRoom] = useState("Unassigned")
+  const [matterDeviceName, setMatterDeviceName] = useState("")
+  const [matterWifiSsid, setMatterWifiSsid] = useState("")
+  const [matterWifiCredentials, setMatterWifiCredentials] = useState("")
+  const [matterThreadDataset, setMatterThreadDataset] = useState("")
   const deviceCardRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const {
     favoriteDeviceIds,
@@ -433,6 +472,26 @@ export function Devices({
     getExposure,
     saveExposure
   } = useAlexaExposureRegistry(isAdmin)
+
+  const loadMatterController = useCallback(async () => {
+    if (!isAdmin) {
+      return
+    }
+
+    setMatterLoading(true)
+    try {
+      const [statusResponse, sessionsResponse] = await Promise.all([
+        getMatterStatus(),
+        getMatterCommissioningSessions()
+      ])
+      setMatterStatus(statusResponse?.status || null)
+      setMatterSessions(Array.isArray(sessionsResponse?.sessions) ? sessionsResponse.sessions : [])
+    } catch (error: any) {
+      console.warn('Failed to load Matter controller status:', error)
+    } finally {
+      setMatterLoading(false)
+    }
+  }, [isAdmin])
 
   const buildRoomsFromDevices = useCallback((deviceList: any[]) => {
     const roomMap = new Map<string, any[]>()
@@ -529,7 +588,8 @@ export function Devices({
     }
 
     fetchDevices()
-  }, [buildRoomsFromDevices, toast])
+    void loadMatterController()
+  }, [buildRoomsFromDevices, toast, loadMatterController])
 
   useDeviceRealtime(applyIncomingDevices)
 
@@ -827,6 +887,201 @@ export function Devices({
         return next
       })
     }
+  }
+
+  const handleMatterCommissioning = async () => {
+    const setupCode = matterSetupCode.trim()
+    if (!setupCode) {
+      toast({
+        title: "Matter setup code required",
+        description: "Scan or enter the Matter QR/manual setup code first.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setMatterCommissioning(true)
+    try {
+      const response = await startMatterCommissioning({
+        setupCode,
+        transport: matterTransport,
+        knownAddress: matterKnownAddress.trim() || undefined,
+        room: matterRoom.trim() || "Unassigned",
+        name: matterDeviceName.trim() || undefined,
+        wifiSsid: matterWifiSsid.trim() || undefined,
+        wifiCredentials: matterWifiCredentials.trim() || undefined,
+        threadOperationalDataset: matterThreadDataset.trim() || undefined
+      })
+      setMatterSetupCode("")
+      setMatterKnownAddress("")
+      setMatterDeviceName("")
+      setMatterWifiCredentials("")
+      setMatterThreadDataset("")
+      toast({
+        title: "Matter commissioning started",
+        description: response?.session?.manualSteps?.[0] || "Put the device in commissioning mode and keep it nearby."
+      })
+      await loadMatterController()
+      await refreshDevicesSnapshot()
+    } catch (error: any) {
+      toast({
+        title: "Matter commissioning failed",
+        description: error.message || "Unable to start Matter commissioning.",
+        variant: "destructive"
+      })
+    } finally {
+      setMatterCommissioning(false)
+    }
+  }
+
+  const renderMatterControllerPanel = () => {
+    if (!isAdmin || embedded) {
+      return null
+    }
+
+    const thread = matterStatus?.thread
+    const rcpDetected = Boolean(thread?.rcpDetected)
+    const otbrOnline = Boolean(thread?.otbr?.online)
+    const threadReady = Boolean(thread?.readyForThreadCommissioning)
+    const controllerStarted = Boolean(matterStatus?.controllerStarted)
+    const lastSession = matterSessions[0]
+
+    return (
+      <Card className="border border-border/50 bg-white/80 shadow-lg backdrop-blur-sm dark:bg-slate-900/70">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex flex-wrap items-center justify-between gap-3 text-base">
+            <span className="inline-flex items-center gap-2">
+              <Network className="h-4 w-4 text-cyan-500" />
+              Matter & Thread
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={loadMatterController}
+              disabled={matterLoading}
+              className="h-8 rounded-full px-3 text-xs"
+            >
+              {matterLoading ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <Radio className="mr-2 h-3.5 w-3.5" />}
+              Refresh
+            </Button>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-2 md:grid-cols-4">
+            <Badge variant={controllerStarted ? "default" : "secondary"} className="justify-center gap-1 rounded-full py-1.5">
+              <Cpu className="h-3.5 w-3.5" />
+              Controller {controllerStarted ? "ready" : "waiting"}
+            </Badge>
+            <Badge variant={rcpDetected ? "default" : "secondary"} className="justify-center gap-1 rounded-full py-1.5">
+              <Cable className="h-3.5 w-3.5" />
+              MG24 {rcpDetected ? "detected" : "not plugged in"}
+            </Badge>
+            <Badge variant={otbrOnline ? "default" : "secondary"} className="justify-center gap-1 rounded-full py-1.5">
+              <Wifi className="h-3.5 w-3.5" />
+              OTBR {otbrOnline ? "online" : "offline"}
+            </Badge>
+            <Badge variant={threadReady ? "default" : "secondary"} className="justify-center gap-1 rounded-full py-1.5">
+              <Radio className="h-3.5 w-3.5" />
+              Thread {threadReady ? "ready" : "needs setup"}
+            </Badge>
+          </div>
+
+          {matterStatus?.startError ? (
+            <div className="rounded-[1rem] border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-200">
+              {matterStatus.startError}
+            </div>
+          ) : null}
+
+          <div className="grid gap-3 lg:grid-cols-[1.2fr_0.8fr]">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Input
+                value={matterSetupCode}
+                onChange={(event) => setMatterSetupCode(event.target.value)}
+                placeholder="Matter QR or manual code"
+                className="sm:col-span-2"
+              />
+              <Select value={matterTransport} onValueChange={(value) => setMatterTransport(value as MatterTransport)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Transport" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="thread">Thread</SelectItem>
+                  <SelectItem value="ip">IP / Auto</SelectItem>
+                  <SelectItem value="wifi">Wi-Fi via BLE</SelectItem>
+                  <SelectItem value="ethernet">Ethernet</SelectItem>
+                  <SelectItem value="ble">BLE only</SelectItem>
+                </SelectContent>
+              </Select>
+              <Input
+                value={matterKnownAddress}
+                onChange={(event) => setMatterKnownAddress(event.target.value)}
+                placeholder="Known IP (optional)"
+              />
+              <Input
+                value={matterRoom}
+                onChange={(event) => setMatterRoom(event.target.value)}
+                placeholder="Room"
+              />
+              <Input
+                value={matterDeviceName}
+                onChange={(event) => setMatterDeviceName(event.target.value)}
+                placeholder="Device name (optional)"
+              />
+              {matterTransport === "wifi" ? (
+                <>
+                  <Input
+                    value={matterWifiSsid}
+                    onChange={(event) => setMatterWifiSsid(event.target.value)}
+                    placeholder="Wi-Fi SSID"
+                  />
+                  <Input
+                    value={matterWifiCredentials}
+                    onChange={(event) => setMatterWifiCredentials(event.target.value)}
+                    placeholder="Wi-Fi password"
+                    type="password"
+                  />
+                </>
+              ) : null}
+              {matterTransport === "thread" ? (
+                <Input
+                  value={matterThreadDataset}
+                  onChange={(event) => setMatterThreadDataset(event.target.value)}
+                  placeholder="Thread dataset override (optional)"
+                  className="sm:col-span-2"
+                />
+              ) : null}
+              <Button
+                type="button"
+                onClick={handleMatterCommissioning}
+                disabled={matterCommissioning}
+                className="sm:col-span-2"
+              >
+                {matterCommissioning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Network className="mr-2 h-4 w-4" />}
+                Add Matter Device
+              </Button>
+            </div>
+
+            <div className="rounded-[1rem] border border-white/10 bg-white/10 p-3 text-xs text-muted-foreground dark:bg-slate-950/20">
+              {lastSession ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-semibold text-foreground">Latest session</span>
+                    <Badge variant={lastSession.status === "completed" ? "default" : "secondary"}>{lastSession.status}</Badge>
+                  </div>
+                  {lastSession.error ? <p className="text-red-500">{lastSession.error}</p> : null}
+                  {Array.isArray(lastSession.manualSteps) && lastSession.manualSteps.length > 0 ? (
+                    <p>{lastSession.manualSteps.slice(0, 2).join(" ")}</p>
+                  ) : null}
+                </div>
+              ) : (
+                <p>No Matter commissioning sessions yet. Add a device with a setup code when it is in pairing mode.</p>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    )
   }
 
   const getDeviceIcon = (device: any) => {
@@ -1520,6 +1775,8 @@ export function Devices({
           </div>
         </CardContent>
       </Card>
+
+      {renderMatterControllerPanel()}
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50">

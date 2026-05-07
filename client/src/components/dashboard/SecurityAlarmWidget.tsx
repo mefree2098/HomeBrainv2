@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   AlertTriangle,
   Battery,
@@ -129,6 +129,15 @@ const speakSecurityPrompt = (message: string, audioUrl?: string | null) => {
   if (typeof window !== "undefined" && "speechSynthesis" in window) {
     window.speechSynthesis.speak(new SpeechSynthesisUtterance(message))
   }
+}
+
+const playSecurityEffect = (audioUrl?: string | null) => {
+  if (!audioUrl || typeof Audio === "undefined") {
+    return
+  }
+
+  const audio = new Audio(audioUrl)
+  audio.play().catch(() => {})
 }
 
 const normalizeSensorSelection = (sensorKeys: string[] | null | undefined) => {
@@ -344,6 +353,9 @@ export function SecurityAlarmWidget({
   const [dismissReason, setDismissReason] = useState<"false_alarm" | "test" | "manual" | "custom">("false_alarm")
   const [customDismissReason, setCustomDismissReason] = useState("")
   const [platformUpdating, setPlatformUpdating] = useState<"homebrain" | "smartthings" | null>(null)
+  const lastCountdownEffectSecondRef = useRef<number | null>(null)
+  const playedFinalBeepsRef = useRef(false)
+  const lastAlarmStateEffectRef = useRef<string | null>(null)
 
   const fetchAlarmStatus = async () => {
     try {
@@ -381,12 +393,45 @@ export function SecurityAlarmWidget({
 
   useEffect(() => {
     if (!alarmStatus?.isArming) {
+      lastCountdownEffectSecondRef.current = null
+      playedFinalBeepsRef.current = false
       return
     }
 
     const interval = setInterval(fetchAlarmStatus, 1000)
     return () => clearInterval(interval)
   }, [alarmStatus?.isArming])
+
+  useEffect(() => {
+    if (!alarmStatus?.isArming) {
+      return
+    }
+
+    const seconds = Math.max(0, alarmStatus.secondsUntilArmed || 0)
+    if (seconds <= 0 || seconds > 10 || lastCountdownEffectSecondRef.current === seconds) {
+      return
+    }
+
+    lastCountdownEffectSecondRef.current = seconds
+    if (seconds <= 3 && !playedFinalBeepsRef.current) {
+      playedFinalBeepsRef.current = true
+      playSecurityEffect(alarmStatus.audioPrompts?.armingFinalBeeps)
+      return
+    }
+
+    playSecurityEffect(alarmStatus.audioPrompts?.armingCountdownBeep)
+  }, [alarmStatus?.isArming, alarmStatus?.secondsUntilArmed, alarmStatus?.audioPrompts])
+
+  useEffect(() => {
+    if (!alarmStatus?.alarmState || lastAlarmStateEffectRef.current === alarmStatus.alarmState) {
+      return
+    }
+
+    lastAlarmStateEffectRef.current = alarmStatus.alarmState
+    if (alarmStatus.alarmState === "triggered") {
+      playSecurityEffect(alarmStatus.audioPrompts?.securityAlertPulse || alarmStatus.audioPrompts?.alarmTriggered)
+    }
+  }, [alarmStatus?.alarmState, alarmStatus?.audioPrompts])
 
   useEffect(() => {
     let cancelled = false
@@ -454,6 +499,7 @@ export function SecurityAlarmWidget({
           "The security system is now armed for stay. Have a good night.",
           alarmStatus?.audioPrompts?.armedStay
         )
+        playSecurityEffect(alarmStatus?.audioPrompts?.securityConfirmationChime)
         toast({
           title: "Armed Stay",
           description: "Security system armed in stay mode"
@@ -516,6 +562,7 @@ export function SecurityAlarmWidget({
           "The security system is now disarmed. Have a great day.",
           alarmStatus?.audioPrompts?.disarmed
         )
+        playSecurityEffect(alarmStatus?.audioPrompts?.securityConfirmationChime)
         toast({
           title: "Disarmed",
           description: "Security system disarmed"
@@ -584,6 +631,7 @@ export function SecurityAlarmWidget({
             : "Alarm dismissed. The siren has been silenced.",
           dismissReason === "false_alarm" ? alarmStatus?.audioPrompts?.alarmDismissedFalseAlarm : undefined
         )
+        playSecurityEffect(alarmStatus?.audioPrompts?.securityConfirmationChime)
         toast({
           title: "Alarm Dismissed",
           description: "Triggered alarm has been dismissed"
