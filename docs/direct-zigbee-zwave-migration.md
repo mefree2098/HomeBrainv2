@@ -88,6 +88,9 @@ The native catalog maps these categories to direct Zigbee/Z-Wave feature support
 - [x] iOS migration cards show the same migration plan details as web: recommended radio, native support count, warnings, and manual reset/inclusion steps.
 - [x] iOS device/workflow/dashboard source filters include Zigbee, Z-Wave, Thread, and Matter even before devices exist.
 - [x] Pairing workflow guides user through exclusion/reset/pairing steps when automation cannot do it.
+- [x] Migration plans now expose a step-by-step guided workflow: HomeBrain opens Z-Wave exclusion, waits for the device-specific physical exclusion action, opens HomeBrain inclusion, then waits for the device-specific inclusion/pairing action.
+- [x] Device-specific instruction profiles are included for Z-Wave locks (Schlage, Kwikset/Weiser, Yale, generic secure locks), Z-Wave sirens, garage controllers, Z-Wave switches/dimmers/outlets/meters, SmartThings/Aeotec Zigbee contact and multipurpose sensors, Zigbee motion sensors, buttons/fobs, plugs/repeaters, and lights.
+- [x] Web and iOS migration UX no longer tells the user to search manufacturer instructions; it displays the matched instruction profile, concrete physical action, and a touch/click confirmation to advance to the next automated step.
 - [x] Existing HomeBrain device keeps name, room, groups, favorites/Alexa exposure where possible.
 - [x] SmartThings integration remains installed; migrated device source becomes `homebrain-zigbee` or `homebrain-zwave`.
 - [x] Post-migration validation compares core state and battery/support data.

@@ -31,6 +31,15 @@ test('direct radio catalog maps Z-Wave lock migration with battery support', () 
   assert.equal(plan.supported, true);
   assert.ok(plan.warnings.some((warning) => warning.includes('Door locks')));
   assert.ok(plan.featureSupport.some((feature) => feature.key === 'battery' && feature.supported));
+  assert.equal(plan.instructionProfile.key, 'zwave-lock-schlage-connect');
+  assert.deepEqual(plan.guidedSteps.map((step) => step.action).slice(0, 4), [
+    'start_zwave_exclusion',
+    'user_confirm',
+    'start_direct_migration',
+    'user_confirm'
+  ]);
+  assert.ok(plan.guidedSteps.some((step) => step.instructions.some((instruction) => instruction.includes('programming code'))));
+  assert.ok(!plan.manualSteps.join(' ').includes('manufacturer instructions'));
 });
 
 test('direct radio catalog maps SmartThings multipurpose sensors toward Zigbee', () => {
@@ -50,7 +59,9 @@ test('direct radio catalog maps SmartThings multipurpose sensors toward Zigbee',
   assert.equal(plan.recommendedProtocol, 'zigbee');
   assert.equal(plan.targetSource, 'homebrain-zigbee');
   assert.deepEqual(plan.features, ['acceleration', 'axis', 'battery', 'contact', 'temperature']);
-  assert.ok(plan.manualSteps.some((step) => step.includes('factory reset') || step.includes('pairing mode')));
+  assert.ok(plan.guidedSteps.some((step) => step.action === 'start_direct_migration'));
+  assert.ok(plan.guidedSteps.some((step) => step.instructions.some((instruction) => instruction.includes('Connect button'))));
+  assert.ok(plan.manualSteps.some((step) => step.includes('Zigbee pairing') || step.includes('Connect button')));
 });
 
 test('direct radio catalog leaves cloud and virtual SmartThings helpers out of native migration', () => {

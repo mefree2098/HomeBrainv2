@@ -23,6 +23,7 @@ import {
   getDirectRadioMigrationPlan,
   startDirectRadioMigration,
   startZWaveExclusion,
+  type DirectRadioMigrationGuidedStep,
   type DirectRadioMigrationPlan
 } from "@/api/directRadios"
 import {
@@ -101,6 +102,14 @@ type LiveEnergySnapshot = {
   energyTimestamp: Date | null
 }
 
+type MigrationFlowState = {
+  protocol: "zigbee" | "zwave"
+  plan: DirectRadioMigrationPlan
+  stepIndex: number
+  statusMessage: string
+  complete?: boolean
+}
+
 const HISTORY_HOURS = 24
 const HISTORY_LIMIT = 720
 const TELEMETRY_RANGE_OPTIONS = [
@@ -120,6 +129,22 @@ const HARMONY_PRIMARY_COMMANDS = [
   { key: "home", label: "Home" },
   { key: "menu", label: "Menu" }
 ] as const
+
+function getGuidedMigrationSteps(plan: DirectRadioMigrationPlan | null | undefined): DirectRadioMigrationGuidedStep[] {
+  return Array.isArray(plan?.guidedSteps) ? plan.guidedSteps.filter((step) => step && step.id) : []
+}
+
+function getMigrationActionMessage(step: DirectRadioMigrationGuidedStep, protocol: "zigbee" | "zwave") {
+  if (step.action === "start_zwave_exclusion") {
+    return "HomeBrain opened Z-Wave exclusion. Complete the device action below, then continue."
+  }
+  if (step.action === "start_direct_migration") {
+    return protocol === "zigbee"
+      ? "HomeBrain opened Zigbee pairing. Complete the device action below, then continue."
+      : "HomeBrain opened Z-Wave inclusion. Complete the device action below, then continue."
+  }
+  return "Complete the current device step, then continue."
+}
 
 function formatBinaryMetricValue(key: string, value: number | null | undefined) {
   if (value == null) {
@@ -750,6 +775,7 @@ export function DeviceDetailsDialog({
   const [migrationLoading, setMigrationLoading] = useState(false)
   const [migrationStarting, setMigrationStarting] = useState<"zigbee" | "zwave" | null>(null)
   const [migrationError, setMigrationError] = useState<string | null>(null)
+  const [migrationFlow, setMigrationFlow] = useState<MigrationFlowState | null>(null)
   const [activeTab, setActiveTab] = useState<"overview" | "controls" | "alexa" | "history">("overview")
   const { toast } = useToast()
   const { isAdmin } = useAuth()
@@ -847,10 +873,12 @@ export function DeviceDetailsDialog({
       setMigrationPlan(null)
       setMigrationError(null)
       setMigrationLoading(false)
+      setMigrationFlow(null)
       return
     }
 
     let cancelled = false
+    setMigrationFlow(null)
     const loadMigrationPlan = async () => {
       setMigrationLoading(true)
       setMigrationError(null)
@@ -1314,6 +1342,50 @@ export function DeviceDetailsDialog({
     }
   }
 
+  const executeGuidedMigrationStep = async (
+    step: DirectRadioMigrationGuidedStep,
+    protocol: "zigbee" | "zwave"
+  ) => {
+    if (!device?._id) {
+      return
+    }
+
+    if (step.action === "start_zwave_exclusion") {
+      await startZWaveExclusion(step.durationSeconds || 120)
+      return
+    }
+
+    if (step.action === "start_direct_migration") {
+      const response = await startDirectRadioMigration({
+        deviceId: device._id,
+        protocol,
+        durationSeconds: step.durationSeconds || (protocol === "zwave" ? 240 : 180)
+      })
+      if (response.plan) {
+        setMigrationPlan(response.plan)
+      }
+    }
+  }
+
+  const advancePastAutomatedMigrationSteps = async (
+    plan: DirectRadioMigrationPlan,
+    protocol: "zigbee" | "zwave",
+    startIndex: number
+  ) => {
+    const steps = getGuidedMigrationSteps(plan)
+    let stepIndex = startIndex
+    let statusMessage = ""
+
+    while (stepIndex < steps.length && steps[stepIndex]?.automatic) {
+      const step = steps[stepIndex]
+      await executeGuidedMigrationStep(step, protocol)
+      statusMessage = getMigrationActionMessage(step, protocol)
+      stepIndex += 1
+    }
+
+    return { stepIndex, statusMessage }
+  }
+
   const handleStartDirectMigration = async (protocol: "zigbee" | "zwave") => {
     if (!device?._id) {
       return
@@ -1321,20 +1393,24 @@ export function DeviceDetailsDialog({
 
     setMigrationStarting(protocol)
     try {
-      if (protocol === "zwave") {
-        await startZWaveExclusion(120).catch(() => null)
+      const planResponse = await getDirectRadioMigrationPlan(device._id, protocol)
+      const selectedPlan = planResponse.plan
+      const steps = getGuidedMigrationSteps(selectedPlan)
+      if (steps.length === 0) {
+        throw new Error("HomeBrain could not build a guided migration workflow for this device.")
       }
-      const response = await startDirectRadioMigration({
-        deviceId: device._id,
+      setMigrationPlan(selectedPlan)
+      const result = await advancePastAutomatedMigrationSteps(selectedPlan, protocol, 0)
+      const stepIndex = Math.min(result.stepIndex, steps.length - 1)
+      setMigrationFlow({
         protocol,
-        durationSeconds: 180
+        plan: selectedPlan,
+        stepIndex,
+        statusMessage: result.statusMessage || "Guided migration started."
       })
-      setMigrationPlan(response.plan || migrationPlan)
       toast({
-        title: "Migration started",
-        description: protocol === "zigbee"
-          ? "Zigbee permit-join is open. Put the device into pairing mode now."
-          : "Z-Wave inclusion is open. Exclude/reset the device, then trigger inclusion."
+        title: "Guided migration started",
+        description: steps[stepIndex]?.title || "Follow the HomeBrain migration workflow."
       })
     } catch (startError) {
       const message = startError instanceof Error
@@ -1342,6 +1418,62 @@ export function DeviceDetailsDialog({
         : "Failed to start HomeBrain migration."
       toast({
         title: "Migration unavailable",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setMigrationStarting(null)
+    }
+  }
+
+  const handleAdvanceMigrationFlow = async () => {
+    if (!migrationFlow || !device?._id) {
+      return
+    }
+
+    const steps = getGuidedMigrationSteps(migrationFlow.plan)
+    const currentStep = steps[migrationFlow.stepIndex]
+    setMigrationStarting(migrationFlow.protocol)
+    try {
+      const nextStartIndex = migrationFlow.stepIndex + 1
+      if (nextStartIndex >= steps.length) {
+        setMigrationFlow({
+          ...migrationFlow,
+          complete: true,
+          statusMessage: "Guided workflow complete. Verify the direct HomeBrain device before retiring the SmartThings entry."
+        })
+        toast({
+          title: "Migration workflow complete",
+          description: "Now verify HomeBrain state, battery, and controls before retiring the old SmartThings entry."
+        })
+        return
+      }
+
+      const result = await advancePastAutomatedMigrationSteps(
+        migrationFlow.plan,
+        migrationFlow.protocol,
+        nextStartIndex
+      )
+      if (result.stepIndex >= steps.length) {
+        setMigrationFlow({
+          ...migrationFlow,
+          stepIndex: steps.length - 1,
+          complete: true,
+          statusMessage: "Guided workflow complete. Verify the direct HomeBrain device before retiring the SmartThings entry."
+        })
+      } else {
+        setMigrationFlow({
+          ...migrationFlow,
+          stepIndex: result.stepIndex,
+          statusMessage: result.statusMessage || `Completed ${currentStep?.title || "the previous step"}.`
+        })
+      }
+    } catch (advanceError) {
+      const message = advanceError instanceof Error
+        ? advanceError.message
+        : "Failed to advance the migration workflow."
+      toast({
+        title: "Migration step failed",
         description: message,
         variant: "destructive"
       })
@@ -1965,41 +2097,96 @@ export function DeviceDetailsDialog({
                                 </div>
                               ) : null}
 
-                              <div className="space-y-2">
-                                <p className="section-kicker text-white/45">Manual steps</p>
-                                <div className="space-y-2 text-sm leading-relaxed text-muted-foreground">
-                                  {migrationPlan.manualSteps.slice(0, 4).map((step, index) => (
-                                    <p key={`${step}-${index}`}>{index + 1}. {step}</p>
-                                  ))}
+                              {migrationPlan.instructionProfile ? (
+                                <div className="rounded-[1.15rem] border border-cyan-300/15 bg-cyan-300/[0.07] p-4">
+                                  <p className="section-kicker text-cyan-100/55">Instruction profile</p>
+                                  <p className="mt-2 text-sm font-semibold text-cyan-50">{migrationPlan.instructionProfile.label}</p>
+                                  <p className="mt-1 text-xs leading-relaxed text-cyan-50/66">
+                                    Confidence: {migrationPlan.instructionProfile.confidence}
+                                  </p>
                                 </div>
-                              </div>
+                              ) : null}
 
-                              <div className="grid gap-2 sm:grid-cols-2">
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  className="border-white/10 bg-white/[0.04] text-white/90 hover:bg-white/[0.08]"
-                                  onClick={() => handleStartDirectMigration("zigbee")}
-                                  disabled={!migrationPlan.supported || migrationStarting !== null}
-                                >
-                                  {migrationStarting === "zigbee" ? (
-                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                  ) : null}
-                                  Zigbee
-                                </Button>
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  className="border-white/10 bg-white/[0.04] text-white/90 hover:bg-white/[0.08]"
-                                  onClick={() => handleStartDirectMigration("zwave")}
-                                  disabled={!migrationPlan.supported || migrationStarting !== null}
-                                >
-                                  {migrationStarting === "zwave" ? (
-                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                  ) : null}
-                                  Z-Wave
-                                </Button>
-                              </div>
+                              {migrationFlow ? (
+                                <div className="space-y-3 rounded-[1.15rem] border border-sky-300/20 bg-sky-300/[0.08] p-4">
+                                  {(() => {
+                                    const steps = getGuidedMigrationSteps(migrationFlow.plan)
+                                    const currentStep = steps[migrationFlow.stepIndex]
+                                    return currentStep ? (
+                                      <>
+                                        <div className="flex items-start justify-between gap-3">
+                                          <div>
+                                            <p className="section-kicker text-sky-100/55">
+                                              Step {Math.min(migrationFlow.stepIndex + 1, steps.length)}/{steps.length}
+                                            </p>
+                                            <p className="mt-2 text-base font-semibold text-white">{currentStep.title}</p>
+                                          </div>
+                                          <Badge variant="outline" className="border-sky-200/25 bg-sky-200/10 text-sky-50">
+                                            {migrationFlow.protocol === "zigbee" ? "Zigbee" : "Z-Wave"}
+                                          </Badge>
+                                        </div>
+                                        <p className="text-sm leading-relaxed text-sky-50/76">{migrationFlow.statusMessage}</p>
+                                        <div className="space-y-2 text-sm leading-relaxed text-muted-foreground">
+                                          {currentStep.instructions.map((instruction, index) => (
+                                            <p key={`${currentStep.id}-${index}`}>{index + 1}. {instruction}</p>
+                                          ))}
+                                        </div>
+                                        <Button
+                                          type="button"
+                                          className="w-full bg-sky-400 text-slate-950 hover:bg-sky-300"
+                                          onClick={handleAdvanceMigrationFlow}
+                                          disabled={migrationStarting !== null || migrationFlow.complete}
+                                        >
+                                          {migrationStarting === migrationFlow.protocol ? (
+                                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                          ) : null}
+                                          {migrationFlow.complete ? "Workflow complete" : currentStep.confirmLabel}
+                                        </Button>
+                                      </>
+                                    ) : null
+                                  })()}
+                                </div>
+                              ) : (
+                                <>
+                                  <div className="space-y-2">
+                                    <p className="section-kicker text-white/45">Guided workflow</p>
+                                    <div className="space-y-2 text-sm leading-relaxed text-muted-foreground">
+                                      {getGuidedMigrationSteps(migrationPlan).slice(0, 5).map((step, index) => (
+                                        <p key={`${step.id}-${index}`}>
+                                          {index + 1}. {step.automatic ? "HomeBrain: " : ""}{step.title}
+                                        </p>
+                                      ))}
+                                    </div>
+                                  </div>
+
+                                  <div className="grid gap-2 sm:grid-cols-2">
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      className="border-white/10 bg-white/[0.04] text-white/90 hover:bg-white/[0.08]"
+                                      onClick={() => handleStartDirectMigration("zigbee")}
+                                      disabled={!migrationPlan.supported || migrationStarting !== null}
+                                    >
+                                      {migrationStarting === "zigbee" ? (
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                      ) : null}
+                                      Start guided Zigbee
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      className="border-white/10 bg-white/[0.04] text-white/90 hover:bg-white/[0.08]"
+                                      onClick={() => handleStartDirectMigration("zwave")}
+                                      disabled={!migrationPlan.supported || migrationStarting !== null}
+                                    >
+                                      {migrationStarting === "zwave" ? (
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                      ) : null}
+                                      Start guided Z-Wave
+                                    </Button>
+                                  </div>
+                                </>
+                              )}
                             </>
                           ) : null}
                         </CardContent>
