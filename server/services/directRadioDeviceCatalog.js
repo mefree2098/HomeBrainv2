@@ -192,6 +192,7 @@ function getDeviceDescriptor(device) {
     device?.properties?.source,
     device?.properties?.smartThingsDeviceTypeName,
     device?.properties?.smartThingsPresentationId,
+    device?.properties?.smartThingsManufacturer,
     device?.properties?.smartThingsManufacturerName,
     device?.properties?.smartThingsDeviceNetworkType,
     ...getSmartThingsCategories(device),
@@ -358,36 +359,392 @@ function buildFeatureSupport(features, protocol = 'unknown') {
     }));
 }
 
-function getManualResetGuidance(protocol, device) {
+function buildGuidedStep({
+  id,
+  title,
+  phase,
+  protocol,
+  action = 'user_confirm',
+  automatic = false,
+  durationSeconds = null,
+  instructions = [],
+  confirmLabel = 'Done'
+}) {
+  return {
+    id,
+    title,
+    phase,
+    protocol,
+    action,
+    automatic,
+    durationSeconds,
+    instructions: uniqueStrings(instructions.map(normalizeString)),
+    confirmLabel
+  };
+}
+
+function instructionProfile(key, label, confidence, options = {}) {
+  return {
+    key,
+    label,
+    confidence,
+    reference: options.reference || null
+  };
+}
+
+function getZWavePhysicalInstructions(device, features = new Set()) {
+  const descriptor = getDeviceDescriptor(device);
+  const name = normalizeString(device?.name) || 'the device';
+
+  if (features.has('lock') || /\b(?:deadbolt|lock)\b/.test(descriptor)) {
+    if (/\bschlage\b/.test(descriptor)) {
+      return {
+        profile: instructionProfile('zwave-lock-schlage-connect', 'Schlage Connect Z-Wave lock', 'high', {
+          reference: 'Schlage Connect uses Schlage logo, 6-digit programming code, then 0; BE469ZP can use the red enroll/unenroll button.'
+        }),
+        exclusion: [
+          `Keep ${name} awake and within strong Z-Wave range of the Zooz stick; fresh batteries matter for secure lock pairing.`,
+          'At the outside keypad, press the Schlage logo, enter the 6-digit programming code from the inside label, then press 0.',
+          'For BE469ZP/Z-Wave Plus models with an interior red enroll/unenroll button, press and release that red button instead if the keypad sequence is not accepted.',
+          'Wait for the green check or success tone before continuing.'
+        ],
+        inclusion: [
+          `Keep ${name} close to the Zooz stick until S2/S0 security and interview complete.`,
+          'At the outside keypad, press the Schlage logo, enter the 6-digit programming code, then press 0.',
+          'For BE469ZP/Z-Wave Plus models, press and release the interior red enroll/unenroll button if that is the model installed.',
+          'If HomeBrain asks for the DSK PIN, enter the first 5 digits from the lock or module label.'
+        ]
+      };
+    }
+
+    if (/\b(?:kwikset|weiser|smartcode)\b/.test(descriptor)) {
+      return {
+        profile: instructionProfile('zwave-lock-kwikset-smartcode', 'Kwikset/Weiser SmartCode Z-Wave lock', 'high', {
+          reference: 'Kwikset SmartCode Z-Wave locks use the interior A/Program button during controller inclusion and exclusion.'
+        }),
+        exclusion: [
+          `Remove the interior cover on ${name} and keep the door open with the lock powered.`,
+          'After HomeBrain opens exclusion, press and release interior button A once. On older SmartCode models this may be labeled Program.',
+          'Wait for the lock status LED or keypad to report success before moving to inclusion.'
+        ],
+        inclusion: [
+          `Keep ${name} near the Zooz stick until secure inclusion finishes.`,
+          'Press and release interior button A once. On older SmartCode models, press Program once.',
+          'Leave the battery cover off until HomeBrain finishes the secure interview and battery/lock state are visible.'
+        ]
+      };
+    }
+
+    if (/\byale\b|\bassure\b/.test(descriptor)) {
+      return {
+        profile: instructionProfile('zwave-lock-yale-assure', 'Yale Assure Z-Wave lock', 'medium', {
+          reference: 'Yale Assure Z-Wave modules use the lock Network Module menu; remove and add use different menu choices.'
+        }),
+        exclusion: [
+          `Wake ${name}'s keypad and keep the door open while the Zooz stick is excluding.`,
+          'Enter the master PIN, press the gear key, press 7, press the gear key, press 3, then press the gear key to remove the Z-Wave module from its old network.',
+          'Wait for the lock confirmation tone before continuing.'
+        ],
+        inclusion: [
+          `Keep ${name} close to the Zooz stick until HomeBrain finishes secure interview.`,
+          'Enter the master PIN, press the gear key, press 7, press the gear key, press 1, then press the gear key to include the Z-Wave module.',
+          'If HomeBrain requests the DSK PIN, use the first 5 digits printed on the Z-Wave module label.'
+        ]
+      };
+    }
+
+    return {
+      profile: instructionProfile('zwave-lock-general', 'Z-Wave door lock', 'medium', {
+        reference: 'SmartThings identified this as a lock but did not expose a precise lock manufacturer/model.'
+      }),
+      exclusion: [
+        `Keep ${name} close to the Zooz stick with fresh batteries and the door open.`,
+        'Use the matching lock action: Schlage Connect uses Schlage logo + 6-digit programming code + 0; Kwikset/Weiser SmartCode uses interior A/Program once; Yale Assure uses master PIN + gear + 7 + gear + 3 + gear.',
+        'Wait for a green check, success beep, or HomeBrain exclusion event before continuing.'
+      ],
+      inclusion: [
+        `Keep ${name} close to the Zooz stick until secure inclusion and interview complete.`,
+        'Use the matching lock action: Schlage Connect uses Schlage logo + programming code + 0; Kwikset/Weiser SmartCode uses interior A/Program once; Yale Assure uses master PIN + gear + 7 + gear + 1 + gear.',
+        'If HomeBrain requests the DSK PIN, enter the first 5 digits from the lock or Z-Wave module label.'
+      ]
+    };
+  }
+
+  if (features.has('alarm') || /\b(?:aeotec|siren|alarm)\b/.test(descriptor)) {
+    return {
+      profile: instructionProfile('zwave-siren', 'Z-Wave siren/alarm', 'medium', {
+        reference: 'Aeotec Siren models use the Action button for Z-Wave inclusion and exclusion; newer Siren 8 uses a double-click.'
+      }),
+      exclusion: [
+        `Keep ${name} powered on and close enough that HomeBrain can hear the exclusion event.`,
+        'Press the siren Action/Z-Wave button. For Aeotec Siren 8, double-click the Action button. For older Aeotec Gen5/6 sirens, press the Action button once unless the model label says otherwise.',
+        'The LED should flash rapidly or show the model-specific success pattern.'
+      ],
+      inclusion: [
+        `Keep ${name} plugged in until HomeBrain completes interview.`,
+        'Press the siren Action/Z-Wave button. For Aeotec Siren 8, double-click the Action button.',
+        'After pairing, verify alarm, chime, tamper, and switch-off commands before using it in Security Center.'
+      ]
+    };
+  }
+
+  if (/\b(?:garage door opener|linear|gd00z|fortrezz)\b/.test(descriptor)) {
+    return {
+      profile: instructionProfile('zwave-garage-controller', 'Z-Wave garage controller', 'medium'),
+      exclusion: [
+        `Stand near ${name} and locate the Z-Wave/link button on the controller module.`,
+        'After HomeBrain opens exclusion, press and release the Z-Wave/link button once. Many Linear/GoControl garage modules beep once when the command is accepted.'
+      ],
+      inclusion: [
+        `Keep ${name}'s controller module powered and near the Zooz stick if possible.`,
+        'Press and release the Z-Wave/link button once, then wait for HomeBrain to finish interview and expose door/barrier state.'
+      ]
+    };
+  }
+
+  if (features.has('switch') || features.has('brightness') || features.has('power') || features.has('energy')) {
+    return {
+      profile: instructionProfile('zwave-switch-dimmer-outlet', 'Z-Wave switch, dimmer, outlet, or meter', 'medium'),
+      exclusion: [
+        `Go to ${name} and identify the local paddle, switch, service button, or Z-Wave button.`,
+        'After HomeBrain opens exclusion, tap the local on/up paddle once. If it does not exclude, toggle on/up and off/down quickly 3 times; many Zooz/GE/Jasco style devices use that sequence.',
+        'For plug-in modules, press the physical button once or three times quickly if one tap does not work.'
+      ],
+      inclusion: [
+        `Keep ${name} powered while HomeBrain inclusion is open.`,
+        'Tap the local on/up paddle once, or press the plug/module button once. If no node appears, use the quick 3-toggle sequence.',
+        'For metering devices, leave the device powered for the full interview so power and energy command classes are discovered.'
+      ]
+    };
+  }
+
+  return {
+    profile: instructionProfile('zwave-generic', 'Generic Z-Wave device', 'low'),
+    exclusion: [
+      `Put ${name} near the Zooz stick if it is portable or battery powered.`,
+      'After HomeBrain opens exclusion, press the device Z-Wave, learn, program, link, or action button once. If the device is a wall control, try the on/up paddle once, then the quick 3-toggle sequence if needed.'
+    ],
+    inclusion: [
+      `Keep ${name} powered and awake while HomeBrain inclusion is open.`,
+      'Press the device Z-Wave, learn, program, link, or action button once. Wake battery devices again if HomeBrain shows interview data is still incomplete.'
+    ]
+  };
+}
+
+function getZigbeePhysicalInstructions(device, features = new Set()) {
+  const descriptor = getDeviceDescriptor(device);
+  const name = normalizeString(device?.name) || 'the device';
+
+  if (/\b(?:multipurpose|multifunctional|smartthings.*contact|contactsensor|bf69d6e0|7c42baaf)\b/.test(descriptor) || features.has('contact')) {
+    return {
+      profile: instructionProfile('zigbee-smartthings-contact-multipurpose', 'SmartThings/Aeotec contact or multipurpose sensor', 'high', {
+        reference: 'SmartThings multipurpose/contact sensors reset from the interior Connect button until the LED begins its pairing blink.'
+      }),
+      pairing: [
+        `Open ${name}'s cover so you can reach the small Connect/reset button.`,
+        'After HomeBrain opens Zigbee permit-join, hold the Connect button for about 5 seconds.',
+        'Release when the LED starts blinking red. A blue double-blink or repeated blink pattern means the sensor is trying to join.',
+        'Tap the button once more if HomeBrain discovers it but the battery, temperature, acceleration, or axis interview stalls.'
+      ]
+    };
+  }
+
+  if (features.has('motion') || /\b(?:motion|bedc1499|635a866e)\b/.test(descriptor)) {
+    return {
+      profile: instructionProfile('zigbee-motion-sensor', 'Zigbee motion sensor', 'medium'),
+      pairing: [
+        `Open ${name}'s battery cover and keep it near the SONOFF coordinator.`,
+        'Hold the reset/connect button for 5 to 10 seconds until the LED begins blinking.',
+        'Release the button and keep the sensor awake. If HomeBrain finds it but battery or temperature is missing, press the button once to wake it again.'
+      ]
+    };
+  }
+
+  if (features.has('button') || /\b(?:button|fob|remotecontroller|key fob)\b/.test(descriptor)) {
+    return {
+      profile: instructionProfile('zigbee-button-fob', 'Zigbee button or key fob', 'medium'),
+      pairing: [
+        `Bring ${name} close to the SONOFF coordinator.`,
+        'Hold the main button or recessed reset button until the LED starts blinking.',
+        'Press each button once after discovery so HomeBrain can map button events before you finish migration.'
+      ]
+    };
+  }
+
+  if (features.has('switch') || features.has('power') || /\b(?:plug|outlet|repeater)\b/.test(descriptor)) {
+    return {
+      profile: instructionProfile('zigbee-plug-outlet-repeater', 'Zigbee plug, outlet, or repeater', 'medium'),
+      pairing: [
+        `Plug in ${name} near the SONOFF coordinator for initial pairing.`,
+        'Hold the power/pair button for 5 to 10 seconds until the LED blinks rapidly.',
+        'Leave it powered until HomeBrain confirms switch, power, and route/repeater metadata.'
+      ]
+    };
+  }
+
+  if (features.has('color') || features.has('colorTemperature') || features.has('brightness') || /\b(?:bulb|light|led|strip|spotlight)\b/.test(descriptor)) {
+    return {
+      profile: instructionProfile('zigbee-light-bulb-strip', 'Zigbee light, bulb, strip, or dimmer', 'medium'),
+      pairing: [
+        `Power ${name} from a nearby switch or outlet while HomeBrain permit-join is open.`,
+        'If it is already paired, reset it with the brand-specific power-cycle sequence, commonly on/off 5 or 6 times until the light blinks.',
+        'Leave it on after the blink so HomeBrain can interview on/off, level, color temperature, and color clusters.'
+      ]
+    };
+  }
+
+  return {
+    profile: instructionProfile('zigbee-generic', 'Generic Zigbee device', 'low'),
+    pairing: [
+      `Bring ${name} close to the SONOFF coordinator if it is battery powered.`,
+      'Hold the reset, connect, or pair button until the LED blinks. For many SmartThings-family sensors this is about 5 seconds.',
+      'Wake battery devices again during interview if HomeBrain has not yet captured battery or sensor attributes.'
+    ]
+  };
+}
+
+function buildGuidedMigrationSteps(protocol, device) {
   const name = normalizeString(device?.name) || 'the device';
   const features = new Set(inferFeaturesFromSmartThings(device));
 
   if (protocol === 'zwave') {
-    const lockNote = features.has('lock')
-      ? 'For a door lock, keep it close to the Zooz stick during inclusion, start inclusion from HomeBrain, then enter the lock pairing/exclusion sequence at the keypad or interior button so S2 security can complete.'
-      : 'For powered Z-Wave modules, run exclusion first if the device was ever joined to SmartThings, then start inclusion from HomeBrain and trigger the device pair action.';
-    return [
-      `Start Z-Wave exclusion from HomeBrain for ${name}.`,
-      'Trigger the device exclusion/reset sequence from the manufacturer instructions.',
-      lockNote,
-      'After HomeBrain sees the node, verify lock/switch/sensor state and battery before removing or ignoring the old SmartThings entry.'
-    ];
+    const guidance = getZWavePhysicalInstructions(device, features);
+    return {
+      instructionProfile: guidance.profile,
+      guidedSteps: [
+        buildGuidedStep({
+          id: 'start-homebrain-zwave-exclusion',
+          title: 'Open HomeBrain Z-Wave exclusion',
+          phase: 'exclusion',
+          protocol: 'zwave',
+          action: 'start_zwave_exclusion',
+          automatic: true,
+          durationSeconds: 120,
+          instructions: [
+            'HomeBrain will put the Zooz ZST39 controller into Z-Wave exclusion mode.',
+            'Do this even if the device is still listed in SmartThings; Z-Wave exclusion clears the device network link before HomeBrain inclusion.'
+          ],
+          confirmLabel: 'Start exclusion'
+        }),
+        buildGuidedStep({
+          id: 'trigger-device-zwave-exclusion',
+          title: `Trigger exclusion on ${name}`,
+          phase: 'physical_exclusion',
+          protocol: 'zwave',
+          instructions: guidance.exclusion,
+          confirmLabel: 'I completed the exclusion action'
+        }),
+        buildGuidedStep({
+          id: 'start-homebrain-zwave-inclusion',
+          title: 'Open HomeBrain Z-Wave inclusion',
+          phase: 'inclusion',
+          protocol: 'zwave',
+          action: 'start_direct_migration',
+          automatic: true,
+          durationSeconds: features.has('lock') ? 240 : 180,
+          instructions: [
+            'HomeBrain will start secure Z-Wave inclusion and keep the existing HomeBrain device identity ready for replacement.',
+            features.has('lock')
+              ? 'Locks should stay close to the Zooz stick until S2/S0 security and interview finish.'
+              : 'Leave the device powered and awake until the interview finishes.'
+          ],
+          confirmLabel: 'Start inclusion'
+        }),
+        buildGuidedStep({
+          id: 'trigger-device-zwave-inclusion',
+          title: `Include ${name} into HomeBrain`,
+          phase: 'physical_inclusion',
+          protocol: 'zwave',
+          instructions: guidance.inclusion,
+          confirmLabel: 'I completed the inclusion action'
+        }),
+        buildGuidedStep({
+          id: 'verify-homebrain-zwave-migration',
+          title: 'Verify HomeBrain control',
+          phase: 'verification',
+          protocol: 'zwave',
+          instructions: [
+            'Wait for HomeBrain to show the new direct Z-Wave node as interviewed and online.',
+            'Verify primary state, battery if present, and each important feature before retiring the SmartThings entry.',
+            'After validation, keep the SmartThings integration installed but use the HomeBrain-native device in automations and Security Center.'
+          ],
+          confirmLabel: 'Finish'
+        })
+      ]
+    };
   }
 
   if (protocol === 'zigbee') {
-    return [
-      `Put ${name} into factory reset or pairing mode. Most Zigbee sensors require holding the reset/pair button until the LED begins blinking.`,
-      'Start Zigbee permit-join from HomeBrain.',
-      'Keep battery sensors awake near the SONOFF coordinator until HomeBrain reports the interview as complete.',
-      'Verify state, temperature, battery, and any tamper/acceleration attributes before removing or ignoring the old SmartThings entry.'
-    ];
+    const guidance = getZigbeePhysicalInstructions(device, features);
+    return {
+      instructionProfile: guidance.profile,
+      guidedSteps: [
+        buildGuidedStep({
+          id: 'start-homebrain-zigbee-permit-join',
+          title: 'Open HomeBrain Zigbee pairing',
+          phase: 'permit_join',
+          protocol: 'zigbee',
+          action: 'start_direct_migration',
+          automatic: true,
+          durationSeconds: 180,
+          instructions: [
+            'HomeBrain will open Zigbee permit-join on the SONOFF coordinator and prepare to preserve this HomeBrain device record.',
+            'Factory reset or pair the device only after permit-join is open.'
+          ],
+          confirmLabel: 'Start pairing'
+        }),
+        buildGuidedStep({
+          id: 'trigger-device-zigbee-pairing',
+          title: `Put ${name} into Zigbee pairing mode`,
+          phase: 'physical_pairing',
+          protocol: 'zigbee',
+          instructions: guidance.pairing,
+          confirmLabel: 'I completed the pairing action'
+        }),
+        buildGuidedStep({
+          id: 'verify-homebrain-zigbee-migration',
+          title: 'Verify HomeBrain control',
+          phase: 'verification',
+          protocol: 'zigbee',
+          instructions: [
+            'Wait for HomeBrain to complete the Zigbee interview.',
+            'Verify primary state, temperature, battery, tamper, acceleration, axis, color, power, or energy fields that apply to this device.',
+            'Wake battery sensors again if any expected attributes are missing before retiring the SmartThings entry.'
+          ],
+          confirmLabel: 'Finish'
+        })
+      ]
+    };
   }
 
-  return [
-    `Choose Zigbee or Z-Wave for ${name} after checking the product label or the SmartThings device details.`,
-    'Run exclusion/reset first for Z-Wave devices; run factory reset/pair mode for Zigbee devices.',
-    'Start the matching HomeBrain pairing flow and validate state plus battery before retiring the SmartThings entry.'
-  ];
+  return {
+    instructionProfile: instructionProfile('choose-radio', 'Choose Zigbee or Z-Wave', 'low'),
+    guidedSteps: [
+      buildGuidedStep({
+        id: 'choose-radio',
+        title: `Choose the native radio for ${name}`,
+        phase: 'choose_protocol',
+        protocol: 'unknown',
+        instructions: [
+          'Check the product label, battery compartment, or SmartThings details for Zigbee or Z-Wave.',
+          'Use the Zigbee workflow for SmartThings/Aeotec sensors, Zigbee bulbs, buttons, and plugs.',
+          'Use the Z-Wave workflow for deadbolts, Z-Wave sirens, wall switches, dimmers, outlets, and Z-Wave meters.'
+        ],
+        confirmLabel: 'Choose radio'
+      })
+    ]
+  };
+}
+
+function flattenGuidedSteps(guidedSteps) {
+  return guidedSteps.map((step) => {
+    const instructions = Array.isArray(step.instructions) ? step.instructions.join(' ') : '';
+    return `${step.title}: ${instructions}`;
+  });
+}
+
+function getManualResetGuidance(protocol, device) {
+  return flattenGuidedSteps(buildGuidedMigrationSteps(protocol, device).guidedSteps);
 }
 
 function buildMigrationPlan(device, options = {}) {
@@ -421,6 +778,7 @@ function buildMigrationPlan(device, options = {}) {
   if (unsupportedFeatures.length > 0) {
     warnings.push(`Some uncommon attributes will be captured as raw telemetry first: ${unsupportedFeatures.map((entry) => entry.label).join(', ')}.`);
   }
+  const guidance = buildGuidedMigrationSteps(protocol, device);
 
   return {
     deviceId: normalizeString(device?._id?.toString?.() || device?._id || device?.id) || null,
@@ -436,6 +794,8 @@ function buildMigrationPlan(device, options = {}) {
     features,
     featureSupport: supportedFeatures,
     manualSteps: getManualResetGuidance(protocol, device),
+    guidedSteps: guidance.guidedSteps,
+    instructionProfile: guidance.instructionProfile,
     warnings,
     canPreserveDeviceRecord: Boolean(device?._id),
     targetSource: protocol === 'zigbee'
@@ -467,6 +827,7 @@ module.exports = {
   FEATURE_LABELS,
   buildDirectFeatureProperties,
   buildFeatureSupport,
+  buildGuidedMigrationSteps,
   buildMigrationPlan,
   getDirectProtocol,
   getSmartThingsCapabilities,

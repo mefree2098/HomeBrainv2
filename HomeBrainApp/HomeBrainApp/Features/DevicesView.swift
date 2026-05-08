@@ -33,6 +33,7 @@ struct DevicesView: View {
     @State private var migrationFeedback: [String: String] = [:]
     @State private var migrationPlans: [String: DirectRadioMigrationPlanRecord] = [:]
     @State private var migrationPlanErrors: [String: String] = [:]
+    @State private var migrationWorkflows: [String: DirectRadioMigrationWorkflowRecord] = [:]
     @State private var matterControllerReady = false
     @State private var matterRcpDetected = false
     @State private var matterOtbrOnline = false
@@ -504,6 +505,7 @@ struct DevicesView: View {
         let plan = migrationPlans[device.id]
         let planError = migrationPlanErrors[device.id]
         let feedback = migrationFeedback[device.id]
+        let workflow = migrationWorkflows[device.id]
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 8) {
@@ -520,7 +522,7 @@ struct DevicesView: View {
                 }
             }
 
-            Text("Start pairing, then put the device into reset or inclusion mode. Z-Wave devices should run exclusion first.")
+            Text("HomeBrain walks you through each migration step, opens the radio operation at the right time, then waits for the physical device action.")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -542,24 +544,28 @@ struct DevicesView: View {
                 directRadioMigrationPlanSummary(plan)
             }
 
-            HStack(spacing: 8) {
-                Button {
-                    Task { await startDirectRadioMigration(device, protocolName: "zigbee") }
-                } label: {
-                    Label("Zigbee", systemImage: "dot.radiowaves.left.and.right")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                .disabled(isPending || plan?.supported == false)
+            if let workflow {
+                directRadioMigrationWorkflowCard(workflow, device: device, isPending: isPending)
+            } else {
+                HStack(spacing: 8) {
+                    Button {
+                        Task { await startDirectRadioMigration(device, protocolName: "zigbee") }
+                    } label: {
+                        Label("Zigbee", systemImage: "dot.radiowaves.left.and.right")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                    .disabled(isPending || plan?.supported == false)
 
-                Button {
-                    Task { await startDirectRadioMigration(device, protocolName: "zwave") }
-                } label: {
-                    Label("Z-Wave", systemImage: "wave.3.right")
-                        .frame(maxWidth: .infinity)
+                    Button {
+                        Task { await startDirectRadioMigration(device, protocolName: "zwave") }
+                    } label: {
+                        Label("Z-Wave", systemImage: "wave.3.right")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                    .disabled(isPending || plan?.supported == false)
                 }
-                .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                .disabled(isPending || plan?.supported == false)
             }
 
             if let feedback {
@@ -613,15 +619,29 @@ struct DevicesView: View {
                 }
             }
 
-            if !plan.manualSteps.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Manual steps")
+            if let profile = plan.instructionProfile {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Instruction profile")
                         .font(.system(size: 10, weight: .bold, design: .rounded))
                         .textCase(.uppercase)
                         .tracking(1.6)
                         .foregroundStyle(HBPalette.textMuted)
-                    ForEach(Array(plan.manualSteps.prefix(4).enumerated()), id: \.offset) { index, step in
-                        Text("\(index + 1). \(step)")
+                    Text("\(profile.label) • \(profile.confidence)")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(HBPalette.accentBlue)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if !plan.guidedSteps.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Guided workflow")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .textCase(.uppercase)
+                        .tracking(1.6)
+                        .foregroundStyle(HBPalette.textMuted)
+                    ForEach(Array(plan.guidedSteps.prefix(5).enumerated()), id: \.offset) { index, step in
+                        Text("\(index + 1). \(step.automatic ? "HomeBrain: " : "")\(step.title)")
                             .font(.system(size: 11, weight: .medium, design: .rounded))
                             .foregroundStyle(HBPalette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -631,6 +651,69 @@ struct DevicesView: View {
         }
         .padding(10)
         .background(HBPalette.panelSoft.opacity(0.5), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func directRadioMigrationWorkflowCard(
+        _ workflow: DirectRadioMigrationWorkflowRecord,
+        device: DeviceItem,
+        isPending: Bool
+    ) -> some View {
+        let steps = workflow.plan.guidedSteps
+        let currentStep = workflow.currentStep
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Step \(min(workflow.stepIndex + 1, max(steps.count, 1)))/\(max(steps.count, 1))")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .textCase(.uppercase)
+                        .tracking(1.6)
+                        .foregroundStyle(HBPalette.textMuted)
+                    Text(currentStep?.title ?? "Migration workflow")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Text(workflow.protocolLabel)
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .foregroundStyle(HBPalette.accentGreen)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(HBPalette.panelSoft.opacity(0.72), in: Capsule())
+            }
+
+            Text(workflow.statusMessage)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(HBPalette.accentBlue)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let currentStep {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(currentStep.instructions.enumerated()), id: \.offset) { index, instruction in
+                        Text("\(index + 1). \(instruction)")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Button {
+                    Task { await advanceDirectRadioMigrationWorkflow(device) }
+                } label: {
+                    Label(workflow.complete ? "Workflow complete" : currentStep.confirmLabel, systemImage: workflow.complete ? "checkmark.circle.fill" : "arrow.forward.circle.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(HBPrimaryButtonStyle(compact: true))
+                .disabled(isPending || workflow.complete)
+            }
+        }
+        .padding(10)
+        .background(HBPalette.accentBlue.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(HBPalette.accentBlue.opacity(0.25), lineWidth: 1)
+        )
     }
 
     private var matterControllerPanel: some View {
@@ -1430,6 +1513,71 @@ struct DevicesView: View {
         }
     }
 
+    private func migrationActionMessage(for step: DirectRadioMigrationGuidedStepRecord, protocolName: String) -> String {
+        switch step.action {
+        case "start_zwave_exclusion":
+            return "HomeBrain opened Z-Wave exclusion. Complete the device action below, then continue."
+        case "start_direct_migration":
+            return protocolName == "zigbee"
+                ? "HomeBrain opened Zigbee pairing. Complete the device action below, then continue."
+                : "HomeBrain opened Z-Wave inclusion. Complete the device action below, then continue."
+        default:
+            return "Complete the current device step, then continue."
+        }
+    }
+
+    private func executeDirectRadioMigrationStep(
+        _ step: DirectRadioMigrationGuidedStepRecord,
+        device: DeviceItem,
+        protocolName: String
+    ) async throws {
+        switch step.action {
+        case "start_zwave_exclusion":
+            _ = try await session.apiClient.post(
+                "/api/direct-radios/exclusion/start",
+                body: [
+                    "protocol": "zwave",
+                    "durationSeconds": step.durationSeconds ?? 120
+                ]
+            )
+        case "start_direct_migration":
+            let response = try await session.apiClient.post(
+                "/api/direct-radios/migrations",
+                body: [
+                    "deviceId": device.id,
+                    "protocol": protocolName,
+                    "durationSeconds": step.durationSeconds ?? (protocolName == "zwave" ? 240 : 180)
+                ]
+            )
+            let root = JSON.object(response)
+            let returnedPlan = JSON.object(root["plan"])
+            if !returnedPlan.isEmpty {
+                migrationPlans[device.id] = DirectRadioMigrationPlanRecord.from(returnedPlan)
+            }
+        default:
+            break
+        }
+    }
+
+    private func advancePastAutomatedMigrationSteps(
+        plan: DirectRadioMigrationPlanRecord,
+        device: DeviceItem,
+        protocolName: String,
+        startIndex: Int
+    ) async throws -> (stepIndex: Int, statusMessage: String) {
+        var stepIndex = startIndex
+        var statusMessage = ""
+
+        while stepIndex < plan.guidedSteps.count, plan.guidedSteps[stepIndex].automatic {
+            let step = plan.guidedSteps[stepIndex]
+            try await executeDirectRadioMigrationStep(step, device: device, protocolName: protocolName)
+            statusMessage = migrationActionMessage(for: step, protocolName: protocolName)
+            stepIndex += 1
+        }
+
+        return (stepIndex, statusMessage)
+    }
+
     private func startDirectRadioMigration(_ device: DeviceItem, protocolName: String) async {
         if pendingMigrationDeviceIds.contains(device.id) {
             return
@@ -1437,39 +1585,106 @@ struct DevicesView: View {
 
         pendingMigrationDeviceIds.insert(device.id)
         migrationFeedback[device.id] = protocolName == "zwave"
-            ? "Starting Z-Wave exclusion, then HomeBrain inclusion."
-            : "Starting Zigbee permit-join."
+            ? "Opening guided Z-Wave exclusion first."
+            : "Opening guided Zigbee pairing."
 
         defer {
             pendingMigrationDeviceIds.remove(device.id)
         }
 
         if previewMode {
-            migrationFeedback[device.id] = "Migration pairing window started. Put the device into pairing mode."
+            let previewPlan = DirectRadioMigrationPlanRecord.preview(for: device, protocolName: protocolName)
+            migrationPlans[device.id] = previewPlan
+            migrationWorkflows[device.id] = DirectRadioMigrationWorkflowRecord(
+                protocolName: protocolName,
+                plan: previewPlan,
+                stepIndex: min(1, max(previewPlan.guidedSteps.count - 1, 0)),
+                statusMessage: "Guided migration started. Complete the current device action.",
+                complete: false
+            )
             return
         }
 
         do {
-            if protocolName == "zwave" {
-                _ = try? await session.apiClient.post(
-                    "/api/direct-radios/exclusion/start",
-                    body: ["durationSeconds": 120]
-                )
+            let response = try await session.apiClient.get("/api/direct-radios/migration-plan/\(device.id)?protocol=\(protocolName)")
+            let root = JSON.object(response)
+            let selectedPlan = DirectRadioMigrationPlanRecord.from(JSON.object(root["plan"]))
+            guard !selectedPlan.guidedSteps.isEmpty else {
+                throw URLError(.cannotParseResponse)
             }
+            migrationPlans[device.id] = selectedPlan
 
-            _ = try await session.apiClient.post(
-                "/api/direct-radios/migrations",
-                body: [
-                    "deviceId": device.id,
-                    "protocol": protocolName,
-                    "durationSeconds": 180
-                ]
+            let result = try await advancePastAutomatedMigrationSteps(
+                plan: selectedPlan,
+                device: device,
+                protocolName: protocolName,
+                startIndex: 0
             )
-            migrationFeedback[device.id] = protocolName == "zwave"
-                ? "HomeBrain is listening. Run the lock or device inclusion sequence now."
-                : "HomeBrain is listening. Hold the device reset button until it blinks, then keep it nearby."
+            let safeIndex = min(result.stepIndex, max(selectedPlan.guidedSteps.count - 1, 0))
+            migrationWorkflows[device.id] = DirectRadioMigrationWorkflowRecord(
+                protocolName: protocolName,
+                plan: selectedPlan,
+                stepIndex: safeIndex,
+                statusMessage: result.statusMessage.isEmpty ? "Guided migration started." : result.statusMessage,
+                complete: false
+            )
+            migrationFeedback[device.id] = selectedPlan.guidedSteps[safeIndex].title
         } catch {
             migrationFeedback[device.id] = "Migration could not start: \(error.localizedDescription)"
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func advanceDirectRadioMigrationWorkflow(_ device: DeviceItem) async {
+        guard var workflow = migrationWorkflows[device.id],
+              !pendingMigrationDeviceIds.contains(device.id) else {
+            return
+        }
+
+        pendingMigrationDeviceIds.insert(device.id)
+        defer {
+            pendingMigrationDeviceIds.remove(device.id)
+        }
+
+        if previewMode {
+            workflow.stepIndex = min(workflow.stepIndex + 1, max(workflow.plan.guidedSteps.count - 1, 0))
+            workflow.complete = workflow.stepIndex >= workflow.plan.guidedSteps.count - 1
+            workflow.statusMessage = workflow.complete ? "Guided workflow complete." : "Next migration step ready."
+            migrationWorkflows[device.id] = workflow
+            migrationFeedback[device.id] = workflow.statusMessage
+            return
+        }
+
+        do {
+            let nextStartIndex = workflow.stepIndex + 1
+            if nextStartIndex >= workflow.plan.guidedSteps.count {
+                workflow.complete = true
+                workflow.statusMessage = "Guided workflow complete. Verify HomeBrain state, battery, and controls before retiring SmartThings."
+                migrationWorkflows[device.id] = workflow
+                migrationFeedback[device.id] = workflow.statusMessage
+                return
+            }
+
+            let result = try await advancePastAutomatedMigrationSteps(
+                plan: workflow.plan,
+                device: device,
+                protocolName: workflow.protocolName,
+                startIndex: nextStartIndex
+            )
+
+            if result.stepIndex >= workflow.plan.guidedSteps.count {
+                workflow.stepIndex = max(workflow.plan.guidedSteps.count - 1, 0)
+                workflow.complete = true
+                workflow.statusMessage = "Guided workflow complete. Verify HomeBrain state, battery, and controls before retiring SmartThings."
+            } else {
+                workflow.stepIndex = result.stepIndex
+                workflow.statusMessage = result.statusMessage.isEmpty ? "Next migration step ready." : result.statusMessage
+            }
+
+            migrationWorkflows[device.id] = workflow
+            migrationFeedback[device.id] = workflow.statusMessage
+        } catch {
+            migrationFeedback[device.id] = "Migration step failed: \(error.localizedDescription)"
             errorMessage = error.localizedDescription
         }
     }
@@ -2003,6 +2218,85 @@ private struct DirectRadioMigrationFeatureSupportRecord: Identifiable {
     }
 }
 
+private struct DirectRadioMigrationInstructionProfileRecord {
+    let key: String
+    let label: String
+    let confidence: String
+    let reference: String?
+
+    nonisolated static func from(_ object: [String: Any]) -> DirectRadioMigrationInstructionProfileRecord? {
+        guard !object.isEmpty else {
+            return nil
+        }
+
+        let key = JSON.string(object, "key")
+        return DirectRadioMigrationInstructionProfileRecord(
+            key: key,
+            label: JSON.string(object, "label", fallback: key.isEmpty ? "Device instructions" : key),
+            confidence: JSON.string(object, "confidence", fallback: "medium"),
+            reference: JSON.optionalString(object, "reference")
+        )
+    }
+}
+
+private struct DirectRadioMigrationGuidedStepRecord: Identifiable {
+    let id: String
+    let title: String
+    let phase: String
+    let protocolName: String
+    let action: String
+    let automatic: Bool
+    let durationSeconds: Int?
+    let instructions: [String]
+    let confirmLabel: String
+
+    nonisolated static func from(_ object: [String: Any]) -> DirectRadioMigrationGuidedStepRecord {
+        let id = JSON.string(object, "id", fallback: UUID().uuidString)
+        let durationValue = object["durationSeconds"]
+        let durationSeconds: Int?
+        if let value = durationValue as? Int {
+            durationSeconds = value
+        } else if let value = durationValue as? Double {
+            durationSeconds = Int(value)
+        } else if let value = durationValue as? String, let parsed = Int(value) {
+            durationSeconds = parsed
+        } else {
+            durationSeconds = nil
+        }
+
+        return DirectRadioMigrationGuidedStepRecord(
+            id: id,
+            title: JSON.string(object, "title", fallback: "Migration step"),
+            phase: JSON.string(object, "phase"),
+            protocolName: JSON.string(object, "protocol", fallback: "unknown"),
+            action: JSON.string(object, "action", fallback: "user_confirm"),
+            automatic: JSON.bool(object, "automatic"),
+            durationSeconds: durationSeconds,
+            instructions: JSON.stringArray(object["instructions"]),
+            confirmLabel: JSON.string(object, "confirmLabel", fallback: "Done")
+        )
+    }
+}
+
+private struct DirectRadioMigrationWorkflowRecord {
+    let protocolName: String
+    var plan: DirectRadioMigrationPlanRecord
+    var stepIndex: Int
+    var statusMessage: String
+    var complete: Bool
+
+    var currentStep: DirectRadioMigrationGuidedStepRecord? {
+        guard plan.guidedSteps.indices.contains(stepIndex) else {
+            return nil
+        }
+        return plan.guidedSteps[stepIndex]
+    }
+
+    var protocolLabel: String {
+        protocolName == "zigbee" ? "Zigbee" : "Z-Wave"
+    }
+}
+
 private struct DirectRadioMigrationPlanRecord {
     let recommendedProtocol: String
     let inferredProtocol: String
@@ -2010,6 +2304,8 @@ private struct DirectRadioMigrationPlanRecord {
     let features: [String]
     let featureSupport: [DirectRadioMigrationFeatureSupportRecord]
     let manualSteps: [String]
+    let guidedSteps: [DirectRadioMigrationGuidedStepRecord]
+    let instructionProfile: DirectRadioMigrationInstructionProfileRecord?
     let warnings: [String]
     let targetSource: String
 
@@ -2029,21 +2325,51 @@ private struct DirectRadioMigrationPlanRecord {
     }
 
     nonisolated static func from(_ object: [String: Any]) -> DirectRadioMigrationPlanRecord {
-        DirectRadioMigrationPlanRecord(
+        return DirectRadioMigrationPlanRecord(
             recommendedProtocol: JSON.string(object, "recommendedProtocol", fallback: "unknown"),
             inferredProtocol: JSON.string(object, "inferredProtocol", fallback: "unknown"),
             supported: JSON.bool(object, "supported"),
             features: JSON.stringArray(object["features"]),
             featureSupport: JSON.array(object["featureSupport"]).map(DirectRadioMigrationFeatureSupportRecord.from),
             manualSteps: JSON.stringArray(object["manualSteps"]),
+            guidedSteps: JSON.array(object["guidedSteps"]).map(DirectRadioMigrationGuidedStepRecord.from),
+            instructionProfile: DirectRadioMigrationInstructionProfileRecord.from(JSON.object(object["instructionProfile"])),
             warnings: JSON.stringArray(object["warnings"]),
             targetSource: JSON.string(object, "targetSource")
         )
     }
 
-    nonisolated static func preview(for device: DeviceItem) -> DirectRadioMigrationPlanRecord {
-        DirectRadioMigrationPlanRecord(
-            recommendedProtocol: "unknown",
+    nonisolated static func preview(for device: DeviceItem, protocolName: String = "unknown") -> DirectRadioMigrationPlanRecord {
+        let selectedProtocol = protocolName == "zigbee" || protocolName == "zwave" ? protocolName : "unknown"
+        let firstAction = selectedProtocol == "zwave" ? "start_zwave_exclusion" : "start_direct_migration"
+        let firstTitle = selectedProtocol == "zwave" ? "Open HomeBrain Z-Wave exclusion" : "Open HomeBrain Zigbee pairing"
+        let secondTitle = selectedProtocol == "zwave" ? "Trigger exclusion on \(device.name)" : "Put \(device.name) into Zigbee pairing mode"
+        let guidedSteps = [
+            DirectRadioMigrationGuidedStepRecord(
+                id: "preview-start",
+                title: firstTitle,
+                phase: selectedProtocol == "zwave" ? "exclusion" : "permit_join",
+                protocolName: selectedProtocol,
+                action: firstAction,
+                automatic: true,
+                durationSeconds: selectedProtocol == "zwave" ? 120 : 180,
+                instructions: ["HomeBrain opens the radio window automatically."],
+                confirmLabel: "Start"
+            ),
+            DirectRadioMigrationGuidedStepRecord(
+                id: "preview-device-action",
+                title: secondTitle,
+                phase: "physical_action",
+                protocolName: selectedProtocol,
+                action: "user_confirm",
+                automatic: false,
+                durationSeconds: nil,
+                instructions: ["Use the device-specific reset, exclusion, or pairing action shown by HomeBrain."],
+                confirmLabel: "I completed this"
+            )
+        ]
+        return DirectRadioMigrationPlanRecord(
+            recommendedProtocol: selectedProtocol,
             inferredProtocol: "unknown",
             supported: true,
             features: [device.type],
@@ -2055,6 +2381,13 @@ private struct DirectRadioMigrationPlanRecord {
                 "Reset or exclude the device from SmartThings.",
                 "Put the device into pairing or inclusion mode near the HomeBrain radio."
             ],
+            guidedSteps: guidedSteps,
+            instructionProfile: DirectRadioMigrationInstructionProfileRecord(
+                key: "preview",
+                label: "Preview device instructions",
+                confidence: "medium",
+                reference: nil
+            ),
             warnings: [],
             targetSource: ""
         )

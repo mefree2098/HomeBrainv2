@@ -84,8 +84,27 @@ export type DirectRadioMigrationPlan = {
     support: 'native' | 'best_effort';
   }>;
   manualSteps: string[];
+  guidedSteps?: DirectRadioMigrationGuidedStep[];
+  instructionProfile?: {
+    key: string;
+    label: string;
+    confidence: 'low' | 'medium' | 'high' | string;
+    reference?: string | null;
+  } | null;
   warnings: string[];
   targetSource: string | null;
+};
+
+export type DirectRadioMigrationGuidedStep = {
+  id: string;
+  title: string;
+  phase: string;
+  protocol: DirectRadioProtocol | 'unknown';
+  action: 'start_zwave_exclusion' | 'start_direct_migration' | 'user_confirm' | string;
+  automatic: boolean;
+  durationSeconds?: number | null;
+  instructions: string[];
+  confirmLabel: string;
 };
 
 export const getDirectRadioStatus = async () => {
