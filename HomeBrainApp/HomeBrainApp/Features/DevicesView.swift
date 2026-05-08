@@ -1992,7 +1992,7 @@ private struct DirectRadioMigrationFeatureSupportRecord: Identifiable {
     let supported: Bool
     let support: String
 
-    static func from(_ object: [String: Any]) -> DirectRadioMigrationFeatureSupportRecord {
+    nonisolated static func from(_ object: [String: Any]) -> DirectRadioMigrationFeatureSupportRecord {
         let key = JSON.string(object, "key", fallback: UUID().uuidString)
         return DirectRadioMigrationFeatureSupportRecord(
             id: key,
@@ -2028,7 +2028,7 @@ private struct DirectRadioMigrationPlanRecord {
         featureSupport.filter { $0.supported }.count
     }
 
-    static func from(_ object: [String: Any]) -> DirectRadioMigrationPlanRecord {
+    nonisolated static func from(_ object: [String: Any]) -> DirectRadioMigrationPlanRecord {
         DirectRadioMigrationPlanRecord(
             recommendedProtocol: JSON.string(object, "recommendedProtocol", fallback: "unknown"),
             inferredProtocol: JSON.string(object, "inferredProtocol", fallback: "unknown"),
@@ -2041,7 +2041,7 @@ private struct DirectRadioMigrationPlanRecord {
         )
     }
 
-    static func preview(for device: DeviceItem) -> DirectRadioMigrationPlanRecord {
+    nonisolated static func preview(for device: DeviceItem) -> DirectRadioMigrationPlanRecord {
         DirectRadioMigrationPlanRecord(
             recommendedProtocol: "unknown",
             inferredProtocol: "unknown",
