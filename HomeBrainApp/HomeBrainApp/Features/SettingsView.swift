@@ -2276,7 +2276,7 @@ private struct DirectRadioScoreSet {
     let zigbee: Int
     let zwave: Int
 
-    static func from(_ object: [String: Any]) -> DirectRadioScoreSet {
+    nonisolated static func from(_ object: [String: Any]) -> DirectRadioScoreSet {
         DirectRadioScoreSet(
             zigbee: JSON.int(object, "zigbee"),
             zwave: JSON.int(object, "zwave")
@@ -2299,7 +2299,7 @@ private struct DirectRadioSerialPortRecord: Identifiable {
     let likelyZWave: Bool
     let scores: DirectRadioScoreSet
 
-    static func from(_ object: [String: Any]) -> DirectRadioSerialPortRecord {
+    nonisolated static func from(_ object: [String: Any]) -> DirectRadioSerialPortRecord {
         let path = JSON.string(object, "path")
         return DirectRadioSerialPortRecord(
             id: path.isEmpty ? UUID().uuidString : path,
@@ -2345,7 +2345,7 @@ private struct DirectRadioControllerRecord {
         return ""
     }
 
-    static func from(_ object: [String: Any], protocolName: String) -> DirectRadioControllerRecord {
+    nonisolated static func from(_ object: [String: Any], protocolName: String) -> DirectRadioControllerRecord {
         DirectRadioControllerRecord(
             protocolName: protocolName,
             expectedHardware: JSON.string(object, "expectedHardware"),
@@ -2370,7 +2370,7 @@ private struct DirectRadioControllerSet {
     let zigbee: DirectRadioControllerRecord
     let zwave: DirectRadioControllerRecord
 
-    static func from(_ object: [String: Any]) -> DirectRadioControllerSet {
+    nonisolated static func from(_ object: [String: Any]) -> DirectRadioControllerSet {
         DirectRadioControllerSet(
             zigbee: DirectRadioControllerRecord.from(JSON.object(object["zigbee"]), protocolName: "zigbee"),
             zwave: DirectRadioControllerRecord.from(JSON.object(object["zwave"]), protocolName: "zwave")
@@ -2385,7 +2385,7 @@ private struct DirectRadioStatusSnapshot {
     let diagnostics: [String]
     let controllers: DirectRadioControllerSet
 
-    static func from(_ object: [String: Any]) -> DirectRadioStatusSnapshot {
+    nonisolated static func from(_ object: [String: Any]) -> DirectRadioStatusSnapshot {
         DirectRadioStatusSnapshot(
             enabled: JSON.bool(object, "enabled"),
             dataDir: JSON.string(object, "dataDir"),
@@ -2411,7 +2411,7 @@ private struct DirectRadioLogEntryRecord: Identifiable {
         JSON.displayDate(from: timestamp)
     }
 
-    static func from(_ object: [String: Any]) -> DirectRadioLogEntryRecord {
+    nonisolated static func from(_ object: [String: Any]) -> DirectRadioLogEntryRecord {
         DirectRadioLogEntryRecord(
             id: JSON.string(object, "id", fallback: UUID().uuidString),
             timestamp: JSON.string(object, "timestamp"),
