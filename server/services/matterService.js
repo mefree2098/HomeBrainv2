@@ -763,7 +763,7 @@ function buildThreadSetupGuidance({
     detail: otbr.online
       ? 'OTBR is responding, so the Thread radio path is active.'
       : canServerFlash
-        ? 'Use HomeBrain to flash an OpenThread RCP .gbl image to the selected MG24 stick, then start OTBR.'
+        ? 'Use HomeBrain to download the latest matching SONOFF OpenThread RCP firmware and flash the selected MG24 stick, then start OTBR.'
         : 'Install universal-silabs-flasher on the HomeBrain host, or use the SONOFF Dongle Flasher with the stick attached to the browser computer.',
     url: SONOFF_MG24_FLASHER_URL,
     guideUrl: SONOFF_MG24_OPENTHREAD_GUIDE_URL,

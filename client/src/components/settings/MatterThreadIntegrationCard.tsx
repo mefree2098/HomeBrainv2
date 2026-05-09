@@ -253,12 +253,23 @@ export function MatterThreadIntegrationCard() {
   const usingCustomFirmware = Boolean(matterFirmwareBase64)
   const activeFlashJob = flashStatus?.activeJob || flashStatus?.recentJobs?.[0]
   const flashConfirmationPhrase = flashStatus?.confirmationPhrase || thread?.setup?.flasher?.serverSideConfirmation || "FLASH OPENTHREAD RCP"
-  const flashConfirmationMatches = matterFlashConfirm.trim().toUpperCase() === flashConfirmationPhrase
+  const flashConfirmationMatches = matterFlashConfirm.trim().toUpperCase() === flashConfirmationPhrase.trim().toUpperCase()
   const hasFirmwareSource = Boolean(usingCustomFirmware || latestFirmwareReady)
   const serverFlashSupported = Boolean(flashTool?.available || flashTool?.canAutoInstall)
   const canServerFlash = Boolean(serverFlashSupported && selectedThreadPath && rcpDetected)
   const flashRunning = Boolean(activeFlashJob && ["queued", "preparing", "flashing"].includes(activeFlashJob.status))
   const flashLogs = Array.isArray(activeFlashJob?.logs) ? activeFlashJob.logs.slice(-8) : []
+  const flashDisabledReason = flashRunning
+    ? "A Thread firmware flash is already running."
+    : !canServerFlash
+      ? selectedThreadPath && rcpDetected
+        ? "HomeBrain cannot install or run the Silicon Labs flasher on this host yet."
+        : "Select a detected SONOFF MG24 stick before flashing."
+      : !hasFirmwareSource
+        ? "HomeBrain has not resolved a matching firmware download yet."
+        : !flashConfirmationMatches
+          ? `Type ${flashConfirmationPhrase} to enable download and flashing.`
+          : ""
 
   return (
     <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
@@ -410,15 +421,18 @@ export function MatterThreadIntegrationCard() {
               <div>
                 <p className="text-xs font-semibold text-foreground">Flash from HomeBrain</p>
                 <p className="text-xs text-muted-foreground">
-                  {flashTool?.available
-                    ? `Tool: ${flashTool.label || "universal-silabs-flasher"}`
-                    : flashTool?.installHint || "HomeBrain will install the flasher when flashing starts."}
+                  HomeBrain will download the latest matching SONOFF OpenThread firmware automatically. Uploading a file is only for a custom override.
                 </p>
               </div>
               <Badge variant={canServerFlash ? "default" : "secondary"} className="rounded-full text-[0.68rem]">
                 {flashTool?.available ? "ready" : canServerFlash ? "will install" : "not ready"}
               </Badge>
             </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {flashTool?.available
+                ? `Tool: ${flashTool.label || "universal-silabs-flasher"}`
+                : flashTool?.installHint || "HomeBrain will install the flasher when flashing starts."}
+            </p>
 
             <div className="mt-3 rounded-md border border-border/60 bg-background/80 px-3 py-2 text-xs">
               {latestFirmwareReady ? (
@@ -444,16 +458,22 @@ export function MatterThreadIntegrationCard() {
             </div>
 
             <div className="mt-3 grid gap-2 lg:grid-cols-[1fr_1fr]">
-              <Input
-                type="file"
-                accept=".gbl"
-                onChange={(event) => void handleMatterFirmwareFile(event.target.files?.[0])}
-              />
-              <Input
-                value={matterFlashConfirm}
-                onChange={(event) => setMatterFlashConfirm(event.target.value)}
-                placeholder={`Type ${flashConfirmationPhrase}`}
-              />
+              <label className="space-y-1">
+                <span className="text-xs font-medium text-foreground">Optional custom .gbl firmware</span>
+                <Input
+                  type="file"
+                  accept=".gbl"
+                  onChange={(event) => void handleMatterFirmwareFile(event.target.files?.[0])}
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs font-medium text-foreground">Safety confirmation</span>
+                <Input
+                  value={matterFlashConfirm}
+                  onChange={(event) => setMatterFlashConfirm(event.target.value)}
+                  placeholder={`Type ${flashConfirmationPhrase}`}
+                />
+              </label>
               <Button
                 type="button"
                 variant="destructive"
@@ -462,9 +482,19 @@ export function MatterThreadIntegrationCard() {
                 onClick={() => void handleMatterThreadFlash()}
               >
                 {matterFlashSaving || flashRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
-                {usingCustomFirmware ? "Flash Selected OpenThread RCP" : "Flash Latest OpenThread RCP"}
+                {usingCustomFirmware ? "Flash Selected OpenThread RCP" : "Download and Flash Latest OpenThread RCP"}
               </Button>
             </div>
+
+            {flashDisabledReason ? (
+              <p className="mt-2 text-xs text-amber-700 dark:text-amber-200">
+                {flashDisabledReason}
+              </p>
+            ) : (
+              <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-200">
+                Ready to download and flash {latestFirmware?.firmware?.name || "the latest OpenThread firmware"}.
+              </p>
+            )}
 
             {matterFirmwareName ? (
               <p className="mt-2 truncate text-xs text-muted-foreground">Selected firmware: {matterFirmwareName}</p>
