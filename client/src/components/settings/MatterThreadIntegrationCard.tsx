@@ -321,13 +321,15 @@ export function MatterThreadIntegrationCard() {
   const otbrConfirmationPhrase = otbrHost?.confirmationPhrase || thread?.setup?.otbr?.serverSideConfirmation || "START THREAD BORDER ROUTER"
   const otbrConfirmationMatches = matterOtbrConfirm.trim().toUpperCase() === otbrConfirmationPhrase.trim().toUpperCase()
   const otbrDataset = thread?.otbr?.dataset || otbrHost?.dataset || activeOtbrJob?.result?.otbr?.dataset || activeOtbrJob?.result?.otbrHost?.dataset || ""
+  const otbrReady = Boolean(threadReady || otbrDataset)
+  const otbrNeedsDataset = Boolean(otbrOnline && !otbrReady)
   const canStartOtbr = Boolean(
     selectedThreadPath
     && rcpDetected
     && flashComplete
     && (otbrHost?.helperAvailable || otbrHost?.canAutoInstall)
   )
-  const otbrDisabledReason = otbrOnline
+  const otbrDisabledReason = otbrReady
     ? "OTBR is online and serving a Thread dataset."
     : otbrRunning
       ? "OTBR setup is already running."
@@ -335,10 +337,10 @@ export function MatterThreadIntegrationCard() {
         ? "Select a detected SONOFF MG24 stick before starting OTBR."
         : !flashComplete
           ? "Flash the MG24 with OpenThread RCP before starting OTBR."
-          : !(otbrHost?.helperAvailable || otbrHost?.canAutoInstall)
-            ? "The HomeBrain OTBR helper has not been installed on this host yet."
+            : !(otbrHost?.helperAvailable || otbrHost?.canAutoInstall)
+              ? "The HomeBrain OTBR helper has not been installed on this host yet."
             : !otbrConfirmationMatches
-              ? `Type ${otbrConfirmationPhrase} to start OTBR.`
+              ? `Type ${otbrConfirmationPhrase} to ${otbrNeedsDataset ? "create the Thread dataset" : "start OTBR"}.`
               : ""
   const flashDisabledReason = flashRunning
     ? "A Thread firmware flash is already running."
@@ -612,8 +614,8 @@ export function MatterThreadIntegrationCard() {
                   {startOtbrAction?.detail || "Start OTBR after the MG24 is flashed with OpenThread RCP."}
                 </p>
               </div>
-              <Badge variant={otbrOnline || otbrDataset ? "default" : canStartOtbr ? "secondary" : "outline"} className="rounded-full text-[0.68rem]">
-                {otbrOnline ? "online" : otbrDataset ? "dataset ready" : canStartOtbr ? "ready" : "required"}
+              <Badge variant={otbrReady ? "default" : otbrOnline || canStartOtbr ? "secondary" : "outline"} className="rounded-full text-[0.68rem]">
+                {otbrReady ? "dataset ready" : otbrOnline ? "dataset missing" : canStartOtbr ? "ready" : "required"}
               </Badge>
             </div>
 
@@ -641,7 +643,7 @@ export function MatterThreadIntegrationCard() {
                   value={matterThreadNetworkName}
                   onChange={(event) => setMatterThreadNetworkName(event.target.value)}
                   placeholder="HomeBrain Thread"
-                  disabled={otbrOnline || matterOtbrSaving || otbrRunning}
+                  disabled={otbrReady || matterOtbrSaving || otbrRunning}
                 />
               </label>
               <label className="space-y-1">
@@ -650,22 +652,22 @@ export function MatterThreadIntegrationCard() {
                   value={matterOtbrConfirm}
                   onChange={(event) => setMatterOtbrConfirm(event.target.value)}
                   placeholder={`Type ${otbrConfirmationPhrase}`}
-                  disabled={otbrOnline || matterOtbrSaving || otbrRunning}
+                  disabled={otbrReady || matterOtbrSaving || otbrRunning}
                 />
               </label>
               <Button
                 type="button"
                 className="lg:col-span-2"
-                disabled={otbrOnline || !canStartOtbr || !otbrConfirmationMatches || matterOtbrSaving || otbrRunning}
+                disabled={otbrReady || !canStartOtbr || !otbrConfirmationMatches || matterOtbrSaving || otbrRunning}
                 onClick={() => void handleStartOtbr()}
               >
                 {matterOtbrSaving || otbrRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Power className="mr-2 h-4 w-4" />}
-                Start OTBR and Create Thread Dataset
+                {otbrNeedsDataset ? "Create Thread Dataset" : "Start OTBR and Create Thread Dataset"}
               </Button>
             </div>
 
             {otbrDisabledReason ? (
-              <p className={`mt-2 text-xs ${otbrOnline ? "text-emerald-700 dark:text-emerald-200" : "text-amber-700 dark:text-amber-200"}`}>
+              <p className={`mt-2 text-xs ${otbrReady ? "text-emerald-700 dark:text-emerald-200" : "text-amber-700 dark:text-amber-200"}`}>
                 {otbrDisabledReason}
               </p>
             ) : (

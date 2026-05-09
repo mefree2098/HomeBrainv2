@@ -226,7 +226,7 @@ read_dataset() {
   if [[ -z "${ot_ctl_bin}" ]]; then
     return 0
   fi
-  timeout 20s "${ot_ctl_bin}" dataset active -x 2>/dev/null | awk '/^[0-9a-fA-F]+$/ {print; exit}' || true
+  timeout 20s "${ot_ctl_bin}" dataset active -x 2>/dev/null | tr -d '\r' | awk '/^[0-9a-fA-F]+$/ {print; exit}' || true
 }
 
 read_state() {
@@ -235,11 +235,25 @@ read_state() {
   if [[ -z "${ot_ctl_bin}" ]]; then
     return 0
   fi
-  timeout 20s "${ot_ctl_bin}" state 2>/dev/null | awk 'NF {print; exit}' || true
+  timeout 20s "${ot_ctl_bin}" state 2>/dev/null | tr -d '\r' | awk '/^(disabled|detached|child|router|leader)$/ {print; exit}' || true
+}
+
+wait_for_ot_ctl() {
+  local attempt state
+  for attempt in $(seq 1 60); do
+    state="$(read_state)"
+    if [[ -n "${state}" ]]; then
+      log "ot-ctl is ready; Thread interface state is ${state}."
+      return 0
+    fi
+    sleep 1
+  done
+  systemctl status "${SERVICE_NAME}" --no-pager >&2 || true
+  die "ot-ctl did not become ready after starting ${SERVICE_NAME}."
 }
 
 ensure_dataset() {
-  local dataset
+  local attempt dataset
   dataset="$(read_dataset)"
   if [[ -n "${dataset}" ]]; then
     log "Active Thread dataset already exists."
@@ -248,7 +262,13 @@ ensure_dataset() {
     ot_ctl dataset init new >/dev/null
     ot_ctl dataset networkname "${NETWORK_NAME}" >/dev/null
     ot_ctl dataset commit active >/dev/null
-    dataset="$(read_dataset)"
+    for attempt in $(seq 1 20); do
+      dataset="$(read_dataset)"
+      if [[ -n "${dataset}" ]]; then
+        break
+      fi
+      sleep 1
+    done
   fi
 
   [[ -n "${dataset}" ]] || die "Unable to read active Thread dataset after forming network."
@@ -256,8 +276,8 @@ ensure_dataset() {
 }
 
 start_thread_network() {
-  ot_ctl ifconfig up >/dev/null || true
-  ot_ctl thread start >/dev/null || true
+  ot_ctl ifconfig up >/dev/null
+  ot_ctl thread start >/dev/null
 
   local attempt state
   for attempt in $(seq 1 30); do
@@ -301,6 +321,7 @@ case "${ACTION}" in
     log "Starting ${SERVICE_NAME}."
     systemctl restart "${SERVICE_NAME}"
     wait_for_service
+    wait_for_ot_ctl
     ensure_dataset
     start_thread_network
     print_status_json
