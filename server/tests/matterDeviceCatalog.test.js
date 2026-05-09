@@ -186,6 +186,21 @@ test('Matter service guards Thread firmware flashing inputs and command construc
     matterService._test.parseHexDatasetFromText('Done\n0e080000000000010000\n'),
     '0e080000000000010000'
   );
+  assert.equal(
+    matterService._test.normalizeThreadOtbrState('detached\r\nDone'),
+    'detached'
+  );
+  assert.deepEqual(
+    matterService._test.resolveThreadActiveDataset({
+      configuredDataset: '',
+      otbrDataset: '',
+      hostDataset: '0e080000000000010000'
+    }),
+    {
+      dataset: '0e080000000000010000',
+      source: 'otbr-host'
+    }
+  );
   assert.throws(
     () => matterService._test.buildOtbrRadioUrl('/tmp/ttyUSB2', '460800'),
     /OTBR radio device must be a local/

@@ -754,6 +754,33 @@ function parseHexDatasetFromText(value) {
     .find((line) => /^[0-9a-f]+$/i.test(line)) || '';
 }
 
+function normalizeThreadOtbrState(value) {
+  return String(value || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim().toLowerCase())
+    .find((line) => ['disabled', 'detached', 'child', 'router', 'leader'].includes(line)) || '';
+}
+
+function resolveThreadActiveDataset({
+  configuredDataset = '',
+  otbrDataset = '',
+  hostDataset = ''
+} = {}) {
+  const configured = normalizeString(configuredDataset);
+  const fromOtbr = normalizeString(otbrDataset);
+  const fromHost = normalizeString(hostDataset);
+  if (configured) {
+    return { dataset: configured, source: 'homebrain-config' };
+  }
+  if (fromOtbr) {
+    return { dataset: fromOtbr, source: 'otbr-rest' };
+  }
+  if (fromHost) {
+    return { dataset: fromHost, source: 'otbr-host' };
+  }
+  return { dataset: '', source: null };
+}
+
 function runSync(command, args = [], options = {}) {
   const result = spawnSync(command, args, {
     encoding: 'utf8',
@@ -1251,7 +1278,7 @@ class MatterService {
       mainPid: mainPid && mainPid !== '0' ? mainPid : null,
       otbrAgentInstalled,
       otCtlInstalled,
-      state: stateProbe?.stdout || '',
+      state: normalizeThreadOtbrState(stateProbe?.stdout || ''),
       dataset: parseHexDatasetFromText(datasetProbe?.stdout || ''),
       activeJob: activeJob ? this.serializeThreadOtbrJob(activeJob, { includeLogs: options.includeLogs !== false }) : null,
       recentJobs
@@ -2012,9 +2039,6 @@ class MatterService {
     const selectedPort = expectedPorts.find((port) => serialPortMatchesPath(port, config.preferredThreadPort))
       || expectedPorts[0]
       || null;
-    const otbr = await this.checkOtbrRest(config.otbrRestUrl);
-    const configuredDataset = normalizeString(config.thread?.operationalDataset);
-    const activeDataset = configuredDataset || otbr.dataset || '';
     const firmwareFlash = await this.getThreadFirmwareFlashStatus({
       includeLogs: false,
       selectedPort
@@ -2023,11 +2047,17 @@ class MatterService {
       includeLogs: false,
       selectedPort
     });
+    const otbr = await this.checkOtbrRest(config.otbrRestUrl);
+    const activeDataset = resolveThreadActiveDataset({
+      configuredDataset: config.thread?.operationalDataset,
+      otbrDataset: otbr.dataset,
+      hostDataset: otbrHost.dataset
+    });
     const setup = buildThreadSetupGuidance({
       expectedPorts,
       selectedPort,
       otbr,
-      activeDataset,
+      activeDataset: activeDataset.dataset,
       firmwareFlash
     });
 
@@ -2041,16 +2071,17 @@ class MatterService {
         restUrl: otbr.baseUrl,
         online: otbr.online,
         datasetEndpoint: otbr.endpoint,
-        hasActiveDataset: Boolean(activeDataset),
-        activeDatasetSource: configuredDataset ? 'homebrain-config' : (otbr.dataset ? 'otbr-rest' : null)
+        dataset: activeDataset.dataset,
+        hasActiveDataset: Boolean(activeDataset.dataset),
+        activeDatasetSource: activeDataset.source
       },
       otbrHost,
-      readyForThreadCommissioning: Boolean(expectedPorts.length > 0 && activeDataset),
+      readyForThreadCommissioning: Boolean(expectedPorts.length > 0 && activeDataset.dataset),
       setup,
       firmwareFlash,
       manualSteps: buildManualSteps({
         transport: MATTER_TRANSPORTS.thread,
-        hasThreadDataset: Boolean(activeDataset),
+        hasThreadDataset: Boolean(activeDataset.dataset),
         hasBle: this.isBleRuntimeAvailable()
       })
     };
@@ -2931,12 +2962,14 @@ matterService._test = {
   normalizeThreadBaudRate,
   normalizeThreadFirmwareFlashConfirmation,
   normalizeThreadOtbrConfirmation,
+  normalizeThreadOtbrState,
   normalizeSerialPort,
   normalizeOtbrRestUrl,
   normalizeTransport,
   normalizeSonoffFirmwareEntry,
   parseHexDatasetFromText,
   parseKnownAddress,
+  resolveThreadActiveDataset,
   sanitizeFirmwareFileName,
   selectLatestSonoffThreadFirmware,
   serialPortMatchesPath,
