@@ -28,15 +28,21 @@ import {
   AlertCircle,
   Cable,
   Cpu,
+  ExternalLink,
   Network,
   Radio,
+  Settings2,
+  Upload,
   Wifi
 } from "lucide-react"
 import { getDeviceGroups, getDevices, controlDevice, type DeviceGroupSummary } from "@/api/devices"
 import {
   getMatterCommissioningSessions,
+  getMatterThreadFirmwareFlashStatus,
   getMatterStatus,
+  startMatterThreadFirmwareFlash,
   startMatterCommissioning,
+  updateMatterConfig,
   type MatterTransport
 } from "@/api/matter"
 import { DeviceDetailsDialog } from "@/components/devices/DeviceDetailsDialog"
@@ -424,8 +430,11 @@ export function Devices({
   const [controlErrorMessages, setControlErrorMessages] = useState<Record<string, string>>({})
   const [matterStatus, setMatterStatus] = useState<any | null>(null)
   const [matterSessions, setMatterSessions] = useState<any[]>([])
+  const [matterFlashStatus, setMatterFlashStatus] = useState<any | null>(null)
   const [matterLoading, setMatterLoading] = useState(false)
   const [matterCommissioning, setMatterCommissioning] = useState(false)
+  const [matterConfigSaving, setMatterConfigSaving] = useState(false)
+  const [matterFlashSaving, setMatterFlashSaving] = useState(false)
   const [matterSetupCode, setMatterSetupCode] = useState("")
   const [matterTransport, setMatterTransport] = useState<MatterTransport>("thread")
   const [matterKnownAddress, setMatterKnownAddress] = useState("")
@@ -434,6 +443,9 @@ export function Devices({
   const [matterWifiSsid, setMatterWifiSsid] = useState("")
   const [matterWifiCredentials, setMatterWifiCredentials] = useState("")
   const [matterThreadDataset, setMatterThreadDataset] = useState("")
+  const [matterFirmwareName, setMatterFirmwareName] = useState("")
+  const [matterFirmwareBase64, setMatterFirmwareBase64] = useState("")
+  const [matterFlashConfirm, setMatterFlashConfirm] = useState("")
   const deviceCardRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const {
     favoriteDeviceIds,
@@ -454,12 +466,14 @@ export function Devices({
 
     setMatterLoading(true)
     try {
-      const [statusResponse, sessionsResponse] = await Promise.all([
+      const [statusResponse, sessionsResponse, flashResponse] = await Promise.all([
         getMatterStatus(),
-        getMatterCommissioningSessions()
+        getMatterCommissioningSessions(),
+        getMatterThreadFirmwareFlashStatus()
       ])
       setMatterStatus(statusResponse?.status || null)
       setMatterSessions(Array.isArray(sessionsResponse?.sessions) ? sessionsResponse.sessions : [])
+      setMatterFlashStatus(flashResponse?.status || null)
     } catch (error: any) {
       console.warn('Failed to load Matter controller status:', error)
     } finally {
@@ -564,6 +578,18 @@ export function Devices({
     fetchDevices()
     void loadMatterController()
   }, [buildRoomsFromDevices, toast, loadMatterController])
+
+  useEffect(() => {
+    const activeFlash = matterFlashStatus?.activeJob
+    if (!activeFlash || !['queued', 'preparing', 'flashing'].includes(activeFlash.status)) {
+      return undefined
+    }
+
+    const timer = window.setInterval(() => {
+      void loadMatterController()
+    }, 3000)
+    return () => window.clearInterval(timer)
+  }, [matterFlashStatus?.activeJob?.id, matterFlashStatus?.activeJob?.status, loadMatterController])
 
   useDeviceRealtime(applyIncomingDevices)
 
@@ -908,6 +934,93 @@ export function Devices({
     }
   }
 
+  const handleSelectThreadPort = async (portPath: string) => {
+    const preferredThreadPort = portPath.trim()
+    if (!preferredThreadPort) {
+      return
+    }
+
+    setMatterConfigSaving(true)
+    try {
+      await updateMatterConfig({ preferredThreadPort })
+      toast({
+        title: "Thread stick selected",
+        description: "HomeBrain will use that SONOFF MG24 for Thread commissioning."
+      })
+      await loadMatterController()
+    } catch (error: any) {
+      toast({
+        title: "Thread setup update failed",
+        description: error.message || "Unable to save the Thread stick selection.",
+        variant: "destructive"
+      })
+    } finally {
+      setMatterConfigSaving(false)
+    }
+  }
+
+  const handleMatterFirmwareFile = async (file?: File | null) => {
+    if (!file) {
+      setMatterFirmwareName("")
+      setMatterFirmwareBase64("")
+      return
+    }
+
+    if (!file.name.toLowerCase().endsWith(".gbl")) {
+      toast({
+        title: "OpenThread firmware required",
+        description: "Choose the Silicon Labs .gbl image for OpenThread RCP.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result || ""))
+      reader.onerror = () => reject(reader.error || new Error("Unable to read firmware file."))
+      reader.readAsDataURL(file)
+    })
+    setMatterFirmwareName(file.name)
+    setMatterFirmwareBase64(dataUrl)
+  }
+
+  const handleMatterThreadFlash = async () => {
+    const confirmFlash = matterFlashConfirm.trim()
+    const latestFirmware = matterFlashStatus?.latestFirmware || matterStatus?.thread?.firmwareFlash?.latestFirmware
+    if (!matterFirmwareBase64 && !latestFirmware?.available) {
+      toast({
+        title: "Latest firmware unavailable",
+        description: latestFirmware?.error || "HomeBrain could not resolve the latest SONOFF OpenThread firmware yet.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setMatterFlashSaving(true)
+    try {
+      await startMatterThreadFirmwareFlash({
+        confirmFlash,
+        firmwareName: matterFirmwareName || undefined,
+        firmwareBase64: matterFirmwareBase64 || undefined
+      })
+      setMatterFlashConfirm("")
+      toast({
+        title: "Thread firmware flash started",
+        description: "HomeBrain is downloading the matching OpenThread firmware and flashing the selected MG24 stick."
+      })
+      await loadMatterController()
+    } catch (error: any) {
+      toast({
+        title: "Thread firmware flash failed",
+        description: error.message || "Unable to start Thread firmware flashing.",
+        variant: "destructive"
+      })
+    } finally {
+      setMatterFlashSaving(false)
+    }
+  }
+
   const renderMatterControllerPanel = () => {
     if (!isAdmin || embedded) {
       return null
@@ -919,6 +1032,37 @@ export function Devices({
     const threadReady = Boolean(thread?.readyForThreadCommissioning)
     const controllerStarted = Boolean(matterStatus?.controllerStarted)
     const lastSession = matterSessions[0]
+    const threadPorts = Array.isArray(thread?.expectedPorts) ? thread.expectedPorts : []
+    const selectedThreadPath = thread?.setup?.selectedPortPath
+      || thread?.selectedPort?.path
+      || thread?.selectedPort?.stablePath
+      || thread?.selectedPort?.rawPath
+      || ""
+    const setupActions = Array.isArray(thread?.setup?.actions) ? thread.setup.actions : []
+    const flasherUrl = thread?.setup?.flasher?.url || matterStatus?.hardware?.flasherUrl
+    const flasherAddOnUrl = thread?.setup?.flasher?.addOnUrl || matterStatus?.hardware?.flasherAddOnUrl
+    const openThreadGuideUrl = thread?.setup?.flasher?.openThreadGuideUrl || matterStatus?.hardware?.openThreadGuideUrl
+    const otbrGuideUrl = thread?.setup?.otbr?.guideUrl || matterStatus?.hardware?.otbrGuideUrl
+    const threadFlashStatus = thread?.firmwareFlash
+    const flashStatus = {
+      ...(threadFlashStatus || {}),
+      ...(matterFlashStatus || {}),
+      latestFirmware: threadFlashStatus?.latestFirmware || matterFlashStatus?.latestFirmware,
+      activeJob: matterFlashStatus?.activeJob || threadFlashStatus?.activeJob,
+      recentJobs: matterFlashStatus?.recentJobs || threadFlashStatus?.recentJobs
+    }
+    const flashTool = flashStatus?.tool
+    const latestFirmware = flashStatus?.latestFirmware
+    const latestFirmwareReady = Boolean(latestFirmware?.available && latestFirmware?.firmware?.url)
+    const usingCustomFirmware = Boolean(matterFirmwareBase64)
+    const activeFlashJob = flashStatus?.activeJob || flashStatus?.recentJobs?.[0]
+    const flashConfirmationPhrase = flashStatus?.confirmationPhrase || thread?.setup?.flasher?.serverSideConfirmation || "FLASH OPENTHREAD RCP"
+    const flashConfirmationMatches = matterFlashConfirm.trim().toUpperCase() === flashConfirmationPhrase
+    const hasFirmwareSource = Boolean(usingCustomFirmware || latestFirmwareReady)
+    const serverFlashSupported = Boolean(flashTool?.available || flashTool?.canAutoInstall)
+    const canServerFlash = Boolean(serverFlashSupported && selectedThreadPath && rcpDetected)
+    const flashRunning = Boolean(activeFlashJob && ['queued', 'preparing', 'flashing'].includes(activeFlashJob.status))
+    const flashLogs = Array.isArray(activeFlashJob?.logs) ? activeFlashJob.logs.slice(-8) : []
 
     return (
       <Card className="border border-border/50 bg-white/80 shadow-lg backdrop-blur-sm dark:bg-slate-900/70">
@@ -966,6 +1110,189 @@ export function Devices({
               {matterStatus.startError}
             </div>
           ) : null}
+
+          <div className="space-y-3 rounded-[1rem] border border-cyan-500/20 bg-cyan-500/5 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-semibold text-foreground">Thread stick setup</p>
+                <p className="text-xs text-muted-foreground">
+                  {selectedThreadPath
+                    ? `Selected: ${selectedThreadPath}`
+                    : "Select the SONOFF MG24 stick, then flash OpenThread RCP and start OTBR."}
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {flasherUrl ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5 rounded-full px-3 text-xs"
+                    onClick={() => window.open(flasherUrl, "_blank", "noopener,noreferrer")}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    Flasher
+                  </Button>
+                ) : null}
+                {flasherAddOnUrl ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5 rounded-full px-3 text-xs"
+                    onClick={() => window.open(flasherAddOnUrl, "_blank", "noopener,noreferrer")}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    Host flash
+                  </Button>
+                ) : null}
+                {openThreadGuideUrl || otbrGuideUrl ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 gap-1.5 rounded-full px-3 text-xs"
+                    onClick={() => window.open(openThreadGuideUrl || otbrGuideUrl, "_blank", "noopener,noreferrer")}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                    Guide
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+
+            {threadPorts.length > 0 ? (
+              <div className="grid gap-2 lg:grid-cols-2">
+                {threadPorts.map((port: any) => {
+                  const portPath = port.path || port.stablePath || port.rawPath || ""
+                  const selected = Boolean(portPath && [port.path, port.stablePath, port.rawPath, port.realPath].filter(Boolean).includes(selectedThreadPath))
+                  return (
+                    <div key={portPath || port.serialNumber} className="flex items-center justify-between gap-3 rounded-md border border-border/70 bg-background/70 px-3 py-2 text-xs">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium text-foreground">{portPath || "SONOFF MG24"}</p>
+                        <p className="truncate text-muted-foreground">{port.serialNumber || port.pnpId || "No serial id reported"}</p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant={selected ? "secondary" : "outline"}
+                        size="sm"
+                        className="h-8 shrink-0 gap-1.5 rounded-full px-3 text-xs"
+                        disabled={selected || matterConfigSaving}
+                        onClick={() => void handleSelectThreadPort(portPath)}
+                      >
+                        {matterConfigSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Settings2 className="h-3.5 w-3.5" />}
+                        {selected ? "Selected" : "Use"}
+                      </Button>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-200">
+                No SONOFF MG24 Thread stick is detected yet.
+              </div>
+            )}
+
+            {setupActions.length > 0 ? (
+              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                {setupActions.map((action: any) => (
+                  <div key={action.id} className="rounded-md border border-border/70 bg-background/60 px-3 py-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-foreground">{action.label}</span>
+                      <Badge variant={action.status === "complete" ? "default" : action.status === "blocked" ? "destructive" : "secondary"} className="rounded-full text-[0.68rem]">
+                        {action.status}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">{action.detail}</p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            <div className="rounded-md border border-border/70 bg-background/70 px-3 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-semibold text-foreground">Flash from HomeBrain</p>
+                  <p className="text-xs text-muted-foreground">
+                    {flashTool?.available
+                      ? `Tool: ${flashTool.label || "universal-silabs-flasher"}`
+                      : flashTool?.installHint || "HomeBrain will install the flasher when flashing starts."}
+                  </p>
+                </div>
+                <Badge variant={canServerFlash ? "default" : "secondary"} className="rounded-full text-[0.68rem]">
+                  {flashTool?.available ? "ready" : canServerFlash ? "will install" : "not ready"}
+                </Badge>
+              </div>
+
+              <div className="mt-3 rounded-md border border-border/60 bg-background/80 px-3 py-2 text-xs">
+                {latestFirmwareReady ? (
+                  <>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-semibold text-foreground">
+                        Latest {latestFirmware.target?.productName || "SONOFF MG24"} OpenThread
+                      </span>
+                      <Badge variant="secondary" className="rounded-full text-[0.68rem]">
+                        {latestFirmware.firmware.sdkVersion || latestFirmware.firmware.version}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 truncate text-muted-foreground">{latestFirmware.firmware.name}</p>
+                    <p className="mt-1 text-muted-foreground">
+                      Verified from {latestFirmware.verification?.serialNumber || "USB descriptor"} against SONOFF firmware manifest.
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-amber-700 dark:text-amber-200">
+                    {latestFirmware?.error || "Checking SONOFF for the latest matching OpenThread firmware."}
+                  </p>
+                )}
+              </div>
+
+              <div className="mt-3 grid gap-2 lg:grid-cols-[1fr_1fr]">
+                <Input
+                  type="file"
+                  accept=".gbl"
+                  onChange={(event) => void handleMatterFirmwareFile(event.target.files?.[0])}
+                />
+                <Input
+                  value={matterFlashConfirm}
+                  onChange={(event) => setMatterFlashConfirm(event.target.value)}
+                  placeholder={`Type ${flashConfirmationPhrase}`}
+                />
+                <Button
+                  type="button"
+                  variant="destructive"
+                  className="lg:col-span-2"
+                  disabled={!canServerFlash || !hasFirmwareSource || !flashConfirmationMatches || matterFlashSaving || flashRunning}
+                  onClick={() => void handleMatterThreadFlash()}
+                >
+                  {matterFlashSaving || flashRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+                  {usingCustomFirmware ? "Flash Selected OpenThread RCP" : "Flash Latest OpenThread RCP"}
+                </Button>
+              </div>
+
+              {matterFirmwareName ? (
+                <p className="mt-2 truncate text-xs text-muted-foreground">Selected firmware: {matterFirmwareName}</p>
+              ) : null}
+
+              {activeFlashJob ? (
+                <div className="mt-3 rounded-md border border-border/60 bg-slate-950/90 p-3 text-xs text-slate-100">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold">{activeFlashJob.phase || activeFlashJob.status}</span>
+                    <Badge variant={activeFlashJob.status === "completed" ? "default" : activeFlashJob.status === "failed" ? "destructive" : "secondary"}>
+                      {activeFlashJob.status}
+                    </Badge>
+                  </div>
+                  {activeFlashJob.error ? <p className="mt-2 text-red-300">{activeFlashJob.error}</p> : null}
+                  {activeFlashJob.commandPreview ? <p className="mt-2 break-all text-slate-300">{activeFlashJob.commandPreview}</p> : null}
+                  {flashLogs.length > 0 ? (
+                    <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-[0.7rem] leading-relaxed text-slate-300">
+                      {flashLogs.map((entry: any) => `[${entry.stream}] ${entry.line}`).join("\n")}
+                    </pre>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </div>
 
           <div className="grid gap-3 lg:grid-cols-[1.2fr_0.8fr]">
             <div className="grid gap-2 sm:grid-cols-2">

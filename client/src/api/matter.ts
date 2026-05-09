@@ -18,6 +18,12 @@ export type MatterCommissioningPayload = {
   threadOperationalDataset?: string;
 };
 
+export type MatterThreadFirmwareFlashPayload = {
+  confirmFlash: string;
+  firmwareName?: string;
+  firmwareBase64?: string;
+};
+
 const apiErrorMessage = (error: any, fallback: string) => (
   error?.response?.data?.message || error?.response?.data?.error || error?.message || fallback
 );
@@ -39,6 +45,16 @@ export const getThreadStatus = async () => {
   } catch (error) {
     console.error('Error fetching Thread status:', error);
     throw new Error(apiErrorMessage(error, 'Failed to load Thread status'));
+  }
+};
+
+export const getMatterThreadFirmwareFlashStatus = async () => {
+  try {
+    const response = await api.get('/api/matter/thread/firmware-flash/status');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching Thread firmware flash status:', error);
+    throw new Error(apiErrorMessage(error, 'Failed to load Thread firmware flash status'));
   }
 };
 
@@ -69,5 +85,15 @@ export const updateMatterConfig = async (payload: Record<string, unknown>) => {
   } catch (error) {
     console.error('Error updating Matter config:', error);
     throw new Error(apiErrorMessage(error, 'Failed to update Matter configuration'));
+  }
+};
+
+export const startMatterThreadFirmwareFlash = async (payload: MatterThreadFirmwareFlashPayload) => {
+  try {
+    const response = await api.post('/api/matter/thread/firmware-flash/start', payload);
+    return response.data;
+  } catch (error) {
+    console.error('Error starting Thread firmware flash:', error);
+    throw new Error(apiErrorMessage(error, 'Failed to start Thread firmware flash'));
   }
 };

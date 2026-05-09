@@ -50,6 +50,34 @@ router.get('/thread/status', async (_req, res) => {
   }
 });
 
+router.get('/thread/firmware-flash/status', async (_req, res) => {
+  try {
+    const threadStatus = await matterService.getThreadStatus();
+    const status = await matterService.getThreadFirmwareFlashStatus({
+      selectedPort: threadStatus.selectedPort
+    });
+    res.status(200).json({
+      success: true,
+      status
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to get Thread firmware flash status');
+  }
+});
+
+router.post('/thread/firmware-flash/start', async (req, res) => {
+  try {
+    const job = await matterService.startThreadFirmwareFlash(req.body || {});
+    res.status(202).json({
+      success: true,
+      job,
+      status: await matterService.getThreadFirmwareFlashStatus()
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to start Thread firmware flash');
+  }
+});
+
 router.get('/devices', async (_req, res) => {
   try {
     const devices = await matterService.listMatterDevices();

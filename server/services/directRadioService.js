@@ -261,11 +261,14 @@ function enrichSerialPortForDirectRadios(port) {
   const zwaveScore = scorePortForProtocol(port, 'zwave');
   const likelyZigbee = zigbeeScore >= 8;
   const likelyZWave = zwaveScore >= 8;
-  const preferredProtocol = zigbeeScore > zwaveScore
-    ? 'zigbee'
-    : zwaveScore > zigbeeScore
-      ? 'zwave'
-      : null;
+  const likelyThread = looksLikeSonoffMg24ThreadStick(port);
+  const preferredProtocol = Math.max(zigbeeScore, zwaveScore) > 0
+    ? (zigbeeScore > zwaveScore
+      ? 'zigbee'
+      : zwaveScore > zigbeeScore
+        ? 'zwave'
+        : null)
+    : null;
 
   return {
     ...port,
@@ -275,25 +278,41 @@ function enrichSerialPortForDirectRadios(port) {
     },
     likelyZigbee,
     likelyZWave,
+    likelyThread,
     preferredProtocol
   };
+}
+
+function looksLikeSonoffMg24ThreadStick(port = {}) {
+  const descriptor = port?.descriptor || '';
+  const vendorId = trimString(port?.vendorId).toLowerCase();
+  const productId = trimString(port?.productId).toLowerCase();
+  return /(?:^|[^a-z0-9])(?:mg24|pmg24|dongle[-_ ]?m|dongle[-_ ]?plus[-_ ]?mg24|efr32mg24)(?=$|[^a-z0-9])/.test(descriptor)
+    && (
+      /\b(?:sonoff|itead|silicon labs|cp210)\b/.test(descriptor)
+        || (vendorId === '10c4' && productId === 'ea60')
+    );
 }
 
 function scorePortForProtocol(port, protocol) {
   const descriptor = port?.descriptor || '';
   const vendorId = trimString(port?.vendorId).toLowerCase();
   const productId = trimString(port?.productId).toLowerCase();
+  const isThreadCapableMg24 = looksLikeSonoffMg24ThreadStick(port);
   let score = 0;
 
   if (protocol === 'zigbee') {
-    if (/\b(?:sonoff|itead|zbdongle|zbdongle-p|zigbee|cc2652|cc1352|z-stack|zstack)\b/.test(descriptor)) score += 12;
+    if (/\b(?:zbdongle|zbdongle-p|zigbee|cc2652|cc1352|z-stack|zstack)\b/.test(descriptor)) score += 12;
+    if (/\b(?:sonoff|itead)\b/.test(descriptor) && /\b(?:zigbee|zbdongle|cc2652|cc1352)\b/.test(descriptor)) score += 2;
     if (/\b(?:cp2102|cp210x|silicon labs)\b/.test(descriptor)) score += 2;
     if (vendorId === '10c4' && productId === 'ea60') score += 2;
+    if (isThreadCapableMg24) score -= 10;
     if (/\b(?:z-wave|zwave|zst39|zooz|700 series|800 series|uzb)\b/.test(descriptor)) score -= 8;
   } else if (protocol === 'zwave') {
     if (/\b(?:z-wave|zwave|zst39|zooz|800 series|700 series|uzb|serialapi|serial api)\b/.test(descriptor)) score += 12;
     if (/\b(?:cp2102|cp210x|silicon labs)\b/.test(descriptor)) score += 2;
     if (vendorId === '10c4' && productId === 'ea60') score += 2;
+    if (isThreadCapableMg24) score -= 6;
     if (/\b(?:sonoff|itead|zbdongle|zigbee|cc2652|cc1352|z-stack|zstack)\b/.test(descriptor)) score -= 8;
   }
 
@@ -1922,6 +1941,7 @@ directRadioService._test = {
   addFallbackSerialPortCandidates,
   choosePortForProtocol,
   enrichSerialPortForDirectRadios,
+  looksLikeSonoffMg24ThreadStick,
   normalizeSerialPort,
   scorePortForProtocol
 };
