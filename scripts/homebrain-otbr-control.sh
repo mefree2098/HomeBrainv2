@@ -146,7 +146,11 @@ install_otbr_package_or_source() {
     INFRA_IF_NAME="$(detect_infra_if)"
     export REFERENCE_DEVICE=0
     export RELEASE=1
-    export NAT64=1
+    export REST_API=1
+    export WEB_GUI=0
+    export NAT64=0
+    export DNS64=0
+    export FIREWALL=0
     ./script/bootstrap
     ./script/setup
   )
