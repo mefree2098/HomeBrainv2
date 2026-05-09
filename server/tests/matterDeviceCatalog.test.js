@@ -126,6 +126,9 @@ test('Matter service guards Thread firmware flashing inputs and command construc
   assert.equal(matterService._test.normalizeThreadFirmwareFlashConfirmation('FLASH OPENTHREAD RCP'), true);
   assert.equal(matterService._test.normalizeThreadFirmwareFlashConfirmation('flash openthread rcp'), true);
   assert.equal(matterService._test.normalizeThreadFirmwareFlashConfirmation('FLASH ZIGBEE'), false);
+  assert.equal(matterService._test.normalizeThreadOtbrConfirmation('START THREAD BORDER ROUTER'), true);
+  assert.equal(matterService._test.normalizeThreadOtbrConfirmation('start thread border router'), true);
+  assert.equal(matterService._test.normalizeThreadOtbrConfirmation('START ZIGBEE'), false);
 
   assert.equal(matterService._test.sanitizeFirmwareFileName('../OpenThread RCP.gbl'), 'OpenThread_RCP.gbl');
   assert.throws(
@@ -170,6 +173,65 @@ test('Matter service guards Thread firmware flashing inputs and command construc
       '/tmp/openthread.gbl'
     ]
   );
+
+  assert.equal(
+    matterService._test.buildOtbrRadioUrl('/dev/serial/by-id/usb-SONOFF_MG24', '460800'),
+    'spinel+hdlc+uart:///dev/serial/by-id/usb-SONOFF_MG24?uart-baudrate=460800'
+  );
+  assert.equal(
+    matterService._test.buildOtbrRadioUrl('/dev/ttyUSB2', 'bad'),
+    'spinel+hdlc+uart:///dev/ttyUSB2?uart-baudrate=460800'
+  );
+  assert.equal(
+    matterService._test.parseHexDatasetFromText('Done\n0e080000000000010000\n'),
+    '0e080000000000010000'
+  );
+  assert.throws(
+    () => matterService._test.buildOtbrRadioUrl('/tmp/ttyUSB2', '460800'),
+    /OTBR radio device must be a local/
+  );
+});
+
+test('Matter Thread setup guidance marks completed OpenThread flash before OTBR starts', () => {
+  const port = {
+    path: '/dev/serial/by-id/usb-SONOFF_MG24',
+    stablePath: '/dev/serial/by-id/usb-SONOFF_MG24'
+  };
+  const guidance = matterService._test.buildThreadSetupGuidance({
+    expectedPorts: [port],
+    selectedPort: port,
+    otbr: {
+      online: false,
+      dataset: '',
+      baseUrl: 'http://127.0.0.1:8081'
+    },
+    activeDataset: '',
+    firmwareFlash: {
+      tool: {
+        available: true,
+        canAutoInstall: true
+      },
+      recentJobs: [
+        {
+          status: 'completed',
+          devicePath: port.path,
+          firmware: {
+            firmwareType: 'OpenThread',
+            version: '2.4.4'
+          }
+        }
+      ]
+    }
+  });
+
+  const flashAction = guidance.actions.find((action) => action.id === 'flash-openthread-rcp');
+  const otbrAction = guidance.actions.find((action) => action.id === 'start-otbr');
+
+  assert.equal(flashAction.status, 'complete');
+  assert.match(flashAction.detail, /OpenThread RCP firmware 2\.4\.4 was flashed successfully/);
+  assert.equal(otbrAction.status, 'required');
+  assert.match(otbrAction.detail, /HomeBrain-managed OTBR/);
+  assert.equal(guidance.otbr.serverSideConfirmation, 'START THREAD BORDER ROUTER');
 });
 
 test('Matter service selects the latest SONOFF OpenThread firmware for the connected PMG24 stick', () => {

@@ -24,6 +24,12 @@ export type MatterThreadFirmwareFlashPayload = {
   firmwareBase64?: string;
 };
 
+export type MatterThreadOtbrStartPayload = {
+  confirmOtbr: string;
+  networkName?: string;
+  baudRate?: string;
+};
+
 const apiErrorMessage = (error: any, fallback: string) => (
   error?.response?.data?.message || error?.response?.data?.error || error?.message || fallback
 );
@@ -55,6 +61,16 @@ export const getMatterThreadFirmwareFlashStatus = async () => {
   } catch (error) {
     console.error('Error fetching Thread firmware flash status:', error);
     throw new Error(apiErrorMessage(error, 'Failed to load Thread firmware flash status'));
+  }
+};
+
+export const getMatterThreadOtbrStatus = async () => {
+  try {
+    const response = await api.get('/api/matter/thread/otbr/status');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching Thread OTBR status:', error);
+    throw new Error(apiErrorMessage(error, 'Failed to load Thread border router status'));
   }
 };
 
@@ -95,5 +111,15 @@ export const startMatterThreadFirmwareFlash = async (payload: MatterThreadFirmwa
   } catch (error) {
     console.error('Error starting Thread firmware flash:', error);
     throw new Error(apiErrorMessage(error, 'Failed to start Thread firmware flash'));
+  }
+};
+
+export const startMatterThreadOtbr = async (payload: MatterThreadOtbrStartPayload) => {
+  try {
+    const response = await api.post('/api/matter/thread/otbr/start', payload);
+    return response.data;
+  } catch (error) {
+    console.error('Error starting Thread border router:', error);
+    throw new Error(apiErrorMessage(error, 'Failed to start Thread border router'));
   }
 };
