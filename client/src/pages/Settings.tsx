@@ -11,7 +11,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { WakeWordManager } from "@/components/voice/WakeWordManager"
 import {
   Settings as SettingsIcon,
-  Wifi,
   Volume2,
   Mic,
   MapPin,
@@ -161,6 +160,7 @@ import { RainMachineIntegrationCard } from "@/components/rainmachine/RainMachine
 import { HardwareOrbsTab } from "@/components/settings/HardwareOrbsTab"
 import { DeviceCommandCoordinatorTab } from "@/components/settings/DeviceCommandCoordinatorTab"
 import { DirectRadioAdminCard } from "@/components/settings/DirectRadioAdminCard"
+import { MatterThreadIntegrationCard } from "@/components/settings/MatterThreadIntegrationCard"
 import { CodexSkillIntegration } from "./CodexSkillIntegration"
 import { OpenClawIntegration } from "./OpenClawIntegration"
 
@@ -5237,16 +5237,17 @@ export function Settings() {
               </TabsContent>
 
               <TabsContent value="devices" className="space-y-6">
-            <DirectRadioAdminCard />
+                <MatterThreadIntegrationCard />
+                <DirectRadioAdminCard />
 
-            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Wifi className="h-5 w-5 text-blue-600" />
-                  Device Integrations
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
+                <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      <HardDrive className="h-5 w-5 text-blue-600" />
+                      INSTEON
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
                 <div className="space-y-3">
                   <div>
                     <label className="text-sm font-medium">INSTEON PLM Endpoint</label>
