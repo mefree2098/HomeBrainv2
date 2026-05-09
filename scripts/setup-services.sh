@@ -24,6 +24,8 @@ RESTART_HELPER_SOURCE_PATH="${HOMEBRAIN_DIR}/scripts/restart-homebrain-service.s
 RESTART_HELPER_INSTALL_PATH="${HOMEBRAIN_HELPER_INSTALL_DIR}/restart-homebrain-service.sh"
 RESTORE_HELPER_SOURCE_PATH="${HOMEBRAIN_DIR}/scripts/restore-homebrain-backup.sh"
 RESTORE_HELPER_INSTALL_PATH="${HOMEBRAIN_HELPER_INSTALL_DIR}/restore-homebrain-backup.sh"
+OTBR_HELPER_SOURCE_PATH="${HOMEBRAIN_DIR}/scripts/homebrain-otbr-control.sh"
+OTBR_HELPER_INSTALL_PATH="${HOMEBRAIN_HELPER_INSTALL_DIR}/homebrain-otbr-control.sh"
 OLLAMA_PRIVILEGE_OVERRIDE_PATH="${SERVICE_DROPIN_DIR}/99-ollama-helper.conf"
 OLLAMA_SERVICE_DROPIN_DIR="/etc/systemd/system/ollama.service.d"
 OLLAMA_RESOURCE_GUARD_PATH="${OLLAMA_SERVICE_DROPIN_DIR}/10-homebrain-resource-guard.conf"
@@ -572,6 +574,7 @@ EOF
 
   sudo systemctl daemon-reload
   sudo systemctl enable "${SERVICE_NAME}"
+  install_otbr_privileged_helper
   configure_deploy_sudoers
   print_success "Service installed and enabled."
 }
@@ -600,6 +603,21 @@ install_ollama_privileged_helper() {
   sudo install -m 0755 "${OLLAMA_HELPER_SOURCE_PATH}" "${OLLAMA_HELPER_INSTALL_PATH}"
   sudo chown root:root "${OLLAMA_HELPER_INSTALL_PATH}"
   print_success "Installed Ollama privilege helper to ${OLLAMA_HELPER_INSTALL_PATH}."
+}
+
+install_otbr_privileged_helper() {
+  require_repo
+
+  if [[ ! -f "${OTBR_HELPER_SOURCE_PATH}" ]]; then
+    print_error "OTBR privilege helper not found at ${OTBR_HELPER_SOURCE_PATH}"
+    exit 1
+  fi
+
+  print_status "Installing the HomeBrain OTBR privilege helper..."
+  sudo install -d -m 0755 "${HOMEBRAIN_HELPER_INSTALL_DIR}"
+  sudo install -m 0755 "${OTBR_HELPER_SOURCE_PATH}" "${OTBR_HELPER_INSTALL_PATH}"
+  sudo chown root:root "${OTBR_HELPER_INSTALL_PATH}"
+  print_success "Installed OTBR privilege helper to ${OTBR_HELPER_INSTALL_PATH}."
 }
 
 configure_ollama_resource_guard() {
@@ -652,6 +670,7 @@ configure_deploy_sudoers() {
     "${OLLAMA_HELPER_INSTALL_PATH} update"
     "${OLLAMA_HELPER_INSTALL_PATH} stop-system"
     "${OLLAMA_HELPER_INSTALL_PATH} probe"
+    "${OTBR_HELPER_INSTALL_PATH} *"
     "/usr/sbin/reboot"
     "/sbin/reboot"
     "/usr/bin/reboot"
@@ -682,6 +701,7 @@ EOF
 refresh_privileges() {
   configure_homebrain_ollama_privilege_override
   install_ollama_privileged_helper
+  install_otbr_privileged_helper
   configure_ollama_resource_guard
   configure_mongodb_resource_guard
   configure_deploy_sudoers
@@ -1065,7 +1085,7 @@ Usage: $0 <command>
 
 Commands:
   install-service   Write /etc/systemd/system/homebrain.service plus restart/restore helpers
-  refresh-privileges Install the Ollama helper and refresh HomeBrain sudoers
+  refresh-privileges Install privileged helpers and refresh HomeBrain sudoers
   configure-mongodb Write the MongoDB WiredTiger cache guard
   setup-caddy       Install Caddy as the native public edge service
   start             Start MongoDB and HomeBrain

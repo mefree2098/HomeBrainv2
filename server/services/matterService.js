@@ -29,11 +29,15 @@ const THREAD_FLASH_MANAGED_VENV_DIR = path.join(MATTER_DATA_DIR, 'silabs-flasher
 const DEFAULT_OTBR_REST_URL = process.env.HOMEBRAIN_OTBR_REST_URL || 'http://127.0.0.1:8081';
 const DEFAULT_COMMISSIONING_TIMEOUT_SECONDS = Math.max(20, Number(process.env.HOMEBRAIN_MATTER_COMMISSIONING_TIMEOUT_SECONDS || 90));
 const THREAD_FLASH_CONFIRMATION = 'FLASH OPENTHREAD RCP';
+const THREAD_OTBR_CONFIRMATION = 'START THREAD BORDER ROUTER';
 const THREAD_FLASH_MAX_FIRMWARE_BYTES = Math.max(
   1024 * 1024,
   Number(process.env.HOMEBRAIN_THREAD_FLASH_MAX_BYTES || 6 * 1024 * 1024)
 );
 const THREAD_FLASH_LOG_LIMIT = Math.max(50, Number(process.env.HOMEBRAIN_THREAD_FLASH_LOG_LIMIT || 250));
+const THREAD_OTBR_LOG_LIMIT = Math.max(50, Number(process.env.HOMEBRAIN_THREAD_OTBR_LOG_LIMIT || 250));
+const THREAD_OTBR_START_TIMEOUT_MS = Math.max(60_000, Number(process.env.HOMEBRAIN_THREAD_OTBR_START_TIMEOUT_MS || 30 * 60_000));
+const THREAD_OTBR_HELPER_PATH = process.env.HOMEBRAIN_OTBR_HELPER_PATH || '/usr/local/lib/homebrain/homebrain-otbr-control.sh';
 const UNIVERSAL_SILABS_FLASHER_REPO_URL = 'https://github.com/NabuCasa/universal-silabs-flasher';
 const UNIVERSAL_SILABS_FLASHER_INSTALL_HINT = 'HomeBrain can install universal-silabs-flasher into its managed Matter venv when flashing starts.';
 const SONOFF_DONGLE_HARDWARE_BASE_URL = 'https://dongle.sonoff.tech/dongle-flasher/dongle-hardware';
@@ -725,6 +729,69 @@ function buildThreadFirmwareFlashCommand(tool, options) {
   };
 }
 
+function normalizeThreadOtbrConfirmation(value) {
+  return normalizeString(value).toUpperCase() === THREAD_OTBR_CONFIRMATION;
+}
+
+function normalizeThreadBaudRate(value, fallback = '460800') {
+  const text = normalizeString(value) || fallback;
+  return /^[0-9]{4,8}$/.test(text) ? text : fallback;
+}
+
+function buildOtbrRadioUrl(devicePath, baudRate = '460800') {
+  const pathValue = normalizeString(devicePath);
+  if (!pathValue.startsWith('/dev/')) {
+    throw new Error('OTBR radio device must be a local /dev serial path');
+  }
+  return `spinel+hdlc+uart://${pathValue}?uart-baudrate=${normalizeThreadBaudRate(baudRate)}`;
+}
+
+function parseHexDatasetFromText(value) {
+  return String(value || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => /^[0-9a-f]+$/i.test(line)) || '';
+}
+
+function runSync(command, args = [], options = {}) {
+  const result = spawnSync(command, args, {
+    encoding: 'utf8',
+    timeout: options.timeout || 5000,
+    ...options
+  });
+  return {
+    ok: result.status === 0,
+    status: result.status,
+    signal: result.signal,
+    stdout: normalizeString(result.stdout),
+    stderr: normalizeString(result.stderr),
+    error: result.error?.message || ''
+  };
+}
+
+function commandExists(command) {
+  const result = runSync('bash', ['-lc', `command -v ${command} 2>/dev/null`]);
+  return result.ok && Boolean(result.stdout);
+}
+
+function systemctlValue(args = []) {
+  const result = runSync('systemctl', args, { timeout: 4000 });
+  return result.ok ? result.stdout : '';
+}
+
+function findCompletedThreadFirmwareFlash(firmwareFlash = {}, selectedPath = '') {
+  const selected = normalizeString(selectedPath);
+  const jobs = Array.isArray(firmwareFlash?.recentJobs) ? firmwareFlash.recentJobs : [];
+  return jobs.find((job) => {
+    if (job?.status !== 'completed') {
+      return false;
+    }
+    const jobPath = normalizeString(job.devicePath);
+    const type = normalizeLower(job?.firmware?.firmwareType || job?.firmware?.target?.firmwareType);
+    return (!selected || jobPath === selected) && type === 'openthread';
+  }) || null;
+}
+
 function buildThreadSetupGuidance({
   expectedPorts = [],
   selectedPort = null,
@@ -734,6 +801,7 @@ function buildThreadSetupGuidance({
 }) {
   const selectedPath = selectedPort?.path || selectedPort?.stablePath || selectedPort?.rawPath || '';
   const canServerFlash = Boolean(firmwareFlash?.tool?.available || firmwareFlash?.tool?.canAutoInstall);
+  const completedFlash = findCompletedThreadFirmwareFlash(firmwareFlash, selectedPath);
   const actions = [];
 
   actions.push({
@@ -759,9 +827,11 @@ function buildThreadSetupGuidance({
   actions.push({
     id: 'flash-openthread-rcp',
     label: 'Flash OpenThread RCP firmware',
-    status: otbr.online ? 'complete' : (expectedPorts.length > 0 ? 'recommended' : 'blocked'),
+    status: (otbr.online || completedFlash) ? 'complete' : (expectedPorts.length > 0 ? 'recommended' : 'blocked'),
     detail: otbr.online
       ? 'OTBR is responding, so the Thread radio path is active.'
+      : completedFlash
+        ? `OpenThread RCP firmware ${completedFlash?.firmware?.version || completedFlash?.firmware?.name || ''} was flashed successfully.`
       : canServerFlash
         ? 'Use HomeBrain to download the latest matching SONOFF OpenThread RCP firmware and flash the selected MG24 stick, then start OTBR.'
         : 'Install universal-silabs-flasher on the HomeBrain host, or use the SONOFF Dongle Flasher with the stick attached to the browser computer.',
@@ -776,7 +846,9 @@ function buildThreadSetupGuidance({
     status: otbr.online ? 'complete' : 'required',
     detail: otbr.online
       ? `OTBR REST is online at ${otbr.baseUrl}.`
-      : 'OTBR is not answering yet; Thread commissioning needs an active border router and dataset.',
+      : completedFlash
+        ? 'Start HomeBrain-managed OTBR so the flashed MG24 can provide an active Thread dataset.'
+        : 'OTBR is not answering yet; flash the MG24 with OpenThread RCP, then start the border router.',
     guideUrl: OPENTHREAD_OTBR_GUIDE_URL
   });
 
@@ -803,7 +875,8 @@ function buildThreadSetupGuidance({
     },
     otbr: {
       restUrl: otbr.baseUrl || DEFAULT_OTBR_REST_URL,
-      guideUrl: OPENTHREAD_OTBR_GUIDE_URL
+      guideUrl: OPENTHREAD_OTBR_GUIDE_URL,
+      serverSideConfirmation: THREAD_OTBR_CONFIRMATION
     },
     actions
   };
@@ -905,6 +978,8 @@ class MatterService {
     this.lastThreadStatus = null;
     this.threadFirmwareFlashJobs = new Map();
     this.activeThreadFirmwareFlashJobId = null;
+    this.threadOtbrJobs = new Map();
+    this.activeThreadOtbrJobId = null;
     this.threadFirmwareFlashToolCache = null;
     this.sonoffFirmwareManifestCache = null;
   }
@@ -985,6 +1060,7 @@ class MatterService {
 
   async start() {
     if (this.started) {
+      await this.ensureControllerIfConfigured();
       return this.getStatus();
     }
 
@@ -996,12 +1072,7 @@ class MatterService {
       await this.loadSessions();
       this.detectedSerialPorts = await this.detectSerialPorts();
       this.lastThreadStatus = await this.getThreadStatus({ refreshPorts: false });
-      if (this.config.autoStartController && this.config.enabled) {
-        await this.ensureController().catch((error) => {
-          this.startError = error.message;
-          console.warn(`MatterService: Matter controller startup deferred: ${error.message}`);
-        });
-      }
+      await this.ensureControllerIfConfigured();
     } catch (error) {
       this.startError = error.message;
       console.warn(`MatterService: Startup failed: ${error.message}`);
@@ -1017,6 +1088,21 @@ class MatterService {
     this.controller = null;
     this.controllerStartPromise = null;
     this.started = false;
+  }
+
+  async ensureControllerIfConfigured() {
+    const config = await this.loadConfig();
+    if (!config.autoStartController || !config.enabled || this.controller || this.controllerStartPromise) {
+      return;
+    }
+
+    try {
+      await this.ensureController();
+      this.startError = null;
+    } catch (error) {
+      this.startError = error.message;
+      console.warn(`MatterService: Matter controller startup deferred: ${error.message}`);
+    }
   }
 
   async detectSerialPorts() {
@@ -1040,8 +1126,8 @@ class MatterService {
     }
   }
 
-  async checkOtbrRest() {
-    const baseUrl = normalizeOtbrRestUrl(DEFAULT_OTBR_REST_URL);
+  async checkOtbrRest(restUrl = DEFAULT_OTBR_REST_URL) {
+    const baseUrl = normalizeOtbrRestUrl(restUrl);
     const candidates = [
       '/node/dataset/active',
       '/node/dataset/active/tlvs',
@@ -1107,6 +1193,227 @@ class MatterService {
     }
 
     return '';
+  }
+
+  async getThreadOtbrHostStatus(options = {}) {
+    const activeJob = this.activeThreadOtbrJobId
+      ? this.threadOtbrJobs.get(this.activeThreadOtbrJobId)
+      : null;
+    const recentJobs = Array.from(this.threadOtbrJobs.values())
+      .sort((left, right) => new Date(right.updatedAt || 0) - new Date(left.updatedAt || 0))
+      .slice(0, 5)
+      .map((job) => this.serializeThreadOtbrJob(job, { includeLogs: options.includeLogs !== false }));
+    const serviceActive = systemctlValue(['is-active', 'otbr-agent']);
+    const serviceEnabled = systemctlValue(['is-enabled', 'otbr-agent']);
+    const mainPid = systemctlValue(['show', '-p', 'MainPID', '--value', 'otbr-agent']);
+    const helperAvailable = fs.existsSync(THREAD_OTBR_HELPER_PATH);
+    const otbrAgentInstalled = commandExists('otbr-agent') || fs.existsSync('/usr/sbin/otbr-agent') || fs.existsSync('/usr/local/sbin/otbr-agent');
+    const otCtlInstalled = commandExists('ot-ctl') || fs.existsSync('/usr/sbin/ot-ctl') || fs.existsSync('/usr/local/bin/ot-ctl');
+    const datasetProbe = otCtlInstalled ? runSync('bash', ['-lc', 'ot-ctl dataset active -x 2>/dev/null || true'], { timeout: 7000 }) : null;
+    const stateProbe = otCtlInstalled ? runSync('bash', ['-lc', 'ot-ctl state 2>/dev/null || true'], { timeout: 7000 }) : null;
+
+    return {
+      confirmationPhrase: THREAD_OTBR_CONFIRMATION,
+      helperPath: THREAD_OTBR_HELPER_PATH,
+      helperAvailable,
+      canAutoInstall: helperAvailable,
+      serviceName: 'otbr-agent',
+      serviceActive: serviceActive || 'unknown',
+      serviceEnabled: serviceEnabled || 'unknown',
+      mainPid: mainPid && mainPid !== '0' ? mainPid : null,
+      otbrAgentInstalled,
+      otCtlInstalled,
+      state: stateProbe?.stdout || '',
+      dataset: parseHexDatasetFromText(datasetProbe?.stdout || ''),
+      activeJob: activeJob ? this.serializeThreadOtbrJob(activeJob, { includeLogs: options.includeLogs !== false }) : null,
+      recentJobs
+    };
+  }
+
+  createThreadOtbrJob({ devicePath, baudRate, networkName }) {
+    const id = `thread-otbr-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
+    const now = new Date().toISOString();
+    const job = {
+      id,
+      status: 'queued',
+      phase: 'queued',
+      createdAt: now,
+      updatedAt: now,
+      finishedAt: null,
+      error: null,
+      devicePath,
+      baudRate,
+      radioUrl: buildOtbrRadioUrl(devicePath, baudRate),
+      networkName,
+      logs: [],
+      result: null
+    };
+    this.threadOtbrJobs.set(id, job);
+    this.activeThreadOtbrJobId = id;
+    return job;
+  }
+
+  serializeThreadOtbrJob(job, options = {}) {
+    if (!job) {
+      return null;
+    }
+    return {
+      id: job.id,
+      status: job.status,
+      phase: job.phase,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      finishedAt: job.finishedAt,
+      error: job.error,
+      devicePath: job.devicePath,
+      baudRate: job.baudRate,
+      radioUrl: job.radioUrl,
+      networkName: job.networkName,
+      result: job.result,
+      logs: options.includeLogs === false ? [] : job.logs.slice(-THREAD_OTBR_LOG_LIMIT)
+    };
+  }
+
+  updateThreadOtbrJob(job, updates = {}) {
+    Object.assign(job, updates, {
+      updatedAt: new Date().toISOString()
+    });
+    return job;
+  }
+
+  appendThreadOtbrLog(job, stream, chunk) {
+    String(chunk || '')
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .filter(Boolean)
+      .forEach((line) => {
+        job.logs.push({
+          at: new Date().toISOString(),
+          stream,
+          line
+        });
+      });
+    if (job.logs.length > THREAD_OTBR_LOG_LIMIT) {
+      job.logs.splice(0, job.logs.length - THREAD_OTBR_LOG_LIMIT);
+    }
+    job.updatedAt = new Date().toISOString();
+  }
+
+  async startThreadBorderRouter(payload = {}) {
+    if (!normalizeThreadOtbrConfirmation(payload.confirmOtbr || payload.confirm || payload.confirmStart)) {
+      const error = new Error(`Type ${THREAD_OTBR_CONFIRMATION} to start HomeBrain-managed OTBR.`);
+      error.status = 400;
+      throw error;
+    }
+
+    if (this.activeThreadOtbrJobId) {
+      const active = this.threadOtbrJobs.get(this.activeThreadOtbrJobId);
+      if (active && ['queued', 'preparing', 'starting'].includes(active.status)) {
+        const error = new Error('An OTBR start job is already running.');
+        error.status = 409;
+        throw error;
+      }
+    }
+
+    const config = await this.loadConfig();
+    const threadStatus = await this.getThreadStatus();
+    const selectedPort = threadStatus.selectedPort;
+    const devicePath = selectedPort?.path || selectedPort?.stablePath || selectedPort?.rawPath || '';
+    if (!devicePath) {
+      const error = new Error('No SONOFF MG24 Thread stick is selected.');
+      error.status = 400;
+      throw error;
+    }
+
+    const latestFirmware = threadStatus?.firmwareFlash?.latestFirmware?.firmware;
+    const baudRate = normalizeThreadBaudRate(payload.baudRate || latestFirmware?.baudRate || '460800');
+    const networkName = normalizeString(payload.networkName || config.thread?.networkName) || 'HomeBrain Thread';
+    const job = this.createThreadOtbrJob({ devicePath, baudRate, networkName });
+
+    void this.runThreadBorderRouterJob(job).catch((error) => {
+      this.updateThreadOtbrJob(job, {
+        status: 'failed',
+        phase: 'failed',
+        finishedAt: new Date().toISOString(),
+        error: error.message || 'OTBR start failed'
+      });
+      this.activeThreadOtbrJobId = null;
+      this.lastThreadStatus = null;
+    });
+
+    return this.serializeThreadOtbrJob(job);
+  }
+
+  async runThreadBorderRouterJob(job) {
+    this.updateThreadOtbrJob(job, { status: 'preparing', phase: 'preparing' });
+
+    await new Promise((resolve, reject) => {
+      const args = [
+        '-n',
+        THREAD_OTBR_HELPER_PATH,
+        'start',
+        '--device',
+        job.devicePath,
+        '--baud',
+        job.baudRate,
+        '--radio-url',
+        job.radioUrl,
+        '--network-name',
+        job.networkName
+      ];
+
+      const child = spawn('sudo', args, {
+        cwd: path.dirname(THREAD_OTBR_HELPER_PATH),
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+      const timer = setTimeout(() => {
+        child.kill('SIGTERM');
+        reject(new Error(`OTBR helper timed out after ${Math.round(THREAD_OTBR_START_TIMEOUT_MS / 1000)} seconds`));
+      }, THREAD_OTBR_START_TIMEOUT_MS);
+
+      this.updateThreadOtbrJob(job, { status: 'starting', phase: 'starting' });
+      child.stdout.on('data', (chunk) => this.appendThreadOtbrLog(job, 'stdout', chunk));
+      child.stderr.on('data', (chunk) => this.appendThreadOtbrLog(job, 'stderr', chunk));
+      child.on('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.on('close', (code, signal) => {
+        clearTimeout(timer);
+        if (code === 0) {
+          resolve();
+          return;
+        }
+        reject(new Error(`OTBR helper exited with ${signal || `code ${code}`}`));
+      });
+    });
+
+    const config = await this.loadConfig();
+    let otbr = await this.checkOtbrRest(config.otbrRestUrl);
+    for (let attempt = 0; attempt < 10 && (!otbr.online || !otbr.dataset); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      otbr = await this.checkOtbrRest(config.otbrRestUrl);
+    }
+
+    const otbrHost = await this.getThreadOtbrHostStatus({ includeLogs: false });
+    this.updateThreadOtbrJob(job, {
+      status: otbr.online && (otbr.dataset || otbrHost.dataset) ? 'completed' : 'failed',
+      phase: otbr.online && (otbr.dataset || otbrHost.dataset) ? 'completed' : 'failed',
+      finishedAt: new Date().toISOString(),
+      error: otbr.online && (otbr.dataset || otbrHost.dataset)
+        ? null
+        : 'OTBR started, but HomeBrain could not read an active Thread dataset from OTBR.',
+      result: {
+        otbr,
+        otbrHost
+      }
+    });
+    this.activeThreadOtbrJobId = null;
+    this.lastThreadStatus = null;
+
+    if (!job.error && !this.controller) {
+      await this.ensureControllerIfConfigured();
+    }
   }
 
   createThreadFirmwareFlashJob(devicePath, tool) {
@@ -1627,10 +1934,14 @@ class MatterService {
     const selectedPort = expectedPorts.find((port) => serialPortMatchesPath(port, config.preferredThreadPort))
       || expectedPorts[0]
       || null;
-    const otbr = await this.checkOtbrRest();
+    const otbr = await this.checkOtbrRest(config.otbrRestUrl);
     const configuredDataset = normalizeString(config.thread?.operationalDataset);
     const activeDataset = configuredDataset || otbr.dataset || '';
     const firmwareFlash = await this.getThreadFirmwareFlashStatus({
+      includeLogs: false,
+      selectedPort
+    });
+    const otbrHost = await this.getThreadOtbrHostStatus({
       includeLogs: false,
       selectedPort
     });
@@ -1655,6 +1966,7 @@ class MatterService {
         hasActiveDataset: Boolean(activeDataset),
         activeDatasetSource: configuredDataset ? 'homebrain-config' : (otbr.dataset ? 'otbr-rest' : null)
       },
+      otbrHost,
       readyForThreadCommissioning: Boolean(expectedPorts.length > 0 && activeDataset),
       setup,
       firmwareFlash,
@@ -2016,7 +2328,7 @@ class MatterService {
     if (configured) {
       return configured;
     }
-    const otbr = await this.checkOtbrRest();
+    const otbr = await this.checkOtbrRest(config.otbrRestUrl);
     return normalizeString(otbr.dataset);
   }
 
@@ -2525,6 +2837,7 @@ const matterService = new MatterService();
 matterService.MatterService = MatterService;
 matterService._test = {
   addFallbackSerialPortCandidates,
+  buildOtbrRadioUrl,
   buildThreadFirmwareFlashCommand,
   buildManualSteps,
   buildThreadSetupGuidance,
@@ -2536,11 +2849,14 @@ matterService._test = {
   isAllowedLocalOtbrHost,
   isTrustedSonoffFirmwareUrl,
   looksLikeSonoffMg24Port,
+  normalizeThreadBaudRate,
   normalizeThreadFirmwareFlashConfirmation,
+  normalizeThreadOtbrConfirmation,
   normalizeSerialPort,
   normalizeOtbrRestUrl,
   normalizeTransport,
   normalizeSonoffFirmwareEntry,
+  parseHexDatasetFromText,
   parseKnownAddress,
   sanitizeFirmwareFileName,
   selectLatestSonoffThreadFirmware,

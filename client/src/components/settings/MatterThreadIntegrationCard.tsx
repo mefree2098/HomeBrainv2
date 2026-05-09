@@ -10,6 +10,7 @@ import {
   ExternalLink,
   Loader2,
   Network,
+  Power,
   Radio,
   Settings2,
   Upload,
@@ -18,9 +19,11 @@ import {
 import {
   getMatterCommissioningSessions,
   getMatterThreadFirmwareFlashStatus,
+  getMatterThreadOtbrStatus,
   getMatterStatus,
   startMatterCommissioning,
   startMatterThreadFirmwareFlash,
+  startMatterThreadOtbr,
   updateMatterConfig,
   type MatterTransport
 } from "@/api/matter"
@@ -33,10 +36,12 @@ export function MatterThreadIntegrationCard() {
   const [matterStatus, setMatterStatus] = useState<any | null>(null)
   const [matterSessions, setMatterSessions] = useState<any[]>([])
   const [matterFlashStatus, setMatterFlashStatus] = useState<any | null>(null)
+  const [matterOtbrStatus, setMatterOtbrStatus] = useState<any | null>(null)
   const [matterLoading, setMatterLoading] = useState(false)
   const [matterCommissioning, setMatterCommissioning] = useState(false)
   const [matterConfigSaving, setMatterConfigSaving] = useState(false)
   const [matterFlashSaving, setMatterFlashSaving] = useState(false)
+  const [matterOtbrSaving, setMatterOtbrSaving] = useState(false)
   const [matterSetupCode, setMatterSetupCode] = useState("")
   const [matterTransport, setMatterTransport] = useState<MatterTransport>("thread")
   const [matterKnownAddress, setMatterKnownAddress] = useState("")
@@ -48,6 +53,8 @@ export function MatterThreadIntegrationCard() {
   const [matterFirmwareName, setMatterFirmwareName] = useState("")
   const [matterFirmwareBase64, setMatterFirmwareBase64] = useState("")
   const [matterFlashConfirm, setMatterFlashConfirm] = useState("")
+  const [matterOtbrConfirm, setMatterOtbrConfirm] = useState("")
+  const [matterThreadNetworkName, setMatterThreadNetworkName] = useState("")
 
   const loadMatterController = useCallback(async () => {
     if (!isAdmin) {
@@ -56,14 +63,16 @@ export function MatterThreadIntegrationCard() {
 
     setMatterLoading(true)
     try {
-      const [statusResponse, sessionsResponse, flashResponse] = await Promise.all([
+      const [statusResponse, sessionsResponse, flashResponse, otbrResponse] = await Promise.all([
         getMatterStatus(),
         getMatterCommissioningSessions(),
-        getMatterThreadFirmwareFlashStatus()
+        getMatterThreadFirmwareFlashStatus(),
+        getMatterThreadOtbrStatus()
       ])
       setMatterStatus(statusResponse?.status || null)
       setMatterSessions(Array.isArray(sessionsResponse?.sessions) ? sessionsResponse.sessions : [])
       setMatterFlashStatus(flashResponse?.status || null)
+      setMatterOtbrStatus(otbrResponse?.status || null)
     } catch (error: any) {
       console.warn("Failed to load Matter controller status:", error)
     } finally {
@@ -77,7 +86,10 @@ export function MatterThreadIntegrationCard() {
 
   useEffect(() => {
     const activeFlash = matterFlashStatus?.activeJob
-    if (!activeFlash || !["queued", "preparing", "flashing"].includes(activeFlash.status)) {
+    const activeOtbr = matterOtbrStatus?.activeJob
+    const flashRunning = activeFlash && ["queued", "preparing", "flashing"].includes(activeFlash.status)
+    const otbrRunning = activeOtbr && ["queued", "preparing", "starting"].includes(activeOtbr.status)
+    if (!flashRunning && !otbrRunning) {
       return undefined
     }
 
@@ -85,7 +97,13 @@ export function MatterThreadIntegrationCard() {
       void loadMatterController()
     }, 3000)
     return () => window.clearInterval(timer)
-  }, [matterFlashStatus?.activeJob?.id, matterFlashStatus?.activeJob?.status, loadMatterController])
+  }, [
+    matterFlashStatus?.activeJob?.id,
+    matterFlashStatus?.activeJob?.status,
+    matterOtbrStatus?.activeJob?.id,
+    matterOtbrStatus?.activeJob?.status,
+    loadMatterController
+  ])
 
   const handleMatterCommissioning = async () => {
     const setupCode = matterSetupCode.trim()
@@ -218,6 +236,31 @@ export function MatterThreadIntegrationCard() {
     }
   }
 
+  const handleStartOtbr = async () => {
+    const confirmOtbr = matterOtbrConfirm.trim()
+    setMatterOtbrSaving(true)
+    try {
+      await startMatterThreadOtbr({
+        confirmOtbr,
+        networkName: matterThreadNetworkName.trim() || undefined
+      })
+      setMatterOtbrConfirm("")
+      toast({
+        title: "Thread border router starting",
+        description: "HomeBrain is installing or configuring OTBR and creating an active Thread dataset."
+      })
+      await loadMatterController()
+    } catch (error: any) {
+      toast({
+        title: "Thread border router failed",
+        description: error.message || "Unable to start the Thread border router.",
+        variant: "destructive"
+      })
+    } finally {
+      setMatterOtbrSaving(false)
+    }
+  }
+
   if (!isAdmin) {
     return null
   }
@@ -251,7 +294,8 @@ export function MatterThreadIntegrationCard() {
   const latestFirmware = flashStatus?.latestFirmware
   const latestFirmwareReady = Boolean(latestFirmware?.available && latestFirmware?.firmware?.url)
   const usingCustomFirmware = Boolean(matterFirmwareBase64)
-  const activeFlashJob = flashStatus?.activeJob || flashStatus?.recentJobs?.[0]
+  const recentFlashJobs = Array.isArray(flashStatus?.recentJobs) ? flashStatus.recentJobs : []
+  const activeFlashJob = flashStatus?.activeJob || recentFlashJobs[0]
   const flashConfirmationPhrase = flashStatus?.confirmationPhrase || thread?.setup?.flasher?.serverSideConfirmation || "FLASH OPENTHREAD RCP"
   const flashConfirmationMatches = matterFlashConfirm.trim().toUpperCase() === flashConfirmationPhrase.trim().toUpperCase()
   const hasFirmwareSource = Boolean(usingCustomFirmware || latestFirmwareReady)
@@ -259,6 +303,43 @@ export function MatterThreadIntegrationCard() {
   const canServerFlash = Boolean(serverFlashSupported && selectedThreadPath && rcpDetected)
   const flashRunning = Boolean(activeFlashJob && ["queued", "preparing", "flashing"].includes(activeFlashJob.status))
   const flashLogs = Array.isArray(activeFlashJob?.logs) ? activeFlashJob.logs.slice(-8) : []
+  const flashAction = setupActions.find((action: any) => action.id === "flash-openthread-rcp")
+  const startOtbrAction = setupActions.find((action: any) => action.id === "start-otbr")
+  const flashComplete = Boolean(
+    flashAction?.status === "complete"
+    || activeFlashJob?.status === "completed"
+    || recentFlashJobs.some((job: any) => job?.status === "completed")
+  )
+  const otbrHost = {
+    ...(thread?.otbrHost || {}),
+    ...(matterOtbrStatus || {})
+  }
+  const recentOtbrJobs = Array.isArray(otbrHost?.recentJobs) ? otbrHost.recentJobs : []
+  const activeOtbrJob = otbrHost?.activeJob || recentOtbrJobs[0]
+  const otbrRunning = Boolean(activeOtbrJob && ["queued", "preparing", "starting"].includes(activeOtbrJob.status))
+  const otbrLogs = Array.isArray(activeOtbrJob?.logs) ? activeOtbrJob.logs.slice(-8) : []
+  const otbrConfirmationPhrase = otbrHost?.confirmationPhrase || thread?.setup?.otbr?.serverSideConfirmation || "START THREAD BORDER ROUTER"
+  const otbrConfirmationMatches = matterOtbrConfirm.trim().toUpperCase() === otbrConfirmationPhrase.trim().toUpperCase()
+  const otbrDataset = thread?.otbr?.dataset || otbrHost?.dataset || activeOtbrJob?.result?.otbr?.dataset || activeOtbrJob?.result?.otbrHost?.dataset || ""
+  const canStartOtbr = Boolean(
+    selectedThreadPath
+    && rcpDetected
+    && flashComplete
+    && (otbrHost?.helperAvailable || otbrHost?.canAutoInstall)
+  )
+  const otbrDisabledReason = otbrOnline
+    ? "OTBR is online and serving a Thread dataset."
+    : otbrRunning
+      ? "OTBR setup is already running."
+      : !selectedThreadPath || !rcpDetected
+        ? "Select a detected SONOFF MG24 stick before starting OTBR."
+        : !flashComplete
+          ? "Flash the MG24 with OpenThread RCP before starting OTBR."
+          : !(otbrHost?.helperAvailable || otbrHost?.canAutoInstall)
+            ? "The HomeBrain OTBR helper has not been installed on this host yet."
+            : !otbrConfirmationMatches
+              ? `Type ${otbrConfirmationPhrase} to start OTBR.`
+              : ""
   const flashDisabledReason = flashRunning
     ? "A Thread firmware flash is already running."
     : !canServerFlash
@@ -424,8 +505,8 @@ export function MatterThreadIntegrationCard() {
                   HomeBrain will download the latest matching SONOFF OpenThread firmware automatically. Uploading a file is only for a custom override.
                 </p>
               </div>
-              <Badge variant={canServerFlash ? "default" : "secondary"} className="rounded-full text-[0.68rem]">
-                {flashTool?.available ? "ready" : canServerFlash ? "will install" : "not ready"}
+              <Badge variant={flashComplete ? "default" : canServerFlash ? "secondary" : "outline"} className="rounded-full text-[0.68rem]">
+                {flashComplete ? "complete" : flashTool?.available ? "ready" : canServerFlash ? "will install" : "not ready"}
               </Badge>
             </div>
             <p className="mt-1 text-xs text-muted-foreground">
@@ -486,7 +567,11 @@ export function MatterThreadIntegrationCard() {
               </Button>
             </div>
 
-            {flashDisabledReason ? (
+            {flashComplete && !flashRunning ? (
+              <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-200">
+                OpenThread RCP firmware is flashed. Next step: start OTBR and create the active Thread dataset.
+              </p>
+            ) : flashDisabledReason ? (
               <p className="mt-2 text-xs text-amber-700 dark:text-amber-200">
                 {flashDisabledReason}
               </p>
@@ -513,6 +598,94 @@ export function MatterThreadIntegrationCard() {
                 {flashLogs.length > 0 ? (
                   <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-[0.7rem] leading-relaxed text-slate-300">
                     {flashLogs.map((entry: any) => `[${entry.stream}] ${entry.line}`).join("\n")}
+                  </pre>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="rounded-md border border-border/70 bg-background/70 px-3 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-semibold text-foreground">Start Thread Border Router</p>
+                <p className="text-xs text-muted-foreground">
+                  {startOtbrAction?.detail || "Start OTBR after the MG24 is flashed with OpenThread RCP."}
+                </p>
+              </div>
+              <Badge variant={otbrOnline || otbrDataset ? "default" : canStartOtbr ? "secondary" : "outline"} className="rounded-full text-[0.68rem]">
+                {otbrOnline ? "online" : otbrDataset ? "dataset ready" : canStartOtbr ? "ready" : "required"}
+              </Badge>
+            </div>
+
+            <div className="mt-3 grid gap-2 md:grid-cols-3">
+              <div className="rounded-md border border-border/60 bg-background/80 px-3 py-2 text-xs">
+                <p className="font-semibold text-foreground">Service</p>
+                <p className="mt-1 text-muted-foreground">
+                  {otbrHost?.serviceName || "otbr-agent"}: {otbrHost?.serviceActive || "unknown"}
+                </p>
+              </div>
+              <div className="rounded-md border border-border/60 bg-background/80 px-3 py-2 text-xs">
+                <p className="font-semibold text-foreground">Radio</p>
+                <p className="mt-1 truncate text-muted-foreground">{selectedThreadPath || "No stick selected"}</p>
+              </div>
+              <div className="rounded-md border border-border/60 bg-background/80 px-3 py-2 text-xs">
+                <p className="font-semibold text-foreground">Dataset</p>
+                <p className="mt-1 text-muted-foreground">{otbrDataset ? "active" : "missing"}</p>
+              </div>
+            </div>
+
+            <div className="mt-3 grid gap-2 lg:grid-cols-[1fr_1fr]">
+              <label className="space-y-1">
+                <span className="text-xs font-medium text-foreground">Thread network name</span>
+                <Input
+                  value={matterThreadNetworkName}
+                  onChange={(event) => setMatterThreadNetworkName(event.target.value)}
+                  placeholder="HomeBrain Thread"
+                  disabled={otbrOnline || matterOtbrSaving || otbrRunning}
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs font-medium text-foreground">Safety confirmation</span>
+                <Input
+                  value={matterOtbrConfirm}
+                  onChange={(event) => setMatterOtbrConfirm(event.target.value)}
+                  placeholder={`Type ${otbrConfirmationPhrase}`}
+                  disabled={otbrOnline || matterOtbrSaving || otbrRunning}
+                />
+              </label>
+              <Button
+                type="button"
+                className="lg:col-span-2"
+                disabled={otbrOnline || !canStartOtbr || !otbrConfirmationMatches || matterOtbrSaving || otbrRunning}
+                onClick={() => void handleStartOtbr()}
+              >
+                {matterOtbrSaving || otbrRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Power className="mr-2 h-4 w-4" />}
+                Start OTBR and Create Thread Dataset
+              </Button>
+            </div>
+
+            {otbrDisabledReason ? (
+              <p className={`mt-2 text-xs ${otbrOnline ? "text-emerald-700 dark:text-emerald-200" : "text-amber-700 dark:text-amber-200"}`}>
+                {otbrDisabledReason}
+              </p>
+            ) : (
+              <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-200">
+                Ready to start OTBR with {matterThreadNetworkName.trim() || "HomeBrain Thread"}.
+              </p>
+            )}
+
+            {activeOtbrJob ? (
+              <div className="mt-3 rounded-md border border-border/60 bg-slate-950/90 p-3 text-xs text-slate-100">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold">{activeOtbrJob.phase || activeOtbrJob.status}</span>
+                  <Badge variant={activeOtbrJob.status === "completed" ? "default" : activeOtbrJob.status === "failed" ? "destructive" : "secondary"}>
+                    {activeOtbrJob.status}
+                  </Badge>
+                </div>
+                {activeOtbrJob.error ? <p className="mt-2 text-red-300">{activeOtbrJob.error}</p> : null}
+                {otbrLogs.length > 0 ? (
+                  <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-[0.7rem] leading-relaxed text-slate-300">
+                    {otbrLogs.map((entry: any) => `[${entry.stream}] ${entry.line}`).join("\n")}
                   </pre>
                 ) : null}
               </div>

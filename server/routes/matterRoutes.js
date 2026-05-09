@@ -78,6 +78,31 @@ router.post('/thread/firmware-flash/start', async (req, res) => {
   }
 });
 
+router.get('/thread/otbr/status', async (_req, res) => {
+  try {
+    const status = await matterService.getThreadOtbrHostStatus();
+    res.status(200).json({
+      success: true,
+      status
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to get OpenThread Border Router status');
+  }
+});
+
+router.post('/thread/otbr/start', async (req, res) => {
+  try {
+    const job = await matterService.startThreadBorderRouter(req.body || {});
+    res.status(202).json({
+      success: true,
+      job,
+      status: await matterService.getThreadOtbrHostStatus()
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to start OpenThread Border Router');
+  }
+});
+
 router.get('/devices', async (_req, res) => {
   try {
     const devices = await matterService.listMatterDevices();
