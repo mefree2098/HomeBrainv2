@@ -2,7 +2,9 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
+const { spawn, spawnSync } = require('child_process');
 const axios = require('axios');
+const semver = require('semver');
 const Device = require('../models/Device');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const {
@@ -22,9 +24,25 @@ const MATTER_DATA_DIR = process.env.HOMEBRAIN_MATTER_DATA_DIR
 const MATTER_CONFIG_PATH = path.join(MATTER_DATA_DIR, 'config.json');
 const MATTER_SESSIONS_PATH = path.join(MATTER_DATA_DIR, 'commissioning-sessions.json');
 const MATTER_STORAGE_DIR = path.join(MATTER_DATA_DIR, 'matter-js-storage');
+const THREAD_FLASH_JOBS_DIR = path.join(MATTER_DATA_DIR, 'firmware-flashes');
+const THREAD_FLASH_MANAGED_VENV_DIR = path.join(MATTER_DATA_DIR, 'silabs-flasher-venv');
 const DEFAULT_OTBR_REST_URL = process.env.HOMEBRAIN_OTBR_REST_URL || 'http://127.0.0.1:8081';
 const DEFAULT_COMMISSIONING_TIMEOUT_SECONDS = Math.max(20, Number(process.env.HOMEBRAIN_MATTER_COMMISSIONING_TIMEOUT_SECONDS || 90));
+const THREAD_FLASH_CONFIRMATION = 'FLASH OPENTHREAD RCP';
+const THREAD_FLASH_MAX_FIRMWARE_BYTES = Math.max(
+  1024 * 1024,
+  Number(process.env.HOMEBRAIN_THREAD_FLASH_MAX_BYTES || 6 * 1024 * 1024)
+);
+const THREAD_FLASH_LOG_LIMIT = Math.max(50, Number(process.env.HOMEBRAIN_THREAD_FLASH_LOG_LIMIT || 250));
+const UNIVERSAL_SILABS_FLASHER_REPO_URL = 'https://github.com/NabuCasa/universal-silabs-flasher';
+const UNIVERSAL_SILABS_FLASHER_INSTALL_HINT = 'HomeBrain can install universal-silabs-flasher into its managed Matter venv when flashing starts.';
+const SONOFF_DONGLE_HARDWARE_BASE_URL = 'https://dongle.sonoff.tech/dongle-flasher/dongle-hardware';
+const SONOFF_FIRMWARE_MANIFEST_URL = `${SONOFF_DONGLE_HARDWARE_BASE_URL}/FIRMWARE_LIST.json`;
 const SONOFF_MG24_ASIN = 'B0FMJD288B';
+const SONOFF_MG24_FLASHER_URL = 'https://dongle.sonoff.tech/sonoff-dongle-flasher/';
+const SONOFF_MG24_OPENTHREAD_GUIDE_URL = 'https://dongle.sonoff.tech/guide/dongle-pmg24/how_to_flash_openthread_firmware/';
+const SONOFF_MG24_FLASHER_ADDON_URL = 'https://github.com/iHost-Open-Source-Project/hassio-ihost-addon/tree/master/hassio-ihost-sonoff-dongle-flasher';
+const OPENTHREAD_OTBR_GUIDE_URL = 'https://openthread.io/guides/border-router';
 
 const MATTER_CONTROLLER_HARDWARE = Object.freeze({
   asin: SONOFF_MG24_ASIN,
@@ -36,7 +54,11 @@ const MATTER_CONTROLLER_HARDWARE = Object.freeze({
     'Zigbee NCP',
     'Zigbee/OpenThread MultiPAN RCP'
   ],
-  role: 'Thread RCP for OpenThread Border Router; Matter over IP via Ethernet/Wi-Fi/Thread'
+  role: 'Thread RCP for OpenThread Border Router; Matter over IP via Ethernet/Wi-Fi/Thread',
+  flasherUrl: SONOFF_MG24_FLASHER_URL,
+  openThreadGuideUrl: SONOFF_MG24_OPENTHREAD_GUIDE_URL,
+  flasherAddOnUrl: SONOFF_MG24_FLASHER_ADDON_URL,
+  otbrGuideUrl: OPENTHREAD_OTBR_GUIDE_URL
 });
 
 const MATTER_ACTION_CLUSTER_HINTS = Object.freeze({
@@ -220,9 +242,93 @@ function normalizeTransport(value) {
   return MATTER_TRANSPORTS.ip;
 }
 
+function resolveLocalSerialById() {
+  const byIdDir = '/dev/serial/by-id';
+  try {
+    return fs.readdirSync(byIdDir)
+      .map((entry) => {
+        const stablePath = path.join(byIdDir, entry);
+        let realPath = '';
+        try {
+          realPath = fs.realpathSync(stablePath);
+        } catch (_error) {
+          realPath = '';
+        }
+        return {
+          stablePath,
+          realPath,
+          label: entry
+        };
+      });
+  } catch (_error) {
+    return [];
+  }
+}
+
+function resolveRealPath(serialPath) {
+  const normalizedPath = normalizeString(serialPath);
+  if (!normalizedPath) {
+    return '';
+  }
+
+  try {
+    return fs.realpathSync(normalizedPath);
+  } catch (_error) {
+    return normalizedPath;
+  }
+}
+
+function buildFallbackSerialPort(pathValue, stableLink = null) {
+  const resolvedPath = resolveRealPath(pathValue);
+  const stablePath = normalizeString(stableLink?.stablePath);
+  const label = normalizeString(stableLink?.label) || (stablePath ? path.basename(stablePath) : path.basename(pathValue));
+
+  return {
+    path: resolvedPath || pathValue,
+    pnpId: label,
+    friendlyName: label,
+    stablePath,
+    realPath: resolvedPath
+  };
+}
+
+function hasPortCandidate(candidates, serialPath) {
+  const normalizedPath = normalizeString(serialPath);
+  if (!normalizedPath) {
+    return true;
+  }
+
+  const resolvedPath = resolveRealPath(normalizedPath);
+  return candidates.some((candidate) => {
+    const candidatePath = normalizeString(candidate?.path || candidate?.comName || candidate?.device || candidate?.pnpId);
+    const candidateStablePath = normalizeString(candidate?.stablePath);
+    const candidateRealPath = resolveRealPath(candidatePath);
+    return candidatePath === normalizedPath
+      || candidateStablePath === normalizedPath
+      || candidateRealPath === resolvedPath
+      || (candidateRealPath && resolvedPath && candidateRealPath === resolvedPath);
+  });
+}
+
+function addFallbackSerialPortCandidates(rawPorts = [], stableLinks = resolveLocalSerialById()) {
+  const candidates = Array.isArray(rawPorts) ? [...rawPorts] : [];
+
+  stableLinks.forEach((stableLink) => {
+    const candidatePath = stableLink.realPath || stableLink.stablePath;
+    if (candidatePath && !hasPortCandidate(candidates, candidatePath)) {
+      candidates.push(buildFallbackSerialPort(candidatePath, stableLink));
+    }
+  });
+
+  return candidates;
+}
+
 function looksLikeSonoffMg24Port(port = {}) {
   const descriptor = [
     port.path,
+    port.rawPath,
+    port.stablePath,
+    port.realPath,
     port.manufacturer,
     port.friendlyName,
     port.serialNumber,
@@ -238,20 +344,468 @@ function looksLikeSonoffMg24Port(port = {}) {
     return false;
   }
 
-  return /\b(sonoff|itead|dongle.?m|dongle.?plus.?mg24|mg24|efr32mg24|silicon labs|cp210)\b/.test(descriptor)
+  const isMg24Family = /(?:^|[^a-z0-9])(?:mg24|pmg24|dongle[-_ ]?m|dongle[-_ ]?plus[-_ ]?mg24|efr32mg24)(?=$|[^a-z0-9])/.test(descriptor);
+  const isKnownVendor = /\b(?:sonoff|itead|silicon labs|cp210)\b/.test(descriptor)
+    || (normalizeLower(port.vendorId) === '10c4' && normalizeLower(port.productId) === 'ea60');
+
+  return isMg24Family
+    && isKnownVendor
     && !/\b(zooz|zst10|zwave|z-wave|zw090|zwave js)\b/.test(descriptor);
 }
 
-function normalizeSerialPort(port = {}) {
+function normalizeSerialPort(port = {}, stableLinks = resolveLocalSerialById()) {
+  const pathValue = normalizeString(port.path || port.comName || port.device || port.pnpId);
+  const realPath = resolveRealPath(pathValue);
+  const stableMatch = stableLinks.find((entry) => (
+    entry.stablePath === pathValue
+      || (entry.realPath && realPath && entry.realPath === realPath)
+      || (entry.realPath && pathValue && entry.realPath.endsWith(path.basename(pathValue)))
+  ));
+  const stablePath = normalizeString(port.stablePath) || stableMatch?.stablePath || '';
   return {
-    path: port.path,
+    path: stablePath || pathValue,
+    rawPath: pathValue || null,
+    stablePath: stablePath || null,
+    realPath: realPath || null,
     manufacturer: port.manufacturer || null,
     serialNumber: port.serialNumber || null,
     vendorId: port.vendorId || null,
     productId: port.productId || null,
     pnpId: port.pnpId || null,
     friendlyName: port.friendlyName || null,
-    isExpectedMatterThreadStick: looksLikeSonoffMg24Port(port)
+    isExpectedMatterThreadStick: false
+  };
+}
+
+function buildSerialPortDescriptor(port = {}) {
+  return [
+    port.path,
+    port.rawPath,
+    port.stablePath,
+    port.realPath,
+    port.manufacturer,
+    port.friendlyName,
+    port.serialNumber,
+    port.vendorId,
+    port.productId,
+    port.pnpId
+  ]
+    .map((value) => normalizeString(value).toLowerCase())
+    .filter(Boolean)
+    .join(' ');
+}
+
+function serialPortMatchesPath(port = {}, serialPath = '') {
+  const requestedPath = normalizeString(serialPath);
+  if (!requestedPath) {
+    return false;
+  }
+
+  const requestedRealPath = resolveRealPath(requestedPath);
+  return [port.path, port.rawPath, port.stablePath, port.realPath]
+    .map(normalizeString)
+    .filter(Boolean)
+    .some((candidatePath) => (
+      candidatePath === requestedPath
+        || (requestedRealPath && resolveRealPath(candidatePath) === requestedRealPath)
+    ));
+}
+
+function inferSonoffThreadFirmwareTarget(port = {}) {
+  const descriptor = buildSerialPortDescriptor(port);
+  if (!descriptor || !looksLikeSonoffMg24Port(port)) {
+    return null;
+  }
+
+  const evidence = [
+    port.stablePath ? 'stablePath' : null,
+    port.pnpId ? 'pnpId' : null,
+    port.serialNumber ? 'serialNumber' : null,
+    port.manufacturer ? 'manufacturer' : null
+  ].filter(Boolean);
+
+  if (/(?:^|[^a-z0-9])(?:dongle[-_ ]?plus[-_ ]?mg24|pmg24)(?=$|[^a-z0-9])/.test(descriptor)) {
+    return {
+      dongleType: 'Dongle-PMG24',
+      chipModel: 'mg24',
+      productName: 'SONOFF Dongle Plus MG24',
+      firmwareType: 'OpenThread',
+      evidence
+    };
+  }
+
+  if (/(?:^|[^a-z0-9])(?:dongle[-_ ]?m|dongle[-_ ]?max[-_ ]?mg24)(?=$|[^a-z0-9])/.test(descriptor)) {
+    return {
+      dongleType: 'Dongle-M',
+      chipModel: 'mg24',
+      productName: 'SONOFF Dongle Max MG24',
+      firmwareType: 'OpenThread',
+      evidence
+    };
+  }
+
+  return null;
+}
+
+function firmwareVersionTime(value) {
+  const normalized = normalizeString(value);
+  if (/^\d{8}$/.test(normalized)) {
+    const year = Number(normalized.slice(0, 4));
+    const month = Number(normalized.slice(4, 6)) - 1;
+    const day = Number(normalized.slice(6, 8));
+    const time = Date.UTC(year, month, day);
+    return Number.isFinite(time) ? time : Number.NaN;
+  }
+  const parsed = Date.parse(normalized);
+  return Number.isFinite(parsed) ? parsed : Number.NaN;
+}
+
+function compareFirmwareEntries(left = {}, right = {}) {
+  const leftVersion = normalizeString(left.version);
+  const rightVersion = normalizeString(right.version);
+  const leftSemver = semver.valid(leftVersion);
+  const rightSemver = semver.valid(rightVersion);
+  if (leftSemver && rightSemver) {
+    return semver.rcompare(leftSemver, rightSemver);
+  }
+  if (leftSemver) {
+    return -1;
+  }
+  if (rightSemver) {
+    return 1;
+  }
+
+  const leftTime = firmwareVersionTime(leftVersion);
+  const rightTime = firmwareVersionTime(rightVersion);
+  if (!Number.isNaN(leftTime) && !Number.isNaN(rightTime)) {
+    return rightTime - leftTime;
+  }
+  if (!Number.isNaN(leftTime)) {
+    return -1;
+  }
+  if (!Number.isNaN(rightTime)) {
+    return 1;
+  }
+
+  return rightVersion.localeCompare(leftVersion, undefined, {
+    numeric: true,
+    sensitivity: 'base'
+  });
+}
+
+function normalizeSonoffFirmwareEntry(entry = {}) {
+  const name = sanitizeFirmwareFileName(entry.name);
+  return {
+    name,
+    dongleType: normalizeString(entry.dongleType),
+    chipModel: normalizeString(entry.chipModel).toLowerCase(),
+    firmwareType: normalizeString(entry.firmwareType),
+    firmwareDesc: normalizeString(entry.firmwareDesc),
+    version: normalizeString(entry.version),
+    baudRate: normalizeString(entry.baudRate),
+    sdkVersion: normalizeString(entry.sdkVersion),
+    url: `${SONOFF_DONGLE_HARDWARE_BASE_URL}/${encodeURIComponent(name)}`
+  };
+}
+
+function selectLatestSonoffThreadFirmware(firmwareList = [], target = {}) {
+  const dongleType = normalizeString(target.dongleType);
+  const chipModel = normalizeString(target.chipModel).toLowerCase();
+  const firmwareType = normalizeString(target.firmwareType) || 'OpenThread';
+  const candidates = (Array.isArray(firmwareList) ? firmwareList : [])
+    .map((entry) => {
+      try {
+        return normalizeSonoffFirmwareEntry(entry);
+      } catch (_error) {
+        return null;
+      }
+    })
+    .filter((entry) => (
+      entry
+        && entry.dongleType === dongleType
+        && entry.firmwareType === firmwareType
+        && (!chipModel || entry.chipModel === chipModel)
+    ));
+
+  const stableCandidates = candidates.filter((entry) => entry.firmwareDesc.toLowerCase() === 'stable');
+  const sortable = stableCandidates.length > 0 ? stableCandidates : candidates;
+  return sortable.sort(compareFirmwareEntries)[0] || null;
+}
+
+function normalizeThreadFirmwareFlashConfirmation(value) {
+  return normalizeString(value).toUpperCase() === THREAD_FLASH_CONFIRMATION;
+}
+
+function sanitizeFirmwareFileName(value) {
+  const rawName = path.basename(normalizeString(value) || 'openthread-rcp.gbl');
+  const safeName = rawName.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/^_+/, '');
+  const finalName = safeName || 'openthread-rcp.gbl';
+  const lowerName = finalName.toLowerCase();
+  if (!lowerName.endsWith('.gbl')) {
+    const error = new Error('Thread firmware must be a Silicon Labs .gbl image.');
+    error.status = 400;
+    throw error;
+  }
+  return finalName;
+}
+
+function isTrustedSonoffFirmwareUrl(value) {
+  const rawUrl = normalizeString(value);
+  if (!rawUrl) {
+    return false;
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch (_error) {
+    return false;
+  }
+
+  const firmwareBaseUrl = new URL(SONOFF_DONGLE_HARDWARE_BASE_URL);
+  return parsed.protocol === 'https:'
+    && parsed.hostname.toLowerCase() === firmwareBaseUrl.hostname.toLowerCase()
+    && parsed.pathname.startsWith(`${firmwareBaseUrl.pathname}/`)
+    && parsed.pathname.toLowerCase().endsWith('.gbl')
+    && parsed.username === ''
+    && parsed.password === '';
+}
+
+function firmwareNameFromUrl(value) {
+  try {
+    const parsed = new URL(value);
+    return sanitizeFirmwareFileName(decodeURIComponent(path.basename(parsed.pathname || 'openthread-rcp.gbl')));
+  } catch (_error) {
+    return sanitizeFirmwareFileName('openthread-rcp.gbl');
+  }
+}
+
+function splitCommandSpec(value) {
+  const spec = normalizeString(value);
+  if (!spec) {
+    return [];
+  }
+
+  const parts = [];
+  let current = '';
+  let quote = '';
+  for (const char of spec) {
+    if (quote) {
+      if (char === quote) {
+        quote = '';
+      } else {
+        current += char;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) {
+      if (current) {
+        parts.push(current);
+        current = '';
+      }
+      continue;
+    }
+    current += char;
+  }
+  if (current) {
+    parts.push(current);
+  }
+  return parts;
+}
+
+function buildThreadFirmwareFlashToolCandidates() {
+  const candidates = [];
+  const envSpec = splitCommandSpec(process.env.HOMEBRAIN_SILABS_FLASHER_COMMAND);
+  if (envSpec.length > 0) {
+    candidates.push({
+      command: envSpec[0],
+      baseArgs: envSpec.slice(1),
+      label: process.env.HOMEBRAIN_SILABS_FLASHER_COMMAND,
+      source: 'env'
+    });
+  }
+
+  candidates.push({
+    command: path.join(THREAD_FLASH_MANAGED_VENV_DIR, process.platform === 'win32' ? 'Scripts/universal-silabs-flasher.exe' : 'bin/universal-silabs-flasher'),
+    baseArgs: [],
+    label: 'HomeBrain managed universal-silabs-flasher',
+    source: 'managed-venv'
+  });
+  candidates.push({
+    command: 'universal-silabs-flasher',
+    baseArgs: [],
+    label: 'universal-silabs-flasher',
+    source: 'path'
+  });
+
+  const pythonBin = process.env.PYTHON_BIN || 'python3';
+  candidates.push({
+    command: pythonBin,
+    baseArgs: ['-m', 'universal_silabs_flasher'],
+    label: `${pythonBin} -m universal_silabs_flasher`,
+    source: 'python-module'
+  });
+
+  const seen = new Set();
+  return candidates.filter((candidate) => {
+    const key = `${candidate.command}\0${candidate.baseArgs.join('\0')}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function probeThreadFirmwareFlashTool(candidate) {
+  const args = [...candidate.baseArgs, '--help'];
+  const result = spawnSync(candidate.command, args, {
+    encoding: 'utf8',
+    timeout: 5000
+  });
+  const output = `${result.stdout || ''}\n${result.stderr || ''}`.trim();
+  const available = result.status === 0 && /universal-silabs-flasher|silicon labs flasher/i.test(output);
+  return {
+    ...candidate,
+    available,
+    error: available ? null : (result.error?.message || output.split('\n').find(Boolean) || `Exited with ${result.status}`),
+    versionText: available ? output.split('\n').slice(0, 3).join('\n') : ''
+  };
+}
+
+function resolveThreadFirmwareFlashTool() {
+  const probes = buildThreadFirmwareFlashToolCandidates().map(probeThreadFirmwareFlashTool);
+  const selected = probes.find((probe) => probe.available) || null;
+  return {
+    available: Boolean(selected),
+    command: selected?.command || null,
+    baseArgs: selected?.baseArgs || [],
+    label: selected?.label || null,
+    source: selected?.source || null,
+    canAutoInstall: true,
+    installHint: UNIVERSAL_SILABS_FLASHER_INSTALL_HINT,
+    docsUrl: UNIVERSAL_SILABS_FLASHER_REPO_URL,
+    candidates: probes.map((probe) => ({
+      label: probe.label,
+      source: probe.source,
+      available: probe.available,
+      error: probe.available ? null : probe.error
+    }))
+  };
+}
+
+function buildUniversalSilabsFlasherArgs({ devicePath, firmwarePath, verbose = false }) {
+  const args = [];
+  if (verbose) {
+    args.push('--verbose');
+  }
+  args.push(
+    '--device',
+    devicePath,
+    '--bootloader-reset',
+    'rts_dtr',
+    'flash',
+    '--firmware',
+    firmwarePath
+  );
+  return args;
+}
+
+function buildThreadFirmwareFlashCommand(tool, options) {
+  return {
+    command: tool.command,
+    args: [
+      ...(tool.baseArgs || []),
+      ...buildUniversalSilabsFlasherArgs(options)
+    ]
+  };
+}
+
+function buildThreadSetupGuidance({
+  expectedPorts = [],
+  selectedPort = null,
+  otbr = {},
+  activeDataset = '',
+  firmwareFlash = null
+}) {
+  const selectedPath = selectedPort?.path || selectedPort?.stablePath || selectedPort?.rawPath || '';
+  const canServerFlash = Boolean(firmwareFlash?.tool?.available || firmwareFlash?.tool?.canAutoInstall);
+  const actions = [];
+
+  actions.push({
+    id: 'connect-mg24',
+    label: 'Connect SONOFF MG24',
+    status: expectedPorts.length > 0 ? 'complete' : 'required',
+    detail: expectedPorts.length > 0
+      ? `${expectedPorts.length} SONOFF MG24 Thread-capable stick${expectedPorts.length === 1 ? '' : 's'} detected.`
+      : 'Plug in the SONOFF Dongle Plus MG24 so HomeBrain can bind it to OpenThread.'
+  });
+
+  if (expectedPorts.length > 1) {
+    actions.push({
+      id: 'select-thread-port',
+      label: 'Select Thread stick',
+      status: selectedPort ? 'complete' : 'required',
+      detail: selectedPath
+        ? `HomeBrain will use ${selectedPath} for Thread.`
+        : 'Choose the MG24 stick that should be reserved for Thread.'
+    });
+  }
+
+  actions.push({
+    id: 'flash-openthread-rcp',
+    label: 'Flash OpenThread RCP firmware',
+    status: otbr.online ? 'complete' : (expectedPorts.length > 0 ? 'recommended' : 'blocked'),
+    detail: otbr.online
+      ? 'OTBR is responding, so the Thread radio path is active.'
+      : canServerFlash
+        ? 'Use HomeBrain to flash an OpenThread RCP .gbl image to the selected MG24 stick, then start OTBR.'
+        : 'Install universal-silabs-flasher on the HomeBrain host, or use the SONOFF Dongle Flasher with the stick attached to the browser computer.',
+    url: SONOFF_MG24_FLASHER_URL,
+    guideUrl: SONOFF_MG24_OPENTHREAD_GUIDE_URL,
+    addOnUrl: SONOFF_MG24_FLASHER_ADDON_URL
+  });
+
+  actions.push({
+    id: 'start-otbr',
+    label: 'Start OpenThread Border Router',
+    status: otbr.online ? 'complete' : 'required',
+    detail: otbr.online
+      ? `OTBR REST is online at ${otbr.baseUrl}.`
+      : 'OTBR is not answering yet; Thread commissioning needs an active border router and dataset.',
+    guideUrl: OPENTHREAD_OTBR_GUIDE_URL
+  });
+
+  actions.push({
+    id: 'active-thread-dataset',
+    label: 'Provide active Thread dataset',
+    status: activeDataset ? 'complete' : 'required',
+    detail: activeDataset
+      ? 'HomeBrain can read the active Thread dataset.'
+      : 'Start OTBR or paste the active operational dataset in Matter setup.'
+  });
+
+  return {
+    desiredFirmware: 'OpenThread RCP',
+    selectedPortPath: selectedPath || null,
+    flasher: {
+      label: 'SONOFF Dongle Flasher',
+      url: SONOFF_MG24_FLASHER_URL,
+      openThreadGuideUrl: SONOFF_MG24_OPENTHREAD_GUIDE_URL,
+      addOnUrl: SONOFF_MG24_FLASHER_ADDON_URL,
+      canFlashInBrowser: true,
+      serverSideFlashingAvailable: canServerFlash,
+      serverSideConfirmation: THREAD_FLASH_CONFIRMATION
+    },
+    otbr: {
+      restUrl: otbr.baseUrl || DEFAULT_OTBR_REST_URL,
+      guideUrl: OPENTHREAD_OTBR_GUIDE_URL
+    },
+    actions
   };
 }
 
@@ -349,11 +903,16 @@ class MatterService {
     this.runtime = null;
     this.detectedSerialPorts = [];
     this.lastThreadStatus = null;
+    this.threadFirmwareFlashJobs = new Map();
+    this.activeThreadFirmwareFlashJobId = null;
+    this.threadFirmwareFlashToolCache = null;
+    this.sonoffFirmwareManifestCache = null;
   }
 
   async ensureDataDir() {
     await fsp.mkdir(MATTER_DATA_DIR, { recursive: true });
     await fsp.mkdir(MATTER_STORAGE_DIR, { recursive: true });
+    await fsp.mkdir(THREAD_FLASH_JOBS_DIR, { recursive: true });
   }
 
   async loadConfig() {
@@ -468,7 +1027,13 @@ class MatterService {
         throw new Error('serialport.list is not available');
       }
       const ports = await listSerialPorts();
-      return ports.map(normalizeSerialPort);
+      const stableLinks = resolveLocalSerialById();
+      return addFallbackSerialPortCandidates(ports, stableLinks)
+        .map((port) => normalizeSerialPort(port, stableLinks))
+        .map((port) => ({
+          ...port,
+          isExpectedMatterThreadStick: looksLikeSonoffMg24Port(port)
+        }));
     } catch (error) {
       console.warn(`MatterService: Unable to list serial ports: ${error.message}`);
       return [];
@@ -544,6 +1109,511 @@ class MatterService {
     return '';
   }
 
+  createThreadFirmwareFlashJob(devicePath, tool) {
+    const id = `thread-flash-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
+    const now = new Date().toISOString();
+    const job = {
+      id,
+      status: 'queued',
+      phase: 'queued',
+      createdAt: now,
+      updatedAt: now,
+      finishedAt: null,
+      error: null,
+      devicePath,
+      firmware: null,
+      commandPreview: null,
+      tool: {
+        available: Boolean(tool.available),
+        canAutoInstall: Boolean(tool.canAutoInstall),
+        label: tool.label || 'HomeBrain managed universal-silabs-flasher',
+        source: tool.source || 'managed-venv',
+        docsUrl: tool.docsUrl || UNIVERSAL_SILABS_FLASHER_REPO_URL
+      },
+      logs: []
+    };
+    this.threadFirmwareFlashJobs.set(id, job);
+    this.activeThreadFirmwareFlashJobId = id;
+    return job;
+  }
+
+  redactThreadFirmwareFlashJob(job, options = {}) {
+    if (!job) {
+      return null;
+    }
+    return {
+      id: job.id,
+      status: job.status,
+      phase: job.phase,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      finishedAt: job.finishedAt,
+      error: job.error,
+      devicePath: job.devicePath,
+      firmware: job.firmware,
+      commandPreview: job.commandPreview,
+      tool: job.tool,
+      logs: options.includeLogs === false ? [] : job.logs.slice(-THREAD_FLASH_LOG_LIMIT)
+    };
+  }
+
+  async persistThreadFirmwareFlashJob(job) {
+    if (!job?.id) {
+      return;
+    }
+    try {
+      await this.ensureDataDir();
+      await fsp.writeFile(
+        path.join(THREAD_FLASH_JOBS_DIR, `${job.id}.json`),
+        JSON.stringify(this.redactThreadFirmwareFlashJob(job), null, 2)
+      );
+    } catch (error) {
+      console.warn(`MatterService: Failed to persist Thread firmware flash job: ${error.message}`);
+    }
+  }
+
+  appendThreadFirmwareFlashLog(job, streamName, chunk) {
+    const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk || '');
+    text
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .filter(Boolean)
+      .forEach((line) => {
+        job.logs.push({
+          at: new Date().toISOString(),
+          stream: streamName,
+          line: line.slice(0, 1000)
+        });
+      });
+    if (job.logs.length > THREAD_FLASH_LOG_LIMIT) {
+      job.logs.splice(0, job.logs.length - THREAD_FLASH_LOG_LIMIT);
+    }
+    job.updatedAt = new Date().toISOString();
+  }
+
+  async updateThreadFirmwareFlashJob(job, updates = {}) {
+    Object.assign(job, updates, {
+      updatedAt: new Date().toISOString()
+    });
+    await this.persistThreadFirmwareFlashJob(job);
+  }
+
+  async fetchSonoffFirmwareManifest(options = {}) {
+    const now = Date.now();
+    if (
+      !options.forceRefresh
+      && this.sonoffFirmwareManifestCache
+      && now - this.sonoffFirmwareManifestCache.fetchedAt < 5 * 60_000
+    ) {
+      return this.sonoffFirmwareManifestCache;
+    }
+
+    const response = await axios.get(SONOFF_FIRMWARE_MANIFEST_URL, {
+      timeout: 15000,
+      validateStatus: (status) => status >= 200 && status < 300,
+      params: {
+        timeStamp: Date.now()
+      }
+    });
+    const firmwareList = Array.isArray(response.data?.firmwareList)
+      ? response.data.firmwareList
+      : [];
+    if (firmwareList.length === 0) {
+      const error = new Error('SONOFF firmware manifest did not include firmware entries.');
+      error.status = 502;
+      throw error;
+    }
+
+    this.sonoffFirmwareManifestCache = {
+      sourceUrl: SONOFF_FIRMWARE_MANIFEST_URL,
+      fetchedAt: now,
+      firmwareList
+    };
+    return this.sonoffFirmwareManifestCache;
+  }
+
+  async getLatestThreadFirmwareForPort(port, options = {}) {
+    const target = inferSonoffThreadFirmwareTarget(port);
+    if (!target) {
+      return {
+        available: false,
+        error: 'The selected serial device is not a verified SONOFF MG24 Thread stick.',
+        target: null,
+        firmware: null,
+        manifest: {
+          sourceUrl: SONOFF_FIRMWARE_MANIFEST_URL,
+          fetchedAt: null
+        }
+      };
+    }
+
+    try {
+      const manifest = await this.fetchSonoffFirmwareManifest(options);
+      const firmware = selectLatestSonoffThreadFirmware(manifest.firmwareList, target);
+      if (!firmware) {
+        return {
+          available: false,
+          error: `No ${target.firmwareType} firmware was found for ${target.dongleType}.`,
+          target,
+          firmware: null,
+          manifest: {
+            sourceUrl: manifest.sourceUrl,
+            fetchedAt: new Date(manifest.fetchedAt).toISOString()
+          }
+        };
+      }
+
+      return {
+        available: true,
+        error: null,
+        target,
+        firmware,
+        manifest: {
+          sourceUrl: manifest.sourceUrl,
+          fetchedAt: new Date(manifest.fetchedAt).toISOString()
+        },
+        verification: {
+          selectedPath: port?.path || port?.stablePath || port?.rawPath || null,
+          serialNumber: port?.serialNumber || null,
+          pnpId: port?.pnpId || null,
+          evidence: target.evidence || []
+        }
+      };
+    } catch (error) {
+      return {
+        available: false,
+        error: error.message || 'Unable to check the SONOFF firmware manifest.',
+        target,
+        firmware: null,
+        manifest: {
+          sourceUrl: SONOFF_FIRMWARE_MANIFEST_URL,
+          fetchedAt: null
+        }
+      };
+    }
+  }
+
+  async resolveThreadFirmwareImage(payload = {}, jobDir, selectedPort = null, latestFirmware = null) {
+    const firmwareUrl = normalizeString(payload.firmwareUrl);
+    const firmwareBase64 = normalizeString(payload.firmwareBase64);
+    if (firmwareUrl) {
+      const error = new Error('Firmware URL downloads are not supported. Let HomeBrain download the official latest firmware, or upload a local .gbl file.');
+      error.status = 400;
+      throw error;
+    }
+    const automaticFirmware = !firmwareBase64
+      ? (latestFirmware || await this.getLatestThreadFirmwareForPort(selectedPort, { forceRefresh: true }))
+      : null;
+
+    if (automaticFirmware) {
+      if (automaticFirmware && !automaticFirmware.available) {
+        const error = new Error(automaticFirmware.error || 'Unable to resolve the latest SONOFF OpenThread firmware for this stick.');
+        error.status = 502;
+        throw error;
+      }
+      const effectiveFirmwareUrl = automaticFirmware?.firmware?.url;
+      if (!effectiveFirmwareUrl || !isTrustedSonoffFirmwareUrl(effectiveFirmwareUrl)) {
+        const error = new Error('The SONOFF firmware manifest returned an untrusted firmware URL.');
+        error.status = 502;
+        throw error;
+      }
+      const fileName = automaticFirmware?.firmware?.name || firmwareNameFromUrl(effectiveFirmwareUrl);
+      const response = await axios.get(effectiveFirmwareUrl, {
+        responseType: 'arraybuffer',
+        timeout: 30000,
+        maxRedirects: 0,
+        maxContentLength: THREAD_FLASH_MAX_FIRMWARE_BYTES,
+        maxBodyLength: THREAD_FLASH_MAX_FIRMWARE_BYTES,
+        validateStatus: (status) => status >= 200 && status < 300
+      });
+      const buffer = Buffer.from(response.data);
+      if (buffer.length <= 0 || buffer.length > THREAD_FLASH_MAX_FIRMWARE_BYTES) {
+        const error = new Error('Firmware image is empty or exceeds the configured size limit.');
+        error.status = 400;
+        throw error;
+      }
+      const firmwarePath = path.join(jobDir, fileName);
+      await fsp.writeFile(firmwarePath, buffer);
+      return {
+        path: firmwarePath,
+        name: fileName,
+        size: buffer.length,
+        source: 'sonoff-latest',
+        url: effectiveFirmwareUrl,
+        version: automaticFirmware?.firmware?.version || null,
+        sdkVersion: automaticFirmware?.firmware?.sdkVersion || null,
+        firmwareType: automaticFirmware?.firmware?.firmwareType || null,
+        firmwareDesc: automaticFirmware?.firmware?.firmwareDesc || null,
+        target: automaticFirmware?.target || null,
+        verification: automaticFirmware?.verification || null
+      };
+    }
+
+    let encoded = firmwareBase64;
+    const dataUrlMatch = encoded.match(/^data:[^,]+,(.+)$/);
+    if (dataUrlMatch) {
+      encoded = dataUrlMatch[1];
+    }
+    encoded = encoded.replace(/\s/g, '');
+    if (!/^[a-z0-9+/=]+$/i.test(encoded)) {
+      const error = new Error('Firmware upload was not valid base64.');
+      error.status = 400;
+      throw error;
+    }
+    const buffer = Buffer.from(encoded, 'base64');
+    if (buffer.length <= 0 || buffer.length > THREAD_FLASH_MAX_FIRMWARE_BYTES) {
+      const error = new Error('Firmware image is empty or exceeds the configured size limit.');
+      error.status = 400;
+      throw error;
+    }
+    const fileName = sanitizeFirmwareFileName(payload.firmwareName);
+    const firmwarePath = path.join(jobDir, fileName);
+    await fsp.writeFile(firmwarePath, buffer);
+    return {
+      path: firmwarePath,
+      name: fileName,
+      size: buffer.length,
+      source: 'upload'
+    };
+  }
+
+  async runThreadFirmwareFlashCommand(job, command, args, options = {}) {
+    this.appendThreadFirmwareFlashLog(job, 'system', `$ ${[command, ...args].join(' ')}`);
+    await new Promise((resolve, reject) => {
+      const child = spawn(command, args, {
+        cwd: options.cwd || MATTER_DATA_DIR,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          PIP_DISABLE_PIP_VERSION_CHECK: '1'
+        }
+      });
+
+      child.stdout.on('data', (chunk) => this.appendThreadFirmwareFlashLog(job, 'stdout', chunk));
+      child.stderr.on('data', (chunk) => this.appendThreadFirmwareFlashLog(job, 'stderr', chunk));
+      child.on('error', reject);
+      child.on('close', (code, signal) => {
+        if (code === 0) {
+          resolve();
+          return;
+        }
+        reject(new Error(`${command} exited with ${signal || `code ${code}`}`));
+      });
+    });
+  }
+
+  async installThreadFirmwareFlashTool(job) {
+    await this.updateThreadFirmwareFlashJob(job, {
+      status: 'preparing',
+      phase: 'installing-universal-silabs-flasher'
+    });
+
+    const pythonBin = process.env.PYTHON_BIN || 'python3';
+    await this.runThreadFirmwareFlashCommand(job, pythonBin, ['-m', 'venv', THREAD_FLASH_MANAGED_VENV_DIR], {
+      cwd: MATTER_DATA_DIR
+    });
+
+    const managedPython = path.join(
+      THREAD_FLASH_MANAGED_VENV_DIR,
+      process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'
+    );
+    await this.runThreadFirmwareFlashCommand(
+      job,
+      managedPython,
+      ['-m', 'pip', 'install', '--upgrade', 'pip', 'universal-silabs-flasher'],
+      { cwd: MATTER_DATA_DIR }
+    );
+
+    this.threadFirmwareFlashToolCache = null;
+    const tool = this.getThreadFirmwareFlashTool({ forceRefresh: true });
+    if (!tool.available) {
+      const error = new Error('HomeBrain installed universal-silabs-flasher, but the flasher command is still unavailable.');
+      error.status = 503;
+      throw error;
+    }
+    await this.updateThreadFirmwareFlashJob(job, {
+      tool: {
+        available: true,
+        canAutoInstall: true,
+        label: tool.label,
+        source: tool.source,
+        docsUrl: tool.docsUrl || UNIVERSAL_SILABS_FLASHER_REPO_URL
+      }
+    });
+    return tool;
+  }
+
+  getThreadFirmwareFlashTool(options = {}) {
+    const now = Date.now();
+    if (
+      !options.forceRefresh
+      && this.threadFirmwareFlashToolCache
+      && now - this.threadFirmwareFlashToolCache.checkedAt < 30_000
+    ) {
+      return this.threadFirmwareFlashToolCache.tool;
+    }
+    const tool = resolveThreadFirmwareFlashTool();
+    this.threadFirmwareFlashToolCache = {
+      checkedAt: now,
+      tool
+    };
+    return tool;
+  }
+
+  async getThreadFirmwareFlashStatus(options = {}) {
+    const tool = this.getThreadFirmwareFlashTool(options);
+    const jobs = Array.from(this.threadFirmwareFlashJobs.values())
+      .sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0));
+    const activeJob = this.activeThreadFirmwareFlashJobId
+      ? this.threadFirmwareFlashJobs.get(this.activeThreadFirmwareFlashJobId)
+      : null;
+    const latestFirmware = options.selectedPort
+      ? await this.getLatestThreadFirmwareForPort(options.selectedPort, options)
+      : null;
+    return {
+      confirmationPhrase: THREAD_FLASH_CONFIRMATION,
+      maxFirmwareBytes: THREAD_FLASH_MAX_FIRMWARE_BYTES,
+      tool,
+      latestFirmware,
+      activeJob: this.redactThreadFirmwareFlashJob(activeJob, options),
+      recentJobs: jobs.slice(0, 5).map((job) => this.redactThreadFirmwareFlashJob(job, options))
+    };
+  }
+
+  async startThreadFirmwareFlash(payload = {}) {
+    if (!normalizeThreadFirmwareFlashConfirmation(payload.confirmFlash || payload.confirmation)) {
+      const error = new Error(`Type ${THREAD_FLASH_CONFIRMATION} to confirm Thread firmware flashing.`);
+      error.status = 400;
+      throw error;
+    }
+    const firmwareUrl = normalizeString(payload.firmwareUrl);
+    const firmwareBase64 = normalizeString(payload.firmwareBase64);
+    if (firmwareUrl) {
+      const error = new Error('Firmware URL downloads are not supported. Let HomeBrain download the official latest firmware, or upload a local .gbl file.');
+      error.status = 400;
+      throw error;
+    }
+    if (firmwareBase64) {
+      sanitizeFirmwareFileName(payload.firmwareName);
+    }
+
+    const activeJob = this.activeThreadFirmwareFlashJobId
+      ? this.threadFirmwareFlashJobs.get(this.activeThreadFirmwareFlashJobId)
+      : null;
+    if (activeJob && ['queued', 'preparing', 'flashing'].includes(activeJob.status)) {
+      const error = new Error('A Thread firmware flash is already running.');
+      error.status = 409;
+      throw error;
+    }
+
+    const threadStatus = await this.getThreadStatus();
+    const selectedPort = threadStatus.selectedPort;
+    if (!selectedPort?.isExpectedMatterThreadStick) {
+      const error = new Error('Select a detected SONOFF MG24 Thread stick before flashing firmware.');
+      error.status = 400;
+      throw error;
+    }
+    const devicePath = selectedPort.path || selectedPort.stablePath || selectedPort.rawPath || selectedPort.realPath;
+    if (!devicePath) {
+      const error = new Error('The selected Thread stick does not expose a usable serial path.');
+      error.status = 400;
+      throw error;
+    }
+    const latestFirmware = !firmwareBase64
+      ? await this.getLatestThreadFirmwareForPort(selectedPort, { forceRefresh: true })
+      : null;
+    if (latestFirmware && !latestFirmware.available) {
+      const error = new Error(latestFirmware.error || 'Unable to resolve the latest SONOFF OpenThread firmware for this stick.');
+      error.status = 502;
+      throw error;
+    }
+
+    const tool = this.getThreadFirmwareFlashTool({ forceRefresh: true });
+
+    const job = this.createThreadFirmwareFlashJob(devicePath, tool);
+    await this.persistThreadFirmwareFlashJob(job);
+    setImmediate(() => {
+      this.runThreadFirmwareFlashJob(job, payload, selectedPort, devicePath, tool, latestFirmware).catch((error) => {
+        this.updateThreadFirmwareFlashJob(job, {
+          status: 'failed',
+          phase: 'failed',
+          error: error.message,
+          finishedAt: new Date().toISOString()
+        }).catch(() => {});
+        this.activeThreadFirmwareFlashJobId = null;
+      });
+    });
+
+    return this.redactThreadFirmwareFlashJob(job);
+  }
+
+  async runThreadFirmwareFlashJob(job, payload, selectedPort, devicePath, tool, latestFirmware = null) {
+    let effectiveTool = tool;
+    if (!effectiveTool.available) {
+      effectiveTool = await this.installThreadFirmwareFlashTool(job);
+    }
+
+    await this.updateThreadFirmwareFlashJob(job, {
+      status: 'preparing',
+      phase: 'writing-firmware-image'
+    });
+    const jobDir = path.join(THREAD_FLASH_JOBS_DIR, job.id);
+    await fsp.mkdir(jobDir, { recursive: true });
+    const firmware = await this.resolveThreadFirmwareImage(payload, jobDir, selectedPort, latestFirmware);
+    const flashCommand = buildThreadFirmwareFlashCommand(effectiveTool, {
+      devicePath,
+      firmwarePath: firmware.path,
+      verbose: true
+    });
+
+    await this.updateThreadFirmwareFlashJob(job, {
+      status: 'flashing',
+      phase: 'running-universal-silabs-flasher',
+      firmware: {
+        name: firmware.name,
+        size: firmware.size,
+        source: firmware.source,
+        url: firmware.url || null,
+        version: firmware.version || null,
+        sdkVersion: firmware.sdkVersion || null,
+        firmwareType: firmware.firmwareType || null,
+        firmwareDesc: firmware.firmwareDesc || null,
+        target: firmware.target || null,
+        verification: firmware.verification || null
+      },
+      commandPreview: [
+        flashCommand.command,
+        ...flashCommand.args.map((arg) => arg === firmware.path ? firmware.name : arg)
+      ].join(' ')
+    });
+
+    await new Promise((resolve, reject) => {
+      const child = spawn(flashCommand.command, flashCommand.args, {
+        cwd: jobDir,
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+
+      child.stdout.on('data', (chunk) => this.appendThreadFirmwareFlashLog(job, 'stdout', chunk));
+      child.stderr.on('data', (chunk) => this.appendThreadFirmwareFlashLog(job, 'stderr', chunk));
+      child.on('error', reject);
+      child.on('close', (code, signal) => {
+        if (code === 0) {
+          resolve();
+          return;
+        }
+        reject(new Error(`universal-silabs-flasher exited with ${signal || `code ${code}`}`));
+      });
+    });
+
+    await this.updateThreadFirmwareFlashJob(job, {
+      status: 'completed',
+      phase: 'completed',
+      finishedAt: new Date().toISOString()
+    });
+    this.activeThreadFirmwareFlashJobId = null;
+    this.lastThreadStatus = null;
+  }
+
   async getThreadStatus(options = {}) {
     const config = await this.loadConfig();
     const serialPorts = options.refreshPorts === false
@@ -554,12 +1624,23 @@ class MatterService {
     }
 
     const expectedPorts = serialPorts.filter((port) => port.isExpectedMatterThreadStick);
-    const selectedPort = expectedPorts.find((port) => port.path === config.preferredThreadPort)
+    const selectedPort = expectedPorts.find((port) => serialPortMatchesPath(port, config.preferredThreadPort))
       || expectedPorts[0]
       || null;
     const otbr = await this.checkOtbrRest();
     const configuredDataset = normalizeString(config.thread?.operationalDataset);
     const activeDataset = configuredDataset || otbr.dataset || '';
+    const firmwareFlash = await this.getThreadFirmwareFlashStatus({
+      includeLogs: false,
+      selectedPort
+    });
+    const setup = buildThreadSetupGuidance({
+      expectedPorts,
+      selectedPort,
+      otbr,
+      activeDataset,
+      firmwareFlash
+    });
 
     const status = {
       hardware: MATTER_CONTROLLER_HARDWARE,
@@ -575,6 +1656,8 @@ class MatterService {
         activeDatasetSource: configuredDataset ? 'homebrain-config' : (otbr.dataset ? 'otbr-rest' : null)
       },
       readyForThreadCommissioning: Boolean(expectedPorts.length > 0 && activeDataset),
+      setup,
+      firmwareFlash,
       manualSteps: buildManualSteps({
         transport: MATTER_TRANSPORTS.thread,
         hasThreadDataset: Boolean(activeDataset),
@@ -1428,6 +2511,9 @@ class MatterService {
         'QR setup code',
         'Known IP address',
         'Matter-over-IP discovery',
+        'SONOFF MG24 OpenThread RCP setup guidance',
+        'Automatic latest SONOFF OpenThread firmware selection',
+        'Admin-confirmed SONOFF MG24 OpenThread RCP firmware flashing',
         'Thread credentials through OpenThread Border Router',
         'Wi-Fi credentials through BLE commissioning when Bluetooth is available'
       ]
@@ -1438,15 +2524,28 @@ class MatterService {
 const matterService = new MatterService();
 matterService.MatterService = MatterService;
 matterService._test = {
+  addFallbackSerialPortCandidates,
+  buildThreadFirmwareFlashCommand,
   buildManualSteps,
+  buildThreadSetupGuidance,
+  buildUniversalSilabsFlasherArgs,
+  compareFirmwareEntries,
   endpointDescriptorFromRecord,
+  inferSonoffThreadFirmwareTarget,
   getSerialPortListFunction,
   isAllowedLocalOtbrHost,
+  isTrustedSonoffFirmwareUrl,
   looksLikeSonoffMg24Port,
+  normalizeThreadFirmwareFlashConfirmation,
   normalizeSerialPort,
   normalizeOtbrRestUrl,
   normalizeTransport,
-  parseKnownAddress
+  normalizeSonoffFirmwareEntry,
+  parseKnownAddress,
+  sanitizeFirmwareFileName,
+  selectLatestSonoffThreadFirmware,
+  serialPortMatchesPath,
+  splitCommandSpec
 };
 
 module.exports = matterService;

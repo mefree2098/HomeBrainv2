@@ -64,6 +64,25 @@ test('Matter service detects SONOFF MG24 serial ports and parses known addresses
     manufacturer: 'Zooz',
     friendlyName: 'Zooz ZST10 Z-Wave'
   }), false);
+  assert.equal(matterService._test.looksLikeSonoffMg24Port({
+    path: '/dev/serial/by-id/usb-ITead_Sonoff_Zigbee_3.0_USB_Dongle_Plus_2275350e6ca4ef119f8aaf8086a24396-if00-port0',
+    manufacturer: 'ITead',
+    pnpId: 'usb-ITead_Sonoff_Zigbee_3.0_USB_Dongle_Plus_2275350e6ca4ef119f8aaf8086a24396-if00-port0',
+    vendorId: '10c4',
+    productId: 'ea60'
+  }), false);
+  assert.equal(matterService._test.looksLikeSonoffMg24Port({
+    stablePath: '/dev/serial/by-id/usb-SONOFF_SONOFF_Dongle_Plus_MG24_c4416e8b64f5ef11996896a29ed47d52-if00-port0',
+    manufacturer: 'SONOFF',
+    pnpId: 'usb-SONOFF_SONOFF_Dongle_Plus_MG24_c4416e8b64f5ef11996896a29ed47d52-if00-port0',
+    vendorId: '10c4',
+    productId: 'ea60'
+  }), true);
+  assert.equal(matterService._test.serialPortMatchesPath({
+    path: '/dev/serial/by-id/usb-SONOFF_SONOFF_Dongle_Plus_MG24_c4416e8b64f5ef11996896a29ed47d52-if00-port0',
+    rawPath: '/dev/ttyUSB2',
+    realPath: '/dev/ttyUSB2'
+  }, '/dev/ttyUSB2'), true);
 
   assert.deepEqual(matterService._test.parseKnownAddress('192.168.1.50:5540'), {
     ip: '192.168.1.50',
@@ -101,4 +120,110 @@ test('Matter service constrains OTBR REST URLs to local and private networks', (
     matterService._test.normalizeOtbrRestUrl('http://192.168.1.40:8081/node/'),
     'http://192.168.1.40:8081/node'
   );
+});
+
+test('Matter service guards Thread firmware flashing inputs and command construction', () => {
+  assert.equal(matterService._test.normalizeThreadFirmwareFlashConfirmation('FLASH OPENTHREAD RCP'), true);
+  assert.equal(matterService._test.normalizeThreadFirmwareFlashConfirmation('flash openthread rcp'), true);
+  assert.equal(matterService._test.normalizeThreadFirmwareFlashConfirmation('FLASH ZIGBEE'), false);
+
+  assert.equal(matterService._test.sanitizeFirmwareFileName('../OpenThread RCP.gbl'), 'OpenThread_RCP.gbl');
+  assert.throws(
+    () => matterService._test.sanitizeFirmwareFileName('zigbee.bin'),
+    /Thread firmware must be a Silicon Labs \.gbl image/
+  );
+
+  assert.equal(
+    matterService._test.isTrustedSonoffFirmwareUrl(
+      'https://dongle.sonoff.tech/dongle-flasher/dongle-hardware/donglepmg24_mg24_openthread_stable_2.4.4_460800.gbl'
+    ),
+    true
+  );
+  assert.equal(
+    matterService._test.isTrustedSonoffFirmwareUrl('http://dongle.sonoff.tech/dongle-flasher/dongle-hardware/ot-rcp.gbl'),
+    false
+  );
+  assert.equal(
+    matterService._test.isTrustedSonoffFirmwareUrl('https://example.com/dongle-flasher/dongle-hardware/ot-rcp.gbl'),
+    false
+  );
+
+  assert.deepEqual(
+    matterService._test.splitCommandSpec('python3 -m universal_silabs_flasher'),
+    ['python3', '-m', 'universal_silabs_flasher']
+  );
+
+  assert.deepEqual(
+    matterService._test.buildUniversalSilabsFlasherArgs({
+      devicePath: '/dev/serial/by-id/usb-SONOFF_MG24',
+      firmwarePath: '/tmp/openthread.gbl',
+      verbose: true
+    }),
+    [
+      '--verbose',
+      '--device',
+      '/dev/serial/by-id/usb-SONOFF_MG24',
+      '--bootloader-reset',
+      'rts_dtr',
+      'flash',
+      '--firmware',
+      '/tmp/openthread.gbl'
+    ]
+  );
+});
+
+test('Matter service selects the latest SONOFF OpenThread firmware for the connected PMG24 stick', () => {
+  const port = {
+    stablePath: '/dev/serial/by-id/usb-SONOFF_SONOFF_Dongle_Plus_MG24_c4416e8b64f5ef11996896a29ed47d52-if00-port0',
+    rawPath: '/dev/ttyUSB2',
+    manufacturer: 'SONOFF',
+    serialNumber: 'c4416e8b64f5ef11996896a29ed47d52',
+    pnpId: 'usb-SONOFF_SONOFF_Dongle_Plus_MG24_c4416e8b64f5ef11996896a29ed47d52-if00-port0',
+    vendorId: '10c4',
+    productId: 'ea60'
+  };
+  const target = matterService._test.inferSonoffThreadFirmwareTarget(port);
+  assert.deepEqual(target, {
+    dongleType: 'Dongle-PMG24',
+    chipModel: 'mg24',
+    productName: 'SONOFF Dongle Plus MG24',
+    firmwareType: 'OpenThread',
+    evidence: ['stablePath', 'pnpId', 'serialNumber', 'manufacturer']
+  });
+
+  const latest = matterService._test.selectLatestSonoffThreadFirmware([
+    {
+      name: 'donglepmg24_mg24_openthread_stable_2.4.3_460800.gbl',
+      dongleType: 'Dongle-PMG24',
+      chipModel: 'mg24',
+      firmwareType: 'OpenThread',
+      firmwareDesc: 'stable',
+      version: '2.4.3',
+      baudRate: '460800'
+    },
+    {
+      name: 'donglepmg24_mg24_openthread_stable_2.4.4_460800.gbl',
+      dongleType: 'Dongle-PMG24',
+      chipModel: 'mg24',
+      firmwareType: 'OpenThread',
+      firmwareDesc: 'stable',
+      version: '2.4.4',
+      baudRate: '460800'
+    },
+    {
+      name: 'donglem_mg24_openthread_stable_1.0.0_115200_2.4.4.gbl',
+      dongleType: 'Dongle-M',
+      chipModel: 'mg24',
+      firmwareType: 'OpenThread',
+      firmwareDesc: 'stable',
+      version: '1.0.0',
+      baudRate: '115200',
+      sdkVersion: '2.4.4'
+    }
+  ], target);
+
+  assert.equal(latest.name, 'donglepmg24_mg24_openthread_stable_2.4.4_460800.gbl');
+  assert.equal(latest.dongleType, 'Dongle-PMG24');
+  assert.equal(latest.firmwareType, 'OpenThread');
+  assert.equal(latest.url, 'https://dongle.sonoff.tech/dongle-flasher/dongle-hardware/donglepmg24_mg24_openthread_stable_2.4.4_460800.gbl');
 });

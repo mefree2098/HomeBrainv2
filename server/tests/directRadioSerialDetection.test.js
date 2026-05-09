@@ -74,6 +74,22 @@ test('direct radio scoring treats generic CP210x as weak without protocol identi
   assert.ok(scorePortForProtocol(generic, 'zwave') < 8);
 });
 
+test('direct radio scoring reserves SONOFF MG24 sticks for Thread setup by default', () => {
+  const mg24 = enrichSerialPortForDirectRadios(normalizeSerialPort({
+    path: '/dev/ttyUSB2',
+    manufacturer: 'SONOFF',
+    product: 'SONOFF Dongle Plus MG24',
+    pnpId: 'usb-SONOFF_SONOFF_Dongle_Plus_MG24_c4416e8b64f5ef11996896a29ed47d52-if00-port0',
+    vendorId: '10C4',
+    productId: 'EA60'
+  }, []));
+
+  assert.equal(mg24.likelyThread, true);
+  assert.equal(mg24.likelyZigbee, false);
+  assert.equal(mg24.preferredProtocol, null);
+  assert.ok(scorePortForProtocol(mg24, 'zigbee') < 8);
+});
+
 test('direct radio status explains when HomeBrain sees serial endpoints but no native radio stick', async (t) => {
   const originalDirectEnabled = process.env.HOMEBRAIN_DIRECT_RADIOS_ENABLED;
   const originalZigbeePort = process.env.HOMEBRAIN_ZIGBEE_PORT;
