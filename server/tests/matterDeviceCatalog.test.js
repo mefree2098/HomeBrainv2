@@ -234,6 +234,31 @@ test('Matter Thread setup guidance marks completed OpenThread flash before OTBR 
   assert.equal(guidance.otbr.serverSideConfirmation, 'START THREAD BORDER ROUTER');
 });
 
+test('persisted Thread flash jobs are normalized for restart-safe status checks', () => {
+  const completed = matterService._test.normalizePersistedThreadFirmwareFlashJob({
+    id: 'thread-flash-test',
+    status: 'completed',
+    phase: 'completed',
+    createdAt: '2026-05-09T18:00:00.000Z',
+    devicePath: '/dev/serial/by-id/usb-SONOFF_MG24',
+    firmware: {
+      firmwareType: 'OpenThread',
+      version: '2.4.4'
+    },
+    logs: Array.from({ length: 300 }, (_, index) => ({ line: `line ${index}` }))
+  });
+
+  assert.equal(completed.id, 'thread-flash-test');
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.firmware.version, '2.4.4');
+  assert.equal(completed.logs.length, 250);
+
+  const missingId = matterService._test.normalizePersistedThreadFirmwareFlashJob({
+    status: 'completed'
+  });
+  assert.equal(missingId, null);
+});
+
 test('Matter service selects the latest SONOFF OpenThread firmware for the connected PMG24 stick', () => {
   const port = {
     stablePath: '/dev/serial/by-id/usb-SONOFF_SONOFF_Dongle_Plus_MG24_c4416e8b64f5ef11996896a29ed47d52-if00-port0',

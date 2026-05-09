@@ -38,6 +38,7 @@ const THREAD_FLASH_LOG_LIMIT = Math.max(50, Number(process.env.HOMEBRAIN_THREAD_
 const THREAD_OTBR_LOG_LIMIT = Math.max(50, Number(process.env.HOMEBRAIN_THREAD_OTBR_LOG_LIMIT || 250));
 const THREAD_OTBR_START_TIMEOUT_MS = Math.max(60_000, Number(process.env.HOMEBRAIN_THREAD_OTBR_START_TIMEOUT_MS || 30 * 60_000));
 const THREAD_OTBR_HELPER_PATH = process.env.HOMEBRAIN_OTBR_HELPER_PATH || '/usr/local/lib/homebrain/homebrain-otbr-control.sh';
+const THREAD_FLASH_ACTIVE_STATUSES = new Set(['queued', 'preparing', 'flashing']);
 const UNIVERSAL_SILABS_FLASHER_REPO_URL = 'https://github.com/NabuCasa/universal-silabs-flasher';
 const UNIVERSAL_SILABS_FLASHER_INSTALL_HINT = 'HomeBrain can install universal-silabs-flasher into its managed Matter venv when flashing starts.';
 const SONOFF_DONGLE_HARDWARE_BASE_URL = 'https://dongle.sonoff.tech/dongle-flasher/dongle-hardware';
@@ -792,6 +793,32 @@ function findCompletedThreadFirmwareFlash(firmwareFlash = {}, selectedPath = '')
   }) || null;
 }
 
+function normalizePersistedThreadFirmwareFlashJob(record) {
+  if (!record || typeof record !== 'object') {
+    return null;
+  }
+  const id = normalizeString(record.id);
+  if (!id) {
+    return null;
+  }
+  const now = new Date().toISOString();
+  const status = normalizeString(record.status) || 'failed';
+  return {
+    id,
+    status,
+    phase: normalizeString(record.phase) || status,
+    createdAt: normalizeString(record.createdAt) || normalizeString(record.updatedAt) || now,
+    updatedAt: normalizeString(record.updatedAt) || normalizeString(record.createdAt) || now,
+    finishedAt: normalizeString(record.finishedAt) || null,
+    error: normalizeString(record.error) || null,
+    devicePath: normalizeString(record.devicePath),
+    firmware: record.firmware && typeof record.firmware === 'object' ? record.firmware : null,
+    commandPreview: normalizeString(record.commandPreview) || null,
+    tool: record.tool && typeof record.tool === 'object' ? record.tool : null,
+    logs: Array.isArray(record.logs) ? record.logs.slice(-THREAD_FLASH_LOG_LIMIT) : []
+  };
+}
+
 function buildThreadSetupGuidance({
   expectedPorts = [],
   selectedPort = null,
@@ -978,6 +1005,7 @@ class MatterService {
     this.lastThreadStatus = null;
     this.threadFirmwareFlashJobs = new Map();
     this.activeThreadFirmwareFlashJobId = null;
+    this.threadFirmwareFlashJobsLoaded = false;
     this.threadOtbrJobs = new Map();
     this.activeThreadOtbrJobId = null;
     this.threadFirmwareFlashToolCache = null;
@@ -1011,7 +1039,7 @@ class MatterService {
       adminVendorId: Number.isFinite(Number(existing.adminVendorId)) ? Number(existing.adminVendorId) : 0xfff1,
       adminFabricId: Number.isFinite(Number(existing.adminFabricId)) ? Number(existing.adminFabricId) : 1,
       storagePath: normalizeString(existing.storagePath) || MATTER_STORAGE_DIR,
-      otbrRestUrl: normalizeOtbrRestUrl(DEFAULT_OTBR_REST_URL),
+      otbrRestUrl: normalizeOtbrRestUrl(existing.otbrRestUrl, DEFAULT_OTBR_REST_URL),
       thread: {
         networkName: normalizeString(existing.thread?.networkName) || '',
         operationalDataset: normalizeString(existing.thread?.operationalDataset) || ''
@@ -1479,6 +1507,55 @@ class MatterService {
     }
   }
 
+  async loadThreadFirmwareFlashJobs(options = {}) {
+    if (this.threadFirmwareFlashJobsLoaded && !options.forceRefresh) {
+      return;
+    }
+
+    await this.ensureDataDir();
+    let entries = [];
+    try {
+      entries = await fsp.readdir(THREAD_FLASH_JOBS_DIR, { withFileTypes: true });
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        console.warn(`MatterService: Failed to list Thread firmware flash jobs: ${error.message}`);
+      }
+      this.threadFirmwareFlashJobsLoaded = true;
+      return;
+    }
+
+    const interruptedJobs = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) {
+        continue;
+      }
+      const filePath = path.join(THREAD_FLASH_JOBS_DIR, entry.name);
+      try {
+        const parsed = JSON.parse(await fsp.readFile(filePath, 'utf8'));
+        const job = normalizePersistedThreadFirmwareFlashJob(parsed);
+        if (!job) {
+          continue;
+        }
+        if (THREAD_FLASH_ACTIVE_STATUSES.has(job.status)) {
+          job.status = 'failed';
+          job.phase = 'failed';
+          job.finishedAt = job.finishedAt || new Date().toISOString();
+          job.error = job.error || 'HomeBrain restarted before this firmware flash job completed.';
+          interruptedJobs.push(job);
+        }
+        this.threadFirmwareFlashJobs.set(job.id, job);
+      } catch (error) {
+        console.warn(`MatterService: Failed to load Thread firmware flash job ${entry.name}: ${error.message}`);
+      }
+    }
+
+    this.activeThreadFirmwareFlashJobId = Array.from(this.threadFirmwareFlashJobs.values())
+      .find((job) => THREAD_FLASH_ACTIVE_STATUSES.has(job.status))?.id || null;
+    this.threadFirmwareFlashJobsLoaded = true;
+
+    await Promise.all(interruptedJobs.map((job) => this.persistThreadFirmwareFlashJob(job)));
+  }
+
   appendThreadFirmwareFlashLog(job, streamName, chunk) {
     const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk || '');
     text
@@ -1768,6 +1845,7 @@ class MatterService {
   }
 
   async getThreadFirmwareFlashStatus(options = {}) {
+    await this.loadThreadFirmwareFlashJobs();
     const tool = this.getThreadFirmwareFlashTool(options);
     const jobs = Array.from(this.threadFirmwareFlashJobs.values())
       .sort((left, right) => new Date(right.createdAt || 0) - new Date(left.createdAt || 0));
@@ -2849,6 +2927,7 @@ matterService._test = {
   isAllowedLocalOtbrHost,
   isTrustedSonoffFirmwareUrl,
   looksLikeSonoffMg24Port,
+  normalizePersistedThreadFirmwareFlashJob,
   normalizeThreadBaudRate,
   normalizeThreadFirmwareFlashConfirmation,
   normalizeThreadOtbrConfirmation,
