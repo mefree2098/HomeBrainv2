@@ -746,8 +746,11 @@ PY
       "$(json_escape "${fallback_detail}")")"
     status=1
   fi
-  printf '%s\n' "${validation:-{\"ok\":false,\"error\":\"preflight produced no output\"}}" >"${VALIDATION_FILE}"
-  printf '%s\n' "${validation:-{\"ok\":false,\"error\":\"preflight produced no output\"}}"
+  if [[ -z "${validation}" ]]; then
+    validation='{"ok":false,"error":"preflight produced no output"}'
+  fi
+  printf '%s\n' "${validation}" >"${VALIDATION_FILE}"
+  printf '%s\n' "${validation}"
   return "${status}"
 }
 

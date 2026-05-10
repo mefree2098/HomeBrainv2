@@ -1,7 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 
@@ -52,4 +54,28 @@ test('Thread kernel helper validates the custom kernel before scheduling reboot'
   assert.match(script, /validate\|preflight/);
   assert.match(script, /run_preflight_validation[\s\S]+mark_pending_reboot/);
   assert.doesNotMatch(script, /^\s+path\.write_text/m);
+});
+
+test('Thread kernel helper validate emits parseable JSON on failed preflight', (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'homebrain-thread-kernel-test-'));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+
+  const result = spawnSync('bash', [path.join(repoRoot, 'scripts', 'homebrain-jetson-kernel-control.sh'), 'validate'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      HOMEBRAIN_THREAD_KERNEL_STATE_DIR: tempDir,
+      HOMEBRAIN_THREAD_KERNEL_EXTLINUX_CONF: path.join(tempDir, 'extlinux.conf'),
+      HOMEBRAIN_THREAD_KERNEL_IMAGE: path.join(tempDir, 'Image.homebrain-thread'),
+      HOMEBRAIN_THREAD_KERNEL_INITRD: path.join(tempDir, 'initrd.homebrain-thread'),
+      HOMEBRAIN_THREAD_KERNEL_CONFIG: path.join(tempDir, 'config.homebrain-thread'),
+      HOMEBRAIN_THREAD_KERNEL_SOURCE_DIR: path.join(tempDir, 'kernel-src')
+    }
+  });
+
+  assert.equal(result.status, 1);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, false);
+  assert.equal(payload.checks[0].name, 'custom kernel image exists');
 });

@@ -433,6 +433,15 @@ test('Thread kernel helper JSON parser tolerates wrapper output', () => {
   assert.equal(parsed.checks[0].name, 'custom kernel image exists');
 });
 
+test('Thread kernel helper JSON parser tolerates trailing helper noise', () => {
+  const parsed = matterService._test.parseJsonObjectFromOutput(
+    '{"ok":false,"checks":[{"name":"custom kernel image exists","ok":false,"detail":"/boot/Image.homebrain-thread"}]}}'
+  );
+
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.checks[0].detail, '/boot/Image.homebrain-thread');
+});
+
 test('persisted Thread flash jobs are normalized for restart-safe status checks', () => {
   const completed = matterService._test.normalizePersistedThreadFirmwareFlashJob({
     id: 'thread-flash-test',
