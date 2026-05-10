@@ -24,6 +24,16 @@ die() {
   exit 1
 }
 
+json_escape() {
+  local value="${1:-}"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\r'/}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\t'/\\t}"
+  printf '%s' "${value}"
+}
+
 require_root() {
   if [[ "${EUID}" -ne 0 ]]; then
     die "This helper must run as root through HomeBrain sudoers."
@@ -280,7 +290,7 @@ start_thread_network() {
   ot_ctl thread start >/dev/null
 
   local attempt state
-  for attempt in $(seq 1 30); do
+  for attempt in $(seq 1 90); do
     state="$(read_state)"
     case "${state}" in
       leader|router|child)
@@ -292,11 +302,11 @@ start_thread_network() {
   done
 
   state="$(read_state)"
-  log "Thread interface state after wait: ${state:-unknown}."
+  die "Thread interface did not attach after start; current state is ${state:-unknown}."
 }
 
 print_status_json() {
-  local active enabled pid state dataset agent ctl
+  local active enabled pid state dataset agent ctl status_text journal_text
   active="$(systemctl is-active "${SERVICE_NAME}" 2>/dev/null || true)"
   enabled="$(systemctl is-enabled "${SERVICE_NAME}" 2>/dev/null || true)"
   pid="$(systemctl show -p MainPID --value "${SERVICE_NAME}" 2>/dev/null || true)"
@@ -304,9 +314,21 @@ print_status_json() {
   dataset="$(read_dataset)"
   agent="$(resolve_otbr_agent)"
   ctl="$(resolve_ot_ctl)"
+  status_text="$(systemctl status "${SERVICE_NAME}" --no-pager --lines=20 2>&1 || true)"
+  journal_text="$(journalctl -u "${SERVICE_NAME}" -n 60 --no-pager 2>&1 || true)"
 
-  printf '{"success":true,"service":"%s","active":"%s","enabled":"%s","mainPid":"%s","state":"%s","dataset":"%s","otbrAgent":"%s","otCtl":"%s","restUrl":"http://127.0.0.1:%s"}\n' \
-    "${SERVICE_NAME}" "${active}" "${enabled}" "${pid}" "${state}" "${dataset}" "${agent}" "${ctl}" "${REST_PORT}"
+  printf '{"success":true,"service":"%s","active":"%s","enabled":"%s","mainPid":"%s","state":"%s","dataset":"%s","otbrAgent":"%s","otCtl":"%s","restUrl":"http://127.0.0.1:%s","diagnostics":{"systemctl":"%s","journal":"%s"}}\n' \
+    "$(json_escape "${SERVICE_NAME}")" \
+    "$(json_escape "${active}")" \
+    "$(json_escape "${enabled}")" \
+    "$(json_escape "${pid}")" \
+    "$(json_escape "${state}")" \
+    "$(json_escape "${dataset}")" \
+    "$(json_escape "${agent}")" \
+    "$(json_escape "${ctl}")" \
+    "$(json_escape "${REST_PORT}")" \
+    "$(json_escape "${status_text}")" \
+    "$(json_escape "${journal_text}")"
 }
 
 case "${ACTION}" in
