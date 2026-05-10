@@ -98,6 +98,14 @@ function normalizeLower(value) {
   return normalizeString(value).toLowerCase();
 }
 
+function envFlagEnabled(value) {
+  return ['1', 'true', 'yes', 'on'].includes(normalizeLower(value));
+}
+
+function isThreadKernelRebuildEnabled() {
+  return envFlagEnabled(process.env.HOMEBRAIN_ENABLE_THREAD_KERNEL_REBUILD);
+}
+
 function isAllowedLocalOtbrHost(hostname) {
   let host = normalizeLower(hostname);
   if (host.startsWith('[')) {
@@ -1212,6 +1220,7 @@ function buildThreadSetupGuidance({
   const backboneRouterLimited = ipv6Mroute === 'unsupported' || backboneRouterMode === 'no-bbr';
   const kernelSupportsFullThread = Boolean(threadKernel?.kernelSupportsFullThread);
   const kernelNeedsRebuild = Boolean(threadKernel?.needsRebuild);
+  const kernelRebuildEnabled = Boolean(threadKernel?.rebuildEnabled);
   const actions = [];
 
   actions.push({
@@ -1274,8 +1283,10 @@ function buildThreadSetupGuidance({
       ? 'The host kernel and OTBR build can support Thread 1.2 Backbone Router multicast forwarding.'
       : backboneRouterLimited && !threadKernel
         ? 'This Jetson kernel does not expose IPv6 multicast routing, so HomeBrain will run OTBR without Thread 1.2 Backbone Router multicast forwarding.'
-      : kernelNeedsRebuild
+      : kernelNeedsRebuild && kernelRebuildEnabled
         ? 'This Jetson kernel does not expose the multicast routing options OTBR Backbone Router needs; HomeBrain can rebuild a custom Thread kernel, or keep the safe no-BBR fallback.'
+      : kernelNeedsRebuild
+        ? 'This Jetson kernel does not expose the multicast routing options OTBR Backbone Router needs. HomeBrain is keeping OTBR in the safe no-BBR fallback; the automatic Jetson kernel rebuild path is disabled.'
         : backboneRouterLimited
           ? 'This Jetson kernel does not expose IPv6 multicast routing, so HomeBrain will run OTBR without Thread 1.2 Backbone Router multicast forwarding.'
           : 'HomeBrain is checking host multicast routing support before enabling OTBR Backbone Router.'
@@ -1319,6 +1330,7 @@ function buildThreadSetupGuidance({
     kernel: {
       serverSideConfirmation: THREAD_KERNEL_CONFIRMATION,
       rebootConfirmation: THREAD_KERNEL_REBOOT_CONFIRMATION,
+      rebuildEnabled: kernelRebuildEnabled,
       builderUrl: JETSONHACKS_KERNEL_BUILDER_URL,
       nvidiaGuideUrl: NVIDIA_JETSON_KERNEL_CUSTOMIZATION_URL
     },
@@ -2084,13 +2096,15 @@ class MatterService {
     const kernelSupportsFullThread = helperStatus
       ? Boolean(helperStatus.kernelSupportsFullThread)
       : false;
+    const rebuildEnabled = isThreadKernelRebuildEnabled();
 
     return {
       confirmationPhrase: THREAD_KERNEL_CONFIRMATION,
       rebootConfirmationPhrase: THREAD_KERNEL_REBOOT_CONFIRMATION,
       helperPath: THREAD_KERNEL_HELPER_PATH,
       helperAvailable,
-      canAutoInstall: helperAvailable,
+      canAutoInstall: helperAvailable && rebuildEnabled,
+      rebuildEnabled,
       builderUrl: JETSONHACKS_KERNEL_BUILDER_URL,
       nvidiaGuideUrl: NVIDIA_JETSON_KERNEL_CUSTOMIZATION_URL,
       isJetsonOrin: Boolean(helperStatus?.isJetsonOrin),
@@ -2107,11 +2121,15 @@ class MatterService {
       source: helperStatus?.source || null,
       boot: helperStatus?.boot || null,
       postRebootAction,
-      warnings: [
-        'This changes the Jetson boot kernel and modules. A failed kernel install can require local console or SD/NVMe recovery.',
-        'The build can take a long time on the Jetson and should only run with stable power and network.',
-        'NVIDIA JetPack/L4T updates may replace the boot kernel. HomeBrain will detect missing multicast routing again and fall back to OTBR no-BBR until you reapply this kernel support.'
-      ],
+      warnings: rebuildEnabled
+        ? [
+          'This changes the Jetson boot kernel and modules. A failed kernel install can require local console or SD/NVMe recovery.',
+          'The build can take a long time on the Jetson and should only run with stable power and network.',
+          'NVIDIA JetPack/L4T updates may replace the boot kernel. HomeBrain will detect missing multicast routing again and fall back to OTBR no-BBR until you reapply this kernel support.'
+        ]
+        : [
+          'Automatic Jetson kernel rebuilds are disabled. HomeBrain will keep OTBR in the safe no-BBR fallback on kernels without multicast routing support.'
+        ],
       diagnostics: {
         helperStatusAvailable: Boolean(helperStatus),
         helperError: helperStatus ? null : normalizeString(helperProbe?.stderr || helperProbe?.error || ''),
@@ -2177,6 +2195,12 @@ class MatterService {
   }
 
   async startThreadKernelRebuild(payload = {}) {
+    if (!isThreadKernelRebuildEnabled()) {
+      const error = new Error('Automatic Jetson kernel rebuilds are disabled. HomeBrain will keep OTBR in the safe no-BBR fallback until a rollback-safe kernel installer is available.');
+      error.status = 403;
+      throw error;
+    }
+
     if (!normalizeThreadKernelConfirmation(payload.confirmKernel || payload.confirm || payload.confirmRebuild)) {
       const error = new Error(`Type ${THREAD_KERNEL_CONFIRMATION} to rebuild and install a HomeBrain Thread kernel.`);
       error.status = 400;
@@ -4071,8 +4095,7 @@ class MatterService {
         'Automatic latest SONOFF OpenThread firmware selection',
         'Admin-confirmed SONOFF MG24 OpenThread RCP firmware flashing',
         'Thread credentials through OpenThread Border Router',
-        'Admin-confirmed Jetson kernel rebuild for full Thread Backbone Router support',
-        'Safe OTBR no-BBR fallback when NVIDIA kernel updates remove multicast routing support',
+        'Safe OTBR no-BBR fallback when the host kernel lacks multicast routing support',
         'Wi-Fi credentials through BLE commissioning when Bluetooth is available'
       ]
     };
