@@ -1769,6 +1769,7 @@ class MatterService {
       kernelSupportsFullThread,
       needsRebuild,
       pendingReboot: helperStatus?.pendingReboot || null,
+      validation: helperStatus?.validation || null,
       lastResult: helperStatus?.lastResult || null,
       builder: helperStatus?.builder || null,
       source: helperStatus?.source || null,
@@ -1786,6 +1787,28 @@ class MatterService {
       },
       activeJob: activeJob ? this.serializeThreadKernelJob(activeJob, { includeLogs: options.includeLogs !== false }) : null,
       recentJobs
+    };
+  }
+
+  async validateThreadKernelPreflight() {
+    if (!fs.existsSync(THREAD_KERNEL_HELPER_PATH)) {
+      const error = new Error('The HomeBrain Thread kernel helper has not been installed on this host yet.');
+      error.status = 503;
+      throw error;
+    }
+
+    const probe = runSync('sudo', ['-n', THREAD_KERNEL_HELPER_PATH, 'validate'], { timeout: 60_000 });
+    const validation = parseJsonObject(probe.stdout || '');
+    if (!validation) {
+      const error = new Error(normalizeString(probe.stderr || probe.error) || 'Thread kernel preflight did not return validation details.');
+      error.status = 502;
+      throw error;
+    }
+
+    return {
+      success: Boolean(validation.ok),
+      validation,
+      status: await this.getThreadKernelStatus({ includeLogs: false, forceRefresh: true })
     };
   }
 

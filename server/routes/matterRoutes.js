@@ -128,6 +128,15 @@ router.post('/thread/kernel/rebuild', async (req, res) => {
   }
 });
 
+router.post('/thread/kernel/validate', async (_req, res) => {
+  try {
+    const result = await matterService.validateThreadKernelPreflight();
+    res.status(200).json(result);
+  } catch (error) {
+    sendError(res, error, 'Failed to run Thread kernel preflight');
+  }
+});
+
 router.get('/devices', async (_req, res) => {
   try {
     const devices = await matterService.listMatterDevices();

@@ -31,3 +31,23 @@ test('setup-services installs privileged Thread helpers and grants sudoers acces
   assert.match(script, /install_thread_kernel_privileged_helper/);
   assert.match(script, /\$\{THREAD_KERNEL_HELPER_INSTALL_PATH\} \*/);
 });
+
+test('setup-services installs smbclient for SMB disaster recovery backups', () => {
+  const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
+
+  assert.match(script, /install_backup_smb_tools/);
+  assert.match(script, /apt-get install -y smbclient/);
+});
+
+test('Thread kernel helper validates the custom kernel before scheduling reboot', () => {
+  const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'homebrain-jetson-kernel-control.sh'), 'utf8');
+
+  assert.match(script, /run_preflight_validation/);
+  assert.match(script, /restore_extlinux_backup_after_failed_validation/);
+  assert.match(script, /custom kernel config enables Thread multicast routing/);
+  assert.match(script, /matching modules directory exists/);
+  assert.match(script, /stock boot fallback label remains available/);
+  assert.match(script, /validate\|preflight/);
+  assert.match(script, /run_preflight_validation[\s\S]+mark_pending_reboot/);
+  assert.doesNotMatch(script, /^\s+path\.write_text/m);
+});

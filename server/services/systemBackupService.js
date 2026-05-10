@@ -12,9 +12,14 @@ const { getDataRetentionDays } = require('../config/dataRetention');
 
 const BACKUP_FORMAT_VERSION = 1;
 const DEFAULT_SERVICE_NAME = 'homebrain';
+const SMB_BACKUP_CONFIRMATION = 'BACKUP HOMEBRAIN TO SMB';
 
 function isRestoreActiveStatus(status) {
   return ['queued', 'validating', 'restoring'].includes(String(status || '').trim());
+}
+
+function isBackupActiveStatus(status) {
+  return ['queued', 'creating', 'uploading'].includes(String(status || '').trim());
 }
 
 function sanitizeFilename(value, fallback = 'homebrain-backup.tar.gz') {
@@ -23,7 +28,26 @@ function sanitizeFilename(value, fallback = 'homebrain-backup.tar.gz') {
     return fallback;
   }
 
-  const sanitized = trimmed.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  let sanitized = '';
+  let previousWasDash = false;
+  for (const char of trimmed) {
+    const code = char.charCodeAt(0);
+    const isSafe =
+      (code >= 48 && code <= 57)
+      || (code >= 65 && code <= 90)
+      || (code >= 97 && code <= 122)
+      || char === '.'
+      || char === '_'
+      || char === '-';
+    const nextChar = isSafe ? char : '-';
+    if (nextChar === '-' && previousWasDash) {
+      continue;
+    }
+    sanitized += nextChar;
+    previousWasDash = nextChar === '-';
+  }
+
+  sanitized = sanitized.split('-').filter(Boolean).join('-');
   return sanitized || fallback;
 }
 
@@ -54,8 +78,90 @@ function buildRestoreJobSummary(job) {
   };
 }
 
+function buildBackupJobSummary(job) {
+  if (!job) {
+    return null;
+  }
+
+  return {
+    id: job.id,
+    status: job.status,
+    actor: job.actor || 'unknown',
+    archiveName: job.archiveName || null,
+    createdAt: job.createdAt || null,
+    updatedAt: job.updatedAt || null,
+    completedAt: job.completedAt || null,
+    error: job.error || null,
+    phase: job.phase || null,
+    message: job.message || null,
+    remoteTarget: job.remoteTarget || null,
+    manifest: job.manifest || null
+  };
+}
+
 function buildArchivePathArgs(targetPath) {
   return [`--archive=${targetPath}`, '--gzip'];
+}
+
+function normalizeSmbPathPart(value) {
+  return String(value || '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function parseSmbShareTarget(value, extraDirectory = '') {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    throw new Error('SMB share URL is required.');
+  }
+
+  let host = '';
+  let parts = [];
+  if (raw.startsWith('smb://')) {
+    const parsed = new URL(raw);
+    host = parsed.hostname;
+    parts = normalizeSmbPathPart(decodeURIComponent(parsed.pathname || ''));
+  } else {
+    const withoutSlashes = raw.replace(/^\\\\/, '//');
+    if (!withoutSlashes.startsWith('//')) {
+      throw new Error('SMB share must look like smb://server/share/path or //server/share/path.');
+    }
+    parts = normalizeSmbPathPart(withoutSlashes.slice(2));
+    host = parts.shift() || '';
+  }
+
+  const share = parts.shift() || '';
+  if (!host || !share) {
+    throw new Error('SMB share must include both a host and share name.');
+  }
+
+  const remoteParts = [
+    ...parts,
+    ...normalizeSmbPathPart(extraDirectory)
+  ];
+  const remoteDirectory = remoteParts.join('/');
+  const sharePath = `//${host}/${share}`;
+  return {
+    sharePath,
+    remoteDirectory,
+    displayPath: remoteDirectory ? `${sharePath}/${remoteDirectory}` : sharePath
+  };
+}
+
+function smbQuote(value) {
+  return `"${String(value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+function buildSmbClientUploadCommand(localArchivePath, remoteDirectory, remoteFilename) {
+  const commands = ['prompt off'];
+  normalizeSmbPathPart(remoteDirectory).forEach((part) => {
+    commands.push(`mkdir ${smbQuote(part)}`);
+    commands.push(`cd ${smbQuote(part)}`);
+  });
+  commands.push(`put ${smbQuote(localArchivePath)} ${smbQuote(remoteFilename)}`);
+  return commands.join('; ');
 }
 
 class SystemBackupService {
@@ -63,8 +169,10 @@ class SystemBackupService {
     this.projectRoot = options.projectRoot || path.resolve(__dirname, '..', '..');
     this.serverRoot = path.join(this.projectRoot, 'server');
     this.backupRoot = options.backupRoot || path.join(this.serverRoot, 'data', 'system-backup');
+    this.backupJobsDir = path.join(this.backupRoot, 'backup-jobs');
     this.restoreJobsDir = path.join(this.backupRoot, 'restore-jobs');
     this.restoreArchivesDir = path.join(this.backupRoot, 'restore-archives');
+    this.latestBackupJobRefPath = path.join(this.backupRoot, 'latest-backup-job.txt');
     this.latestRestoreJobRefPath = path.join(this.backupRoot, 'latest-restore-job.txt');
     this.spawnProcess = options.spawnProcess || spawn;
     this.tempRoot = options.tempRoot || os.tmpdir();
@@ -75,6 +183,7 @@ class SystemBackupService {
       || `${this.serviceName}-restore-helper`;
     this.now = options.now || (() => new Date());
     this._runningRestorePromise = null;
+    this._runningBackupPromise = null;
   }
 
   async spawnDetached(command, args, options = {}) {
@@ -111,6 +220,7 @@ class SystemBackupService {
   }
 
   async initialize() {
+    await fsp.mkdir(this.backupJobsDir, { recursive: true });
     await fsp.mkdir(this.restoreJobsDir, { recursive: true });
     await fsp.mkdir(this.restoreArchivesDir, { recursive: true });
   }
@@ -143,6 +253,10 @@ class SystemBackupService {
 
   getRestoreJobPath(jobId) {
     return path.join(this.restoreJobsDir, `${jobId}.json`);
+  }
+
+  getBackupJobPath(jobId) {
+    return path.join(this.backupJobsDir, `${jobId}.json`);
   }
 
   async pathExists(targetPath) {
@@ -318,6 +432,214 @@ class SystemBackupService {
         await fsp.rm(tempRoot, { recursive: true, force: true });
       }
     };
+  }
+
+  async writeBackupJob(job) {
+    await this.initialize();
+    await fsp.writeFile(
+      this.getBackupJobPath(job.id),
+      `${JSON.stringify(job, null, 2)}\n`,
+      'utf8'
+    );
+    await fsp.writeFile(this.latestBackupJobRefPath, `${job.id}\n`, 'utf8');
+    return job;
+  }
+
+  async readBackupJob(jobId) {
+    const raw = await fsp.readFile(this.getBackupJobPath(jobId), 'utf8');
+    return JSON.parse(raw);
+  }
+
+  async updateBackupJob(jobId, updater) {
+    const current = await this.readBackupJob(jobId);
+    const patch = typeof updater === 'function' ? await updater(current) : updater;
+    const next = {
+      ...current,
+      ...patch,
+      updatedAt: this.now().toISOString()
+    };
+    await this.writeBackupJob(next);
+    return next;
+  }
+
+  async readLatestBackupJobRecord() {
+    await this.initialize();
+
+    try {
+      const jobId = String(await fsp.readFile(this.latestBackupJobRefPath, 'utf8')).trim();
+      if (!jobId) {
+        return null;
+      }
+
+      return await this.readBackupJob(jobId);
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  async getLatestBackupJob() {
+    return buildBackupJobSummary(await this.readLatestBackupJobRecord());
+  }
+
+  async writeSmbCredentialsFile(options = {}, tempRoot) {
+    const username = String(options.username || '').trim();
+    const password = String(options.password || '');
+    const domain = String(options.domain || '').trim();
+    if (!username && !password) {
+      return null;
+    }
+
+    const credentialsPath = path.join(tempRoot, 'smb-credentials');
+    const lines = [];
+    if (username) {
+      lines.push(`username = ${username}`);
+    }
+    lines.push(`password = ${password}`);
+    if (domain) {
+      lines.push(`domain = ${domain}`);
+    }
+    await fsp.writeFile(credentialsPath, `${lines.join('\n')}\n`, { mode: 0o600 });
+    await fsp.chmod(credentialsPath, 0o600);
+    return credentialsPath;
+  }
+
+  async uploadArchiveToSmb(archivePath, options = {}) {
+    const target = parseSmbShareTarget(options.shareUrl || options.sharePath, options.remoteDirectory);
+    const remoteFilename = sanitizeFilename(options.remoteFilename || path.basename(archivePath), path.basename(archivePath));
+    const tempRoot = await fsp.mkdtemp(path.join(this.tempRoot, 'homebrain-smb-backup-'));
+
+    try {
+      const credentialsPath = await this.writeSmbCredentialsFile(options, tempRoot);
+      const args = [
+        target.sharePath,
+        '-m',
+        'SMB3'
+      ];
+      if (credentialsPath) {
+        args.push('-A', credentialsPath);
+      } else {
+        args.push('-N');
+      }
+      args.push('-c', buildSmbClientUploadCommand(archivePath, target.remoteDirectory, remoteFilename));
+
+      try {
+        await this.runCommand('smbclient', args, {
+          captureStdout: false
+        });
+      } catch (error) {
+        if (/ENOENT|not found|spawn smbclient/i.test(error.message || '')) {
+          throw new Error('smbclient is required to save backups to SMB. Install the samba-client/smbclient package on the HomeBrain host.');
+        }
+        throw error;
+      }
+
+      return {
+        sharePath: target.sharePath,
+        remoteDirectory: target.remoteDirectory,
+        remoteFilename,
+        remoteTarget: `${target.displayPath}/${remoteFilename}`,
+        displayPath: target.displayPath
+      };
+    } finally {
+      await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  async startSmbBackupJob(options = {}) {
+    await this.initialize();
+
+    if (String(options.confirmBackup || options.confirm || '').trim().toUpperCase() !== SMB_BACKUP_CONFIRMATION) {
+      const error = new Error(`Type ${SMB_BACKUP_CONFIRMATION} to save a disaster recovery backup to SMB.`);
+      error.status = 400;
+      throw error;
+    }
+
+    const target = parseSmbShareTarget(options.shareUrl || options.sharePath, options.remoteDirectory);
+
+    const latestJob = await this.readLatestBackupJobRecord();
+    if ((latestJob && isBackupActiveStatus(latestJob.status)) || this._runningBackupPromise) {
+      const error = new Error('A disaster recovery backup job is already running');
+      error.code = 'BACKUP_RUNNING';
+      throw error;
+    }
+
+    const job = await this.writeBackupJob({
+      id: randomUUID(),
+      actor: options.actor || 'unknown',
+      archiveName: null,
+      status: 'queued',
+      phase: 'queued',
+      createdAt: this.now().toISOString(),
+      updatedAt: this.now().toISOString(),
+      completedAt: null,
+      error: null,
+      message: 'SMB backup queued.',
+      remoteTarget: null,
+      smb: {
+        sharePath: target.sharePath,
+        remoteDirectory: target.remoteDirectory,
+        usernameConfigured: Boolean(String(options.username || '').trim()),
+        domain: String(options.domain || '').trim() || null
+      },
+      manifest: null
+    });
+
+    this._runningBackupPromise = this.executeSmbBackupJob(job.id, options)
+      .catch(() => null)
+      .finally(() => {
+        this._runningBackupPromise = null;
+      });
+
+    return buildBackupJobSummary(job);
+  }
+
+  async executeSmbBackupJob(jobId, options = {}) {
+    let backup = null;
+    try {
+      await this.updateBackupJob(jobId, {
+        status: 'creating',
+        phase: 'creating-archive',
+        message: 'Creating HomeBrain disaster recovery archive.'
+      });
+
+      backup = await this.createDisasterRecoveryBackup();
+
+      await this.updateBackupJob(jobId, {
+        status: 'uploading',
+        phase: 'uploading-smb',
+        archiveName: backup.archiveFilename,
+        manifest: {
+          version: backup.manifest?.version || null,
+          createdAt: backup.manifest?.createdAt || null,
+          appVersion: backup.manifest?.appVersion || null,
+          database: backup.manifest?.database || null
+        },
+        message: 'Uploading backup archive to SMB share.'
+      });
+
+      const uploaded = await this.uploadArchiveToSmb(backup.archivePath, {
+        ...options,
+        remoteFilename: options.remoteFilename || backup.archiveFilename
+      });
+
+      await this.updateBackupJob(jobId, {
+        status: 'completed',
+        phase: 'completed',
+        completedAt: this.now().toISOString(),
+        remoteTarget: uploaded.remoteTarget,
+        message: `Backup saved to ${uploaded.remoteTarget}.`
+      });
+    } catch (error) {
+      await this.updateBackupJob(jobId, {
+        status: 'failed',
+        phase: 'failed',
+        completedAt: this.now().toISOString(),
+        error: error.message,
+        message: 'Backup failed before HomeBrain could save the archive to SMB.'
+      }).catch(() => {});
+    } finally {
+      await backup?.cleanup?.().catch(() => {});
+    }
   }
 
   async writeRestoreJob(job) {
@@ -656,3 +978,7 @@ class SystemBackupService {
 
 module.exports = new SystemBackupService();
 module.exports.SystemBackupService = SystemBackupService;
+module.exports._test = {
+  buildSmbClientUploadCommand,
+  parseSmbShareTarget
+};

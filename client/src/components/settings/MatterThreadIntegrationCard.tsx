@@ -28,6 +28,7 @@ import {
   startMatterThreadKernelRebuild,
   startMatterThreadOtbr,
   updateMatterConfig,
+  validateMatterThreadKernelPreflight,
   type MatterTransport
 } from "@/api/matter"
 import { useAuth } from "@/contexts/AuthContext"
@@ -47,6 +48,7 @@ export function MatterThreadIntegrationCard() {
   const [matterFlashSaving, setMatterFlashSaving] = useState(false)
   const [matterOtbrSaving, setMatterOtbrSaving] = useState(false)
   const [matterKernelSaving, setMatterKernelSaving] = useState(false)
+  const [matterKernelValidating, setMatterKernelValidating] = useState(false)
   const [matterSetupCode, setMatterSetupCode] = useState("")
   const [matterTransport, setMatterTransport] = useState<MatterTransport>("thread")
   const [matterKnownAddress, setMatterKnownAddress] = useState("")
@@ -304,6 +306,30 @@ export function MatterThreadIntegrationCard() {
     }
   }
 
+  const handleMatterThreadKernelPreflight = async () => {
+    setMatterKernelValidating(true)
+    try {
+      const response = await validateMatterThreadKernelPreflight()
+      setMatterKernelStatus(response?.status || matterKernelStatus)
+      toast({
+        title: response?.success ? "Kernel preflight passed" : "Kernel preflight failed",
+        description: response?.success
+          ? "The custom kernel image, modules, config, and boot entry passed validation."
+          : "HomeBrain found a kernel install issue. Reboot is not safe until it is fixed.",
+        variant: response?.success ? "default" : "destructive"
+      })
+      await loadMatterController()
+    } catch (error: any) {
+      toast({
+        title: "Kernel preflight failed",
+        description: error.message || "Unable to run the Thread kernel preflight.",
+        variant: "destructive"
+      })
+    } finally {
+      setMatterKernelValidating(false)
+    }
+  }
+
   if (!isAdmin) {
     return null
   }
@@ -385,6 +411,8 @@ export function MatterThreadIntegrationCard() {
   const kernelSupportsFullThread = Boolean(kernelStatus?.kernelSupportsFullThread)
   const kernelNeedsRebuild = Boolean(kernelStatus?.needsRebuild)
   const kernelPendingReboot = Boolean(kernelStatus?.pendingReboot)
+  const kernelValidation = kernelStatus?.validation
+  const kernelValidationChecks = Array.isArray(kernelValidation?.checks) ? kernelValidation.checks : []
   const canRebuildKernel = Boolean(kernelStatus?.helperAvailable && kernelStatus?.isJetsonOrin !== false)
   const otbrConfirmationPhrase = otbrHost?.confirmationPhrase || thread?.setup?.otbr?.serverSideConfirmation || "START THREAD BORDER ROUTER"
   const otbrConfirmationMatches = matterOtbrConfirm.trim().toUpperCase() === otbrConfirmationPhrase.trim().toUpperCase()
@@ -827,7 +855,43 @@ export function MatterThreadIntegrationCard() {
             </div>
 
             <div className="mt-3 rounded-md border border-amber-500/25 bg-background/70 px-3 py-2 text-xs text-amber-700 dark:text-amber-200">
-              This modifies /boot and /lib/modules. If NVIDIA replaces the kernel during a JetPack/L4T update, HomeBrain will keep OTBR in the no-BBR fallback and show this rebuild action again.
+              This modifies /boot and /lib/modules. HomeBrain validates the installed image, required config flags, matching modules, and extlinux boot entry before it schedules the reboot. If NVIDIA replaces the kernel during a JetPack/L4T update, HomeBrain will keep OTBR in the no-BBR fallback and show this rebuild action again.
+            </div>
+
+            <div className="mt-3 rounded-md border border-border/60 bg-background/80 px-3 py-2 text-xs">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="font-semibold text-foreground">Pre-reboot kernel validation</p>
+                  <p className="text-muted-foreground">
+                    {kernelValidation
+                      ? `${kernelValidation.ok ? "Passed" : "Failed"} ${kernelValidation.checkedAt ? `at ${new Date(kernelValidation.checkedAt).toLocaleString()}` : ""}`
+                      : "No custom kernel preflight has been recorded yet."}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 rounded-full px-3 text-xs"
+                  disabled={matterKernelValidating || !kernelStatus?.helperAvailable}
+                  onClick={() => void handleMatterThreadKernelPreflight()}
+                >
+                  {matterKernelValidating ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <ShieldAlert className="mr-2 h-3.5 w-3.5" />}
+                  Run Preflight
+                </Button>
+              </div>
+              {kernelValidationChecks.length > 0 ? (
+                <div className="mt-2 grid gap-1 sm:grid-cols-2">
+                  {kernelValidationChecks.slice(0, 8).map((check: any) => (
+                    <div key={check.name} className="flex items-center justify-between gap-2 rounded border border-border/50 bg-background/70 px-2 py-1">
+                      <span className="truncate text-muted-foreground">{check.name}</span>
+                      <Badge variant={check.ok ? "default" : "destructive"} className="rounded-full text-[0.65rem]">
+                        {check.ok ? "ok" : "fix"}
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
 
             <div className="mt-3 grid gap-2 lg:grid-cols-[1fr_1fr]">
