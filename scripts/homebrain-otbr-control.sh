@@ -311,6 +311,11 @@ install_otbr_package_or_source() {
     install_otbr_from_source "${desired_mode}"
     return
   fi
+  if [[ "${installed_mode}" == "no-bbr" ]]; then
+    log "Existing OTBR build was no-BBR; rebuilding from source for full Backbone Router support."
+    install_otbr_from_source "${desired_mode}"
+    return
+  fi
 
   log "Trying distro OTBR packages first."
   if apt-get install -y otbr-agent otbr-web >/tmp/homebrain-otbr-apt.log 2>&1; then
@@ -458,6 +463,9 @@ configure_router_mode() {
   if [[ "$(resolve_backbone_router_build_mode)" == "no-bbr" ]]; then
     log "Backbone Router multicast routing is unavailable on this host; keeping BBR disabled."
     ot_ctl bbr disable >/dev/null 2>&1 || true
+  else
+    log "Backbone Router multicast routing is available; enabling BBR for full Thread router support."
+    ot_ctl bbr enable >/dev/null 2>&1 || true
   fi
   ot_ctl mode rdn >/dev/null 2>&1 || true
   ot_ctl routereligible enable >/dev/null 2>&1 || true

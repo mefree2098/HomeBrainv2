@@ -22,3 +22,12 @@ test('setup-services waits for the app mount and avoids tight reboot crash loops
   assert.match(script, /StartLimitBurst=30/);
   assert.match(script, /RestartSec=10/);
 });
+
+test('setup-services installs privileged Thread helpers and grants sudoers access', () => {
+  const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
+
+  assert.match(script, /homebrain-otbr-control\.sh/);
+  assert.match(script, /homebrain-jetson-kernel-control\.sh/);
+  assert.match(script, /install_thread_kernel_privileged_helper/);
+  assert.match(script, /\$\{THREAD_KERNEL_HELPER_INSTALL_PATH\} \*/);
+});

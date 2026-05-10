@@ -12,6 +12,7 @@ import {
   Network,
   Power,
   Radio,
+  ShieldAlert,
   Settings2,
   Upload,
   Wifi
@@ -19,10 +20,12 @@ import {
 import {
   getMatterCommissioningSessions,
   getMatterThreadFirmwareFlashStatus,
+  getMatterThreadKernelStatus,
   getMatterThreadOtbrStatus,
   getMatterStatus,
   startMatterCommissioning,
   startMatterThreadFirmwareFlash,
+  startMatterThreadKernelRebuild,
   startMatterThreadOtbr,
   updateMatterConfig,
   type MatterTransport
@@ -37,11 +40,13 @@ export function MatterThreadIntegrationCard() {
   const [matterSessions, setMatterSessions] = useState<any[]>([])
   const [matterFlashStatus, setMatterFlashStatus] = useState<any | null>(null)
   const [matterOtbrStatus, setMatterOtbrStatus] = useState<any | null>(null)
+  const [matterKernelStatus, setMatterKernelStatus] = useState<any | null>(null)
   const [matterLoading, setMatterLoading] = useState(false)
   const [matterCommissioning, setMatterCommissioning] = useState(false)
   const [matterConfigSaving, setMatterConfigSaving] = useState(false)
   const [matterFlashSaving, setMatterFlashSaving] = useState(false)
   const [matterOtbrSaving, setMatterOtbrSaving] = useState(false)
+  const [matterKernelSaving, setMatterKernelSaving] = useState(false)
   const [matterSetupCode, setMatterSetupCode] = useState("")
   const [matterTransport, setMatterTransport] = useState<MatterTransport>("thread")
   const [matterKnownAddress, setMatterKnownAddress] = useState("")
@@ -54,6 +59,8 @@ export function MatterThreadIntegrationCard() {
   const [matterFirmwareBase64, setMatterFirmwareBase64] = useState("")
   const [matterFlashConfirm, setMatterFlashConfirm] = useState("")
   const [matterOtbrConfirm, setMatterOtbrConfirm] = useState("")
+  const [matterKernelConfirm, setMatterKernelConfirm] = useState("")
+  const [matterKernelRebootConfirm, setMatterKernelRebootConfirm] = useState("")
   const [matterThreadNetworkName, setMatterThreadNetworkName] = useState("")
 
   const loadMatterController = useCallback(async () => {
@@ -63,16 +70,18 @@ export function MatterThreadIntegrationCard() {
 
     setMatterLoading(true)
     try {
-      const [statusResponse, sessionsResponse, flashResponse, otbrResponse] = await Promise.all([
+      const [statusResponse, sessionsResponse, flashResponse, otbrResponse, kernelResponse] = await Promise.all([
         getMatterStatus(),
         getMatterCommissioningSessions(),
         getMatterThreadFirmwareFlashStatus(),
-        getMatterThreadOtbrStatus()
+        getMatterThreadOtbrStatus(),
+        getMatterThreadKernelStatus()
       ])
       setMatterStatus(statusResponse?.status || null)
       setMatterSessions(Array.isArray(sessionsResponse?.sessions) ? sessionsResponse.sessions : [])
       setMatterFlashStatus(flashResponse?.status || null)
       setMatterOtbrStatus(otbrResponse?.status || null)
+      setMatterKernelStatus(kernelResponse?.status || null)
     } catch (error: any) {
       console.warn("Failed to load Matter controller status:", error)
     } finally {
@@ -87,9 +96,11 @@ export function MatterThreadIntegrationCard() {
   useEffect(() => {
     const activeFlash = matterFlashStatus?.activeJob
     const activeOtbr = matterOtbrStatus?.activeJob
+    const activeKernel = matterKernelStatus?.activeJob
     const flashRunning = activeFlash && ["queued", "preparing", "flashing"].includes(activeFlash.status)
     const otbrRunning = activeOtbr && ["queued", "preparing", "starting"].includes(activeOtbr.status)
-    if (!flashRunning && !otbrRunning) {
+    const kernelRunning = activeKernel && ["queued", "preparing", "building", "installing"].includes(activeKernel.status)
+    if (!flashRunning && !otbrRunning && !kernelRunning) {
       return undefined
     }
 
@@ -102,6 +113,8 @@ export function MatterThreadIntegrationCard() {
     matterFlashStatus?.activeJob?.status,
     matterOtbrStatus?.activeJob?.id,
     matterOtbrStatus?.activeJob?.status,
+    matterKernelStatus?.activeJob?.id,
+    matterKernelStatus?.activeJob?.status,
     loadMatterController
   ])
 
@@ -261,6 +274,36 @@ export function MatterThreadIntegrationCard() {
     }
   }
 
+  const handleMatterThreadKernelRebuild = async () => {
+    const confirmKernel = matterKernelConfirm.trim()
+    const confirmReboot = matterKernelRebootConfirm.trim()
+    setMatterKernelSaving(true)
+    try {
+      await startMatterThreadKernelRebuild({
+        confirmKernel,
+        confirmReboot,
+        autoReboot: true,
+        enableFullOtbrAfterReboot: true,
+        networkName: matterThreadNetworkName.trim() || undefined
+      })
+      setMatterKernelConfirm("")
+      setMatterKernelRebootConfirm("")
+      toast({
+        title: "Thread kernel rebuild started",
+        description: "HomeBrain will build the Jetson kernel, schedule a reboot, then try OTBR with full Backbone Router support."
+      })
+      await loadMatterController()
+    } catch (error: any) {
+      toast({
+        title: "Thread kernel rebuild failed",
+        description: error.message || "Unable to start the Jetson kernel rebuild.",
+        variant: "destructive"
+      })
+    } finally {
+      setMatterKernelSaving(false)
+    }
+  }
+
   if (!isAdmin) {
     return null
   }
@@ -314,6 +357,10 @@ export function MatterThreadIntegrationCard() {
     ...(thread?.otbrHost || {}),
     ...(matterOtbrStatus || {})
   }
+  const kernelStatus = {
+    ...(thread?.kernel || {}),
+    ...(matterKernelStatus || {})
+  }
   const ipv6MrouteStatus = String(otbrHost?.ipv6Mroute || "").toLowerCase()
   const backboneRouterMode = String(otbrHost?.backboneRouterMode || "").toLowerCase()
   const installedBackboneRouterMode = String(otbrHost?.installedBackboneRouterMode || "").toLowerCase()
@@ -327,6 +374,18 @@ export function MatterThreadIntegrationCard() {
   const activeOtbrJob = otbrHost?.activeJob || recentOtbrJobs[0]
   const otbrRunning = Boolean(activeOtbrJob && ["queued", "preparing", "starting"].includes(activeOtbrJob.status))
   const otbrLogs = Array.isArray(activeOtbrJob?.logs) ? activeOtbrJob.logs.slice(-8) : []
+  const kernelConfirmationPhrase = kernelStatus?.confirmationPhrase || thread?.setup?.kernel?.serverSideConfirmation || "REBUILD JETSON KERNEL FOR FULL THREAD"
+  const kernelRebootConfirmationPhrase = kernelStatus?.rebootConfirmationPhrase || thread?.setup?.kernel?.rebootConfirmation || "REBOOT JETSON AFTER KERNEL INSTALL"
+  const kernelConfirmationMatches = matterKernelConfirm.trim().toUpperCase() === kernelConfirmationPhrase.trim().toUpperCase()
+  const kernelRebootConfirmationMatches = matterKernelRebootConfirm.trim().toUpperCase() === kernelRebootConfirmationPhrase.trim().toUpperCase()
+  const recentKernelJobs = Array.isArray(kernelStatus?.recentJobs) ? kernelStatus.recentJobs : []
+  const activeKernelJob = kernelStatus?.activeJob || recentKernelJobs[0]
+  const kernelRunning = Boolean(activeKernelJob && ["queued", "preparing", "building", "installing"].includes(activeKernelJob.status))
+  const kernelLogs = Array.isArray(activeKernelJob?.logs) ? activeKernelJob.logs.slice(-10) : []
+  const kernelSupportsFullThread = Boolean(kernelStatus?.kernelSupportsFullThread)
+  const kernelNeedsRebuild = Boolean(kernelStatus?.needsRebuild)
+  const kernelPendingReboot = Boolean(kernelStatus?.pendingReboot)
+  const canRebuildKernel = Boolean(kernelStatus?.helperAvailable && kernelStatus?.isJetsonOrin !== false)
   const otbrConfirmationPhrase = otbrHost?.confirmationPhrase || thread?.setup?.otbr?.serverSideConfirmation || "START THREAD BORDER ROUTER"
   const otbrConfirmationMatches = matterOtbrConfirm.trim().toUpperCase() === otbrConfirmationPhrase.trim().toUpperCase()
   const otbrDataset = thread?.otbr?.dataset || otbrHost?.dataset || activeOtbrJob?.result?.otbr?.dataset || activeOtbrJob?.result?.otbrHost?.dataset || ""
@@ -362,7 +421,20 @@ export function MatterThreadIntegrationCard() {
         ? "HomeBrain has not resolved a matching firmware download yet."
         : !flashConfirmationMatches
           ? `Type ${flashConfirmationPhrase} to enable download and flashing.`
-          : ""
+      : ""
+  const kernelDisabledReason = kernelSupportsFullThread && !kernelNeedsRebuild
+    ? ""
+    : kernelRunning
+      ? "A Thread kernel rebuild is already running."
+      : kernelPendingReboot
+        ? "The custom kernel is installed and waiting for the Jetson reboot."
+        : !canRebuildKernel
+          ? kernelStatus?.helperAvailable
+            ? "This host does not look like a supported Jetson Orin L4T device."
+            : "The HomeBrain Thread kernel helper has not been installed on this host yet."
+          : !kernelConfirmationMatches || !kernelRebootConfirmationMatches
+            ? "Type both confirmation phrases to rebuild the kernel and reboot."
+            : ""
 
   return (
     <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
@@ -710,6 +782,109 @@ export function MatterThreadIntegrationCard() {
                 {otbrLogs.length > 0 ? (
                   <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-[0.7rem] leading-relaxed text-slate-300">
                     {otbrLogs.map((entry: any) => `[${entry.stream}] ${entry.line}`).join("\n")}
+                  </pre>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="inline-flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                  <ShieldAlert className="h-3.5 w-3.5 text-amber-500" />
+                  Full Thread router kernel support
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Rebuilds the Jetson kernel with IPv4/IPv6 multicast routing, reboots, then tries OTBR again with Backbone Router enabled.
+                </p>
+              </div>
+              <Badge
+                variant={kernelSupportsFullThread ? "default" : kernelPendingReboot || kernelRunning ? "secondary" : kernelNeedsRebuild ? "destructive" : "outline"}
+                className="rounded-full text-[0.68rem]"
+              >
+                {kernelSupportsFullThread ? "full kernel" : kernelPendingReboot ? "reboot pending" : kernelRunning ? "building" : kernelNeedsRebuild ? "kernel limited" : "checking"}
+              </Badge>
+            </div>
+
+            <div className="mt-3 grid gap-2 md:grid-cols-4">
+              <div className="rounded-md border border-border/60 bg-background/80 px-3 py-2 text-xs">
+                <p className="font-semibold text-foreground">Jetson</p>
+                <p className="mt-1 text-muted-foreground">{kernelStatus?.isJetsonOrin === false ? "unsupported host" : kernelStatus?.l4tRelease || "detecting"}</p>
+              </div>
+              <div className="rounded-md border border-border/60 bg-background/80 px-3 py-2 text-xs">
+                <p className="font-semibold text-foreground">Kernel</p>
+                <p className="mt-1 text-muted-foreground">{kernelStatus?.unameRelease || "unknown"}</p>
+              </div>
+              <div className="rounded-md border border-border/60 bg-background/80 px-3 py-2 text-xs">
+                <p className="font-semibold text-foreground">IPv6 mroute</p>
+                <p className="mt-1 text-muted-foreground">{kernelStatus?.runtimeIpv6Mroute || ipv6MrouteStatus || "unknown"}</p>
+              </div>
+              <div className="rounded-md border border-border/60 bg-background/80 px-3 py-2 text-xs">
+                <p className="font-semibold text-foreground">Update fallback</p>
+                <p className="mt-1 text-muted-foreground">{kernelNeedsRebuild ? "safe no-BBR" : "full capable"}</p>
+              </div>
+            </div>
+
+            <div className="mt-3 rounded-md border border-amber-500/25 bg-background/70 px-3 py-2 text-xs text-amber-700 dark:text-amber-200">
+              This modifies /boot and /lib/modules. If NVIDIA replaces the kernel during a JetPack/L4T update, HomeBrain will keep OTBR in the no-BBR fallback and show this rebuild action again.
+            </div>
+
+            <div className="mt-3 grid gap-2 lg:grid-cols-[1fr_1fr]">
+              <label className="space-y-1">
+                <span className="text-xs font-medium text-foreground">Kernel rebuild confirmation</span>
+                <Input
+                  value={matterKernelConfirm}
+                  onChange={(event) => setMatterKernelConfirm(event.target.value)}
+                  placeholder={`Type ${kernelConfirmationPhrase}`}
+                  disabled={matterKernelSaving || kernelRunning || kernelPendingReboot}
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs font-medium text-foreground">Reboot confirmation</span>
+                <Input
+                  value={matterKernelRebootConfirm}
+                  onChange={(event) => setMatterKernelRebootConfirm(event.target.value)}
+                  placeholder={`Type ${kernelRebootConfirmationPhrase}`}
+                  disabled={matterKernelSaving || kernelRunning || kernelPendingReboot}
+                />
+              </label>
+              <Button
+                type="button"
+                variant="destructive"
+                className="lg:col-span-2"
+                disabled={!canRebuildKernel || !kernelConfirmationMatches || !kernelRebootConfirmationMatches || matterKernelSaving || kernelRunning || kernelPendingReboot}
+                onClick={() => void handleMatterThreadKernelRebuild()}
+              >
+                {matterKernelSaving || kernelRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldAlert className="mr-2 h-4 w-4" />}
+                {kernelSupportsFullThread ? "Reapply Thread Kernel After Update" : "Rebuild Kernel, Reboot, Enable Full Thread"}
+              </Button>
+            </div>
+
+            {kernelDisabledReason ? (
+              <p className="mt-2 text-xs text-amber-700 dark:text-amber-200">{kernelDisabledReason}</p>
+            ) : kernelSupportsFullThread ? (
+              <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-200">
+                The running kernel exposes the multicast routing OTBR needs for full Backbone Router mode.
+              </p>
+            ) : (
+              <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-200">
+                Ready to rebuild the Jetson kernel and reboot into full Thread router support.
+              </p>
+            )}
+
+            {activeKernelJob ? (
+              <div className="mt-3 rounded-md border border-border/60 bg-slate-950/90 p-3 text-xs text-slate-100">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold">{activeKernelJob.phase || activeKernelJob.status}</span>
+                  <Badge variant={activeKernelJob.status === "completed" ? "default" : activeKernelJob.status === "failed" ? "destructive" : "secondary"}>
+                    {activeKernelJob.status}
+                  </Badge>
+                </div>
+                {activeKernelJob.error ? <p className="mt-2 text-red-300">{activeKernelJob.error}</p> : null}
+                {kernelLogs.length > 0 ? (
+                  <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-[0.7rem] leading-relaxed text-slate-300">
+                    {kernelLogs.map((entry: any) => `[${entry.stream}] ${entry.line}`).join("\n")}
                   </pre>
                 ) : null}
               </div>

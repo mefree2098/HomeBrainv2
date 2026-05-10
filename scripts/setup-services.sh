@@ -26,6 +26,8 @@ RESTORE_HELPER_SOURCE_PATH="${HOMEBRAIN_DIR}/scripts/restore-homebrain-backup.sh
 RESTORE_HELPER_INSTALL_PATH="${HOMEBRAIN_HELPER_INSTALL_DIR}/restore-homebrain-backup.sh"
 OTBR_HELPER_SOURCE_PATH="${HOMEBRAIN_DIR}/scripts/homebrain-otbr-control.sh"
 OTBR_HELPER_INSTALL_PATH="${HOMEBRAIN_HELPER_INSTALL_DIR}/homebrain-otbr-control.sh"
+THREAD_KERNEL_HELPER_SOURCE_PATH="${HOMEBRAIN_DIR}/scripts/homebrain-jetson-kernel-control.sh"
+THREAD_KERNEL_HELPER_INSTALL_PATH="${HOMEBRAIN_HELPER_INSTALL_DIR}/homebrain-jetson-kernel-control.sh"
 OLLAMA_PRIVILEGE_OVERRIDE_PATH="${SERVICE_DROPIN_DIR}/99-ollama-helper.conf"
 OLLAMA_SERVICE_DROPIN_DIR="/etc/systemd/system/ollama.service.d"
 OLLAMA_RESOURCE_GUARD_PATH="${OLLAMA_SERVICE_DROPIN_DIR}/10-homebrain-resource-guard.conf"
@@ -575,6 +577,7 @@ EOF
   sudo systemctl daemon-reload
   sudo systemctl enable "${SERVICE_NAME}"
   install_otbr_privileged_helper
+  install_thread_kernel_privileged_helper
   configure_deploy_sudoers
   print_success "Service installed and enabled."
 }
@@ -618,6 +621,21 @@ install_otbr_privileged_helper() {
   sudo install -m 0755 "${OTBR_HELPER_SOURCE_PATH}" "${OTBR_HELPER_INSTALL_PATH}"
   sudo chown root:root "${OTBR_HELPER_INSTALL_PATH}"
   print_success "Installed OTBR privilege helper to ${OTBR_HELPER_INSTALL_PATH}."
+}
+
+install_thread_kernel_privileged_helper() {
+  require_repo
+
+  if [[ ! -f "${THREAD_KERNEL_HELPER_SOURCE_PATH}" ]]; then
+    print_error "Thread kernel privilege helper not found at ${THREAD_KERNEL_HELPER_SOURCE_PATH}"
+    exit 1
+  fi
+
+  print_status "Installing the HomeBrain Thread kernel privilege helper..."
+  sudo install -d -m 0755 "${HOMEBRAIN_HELPER_INSTALL_DIR}"
+  sudo install -m 0755 "${THREAD_KERNEL_HELPER_SOURCE_PATH}" "${THREAD_KERNEL_HELPER_INSTALL_PATH}"
+  sudo chown root:root "${THREAD_KERNEL_HELPER_INSTALL_PATH}"
+  print_success "Installed Thread kernel privilege helper to ${THREAD_KERNEL_HELPER_INSTALL_PATH}."
 }
 
 configure_ollama_resource_guard() {
@@ -671,6 +689,7 @@ configure_deploy_sudoers() {
     "${OLLAMA_HELPER_INSTALL_PATH} stop-system"
     "${OLLAMA_HELPER_INSTALL_PATH} probe"
     "${OTBR_HELPER_INSTALL_PATH} *"
+    "${THREAD_KERNEL_HELPER_INSTALL_PATH} *"
     "/usr/sbin/reboot"
     "/sbin/reboot"
     "/usr/bin/reboot"
@@ -702,6 +721,7 @@ refresh_privileges() {
   configure_homebrain_ollama_privilege_override
   install_ollama_privileged_helper
   install_otbr_privileged_helper
+  install_thread_kernel_privileged_helper
   configure_ollama_resource_guard
   configure_mongodb_resource_guard
   configure_deploy_sudoers
