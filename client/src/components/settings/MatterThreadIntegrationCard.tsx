@@ -453,9 +453,11 @@ export function MatterThreadIntegrationCard() {
   const kernelConfirmationMatches = matterKernelConfirm.trim().toUpperCase() === kernelConfirmationPhrase.trim().toUpperCase()
   const kernelRebootConfirmationMatches = matterKernelRebootConfirm.trim().toUpperCase() === kernelRebootConfirmationPhrase.trim().toUpperCase()
   const recentKernelJobs = Array.isArray(kernelStatus?.recentJobs) ? kernelStatus.recentJobs : []
-  const activeKernelJob = kernelStatus?.activeJob || recentKernelJobs[0]
+  const activeKernelJob = kernelStatus?.activeJob || null
+  const latestKernelJob = recentKernelJobs[0] || null
+  const displayedKernelJob = activeKernelJob || latestKernelJob
   const kernelRunning = Boolean(activeKernelJob && ["queued", "preparing", "building", "installing"].includes(activeKernelJob.status))
-  const kernelLogs = Array.isArray(activeKernelJob?.logs) ? activeKernelJob.logs.slice(-10) : []
+  const kernelLogs = Array.isArray(displayedKernelJob?.logs) ? displayedKernelJob.logs.slice(-10) : []
   const kernelSupportsFullThread = Boolean(kernelStatus?.kernelSupportsFullThread)
   const kernelNeedsRebuild = Boolean(kernelStatus?.needsRebuild)
   const kernelPendingReboot = Boolean(kernelStatus?.pendingReboot)
@@ -1003,15 +1005,17 @@ export function MatterThreadIntegrationCard() {
               </p>
             )}
 
-            {activeKernelJob ? (
+            {displayedKernelJob ? (
               <div className="mt-3 rounded-md border border-border/60 bg-slate-950/90 p-3 text-xs text-slate-100">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-semibold">{activeKernelJob.phase || activeKernelJob.status}</span>
-                  <Badge variant={activeKernelJob.status === "completed" ? "default" : activeKernelJob.status === "failed" ? "destructive" : "secondary"}>
-                    {activeKernelJob.status}
+                  <span className="font-semibold">
+                    {activeKernelJob ? (displayedKernelJob.phase || displayedKernelJob.status) : "Latest kernel rebuild attempt"}
+                  </span>
+                  <Badge variant={displayedKernelJob.status === "completed" ? "default" : displayedKernelJob.status === "failed" ? "destructive" : "secondary"}>
+                    {displayedKernelJob.status}
                   </Badge>
                 </div>
-                {activeKernelJob.error ? <p className="mt-2 text-red-300">{activeKernelJob.error}</p> : null}
+                {displayedKernelJob.error ? <p className="mt-2 text-red-300">{displayedKernelJob.error}</p> : null}
                 {kernelLogs.length > 0 ? (
                   <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-[0.7rem] leading-relaxed text-slate-300">
                     {kernelLogs.map((entry: any) => `[${entry.stream}] ${entry.line}`).join("\n")}

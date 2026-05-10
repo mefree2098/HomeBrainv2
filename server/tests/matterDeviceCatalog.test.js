@@ -476,6 +476,50 @@ test('Thread kernel helper results reconcile detached rebuild jobs across HomeBr
   assert.equal(completed.phase, 'completed-reboot-scheduled');
 });
 
+test('Thread kernel helper last result marks orphaned running state as stale', () => {
+  const normalized = matterService._test.normalizeThreadKernelHelperLastResult({
+    status: 'running',
+    message: 'Kernel rebuild is running.',
+    updatedAt: '2026-05-10T18:01:00Z'
+  }, {
+    activeJob: null,
+    helperProcess: {
+      available: true,
+      running: false,
+      matches: []
+    }
+  });
+
+  assert.equal(normalized.status, 'stale');
+  assert.equal(normalized.stale, true);
+  assert.match(normalized.message, /stale/);
+});
+
+test('Thread kernel helper last result keeps matching active jobs running', () => {
+  const job = matterService._test.normalizePersistedThreadKernelJob({
+    id: 'thread-kernel-detached',
+    status: 'building',
+    phase: 'building-and-installing-kernel',
+    createdAt: '2026-05-10T18:00:00.000Z'
+  });
+
+  const normalized = matterService._test.normalizeThreadKernelHelperLastResult({
+    jobId: 'thread-kernel-detached',
+    status: 'running',
+    updatedAt: '2026-05-10T18:01:00Z'
+  }, {
+    activeJob: job,
+    helperProcess: {
+      available: true,
+      running: true,
+      matches: ['123 sudo -n /usr/local/lib/homebrain/homebrain-jetson-kernel-control.sh apply --job-id thread-kernel-detached']
+    }
+  });
+
+  assert.equal(normalized.status, 'running');
+  assert.equal(normalized.stale, undefined);
+});
+
 test('Thread kernel helper JSON parser tolerates wrapper output', () => {
   const parsed = matterService._test.parseJsonObjectFromOutput([
     '[homebrain-thread-kernel] checking installed files',
