@@ -45,6 +45,9 @@ test('Thread kernel helper validates the custom kernel before scheduling reboot'
   const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'homebrain-jetson-kernel-control.sh'), 'utf8');
 
   assert.match(script, /CONFIG_IP_ADVANCED_ROUTER/);
+  assert.match(script, /--job-id/);
+  assert.match(script, /"jobId"/);
+  assert.match(script, /"logFile"/);
   assert.match(script, /run_preflight_validation/);
   assert.match(script, /restore_extlinux_backup_after_failed_validation/);
   assert.match(script, /custom kernel config enables Thread multicast routing/);

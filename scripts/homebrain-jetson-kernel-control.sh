@@ -27,6 +27,7 @@ REBOOT_CONFIRMATION=""
 AUTO_REBOOT=0
 FORCE_SOURCES=0
 JOBS="${HOMEBRAIN_THREAD_KERNEL_JOBS:-}"
+JOB_ID="${HOMEBRAIN_THREAD_KERNEL_JOB_ID:-}"
 
 THREAD_KERNEL_CONFIGS=(
   CONFIG_IP_ADVANCED_ROUTER
@@ -101,6 +102,10 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --jobs)
       JOBS="${2:-}"
+      shift 2
+      ;;
+    --job-id)
+      JOB_ID="${2:-}"
       shift 2
       ;;
     *)
@@ -768,10 +773,12 @@ PY
 write_result_json() {
   local status="${1:-completed}" message="${2:-}" pending_reboot="${3:-false}"
   mkdir -p "${STATE_DIR}"
-  printf '{"status":"%s","message":"%s","updatedAt":"%s","unameRelease":"%s","l4tRelease":"%s","customImage":"%s","customImageSha256":"%s","customInitrd":"%s","customInitrdSha256":"%s","pendingReboot":%s}\n' \
+  printf '{"status":"%s","message":"%s","updatedAt":"%s","jobId":"%s","logFile":"%s","unameRelease":"%s","l4tRelease":"%s","customImage":"%s","customImageSha256":"%s","customInitrd":"%s","customInitrdSha256":"%s","pendingReboot":%s}\n' \
     "$(json_escape "${status}")" \
     "$(json_escape "${message}")" \
     "$(now_iso)" \
+    "$(json_escape "${JOB_ID}")" \
+    "$(json_escape "${LOG_FILE}")" \
     "$(json_escape "$(uname -r)")" \
     "$(json_escape "$(read_l4t_release)")" \
     "$(json_escape "${CUSTOM_IMAGE}")" \

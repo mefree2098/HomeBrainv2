@@ -44,7 +44,10 @@ const THREAD_OTBR_START_TIMEOUT_MS = Math.max(60_000, Number(process.env.HOMEBRA
 const THREAD_OTBR_HELPER_PATH = process.env.HOMEBRAIN_OTBR_HELPER_PATH || '/usr/local/lib/homebrain/homebrain-otbr-control.sh';
 const THREAD_KERNEL_LOG_LIMIT = Math.max(50, Number(process.env.HOMEBRAIN_THREAD_KERNEL_LOG_LIMIT || 500));
 const THREAD_KERNEL_BUILD_TIMEOUT_MS = Math.max(30 * 60_000, Number(process.env.HOMEBRAIN_THREAD_KERNEL_BUILD_TIMEOUT_MS || 4 * 60 * 60_000));
+const THREAD_KERNEL_MONITOR_INTERVAL_MS = Math.max(5_000, Number(process.env.HOMEBRAIN_THREAD_KERNEL_MONITOR_INTERVAL_MS || 10_000));
+const THREAD_KERNEL_START_GRACE_MS = Math.max(10_000, Number(process.env.HOMEBRAIN_THREAD_KERNEL_START_GRACE_MS || 30_000));
 const THREAD_KERNEL_HELPER_PATH = process.env.HOMEBRAIN_THREAD_KERNEL_HELPER_PATH || '/usr/local/lib/homebrain/homebrain-jetson-kernel-control.sh';
+const THREAD_KERNEL_HELPER_LOG_PATH = process.env.HOMEBRAIN_THREAD_KERNEL_LOG_PATH || '/var/lib/homebrain/thread-kernel/last-build.log';
 const MATTER_CONTROLLER_ID = 'homebrain-matter-controller';
 const THREAD_FLASH_ACTIVE_STATUSES = new Set(['queued', 'preparing', 'flashing']);
 const THREAD_KERNEL_ACTIVE_STATUSES = new Set(['queued', 'preparing', 'building', 'installing']);
@@ -181,6 +184,19 @@ function toNumber(value) {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
+}
+
+function toTimeMs(value) {
+  const text = normalizeString(value);
+  if (!text) {
+    return null;
+  }
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
 }
 
 function clampPercent(value) {
@@ -1081,6 +1097,79 @@ function normalizePersistedThreadKernelJob(record) {
   };
 }
 
+function threadKernelHelperResultMatchesJob(lastResult, job) {
+  if (!lastResult || typeof lastResult !== 'object' || !job?.id) {
+    return false;
+  }
+
+  const resultJobId = normalizeString(lastResult.jobId);
+  if (resultJobId) {
+    return resultJobId === job.id;
+  }
+
+  const resultUpdatedAt = toTimeMs(lastResult.updatedAt);
+  const jobCreatedAt = toTimeMs(job.createdAt);
+  if (resultUpdatedAt === null || jobCreatedAt === null) {
+    return false;
+  }
+
+  return resultUpdatedAt >= jobCreatedAt - 60_000;
+}
+
+function buildThreadKernelJobUpdateFromHelperStatus(job, helperStatus, options = {}) {
+  const lastResult = helperStatus?.lastResult;
+  if (!threadKernelHelperResultMatchesJob(lastResult, job)) {
+    return null;
+  }
+
+  const resultStatus = normalizeLower(lastResult.status);
+  const message = normalizeString(lastResult.message);
+  const finishedAt = normalizeString(lastResult.updatedAt) || new Date().toISOString();
+  const processRunning = options.processRunning;
+
+  if (resultStatus === 'completed') {
+    return {
+      status: 'completed',
+      phase: job.autoReboot ? 'completed-reboot-scheduled' : 'completed-reboot-required',
+      finishedAt,
+      error: null,
+      result: helperStatus
+    };
+  }
+
+  if (resultStatus === 'failed' || resultStatus === 'error') {
+    return {
+      status: 'failed',
+      phase: 'failed',
+      finishedAt,
+      error: message || 'Thread kernel helper failed. See the last build log for details.',
+      result: helperStatus
+    };
+  }
+
+  if (resultStatus === 'running') {
+    if (processRunning === false) {
+      return {
+        status: 'failed',
+        phase: 'failed',
+        finishedAt: new Date().toISOString(),
+        error: 'Thread kernel helper is no longer running. See the last build log for details.',
+        result: helperStatus
+      };
+    }
+
+    return {
+      status: 'building',
+      phase: 'building-and-installing-kernel',
+      finishedAt: null,
+      error: null,
+      result: null
+    };
+  }
+
+  return null;
+}
+
 function buildThreadSetupGuidance({
   expectedPorts = [],
   selectedPort = null,
@@ -1733,6 +1822,102 @@ class MatterService {
     }
   }
 
+  getThreadKernelHelperStatusSync() {
+    if (!fs.existsSync(THREAD_KERNEL_HELPER_PATH)) {
+      return null;
+    }
+    const probe = runSync('sudo', ['-n', THREAD_KERNEL_HELPER_PATH, 'status'], { timeout: 30_000 });
+    return parseJsonObjectFromOutput(probe?.stdout || '');
+  }
+
+  getThreadKernelHelperProcessStatus(jobId = '') {
+    const probe = runSync('ps', ['-eo', 'pid=,args='], { timeout: 4000 });
+    const normalizedJobId = normalizeString(jobId);
+    if (!probe.ok && !probe.stdout) {
+      return {
+        available: false,
+        running: null,
+        matches: [],
+        error: probe.stderr || probe.error || 'Unable to inspect running processes.'
+      };
+    }
+
+    const matches = normalizeString(probe.stdout)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => (
+        line.includes('homebrain-jetson-kernel-control.sh')
+        && /\b(apply|rebuild)\b/.test(line)
+        && (!normalizedJobId || line.includes(normalizedJobId))
+      ))
+      .slice(0, 10);
+
+    return {
+      available: true,
+      running: matches.length > 0,
+      matches
+    };
+  }
+
+  async readThreadKernelHelperLogTail() {
+    try {
+      const text = await fsp.readFile(THREAD_KERNEL_HELPER_LOG_PATH, 'utf8');
+      const stat = await fsp.stat(THREAD_KERNEL_HELPER_LOG_PATH).catch(() => null);
+      const at = stat?.mtime instanceof Date ? stat.mtime.toISOString() : new Date().toISOString();
+      return text
+        .split(/\r?\n/)
+        .map((line) => line.trimEnd())
+        .filter(Boolean)
+        .slice(-THREAD_KERNEL_LOG_LIMIT)
+        .map((line) => ({
+          at,
+          stream: 'log',
+          line: line.slice(0, 1000)
+        }));
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  async refreshThreadKernelJobLogsFromHelper(job) {
+    const logs = await this.readThreadKernelHelperLogTail();
+    if (logs.length > 0) {
+      job.logs = logs;
+      job.updatedAt = new Date().toISOString();
+    }
+  }
+
+  async failThreadKernelJob(job, error, result = null) {
+    await this.refreshThreadKernelJobLogsFromHelper(job);
+    await this.updateThreadKernelJob(job, {
+      status: 'failed',
+      phase: 'failed',
+      error: error.message || String(error),
+      finishedAt: new Date().toISOString(),
+      result
+    });
+    if (this.activeThreadKernelJobId === job.id) {
+      this.activeThreadKernelJobId = null;
+    }
+    if (job.enableFullOtbrAfterReboot) {
+      await this.clearThreadKernelPostRebootMarker();
+    }
+  }
+
+  async applyThreadKernelHelperJobUpdate(job, update) {
+    await this.refreshThreadKernelJobLogsFromHelper(job);
+    await this.updateThreadKernelJob(job, update);
+    if (!THREAD_KERNEL_ACTIVE_STATUSES.has(update.status)) {
+      if (this.activeThreadKernelJobId === job.id) {
+        this.activeThreadKernelJobId = null;
+      }
+      if (update.status === 'failed' && job.enableFullOtbrAfterReboot) {
+        await this.clearThreadKernelPostRebootMarker();
+      }
+      this.lastThreadStatus = null;
+    }
+  }
+
   async loadThreadKernelJobs(options = {}) {
     if (this.threadKernelJobsLoaded && !options.forceRefresh) {
       return;
@@ -1750,7 +1935,8 @@ class MatterService {
       return;
     }
 
-    const interruptedJobs = [];
+    const reconciledJobs = [];
+    const recoveredJobs = [];
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.json')) {
         continue;
@@ -1767,11 +1953,34 @@ class MatterService {
           continue;
         }
         if (THREAD_KERNEL_ACTIVE_STATUSES.has(job.status) && !isCurrentInMemoryJob) {
-          job.status = 'failed';
-          job.phase = 'failed';
-          job.finishedAt = job.finishedAt || new Date().toISOString();
-          job.error = job.error || 'HomeBrain restarted before this kernel rebuild job completed.';
-          interruptedJobs.push(job);
+          const helperStatus = this.getThreadKernelHelperStatusSync();
+          const processStatus = this.getThreadKernelHelperProcessStatus(job.id);
+          const update = buildThreadKernelJobUpdateFromHelperStatus(job, helperStatus, {
+            processRunning: processStatus.available ? processStatus.running : null
+          });
+
+          if (update) {
+            Object.assign(job, update, {
+              updatedAt: new Date().toISOString()
+            });
+            await this.refreshThreadKernelJobLogsFromHelper(job);
+            reconciledJobs.push(job);
+            if (THREAD_KERNEL_ACTIVE_STATUSES.has(job.status)) {
+              recoveredJobs.push(job);
+            } else if (job.status === 'failed' && job.enableFullOtbrAfterReboot) {
+              await this.clearThreadKernelPostRebootMarker();
+            }
+          } else {
+            job.status = 'failed';
+            job.phase = 'failed';
+            job.finishedAt = job.finishedAt || new Date().toISOString();
+            job.error = job.error || 'HomeBrain restarted and the kernel helper is no longer reporting this rebuild job.';
+            await this.refreshThreadKernelJobLogsFromHelper(job);
+            reconciledJobs.push(job);
+            if (job.enableFullOtbrAfterReboot) {
+              await this.clearThreadKernelPostRebootMarker();
+            }
+          }
         }
         this.threadKernelJobs.set(job.id, job);
       } catch (error) {
@@ -1783,7 +1992,14 @@ class MatterService {
       .find((job) => THREAD_KERNEL_ACTIVE_STATUSES.has(job.status))?.id || null;
     this.threadKernelJobsLoaded = true;
 
-    await Promise.all(interruptedJobs.map((job) => this.persistThreadKernelJob(job)));
+    await Promise.all(reconciledJobs.map((job) => this.persistThreadKernelJob(job)));
+    recoveredJobs.forEach((job) => {
+      setImmediate(() => {
+        this.monitorThreadKernelRebuildJob(job, { recovered: true }).catch((error) => {
+          this.failThreadKernelJob(job, error).catch(() => {});
+        });
+      });
+    });
   }
 
   appendThreadKernelJobLog(job, streamName, chunk) {
@@ -1826,7 +2042,15 @@ class MatterService {
       ? runSync('sudo', ['-n', THREAD_KERNEL_HELPER_PATH, 'status'], { timeout: 30_000 })
       : null;
     const helperStatus = parseJsonObjectFromOutput(helperProbe?.stdout || '');
-    const postRebootAction = await this.readThreadKernelPostRebootMarker();
+    const helperProcess = this.getThreadKernelHelperProcessStatus(activeJob?.id || '');
+    let postRebootAction = await this.readThreadKernelPostRebootMarker();
+    if (postRebootAction?.sourceJobId && !helperStatus?.pendingReboot) {
+      const sourceJob = this.threadKernelJobs.get(postRebootAction.sourceJobId);
+      if (sourceJob?.status === 'failed') {
+        await this.clearThreadKernelPostRebootMarker();
+        postRebootAction = null;
+      }
+    }
     const needsRebuild = helperStatus
       ? Boolean(helperStatus.needsRebuild)
       : true;
@@ -1864,7 +2088,8 @@ class MatterService {
       diagnostics: {
         helperStatusAvailable: Boolean(helperStatus),
         helperError: helperStatus ? null : normalizeString(helperProbe?.stderr || helperProbe?.error || ''),
-        helperExitStatus: helperProbe?.status ?? null
+        helperExitStatus: helperProbe?.status ?? null,
+        helperProcess
       },
       activeJob: activeJob ? this.serializeThreadKernelJob(activeJob, { includeLogs: options.includeLogs !== false }) : null,
       recentJobs
@@ -1966,16 +2191,7 @@ class MatterService {
 
     setImmediate(() => {
       this.runThreadKernelRebuildJob(job, payload).catch((error) => {
-        this.updateThreadKernelJob(job, {
-          status: 'failed',
-          phase: 'failed',
-          error: error.message,
-          finishedAt: new Date().toISOString()
-        }).catch(() => {});
-        this.activeThreadKernelJobId = null;
-        if (job.enableFullOtbrAfterReboot) {
-          this.clearThreadKernelPostRebootMarker().catch(() => {});
-        }
+        this.failThreadKernelJob(job, error).catch(() => {});
       });
     });
 
@@ -1989,6 +2205,8 @@ class MatterService {
       '-n',
       THREAD_KERNEL_HELPER_PATH,
       'apply',
+      '--job-id',
+      job.id,
       '--confirm',
       THREAD_KERNEL_CONFIRMATION
     ];
@@ -2013,39 +2231,52 @@ class MatterService {
     await new Promise((resolve, reject) => {
       const child = spawn('sudo', args, {
         cwd: path.dirname(THREAD_KERNEL_HELPER_PATH),
-        stdio: ['ignore', 'pipe', 'pipe']
+        detached: true,
+        stdio: 'ignore'
       });
-      const timer = setTimeout(() => {
-        child.kill('SIGTERM');
-        reject(new Error(`Thread kernel helper timed out after ${Math.round(THREAD_KERNEL_BUILD_TIMEOUT_MS / 60000)} minutes`));
-      }, THREAD_KERNEL_BUILD_TIMEOUT_MS);
-
-      child.stdout.on('data', (chunk) => this.appendThreadKernelJobLog(job, 'stdout', chunk));
-      child.stderr.on('data', (chunk) => this.appendThreadKernelJobLog(job, 'stderr', chunk));
+      const timer = setTimeout(() => resolve(), 500);
       child.on('error', (error) => {
         clearTimeout(timer);
         reject(error);
       });
-      child.on('close', (code, signal) => {
+      child.on('spawn', () => {
         clearTimeout(timer);
-        if (code === 0) {
-          resolve();
-          return;
-        }
-        reject(new Error(`Thread kernel helper exited with ${signal || `code ${code}`}`));
+        child.unref();
+        resolve();
       });
     });
 
-    const status = await this.getThreadKernelStatus({ includeLogs: false, forceRefresh: true });
-    await this.updateThreadKernelJob(job, {
-      status: 'completed',
-      phase: job.autoReboot ? 'completed-reboot-scheduled' : 'completed-reboot-required',
-      finishedAt: new Date().toISOString(),
-      error: null,
-      result: status
-    });
-    this.activeThreadKernelJobId = null;
-    this.lastThreadStatus = null;
+    await this.monitorThreadKernelRebuildJob(job);
+  }
+
+  async monitorThreadKernelRebuildJob(job, options = {}) {
+    const startedAt = Date.now();
+    let helperSeen = options.recovered === true;
+
+    while (Date.now() - startedAt < THREAD_KERNEL_BUILD_TIMEOUT_MS) {
+      await this.refreshThreadKernelJobLogsFromHelper(job);
+      const helperStatus = this.getThreadKernelHelperStatusSync();
+      const processStatus = this.getThreadKernelHelperProcessStatus(job.id);
+      const update = buildThreadKernelJobUpdateFromHelperStatus(job, helperStatus, {
+        processRunning: processStatus.available ? processStatus.running : null
+      });
+
+      if (update) {
+        helperSeen = true;
+        await this.applyThreadKernelHelperJobUpdate(job, update);
+        if (!THREAD_KERNEL_ACTIVE_STATUSES.has(update.status)) {
+          return;
+        }
+      } else if (!helperSeen && Date.now() - startedAt >= THREAD_KERNEL_START_GRACE_MS) {
+        throw new Error('Thread kernel helper did not start or did not record build state.');
+      } else if (helperSeen && processStatus.available && !processStatus.running) {
+        throw new Error('Thread kernel helper stopped before recording completion.');
+      }
+
+      await sleep(THREAD_KERNEL_MONITOR_INTERVAL_MS);
+    }
+
+    throw new Error(`Thread kernel helper timed out after ${Math.round(THREAD_KERNEL_BUILD_TIMEOUT_MS / 60000)} minutes`);
   }
 
   createThreadOtbrJob({ devicePath, baudRate, networkName, backboneRouterMode }) {
@@ -3839,6 +4070,8 @@ matterService._test = {
   looksLikeSonoffMg24Port,
   normalizePersistedThreadFirmwareFlashJob,
   normalizePersistedThreadKernelJob,
+  buildThreadKernelJobUpdateFromHelperStatus,
+  threadKernelHelperResultMatchesJob,
   normalizeThreadBackboneRouterMode,
   normalizeThreadBaudRate,
   normalizeThreadFirmwareFlashConfirmation,

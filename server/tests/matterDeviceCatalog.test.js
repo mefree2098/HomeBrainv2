@@ -423,6 +423,59 @@ test('persisted Thread kernel jobs are normalized for restart-safe status checks
   assert.equal(missingId, null);
 });
 
+test('Thread kernel helper results reconcile detached rebuild jobs across HomeBrain restarts', () => {
+  const job = matterService._test.normalizePersistedThreadKernelJob({
+    id: 'thread-kernel-detached',
+    status: 'building',
+    phase: 'building-and-installing-kernel',
+    createdAt: '2026-05-10T18:00:00.000Z',
+    autoReboot: true,
+    enableFullOtbrAfterReboot: true
+  });
+
+  assert.equal(matterService._test.threadKernelHelperResultMatchesJob({
+    jobId: 'thread-kernel-detached',
+    status: 'running',
+    updatedAt: '2026-05-10T18:01:00Z'
+  }, job), true);
+  assert.equal(matterService._test.threadKernelHelperResultMatchesJob({
+    jobId: 'other-job',
+    status: 'running',
+    updatedAt: '2026-05-10T18:01:00Z'
+  }, job), false);
+
+  const running = matterService._test.buildThreadKernelJobUpdateFromHelperStatus(job, {
+    lastResult: {
+      jobId: 'thread-kernel-detached',
+      status: 'running',
+      updatedAt: '2026-05-10T18:01:00Z'
+    }
+  }, { processRunning: true });
+  assert.equal(running.status, 'building');
+  assert.equal(running.phase, 'building-and-installing-kernel');
+
+  const stopped = matterService._test.buildThreadKernelJobUpdateFromHelperStatus(job, {
+    lastResult: {
+      jobId: 'thread-kernel-detached',
+      status: 'running',
+      message: 'Kernel rebuild is running.',
+      updatedAt: '2026-05-10T18:01:00Z'
+    }
+  }, { processRunning: false });
+  assert.equal(stopped.status, 'failed');
+  assert.match(stopped.error, /no longer running/);
+
+  const completed = matterService._test.buildThreadKernelJobUpdateFromHelperStatus(job, {
+    lastResult: {
+      jobId: 'thread-kernel-detached',
+      status: 'completed',
+      updatedAt: '2026-05-10T18:45:00Z'
+    }
+  }, { processRunning: false });
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.phase, 'completed-reboot-scheduled');
+});
+
 test('Thread kernel helper JSON parser tolerates wrapper output', () => {
   const parsed = matterService._test.parseJsonObjectFromOutput([
     '[homebrain-thread-kernel] checking installed files',
