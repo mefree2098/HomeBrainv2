@@ -319,6 +319,39 @@ test('Matter Thread setup guidance requires OTBR to attach before commissioning 
   assert.match(attachAction.detail, /cannot be commissioned/);
 });
 
+test('Matter Thread setup guidance surfaces no-BBR host fallback', () => {
+  const port = {
+    path: '/dev/serial/by-id/usb-SONOFF_MG24',
+    stablePath: '/dev/serial/by-id/usb-SONOFF_MG24'
+  };
+  const guidance = matterService._test.buildThreadSetupGuidance({
+    expectedPorts: [port],
+    selectedPort: port,
+    otbr: {
+      online: true,
+      dataset: '0e080000000000010000',
+      baseUrl: 'http://127.0.0.1:8081'
+    },
+    otbrHost: {
+      state: 'leader',
+      ipv6Mroute: 'unsupported',
+      backboneRouterMode: 'no-bbr'
+    },
+    activeDataset: '0e080000000000010000',
+    firmwareFlash: {
+      tool: {
+        available: true,
+        canAutoInstall: true
+      }
+    }
+  });
+
+  const backboneAction = guidance.actions.find((action) => action.id === 'host-backbone-router');
+
+  assert.equal(backboneAction.status, 'limited');
+  assert.match(backboneAction.detail, /without Thread 1\.2 Backbone Router/);
+});
+
 test('persisted Thread flash jobs are normalized for restart-safe status checks', () => {
   const completed = matterService._test.normalizePersistedThreadFirmwareFlashJob({
     id: 'thread-flash-test',
