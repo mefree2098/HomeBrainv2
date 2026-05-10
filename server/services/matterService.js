@@ -25,11 +25,15 @@ const MATTER_CONFIG_PATH = path.join(MATTER_DATA_DIR, 'config.json');
 const MATTER_SESSIONS_PATH = path.join(MATTER_DATA_DIR, 'commissioning-sessions.json');
 const MATTER_STORAGE_DIR = path.join(MATTER_DATA_DIR, 'matter-js-storage');
 const THREAD_FLASH_JOBS_DIR = path.join(MATTER_DATA_DIR, 'firmware-flashes');
+const THREAD_KERNEL_JOBS_DIR = path.join(MATTER_DATA_DIR, 'thread-kernel-jobs');
+const THREAD_KERNEL_POST_REBOOT_PATH = path.join(MATTER_DATA_DIR, 'thread-kernel-post-reboot.json');
 const THREAD_FLASH_MANAGED_VENV_DIR = path.join(MATTER_DATA_DIR, 'silabs-flasher-venv');
 const DEFAULT_OTBR_REST_URL = process.env.HOMEBRAIN_OTBR_REST_URL || 'http://127.0.0.1:8081';
 const DEFAULT_COMMISSIONING_TIMEOUT_SECONDS = Math.max(20, Number(process.env.HOMEBRAIN_MATTER_COMMISSIONING_TIMEOUT_SECONDS || 90));
 const THREAD_FLASH_CONFIRMATION = 'FLASH OPENTHREAD RCP';
 const THREAD_OTBR_CONFIRMATION = 'START THREAD BORDER ROUTER';
+const THREAD_KERNEL_CONFIRMATION = 'REBUILD JETSON KERNEL FOR FULL THREAD';
+const THREAD_KERNEL_REBOOT_CONFIRMATION = 'REBOOT JETSON AFTER KERNEL INSTALL';
 const THREAD_FLASH_MAX_FIRMWARE_BYTES = Math.max(
   1024 * 1024,
   Number(process.env.HOMEBRAIN_THREAD_FLASH_MAX_BYTES || 6 * 1024 * 1024)
@@ -38,8 +42,12 @@ const THREAD_FLASH_LOG_LIMIT = Math.max(50, Number(process.env.HOMEBRAIN_THREAD_
 const THREAD_OTBR_LOG_LIMIT = Math.max(50, Number(process.env.HOMEBRAIN_THREAD_OTBR_LOG_LIMIT || 250));
 const THREAD_OTBR_START_TIMEOUT_MS = Math.max(60_000, Number(process.env.HOMEBRAIN_THREAD_OTBR_START_TIMEOUT_MS || 60 * 60_000));
 const THREAD_OTBR_HELPER_PATH = process.env.HOMEBRAIN_OTBR_HELPER_PATH || '/usr/local/lib/homebrain/homebrain-otbr-control.sh';
+const THREAD_KERNEL_LOG_LIMIT = Math.max(50, Number(process.env.HOMEBRAIN_THREAD_KERNEL_LOG_LIMIT || 500));
+const THREAD_KERNEL_BUILD_TIMEOUT_MS = Math.max(30 * 60_000, Number(process.env.HOMEBRAIN_THREAD_KERNEL_BUILD_TIMEOUT_MS || 4 * 60 * 60_000));
+const THREAD_KERNEL_HELPER_PATH = process.env.HOMEBRAIN_THREAD_KERNEL_HELPER_PATH || '/usr/local/lib/homebrain/homebrain-jetson-kernel-control.sh';
 const MATTER_CONTROLLER_ID = 'homebrain-matter-controller';
 const THREAD_FLASH_ACTIVE_STATUSES = new Set(['queued', 'preparing', 'flashing']);
+const THREAD_KERNEL_ACTIVE_STATUSES = new Set(['queued', 'preparing', 'building', 'installing']);
 const UNIVERSAL_SILABS_FLASHER_REPO_URL = 'https://github.com/NabuCasa/universal-silabs-flasher';
 const UNIVERSAL_SILABS_FLASHER_INSTALL_HINT = 'HomeBrain can install universal-silabs-flasher into its managed Matter venv when flashing starts.';
 const SONOFF_DONGLE_HARDWARE_BASE_URL = 'https://dongle.sonoff.tech/dongle-flasher/dongle-hardware';
@@ -49,6 +57,8 @@ const SONOFF_MG24_FLASHER_URL = 'https://dongle.sonoff.tech/sonoff-dongle-flashe
 const SONOFF_MG24_OPENTHREAD_GUIDE_URL = 'https://dongle.sonoff.tech/guide/dongle-pmg24/how_to_flash_openthread_firmware/';
 const SONOFF_MG24_FLASHER_ADDON_URL = 'https://github.com/iHost-Open-Source-Project/hassio-ihost-addon/tree/master/hassio-ihost-sonoff-dongle-flasher';
 const OPENTHREAD_OTBR_GUIDE_URL = 'https://openthread.io/guides/border-router';
+const JETSONHACKS_KERNEL_BUILDER_URL = 'https://github.com/jetsonhacks/jetson-orin-kernel-builder';
+const NVIDIA_JETSON_KERNEL_CUSTOMIZATION_URL = 'https://docs.nvidia.com/jetson/archives/r36.3/DeveloperGuide/SD/Kernel/KernelCustomization.html';
 
 const MATTER_CONTROLLER_HARDWARE = Object.freeze({
   asin: SONOFF_MG24_ASIN,
@@ -735,6 +745,25 @@ function normalizeThreadOtbrConfirmation(value) {
   return normalizeString(value).toUpperCase() === THREAD_OTBR_CONFIRMATION;
 }
 
+function normalizeThreadKernelConfirmation(value) {
+  return normalizeString(value).toUpperCase() === THREAD_KERNEL_CONFIRMATION;
+}
+
+function normalizeThreadKernelRebootConfirmation(value) {
+  return normalizeString(value).toUpperCase() === THREAD_KERNEL_REBOOT_CONFIRMATION;
+}
+
+function normalizeThreadBackboneRouterMode(value, fallback = 'auto') {
+  const normalized = normalizeLower(value);
+  if (['full', 'enabled', 'enable', 'true', 'yes', 'on', '1'].includes(normalized)) {
+    return 'full';
+  }
+  if (['no-bbr', 'limited', 'disabled', 'disable', 'false', 'no', 'off', '0'].includes(normalized)) {
+    return 'no-bbr';
+  }
+  return fallback;
+}
+
 function normalizeThreadBaudRate(value, fallback = '460800') {
   const text = normalizeString(value) || fallback;
   return /^[0-9]{4,8}$/.test(text) ? text : fallback;
@@ -944,13 +973,41 @@ function normalizePersistedThreadFirmwareFlashJob(record) {
   };
 }
 
+function normalizePersistedThreadKernelJob(record) {
+  if (!record || typeof record !== 'object') {
+    return null;
+  }
+  const id = normalizeString(record.id);
+  if (!id) {
+    return null;
+  }
+  const now = new Date().toISOString();
+  const status = normalizeString(record.status) || 'failed';
+  return {
+    id,
+    status,
+    phase: normalizeString(record.phase) || status,
+    createdAt: normalizeString(record.createdAt) || normalizeString(record.updatedAt) || now,
+    updatedAt: normalizeString(record.updatedAt) || normalizeString(record.createdAt) || now,
+    finishedAt: normalizeString(record.finishedAt) || null,
+    error: normalizeString(record.error) || null,
+    autoReboot: Boolean(record.autoReboot),
+    enableFullOtbrAfterReboot: record.enableFullOtbrAfterReboot !== false,
+    networkName: normalizeString(record.networkName) || 'HomeBrain Thread',
+    commandPreview: normalizeString(record.commandPreview) || null,
+    result: record.result && typeof record.result === 'object' ? record.result : null,
+    logs: Array.isArray(record.logs) ? record.logs.slice(-THREAD_KERNEL_LOG_LIMIT) : []
+  };
+}
+
 function buildThreadSetupGuidance({
   expectedPorts = [],
   selectedPort = null,
   otbr = {},
   otbrHost = {},
   activeDataset = '',
-  firmwareFlash = null
+  firmwareFlash = null,
+  threadKernel = null
 }) {
   const selectedPath = selectedPort?.path || selectedPort?.stablePath || selectedPort?.rawPath || '';
   const canServerFlash = Boolean(firmwareFlash?.tool?.available || firmwareFlash?.tool?.canAutoInstall);
@@ -960,6 +1017,8 @@ function buildThreadSetupGuidance({
   const ipv6Mroute = normalizeLower(otbrHost?.ipv6Mroute);
   const backboneRouterMode = normalizeLower(otbrHost?.backboneRouterMode);
   const backboneRouterLimited = ipv6Mroute === 'unsupported' || backboneRouterMode === 'no-bbr';
+  const kernelSupportsFullThread = Boolean(threadKernel?.kernelSupportsFullThread);
+  const kernelNeedsRebuild = Boolean(threadKernel?.needsRebuild);
   const actions = [];
 
   actions.push({
@@ -1017,10 +1076,16 @@ function buildThreadSetupGuidance({
   actions.push({
     id: 'host-backbone-router',
     label: 'Host Backbone Router support',
-    status: backboneRouterLimited ? 'limited' : 'complete',
-    detail: backboneRouterLimited
-      ? 'This Jetson kernel does not expose IPv6 multicast routing, so HomeBrain will run OTBR without Thread 1.2 Backbone Router multicast forwarding.'
-      : 'The host can support OTBR Backbone Router multicast forwarding.'
+    status: kernelSupportsFullThread && !backboneRouterLimited ? 'complete' : (kernelNeedsRebuild || backboneRouterLimited ? 'limited' : 'checking'),
+    detail: kernelSupportsFullThread && !backboneRouterLimited
+      ? 'The host kernel and OTBR build can support Thread 1.2 Backbone Router multicast forwarding.'
+      : backboneRouterLimited && !threadKernel
+        ? 'This Jetson kernel does not expose IPv6 multicast routing, so HomeBrain will run OTBR without Thread 1.2 Backbone Router multicast forwarding.'
+      : kernelNeedsRebuild
+        ? 'This Jetson kernel does not expose the multicast routing options OTBR Backbone Router needs; HomeBrain can rebuild a custom Thread kernel, or keep the safe no-BBR fallback.'
+        : backboneRouterLimited
+          ? 'This Jetson kernel does not expose IPv6 multicast routing, so HomeBrain will run OTBR without Thread 1.2 Backbone Router multicast forwarding.'
+          : 'HomeBrain is checking host multicast routing support before enabling OTBR Backbone Router.'
   });
 
   actions.push({
@@ -1057,6 +1122,12 @@ function buildThreadSetupGuidance({
       restUrl: otbr.baseUrl || DEFAULT_OTBR_REST_URL,
       guideUrl: OPENTHREAD_OTBR_GUIDE_URL,
       serverSideConfirmation: THREAD_OTBR_CONFIRMATION
+    },
+    kernel: {
+      serverSideConfirmation: THREAD_KERNEL_CONFIRMATION,
+      rebootConfirmation: THREAD_KERNEL_REBOOT_CONFIRMATION,
+      builderUrl: JETSONHACKS_KERNEL_BUILDER_URL,
+      nvidiaGuideUrl: NVIDIA_JETSON_KERNEL_CUSTOMIZATION_URL
     },
     actions
   };
@@ -1163,6 +1234,10 @@ class MatterService {
     this.threadFirmwareFlashJobsLoaded = false;
     this.threadOtbrJobs = new Map();
     this.activeThreadOtbrJobId = null;
+    this.threadKernelJobs = new Map();
+    this.activeThreadKernelJobId = null;
+    this.threadKernelJobsLoaded = false;
+    this.threadKernelPostRebootResumeQueued = false;
     this.threadFirmwareFlashToolCache = null;
     this.sonoffFirmwareManifestCache = null;
   }
@@ -1171,6 +1246,7 @@ class MatterService {
     await fsp.mkdir(MATTER_DATA_DIR, { recursive: true });
     await fsp.mkdir(MATTER_STORAGE_DIR, { recursive: true });
     await fsp.mkdir(THREAD_FLASH_JOBS_DIR, { recursive: true });
+    await fsp.mkdir(THREAD_KERNEL_JOBS_DIR, { recursive: true });
   }
 
   async loadConfig() {
@@ -1255,6 +1331,7 @@ class MatterService {
       await this.loadSessions();
       this.detectedSerialPorts = await this.detectSerialPorts();
       this.lastThreadStatus = await this.getThreadStatus({ refreshPorts: false });
+      this.queueThreadKernelPostRebootResume();
       await this.ensureControllerIfConfigured();
     } catch (error) {
       this.recordControllerStartupError(error);
@@ -1450,7 +1527,417 @@ class MatterService {
     };
   }
 
-  createThreadOtbrJob({ devicePath, baudRate, networkName }) {
+  async readThreadKernelPostRebootMarker() {
+    try {
+      const parsed = JSON.parse(await fsp.readFile(THREAD_KERNEL_POST_REBOOT_PATH, 'utf8'));
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        console.warn(`MatterService: Failed to read Thread kernel post-reboot marker: ${error.message}`);
+      }
+      return null;
+    }
+  }
+
+  async writeThreadKernelPostRebootMarker(marker = {}) {
+    await this.ensureDataDir();
+    await fsp.writeFile(THREAD_KERNEL_POST_REBOOT_PATH, JSON.stringify({
+      createdAt: new Date().toISOString(),
+      networkName: normalizeString(marker.networkName) || 'HomeBrain Thread',
+      requestedBackboneRouterMode: 'full',
+      sourceJobId: normalizeString(marker.sourceJobId) || null,
+      attemptCount: Number.isFinite(Number(marker.attemptCount)) ? Number(marker.attemptCount) : 0,
+      lastAttemptAt: normalizeString(marker.lastAttemptAt) || null,
+      lastError: normalizeString(marker.lastError) || null
+    }, null, 2));
+  }
+
+  async clearThreadKernelPostRebootMarker() {
+    try {
+      await fsp.unlink(THREAD_KERNEL_POST_REBOOT_PATH);
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        console.warn(`MatterService: Failed to clear Thread kernel post-reboot marker: ${error.message}`);
+      }
+    }
+  }
+
+  queueThreadKernelPostRebootResume() {
+    if (this.threadKernelPostRebootResumeQueued) {
+      return;
+    }
+    this.threadKernelPostRebootResumeQueued = true;
+    setTimeout(() => {
+      this.threadKernelPostRebootResumeQueued = false;
+      this.resumeThreadKernelPostRebootIfReady().catch((error) => {
+        console.warn(`MatterService: Thread kernel post-reboot resume failed: ${error.message}`);
+      });
+    }, 5000);
+  }
+
+  async resumeThreadKernelPostRebootIfReady() {
+    const marker = await this.readThreadKernelPostRebootMarker();
+    if (!marker) {
+      return null;
+    }
+
+    const kernelStatus = await this.getThreadKernelStatus({ includeLogs: false });
+    if (!kernelStatus?.kernelSupportsFullThread || kernelStatus?.pendingReboot) {
+      return null;
+    }
+
+    const attempts = Number(marker.attemptCount || 0);
+    if (attempts >= 3) {
+      return null;
+    }
+
+    await this.writeThreadKernelPostRebootMarker({
+      ...marker,
+      attemptCount: attempts + 1,
+      lastAttemptAt: new Date().toISOString()
+    });
+
+    try {
+      const job = await this.startThreadBorderRouter({
+        confirmOtbr: THREAD_OTBR_CONFIRMATION,
+        networkName: marker.networkName || 'HomeBrain Thread',
+        backboneRouterMode: 'full'
+      });
+      await this.clearThreadKernelPostRebootMarker();
+      return job;
+    } catch (error) {
+      await this.writeThreadKernelPostRebootMarker({
+        ...marker,
+        attemptCount: attempts + 1,
+        lastAttemptAt: new Date().toISOString(),
+        lastError: error.message
+      });
+      return null;
+    }
+  }
+
+  serializeThreadKernelJob(job, options = {}) {
+    if (!job) {
+      return null;
+    }
+    return {
+      id: job.id,
+      status: job.status,
+      phase: job.phase,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      finishedAt: job.finishedAt,
+      error: job.error,
+      autoReboot: job.autoReboot,
+      enableFullOtbrAfterReboot: job.enableFullOtbrAfterReboot,
+      networkName: job.networkName,
+      commandPreview: job.commandPreview,
+      result: job.result,
+      logs: options.includeLogs === false ? [] : job.logs.slice(-THREAD_KERNEL_LOG_LIMIT)
+    };
+  }
+
+  async persistThreadKernelJob(job) {
+    if (!job?.id) {
+      return;
+    }
+    try {
+      await this.ensureDataDir();
+      await fsp.writeFile(
+        path.join(THREAD_KERNEL_JOBS_DIR, `${job.id}.json`),
+        JSON.stringify(this.serializeThreadKernelJob(job), null, 2)
+      );
+    } catch (error) {
+      console.warn(`MatterService: Failed to persist Thread kernel job: ${error.message}`);
+    }
+  }
+
+  async loadThreadKernelJobs(options = {}) {
+    if (this.threadKernelJobsLoaded && !options.forceRefresh) {
+      return;
+    }
+
+    await this.ensureDataDir();
+    let entries = [];
+    try {
+      entries = await fsp.readdir(THREAD_KERNEL_JOBS_DIR, { withFileTypes: true });
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        console.warn(`MatterService: Failed to list Thread kernel jobs: ${error.message}`);
+      }
+      this.threadKernelJobsLoaded = true;
+      return;
+    }
+
+    const interruptedJobs = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.json')) {
+        continue;
+      }
+      const filePath = path.join(THREAD_KERNEL_JOBS_DIR, entry.name);
+      try {
+        const parsed = JSON.parse(await fsp.readFile(filePath, 'utf8'));
+        const job = normalizePersistedThreadKernelJob(parsed);
+        if (!job) {
+          continue;
+        }
+        const isCurrentInMemoryJob = this.activeThreadKernelJobId === job.id && THREAD_KERNEL_ACTIVE_STATUSES.has(job.status);
+        if (isCurrentInMemoryJob) {
+          continue;
+        }
+        if (THREAD_KERNEL_ACTIVE_STATUSES.has(job.status) && !isCurrentInMemoryJob) {
+          job.status = 'failed';
+          job.phase = 'failed';
+          job.finishedAt = job.finishedAt || new Date().toISOString();
+          job.error = job.error || 'HomeBrain restarted before this kernel rebuild job completed.';
+          interruptedJobs.push(job);
+        }
+        this.threadKernelJobs.set(job.id, job);
+      } catch (error) {
+        console.warn(`MatterService: Failed to load Thread kernel job ${entry.name}: ${error.message}`);
+      }
+    }
+
+    this.activeThreadKernelJobId = Array.from(this.threadKernelJobs.values())
+      .find((job) => THREAD_KERNEL_ACTIVE_STATUSES.has(job.status))?.id || null;
+    this.threadKernelJobsLoaded = true;
+
+    await Promise.all(interruptedJobs.map((job) => this.persistThreadKernelJob(job)));
+  }
+
+  appendThreadKernelJobLog(job, streamName, chunk) {
+    const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk || '');
+    text
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .filter(Boolean)
+      .forEach((line) => {
+        job.logs.push({
+          at: new Date().toISOString(),
+          stream: streamName,
+          line: line.slice(0, 1000)
+        });
+      });
+    if (job.logs.length > THREAD_KERNEL_LOG_LIMIT) {
+      job.logs.splice(0, job.logs.length - THREAD_KERNEL_LOG_LIMIT);
+    }
+    job.updatedAt = new Date().toISOString();
+  }
+
+  async updateThreadKernelJob(job, updates = {}) {
+    Object.assign(job, updates, {
+      updatedAt: new Date().toISOString()
+    });
+    await this.persistThreadKernelJob(job);
+  }
+
+  async getThreadKernelStatus(options = {}) {
+    await this.loadThreadKernelJobs(options);
+    const activeJob = this.activeThreadKernelJobId
+      ? this.threadKernelJobs.get(this.activeThreadKernelJobId)
+      : null;
+    const recentJobs = Array.from(this.threadKernelJobs.values())
+      .sort((left, right) => new Date(right.updatedAt || 0) - new Date(left.updatedAt || 0))
+      .slice(0, 5)
+      .map((job) => this.serializeThreadKernelJob(job, { includeLogs: options.includeLogs !== false }));
+    const helperAvailable = fs.existsSync(THREAD_KERNEL_HELPER_PATH);
+    const helperProbe = helperAvailable
+      ? runSync('sudo', ['-n', THREAD_KERNEL_HELPER_PATH, 'status'], { timeout: 30_000 })
+      : null;
+    const helperStatus = parseJsonObject(helperProbe?.stdout || '');
+    const postRebootAction = await this.readThreadKernelPostRebootMarker();
+    const needsRebuild = helperStatus
+      ? Boolean(helperStatus.needsRebuild)
+      : true;
+    const kernelSupportsFullThread = helperStatus
+      ? Boolean(helperStatus.kernelSupportsFullThread)
+      : false;
+
+    return {
+      confirmationPhrase: THREAD_KERNEL_CONFIRMATION,
+      rebootConfirmationPhrase: THREAD_KERNEL_REBOOT_CONFIRMATION,
+      helperPath: THREAD_KERNEL_HELPER_PATH,
+      helperAvailable,
+      canAutoInstall: helperAvailable,
+      builderUrl: JETSONHACKS_KERNEL_BUILDER_URL,
+      nvidiaGuideUrl: NVIDIA_JETSON_KERNEL_CUSTOMIZATION_URL,
+      isJetsonOrin: Boolean(helperStatus?.isJetsonOrin),
+      unameRelease: normalizeString(helperStatus?.unameRelease) || null,
+      l4tRelease: normalizeString(helperStatus?.l4tRelease) || null,
+      kernelConfig: helperStatus?.kernelConfig || null,
+      runtimeIpv6Mroute: normalizeString(helperStatus?.runtimeIpv6Mroute) || null,
+      kernelSupportsFullThread,
+      needsRebuild,
+      pendingReboot: helperStatus?.pendingReboot || null,
+      lastResult: helperStatus?.lastResult || null,
+      builder: helperStatus?.builder || null,
+      source: helperStatus?.source || null,
+      boot: helperStatus?.boot || null,
+      postRebootAction,
+      warnings: [
+        'This changes the Jetson boot kernel and modules. A failed kernel install can require local console or SD/NVMe recovery.',
+        'The build can take a long time on the Jetson and should only run with stable power and network.',
+        'NVIDIA JetPack/L4T updates may replace the boot kernel. HomeBrain will detect missing multicast routing again and fall back to OTBR no-BBR until you reapply this kernel support.'
+      ],
+      diagnostics: {
+        helperStatusAvailable: Boolean(helperStatus),
+        helperError: helperStatus ? null : normalizeString(helperProbe?.stderr || helperProbe?.error || ''),
+        helperExitStatus: helperProbe?.status ?? null
+      },
+      activeJob: activeJob ? this.serializeThreadKernelJob(activeJob, { includeLogs: options.includeLogs !== false }) : null,
+      recentJobs
+    };
+  }
+
+  createThreadKernelJob({ autoReboot, enableFullOtbrAfterReboot, networkName }) {
+    const id = `thread-kernel-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
+    const now = new Date().toISOString();
+    const job = {
+      id,
+      status: 'queued',
+      phase: 'queued',
+      createdAt: now,
+      updatedAt: now,
+      finishedAt: null,
+      error: null,
+      autoReboot: Boolean(autoReboot),
+      enableFullOtbrAfterReboot: enableFullOtbrAfterReboot !== false,
+      networkName: normalizeString(networkName) || 'HomeBrain Thread',
+      commandPreview: null,
+      result: null,
+      logs: []
+    };
+    this.threadKernelJobs.set(id, job);
+    this.activeThreadKernelJobId = id;
+    return job;
+  }
+
+  async startThreadKernelRebuild(payload = {}) {
+    if (!normalizeThreadKernelConfirmation(payload.confirmKernel || payload.confirm || payload.confirmRebuild)) {
+      const error = new Error(`Type ${THREAD_KERNEL_CONFIRMATION} to rebuild and install a HomeBrain Thread kernel.`);
+      error.status = 400;
+      throw error;
+    }
+    const autoReboot = payload.autoReboot !== false;
+    if (autoReboot && !normalizeThreadKernelRebootConfirmation(payload.confirmReboot || payload.rebootConfirmation)) {
+      const error = new Error(`Type ${THREAD_KERNEL_REBOOT_CONFIRMATION} to let HomeBrain reboot after the kernel installs.`);
+      error.status = 400;
+      throw error;
+    }
+    if (!fs.existsSync(THREAD_KERNEL_HELPER_PATH)) {
+      const error = new Error('The HomeBrain Thread kernel helper has not been installed on this host yet. Run setup-services refresh-privileges first.');
+      error.status = 503;
+      throw error;
+    }
+    if (this.activeThreadKernelJobId) {
+      const active = this.threadKernelJobs.get(this.activeThreadKernelJobId);
+      if (active && THREAD_KERNEL_ACTIVE_STATUSES.has(active.status)) {
+        const error = new Error('A Thread kernel rebuild is already running.');
+        error.status = 409;
+        throw error;
+      }
+    }
+
+    const config = await this.loadConfig();
+    const networkName = normalizeString(payload.networkName || config.thread?.networkName) || 'HomeBrain Thread';
+    const job = this.createThreadKernelJob({
+      autoReboot,
+      enableFullOtbrAfterReboot: payload.enableFullOtbrAfterReboot !== false,
+      networkName
+    });
+    await this.persistThreadKernelJob(job);
+    if (job.enableFullOtbrAfterReboot) {
+      await this.writeThreadKernelPostRebootMarker({
+        sourceJobId: job.id,
+        networkName
+      });
+    }
+
+    setImmediate(() => {
+      this.runThreadKernelRebuildJob(job, payload).catch((error) => {
+        this.updateThreadKernelJob(job, {
+          status: 'failed',
+          phase: 'failed',
+          error: error.message,
+          finishedAt: new Date().toISOString()
+        }).catch(() => {});
+        this.activeThreadKernelJobId = null;
+        if (job.enableFullOtbrAfterReboot) {
+          this.clearThreadKernelPostRebootMarker().catch(() => {});
+        }
+      });
+    });
+
+    return this.serializeThreadKernelJob(job);
+  }
+
+  async runThreadKernelRebuildJob(job, payload = {}) {
+    await this.updateThreadKernelJob(job, { status: 'preparing', phase: 'preparing' });
+
+    const args = [
+      '-n',
+      THREAD_KERNEL_HELPER_PATH,
+      'apply',
+      '--confirm',
+      THREAD_KERNEL_CONFIRMATION
+    ];
+    if (job.autoReboot) {
+      args.push('--auto-reboot', '--reboot-confirm', THREAD_KERNEL_REBOOT_CONFIRMATION);
+    }
+    const jobs = toNumber(payload.jobs);
+    if (jobs && jobs > 0) {
+      args.push('--jobs', String(Math.round(jobs)));
+    }
+    if (payload.forceSources === true) {
+      args.push('--force-sources');
+    }
+
+    job.commandPreview = args.join(' ');
+    await this.updateThreadKernelJob(job, {
+      status: 'building',
+      phase: 'building-and-installing-kernel',
+      commandPreview: job.commandPreview
+    });
+
+    await new Promise((resolve, reject) => {
+      const child = spawn('sudo', args, {
+        cwd: path.dirname(THREAD_KERNEL_HELPER_PATH),
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+      const timer = setTimeout(() => {
+        child.kill('SIGTERM');
+        reject(new Error(`Thread kernel helper timed out after ${Math.round(THREAD_KERNEL_BUILD_TIMEOUT_MS / 60000)} minutes`));
+      }, THREAD_KERNEL_BUILD_TIMEOUT_MS);
+
+      child.stdout.on('data', (chunk) => this.appendThreadKernelJobLog(job, 'stdout', chunk));
+      child.stderr.on('data', (chunk) => this.appendThreadKernelJobLog(job, 'stderr', chunk));
+      child.on('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.on('close', (code, signal) => {
+        clearTimeout(timer);
+        if (code === 0) {
+          resolve();
+          return;
+        }
+        reject(new Error(`Thread kernel helper exited with ${signal || `code ${code}`}`));
+      });
+    });
+
+    const status = await this.getThreadKernelStatus({ includeLogs: false, forceRefresh: true });
+    await this.updateThreadKernelJob(job, {
+      status: 'completed',
+      phase: job.autoReboot ? 'completed-reboot-scheduled' : 'completed-reboot-required',
+      finishedAt: new Date().toISOString(),
+      error: null,
+      result: status
+    });
+    this.activeThreadKernelJobId = null;
+    this.lastThreadStatus = null;
+  }
+
+  createThreadOtbrJob({ devicePath, baudRate, networkName, backboneRouterMode }) {
     const id = `thread-otbr-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
     const now = new Date().toISOString();
     const job = {
@@ -1465,6 +1952,7 @@ class MatterService {
       baudRate,
       radioUrl: buildOtbrRadioUrl(devicePath, baudRate),
       networkName,
+      backboneRouterMode: normalizeThreadBackboneRouterMode(backboneRouterMode),
       logs: [],
       result: null
     };
@@ -1489,6 +1977,7 @@ class MatterService {
       baudRate: job.baudRate,
       radioUrl: job.radioUrl,
       networkName: job.networkName,
+      backboneRouterMode: job.backboneRouterMode,
       result: job.result,
       logs: options.includeLogs === false ? [] : job.logs.slice(-THREAD_OTBR_LOG_LIMIT)
     };
@@ -1548,7 +2037,8 @@ class MatterService {
     const latestFirmware = threadStatus?.firmwareFlash?.latestFirmware?.firmware;
     const baudRate = normalizeThreadBaudRate(payload.baudRate || latestFirmware?.baudRate || '460800');
     const networkName = normalizeString(payload.networkName || config.thread?.networkName) || 'HomeBrain Thread';
-    const job = this.createThreadOtbrJob({ devicePath, baudRate, networkName });
+    const backboneRouterMode = normalizeThreadBackboneRouterMode(payload.backboneRouterMode || payload.bbrMode);
+    const job = this.createThreadOtbrJob({ devicePath, baudRate, networkName, backboneRouterMode });
 
     void this.runThreadBorderRouterJob(job).catch((error) => {
       this.updateThreadOtbrJob(job, {
@@ -1584,7 +2074,11 @@ class MatterService {
 
       const child = spawn('sudo', args, {
         cwd: path.dirname(THREAD_OTBR_HELPER_PATH),
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: {
+          ...process.env,
+          HOMEBRAIN_OTBR_BACKBONE_ROUTER: job.backboneRouterMode || 'auto'
+        }
       });
       const timer = setTimeout(() => {
         child.kill('SIGTERM');
@@ -2218,6 +2712,9 @@ class MatterService {
       includeLogs: false,
       selectedPort
     });
+    const threadKernel = await this.getThreadKernelStatus({
+      includeLogs: false
+    });
     const otbr = await this.checkOtbrRest(config.otbrRestUrl);
     const activeDataset = resolveThreadActiveDataset({
       configuredDataset: config.thread?.operationalDataset,
@@ -2229,6 +2726,7 @@ class MatterService {
       selectedPort,
       otbr,
       otbrHost,
+      threadKernel,
       activeDataset: activeDataset.dataset,
       firmwareFlash
     });
@@ -2251,6 +2749,7 @@ class MatterService {
         state: otbrHost.state || ''
       },
       otbrHost,
+      kernel: threadKernel,
       readyForThreadCommissioning: Boolean(expectedPorts.length > 0 && activeDataset.dataset && otbr.online && otbrAttached),
       setup,
       firmwareFlash,
@@ -3202,6 +3701,8 @@ class MatterService {
         'Automatic latest SONOFF OpenThread firmware selection',
         'Admin-confirmed SONOFF MG24 OpenThread RCP firmware flashing',
         'Thread credentials through OpenThread Border Router',
+        'Admin-confirmed Jetson kernel rebuild for full Thread Backbone Router support',
+        'Safe OTBR no-BBR fallback when NVIDIA kernel updates remove multicast routing support',
         'Wi-Fi credentials through BLE commissioning when Bluetooth is available'
       ]
     };
@@ -3226,8 +3727,12 @@ matterService._test = {
   isTrustedSonoffFirmwareUrl,
   looksLikeSonoffMg24Port,
   normalizePersistedThreadFirmwareFlashJob,
+  normalizePersistedThreadKernelJob,
+  normalizeThreadBackboneRouterMode,
   normalizeThreadBaudRate,
   normalizeThreadFirmwareFlashConfirmation,
+  normalizeThreadKernelConfirmation,
+  normalizeThreadKernelRebootConfirmation,
   normalizeThreadOtbrConfirmation,
   normalizeThreadOtbrState,
   normalizeSerialPort,

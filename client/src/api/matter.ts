@@ -28,6 +28,15 @@ export type MatterThreadOtbrStartPayload = {
   confirmOtbr: string;
   networkName?: string;
   baudRate?: string;
+  backboneRouterMode?: 'auto' | 'full' | 'no-bbr';
+};
+
+export type MatterThreadKernelRebuildPayload = {
+  confirmKernel: string;
+  confirmReboot: string;
+  autoReboot?: boolean;
+  enableFullOtbrAfterReboot?: boolean;
+  networkName?: string;
 };
 
 const apiErrorMessage = (error: any, fallback: string) => (
@@ -71,6 +80,16 @@ export const getMatterThreadOtbrStatus = async () => {
   } catch (error) {
     console.error('Error fetching Thread OTBR status:', error);
     throw new Error(apiErrorMessage(error, 'Failed to load Thread border router status'));
+  }
+};
+
+export const getMatterThreadKernelStatus = async () => {
+  try {
+    const response = await api.get('/api/matter/thread/kernel/status');
+    return response.data;
+  } catch (error) {
+    console.error('Error fetching Thread kernel status:', error);
+    throw new Error(apiErrorMessage(error, 'Failed to load Thread kernel status'));
   }
 };
 
@@ -121,5 +140,15 @@ export const startMatterThreadOtbr = async (payload: MatterThreadOtbrStartPayloa
   } catch (error) {
     console.error('Error starting Thread border router:', error);
     throw new Error(apiErrorMessage(error, 'Failed to start Thread border router'));
+  }
+};
+
+export const startMatterThreadKernelRebuild = async (payload: MatterThreadKernelRebuildPayload) => {
+  try {
+    const response = await api.post('/api/matter/thread/kernel/rebuild', payload);
+    return response.data;
+  } catch (error) {
+    console.error('Error starting Thread kernel rebuild:', error);
+    throw new Error(apiErrorMessage(error, 'Failed to start Thread kernel rebuild'));
   }
 };

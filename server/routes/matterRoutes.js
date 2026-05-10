@@ -103,6 +103,31 @@ router.post('/thread/otbr/start', async (req, res) => {
   }
 });
 
+router.get('/thread/kernel/status', async (_req, res) => {
+  try {
+    const status = await matterService.getThreadKernelStatus();
+    res.status(200).json({
+      success: true,
+      status
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to get Thread kernel status');
+  }
+});
+
+router.post('/thread/kernel/rebuild', async (req, res) => {
+  try {
+    const job = await matterService.startThreadKernelRebuild(req.body || {});
+    res.status(202).json({
+      success: true,
+      job,
+      status: await matterService.getThreadKernelStatus()
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to start Thread kernel rebuild');
+  }
+});
+
 router.get('/devices', async (_req, res) => {
   try {
     const devices = await matterService.listMatterDevices();

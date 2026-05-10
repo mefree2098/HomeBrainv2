@@ -129,6 +129,14 @@ test('Matter service guards Thread firmware flashing inputs and command construc
   assert.equal(matterService._test.normalizeThreadOtbrConfirmation('START THREAD BORDER ROUTER'), true);
   assert.equal(matterService._test.normalizeThreadOtbrConfirmation('start thread border router'), true);
   assert.equal(matterService._test.normalizeThreadOtbrConfirmation('START ZIGBEE'), false);
+  assert.equal(matterService._test.normalizeThreadKernelConfirmation('REBUILD JETSON KERNEL FOR FULL THREAD'), true);
+  assert.equal(matterService._test.normalizeThreadKernelConfirmation('rebuild jetson kernel for full thread'), true);
+  assert.equal(matterService._test.normalizeThreadKernelConfirmation('REBUILD LINUX'), false);
+  assert.equal(matterService._test.normalizeThreadKernelRebootConfirmation('REBOOT JETSON AFTER KERNEL INSTALL'), true);
+  assert.equal(matterService._test.normalizeThreadKernelRebootConfirmation('reboot jetson after kernel install'), true);
+  assert.equal(matterService._test.normalizeThreadBackboneRouterMode('full'), 'full');
+  assert.equal(matterService._test.normalizeThreadBackboneRouterMode('disabled'), 'no-bbr');
+  assert.equal(matterService._test.normalizeThreadBackboneRouterMode('whatever'), 'auto');
 
   assert.equal(matterService._test.sanitizeFirmwareFileName('../OpenThread RCP.gbl'), 'OpenThread_RCP.gbl');
   assert.throws(
@@ -350,6 +358,69 @@ test('Matter Thread setup guidance surfaces no-BBR host fallback', () => {
 
   assert.equal(backboneAction.status, 'limited');
   assert.match(backboneAction.detail, /without Thread 1\.2 Backbone Router/);
+});
+
+test('Matter Thread setup guidance advertises kernel rebuild path for full Backbone Router support', () => {
+  const port = {
+    path: '/dev/serial/by-id/usb-SONOFF_MG24',
+    stablePath: '/dev/serial/by-id/usb-SONOFF_MG24'
+  };
+  const guidance = matterService._test.buildThreadSetupGuidance({
+    expectedPorts: [port],
+    selectedPort: port,
+    otbr: {
+      online: true,
+      dataset: '0e080000000000010000',
+      baseUrl: 'http://127.0.0.1:8081'
+    },
+    otbrHost: {
+      state: 'leader',
+      ipv6Mroute: 'unsupported',
+      backboneRouterMode: 'no-bbr'
+    },
+    threadKernel: {
+      kernelSupportsFullThread: false,
+      needsRebuild: true
+    },
+    activeDataset: '0e080000000000010000',
+    firmwareFlash: {
+      tool: {
+        available: true,
+        canAutoInstall: true
+      }
+    }
+  });
+
+  const backboneAction = guidance.actions.find((action) => action.id === 'host-backbone-router');
+
+  assert.equal(backboneAction.status, 'limited');
+  assert.match(backboneAction.detail, /rebuild a custom Thread kernel/);
+  assert.equal(guidance.kernel.serverSideConfirmation, 'REBUILD JETSON KERNEL FOR FULL THREAD');
+  assert.equal(guidance.kernel.rebootConfirmation, 'REBOOT JETSON AFTER KERNEL INSTALL');
+});
+
+test('persisted Thread kernel jobs are normalized for restart-safe status checks', () => {
+  const completed = matterService._test.normalizePersistedThreadKernelJob({
+    id: 'thread-kernel-test',
+    status: 'completed',
+    phase: 'completed-reboot-scheduled',
+    createdAt: '2026-05-10T18:00:00.000Z',
+    autoReboot: true,
+    enableFullOtbrAfterReboot: true,
+    networkName: 'HomeBrain Thread',
+    logs: Array.from({ length: 650 }, (_, index) => ({ line: `line ${index}` }))
+  });
+
+  assert.equal(completed.id, 'thread-kernel-test');
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.autoReboot, true);
+  assert.equal(completed.enableFullOtbrAfterReboot, true);
+  assert.equal(completed.logs.length, 500);
+
+  const missingId = matterService._test.normalizePersistedThreadKernelJob({
+    status: 'completed'
+  });
+  assert.equal(missingId, null);
 });
 
 test('persisted Thread flash jobs are normalized for restart-safe status checks', () => {
