@@ -236,28 +236,48 @@ file_sha256() {
   fi
 }
 
-pending_reboot_json() {
-  if [[ -r "${PENDING_REBOOT_FILE}" ]]; then
-    tr -d '\n' <"${PENDING_REBOOT_FILE}"
-  else
+json_file_or_null() {
+  local target="${1:-}"
+  if [[ ! -s "${target}" ]]; then
     printf 'null'
+    return
   fi
+
+  if command_exists python3; then
+    JSON_FILE="${target}" python3 - <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+path = Path(os.environ["JSON_FILE"])
+try:
+    payload = json.loads(path.read_text(errors="ignore"))
+except Exception:
+    print("null")
+    raise SystemExit(0)
+
+if payload is None:
+    print("null")
+else:
+    print(json.dumps(payload, separators=(",", ":")))
+PY
+    return
+  fi
+
+  tr -d '\n' <"${target}"
+}
+
+pending_reboot_json() {
+  json_file_or_null "${PENDING_REBOOT_FILE}"
 }
 
 last_result_json() {
-  if [[ -r "${LAST_RESULT_FILE}" ]]; then
-    tr -d '\n' <"${LAST_RESULT_FILE}"
-  else
-    printf 'null'
-  fi
+  json_file_or_null "${LAST_RESULT_FILE}"
 }
 
 validation_json() {
-  if [[ -r "${VALIDATION_FILE}" ]]; then
-    tr -d '\n' <"${VALIDATION_FILE}"
-  else
-    printf 'null'
-  fi
+  json_file_or_null "${VALIDATION_FILE}"
 }
 
 print_status_json() {
@@ -557,9 +577,10 @@ PY
 
 run_preflight_validation() {
   mkdir -p "${STATE_DIR}"
-  local validation status
+  local validation status stderr_file stderr_text fallback_detail
+  stderr_file="$(mktemp "${STATE_DIR}/preflight-stderr.XXXXXX" 2>/dev/null || mktemp)"
   set +e
-  validation="$(EXTLINUX_CONF="${EXTLINUX_CONF}" CUSTOM_LABEL="${CUSTOM_LABEL}" CUSTOM_IMAGE="${CUSTOM_IMAGE}" CUSTOM_INITRD="${CUSTOM_INITRD}" CUSTOM_CONFIG="${CUSTOM_CONFIG}" KERNEL_RELEASE_FILE="${KERNEL_RELEASE_FILE}" KERNEL_SRC="${KERNEL_SRC}" REQUIRED_CONFIGS="$(IFS=,; echo "${THREAD_KERNEL_CONFIGS[*]}")" python3 - <<'PY'
+  validation="$(EXTLINUX_CONF="${EXTLINUX_CONF}" CUSTOM_LABEL="${CUSTOM_LABEL}" CUSTOM_IMAGE="${CUSTOM_IMAGE}" CUSTOM_INITRD="${CUSTOM_INITRD}" CUSTOM_CONFIG="${CUSTOM_CONFIG}" KERNEL_RELEASE_FILE="${KERNEL_RELEASE_FILE}" KERNEL_SRC="${KERNEL_SRC}" REQUIRED_CONFIGS="$(IFS=,; echo "${THREAD_KERNEL_CONFIGS[*]}")" python3 - 2>"${stderr_file}" <<'PY'
 import json
 import os
 import re
@@ -715,6 +736,16 @@ PY
 )"
   status=$?
   set -e
+  stderr_text="$(tr -d '\r' <"${stderr_file}" 2>/dev/null || true)"
+  rm -f "${stderr_file}"
+  if [[ -z "${validation}" ]]; then
+    fallback_detail="${stderr_text:-preflight produced no output}"
+    validation="$(printf '{"ok":false,"checkedAt":"%s","error":"%s","checks":[{"name":"preflight helper returned validation details","ok":false,"detail":"%s"}],"warnings":[]}\n' \
+      "$(now_iso)" \
+      "$(json_escape "${fallback_detail}")" \
+      "$(json_escape "${fallback_detail}")")"
+    status=1
+  fi
   printf '%s\n' "${validation:-{\"ok\":false,\"error\":\"preflight produced no output\"}}" >"${VALIDATION_FILE}"
   printf '%s\n' "${validation:-{\"ok\":false,\"error\":\"preflight produced no output\"}}"
   return "${status}"

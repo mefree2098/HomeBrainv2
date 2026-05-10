@@ -47,6 +47,8 @@ test('Thread kernel helper validates the custom kernel before scheduling reboot'
   assert.match(script, /custom kernel config enables Thread multicast routing/);
   assert.match(script, /matching modules directory exists/);
   assert.match(script, /stock boot fallback label remains available/);
+  assert.match(script, /json_file_or_null/);
+  assert.match(script, /preflight helper returned validation details/);
   assert.match(script, /validate\|preflight/);
   assert.match(script, /run_preflight_validation[\s\S]+mark_pending_reboot/);
   assert.doesNotMatch(script, /^\s+path\.write_text/m);

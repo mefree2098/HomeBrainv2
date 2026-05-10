@@ -934,6 +934,58 @@ function parseJsonObject(value) {
   }
 }
 
+function parseJsonObjectFromOutput(value) {
+  const normalized = normalizeString(value);
+  const direct = parseJsonObject(normalized);
+  if (direct) {
+    return direct;
+  }
+
+  const start = normalized.indexOf('{');
+  const end = normalized.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    return parseJsonObject(normalized.slice(start, end + 1));
+  }
+
+  return null;
+}
+
+function truncateDiagnostic(value, maxLength = 4000) {
+  const normalized = normalizeString(value);
+  if (!normalized || normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength)}...`;
+}
+
+function buildThreadKernelValidationFallback(probe = {}) {
+  const detail = normalizeString(probe.stderr || probe.error)
+    || (probe.signal ? `Thread kernel helper exited with signal ${probe.signal}` : '')
+    || (probe.status !== null && probe.status !== undefined ? `Thread kernel helper exited with status ${probe.status}` : '')
+    || 'Thread kernel preflight did not return validation details.';
+
+  return {
+    ok: false,
+    checkedAt: new Date().toISOString(),
+    error: detail,
+    checks: [
+      {
+        name: 'preflight helper returned validation details',
+        ok: false,
+        detail
+      }
+    ],
+    warnings: [],
+    diagnostics: {
+      helperExitStatus: probe.status ?? null,
+      helperSignal: probe.signal || null,
+      stderr: truncateDiagnostic(probe.stderr),
+      stdout: truncateDiagnostic(probe.stdout),
+      error: truncateDiagnostic(probe.error)
+    }
+  };
+}
+
 function findCompletedThreadFirmwareFlash(firmwareFlash = {}, selectedPath = '') {
   const selected = normalizeString(selectedPath);
   const jobs = Array.isArray(firmwareFlash?.recentJobs) ? firmwareFlash.recentJobs : [];
@@ -1473,7 +1525,7 @@ class MatterService {
     const helperProbe = helperAvailable
       ? runSync('sudo', ['-n', THREAD_OTBR_HELPER_PATH, 'status'], { timeout: 25_000 })
       : null;
-    const helperStatus = parseJsonObject(helperProbe?.stdout || '');
+    const helperStatus = parseJsonObjectFromOutput(helperProbe?.stdout || '');
     const serviceActive = normalizeString(helperStatus?.active) || systemctlValue(['is-active', 'otbr-agent']);
     const serviceEnabled = normalizeString(helperStatus?.enabled) || systemctlValue(['is-enabled', 'otbr-agent']);
     const mainPid = normalizeString(helperStatus?.mainPid) || systemctlValue(['show', '-p', 'MainPID', '--value', 'otbr-agent']);
@@ -1744,7 +1796,7 @@ class MatterService {
     const helperProbe = helperAvailable
       ? runSync('sudo', ['-n', THREAD_KERNEL_HELPER_PATH, 'status'], { timeout: 30_000 })
       : null;
-    const helperStatus = parseJsonObject(helperProbe?.stdout || '');
+    const helperStatus = parseJsonObjectFromOutput(helperProbe?.stdout || '');
     const postRebootAction = await this.readThreadKernelPostRebootMarker();
     const needsRebuild = helperStatus
       ? Boolean(helperStatus.needsRebuild)
@@ -1798,17 +1850,24 @@ class MatterService {
     }
 
     const probe = runSync('sudo', ['-n', THREAD_KERNEL_HELPER_PATH, 'validate'], { timeout: 60_000 });
-    const validation = parseJsonObject(probe.stdout || '');
+    const validation = parseJsonObjectFromOutput(probe.stdout || '');
+    const status = await this.getThreadKernelStatus({ includeLogs: false, forceRefresh: true });
     if (!validation) {
-      const error = new Error(normalizeString(probe.stderr || probe.error) || 'Thread kernel preflight did not return validation details.');
-      error.status = 502;
-      throw error;
+      const fallbackValidation = buildThreadKernelValidationFallback(probe);
+      return {
+        success: false,
+        validation: fallbackValidation,
+        status: {
+          ...status,
+          validation: fallbackValidation
+        }
+      };
     }
 
     return {
       success: Boolean(validation.ok),
       validation,
-      status: await this.getThreadKernelStatus({ includeLogs: false, forceRefresh: true })
+      status
     };
   }
 
@@ -3762,6 +3821,7 @@ matterService._test = {
   normalizeOtbrRestUrl,
   normalizeTransport,
   normalizeSonoffFirmwareEntry,
+  parseJsonObjectFromOutput,
   parseHexDatasetFromText,
   parseKnownAddress,
   resolveThreadActiveDataset,
