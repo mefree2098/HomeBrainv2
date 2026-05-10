@@ -56,6 +56,25 @@ const describeKernelPreflight = (validation: any, fallback: string) => {
   return fallback
 }
 
+const kernelPreflightShowsMissingInstall = (validation: any, status?: any) => {
+  if (!validation || typeof validation !== "object" || validation.ok !== false) {
+    return false
+  }
+
+  const hasRecordedImage = Boolean(
+    status?.boot?.customImageSha256
+    || (typeof validation.customImageBytes === "number" && validation.customImageBytes > 0)
+  )
+  if (hasRecordedImage) {
+    return false
+  }
+
+  const checks = Array.isArray(validation.checks) ? validation.checks : []
+  return checks.some((check: any) => (
+    check?.name === "custom kernel image exists" && check.ok === false
+  ))
+}
+
 export function MatterThreadIntegrationCard() {
   const { isAdmin } = useAuth()
   const { toast } = useToast()
@@ -333,12 +352,19 @@ export function MatterThreadIntegrationCard() {
     try {
       const response = await validateMatterThreadKernelPreflight()
       setMatterKernelStatus(response?.status || matterKernelStatus)
+      const missingInstall = kernelPreflightShowsMissingInstall(response?.validation, response?.status)
       toast({
-        title: response?.success ? "Kernel preflight passed" : "Kernel preflight failed",
+        title: response?.success
+          ? "Kernel preflight passed"
+          : missingInstall
+            ? "Custom kernel not installed yet"
+            : "Kernel preflight failed",
         description: response?.success
           ? "The custom kernel image, modules, config, and boot entry passed validation."
-          : describeKernelPreflight(response?.validation, "HomeBrain found a kernel install issue. Reboot is not safe until it is fixed."),
-        variant: response?.success ? "default" : "destructive"
+          : missingInstall
+            ? "This is expected before the rebuild. HomeBrain will create the kernel image and run this validation again before scheduling a reboot."
+            : describeKernelPreflight(response?.validation, "HomeBrain found a kernel install issue. Reboot is not safe until it is fixed."),
+        variant: response?.success || missingInstall ? "default" : "destructive"
       })
       await loadMatterController()
     } catch (error: any) {
@@ -435,6 +461,15 @@ export function MatterThreadIntegrationCard() {
   const kernelPendingReboot = Boolean(kernelStatus?.pendingReboot)
   const kernelValidation = kernelStatus?.validation
   const kernelValidationChecks = Array.isArray(kernelValidation?.checks) ? kernelValidation.checks : []
+  const customKernelInstalled = Boolean(
+    kernelSupportsFullThread
+    || kernelPendingReboot
+    || kernelStatus?.boot?.customImageSha256
+    || (typeof kernelValidation?.customImageBytes === "number" && kernelValidation.customImageBytes > 0)
+    || recentKernelJobs.some((job: any) => job?.status === "completed" || job?.result?.pendingReboot)
+  )
+  const kernelValidationMissingInstall = kernelPreflightShowsMissingInstall(kernelValidation, kernelStatus)
+  const canValidateKernelInstall = Boolean(kernelStatus?.helperAvailable && customKernelInstalled)
   const canRebuildKernel = Boolean(kernelStatus?.helperAvailable && kernelStatus?.isJetsonOrin !== false)
   const otbrConfirmationPhrase = otbrHost?.confirmationPhrase || thread?.setup?.otbr?.serverSideConfirmation || "START THREAD BORDER ROUTER"
   const otbrConfirmationMatches = matterOtbrConfirm.trim().toUpperCase() === otbrConfirmationPhrase.trim().toUpperCase()
@@ -885,9 +920,13 @@ export function MatterThreadIntegrationCard() {
                 <div>
                   <p className="font-semibold text-foreground">Pre-reboot kernel validation</p>
                   <p className="text-muted-foreground">
-                    {kernelValidation
-                      ? `${kernelValidation.ok ? "Passed" : "Failed"} ${kernelValidation.checkedAt ? `at ${new Date(kernelValidation.checkedAt).toLocaleString()}` : ""}`
-                      : "No custom kernel preflight has been recorded yet."}
+                    {kernelValidationMissingInstall
+                      ? "No custom kernel is installed yet; rebuild will validate before reboot."
+                      : kernelValidation
+                        ? `${kernelValidation.ok ? "Passed" : "Failed"} ${kernelValidation.checkedAt ? `at ${new Date(kernelValidation.checkedAt).toLocaleString()}` : ""}`
+                        : customKernelInstalled
+                          ? "No custom kernel preflight has been recorded yet."
+                          : "No custom kernel is installed yet; rebuild will run preflight automatically before reboot."}
                   </p>
                 </div>
                 <Button
@@ -895,11 +934,11 @@ export function MatterThreadIntegrationCard() {
                   variant="outline"
                   size="sm"
                   className="h-8 rounded-full px-3 text-xs"
-                  disabled={matterKernelValidating || !kernelStatus?.helperAvailable}
+                  disabled={matterKernelValidating || !canValidateKernelInstall}
                   onClick={() => void handleMatterThreadKernelPreflight()}
                 >
                   {matterKernelValidating ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <ShieldAlert className="mr-2 h-3.5 w-3.5" />}
-                  Run Preflight
+                  Validate Install
                 </Button>
               </div>
               {kernelValidationChecks.length > 0 ? (
@@ -912,8 +951,8 @@ export function MatterThreadIntegrationCard() {
                           <span className="mt-0.5 block truncate text-[0.68rem] text-amber-700 dark:text-amber-200">{check.detail.trim()}</span>
                         ) : null}
                       </span>
-                      <Badge variant={check.ok ? "default" : "destructive"} className="rounded-full text-[0.65rem]">
-                        {check.ok ? "ok" : "fix"}
+                      <Badge variant={check.ok ? "default" : kernelValidationMissingInstall ? "secondary" : "destructive"} className="rounded-full text-[0.65rem]">
+                        {check.ok ? "ok" : kernelValidationMissingInstall ? "needed" : "fix"}
                       </Badge>
                     </div>
                   ))}
