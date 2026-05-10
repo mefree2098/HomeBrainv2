@@ -201,9 +201,37 @@ test('Matter service guards Thread firmware flashing inputs and command construc
       source: 'otbr-host'
     }
   );
+  assert.equal(
+    matterService._test.matterControllerStoreMayContainPairedNodes([
+      'root.commissioning.passcode',
+      'fabrics.fabrics'
+    ]),
+    false
+  );
+  assert.equal(
+    matterService._test.matterControllerStoreMayContainPairedNodes([
+      'peers.1234.commissioningClient.peerAddress'
+    ]),
+    true
+  );
   assert.throws(
     () => matterService._test.buildOtbrRadioUrl('/tmp/ttyUSB2', '460800'),
     /OTBR radio device must be a local/
+  );
+});
+
+test('Matter controller diagnostics preserve nested initialization failures', () => {
+  const cause = new Error('EADDRINUSE 5353');
+  cause.code = 'EADDRINUSE';
+  const error = new Error('MatterController unavailable due to initialization error', { cause });
+  const detail = matterService._test.serializeMatterControllerError(error);
+
+  assert.equal(detail.message, 'MatterController unavailable due to initialization error');
+  assert.equal(detail.cause.message, 'EADDRINUSE 5353');
+  assert.equal(detail.cause.code, 'EADDRINUSE');
+  assert.equal(
+    matterService._test.summarizeMatterControllerError(error),
+    'MatterController unavailable due to initialization error: EADDRINUSE 5353'
   );
 });
 
