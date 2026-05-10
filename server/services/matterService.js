@@ -1394,6 +1394,9 @@ class MatterService {
     const stateProbe = (!helperStatus && otCtlInstalled) ? runSync('bash', ['-lc', 'ot-ctl state 2>/dev/null || true'], { timeout: 7000 }) : null;
     const state = normalizeThreadOtbrState(helperStatus?.state || stateProbe?.stdout || '');
     const dataset = parseHexDatasetFromText(helperStatus?.dataset || datasetProbe?.stdout || '');
+    const mode = normalizeString(helperStatus?.mode || '');
+    const routerEligible = normalizeString(helperStatus?.routerEligible || '');
+    const version = normalizeString(helperStatus?.version || '');
 
     return {
       confirmationPhrase: THREAD_OTBR_CONFIRMATION,
@@ -1409,6 +1412,9 @@ class MatterService {
       state,
       attached: isThreadOtbrAttachedState(state),
       dataset,
+      mode,
+      routerEligible,
+      version,
       diagnostics: {
         helperStatusAvailable: Boolean(helperStatus),
         helperError: helperStatus ? null : normalizeString(helperProbe?.stderr || helperProbe?.error || ''),

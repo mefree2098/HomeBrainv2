@@ -248,6 +248,18 @@ read_state() {
   timeout 20s "${ot_ctl_bin}" state 2>/dev/null | tr -d '\r' | awk '/^(disabled|detached|child|router|leader)$/ {print; exit}' || true
 }
 
+read_ot_value() {
+  local ot_ctl_bin
+  ot_ctl_bin="$(resolve_ot_ctl)"
+  if [[ -z "${ot_ctl_bin}" ]]; then
+    return 0
+  fi
+  timeout 10s "${ot_ctl_bin}" "$@" 2>/dev/null \
+    | tr -d '\r' \
+    | sed '/^Done$/d' \
+    | head -n 12 || true
+}
+
 wait_for_ot_ctl() {
   local attempt state
   for attempt in $(seq 1 60); do
@@ -285,7 +297,14 @@ ensure_dataset() {
   printf '%s\n' "${dataset}" >"${STATE_DIR}/active-dataset.hex"
 }
 
+configure_router_mode() {
+  log "Ensuring OpenThread can form or join as a router."
+  ot_ctl mode rdn >/dev/null 2>&1 || true
+  ot_ctl routereligible enable >/dev/null 2>&1 || true
+}
+
 start_thread_network() {
+  configure_router_mode
   ot_ctl ifconfig up >/dev/null
   ot_ctl thread start >/dev/null
 
@@ -306,7 +325,7 @@ start_thread_network() {
 }
 
 print_status_json() {
-  local active enabled pid state dataset agent ctl status_text journal_text
+  local active enabled pid state dataset agent ctl mode router_eligible version status_text journal_text
   active="$(systemctl is-active "${SERVICE_NAME}" 2>/dev/null || true)"
   enabled="$(systemctl is-enabled "${SERVICE_NAME}" 2>/dev/null || true)"
   pid="$(systemctl show -p MainPID --value "${SERVICE_NAME}" 2>/dev/null || true)"
@@ -314,16 +333,24 @@ print_status_json() {
   dataset="$(read_dataset)"
   agent="$(resolve_otbr_agent)"
   ctl="$(resolve_ot_ctl)"
+  mode="$(read_ot_value mode)"
+  router_eligible="$(read_ot_value routereligible)"
+  version="$(read_ot_value version)"
   status_text="$(systemctl status "${SERVICE_NAME}" --no-pager --lines=20 2>&1 || true)"
-  journal_text="$(journalctl -u "${SERVICE_NAME}" -n 60 --no-pager 2>&1 || true)"
+  journal_text="$(journalctl -u "${SERVICE_NAME}" -n 240 --no-pager 2>&1 \
+    | grep -Ei 'fail|error|exited|killed|stop|start|restart|spinel|radio|attach|parent|leader|router|rloc|notfound|dropped|rejected|reset' \
+    | tail -n 140 || true)"
 
-  printf '{"success":true,"service":"%s","active":"%s","enabled":"%s","mainPid":"%s","state":"%s","dataset":"%s","otbrAgent":"%s","otCtl":"%s","restUrl":"http://127.0.0.1:%s","diagnostics":{"systemctl":"%s","journal":"%s"}}\n' \
+  printf '{"success":true,"service":"%s","active":"%s","enabled":"%s","mainPid":"%s","state":"%s","dataset":"%s","mode":"%s","routerEligible":"%s","version":"%s","otbrAgent":"%s","otCtl":"%s","restUrl":"http://127.0.0.1:%s","diagnostics":{"systemctl":"%s","journal":"%s"}}\n' \
     "$(json_escape "${SERVICE_NAME}")" \
     "$(json_escape "${active}")" \
     "$(json_escape "${enabled}")" \
     "$(json_escape "${pid}")" \
     "$(json_escape "${state}")" \
     "$(json_escape "${dataset}")" \
+    "$(json_escape "${mode}")" \
+    "$(json_escape "${router_eligible}")" \
+    "$(json_escape "${version}")" \
     "$(json_escape "${agent}")" \
     "$(json_escape "${ctl}")" \
     "$(json_escape "${REST_PORT}")" \
