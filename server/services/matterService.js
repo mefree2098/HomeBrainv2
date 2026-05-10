@@ -941,10 +941,39 @@ function parseJsonObjectFromOutput(value) {
     return direct;
   }
 
-  const start = normalized.indexOf('{');
-  const end = normalized.lastIndexOf('}');
-  if (start >= 0 && end > start) {
-    return parseJsonObject(normalized.slice(start, end + 1));
+  for (let start = normalized.indexOf('{'); start >= 0; start = normalized.indexOf('{', start + 1)) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let index = start; index < normalized.length; index += 1) {
+      const char = normalized[index];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === '\\') {
+          escaped = true;
+        } else if (char === '"') {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === '"') {
+        inString = true;
+      } else if (char === '{') {
+        depth += 1;
+      } else if (char === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          const parsed = parseJsonObject(normalized.slice(start, index + 1));
+          if (parsed) {
+            return parsed;
+          }
+          break;
+        }
+      }
+    }
   }
 
   return null;
