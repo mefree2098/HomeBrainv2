@@ -333,6 +333,61 @@ const SettingsSchema = new mongoose.Schema({
     enum: ['manual', 'scheduled', ''],
     default: ''
   },
+  smbBackupShareUrl: {
+    type: String,
+    default: ''
+  },
+  smbBackupRemoteDirectory: {
+    type: String,
+    default: 'HomeBrain'
+  },
+  smbBackupUsername: {
+    type: String,
+    default: ''
+  },
+  smbBackupPassword: {
+    type: String,
+    default: ''
+  },
+  smbBackupDomain: {
+    type: String,
+    default: ''
+  },
+  smbBackupScheduleEnabled: {
+    type: Boolean,
+    default: false
+  },
+  smbBackupScheduleTime: {
+    type: String,
+    default: '02:30'
+  },
+  smbBackupRetentionCount: {
+    type: Number,
+    min: 1,
+    max: 30,
+    default: 3
+  },
+  smbBackupScheduleNextRunAt: {
+    type: Date,
+    default: null
+  },
+  smbBackupScheduleLastTriggeredAt: {
+    type: Date,
+    default: null
+  },
+  smbBackupScheduleLastCompletedAt: {
+    type: Date,
+    default: null
+  },
+  smbBackupScheduleLastStatus: {
+    type: String,
+    enum: ['', 'queued', 'completed', 'failed'],
+    default: ''
+  },
+  smbBackupScheduleLastError: {
+    type: String,
+    default: ''
+  },
   
   // Metadata
   lastModified: {
@@ -474,6 +529,10 @@ SettingsSchema.methods.toSanitized = function() {
   sanitized.hardwareOrbWifiPasswordConfigured = Boolean(sanitized.hardwareOrbWifiPassword);
   if (sanitized.hardwareOrbWifiPassword) {
     sanitized.hardwareOrbWifiPassword = '********';
+  }
+  sanitized.smbBackupPasswordConfigured = Boolean(sanitized.smbBackupPassword);
+  if (sanitized.smbBackupPassword) {
+    sanitized.smbBackupPassword = '********';
   }
   delete sanitized.harmonyKnownHubs;
   delete sanitized.voiceRegion;

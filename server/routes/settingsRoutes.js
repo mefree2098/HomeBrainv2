@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const settingsService = require('../services/settingsService');
 const deviceRestartService = require('../services/deviceRestartService');
+const smbBackupSchedulerService = require('../services/smbBackupSchedulerService');
 const { testOpenAIModelCompatibility } = require('../services/llmService');
 const {
   completeCodexLogin,
@@ -74,6 +75,7 @@ router.put('/', auth, async (req, res) => {
     
     const settings = await settingsService.updateSettings(req.body);
     await deviceRestartService.configureFromSettings(settings);
+    await smbBackupSchedulerService.configureFromSettings(settings);
     const sanitizedSettings = settings.toSanitized();
     
     console.log('Successfully updated application settings');

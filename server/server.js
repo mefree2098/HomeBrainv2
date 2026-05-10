@@ -69,6 +69,7 @@ const rainMachineService = require("./services/rainMachineService");
 const senseService = require("./services/senseService");
 const platformDeployService = require("./services/platformDeployService");
 const deviceRestartService = require("./services/deviceRestartService");
+const smbBackupSchedulerService = require("./services/smbBackupSchedulerService");
 const smartThingsService = require("./services/smartThingsService");
 const ecobeeService = require("./services/ecobeeService");
 const axiomIngressSyncService = require("./services/axiomIngressSyncService");
@@ -327,6 +328,13 @@ void dbReady
       console.log('Device restart scheduler initialized successfully');
     } catch (error) {
       console.warn(`Device restart scheduler startup failed: ${error.message}`);
+    }
+
+    try {
+      await smbBackupSchedulerService.initialize();
+      console.log('SMB backup scheduler initialized successfully');
+    } catch (error) {
+      console.warn(`SMB backup scheduler startup failed: ${error.message}`);
     }
   })
   .catch((error) => {
@@ -730,6 +738,12 @@ async function gracefulShutdown(signal) {
     deviceRestartService.stop();
   } catch (error) {
     console.error('Error stopping device restart scheduler:', error.message);
+  }
+
+  try {
+    smbBackupSchedulerService.stop();
+  } catch (error) {
+    console.error('Error stopping SMB backup scheduler:', error.message);
   }
 
   try {

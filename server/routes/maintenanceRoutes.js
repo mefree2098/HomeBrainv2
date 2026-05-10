@@ -468,6 +468,34 @@ router.get('/backup/latest', async (_req, res) => {
   }
 });
 
+router.get('/backup/smb/schedule', async (_req, res) => {
+  try {
+    const status = await maintenanceService.getSmbBackupScheduleStatus();
+    return res.status(200).json(status);
+  } catch (error) {
+    console.error('MaintenanceRoutes: Error fetching SMB backup schedule status:', error.message);
+    console.error(error.stack);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch SMB backup schedule status'
+    });
+  }
+});
+
+router.post('/backup/smb/test', async (req, res) => {
+  try {
+    const result = await maintenanceService.testSmbDisasterRecoveryBackup(req.body || {});
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('MaintenanceRoutes: Error testing SMB backup target:', error.message);
+    console.error(error.stack);
+    return res.status(error.status || 500).json({
+      success: false,
+      error: error.message || 'Failed to test SMB backup target'
+    });
+  }
+});
+
 router.post('/backup/smb', async (req, res) => {
   try {
     const actor = req.user?.email || req.user?._id || 'unknown';

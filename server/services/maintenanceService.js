@@ -16,6 +16,7 @@ const smartThingsService = require('./smartThingsService');
 const harmonyService = require('./harmonyService');
 const insteonService = require('./insteonService');
 const systemBackupService = require('./systemBackupService');
+const smbBackupSchedulerService = require('./smbBackupSchedulerService');
 const { getDataRetentionDays } = require('../config/dataRetention');
 const {
   buildSmartThingsDeviceIdentityQuery,
@@ -1539,6 +1540,22 @@ class MaintenanceService {
       console.error(error.stack);
       throw error;
     }
+  }
+
+  async testSmbDisasterRecoveryBackup(options = {}) {
+    console.log('MaintenanceService: Testing SMB disaster recovery backup target');
+
+    try {
+      return await systemBackupService.testSmbConnection(options);
+    } catch (error) {
+      console.error('MaintenanceService: Error testing SMB backup target:', error.message);
+      console.error(error.stack);
+      throw error;
+    }
+  }
+
+  async getSmbBackupScheduleStatus() {
+    return smbBackupSchedulerService.getStatus();
   }
 
   async getLatestDisasterRecoveryBackupJob() {
