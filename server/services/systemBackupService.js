@@ -28,7 +28,26 @@ function sanitizeFilename(value, fallback = 'homebrain-backup.tar.gz') {
     return fallback;
   }
 
-  const sanitized = trimmed.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  let sanitized = '';
+  let previousWasDash = false;
+  for (const char of trimmed) {
+    const code = char.charCodeAt(0);
+    const isSafe =
+      (code >= 48 && code <= 57)
+      || (code >= 65 && code <= 90)
+      || (code >= 97 && code <= 122)
+      || char === '.'
+      || char === '_'
+      || char === '-';
+    const nextChar = isSafe ? char : '-';
+    if (nextChar === '-' && previousWasDash) {
+      continue;
+    }
+    sanitized += nextChar;
+    previousWasDash = nextChar === '-';
+  }
+
+  sanitized = sanitized.split('-').filter(Boolean).join('-');
   return sanitized || fallback;
 }
 
