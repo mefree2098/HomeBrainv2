@@ -29,6 +29,17 @@ FORCE_SOURCES=0
 JOBS="${HOMEBRAIN_THREAD_KERNEL_JOBS:-}"
 
 THREAD_KERNEL_CONFIGS=(
+  CONFIG_IP_ADVANCED_ROUTER
+  CONFIG_IP_MULTIPLE_TABLES
+  CONFIG_IP_MROUTE
+  CONFIG_IP_MROUTE_MULTIPLE_TABLES
+  CONFIG_IPV6_MULTIPLE_TABLES
+  CONFIG_IPV6_MROUTE
+  CONFIG_IPV6_MROUTE_MULTIPLE_TABLES
+)
+
+THREAD_KERNEL_CONFIG_ORDER=(
+  CONFIG_IP_ADVANCED_ROUTER
   CONFIG_IP_MULTIPLE_TABLES
   CONFIG_IP_MROUTE
   CONFIG_IP_MROUTE_MULTIPLE_TABLES
@@ -391,7 +402,7 @@ apply_thread_kernel_config() {
     cd "${KERNEL_SRC}"
     cp -a .config ".config.homebrain-before-thread-$(date +%Y%m%d-%H%M%S)"
     chmod +x scripts/config
-    for key in "${THREAD_KERNEL_CONFIGS[@]}"; do
+    for key in "${THREAD_KERNEL_CONFIG_ORDER[@]}"; do
       ./scripts/config --file .config -e "${key#CONFIG_}"
     done
     make olddefconfig
@@ -814,11 +825,13 @@ run_apply() {
   exec > >(tee -a "${LOG_FILE}") 2> >(tee -a "${LOG_FILE}" >&2)
 
   write_result_json running "Kernel rebuild is running." false
+  trap 'write_result_json failed "Kernel rebuild failed before install. See the last build log for details." false' ERR
   ensure_build_packages
   prepare_builder
   prepare_sources
   apply_thread_kernel_config
   build_and_install_kernel
+  trap - ERR
   log "Running pre-reboot validation for the installed HomeBrain Thread kernel."
   if ! run_preflight_validation >/dev/null; then
     restore_extlinux_backup_after_failed_validation
