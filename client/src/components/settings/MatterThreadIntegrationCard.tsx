@@ -34,6 +34,28 @@ import {
 import { useAuth } from "@/contexts/AuthContext"
 import { useToast } from "@/hooks/useToast"
 
+const describeKernelPreflight = (validation: any, fallback: string) => {
+  if (!validation || typeof validation !== "object") {
+    return fallback
+  }
+
+  const failedCheck = Array.isArray(validation.checks)
+    ? validation.checks.find((check: any) => check && check.ok === false)
+    : null
+  if (failedCheck?.name) {
+    const detail = typeof failedCheck.detail === "string" && failedCheck.detail.trim()
+      ? `: ${failedCheck.detail.trim()}`
+      : ""
+    return `${failedCheck.name}${detail}`
+  }
+
+  if (typeof validation.error === "string" && validation.error.trim()) {
+    return validation.error.trim()
+  }
+
+  return fallback
+}
+
 export function MatterThreadIntegrationCard() {
   const { isAdmin } = useAuth()
   const { toast } = useToast()
@@ -315,7 +337,7 @@ export function MatterThreadIntegrationCard() {
         title: response?.success ? "Kernel preflight passed" : "Kernel preflight failed",
         description: response?.success
           ? "The custom kernel image, modules, config, and boot entry passed validation."
-          : "HomeBrain found a kernel install issue. Reboot is not safe until it is fixed.",
+          : describeKernelPreflight(response?.validation, "HomeBrain found a kernel install issue. Reboot is not safe until it is fixed."),
         variant: response?.success ? "default" : "destructive"
       })
       await loadMatterController()
@@ -883,8 +905,13 @@ export function MatterThreadIntegrationCard() {
               {kernelValidationChecks.length > 0 ? (
                 <div className="mt-2 grid gap-1 sm:grid-cols-2">
                   {kernelValidationChecks.slice(0, 8).map((check: any) => (
-                    <div key={check.name} className="flex items-center justify-between gap-2 rounded border border-border/50 bg-background/70 px-2 py-1">
-                      <span className="truncate text-muted-foreground">{check.name}</span>
+                    <div key={check.name} className="flex items-start justify-between gap-2 rounded border border-border/50 bg-background/70 px-2 py-1">
+                      <span className="min-w-0 text-muted-foreground">
+                        <span className="block truncate">{check.name}</span>
+                        {check.ok === false && typeof check.detail === "string" && check.detail.trim() ? (
+                          <span className="mt-0.5 block truncate text-[0.68rem] text-amber-700 dark:text-amber-200">{check.detail.trim()}</span>
+                        ) : null}
+                      </span>
                       <Badge variant={check.ok ? "default" : "destructive"} className="rounded-full text-[0.65rem]">
                         {check.ok ? "ok" : "fix"}
                       </Badge>

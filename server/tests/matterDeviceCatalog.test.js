@@ -423,6 +423,16 @@ test('persisted Thread kernel jobs are normalized for restart-safe status checks
   assert.equal(missingId, null);
 });
 
+test('Thread kernel helper JSON parser tolerates wrapper output', () => {
+  const parsed = matterService._test.parseJsonObjectFromOutput([
+    '[homebrain-thread-kernel] checking installed files',
+    '{"ok":false,"checks":[{"name":"custom kernel image exists","ok":false,"detail":"/boot/Image.homebrain-thread"}]}'
+  ].join('\n'));
+
+  assert.equal(parsed.ok, false);
+  assert.equal(parsed.checks[0].name, 'custom kernel image exists');
+});
+
 test('persisted Thread flash jobs are normalized for restart-safe status checks', () => {
   const completed = matterService._test.normalizePersistedThreadFirmwareFlashJob({
     id: 'thread-flash-test',

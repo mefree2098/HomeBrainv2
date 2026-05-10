@@ -22,7 +22,9 @@ function sendError(res, error, fallbackMessage) {
   res.status(status).json({
     success: false,
     message: error.message || fallbackMessage,
-    error: error.message || fallbackMessage
+    error: error.message || fallbackMessage,
+    ...(error.validation ? { validation: error.validation } : {}),
+    ...(error.diagnostics ? { diagnostics: error.diagnostics } : {})
   });
 }
 
