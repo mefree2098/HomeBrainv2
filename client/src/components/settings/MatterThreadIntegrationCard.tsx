@@ -460,6 +460,7 @@ export function MatterThreadIntegrationCard() {
   const kernelLogs = Array.isArray(displayedKernelJob?.logs) ? displayedKernelJob.logs.slice(-10) : []
   const kernelSupportsFullThread = Boolean(kernelStatus?.kernelSupportsFullThread)
   const kernelNeedsRebuild = Boolean(kernelStatus?.needsRebuild)
+  const kernelRebuildEnabled = Boolean(kernelStatus?.rebuildEnabled)
   const kernelPendingReboot = Boolean(kernelStatus?.pendingReboot)
   const kernelValidation = kernelStatus?.validation
   const kernelValidationChecks = Array.isArray(kernelValidation?.checks) ? kernelValidation.checks : []
@@ -471,8 +472,8 @@ export function MatterThreadIntegrationCard() {
     || recentKernelJobs.some((job: any) => job?.status === "completed" || job?.result?.pendingReboot)
   )
   const kernelValidationMissingInstall = kernelPreflightShowsMissingInstall(kernelValidation, kernelStatus)
-  const canValidateKernelInstall = Boolean(kernelStatus?.helperAvailable && customKernelInstalled)
-  const canRebuildKernel = Boolean(kernelStatus?.helperAvailable && kernelStatus?.isJetsonOrin !== false)
+  const canValidateKernelInstall = Boolean(kernelRebuildEnabled && kernelStatus?.helperAvailable && customKernelInstalled)
+  const canRebuildKernel = Boolean(kernelRebuildEnabled && kernelStatus?.helperAvailable && kernelStatus?.isJetsonOrin !== false)
   const otbrConfirmationPhrase = otbrHost?.confirmationPhrase || thread?.setup?.otbr?.serverSideConfirmation || "START THREAD BORDER ROUTER"
   const otbrConfirmationMatches = matterOtbrConfirm.trim().toUpperCase() === otbrConfirmationPhrase.trim().toUpperCase()
   const otbrDataset = thread?.otbr?.dataset || otbrHost?.dataset || activeOtbrJob?.result?.otbr?.dataset || activeOtbrJob?.result?.otbrHost?.dataset || ""
@@ -515,6 +516,8 @@ export function MatterThreadIntegrationCard() {
       ? "A Thread kernel rebuild is already running."
       : kernelPendingReboot
         ? "The custom kernel is installed and waiting for the Jetson reboot."
+        : !kernelRebuildEnabled
+          ? "Automatic Jetson kernel rebuilds are disabled. HomeBrain will keep OTBR in the safe no-BBR fallback on this kernel."
         : !canRebuildKernel
           ? kernelStatus?.helperAvailable
             ? "This host does not look like a supported Jetson Orin L4T device."
@@ -883,7 +886,7 @@ export function MatterThreadIntegrationCard() {
                   Full Thread router kernel support
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Rebuilds the Jetson kernel with IPv4/IPv6 multicast routing, reboots, then tries OTBR again with Backbone Router enabled.
+                  Shows whether the Jetson kernel can run full Backbone Router multicast routing. HomeBrain keeps OTBR in the safe no-BBR fallback when it cannot.
                 </p>
               </div>
               <Badge
@@ -914,7 +917,7 @@ export function MatterThreadIntegrationCard() {
             </div>
 
             <div className="mt-3 rounded-md border border-amber-500/25 bg-background/70 px-3 py-2 text-xs text-amber-700 dark:text-amber-200">
-              This modifies /boot and /lib/modules. HomeBrain validates the installed image, required config flags, matching modules, and extlinux boot entry before it schedules the reboot. If NVIDIA replaces the kernel during a JetPack/L4T update, HomeBrain will keep OTBR in the no-BBR fallback and show this rebuild action again.
+              Automatic Jetson kernel modification is disabled by default. HomeBrain will use the stock kernel and run OTBR without Backbone Router multicast forwarding when IPv6 multicast routing is unavailable.
             </div>
 
             <div className="mt-3 rounded-md border border-border/60 bg-background/80 px-3 py-2 text-xs">
@@ -962,36 +965,38 @@ export function MatterThreadIntegrationCard() {
               ) : null}
             </div>
 
-            <div className="mt-3 grid gap-2 lg:grid-cols-[1fr_1fr]">
-              <label className="space-y-1">
-                <span className="text-xs font-medium text-foreground">Kernel rebuild confirmation</span>
-                <Input
-                  value={matterKernelConfirm}
-                  onChange={(event) => setMatterKernelConfirm(event.target.value)}
-                  placeholder={`Type ${kernelConfirmationPhrase}`}
-                  disabled={matterKernelSaving || kernelRunning || kernelPendingReboot}
-                />
-              </label>
-              <label className="space-y-1">
-                <span className="text-xs font-medium text-foreground">Reboot confirmation</span>
-                <Input
-                  value={matterKernelRebootConfirm}
-                  onChange={(event) => setMatterKernelRebootConfirm(event.target.value)}
-                  placeholder={`Type ${kernelRebootConfirmationPhrase}`}
-                  disabled={matterKernelSaving || kernelRunning || kernelPendingReboot}
-                />
-              </label>
-              <Button
-                type="button"
-                variant="destructive"
-                className="lg:col-span-2"
-                disabled={!canRebuildKernel || !kernelConfirmationMatches || !kernelRebootConfirmationMatches || matterKernelSaving || kernelRunning || kernelPendingReboot}
-                onClick={() => void handleMatterThreadKernelRebuild()}
-              >
-                {matterKernelSaving || kernelRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldAlert className="mr-2 h-4 w-4" />}
-                {kernelSupportsFullThread ? "Reapply Thread Kernel After Update" : "Rebuild Kernel, Reboot, Enable Full Thread"}
-              </Button>
-            </div>
+            {kernelRebuildEnabled ? (
+              <div className="mt-3 grid gap-2 lg:grid-cols-[1fr_1fr]">
+                <label className="space-y-1">
+                  <span className="text-xs font-medium text-foreground">Kernel rebuild confirmation</span>
+                  <Input
+                    value={matterKernelConfirm}
+                    onChange={(event) => setMatterKernelConfirm(event.target.value)}
+                    placeholder={`Type ${kernelConfirmationPhrase}`}
+                    disabled={matterKernelSaving || kernelRunning || kernelPendingReboot}
+                  />
+                </label>
+                <label className="space-y-1">
+                  <span className="text-xs font-medium text-foreground">Reboot confirmation</span>
+                  <Input
+                    value={matterKernelRebootConfirm}
+                    onChange={(event) => setMatterKernelRebootConfirm(event.target.value)}
+                    placeholder={`Type ${kernelRebootConfirmationPhrase}`}
+                    disabled={matterKernelSaving || kernelRunning || kernelPendingReboot}
+                  />
+                </label>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  className="lg:col-span-2"
+                  disabled={!canRebuildKernel || !kernelConfirmationMatches || !kernelRebootConfirmationMatches || matterKernelSaving || kernelRunning || kernelPendingReboot}
+                  onClick={() => void handleMatterThreadKernelRebuild()}
+                >
+                  {matterKernelSaving || kernelRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldAlert className="mr-2 h-4 w-4" />}
+                  {kernelSupportsFullThread ? "Reapply Thread Kernel After Update" : "Rebuild Kernel, Reboot, Enable Full Thread"}
+                </Button>
+              </div>
+            ) : null}
 
             {kernelDisabledReason ? (
               <p className="mt-2 text-xs text-amber-700 dark:text-amber-200">{kernelDisabledReason}</p>
@@ -1001,7 +1006,7 @@ export function MatterThreadIntegrationCard() {
               </p>
             ) : (
               <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-200">
-                Ready to rebuild the Jetson kernel and reboot into full Thread router support.
+                OTBR will continue in the safe no-BBR fallback on this kernel.
               </p>
             )}
 

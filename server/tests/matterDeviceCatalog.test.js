@@ -360,7 +360,7 @@ test('Matter Thread setup guidance surfaces no-BBR host fallback', () => {
   assert.match(backboneAction.detail, /without Thread 1\.2 Backbone Router/);
 });
 
-test('Matter Thread setup guidance advertises kernel rebuild path for full Backbone Router support', () => {
+test('Matter Thread setup guidance defaults to safe no-BBR when kernel rebuilds are disabled', () => {
   const port = {
     path: '/dev/serial/by-id/usb-SONOFF_MG24',
     stablePath: '/dev/serial/by-id/usb-SONOFF_MG24'
@@ -380,7 +380,8 @@ test('Matter Thread setup guidance advertises kernel rebuild path for full Backb
     },
     threadKernel: {
       kernelSupportsFullThread: false,
-      needsRebuild: true
+      needsRebuild: true,
+      rebuildEnabled: false
     },
     activeDataset: '0e080000000000010000',
     firmwareFlash: {
@@ -394,9 +395,8 @@ test('Matter Thread setup guidance advertises kernel rebuild path for full Backb
   const backboneAction = guidance.actions.find((action) => action.id === 'host-backbone-router');
 
   assert.equal(backboneAction.status, 'limited');
-  assert.match(backboneAction.detail, /rebuild a custom Thread kernel/);
-  assert.equal(guidance.kernel.serverSideConfirmation, 'REBUILD JETSON KERNEL FOR FULL THREAD');
-  assert.equal(guidance.kernel.rebootConfirmation, 'REBOOT JETSON AFTER KERNEL INSTALL');
+  assert.match(backboneAction.detail, /safe no-BBR fallback/);
+  assert.equal(guidance.kernel.rebuildEnabled, false);
 });
 
 test('persisted Thread kernel jobs are normalized for restart-safe status checks', () => {
