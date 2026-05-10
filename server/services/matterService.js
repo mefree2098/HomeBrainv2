@@ -36,7 +36,7 @@ const THREAD_FLASH_MAX_FIRMWARE_BYTES = Math.max(
 );
 const THREAD_FLASH_LOG_LIMIT = Math.max(50, Number(process.env.HOMEBRAIN_THREAD_FLASH_LOG_LIMIT || 250));
 const THREAD_OTBR_LOG_LIMIT = Math.max(50, Number(process.env.HOMEBRAIN_THREAD_OTBR_LOG_LIMIT || 250));
-const THREAD_OTBR_START_TIMEOUT_MS = Math.max(60_000, Number(process.env.HOMEBRAIN_THREAD_OTBR_START_TIMEOUT_MS || 30 * 60_000));
+const THREAD_OTBR_START_TIMEOUT_MS = Math.max(60_000, Number(process.env.HOMEBRAIN_THREAD_OTBR_START_TIMEOUT_MS || 60 * 60_000));
 const THREAD_OTBR_HELPER_PATH = process.env.HOMEBRAIN_OTBR_HELPER_PATH || '/usr/local/lib/homebrain/homebrain-otbr-control.sh';
 const MATTER_CONTROLLER_ID = 'homebrain-matter-controller';
 const THREAD_FLASH_ACTIVE_STATUSES = new Set(['queued', 'preparing', 'flashing']);
@@ -957,6 +957,9 @@ function buildThreadSetupGuidance({
   const completedFlash = findCompletedThreadFirmwareFlash(firmwareFlash, selectedPath);
   const threadAttached = isThreadOtbrAttachedState(otbrHost?.state);
   const threadState = normalizeThreadOtbrState(otbrHost?.state);
+  const ipv6Mroute = normalizeLower(otbrHost?.ipv6Mroute);
+  const backboneRouterMode = normalizeLower(otbrHost?.backboneRouterMode);
+  const backboneRouterLimited = ipv6Mroute === 'unsupported' || backboneRouterMode === 'no-bbr';
   const actions = [];
 
   actions.push({
@@ -1009,6 +1012,15 @@ function buildThreadSetupGuidance({
           ? 'Start HomeBrain-managed OTBR so the flashed MG24 can provide an active Thread dataset.'
           : 'OTBR is not answering yet; flash the MG24 with OpenThread RCP, then start the border router.',
     guideUrl: OPENTHREAD_OTBR_GUIDE_URL
+  });
+
+  actions.push({
+    id: 'host-backbone-router',
+    label: 'Host Backbone Router support',
+    status: backboneRouterLimited ? 'limited' : 'complete',
+    detail: backboneRouterLimited
+      ? 'This Jetson kernel does not expose IPv6 multicast routing, so HomeBrain will run OTBR without Thread 1.2 Backbone Router multicast forwarding.'
+      : 'The host can support OTBR Backbone Router multicast forwarding.'
   });
 
   actions.push({
@@ -1397,6 +1409,10 @@ class MatterService {
     const mode = normalizeString(helperStatus?.mode || '');
     const routerEligible = normalizeString(helperStatus?.routerEligible || '');
     const version = normalizeString(helperStatus?.version || '');
+    const bbrState = normalizeString(helperStatus?.bbrState || '');
+    const ipv6Mroute = normalizeString(helperStatus?.ipv6Mroute || '');
+    const backboneRouterMode = normalizeString(helperStatus?.backboneRouterMode || '');
+    const installedBackboneRouterMode = normalizeString(helperStatus?.installedBackboneRouterMode || '');
 
     return {
       confirmationPhrase: THREAD_OTBR_CONFIRMATION,
@@ -1415,6 +1431,14 @@ class MatterService {
       mode,
       routerEligible,
       version,
+      bbrState,
+      ipv6Mroute,
+      backboneRouterMode,
+      installedBackboneRouterMode,
+      backboneRouterLimited: Boolean(
+        normalizeLower(ipv6Mroute) === 'unsupported'
+        || normalizeLower(backboneRouterMode) === 'no-bbr'
+      ),
       diagnostics: {
         helperStatusAvailable: Boolean(helperStatus),
         helperError: helperStatus ? null : normalizeString(helperProbe?.stderr || helperProbe?.error || ''),

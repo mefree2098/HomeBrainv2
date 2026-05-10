@@ -314,6 +314,15 @@ export function MatterThreadIntegrationCard() {
     ...(thread?.otbrHost || {}),
     ...(matterOtbrStatus || {})
   }
+  const ipv6MrouteStatus = String(otbrHost?.ipv6Mroute || "").toLowerCase()
+  const backboneRouterMode = String(otbrHost?.backboneRouterMode || "").toLowerCase()
+  const installedBackboneRouterMode = String(otbrHost?.installedBackboneRouterMode || "").toLowerCase()
+  const backboneRouterLimited = Boolean(
+    otbrHost?.backboneRouterLimited
+    || ipv6MrouteStatus === "unsupported"
+    || backboneRouterMode === "no-bbr"
+    || installedBackboneRouterMode === "no-bbr"
+  )
   const recentOtbrJobs = Array.isArray(otbrHost?.recentJobs) ? otbrHost.recentJobs : []
   const activeOtbrJob = otbrHost?.activeJob || recentOtbrJobs[0]
   const otbrRunning = Boolean(activeOtbrJob && ["queued", "preparing", "starting"].includes(activeOtbrJob.status))
@@ -321,8 +330,9 @@ export function MatterThreadIntegrationCard() {
   const otbrConfirmationPhrase = otbrHost?.confirmationPhrase || thread?.setup?.otbr?.serverSideConfirmation || "START THREAD BORDER ROUTER"
   const otbrConfirmationMatches = matterOtbrConfirm.trim().toUpperCase() === otbrConfirmationPhrase.trim().toUpperCase()
   const otbrDataset = thread?.otbr?.dataset || otbrHost?.dataset || activeOtbrJob?.result?.otbr?.dataset || activeOtbrJob?.result?.otbrHost?.dataset || ""
-  const otbrReady = Boolean(threadReady || otbrDataset)
-  const otbrNeedsDataset = Boolean(otbrOnline && !otbrReady)
+  const otbrHasDataset = Boolean(otbrDataset)
+  const otbrReady = Boolean(threadReady)
+  const otbrNeedsDataset = Boolean(otbrOnline && !otbrHasDataset)
   const canStartOtbr = Boolean(
     selectedThreadPath
     && rcpDetected
@@ -330,7 +340,7 @@ export function MatterThreadIntegrationCard() {
     && (otbrHost?.helperAvailable || otbrHost?.canAutoInstall)
   )
   const otbrDisabledReason = otbrReady
-    ? "OTBR is online and serving a Thread dataset."
+    ? "OTBR is online, Thread is attached, and the active dataset is available."
     : otbrRunning
       ? "OTBR setup is already running."
       : !selectedThreadPath || !rcpDetected
@@ -615,11 +625,17 @@ export function MatterThreadIntegrationCard() {
                 </p>
               </div>
               <Badge variant={otbrReady ? "default" : otbrOnline || canStartOtbr ? "secondary" : "outline"} className="rounded-full text-[0.68rem]">
-                {otbrReady ? "dataset ready" : otbrOnline ? "dataset missing" : canStartOtbr ? "ready" : "required"}
+                {otbrReady ? "thread ready" : otbrOnline && otbrHasDataset ? "attach needed" : otbrOnline ? "dataset missing" : canStartOtbr ? "ready" : "required"}
               </Badge>
             </div>
 
-            <div className="mt-3 grid gap-2 md:grid-cols-3">
+            {backboneRouterLimited ? (
+              <div className="mt-3 rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-200">
+                This Jetson kernel does not expose IPv6 multicast routing, so HomeBrain will run OTBR without Thread 1.2 Backbone Router multicast forwarding. Matter/Thread commissioning can still proceed, but some cross-LAN multicast behavior may be limited.
+              </div>
+            ) : null}
+
+            <div className="mt-3 grid gap-2 md:grid-cols-4">
               <div className="rounded-md border border-border/60 bg-background/80 px-3 py-2 text-xs">
                 <p className="font-semibold text-foreground">Service</p>
                 <p className="mt-1 text-muted-foreground">
@@ -632,7 +648,13 @@ export function MatterThreadIntegrationCard() {
               </div>
               <div className="rounded-md border border-border/60 bg-background/80 px-3 py-2 text-xs">
                 <p className="font-semibold text-foreground">Dataset</p>
-                <p className="mt-1 text-muted-foreground">{otbrDataset ? "active" : "missing"}</p>
+                <p className="mt-1 text-muted-foreground">{otbrHasDataset ? "active" : "missing"}</p>
+              </div>
+              <div className="rounded-md border border-border/60 bg-background/80 px-3 py-2 text-xs">
+                <p className="font-semibold text-foreground">Backbone</p>
+                <p className="mt-1 text-muted-foreground">
+                  {backboneRouterLimited ? "limited" : backboneRouterMode === "full" ? "full" : "detecting"}
+                </p>
               </div>
             </div>
 
@@ -662,7 +684,7 @@ export function MatterThreadIntegrationCard() {
                 onClick={() => void handleStartOtbr()}
               >
                 {matterOtbrSaving || otbrRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Power className="mr-2 h-4 w-4" />}
-                {otbrNeedsDataset ? "Create Thread Dataset" : "Start OTBR and Create Thread Dataset"}
+                {otbrNeedsDataset ? "Create Thread Dataset" : otbrHasDataset && !otbrReady ? "Restart OTBR and Attach Thread" : "Start OTBR and Create Thread Dataset"}
               </Button>
             </div>
 
