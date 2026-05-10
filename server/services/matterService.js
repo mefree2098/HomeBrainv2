@@ -1170,6 +1170,29 @@ function buildThreadKernelJobUpdateFromHelperStatus(job, helperStatus, options =
   return null;
 }
 
+function normalizeThreadKernelHelperLastResult(lastResult, options = {}) {
+  if (!lastResult || typeof lastResult !== 'object') {
+    return null;
+  }
+
+  const resultStatus = normalizeLower(lastResult.status);
+  const activeJob = options.activeJob || null;
+  const helperProcess = options.helperProcess || null;
+  const matchesActiveJob = activeJob ? threadKernelHelperResultMatchesJob(lastResult, activeJob) : false;
+  const helperKnownStopped = helperProcess?.available === true && helperProcess.running === false;
+
+  if (resultStatus === 'running' && !matchesActiveJob && helperKnownStopped) {
+    return {
+      ...lastResult,
+      status: 'stale',
+      stale: true,
+      message: 'Previous Thread kernel helper status is stale; no rebuild helper is currently running.'
+    };
+  }
+
+  return lastResult;
+}
+
 function buildThreadSetupGuidance({
   expectedPorts = [],
   selectedPort = null,
@@ -2043,6 +2066,10 @@ class MatterService {
       : null;
     const helperStatus = parseJsonObjectFromOutput(helperProbe?.stdout || '');
     const helperProcess = this.getThreadKernelHelperProcessStatus(activeJob?.id || '');
+    const helperLastResult = normalizeThreadKernelHelperLastResult(helperStatus?.lastResult || null, {
+      activeJob,
+      helperProcess
+    });
     let postRebootAction = await this.readThreadKernelPostRebootMarker();
     if (postRebootAction?.sourceJobId && !helperStatus?.pendingReboot) {
       const sourceJob = this.threadKernelJobs.get(postRebootAction.sourceJobId);
@@ -2075,7 +2102,7 @@ class MatterService {
       needsRebuild,
       pendingReboot: helperStatus?.pendingReboot || null,
       validation: helperStatus?.validation || null,
-      lastResult: helperStatus?.lastResult || null,
+      lastResult: helperLastResult,
       builder: helperStatus?.builder || null,
       source: helperStatus?.source || null,
       boot: helperStatus?.boot || null,
@@ -2089,7 +2116,8 @@ class MatterService {
         helperStatusAvailable: Boolean(helperStatus),
         helperError: helperStatus ? null : normalizeString(helperProbe?.stderr || helperProbe?.error || ''),
         helperExitStatus: helperProbe?.status ?? null,
-        helperProcess
+        helperProcess,
+        staleLastResult: Boolean(helperLastResult?.stale)
       },
       activeJob: activeJob ? this.serializeThreadKernelJob(activeJob, { includeLogs: options.includeLogs !== false }) : null,
       recentJobs
@@ -4071,6 +4099,7 @@ matterService._test = {
   normalizePersistedThreadFirmwareFlashJob,
   normalizePersistedThreadKernelJob,
   buildThreadKernelJobUpdateFromHelperStatus,
+  normalizeThreadKernelHelperLastResult,
   threadKernelHelperResultMatchesJob,
   normalizeThreadBackboneRouterMode,
   normalizeThreadBaudRate,
