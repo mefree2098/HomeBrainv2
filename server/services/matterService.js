@@ -38,6 +38,7 @@ const THREAD_FLASH_LOG_LIMIT = Math.max(50, Number(process.env.HOMEBRAIN_THREAD_
 const THREAD_OTBR_LOG_LIMIT = Math.max(50, Number(process.env.HOMEBRAIN_THREAD_OTBR_LOG_LIMIT || 250));
 const THREAD_OTBR_START_TIMEOUT_MS = Math.max(60_000, Number(process.env.HOMEBRAIN_THREAD_OTBR_START_TIMEOUT_MS || 30 * 60_000));
 const THREAD_OTBR_HELPER_PATH = process.env.HOMEBRAIN_OTBR_HELPER_PATH || '/usr/local/lib/homebrain/homebrain-otbr-control.sh';
+const MATTER_CONTROLLER_ID = 'homebrain-matter-controller';
 const THREAD_FLASH_ACTIVE_STATUSES = new Set(['queued', 'preparing', 'flashing']);
 const UNIVERSAL_SILABS_FLASHER_REPO_URL = 'https://github.com/NabuCasa/universal-silabs-flasher';
 const UNIVERSAL_SILABS_FLASHER_INSTALL_HINT = 'HomeBrain can install universal-silabs-flasher into its managed Matter venv when flashing starts.';
@@ -781,6 +782,90 @@ function resolveThreadActiveDataset({
   return { dataset: '', source: null };
 }
 
+function serializeMatterControllerError(error, depth = 0) {
+  if (!error || depth > 4) {
+    return null;
+  }
+
+  const detail = {
+    name: normalizeString(error.name) || 'Error',
+    message: normalizeString(error.message) || String(error)
+  };
+
+  if (error.code) {
+    detail.code = String(error.code);
+  }
+  if (error.errno) {
+    detail.errno = String(error.errno);
+  }
+  if (error.syscall) {
+    detail.syscall = String(error.syscall);
+  }
+  if (error.subject?.constructor?.name) {
+    detail.subject = error.subject.constructor.name;
+  }
+  if (error.recovery) {
+    detail.recovery = error.recovery;
+  }
+  if (error.stack) {
+    detail.stack = String(error.stack).split('\n').slice(0, 8).join('\n');
+  }
+  if (error.cause) {
+    detail.cause = serializeMatterControllerError(error.cause, depth + 1);
+  }
+  if (Array.isArray(error.errors) && error.errors.length > 0) {
+    detail.errors = error.errors.slice(0, 5).map((entry) => serializeMatterControllerError(entry, depth + 1));
+  }
+
+  return detail;
+}
+
+function summarizeMatterControllerError(error) {
+  const detail = serializeMatterControllerError(error);
+  if (!detail) {
+    return '';
+  }
+  const messages = [];
+  let cursor = detail;
+  while (cursor) {
+    if (cursor.message && !messages.includes(cursor.message)) {
+      messages.push(cursor.message);
+    }
+    cursor = cursor.cause;
+  }
+  return messages.join(': ');
+}
+
+function timestampForPath(date = new Date()) {
+  return date.toISOString().replace(/[:.]/g, '-');
+}
+
+async function pathExists(targetPath) {
+  try {
+    await fsp.access(targetPath);
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+async function listMatterControllerStoreEntries(controllerStorePath) {
+  try {
+    return await fsp.readdir(controllerStorePath);
+  } catch (_error) {
+    return [];
+  }
+}
+
+function matterControllerStoreMayContainPairedNodes(entries = []) {
+  return entries.some((entry) => (
+    /^peers?\b/i.test(entry)
+    || /\.peers?\b/i.test(entry)
+    || /\.commissioningClient\./i.test(entry)
+    || /\.networkClient\./i.test(entry)
+  ));
+}
+
 function runSync(command, args = [], options = {}) {
   const result = spawnSync(command, args, {
     encoding: 'utf8',
@@ -1027,6 +1112,8 @@ class MatterService {
     this.sessions = [];
     this.controller = null;
     this.controllerStartPromise = null;
+    this.controllerError = null;
+    this.controllerRecovery = null;
     this.runtime = null;
     this.detectedSerialPorts = [];
     this.lastThreadStatus = null;
@@ -1129,8 +1216,8 @@ class MatterService {
       this.lastThreadStatus = await this.getThreadStatus({ refreshPorts: false });
       await this.ensureControllerIfConfigured();
     } catch (error) {
-      this.startError = error.message;
-      console.warn(`MatterService: Startup failed: ${error.message}`);
+      this.recordControllerStartupError(error);
+      console.warn(`MatterService: Startup failed: ${this.startError}`);
     }
 
     return this.getStatus();
@@ -1154,10 +1241,16 @@ class MatterService {
     try {
       await this.ensureController();
       this.startError = null;
+      this.controllerError = null;
     } catch (error) {
-      this.startError = error.message;
-      console.warn(`MatterService: Matter controller startup deferred: ${error.message}`);
+      this.recordControllerStartupError(error);
+      console.warn(`MatterService: Matter controller startup deferred: ${this.startError}`);
     }
+  }
+
+  recordControllerStartupError(error) {
+    this.controllerError = serializeMatterControllerError(error);
+    this.startError = summarizeMatterControllerError(error) || error.message;
   }
 
   async detectSerialPorts() {
@@ -2137,20 +2230,56 @@ class MatterService {
     }
 
     this.controllerStartPromise = (async () => {
-      const runtime = this.loadMatterRuntime();
-      await fsp.mkdir(config.storagePath, { recursive: true });
-      const environment = runtime.NodeJsEnvironment();
-      environment.vars.set('storage.path', config.storagePath);
-      environment.get(runtime.StorageService).location = config.storagePath;
+      try {
+        const controller = await this.createMatterController(config);
+        this.controller = controller;
+        this.controllerError = null;
+        return controller;
+      } catch (error) {
+        const recovery = await this.recoverMatterControllerStoreIfSafe(config, error);
+        if (!recovery?.attempted) {
+          throw error;
+        }
 
-      if (runtime.NodeJsBle && runtime.Ble) {
-        runtime.Ble.get = runtime.singleton(() => new runtime.NodeJsBle({ environment }));
+        this.controllerRecovery = recovery;
+        try {
+          this.runtime = null;
+          const controller = await this.createMatterController(config);
+          this.controller = controller;
+          this.controllerError = null;
+          this.startError = null;
+          return controller;
+        } catch (retryError) {
+          retryError.recovery = recovery;
+          throw retryError;
+        }
       }
+    })();
 
-      const controller = new runtime.CommissioningController({
+    try {
+      return await this.controllerStartPromise;
+    } finally {
+      this.controllerStartPromise = null;
+    }
+  }
+
+  async createMatterController(config) {
+    const runtime = this.loadMatterRuntime();
+    await fsp.mkdir(config.storagePath, { recursive: true });
+    const environment = runtime.NodeJsEnvironment();
+    environment.vars.set('storage.path', config.storagePath);
+    environment.get(runtime.StorageService).location = config.storagePath;
+
+    if (runtime.NodeJsBle && runtime.Ble) {
+      runtime.Ble.get = runtime.singleton(() => new runtime.NodeJsBle({ environment }));
+    }
+
+    let controller = null;
+    try {
+      controller = new runtime.CommissioningController({
         environment: {
           environment,
-          id: 'homebrain-matter-controller'
+          id: MATTER_CONTROLLER_ID
         },
         autoConnect: false,
         adminFabricLabel: config.adminFabricLabel,
@@ -2169,15 +2298,68 @@ class MatterService {
       });
 
       await controller.start();
-      this.controller = controller;
+      this.controllerRecovery = null;
       return controller;
-    })();
-
-    try {
-      return await this.controllerStartPromise;
-    } finally {
-      this.controllerStartPromise = null;
+    } catch (error) {
+      if (controller && typeof controller.close === 'function') {
+        try {
+          await controller.close();
+        } catch (_closeError) {
+          // The original startup error is more useful here.
+        }
+      }
+      throw error;
     }
+  }
+
+  async recoverMatterControllerStoreIfSafe(config, error) {
+    const controllerStorePath = path.join(config.storagePath, MATTER_CONTROLLER_ID);
+    const exists = await pathExists(controllerStorePath);
+    if (!exists) {
+      return {
+        attempted: false,
+        reason: 'controller-store-missing',
+        error: serializeMatterControllerError(error)
+      };
+    }
+
+    const entries = await listMatterControllerStoreEntries(controllerStorePath);
+    let matterDeviceCount = 0;
+    try {
+      matterDeviceCount = await Device.countDocuments({
+        $or: [
+          { 'properties.source': MATTER_SOURCE },
+          { 'properties.matter.nodeId': { $exists: true, $ne: '' } }
+        ]
+      });
+    } catch (countError) {
+      return {
+        attempted: false,
+        reason: 'matter-device-count-unavailable',
+        entryCount: entries.length,
+        error: serializeMatterControllerError(error),
+        countError: serializeMatterControllerError(countError)
+      };
+    }
+    if (matterDeviceCount > 0 || matterControllerStoreMayContainPairedNodes(entries)) {
+      return {
+        attempted: false,
+        reason: 'controller-store-may-contain-commissioned-nodes',
+        matterDeviceCount,
+        entryCount: entries.length,
+        error: serializeMatterControllerError(error)
+      };
+    }
+
+    const backupPath = `${controllerStorePath}.failed-${timestampForPath()}`;
+    await fsp.rename(controllerStorePath, backupPath);
+    return {
+      attempted: true,
+      reason: 'controller-start-failed-empty-store-backed-up',
+      backupPath,
+      entryCount: entries.length,
+      error: serializeMatterControllerError(error)
+    };
   }
 
   parseSetupPayload(payload = {}) {
@@ -2908,6 +3090,8 @@ class MatterService {
       started: this.started,
       controllerStarted: Boolean(this.controller),
       startError: this.startError,
+      controllerError: this.controllerError,
+      controllerRecovery: this.controllerRecovery,
       hardware: MATTER_CONTROLLER_HARDWARE,
       config: stripSensitiveConfig(config),
       thread,
@@ -2970,7 +3154,10 @@ matterService._test = {
   parseHexDatasetFromText,
   parseKnownAddress,
   resolveThreadActiveDataset,
+  matterControllerStoreMayContainPairedNodes,
+  serializeMatterControllerError,
   sanitizeFirmwareFileName,
+  summarizeMatterControllerError,
   selectLatestSonoffThreadFirmware,
   serialPortMatchesPath,
   splitCommandSpec
