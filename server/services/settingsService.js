@@ -68,7 +68,11 @@ class SettingsService {
         'authSessionMaxAgeDays',
         // Whole-device restart schedule
         'deviceRestartScheduleEnabled', 'deviceRestartScheduleFrequency',
-        'deviceRestartScheduleDayOfWeek', 'deviceRestartScheduleTime'
+        'deviceRestartScheduleDayOfWeek', 'deviceRestartScheduleTime',
+        // SMB disaster recovery backup
+        'smbBackupShareUrl', 'smbBackupRemoteDirectory', 'smbBackupUsername',
+        'smbBackupPassword', 'smbBackupDomain', 'smbBackupScheduleEnabled',
+        'smbBackupScheduleTime', 'smbBackupRetentionCount'
       ];
       const sensitiveFields = new Set([
         'elevenlabsApiKey',
@@ -77,7 +81,8 @@ class SettingsService {
         'openaiApiKey',
         'anthropicApiKey',
         'isyPassword',
-        'hardwareOrbWifiPassword'
+        'hardwareOrbWifiPassword',
+        'smbBackupPassword'
       ]);
       
       const sanitizedUpdates = {};
@@ -119,6 +124,20 @@ class SettingsService {
 
       if (typeof sanitizedUpdates.hardwareOrbWifiSsid === 'string') {
         sanitizedUpdates.hardwareOrbWifiSsid = sanitizedUpdates.hardwareOrbWifiSsid.trim();
+      }
+
+      ['smbBackupShareUrl', 'smbBackupRemoteDirectory', 'smbBackupUsername', 'smbBackupDomain']
+        .forEach((key) => {
+          if (typeof sanitizedUpdates[key] === 'string') {
+            sanitizedUpdates[key] = sanitizedUpdates[key].trim();
+          }
+        });
+
+      if (Object.prototype.hasOwnProperty.call(sanitizedUpdates, 'smbBackupRetentionCount')) {
+        const retentionCount = Number(sanitizedUpdates.smbBackupRetentionCount);
+        sanitizedUpdates.smbBackupRetentionCount = Number.isFinite(retentionCount)
+          ? Math.min(30, Math.max(1, Math.trunc(retentionCount)))
+          : 3;
       }
 
       if (typeof sanitizedUpdates.codexHomeProfile === 'string') {
@@ -173,6 +192,26 @@ class SettingsService {
           sanitizedUpdates.deviceRestartScheduleTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
         } else {
           delete sanitizedUpdates.deviceRestartScheduleTime;
+        }
+      }
+
+      if (typeof sanitizedUpdates.smbBackupScheduleTime === 'string') {
+        const trimmedScheduleTime = sanitizedUpdates.smbBackupScheduleTime.trim();
+        const match = trimmedScheduleTime.match(/^(\d{1,2}):(\d{2})$/);
+        const hour = match ? Number(match[1]) : NaN;
+        const minute = match ? Number(match[2]) : NaN;
+        if (
+          match &&
+          Number.isInteger(hour) &&
+          Number.isInteger(minute) &&
+          hour >= 0 &&
+          hour <= 23 &&
+          minute >= 0 &&
+          minute <= 59
+        ) {
+          sanitizedUpdates.smbBackupScheduleTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+        } else {
+          delete sanitizedUpdates.smbBackupScheduleTime;
         }
       }
       

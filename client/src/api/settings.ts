@@ -65,6 +65,14 @@ export const updateSettings = async (settings: {
   deviceRestartScheduleFrequency?: 'daily' | 'weekly' | 'biweekly';
   deviceRestartScheduleDayOfWeek?: number;
   deviceRestartScheduleTime?: string;
+  smbBackupShareUrl?: string;
+  smbBackupRemoteDirectory?: string;
+  smbBackupUsername?: string;
+  smbBackupPassword?: string;
+  smbBackupDomain?: string;
+  smbBackupScheduleEnabled?: boolean;
+  smbBackupScheduleTime?: string;
+  smbBackupRetentionCount?: number;
 }) => {
   try {
     const response = await api.put('/api/settings', settings);

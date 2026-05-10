@@ -61,6 +61,7 @@ export interface DisasterRecoveryBackupJob {
   id: string;
   status: 'queued' | 'creating' | 'uploading' | 'completed' | 'failed';
   actor?: string | null;
+  source?: 'manual' | 'scheduled' | string | null;
   archiveName?: string | null;
   createdAt?: string | null;
   updatedAt?: string | null;
@@ -69,6 +70,13 @@ export interface DisasterRecoveryBackupJob {
   phase?: string | null;
   message?: string | null;
   remoteTarget?: string | null;
+  retention?: {
+    keepCount?: number;
+    matched?: number;
+    kept?: string[];
+    deleted?: string[];
+    displayPath?: string;
+  } | null;
   manifest?: {
     version?: number | null;
     createdAt?: string | null;
@@ -77,12 +85,52 @@ export interface DisasterRecoveryBackupJob {
 }
 
 export interface SmbDisasterRecoveryBackupPayload {
-  shareUrl: string;
+  shareUrl?: string;
   remoteDirectory?: string;
   username?: string;
   password?: string;
   domain?: string;
-  confirmBackup: string;
+  confirmBackup?: string;
+  useSavedSettings?: boolean;
+  retentionCount?: number;
+}
+
+export interface SmbBackupConnectionTestPayload {
+  shareUrl?: string;
+  remoteDirectory?: string;
+  username?: string;
+  password?: string;
+  domain?: string;
+  useSavedSettings?: boolean;
+}
+
+export interface SmbBackupConnectionTestResponse {
+  success: boolean;
+  message?: string;
+  sharePath?: string;
+  remoteDirectory?: string;
+  remoteTarget?: string;
+  stdout?: string;
+}
+
+export interface SmbBackupScheduleStatusResponse {
+  success: boolean;
+  schedule?: {
+    enabled?: boolean;
+    time?: string;
+    timeZone?: string;
+    retentionCount?: number;
+    shareUrlConfigured?: boolean;
+    remoteDirectory?: string;
+    usernameConfigured?: boolean;
+    passwordConfigured?: boolean;
+    domainConfigured?: boolean;
+    nextRunAt?: string | null;
+    lastTriggeredAt?: string | null;
+    lastCompletedAt?: string | null;
+    lastStatus?: string;
+    lastError?: string;
+  };
 }
 
 export interface DeviceRestartStatusResponse {
@@ -374,6 +422,26 @@ export const startSmbDisasterRecoveryBackup = async (payload: SmbDisasterRecover
       message?: string;
       job: DisasterRecoveryBackupJob;
     };
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+};
+
+export const testSmbDisasterRecoveryBackup = async (payload: SmbBackupConnectionTestPayload) => {
+  try {
+    const response = await api.post('/api/maintenance/backup/smb/test', payload);
+    return response.data as SmbBackupConnectionTestResponse;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+};
+
+export const getSmbBackupScheduleStatus = async () => {
+  try {
+    const response = await api.get('/api/maintenance/backup/smb/schedule');
+    return response.data as SmbBackupScheduleStatusResponse;
   } catch (error) {
     console.error(error);
     throw new Error(error?.response?.data?.error || error.message);

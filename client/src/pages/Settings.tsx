@@ -113,6 +113,8 @@ import {
   exportConfiguration,
   downloadDisasterRecoveryBackup,
   startSmbDisasterRecoveryBackup,
+  testSmbDisasterRecoveryBackup,
+  getSmbBackupScheduleStatus,
   getLatestDisasterRecoveryBackupJob,
   uploadDisasterRecoveryBackup,
   getLatestDisasterRecoveryRestoreJob,
@@ -121,6 +123,7 @@ import {
   type DisasterRecoveryBackupJob,
   type DisasterRecoveryRestoreJob,
   type DeviceRestartStatusResponse,
+  type SmbBackupScheduleStatusResponse,
   type InsteonMaintenanceSyncResponse,
   type InsteonMaintenanceSyncRunSnapshot
 } from "@/api/maintenance"
@@ -564,16 +567,14 @@ export function Settings() {
   const [exportingConfig, setExportingConfig] = useState(false)
   const [creatingFullBackup, setCreatingFullBackup] = useState(false)
   const [creatingSmbBackup, setCreatingSmbBackup] = useState(false)
+  const [testingSmbBackup, setTestingSmbBackup] = useState(false)
   const [restoringBackup, setRestoringBackup] = useState(false)
   const [selectedRestoreBackup, setSelectedRestoreBackup] = useState<File | null>(null)
   const [latestBackupJob, setLatestBackupJob] = useState<DisasterRecoveryBackupJob | null>(null)
   const [latestRestoreJob, setLatestRestoreJob] = useState<DisasterRecoveryRestoreJob | null>(null)
-  const [smbBackupShareUrl, setSmbBackupShareUrl] = useState("")
-  const [smbBackupDirectory, setSmbBackupDirectory] = useState("HomeBrain")
-  const [smbBackupUsername, setSmbBackupUsername] = useState("")
-  const [smbBackupPassword, setSmbBackupPassword] = useState("")
-  const [smbBackupDomain, setSmbBackupDomain] = useState("")
   const [smbBackupConfirm, setSmbBackupConfirm] = useState("")
+  const [smbBackupPasswordConfigured, setSmbBackupPasswordConfigured] = useState(false)
+  const [smbBackupScheduleStatus, setSmbBackupScheduleStatus] = useState<SmbBackupScheduleStatusResponse | null>(null)
   const [deviceRestartStatus, setDeviceRestartStatus] = useState<DeviceRestartStatusResponse | null>(null)
   const [rebootingDevice, setRebootingDevice] = useState(false)
   const [healthData, setHealthData] = useState(null)
@@ -639,7 +640,20 @@ export function Settings() {
       deviceRestartScheduleDayOfWeek: 0,
       deviceRestartScheduleTime: "03:00",
       deviceRestartScheduleNextRunAt: "",
-      deviceRestartScheduleLastTriggeredAt: ""
+      deviceRestartScheduleLastTriggeredAt: "",
+      smbBackupShareUrl: "",
+      smbBackupRemoteDirectory: "HomeBrain",
+      smbBackupUsername: "",
+      smbBackupPassword: "",
+      smbBackupDomain: "",
+      smbBackupScheduleEnabled: false,
+      smbBackupScheduleTime: "02:30",
+      smbBackupRetentionCount: 3,
+      smbBackupScheduleNextRunAt: "",
+      smbBackupScheduleLastTriggeredAt: "",
+      smbBackupScheduleLastCompletedAt: "",
+      smbBackupScheduleLastStatus: "",
+      smbBackupScheduleLastError: ""
     }
   })
 
@@ -853,6 +867,28 @@ export function Settings() {
     deviceRestartStatus?.schedule?.lastTriggeredAt || watch("deviceRestartScheduleLastTriggeredAt")
   const deviceRestartTimeZone =
     deviceRestartStatus?.schedule?.timeZone || (watch("timezone") || "America/New_York").toString()
+  const smbBackupShareUrl = (watch("smbBackupShareUrl") || "").toString()
+  const smbBackupRemoteDirectory = (watch("smbBackupRemoteDirectory") || "").toString()
+  const smbBackupUsername = (watch("smbBackupUsername") || "").toString()
+  const smbBackupPassword = (watch("smbBackupPassword") || "").toString()
+  const smbBackupDomain = (watch("smbBackupDomain") || "").toString()
+  const smbBackupScheduleEnabled = watch("smbBackupScheduleEnabled") === true
+  const smbBackupRetentionCount = Math.max(
+    1,
+    Math.min(30, Number(watch("smbBackupRetentionCount") ?? 3) || 3)
+  )
+  const smbBackupScheduleNextRunAt =
+    smbBackupScheduleStatus?.schedule?.nextRunAt || watch("smbBackupScheduleNextRunAt")
+  const smbBackupScheduleLastTriggeredAt =
+    smbBackupScheduleStatus?.schedule?.lastTriggeredAt || watch("smbBackupScheduleLastTriggeredAt")
+  const smbBackupScheduleLastCompletedAt =
+    smbBackupScheduleStatus?.schedule?.lastCompletedAt || watch("smbBackupScheduleLastCompletedAt")
+  const smbBackupScheduleLastStatus =
+    smbBackupScheduleStatus?.schedule?.lastStatus || watch("smbBackupScheduleLastStatus")
+  const smbBackupScheduleLastError =
+    smbBackupScheduleStatus?.schedule?.lastError || watch("smbBackupScheduleLastError")
+  const smbBackupTimeZone =
+    smbBackupScheduleStatus?.schedule?.timeZone || (watch("timezone") || "America/New_York").toString()
   const securityHomeBrainEnabled = watch("securityHomeBrainEnabled") !== false
   const securitySmartThingsEnabled = watch("securitySmartThingsEnabled") !== false
   const securityArmAwayExitDelaySeconds = Math.max(
@@ -902,6 +938,7 @@ export function Settings() {
           setIsyPasswordConfigured(Boolean(
             response.settings.isyPassword && String(response.settings.isyPassword).trim()
           ))
+          setSmbBackupPasswordConfigured(Boolean(response.settings.smbBackupPasswordConfigured))
 
           const resolvedHomeBrainModel =
             response.settings.homebrainLocalLlmModel ||
@@ -915,6 +952,10 @@ export function Settings() {
               if (key === 'isyPassword') {
                 // Keep the input empty and track configured state separately so typing/saving behaves predictably.
                 setValue('isyPassword', '')
+                return
+              }
+              if (key === 'smbBackupPassword') {
+                setValue('smbBackupPassword', '')
                 return
               }
               // For masked sensitive fields, show a placeholder indicating key is configured
@@ -979,6 +1020,24 @@ export function Settings() {
           } catch (restartStatusError) {
             console.warn("Failed to load device restart status:", restartStatusError)
           }
+
+          try {
+            const smbScheduleStatus = await getSmbBackupScheduleStatus()
+            setSmbBackupScheduleStatus(smbScheduleStatus)
+            if (smbScheduleStatus.schedule?.nextRunAt) {
+              setValue("smbBackupScheduleNextRunAt", smbScheduleStatus.schedule.nextRunAt)
+            }
+            if (smbScheduleStatus.schedule?.lastTriggeredAt) {
+              setValue("smbBackupScheduleLastTriggeredAt", smbScheduleStatus.schedule.lastTriggeredAt)
+            }
+            if (smbScheduleStatus.schedule?.lastCompletedAt) {
+              setValue("smbBackupScheduleLastCompletedAt", smbScheduleStatus.schedule.lastCompletedAt)
+            }
+            setValue("smbBackupScheduleLastStatus", smbScheduleStatus.schedule?.lastStatus || "")
+            setValue("smbBackupScheduleLastError", smbScheduleStatus.schedule?.lastError || "")
+          } catch (smbScheduleError) {
+            console.warn("Failed to load SMB backup schedule status:", smbScheduleError)
+          }
           
           toast({
             title: "Settings Loaded",
@@ -1005,6 +1064,7 @@ export function Settings() {
     loadLLMPriorityList();
     loadLatestBackupJob();
     loadLatestRestoreJob();
+    loadSmbBackupScheduleStatus();
   }, [setValue, toast]);
 
   useEffect(() => {
@@ -1074,6 +1134,14 @@ export function Settings() {
     }
   }, [latestBackupJob?.id, latestBackupJob?.status])
 
+  useEffect(() => {
+    if (!latestBackupJob || !["completed", "failed"].includes(latestBackupJob.status)) {
+      return
+    }
+
+    loadSmbBackupScheduleStatus()
+  }, [latestBackupJob?.id, latestBackupJob?.status])
+
   // Load LLM priority list
   const loadLLMPriorityList = async () => {
     try {
@@ -1112,6 +1180,23 @@ export function Settings() {
     } catch (error) {
       console.error("Failed to load latest backup job:", error)
       setLatestBackupJob(null)
+    }
+  }
+
+  const loadSmbBackupScheduleStatus = async () => {
+    try {
+      const response = await getSmbBackupScheduleStatus()
+      setSmbBackupScheduleStatus(response)
+      setValue("smbBackupScheduleNextRunAt", response.schedule?.nextRunAt || "")
+      setValue("smbBackupScheduleLastTriggeredAt", response.schedule?.lastTriggeredAt || "")
+      setValue("smbBackupScheduleLastCompletedAt", response.schedule?.lastCompletedAt || "")
+      setValue("smbBackupScheduleLastStatus", response.schedule?.lastStatus || "")
+      setValue("smbBackupScheduleLastError", response.schedule?.lastError || "")
+      return response
+    } catch (error) {
+      console.error("Failed to load SMB backup schedule status:", error)
+      setSmbBackupScheduleStatus(null)
+      return null
     }
   }
 
@@ -1613,6 +1698,11 @@ export function Settings() {
       delete settingsToSave.securityPins
       delete settingsToSave.deviceRestartScheduleNextRunAt
       delete settingsToSave.deviceRestartScheduleLastTriggeredAt
+      delete settingsToSave.smbBackupScheduleNextRunAt
+      delete settingsToSave.smbBackupScheduleLastTriggeredAt
+      delete settingsToSave.smbBackupScheduleLastCompletedAt
+      delete settingsToSave.smbBackupScheduleLastStatus
+      delete settingsToSave.smbBackupScheduleLastError
       settingsToSave.spamFilterLocalLlmModel = settingsToSave.homebrainLocalLlmModel
 
       const normalizedCodexHome = (settingsToSave.codexHome || "").toString().trim()
@@ -1631,6 +1721,23 @@ export function Settings() {
       } else {
         settingsToSave.isyPassword = trimmedIsyPassword
       }
+
+      const trimmedSmbPassword = typeof settingsToSave.smbBackupPassword === "string"
+        ? settingsToSave.smbBackupPassword
+        : ""
+      if (!trimmedSmbPassword || isMaskedSecretPlaceholder(trimmedSmbPassword)) {
+        delete settingsToSave.smbBackupPassword
+      } else {
+        settingsToSave.smbBackupPassword = trimmedSmbPassword
+      }
+      settingsToSave.smbBackupShareUrl = (settingsToSave.smbBackupShareUrl || "").toString().trim()
+      settingsToSave.smbBackupRemoteDirectory = (settingsToSave.smbBackupRemoteDirectory || "").toString().trim()
+      settingsToSave.smbBackupUsername = (settingsToSave.smbBackupUsername || "").toString().trim()
+      settingsToSave.smbBackupDomain = (settingsToSave.smbBackupDomain || "").toString().trim()
+      settingsToSave.smbBackupRetentionCount = Math.max(
+        1,
+        Math.min(30, Number(settingsToSave.smbBackupRetentionCount ?? 3) || 3)
+      )
       
       const response = await updateSettings(settingsToSave);
       
@@ -1653,6 +1760,8 @@ export function Settings() {
           response.settings?.isyPassword && String(response.settings.isyPassword).trim()
         ))
         setValue("isyPassword", "")
+        setSmbBackupPasswordConfigured(Boolean(response.settings?.smbBackupPasswordConfigured))
+        setValue("smbBackupPassword", "")
         try {
           const restartStatus = await getDeviceRestartStatus()
           setDeviceRestartStatus(restartStatus)
@@ -1667,6 +1776,7 @@ export function Settings() {
         } catch (restartStatusError) {
           console.warn("Failed to refresh device restart status:", restartStatusError)
         }
+        await loadSmbBackupScheduleStatus()
         toast({
           title: "Settings Saved",
           description: response.message || "Your settings have been saved successfully"
@@ -4103,6 +4213,56 @@ export function Settings() {
     }
   }
 
+  const buildSmbBackupPayload = (options: { includeConfirmation?: boolean } = {}) => {
+    const payload: any = {
+      useSavedSettings: true,
+      shareUrl: smbBackupShareUrl.trim(),
+      remoteDirectory: smbBackupRemoteDirectory.trim(),
+      username: smbBackupUsername.trim(),
+      domain: smbBackupDomain.trim(),
+      retentionCount: smbBackupRetentionCount
+    }
+
+    if (smbBackupPassword && !isMaskedSecretPlaceholder(smbBackupPassword)) {
+      payload.password = smbBackupPassword
+    }
+
+    if (options.includeConfirmation) {
+      payload.confirmBackup = smbBackupConfirm.trim()
+    }
+
+    return payload
+  }
+
+  const handleTestSmbBackupConnection = async () => {
+    if (!smbBackupShareUrl.trim()) {
+      toast({
+        title: "SMB Share Required",
+        description: "Enter an SMB share like smb://server/share/HomeBrain or //server/share/HomeBrain.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setTestingSmbBackup(true)
+    try {
+      const response = await testSmbDisasterRecoveryBackup(buildSmbBackupPayload())
+      toast({
+        title: "SMB Test Passed",
+        description: response.message || "HomeBrain wrote, listed, and removed a test file on the SMB share."
+      })
+    } catch (error: any) {
+      console.error("Failed to test SMB backup target:", error)
+      toast({
+        title: "SMB Test Failed",
+        description: error?.message || "Unable to write to the SMB backup share.",
+        variant: "destructive"
+      })
+    } finally {
+      setTestingSmbBackup(false)
+    }
+  }
+
   const handleCreateSmbBackup = async () => {
     if (!smbBackupShareUrl.trim()) {
       toast({
@@ -4115,16 +4275,9 @@ export function Settings() {
 
     setCreatingSmbBackup(true)
     try {
-      const response = await startSmbDisasterRecoveryBackup({
-        shareUrl: smbBackupShareUrl.trim(),
-        remoteDirectory: smbBackupDirectory.trim() || undefined,
-        username: smbBackupUsername.trim() || undefined,
-        password: smbBackupPassword,
-        domain: smbBackupDomain.trim() || undefined,
-        confirmBackup: smbBackupConfirm.trim()
-      })
+      const response = await startSmbDisasterRecoveryBackup(buildSmbBackupPayload({ includeConfirmation: true }))
       setLatestBackupJob(response.job || null)
-      setSmbBackupPassword("")
+      setValue("smbBackupPassword", "")
       setSmbBackupConfirm("")
       toast({
         title: "SMB Backup Started",
@@ -8482,47 +8635,161 @@ export function Settings() {
                     </Button>
                   </div>
 
-                  <div className="space-y-3 md:col-span-2 rounded-lg border border-border/60 bg-background/70 p-3">
+                  <div className="space-y-4 md:col-span-2 rounded-lg border border-border/60 bg-background/70 p-3">
                     <div>
-                      <h4 className="font-medium">Save Backup to SMB</h4>
+                      <h4 className="font-medium">SMB Backups</h4>
                       <p className="text-sm text-muted-foreground">
-                        Create the same full disaster recovery archive and copy it directly to a network share.
+                        Save full disaster recovery archives to a network share and keep a rolling set of backups.
                       </p>
                     </div>
+
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="md:col-span-2">
+                        <label className="text-sm font-medium">SMB share</label>
+                        <Input
+                          {...register("smbBackupShareUrl")}
+                          placeholder="smb://server/share"
+                          className="mt-1"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-sm font-medium">Remote folder</label>
+                        <Input
+                          {...register("smbBackupRemoteDirectory")}
+                          placeholder="HomeBrain"
+                          className="mt-1"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-sm font-medium">Domain or workgroup</label>
+                        <Input
+                          {...register("smbBackupDomain")}
+                          placeholder="Optional"
+                          className="mt-1"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-sm font-medium">Username</label>
+                        <Input
+                          {...register("smbBackupUsername")}
+                          placeholder="Optional for guest shares"
+                          className="mt-1"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-sm font-medium">Password</label>
+                        <Input
+                          {...register("smbBackupPassword")}
+                          placeholder={smbBackupPasswordConfigured ? "Password configured" : "Optional"}
+                          type="password"
+                          className="mt-1"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border border-border/60 bg-slate-50/80 p-3 dark:bg-slate-950/40">
+                      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                        <div>
+                          <p className="font-medium">Automatic nightly backups</p>
+                          <p className="text-sm text-muted-foreground">
+                            Runs once per night using the {smbBackupTimeZone} timezone.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={smbBackupScheduleEnabled}
+                          onCheckedChange={(checked) => setValue("smbBackupScheduleEnabled", checked)}
+                        />
+                      </div>
+
+                      <div className="mt-3 grid gap-3 md:grid-cols-4">
+                        <div>
+                          <label className="text-sm font-medium">Time</label>
+                          <Input
+                            type="time"
+                            {...register("smbBackupScheduleTime")}
+                            disabled={!smbBackupScheduleEnabled}
+                            className="mt-1"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-sm font-medium">Keep last</label>
+                          <Input
+                            type="number"
+                            min={1}
+                            max={30}
+                            {...register("smbBackupRetentionCount", { valueAsNumber: true })}
+                            className="mt-1"
+                          />
+                        </div>
+                        <div className="md:col-span-2 rounded-lg border border-border/60 bg-background/80 px-3 py-2">
+                          <p className="text-xs font-medium uppercase text-muted-foreground">Next backup</p>
+                          <p className="mt-1 text-sm font-medium">
+                            {smbBackupScheduleEnabled && smbBackupScheduleNextRunAt
+                              ? formatHarmonyTimestamp(smbBackupScheduleNextRunAt)
+                              : smbBackupScheduleEnabled
+                                ? "Waiting for SMB share"
+                                : "Disabled"}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid gap-3 md:grid-cols-3">
+                        <div className="rounded-lg border border-border/60 bg-background/80 px-3 py-2">
+                          <p className="text-xs font-medium uppercase text-muted-foreground">Last started</p>
+                          <p className="mt-1 text-sm font-medium">
+                            {smbBackupScheduleLastTriggeredAt ? formatHarmonyTimestamp(smbBackupScheduleLastTriggeredAt) : "Never"}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-border/60 bg-background/80 px-3 py-2">
+                          <p className="text-xs font-medium uppercase text-muted-foreground">Last completed</p>
+                          <p className="mt-1 text-sm font-medium">
+                            {smbBackupScheduleLastCompletedAt ? formatHarmonyTimestamp(smbBackupScheduleLastCompletedAt) : "Never"}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-border/60 bg-background/80 px-3 py-2">
+                          <p className="text-xs font-medium uppercase text-muted-foreground">Last result</p>
+                          <p className="mt-1 text-sm font-medium">
+                            {smbBackupScheduleLastStatus || "No scheduled run yet"}
+                          </p>
+                          {smbBackupScheduleLastError && (
+                            <p className="mt-1 text-xs text-red-600 dark:text-red-300">{smbBackupScheduleLastError}</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
                     <div className="grid gap-2 md:grid-cols-2">
-                      <Input
-                        value={smbBackupShareUrl}
-                        onChange={(event) => setSmbBackupShareUrl(event.target.value)}
-                        placeholder="smb://server/share"
-                        className="md:col-span-2"
-                      />
-                      <Input
-                        value={smbBackupDirectory}
-                        onChange={(event) => setSmbBackupDirectory(event.target.value)}
-                        placeholder="Remote folder"
-                      />
-                      <Input
-                        value={smbBackupDomain}
-                        onChange={(event) => setSmbBackupDomain(event.target.value)}
-                        placeholder="Domain or workgroup (optional)"
-                      />
-                      <Input
-                        value={smbBackupUsername}
-                        onChange={(event) => setSmbBackupUsername(event.target.value)}
-                        placeholder="Username"
-                      />
-                      <Input
-                        value={smbBackupPassword}
-                        onChange={(event) => setSmbBackupPassword(event.target.value)}
-                        placeholder="Password"
-                        type="password"
-                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleTestSmbBackupConnection}
+                        disabled={testingSmbBackup || creatingSmbBackup || !smbBackupShareUrl.trim()}
+                        className="w-full"
+                      >
+                        {testingSmbBackup ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                            Testing...
+                          </>
+                        ) : (
+                          <>
+                            <TestTube className="h-4 w-4 mr-2" />
+                            Test SMB Connection
+                          </>
+                        )}
+                      </Button>
+
                       <Input
                         value={smbBackupConfirm}
                         onChange={(event) => setSmbBackupConfirm(event.target.value)}
                         placeholder="Type BACKUP HOMEBRAIN TO SMB"
-                        className="md:col-span-2"
                       />
+
                       <Button
                         type="button"
                         variant="outline"
@@ -8544,12 +8811,19 @@ export function Settings() {
                         )}
                       </Button>
                     </div>
+
                     {latestBackupJob && (
                       <div className="rounded-md border border-border/60 bg-background/80 px-3 py-2 text-sm text-muted-foreground">
                         <p>Status: {latestBackupJob.status}</p>
                         <p>Phase: {latestBackupJob.phase || "n/a"}</p>
+                        {latestBackupJob.source && <p>Source: {latestBackupJob.source}</p>}
                         {latestBackupJob.archiveName && <p>Archive: {latestBackupJob.archiveName}</p>}
                         {latestBackupJob.remoteTarget && <p className="break-all">Saved: {latestBackupJob.remoteTarget}</p>}
+                        {latestBackupJob.retention && (
+                          <p>
+                            Retention: kept {latestBackupJob.retention.kept?.length ?? 0} of {latestBackupJob.retention.matched ?? 0}; deleted {latestBackupJob.retention.deleted?.length ?? 0}.
+                          </p>
+                        )}
                         {latestBackupJob.message && <p>{latestBackupJob.message}</p>}
                         {latestBackupJob.error && <p className="text-red-600 dark:text-red-300">{latestBackupJob.error}</p>}
                       </div>

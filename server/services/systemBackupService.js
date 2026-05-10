@@ -9,10 +9,12 @@ const dotenv = require('dotenv');
 
 const packageJson = require('../../package.json');
 const { getDataRetentionDays } = require('../config/dataRetention');
+const Settings = require('../models/Settings');
 
 const BACKUP_FORMAT_VERSION = 1;
 const DEFAULT_SERVICE_NAME = 'homebrain';
 const SMB_BACKUP_CONFIRMATION = 'BACKUP HOMEBRAIN TO SMB';
+const SMB_BACKUP_FILENAME_PATTERN = /homebrain-backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.tar\.gz/g;
 
 function isRestoreActiveStatus(status) {
   return ['queued', 'validating', 'restoring'].includes(String(status || '').trim());
@@ -95,6 +97,8 @@ function buildBackupJobSummary(job) {
     phase: job.phase || null,
     message: job.message || null,
     remoteTarget: job.remoteTarget || null,
+    source: job.source || 'manual',
+    retention: job.retention || null,
     manifest: job.manifest || null
   };
 }
@@ -164,6 +168,90 @@ function buildSmbClientUploadCommand(localArchivePath, remoteDirectory, remoteFi
   return commands.join('; ');
 }
 
+function buildSmbClientTestCommand(localTestPath, remoteDirectory, remoteFilename) {
+  const commands = ['prompt off'];
+  normalizeSmbPathPart(remoteDirectory).forEach((part) => {
+    commands.push(`mkdir ${smbQuote(part)}`);
+    commands.push(`cd ${smbQuote(part)}`);
+  });
+  commands.push(`put ${smbQuote(localTestPath)} ${smbQuote(remoteFilename)}`);
+  commands.push(`ls ${smbQuote(remoteFilename)}`);
+  commands.push(`del ${smbQuote(remoteFilename)}`);
+  return commands.join('; ');
+}
+
+function buildSmbClientListBackupsCommand(remoteDirectory) {
+  const commands = ['prompt off'];
+  normalizeSmbPathPart(remoteDirectory).forEach((part) => {
+    commands.push(`cd ${smbQuote(part)}`);
+  });
+  commands.push('ls "homebrain-backup-*.tar.gz"');
+  return commands.join('; ');
+}
+
+function buildSmbClientDeleteBackupsCommand(remoteDirectory, filenames = []) {
+  const commands = ['prompt off'];
+  normalizeSmbPathPart(remoteDirectory).forEach((part) => {
+    commands.push(`cd ${smbQuote(part)}`);
+  });
+  filenames.forEach((filename) => {
+    commands.push(`del ${smbQuote(filename)}`);
+  });
+  return commands.join('; ');
+}
+
+function parseSmbBackupFilenames(output = '') {
+  return Array.from(new Set(String(output || '').match(SMB_BACKUP_FILENAME_PATTERN) || []))
+    .sort();
+}
+
+function isMaskedSecretValue(value) {
+  if (typeof value !== 'string') {
+    return false;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (/^[*•]+$/.test(trimmed)) {
+    return true;
+  }
+  return /^[*•]{4,}[^*•\s]+$/.test(trimmed);
+}
+
+function hasOwnValue(object, key) {
+  return Object.prototype.hasOwnProperty.call(object || {}, key);
+}
+
+function pickConfiguredString(candidate, fallback = '', explicit = false) {
+  if (explicit) {
+    if (typeof candidate === 'string' && isMaskedSecretValue(candidate)) {
+      return typeof fallback === 'string' ? fallback.trim() : '';
+    }
+    return typeof candidate === 'string' ? candidate.trim() : '';
+  }
+
+  if (typeof candidate === 'string' && candidate.trim() && !isMaskedSecretValue(candidate)) {
+    return candidate.trim();
+  }
+  return typeof fallback === 'string' ? fallback.trim() : '';
+}
+
+function pickConfiguredPassword(candidate, fallback = '') {
+  if (typeof candidate === 'string' && candidate && !isMaskedSecretValue(candidate)) {
+    return candidate;
+  }
+  return typeof fallback === 'string' ? fallback : '';
+}
+
+function normalizeRetentionCount(value, fallback = null) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.min(30, Math.max(1, Math.trunc(numeric)));
+}
+
 class SystemBackupService {
   constructor(options = {}) {
     this.projectRoot = options.projectRoot || path.resolve(__dirname, '..', '..');
@@ -175,6 +263,7 @@ class SystemBackupService {
     this.latestBackupJobRefPath = path.join(this.backupRoot, 'latest-backup-job.txt');
     this.latestRestoreJobRefPath = path.join(this.backupRoot, 'latest-restore-job.txt');
     this.spawnProcess = options.spawnProcess || spawn;
+    this.settingsModel = options.settingsModel || Settings;
     this.tempRoot = options.tempRoot || os.tmpdir();
     this.databaseUrl = options.databaseUrl || process.env.DATABASE_URL || '';
     this.serviceName = options.serviceName || process.env.HOMEBRAIN_SERVICE_NAME || DEFAULT_SERVICE_NAME;
@@ -503,9 +592,42 @@ class SystemBackupService {
     return credentialsPath;
   }
 
-  async uploadArchiveToSmb(archivePath, options = {}) {
+  buildSmbOptionsFromSettings(settings = {}, overrides = {}) {
+    const shareOverrideKey = hasOwnValue(overrides, 'shareUrl') ? 'shareUrl' : 'sharePath';
+    const shareOverrideExplicit = hasOwnValue(overrides, 'shareUrl') || hasOwnValue(overrides, 'sharePath');
+    return {
+      shareUrl: pickConfiguredString(overrides[shareOverrideKey], settings.smbBackupShareUrl, shareOverrideExplicit),
+      remoteDirectory: pickConfiguredString(
+        overrides.remoteDirectory,
+        settings.smbBackupRemoteDirectory,
+        hasOwnValue(overrides, 'remoteDirectory')
+      ),
+      username: pickConfiguredString(overrides.username, settings.smbBackupUsername, hasOwnValue(overrides, 'username')),
+      password: pickConfiguredPassword(overrides.password, settings.smbBackupPassword),
+      domain: pickConfiguredString(overrides.domain, settings.smbBackupDomain, hasOwnValue(overrides, 'domain')),
+      retentionCount: normalizeRetentionCount(
+        Object.prototype.hasOwnProperty.call(overrides, 'retentionCount')
+          ? overrides.retentionCount
+          : settings.smbBackupRetentionCount,
+        null
+      )
+    };
+  }
+
+  async resolveSmbOptions(options = {}) {
+    if (!options.useSavedSettings) {
+      return options;
+    }
+
+    const settings = await this.settingsModel.getSettings();
+    return {
+      ...options,
+      ...this.buildSmbOptionsFromSettings(settings, options)
+    };
+  }
+
+  async runSmbClientCommand(options = {}, commandText, commandOptions = {}) {
     const target = parseSmbShareTarget(options.shareUrl || options.sharePath, options.remoteDirectory);
-    const remoteFilename = sanitizeFilename(options.remoteFilename || path.basename(archivePath), path.basename(archivePath));
     const tempRoot = await fsp.mkdtemp(path.join(this.tempRoot, 'homebrain-smb-backup-'));
 
     try {
@@ -520,41 +642,137 @@ class SystemBackupService {
       } else {
         args.push('-N');
       }
-      args.push('-c', buildSmbClientUploadCommand(archivePath, target.remoteDirectory, remoteFilename));
+      args.push('-c', commandText);
 
       try {
-        await this.runCommand('smbclient', args, {
-          captureStdout: false
+        const result = await this.runCommand('smbclient', args, {
+          captureStdout: commandOptions.captureStdout !== false
         });
+        return { target, result };
       } catch (error) {
         if (/ENOENT|not found|spawn smbclient/i.test(error.message || '')) {
           throw new Error('smbclient is required to save backups to SMB. Install the samba-client/smbclient package on the HomeBrain host.');
         }
         throw error;
       }
+    } finally {
+      await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  async uploadArchiveToSmb(archivePath, options = {}) {
+    const target = parseSmbShareTarget(options.shareUrl || options.sharePath, options.remoteDirectory);
+    const remoteFilename = sanitizeFilename(options.remoteFilename || path.basename(archivePath), path.basename(archivePath));
+    const { target: uploadedTarget } = await this.runSmbClientCommand(
+      options,
+      buildSmbClientUploadCommand(archivePath, target.remoteDirectory, remoteFilename),
+      { captureStdout: false }
+    );
+
+    return {
+      sharePath: uploadedTarget.sharePath,
+      remoteDirectory: uploadedTarget.remoteDirectory,
+      remoteFilename,
+      remoteTarget: `${uploadedTarget.displayPath}/${remoteFilename}`,
+      displayPath: uploadedTarget.displayPath
+    };
+  }
+
+  async testSmbConnection(options = {}) {
+    const resolvedOptions = await this.resolveSmbOptions(options);
+    const target = parseSmbShareTarget(resolvedOptions.shareUrl || resolvedOptions.sharePath, resolvedOptions.remoteDirectory);
+    const tempRoot = await fsp.mkdtemp(path.join(this.tempRoot, 'homebrain-smb-test-'));
+    const remoteFilename = `homebrain-smb-test-${randomUUID()}.txt`;
+    const localTestPath = path.join(tempRoot, remoteFilename);
+
+    try {
+      await fsp.writeFile(localTestPath, `HomeBrain SMB connection test ${this.now().toISOString()}\n`, 'utf8');
+      const { result } = await this.runSmbClientCommand(
+        resolvedOptions,
+        buildSmbClientTestCommand(localTestPath, target.remoteDirectory, remoteFilename),
+        { captureStdout: true }
+      );
 
       return {
+        success: true,
+        message: 'SMB connection test completed successfully.',
         sharePath: target.sharePath,
         remoteDirectory: target.remoteDirectory,
-        remoteFilename,
         remoteTarget: `${target.displayPath}/${remoteFilename}`,
-        displayPath: target.displayPath
+        stdout: result.stdout || ''
       };
     } finally {
       await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
     }
   }
 
-  async startSmbBackupJob(options = {}) {
-    await this.initialize();
+  async listSmbBackupFiles(options = {}) {
+    const target = parseSmbShareTarget(options.shareUrl || options.sharePath, options.remoteDirectory);
+    const { result } = await this.runSmbClientCommand(
+      options,
+      buildSmbClientListBackupsCommand(target.remoteDirectory),
+      { captureStdout: true }
+    );
 
-    if (String(options.confirmBackup || options.confirm || '').trim().toUpperCase() !== SMB_BACKUP_CONFIRMATION) {
+    return {
+      sharePath: target.sharePath,
+      remoteDirectory: target.remoteDirectory,
+      displayPath: target.displayPath,
+      files: parseSmbBackupFilenames(result.stdout)
+    };
+  }
+
+  async pruneSmbBackups(options = {}, keepCount = 3) {
+    const normalizedKeepCount = normalizeRetentionCount(keepCount, 3);
+    const listing = await this.listSmbBackupFiles(options);
+    const sorted = [...listing.files].sort().reverse();
+    const kept = sorted.slice(0, normalizedKeepCount);
+    const deleted = sorted.slice(normalizedKeepCount);
+
+    if (deleted.length > 0) {
+      await this.runSmbClientCommand(
+        options,
+        buildSmbClientDeleteBackupsCommand(listing.remoteDirectory, deleted),
+        { captureStdout: false }
+      );
+    }
+
+    return {
+      keepCount: normalizedKeepCount,
+      matched: sorted.length,
+      kept,
+      deleted,
+      displayPath: listing.displayPath
+    };
+  }
+
+  async startSmbBackupJob(options = {}) {
+    return this.startSmbBackupJobInternal(options, { requireConfirmation: true });
+  }
+
+  async startScheduledSmbBackupJobFromSettings(settings = {}, options = {}) {
+    const resolved = {
+      ...this.buildSmbOptionsFromSettings(settings, options),
+      actor: options.actor || 'system:scheduler',
+      source: 'scheduled',
+      targetRunAt: options.targetRunAt || null,
+      onComplete: options.onComplete
+    };
+    return this.startSmbBackupJobInternal(resolved, { requireConfirmation: false });
+  }
+
+  async startSmbBackupJobInternal(options = {}, control = {}) {
+    await this.initialize();
+    const requireConfirmation = control.requireConfirmation !== false;
+    const resolvedOptions = await this.resolveSmbOptions(options);
+
+    if (requireConfirmation && String(resolvedOptions.confirmBackup || resolvedOptions.confirm || '').trim().toUpperCase() !== SMB_BACKUP_CONFIRMATION) {
       const error = new Error(`Type ${SMB_BACKUP_CONFIRMATION} to save a disaster recovery backup to SMB.`);
       error.status = 400;
       throw error;
     }
 
-    const target = parseSmbShareTarget(options.shareUrl || options.sharePath, options.remoteDirectory);
+    const target = parseSmbShareTarget(resolvedOptions.shareUrl || resolvedOptions.sharePath, resolvedOptions.remoteDirectory);
 
     const latestJob = await this.readLatestBackupJobRecord();
     if ((latestJob && isBackupActiveStatus(latestJob.status)) || this._runningBackupPromise) {
@@ -565,7 +783,8 @@ class SystemBackupService {
 
     const job = await this.writeBackupJob({
       id: randomUUID(),
-      actor: options.actor || 'unknown',
+      actor: resolvedOptions.actor || 'unknown',
+      source: resolvedOptions.source || 'manual',
       archiveName: null,
       status: 'queued',
       phase: 'queued',
@@ -578,13 +797,14 @@ class SystemBackupService {
       smb: {
         sharePath: target.sharePath,
         remoteDirectory: target.remoteDirectory,
-        usernameConfigured: Boolean(String(options.username || '').trim()),
-        domain: String(options.domain || '').trim() || null
+        usernameConfigured: Boolean(String(resolvedOptions.username || '').trim()),
+        domain: String(resolvedOptions.domain || '').trim() || null
       },
+      retention: null,
       manifest: null
     });
 
-    this._runningBackupPromise = this.executeSmbBackupJob(job.id, options)
+    this._runningBackupPromise = this.executeSmbBackupJob(job.id, resolvedOptions)
       .catch(() => null)
       .finally(() => {
         this._runningBackupPromise = null;
@@ -622,21 +842,34 @@ class SystemBackupService {
         remoteFilename: options.remoteFilename || backup.archiveFilename
       });
 
-      await this.updateBackupJob(jobId, {
+      let retention = null;
+      const retentionCount = normalizeRetentionCount(options.retentionCount, null);
+      if (retentionCount) {
+        retention = await this.pruneSmbBackups(options, retentionCount);
+      }
+
+      const completedJob = await this.updateBackupJob(jobId, {
         status: 'completed',
         phase: 'completed',
         completedAt: this.now().toISOString(),
         remoteTarget: uploaded.remoteTarget,
-        message: `Backup saved to ${uploaded.remoteTarget}.`
+        retention,
+        message: retention
+          ? `Backup saved to ${uploaded.remoteTarget}. Retention kept ${retention.kept.length} backup${retention.kept.length === 1 ? '' : 's'} and deleted ${retention.deleted.length}.`
+          : `Backup saved to ${uploaded.remoteTarget}.`
       });
+      await options.onComplete?.(buildBackupJobSummary(completedJob));
     } catch (error) {
-      await this.updateBackupJob(jobId, {
+      const failedJob = await this.updateBackupJob(jobId, {
         status: 'failed',
         phase: 'failed',
         completedAt: this.now().toISOString(),
         error: error.message,
         message: 'Backup failed before HomeBrain could save the archive to SMB.'
       }).catch(() => {});
+      if (failedJob) {
+        await options.onComplete?.(buildBackupJobSummary(failedJob));
+      }
     } finally {
       await backup?.cleanup?.().catch(() => {});
     }
@@ -980,5 +1213,9 @@ module.exports = new SystemBackupService();
 module.exports.SystemBackupService = SystemBackupService;
 module.exports._test = {
   buildSmbClientUploadCommand,
-  parseSmbShareTarget
+  buildSmbClientTestCommand,
+  buildSmbClientListBackupsCommand,
+  buildSmbClientDeleteBackupsCommand,
+  parseSmbShareTarget,
+  parseSmbBackupFilenames
 };

@@ -329,3 +329,81 @@ test('SMB share parser accepts UNC paths and rejects incomplete shares', () => {
     /host and share/
   );
 });
+
+test('testSmbConnection writes, lists, and deletes a probe file on the configured share', { concurrency: false }, async (t) => {
+  const { projectRoot, tempRoot } = await createTempProject(t);
+  const service = new SystemBackupService({
+    projectRoot,
+    tempRoot,
+    now: () => new Date('2026-05-10T08:30:00.000Z')
+  });
+
+  let smbclientCommand = '';
+  service.runCommand = async (command, args) => {
+    assert.equal(command, 'smbclient');
+    smbclientCommand = args[args.indexOf('-c') + 1];
+    assert.match(smbclientCommand, /put .*homebrain-smb-test-.*\.txt/);
+    assert.match(smbclientCommand, /ls "homebrain-smb-test-.*\.txt"/);
+    assert.match(smbclientCommand, /del "homebrain-smb-test-.*\.txt"/);
+    return { code: 0, stdout: 'homebrain-smb-test-ok.txt', stderr: '' };
+  };
+
+  const result = await service.testSmbConnection({
+    shareUrl: '//nas/backups',
+    remoteDirectory: 'HomeBrain/nightly'
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.sharePath, '//nas/backups');
+  assert.equal(result.remoteDirectory, 'HomeBrain/nightly');
+  assert.match(result.remoteTarget, /\/\/nas\/backups\/HomeBrain\/nightly\/homebrain-smb-test-/);
+  assert.match(smbclientCommand, /cd "nightly"/);
+});
+
+test('pruneSmbBackups keeps the newest matching backup files and deletes older ones', { concurrency: false }, async (t) => {
+  const { projectRoot, tempRoot } = await createTempProject(t);
+  const service = new SystemBackupService({
+    projectRoot,
+    tempRoot
+  });
+
+  const deletedCommands = [];
+  service.runCommand = async (command, args) => {
+    assert.equal(command, 'smbclient');
+    const commandText = args[args.indexOf('-c') + 1];
+    if (commandText.includes('ls "homebrain-backup-*.tar.gz"')) {
+      return {
+        code: 0,
+        stdout: [
+          'homebrain-backup-2026-05-06T02-30-00Z.tar.gz',
+          'homebrain-backup-2026-05-07T02-30-00Z.tar.gz',
+          'homebrain-backup-2026-05-08T02-30-00Z.tar.gz',
+          'homebrain-backup-2026-05-09T02-30-00Z.tar.gz',
+          'homebrain-backup-2026-05-10T02-30-00Z.tar.gz'
+        ].join('\n'),
+        stderr: ''
+      };
+    }
+
+    deletedCommands.push(commandText);
+    return { code: 0, stdout: '', stderr: '' };
+  };
+
+  const result = await service.pruneSmbBackups({
+    shareUrl: 'smb://nas.local/backups',
+    remoteDirectory: 'HomeBrain'
+  }, 3);
+
+  assert.deepEqual(result.kept, [
+    'homebrain-backup-2026-05-10T02-30-00Z.tar.gz',
+    'homebrain-backup-2026-05-09T02-30-00Z.tar.gz',
+    'homebrain-backup-2026-05-08T02-30-00Z.tar.gz'
+  ]);
+  assert.deepEqual(result.deleted, [
+    'homebrain-backup-2026-05-07T02-30-00Z.tar.gz',
+    'homebrain-backup-2026-05-06T02-30-00Z.tar.gz'
+  ]);
+  assert.equal(deletedCommands.length, 1);
+  assert.match(deletedCommands[0], /del "homebrain-backup-2026-05-07T02-30-00Z\.tar\.gz"/);
+  assert.match(deletedCommands[0], /del "homebrain-backup-2026-05-06T02-30-00Z\.tar\.gz"/);
+});
