@@ -190,6 +190,14 @@ test('Matter service guards Thread firmware flashing inputs and command construc
     matterService._test.normalizeThreadOtbrState('detached\r\nDone'),
     'detached'
   );
+  assert.equal(
+    matterService._test.isThreadOtbrAttachedState('detached\r\nDone'),
+    false
+  );
+  assert.equal(
+    matterService._test.isThreadOtbrAttachedState('leader\r\nDone'),
+    true
+  );
   assert.deepEqual(
     matterService._test.resolveThreadActiveDataset({
       configuredDataset: '',
@@ -275,6 +283,40 @@ test('Matter Thread setup guidance marks completed OpenThread flash before OTBR 
   assert.equal(otbrAction.status, 'required');
   assert.match(otbrAction.detail, /HomeBrain-managed OTBR/);
   assert.equal(guidance.otbr.serverSideConfirmation, 'START THREAD BORDER ROUTER');
+});
+
+test('Matter Thread setup guidance requires OTBR to attach before commissioning is ready', () => {
+  const port = {
+    path: '/dev/serial/by-id/usb-SONOFF_MG24',
+    stablePath: '/dev/serial/by-id/usb-SONOFF_MG24'
+  };
+  const guidance = matterService._test.buildThreadSetupGuidance({
+    expectedPorts: [port],
+    selectedPort: port,
+    otbr: {
+      online: true,
+      dataset: '0e080000000000010000',
+      baseUrl: 'http://127.0.0.1:8081'
+    },
+    otbrHost: {
+      state: 'detached'
+    },
+    activeDataset: '0e080000000000010000',
+    firmwareFlash: {
+      tool: {
+        available: true,
+        canAutoInstall: true
+      }
+    }
+  });
+
+  const otbrAction = guidance.actions.find((action) => action.id === 'start-otbr');
+  const attachAction = guidance.actions.find((action) => action.id === 'attach-thread-network');
+
+  assert.equal(otbrAction.status, 'required');
+  assert.match(otbrAction.detail, /Thread is detached/);
+  assert.equal(attachAction.status, 'required');
+  assert.match(attachAction.detail, /cannot be commissioned/);
 });
 
 test('persisted Thread flash jobs are normalized for restart-safe status checks', () => {

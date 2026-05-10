@@ -762,6 +762,10 @@ function normalizeThreadOtbrState(value) {
     .find((line) => ['disabled', 'detached', 'child', 'router', 'leader'].includes(line)) || '';
 }
 
+function isThreadOtbrAttachedState(value) {
+  return ['child', 'router', 'leader'].includes(normalizeThreadOtbrState(value));
+}
+
 function resolveThreadActiveDataset({
   configuredDataset = '',
   otbrDataset = '',
@@ -889,7 +893,16 @@ function commandExists(command) {
 
 function systemctlValue(args = []) {
   const result = runSync('systemctl', args, { timeout: 4000 });
-  return result.ok ? result.stdout : '';
+  return result.stdout || result.stderr || '';
+}
+
+function parseJsonObject(value) {
+  try {
+    const parsed = JSON.parse(normalizeString(value));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch (_error) {
+    return null;
+  }
 }
 
 function findCompletedThreadFirmwareFlash(firmwareFlash = {}, selectedPath = '') {
@@ -935,12 +948,15 @@ function buildThreadSetupGuidance({
   expectedPorts = [],
   selectedPort = null,
   otbr = {},
+  otbrHost = {},
   activeDataset = '',
   firmwareFlash = null
 }) {
   const selectedPath = selectedPort?.path || selectedPort?.stablePath || selectedPort?.rawPath || '';
   const canServerFlash = Boolean(firmwareFlash?.tool?.available || firmwareFlash?.tool?.canAutoInstall);
   const completedFlash = findCompletedThreadFirmwareFlash(firmwareFlash, selectedPath);
+  const threadAttached = isThreadOtbrAttachedState(otbrHost?.state);
+  const threadState = normalizeThreadOtbrState(otbrHost?.state);
   const actions = [];
 
   actions.push({
@@ -966,14 +982,16 @@ function buildThreadSetupGuidance({
   actions.push({
     id: 'flash-openthread-rcp',
     label: 'Flash OpenThread RCP firmware',
-    status: (otbr.online || completedFlash) ? 'complete' : (expectedPorts.length > 0 ? 'recommended' : 'blocked'),
-    detail: otbr.online
-      ? 'OTBR is responding, so the Thread radio path is active.'
+    status: (threadAttached || completedFlash) ? 'complete' : (expectedPorts.length > 0 ? 'recommended' : 'blocked'),
+    detail: threadAttached
+      ? 'OTBR is attached, so the Thread radio path is active.'
       : completedFlash
         ? `OpenThread RCP firmware ${completedFlash?.firmware?.version || completedFlash?.firmware?.name || ''} was flashed successfully.`
-      : canServerFlash
-        ? 'Use HomeBrain to download the latest matching SONOFF OpenThread RCP firmware and flash the selected MG24 stick, then start OTBR.'
-        : 'Install universal-silabs-flasher on the HomeBrain host, or use the SONOFF Dongle Flasher with the stick attached to the browser computer.',
+        : otbr.online
+          ? 'OTBR is responding, but the Thread interface is not attached yet.'
+          : canServerFlash
+            ? 'Use HomeBrain to download the latest matching SONOFF OpenThread RCP firmware and flash the selected MG24 stick, then start OTBR.'
+            : 'Install universal-silabs-flasher on the HomeBrain host, or use the SONOFF Dongle Flasher with the stick attached to the browser computer.',
     url: SONOFF_MG24_FLASHER_URL,
     guideUrl: SONOFF_MG24_OPENTHREAD_GUIDE_URL,
     addOnUrl: SONOFF_MG24_FLASHER_ADDON_URL
@@ -982,13 +1000,24 @@ function buildThreadSetupGuidance({
   actions.push({
     id: 'start-otbr',
     label: 'Start OpenThread Border Router',
-    status: otbr.online ? 'complete' : 'required',
-    detail: otbr.online
-      ? `OTBR REST is online at ${otbr.baseUrl}.`
-      : completedFlash
-        ? 'Start HomeBrain-managed OTBR so the flashed MG24 can provide an active Thread dataset.'
-        : 'OTBR is not answering yet; flash the MG24 with OpenThread RCP, then start the border router.',
+    status: (otbr.online && threadAttached) ? 'complete' : 'required',
+    detail: otbr.online && threadAttached
+      ? `OTBR REST is online at ${otbr.baseUrl} and Thread is ${threadState}.`
+      : otbr.online
+        ? `OTBR REST is online, but Thread is ${threadState || 'not attached'}; restart OTBR and check diagnostics.`
+        : completedFlash
+          ? 'Start HomeBrain-managed OTBR so the flashed MG24 can provide an active Thread dataset.'
+          : 'OTBR is not answering yet; flash the MG24 with OpenThread RCP, then start the border router.',
     guideUrl: OPENTHREAD_OTBR_GUIDE_URL
+  });
+
+  actions.push({
+    id: 'attach-thread-network',
+    label: 'Attach Thread network',
+    status: threadAttached ? 'complete' : 'required',
+    detail: threadAttached
+      ? `OpenThread reports ${threadState}.`
+      : `OpenThread is ${threadState || 'not reporting a state'}; Thread devices cannot be commissioned until the border router attaches.`
   });
 
   actions.push({
@@ -1351,14 +1380,20 @@ class MatterService {
       .sort((left, right) => new Date(right.updatedAt || 0) - new Date(left.updatedAt || 0))
       .slice(0, 5)
       .map((job) => this.serializeThreadOtbrJob(job, { includeLogs: options.includeLogs !== false }));
-    const serviceActive = systemctlValue(['is-active', 'otbr-agent']);
-    const serviceEnabled = systemctlValue(['is-enabled', 'otbr-agent']);
-    const mainPid = systemctlValue(['show', '-p', 'MainPID', '--value', 'otbr-agent']);
     const helperAvailable = fs.existsSync(THREAD_OTBR_HELPER_PATH);
+    const helperProbe = helperAvailable
+      ? runSync('sudo', ['-n', THREAD_OTBR_HELPER_PATH, 'status'], { timeout: 25_000 })
+      : null;
+    const helperStatus = parseJsonObject(helperProbe?.stdout || '');
+    const serviceActive = normalizeString(helperStatus?.active) || systemctlValue(['is-active', 'otbr-agent']);
+    const serviceEnabled = normalizeString(helperStatus?.enabled) || systemctlValue(['is-enabled', 'otbr-agent']);
+    const mainPid = normalizeString(helperStatus?.mainPid) || systemctlValue(['show', '-p', 'MainPID', '--value', 'otbr-agent']);
     const otbrAgentInstalled = commandExists('otbr-agent') || fs.existsSync('/usr/sbin/otbr-agent') || fs.existsSync('/usr/local/sbin/otbr-agent');
     const otCtlInstalled = commandExists('ot-ctl') || fs.existsSync('/usr/sbin/ot-ctl') || fs.existsSync('/usr/local/bin/ot-ctl');
-    const datasetProbe = otCtlInstalled ? runSync('bash', ['-lc', 'ot-ctl dataset active -x 2>/dev/null || true'], { timeout: 7000 }) : null;
-    const stateProbe = otCtlInstalled ? runSync('bash', ['-lc', 'ot-ctl state 2>/dev/null || true'], { timeout: 7000 }) : null;
+    const datasetProbe = (!helperStatus && otCtlInstalled) ? runSync('bash', ['-lc', 'ot-ctl dataset active -x 2>/dev/null || true'], { timeout: 7000 }) : null;
+    const stateProbe = (!helperStatus && otCtlInstalled) ? runSync('bash', ['-lc', 'ot-ctl state 2>/dev/null || true'], { timeout: 7000 }) : null;
+    const state = normalizeThreadOtbrState(helperStatus?.state || stateProbe?.stdout || '');
+    const dataset = parseHexDatasetFromText(helperStatus?.dataset || datasetProbe?.stdout || '');
 
     return {
       confirmationPhrase: THREAD_OTBR_CONFIRMATION,
@@ -1371,8 +1406,15 @@ class MatterService {
       mainPid: mainPid && mainPid !== '0' ? mainPid : null,
       otbrAgentInstalled,
       otCtlInstalled,
-      state: normalizeThreadOtbrState(stateProbe?.stdout || ''),
-      dataset: parseHexDatasetFromText(datasetProbe?.stdout || ''),
+      state,
+      attached: isThreadOtbrAttachedState(state),
+      dataset,
+      diagnostics: {
+        helperStatusAvailable: Boolean(helperStatus),
+        helperError: helperStatus ? null : normalizeString(helperProbe?.stderr || helperProbe?.error || ''),
+        systemctl: normalizeString(helperStatus?.diagnostics?.systemctl || ''),
+        journal: normalizeString(helperStatus?.diagnostics?.journal || '')
+      },
       activeJob: activeJob ? this.serializeThreadOtbrJob(activeJob, { includeLogs: options.includeLogs !== false }) : null,
       recentJobs
     };
@@ -1544,13 +1586,19 @@ class MatterService {
     }
 
     const otbrHost = await this.getThreadOtbrHostStatus({ includeLogs: false });
+    const hasDataset = Boolean(otbr.dataset || otbrHost.dataset);
+    const attached = isThreadOtbrAttachedState(otbrHost.state);
+    const completed = Boolean(otbr.online && hasDataset && attached);
+    const failureReason = !otbr.online
+      ? 'OTBR started, but the REST API is not responding.'
+      : !hasDataset
+        ? 'OTBR started, but HomeBrain could not read an active Thread dataset from OTBR.'
+        : `OTBR has a dataset, but OpenThread is ${otbrHost.state || 'not attached'} instead of leader/router/child.`;
     this.updateThreadOtbrJob(job, {
-      status: otbr.online && (otbr.dataset || otbrHost.dataset) ? 'completed' : 'failed',
-      phase: otbr.online && (otbr.dataset || otbrHost.dataset) ? 'completed' : 'failed',
+      status: completed ? 'completed' : 'failed',
+      phase: completed ? 'completed' : 'failed',
       finishedAt: new Date().toISOString(),
-      error: otbr.online && (otbr.dataset || otbrHost.dataset)
-        ? null
-        : 'OTBR started, but HomeBrain could not read an active Thread dataset from OTBR.',
+      error: completed ? null : failureReason,
       result: {
         otbr,
         otbrHost
@@ -2150,9 +2198,11 @@ class MatterService {
       expectedPorts,
       selectedPort,
       otbr,
+      otbrHost,
       activeDataset: activeDataset.dataset,
       firmwareFlash
     });
+    const otbrAttached = isThreadOtbrAttachedState(otbrHost.state);
 
     const status = {
       hardware: MATTER_CONTROLLER_HARDWARE,
@@ -2166,10 +2216,12 @@ class MatterService {
         datasetEndpoint: otbr.endpoint,
         dataset: activeDataset.dataset,
         hasActiveDataset: Boolean(activeDataset.dataset),
-        activeDatasetSource: activeDataset.source
+        activeDatasetSource: activeDataset.source,
+        attached: otbrAttached,
+        state: otbrHost.state || ''
       },
       otbrHost,
-      readyForThreadCommissioning: Boolean(expectedPorts.length > 0 && activeDataset.dataset),
+      readyForThreadCommissioning: Boolean(expectedPorts.length > 0 && activeDataset.dataset && otbr.online && otbrAttached),
       setup,
       firmwareFlash,
       manualSteps: buildManualSteps({
@@ -3140,6 +3192,7 @@ matterService._test = {
   inferSonoffThreadFirmwareTarget,
   getSerialPortListFunction,
   isAllowedLocalOtbrHost,
+  isThreadOtbrAttachedState,
   isTrustedSonoffFirmwareUrl,
   looksLikeSonoffMg24Port,
   normalizePersistedThreadFirmwareFlashJob,
