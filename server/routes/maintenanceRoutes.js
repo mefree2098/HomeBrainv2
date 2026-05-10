@@ -451,6 +451,48 @@ router.get('/backup/full', async (req, res) => {
   }
 });
 
+router.get('/backup/latest', async (_req, res) => {
+  try {
+    const job = await maintenanceService.getLatestDisasterRecoveryBackupJob();
+    return res.status(200).json({
+      success: true,
+      job
+    });
+  } catch (error) {
+    console.error('MaintenanceRoutes: Error fetching latest backup job:', error.message);
+    console.error(error.stack);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch latest backup job'
+    });
+  }
+});
+
+router.post('/backup/smb', async (req, res) => {
+  try {
+    const actor = req.user?.email || req.user?._id || 'unknown';
+    const job = await maintenanceService.startSmbDisasterRecoveryBackup({
+      ...(req.body || {}),
+      actor
+    });
+
+    return res.status(202).json({
+      success: true,
+      message: 'SMB disaster recovery backup queued.',
+      job
+    });
+  } catch (error) {
+    console.error('MaintenanceRoutes: Error starting SMB backup:', error.message);
+    console.error(error.stack);
+
+    const statusCode = error.code === 'BACKUP_RUNNING' ? 409 : (error.status || 500);
+    return res.status(statusCode).json({
+      success: false,
+      error: error.message || 'Failed to start SMB backup'
+    });
+  }
+});
+
 router.get('/restore/latest', async (_req, res) => {
   try {
     const job = await maintenanceService.getLatestRestoreJob();

@@ -1529,6 +1529,22 @@ class MaintenanceService {
     }
   }
 
+  async startSmbDisasterRecoveryBackup(options = {}) {
+    console.log('MaintenanceService: Queueing SMB disaster recovery backup');
+
+    try {
+      return await systemBackupService.startSmbBackupJob(options);
+    } catch (error) {
+      console.error('MaintenanceService: Error starting SMB disaster recovery backup:', error.message);
+      console.error(error.stack);
+      throw error;
+    }
+  }
+
+  async getLatestDisasterRecoveryBackupJob() {
+    return systemBackupService.getLatestBackupJob();
+  }
+
   async startDisasterRecoveryRestore(readable, options = {}) {
     console.log('MaintenanceService: Queueing full disaster recovery restore');
 

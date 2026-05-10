@@ -242,3 +242,90 @@ test('launchRestoreHelper falls back to the repo restore script when the systemd
   assert.equal(spawnCalls[0].options.env.HOMEBRAIN_DIR, projectRoot);
   assert.equal(spawnCalls[0].options.env.HOMEBRAIN_SERVICE_NAME, 'homebrain');
 });
+
+test('uploadArchiveToSmb copies backups with smbclient without exposing credentials in args', { concurrency: false }, async (t) => {
+  const { projectRoot, tempRoot } = await createTempProject(t);
+  const archivePath = path.join(tempRoot, 'homebrain-backup.tar.gz');
+  await fsp.writeFile(archivePath, 'backup', 'utf8');
+
+  const service = new SystemBackupService({
+    projectRoot,
+    tempRoot
+  });
+
+  let smbclientCall = null;
+  service.runCommand = async (command, args) => {
+    smbclientCall = { command, args };
+    assert.equal(command, 'smbclient');
+    assert.equal(args.includes('super-secret'), false);
+    const credentialsIndex = args.indexOf('-A');
+    assert.notEqual(credentialsIndex, -1);
+    const credentialsPath = args[credentialsIndex + 1];
+    const credentials = await fsp.readFile(credentialsPath, 'utf8');
+    assert.match(credentials, /username = matt/);
+    assert.match(credentials, /password = super-secret/);
+    assert.match(credentials, /domain = WORKGROUP/);
+    return { code: 0, stdout: '', stderr: '' };
+  };
+
+  const result = await service.uploadArchiveToSmb(archivePath, {
+    shareUrl: 'smb://nas.local/backups/homebrain',
+    remoteDirectory: 'daily',
+    username: 'matt',
+    password: 'super-secret',
+    domain: 'WORKGROUP'
+  });
+
+  assert.equal(result.sharePath, '//nas.local/backups');
+  assert.equal(result.remoteDirectory, 'homebrain/daily');
+  assert.equal(result.remoteTarget, '//nas.local/backups/homebrain/daily/homebrain-backup.tar.gz');
+  assert.equal(smbclientCall.command, 'smbclient');
+  assert.equal(smbclientCall.args[0], '//nas.local/backups');
+  const commandText = smbclientCall.args[smbclientCall.args.indexOf('-c') + 1];
+  assert.match(commandText, /mkdir "homebrain"/);
+  assert.match(commandText, /cd "daily"/);
+  assert.match(commandText, /put .*homebrain-backup\.tar\.gz/);
+});
+
+test('SMB backup jobs persist only sanitized share metadata', { concurrency: false }, async (t) => {
+  const { projectRoot, tempRoot } = await createTempProject(t);
+  const service = new SystemBackupService({
+    projectRoot,
+    tempRoot,
+    now: () => new Date('2026-04-15T14:00:00.000Z')
+  });
+
+  service.executeSmbBackupJob = async () => {};
+
+  const job = await service.startSmbBackupJob({
+    shareUrl: 'smb://matt:super-secret@nas.local/backups/homebrain',
+    remoteDirectory: 'daily',
+    username: 'matt',
+    password: 'super-secret',
+    confirmBackup: 'BACKUP HOMEBRAIN TO SMB'
+  });
+  const stored = await service.readBackupJob(job.id);
+  const raw = JSON.stringify(stored);
+
+  assert.equal(stored.smb.sharePath, '//nas.local/backups');
+  assert.equal(stored.smb.remoteDirectory, 'homebrain/daily');
+  assert.equal(stored.smb.usernameConfigured, true);
+  assert.doesNotMatch(raw, /super-secret/);
+  assert.doesNotMatch(raw, /matt:super-secret/);
+});
+
+test('SMB share parser accepts UNC paths and rejects incomplete shares', () => {
+  const parsed = systemBackupServiceModule._test.parseSmbShareTarget('//nas/backups/homebrain', 'daily');
+  assert.equal(parsed.sharePath, '//nas/backups');
+  assert.equal(parsed.remoteDirectory, 'homebrain/daily');
+  assert.equal(parsed.displayPath, '//nas/backups/homebrain/daily');
+
+  assert.throws(
+    () => systemBackupServiceModule._test.parseSmbShareTarget('nas/backups'),
+    /SMB share must look like/
+  );
+  assert.throws(
+    () => systemBackupServiceModule._test.parseSmbShareTarget('//nas'),
+    /host and share/
+  );
+});

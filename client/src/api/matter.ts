@@ -152,3 +152,13 @@ export const startMatterThreadKernelRebuild = async (payload: MatterThreadKernel
     throw new Error(apiErrorMessage(error, 'Failed to start Thread kernel rebuild'));
   }
 };
+
+export const validateMatterThreadKernelPreflight = async () => {
+  try {
+    const response = await api.post('/api/matter/thread/kernel/validate');
+    return response.data;
+  } catch (error) {
+    console.error('Error running Thread kernel preflight:', error);
+    throw new Error(apiErrorMessage(error, 'Failed to run Thread kernel preflight'));
+  }
+};

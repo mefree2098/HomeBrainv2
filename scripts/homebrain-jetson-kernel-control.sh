@@ -12,12 +12,16 @@ EXTLINUX_CONF="${HOMEBRAIN_THREAD_KERNEL_EXTLINUX_CONF:-/boot/extlinux/extlinux.
 CUSTOM_LABEL="${HOMEBRAIN_THREAD_KERNEL_LABEL:-homebrain-thread}"
 CUSTOM_IMAGE="${HOMEBRAIN_THREAD_KERNEL_IMAGE:-/boot/Image.homebrain-thread}"
 CUSTOM_INITRD="${HOMEBRAIN_THREAD_KERNEL_INITRD:-/boot/initrd.homebrain-thread}"
+CUSTOM_CONFIG="${HOMEBRAIN_THREAD_KERNEL_CONFIG:-/boot/config.homebrain-thread}"
 CONFIRM_PHRASE="${HOMEBRAIN_THREAD_KERNEL_CONFIRMATION:-REBUILD JETSON KERNEL FOR FULL THREAD}"
 REBOOT_CONFIRM_PHRASE="${HOMEBRAIN_THREAD_KERNEL_REBOOT_CONFIRMATION:-REBOOT JETSON AFTER KERNEL INSTALL}"
 JETSONHACKS_REPO_URL="${HOMEBRAIN_THREAD_KERNEL_BUILDER_REPO:-https://github.com/jetsonhacks/jetson-orin-kernel-builder.git}"
 LOG_FILE="${STATE_DIR}/last-build.log"
 LAST_RESULT_FILE="${STATE_DIR}/last-result.json"
 PENDING_REBOOT_FILE="${STATE_DIR}/pending-reboot.json"
+VALIDATION_FILE="${STATE_DIR}/last-validation.json"
+KERNEL_RELEASE_FILE="${STATE_DIR}/kernel-release"
+LAST_EXTLINUX_BACKUP_FILE="${STATE_DIR}/last-extlinux-backup-path"
 CONFIRMATION=""
 REBOOT_CONFIRMATION=""
 AUTO_REBOOT=0
@@ -248,8 +252,16 @@ last_result_json() {
   fi
 }
 
+validation_json() {
+  if [[ -r "${VALIDATION_FILE}" ]]; then
+    tr -d '\n' <"${VALIDATION_FILE}"
+  else
+    printf 'null'
+  fi
+}
+
 print_status_json() {
-  local jetson="false" support="false" needs="true" runtime l4t default_label pending last_result
+  local jetson="false" support="false" needs="true" runtime l4t default_label pending last_result validation
   if is_jetson_orin_host; then
     jetson="true"
   fi
@@ -262,8 +274,9 @@ print_status_json() {
   default_label="$(read_extlinux_default)"
   pending="$(pending_reboot_json)"
   last_result="$(last_result_json)"
+  validation="$(validation_json)"
 
-  printf '{"success":true,"helper":"homebrain-jetson-kernel-control","confirmationPhrase":"%s","rebootConfirmationPhrase":"%s","isJetsonOrin":%s,"unameRelease":"%s","l4tRelease":"%s","kernelConfig":%s,"runtimeIpv6Mroute":"%s","kernelSupportsFullThread":%s,"needsRebuild":%s,"builder":{"path":"%s","exists":%s,"revision":"%s"},"source":{"path":"%s","exists":%s,"revision":"%s"},"boot":{"extlinuxConf":"%s","defaultLabel":"%s","customLabel":"%s","customImage":"%s","customImageSha256":"%s","customInitrd":"%s","customInitrdSha256":"%s"},"pendingReboot":%s,"lastResult":%s}\n' \
+  printf '{"success":true,"helper":"homebrain-jetson-kernel-control","confirmationPhrase":"%s","rebootConfirmationPhrase":"%s","isJetsonOrin":%s,"unameRelease":"%s","l4tRelease":"%s","kernelConfig":%s,"runtimeIpv6Mroute":"%s","kernelSupportsFullThread":%s,"needsRebuild":%s,"builder":{"path":"%s","exists":%s,"revision":"%s"},"source":{"path":"%s","exists":%s,"revision":"%s"},"boot":{"extlinuxConf":"%s","defaultLabel":"%s","customLabel":"%s","customImage":"%s","customImageSha256":"%s","customInitrd":"%s","customInitrdSha256":"%s","customConfig":"%s","customConfigSha256":"%s"},"pendingReboot":%s,"validation":%s,"lastResult":%s}\n' \
     "$(json_escape "${CONFIRM_PHRASE}")" \
     "$(json_escape "${REBOOT_CONFIRM_PHRASE}")" \
     "${jetson}" \
@@ -286,7 +299,10 @@ print_status_json() {
     "$(json_escape "$(file_sha256 "${CUSTOM_IMAGE}")")" \
     "$(json_escape "${CUSTOM_INITRD}")" \
     "$(json_escape "$(file_sha256 "${CUSTOM_INITRD}")")" \
+    "$(json_escape "${CUSTOM_CONFIG}")" \
+    "$(json_escape "$(file_sha256 "${CUSTOM_CONFIG}")")" \
     "${pending}" \
+    "${validation}" \
     "${last_result}"
 }
 
@@ -393,6 +409,7 @@ build_and_install_kernel() {
     make modules_install
     depmod "${kernel_release}" || true
   )
+  kernel_release="$(cd "${KERNEL_SRC}" && make -s kernelrelease)"
 
   [[ -r "${KERNEL_SRC}/arch/arm64/boot/Image" ]] || die "Built kernel Image was not found."
   mkdir -p "$(dirname "${CUSTOM_IMAGE}")"
@@ -405,6 +422,8 @@ build_and_install_kernel() {
 
   log "Installing custom kernel image to ${CUSTOM_IMAGE}."
   install -m 0644 "${KERNEL_SRC}/arch/arm64/boot/Image" "${CUSTOM_IMAGE}"
+  install -m 0644 "${KERNEL_SRC}/.config" "${CUSTOM_CONFIG}"
+  printf '%s\n' "${kernel_release}" >"${KERNEL_RELEASE_FILE}"
 
   if command_exists nv-update-initrd; then
     log "Updating Jetson initrd with nv-update-initrd."
@@ -427,6 +446,7 @@ build_and_install_kernel() {
   [[ -r "${EXTLINUX_CONF}" ]] || die "Jetson extlinux config was not found at ${EXTLINUX_CONF}."
   extlinux_backup="${EXTLINUX_CONF}.homebrain-backup.$(date +%Y%m%d-%H%M%S)"
   cp -a "${EXTLINUX_CONF}" "${extlinux_backup}"
+  printf '%s\n' "${extlinux_backup}" >"${LAST_EXTLINUX_BACKUP_FILE}"
   log "Updating ${EXTLINUX_CONF}; backup is ${extlinux_backup}."
   EXTLINUX_CONF="${EXTLINUX_CONF}" CUSTOM_LABEL="${CUSTOM_LABEL}" CUSTOM_IMAGE="${CUSTOM_IMAGE}" CUSTOM_INITRD="${CUSTOM_INITRD}" python3 - <<'PY'
 import os
@@ -438,40 +458,266 @@ image = os.environ["CUSTOM_IMAGE"]
 initrd = os.environ["CUSTOM_INITRD"]
 
 lines = path.read_text().splitlines()
-out = []
-skip = False
+global_lines = []
+stanzas = []
+current = None
+default_label = ""
+
 for line in lines:
     stripped = line.strip()
     upper = stripped.upper()
-    if upper.startswith("LABEL ") and stripped.split(None, 1)[1:] and stripped.split(None, 1)[1] == label:
-        skip = True
-        continue
-    if skip and upper.startswith("LABEL "):
-        skip = False
-    if skip:
-        continue
     if upper.startswith("DEFAULT "):
-        out.append(f"DEFAULT {label}")
+        parts = stripped.split(None, 1)
+        default_label = parts[1] if len(parts) > 1 else ""
+        global_lines.append(f"DEFAULT {label}")
+        continue
+    if upper.startswith("LABEL "):
+        if current:
+            stanzas.append(current)
+        current = [line]
+        continue
+    if current is None:
+        global_lines.append(line)
     else:
-        out.append(line)
+        current.append(line)
 
-if not any(line.strip().upper().startswith("DEFAULT ") for line in out):
-    out.insert(0, f"DEFAULT {label}")
+if current:
+    stanzas.append(current)
 
-while out and out[-1] == "":
-    out.pop()
+if not any(line.strip().upper().startswith("DEFAULT ") for line in global_lines):
+    global_lines.insert(0, f"DEFAULT {label}")
 
-stanza = [
-    "",
-    f"LABEL {label}",
-    "    MENU LABEL HomeBrain Thread multicast kernel",
-    f"    LINUX {image}",
-]
-if Path(initrd).exists():
-    stanza.append(f"    INITRD {initrd}")
-stanza.append("    APPEND ${cbootargs}")
-path.write_text("\n".join(out + stanza) + "\n")
+existing_stanzas = []
+source_stanza = None
+for stanza in stanzas:
+    first = stanza[0].strip().split(None, 1)
+    stanza_label = first[1] if len(first) > 1 else ""
+    if stanza_label == label:
+        continue
+    if source_stanza is None and (stanza_label == default_label or not default_label):
+        source_stanza = stanza
+    existing_stanzas.append(stanza)
+
+if source_stanza is None and existing_stanzas:
+    source_stanza = existing_stanzas[0]
+
+if source_stanza:
+    new_stanza = []
+    saw_linux = False
+    saw_menu = False
+    saw_initrd = False
+    for line in source_stanza:
+        stripped = line.strip()
+        upper = stripped.upper()
+        indent = line[:len(line) - len(line.lstrip())] or "    "
+        if upper.startswith("LABEL "):
+            new_stanza.append(f"LABEL {label}")
+        elif upper.startswith("MENU LABEL "):
+            new_stanza.append(f"{indent}MENU LABEL HomeBrain Thread multicast kernel")
+            saw_menu = True
+        elif upper.startswith("LINUX "):
+            new_stanza.append(f"{indent}LINUX {image}")
+            saw_linux = True
+        elif upper.startswith("INITRD ") and Path(initrd).exists():
+            new_stanza.append(f"{indent}INITRD {initrd}")
+            saw_initrd = True
+        else:
+            new_stanza.append(line)
+    if not saw_menu:
+        new_stanza.insert(1, "    MENU LABEL HomeBrain Thread multicast kernel")
+    if not saw_linux:
+        new_stanza.insert(2, f"    LINUX {image}")
+    if Path(initrd).exists() and not saw_initrd:
+        insert_at = 3 if len(new_stanza) >= 3 else len(new_stanza)
+        new_stanza.insert(insert_at, f"    INITRD {initrd}")
+else:
+    new_stanza = [
+        f"LABEL {label}",
+        "    MENU LABEL HomeBrain Thread multicast kernel",
+        f"    LINUX {image}",
+    ]
+    if Path(initrd).exists():
+        new_stanza.append(f"    INITRD {initrd}")
+    new_stanza.append("    APPEND ${cbootargs}")
+
+while global_lines and global_lines[-1] == "":
+    global_lines.pop()
+
+out = list(global_lines)
+for stanza in existing_stanzas:
+    if out and out[-1] != "":
+        out.append("")
+    out.extend(stanza)
+if out and out[-1] != "":
+    out.append("")
+out.extend(new_stanza)
+path.write_text("\n".join(out).rstrip() + "\n")
 PY
+}
+
+run_preflight_validation() {
+  mkdir -p "${STATE_DIR}"
+  local validation status
+  set +e
+  validation="$(EXTLINUX_CONF="${EXTLINUX_CONF}" CUSTOM_LABEL="${CUSTOM_LABEL}" CUSTOM_IMAGE="${CUSTOM_IMAGE}" CUSTOM_INITRD="${CUSTOM_INITRD}" CUSTOM_CONFIG="${CUSTOM_CONFIG}" KERNEL_RELEASE_FILE="${KERNEL_RELEASE_FILE}" KERNEL_SRC="${KERNEL_SRC}" REQUIRED_CONFIGS="$(IFS=,; echo "${THREAD_KERNEL_CONFIGS[*]}")" python3 - <<'PY'
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+required = [item for item in os.environ["REQUIRED_CONFIGS"].split(",") if item]
+extlinux = Path(os.environ["EXTLINUX_CONF"])
+label = os.environ["CUSTOM_LABEL"]
+image = Path(os.environ["CUSTOM_IMAGE"])
+initrd = Path(os.environ["CUSTOM_INITRD"])
+config = Path(os.environ["CUSTOM_CONFIG"])
+kernel_src = Path(os.environ["KERNEL_SRC"])
+release_file = Path(os.environ["KERNEL_RELEASE_FILE"])
+
+def read_config(path):
+    values = {}
+    if not path.exists():
+        return values
+    for line in path.read_text(errors="ignore").splitlines():
+        for key in required:
+            if line == f"{key}=y":
+                values[key] = "y"
+            elif line == f"{key}=m":
+                values[key] = "m"
+            elif line == f"# {key} is not set":
+                values[key] = "n"
+    return values
+
+def parse_extlinux(path):
+    parsed = {"defaultLabel": "", "labels": [], "custom": None}
+    if not path.exists():
+        return parsed
+    current = None
+    for line in path.read_text(errors="ignore").splitlines():
+        stripped = line.strip()
+        upper = stripped.upper()
+        if upper.startswith("DEFAULT "):
+            parts = stripped.split(None, 1)
+            parsed["defaultLabel"] = parts[1] if len(parts) > 1 else ""
+            continue
+        if upper.startswith("LABEL "):
+            parts = stripped.split(None, 1)
+            current = {"label": parts[1] if len(parts) > 1 else "", "lines": [], "linux": "", "initrd": ""}
+            parsed["labels"].append(current["label"])
+            if current["label"] == label:
+                parsed["custom"] = current
+            continue
+        if current is not None:
+            current["lines"].append(line)
+            if upper.startswith("LINUX "):
+                parts = stripped.split(None, 1)
+                current["linux"] = parts[1] if len(parts) > 1 else ""
+            elif upper.startswith("INITRD "):
+                parts = stripped.split(None, 1)
+                current["initrd"] = parts[1] if len(parts) > 1 else ""
+    return parsed
+
+checks = []
+warnings = []
+
+def add_check(name, ok, detail=""):
+    checks.append({"name": name, "ok": bool(ok), "detail": detail})
+    return bool(ok)
+
+image_exists = image.exists()
+image_size = image.stat().st_size if image_exists else 0
+add_check("custom kernel image exists", image_exists, str(image))
+add_check("custom kernel image is non-empty", image_size > 8 * 1024 * 1024, f"{image_size} bytes")
+
+file_text = ""
+if image_exists:
+    try:
+        file_text = subprocess.run(["file", "-b", str(image)], text=True, capture_output=True, timeout=5).stdout.strip()
+    except Exception as exc:
+        file_text = f"file unavailable: {exc}"
+    if file_text and not re.search(r"(linux|kernel|arm|aarch64|data)", file_text, re.I):
+        warnings.append(f"Unexpected kernel image file type: {file_text}")
+
+config_values = read_config(config)
+missing = [key for key in required if config_values.get(key) not in ("y", "m")]
+add_check("custom kernel config exists", config.exists(), str(config))
+add_check("custom kernel config enables Thread multicast routing", not missing, ", ".join(missing) if missing else "all required options enabled")
+
+extract_script = kernel_src / "scripts" / "extract-ikconfig"
+extracted = {"available": False, "ok": None, "missing": [], "error": ""}
+if image_exists and extract_script.exists():
+    try:
+        result = subprocess.run([str(extract_script), str(image)], text=True, capture_output=True, timeout=20)
+        if result.returncode == 0 and result.stdout.strip():
+            extracted["available"] = True
+            temp_config = Path(os.environ.get("TMPDIR", "/tmp")) / f"homebrain-extracted-kernel-config-{os.getpid()}"
+            temp_config.write_text(result.stdout)
+            values = read_config(temp_config)
+            temp_config.unlink(missing_ok=True)
+            extracted["missing"] = [key for key in required if values.get(key) not in ("y", "m")]
+            extracted["ok"] = not extracted["missing"]
+            add_check("embedded kernel config matches required Thread options", extracted["ok"], ", ".join(extracted["missing"]) if extracted["missing"] else "all required options present")
+        else:
+            extracted["error"] = (result.stderr or result.stdout or f"exit {result.returncode}").strip()
+            warnings.append("Could not extract embedded kernel config from Image; validating copied source .config instead.")
+    except Exception as exc:
+        extracted["error"] = str(exc)
+        warnings.append("Could not extract embedded kernel config from Image; validating copied source .config instead.")
+else:
+    warnings.append("Kernel extract-ikconfig script is unavailable; validating copied source .config instead.")
+
+kernel_release = release_file.read_text().strip() if release_file.exists() else ""
+modules_dir = Path("/lib/modules") / kernel_release if kernel_release else Path("/lib/modules/__missing__")
+add_check("kernel release recorded", bool(kernel_release), kernel_release or "missing")
+add_check("matching modules directory exists", modules_dir.exists(), str(modules_dir))
+add_check("module dependency index exists", (modules_dir / "modules.dep").exists(), str(modules_dir / "modules.dep"))
+
+boot = parse_extlinux(extlinux)
+custom = boot.get("custom") or {}
+fallback_labels = [item for item in boot.get("labels", []) if item and item != label]
+custom_linux = custom.get("linux", "")
+custom_initrd = custom.get("initrd", "")
+linux_matches = custom_linux == str(image)
+initrd_ok = True
+if custom_initrd == str(initrd):
+    initrd_ok = initrd.exists()
+
+add_check("boot config exists", extlinux.exists(), str(extlinux))
+add_check("custom boot label exists", bool(custom), label)
+add_check("custom boot label is default", boot.get("defaultLabel") == label, boot.get("defaultLabel") or "missing")
+add_check("custom boot label points at HomeBrain kernel image", linux_matches, custom_linux or "missing")
+add_check("stock boot fallback label remains available", bool(fallback_labels), ", ".join(fallback_labels) or "none")
+add_check("referenced custom initrd exists", initrd_ok, custom_initrd or "no custom initrd reference")
+
+ok = all(check["ok"] for check in checks)
+payload = {
+    "ok": ok,
+    "checkedAt": subprocess.run(["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"], text=True, capture_output=True).stdout.strip(),
+    "kernelRelease": kernel_release or None,
+    "customImage": str(image),
+    "customImageBytes": image_size,
+    "customImageType": file_text,
+    "customConfig": str(config),
+    "extlinuxConf": str(extlinux),
+    "defaultLabel": boot.get("defaultLabel") or None,
+    "fallbackLabels": fallback_labels,
+    "requiredConfigs": required,
+    "configValues": config_values,
+    "embeddedConfig": extracted,
+    "checks": checks,
+    "warnings": warnings,
+}
+print(json.dumps(payload, separators=(",", ":")))
+sys.exit(0 if ok else 1)
+PY
+)"
+  status=$?
+  set -e
+  printf '%s\n' "${validation:-{\"ok\":false,\"error\":\"preflight produced no output\"}}" >"${VALIDATION_FILE}"
+  printf '%s\n' "${validation:-{\"ok\":false,\"error\":\"preflight produced no output\"}}"
+  return "${status}"
 }
 
 write_result_json() {
@@ -502,6 +748,17 @@ clear_pending_reboot_if_current_kernel_supports_thread() {
   fi
 }
 
+restore_extlinux_backup_after_failed_validation() {
+  local backup_path=""
+  if [[ -r "${LAST_EXTLINUX_BACKUP_FILE}" ]]; then
+    backup_path="$(cat "${LAST_EXTLINUX_BACKUP_FILE}")"
+  fi
+  if [[ -n "${backup_path}" && -r "${backup_path}" ]]; then
+    log "Restoring ${EXTLINUX_CONF} from ${backup_path} because validation failed."
+    cp -a "${backup_path}" "${EXTLINUX_CONF}"
+  fi
+}
+
 schedule_reboot() {
   mark_pending_reboot
   log "Scheduling Jetson reboot in one minute so HomeBrain can finish recording job status."
@@ -528,6 +785,12 @@ run_apply() {
   prepare_sources
   apply_thread_kernel_config
   build_and_install_kernel
+  log "Running pre-reboot validation for the installed HomeBrain Thread kernel."
+  if ! run_preflight_validation >/dev/null; then
+    restore_extlinux_backup_after_failed_validation
+    write_result_json failed "Pre-reboot kernel validation failed. Reboot was not scheduled." false
+    die "Pre-reboot kernel validation failed; leaving the current booted kernel in place."
+  fi
   mark_pending_reboot
   write_result_json completed "Custom Thread multicast kernel installed. Reboot is required." true
 
@@ -542,6 +805,9 @@ case "${ACTION}" in
   status)
     clear_pending_reboot_if_current_kernel_supports_thread
     print_status_json
+    ;;
+  validate|preflight)
+    run_preflight_validation
     ;;
   apply|rebuild)
     run_apply

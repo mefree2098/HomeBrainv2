@@ -57,6 +57,34 @@ export interface DisasterRecoveryRestoreJob {
   } | null;
 }
 
+export interface DisasterRecoveryBackupJob {
+  id: string;
+  status: 'queued' | 'creating' | 'uploading' | 'completed' | 'failed';
+  actor?: string | null;
+  archiveName?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  completedAt?: string | null;
+  error?: string | null;
+  phase?: string | null;
+  message?: string | null;
+  remoteTarget?: string | null;
+  manifest?: {
+    version?: number | null;
+    createdAt?: string | null;
+    appVersion?: string | null;
+  } | null;
+}
+
+export interface SmbDisasterRecoveryBackupPayload {
+  shareUrl: string;
+  remoteDirectory?: string;
+  username?: string;
+  password?: string;
+  domain?: string;
+  confirmBackup: string;
+}
+
 export interface DeviceRestartStatusResponse {
   success: boolean;
   schedule?: {
@@ -331,6 +359,33 @@ export const downloadDisasterRecoveryBackup = async () => {
           : null,
         'homebrain-backup.tar.gz'
       )
+    };
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+};
+
+export const startSmbDisasterRecoveryBackup = async (payload: SmbDisasterRecoveryBackupPayload) => {
+  try {
+    const response = await api.post('/api/maintenance/backup/smb', payload);
+    return response.data as {
+      success: boolean;
+      message?: string;
+      job: DisasterRecoveryBackupJob;
+    };
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+};
+
+export const getLatestDisasterRecoveryBackupJob = async () => {
+  try {
+    const response = await api.get('/api/maintenance/backup/latest');
+    return response.data as {
+      success: boolean;
+      job: DisasterRecoveryBackupJob | null;
     };
   } catch (error) {
     console.error(error);

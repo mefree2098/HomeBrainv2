@@ -573,6 +573,7 @@ WantedBy=multi-user.target
 EOF
 
   configure_mongodb_resource_guard
+  install_backup_smb_tools
 
   sudo systemctl daemon-reload
   sudo systemctl enable "${SERVICE_NAME}"
@@ -636,6 +637,24 @@ install_thread_kernel_privileged_helper() {
   sudo install -m 0755 "${THREAD_KERNEL_HELPER_SOURCE_PATH}" "${THREAD_KERNEL_HELPER_INSTALL_PATH}"
   sudo chown root:root "${THREAD_KERNEL_HELPER_INSTALL_PATH}"
   print_success "Installed Thread kernel privilege helper to ${THREAD_KERNEL_HELPER_INSTALL_PATH}."
+}
+
+install_backup_smb_tools() {
+  if command -v smbclient >/dev/null 2>&1; then
+    return
+  fi
+
+  if ! command -v apt-get >/dev/null 2>&1; then
+    print_warning "smbclient is not installed and apt-get is unavailable; SMB backups will fail until smbclient is installed."
+    return
+  fi
+
+  print_status "Installing smbclient for HomeBrain SMB disaster recovery backups..."
+  if sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y smbclient; then
+    print_success "Installed smbclient for SMB backups."
+  else
+    print_warning "Unable to install smbclient automatically; SMB backups will fail until it is installed."
+  fi
 }
 
 configure_ollama_resource_guard() {
@@ -722,6 +741,7 @@ refresh_privileges() {
   install_ollama_privileged_helper
   install_otbr_privileged_helper
   install_thread_kernel_privileged_helper
+  install_backup_smb_tools
   configure_ollama_resource_guard
   configure_mongodb_resource_guard
   configure_deploy_sudoers
