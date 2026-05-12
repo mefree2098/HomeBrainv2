@@ -12,12 +12,14 @@ const DEFAULT_AIR_QUALITY_STALE_IF_ERROR_MS = 30 * 60 * 1000;
 const DEFAULT_GEOCODE_STALE_IF_ERROR_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_DASHBOARD_WEATHER_CACHE_TTL_MS = 60 * 1000;
 const DEFAULT_WEATHER_TEMPEST_SYNC_COOLDOWN_MS = 5 * 60 * 1000;
+const DEFAULT_WEATHER_TEMPEST_STALE_AFTER_MS = 15 * 60 * 1000;
 const WEATHER_CACHE_COORDINATE_PRECISION = 2;
 const WEATHER_RECOVERY_COORDINATE_PRECISION = 1;
 const forecastCache = new Map();
 const airQualityCache = new Map();
 const geocodeCache = new Map();
 const dashboardWeatherCache = new Map();
+let lastWeatherTempestRefreshAttemptAt = 0;
 const PERSISTED_WEATHER_CACHE_KIND_FORECAST = 'forecast';
 const PERSISTED_WEATHER_CACHE_KIND_AIR_QUALITY = 'air_quality';
 
@@ -177,6 +179,10 @@ const WEATHER_TEMPEST_SYNC_COOLDOWN_MS = parsePositiveInteger(
   process.env.WEATHER_TEMPEST_SYNC_COOLDOWN_MS,
   DEFAULT_WEATHER_TEMPEST_SYNC_COOLDOWN_MS
 );
+const WEATHER_TEMPEST_STALE_AFTER_MS = parsePositiveInteger(
+  process.env.WEATHER_TEMPEST_STALE_AFTER_MS,
+  DEFAULT_WEATHER_TEMPEST_STALE_AFTER_MS
+);
 
 function normalizeCoordinates(latitude, longitude) {
   const lat = toNumber(latitude);
@@ -235,6 +241,89 @@ function parseUpdatedAtTimestamp(value) {
 
   const candidate = value instanceof Date ? value : new Date(value);
   return Number.isNaN(candidate.getTime()) ? 0 : candidate.getTime();
+}
+
+function isTempestSnapshotStale(tempestStation, nowMs = Date.now()) {
+  if (!tempestStation) {
+    return false;
+  }
+
+  if (toNumber(tempestStation.stationId) === null) {
+    return false;
+  }
+
+  const observedAtMs = parseUpdatedAtTimestamp(tempestStation.observedAt);
+  const observationStale = observedAtMs === 0 || (nowMs - observedAtMs) > WEATHER_TEMPEST_STALE_AFTER_MS;
+  const websocketStale = tempestStation.status?.websocketConnected === false;
+
+  return observationStale || websocketStale;
+}
+
+async function getWeatherTempestSnapshot() {
+  return tempestService.getSelectedStationSnapshot().catch(() => null);
+}
+
+async function refreshTempestForWeatherIfNeeded(tempestStation, options = {}) {
+  const forceTempestSync = parseBooleanFlag(options.forceTempestSync);
+  const stale = !forceTempestSync && isTempestSnapshotStale(tempestStation);
+
+  if (!forceTempestSync && !stale) {
+    return {
+      refreshed: false,
+      tempestStation
+    };
+  }
+
+  const reason = forceTempestSync ? 'weather-manual-refresh' : 'weather-stale-tempest-refresh';
+  const nowMs = Date.now();
+  if (
+    !forceTempestSync
+    && lastWeatherTempestRefreshAttemptAt > 0
+    && (nowMs - lastWeatherTempestRefreshAttemptAt) < WEATHER_TEMPEST_SYNC_COOLDOWN_MS
+  ) {
+    return {
+      refreshed: false,
+      result: {
+        success: true,
+        skipped: true,
+        reason: 'weather-stale-refresh-cooldown',
+        lastRefreshAttemptAt: new Date(lastWeatherTempestRefreshAttemptAt).toISOString()
+      },
+      tempestStation
+    };
+  }
+
+  try {
+    if (!forceTempestSync) {
+      lastWeatherTempestRefreshAttemptAt = nowMs;
+    }
+
+    const result = await tempestService.refreshRuntime({
+      reason,
+      minIntervalMs: WEATHER_TEMPEST_SYNC_COOLDOWN_MS
+    });
+
+    if (result?.skipped) {
+      return {
+        refreshed: false,
+        result,
+        tempestStation
+      };
+    }
+
+    return {
+      refreshed: true,
+      result,
+      tempestStation: await getWeatherTempestSnapshot()
+    };
+  } catch (error) {
+    console.warn(`WeatherService: Tempest refresh failed before weather fetch: ${error.message}`);
+    return {
+      refreshed: false,
+      error,
+      tempestStation
+    };
+  }
 }
 
 async function hydratePersistentWeatherCacheEntry(cache, kind, key, ttlMs) {
@@ -645,12 +734,14 @@ async function resolveWeatherLocation({ latitude, longitude, address, label }) {
   throw new Error('No weather location is configured. Add an address in Settings or choose a custom/auto weather source.');
 }
 
-async function buildDashboardWeatherPayload(location) {
+async function buildDashboardWeatherPayload(location, options = {}) {
   const forecastCacheKey = buildForecastCacheKey(location);
   const airQualityCacheKey = buildAirQualityCacheKey(location);
   const forecastRecoveryKeys = buildRecoveryCacheKeys(location, PERSISTED_WEATHER_CACHE_KIND_FORECAST);
   const airQualityRecoveryKeys = buildRecoveryCacheKeys(location, PERSISTED_WEATHER_CACHE_KIND_AIR_QUALITY);
-  const tempestStation = await tempestService.getSelectedStationSnapshot().catch(() => null);
+  const tempestStation = Object.prototype.hasOwnProperty.call(options, 'tempestStation')
+    ? options.tempestStation
+    : await getWeatherTempestSnapshot();
 
   let forecastResponse;
   try {
@@ -762,39 +853,38 @@ async function buildDashboardWeatherPayload(location) {
 async function fetchDashboardWeather(options = {}) {
   const location = await resolveWeatherLocation(options);
   const forceTempestSync = parseBooleanFlag(options.forceTempestSync);
+  let tempestStation = await getWeatherTempestSnapshot();
+  const refreshResult = await refreshTempestForWeatherIfNeeded(tempestStation, options);
+  tempestStation = refreshResult.tempestStation || tempestStation;
+
+  const dashboardCacheKey = buildDashboardWeatherCacheKey(location);
+  if (refreshResult.refreshed) {
+    dashboardWeatherCache.delete(dashboardCacheKey);
+  }
 
   if (forceTempestSync) {
-    await tempestService.refreshRuntime({
-      reason: 'weather-manual-refresh',
-      minIntervalMs: WEATHER_TEMPEST_SYNC_COOLDOWN_MS
-    }).catch((error) => {
-      console.warn(`WeatherService: Tempest refresh failed before weather fetch: ${error.message}`);
-    });
-
-    return buildDashboardWeatherPayload(location);
+    return buildDashboardWeatherPayload(location, { tempestStation });
   }
 
   return readThroughCache(
     dashboardWeatherCache,
-    buildDashboardWeatherCacheKey(location),
+    dashboardCacheKey,
     DASHBOARD_WEATHER_CACHE_TTL_MS,
-    () => buildDashboardWeatherPayload(location)
+    () => buildDashboardWeatherPayload(location, { tempestStation })
   );
 }
 
 async function fetchWeatherDashboard(options = {}) {
-  const [forecast, tempest] = await Promise.all([
-    fetchDashboardWeather(options),
-    tempestService.getDashboardData({
-      hours: options.tempestHistoryHours || 24
-    }).catch(() => ({
-      available: false,
-      station: null,
-      observations: [],
-      events: [],
-      moduleTelemetry: null
-    }))
-  ]);
+  const forecast = await fetchDashboardWeather(options);
+  const tempest = await tempestService.getDashboardData({
+    hours: options.tempestHistoryHours || 24
+  }).catch(() => ({
+    available: false,
+    station: null,
+    observations: [],
+    events: [],
+    moduleTelemetry: null
+  }));
 
   const moduleTelemetry = forecast?.tempest?.moduleTelemetry
     ?? (tempest?.available && tempest?.station?.id
@@ -829,6 +919,7 @@ module.exports = {
     airQualityCache.clear();
     geocodeCache.clear();
     dashboardWeatherCache.clear();
+    lastWeatherTempestRefreshAttemptAt = 0;
     weatherCacheStore.resetForTests();
   }
 };
