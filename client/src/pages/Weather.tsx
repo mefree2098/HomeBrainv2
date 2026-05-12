@@ -171,6 +171,10 @@ function WeatherTelemetryModuleCard({
   centerContent?: boolean
   children: ReactNode
 }) {
+  const helperText = enabled
+    ? "Hover or tap for telemetry"
+    : "Telemetry drilldown unlocks when Tempest history is available"
+
   const card = (
     <button
       type="button"
@@ -178,13 +182,22 @@ function WeatherTelemetryModuleCard({
       onClick={enabled ? onOpen : undefined}
       className="w-full text-left disabled:cursor-default"
     >
-      <Card className={cn(className, centerContent ? "flex min-h-[9.75rem] flex-col justify-center" : undefined)}>
-        {children}
-        <CardContent className={cn("pt-0", centerContent ? "pb-4 sm:pb-4" : undefined)}>
-          <p className="text-xs text-cyan-50/70">
-            {enabled ? "Hover or tap for telemetry" : "Telemetry drilldown unlocks when Tempest history is available"}
-          </p>
-        </CardContent>
+      <Card className={cn(className, centerContent ? "min-h-[9.75rem]" : undefined)}>
+        {centerContent ? (
+          <div className="grid min-h-[9.75rem] grid-rows-[minmax(0,1fr)_auto_minmax(0,1fr)] px-4">
+            <div className="row-start-2">
+              {children}
+              <p className="mt-8 text-xs text-cyan-50/70">{helperText}</p>
+            </div>
+          </div>
+        ) : (
+          <>
+            {children}
+            <CardContent className="pt-0">
+              <p className="text-xs text-cyan-50/70">{helperText}</p>
+            </CardContent>
+          </>
+        )}
       </Card>
     </button>
   )
@@ -621,14 +634,14 @@ export function Weather() {
                 centerContent
                 className="border-white/10 bg-white/5 shadow-none"
               >
-                <CardContent className="p-4">
+                <div>
                   <div className="flex items-center justify-between gap-2">
                     <span className="section-kicker">Humidity</span>
                     <Activity className="h-4 w-4 text-cyan-500" />
                   </div>
                   <p className="mt-2 text-2xl font-semibold">{formatPercent(station?.metrics.humidityPct ?? forecast.current.humidity)}</p>
                   <p className="mt-1 text-sm text-muted-foreground">Dew point {formatTemperature(station?.metrics.dewPointF)}</p>
-                </CardContent>
+                </div>
               </WeatherTelemetryModuleCard>
 
               <WeatherTelemetryModuleCard
@@ -639,14 +652,14 @@ export function Weather() {
                 centerContent
                 className="border-white/10 bg-white/5 shadow-none"
               >
-                <CardContent className="p-4">
+                <div>
                   <div className="flex items-center justify-between gap-2">
                     <span className="section-kicker">Solar</span>
                     <SunMedium className="h-4 w-4 text-amber-500" />
                   </div>
                   <p className="mt-2 text-2xl font-semibold">{formatSolar(station?.metrics.solarRadiationWm2)}</p>
                   <p className="mt-1 text-sm text-muted-foreground">UV {formatUv(station?.metrics.uvIndex)}</p>
-                </CardContent>
+                </div>
               </WeatherTelemetryModuleCard>
 
               <WeatherTelemetryModuleCard
@@ -657,7 +670,7 @@ export function Weather() {
                 centerContent
                 className="border-white/10 bg-white/5 shadow-none"
               >
-                <CardContent className="p-4">
+                <div>
                   <div className="flex items-center justify-between gap-2">
                     <span className="section-kicker">Signal Path</span>
                     <RadioTower className="h-4 w-4 text-emerald-500" />
@@ -668,7 +681,7 @@ export function Weather() {
                   <p className="mt-1 text-sm text-muted-foreground">
                     RSSI {station?.status.signalRssi ?? "--"} dBm
                   </p>
-                </CardContent>
+                </div>
               </WeatherTelemetryModuleCard>
 
               <WeatherTelemetryModuleCard
@@ -679,7 +692,7 @@ export function Weather() {
                 centerContent
                 className="border-white/10 bg-white/5 shadow-none"
               >
-                <CardContent className="p-4">
+                <div>
                   <div className="flex items-center justify-between gap-2">
                     <span className="section-kicker">Lightning</span>
                     <Zap className="h-4 w-4 text-violet-500" />
@@ -688,7 +701,7 @@ export function Weather() {
                   <p className="mt-1 text-sm text-muted-foreground">
                     Avg {station?.metrics.lightningAvgDistanceMiles?.toFixed(1) ?? "--"} mi
                   </p>
-                </CardContent>
+                </div>
               </WeatherTelemetryModuleCard>
             </div>
 
