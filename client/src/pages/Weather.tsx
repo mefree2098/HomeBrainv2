@@ -42,6 +42,7 @@ import {
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
 import { WeatherGlyph } from "@/components/weather/WeatherGlyph"
 import { useAuth } from "@/contexts/AuthContext"
+import { cn } from "@/lib/utils"
 
 const cToF = (value: number | null | undefined) => value == null ? null : Number(((value * 9) / 5 + 32).toFixed(1))
 const mpsToMph = (value: number | null | undefined) => value == null ? null : Number((value * 2.2369362921).toFixed(1))
@@ -159,6 +160,7 @@ function WeatherTelemetryModuleCard({
   preview,
   onOpen,
   className,
+  centerContent = false,
   children
 }: {
   enabled: boolean
@@ -166,6 +168,7 @@ function WeatherTelemetryModuleCard({
   preview: string
   onOpen: () => void
   className?: string
+  centerContent?: boolean
   children: ReactNode
 }) {
   const card = (
@@ -175,9 +178,9 @@ function WeatherTelemetryModuleCard({
       onClick={enabled ? onOpen : undefined}
       className="w-full text-left disabled:cursor-default"
     >
-      <Card className={className}>
+      <Card className={cn(className, centerContent ? "flex min-h-[9.75rem] flex-col justify-center" : undefined)}>
         {children}
-        <CardContent className="pt-0">
+        <CardContent className={cn("pt-0", centerContent ? "pb-4 sm:pb-4" : undefined)}>
           <p className="text-xs text-cyan-50/70">
             {enabled ? "Hover or tap for telemetry" : "Telemetry drilldown unlocks when Tempest history is available"}
           </p>
@@ -615,6 +618,7 @@ export function Weather() {
                 title="Humidity"
                 preview={modulePreview("humidity", moduleTelemetry)}
                 onOpen={() => setOpenModuleKey("humidity")}
+                centerContent
                 className="border-white/10 bg-white/5 shadow-none"
               >
                 <CardContent className="p-4">
@@ -632,6 +636,7 @@ export function Weather() {
                 title="Solar"
                 preview={modulePreview("solar", moduleTelemetry)}
                 onOpen={() => setOpenModuleKey("solar")}
+                centerContent
                 className="border-white/10 bg-white/5 shadow-none"
               >
                 <CardContent className="p-4">
@@ -649,6 +654,7 @@ export function Weather() {
                 title="Signal Path"
                 preview={modulePreview("signal", moduleTelemetry)}
                 onOpen={() => setOpenModuleKey("signal")}
+                centerContent
                 className="border-white/10 bg-white/5 shadow-none"
               >
                 <CardContent className="p-4">
@@ -670,6 +676,7 @@ export function Weather() {
                 title="Lightning"
                 preview={modulePreview("lightning", moduleTelemetry)}
                 onOpen={() => setOpenModuleKey("lightning")}
+                centerContent
                 className="border-white/10 bg-white/5 shadow-none"
               >
                 <CardContent className="p-4">
