@@ -442,31 +442,40 @@ function getInsteonCommandRetryOptions(action, source = '', defaults = {}) {
   const parameters = action?.parameters && typeof action.parameters === 'object'
     ? action.parameters
     : {};
+  const defaultRetryCount = Number.isFinite(Number(defaults?.retryCount))
+    ? Number(defaults.retryCount)
+    : DEFAULT_WORKFLOW_INSTEON_RETRY_COUNT;
+  const defaultRetryDelayMs = Number.isFinite(Number(defaults?.retryDelayMs))
+    ? Number(defaults.retryDelayMs)
+    : DEFAULT_WORKFLOW_INSTEON_RETRY_DELAY_MS;
+  const defaultCommandTimeoutMs = Number.isFinite(Number(defaults?.commandTimeoutMs))
+    ? Number(defaults.commandTimeoutMs)
+    : DEFAULT_WORKFLOW_INSTEON_COMMAND_TIMEOUT_MS;
   const retryCountRaw = Number(
     Object.prototype.hasOwnProperty.call(parameters, 'retryCount')
       ? parameters.retryCount
       : (Object.prototype.hasOwnProperty.call(parameters, 'retries')
         ? parameters.retries
-        : DEFAULT_WORKFLOW_INSTEON_RETRY_COUNT)
+        : defaultRetryCount)
   );
   const retryDelayRaw = Number(
     Object.prototype.hasOwnProperty.call(parameters, 'retryDelayMs')
       ? parameters.retryDelayMs
       : (Object.prototype.hasOwnProperty.call(parameters, 'retryDelay')
         ? parameters.retryDelay
-        : DEFAULT_WORKFLOW_INSTEON_RETRY_DELAY_MS)
+        : defaultRetryDelayMs)
   );
 
   const retryCount = Number.isFinite(retryCountRaw)
     ? Math.max(0, Math.min(4, Math.round(retryCountRaw)))
-    : DEFAULT_WORKFLOW_INSTEON_RETRY_COUNT;
+    : defaultRetryCount;
   const retryDelayMs = Number.isFinite(retryDelayRaw)
     ? Math.max(0, Math.min(10_000, Math.round(retryDelayRaw)))
-    : DEFAULT_WORKFLOW_INSTEON_RETRY_DELAY_MS;
+    : defaultRetryDelayMs;
   const commandTimeoutRaw = Number(
     Object.prototype.hasOwnProperty.call(parameters, 'commandTimeoutMs')
       ? parameters.commandTimeoutMs
-      : DEFAULT_WORKFLOW_INSTEON_COMMAND_TIMEOUT_MS
+      : defaultCommandTimeoutMs
   );
   const verificationMode = sanitizeString(parameters.verificationMode || parameters.verifyMode).toLowerCase();
   const defaultVerificationMode = sanitizeString(defaults?.verificationMode).toLowerCase();
@@ -600,11 +609,16 @@ function normalizeRetryDelayMs(value, fallback = DEFAULT_WORKFLOW_ACTION_RETRY_D
 function isRetryableActionByDefault(action) {
   switch (String(action?.type || '').trim().toLowerCase()) {
     case 'device_control':
+      return !isDeviceGroupControlAction(action);
     case 'scene_activate':
       return true;
     default:
       return false;
   }
+}
+
+function isDeviceGroupControlAction(action) {
+  return Boolean(normalizeDeviceGroupTarget(getActionTargetCandidate(action, ['deviceId'])));
 }
 
 function resolveActionRetryPolicy(action) {
@@ -1826,7 +1840,9 @@ async function executeDeviceGroupControl(groupTarget, action, context = {}) {
   const value = getActionValue(actionName, action?.parameters || {});
   const insteonGroupOptions = {
     ...getInsteonCommandRetryOptions(action, 'insteon', {
-      verificationMode: 'fast'
+      verificationMode: 'fast',
+      retryCount: 0,
+      retryDelayMs: 0
     }),
     deviceGroup: rootGroupName
   };
