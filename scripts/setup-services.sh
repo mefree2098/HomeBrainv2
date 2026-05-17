@@ -15,6 +15,8 @@ HOMEBRAIN_USER="${HOMEBRAIN_USER:-${SUDO_USER:-$USER}}"
 SERVICE_NAME="homebrain"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 SERVICE_DROPIN_DIR="/etc/systemd/system/${SERVICE_NAME}.service.d"
+LEGACY_DISCOVERY_SERVICE_NAME="${HOMEBRAIN_LEGACY_DISCOVERY_SERVICE_NAME:-homebrain-discovery}"
+LEGACY_DISCOVERY_SERVICE_PATH="/etc/systemd/system/${LEGACY_DISCOVERY_SERVICE_NAME}.service"
 RESTART_HELPER_SERVICE_NAME="${SERVICE_NAME}-restart-helper"
 RESTART_HELPER_SERVICE_PATH="/etc/systemd/system/${RESTART_HELPER_SERVICE_NAME}.service"
 RESTORE_HELPER_SERVICE_NAME="${SERVICE_NAME}-restore-helper"
@@ -450,6 +452,50 @@ describe_homebrain_listener_state() {
   echo "service MainPID=${main_pid:-0}; port 3000 listener pid(s)=${listener_pids}"
 }
 
+legacy_discovery_service_unit() {
+  sudo systemctl cat "${LEGACY_DISCOVERY_SERVICE_NAME}.service" 2>/dev/null || true
+}
+
+legacy_discovery_service_runs_homebrain_backend() {
+  local unit_text
+
+  unit_text="$(legacy_discovery_service_unit)"
+  if [[ -z "${unit_text}" ]]; then
+    return 1
+  fi
+
+  [[ "${unit_text}" == *"HomeBrainv2"* \
+    || "${unit_text}" == *"server/server.js"* \
+    || "${unit_text}" == *"run-with-modern-node.js"* \
+    || "${unit_text}" == *"run-homebrain-server-with-modern-node.sh"* ]]
+}
+
+neutralize_legacy_discovery_backend_service() {
+  if ! legacy_discovery_service_runs_homebrain_backend; then
+    return 0
+  fi
+
+  print_warning "Neutralizing legacy ${LEGACY_DISCOVERY_SERVICE_NAME} unit that launches the HomeBrain backend."
+  sudo systemctl stop "${LEGACY_DISCOVERY_SERVICE_NAME}.service" 2>/dev/null || true
+  sudo tee "${LEGACY_DISCOVERY_SERVICE_PATH}" >/dev/null <<EOF
+[Unit]
+Description=Legacy HomeBrain discovery service placeholder
+Documentation=https://github.com/mefree2098/HomeBrainv2
+
+[Service]
+Type=oneshot
+ExecStart=/bin/true
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  sudo systemctl daemon-reload
+  sudo systemctl reset-failed "${LEGACY_DISCOVERY_SERVICE_NAME}.service" 2>/dev/null || true
+  sudo systemctl disable "${LEGACY_DISCOVERY_SERVICE_NAME}.service" 2>/dev/null || true
+  print_success "Legacy ${LEGACY_DISCOVERY_SERVICE_NAME} backend unit replaced with a no-op placeholder."
+}
+
 print_port_listener_summary() {
   sudo ss -lntup 2>/dev/null | grep -E '(:80|:443|:3000|:27017)\b|:12345\b' || true
 }
@@ -582,6 +628,7 @@ EOF
 
   configure_mongodb_resource_guard
   install_backup_smb_tools
+  neutralize_legacy_discovery_backend_service
 
   sudo systemctl daemon-reload
   sudo systemctl enable "${SERVICE_NAME}"

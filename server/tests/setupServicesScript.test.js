@@ -37,6 +37,18 @@ test('setup-services installs privileged Thread helpers and grants sudoers acces
   assert.match(script, /\$\{THREAD_KERNEL_HELPER_INSTALL_PATH\} \*/);
 });
 
+test('setup-services neutralizes legacy discovery units that launch the backend', () => {
+  const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
+
+  assert.match(script, /LEGACY_DISCOVERY_SERVICE_NAME="\$\{HOMEBRAIN_LEGACY_DISCOVERY_SERVICE_NAME:-homebrain-discovery\}"/);
+  assert.match(script, /legacy_discovery_service_runs_homebrain_backend/);
+  assert.match(script, /server\/server\.js/);
+  assert.match(script, /run-homebrain-server-with-modern-node\.sh/);
+  assert.match(script, /neutralize_legacy_discovery_backend_service/);
+  assert.match(script, /ExecStart=\/bin\/true/);
+  assert.match(script, /systemctl stop "\$\{LEGACY_DISCOVERY_SERVICE_NAME\}\.service"/);
+});
+
 test('setup-services installs smbclient for SMB disaster recovery backups', () => {
   const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
 
