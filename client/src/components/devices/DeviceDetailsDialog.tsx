@@ -136,7 +136,7 @@ function getGuidedMigrationSteps(plan: DirectRadioMigrationPlan | null | undefin
 
 function getMigrationActionMessage(step: DirectRadioMigrationGuidedStep, protocol: "zigbee" | "zwave") {
   if (step.action === "start_zwave_exclusion") {
-    return "HomeBrain opened Z-Wave exclusion. Complete the device action below, then continue."
+    return "HomeBrain opened Z-Wave exclusion on the Zooz stick. Trigger the device remove/exclude action below, then continue."
   }
   if (step.action === "start_direct_migration") {
     return protocol === "zigbee"
@@ -144,6 +144,20 @@ function getMigrationActionMessage(step: DirectRadioMigrationGuidedStep, protoco
       : "HomeBrain opened Z-Wave inclusion. Complete the device action below, then continue."
   }
   return "Complete the current device step, then continue."
+}
+
+function isMigrationProtocol(value: unknown): value is "zigbee" | "zwave" {
+  return value === "zigbee" || value === "zwave"
+}
+
+function getMigrationProtocolLabel(protocol: "zigbee" | "zwave" | string | null | undefined) {
+  if (protocol === "zigbee") {
+    return "HomeBrain Zigbee"
+  }
+  if (protocol === "zwave") {
+    return "HomeBrain Z-Wave"
+  }
+  return "Choose manually"
 }
 
 function formatBinaryMetricValue(key: string, value: number | null | undefined) {
@@ -2058,7 +2072,7 @@ export function DeviceDetailsDialog({
                         <CardHeader className="pb-4">
                           <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Migrate to HomeBrain</CardTitle>
                           <CardDescription>
-                            Move this SmartThings device onto the HomeBrain Zigbee or Z-Wave controller while preserving its HomeBrain identity.
+                            Move this SmartThings device onto a HomeBrain radio, then retire the SmartThings entry after native state and controls are verified.
                           </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4">
@@ -2072,21 +2086,55 @@ export function DeviceDetailsDialog({
                               {migrationError}
                             </div>
                           ) : migrationPlan ? (
-                            <>
+                            (() => {
+                              const recommendedProtocol = isMigrationProtocol(migrationPlan.recommendedProtocol)
+                                ? migrationPlan.recommendedProtocol
+                                : null
+                              const supportedFeatureCount = migrationPlan.featureSupport.filter((feature) => feature.supported).length
+                              const protocolOrder: Array<"zigbee" | "zwave"> = recommendedProtocol
+                                ? [
+                                    recommendedProtocol,
+                                    recommendedProtocol === "zigbee" ? "zwave" : "zigbee"
+                                  ]
+                                : ["zigbee", "zwave"]
+
+                              return (
+                                <>
                               <div className="rounded-[1.15rem] border border-white/10 bg-white/[0.04] p-4">
-                                <p className="section-kicker text-white/45">Recommended radio</p>
-                                <p className="mt-2 text-xl font-semibold text-white">
-                                  {migrationPlan.recommendedProtocol === "zigbee"
-                                    ? "HomeBrain Zigbee"
-                                    : migrationPlan.recommendedProtocol === "zwave"
-                                      ? "HomeBrain Z-Wave"
-                                      : "Choose manually"}
-                                </p>
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <p className="section-kicker text-white/45">
+                                      {migrationPlan.supported ? "Recommended radio" : "Migration status"}
+                                    </p>
+                                    <p className="mt-2 text-xl font-semibold text-white">
+                                      {migrationPlan.supported ? getMigrationProtocolLabel(recommendedProtocol) : "Blocked for native radio"}
+                                    </p>
+                                  </div>
+                                  <Badge
+                                    variant="outline"
+                                    className={cn(
+                                      "border-white/12 bg-white/[0.06] text-white/80",
+                                      migrationPlan.supported
+                                        ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-50"
+                                        : "border-amber-300/25 bg-amber-300/10 text-amber-50"
+                                    )}
+                                  >
+                                    {migrationPlan.supported ? "Ready" : "Do not migrate"}
+                                  </Badge>
+                                </div>
                                 <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
                                   {migrationPlan.supported
-                                    ? `${migrationPlan.featureSupport.filter((feature) => feature.supported).length} native feature paths are ready for this device.`
-                                    : "This looks like a virtual or cloud device, so direct radio migration is blocked."}
+                                    ? `${supportedFeatureCount} native feature paths are ready. HomeBrain will keep the current device record available for replacement during pairing.`
+                                    : "This appears to be a cloud, virtual, camera, TV, Harmony, or SmartThings helper device, so HomeBrain will not open a Zigbee or Z-Wave migration workflow for it."}
                                 </p>
+                              </div>
+
+                              <div className="rounded-[1.15rem] border border-cyan-300/15 bg-cyan-300/[0.07] p-4 text-sm leading-relaxed text-cyan-50/78">
+                                {!migrationPlan.supported
+                                  ? "HomeBrain will not open an exclusion, pairing, or migration window for this device. Keep it on its current integration unless you replace it with native radio hardware."
+                                  : recommendedProtocol === "zwave"
+                                  ? "Z-Wave transition starts with exclusion from the old network. HomeBrain opens exclusion on the Zooz stick; you still trigger the physical exclude/remove action on the device before including it natively."
+                                  : "HomeBrain does not delete the SmartThings device during this workflow. Verify native HomeBrain state, battery, and controls first, then retire or hide the old SmartThings-backed entry."}
                               </div>
 
                               {migrationPlan.warnings.length > 0 ? (
@@ -2107,7 +2155,14 @@ export function DeviceDetailsDialog({
                                 </div>
                               ) : null}
 
-                              {migrationFlow ? (
+                              {!migrationPlan.supported ? (
+                                <div className="rounded-[1.15rem] border border-white/10 bg-white/[0.04] p-4">
+                                  <p className="section-kicker text-white/45">No radio workflow</p>
+                                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                                    Keep this device on its current integration, or replace it with a known Zigbee, Z-Wave, or Matter device before onboarding through HomeBrain native control.
+                                  </p>
+                                </div>
+                              ) : migrationFlow ? (
                                 <div className="space-y-3 rounded-[1.15rem] border border-sky-300/20 bg-sky-300/[0.08] p-4">
                                   {(() => {
                                     const steps = getGuidedMigrationSteps(migrationFlow.plan)
@@ -2160,34 +2215,36 @@ export function DeviceDetailsDialog({
                                   </div>
 
                                   <div className="grid gap-2 sm:grid-cols-2">
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      className="border-white/10 bg-white/[0.04] text-white/90 hover:bg-white/[0.08]"
-                                      onClick={() => handleStartDirectMigration("zigbee")}
-                                      disabled={!migrationPlan.supported || migrationStarting !== null}
-                                    >
-                                      {migrationStarting === "zigbee" ? (
-                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                      ) : null}
-                                      Start guided Zigbee
-                                    </Button>
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      className="border-white/10 bg-white/[0.04] text-white/90 hover:bg-white/[0.08]"
-                                      onClick={() => handleStartDirectMigration("zwave")}
-                                      disabled={!migrationPlan.supported || migrationStarting !== null}
-                                    >
-                                      {migrationStarting === "zwave" ? (
-                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                      ) : null}
-                                      Start guided Z-Wave
-                                    </Button>
+                                    {protocolOrder.map((protocol) => {
+                                      const recommended = protocol === recommendedProtocol
+                                      return (
+                                        <Button
+                                          key={protocol}
+                                          type="button"
+                                          variant={recommended ? "default" : "outline"}
+                                          className={recommended
+                                            ? "bg-cyan-300 text-slate-950 hover:bg-cyan-200"
+                                            : "border-white/10 bg-white/[0.04] text-white/90 hover:bg-white/[0.08]"}
+                                          onClick={() => handleStartDirectMigration(protocol)}
+                                          disabled={migrationStarting !== null}
+                                        >
+                                          {migrationStarting === protocol ? (
+                                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                          ) : null}
+                                          {recommended
+                                            ? `Start recommended ${protocol === "zigbee" ? "Zigbee" : "Z-Wave"}`
+                                            : recommendedProtocol
+                                              ? `Use ${protocol === "zigbee" ? "Zigbee" : "Z-Wave"} instead`
+                                              : `Start guided ${protocol === "zigbee" ? "Zigbee" : "Z-Wave"}`}
+                                        </Button>
+                                      )
+                                    })}
                                   </div>
                                 </>
                               )}
-                            </>
+                                </>
+                              )
+                            })()
                           ) : null}
                         </CardContent>
                       </Card>

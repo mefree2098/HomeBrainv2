@@ -531,6 +531,114 @@ test('device_control action requires SmartThings post-command verification in wo
   assert.equal(result.status, 'success');
 });
 
+test('device_control action routes native radio and Matter targets without cloud post-command verification', async (t) => {
+  const originalFindById = Device.findById;
+  const originalControlDevice = deviceService.controlDevice;
+  const deviceIds = [
+    new mongoose.Types.ObjectId().toString(),
+    new mongoose.Types.ObjectId().toString(),
+    new mongoose.Types.ObjectId().toString()
+  ];
+  const devices = new Map([
+    [deviceIds[0], {
+      _id: deviceIds[0],
+      name: 'Native Zigbee Plug',
+      type: 'switch',
+      status: false,
+      isOnline: true,
+      properties: {
+        source: 'homebrain-zigbee',
+        homebrainDirect: { protocol: 'zigbee', ieeeAddr: '0x00124b0025aa55cc' }
+      }
+    }],
+    [deviceIds[1], {
+      _id: deviceIds[1],
+      name: 'Native Z-Wave Lock',
+      type: 'lock',
+      status: false,
+      isOnline: true,
+      properties: {
+        source: 'homebrain-zwave',
+        homebrainDirect: { protocol: 'zwave', nodeId: 7 }
+      }
+    }],
+    [deviceIds[2], {
+      _id: deviceIds[2],
+      name: 'Native Matter Light',
+      type: 'light',
+      status: false,
+      isOnline: true,
+      properties: {
+        source: 'homebrain-matter',
+        matter: { nodeId: '44', endpointId: 1 }
+      }
+    }]
+  ]);
+  const calls = [];
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    deviceService.controlDevice = originalControlDevice;
+  });
+
+  Device.findById = (id) => ({
+    lean: async () => devices.get(String(id))
+  });
+
+  deviceService.controlDevice = async (target, action, value, options) => {
+    const device = devices.get(String(target));
+    calls.push({
+      target,
+      action,
+      value,
+      options,
+      source: device?.properties?.source
+    });
+    return {
+      message: 'Native command accepted',
+      details: {
+        source: device?.properties?.source
+      }
+    };
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'device_control',
+      target: deviceIds[0],
+      parameters: { action: 'turn_on' }
+    },
+    {
+      type: 'device_control',
+      target: deviceIds[1],
+      parameters: { action: 'lock' }
+    },
+    {
+      type: 'device_control',
+      target: deviceIds[2],
+      parameters: { action: 'turn_on' }
+    }
+  ], { context: { workflowId: 'native-workflow-1', workflowName: 'Native QA' } });
+
+  assert.equal(result.status, 'success');
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls.map((call) => call.source), [
+    'homebrain-zigbee',
+    'homebrain-zwave',
+    'homebrain-matter'
+  ]);
+  calls.forEach((call) => {
+    assert.equal(call.options.requirePostActionVerification, false);
+    assert.equal(call.options.command.actionType, 'device_control');
+    assert.equal(call.options.command.workflowId, 'native-workflow-1');
+  });
+  assert.deepEqual(result.actionResults.map((entry) => entry.details.source), [
+    'homebrain-zigbee',
+    'homebrain-zwave',
+    'homebrain-matter'
+  ]);
+});
+
 test('device_control action retries transient workflow failures and records attempts', async (t) => {
   const deviceId = new mongoose.Types.ObjectId().toString();
   const originalFindById = Device.findById;

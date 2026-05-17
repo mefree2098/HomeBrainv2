@@ -778,7 +778,9 @@ function buildMigrationPlan(device, options = {}) {
   if (unsupportedFeatures.length > 0) {
     warnings.push(`Some uncommon attributes will be captured as raw telemetry first: ${unsupportedFeatures.map((entry) => entry.label).join(', ')}.`);
   }
-  const guidance = buildGuidedMigrationSteps(protocol, device);
+  const guidance = cloudOnly
+    ? { instructionProfile: null, guidedSteps: [] }
+    : buildGuidedMigrationSteps(protocol, device);
 
   return {
     deviceId: normalizeString(device?._id?.toString?.() || device?._id || device?.id) || null,
@@ -793,7 +795,7 @@ function buildMigrationPlan(device, options = {}) {
     cloudOrVirtualOnly: cloudOnly,
     features,
     featureSupport: supportedFeatures,
-    manualSteps: getManualResetGuidance(protocol, device),
+    manualSteps: cloudOnly ? [] : getManualResetGuidance(protocol, device),
     guidedSteps: guidance.guidedSteps,
     instructionProfile: guidance.instructionProfile,
     warnings,

@@ -9,6 +9,8 @@ const deviceUpdateEmitter = require('../services/deviceUpdateEmitter');
 const insteonService = require('../services/insteonService');
 const harmonyService = require('../services/harmonyService');
 const rainMachineService = require('../services/rainMachineService');
+const directRadioService = require('../services/directRadioService');
+const matterService = require('../services/matterService');
 
 test('controlDevice routes Insteon turn_on through insteon service and skips generic DB write path', async (t) => {
   const originalFindById = Device.findById;
@@ -402,6 +404,154 @@ test('controlDevice rejects stale SmartThings post-action verification when requ
     /SmartThings verification returned stale state/
   );
   assert.equal(persisted, false);
+});
+
+test('controlDevice routes HomeBrain Zigbee commands through the direct radio service', async (t) => {
+  const originalFindById = Device.findById;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalControlDevice = directRadioService.controlDevice;
+  const originalRefreshDirectDeviceState = directRadioService.refreshDirectDeviceState;
+  const originalRecordSamplesForDevices = deviceEnergySampleService.recordSamplesForDevices;
+  const originalEmit = deviceUpdateEmitter.emit;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    directRadioService.controlDevice = originalControlDevice;
+    directRadioService.refreshDirectDeviceState = originalRefreshDirectDeviceState;
+    deviceEnergySampleService.recordSamplesForDevices = originalRecordSamplesForDevices;
+    deviceUpdateEmitter.emit = originalEmit;
+  });
+
+  const nativeDevice = {
+    _id: 'device-zigbee-switch',
+    name: 'Native Zigbee Plug',
+    type: 'switch',
+    status: false,
+    isOnline: true,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x00124b0025aa55cc'
+      },
+      directRadioFeatures: ['switch', 'power']
+    }
+  };
+
+  let receivedCommand = null;
+  let persistedUpdate = null;
+  let sampledDeviceCount = 0;
+
+  Device.findById = async () => ({ ...nativeDevice });
+  Device.findByIdAndUpdate = async (_id, update) => {
+    persistedUpdate = update;
+    return { ...nativeDevice, ...update };
+  };
+  directRadioService.controlDevice = async (device, action, commandValue, updateData) => {
+    receivedCommand = {
+      device,
+      action,
+      commandValue,
+      updateData
+    };
+    updateData.status = true;
+  };
+  directRadioService.refreshDirectDeviceState = async () => ({
+    status: true,
+    isOnline: true,
+    power: 8.5
+  });
+  deviceEnergySampleService.recordSamplesForDevices = async (devices) => {
+    sampledDeviceCount = devices.length;
+  };
+  deviceUpdateEmitter.emit = () => {};
+
+  const updated = await deviceService.controlDevice('device-zigbee-switch', 'turn_on');
+
+  assert.equal(receivedCommand.device.name, 'Native Zigbee Plug');
+  assert.equal(receivedCommand.action, 'turnon');
+  assert.equal(receivedCommand.commandValue, true);
+  assert.equal(persistedUpdate.status, true);
+  assert.equal(persistedUpdate.isOnline, true);
+  assert.equal(persistedUpdate.power, 8.5);
+  assert.equal(sampledDeviceCount, 1);
+  assert.equal(updated.status, true);
+});
+
+test('controlDevice routes Matter commands through the Matter service and refreshes state', async (t) => {
+  const originalFindById = Device.findById;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalControlDevice = matterService.controlDevice;
+  const originalRefreshMatterDeviceState = matterService.refreshMatterDeviceState;
+  const originalRecordSamplesForDevices = deviceEnergySampleService.recordSamplesForDevices;
+  const originalEmit = deviceUpdateEmitter.emit;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    matterService.controlDevice = originalControlDevice;
+    matterService.refreshMatterDeviceState = originalRefreshMatterDeviceState;
+    deviceEnergySampleService.recordSamplesForDevices = originalRecordSamplesForDevices;
+    deviceUpdateEmitter.emit = originalEmit;
+  });
+
+  const matterDevice = {
+    _id: 'device-matter-light',
+    name: 'Native Matter Light',
+    type: 'light',
+    status: false,
+    brightness: 0,
+    isOnline: true,
+    properties: {
+      source: 'homebrain-matter',
+      matter: {
+        nodeId: '44',
+        endpointId: 1
+      },
+      matterFeatures: ['switch', 'brightness']
+    }
+  };
+
+  let receivedCommand = null;
+  let persistedUpdate = null;
+  let sampledDeviceCount = 0;
+
+  Device.findById = async () => ({ ...matterDevice });
+  Device.findByIdAndUpdate = async (_id, update) => {
+    persistedUpdate = update;
+    return { ...matterDevice, ...update };
+  };
+  matterService.controlDevice = async (device, action, commandValue, updateData) => {
+    receivedCommand = {
+      device,
+      action,
+      commandValue,
+      updateData
+    };
+    updateData.brightness = commandValue;
+    updateData.status = commandValue > 0;
+  };
+  matterService.refreshMatterDeviceState = async () => ({
+    status: true,
+    brightness: 42,
+    isOnline: true
+  });
+  deviceEnergySampleService.recordSamplesForDevices = async (devices) => {
+    sampledDeviceCount = devices.length;
+  };
+  deviceUpdateEmitter.emit = () => {};
+
+  const updated = await deviceService.controlDevice('device-matter-light', 'set_brightness', 42);
+
+  assert.equal(receivedCommand.device.name, 'Native Matter Light');
+  assert.equal(receivedCommand.action, 'setbrightness');
+  assert.equal(receivedCommand.commandValue, 42);
+  assert.equal(persistedUpdate.status, true);
+  assert.equal(persistedUpdate.brightness, 42);
+  assert.equal(persistedUpdate.isOnline, true);
+  assert.equal(sampledDeviceCount, 1);
+  assert.equal(updated.brightness, 42);
 });
 
 test('controlDevice routes RainMachine zone start actions through the RainMachine service', async (t) => {
