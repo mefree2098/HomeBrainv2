@@ -79,3 +79,18 @@ test('run-with-modern-node forwards termination signals to the spawned command',
   assert.equal(result.code, 0);
   assert.equal(fs.readFileSync(signalPath, 'utf8'), 'SIGTERM');
 });
+
+test('run-with-modern-node can print the selected Node binary for exec launchers', () => {
+  const result = require('node:child_process').spawnSync(process.execPath, [runnerPath, '--print-node-bin'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      HOMEBRAIN_PREFERRED_NODE_MAJOR: process.versions.node.split('.')[0]
+    }
+  });
+
+  assert.equal(result.status, 0);
+  assert.ok(result.stdout.trim());
+  assert.equal(fs.existsSync(result.stdout.trim()), true);
+});

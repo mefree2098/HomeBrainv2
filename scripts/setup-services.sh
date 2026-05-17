@@ -505,7 +505,8 @@ Environment="HOME=${homebrain_home}"
 Environment="USER=${HOMEBRAIN_USER}"
 Environment="LOGNAME=${HOMEBRAIN_USER}"
 Environment=WAKEWORD_PIPER_EXEC=${HOMEBRAIN_DIR}/server/.wakeword-venv/bin/piper
-ExecStart=${node_bin} scripts/run-with-modern-node.js node server/server.js
+Environment=HOMEBRAIN_BOOTSTRAP_NODE_BIN=${node_bin}
+ExecStart=${HOMEBRAIN_DIR}/scripts/run-homebrain-server-with-modern-node.sh
 Restart=always
 RestartSec=10
 TimeoutStopSec=15s

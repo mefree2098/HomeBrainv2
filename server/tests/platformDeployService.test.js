@@ -518,7 +518,9 @@ test('setup-services keeps HomeBrain-managed child services alive across restart
   const serviceUnitEnd = script.indexOf('[Install]', serviceUnitStart);
   const serviceUnit = script.slice(serviceUnitStart, serviceUnitEnd);
 
-  assert.match(serviceUnit, /ExecStart=.*server\/server\.js/);
+  assert.match(serviceUnit, /Environment=HOMEBRAIN_BOOTSTRAP_NODE_BIN=\$\{node_bin\}/);
+  assert.match(serviceUnit, /ExecStart=\$\{HOMEBRAIN_DIR\}\/scripts\/run-homebrain-server-with-modern-node\.sh/);
+  assert.doesNotMatch(serviceUnit, /ExecStart=.*run-with-modern-node\.js node server\/server\.js/);
   assert.match(serviceUnit, /KillMode=process/);
   assert.doesNotMatch(serviceUnit, /KillMode=mixed/);
 });
