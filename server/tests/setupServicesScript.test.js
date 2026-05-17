@@ -13,6 +13,7 @@ test('setup-services writes a HomeBrain unit that starts from the repo root', ()
   assert.match(script, /WorkingDirectory=\$\{HOMEBRAIN_DIR\}/);
   assert.doesNotMatch(script, /WorkingDirectory=\$\{HOMEBRAIN_DIR\}\/server/);
   assert.match(script, /Environment=HOMEBRAIN_BOOTSTRAP_NODE_BIN=\$\{node_bin\}/);
+  assert.match(script, /Environment=HOMEBRAIN_PORT=\$\{HOMEBRAIN_PORT\}/);
   assert.match(script, /ExecStart=\$\{HOMEBRAIN_DIR\}\/scripts\/run-homebrain-server-with-modern-node\.sh/);
   assert.doesNotMatch(script, /ExecStart=\$\{node_bin\} scripts\/run-with-modern-node\.js node server\/server\.js/);
 });
@@ -58,7 +59,61 @@ test('HomeBrain systemd launcher execs into the selected Node server process', (
   const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'run-homebrain-server-with-modern-node.sh'), 'utf8');
 
   assert.match(script, /run-with-modern-node\.js --print-node-bin/);
+  assert.match(script, /cleanup_blocking_homebrain_port_listener/);
   assert.match(script, /exec "\$\{SELECTED_NODE\}" "\$\{HOMEBRAIN_DIR\}\/server\/server\.js"/);
+});
+
+test('HomeBrain systemd launcher reclaims an existing HomeBrain port listener before exec', (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'homebrain-launcher-test-'));
+  const binDir = path.join(tempDir, 'bin');
+  const scriptsDir = path.join(tempDir, 'scripts');
+  const serverDir = path.join(tempDir, 'server');
+  const selectedNodePath = path.join(binDir, 'selected-node');
+  const launchedArgsPath = path.join(tempDir, 'launched-args.txt');
+
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.mkdirSync(scriptsDir, { recursive: true });
+  fs.mkdirSync(serverDir, { recursive: true });
+
+  fs.writeFileSync(
+    path.join(scriptsDir, 'run-with-modern-node.js'),
+    `if (process.argv[2] === '--print-node-bin') { console.log(${JSON.stringify(selectedNodePath)}); process.exit(0); }\nprocess.exit(1);\n`,
+    'utf8'
+  );
+  fs.writeFileSync(
+    selectedNodePath,
+    '#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "${LAUNCHED_ARGS_PATH}"\n',
+    { mode: 0o755 }
+  );
+  fs.writeFileSync(
+    path.join(binDir, 'ss'),
+    '#!/usr/bin/env bash\nprintf "%s\\n" "LISTEN 0 511 0.0.0.0:31337 0.0.0.0:* users:((\\"node\\",pid=4242,fd=20))"\n',
+    { mode: 0o755 }
+  );
+  fs.writeFileSync(
+    path.join(binDir, 'ps'),
+    '#!/usr/bin/env bash\nprintf "/usr/bin/node %s/server/server.js\\n" "${HOMEBRAIN_DIR}"\n',
+    { mode: 0o755 }
+  );
+
+  const result = spawnSync('bash', [path.join(repoRoot, 'scripts', 'run-homebrain-server-with-modern-node.sh')], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      HOMEBRAIN_DIR: tempDir,
+      HOMEBRAIN_PORT: '31337',
+      HOMEBRAIN_BOOTSTRAP_NODE_BIN: process.execPath,
+      LAUNCHED_ARGS_PATH: launchedArgsPath,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`
+    }
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stderr, /Stopping existing HomeBrain listener\(s\) on port 31337: 4242/);
+  assert.equal(fs.readFileSync(launchedArgsPath, 'utf8').trim(), path.join(tempDir, 'server', 'server.js'));
 });
 
 test('Thread kernel helper validates the custom kernel before scheduling reboot', () => {
