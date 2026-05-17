@@ -735,11 +735,100 @@ test('device_control action can target a device group', async (t) => {
     receivedOptions.map((entry) => entry?.verificationMode),
     ['fast', 'fast']
   );
+  assert.deepEqual(
+    receivedOptions.map((entry) => entry?.commandAttempts),
+    [1, 1]
+  );
+  assert.deepEqual(
+    receivedOptions.map((entry) => entry?.commandPauseBetweenMs),
+    [0, 0]
+  );
   assert.equal(result.actionResults.length, 1);
   assert.equal(result.actionResults[0].success, true);
   assert.equal(result.actionResults[0].details.group, 'Interior Lights');
   assert.equal(result.actionResults[0].details.executionMode, 'parallel');
   assert.equal(result.actionResults[0].details.successfulTargets, 2);
+});
+
+test('device_control action does not retry whole device groups by default', async (t) => {
+  const originalResolveGroupExecutionPlanByName = deviceGroupService.resolveGroupExecutionPlanByName;
+  const originalTryControlDeviceGroup = insteonService.tryControlDeviceGroup;
+  const originalTurnOff = insteonService.turnOff;
+  let turnOffCalls = 0;
+
+  t.after(() => {
+    deviceGroupService.resolveGroupExecutionPlanByName = originalResolveGroupExecutionPlanByName;
+    insteonService.tryControlDeviceGroup = originalTryControlDeviceGroup;
+    insteonService.turnOff = originalTurnOff;
+  });
+
+  const groupDevices = [
+    {
+      _id: new mongoose.Types.ObjectId().toString(),
+      name: 'Kitchen Cans',
+      type: 'light',
+      room: 'Kitchen',
+      groups: ['Interior Lights'],
+      properties: {
+        source: 'insteon'
+      }
+    },
+    {
+      _id: new mongoose.Types.ObjectId().toString(),
+      name: 'Hall Lamp',
+      type: 'light',
+      room: 'Hall',
+      groups: ['Interior Lights'],
+      properties: {
+        source: 'insteon'
+      }
+    }
+  ];
+
+  deviceGroupService.resolveGroupExecutionPlanByName = async () => ({
+    rootGroup: {
+      _id: new mongoose.Types.ObjectId().toString(),
+      name: 'Interior Lights',
+      normalizedName: 'interior lights'
+    },
+    devices: groupDevices,
+    units: [
+      {
+        groupId: new mongoose.Types.ObjectId().toString(),
+        groupName: 'Interior Lights',
+        groupRecord: {
+          _id: new mongoose.Types.ObjectId().toString(),
+          name: 'Interior Lights',
+          normalizedName: 'interior lights'
+        },
+        devices: groupDevices,
+        allowManagedInsteonGroup: true
+      }
+    ],
+    containsNestedGroups: false
+  });
+  insteonService.tryControlDeviceGroup = async () => null;
+  insteonService.turnOff = async () => {
+    turnOffCalls += 1;
+    throw new Error('Timeout turning off device');
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'device_control',
+      target: { kind: 'device_group', group: 'Interior Lights' },
+      parameters: { action: 'turn_off' }
+    }
+  ], { context: {} });
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.actionResults.length, 1);
+  assert.equal(result.actionResults[0].success, false);
+  assert.equal(turnOffCalls, groupDevices.length);
+  assert.equal(result.actionResults[0].details.workflowRetry.attempts, 1);
+  assert.equal(result.actionResults[0].details.workflowRetry.maxAttempts, 1);
+  assert.equal(result.actionResults[0].details.workflowRetry.retries, 0);
+  assert.equal(result.actionResults[0].details.workflowRetry.failures[0].willRetry, false);
 });
 
 test('device_control action fails grouped Insteon commands that are not confirmed', async (t) => {
