@@ -217,6 +217,7 @@ process_matches_homebrain() {
 }
 
 cleanup_orphaned_homebrain_processes() {
+  local include_service_pid="${1:-false}"
   local service_pid="0"
   local stale_pids=()
 
@@ -228,7 +229,11 @@ cleanup_orphaned_homebrain_processes() {
 
     local pid="${line%% *}"
     local cmd="${line#* }"
-    if [[ -z "${pid}" || "${pid}" == "${service_pid}" ]]; then
+    if [[ -z "${pid}" ]]; then
+      continue
+    fi
+
+    if [[ "${include_service_pid}" != "true" && "${pid}" == "${service_pid}" ]]; then
       continue
     fi
 
@@ -281,7 +286,7 @@ stop_homebrain_service() {
   local elapsed=0
   local state=""
 
-  cleanup_orphaned_homebrain_processes
+  cleanup_orphaned_homebrain_processes false
 
   if ! homebrain_service_unit_exists; then
     cleanup_blocking_homebrain_port_listeners
@@ -290,6 +295,7 @@ stop_homebrain_service() {
 
   state="$(get_homebrain_service_state)"
   if [[ -z "${state}" || "${state}" == "inactive" || "${state}" == "failed" ]]; then
+    cleanup_orphaned_homebrain_processes true
     cleanup_blocking_homebrain_port_listeners
     print_success "HomeBrain service is already stopped."
     return 0
@@ -316,7 +322,7 @@ stop_homebrain_service() {
     elapsed=$((elapsed + 1))
   done
 
-  cleanup_orphaned_homebrain_processes
+  cleanup_orphaned_homebrain_processes true
   cleanup_blocking_homebrain_port_listeners
 
   state="$(get_homebrain_service_state)"

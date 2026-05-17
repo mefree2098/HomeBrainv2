@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
@@ -187,14 +188,54 @@ function main() {
     env
   });
 
+  let childExited = false;
+  let terminationTimer = null;
+  const forwardedSignals = new Set();
+  const terminationGraceMs = Math.max(
+    1000,
+    Number.parseInt(String(process.env.HOMEBRAIN_CHILD_TERMINATION_GRACE_MS || '10000'), 10) || 10000
+  );
+
+  const forwardTerminationSignal = (signal) => {
+    if (childExited) {
+      process.exit(0);
+      return;
+    }
+
+    if (!forwardedSignals.has(signal)) {
+      forwardedSignals.add(signal);
+      child.kill(signal);
+    }
+
+    if (!terminationTimer) {
+      terminationTimer = setTimeout(() => {
+        if (!childExited) {
+          child.kill('SIGKILL');
+        }
+      }, terminationGraceMs);
+      terminationTimer.unref();
+    }
+  };
+
+  ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'].forEach((signal) => {
+    process.on(signal, () => forwardTerminationSignal(signal));
+  });
+
   child.on('error', (error) => {
     console.error(`Failed to start command "${args.join(' ')}": ${error.message}`);
     process.exit(1);
   });
 
   child.on('exit', (code, signal) => {
+    childExited = true;
+    if (terminationTimer) {
+      clearTimeout(terminationTimer);
+      terminationTimer = null;
+    }
+
     if (signal) {
-      process.kill(process.pid, signal);
+      const signalNumber = os.constants.signals?.[signal];
+      process.exit(Number.isInteger(signalNumber) ? 128 + signalNumber : 1);
       return;
     }
     process.exit(code == null ? 1 : code);
