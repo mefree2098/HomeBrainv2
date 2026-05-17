@@ -522,7 +522,7 @@ struct DevicesView: View {
                 }
             }
 
-            Text("HomeBrain walks you through each migration step, opens the radio operation at the right time, then waits for the physical device action.")
+            Text("HomeBrain opens the native radio operation at the right time, then waits for the physical exclude, reset, or pairing action. Retire SmartThings only after native state and controls are verified.")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -546,25 +546,23 @@ struct DevicesView: View {
 
             if let workflow {
                 directRadioMigrationWorkflowCard(workflow, device: device, isPending: isPending)
+            } else if plan?.supported == false {
+                Text("No radio workflow is available for this device. Keep it on its current integration, or replace it with a known Zigbee, Z-Wave, or Matter device before onboarding natively.")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(10)
+                    .background(HBPalette.panelSoft.opacity(0.45), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             } else {
                 HStack(spacing: 8) {
-                    Button {
-                        Task { await startDirectRadioMigration(device, protocolName: "zigbee") }
-                    } label: {
-                        Label("Zigbee", systemImage: "dot.radiowaves.left.and.right")
-                            .frame(maxWidth: .infinity)
+                    ForEach(plan?.protocolButtonOrder ?? ["zigbee", "zwave"], id: \.self) { protocolName in
+                        migrationProtocolButton(
+                            plan: plan,
+                            device: device,
+                            protocolName: protocolName,
+                            isPending: isPending
+                        )
                     }
-                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                    .disabled(isPending || plan?.supported == false)
-
-                    Button {
-                        Task { await startDirectRadioMigration(device, protocolName: "zwave") }
-                    } label: {
-                        Label("Z-Wave", systemImage: "wave.3.right")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                    .disabled(isPending || plan?.supported == false)
                 }
             }
 
@@ -586,6 +584,41 @@ struct DevicesView: View {
         }
     }
 
+    @ViewBuilder
+    private func migrationProtocolButton(plan: DirectRadioMigrationPlanRecord?, device: DeviceItem, protocolName: String, isPending: Bool) -> some View {
+        let recommended = protocolName == plan?.normalizedRecommendedProtocol
+        let title = migrationProtocolButtonTitle(plan: plan, protocolName: protocolName)
+        let icon = migrationProtocolIcon(protocolName)
+
+        if recommended {
+            Button {
+                Task { await startDirectRadioMigration(device, protocolName: protocolName) }
+            } label: {
+                Label(title, systemImage: icon)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(HBPrimaryButtonStyle(compact: true))
+            .disabled(isPending)
+        } else {
+            Button {
+                Task { await startDirectRadioMigration(device, protocolName: protocolName) }
+            } label: {
+                Label(title, systemImage: icon)
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(HBSecondaryButtonStyle(compact: true))
+            .disabled(isPending)
+        }
+    }
+
+    private func migrationProtocolIcon(_ protocolName: String) -> String {
+        protocolName == "zigbee" ? "dot.radiowaves.left.and.right" : "wave.3.right"
+    }
+
+    private func migrationProtocolButtonTitle(plan: DirectRadioMigrationPlanRecord?, protocolName: String) -> String {
+        plan?.buttonTitle(for: protocolName) ?? (protocolName == "zigbee" ? "Zigbee" : "Z-Wave")
+    }
+
     private func directRadioMigrationPlanSummary(_ plan: DirectRadioMigrationPlanRecord) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -600,7 +633,7 @@ struct DevicesView: View {
                         .foregroundStyle(HBPalette.textPrimary)
                 }
                 Spacer()
-                Text(plan.supported ? "\(plan.nativeFeatureCount)/\(max(plan.featureSupport.count, 1)) native" : "Blocked")
+                Text(plan.supported ? "\(plan.nativeFeatureCount)/\(max(plan.featureSupport.count, 1)) native" : "Do not migrate")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(plan.supported ? HBPalette.accentGreen : HBPalette.accentRed)
                     .padding(.horizontal, 8)
@@ -618,6 +651,11 @@ struct DevicesView: View {
                     }
                 }
             }
+
+            Text(plan.migrationSafetyNote)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(HBPalette.accentBlue)
+                .fixedSize(horizontal: false, vertical: true)
 
             if let profile = plan.instructionProfile {
                 VStack(alignment: .leading, spacing: 3) {
@@ -1516,7 +1554,7 @@ struct DevicesView: View {
     private func migrationActionMessage(for step: DirectRadioMigrationGuidedStepRecord, protocolName: String) -> String {
         switch step.action {
         case "start_zwave_exclusion":
-            return "HomeBrain opened Z-Wave exclusion. Complete the device action below, then continue."
+            return "HomeBrain opened Z-Wave exclusion on the Zooz stick. Trigger the device remove/exclude action below, then continue."
         case "start_direct_migration":
             return protocolName == "zigbee"
                 ? "HomeBrain opened Zigbee pairing. Complete the device action below, then continue."
@@ -2318,6 +2356,49 @@ private struct DirectRadioMigrationPlanRecord {
         default:
             return "Choose manually"
         }
+    }
+
+    var normalizedRecommendedProtocol: String? {
+        switch recommendedProtocol {
+        case "zigbee":
+            return "zigbee"
+        case "zwave", "z-wave":
+            return "zwave"
+        default:
+            return nil
+        }
+    }
+
+    var protocolButtonOrder: [String] {
+        guard let recommended = normalizedRecommendedProtocol else {
+            return ["zigbee", "zwave"]
+        }
+
+        return [
+            recommended,
+            recommended == "zigbee" ? "zwave" : "zigbee"
+        ]
+    }
+
+    func buttonTitle(for protocolName: String) -> String {
+        let label = protocolName == "zigbee" ? "Zigbee" : "Z-Wave"
+        if protocolName == normalizedRecommendedProtocol {
+            return "Recommended \(label)"
+        }
+        if normalizedRecommendedProtocol != nil {
+            return "Use \(label)"
+        }
+        return label
+    }
+
+    var migrationSafetyNote: String {
+        if !supported {
+            return "HomeBrain will not open an exclusion, pairing, or migration window for this device. Keep it on its current integration unless you replace it with native radio hardware."
+        }
+        if normalizedRecommendedProtocol == "zwave" {
+            return "Z-Wave transition starts with exclusion from the old network. HomeBrain opens exclusion on the Zooz stick; you trigger the physical exclude/remove action on the device before inclusion."
+        }
+        return "HomeBrain keeps the SmartThings-backed record until you verify the native HomeBrain replacement. Confirm battery, state, and controls before retiring SmartThings."
     }
 
     var nativeFeatureCount: Int {

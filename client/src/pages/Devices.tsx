@@ -1512,7 +1512,7 @@ export function Devices({
 
         <TabsContent value="all" className="space-y-4">
           {viewMode === "grid" ? (
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,16.5rem),1fr))] gap-4">
               {sortedFilteredDevices.map((device) => renderGridDeviceCard(device))}
             </div>
           ) : (

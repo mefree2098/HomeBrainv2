@@ -80,5 +80,8 @@ test('direct radio catalog leaves cloud and virtual SmartThings helpers out of n
   assert.equal(isCloudOrVirtualOnly(device), true);
   const plan = buildMigrationPlan(device);
   assert.equal(plan.supported, false);
+  assert.deepEqual(plan.guidedSteps, []);
+  assert.deepEqual(plan.manualSteps, []);
+  assert.equal(plan.instructionProfile, null);
   assert.ok(plan.warnings.some((warning) => warning.includes('cloud, virtual')));
 });
