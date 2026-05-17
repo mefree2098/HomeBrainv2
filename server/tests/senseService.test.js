@@ -289,7 +289,7 @@ test('Sense refresh failures back off scheduled polling without disabling the in
     await service.shutdown();
   });
 
-  service.noteRefreshFailure(new Error('HTTP 504 Gateway Timeout'));
+  const appliedBackoffMs = service.noteRefreshFailure(new Error('HTTP 504 Gateway Timeout'));
   await service.ensurePollTimer();
 
   const expectedBackoffBaseMs = Math.max(
@@ -298,7 +298,10 @@ test('Sense refresh failures back off scheduled polling without disabling the in
   );
 
   assert.equal(service.consecutiveRefreshFailures, 1);
-  assert.equal(service.pollIntervalMs >= expectedBackoffBaseMs, true);
+  assert.equal(appliedBackoffMs, expectedBackoffBaseMs);
+  assert.equal(service.failureBackoffMs, expectedBackoffBaseMs);
+  assert.equal(service.pollIntervalMs <= expectedBackoffBaseMs, true);
+  assert.equal(service.pollIntervalMs >= expectedBackoffBaseMs - 1000, true);
   assert.equal(service.pollIntervalMs > 10_000, true);
 
   service.resetRefreshFailureBackoff();
