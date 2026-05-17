@@ -24,6 +24,7 @@ const DEPENDENCY_ARTIFACT_PATHS = Object.freeze([
   path.join('broker', 'node_modules'),
   path.join('lambda', 'node_modules')
 ]);
+const DEFAULT_CORE_RESTART_COMMAND = 'sudo -n systemctl daemon-reload || true; sudo -n systemctl start --no-block homebrain-restart-helper';
 
 const DEPLOY_PRESETS = Object.freeze({
   safe: Object.freeze({
@@ -104,7 +105,7 @@ class PlatformDeployService {
     this.defaultOllamaRestartCommand = process.env.HOMEBRAIN_DEPLOY_OLLAMA_RESTART_CMD || '';
     this.customRestartCommand = process.env.HOMEBRAIN_DEPLOY_RESTART_CMD || '';
     this.coreRestartCommand = process.env.HOMEBRAIN_DEPLOY_CORE_RESTART_CMD
-      || 'sudo -n systemctl daemon-reload || true; sudo -n systemctl start --no-block homebrain-restart-helper';
+      || DEFAULT_CORE_RESTART_COMMAND;
     this.alexaBrokerService = options.alexaBrokerService || alexaBrokerService;
     this.runtimeSnapshotCaptured = false;
     this.runtimeSnapshot = {
@@ -1218,6 +1219,51 @@ class PlatformDeployService {
     return /\bsystemctl\s+(?:restart|try-restart|start)\s+[^;]*\bhomebrain\b/i.test(command);
   }
 
+  commandDirectlyRestartsHomebrain(command) {
+    if (!command) {
+      return false;
+    }
+    return /\bsystemctl\s+(?:restart|try-restart|start)\s+(?:--no-block\s+)?(?:[^\s;]+\s+)*homebrain(?:\.service)?(?:\s|$)/i
+      .test(command);
+  }
+
+  commandStartsHomebrainRestartHelper(command) {
+    if (!command) {
+      return false;
+    }
+    return /\bsystemctl\s+(?:restart|try-restart|start)\s+(?:--no-block\s+)?(?:[^\s;]+\s+)*homebrain-restart-helper(?:\.service)?(?:\s|$)/i
+      .test(command);
+  }
+
+  protectCoreRestartSegments(restartSegments, label = 'core restart command') {
+    const segments = Array.isArray(restartSegments) ? restartSegments : [];
+    const notes = [];
+    const hasDirectHomebrainRestart = segments.some((segment) => this.commandDirectlyRestartsHomebrain(segment));
+    const hasRestartHelper = segments.some((segment) => this.commandStartsHomebrainRestartHelper(segment));
+
+    if (!hasDirectHomebrainRestart || hasRestartHelper) {
+      return { segments, notes };
+    }
+
+    const helperSegments = this.normalizeRestartCommandSegments(
+      DEFAULT_CORE_RESTART_COMMAND,
+      'default core restart command'
+    ).segments;
+    const protectedSegments = segments.filter((segment) => !this.commandDirectlyRestartsHomebrain(segment));
+
+    for (const helperSegment of helperSegments) {
+      if (!protectedSegments.includes(helperSegment)) {
+        protectedSegments.push(helperSegment);
+      }
+    }
+
+    notes.push(
+      `Replaced direct homebrain restart in ${label} with homebrain-restart-helper so orphaned HomeBrain Node processes are cleaned before restart.`
+    );
+
+    return { segments: protectedSegments, notes };
+  }
+
   runtimeBootedAfterRestartRequest(runtime, pendingRestart) {
     const requestedAtMs = parseTimestampMs(pendingRestart?.requestedAt);
     const bootedAtMs = parseTimestampMs(runtime?.bootedAt);
@@ -1275,11 +1321,20 @@ class PlatformDeployService {
     notes.push(...normalizedCoreRestart.notes);
     if (normalizedCoreRestart.segments.length === 0) {
       normalizedCoreRestart = this.normalizeRestartCommandSegments(
-        'sudo -n systemctl daemon-reload || true; sudo -n systemctl restart --no-block homebrain',
+        DEFAULT_CORE_RESTART_COMMAND,
         'default core restart command'
       );
       notes.push(...normalizedCoreRestart.notes);
     }
+    const protectedCoreRestart = this.protectCoreRestartSegments(
+      normalizedCoreRestart.segments,
+      normalizedCoreRestart.segments.length > 0 ? 'HOMEBRAIN_DEPLOY_CORE_RESTART_CMD' : 'default core restart command'
+    );
+    notes.push(...protectedCoreRestart.notes);
+    normalizedCoreRestart = {
+      ...normalizedCoreRestart,
+      segments: protectedCoreRestart.segments
+    };
     commandParts.push(...normalizedCoreRestart.segments);
 
     return {

@@ -452,6 +452,26 @@ test('buildServiceRestartCommand does not revive the host Ollama service by defa
   assert.equal(result.fullCommand.includes('ollama'), false);
 });
 
+test('buildServiceRestartCommand routes direct HomeBrain restarts through the restart helper', { concurrency: false }, async (t) => {
+  const service = await createTempService(t);
+  service.coreRestartCommand = [
+    'sudo -n systemctl daemon-reload || true',
+    'sudo -n systemctl restart --no-block homebrain-discovery || true',
+    'sudo -n systemctl restart --no-block homebrain'
+  ].join('; ');
+
+  const result = service.buildServiceRestartCommand();
+
+  assert.equal(result.fullCommand.includes('sudo -n systemctl restart --no-block homebrain;'), false);
+  assert.equal(result.fullCommand.endsWith('sudo -n systemctl restart --no-block homebrain'), false);
+  assert.equal(result.fullCommand.includes('sudo -n systemctl restart --no-block homebrain-discovery || true'), true);
+  assert.equal(result.fullCommand.includes('sudo -n systemctl start --no-block homebrain-restart-helper'), true);
+  assert.equal(
+    result.notes.some((note) => /orphaned HomeBrain Node processes/i.test(note)),
+    true
+  );
+});
+
 test('normalizeRestartCommandSegments adds --no-block to systemctl start and restart commands', { concurrency: false }, async (t) => {
   const service = await createTempService(t);
 
