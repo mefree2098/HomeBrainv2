@@ -59,6 +59,23 @@ test('direct radio autodetection does not assign the same serial endpoint to bot
   assert.notEqual(zigbee.path, zwave.path);
 });
 
+test('direct radio scoring recognizes stable Linux by-id Zigbee paths with separators', () => {
+  const zigbee = enrichSerialPortForDirectRadios(normalizeSerialPort({
+    path: '/dev/serial/by-id/usb-ITead_Sonoff_Zigbee_3.0_USB_Dongle_Plus_2275350e6ca4ef119f8aaf8086a24396-if00-port0',
+    manufacturer: 'ITead',
+    vendorId: '10C4',
+    productId: 'EA60',
+    serialNumber: '2275350e6ca4ef119f8aaf8086a24396',
+    pnpId: 'usb-ITead_Sonoff_Zigbee_3.0_USB_Dongle_Plus_2275350e6ca4ef119f8aaf8086a24396-if00-port0'
+  }, []));
+
+  assert.equal(zigbee.likelyZigbee, true);
+  assert.equal(zigbee.likelyZWave, false);
+  assert.equal(zigbee.likelyThread, false);
+  assert.equal(zigbee.preferredProtocol, 'zigbee');
+  assert.ok(zigbee.scores.zigbee >= 8);
+});
+
 test('direct radio scoring treats generic CP210x as weak without protocol identity', () => {
   const generic = normalizeSerialPort({
     path: '/dev/ttyUSB1',

@@ -299,6 +299,12 @@ class DeviceService {
     this.rainMachineSyncPromise = null;
     this.lastRainMachineSyncAt = 0;
     this.rainMachineSyncCooldownMs = Number(process.env.RAINMACHINE_DEVICE_REFRESH_MS || 60 * 1000);
+    const integrationRefreshDebounceMs = Number(process.env.HOMEBRAIN_DEVICE_REFRESH_DEBOUNCE_MS || 1_000);
+    this.integrationRefreshPromise = null;
+    this.lastIntegrationRefreshScheduledAt = 0;
+    this.integrationRefreshDebounceMs = Number.isFinite(integrationRefreshDebounceMs)
+      ? Math.max(250, Math.min(10_000, integrationRefreshDebounceMs))
+      : 1_000;
   }
 
   /**
@@ -2471,11 +2477,26 @@ class DeviceService {
   }
 
   scheduleIntegrationRefresh({ immediate = false, reason = 'background' } = {}) {
-    Promise.resolve()
+    if (this.integrationRefreshPromise) {
+      return this.integrationRefreshPromise;
+    }
+
+    const now = Date.now();
+    if (!immediate && now - this.lastIntegrationRefreshScheduledAt < this.integrationRefreshDebounceMs) {
+      return Promise.resolve(null);
+    }
+
+    this.lastIntegrationRefreshScheduledAt = now;
+    this.integrationRefreshPromise = Promise.resolve()
       .then(() => this.ensureIntegrationState({ immediate }))
       .catch((error) => {
         console.warn(`DeviceService: Background integration refresh failed (${reason}): ${error.message}`);
+      })
+      .finally(() => {
+        this.integrationRefreshPromise = null;
       });
+
+    return this.integrationRefreshPromise;
   }
 
   async ensureHarmonyState({ immediate = false } = {}) {

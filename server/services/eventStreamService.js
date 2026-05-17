@@ -15,6 +15,21 @@ class EventStreamService extends EventEmitter {
       Number.parseInt(process.env.HOMEBRAIN_EVENT_STREAM_MAX_LISTENERS, 10) || 100
     );
     this.setMaxListeners(maxListeners);
+    this.lastDisconnectedPublishWarningAt = 0;
+  }
+
+  isDatabaseReady() {
+    return mongoose.connection.readyState === 1 && Boolean(mongoose.connection.db);
+  }
+
+  warnDisconnectedPublishSkipped(input = {}) {
+    const now = Date.now();
+    if (now - this.lastDisconnectedPublishWarningAt < 60_000) {
+      return;
+    }
+
+    this.lastDisconnectedPublishWarningAt = now;
+    console.warn(`EventStreamService: skipped "${input?.type || 'unknown'}" because MongoDB is not connected`);
   }
 
   async nextSequence() {
@@ -83,6 +98,11 @@ class EventStreamService extends EventEmitter {
   }
 
   async publishSafe(input = {}) {
+    if (!this.isDatabaseReady()) {
+      this.warnDisconnectedPublishSkipped(input);
+      return null;
+    }
+
     try {
       return await this.publish(input);
     } catch (error) {
