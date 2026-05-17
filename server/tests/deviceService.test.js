@@ -814,6 +814,45 @@ test('getAllDevices hides Harmony devices excluded from HomeBrain unless explici
   assert.doesNotMatch(JSON.stringify(queries[1]), /harmonyExcludeFromHomeBrain/);
 });
 
+test('scheduleIntegrationRefresh coalesces concurrent background refreshes', async (t) => {
+  const originalEnsureIntegrationState = deviceService.ensureIntegrationState;
+  const originalIntegrationRefreshPromise = deviceService.integrationRefreshPromise;
+  const originalLastIntegrationRefreshScheduledAt = deviceService.lastIntegrationRefreshScheduledAt;
+  const originalIntegrationRefreshDebounceMs = deviceService.integrationRefreshDebounceMs;
+  let refreshCalls = 0;
+  let releaseRefresh;
+  const refreshGate = new Promise((resolve) => {
+    releaseRefresh = resolve;
+  });
+
+  t.after(() => {
+    deviceService.ensureIntegrationState = originalEnsureIntegrationState;
+    deviceService.integrationRefreshPromise = originalIntegrationRefreshPromise;
+    deviceService.lastIntegrationRefreshScheduledAt = originalLastIntegrationRefreshScheduledAt;
+    deviceService.integrationRefreshDebounceMs = originalIntegrationRefreshDebounceMs;
+  });
+
+  deviceService.integrationRefreshPromise = null;
+  deviceService.lastIntegrationRefreshScheduledAt = 0;
+  deviceService.integrationRefreshDebounceMs = 1000;
+  deviceService.ensureIntegrationState = async () => {
+    refreshCalls += 1;
+    await refreshGate;
+  };
+
+  const firstRefresh = deviceService.scheduleIntegrationRefresh({ reason: 'test-first' });
+  const secondRefresh = deviceService.scheduleIntegrationRefresh({ reason: 'test-second' });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(firstRefresh, secondRefresh);
+  assert.equal(refreshCalls, 1);
+
+  releaseRefresh();
+  await Promise.all([firstRefresh, secondRefresh]);
+
+  assert.equal(deviceService.integrationRefreshPromise, null);
+});
+
 test('updateDevice normalizes and deduplicates device groups', async (t) => {
   const originalFindById = Device.findById;
   const originalFindOne = Device.findOne;
