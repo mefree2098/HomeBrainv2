@@ -12,7 +12,9 @@ test('setup-services writes a HomeBrain unit that starts from the repo root', ()
 
   assert.match(script, /WorkingDirectory=\$\{HOMEBRAIN_DIR\}/);
   assert.doesNotMatch(script, /WorkingDirectory=\$\{HOMEBRAIN_DIR\}\/server/);
-  assert.match(script, /ExecStart=\$\{node_bin\} scripts\/run-with-modern-node\.js node server\/server\.js/);
+  assert.match(script, /Environment=HOMEBRAIN_BOOTSTRAP_NODE_BIN=\$\{node_bin\}/);
+  assert.match(script, /ExecStart=\$\{HOMEBRAIN_DIR\}\/scripts\/run-homebrain-server-with-modern-node\.sh/);
+  assert.doesNotMatch(script, /ExecStart=\$\{node_bin\} scripts\/run-with-modern-node\.js node server\/server\.js/);
 });
 
 test('setup-services waits for the app mount and avoids tight reboot crash loops', () => {
@@ -50,6 +52,13 @@ test('service helpers do a post-stop HomeBrain process sweep', () => {
     assert.match(script, /local include_service_pid="\$\{1:-false\}"/);
     assert.match(script, /cleanup_orphaned_homebrain_processes true/);
   }
+});
+
+test('HomeBrain systemd launcher execs into the selected Node server process', () => {
+  const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'run-homebrain-server-with-modern-node.sh'), 'utf8');
+
+  assert.match(script, /run-with-modern-node\.js --print-node-bin/);
+  assert.match(script, /exec "\$\{SELECTED_NODE\}" "\$\{HOMEBRAIN_DIR\}\/server\/server\.js"/);
 });
 
 test('Thread kernel helper validates the custom kernel before scheduling reboot', () => {

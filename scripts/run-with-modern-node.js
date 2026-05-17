@@ -158,7 +158,7 @@ function resolveCommand(command, selectedBin) {
 function main() {
   const args = process.argv.slice(2);
   if (args.length === 0) {
-    console.error('Usage: node scripts/run-with-modern-node.js <command> [args...]');
+    console.error('Usage: node scripts/run-with-modern-node.js [--print-node-bin|<command> [args...]]');
     process.exit(1);
   }
 
@@ -173,6 +173,11 @@ function main() {
     console.error('Detected binaries:');
     console.error(formatInspected(inspected));
     process.exit(1);
+  }
+
+  if (args[0] === '--print-node-bin') {
+    process.stdout.write(`${selected.bin}\n`);
+    return;
   }
 
   const command = resolveCommand(args[0], selected.bin);
