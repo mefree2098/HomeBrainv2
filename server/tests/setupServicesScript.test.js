@@ -37,16 +37,24 @@ test('setup-services installs privileged Thread helpers and grants sudoers acces
   assert.match(script, /\$\{THREAD_KERNEL_HELPER_INSTALL_PATH\} \*/);
 });
 
-test('setup-services neutralizes legacy discovery units that launch the backend', () => {
+test('setup-services neutralizes legacy standalone discovery units', () => {
   const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
 
   assert.match(script, /LEGACY_DISCOVERY_SERVICE_NAME="\$\{HOMEBRAIN_LEGACY_DISCOVERY_SERVICE_NAME:-homebrain-discovery\}"/);
-  assert.match(script, /legacy_discovery_service_runs_homebrain_backend/);
-  assert.match(script, /server\/server\.js/);
-  assert.match(script, /run-homebrain-server-with-modern-node\.sh/);
+  assert.match(script, /legacy_discovery_service_exists/);
+  assert.match(script, /legacy_discovery_service_is_placeholder/);
   assert.match(script, /neutralize_legacy_discovery_backend_service/);
   assert.match(script, /ExecStart=\/bin\/true/);
   assert.match(script, /systemctl stop "\$\{LEGACY_DISCOVERY_SERVICE_NAME\}\.service"/);
+});
+
+test('restart helper stops legacy standalone discovery before starting HomeBrain', () => {
+  const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'restart-homebrain-service.sh'), 'utf8');
+
+  assert.match(script, /LEGACY_DISCOVERY_SERVICE_NAME="\$\{HOMEBRAIN_LEGACY_DISCOVERY_SERVICE_NAME:-homebrain-discovery\}"/);
+  assert.match(script, /stop_legacy_discovery_service/);
+  assert.match(script, /"\$\{SYSTEMCTL_BIN\}" stop "\$\{LEGACY_DISCOVERY_SERVICE_NAME\}\.service"/);
+  assert.match(script, /stop_legacy_discovery_service\s*\nstop_homebrain_service/);
 });
 
 test('setup-services installs smbclient for SMB disaster recovery backups', () => {

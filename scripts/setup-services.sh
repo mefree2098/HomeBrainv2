@@ -452,30 +452,24 @@ describe_homebrain_listener_state() {
   echo "service MainPID=${main_pid:-0}; port 3000 listener pid(s)=${listener_pids}"
 }
 
-legacy_discovery_service_unit() {
-  sudo systemctl cat "${LEGACY_DISCOVERY_SERVICE_NAME}.service" 2>/dev/null || true
+legacy_discovery_service_exists() {
+  sudo systemctl cat "${LEGACY_DISCOVERY_SERVICE_NAME}.service" >/dev/null 2>&1
 }
 
-legacy_discovery_service_runs_homebrain_backend() {
+legacy_discovery_service_is_placeholder() {
   local unit_text
 
-  unit_text="$(legacy_discovery_service_unit)"
-  if [[ -z "${unit_text}" ]]; then
-    return 1
-  fi
-
-  [[ "${unit_text}" == *"HomeBrainv2"* \
-    || "${unit_text}" == *"server/server.js"* \
-    || "${unit_text}" == *"run-with-modern-node.js"* \
-    || "${unit_text}" == *"run-homebrain-server-with-modern-node.sh"* ]]
+  unit_text="$(sudo systemctl cat "${LEGACY_DISCOVERY_SERVICE_NAME}.service" 2>/dev/null || true)"
+  [[ "${unit_text}" == *"Legacy HomeBrain discovery service placeholder"* \
+    && "${unit_text}" == *"ExecStart=/bin/true"* ]]
 }
 
 neutralize_legacy_discovery_backend_service() {
-  if ! legacy_discovery_service_runs_homebrain_backend; then
+  if ! legacy_discovery_service_exists || legacy_discovery_service_is_placeholder; then
     return 0
   fi
 
-  print_warning "Neutralizing legacy ${LEGACY_DISCOVERY_SERVICE_NAME} unit that launches the HomeBrain backend."
+  print_warning "Neutralizing legacy ${LEGACY_DISCOVERY_SERVICE_NAME} unit; HomeBrain discovery now runs inside the main service."
   sudo systemctl stop "${LEGACY_DISCOVERY_SERVICE_NAME}.service" 2>/dev/null || true
   sudo tee "${LEGACY_DISCOVERY_SERVICE_PATH}" >/dev/null <<EOF
 [Unit]

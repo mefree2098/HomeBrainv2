@@ -3,6 +3,7 @@
 set -euo pipefail
 
 SERVICE_NAME="${HOMEBRAIN_SERVICE_NAME:-homebrain}"
+LEGACY_DISCOVERY_SERVICE_NAME="${HOMEBRAIN_LEGACY_DISCOVERY_SERVICE_NAME:-homebrain-discovery}"
 HOMEBRAIN_DIR="${HOMEBRAIN_DIR:-}"
 WAIT_SECONDS="${HOMEBRAIN_RESTART_WAIT_SECONDS:-20}"
 HOMEBRAIN_PORT="${HOMEBRAIN_PORT:-3000}"
@@ -182,6 +183,16 @@ cleanup_blocking_homebrain_port_listeners() {
   kill_listener_pids "${blocking_pids[@]}"
 }
 
+stop_legacy_discovery_service() {
+  if ! "${SYSTEMCTL_BIN}" cat "${LEGACY_DISCOVERY_SERVICE_NAME}.service" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "Stopping legacy ${LEGACY_DISCOVERY_SERVICE_NAME} service; HomeBrain discovery runs inside ${SERVICE_NAME}."
+  "${SYSTEMCTL_BIN}" stop "${LEGACY_DISCOVERY_SERVICE_NAME}.service" 2>/dev/null || true
+  "${SYSTEMCTL_BIN}" reset-failed "${LEGACY_DISCOVERY_SERVICE_NAME}.service" 2>/dev/null || true
+}
+
 get_service_state() {
   "${SYSTEMCTL_BIN}" show -p ActiveState --value "${SERVICE_NAME}" 2>/dev/null || true
 }
@@ -225,6 +236,7 @@ stop_homebrain_service() {
 }
 
 echo "Restarting ${SERVICE_NAME}..."
+stop_legacy_discovery_service
 stop_homebrain_service
 "${SYSTEMCTL_BIN}" daemon-reload || true
 "${SYSTEMCTL_BIN}" start "${SERVICE_NAME}"
