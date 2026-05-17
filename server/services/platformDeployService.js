@@ -106,6 +106,7 @@ class PlatformDeployService {
     this.customRestartCommand = process.env.HOMEBRAIN_DEPLOY_RESTART_CMD || '';
     this.coreRestartCommand = process.env.HOMEBRAIN_DEPLOY_CORE_RESTART_CMD
       || DEFAULT_CORE_RESTART_COMMAND;
+    this.legacyDiscoveryServiceName = process.env.HOMEBRAIN_LEGACY_DISCOVERY_SERVICE_NAME || 'homebrain-discovery';
     this.alexaBrokerService = options.alexaBrokerService || alexaBrokerService;
     this.runtimeSnapshotCaptured = false;
     this.runtimeSnapshot = {
@@ -1235,6 +1236,37 @@ class PlatformDeployService {
       .test(command);
   }
 
+  commandTargetsLegacyDiscoveryService(command) {
+    if (!command || !this.legacyDiscoveryServiceName) {
+      return false;
+    }
+
+    const escapedServiceName = this.legacyDiscoveryServiceName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(
+      `\\bsystemctl\\s+(?:restart|try-restart|start)\\s+(?:--no-block\\s+)?(?:[^\\s;]+\\s+)*${escapedServiceName}(?:\\.service)?(?:\\s|$)`,
+      'i'
+    ).test(command);
+  }
+
+  filterLegacyDiscoveryRestartSegments(restartSegments, label = 'restart command') {
+    const segments = Array.isArray(restartSegments) ? restartSegments : [];
+    const kept = [];
+    const notes = [];
+
+    segments.forEach((segment) => {
+      if (this.commandTargetsLegacyDiscoveryService(segment)) {
+        notes.push(
+          `Ignored ${label} segment for legacy ${this.legacyDiscoveryServiceName}; discovery now runs inside the main HomeBrain service.`
+        );
+        return;
+      }
+
+      kept.push(segment);
+    });
+
+    return { segments: kept, notes };
+  }
+
   protectCoreRestartSegments(restartSegments, label = 'core restart command') {
     const segments = Array.isArray(restartSegments) ? restartSegments : [];
     const notes = [];
@@ -1297,11 +1329,20 @@ class PlatformDeployService {
       });
     }
 
-    const normalizedCustomRestart = this.normalizeRestartCommandSegments(
+    let normalizedCustomRestart = this.normalizeRestartCommandSegments(
       this.customRestartCommand,
       'HOMEBRAIN_DEPLOY_RESTART_CMD'
     );
     notes.push(...normalizedCustomRestart.notes);
+    const filteredCustomRestart = this.filterLegacyDiscoveryRestartSegments(
+      normalizedCustomRestart.segments,
+      'HOMEBRAIN_DEPLOY_RESTART_CMD'
+    );
+    notes.push(...filteredCustomRestart.notes);
+    normalizedCustomRestart = {
+      ...normalizedCustomRestart,
+      segments: filteredCustomRestart.segments
+    };
     const customRestart = normalizedCustomRestart.segments.join('; ');
     if (customRestart) {
       if (this.commandRestartsHomebrain(customRestart)) {
@@ -1320,6 +1361,25 @@ class PlatformDeployService {
     );
     notes.push(...normalizedCoreRestart.notes);
     if (normalizedCoreRestart.segments.length === 0) {
+      normalizedCoreRestart = this.normalizeRestartCommandSegments(
+        DEFAULT_CORE_RESTART_COMMAND,
+        'default core restart command'
+      );
+      notes.push(...normalizedCoreRestart.notes);
+    }
+    const filteredCoreRestart = this.filterLegacyDiscoveryRestartSegments(
+      normalizedCoreRestart.segments,
+      normalizedCoreRestart.segments.length > 0 ? 'HOMEBRAIN_DEPLOY_CORE_RESTART_CMD' : 'default core restart command'
+    );
+    notes.push(...filteredCoreRestart.notes);
+    normalizedCoreRestart = {
+      ...normalizedCoreRestart,
+      segments: filteredCoreRestart.segments
+    };
+    if (normalizedCoreRestart.segments.length === 0) {
+      notes.push(
+        'Fell back to the default core restart command because the configured core restart only targeted legacy services.'
+      );
       normalizedCoreRestart = this.normalizeRestartCommandSegments(
         DEFAULT_CORE_RESTART_COMMAND,
         'default core restart command'

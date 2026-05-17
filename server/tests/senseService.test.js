@@ -273,3 +273,32 @@ test('updateRealtimeState persists important websocket state transitions with up
     SenseIntegration.updateOne = originalUpdateOne;
   }
 });
+
+test('Sense refresh failures back off scheduled polling without disabling the integration', async (t) => {
+  const service = new senseService.SenseService();
+  service.backgroundEnabled = true;
+  const originalGetIntegration = SenseIntegration.getIntegration;
+
+  SenseIntegration.getIntegration = async () => ({
+    enabled: true,
+    pollIntervalSeconds: 10
+  });
+
+  t.after(async () => {
+    SenseIntegration.getIntegration = originalGetIntegration;
+    await service.shutdown();
+  });
+
+  service.noteRefreshFailure(new Error('HTTP 504 Gateway Timeout'));
+  await service.ensurePollTimer();
+
+  assert.equal(service.consecutiveRefreshFailures, 1);
+  assert.equal(service.pollIntervalMs >= 60000, true);
+  assert.equal(service.pollIntervalMs > 10_000, true);
+
+  service.resetRefreshFailureBackoff();
+  await service.ensurePollTimer();
+
+  assert.equal(service.consecutiveRefreshFailures, 0);
+  assert.equal(service.pollIntervalMs, 10_000);
+});

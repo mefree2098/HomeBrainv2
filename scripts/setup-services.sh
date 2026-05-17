@@ -456,38 +456,18 @@ legacy_discovery_service_exists() {
   sudo systemctl cat "${LEGACY_DISCOVERY_SERVICE_NAME}.service" >/dev/null 2>&1
 }
 
-legacy_discovery_service_is_placeholder() {
-  local unit_text
-
-  unit_text="$(sudo systemctl cat "${LEGACY_DISCOVERY_SERVICE_NAME}.service" 2>/dev/null || true)"
-  [[ "${unit_text}" == *"Legacy HomeBrain discovery service placeholder"* \
-    && "${unit_text}" == *"ExecStart=/bin/true"* ]]
-}
-
 neutralize_legacy_discovery_backend_service() {
-  if ! legacy_discovery_service_exists || legacy_discovery_service_is_placeholder; then
+  if ! legacy_discovery_service_exists && [[ ! -e "${LEGACY_DISCOVERY_SERVICE_PATH}" ]]; then
     return 0
   fi
 
-  print_warning "Neutralizing legacy ${LEGACY_DISCOVERY_SERVICE_NAME} unit; HomeBrain discovery now runs inside the main service."
+  print_warning "Removing legacy ${LEGACY_DISCOVERY_SERVICE_NAME} unit; HomeBrain discovery now runs inside the main service."
   sudo systemctl stop "${LEGACY_DISCOVERY_SERVICE_NAME}.service" 2>/dev/null || true
-  sudo tee "${LEGACY_DISCOVERY_SERVICE_PATH}" >/dev/null <<EOF
-[Unit]
-Description=Legacy HomeBrain discovery service placeholder
-Documentation=https://github.com/mefree2098/HomeBrainv2
-
-[Service]
-Type=oneshot
-ExecStart=/bin/true
-RemainAfterExit=no
-
-[Install]
-WantedBy=multi-user.target
-EOF
-  sudo systemctl daemon-reload
-  sudo systemctl reset-failed "${LEGACY_DISCOVERY_SERVICE_NAME}.service" 2>/dev/null || true
   sudo systemctl disable "${LEGACY_DISCOVERY_SERVICE_NAME}.service" 2>/dev/null || true
-  print_success "Legacy ${LEGACY_DISCOVERY_SERVICE_NAME} backend unit replaced with a no-op placeholder."
+  sudo systemctl reset-failed "${LEGACY_DISCOVERY_SERVICE_NAME}.service" 2>/dev/null || true
+  sudo rm -f "${LEGACY_DISCOVERY_SERVICE_PATH}"
+  sudo systemctl daemon-reload
+  print_success "Legacy ${LEGACY_DISCOVERY_SERVICE_NAME} backend unit removed."
 }
 
 print_port_listener_summary() {
