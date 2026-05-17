@@ -42,10 +42,10 @@ test('setup-services neutralizes legacy standalone discovery units', () => {
 
   assert.match(script, /LEGACY_DISCOVERY_SERVICE_NAME="\$\{HOMEBRAIN_LEGACY_DISCOVERY_SERVICE_NAME:-homebrain-discovery\}"/);
   assert.match(script, /legacy_discovery_service_exists/);
-  assert.match(script, /legacy_discovery_service_is_placeholder/);
   assert.match(script, /neutralize_legacy_discovery_backend_service/);
-  assert.match(script, /ExecStart=\/bin\/true/);
+  assert.doesNotMatch(script, /ExecStart=\/bin\/true/);
   assert.match(script, /systemctl stop "\$\{LEGACY_DISCOVERY_SERVICE_NAME\}\.service"/);
+  assert.match(script, /rm -f "\$\{LEGACY_DISCOVERY_SERVICE_PATH\}"/);
 });
 
 test('restart helper stops legacy standalone discovery before starting HomeBrain', () => {

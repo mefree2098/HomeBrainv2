@@ -371,6 +371,7 @@ install_app() {
   print_status "Installing HomeBrain dependencies..."
   cd "${HOMEBRAIN_DIR}"
   node scripts/run-with-modern-node.js npm ci --no-audit --no-fund
+  node scripts/run-with-modern-node.js npm run install:all
   print_status "Ensuring native server modules match the active Node.js runtime..."
   node scripts/run-with-modern-node.js npm run ensure:native --prefix server
 

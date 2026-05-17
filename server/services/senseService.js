@@ -18,6 +18,14 @@ const SENSE_WS_BASE = 'wss://clientrt.sense.com/monitors';
 const DEFAULT_HTTP_TIMEOUT_MS = Math.max(5000, Number(process.env.SENSE_HTTP_TIMEOUT_MS || 12000));
 const DEFAULT_POLL_INTERVAL_SECONDS = Math.max(5, Number(process.env.SENSE_POLL_INTERVAL_SECONDS || 10));
 const DEFAULT_TREND_SYNC_INTERVAL_MINUTES = Math.max(5, Number(process.env.SENSE_TREND_SYNC_INTERVAL_MINUTES || 15));
+const SENSE_FAILURE_BACKOFF_BASE_MS = Math.max(
+  30_000,
+  Number(process.env.SENSE_FAILURE_BACKOFF_BASE_MS || 60_000)
+);
+const SENSE_FAILURE_BACKOFF_MAX_MS = Math.max(
+  SENSE_FAILURE_BACKOFF_BASE_MS,
+  Number(process.env.SENSE_FAILURE_BACKOFF_MAX_MS || 10 * 60_000)
+);
 const DEFAULT_ELECTRICITY_RATE_CENTS_PER_KWH = Number.isFinite(Number(process.env.SENSE_ELECTRICITY_RATE_CENTS_PER_KWH))
   ? Math.max(0, Number(process.env.SENSE_ELECTRICITY_RATE_CENTS_PER_KWH))
   : 11;
@@ -611,6 +619,9 @@ class SenseService {
     this.lastAlwaysOnFetchAt = 0;
     this.cachedAlwaysOnInfo = null;
     this.deviceCatalog = new Map();
+    this.consecutiveRefreshFailures = 0;
+    this.failureBackoffUntil = 0;
+    this.failureBackoffMs = 0;
   }
 
   async initialize() {
@@ -654,6 +665,30 @@ class SenseService {
     this.initialized = false;
     this.initializing = null;
     this.refreshPromise = null;
+    this.resetRefreshFailureBackoff();
+  }
+
+  resetRefreshFailureBackoff() {
+    this.consecutiveRefreshFailures = 0;
+    this.failureBackoffUntil = 0;
+    this.failureBackoffMs = 0;
+  }
+
+  noteRefreshFailure() {
+    this.consecutiveRefreshFailures += 1;
+    const exponent = Math.max(0, this.consecutiveRefreshFailures - 1);
+    const nextBackoffMs = Math.min(
+      SENSE_FAILURE_BACKOFF_MAX_MS,
+      SENSE_FAILURE_BACKOFF_BASE_MS * (2 ** exponent)
+    );
+    this.failureBackoffMs = nextBackoffMs;
+    this.failureBackoffUntil = Date.now() + nextBackoffMs;
+    return nextBackoffMs;
+  }
+
+  getRefreshBackoffRemainingMs(now = Date.now()) {
+    const remainingMs = this.failureBackoffUntil - now;
+    return Math.max(0, Number.isFinite(remainingMs) ? remainingMs : 0);
   }
 
   async ensurePollTimer() {
@@ -663,7 +698,7 @@ class SenseService {
 
     const integration = await SenseIntegration.getIntegration();
     const enabled = integration.enabled === true;
-    const nextIntervalMs = Math.max(
+    const requestedIntervalMs = Math.max(
       5000,
       clampInteger(
         integration.pollIntervalSeconds,
@@ -672,6 +707,8 @@ class SenseService {
         300
       ) * 1000
     );
+    const backoffRemainingMs = this.getRefreshBackoffRemainingMs();
+    const nextIntervalMs = Math.max(requestedIntervalMs, backoffRemainingMs);
 
     if (!enabled) {
       if (this.pollTimer) {
@@ -709,6 +746,13 @@ class SenseService {
     }
 
     this.refreshPromise = this.performRefresh({ reason, forceRealtime, forceTrend, mfaCode })
+      .then((result) => {
+        this.resetRefreshFailureBackoff();
+        return result;
+      }, (error) => {
+        this.noteRefreshFailure(error);
+        throw error;
+      })
       .finally(async () => {
         this.refreshPromise = null;
         try {
@@ -1948,6 +1992,9 @@ class SenseService {
         lastAuthenticatedAt: integration.lastAuthenticatedAt || null,
         lastRealtimeAt: integration.lastRealtimeAt || null,
         lastTrendSyncAt: integration.lastTrendSyncAt || null,
+        pollIntervalSeconds: Number(integration.pollIntervalSeconds || DEFAULT_POLL_INTERVAL_SECONDS),
+        failureBackoffSeconds: Math.ceil(this.getRefreshBackoffRemainingMs() / 1000),
+        consecutiveRefreshFailures: this.consecutiveRefreshFailures,
         lastError: integration.lastError || ''
       },
       latestSnapshot: latestSnapshot

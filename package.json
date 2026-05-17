@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "postinstall": "concurrently -n \"client,server,broker,lambda\" \"npm run client-install\" \"npm run server-install\" \"npm run broker-install\" \"npm run lambda-install\"",
+    "install:all": "concurrently -n \"client,server,broker,lambda\" \"npm run client-install\" \"npm run server-install\" \"npm run broker-install\" \"npm run lambda-install\"",
     "test": "echo \"Error: no test specified\" && exit 1",
     "client": "node scripts/run-with-modern-node.js npm --prefix client run dev",
     "client-install": "node scripts/run-with-modern-node.js npm --prefix client ci --no-audit --no-fund",

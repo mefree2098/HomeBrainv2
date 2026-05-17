@@ -464,10 +464,43 @@ test('buildServiceRestartCommand routes direct HomeBrain restarts through the re
 
   assert.equal(result.fullCommand.includes('sudo -n systemctl restart --no-block homebrain;'), false);
   assert.equal(result.fullCommand.endsWith('sudo -n systemctl restart --no-block homebrain'), false);
-  assert.equal(result.fullCommand.includes('sudo -n systemctl restart --no-block homebrain-discovery || true'), true);
+  assert.equal(result.fullCommand.includes('homebrain-discovery'), false);
   assert.equal(result.fullCommand.includes('sudo -n systemctl start --no-block homebrain-restart-helper'), true);
   assert.equal(
     result.notes.some((note) => /orphaned HomeBrain Node processes/i.test(note)),
+    true
+  );
+  assert.equal(
+    result.notes.some((note) => /legacy homebrain-discovery/i.test(note)),
+    true
+  );
+});
+
+test('buildServiceRestartCommand drops stale custom legacy discovery restarts', { concurrency: false }, async (t) => {
+  const service = await createTempService(t);
+  service.customRestartCommand = 'sudo systemctl try-restart homebrain-discovery';
+
+  const result = service.buildServiceRestartCommand();
+
+  assert.equal(result.fullCommand.includes('homebrain-discovery'), false);
+  assert.equal(result.fullCommand.includes('homebrain-restart-helper'), true);
+  assert.equal(
+    result.notes.some((note) => /discovery now runs inside the main HomeBrain service/i.test(note)),
+    true
+  );
+});
+
+test('buildServiceRestartCommand falls back when core restart only targets legacy discovery', { concurrency: false }, async (t) => {
+  const service = await createTempService(t);
+  service.coreRestartCommand = 'sudo systemctl restart homebrain-discovery';
+
+  const result = service.buildServiceRestartCommand();
+
+  assert.equal(result.fullCommand.includes('homebrain-discovery'), false);
+  assert.equal(result.fullCommand.includes('sudo -n systemctl daemon-reload'), true);
+  assert.equal(result.fullCommand.includes('sudo -n systemctl start --no-block homebrain-restart-helper'), true);
+  assert.equal(
+    result.notes.some((note) => /configured core restart only targeted legacy services/i.test(note)),
     true
   );
 });
