@@ -42,6 +42,10 @@ function lockOwnerStillLooksValid(lockData) {
     return false;
   }
 
+  if (pid === process.pid) {
+    return true;
+  }
+
   const commandLine = readLinuxCommandLine(pid);
   if (!commandLine) {
     return true;
