@@ -1,5 +1,17 @@
 // Load environment variables
 require("dotenv").config();
+const { acquireSingletonProcessLock } = require("./utils/singletonProcessLock");
+const homebrainServerLock = acquireSingletonProcessLock({
+  name: 'homebrain-server',
+  port: process.env.PORT || 3000
+});
+
+if (!homebrainServerLock.acquired) {
+  const ownerPid = homebrainServerLock.owner?.pid || 'unknown';
+  console.error(`HomeBrain server is already running for this port (pid ${ownerPid}); exiting duplicate startup.`);
+  process.exit(0);
+}
+
 const mongoose = require("mongoose");
 const { connectDB } = require("./config/database");
 const { databaseAvailabilityGuard } = require("./middleware/databaseAvailability");
