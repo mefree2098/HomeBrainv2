@@ -65,20 +65,20 @@ Run an end-to-end QA pass for HomeBrain native Zigbee, Z-Wave, Thread, and Matte
 
 ## Production Efficiency And Stability
 
-- [ ] Check production process list and service status for duplicate HomeBrain processes.
-- [ ] Check production resource usage.
-- [ ] Check recent logs for native-control errors, repeated retries, or noisy loops.
-- [ ] Confirm no duplicate controller processes or competing serial-port owners.
-- [ ] Fix any efficiency/stability issues found during QA.
+- [x] Check production process list and service status for duplicate HomeBrain processes.
+- [x] Check production resource usage.
+- [x] Check recent logs for native-control errors, repeated retries, or noisy loops.
+- [x] Confirm no duplicate controller processes or competing serial-port owners.
+- [x] Fix any efficiency/stability issues found during QA.
 
 ## Ship And Verify
 
 - [x] Review changed files and make sure the tracker reflects completed evidence.
 - [x] Run full relevant local test battery.
-- [ ] Commit all code and documentation changes.
-- [ ] Push to GitHub.
-- [ ] Deploy production using the HomeBrain live skill.
-- [ ] Verify production commit, health, logs, native-control status, and process efficiency after deploy.
+- [x] Commit all code and documentation changes.
+- [x] Push to GitHub.
+- [x] Deploy production using the HomeBrain live skill.
+- [x] Verify production commit, health, logs, native-control status, and process efficiency after deploy.
 
 ## Evidence Log
 
@@ -105,3 +105,11 @@ Run an end-to-end QA pass for HomeBrain native Zigbee, Z-Wave, Thread, and Matte
 | 2026-05-17 10:44 MDT | iOS Workflows QA | iPhone simulator real Workflows navigation loaded live HomeBrain. Workflow Studio overview, counts, templates, AI creation, and command entry were visible and usable on compact layout. | Pass | No additional iOS workflow code change needed. |
 | 2026-05-17 10:49 MDT | Full server tests | `node scripts/run-with-modern-node.js npm --prefix server test` passed `606/606`. | Pass | Ready for git review and deploy path. |
 | 2026-05-17 11:00 MDT | Final local builds | Re-ran `node scripts/run-with-modern-node.js npm --prefix client run build` and `xcodebuild -project HomeBrainApp/HomeBrainApp.xcodeproj -scheme HomeBrainApp -destination 'platform=iOS Simulator,name=iPhone 17,OS=26.5' build` after final UX copy/grid polish. | Pass | Ready for git review and deploy path. |
+| 2026-05-17 11:06 MDT | GitHub ship | PR #119 merged the native-control QA fixes. Initial production deploy correctly stopped at the server-test gate because the production `SENSE_FAILURE_BACKOFF_BASE_MS=30000` exposed a hard-coded test assumption. | Fixed | PR #120 made the Sense backoff test env-aware, then merged cleanly. |
+| 2026-05-17 11:20 MDT | Production deploy | HomeBrain safe deploy job `12c106f7-b2cc-4a26-9b48-ece6b08bee13` completed: dependencies installed, client built, server tests passed `606/606`, helpers installed, and services restarted. Runtime commit `958cb26dc938034ca4dd4cf3df2539cf54da046c` matches repo `main`. | Pass | None. |
+| 2026-05-17 11:22 MDT | Production health | `deploy-health` overall `healthy`; API, WebSocket, MongoDB, wake-word worker, Caddy, and deployment checks healthy. Runtime pid `131412`, no pending restart, repo/runtime match. | Pass | None. |
+| 2026-05-17 11:23 MDT | Native-control status | Direct-radio status clean: Zigbee controller started/resumed on the ITead SONOFF coordinator, Z-Wave controller started on the Zooz stick with one paired node, no inclusion/exclusion windows, and no active migrations. Matter/Thread status healthy with OTBR online, Thread `leader`, active dataset readable, and ready for Thread commissioning. | Pass | No commissioned Matter nodes exist yet; real Matter onboarding still needs a setup code and device in pairing mode. |
+| 2026-05-17 11:23 MDT | Native-control logs | Direct-radio log after deploy contained 15 startup/sync entries, all `info`: serial scan, Zigbee start/resume, Z-Wave start/ready, node sync, and device update. | Pass | None. |
+| 2026-05-17 11:24 MDT | Production resources | `/api/resources/utilization` reported CPU `21%`, memory `57.94%`, swap `5.02%`, disk `1%`, GPU `0%`, and CPU/GPU temperature `48.9 C`. | Pass | The per-process `%CPU` sample still reflects startup averaging for the freshly restarted backend, but aggregate host utilization is normal. |
+| 2026-05-17 11:24 MDT | Duplicate process check | Process list showed exactly one HomeBrain backend server process: pid `131412`, `/usr/bin/node /home/matt/HomeBrainv2/server/server.js`, plus the expected HomeBrain broker process. No duplicate `server.js` process and no legacy standalone discovery process appeared in the top process list. | Pass | None. |
+| 2026-05-17 11:24 MDT | QA cleanup | Temporary QA admin used for web/Chrome/iOS login was removed after UI verification. | Pass | None. |
