@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const axios = require('axios');
 
 const senseService = require('../services/senseService');
 const SenseIntegration = require('../models/SenseIntegration');
@@ -189,6 +190,75 @@ test('testConnection reuses persisted credentials when the client keeps a masked
   assert.equal(result.monitors.length, 1);
   assert.equal(result.monitor.monitorId, 'monitor-1');
   assert.equal(result.monitor.name, 'Main Panel');
+});
+
+test('requestApi falls back to full Sense auth when refresh token renewal is rejected', async (t) => {
+  const service = new senseService.SenseService();
+  const originalAxiosGet = axios.get;
+  const calls = [];
+  let renewCalled = false;
+  let authenticateCalled = false;
+
+  const integration = {
+    email: 'saved@example.com',
+    password: 'saved-password',
+    accessToken: 'expired-access-token',
+    refreshToken: 'expired-refresh-token',
+    userId: 'user-1',
+    deviceId: 'device-123',
+    monitorId: 'monitor-1'
+  };
+
+  axios.get = async (url, options = {}) => {
+    calls.push({
+      url,
+      authorization: options.headers?.Authorization
+    });
+
+    if (calls.length === 1) {
+      return {
+        status: 401,
+        data: {
+          message: 'Failed to authenticate.'
+        }
+      };
+    }
+
+    return {
+      status: 200,
+      data: {
+        monitor: {
+          id: 'monitor-1',
+          name: 'Main Panel'
+        }
+      }
+    };
+  };
+
+  service.renewAuth = async () => {
+    renewCalled = true;
+    throw new Error('Failed to authenticate.');
+  };
+
+  service.authenticate = async (targetIntegration) => {
+    authenticateCalled = true;
+    assert.equal(targetIntegration.email, 'saved@example.com');
+    assert.equal(targetIntegration.password, 'saved-password');
+    targetIntegration.accessToken = 'fresh-access-token';
+  };
+
+  t.after(() => {
+    axios.get = originalAxiosGet;
+  });
+
+  const result = await service.requestApi('app/monitors/monitor-1/overview', { integration });
+
+  assert.equal(renewCalled, true);
+  assert.equal(authenticateCalled, true);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].authorization, 'bearer expired-access-token');
+  assert.equal(calls[1].authorization, 'bearer fresh-access-token');
+  assert.equal(result.monitor.id, 'monitor-1');
 });
 
 test('updateRealtimeState throttles websocket heartbeat persistence to avoid save storms', async () => {
