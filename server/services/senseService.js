@@ -1077,14 +1077,19 @@ class SenseService {
     }
 
     if (retryAuth && (response.status === 401 || response.status === 403)) {
+      let renewError = null;
       if (trimString(integration?.refreshToken) && trimString(integration?.userId)) {
-        await this.renewAuth(integration);
-        return this.requestApi(path, {
-          integration,
-          params,
-          timeout,
-          retryAuth: false
-        });
+        try {
+          await this.renewAuth(integration);
+          return this.requestApi(path, {
+            integration,
+            params,
+            timeout,
+            retryAuth: false
+          });
+        } catch (error) {
+          renewError = error;
+        }
       }
 
       if (trimString(integration?.email) && trimString(integration?.password)) {
@@ -1095,6 +1100,10 @@ class SenseService {
           timeout,
           retryAuth: false
         });
+      }
+
+      if (renewError) {
+        throw renewError;
       }
     }
 
