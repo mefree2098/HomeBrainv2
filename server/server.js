@@ -63,6 +63,7 @@ const telemetryRoutes = require("./routes/telemetryRoutes");
 const openclawRoutes = require("./routes/openclawRoutes");
 const openclawMcpRoutes = require("./routes/openclawMcpRoutes");
 const codexSkillRoutes = require("./routes/codexSkillRoutes");
+const generalDownloadRoutes = require("./routes/generalDownloadRoutes");
 const deviceCommandCoordinatorRoutes = require("./routes/deviceCommandCoordinatorRoutes");
 const watchRoutes = require("./routes/watchRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
@@ -85,6 +86,7 @@ const smbBackupSchedulerService = require("./services/smbBackupSchedulerService"
 const smartThingsService = require("./services/smartThingsService");
 const ecobeeService = require("./services/ecobeeService");
 const axiomIngressSyncService = require("./services/axiomIngressSyncService");
+const generalDownloadStorage = require("./services/generalDownloadStorage");
 const { shutdownCodexCliService } = require("./services/codexCliService");
 const automationService = require("./services/automationService");
 const automationSchedulerService = require("./services/automationSchedulerService");
@@ -497,6 +499,7 @@ app.use('/api/whisper', whisperRoutes);
 app.use('/api/openclaw/mcp', openclawMcpRoutes);
 app.use('/api/openclaw', openclawRoutes);
 app.use('/api/codex-skill', codexSkillRoutes);
+app.use('/api/admin/general-downloads', generalDownloadRoutes);
 // Internal Caddy Policy Routes
 app.use('/internal/caddy', internalCaddyRoutes);
 // Internal Axiom Sync Routes
@@ -508,6 +511,25 @@ if (fs.existsSync(updatesPath)) {
   console.log(`Serving update downloads from ${updatesPath} at /downloads`);
   app.use('/downloads', express.static(updatesPath));
 }
+
+const generalDownloadsRoot = generalDownloadStorage.ensureGeneralDownloadsRoot();
+const publicDomainDownloadsPath = path.join(generalDownloadsRoot, 'public-domain');
+fs.mkdirSync(publicDomainDownloadsPath, { recursive: true });
+const generalDownloadStaticOptions = {
+  acceptRanges: true,
+  fallthrough: false,
+  immutable: false,
+  setHeaders(res, filePath) {
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    if (filePath.endsWith('.scoreflowseed')) {
+      res.type('application/octet-stream');
+    }
+  }
+};
+console.log(`Serving general downloads from ${generalDownloadsRoot} at /general-downloads`);
+console.log(`Serving public-domain downloads from ${publicDomainDownloadsPath} at /public-domain`);
+app.use('/general-downloads', express.static(generalDownloadsRoot, generalDownloadStaticOptions));
+app.use('/public-domain', express.static(publicDomainDownloadsPath, generalDownloadStaticOptions));
 
 const securityAudioPath = path.join(__dirname, 'public', 'audio', 'security');
 if (fs.existsSync(securityAudioPath)) {
