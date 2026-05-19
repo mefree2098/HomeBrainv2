@@ -7,7 +7,7 @@ const generalDownloadStorage = require('../services/generalDownloadStorage');
 const router = express.Router();
 const generalDownloadRateLimit = rateLimit({
   windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_GENERAL_DOWNLOAD_RATE_LIMIT_WINDOW_MS || 60_000)),
-  limit: Math.max(5, Number(process.env.HOMEBRAIN_GENERAL_DOWNLOAD_RATE_LIMIT_MAX || 60)),
+  limit: Math.max(5, Number(process.env.HOMEBRAIN_GENERAL_DOWNLOAD_RATE_LIMIT_MAX || 300)),
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -50,6 +50,22 @@ router.get('/file', async (req, res) => {
   }
 });
 
+router.get('/upload-status', async (req, res) => {
+  try {
+    const info = await generalDownloadStorage.getDownloadUploadInfo(req.query.path);
+    return res.status(200).json({
+      success: true,
+      ...info
+    });
+  } catch (error) {
+    console.error('GET /api/admin/general-downloads/upload-status - Error:', error.message);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Failed to inspect download upload state'
+    });
+  }
+});
+
 router.put('/upload', async (req, res) => {
   try {
     const uploaded = await generalDownloadStorage.writeDownloadStream(req.query.path, req, {
@@ -65,6 +81,29 @@ router.put('/upload', async (req, res) => {
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || 'Failed to upload download file'
+    });
+  }
+});
+
+router.put('/upload-chunk', async (req, res) => {
+  try {
+    const uploaded = await generalDownloadStorage.writeDownloadChunk(req.query.path, req, {
+      offset: req.query.offset,
+      totalBytes: req.query.totalBytes,
+      expectedBytes: req.get('content-length'),
+      complete: String(req.query.complete || '').toLowerCase() === 'true'
+    });
+
+    return res.status(uploaded.complete ? 201 : 202).json({
+      success: true,
+      file: uploaded
+    });
+  } catch (error) {
+    console.error('PUT /api/admin/general-downloads/upload-chunk - Error:', error.message);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Failed to upload download chunk',
+      expectedOffset: error.expectedOffset
     });
   }
 });
