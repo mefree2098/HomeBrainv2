@@ -208,6 +208,19 @@ const hasSmartThingsLevelState = (device: DeviceLike) => {
     || Boolean(levelMetadata && typeof levelMetadata === "object" && Object.keys(levelMetadata).length > 0)
 }
 
+const propertyListIncludes = (device: DeviceLike, keys: string[], target: string) => {
+  const normalizedTarget = target.trim().toLowerCase()
+  if (!normalizedTarget) {
+    return false
+  }
+
+  return keys.some((key) => {
+    const values = device?.properties?.[key]
+    return Array.isArray(values)
+      && values.some((entry) => normalizeSmartThingsValue(entry).toLowerCase() === normalizedTarget)
+  })
+}
+
 const looksLikeInsteonFader = (device: DeviceLike) => {
   const descriptor = [
     device?.properties?.insteonType,
@@ -251,6 +264,9 @@ const supportsLightFade = (device: DeviceLike) => {
   }
 
   return Boolean(device?.properties?.supportsBrightness)
+    || Number.isFinite(Number(device?.brightness))
+    || propertyListIncludes(device, ["directRadioFeatures"], "brightness")
+    || propertyListIncludes(device, ["matterFeatures"], "brightness")
 }
 
 const getDenseDeviceNameClass = (name: string) => {

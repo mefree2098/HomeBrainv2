@@ -24,6 +24,7 @@ const {
   mergeDuplicateDeviceGroups,
   describeDevices
 } = require('./deviceIdentityService');
+const { mapSmartThingsDeviceType } = require('./deviceTypeClassification');
 
 const DEFAULT_INSTEON_SYNC_RUN_RETENTION = 20;
 const DEFAULT_INSTEON_SYNC_RUN_LOG_LIMIT = 1000;
@@ -591,61 +592,7 @@ class MaintenanceService {
 
   mapSmartThingsType(capabilities, device) {
     const categories = this.collectSmartThingsCategories(device);
-
-    if (
-      capabilities.has('thermostat') ||
-      capabilities.has('thermostatMode') ||
-      capabilities.has('thermostatOperatingState') ||
-      capabilities.has('thermostatSetpoint') ||
-      capabilities.has('thermostatCoolingSetpoint') ||
-      capabilities.has('thermostatHeatingSetpoint') ||
-      capabilities.has('thermostatFanMode') ||
-      categories.has('thermostat')
-    ) {
-      return 'thermostat';
-    }
-
-    if (capabilities.has('lock') || categories.has('lock')) {
-      return 'lock';
-    }
-
-    if (capabilities.has('garageDoorControl') || capabilities.has('doorControl') || categories.has('garageDoor') || categories.has('garage')) {
-      return 'garage';
-    }
-
-    if (capabilities.has('switchLevel') || capabilities.has('colorControl') || categories.has('light')) {
-      return 'light';
-    }
-
-    if (capabilities.has('switch') || categories.has('switch')) {
-      return 'switch';
-    }
-
-    if (
-      capabilities.has('motionSensor') ||
-      capabilities.has('contactSensor') ||
-      capabilities.has('presenceSensor') ||
-      capabilities.has('waterSensor') ||
-      capabilities.has('humidityMeasurement') ||
-      categories.has('sensor')
-    ) {
-      return 'sensor';
-    }
-
-    if (capabilities.has('audioVolume') || categories.has('audio') || categories.has('speaker')) {
-      return 'speaker';
-    }
-
-    if (categories.has('camera')) {
-      return 'camera';
-    }
-
-    // Default to switch for devices we can likely control
-    if (capabilities.size > 0) {
-      return 'switch';
-    }
-
-    return null;
+    return mapSmartThingsDeviceType(capabilities, categories, device);
   }
 
   extractStatusRoot(device) {

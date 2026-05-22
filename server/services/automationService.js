@@ -63,6 +63,45 @@ function getWorkflowDeviceType(device = {}) {
   return rawType;
 }
 
+function normalizeCapabilityEntry(entry) {
+  if (typeof entry === 'string') {
+    return entry.trim();
+  }
+
+  if (entry && typeof entry === 'object') {
+    return sanitizeString(entry.id || entry.capabilityId || entry.name);
+  }
+
+  return '';
+}
+
+function propertyListIncludes(properties = {}, keys = [], target) {
+  const normalizedTarget = sanitizeString(target).toLowerCase();
+  return keys.some((key) => (
+    Array.isArray(properties[key]) &&
+    properties[key].some((entry) => normalizeCapabilityEntry(entry).toLowerCase() === normalizedTarget)
+  ));
+}
+
+function hasSmartThingsLevelState(properties = {}) {
+  const levelValue = properties?.smartThingsAttributeValues?.switchLevel?.level;
+  const levelMetadata = properties?.smartThingsAttributeMetadata?.switchLevel?.level;
+  return levelValue !== undefined && levelValue !== null
+    || Boolean(levelMetadata && typeof levelMetadata === 'object' && Object.keys(levelMetadata).length > 0);
+}
+
+function supportsWorkflowBrightness(device = {}) {
+  const properties = device?.properties || {};
+
+  return Boolean(properties.supportsBrightness)
+    || Number.isFinite(Number(device?.brightness))
+    || propertyListIncludes(properties, ['smartThingsCapabilities', 'smartthingsCapabilities'], 'switchLevel')
+    || propertyListIncludes(properties, ['smartThingsCapabilities', 'smartthingsCapabilities'], 'colorControl')
+    || propertyListIncludes(properties, ['directRadioFeatures'], 'brightness')
+    || propertyListIncludes(properties, ['matterFeatures'], 'brightness')
+    || hasSmartThingsLevelState(properties);
+}
+
 function normalizeDeviceGroupNames(groups) {
   const values = Array.isArray(groups)
     ? groups
@@ -108,8 +147,13 @@ function getWorkflowCapabilitiesForDevice(device = {}) {
       return ['turn_on', 'turn_off', 'set_temperature'];
     case 'lock':
       return ['lock', 'unlock'];
-    case 'switch':
-      return ['turn_on', 'turn_off', 'toggle'];
+    case 'switch': {
+      const capabilities = ['turn_on', 'turn_off', 'toggle'];
+      if (supportsWorkflowBrightness(device)) {
+        capabilities.push('set_brightness');
+      }
+      return capabilities;
+    }
     case 'speaker':
       return ['turn_on', 'turn_off', 'toggle'];
     case 'garage':

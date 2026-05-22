@@ -4,6 +4,7 @@ const Settings = require('../models/Settings');
 const Device = require('../models/Device');
 const deviceEnergySampleService = require('./deviceEnergySampleService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
+const { mapSmartThingsDeviceType } = require('./deviceTypeClassification');
 
 const SHOULD_LOG_SMARTTHINGS_SYNC = process.env.SMARTTHINGS_SYNC_LOGGING === 'true';
 const ACCESS_TOKEN_SOFT_EXPIRY_GRACE_MS = 5 * 60 * 1000;
@@ -1793,60 +1794,7 @@ class SmartThingsService {
 
   mapSmartThingsType(capabilities, device) {
     const categories = this.collectSmartThingsCategories(device);
-
-    if (
-      capabilities.has('thermostat') ||
-      capabilities.has('thermostatMode') ||
-      capabilities.has('thermostatOperatingState') ||
-      capabilities.has('thermostatSetpoint') ||
-      capabilities.has('thermostatCoolingSetpoint') ||
-      capabilities.has('thermostatHeatingSetpoint') ||
-      capabilities.has('thermostatFanMode') ||
-      categories.has('thermostat')
-    ) {
-      return 'thermostat';
-    }
-
-    if (capabilities.has('lock') || categories.has('lock')) {
-      return 'lock';
-    }
-
-    if (capabilities.has('garageDoorControl') || capabilities.has('doorControl') || categories.has('garageDoor') || categories.has('garage')) {
-      return 'garage';
-    }
-
-    if (capabilities.has('switchLevel') || capabilities.has('colorControl') || categories.has('light')) {
-      return 'light';
-    }
-
-    if (capabilities.has('switch') || categories.has('switch')) {
-      return 'switch';
-    }
-
-    if (
-      capabilities.has('motionSensor') ||
-      capabilities.has('contactSensor') ||
-      capabilities.has('presenceSensor') ||
-      capabilities.has('waterSensor') ||
-      capabilities.has('humidityMeasurement') ||
-      categories.has('sensor')
-    ) {
-      return 'sensor';
-    }
-
-    if (capabilities.has('audioVolume') || categories.has('audio') || categories.has('speaker')) {
-      return 'speaker';
-    }
-
-    if (categories.has('camera')) {
-      return 'camera';
-    }
-
-    if (capabilities.size > 0) {
-      return 'switch';
-    }
-
-    return null;
+    return mapSmartThingsDeviceType(capabilities, categories, device);
   }
 
   extractStatusRoot(device) {

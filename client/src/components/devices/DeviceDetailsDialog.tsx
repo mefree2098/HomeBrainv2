@@ -10,6 +10,7 @@ import {
   Lightbulb,
   Loader2,
   Lock,
+  Power,
   RadioTower,
   Sparkles,
   Thermometer,
@@ -479,8 +480,9 @@ function getDeviceHeroIcon(device: DeviceLike | null): LucideIcon {
   const type = String(device?.type || "").trim().toLowerCase()
   switch (type) {
     case "light":
-    case "switch":
       return Lightbulb
+    case "switch":
+      return Power
     case "lock":
       return Lock
     case "thermostat":

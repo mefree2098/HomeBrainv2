@@ -215,17 +215,20 @@ enum UIPreviewData {
             lastSeen: "Just now"
         ),
         DeviceItem(
-            id: "preview-speaker",
-            name: "Kitchen Speaker Cluster",
+            id: "preview-kitchen-dimmer",
+            name: "Kitchen Dimmer Switch",
             type: "switch",
             room: "Kitchen",
-            status: false,
+            status: true,
             isOnline: true,
-            brightness: 0,
+            brightness: 42,
             color: "#ffffff",
             temperature: nil,
             targetTemperature: nil,
-            properties: [:],
+            properties: [
+                "supportsBrightness": true,
+                "directRadioFeatures": ["switch", "brightness"]
+            ],
             lastSeen: "8m ago"
         )
     ]

@@ -47,52 +47,12 @@ function getCapabilitySet(device) {
   return new Set(capabilities.map(normalizeCapability).filter(Boolean));
 }
 
-function getCategorySet(device) {
-  const properties = device?.properties || {};
-  const categories = [
-    ...(Array.isArray(properties.smartThingsCategories) ? properties.smartThingsCategories : []),
-    ...(Array.isArray(properties.smartthingsCategories) ? properties.smartthingsCategories : [])
-  ];
-
-  return new Set(categories.map(normalizeCapability).filter(Boolean).map((entry) => entry.toLowerCase()));
-}
-
-function looksLikeLightSwitch(device) {
-  const descriptor = [
-    device?.name,
-    device?.model,
-    device?.brand,
-    device?.properties?.smartThingsDeviceTypeName,
-    device?.properties?.smartThingsPresentationId
-  ]
-    .filter((entry) => typeof entry === 'string' && entry.trim())
-    .join(' ')
-    .toLowerCase();
-
-  return /\b(light|lamp|dimmer|sconce|chandelier|fixture)\b/.test(descriptor);
-}
-
 function isWatchLightDevice(device) {
   if (!device || typeof device !== 'object') {
     return false;
   }
 
-  if (normalizeString(device.type).toLowerCase() === 'light') {
-    return true;
-  }
-
-  if (normalizeString(device.type).toLowerCase() !== 'switch') {
-    return false;
-  }
-
-  const capabilities = getCapabilitySet(device);
-  const categories = getCategorySet(device);
-
-  return categories.has('light')
-    || capabilities.has('switchLevel')
-    || capabilities.has('colorControl')
-    || device?.properties?.supportsBrightness === true
-    || looksLikeLightSwitch(device);
+  return normalizeString(device.type).toLowerCase() === 'light';
 }
 
 function isDimmableLight(device) {

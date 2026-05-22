@@ -33,20 +33,20 @@ test('normalizeWatchPreferences removes unknown sections and clamps brightness',
   assert.equal(normalized.defaultLightBrightness, 100);
 });
 
-test('watch light helpers include real lights and likely light switches', () => {
+test('watch light helpers keep switches separate from room lights', () => {
   assert.equal(isWatchLightDevice({ type: 'light' }), true);
   assert.equal(isWatchLightDevice({
     type: 'switch',
     name: 'Kitchen Lamp',
     properties: {}
-  }), true);
+  }), false);
   assert.equal(isWatchLightDevice({
     type: 'switch',
     name: 'Outlet',
     properties: {
       smartThingsCategories: ['light']
     }
-  }), true);
+  }), false);
   assert.equal(isWatchLightDevice({
     type: 'switch',
     name: 'Coffee Maker',

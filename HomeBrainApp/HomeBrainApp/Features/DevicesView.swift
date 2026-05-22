@@ -92,8 +92,6 @@ struct DevicesView: View {
             let matchesType: Bool
             if typeFilter == "all" {
                 matchesType = true
-            } else if typeFilter == "light" {
-                matchesType = supportsLightFade(device)
             } else {
                 matchesType = device.type == typeFilter
             }
@@ -119,6 +117,24 @@ struct DevicesView: View {
         self.previewMode = previewMode
         self.embeddedFocusDeviceID = embeddedFocusDeviceID
         self.onClose = onClose
+    }
+
+    private static func previewDeviceTypeFilterFromLaunch() -> String? {
+        let processInfo = ProcessInfo.processInfo
+        let allowedTypes = Set(["all", "light", "switch", "thermostat", "lock", "garage", "sensor", "camera", "speaker"])
+
+        if let index = processInfo.arguments.firstIndex(of: "-ui-preview-device-type"),
+           processInfo.arguments.indices.contains(index + 1) {
+            let requestedType = processInfo.arguments[index + 1].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return allowedTypes.contains(requestedType) ? requestedType : nil
+        }
+
+        if let requestedType = processInfo.environment["UI_PREVIEW_DEVICE_TYPE"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           allowedTypes.contains(requestedType) {
+            return requestedType
+        }
+
+        return nil
     }
 
     var body: some View {
@@ -284,7 +300,7 @@ struct DevicesView: View {
                     HStack(spacing: 8) {
                         HBBadge(text: "\(filteredDevices.count) matched")
                         HBBadge(text: "\(devices.filter(\.isOnline).count) online")
-                        HBBadge(text: typeFilter == "all" ? "All types" : typeFilter.capitalized)
+                        HBBadge(text: deviceTypeFilterLabel(typeFilter))
                         HBBadge(text: sourceFilter == DeviceItem.allSelectionSourcesValue ? "All sources" : sourceFilterLabel)
                         if !searchText.isEmpty {
                             HBBadge(text: "Search active")
@@ -316,7 +332,7 @@ struct DevicesView: View {
 
                         Picker("Type", selection: $typeFilter) {
                             ForEach(availableTypes, id: \.self) { type in
-                                Text(type.capitalized).tag(type)
+                                Text(deviceTypeFilterLabel(type)).tag(type)
                             }
                         }
                         .pickerStyle(.menu)
@@ -350,7 +366,7 @@ struct DevicesView: View {
                         Spacer(minLength: 12)
                         Picker("Type", selection: $typeFilter) {
                             ForEach(availableTypes, id: \.self) { type in
-                                Text(type.capitalized).tag(type)
+                                Text(deviceTypeFilterLabel(type)).tag(type)
                             }
                         }
                         .pickerStyle(.menu)
@@ -411,37 +427,44 @@ struct DevicesView: View {
                     favoriteButton(for: device)
                 }
 
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        statusBadge(for: device)
+                LazyVGrid(
+                    columns: [GridItem(.adaptive(minimum: 112), spacing: 8, alignment: .leading)],
+                    alignment: .leading,
+                    spacing: 8
+                ) {
+                    statusBadge(for: device)
+                        .fixedSize(horizontal: true, vertical: false)
+                    HBBadge(
+                        text: deviceTypeDisplayLabel(device.type).uppercased(),
+                        foreground: HBPalette.textPrimary,
+                        background: HBPalette.panelSoft.opacity(0.88),
+                        stroke: HBPalette.panelStrokeStrong
+                    )
+                    .fixedSize(horizontal: true, vertical: false)
+                    HBBadge(
+                        text: device.selectionSourceLabel,
+                        foreground: HBPalette.textPrimary,
+                        background: HBPalette.panelSoft.opacity(0.88),
+                        stroke: HBPalette.panelStrokeStrong
+                    )
+                    .fixedSize(horizontal: true, vertical: false)
+                    if supportsLightFade(device) && device.type != "thermostat" {
                         HBBadge(
-                            text: device.type.uppercased(),
+                            text: "Dimmable",
                             foreground: HBPalette.textPrimary,
                             background: HBPalette.panelSoft.opacity(0.88),
                             stroke: HBPalette.panelStrokeStrong
                         )
+                        .fixedSize(horizontal: true, vertical: false)
+                    }
+                    if supportsLightColor(device) {
                         HBBadge(
-                            text: device.selectionSourceLabel,
+                            text: "Color",
                             foreground: HBPalette.textPrimary,
                             background: HBPalette.panelSoft.opacity(0.88),
                             stroke: HBPalette.panelStrokeStrong
                         )
-                        if supportsLightFade(device) && device.type != "thermostat" {
-                            HBBadge(
-                                text: "Dimmable",
-                                foreground: HBPalette.textPrimary,
-                                background: HBPalette.panelSoft.opacity(0.88),
-                                stroke: HBPalette.panelStrokeStrong
-                            )
-                        }
-                        if supportsLightColor(device) {
-                            HBBadge(
-                                text: "Color",
-                                foreground: HBPalette.textPrimary,
-                                background: HBPalette.panelSoft.opacity(0.88),
-                                stroke: HBPalette.panelStrokeStrong
-                            )
-                        }
+                        .fixedSize(horizontal: true, vertical: false)
                     }
                 }
 
@@ -1269,7 +1292,7 @@ struct DevicesView: View {
                                 Spacer()
                                 Picker("Type", selection: $newType) {
                                     ForEach(availableTypes.filter { $0 != "all" }, id: \.self) { type in
-                                        Text(type.capitalized).tag(type)
+                                        Text(deviceTypeDisplayLabel(type)).tag(type)
                                     }
                                 }
                                 .pickerStyle(.menu)
@@ -1289,6 +1312,9 @@ struct DevicesView: View {
     private func loadDevices(showLoading: Bool) async {
         if previewMode {
             devices = UIPreviewData.devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            if let previewTypeFilter = Self.previewDeviceTypeFilterFromLaunch() {
+                typeFilter = previewTypeFilter
+            }
             favoritesProfileId = UIPreviewData.favoriteProfileId
             favoriteDeviceIds = UIPreviewData.favoriteDeviceIds
             errorMessage = nil
@@ -1951,7 +1977,11 @@ struct DevicesView: View {
     }
 
     private func iconName(for device: DeviceItem) -> String {
-        if supportsLightFade(device) {
+        if device.type == "switch" {
+            return "switch.2"
+        }
+
+        if device.type == "light" || supportsLightFade(device) {
             return "lightbulb.max"
         }
 
@@ -1970,6 +2000,50 @@ struct DevicesView: View {
             return "sensor.tag.radiowaves.forward"
         default:
             return "switch.2"
+        }
+    }
+
+    private func deviceTypeFilterLabel(_ type: String) -> String {
+        switch type {
+        case "all":
+            return "All types"
+        case "light":
+            return "Lights"
+        case "switch":
+            return "Switches"
+        case "lock":
+            return "Locks"
+        case "thermostat":
+            return "Thermostats"
+        case "garage":
+            return "Garage"
+        case "sensor":
+            return "Sensors"
+        case "camera":
+            return "Cameras"
+        default:
+            return type.capitalized
+        }
+    }
+
+    private func deviceTypeDisplayLabel(_ type: String) -> String {
+        switch type {
+        case "light":
+            return "Light"
+        case "switch":
+            return "Switch"
+        case "lock":
+            return "Lock"
+        case "thermostat":
+            return "Thermostat"
+        case "garage":
+            return "Garage"
+        case "sensor":
+            return "Sensor"
+        case "camera":
+            return "Camera"
+        default:
+            return type.capitalized
         }
     }
 
@@ -2134,6 +2208,16 @@ struct DevicesView: View {
         )
     }
 
+    private func propertyStringSet(for device: DeviceItem, key: String) -> Set<String> {
+        let raw = device.properties[key] as? [Any] ?? []
+        return Set(
+            raw
+                .map(normalizedSmartThingsValue)
+                .filter { !$0.isEmpty }
+                .map { $0.lowercased() }
+        )
+    }
+
     private func looksLikeSmartThingsDimmer(_ device: DeviceItem) -> Bool {
         let descriptor = [
             stringValue(device.properties["smartThingsDeviceTypeName"]),
@@ -2190,6 +2274,8 @@ struct DevicesView: View {
         }
 
         return boolValue(device.properties["supportsBrightness"])
+            || propertyStringSet(for: device, key: "directRadioFeatures").contains("brightness")
+            || propertyStringSet(for: device, key: "matterFeatures").contains("brightness")
     }
 
     private func supportsLightColor(_ device: DeviceItem) -> Bool {
