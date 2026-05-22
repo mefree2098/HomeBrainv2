@@ -9,6 +9,7 @@ import {
   Radar,
   Droplets,
   Gauge,
+  Home,
   Activity,
   Sparkles,
   Zap
@@ -53,6 +54,7 @@ const formatPressure = (value: number | null) => value === null ? "--" : `${valu
 const formatUv = (value: number | null | undefined) => value == null ? "--" : value.toFixed(1)
 const formatAqi = (value: number | null | undefined) => value == null ? "--" : `${Math.round(value)}`
 const formatBatteryVoltage = (value: number | null | undefined) => value == null ? "--" : `${value.toFixed(2)} V`
+const formatPm25 = (value: number | null | undefined) => value == null ? "--" : `${value.toFixed(1)} ug/m³`
 
 const selectMostRecentTimestamp = (...values: Array<string | null | undefined>) => {
   let latest: Date | null = null
@@ -140,6 +142,13 @@ const describeAqiLevel = (value: number | null | undefined) => {
     return "Moderate air"
   }
   return "Unhealthy air"
+}
+
+const describeIndoorAirLevel = (value: number | null | undefined, fallback?: string | null) => {
+  if (fallback) {
+    return fallback
+  }
+  return describeAqiLevel(value)
 }
 
 const describePressureBand = (value: number | null | undefined) => {
@@ -797,12 +806,19 @@ function WeatherTelemetryPopoverCard({
 
 const buildCompactWeatherSummary = (
   weather: DashboardWeatherPayload,
-  tempestStation: DashboardWeatherPayload["tempest"]["station"] | null
+  tempestStation: DashboardWeatherPayload["tempest"]["station"] | null,
+  indoorAir: DashboardWeatherPayload["indoorAir"]["monitor"] | null
 ) => {
   const segments: string[] = []
   const liveRainDetected = hasLiveRain(weather, tempestStation)
 
-  if (tempestStation?.metrics.dewPointF != null) {
+  if (indoorAir?.qualityLabel) {
+    segments.push(`Inside ${indoorAir.qualityLabel.toLowerCase()}`)
+  }
+
+  if (indoorAir?.humidityPct != null) {
+    segments.push(describeHumidityLevel(indoorAir.humidityPct))
+  } else if (tempestStation?.metrics.dewPointF != null) {
     segments.push(describeDewPointLevel(tempestStation.metrics.dewPointF))
   } else if (weather.current.humidity != null) {
     segments.push(describeHumidityLevel(weather.current.humidity))
@@ -915,11 +931,12 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
   const wide = size === "large" || size === "full"
   const stackedHero = compact || medium
   const tempestStation = weather?.tempest?.available ? weather.tempest.station : null
+  const indoorAir = weather?.indoorAir?.available ? weather.indoorAir.monitor : null
   const tempestBatteryPercent = getTempestBatteryPercent(tempestStation?.metrics.batteryVolts)
   const aqiTone = aqiToneClassName(weather?.current.airQualityIndex)
   const uvTone = uvToneClassName(tempestStation?.metrics.uvIndex)
 
-  const fetchWeather = useCallback(async (options: { forceTempestSync?: boolean } = {}) => {
+  const fetchWeather = useCallback(async (options: { forceTempestSync?: boolean; forceIndoorAirSync?: boolean } = {}) => {
     setLoading(true)
     setError(null)
 
@@ -929,7 +946,8 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
       if (locationMode === "custom" && locationQuery?.trim()) {
         response = await getDashboardWeather({
           address: locationQuery.trim(),
-          forceTempestSync: options.forceTempestSync === true
+          forceTempestSync: options.forceTempestSync === true,
+          forceIndoorAirSync: options.forceIndoorAirSync === true
         })
       } else if (locationMode === "auto") {
         const position = await resolveCurrentPosition()
@@ -937,11 +955,13 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
           label: "Current location",
-          forceTempestSync: options.forceTempestSync === true
+          forceTempestSync: options.forceTempestSync === true,
+          forceIndoorAirSync: options.forceIndoorAirSync === true
         })
       } else {
         response = await getDashboardWeather({
-          forceTempestSync: options.forceTempestSync === true
+          forceTempestSync: options.forceTempestSync === true,
+          forceIndoorAirSync: options.forceIndoorAirSync === true
         })
       }
 
@@ -1012,6 +1032,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
   const lastSyncedAt = selectMostRecentTimestamp(
     tempestStation?.observedAt,
     tempestStation?.lastEventAt,
+    indoorAir?.observedAt,
     weather?.fetchedAt
   )
   const lastSyncedTime = formatLastSyncedTime(lastSyncedAt)
@@ -1048,6 +1069,9 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
   }
 
   const humidityValue = tempestStation?.metrics.humidityPct ?? weather.current.humidity
+  const insideTileDetail = indoorAir
+    ? `${formatPercent(indoorAir.humidityPct)} • ${describeIndoorAirLevel(indoorAir.usAqi, indoorAir.qualityLabel)}`
+    : describeHumidityLevel(humidityValue)
   const metricGrid = compact
     ? "grid-cols-2"
     : medium
@@ -1055,7 +1079,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
       : wide
         ? "grid-cols-3 xl:grid-cols-4"
         : "grid-cols-3"
-  const compactSummary = buildCompactWeatherSummary(weather, tempestStation)
+  const compactSummary = buildCompactWeatherSummary(weather, tempestStation, indoorAir)
 
   return (
     <section className="relative overflow-hidden rounded-[1.6rem] border border-white/15 bg-white/8 p-4 shadow-lg shadow-black/5 backdrop-blur-xl dark:bg-slate-950/15 sm:p-5">
@@ -1182,7 +1206,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
                 variant="outline"
                 size="icon"
                 className="h-8 w-8 rounded-full border-white/15 bg-white/8"
-                onClick={() => void fetchWeather({ forceTempestSync: true })}
+                onClick={() => void fetchWeather({ forceTempestSync: true, forceIndoorAirSync: true })}
                 aria-label="Refresh weather"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
@@ -1377,12 +1401,24 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
           </WeatherInfoPopover>
 
           <WeatherInfoPopover
-            label="Humidity details"
+            label={indoorAir ? "Indoor air details" : "Humidity details"}
             align="center"
             className="w-full"
-            contentClassName={moduleTelemetry ? "w-[360px] p-0" : undefined}
+            contentClassName={!indoorAir && moduleTelemetry ? "w-[360px] p-0" : undefined}
             content={(
-              moduleTelemetry ? (
+              indoorAir ? (
+                <WeatherInfoValueCard
+                  title="Indoor Air"
+                  summary={`${formatTemperature(indoorAir.temperatureF)} · ${formatPercent(indoorAir.humidityPct)} · ${describeIndoorAirLevel(indoorAir.usAqi, indoorAir.qualityLabel)}`}
+                  rows={[
+                    { label: "Temperature", value: formatTemperature(indoorAir.temperatureF), toneClassName: "text-cyan-600 dark:text-cyan-300" },
+                    { label: "Humidity", value: formatPercent(indoorAir.humidityPct), toneClassName: "text-emerald-600 dark:text-emerald-300" },
+                    { label: "PM2.5", value: formatPm25(indoorAir.pm25UgM3), toneClassName: "text-violet-600 dark:text-violet-300" },
+                    { label: "Indoor AQI", value: formatAqi(indoorAir.usAqi), toneClassName: "text-foreground" }
+                  ]}
+                  footer={indoorAir.qualityAdvice || "Indoor readings are pulled from the Govee monitor and stored for charting in the Weather and Data Platform panels."}
+                />
+              ) : moduleTelemetry ? (
                 <WeatherTelemetryPopoverCard
                   title="Humidity Telemetry"
                   summary={summarizeModuleTelemetry("humidity", moduleTelemetry)}
@@ -1405,9 +1441,10 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
             )}
           >
             <WeatherCompactMetricTile
-              title="Humidity"
-              value={formatPercent(humidityValue)}
-              detail={describeHumidityLevel(humidityValue)}
+              title={indoorAir ? "Inside" : "Humidity"}
+              value={indoorAir ? formatTemperature(indoorAir.temperatureF) : formatPercent(humidityValue)}
+              detail={insideTileDetail}
+              icon={indoorAir ? <Home className="h-4 w-4 text-emerald-500" /> : undefined}
               accentClassName="bg-emerald-400"
             />
           </WeatherInfoPopover>

@@ -9,13 +9,13 @@ export interface TelemetryMetricDescriptor {
 
 export interface TelemetrySourceSummary {
   sourceKey: string
-  sourceType: "device" | "tempest_station" | "rainmachine_report" | "sense_monitor" | "sense_device"
+  sourceType: "device" | "tempest_station" | "govee_air_quality" | "rainmachine_report" | "sense_monitor" | "sense_device"
   sourceId: string
   name: string
   category: string
   room: string
   origin: string
-  streamType: "device_state" | "tempest_observation" | "tempest_device_state" | "rainmachine_daily_stat" | "rainmachine_watering_log" | "sense_monitor_state" | "sense_device_state"
+  streamType: "device_state" | "tempest_observation" | "tempest_device_state" | "govee_air_quality_sample" | "rainmachine_daily_stat" | "rainmachine_watering_log" | "sense_monitor_state" | "sense_device_state"
   sampleCount: number
   metricCount: number
   lastSampleAt: string | null

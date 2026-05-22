@@ -188,6 +188,10 @@ function sourceTone(source: TelemetrySourceSummary) {
     return "from-cyan-400/25 via-sky-500/15 to-blue-600/20"
   }
 
+  if (source.sourceType === "govee_air_quality") {
+    return "from-emerald-400/24 via-cyan-500/16 to-violet-500/16"
+  }
+
   if (source.sourceType === "rainmachine_report") {
     return "from-sky-400/22 via-emerald-500/16 to-lime-500/16"
   }
@@ -202,6 +206,10 @@ function sourceTone(source: TelemetrySourceSummary) {
 function sourceKindLabel(source: TelemetrySourceSummary) {
   if (source.sourceType === "tempest_station") {
     return "Weather Station"
+  }
+
+  if (source.sourceType === "govee_air_quality") {
+    return "Indoor Air"
   }
 
   if (source.sourceType === "rainmachine_report") {
@@ -222,6 +230,10 @@ function sourceKindLabel(source: TelemetrySourceSummary) {
 function sourceHistoryLabel(source: TelemetrySourceSummary) {
   if (source.sourceType === "tempest_station") {
     return "weather station"
+  }
+
+  if (source.sourceType === "govee_air_quality") {
+    return "indoor air monitor"
   }
 
   if (source.sourceType === "rainmachine_report") {

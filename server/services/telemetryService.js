@@ -99,6 +99,10 @@ const METRIC_LABELS = {
   frequency_hz: 'Frequency',
   battery_pct: 'Battery',
   humidity_pct: 'Humidity',
+  pm2_5_ugm3: 'PM2.5',
+  air_quality_index: 'Indoor AQI',
+  co2_ppm: 'CO2',
+  tvoc_ppb: 'TVOC',
   level_pct: 'Level',
   running: 'Running',
   completed: 'Completed',
@@ -163,6 +167,10 @@ const FEATURED_METRIC_PRIORITY = [
   'temperature_f',
   'temperature',
   'humidity_pct',
+  'air_quality_index',
+  'pm2_5_ugm3',
+  'co2_ppm',
+  'tvoc_ppb',
   'execution_failed',
   'execution_succeeded',
   'duration_ms',
@@ -820,6 +828,15 @@ function inferMetricUnit(key) {
   if (/_dbm$/.test(key)) {
     return 'dBm';
   }
+  if (/_ugm3$/.test(key)) {
+    return 'ug/m³';
+  }
+  if (/_ppm$/.test(key)) {
+    return 'ppm';
+  }
+  if (/_ppb$/.test(key)) {
+    return 'ppb';
+  }
   if (/_volts$/.test(key)) {
     return 'V';
   }
@@ -1432,6 +1449,10 @@ function scoreSourceForPrompt(source, prompt, keywords = [], preferredSourceKey 
   });
 
   if (/weather|tempest|rain|wind|pressure|humidity|uv|solar|lightning/.test(normalizedPrompt) && source?.sourceType === 'tempest_station') {
+    score += 12;
+  }
+
+  if (/indoor|air|quality|aqi|pm2|pm25|humidity|temperature|govee|co2|voc/.test(normalizedPrompt) && source?.sourceType === 'govee_air_quality') {
     score += 12;
   }
 

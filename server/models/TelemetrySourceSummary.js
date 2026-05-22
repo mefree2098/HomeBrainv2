@@ -9,7 +9,7 @@ const telemetrySourceSummarySchema = new mongoose.Schema({
   },
   sourceType: {
     type: String,
-    enum: ['device', 'tempest_station', 'workflow', 'rainmachine_report', 'sense_monitor', 'sense_device'],
+    enum: ['device', 'tempest_station', 'govee_air_quality', 'workflow', 'rainmachine_report', 'sense_monitor', 'sense_device'],
     required: true,
     index: true
   },
@@ -36,7 +36,7 @@ const telemetrySourceSummarySchema = new mongoose.Schema({
   },
   streamType: {
     type: String,
-    enum: ['device_state', 'tempest_observation', 'tempest_device_state', 'workflow_execution', 'rainmachine_daily_stat', 'rainmachine_watering_log', 'sense_monitor_state', 'sense_device_state'],
+    enum: ['device_state', 'tempest_observation', 'tempest_device_state', 'govee_air_quality_sample', 'workflow_execution', 'rainmachine_daily_stat', 'rainmachine_watering_log', 'sense_monitor_state', 'sense_device_state'],
     default: 'device_state',
     index: true
   },

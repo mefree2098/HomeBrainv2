@@ -24,6 +24,7 @@ require('./SmartThingsIntegration');
 require('./TempestIntegration');
 require('./TempestObservation');
 require('./TempestEvent');
+require('./GoveeIntegration');
 require('./RainMachineIntegration');
 require('./RainMachineDailyStat');
 require('./RainMachineWateringDay');

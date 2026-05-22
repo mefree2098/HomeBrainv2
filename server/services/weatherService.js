@@ -1,5 +1,6 @@
 const axios = require('axios');
 const settingsService = require('./settingsService');
+const goveeAirQualityService = require('./goveeAirQualityService');
 const tempestService = require('./tempestService');
 const telemetryService = require('./telemetryService');
 const weatherCacheStore = require('./weatherCacheStore');
@@ -13,6 +14,8 @@ const DEFAULT_GEOCODE_STALE_IF_ERROR_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_DASHBOARD_WEATHER_CACHE_TTL_MS = 60 * 1000;
 const DEFAULT_WEATHER_TEMPEST_SYNC_COOLDOWN_MS = 5 * 60 * 1000;
 const DEFAULT_WEATHER_TEMPEST_STALE_AFTER_MS = 15 * 60 * 1000;
+const DEFAULT_WEATHER_GOVEE_SYNC_COOLDOWN_MS = 60 * 1000;
+const DEFAULT_WEATHER_GOVEE_STALE_AFTER_MS = 5 * 60 * 1000;
 const WEATHER_CACHE_COORDINATE_PRECISION = 2;
 const WEATHER_RECOVERY_COORDINATE_PRECISION = 1;
 const forecastCache = new Map();
@@ -20,6 +23,7 @@ const airQualityCache = new Map();
 const geocodeCache = new Map();
 const dashboardWeatherCache = new Map();
 let lastWeatherTempestRefreshAttemptAt = 0;
+let lastWeatherGoveeRefreshAttemptAt = 0;
 const PERSISTED_WEATHER_CACHE_KIND_FORECAST = 'forecast';
 const PERSISTED_WEATHER_CACHE_KIND_AIR_QUALITY = 'air_quality';
 
@@ -183,6 +187,14 @@ const WEATHER_TEMPEST_STALE_AFTER_MS = parsePositiveInteger(
   process.env.WEATHER_TEMPEST_STALE_AFTER_MS,
   DEFAULT_WEATHER_TEMPEST_STALE_AFTER_MS
 );
+const WEATHER_GOVEE_SYNC_COOLDOWN_MS = parsePositiveInteger(
+  process.env.WEATHER_GOVEE_SYNC_COOLDOWN_MS,
+  DEFAULT_WEATHER_GOVEE_SYNC_COOLDOWN_MS
+);
+const WEATHER_GOVEE_STALE_AFTER_MS = parsePositiveInteger(
+  process.env.WEATHER_GOVEE_STALE_AFTER_MS,
+  DEFAULT_WEATHER_GOVEE_STALE_AFTER_MS
+);
 
 function normalizeCoordinates(latitude, longitude) {
   const lat = toNumber(latitude);
@@ -261,6 +273,81 @@ function isTempestSnapshotStale(tempestStation, nowMs = Date.now()) {
 
 async function getWeatherTempestSnapshot() {
   return tempestService.getSelectedStationSnapshot().catch(() => null);
+}
+
+async function getWeatherIndoorAirSnapshot() {
+  return goveeAirQualityService.getLatestSnapshot().catch(() => null);
+}
+
+function isIndoorAirSnapshotStale(indoorAirSnapshot, nowMs = Date.now()) {
+  if (!indoorAirSnapshot) {
+    return false;
+  }
+
+  const observedAtMs = parseUpdatedAtTimestamp(indoorAirSnapshot.observedAt);
+  return observedAtMs === 0 || (nowMs - observedAtMs) > WEATHER_GOVEE_STALE_AFTER_MS;
+}
+
+async function refreshIndoorAirForWeatherIfNeeded(indoorAirSnapshot, options = {}) {
+  const forceIndoorAirSync = parseBooleanFlag(options.forceIndoorAirSync);
+  const stale = !forceIndoorAirSync && isIndoorAirSnapshotStale(indoorAirSnapshot);
+
+  if (!forceIndoorAirSync && !stale) {
+    return {
+      refreshed: false,
+      indoorAirSnapshot
+    };
+  }
+
+  const nowMs = Date.now();
+  if (
+    !forceIndoorAirSync
+    && lastWeatherGoveeRefreshAttemptAt > 0
+    && (nowMs - lastWeatherGoveeRefreshAttemptAt) < WEATHER_GOVEE_SYNC_COOLDOWN_MS
+  ) {
+    return {
+      refreshed: false,
+      result: {
+        success: true,
+        skipped: true,
+        reason: 'weather-indoor-air-refresh-cooldown',
+        lastRefreshAttemptAt: new Date(lastWeatherGoveeRefreshAttemptAt).toISOString()
+      },
+      indoorAirSnapshot
+    };
+  }
+
+  try {
+    if (!forceIndoorAirSync) {
+      lastWeatherGoveeRefreshAttemptAt = nowMs;
+    }
+
+    const result = await goveeAirQualityService.syncNow({
+      reason: forceIndoorAirSync ? 'weather-manual-refresh' : 'weather-stale-indoor-air-refresh',
+      allowDisabled: false
+    });
+
+    if (result?.skipped) {
+      return {
+        refreshed: false,
+        result,
+        indoorAirSnapshot
+      };
+    }
+
+    return {
+      refreshed: true,
+      result,
+      indoorAirSnapshot: await getWeatherIndoorAirSnapshot()
+    };
+  } catch (error) {
+    console.warn(`WeatherService: Govee indoor air refresh failed before weather fetch: ${error.message}`);
+    return {
+      refreshed: false,
+      error,
+      indoorAirSnapshot
+    };
+  }
 }
 
 async function refreshTempestForWeatherIfNeeded(tempestStation, options = {}) {
@@ -742,6 +829,9 @@ async function buildDashboardWeatherPayload(location, options = {}) {
   const tempestStation = Object.prototype.hasOwnProperty.call(options, 'tempestStation')
     ? options.tempestStation
     : await getWeatherTempestSnapshot();
+  const indoorAirSnapshot = Object.prototype.hasOwnProperty.call(options, 'indoorAirSnapshot')
+    ? options.indoorAirSnapshot
+    : await getWeatherIndoorAirSnapshot();
 
   let forecastResponse;
   try {
@@ -846,6 +936,15 @@ async function buildDashboardWeatherPayload(location, options = {}) {
           available: false,
           station: null,
           moduleTelemetry: null
+        },
+    indoorAir: indoorAirSnapshot
+      ? {
+          available: true,
+          monitor: indoorAirSnapshot
+        }
+      : {
+          available: false,
+          monitor: null
         }
   };
 }
@@ -853,24 +952,28 @@ async function buildDashboardWeatherPayload(location, options = {}) {
 async function fetchDashboardWeather(options = {}) {
   const location = await resolveWeatherLocation(options);
   const forceTempestSync = parseBooleanFlag(options.forceTempestSync);
+  const forceIndoorAirSync = parseBooleanFlag(options.forceIndoorAirSync);
   let tempestStation = await getWeatherTempestSnapshot();
   const refreshResult = await refreshTempestForWeatherIfNeeded(tempestStation, options);
   tempestStation = refreshResult.tempestStation || tempestStation;
+  let indoorAirSnapshot = await getWeatherIndoorAirSnapshot();
+  const indoorAirRefreshResult = await refreshIndoorAirForWeatherIfNeeded(indoorAirSnapshot, options);
+  indoorAirSnapshot = indoorAirRefreshResult.indoorAirSnapshot || indoorAirSnapshot;
 
   const dashboardCacheKey = buildDashboardWeatherCacheKey(location);
-  if (refreshResult.refreshed) {
+  if (refreshResult.refreshed || indoorAirRefreshResult.refreshed) {
     dashboardWeatherCache.delete(dashboardCacheKey);
   }
 
-  if (forceTempestSync) {
-    return buildDashboardWeatherPayload(location, { tempestStation });
+  if (forceTempestSync || forceIndoorAirSync) {
+    return buildDashboardWeatherPayload(location, { tempestStation, indoorAirSnapshot });
   }
 
   return readThroughCache(
     dashboardWeatherCache,
     dashboardCacheKey,
     DASHBOARD_WEATHER_CACHE_TTL_MS,
-    () => buildDashboardWeatherPayload(location, { tempestStation })
+    () => buildDashboardWeatherPayload(location, { tempestStation, indoorAirSnapshot })
   );
 }
 
@@ -884,6 +987,14 @@ async function fetchWeatherDashboard(options = {}) {
     observations: [],
     events: [],
     moduleTelemetry: null
+  }));
+  const indoorAir = await goveeAirQualityService.getDashboardData({
+    hours: options.indoorAirHistoryHours || 24
+  }).catch(() => ({
+    available: false,
+    monitor: null,
+    samples: [],
+    health: null
   }));
 
   const moduleTelemetry = forecast?.tempest?.moduleTelemetry
@@ -900,7 +1011,8 @@ async function fetchWeatherDashboard(options = {}) {
     tempest: {
       ...tempest,
       moduleTelemetry
-    }
+    },
+    indoorAir
   };
 }
 
@@ -920,6 +1032,7 @@ module.exports = {
     geocodeCache.clear();
     dashboardWeatherCache.clear();
     lastWeatherTempestRefreshAttemptAt = 0;
+    lastWeatherGoveeRefreshAttemptAt = 0;
     weatherCacheStore.resetForTests();
   }
 };

@@ -25,6 +25,9 @@ private let atmosphericDewPointChartColor = weatherHexColor(0x34D399)
 private let windAverageChartColor = weatherHexColor(0x38BDF8)
 private let windGustChartColor = weatherHexColor(0xFB7185)
 private let windRapidChartColor = weatherHexColor(0xFACC15)
+private let indoorTemperatureChartColor = weatherHexColor(0x10B981)
+private let indoorHumidityChartColor = weatherHexColor(0x38BDF8)
+private let indoorPM25ChartColor = weatherHexColor(0xA78BFA)
 
 private func weatherOptionalDouble(_ value: Any?) -> Double? {
     if let value = value as? Double {
@@ -141,6 +144,16 @@ private func formatSolar(_ value: Double?) -> String {
 private func formatUV(_ value: Double?) -> String {
     guard let value else { return "--" }
     return String(format: "%.1f", value)
+}
+
+private func formatAQI(_ value: Double?) -> String {
+    guard let value else { return "--" }
+    return String(Int(value.rounded()))
+}
+
+private func formatPM25(_ value: Double?) -> String {
+    guard let value else { return "--" }
+    return String(format: "%.1f ug/m³", value)
 }
 
 private func deriveRainRateFromLastMinute(_ value: Double?) -> Double? {
@@ -478,6 +491,44 @@ private struct TempestEventSnapshot: Identifiable {
     }
 }
 
+private struct GoveeIndoorAirSnapshot: Identifiable, Equatable {
+    let id: String
+    let deviceName: String
+    let room: String
+    let observedAt: String?
+    let temperatureF: Double?
+    let humidityPct: Double?
+    let pm25UgM3: Double?
+    let usAqi: Double?
+    let co2Ppm: Double?
+    let tvocPpb: Double?
+    let qualityLabel: String
+    let qualityAdvice: String
+    let isOnline: Bool?
+
+    static func from(_ object: [String: Any]) -> GoveeIndoorAirSnapshot? {
+        guard !object.isEmpty else {
+            return nil
+        }
+
+        return GoveeIndoorAirSnapshot(
+            id: JSON.string(object, "id", fallback: UUID().uuidString),
+            deviceName: JSON.string(object, "deviceName", fallback: "Govee Indoor Air"),
+            room: JSON.string(object, "room", fallback: "Inside"),
+            observedAt: JSON.optionalString(object, "observedAt"),
+            temperatureF: weatherOptionalDouble(object["temperatureF"]),
+            humidityPct: weatherOptionalDouble(object["humidityPct"]),
+            pm25UgM3: weatherOptionalDouble(object["pm25UgM3"]),
+            usAqi: weatherOptionalDouble(object["usAqi"]),
+            co2Ppm: weatherOptionalDouble(object["co2Ppm"]),
+            tvocPpb: weatherOptionalDouble(object["tvocPpb"]),
+            qualityLabel: JSON.string(object, "qualityLabel", fallback: "Unknown"),
+            qualityAdvice: JSON.string(object, "qualityAdvice", fallback: "Indoor readings are retained for Weather and Data Platform history."),
+            isOnline: object["isOnline"] is NSNull ? nil : (object["isOnline"] as? Bool)
+        )
+    }
+}
+
 private struct WeatherForecastSnapshot {
     let fetchedAt: String
     let locationName: String
@@ -500,6 +551,7 @@ private struct WeatherForecastSnapshot {
     let hourlyForecast: [WeatherHourlySnapshot]
     let tempestAvailable: Bool
     let tempestStation: TempestStationSnapshot?
+    let indoorAir: GoveeIndoorAirSnapshot?
 
     var headlineTemperatureF: Double? {
         tempestStation?.metrics.temperatureF ?? currentTemperatureF
@@ -519,6 +571,7 @@ private struct WeatherForecastSnapshot {
 
         let tempest = JSON.object(object["tempest"])
         let stationObject = JSON.object(tempest["station"])
+        let indoorAir = JSON.object(object["indoorAir"])
 
         return WeatherForecastSnapshot(
             fetchedAt: JSON.string(object, "fetchedAt"),
@@ -541,7 +594,8 @@ private struct WeatherForecastSnapshot {
             todayCondition: JSON.string(today, "condition", fallback: "Unknown"),
             hourlyForecast: JSON.array(object["hourlyForecast"]).map { WeatherHourlySnapshot.from($0) },
             tempestAvailable: JSON.bool(tempest, "available") && !stationObject.isEmpty,
-            tempestStation: stationObject.isEmpty ? nil : TempestStationSnapshot.from(stationObject)
+            tempestStation: stationObject.isEmpty ? nil : TempestStationSnapshot.from(stationObject),
+            indoorAir: JSON.bool(indoorAir, "available") ? GoveeIndoorAirSnapshot.from(JSON.object(indoorAir["monitor"])) : nil
         )
     }
 }
@@ -554,6 +608,8 @@ private struct WeatherDashboardSnapshot {
     let station: TempestStationSnapshot?
     let observations: [TempestObservationSnapshot]
     let events: [TempestEventSnapshot]
+    let indoorAir: GoveeIndoorAirSnapshot?
+    let indoorAirSamples: [GoveeIndoorAirSnapshot]
 
     static func from(_ object: [String: Any]) -> WeatherDashboardSnapshot? {
         guard let forecast = WeatherForecastSnapshot.from(JSON.object(object["forecast"])) else {
@@ -562,6 +618,8 @@ private struct WeatherDashboardSnapshot {
 
         let tempest = JSON.object(object["tempest"])
         let stationObject = JSON.object(tempest["station"])
+        let indoorAir = JSON.object(object["indoorAir"])
+        let indoorAirMonitor = JSON.object(indoorAir["monitor"])
 
         return WeatherDashboardSnapshot(
             fetchedAt: JSON.string(object, "fetchedAt"),
@@ -570,7 +628,9 @@ private struct WeatherDashboardSnapshot {
             tempestAvailable: JSON.bool(tempest, "available") && !stationObject.isEmpty,
             station: stationObject.isEmpty ? nil : TempestStationSnapshot.from(stationObject),
             observations: JSON.array(tempest["observations"]).map { TempestObservationSnapshot.from($0) },
-            events: JSON.array(tempest["events"]).map { TempestEventSnapshot.from($0) }
+            events: JSON.array(tempest["events"]).map { TempestEventSnapshot.from($0) },
+            indoorAir: indoorAirMonitor.isEmpty ? forecast.indoorAir : GoveeIndoorAirSnapshot.from(indoorAirMonitor),
+            indoorAirSamples: JSON.array(indoorAir["samples"]).compactMap { GoveeIndoorAirSnapshot.from($0) }
         )
     }
 }
@@ -768,6 +828,169 @@ private struct TempestConfigForm {
     }
 }
 
+private struct GoveeDeviceChoice: Identifiable {
+    let sku: String
+    let device: String
+    let name: String
+    let type: String
+    let isAirQualityDevice: Bool
+
+    var id: String { "\(sku)::\(device)" }
+    var detail: String { "\(sku)\(isAirQualityDevice ? " • sensor" : "")" }
+
+    static func from(_ object: [String: Any]) -> GoveeDeviceChoice? {
+        let sku = JSON.string(object, "sku")
+        let device = JSON.string(object, "device")
+        guard !sku.isEmpty, !device.isEmpty else { return nil }
+        return GoveeDeviceChoice(
+            sku: sku,
+            device: device,
+            name: JSON.string(object, "deviceName", fallback: "Govee Indoor Air"),
+            type: JSON.string(object, "type"),
+            isAirQualityDevice: JSON.bool(object, "isAirQualityDevice")
+        )
+    }
+}
+
+private struct GoveeIntegrationSnapshot {
+    let apiKey: String
+    let apiKeyConfigured: Bool
+    let apiKeySource: String
+    let enabled: Bool
+    let room: String
+    let selectedDevice: String
+    let selectedSku: String
+    let selectedDeviceName: String
+    let selectedDeviceType: String
+    let pollIntervalMs: Int
+    let tempOffsetF: Double
+    let humidityOffsetPct: Double
+    let pm25OffsetUgM3: Double
+    let lastError: String
+
+    static func from(_ object: [String: Any]) -> GoveeIntegrationSnapshot {
+        GoveeIntegrationSnapshot(
+            apiKey: JSON.string(object, "apiKey"),
+            apiKeyConfigured: JSON.bool(object, "apiKeyConfigured"),
+            apiKeySource: JSON.string(object, "apiKeySource", fallback: "none"),
+            enabled: JSON.bool(object, "enabled"),
+            room: JSON.string(object, "room", fallback: "Inside"),
+            selectedDevice: JSON.string(object, "selectedDevice"),
+            selectedSku: JSON.string(object, "selectedSku"),
+            selectedDeviceName: JSON.string(object, "selectedDeviceName"),
+            selectedDeviceType: JSON.string(object, "selectedDeviceType"),
+            pollIntervalMs: JSON.int(object, "pollIntervalMs", fallback: 60_000),
+            tempOffsetF: weatherOptionalDouble(object["tempOffsetF"]) ?? 0,
+            humidityOffsetPct: weatherOptionalDouble(object["humidityOffsetPct"]) ?? 0,
+            pm25OffsetUgM3: weatherOptionalDouble(object["pm25OffsetUgM3"]) ?? 0,
+            lastError: JSON.string(object, "lastError")
+        )
+    }
+}
+
+private struct GoveeStatusSnapshot {
+    let integration: GoveeIntegrationSnapshot
+    let selectedDevice: GoveeDeviceChoice?
+    let devices: [GoveeDeviceChoice]
+    let latestSample: GoveeIndoorAirSnapshot?
+    let isConnected: Bool
+    let lastSampleAt: String?
+    let lastSyncAt: String?
+    let lastError: String
+
+    static func from(_ object: [String: Any]) -> GoveeStatusSnapshot? {
+        let integration = JSON.object(object["integration"])
+        let health = JSON.object(object["health"])
+        guard !integration.isEmpty, !health.isEmpty else {
+            return nil
+        }
+
+        let selectedDeviceObject = JSON.object(object["selectedDevice"])
+        let latestSampleObject = JSON.object(object["latestSample"])
+        return GoveeStatusSnapshot(
+            integration: GoveeIntegrationSnapshot.from(integration),
+            selectedDevice: selectedDeviceObject.isEmpty ? nil : GoveeDeviceChoice.from(selectedDeviceObject),
+            devices: JSON.array(object["devices"]).compactMap { GoveeDeviceChoice.from($0) },
+            latestSample: latestSampleObject.isEmpty ? nil : GoveeIndoorAirSnapshot.from(latestSampleObject),
+            isConnected: JSON.bool(health, "isConnected"),
+            lastSampleAt: JSON.optionalString(health, "lastSampleAt"),
+            lastSyncAt: JSON.optionalString(health, "lastSyncAt"),
+            lastError: JSON.string(health, "lastError")
+        )
+    }
+}
+
+private struct GoveeConfigForm {
+    var apiKey = ""
+    var enabled = false
+    var room = "Inside"
+    var selectedDevice = ""
+    var selectedSku = ""
+    var selectedDeviceName = ""
+    var selectedDeviceType = ""
+    var pollIntervalSeconds = "60"
+    var tempOffsetF = "0"
+    var humidityOffsetPct = "0"
+    var pm25OffsetUgM3 = "0"
+
+    mutating func hydrate(from status: GoveeStatusSnapshot) {
+        apiKey = status.integration.apiKeyConfigured || weatherIsMaskedSecret(status.integration.apiKey)
+            ? tempestConfiguredSecretPlaceholder
+            : status.integration.apiKey
+        enabled = status.integration.enabled
+        room = status.integration.room
+        selectedDevice = status.integration.selectedDevice
+        selectedSku = status.integration.selectedSku
+        selectedDeviceName = status.integration.selectedDeviceName
+        selectedDeviceType = status.integration.selectedDeviceType
+        pollIntervalSeconds = String(max(60, status.integration.pollIntervalMs / 1000))
+        tempOffsetF = String(format: "%.2f", status.integration.tempOffsetF)
+        humidityOffsetPct = String(format: "%.2f", status.integration.humidityOffsetPct)
+        pm25OffsetUgM3 = String(format: "%.2f", status.integration.pm25OffsetUgM3)
+    }
+
+    mutating func select(_ device: GoveeDeviceChoice?) {
+        guard let device else {
+            selectedDevice = ""
+            selectedSku = ""
+            selectedDeviceName = ""
+            selectedDeviceType = ""
+            return
+        }
+        selectedDevice = device.device
+        selectedSku = device.sku
+        selectedDeviceName = device.name
+        selectedDeviceType = device.type
+    }
+
+    func payload() -> [String: Any] {
+        var result: [String: Any] = [
+            "enabled": enabled,
+            "room": room.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Inside" : room.trimmingCharacters(in: .whitespacesAndNewlines),
+            "pollIntervalMs": max(60, Int(pollIntervalSeconds.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 60) * 1000,
+            "tempOffsetF": Double(tempOffsetF.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0,
+            "humidityOffsetPct": Double(humidityOffsetPct.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0,
+            "pm25OffsetUgM3": Double(pm25OffsetUgM3.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+        ]
+
+        if selectedDevice.isEmpty || selectedSku.isEmpty {
+            result["autoSelect"] = true
+        } else {
+            result["selectedDevice"] = selectedDevice
+            result["selectedSku"] = selectedSku
+            result["selectedDeviceName"] = selectedDeviceName
+            result["selectedDeviceType"] = selectedDeviceType
+        }
+
+        let trimmedKey = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedKey.isEmpty && !weatherIsMaskedSecret(trimmedKey) {
+            result["apiKey"] = trimmedKey
+        }
+
+        return result
+    }
+}
+
 @MainActor
 private final class WeatherLocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published private(set) var coordinate: CLLocationCoordinate2D?
@@ -906,6 +1129,9 @@ struct WeatherView: View {
     @State private var tempestStatus: TempestStatusSnapshot?
     @State private var tempestForm = TempestConfigForm()
     @State private var discoveredStations: [TempestStationChoice] = []
+    @State private var goveeStatus: GoveeStatusSnapshot?
+    @State private var goveeForm = GoveeConfigForm()
+    @State private var discoveredGoveeDevices: [GoveeDeviceChoice] = []
 
     @State private var isLoading = true
     @State private var isRefreshing = false
@@ -913,6 +1139,10 @@ struct WeatherView: View {
     @State private var isTestingTempest = false
     @State private var isSavingTempest = false
     @State private var isSyncingTempest = false
+    @State private var isLoadingGovee = false
+    @State private var isTestingGovee = false
+    @State private var isSavingGovee = false
+    @State private var isSyncingGovee = false
 
     @State private var errorMessage: String?
     @State private var infoMessage = ""
@@ -954,6 +1184,31 @@ struct WeatherView: View {
         )
     }
 
+    private var goveeDeviceChoices: [GoveeDeviceChoice] {
+        if !discoveredGoveeDevices.isEmpty {
+            return discoveredGoveeDevices
+        }
+        return goveeStatus?.devices ?? []
+    }
+
+    private var selectedGoveePickerValue: Binding<String> {
+        Binding(
+            get: {
+                guard !goveeForm.selectedSku.isEmpty, !goveeForm.selectedDevice.isEmpty else {
+                    return "__auto__"
+                }
+                return "\(goveeForm.selectedSku)::\(goveeForm.selectedDevice)"
+            },
+            set: { newValue in
+                if newValue == "__auto__" {
+                    goveeForm.select(nil)
+                    return
+                }
+                goveeForm.select(goveeDeviceChoices.first(where: { $0.id == newValue }))
+            }
+        )
+    }
+
     private var autoLocationKey: String {
         guard let coordinate = locationManager.coordinate else {
             return "none"
@@ -967,6 +1222,10 @@ struct WeatherView: View {
 
     private var activeStation: TempestStationSnapshot? {
         dashboard?.station ?? activeForecast?.tempestStation
+    }
+
+    private var activeIndoorAir: GoveeIndoorAirSnapshot? {
+        dashboard?.indoorAir ?? activeForecast?.indoorAir
     }
 
     private var forecastTrendData: [WeatherHourlySnapshot] {
@@ -998,6 +1257,38 @@ struct WeatherView: View {
             from: forecastTrendData,
             value: { $0.precipitationChance },
             label: { formatTimeOnly($0.time) }
+        )
+    }
+
+    private var indoorAirTrendData: [GoveeIndoorAirSnapshot] {
+        Array((dashboard?.indoorAirSamples ?? []).suffix(weatherChartHistoryLimit))
+    }
+
+    private var indoorAirAxisLabels: [String] {
+        indoorAirTrendData.map { formatTimeOnly($0.observedAt) }
+    }
+
+    private var indoorTemperatureSegments: [WeatherChartSegment] {
+        buildWeatherChartSegments(
+            from: indoorAirTrendData,
+            value: { $0.temperatureF },
+            label: { formatTimeOnly($0.observedAt) }
+        )
+    }
+
+    private var indoorHumiditySegments: [WeatherChartSegment] {
+        buildWeatherChartSegments(
+            from: indoorAirTrendData,
+            value: { $0.humidityPct },
+            label: { formatTimeOnly($0.observedAt) }
+        )
+    }
+
+    private var indoorPM25Segments: [WeatherChartSegment] {
+        buildWeatherChartSegments(
+            from: indoorAirTrendData,
+            value: { $0.pm25UgM3 },
+            label: { formatTimeOnly($0.observedAt) }
         )
     }
 
@@ -1103,13 +1394,13 @@ struct WeatherView: View {
                         buttonTitle: isRefreshing ? "Refreshing..." : "Refresh",
                         buttonIcon: isRefreshing ? "arrow.triangle.2.circlepath.circle.fill" : "arrow.clockwise",
                         buttonAction: {
-                            Task { await refreshAll(silent: false, includeTempestStatus: isAdmin, forceTempestSync: true) }
+                            Task { await refreshAll(silent: false, includeTempestStatus: isAdmin, forceTempestSync: true, forceIndoorAirSync: true) }
                         }
                     )
 
                     if let errorMessage, dashboard == nil {
                         InlineErrorView(message: errorMessage) {
-                            Task { await refreshAll(silent: false, includeTempestStatus: isAdmin, forceTempestSync: true) }
+                            Task { await refreshAll(silent: false, includeTempestStatus: isAdmin, forceTempestSync: true, forceIndoorAirSync: true) }
                         }
                     }
 
@@ -1128,6 +1419,7 @@ struct WeatherView: View {
                         weatherHero(for: dashboard)
                         weatherTelemetryGrid(for: dashboard)
                         weatherSensorAndForecastPanels(for: dashboard)
+                        indoorAirHistoryPanel
                         weatherHistoricalPanels(for: dashboard)
                         weatherEventsPanel
                     } else if weatherLocationMode == .auto && locationManager.isRequesting {
@@ -1144,13 +1436,14 @@ struct WeatherView: View {
 
                     if isAdmin {
                         tempestAdminPanel
+                        goveeAdminPanel
                     }
                 }
             }
             .padding()
         }
         .refreshable {
-            await refreshAll(silent: false, includeTempestStatus: isAdmin, forceTempestSync: true)
+            await refreshAll(silent: false, includeTempestStatus: isAdmin, forceTempestSync: true, forceIndoorAirSync: true)
         }
         .task {
             await refreshAll(silent: false, includeTempestStatus: isAdmin)
@@ -1218,7 +1511,7 @@ struct WeatherView: View {
                         .submitLabel(.search)
                         .hbPanelTextField()
                         .onSubmit {
-                            Task { await loadWeatherDashboard(silent: false, forceTempestSync: true) }
+                            Task { await loadWeatherDashboard(silent: false, forceTempestSync: true, forceIndoorAirSync: true) }
                         }
                 }
 
@@ -1226,7 +1519,7 @@ struct WeatherView: View {
                     if usesCompactWeatherLayout && weatherLocationMode == .auto {
                         VStack(spacing: 10) {
                             Button {
-                                Task { await loadWeatherDashboard(silent: false, forceTempestSync: true) }
+                                Task { await loadWeatherDashboard(silent: false, forceTempestSync: true, forceIndoorAirSync: true) }
                             } label: {
                                 Label(isRefreshing ? "Refreshing..." : "Refresh Deck", systemImage: "arrow.clockwise")
                                     .frame(maxWidth: .infinity)
@@ -1244,7 +1537,7 @@ struct WeatherView: View {
                     } else {
                         HStack(spacing: 10) {
                             Button {
-                                Task { await loadWeatherDashboard(silent: false, forceTempestSync: true) }
+                                Task { await loadWeatherDashboard(silent: false, forceTempestSync: true, forceIndoorAirSync: true) }
                             } label: {
                                 Label(isRefreshing ? "Refreshing..." : "Refresh Deck", systemImage: "arrow.clockwise")
                                     .frame(maxWidth: .infinity)
@@ -1270,12 +1563,14 @@ struct WeatherView: View {
     private func weatherHero(for dashboard: WeatherDashboardSnapshot) -> some View {
         let forecast = dashboard.forecast
         let station = dashboard.station ?? forecast.tempestStation
+        let indoorAir = dashboard.indoorAir ?? forecast.indoorAir
         let headlineTemperature = forecast.headlineTemperatureF
         let headlineFeelsLike = forecast.headlineFeelsLikeF
         let stationLive = dashboard.tempestAvailable && station != nil
         let lastSyncedAt = weatherMostRecentTimestamp(
             station?.observedAt,
             station?.lastEventAt,
+            indoorAir?.observedAt,
             dashboard.fetchedAt.isEmpty ? nil : dashboard.fetchedAt,
             forecast.fetchedAt.isEmpty ? nil : forecast.fetchedAt
         )
@@ -1332,6 +1627,14 @@ struct WeatherView: View {
                                 background: HBPalette.panelSoft.opacity(0.96),
                                 stroke: HBPalette.panelStrokeStrong
                             )
+                            if let indoorAir {
+                                HBBadge(
+                                    text: "Inside \(indoorAir.qualityLabel)",
+                                    foreground: HBPalette.textPrimary,
+                                    background: HBPalette.accentGreen.opacity(0.18),
+                                    stroke: HBPalette.accentGreen.opacity(0.45)
+                                )
+                            }
 
                             HStack(alignment: .top, spacing: 12) {
                                 VStack(alignment: .leading, spacing: 6) {
@@ -1390,6 +1693,14 @@ struct WeatherView: View {
                                             background: HBPalette.panelSoft.opacity(0.96),
                                             stroke: HBPalette.panelStrokeStrong
                                         )
+                                        if let indoorAir {
+                                            HBBadge(
+                                                text: "Inside \(indoorAir.qualityLabel)",
+                                                foreground: HBPalette.textPrimary,
+                                                background: HBPalette.accentGreen.opacity(0.18),
+                                                stroke: HBPalette.accentGreen.opacity(0.45)
+                                            )
+                                        }
                                         Text("Feels like \(formatTemperature(headlineFeelsLike))")
                                             .font(.system(size: 15, weight: .semibold, design: .rounded))
                                             .foregroundStyle(HBPalette.textSecondary)
@@ -1457,11 +1768,12 @@ struct WeatherView: View {
     private func weatherTelemetryGrid(for dashboard: WeatherDashboardSnapshot) -> some View {
         let forecast = dashboard.forecast
         let station = dashboard.station ?? forecast.tempestStation
+        let indoorAir = dashboard.indoorAir ?? forecast.indoorAir
         let liveRainRate = station?.metrics.rainRateInPerHr ?? deriveRainRateFromLastMinute(station?.metrics.rainLastMinuteIn)
         let livePrecipitationNow = station?.metrics.rainLastMinuteIn ?? forecast.precipitationIn
         let liveRainDetected = (liveRainRate ?? 0) > 0 || (livePrecipitationNow ?? 0) > 0
 
-        let items: [WeatherTelemetryCardItem] = [
+        var items: [WeatherTelemetryCardItem] = [
             WeatherTelemetryCardItem(
                 title: "Local Forecast",
                 value: "\(formatTemperature(forecast.highF)) / \(formatTemperature(forecast.lowF))",
@@ -1492,6 +1804,19 @@ struct WeatherView: View {
             )
         ]
 
+        if let indoorAir {
+            items.insert(
+                WeatherTelemetryCardItem(
+                    title: "Indoor Air",
+                    value: formatTemperature(indoorAir.temperatureF),
+                    detail: "\(formatPercent(indoorAir.humidityPct)) RH • PM2.5 \(formatPM25(indoorAir.pm25UgM3)) • \(indoorAir.qualityLabel)",
+                    accent: HBPalette.accentGreen,
+                    gradient: [HBPalette.accentGreen.opacity(0.24), HBPalette.panelSoft.opacity(0.14)]
+                ),
+                at: min(1, items.count)
+            )
+        }
+
         return LazyVGrid(
             columns: [GridItem(.adaptive(minimum: usesCompactWeatherLayout ? 150 : 220), spacing: 12)],
             spacing: 12
@@ -1510,6 +1835,7 @@ struct WeatherView: View {
 
     private func weatherSensorAndForecastPanels(for dashboard: WeatherDashboardSnapshot) -> some View {
         let station = dashboard.station ?? dashboard.forecast.tempestStation
+        let indoorAir = dashboard.indoorAir ?? dashboard.forecast.indoorAir
 
         return weatherSplitPanels {
             HBPanel {
@@ -1591,6 +1917,20 @@ struct WeatherView: View {
                             : [GridItem(.flexible()), GridItem(.flexible())],
                         spacing: 10
                     ) {
+                        if let indoorAir {
+                            MetricCard(
+                                title: "Indoor Temp",
+                                value: formatTemperature(indoorAir.temperatureF),
+                                subtitle: "\(indoorAir.room) • \(indoorAir.qualityLabel)",
+                                tint: HBPalette.accentGreen
+                            )
+                            MetricCard(
+                                title: "Indoor RH",
+                                value: formatPercent(indoorAir.humidityPct),
+                                subtitle: "PM2.5 \(formatPM25(indoorAir.pm25UgM3))",
+                                tint: HBPalette.accentBlue
+                            )
+                        }
                         MetricCard(
                             title: "Humidity",
                             value: formatPercent(station?.metrics.humidityPct ?? dashboard.forecast.humidity),
@@ -1636,6 +1976,83 @@ struct WeatherView: View {
             }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var indoorAirHistoryPanel: some View {
+        HBPanel {
+            VStack(alignment: .leading, spacing: 14) {
+                chartHeader(
+                    title: "Indoor Air History",
+                    subtitle: "Temperature, humidity, and PM2.5 from the Govee indoor air monitor."
+                )
+
+                if indoorAirTrendData.isEmpty {
+                    EmptyStateView(
+                        title: "No indoor air history",
+                        subtitle: "Connect and sync the Govee monitor to populate indoor climate and air-quality charts."
+                    )
+                } else {
+                    Chart {
+                        ForEach(indoorTemperatureSegments) { segment in
+                            ForEach(segment.points) { point in
+                                LineMark(
+                                    x: .value("Sample", point.index),
+                                    y: .value("Indoor Temp", point.value),
+                                    series: .value("Indoor Temp Segment", segment.id)
+                                )
+                                .interpolationMethod(.monotone)
+                                .lineStyle(StrokeStyle(lineWidth: 2.6, lineCap: .round, lineJoin: .round))
+                                .foregroundStyle(indoorTemperatureChartColor)
+                            }
+                        }
+
+                        ForEach(indoorHumiditySegments) { segment in
+                            ForEach(segment.points) { point in
+                                LineMark(
+                                    x: .value("Sample", point.index),
+                                    y: .value("Indoor RH", point.value),
+                                    series: .value("Indoor RH Segment", segment.id)
+                                )
+                                .interpolationMethod(.monotone)
+                                .lineStyle(StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
+                                .foregroundStyle(indoorHumidityChartColor)
+                            }
+                        }
+
+                        ForEach(indoorPM25Segments) { segment in
+                            ForEach(segment.points) { point in
+                                LineMark(
+                                    x: .value("Sample", point.index),
+                                    y: .value("PM2.5", point.value),
+                                    series: .value("PM2.5 Segment", segment.id)
+                                )
+                                .interpolationMethod(.monotone)
+                                .lineStyle(StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
+                                .foregroundStyle(indoorPM25ChartColor)
+                            }
+                        }
+                    }
+                    .frame(height: 260)
+                    .chartXScale(domain: 0...max(indoorAirAxisLabels.count - 1, 0))
+                    .chartXAxis {
+                        AxisMarks(values: weatherChartAxisValues(count: indoorAirAxisLabels.count)) { value in
+                            if let index = value.as(Int.self), indoorAirAxisLabels.indices.contains(index) {
+                                AxisValueLabel(indoorAirAxisLabels[index])
+                                    .foregroundStyle(HBPalette.textMuted)
+                            }
+                        }
+                    }
+                    .chartYAxis {
+                        AxisMarks(position: .leading) {
+                            AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [4, 4]))
+                                .foregroundStyle(HBPalette.panelStroke.opacity(0.35))
+                            AxisValueLabel()
+                                .foregroundStyle(HBPalette.textMuted)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private func weatherHistoricalPanels(for dashboard: WeatherDashboardSnapshot) -> some View {
@@ -2091,6 +2508,163 @@ struct WeatherView: View {
         }
     }
 
+    private var goveeAdminPanel: some View {
+        HBPanel {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Govee Indoor Air")
+                            .font(.system(size: 22, weight: .bold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+                        Text("API key setup, H5106 discovery, indoor comfort readings, and retained telemetry.")
+                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                    }
+
+                    Spacer()
+
+                    HBBadge(text: goveeStatus?.isConnected == true ? "Connected" : "Not Connected")
+                }
+
+                if isLoadingGovee && goveeStatus == nil {
+                    LoadingView(title: "Loading Govee indoor air...")
+                } else {
+                    weatherSplitPanels {
+                        VStack(alignment: .leading, spacing: 12) {
+                            SecureField("Paste Govee API key", text: $goveeForm.apiKey)
+                                .textInputAutocapitalization(.never)
+                                .disableAutocorrection(true)
+                                .hbPanelTextField()
+
+                            if goveeStatus?.integration.apiKeyConfigured == true {
+                                Text(goveeStatus?.integration.apiKeySource == "environment"
+                                     ? "A Govee key is active from runtime environment settings. Enter a new value and save if you want HomeBrain to persist it in the database."
+                                     : "A Govee key is already configured. Enter a new value only if you want to replace it.")
+                                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                                    .foregroundStyle(HBPalette.textSecondary)
+                            }
+
+                            if usesCompactWeatherLayout {
+                                VStack(spacing: 10) {
+                                    TextField("Room label", text: $goveeForm.room)
+                                        .hbPanelTextField()
+                                    TextField("Poll interval seconds", text: $goveeForm.pollIntervalSeconds)
+                                        .keyboardType(.numberPad)
+                                        .hbPanelTextField()
+                                }
+                            } else {
+                                HStack(spacing: 10) {
+                                    TextField("Room label", text: $goveeForm.room)
+                                        .hbPanelTextField()
+                                    TextField("Poll interval seconds", text: $goveeForm.pollIntervalSeconds)
+                                        .keyboardType(.numberPad)
+                                        .hbPanelTextField()
+                                }
+                            }
+
+                            Picker("Preferred Monitor", selection: selectedGoveePickerValue) {
+                                Text("Auto-select indoor monitor").tag("__auto__")
+                                ForEach(goveeDeviceChoices) { device in
+                                    Text("\(device.name) • \(device.detail)").tag(device.id)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(HBPalette.fieldFill, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    .stroke(HBPalette.fieldStroke, lineWidth: 1)
+                            )
+
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: usesCompactWeatherLayout ? 150 : 180), spacing: 10)], spacing: 10) {
+                                tempestToggleChip(title: "Enable", subtitle: "Poll indoor air", isOn: $goveeForm.enabled)
+                                calibrationField(title: "Temp Offset (F)", text: $goveeForm.tempOffsetF)
+                                calibrationField(title: "Humidity Offset (%)", text: $goveeForm.humidityOffsetPct)
+                                calibrationField(title: "PM2.5 Offset", text: $goveeForm.pm25OffsetUgM3)
+                            }
+                        }
+                    } trailing: {
+                        VStack(alignment: .leading, spacing: 10) {
+                            MetricCard(
+                                title: "Indoor Temp",
+                                value: formatTemperature(goveeStatus?.latestSample?.temperatureF),
+                                subtitle: "\(goveeStatus?.latestSample?.room ?? goveeForm.room) • \(goveeStatus?.latestSample?.qualityLabel ?? "No sample")",
+                                tint: HBPalette.accentGreen
+                            )
+                            MetricCard(
+                                title: "Indoor Air",
+                                value: formatPM25(goveeStatus?.latestSample?.pm25UgM3),
+                                subtitle: "AQI \(formatAQI(goveeStatus?.latestSample?.usAqi)) • RH \(formatPercent(goveeStatus?.latestSample?.humidityPct))",
+                                tint: HBPalette.accentBlue
+                            )
+                            MetricCard(
+                                title: "Sync Status",
+                                value: goveeStatus?.lastSampleAt.map(formatTimestamp) ?? "Not synced",
+                                subtitle: "Last API sync \(formatTimestamp(goveeStatus?.lastSyncAt))",
+                                tint: HBPalette.accentPurple
+                            )
+
+                            if let lastError = goveeStatus?.lastError, !lastError.isEmpty {
+                                Text(lastError)
+                                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                                    .foregroundStyle(HBPalette.accentOrange)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(14)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(HBGlassBackground(cornerRadius: 18, variant: .panelSoft))
+                            }
+                        }
+                    }
+
+                    if usesCompactWeatherLayout {
+                        VStack(spacing: 10) {
+                            goveeAdminButtons(stacked: true)
+                        }
+                    } else {
+                        goveeAdminButtons(stacked: false)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func goveeAdminButtons(stacked: Bool) -> some View {
+        let layout = stacked
+            ? AnyLayout(VStackLayout(spacing: 10))
+            : AnyLayout(HStackLayout(spacing: 10))
+
+        layout {
+            Button {
+                Task { await handleTestGovee() }
+            } label: {
+                Label(isTestingGovee ? "Testing..." : "Test API Key", systemImage: "testtube.2")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(HBSecondaryButtonStyle(compact: true))
+            .disabled(isTestingGovee)
+
+            Button {
+                Task { await handleSyncGovee() }
+            } label: {
+                Label(isSyncingGovee ? "Syncing..." : "Sync Now", systemImage: "arrow.triangle.2.circlepath")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(HBSecondaryButtonStyle(compact: true))
+            .disabled(isSyncingGovee)
+
+            Button {
+                Task { await handleSaveGovee() }
+            } label: {
+                Label(isSavingGovee ? "Saving..." : "Save Govee Config", systemImage: "square.and.arrow.down")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(HBPrimaryButtonStyle(compact: true))
+            .disabled(isSavingGovee)
+        }
+    }
+
     private func chartHeader(title: String, subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
@@ -2144,14 +2718,15 @@ struct WeatherView: View {
         }
     }
 
-    private func refreshAll(silent: Bool, includeTempestStatus: Bool, forceTempestSync: Bool = false) async {
-        await loadWeatherDashboard(silent: silent, forceTempestSync: forceTempestSync)
+    private func refreshAll(silent: Bool, includeTempestStatus: Bool, forceTempestSync: Bool = false, forceIndoorAirSync: Bool = false) async {
+        await loadWeatherDashboard(silent: silent, forceTempestSync: forceTempestSync, forceIndoorAirSync: forceIndoorAirSync)
         if includeTempestStatus {
             await loadTempestStatus()
+            await loadGoveeStatus()
         }
     }
 
-    private func loadWeatherDashboard(silent: Bool, forceTempestSync: Bool = false) async {
+    private func loadWeatherDashboard(silent: Bool, forceTempestSync: Bool = false, forceIndoorAirSync: Bool = false) async {
         if silent {
             isRefreshing = true
         } else if dashboard == nil {
@@ -2172,6 +2747,9 @@ struct WeatherView: View {
         if forceTempestSync {
             query.append(URLQueryItem(name: "forceTempestSync", value: "true"))
         }
+        if forceIndoorAirSync {
+            query.append(URLQueryItem(name: "forceIndoorAirSync", value: "true"))
+        }
 
         do {
             let response = try await session.apiClient.get("/api/weather/dashboard", query: query)
@@ -2191,7 +2769,8 @@ struct WeatherView: View {
 
     private func resolvedWeatherQuery() -> [URLQueryItem]? {
         var query: [URLQueryItem] = [
-            URLQueryItem(name: "tempestHistoryHours", value: "24")
+            URLQueryItem(name: "tempestHistoryHours", value: "24"),
+            URLQueryItem(name: "indoorAirHistoryHours", value: "24")
         ]
 
         switch weatherLocationMode {
@@ -2304,6 +2883,100 @@ struct WeatherView: View {
             adminInfoMessage = JSON.string(root, "message", fallback: "Tempest stations and live feeds were refreshed.")
             adminErrorMessage = nil
             await loadTempestStatus()
+            await loadWeatherDashboard(silent: true)
+        } catch {
+            adminErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func loadGoveeStatus() async {
+        guard isAdmin else { return }
+
+        if goveeStatus == nil {
+            isLoadingGovee = true
+        }
+
+        defer { isLoadingGovee = false }
+
+        do {
+            let response = try await session.apiClient.get("/api/govee-air-quality/status")
+            let root = JSON.object(response)
+            guard let status = GoveeStatusSnapshot.from(root) else {
+                throw APIError.parsingFailed
+            }
+            goveeStatus = status
+            goveeForm.hydrate(from: status)
+            if discoveredGoveeDevices.isEmpty {
+                discoveredGoveeDevices = status.devices
+            }
+            adminErrorMessage = nil
+        } catch {
+            adminErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func handleTestGovee() async {
+        guard isAdmin else { return }
+        isTestingGovee = true
+        defer { isTestingGovee = false }
+
+        do {
+            let trimmedKey = goveeForm.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+            let body: [String: Any]
+            if trimmedKey.isEmpty || weatherIsMaskedSecret(trimmedKey) {
+                body = [:]
+            } else {
+                body = ["apiKey": trimmedKey]
+            }
+
+            let response = try await session.apiClient.post("/api/govee-air-quality/test", body: body)
+            let root = JSON.object(response)
+            let discovered = JSON.array(root["airQualityDevices"]).compactMap { GoveeDeviceChoice.from($0) }
+            let allDevices = JSON.array(root["devices"]).compactMap { GoveeDeviceChoice.from($0) }
+            discoveredGoveeDevices = discovered.isEmpty ? allDevices : discovered
+            if goveeForm.selectedDevice.isEmpty {
+                goveeForm.select(discoveredGoveeDevices.first)
+            }
+            adminInfoMessage = JSON.string(root, "message", fallback: "Govee API key verified.")
+            adminErrorMessage = nil
+        } catch {
+            adminErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func handleSaveGovee() async {
+        guard isAdmin else { return }
+        isSavingGovee = true
+        defer { isSavingGovee = false }
+
+        do {
+            let response = try await session.apiClient.post("/api/govee-air-quality/configure", body: goveeForm.payload())
+            let root = JSON.object(response)
+            guard let status = GoveeStatusSnapshot.from(root) else {
+                throw APIError.parsingFailed
+            }
+            goveeStatus = status
+            goveeForm.hydrate(from: status)
+            discoveredGoveeDevices = status.devices
+            adminInfoMessage = JSON.string(root, "message", fallback: "Govee indoor air integration updated successfully.")
+            adminErrorMessage = nil
+            await loadWeatherDashboard(silent: true)
+        } catch {
+            adminErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func handleSyncGovee() async {
+        guard isAdmin else { return }
+        isSyncingGovee = true
+        defer { isSyncingGovee = false }
+
+        do {
+            let response = try await session.apiClient.post("/api/govee-air-quality/sync")
+            let root = JSON.object(response)
+            adminInfoMessage = JSON.string(root, "message", fallback: "Govee indoor air readings were refreshed.")
+            adminErrorMessage = nil
+            await loadGoveeStatus()
             await loadWeatherDashboard(silent: true)
         } catch {
             adminErrorMessage = error.localizedDescription

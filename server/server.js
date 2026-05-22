@@ -32,6 +32,7 @@ const voiceDeviceRoutes = require("./routes/voiceDeviceRoutes");
 const elevenLabsRoutes = require("./routes/elevenLabsRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
 const tempestRoutes = require("./routes/tempestRoutes");
+const goveeAirQualityRoutes = require("./routes/goveeAirQualityRoutes");
 const rainMachineRoutes = require("./routes/rainMachineRoutes");
 const senseRoutes = require("./routes/senseRoutes");
 const weatherRoutes = require("./routes/weatherRoutes");
@@ -78,6 +79,7 @@ const wakeWordTrainingService = require("./services/wakeWordTrainingService");
 const voiceAcknowledgmentService = require("./services/voiceAcknowledgmentService");
 const whisperService = require("./services/whisperService");
 const tempestService = require("./services/tempestService");
+const goveeAirQualityService = require("./services/goveeAirQualityService");
 const rainMachineService = require("./services/rainMachineService");
 const senseService = require("./services/senseService");
 const platformDeployService = require("./services/platformDeployService");
@@ -450,6 +452,7 @@ app.use('/api/settings', settingsRoutes);
 // Weather Routes
 app.use('/api/weather', weatherRoutes);
 app.use('/api/tempest', tempestRoutes);
+app.use('/api/govee-air-quality', goveeAirQualityRoutes);
 app.use('/api/rainmachine', rainMachineRoutes);
 app.use('/api/sense', senseRoutes);
 // Security Alarm Routes
@@ -722,6 +725,16 @@ void dbReady
   }
 })();
 
+// Initialize Govee indoor air integration
+(async () => {
+  try {
+    await goveeAirQualityService.initialize();
+    console.log('Govee Indoor Air Service initialized successfully');
+  } catch (error) {
+    console.error('Failed to initialize Govee Indoor Air Service:', error.message);
+  }
+})();
+
 // Initialize RainMachine irrigation integration
 (async () => {
   try {
@@ -838,6 +851,12 @@ async function gracefulShutdown(signal) {
       await tempestService.shutdown();
     } catch (error) {
       console.error('Error stopping Tempest service:', error.message);
+    }
+
+    try {
+      await goveeAirQualityService.shutdown();
+    } catch (error) {
+      console.error('Error stopping Govee Indoor Air service:', error.message);
     }
 
     try {
