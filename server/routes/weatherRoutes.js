@@ -12,7 +12,8 @@ router.get('/current', auth, async (req, res) => {
       longitude: req.query.longitude,
       address: req.query.address,
       label: req.query.label,
-      forceTempestSync: req.query.forceTempestSync
+      forceTempestSync: req.query.forceTempestSync,
+      forceIndoorAirSync: req.query.forceIndoorAirSync
     });
 
     res.status(200).json({
@@ -36,7 +37,9 @@ router.get('/dashboard', auth, async (req, res) => {
       address: req.query.address,
       label: req.query.label,
       tempestHistoryHours: req.query.tempestHistoryHours,
-      forceTempestSync: req.query.forceTempestSync
+      indoorAirHistoryHours: req.query.indoorAirHistoryHours,
+      forceTempestSync: req.query.forceTempestSync,
+      forceIndoorAirSync: req.query.forceIndoorAirSync
     });
 
     res.status(200).json({

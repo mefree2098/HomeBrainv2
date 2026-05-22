@@ -119,6 +119,49 @@ export interface TempestWidgetData {
   moduleTelemetry: TempestModuleTelemetrySummary | null
 }
 
+export interface GoveeIndoorAirSnapshot {
+  id: string
+  sourceId?: string
+  sourceKey?: string
+  device: string
+  sku: string
+  deviceName: string
+  deviceType: string
+  room: string
+  isOnline: boolean | null
+  observedAt: string | null
+  temperatureF: number | null
+  temperatureC: number | null
+  humidityPct: number | null
+  pm25UgM3: number | null
+  co2Ppm: number | null
+  tvocPpb: number | null
+  usAqi: number | null
+  qualityLabel: string
+  qualityCategory: string
+  qualityAdvice?: string
+  metrics?: Record<string, number | null>
+}
+
+export interface GoveeIndoorAirWidgetData {
+  available: boolean
+  monitor: GoveeIndoorAirSnapshot | null
+}
+
+export interface GoveeIndoorAirDashboardData extends GoveeIndoorAirWidgetData {
+  samples: GoveeIndoorAirSnapshot[]
+  health?: {
+    configured: boolean
+    enabled: boolean
+    isConnected: boolean
+    lastDiscoveryAt: string | null
+    lastSyncAt: string | null
+    lastSampleAt: string | null
+    lastError: string
+    selectedDeviceOnline: boolean | null
+  } | null
+}
+
 export interface TempestTelemetryWindowSummary {
   key: "day" | "week" | "month" | "year"
   label: string
@@ -203,6 +246,7 @@ export interface DashboardWeatherPayload {
   today: DashboardWeatherToday
   hourlyForecast: WeatherHourlyForecastPoint[]
   tempest: TempestWidgetData
+  indoorAir: GoveeIndoorAirWidgetData
 }
 
 export interface WeatherDashboardPayload {
@@ -216,6 +260,7 @@ export interface WeatherDashboardPayload {
     events: TempestEventRecord[]
     moduleTelemetry: TempestModuleTelemetrySummary | null
   }
+  indoorAir: GoveeIndoorAirDashboardData
 }
 
 interface GetDashboardWeatherOptions {
@@ -224,6 +269,7 @@ interface GetDashboardWeatherOptions {
   longitude?: number
   label?: string
   forceTempestSync?: boolean
+  forceIndoorAirSync?: boolean
 }
 
 export const getDashboardWeather = async (options: GetDashboardWeatherOptions = {}) => {
@@ -231,7 +277,8 @@ export const getDashboardWeather = async (options: GetDashboardWeatherOptions = 
     const response = await api.get("/api/weather/current", {
       params: {
         ...options,
-        forceTempestSync: options.forceTempestSync === true ? "true" : undefined
+        forceTempestSync: options.forceTempestSync === true ? "true" : undefined,
+        forceIndoorAirSync: options.forceIndoorAirSync === true ? "true" : undefined
       }
     })
 
@@ -242,12 +289,13 @@ export const getDashboardWeather = async (options: GetDashboardWeatherOptions = 
   }
 }
 
-export const getWeatherDashboard = async (options: GetDashboardWeatherOptions & { tempestHistoryHours?: number } = {}) => {
+export const getWeatherDashboard = async (options: GetDashboardWeatherOptions & { tempestHistoryHours?: number; indoorAirHistoryHours?: number } = {}) => {
   try {
     const response = await api.get("/api/weather/dashboard", {
       params: {
         ...options,
-        forceTempestSync: options.forceTempestSync === true ? "true" : undefined
+        forceTempestSync: options.forceTempestSync === true ? "true" : undefined,
+        forceIndoorAirSync: options.forceIndoorAirSync === true ? "true" : undefined
       }
     })
 

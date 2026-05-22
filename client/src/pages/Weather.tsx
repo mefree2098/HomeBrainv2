@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom"
 import {
   Activity,
   CloudRain,
+  Home,
   Loader2,
   MapPin,
   RadioTower,
@@ -56,6 +57,8 @@ const formatRain = (value: number | null | undefined) => value == null ? "--" : 
 const formatPressure = (value: number | null | undefined) => value == null ? "--" : `${value.toFixed(2)} inHg`
 const formatSolar = (value: number | null | undefined) => value == null ? "--" : `${Math.round(value)} W/m²`
 const formatUv = (value: number | null | undefined) => value == null ? "--" : value.toFixed(1)
+const formatAqi = (value: number | null | undefined) => value == null ? "--" : `${Math.round(value)}`
+const formatPm25 = (value: number | null | undefined) => value == null ? "--" : `${value.toFixed(1)} ug/m³`
 
 const deriveRainRateFromLastMinute = (value: number | null | undefined) => (
   value == null ? null : Number((value * 60).toFixed(2))
@@ -320,7 +323,7 @@ export function Weather() {
   const [error, setError] = useState<string | null>(null)
   const [openModuleKey, setOpenModuleKey] = useState<WeatherModuleKey | null>(null)
 
-  const loadDashboard = useCallback(async (options: { silent?: boolean; forceTempestSync?: boolean } = {}) => {
+  const loadDashboard = useCallback(async (options: { silent?: boolean; forceTempestSync?: boolean; forceIndoorAirSync?: boolean } = {}) => {
     const silent = options.silent === true
 
     if (!silent) {
@@ -333,7 +336,9 @@ export function Weather() {
     try {
       const response = await getWeatherDashboard({
         tempestHistoryHours: 24,
-        forceTempestSync: options.forceTempestSync === true
+        indoorAirHistoryHours: 24,
+        forceTempestSync: options.forceTempestSync === true,
+        forceIndoorAirSync: options.forceIndoorAirSync === true
       })
       setDashboard(response.dashboard)
     } catch (loadError) {
@@ -363,6 +368,7 @@ export function Weather() {
   const forecast = dashboard?.forecast
   const station = dashboard?.tempest?.station ?? null
   const tempestsAvailable = dashboard?.tempest?.available === true && station !== null
+  const indoorAir = dashboard?.indoorAir?.available === true ? dashboard.indoorAir.monitor : null
   const moduleTelemetry = dashboard?.tempest?.moduleTelemetry ?? null
   const liveRainRate = station?.metrics.rainRateInPerHr ?? deriveRainRateFromLastMinute(station?.metrics.rainLastMinuteIn)
   const livePrecipitationNow = station?.metrics.rainLastMinuteIn ?? forecast?.current.precipitationIn ?? null
@@ -410,6 +416,18 @@ export function Weather() {
       precipitationChance: entry.precipitationChance
     }))
   }, [dashboard?.hourlyForecast])
+
+  const indoorAirTrendData = useMemo(() => {
+    const samples = Array.isArray(dashboard?.indoorAir?.samples) ? dashboard.indoorAir.samples : []
+    return samples.slice(-240).map((entry) => ({
+      time: formatChartTime(entry.observedAt || ""),
+      observedAt: entry.observedAt,
+      temperatureF: entry.temperatureF,
+      humidityPct: entry.humidityPct,
+      pm25UgM3: entry.pm25UgM3,
+      usAqi: entry.usAqi
+    }))
+  }, [dashboard?.indoorAir?.samples])
 
   const recentEvents = useMemo(() => {
     const events = Array.isArray(dashboard?.tempest?.events) ? dashboard.tempest.events : []
@@ -481,6 +499,11 @@ export function Weather() {
                 <Badge variant="secondary" className="border-white/10 bg-white/10 text-white">
                   {tempestsAvailable ? "Tempest station fused with forecast" : "Forecast mode"}
                 </Badge>
+                {indoorAir ? (
+                  <Badge variant="secondary" className="border-emerald-300/20 bg-emerald-400/15 text-white">
+                    Inside {indoorAir.qualityLabel}
+                  </Badge>
+                ) : null}
               </div>
               <p className="max-w-3xl text-sm leading-relaxed text-cyan-50/80">
                 {tempestsAvailable
@@ -495,6 +518,7 @@ export function Weather() {
                 <span>{forecast.current.condition}</span>
                 <span>Feels like {formatTemperature(spotlightFeelsLike)}</span>
                 {station?.observedAt ? <span>Station sync {formatDateTime(station.observedAt)}</span> : null}
+                {indoorAir?.observedAt ? <span>Indoor sync {formatDateTime(indoorAir.observedAt)}</span> : null}
               </div>
             </div>
 
@@ -505,7 +529,7 @@ export function Weather() {
               <Button
                 variant="secondary"
                 className="border-white/10 bg-white/10 text-white hover:bg-white/15"
-                onClick={() => void loadDashboard({ silent: true, forceTempestSync: true })}
+                onClick={() => void loadDashboard({ silent: true, forceTempestSync: true, forceIndoorAirSync: true })}
               >
                 {refreshing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
                 Refresh
@@ -626,6 +650,34 @@ export function Weather() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-2">
+              {indoorAir ? (
+                <div className="rounded-[1.15rem] border border-emerald-300/20 bg-emerald-400/10 p-4 sm:col-span-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="section-kicker">Indoor Air</span>
+                    <Home className="h-4 w-4 text-emerald-500" />
+                  </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-4">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Temp</p>
+                      <p className="text-xl font-semibold">{formatTemperature(indoorAir.temperatureF)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Humidity</p>
+                      <p className="text-xl font-semibold">{formatPercent(indoorAir.humidityPct)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">PM2.5</p>
+                      <p className="text-xl font-semibold">{formatPm25(indoorAir.pm25UgM3)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">AQI</p>
+                      <p className="text-xl font-semibold">{formatAqi(indoorAir.usAqi)}</p>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-sm text-muted-foreground">{indoorAir.qualityAdvice || "Govee indoor air readings are retained for charting and Data Platform history."}</p>
+                </div>
+              ) : null}
+
               <WeatherTelemetryModuleCard
                 enabled={Boolean(moduleTelemetry && tempestsAvailable)}
                 title="Humidity"
@@ -718,6 +770,41 @@ export function Weather() {
           </CardContent>
         </Card>
       </div>
+
+      <Card className="border-white/10 bg-white/5">
+        <CardHeader>
+          <CardTitle>Indoor Air History</CardTitle>
+          <CardDescription>Temperature, humidity, PM2.5, and derived indoor AQI from the Govee monitor.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {indoorAirTrendData.length > 0 ? (
+            <ChartContainer
+              className="h-[260px] w-full"
+              config={{
+                temperatureF: { label: "Temp", color: "#10b981" },
+                humidityPct: { label: "Humidity", color: "#38bdf8" },
+                pm25UgM3: { label: "PM2.5", color: "#a78bfa" },
+                usAqi: { label: "AQI", color: "#f59e0b" }
+              }}
+            >
+              <LineChart data={indoorAirTrendData}>
+                <CartesianGrid vertical={false} strokeDasharray="4 4" />
+                <XAxis dataKey="time" tickLine={false} axisLine={false} minTickGap={24} />
+                <YAxis tickLine={false} axisLine={false} width={40} />
+                <ChartTooltip content={<ChartTooltipContent />} />
+                <Line type="monotone" dataKey="temperatureF" stroke="var(--color-temperatureF)" strokeWidth={2.5} dot={false} />
+                <Line type="monotone" dataKey="humidityPct" stroke="var(--color-humidityPct)" strokeWidth={2.5} dot={false} />
+                <Line type="monotone" dataKey="pm25UgM3" stroke="var(--color-pm25UgM3)" strokeWidth={2.5} dot={false} />
+                <Line type="monotone" dataKey="usAqi" stroke="var(--color-usAqi)" strokeWidth={2.5} dot={false} />
+              </LineChart>
+            </ChartContainer>
+          ) : (
+            <div className="rounded-[1.2rem] border border-dashed border-border/60 bg-background/40 p-4 text-sm text-muted-foreground">
+              Connect and sync the Govee indoor air monitor to populate indoor climate and air-quality history.
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 xl:grid-cols-2">
         <Card className="border-white/10 bg-white/5">

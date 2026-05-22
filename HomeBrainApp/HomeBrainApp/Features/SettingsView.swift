@@ -46,6 +46,7 @@ private enum SettingsWebArea: String, CaseIterable, Identifiable {
     case openClaw
     case sense
     case tempest
+    case goveeIndoorAir
     case rainMachine
     case deviceIntegrations
     case ecobee
@@ -70,6 +71,7 @@ private enum SettingsWebArea: String, CaseIterable, Identifiable {
         case .openClaw: return "OpenClaw"
         case .sense: return "Sense"
         case .tempest: return "Tempest"
+        case .goveeIndoorAir: return "Govee Indoor Air"
         case .rainMachine: return "RainMachine"
         case .deviceIntegrations: return "Device Integrations"
         case .ecobee: return "Ecobee"
@@ -94,6 +96,7 @@ private enum SettingsWebArea: String, CaseIterable, Identifiable {
         case .openClaw: return "OpenClaw MCP, token, Jetson bundle"
         case .sense: return "Sense Energy monitor setup and sync"
         case .tempest: return "Tempest station setup and weather fusion"
+        case .goveeIndoorAir: return "Govee H5106 indoor temperature, humidity, and air quality"
         case .rainMachine: return "RainMachine controller setup and sync"
         case .deviceIntegrations: return "INSTEON, SmartThings, Harmony, Zigbee, Z-Wave"
         case .ecobee: return "Ecobee OAuth and thermostat sync"
@@ -118,6 +121,7 @@ private enum SettingsWebArea: String, CaseIterable, Identifiable {
         case .openClaw: return "point.3.connected.trianglepath.dotted"
         case .sense: return "bolt.fill"
         case .tempest: return "cloud.sun"
+        case .goveeIndoorAir: return "house.fill"
         case .rainMachine: return "cloud.rain"
         case .deviceIntegrations: return "switch.2"
         case .ecobee: return "thermometer.medium"
@@ -134,7 +138,7 @@ private enum SettingsWebArea: String, CaseIterable, Identifiable {
 
     var isAdminOnly: Bool {
         switch self {
-        case .alexa, .codexSkill, .openClaw, .sense, .tempest, .rainMachine, .deviceIntegrations,
+        case .alexa, .codexSkill, .openClaw, .sense, .tempest, .goveeIndoorAir, .rainMachine, .deviceIntegrations,
              .ecobee, .apiKeys, .aiProviders, .llmPriority, .hardwareOrbs, .resources, .maintenance,
              .platformAdmin:
             return true
@@ -479,7 +483,7 @@ struct SettingsView: View {
             settingsIntegrationTabsSection
             settingsSaveRefreshSection
 
-        case .alexa, .codexSkill, .openClaw, .sense, .tempest, .rainMachine, .ecobee, .resources, .maintenance:
+        case .alexa, .codexSkill, .openClaw, .sense, .tempest, .goveeIndoorAir, .rainMachine, .ecobee, .resources, .maintenance:
             settingsOpenFullAreaSection(area)
 
         case .deviceIntegrations:
@@ -628,6 +632,7 @@ struct SettingsView: View {
                 .openClaw,
                 .sense,
                 .tempest,
+                .goveeIndoorAir,
                 .rainMachine,
                 .deviceIntegrations,
                 .ecobee
@@ -850,6 +855,7 @@ struct SettingsView: View {
                         .openClaw,
                         .sense,
                         .tempest,
+                        .goveeIndoorAir,
                         .rainMachine,
                         .deviceIntegrations,
                         .ecobee
@@ -895,6 +901,9 @@ struct SettingsView: View {
             SenseEnergyView()
 
         case .tempest:
+            WeatherView()
+
+        case .goveeIndoorAir:
             WeatherView()
 
         case .rainMachine:

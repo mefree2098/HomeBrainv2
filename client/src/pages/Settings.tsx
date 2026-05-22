@@ -162,6 +162,7 @@ import { useNavigate, useSearchParams } from "react-router-dom"
 import { SettingsResourceUtilizationTab } from "@/components/system/SystemResourceUtilization"
 import { SenseIntegrationCard } from "@/components/sense/SenseIntegrationCard"
 import { TempestIntegrationCard } from "@/components/weather/TempestIntegrationCard"
+import { GoveeIndoorAirIntegrationCard } from "@/components/weather/GoveeIndoorAirIntegrationCard"
 import { RainMachineIntegrationCard } from "@/components/rainmachine/RainMachineIntegrationCard"
 import { HardwareOrbsTab } from "@/components/settings/HardwareOrbsTab"
 import { DeviceCommandCoordinatorTab } from "@/components/settings/DeviceCommandCoordinatorTab"
@@ -223,6 +224,7 @@ const SETTINGS_INTEGRATION_TABS = new Set([
   "openclaw",
   "sense",
   "tempest",
+  "govee",
   "rainmachine",
   "devices",
   "ecobee",
@@ -4727,6 +4729,7 @@ export function Settings() {
                 <TabsTrigger value="openclaw">OpenClaw</TabsTrigger>
                 <TabsTrigger value="sense">Sense Energy</TabsTrigger>
                 <TabsTrigger value="tempest">Tempest</TabsTrigger>
+                <TabsTrigger value="govee">Govee Indoor Air</TabsTrigger>
                 <TabsTrigger value="rainmachine">RainMachine</TabsTrigger>
                 <TabsTrigger value="devices">Device Integrations</TabsTrigger>
                 <TabsTrigger value="ecobee">Ecobee</TabsTrigger>
@@ -5466,6 +5469,10 @@ export function Settings() {
 
               <TabsContent value="tempest" className="space-y-6">
                 <TempestIntegrationCard />
+              </TabsContent>
+
+              <TabsContent value="govee" className="space-y-6">
+                <GoveeIndoorAirIntegrationCard />
               </TabsContent>
 
               <TabsContent value="rainmachine" className="space-y-6">

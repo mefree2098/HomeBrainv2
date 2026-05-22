@@ -168,6 +168,43 @@ private struct DashboardTempestModuleTelemetrySummary {
     }
 }
 
+private struct DashboardIndoorAirSnapshot: Equatable {
+    let deviceName: String
+    let room: String
+    let observedAt: String?
+    let temperatureF: Double?
+    let humidityPct: Double?
+    let pm25UgM3: Double?
+    let usAqi: Double?
+    let co2Ppm: Double?
+    let tvocPpb: Double?
+    let qualityLabel: String
+    let qualityAdvice: String
+    let isOnline: Bool?
+
+    nonisolated static func from(_ payload: Any?) -> DashboardIndoorAirSnapshot? {
+        let object = JSON.object(payload)
+        guard !object.isEmpty else {
+            return nil
+        }
+
+        return DashboardIndoorAirSnapshot(
+            deviceName: JSON.string(object, "deviceName", fallback: "Govee Indoor Air"),
+            room: JSON.string(object, "room", fallback: "Inside"),
+            observedAt: JSON.optionalString(object, "observedAt"),
+            temperatureF: dashboardOptionalDouble(object["temperatureF"]),
+            humidityPct: dashboardOptionalDouble(object["humidityPct"]),
+            pm25UgM3: dashboardOptionalDouble(object["pm25UgM3"]),
+            usAqi: dashboardOptionalDouble(object["usAqi"]),
+            co2Ppm: dashboardOptionalDouble(object["co2Ppm"]),
+            tvocPpb: dashboardOptionalDouble(object["tvocPpb"]),
+            qualityLabel: JSON.string(object, "qualityLabel", fallback: "Unknown"),
+            qualityAdvice: JSON.string(object, "qualityAdvice", fallback: "Indoor readings are retained for Weather and Data Platform history."),
+            isOnline: object["isOnline"] is NSNull ? nil : (object["isOnline"] as? Bool)
+        )
+    }
+}
+
 private struct DashboardWeatherSnapshot {
     let fetchedAt: String
     let locationName: String
@@ -189,6 +226,7 @@ private struct DashboardWeatherSnapshot {
     let sunset: String?
     let tempest: DashboardTempestStationSnapshot?
     let moduleTelemetry: DashboardTempestModuleTelemetrySummary?
+    let indoorAir: DashboardIndoorAirSnapshot?
 
     nonisolated static func from(_ payload: Any?) -> DashboardWeatherSnapshot? {
         let root = JSON.object(payload)
@@ -196,6 +234,7 @@ private struct DashboardWeatherSnapshot {
         let current = JSON.object(root["current"])
         let today = JSON.object(root["today"])
         let tempest = JSON.object(root["tempest"])
+        let indoorAir = JSON.object(root["indoorAir"])
         let source = DashboardWeatherLocationMode(rawValue: JSON.string(location, "source")) ?? .saved
 
         guard !location.isEmpty, !current.isEmpty, !today.isEmpty else {
@@ -222,7 +261,8 @@ private struct DashboardWeatherSnapshot {
             sunrise: JSON.optionalString(today, "sunrise"),
             sunset: JSON.optionalString(today, "sunset"),
             tempest: JSON.bool(tempest, "available") ? DashboardTempestStationSnapshot.from(tempest["station"]) : nil,
-            moduleTelemetry: DashboardTempestModuleTelemetrySummary.from(tempest["moduleTelemetry"])
+            moduleTelemetry: DashboardTempestModuleTelemetrySummary.from(tempest["moduleTelemetry"]),
+            indoorAir: JSON.bool(indoorAir, "available") ? DashboardIndoorAirSnapshot.from(indoorAir["monitor"]) : nil
         )
     }
 
@@ -249,7 +289,21 @@ private struct DashboardWeatherSnapshot {
             sunrise: "2026-03-23T07:01:00-06:00",
             sunset: "2026-03-23T19:14:00-06:00",
             tempest: nil,
-            moduleTelemetry: nil
+            moduleTelemetry: nil,
+            indoorAir: DashboardIndoorAirSnapshot(
+                deviceName: "Govee Indoor Air",
+                room: "Inside",
+                observedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-2 * 60)),
+                temperatureF: 71,
+                humidityPct: 44,
+                pm25UgM3: 7,
+                usAqi: 39,
+                co2Ppm: nil,
+                tvocPpb: nil,
+                qualityLabel: "Good",
+                qualityAdvice: "Indoor particulate levels look comfortable.",
+                isOnline: true
+            )
         )
     }
 
@@ -327,6 +381,7 @@ private struct DashboardWeatherSnapshot {
         weatherMostRecentTimestamp(
             tempest?.observedAt,
             tempest?.lastEventAt,
+            indoorAir?.observedAt,
             fetchedAt.isEmpty ? nil : fetchedAt
         )
     }
@@ -623,6 +678,7 @@ struct DashboardView: View {
         case pressure(widgetID: String, value: Double?, trend: String)
         case station(widgetID: String, name: String, room: String, websocketConnected: Bool)
         case today(widgetID: String, high: Double?, low: Double?, condition: String)
+        case indoorAir(widgetID: String, snapshot: DashboardIndoorAirSnapshot)
         case humidity(widgetID: String, value: Double?)
         case dewPoint(widgetID: String, value: Double?)
         case lightning(widgetID: String, count: Double?, averageDistanceMiles: Double?)
@@ -645,6 +701,8 @@ struct DashboardView: View {
                 return "station-\(widgetID)"
             case let .today(widgetID, _, _, _):
                 return "today-\(widgetID)"
+            case let .indoorAir(widgetID, _):
+                return "indoor-air-\(widgetID)"
             case let .humidity(widgetID, _):
                 return "humidity-\(widgetID)"
             case let .dewPoint(widgetID, _):
@@ -3537,13 +3595,26 @@ struct DashboardView: View {
                             )
                         }
 
-                        weatherInfoPopoverTrigger(topic: .humidity(widgetID: widget.id, value: snapshot.displayHumidityPct)) {
-                            weatherCompactMetricTile(
-                                title: "Humidity",
-                                value: formattedPercent(snapshot.displayHumidityPct),
-                                detail: formattedHumidityMeaning(snapshot.displayHumidityPct),
-                                accent: HBPalette.accentGreen
-                            )
+                        if let indoorAir = snapshot.indoorAir {
+                            weatherInfoPopoverTrigger(topic: .indoorAir(widgetID: widget.id, snapshot: indoorAir)) {
+                                weatherCompactMetricTile(
+                                    title: "Inside",
+                                    value: formattedTemperature(indoorAir.temperatureF),
+                                    detail: "\(formattedPercent(indoorAir.humidityPct)) • \(indoorAir.qualityLabel)",
+                                    accent: HBPalette.accentGreen,
+                                    iconSystemName: "house.fill",
+                                    iconColor: HBPalette.accentGreen
+                                )
+                            }
+                        } else {
+                            weatherInfoPopoverTrigger(topic: .humidity(widgetID: widget.id, value: snapshot.displayHumidityPct)) {
+                                weatherCompactMetricTile(
+                                    title: "Humidity",
+                                    value: formattedPercent(snapshot.displayHumidityPct),
+                                    detail: formattedHumidityMeaning(snapshot.displayHumidityPct),
+                                    accent: HBPalette.accentGreen
+                                )
+                            }
                         }
 
                         weatherInfoPopoverTrigger(
@@ -3691,13 +3762,24 @@ struct DashboardView: View {
                                 accent: HBPalette.accentBlue
                             )
                         }
-                        weatherInfoPopoverTrigger(topic: .humidity(widgetID: widget.id, value: snapshot.displayHumidityPct)) {
-                            weatherMetricTile(
-                                title: "Humidity",
-                                value: formattedPercent(snapshot.displayHumidityPct),
-                                detail: "Indoor comfort check",
-                                accent: HBPalette.accentGreen
-                            )
+                        if let indoorAir = snapshot.indoorAir {
+                            weatherInfoPopoverTrigger(topic: .indoorAir(widgetID: widget.id, snapshot: indoorAir)) {
+                                weatherMetricTile(
+                                    title: "Inside",
+                                    value: formattedTemperature(indoorAir.temperatureF),
+                                    detail: "\(formattedPercent(indoorAir.humidityPct)) • \(indoorAir.qualityLabel)",
+                                    accent: HBPalette.accentGreen
+                                )
+                            }
+                        } else {
+                            weatherInfoPopoverTrigger(topic: .humidity(widgetID: widget.id, value: snapshot.displayHumidityPct)) {
+                                weatherMetricTile(
+                                    title: "Humidity",
+                                    value: formattedPercent(snapshot.displayHumidityPct),
+                                    detail: "Indoor comfort check",
+                                    accent: HBPalette.accentGreen
+                                )
+                            }
                         }
                         weatherInfoPopoverTrigger(
                             topic: .sunCycle(
@@ -4120,7 +4202,12 @@ struct DashboardView: View {
     private func compactWeatherSummary(snapshot: DashboardWeatherSnapshot) -> String {
         var segments: [String] = []
 
-        if let dewPoint = snapshot.tempest?.dewPointF {
+        if let indoorAir = snapshot.indoorAir {
+            segments.append("Inside \(indoorAir.qualityLabel.lowercased())")
+            if indoorAir.humidityPct != nil {
+                segments.append(formattedHumidityMeaning(indoorAir.humidityPct))
+            }
+        } else if let dewPoint = snapshot.tempest?.dewPointF {
             segments.append(formattedDewPointMeaning(dewPoint))
         } else if snapshot.displayHumidityPct != nil {
             segments.append(formattedHumidityMeaning(snapshot.displayHumidityPct))
@@ -4302,6 +4389,8 @@ struct DashboardView: View {
             return "weather-info-top-station-\(widgetID)"
         case let .today(widgetID, _, _, _):
             return "weather-info-top-today-\(widgetID)"
+        case let .indoorAir(widgetID, _):
+            return "weather-info-top-indoor-air-\(widgetID)"
         case let .humidity(widgetID, _):
             return "weather-info-top-humidity-\(widgetID)"
         case let .dewPoint(widgetID, _):
@@ -4360,6 +4449,8 @@ struct DashboardView: View {
             return "Station Signal"
         case .today:
             return "Today"
+        case .indoorAir:
+            return "Indoor Air"
         case .humidity:
             return "Humidity Telemetry"
         case .dewPoint:
@@ -4631,6 +4722,21 @@ struct DashboardView: View {
                 weatherInfoValueRow(label: "Low", value: formattedTemperature(low), color: HBPalette.accentPurple)
                 weatherInfoValueRow(label: "Condition", value: condition, color: HBPalette.textPrimary)
                 Text("This card shows today's forecast high and low from the weather service, along with the expected overall condition.")
+                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+            case let .indoorAir(_, snapshot):
+                weatherInfoSectionTitle(
+                    title: "Indoor Air",
+                    summary: "\(formattedTemperature(snapshot.temperatureF)) • \(formattedPercent(snapshot.humidityPct)) • \(snapshot.qualityLabel)"
+                )
+                weatherInfoValueRow(label: "Temperature", value: formattedTemperature(snapshot.temperatureF), color: HBPalette.accentBlue)
+                weatherInfoValueRow(label: "Humidity", value: formattedPercent(snapshot.humidityPct), color: HBPalette.accentGreen)
+                weatherInfoValueRow(label: "PM2.5", value: formattedPM25(snapshot.pm25UgM3), color: HBPalette.accentPurple)
+                weatherInfoValueRow(label: "Indoor AQI", value: formattedAQI(snapshot.usAqi), color: aqiRiskColor(snapshot.usAqi))
+                if snapshot.co2Ppm != nil {
+                    weatherInfoValueRow(label: "CO2", value: formattedPartsPerMillion(snapshot.co2Ppm), color: HBPalette.textPrimary)
+                }
+                Text(snapshot.qualityAdvice)
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(HBPalette.textSecondary)
             case let .humidity(widgetID, value):
@@ -4940,6 +5046,16 @@ struct DashboardView: View {
         default:
             return "Humid air"
         }
+    }
+
+    private func formattedPM25(_ value: Double?) -> String {
+        guard let value else { return "--" }
+        return String(format: "%.1f ug/m³", value)
+    }
+
+    private func formattedPartsPerMillion(_ value: Double?) -> String {
+        guard let value else { return "--" }
+        return String(format: "%.0f ppm", value)
     }
 
     private func formattedDewPointMeaning(_ value: Double?) -> String {
