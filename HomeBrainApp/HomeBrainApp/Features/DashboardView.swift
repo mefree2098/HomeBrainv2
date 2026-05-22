@@ -7338,7 +7338,12 @@ struct DashboardView: View {
             }
         }
 
+        let directRadioFeatures = Set((dashboardStringArray(from: device.properties["directRadioFeatures"]) ?? []).map { $0.lowercased() })
+        let matterFeatures = Set((dashboardStringArray(from: device.properties["matterFeatures"]) ?? []).map { $0.lowercased() })
+
         return boolValue(device.properties["supportsBrightness"])
+            || directRadioFeatures.contains("brightness")
+            || matterFeatures.contains("brightness")
     }
 
     private func supportsLightColor(_ device: DeviceItem) -> Bool {

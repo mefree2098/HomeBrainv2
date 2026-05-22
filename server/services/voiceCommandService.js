@@ -221,7 +221,9 @@ class VoiceCommandService {
       )
       : normalizedSource === 'insteon'
         ? this.looksLikeInsteonFader(properties, deviceName)
-        : Boolean(properties?.supportsBrightness);
+        : Boolean(properties?.supportsBrightness)
+          || (Array.isArray(properties?.directRadioFeatures) && properties.directRadioFeatures.includes('brightness'))
+          || (Array.isArray(properties?.matterFeatures) && properties.matterFeatures.includes('brightness'));
     const supportsColor = isSmartThings
       ? smartThingsCapabilities.has('colorControl')
       : Boolean(properties?.supportsColor);
@@ -257,6 +259,12 @@ class VoiceCommandService {
       default:
         return ['turn_on', 'turn_off'];
     }
+  }
+
+  deviceSupportsBrightness(device = {}) {
+    const source = device?.properties?.source || device?.source || 'local';
+    return this.getDeviceCapabilities(device?.type, source, device?.properties || {}, device?.name || '')
+      .includes('set_brightness');
   }
 
   async getContext() {
@@ -1070,7 +1078,7 @@ RULES
       }
       return undefined;
     }
-    if (name === 'turn_on' && action.value != null && device?.type === 'light') {
+    if (name === 'turn_on' && action.value != null && this.deviceSupportsBrightness(device)) {
       const numeric = Number(action.value);
       if (Number.isFinite(numeric)) {
         return Math.max(0, Math.min(100, Math.round(numeric)));

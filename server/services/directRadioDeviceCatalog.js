@@ -10,6 +10,7 @@ const SOURCE_PROTOCOLS = Object.freeze({
 
 const FEATURE_LABELS = Object.freeze({
   switch: 'On/off switching',
+  light: 'Light fixture / bulb',
   brightness: 'Brightness / dimming',
   color: 'RGB color',
   colorTemperature: 'Color temperature',

@@ -650,6 +650,53 @@ function getHarmonyCommandOptions(device: DeviceLite | null | undefined) {
   return isHarmonyCommandDevice(device) ? getHarmonyCommandMetadata(device) : [];
 }
 
+function normalizeCapabilityEntry(entry: unknown) {
+  if (typeof entry === "string") {
+    return entry.trim()
+  }
+
+  if (entry && typeof entry === "object") {
+    const value = entry as Record<string, unknown>
+    for (const key of ["id", "capabilityId", "name"]) {
+      if (typeof value[key] === "string") {
+        return value[key].trim()
+      }
+    }
+  }
+
+  return ""
+}
+
+function propertyListIncludes(properties: Record<string, unknown> | undefined, keys: string[], target: string) {
+  const normalizedTarget = target.trim().toLowerCase()
+  return keys.some((key) => {
+    const list = properties?.[key]
+    return Array.isArray(list)
+      && list.some((entry) => normalizeCapabilityEntry(entry).toLowerCase() === normalizedTarget)
+  })
+}
+
+function hasSmartThingsLevelState(properties: Record<string, unknown> | undefined) {
+  const values = properties?.smartThingsAttributeValues as Record<string, any> | undefined
+  const metadata = properties?.smartThingsAttributeMetadata as Record<string, any> | undefined
+  const levelValue = values?.switchLevel?.level
+  const levelMetadata = metadata?.switchLevel?.level
+
+  return levelValue !== undefined && levelValue !== null
+    || Boolean(levelMetadata && typeof levelMetadata === "object" && Object.keys(levelMetadata).length > 0)
+}
+
+function supportsBrightnessAction(device: DeviceLite | null | undefined) {
+  const properties = device?.properties
+  return Boolean(properties?.supportsBrightness)
+    || Number.isFinite(Number(device?.brightness))
+    || propertyListIncludes(properties, ["smartThingsCapabilities", "smartthingsCapabilities"], "switchLevel")
+    || propertyListIncludes(properties, ["smartThingsCapabilities", "smartthingsCapabilities"], "colorControl")
+    || propertyListIncludes(properties, ["directRadioFeatures"], "brightness")
+    || propertyListIncludes(properties, ["matterFeatures"], "brightness")
+    || hasSmartThingsLevelState(properties)
+}
+
 function getDeviceActionChoices(device: DeviceLite | null | undefined) {
   if (isWorkflowEnergyMonitorDevice(device)) {
     return []
@@ -691,7 +738,9 @@ function getDeviceActionChoices(device: DeviceLite | null | undefined) {
     case "garage":
       return ["open", "close"];
     case "switch":
-      return ["turn_on", "turn_off", "toggle"];
+      return supportsBrightnessAction(device)
+        ? ["turn_on", "turn_off", "toggle", "set_brightness"]
+        : ["turn_on", "turn_off", "toggle"];
     case "speaker":
       return ["turn_on", "turn_off", "toggle"];
     default:

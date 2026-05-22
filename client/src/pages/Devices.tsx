@@ -156,6 +156,29 @@ const getLightColor = (device: any): string => {
   return normalizeHexColor(device?.color)
 }
 
+const getDeviceTypeLabel = (type: string): string => {
+  switch ((type || '').toLowerCase()) {
+    case 'light':
+      return 'Light'
+    case 'switch':
+      return 'Switch'
+    case 'thermostat':
+      return 'Thermostat'
+    case 'lock':
+      return 'Lock'
+    case 'garage':
+      return 'Garage'
+    case 'sensor':
+      return 'Sensor'
+    case 'camera':
+      return 'Camera'
+    case 'speaker':
+      return 'Speaker'
+    default:
+      return type || 'Device'
+  }
+}
+
 const normalizeSmartThingsValue = (value: unknown): string => {
   if (!value) {
     return ''
@@ -284,6 +307,8 @@ const supportsLightFade = (device: any): boolean => {
   }
 
   return Boolean(device?.properties?.supportsBrightness)
+    || (Array.isArray(device?.properties?.directRadioFeatures)
+      && device.properties.directRadioFeatures.includes('brightness'))
     || (Array.isArray(device?.properties?.matterFeatures)
       && device.properties.matterFeatures.includes('brightness'))
 }
@@ -820,7 +845,11 @@ export function Devices({
   }
 
   const getDeviceIcon = (device: any) => {
-    if (supportsLightFade(device)) {
+    if (device.type === 'switch') {
+      return <Power className="h-5 w-5" />
+    }
+
+    if (device.type === 'light' || supportsLightFade(device)) {
       return <Lightbulb className="h-5 w-5" />
     }
 
@@ -1089,9 +1118,7 @@ export function Devices({
     const matchesSearch = deviceName.includes(lowerSearch) || deviceRoom.includes(lowerSearch)
     const matchesType =
       filterType === "all" ||
-      (filterType === "light"
-        ? supportsLightFade(device)
-        : device.type === filterType)
+      device.type === filterType
     const matchesSource = deviceMatchesSourceFilter(device, filterSource)
 
     return !isHarmonyExcludedFromHomeBrain(device) && matchesSearch && matchesType && matchesSource
@@ -1310,6 +1337,9 @@ export function Devices({
                 : (device.status ? "On" : "Off")}
             </Badge>
             <Badge variant="outline">
+              {getDeviceTypeLabel(device.type)}
+            </Badge>
+            <Badge variant="outline">
               {getDeviceSourceLabel(getDeviceSource(device))}
             </Badge>
             {renderAlexaStatusBadge(device)}
@@ -1471,6 +1501,7 @@ export function Devices({
               <SelectContent>
                 <SelectItem value="all">All Types</SelectItem>
                 <SelectItem value="light">Lights</SelectItem>
+                <SelectItem value="switch">Switches</SelectItem>
                 <SelectItem value="lock">Locks</SelectItem>
                 <SelectItem value="thermostat">Thermostats</SelectItem>
                 <SelectItem value="garage">Garage</SelectItem>
@@ -1532,7 +1563,7 @@ export function Devices({
                           <div className="min-w-0">
                             <h3 className="break-words font-medium">{device.name}</h3>
                             <p className="text-sm text-muted-foreground">
-                              {device.room} • {device.type} • {getDeviceSourceLabel(getDeviceSource(device))}
+                              {device.room} • {getDeviceTypeLabel(device.type)} • {getDeviceSourceLabel(getDeviceSource(device))}
                             </p>
                           </div>
                         </div>

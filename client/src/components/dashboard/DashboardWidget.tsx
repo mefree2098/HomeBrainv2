@@ -98,10 +98,57 @@ const getPreferredOnMode = (device: Device): string => {
   return fallback || "auto"
 }
 
+const normalizeCapabilityEntry = (entry: unknown): string => {
+  if (typeof entry === "string") {
+    return entry.trim()
+  }
+
+  if (entry && typeof entry === "object") {
+    const value = entry as Record<string, unknown>
+    for (const key of ["id", "capabilityId", "name"]) {
+      if (typeof value[key] === "string") {
+        return value[key].trim()
+      }
+    }
+  }
+
+  return ""
+}
+
+const propertyListIncludes = (properties: Record<string, any> | undefined, keys: string[], target: string): boolean => {
+  const normalizedTarget = target.trim().toLowerCase()
+  return keys.some((key) => (
+    Array.isArray(properties?.[key]) &&
+    properties[key].some((entry: unknown) => normalizeCapabilityEntry(entry).toLowerCase() === normalizedTarget)
+  ))
+}
+
+const hasSmartThingsLevelState = (properties: Record<string, any> | undefined): boolean => {
+  const levelValue = properties?.smartThingsAttributeValues?.switchLevel?.level
+  const levelMetadata = properties?.smartThingsAttributeMetadata?.switchLevel?.level
+
+  return levelValue !== undefined && levelValue !== null
+    || Boolean(levelMetadata && typeof levelMetadata === "object" && Object.keys(levelMetadata).length > 0)
+}
+
+const supportsBrightnessControl = (device: Device): boolean => {
+  const properties = device?.properties
+  return device.type === "light"
+    || Boolean(properties?.supportsBrightness)
+    || Number.isFinite(Number(device?.brightness))
+    || propertyListIncludes(properties, ["smartThingsCapabilities", "smartthingsCapabilities"], "switchLevel")
+    || propertyListIncludes(properties, ["smartThingsCapabilities", "smartthingsCapabilities"], "colorControl")
+    || propertyListIncludes(properties, ["directRadioFeatures"], "brightness")
+    || propertyListIncludes(properties, ["matterFeatures"], "brightness")
+    || hasSmartThingsLevelState(properties)
+}
+
 const getDeviceIcon = (type: string) => {
   switch (type) {
     case "light":
       return <Lightbulb className="h-5 w-5" />
+    case "switch":
+      return <Power className="h-5 w-5" />
     case "lock":
       return <Lock className="h-5 w-5" />
     case "thermostat":
@@ -158,7 +205,7 @@ export function DashboardWidget({
   const showFavoriteKicker = !compact
   const showRoom = !compact || Boolean(device.room)
   const showVoiceHint = !compact
-  const showBrightnessSlider = device.type === "light" && device.status && !compact
+  const showBrightnessSlider = supportsBrightnessControl(device) && device.status && !compact
   const showDetailedThermostatControls = thermostat && !compact
 
   const handleToggle = () => {

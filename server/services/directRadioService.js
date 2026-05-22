@@ -15,6 +15,10 @@ const {
   isDirectRadioDevice,
   normalizeFeature
 } = require('./directRadioDeviceCatalog');
+const {
+  inferDirectDeviceType,
+  isDirectLightContext
+} = require('./deviceTypeClassification');
 
 const DATA_DIR = process.env.HOMEBRAIN_DIRECT_RADIO_DATA_DIR
   || path.join(__dirname, '..', 'data', 'direct-radios');
@@ -479,7 +483,8 @@ function inferFeaturesFromZigbeeDefinition(definition, zigbeeDevice) {
   };
 
   exposes.forEach(visitExpose);
-  if (/\b(?:bulb|light|lamp|led)\b/.test(deviceText)) {
+  if (isDirectLightContext(deviceText)) {
+    features.add('light');
     features.add('switch');
   }
 
@@ -1070,7 +1075,13 @@ class DirectRadioService {
       },
       update: {
         name,
-        type: this.inferDeviceTypeFromFeatures(features),
+        type: this.inferDeviceTypeFromFeatures(features, {
+          name,
+          model: definition?.model || zigbeeDevice.modelID,
+          vendor: definition?.vendor,
+          description: definition?.description,
+          manufacturerName: zigbeeDevice.manufacturerName
+        }),
         room: 'Unassigned',
         status: false,
         isOnline: status,
@@ -1158,7 +1169,12 @@ class DirectRadioService {
       },
       update: {
         name: nodeName,
-        type: this.inferDeviceTypeFromFeatures(directFeatures),
+        type: this.inferDeviceTypeFromFeatures(directFeatures, {
+          name: nodeName,
+          productLabel: node.productLabel,
+          manufacturer: node.deviceConfig?.manufacturer,
+          deviceConfig: node.deviceConfig
+        }),
         room: trimString(node.location) || 'Unassigned',
         status: hasLock ? locked : hasSwitch ? Boolean(binaryValue || (brightness && brightness > 0)) : false,
         brightness: brightness ?? undefined,
@@ -1189,15 +1205,8 @@ class DirectRadioService {
     };
   }
 
-  inferDeviceTypeFromFeatures(features = []) {
-    const featureSet = new Set(features.map(normalizeFeature));
-    if (featureSet.has('lock')) return 'lock';
-    if (featureSet.has('thermostat')) return 'thermostat';
-    if (featureSet.has('color') || featureSet.has('colorTemperature') || featureSet.has('brightness')) return 'light';
-    if (featureSet.has('contact') || featureSet.has('motion') || featureSet.has('water') || featureSet.has('smoke') || featureSet.has('battery')) return 'sensor';
-    if (featureSet.has('switch') || featureSet.has('power') || featureSet.has('energy')) return 'switch';
-    if (featureSet.has('alarm')) return 'switch';
-    return 'sensor';
+  inferDeviceTypeFromFeatures(features = [], context = {}) {
+    return inferDirectDeviceType(features.map(normalizeFeature), context);
   }
 
   async handleZigbeeDeviceChanged(zigbeeDevice, reason) {
