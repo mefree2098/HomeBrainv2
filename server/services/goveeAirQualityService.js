@@ -22,6 +22,7 @@ const GOVEE_LAN_CONTROL_PORT = 4003;
 const GOVEE_SOURCE_TYPE = 'govee_air_quality';
 const GOVEE_STREAM_TYPE = 'govee_air_quality_sample';
 const GOVEE_LAN_MULTICAST_TARGET = `${GOVEE_LAN_MULTICAST_ADDRESS}:${GOVEE_LAN_SCAN_PORT}`;
+const GOVEE_LAN_MAX_SUBNET_SWEEP_HOSTS = 512;
 
 const trimString = (value, fallback = '') => {
   if (typeof value !== 'string') {
@@ -124,6 +125,10 @@ const normalizeLanTimeoutMs = (value) => {
   return 10_000;
 };
 
+const normalizeLanCommand = (value) => (
+  trimString(value, '').toLowerCase() === 'devstatus' ? 'devStatus' : 'scan'
+);
+
 const normalizeLanTarget = (target, fallbackPort = GOVEE_LAN_SCAN_PORT) => {
   if (target && typeof target === 'object') {
     const host = trimString(target.host || target.ip || target.address || target.target, '');
@@ -133,7 +138,8 @@ const normalizeLanTarget = (target, fallbackPort = GOVEE_LAN_SCAN_PORT) => {
 
     return {
       host,
-      port: clampUdpPort(target.port || fallbackPort, fallbackPort)
+      port: clampUdpPort(target.port || fallbackPort, fallbackPort),
+      command: normalizeLanCommand(target.command || target.cmd)
     };
   }
 
@@ -163,7 +169,8 @@ const normalizeLanTarget = (target, fallbackPort = GOVEE_LAN_SCAN_PORT) => {
 
   return {
     host,
-    port: clampUdpPort(hostPort.port || fallbackPort, fallbackPort)
+    port: clampUdpPort(hostPort.port || fallbackPort, fallbackPort),
+    command: 'scan'
   };
 };
 
@@ -222,7 +229,8 @@ const getInterfaceBroadcastTargets = () => {
     if (broadcastAddress && broadcastAddress !== entry.address) {
       targets.push({
         host: broadcastAddress,
-        port: GOVEE_LAN_SCAN_PORT
+        port: GOVEE_LAN_SCAN_PORT,
+        command: 'scan'
       });
     }
   });
@@ -230,30 +238,74 @@ const getInterfaceBroadcastTargets = () => {
   return targets;
 };
 
-const buildLanDiscoveryTargets = ({ targets, localDeviceIp } = {}) => {
+const getInterfaceSubnetSweepTargets = ({ maxHosts = GOVEE_LAN_MAX_SUBNET_SWEEP_HOSTS } = {}) => {
+  const interfaces = os.networkInterfaces();
+  const targets = [];
+  const hostLimit = Math.max(0, Math.trunc(Number(maxHosts)) || GOVEE_LAN_MAX_SUBNET_SWEEP_HOSTS);
+
+  Object.values(interfaces).flat().forEach((entry) => {
+    if (!entry || entry.family !== 'IPv4' || entry.internal) {
+      return;
+    }
+
+    const address = ipv4ToInteger(entry.address);
+    const netmask = ipv4ToInteger(entry.netmask);
+    if (address === null || netmask === null) {
+      return;
+    }
+
+    const network = (address & netmask) >>> 0;
+    const broadcast = (address | (~netmask >>> 0)) >>> 0;
+    const hostCount = Math.max(0, broadcast - network - 1);
+    if (hostCount <= 0 || hostCount > hostLimit) {
+      return;
+    }
+
+    for (let cursor = network + 1; cursor < broadcast; cursor += 1) {
+      if (cursor === address) {
+        continue;
+      }
+      targets.push({
+        host: integerToIpv4(cursor),
+        port: GOVEE_LAN_CONTROL_PORT,
+        command: 'devStatus'
+      });
+    }
+  });
+
+  return targets;
+};
+
+const buildLanDiscoveryTargets = ({ targets, localDeviceIp, includeSubnetSweep = true } = {}) => {
   const byKey = new Map();
-  const add = (target) => {
+  const add = (target, commandOverride = null) => {
     const normalized = typeof target === 'string' ? normalizeLanTarget(target) : target;
     if (!normalized?.host) {
       return;
     }
-    const key = `${normalized.host}:${normalized.port || GOVEE_LAN_SCAN_PORT}`;
+    const command = normalizeLanCommand(commandOverride || normalized.command);
+    const key = `${normalized.host}:${normalized.port || GOVEE_LAN_SCAN_PORT}:${command}`;
     byKey.set(key, {
       host: normalized.host,
-      port: clampUdpPort(normalized.port || GOVEE_LAN_SCAN_PORT, GOVEE_LAN_SCAN_PORT)
+      port: clampUdpPort(normalized.port || GOVEE_LAN_SCAN_PORT, GOVEE_LAN_SCAN_PORT),
+      command
     });
   };
 
-  add(GOVEE_LAN_MULTICAST_TARGET);
-  add({ host: '255.255.255.255', port: GOVEE_LAN_SCAN_PORT });
+  add(GOVEE_LAN_MULTICAST_TARGET, 'scan');
+  add({ host: '255.255.255.255', port: GOVEE_LAN_SCAN_PORT, command: 'scan' });
   getInterfaceBroadcastTargets().forEach(add);
   normalizeLanTargetList(process.env.GOVEE_LAN_SCAN_TARGETS).forEach(add);
   normalizeLanTargetList(targets).forEach(add);
 
   const configuredIp = trimString(localDeviceIp, '');
   if (configuredIp) {
-    add({ host: configuredIp, port: GOVEE_LAN_SCAN_PORT });
-    add({ host: configuredIp, port: GOVEE_LAN_CONTROL_PORT });
+    add({ host: configuredIp, port: GOVEE_LAN_SCAN_PORT, command: 'scan' });
+    add({ host: configuredIp, port: GOVEE_LAN_CONTROL_PORT, command: 'devStatus' });
+  }
+
+  if (includeSubnetSweep && process.env.GOVEE_LAN_DISABLE_SUBNET_SWEEP !== 'true') {
+    getInterfaceSubnetSweepTargets().forEach(add);
   }
 
   return Array.from(byKey.values());
@@ -527,6 +579,77 @@ function buildSyntheticCapability(instance, value, unit) {
   }
 
   return capability;
+}
+
+function normalizeLocalStatusDiscoveryResponse(payload, remote = {}) {
+  const command = normalizeLanCommand(payload?.msg?.cmd || payload?.cmd);
+  const data = payload?.msg?.data || payload?.data || {};
+  const ip = trimString(remote.address || data.ip, '');
+  if (command !== 'devStatus' || !ip || !data || typeof data !== 'object') {
+    return null;
+  }
+
+  const stateKeys = [
+    'online',
+    'isOnline',
+    'onOff',
+    'powerState',
+    'brightness',
+    'colorTemInKelvin',
+    'sensorTemperature',
+    'temperature',
+    'temp',
+    'tempF',
+    'temperatureF',
+    'tempC',
+    'temperatureC',
+    'sensorHumidity',
+    'humidity',
+    'humidityPct',
+    'pm25',
+    'pm2_5',
+    'pm2.5',
+    'pm25UgM3',
+    'particulateMatter25',
+    'airQualityIndex',
+    'usAqi',
+    'aqi'
+  ];
+  const hasState = stateKeys.some((key) => Object.prototype.hasOwnProperty.call(data, key));
+  if (!hasState) {
+    return null;
+  }
+
+  const temperature = getFirstPresentValue(data, ['sensorTemperature', 'temperature', 'temp', 'tempF', 'temperatureF', 'tempC', 'temperatureC']);
+  const humidity = getFirstPresentValue(data, ['sensorHumidity', 'humidity', 'humidityPct']);
+  const pm25 = getFirstPresentValue(data, ['pm25', 'pm2_5', 'pm2.5', 'pm25UgM3', 'particulateMatter25']);
+  const aqi = getFirstPresentValue(data, ['airQualityIndex', 'usAqi', 'aqi']);
+  const capabilities = [
+    buildSyntheticCapability('sensorTemperature', temperature),
+    buildSyntheticCapability('sensorHumidity', humidity, 'percent'),
+    buildSyntheticCapability('pm25', pm25, 'ug/m3'),
+    buildSyntheticCapability('airQualityIndex', aqi)
+  ].filter(Boolean);
+  const sku = trimString(data.sku || data.model || data.productName, 'LAN').toUpperCase();
+  const device = trimString(data.device || data.deviceId || data.mac, ip);
+
+  return {
+    sku,
+    device,
+    deviceName: trimString(data.deviceName || data.name || data.productName, `Govee LAN ${ip}`),
+    type: trimString(data.type || data.deviceType || 'govee_lan', 'govee_lan'),
+    isAirQualityDevice: isAirQualityDevice({ sku, device, type: data.type, capabilities }),
+    ip,
+    port: GOVEE_LAN_CONTROL_PORT,
+    lanApiSupported: true,
+    capabilities,
+    firmware: {
+      bleHardware: trimString(data.bleVersionHard, ''),
+      bleSoftware: trimString(data.bleVersionSoft, ''),
+      wifiHardware: trimString(data.wifiVersionHard, ''),
+      wifiSoftware: trimString(data.wifiVersionSoft, '')
+    }
+  };
 }
 
 function normalizeLocalStateResponse(localResponse = {}, selectedDevice = {}, integration = {}) {
@@ -850,7 +973,8 @@ class GoveeAirQualityService {
 
       socket.on('message', (message, remote) => {
         const payload = parseLanMessagePayload(message);
-        const device = normalizeLocalScanResponse(payload, remote);
+        const device = normalizeLocalScanResponse(payload, remote)
+          || normalizeLocalStatusDiscoveryResponse(payload, remote);
         if (!device) {
           return;
         }
@@ -867,7 +991,7 @@ class GoveeAirQualityService {
           // Some host network stacks do not allow multicast tuning; discovery can still try.
         }
 
-        const payload = Buffer.from(JSON.stringify({
+        const scanPayload = Buffer.from(JSON.stringify({
           msg: {
             cmd: 'scan',
             data: {
@@ -875,8 +999,15 @@ class GoveeAirQualityService {
             }
           }
         }));
+        const statusPayload = Buffer.from(JSON.stringify({
+          msg: {
+            cmd: 'devStatus',
+            data: {}
+          }
+        }));
 
         scanTargets.forEach((target) => {
+          const payload = target.command === 'devStatus' ? statusPayload : scanPayload;
           socket.send(payload, target.port, target.host, (error) => {
             if (error && target.host === GOVEE_LAN_MULTICAST_ADDRESS) {
               fail(error);
@@ -1616,6 +1747,7 @@ service.__testHooks = {
   normalizeLanTimeoutMs,
   normalizeDeviceList,
   normalizeLocalScanResponse,
+  normalizeLocalStatusDiscoveryResponse,
   normalizeLocalStateResponse,
   normalizeStateResponse
 };
