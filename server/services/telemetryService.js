@@ -29,6 +29,12 @@ const TEMPEST_MODULE_WINDOWS = [
   { key: 'month', label: 'Last 30 Days', hours: 24 * 30 },
   { key: 'year', label: 'Last 12 Months', hours: 24 * 365 }
 ];
+const TEMPEST_MODULE_AGGREGATE_MAX_TIME_MS = clampInteger(
+  process.env.TEMPEST_MODULE_AGGREGATE_MAX_TIME_MS,
+  1500,
+  250,
+  10000
+);
 const DEFAULT_CHART_BUILDER_HOURS = 24 * 7;
 const CHART_BUILDER_SOURCE_LIMIT = 18;
 const SUPPORTED_CHART_TYPES = new Set(['area', 'line']);
@@ -2597,7 +2603,7 @@ class TelemetryService {
           lastObservedAt: { $last: '$observedAt' }
         }
       }
-    ]);
+    ]).option({ maxTimeMS: TEMPEST_MODULE_AGGREGATE_MAX_TIME_MS });
 
     return aggregate || null;
   }
@@ -2642,7 +2648,7 @@ class TelemetryService {
           lastRecordedAt: { $last: '$recordedAt' }
         }
       }
-    ]);
+    ]).option({ maxTimeMS: TEMPEST_MODULE_AGGREGATE_MAX_TIME_MS });
 
     return aggregate || null;
   }
@@ -2671,7 +2677,7 @@ class TelemetryService {
           lastStrikeDistanceMiles: { $last: '$payload.distanceMiles' }
         }
       }
-    ]);
+    ]).option({ maxTimeMS: TEMPEST_MODULE_AGGREGATE_MAX_TIME_MS });
 
     return aggregate || null;
   }

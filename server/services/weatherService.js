@@ -16,6 +16,7 @@ const DEFAULT_WEATHER_TEMPEST_SYNC_COOLDOWN_MS = 5 * 60 * 1000;
 const DEFAULT_WEATHER_TEMPEST_STALE_AFTER_MS = 15 * 60 * 1000;
 const DEFAULT_WEATHER_GOVEE_SYNC_COOLDOWN_MS = 60 * 1000;
 const DEFAULT_WEATHER_GOVEE_STALE_AFTER_MS = 5 * 60 * 1000;
+const DEFAULT_WEATHER_MODULE_TELEMETRY_TIMEOUT_MS = 1500;
 const WEATHER_CACHE_COORDINATE_PRECISION = 2;
 const WEATHER_RECOVERY_COORDINATE_PRECISION = 1;
 const forecastCache = new Map();
@@ -150,6 +151,39 @@ const parseBooleanFlag = (value, fallback = false) => {
 
   return fallback;
 };
+
+const weatherModuleTelemetryTimeoutMs = () => parsePositiveInteger(
+  process.env.WEATHER_MODULE_TELEMETRY_TIMEOUT_MS,
+  DEFAULT_WEATHER_MODULE_TELEMETRY_TIMEOUT_MS
+);
+
+async function withTimeout(promise, timeoutMs, fallback = null) {
+  let timeoutId;
+  const timeoutPromise = new Promise((resolve) => {
+    timeoutId = setTimeout(() => resolve(fallback), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function loadTempestModuleTelemetry(sourceId) {
+  if (!sourceId) {
+    return null;
+  }
+
+  const telemetryPromise = telemetryService.getTempestModuleTelemetry({ sourceId })
+    .catch(() => null);
+
+  return withTimeout(
+    telemetryPromise,
+    weatherModuleTelemetryTimeoutMs(),
+    null
+  );
+}
 
 const FORECAST_CACHE_TTL_MS = parsePositiveInteger(
   process.env.WEATHER_FORECAST_CACHE_TTL_MS,
@@ -920,9 +954,7 @@ async function buildDashboardWeatherPayload(location, options = {}) {
 
   let moduleTelemetry = null;
   if (includeModuleTelemetry && tempestStation?.id) {
-    moduleTelemetry = await telemetryService.getTempestModuleTelemetry({
-      sourceId: tempestStation.id
-    }).catch(() => null);
+    moduleTelemetry = await loadTempestModuleTelemetry(tempestStation.id);
   }
 
   const weatherPayload = mergeTempestCurrentConditions(
@@ -990,6 +1022,7 @@ async function fetchDashboardWeather(options = {}) {
 }
 
 async function fetchWeatherDashboard(options = {}) {
+  const includeModuleTelemetry = parseBooleanFlag(options.includeModuleTelemetry);
   const forecast = await fetchDashboardWeather({
     ...options,
     includeModuleTelemetry: false,
@@ -1014,10 +1047,8 @@ async function fetchWeatherDashboard(options = {}) {
   }));
 
   const moduleTelemetry = forecast?.tempest?.moduleTelemetry
-    ?? (tempest?.available && tempest?.station?.id
-      ? await telemetryService.getTempestModuleTelemetry({
-        sourceId: tempest.station.id
-      }).catch(() => null)
+    ?? (includeModuleTelemetry && tempest?.available && tempest?.station?.id
+      ? await loadTempestModuleTelemetry(tempest.station.id)
       : null);
 
   return {
