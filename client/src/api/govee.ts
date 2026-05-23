@@ -115,9 +115,13 @@ export const testGoveeConnection = async (apiKey?: string) => {
   }
 }
 
-export const discoverLocalGovee = async (timeoutMs = 3500) => {
+export const discoverLocalGovee = async (payload: { timeoutMs?: number; localDeviceIp?: string; targets?: string[] } = {}) => {
   try {
-    const response = await api.post("/api/govee-air-quality/local/discover", { timeoutMs })
+    const response = await api.post("/api/govee-air-quality/local/discover", {
+      timeoutMs: payload.timeoutMs ?? 3500,
+      localDeviceIp: payload.localDeviceIp,
+      targets: payload.targets
+    })
     return response.data as {
       success: boolean
       message: string

@@ -1,5 +1,6 @@
 const axios = require('axios');
 const dgram = require('dgram');
+const os = require('os');
 const { randomUUID } = require('crypto');
 const mongoose = require('mongoose');
 const Device = require('../models/Device');
@@ -20,6 +21,7 @@ const GOVEE_LAN_LISTEN_PORT = 4002;
 const GOVEE_LAN_CONTROL_PORT = 4003;
 const GOVEE_SOURCE_TYPE = 'govee_air_quality';
 const GOVEE_STREAM_TYPE = 'govee_air_quality_sample';
+const GOVEE_LAN_MULTICAST_TARGET = `${GOVEE_LAN_MULTICAST_ADDRESS}:${GOVEE_LAN_SCAN_PORT}`;
 
 const trimString = (value, fallback = '') => {
   if (typeof value !== 'string') {
@@ -120,6 +122,141 @@ const normalizeLanTimeoutMs = (value) => {
     return 7_500;
   }
   return 10_000;
+};
+
+const normalizeLanTarget = (target, fallbackPort = GOVEE_LAN_SCAN_PORT) => {
+  if (target && typeof target === 'object') {
+    const host = trimString(target.host || target.ip || target.address || target.target, '');
+    if (!host) {
+      return null;
+    }
+
+    return {
+      host,
+      port: clampUdpPort(target.port || fallbackPort, fallbackPort)
+    };
+  }
+
+  const raw = trimString(target, '');
+  if (!raw) {
+    return null;
+  }
+
+  const bracketMatch = raw.match(/^\[([^\]]+)\](?::(\d+))?$/);
+  const hostPort = bracketMatch
+    ? { host: bracketMatch[1], port: bracketMatch[2] }
+    : (() => {
+        const lastColon = raw.lastIndexOf(':');
+        if (lastColon > -1 && raw.indexOf(':') === lastColon) {
+          const possiblePort = raw.slice(lastColon + 1);
+          if (/^\d+$/.test(possiblePort)) {
+            return { host: raw.slice(0, lastColon), port: possiblePort };
+          }
+        }
+        return { host: raw, port: null };
+      })();
+
+  const host = trimString(hostPort.host, '');
+  if (!host) {
+    return null;
+  }
+
+  return {
+    host,
+    port: clampUdpPort(hostPort.port || fallbackPort, fallbackPort)
+  };
+};
+
+const normalizeLanTargetList = (value) => {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => normalizeLanTargetList(entry));
+  }
+
+  if (value && typeof value === 'object') {
+    const normalized = normalizeLanTarget(value);
+    return normalized ? [normalized] : [];
+  }
+
+  if (typeof value !== 'string') {
+    return [];
+  }
+
+  return value
+    .split(',')
+    .map((entry) => normalizeLanTarget(entry))
+    .filter(Boolean);
+};
+
+const ipv4ToInteger = (address) => {
+  const parts = trimString(address, '').split('.').map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return null;
+  }
+  return parts.reduce((acc, part) => ((acc << 8) | part) >>> 0, 0);
+};
+
+const integerToIpv4 = (value) => [
+  (value >>> 24) & 255,
+  (value >>> 16) & 255,
+  (value >>> 8) & 255,
+  value & 255
+].join('.');
+
+const getInterfaceBroadcastTargets = () => {
+  const interfaces = os.networkInterfaces();
+  const targets = [];
+
+  Object.values(interfaces).flat().forEach((entry) => {
+    if (!entry || entry.family !== 'IPv4' || entry.internal) {
+      return;
+    }
+
+    const address = ipv4ToInteger(entry.address);
+    const netmask = ipv4ToInteger(entry.netmask);
+    if (address === null || netmask === null) {
+      return;
+    }
+
+    const broadcast = (address | (~netmask >>> 0)) >>> 0;
+    const broadcastAddress = integerToIpv4(broadcast);
+    if (broadcastAddress && broadcastAddress !== entry.address) {
+      targets.push({
+        host: broadcastAddress,
+        port: GOVEE_LAN_SCAN_PORT
+      });
+    }
+  });
+
+  return targets;
+};
+
+const buildLanDiscoveryTargets = ({ targets, localDeviceIp } = {}) => {
+  const byKey = new Map();
+  const add = (target) => {
+    const normalized = typeof target === 'string' ? normalizeLanTarget(target) : target;
+    if (!normalized?.host) {
+      return;
+    }
+    const key = `${normalized.host}:${normalized.port || GOVEE_LAN_SCAN_PORT}`;
+    byKey.set(key, {
+      host: normalized.host,
+      port: clampUdpPort(normalized.port || GOVEE_LAN_SCAN_PORT, GOVEE_LAN_SCAN_PORT)
+    });
+  };
+
+  add(GOVEE_LAN_MULTICAST_TARGET);
+  add({ host: '255.255.255.255', port: GOVEE_LAN_SCAN_PORT });
+  getInterfaceBroadcastTargets().forEach(add);
+  normalizeLanTargetList(process.env.GOVEE_LAN_SCAN_TARGETS).forEach(add);
+  normalizeLanTargetList(targets).forEach(add);
+
+  const configuredIp = trimString(localDeviceIp, '');
+  if (configuredIp) {
+    add({ host: configuredIp, port: GOVEE_LAN_SCAN_PORT });
+    add({ host: configuredIp, port: GOVEE_LAN_CONTROL_PORT });
+  }
+
+  return Array.from(byKey.values());
 };
 
 const normalizeInstanceName = (value) => trimString(value, '')
@@ -677,11 +814,12 @@ class GoveeAirQualityService {
     return response.data;
   }
 
-  discoverLocalDevices({ timeoutMs = DEFAULT_LAN_DISCOVERY_TIMEOUT_MS } = {}) {
+  discoverLocalDevices({ timeoutMs = DEFAULT_LAN_DISCOVERY_TIMEOUT_MS, targets = [], localDeviceIp = '' } = {}) {
     return new Promise((resolve, reject) => {
       const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
       const devices = new Map();
       const lanTimeoutMs = normalizeLanTimeoutMs(timeoutMs);
+      const scanTargets = buildLanDiscoveryTargets({ targets, localDeviceIp });
       let settled = false;
 
       const cleanup = () => {
@@ -738,10 +876,12 @@ class GoveeAirQualityService {
           }
         }));
 
-        socket.send(payload, GOVEE_LAN_SCAN_PORT, GOVEE_LAN_MULTICAST_ADDRESS, (error) => {
-          if (error) {
-            fail(error);
-          }
+        scanTargets.forEach((target) => {
+          socket.send(payload, target.port, target.host, (error) => {
+            if (error && target.host === GOVEE_LAN_MULTICAST_ADDRESS) {
+              fail(error);
+            }
+          });
         });
       });
 
@@ -1471,6 +1611,8 @@ service.__testHooks = {
   describeAirQuality,
   isAirQualityDevice,
   normalizeConnectionMode,
+  normalizeLanTarget,
+  buildLanDiscoveryTargets,
   normalizeLanTimeoutMs,
   normalizeDeviceList,
   normalizeLocalScanResponse,

@@ -224,7 +224,10 @@ export function GoveeIndoorAirIntegrationCard() {
   const handleDiscoverLocal = async () => {
     setDiscoveringLocal(true)
     try {
-      const response = await discoverLocalGovee()
+      const localDeviceIp = form.localDeviceIp?.trim()
+      const response = await discoverLocalGovee({
+        localDeviceIp: localDeviceIp || undefined
+      })
       setDevices((current) => {
         return mergeDevices(current, response.devices)
       })
@@ -571,7 +574,7 @@ export function GoveeIndoorAirIntegrationCard() {
                   ? "Last sample came directly from the local network."
                   : status?.health?.lastLocalError
                     ? status.health.lastLocalError
-                    : "Auto mode tries local LAN first, then uses cloud fallback when configured."}
+                    : "Auto mode tries LAN first, including direct IP when supplied, then uses cloud fallback when configured."}
               </p>
             </div>
             <div className="rounded-lg border border-border/60 bg-background/60 p-3">

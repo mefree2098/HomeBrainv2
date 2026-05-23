@@ -227,11 +227,12 @@ function buildAirQualityCacheKey(location, precision = WEATHER_CACHE_COORDINATE_
   return buildForecastCacheKey(location, precision);
 }
 
-function buildDashboardWeatherCacheKey(location) {
+function buildDashboardWeatherCacheKey(location, options = {}) {
   return [
     buildForecastCacheKey(location),
     location?.source || 'unknown',
-    location?.name || ''
+    location?.name || '',
+    parseBooleanFlag(options.includeModuleTelemetry) ? 'module-telemetry' : 'current-only'
   ].join('|');
 }
 
@@ -832,70 +833,72 @@ async function buildDashboardWeatherPayload(location, options = {}) {
   const indoorAirSnapshot = Object.prototype.hasOwnProperty.call(options, 'indoorAirSnapshot')
     ? options.indoorAirSnapshot
     : await getWeatherIndoorAirSnapshot();
+  const includeModuleTelemetry = parseBooleanFlag(options.includeModuleTelemetry);
 
-  let forecastResponse;
-  try {
-    forecastResponse = await readThroughWeatherCache(forecastCache, {
-      kind: PERSISTED_WEATHER_CACHE_KIND_FORECAST,
-      key: forecastCacheKey,
-      recoveryKeys: forecastRecoveryKeys,
-      ttlMs: FORECAST_CACHE_TTL_MS,
-      staleIfErrorMs: FORECAST_STALE_IF_ERROR_MS,
-      loader: async () => {
-      const response = await axios.get('https://api.open-meteo.com/v1/forecast', {
-        params: {
-          latitude: location.latitude,
-          longitude: location.longitude,
-          current: [
-            'temperature_2m',
-            'relative_humidity_2m',
-            'apparent_temperature',
-            'is_day',
-            'precipitation',
-            'weather_code',
-            'wind_speed_10m'
-          ].join(','),
-          daily: [
-            'weather_code',
-            'temperature_2m_max',
-            'temperature_2m_min',
-            'precipitation_probability_max',
-            'sunrise',
-            'sunset'
-          ].join(','),
-          hourly: [
-            'temperature_2m',
-            'precipitation_probability',
-            'weather_code',
-            'wind_speed_10m'
-          ].join(','),
-          temperature_unit: 'fahrenheit',
-          wind_speed_unit: 'mph',
-          precipitation_unit: 'inch',
-          timezone: 'auto',
-          forecast_days: 2
-        },
-        timeout: 10000
+  const forecastPromise = (async () => {
+    try {
+      return await readThroughWeatherCache(forecastCache, {
+        kind: PERSISTED_WEATHER_CACHE_KIND_FORECAST,
+        key: forecastCacheKey,
+        recoveryKeys: forecastRecoveryKeys,
+        ttlMs: FORECAST_CACHE_TTL_MS,
+        staleIfErrorMs: FORECAST_STALE_IF_ERROR_MS,
+        loader: async () => {
+          const response = await axios.get('https://api.open-meteo.com/v1/forecast', {
+            params: {
+              latitude: location.latitude,
+              longitude: location.longitude,
+              current: [
+                'temperature_2m',
+                'relative_humidity_2m',
+                'apparent_temperature',
+                'is_day',
+                'precipitation',
+                'weather_code',
+                'wind_speed_10m'
+              ].join(','),
+              daily: [
+                'weather_code',
+                'temperature_2m_max',
+                'temperature_2m_min',
+                'precipitation_probability_max',
+                'sunrise',
+                'sunset'
+              ].join(','),
+              hourly: [
+                'temperature_2m',
+                'precipitation_probability',
+                'weather_code',
+                'wind_speed_10m'
+              ].join(','),
+              temperature_unit: 'fahrenheit',
+              wind_speed_unit: 'mph',
+              precipitation_unit: 'inch',
+              timezone: 'auto',
+              forecast_days: 2
+            },
+            timeout: 10000
+          });
+
+          return response.data;
+        }
       });
-
-      return response.data;
+    } catch (error) {
+      if (!tempestStation) {
+        throw error;
       }
-    });
-  } catch (error) {
-    if (!tempestStation) {
-      throw error;
+
+      return null;
     }
+  })();
 
-    forecastResponse = null;
-  }
-
-  const airQualityResponse = await readThroughWeatherCache(airQualityCache, {
-      kind: PERSISTED_WEATHER_CACHE_KIND_AIR_QUALITY,
-      key: airQualityCacheKey,
-      recoveryKeys: airQualityRecoveryKeys,
-      ttlMs: AIR_QUALITY_CACHE_TTL_MS,
-      staleIfErrorMs: AIR_QUALITY_STALE_IF_ERROR_MS,
-      loader: async () => {
+  const airQualityPromise = readThroughWeatherCache(airQualityCache, {
+    kind: PERSISTED_WEATHER_CACHE_KIND_AIR_QUALITY,
+    key: airQualityCacheKey,
+    recoveryKeys: airQualityRecoveryKeys,
+    ttlMs: AIR_QUALITY_CACHE_TTL_MS,
+    staleIfErrorMs: AIR_QUALITY_STALE_IF_ERROR_MS,
+    loader: async () => {
       const response = await axios.get('https://air-quality-api.open-meteo.com/v1/air-quality', {
         params: {
           latitude: location.latitude,
@@ -907,11 +910,16 @@ async function buildDashboardWeatherPayload(location, options = {}) {
       });
 
       return response.data;
-      }
-    }).catch(() => null);
+    }
+  }).catch(() => null);
+
+  const [forecastResponse, airQualityResponse] = await Promise.all([
+    forecastPromise,
+    airQualityPromise
+  ]);
 
   let moduleTelemetry = null;
-  if (tempestStation?.id) {
+  if (includeModuleTelemetry && tempestStation?.id) {
     moduleTelemetry = await telemetryService.getTempestModuleTelemetry({
       sourceId: tempestStation.id
     }).catch(() => null);
@@ -953,32 +961,40 @@ async function fetchDashboardWeather(options = {}) {
   const location = await resolveWeatherLocation(options);
   const forceTempestSync = parseBooleanFlag(options.forceTempestSync);
   const forceIndoorAirSync = parseBooleanFlag(options.forceIndoorAirSync);
+  const includeModuleTelemetry = parseBooleanFlag(options.includeModuleTelemetry);
+  const refreshIndoorAir = parseBooleanFlag(options.refreshIndoorAir);
   let tempestStation = await getWeatherTempestSnapshot();
   const refreshResult = await refreshTempestForWeatherIfNeeded(tempestStation, options);
   tempestStation = refreshResult.tempestStation || tempestStation;
   let indoorAirSnapshot = await getWeatherIndoorAirSnapshot();
-  const indoorAirRefreshResult = await refreshIndoorAirForWeatherIfNeeded(indoorAirSnapshot, options);
+  const indoorAirRefreshResult = (forceIndoorAirSync || refreshIndoorAir)
+    ? await refreshIndoorAirForWeatherIfNeeded(indoorAirSnapshot, options)
+    : { refreshed: false, indoorAirSnapshot };
   indoorAirSnapshot = indoorAirRefreshResult.indoorAirSnapshot || indoorAirSnapshot;
 
-  const dashboardCacheKey = buildDashboardWeatherCacheKey(location);
+  const dashboardCacheKey = buildDashboardWeatherCacheKey(location, { includeModuleTelemetry });
   if (refreshResult.refreshed || indoorAirRefreshResult.refreshed) {
     dashboardWeatherCache.delete(dashboardCacheKey);
   }
 
   if (forceTempestSync || forceIndoorAirSync) {
-    return buildDashboardWeatherPayload(location, { tempestStation, indoorAirSnapshot });
+    return buildDashboardWeatherPayload(location, { tempestStation, indoorAirSnapshot, includeModuleTelemetry });
   }
 
   return readThroughCache(
     dashboardWeatherCache,
     dashboardCacheKey,
     DASHBOARD_WEATHER_CACHE_TTL_MS,
-    () => buildDashboardWeatherPayload(location, { tempestStation, indoorAirSnapshot })
+    () => buildDashboardWeatherPayload(location, { tempestStation, indoorAirSnapshot, includeModuleTelemetry })
   );
 }
 
 async function fetchWeatherDashboard(options = {}) {
-  const forecast = await fetchDashboardWeather(options);
+  const forecast = await fetchDashboardWeather({
+    ...options,
+    includeModuleTelemetry: false,
+    refreshIndoorAir: parseBooleanFlag(options.refreshIndoorAir)
+  });
   const tempest = await tempestService.getDashboardData({
     hours: options.tempestHistoryHours || 24
   }).catch(() => ({

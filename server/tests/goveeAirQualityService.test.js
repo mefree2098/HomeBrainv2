@@ -5,8 +5,10 @@ const goveeAirQualityService = require('../services/goveeAirQualityService');
 
 const {
   deriveUsAqiFromPm25,
+  buildLanDiscoveryTargets,
   isAirQualityDevice,
   normalizeConnectionMode,
+  normalizeLanTarget,
   normalizeLanTimeoutMs,
   normalizeDeviceList,
   normalizeLocalScanResponse,
@@ -28,6 +30,38 @@ test('normalizes Govee LAN timeout requests onto fixed safe durations', () => {
   assert.equal(normalizeLanTimeoutMs(3500), 5000);
   assert.equal(normalizeLanTimeoutMs(6000), 7500);
   assert.equal(normalizeLanTimeoutMs(60_000), 10_000);
+});
+
+test('normalizes Govee LAN scan targets from strings and objects', () => {
+  assert.deepEqual(normalizeLanTarget('192.168.1.88'), {
+    host: '192.168.1.88',
+    port: 4001
+  });
+  assert.deepEqual(normalizeLanTarget('192.168.1.88:4010'), {
+    host: '192.168.1.88',
+    port: 4010
+  });
+  assert.deepEqual(normalizeLanTarget({ ip: '192.168.1.89', port: 4003 }), {
+    host: '192.168.1.89',
+    port: 4003
+  });
+  assert.equal(normalizeLanTarget(''), null);
+});
+
+test('builds broad Govee LAN discovery targets with direct-IP probes', () => {
+  const targets = buildLanDiscoveryTargets({
+    localDeviceIp: '192.168.1.88',
+    targets: ['192.168.1.99:4010', { host: '192.168.1.100', port: 4001 }]
+  });
+  const keys = new Set(targets.map((target) => `${target.host}:${target.port}`));
+
+  assert.equal(keys.has('239.255.255.250:4001'), true);
+  assert.equal(keys.has('255.255.255.255:4001'), true);
+  assert.equal(keys.has('192.168.1.88:4001'), true);
+  assert.equal(keys.has('192.168.1.88:4003'), true);
+  assert.equal(keys.has('192.168.1.99:4010'), true);
+  assert.equal(keys.has('192.168.1.100:4001'), true);
+  assert.equal(keys.size, targets.length);
 });
 
 test('detects H5106 and capability-based Govee indoor air devices', () => {
