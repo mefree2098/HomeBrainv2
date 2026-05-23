@@ -2540,11 +2540,16 @@ class TelemetryService {
   }
 
   async listSourceSummaries() {
-    await this.ensureSourceSummaries();
-
-    const snapshots = await TelemetrySourceSummary.find({})
+    let snapshots = await TelemetrySourceSummary.find({})
       .sort({ lastSampleAt: -1 })
       .lean();
+
+    if (snapshots.length === 0) {
+      await this.ensureSourceSummaries();
+      snapshots = await TelemetrySourceSummary.find({})
+        .sort({ lastSampleAt: -1 })
+        .lean();
+    }
 
     return snapshots
       .map((snapshot) => buildSourceSummaryFromSnapshot(snapshot))
@@ -2933,10 +2938,16 @@ class TelemetryService {
       throw new Error('A telemetry source is required.');
     }
 
+    let snapshot = await TelemetrySourceSummary.findOne({ sourceKey: resolvedSourceKey }).lean();
+    let sourceSummary = buildSourceSummaryFromSnapshot(snapshot);
+    if (sourceSummary) {
+      return sourceSummary;
+    }
+
     await this.ensureSourceSummaries();
 
-    const snapshot = await TelemetrySourceSummary.findOne({ sourceKey: resolvedSourceKey }).lean();
-    const sourceSummary = buildSourceSummaryFromSnapshot(snapshot);
+    snapshot = await TelemetrySourceSummary.findOne({ sourceKey: resolvedSourceKey }).lean();
+    sourceSummary = buildSourceSummaryFromSnapshot(snapshot);
     if (sourceSummary) {
       return sourceSummary;
     }
