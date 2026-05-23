@@ -339,6 +339,8 @@ const getCapabilityUnit = (capability) => {
   const candidates = [
     capability?.unit,
     capability?.state?.unit,
+    capability?.state?.value?.unit,
+    capability?.value?.unit,
     capability?.parameters?.unit,
     capability?.parameters?.units,
     capability?.parameters?.dataType?.unit
@@ -715,21 +717,42 @@ function normalizeDeviceList(responseData) {
 }
 
 function normalizeStateCapabilities(stateResponse) {
-  const data = stateResponse?.data ?? stateResponse ?? {};
-  if (Array.isArray(data?.capabilities)) {
-    return data.capabilities;
+  const containers = [
+    stateResponse?.payload,
+    stateResponse?.data?.payload,
+    stateResponse?.body?.payload,
+    stateResponse?.data,
+    stateResponse
+  ].filter(Boolean);
+
+  for (const container of containers) {
+    if (Array.isArray(container?.capabilities)) {
+      return container.capabilities;
+    }
+    if (Array.isArray(container?.properties)) {
+      return container.properties;
+    }
+    if (Array.isArray(container)) {
+      return container;
+    }
   }
-  if (Array.isArray(data?.properties)) {
-    return data.properties;
-  }
-  if (Array.isArray(stateResponse?.capabilities)) {
-    return stateResponse.capabilities;
-  }
+
   return [];
+}
+
+function getStateResponseDeviceIdentity(stateResponse = {}) {
+  return [
+    stateResponse?.payload,
+    stateResponse?.data?.payload,
+    stateResponse?.body?.payload,
+    stateResponse?.data,
+    stateResponse
+  ].find((container) => container && typeof container === 'object' && !Array.isArray(container)) || {};
 }
 
 function normalizeStateResponse(stateResponse, selectedDevice = {}, integration = {}) {
   const capabilities = normalizeStateCapabilities(stateResponse);
+  const responseIdentity = getStateResponseDeviceIdentity(stateResponse);
   const metricBag = {};
   const rawValues = {};
   const stateInstances = [];
@@ -791,6 +814,18 @@ function normalizeStateResponse(stateResponse, selectedDevice = {}, integration 
       return;
     }
 
+    if (normalized === 'airquality' || normalized.includes('airquality')) {
+      if (numeric !== null) {
+        const unit = getCapabilityUnit(capability);
+        if (unit.includes('aqi') || unit.includes('index')) {
+          metricBag.air_quality_index = Math.round(numeric);
+        } else {
+          metricBag.pm2_5_ugm3 = Math.max(0, roundNumber(numeric + Number(integration?.pm25OffsetUgM3 || 0), 1));
+        }
+      }
+      return;
+    }
+
     if (normalized.includes('carbondioxide') || normalized === 'co2' || normalized.includes('co2')) {
       if (numeric !== null) {
         metricBag.co2_ppm = Math.round(numeric);
@@ -815,8 +850,8 @@ function normalizeStateResponse(stateResponse, selectedDevice = {}, integration 
     : new Date();
 
   return {
-    device: trimString(selectedDevice.device || stateResponse?.data?.device, ''),
-    sku: trimString(selectedDevice.sku || stateResponse?.data?.sku, ''),
+    device: trimString(selectedDevice.device || responseIdentity.device, ''),
+    sku: trimString(selectedDevice.sku || responseIdentity.sku, ''),
     deviceName: trimString(selectedDevice.deviceName || selectedDevice.name, 'Govee Indoor Air Monitor'),
     deviceType: trimString(selectedDevice.type || selectedDevice.deviceType, ''),
     room: trimString(integration?.room, 'Inside'),
