@@ -208,6 +208,37 @@ test('normalizes state response into indoor weather and telemetry metrics', () =
   });
 });
 
+test('normalizes OpenAPI payload state responses into indoor weather metrics', () => {
+  const sample = normalizeStateResponse({
+    requestId: 'test-request',
+    code: 200,
+    payload: {
+      sku: 'H5106',
+      device: 'AA:BB:CC',
+      capabilities: [
+        { type: 'devices.capabilities.online', instance: 'online', state: { value: true } },
+        { type: 'devices.capabilities.property', instance: 'sensorTemperature', state: { value: 22.4 }, parameters: { unit: 'Celsius' } },
+        { type: 'devices.capabilities.property', instance: 'sensorHumidity', state: { value: 39.6 } },
+        { type: 'devices.capabilities.property', instance: 'airQuality', state: { value: 17 } }
+      ]
+    }
+  }, {
+    deviceName: 'Office Air'
+  }, {
+    room: 'Office'
+  });
+
+  assert.equal(sample.device, 'AA:BB:CC');
+  assert.equal(sample.sku, 'H5106');
+  assert.equal(sample.deviceName, 'Office Air');
+  assert.equal(sample.temperatureF, 72.3);
+  assert.equal(sample.temperatureC, 22.4);
+  assert.equal(sample.humidityPct, 39.6);
+  assert.equal(sample.pm25UgM3, 17);
+  assert.equal(sample.usAqi, deriveUsAqiFromPm25(17));
+  assert.deepEqual(sample.stateInstances, ['online', 'sensorTemperature', 'sensorHumidity', 'airQuality']);
+});
+
 test('normalizes local LAN state responses when indoor metrics are exposed', () => {
   const sample = normalizeLocalStateResponse({
     msg: {

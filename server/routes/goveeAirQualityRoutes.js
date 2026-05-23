@@ -61,7 +61,7 @@ router.post('/local/discover', async (req, res) => {
       devices,
       message: devices.length > 0
         ? `Found ${devices.length} local Govee LAN device${devices.length === 1 ? '' : 's'}.`
-        : 'No local Govee LAN devices responded.'
+        : 'No local Govee LAN Control response. If this H5106 is on Wi-Fi but still does not appear, the model or firmware may not expose Govee LAN Control; keep Auto or Cloud mode enabled for API readings.'
     });
   } catch (error) {
     console.error('GoveeAirQualityRoutes: Local discovery failed:', error.message);
