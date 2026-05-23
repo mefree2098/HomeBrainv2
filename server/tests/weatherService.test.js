@@ -6,6 +6,7 @@ const path = require('node:path');
 const axios = require('axios');
 const tempestService = require('../services/tempestService');
 const telemetryService = require('../services/telemetryService');
+const goveeAirQualityService = require('../services/goveeAirQualityService');
 
 const {
   buildLocationName,
@@ -22,10 +23,12 @@ const {
 
 async function setupIsolatedWeatherCache(t) {
   const originalPersistPath = process.env.WEATHER_PERSIST_PATH;
+  const originalNodeEnv = process.env.NODE_ENV;
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'homebrain-weather-cache-'));
   const persistPath = path.join(tempDir, 'weather-provider-cache.json');
 
   process.env.WEATHER_PERSIST_PATH = persistPath;
+  process.env.NODE_ENV = 'test';
   __resetWeatherCachesForTests();
 
   t.after(async () => {
@@ -33,6 +36,11 @@ async function setupIsolatedWeatherCache(t) {
       delete process.env.WEATHER_PERSIST_PATH;
     } else {
       process.env.WEATHER_PERSIST_PATH = originalPersistPath;
+    }
+    if (originalNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = originalNodeEnv;
     }
     __resetWeatherCachesForTests();
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -128,7 +136,115 @@ test('createWeatherPayload normalizes current and daily forecast data', () => {
   assert.equal(Array.isArray(payload.hourlyForecast), true);
 });
 
-test('fetchDashboardWeather attaches Tempest module telemetry to the current weather payload', async (t) => {
+test('fetchDashboardWeather skips heavy telemetry and stale indoor-air sync by default', async (t) => {
+  await setupIsolatedWeatherCache(t);
+  const originalAxiosGet = axios.get;
+  const originalGetSelectedStationSnapshot = tempestService.getSelectedStationSnapshot;
+  const originalGetTempestModuleTelemetry = telemetryService.getTempestModuleTelemetry;
+  const originalGetLatestSnapshot = goveeAirQualityService.getLatestSnapshot;
+  const originalSyncNow = goveeAirQualityService.syncNow;
+
+  t.after(() => {
+    axios.get = originalAxiosGet;
+    tempestService.getSelectedStationSnapshot = originalGetSelectedStationSnapshot;
+    telemetryService.getTempestModuleTelemetry = originalGetTempestModuleTelemetry;
+    goveeAirQualityService.getLatestSnapshot = originalGetLatestSnapshot;
+    goveeAirQualityService.syncNow = originalSyncNow;
+  });
+
+  axios.get = async (url) => {
+    const requestUrl = new URL(url);
+    if (requestUrl.hostname === 'api.open-meteo.com' && requestUrl.pathname === '/v1/forecast') {
+      return {
+        data: {
+          timezone: 'America/Denver',
+          current: {
+            temperature_2m: 67.4,
+            apparent_temperature: 65.2,
+            relative_humidity_2m: 42,
+            wind_speed_10m: 7.8,
+            precipitation: 0,
+            weather_code: 2,
+            is_day: 1
+          },
+          daily: {
+            weather_code: [61],
+            temperature_2m_max: [74.3],
+            temperature_2m_min: [49.8],
+            precipitation_probability_max: [55],
+            sunrise: ['2026-03-23T07:01'],
+            sunset: ['2026-03-23T19:14']
+          }
+        }
+      };
+    }
+
+    if (requestUrl.hostname === 'air-quality-api.open-meteo.com') {
+      return {
+        data: {
+          current: {
+            us_aqi: 38
+          }
+        }
+      };
+    }
+
+    throw new Error(`Unexpected axios request: ${url}`);
+  };
+
+  tempestService.getSelectedStationSnapshot = async () => ({
+    id: 'tempest-device-1',
+    name: 'Backyard Tempest',
+    room: 'Outside',
+    observedAt: '2026-04-02T17:00:00.000Z',
+    metrics: {
+      temperatureF: 66.9,
+      rainLastMinuteIn: 0.03
+    },
+    status: {
+      websocketConnected: true
+    }
+  });
+
+  let telemetryCalls = 0;
+  let syncCalls = 0;
+
+  telemetryService.getTempestModuleTelemetry = async () => {
+    telemetryCalls += 1;
+    return null;
+  };
+  goveeAirQualityService.getLatestSnapshot = async () => ({
+    id: 'govee-sample-1',
+    device: 'AA:BB:CC',
+    sku: 'H5106',
+    deviceName: 'Inside Air',
+    room: 'Inside',
+    observedAt: '2026-04-02T16:00:00.000Z',
+    temperatureF: 71.2,
+    humidityPct: 42,
+    pm25UgM3: 4.5,
+    usAqi: 19,
+    qualityLabel: 'Good'
+  });
+  goveeAirQualityService.syncNow = async () => {
+    syncCalls += 1;
+    return { success: true };
+  };
+
+  const payload = await fetchDashboardWeather({
+    latitude: '39.7392',
+    longitude: '-104.9903',
+    label: 'Current location'
+  });
+
+  assert.equal(telemetryCalls, 0);
+  assert.equal(syncCalls, 0);
+  assert.equal(payload.tempest.moduleTelemetry, null);
+  assert.equal(payload.indoorAir.available, true);
+  assert.equal(payload.indoorAir.monitor?.deviceName, 'Inside Air');
+});
+
+test('fetchDashboardWeather attaches Tempest module telemetry when requested', async (t) => {
   await setupIsolatedWeatherCache(t);
   const originalAxiosGet = axios.get;
   const originalGetSelectedStationSnapshot = tempestService.getSelectedStationSnapshot;
@@ -212,7 +328,8 @@ test('fetchDashboardWeather attaches Tempest module telemetry to the current wea
   const payload = await fetchDashboardWeather({
     latitude: '39.7392',
     longitude: '-104.9903',
-    label: 'Current location'
+    label: 'Current location',
+    includeModuleTelemetry: true
   });
 
   assert.deepEqual(telemetryArgs, { sourceId: 'tempest-device-1' });

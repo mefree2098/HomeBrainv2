@@ -52,7 +52,9 @@ router.post('/test', async (req, res) => {
 router.post('/local/discover', async (req, res) => {
   try {
     const devices = await goveeAirQualityService.discoverLocalDevices({
-      timeoutMs: req.body?.timeoutMs
+      timeoutMs: req.body?.timeoutMs,
+      targets: req.body?.targets,
+      localDeviceIp: req.body?.localDeviceIp
     });
     return res.status(200).json({
       success: true,
