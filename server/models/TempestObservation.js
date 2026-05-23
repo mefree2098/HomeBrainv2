@@ -60,6 +60,10 @@ TempestObservationSchema.index(
   { unique: true, name: 'tempest_observation_unique' }
 );
 TempestObservationSchema.index(
+  { stationId: 1, observedAt: -1, observationType: 1 },
+  { name: 'tempest_observation_station_time_type' }
+);
+TempestObservationSchema.index(
   { observedAt: 1 },
   {
     expireAfterSeconds: retentionDays * 24 * 60 * 60,
