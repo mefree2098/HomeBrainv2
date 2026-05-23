@@ -6,9 +6,29 @@ const goveeAirQualityService = require('../services/goveeAirQualityService');
 const {
   deriveUsAqiFromPm25,
   isAirQualityDevice,
+  normalizeConnectionMode,
+  normalizeLanTimeoutMs,
   normalizeDeviceList,
+  normalizeLocalScanResponse,
+  normalizeLocalStateResponse,
   normalizeStateResponse
 } = goveeAirQualityService.__testHooks;
+
+test('normalizes Govee connection modes safely', () => {
+  assert.equal(normalizeConnectionMode('local'), 'local');
+  assert.equal(normalizeConnectionMode('cloud'), 'cloud');
+  assert.equal(normalizeConnectionMode('AUTO'), 'auto');
+  assert.equal(normalizeConnectionMode('surprise'), 'auto');
+});
+
+test('normalizes Govee LAN timeout requests onto fixed safe durations', () => {
+  assert.equal(normalizeLanTimeoutMs('surprise'), 3500);
+  assert.equal(normalizeLanTimeoutMs(250), 1000);
+  assert.equal(normalizeLanTimeoutMs(2400), 2500);
+  assert.equal(normalizeLanTimeoutMs(3500), 5000);
+  assert.equal(normalizeLanTimeoutMs(6000), 7500);
+  assert.equal(normalizeLanTimeoutMs(60_000), 10_000);
+});
 
 test('detects H5106 and capability-based Govee indoor air devices', () => {
   assert.equal(isAirQualityDevice({
@@ -59,6 +79,28 @@ test('normalizes Govee device discovery payloads', () => {
   assert.deepEqual(devices[0].capabilities.map((entry) => entry.instance), ['sensorTemperature', 'sensorHumidity', 'pm25']);
 });
 
+test('normalizes Govee LAN scan responses with local endpoint details', () => {
+  const device = normalizeLocalScanResponse({
+    msg: {
+      cmd: 'scan',
+      data: {
+        ip: '192.168.1.88',
+        device: 'AA:BB:CC:DD',
+        sku: 'H5106',
+        deviceName: 'Kitchen Air',
+        wifiVersionHard: '1.00.10'
+      }
+    }
+  }, { address: '192.168.1.88', port: 4002 });
+
+  assert.equal(device.sku, 'H5106');
+  assert.equal(device.device, 'AA:BB:CC:DD');
+  assert.equal(device.ip, '192.168.1.88');
+  assert.equal(device.port, 4003);
+  assert.equal(device.isAirQualityDevice, true);
+  assert.equal(device.lanApiSupported, true);
+});
+
 test('normalizes state response into indoor weather and telemetry metrics', () => {
   const sample = normalizeStateResponse({
     data: {
@@ -99,4 +141,61 @@ test('normalizes state response into indoor weather and telemetry metrics', () =
     pm2_5_ugm3: 8,
     air_quality_index: 44
   });
+});
+
+test('normalizes local LAN state responses when indoor metrics are exposed', () => {
+  const sample = normalizeLocalStateResponse({
+    msg: {
+      cmd: 'devStatus',
+      data: {
+        online: true,
+        tempC: 22.5,
+        humidity: 41,
+        pm25: 5.2,
+        airQualityIndex: 22
+      }
+    }
+  }, {
+    sku: 'H5106',
+    device: 'AA:BB:CC',
+    deviceName: 'Kitchen Air',
+    type: 'govee_lan',
+    ip: '192.168.1.88'
+  }, {
+    room: 'Kitchen'
+  });
+
+  assert.equal(sample.source, 'local_lan');
+  assert.equal(sample.localIp, '192.168.1.88');
+  assert.equal(sample.temperatureF, 72.5);
+  assert.equal(sample.humidityPct, 41);
+  assert.equal(sample.pm25UgM3, 5.2);
+  assert.equal(sample.usAqi, 22);
+});
+
+test('local LAN light-style status does not invent indoor air readings', () => {
+  const sample = normalizeLocalStateResponse({
+    msg: {
+      cmd: 'devStatus',
+      data: {
+        onOff: 1,
+        brightness: 50,
+        colorTemInKelvin: 4000
+      }
+    }
+  }, {
+    sku: 'H6159',
+    device: 'AA:BB:CC',
+    deviceName: 'Strip',
+    type: 'govee_lan',
+    ip: '192.168.1.90'
+  }, {
+    room: 'Theater'
+  });
+
+  assert.equal(sample.temperatureF, null);
+  assert.equal(sample.humidityPct, null);
+  assert.equal(sample.pm25UgM3, null);
+  assert.equal(sample.usAqi, null);
+  assert.equal(sample.qualityLabel, 'Unknown');
 });

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { CheckCircle2, Home, Loader2, RefreshCw, Save, TestTube2, Thermometer, Wind } from "lucide-react"
+import { Cloud, Home, Loader2, RefreshCw, Save, TestTube2, Thermometer, Wifi, Wind } from "lucide-react"
 import {
   configureGovee,
+  discoverLocalGovee,
   getGoveeStatus,
   syncGovee,
   testGoveeConnection,
+  testLocalGovee,
   type ConfigureGoveePayload,
   type GoveeDiscoveredDevice,
   type GoveeStatusResponse
@@ -31,6 +33,7 @@ const isMaskedSecretValue = (value: unknown) => {
 
 const defaultForm: ConfigureGoveePayload = {
   apiKey: "",
+  connectionMode: "auto",
   enabled: false,
   room: "Inside",
   selectedDevice: "",
@@ -41,7 +44,9 @@ const defaultForm: ConfigureGoveePayload = {
   pollIntervalMs: 60_000,
   tempOffsetF: 0,
   humidityOffsetPct: 0,
-  pm25OffsetUgM3: 0
+  pm25OffsetUgM3: 0,
+  localDeviceIp: "",
+  localDevicePort: 4003
 }
 
 const formatTimestamp = (value: string | null | undefined) => {
@@ -68,11 +73,22 @@ const formatPm25 = (value: number | null | undefined) => value == null ? "--" : 
 
 const deviceValue = (device: GoveeDiscoveredDevice) => `${device.sku}::${device.device}`
 
+const mergeDevices = (...groups: Array<GoveeDiscoveredDevice[] | undefined>) => {
+  const byKey = new Map<string, GoveeDiscoveredDevice>()
+  groups.flatMap((group) => group || []).forEach((device) => {
+    const key = deviceValue(device)
+    const existing = byKey.get(key)
+    byKey.set(key, existing ? { ...existing, ...device } : device)
+  })
+  return Array.from(byKey.values())
+}
+
 function hydrateForm(status: GoveeStatusResponse): ConfigureGoveePayload {
   return {
     apiKey: status.integration.apiKeyConfigured || isMaskedSecretValue(status.integration.apiKey)
       ? CONFIGURED_SECRET_PLACEHOLDER
       : status.integration.apiKey || "",
+    connectionMode: status.integration.connectionMode || "auto",
     enabled: status.integration.enabled === true,
     room: status.integration.room || "Inside",
     selectedDevice: status.integration.selectedDevice || "",
@@ -83,7 +99,9 @@ function hydrateForm(status: GoveeStatusResponse): ConfigureGoveePayload {
     pollIntervalMs: status.integration.pollIntervalMs || 60_000,
     tempOffsetF: status.integration.tempOffsetF ?? 0,
     humidityOffsetPct: status.integration.humidityOffsetPct ?? 0,
-    pm25OffsetUgM3: status.integration.pm25OffsetUgM3 ?? 0
+    pm25OffsetUgM3: status.integration.pm25OffsetUgM3 ?? 0,
+    localDeviceIp: status.integration.localDeviceIp || "",
+    localDevicePort: status.integration.localDevicePort || 4003
   }
 }
 
@@ -94,6 +112,8 @@ export function GoveeIndoorAirIntegrationCard() {
   const [devices, setDevices] = useState<GoveeDiscoveredDevice[]>([])
   const [loading, setLoading] = useState(true)
   const [testing, setTesting] = useState(false)
+  const [testingLocal, setTestingLocal] = useState(false)
+  const [discoveringLocal, setDiscoveringLocal] = useState(false)
   const [saving, setSaving] = useState(false)
   const [syncing, setSyncing] = useState(false)
 
@@ -103,7 +123,7 @@ export function GoveeIndoorAirIntegrationCard() {
       const nextStatus = await getGoveeStatus()
       setStatus(nextStatus)
       setForm(hydrateForm(nextStatus))
-      setDevices(Array.isArray(nextStatus.devices) ? nextStatus.devices : [])
+      setDevices(mergeDevices(nextStatus.devices, nextStatus.localDevices))
     } catch (error) {
       toast({
         title: "Govee status failed",
@@ -163,6 +183,8 @@ export function GoveeIndoorAirIntegrationCard() {
       selectedSku: selected.sku,
       selectedDeviceName: selected.deviceName,
       selectedDeviceType: selected.type,
+      localDeviceIp: selected.ip || current.localDeviceIp,
+      localDevicePort: selected.port || current.localDevicePort || 4003,
       autoSelect: false
     }))
   }
@@ -172,7 +194,7 @@ export function GoveeIndoorAirIntegrationCard() {
     try {
       const apiKey = isMaskedSecretValue(form.apiKey) ? undefined : form.apiKey
       const response = await testGoveeConnection(apiKey)
-      setDevices(response.devices)
+      setDevices((current) => mergeDevices(current, response.devices))
       const preferred = response.airQualityDevices[0] ?? response.devices[0]
       if (preferred) {
         setForm((current) => ({
@@ -199,6 +221,82 @@ export function GoveeIndoorAirIntegrationCard() {
     }
   }
 
+  const handleDiscoverLocal = async () => {
+    setDiscoveringLocal(true)
+    try {
+      const response = await discoverLocalGovee()
+      setDevices((current) => {
+        return mergeDevices(current, response.devices)
+      })
+      const preferred = response.devices.find((device) => device.isAirQualityDevice) ?? response.devices[0]
+      if (preferred) {
+        setForm((current) => ({
+          ...current,
+          selectedDevice: preferred.device,
+          selectedSku: preferred.sku,
+          selectedDeviceName: preferred.deviceName,
+          selectedDeviceType: preferred.type,
+          localDeviceIp: preferred.ip || current.localDeviceIp,
+          localDevicePort: preferred.port || current.localDevicePort || 4003,
+          autoSelect: false
+        }))
+      }
+      toast({
+        title: response.devices.length > 0 ? "Local Govee discovered" : "No local Govee response",
+        description: response.message
+      })
+    } catch (error) {
+      toast({
+        title: "Local discovery failed",
+        description: error instanceof Error ? error.message : "Unable to discover local Govee LAN devices.",
+        variant: "destructive"
+      })
+    } finally {
+      setDiscoveringLocal(false)
+    }
+  }
+
+  const handleTestLocal = async () => {
+    setTestingLocal(true)
+    try {
+      const response = await testLocalGovee({
+        localDeviceIp: form.localDeviceIp,
+        localDevicePort: form.localDevicePort,
+        discover: !form.localDeviceIp
+      })
+      if (response.devices?.length) {
+        setDevices((current) => {
+          return mergeDevices(current, response.devices)
+        })
+      }
+      if (response.selectedDevice) {
+        setForm((current) => ({
+          ...current,
+          selectedDevice: response.selectedDevice?.device || current.selectedDevice,
+          selectedSku: response.selectedDevice?.sku || current.selectedSku,
+          selectedDeviceName: response.selectedDevice?.deviceName || current.selectedDeviceName,
+          selectedDeviceType: response.selectedDevice?.type || current.selectedDeviceType,
+          localDeviceIp: response.selectedDevice?.ip || current.localDeviceIp,
+          localDevicePort: response.selectedDevice?.port || current.localDevicePort || 4003,
+          autoSelect: false
+        }))
+      }
+      toast({
+        title: response.success ? "Local Govee verified" : "Local Govee unavailable",
+        description: response.message,
+        ...(response.success ? {} : { variant: "destructive" as const })
+      })
+    } catch (error) {
+      toast({
+        title: "Local test failed",
+        description: error instanceof Error ? error.message : "Unable to test local Govee LAN connectivity.",
+        variant: "destructive"
+      })
+    } finally {
+      setTestingLocal(false)
+    }
+  }
+
   const handleSave = async () => {
     setSaving(true)
     try {
@@ -211,13 +309,15 @@ export function GoveeIndoorAirIntegrationCard() {
         pollIntervalMs: Math.max(60_000, Number(form.pollIntervalMs) || 60_000),
         tempOffsetF: Number(form.tempOffsetF) || 0,
         humidityOffsetPct: Number(form.humidityOffsetPct) || 0,
-        pm25OffsetUgM3: Number(form.pm25OffsetUgM3) || 0
+        pm25OffsetUgM3: Number(form.pm25OffsetUgM3) || 0,
+        localDeviceIp: form.localDeviceIp?.trim() || "",
+        localDevicePort: Math.max(1, Math.min(65535, Number(form.localDevicePort) || 4003))
       }
 
       const response = await configureGovee(payload)
       setStatus(response)
       setForm(hydrateForm(response))
-      setDevices(Array.isArray(response.devices) ? response.devices : devices)
+      setDevices(mergeDevices(response.devices, response.localDevices))
       toast({
         title: "Govee indoor air saved",
         description: response.message || "Indoor air monitor integration updated successfully."
@@ -335,6 +435,45 @@ export function GoveeIndoorAirIntegrationCard() {
               </div>
             </div>
 
+            <div className="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)_140px]">
+              <div className="space-y-2">
+                <Label>Connection Mode</Label>
+                <Select
+                  value={form.connectionMode || "auto"}
+                  onValueChange={(value) => updateField("connectionMode", value as ConfigureGoveePayload["connectionMode"])}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Auto" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto">Auto: local first</SelectItem>
+                    <SelectItem value="local">Local LAN only</SelectItem>
+                    <SelectItem value="cloud">Cloud API only</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="govee-local-ip">Local Device IP</Label>
+                <Input
+                  id="govee-local-ip"
+                  value={form.localDeviceIp || ""}
+                  onChange={(event) => updateField("localDeviceIp", event.target.value)}
+                  placeholder="Optional, e.g. 192.168.1.88"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="govee-local-port">LAN Port</Label>
+                <Input
+                  id="govee-local-port"
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={form.localDevicePort || 4003}
+                  onChange={(event) => updateField("localDevicePort", Number(event.target.value) || 4003)}
+                />
+              </div>
+            </div>
+
             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_160px]">
               <div className="space-y-2">
                 <Label>Preferred Monitor</Label>
@@ -413,13 +552,26 @@ export function GoveeIndoorAirIntegrationCard() {
           <div className="space-y-3">
             <div className="rounded-lg border border-border/60 bg-background/60 p-3">
               <div className="flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                <Cloud className="h-4 w-4 text-emerald-500" />
                 <p className="text-sm font-semibold">Discovery</p>
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
                 {devices.length > 0
                   ? `${devices.length} Govee device${devices.length === 1 ? "" : "s"} discovered.`
-                  : "Run a key test to discover API-exposed monitors."}
+                  : "Run a cloud key test or local LAN discovery to find exposed monitors."}
+              </p>
+            </div>
+            <div className="rounded-lg border border-border/60 bg-background/60 p-3">
+              <div className="flex items-center gap-2">
+                <Wifi className="h-4 w-4 text-cyan-500" />
+                <p className="text-sm font-semibold">Local LAN</p>
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                {status?.health?.lastSampleSource === "local_lan"
+                  ? "Last sample came directly from the local network."
+                  : status?.health?.lastLocalError
+                    ? status.health.lastLocalError
+                    : "Auto mode tries local LAN first, then uses cloud fallback when configured."}
               </p>
             </div>
             <div className="rounded-lg border border-border/60 bg-background/60 p-3">
@@ -452,6 +604,14 @@ export function GoveeIndoorAirIntegrationCard() {
           <Button type="button" variant="outline" size="sm" onClick={handleTest} disabled={testing}>
             {testing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <TestTube2 className="mr-2 h-4 w-4" />}
             {testing ? "Testing..." : "Test API Key"}
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={handleDiscoverLocal} disabled={discoveringLocal}>
+            {discoveringLocal ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wifi className="mr-2 h-4 w-4" />}
+            {discoveringLocal ? "Discovering..." : "Discover Local"}
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={handleTestLocal} disabled={testingLocal}>
+            {testingLocal ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <TestTube2 className="mr-2 h-4 w-4" />}
+            {testingLocal ? "Testing LAN..." : "Test Local"}
           </Button>
           <Button type="button" variant="outline" size="sm" onClick={handleSync} disabled={syncing}>
             {syncing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
