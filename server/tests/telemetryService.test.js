@@ -487,6 +487,105 @@ test('updateSourceSummaryForSample avoids counter path conflicts on upserted sam
   assert.equal(Object.hasOwn(calls[0].update.$setOnInsert, 'streamCounts'), false);
 });
 
+test('resolveSourceSummary uses cached summaries before global rebuild checks', async () => {
+  const service = new TelemetryService();
+  const originalFindOne = TelemetrySourceSummary.findOne;
+  let ensureCalls = 0;
+
+  TelemetrySourceSummary.findOne = (query) => {
+    assert.deepEqual(query, { sourceKey: 'govee_air_quality:monitor-1' });
+    return {
+      lean: async () => ({
+        sourceKey: 'govee_air_quality:monitor-1',
+        sourceType: 'govee_air_quality',
+        sourceId: 'monitor-1',
+        sourceName: 'Air Quality Monitor',
+        sourceCategory: 'Indoor Air',
+        sourceRoom: 'Inside',
+        sourceOrigin: 'govee',
+        streamType: 'govee_air_quality_sample',
+        streamCounts: { govee_air_quality_sample: 38 },
+        metricKeys: ['temperature_f', 'humidity_pct', 'air_quality_index'],
+        sampleCount: 38,
+        lastValues: {
+          temperature_f: 71.6,
+          humidity_pct: 34.1,
+          air_quality_index: 6
+        },
+        lastSampleAt: new Date('2026-05-23T22:27:01.823Z')
+      })
+    };
+  };
+  service.ensureSourceSummaries = async () => {
+    ensureCalls += 1;
+    throw new Error('global rebuild check should not run for a cached source');
+  };
+
+  try {
+    const summary = await service.resolveSourceSummary({
+      sourceKey: 'govee_air_quality:monitor-1'
+    });
+
+    assert.equal(summary.name, 'Air Quality Monitor');
+    assert.equal(summary.sampleCount, 38);
+    assert.equal(summary.lastValues.temperature_f, 71.6);
+    assert.equal(ensureCalls, 0);
+  } finally {
+    TelemetrySourceSummary.findOne = originalFindOne;
+  }
+});
+
+test('listSourceSummaries uses cached summaries before global rebuild checks', async () => {
+  const service = new TelemetryService();
+  const originalFind = TelemetrySourceSummary.find;
+  let ensureCalls = 0;
+
+  TelemetrySourceSummary.find = (query) => {
+    assert.deepEqual(query, {});
+    return {
+      sort(sortQuery) {
+        assert.deepEqual(sortQuery, { lastSampleAt: -1 });
+        return {
+          lean: async () => [{
+            sourceKey: 'govee_air_quality:monitor-1',
+            sourceType: 'govee_air_quality',
+            sourceId: 'monitor-1',
+            sourceName: 'Air Quality Monitor',
+            sourceCategory: 'Indoor Air',
+            sourceRoom: 'Inside',
+            sourceOrigin: 'govee',
+            streamType: 'govee_air_quality_sample',
+            streamCounts: { govee_air_quality_sample: 38 },
+            metricKeys: ['temperature_f', 'humidity_pct', 'air_quality_index'],
+            sampleCount: 38,
+            lastValues: {
+              temperature_f: 71.6,
+              humidity_pct: 34.1,
+              air_quality_index: 6
+            },
+            lastSampleAt: new Date('2026-05-23T22:27:01.823Z')
+          }]
+        };
+      }
+    };
+  };
+  service.ensureSourceSummaries = async () => {
+    ensureCalls += 1;
+    throw new Error('global rebuild check should not run for cached sources');
+  };
+
+  try {
+    const summaries = await service.listSourceSummaries();
+
+    assert.equal(summaries.length, 1);
+    assert.equal(summaries[0].sourceKey, 'govee_air_quality:monitor-1');
+    assert.equal(summaries[0].sampleCount, 38);
+    assert.equal(ensureCalls, 0);
+  } finally {
+    TelemetrySourceSummary.find = originalFind;
+  }
+});
+
 test('normalizeDiskCapacity maps resource monitor disk output into free and total values', () => {
   const disk = normalizeDiskCapacity({
     totalBytes: 1_000_000,
