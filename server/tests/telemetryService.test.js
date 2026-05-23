@@ -425,6 +425,12 @@ test('shouldRebuildSourceSummaries catches metadata-only and drifted summary tot
     summaryCount: 4,
     sampleCount: 10000,
     summarySampleCount: 9950
+  }), true);
+  assert.equal(shouldRebuildSourceSummaries({
+    summaryCount: 4,
+    sampleCount: 10000,
+    summarySampleCount: 9950,
+    allowEstimatedDrift: true
   }), false);
   assert.equal(shouldRebuildSourceSummaries({
     summaryCount: 4,
