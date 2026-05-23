@@ -635,7 +635,7 @@ function summarizeSourceBreakdowns(sources = []) {
   return summary;
 }
 
-function shouldRebuildSourceSummaries({ summaryCount, sampleCount, summarySampleCount } = {}) {
+function shouldRebuildSourceSummaries({ summaryCount, sampleCount, summarySampleCount, allowEstimatedDrift = false } = {}) {
   const normalizedSummaryCount = toNonNegativeInteger(summaryCount);
   const normalizedSampleCount = toNonNegativeInteger(sampleCount);
   const normalizedSummarySampleCount = toNonNegativeInteger(summarySampleCount);
@@ -648,7 +648,7 @@ function shouldRebuildSourceSummaries({ summaryCount, sampleCount, summarySample
     return true;
   }
 
-  const allowedDrift = normalizedSampleCount >= 100
+  const allowedDrift = allowEstimatedDrift && normalizedSampleCount >= 100
     ? Math.ceil(normalizedSampleCount * 0.01)
     : 0;
 
@@ -2413,9 +2413,9 @@ class TelemetryService {
 
   async ensureSourceSummaries() {
     const summaryCount = await TelemetrySourceSummary.estimatedDocumentCount();
-    const sampleCount = await TelemetrySample.estimatedDocumentCount();
-    if (sampleCount <= 0) {
-      return { rebuilt: false, summaryCount, sampleCount };
+    const estimatedSampleCount = await TelemetrySample.estimatedDocumentCount();
+    if (estimatedSampleCount <= 0) {
+      return { rebuilt: false, summaryCount, sampleCount: estimatedSampleCount };
     }
 
     let summarySampleCount = 0;
@@ -2431,7 +2431,24 @@ class TelemetryService {
       summarySampleCount = toNonNegativeInteger(totals?.sampleCount);
     }
 
-    if (!shouldRebuildSourceSummaries({ summaryCount, sampleCount, summarySampleCount })) {
+    let sampleCount = estimatedSampleCount;
+    let shouldRebuild = shouldRebuildSourceSummaries({
+      summaryCount,
+      sampleCount,
+      summarySampleCount,
+      allowEstimatedDrift: true
+    });
+
+    if (!shouldRebuild && toNonNegativeInteger(sampleCount) !== summarySampleCount) {
+      sampleCount = await TelemetrySample.countDocuments({});
+      shouldRebuild = shouldRebuildSourceSummaries({
+        summaryCount,
+        sampleCount,
+        summarySampleCount
+      });
+    }
+
+    if (!shouldRebuild) {
       return {
         rebuilt: false,
         summaryCount,
