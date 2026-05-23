@@ -41,6 +41,7 @@ private enum SettingsWebArea: String, CaseIterable, Identifiable {
     case general
     case voice
     case integrations
+    case modules
     case alexa
     case codexSkill
     case openClaw
@@ -66,6 +67,7 @@ private enum SettingsWebArea: String, CaseIterable, Identifiable {
         case .general: return "General"
         case .voice: return "Voice"
         case .integrations: return "Integrations"
+        case .modules: return "Modules"
         case .alexa: return "Alexa"
         case .codexSkill: return "Codex Skill"
         case .openClaw: return "OpenClaw"
@@ -91,6 +93,7 @@ private enum SettingsWebArea: String, CaseIterable, Identifiable {
         case .general: return "Location, timezone, notifications, discovery"
         case .voice: return "Wake word, mic, volume, STT settings"
         case .integrations: return "Web Settings integration index"
+        case .modules: return "Capability map, source selection, and module health"
         case .alexa: return "Broker, link codes, discovery, voice users"
         case .codexSkill: return "Codex live skill token and bundle status"
         case .openClaw: return "OpenClaw MCP, token, Jetson bundle"
@@ -116,6 +119,7 @@ private enum SettingsWebArea: String, CaseIterable, Identifiable {
         case .general: return "gearshape"
         case .voice: return "mic"
         case .integrations: return "puzzlepiece.extension"
+        case .modules: return "square.grid.3x3"
         case .alexa: return "waveform"
         case .codexSkill: return "terminal"
         case .openClaw: return "point.3.connected.trianglepath.dotted"
@@ -138,7 +142,7 @@ private enum SettingsWebArea: String, CaseIterable, Identifiable {
 
     var isAdminOnly: Bool {
         switch self {
-        case .alexa, .codexSkill, .openClaw, .sense, .tempest, .goveeIndoorAir, .rainMachine, .deviceIntegrations,
+        case .modules, .alexa, .codexSkill, .openClaw, .sense, .tempest, .goveeIndoorAir, .rainMachine, .deviceIntegrations,
              .ecobee, .apiKeys, .aiProviders, .llmPriority, .hardwareOrbs, .resources, .maintenance,
              .platformAdmin:
             return true
@@ -483,7 +487,7 @@ struct SettingsView: View {
             settingsIntegrationTabsSection
             settingsSaveRefreshSection
 
-        case .alexa, .codexSkill, .openClaw, .sense, .tempest, .goveeIndoorAir, .rainMachine, .ecobee, .resources, .maintenance:
+        case .modules, .alexa, .codexSkill, .openClaw, .sense, .tempest, .goveeIndoorAir, .rainMachine, .ecobee, .resources, .maintenance:
             settingsOpenFullAreaSection(area)
 
         case .deviceIntegrations:
@@ -627,6 +631,7 @@ struct SettingsView: View {
     private var settingsIntegrationTabsSection: some View {
         Section("Integration Tabs") {
             ForEach([
+                SettingsWebArea.modules,
                 SettingsWebArea.alexa,
                 .codexSkill,
                 .openClaw,
@@ -850,6 +855,7 @@ struct SettingsView: View {
             Form {
                 Section("Integration Tabs") {
                     ForEach([
+                        SettingsWebArea.modules,
                         SettingsWebArea.alexa,
                         .codexSkill,
                         .openClaw,
@@ -869,6 +875,18 @@ struct SettingsView: View {
                 }
             }
             .hbFormStyle()
+
+        case .modules:
+            SettingsEndpointPane(
+                title: "Integration Modules",
+                subtitle: "Module health, capability providers, selected Climate sources, and telemetry-capable integrations.",
+                statusPath: "/api/integrations",
+                actions: [
+                    SettingsEndpointAction(title: "Climate Outdoor Providers", method: .get, path: "/api/integrations/capabilities/outdoor_climate/providers"),
+                    SettingsEndpointAction(title: "Climate Indoor Providers", method: .get, path: "/api/integrations/capabilities/indoor_climate/providers"),
+                    SettingsEndpointAction(title: "Air Quality Providers", method: .get, path: "/api/integrations/capabilities/air_quality/providers")
+                ]
+            )
 
         case .alexa:
             SettingsEndpointPane(

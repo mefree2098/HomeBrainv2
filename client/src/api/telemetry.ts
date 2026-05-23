@@ -15,6 +15,11 @@ export interface TelemetrySourceSummary {
   category: string
   room: string
   origin: string
+  integrationModuleId?: string
+  integrationModuleName?: string
+  integrationCategory?: string
+  capabilities?: string[]
+  deviceTypes?: string[]
   streamType: "device_state" | "tempest_observation" | "tempest_device_state" | "govee_air_quality_sample" | "rainmachine_daily_stat" | "rainmachine_watering_log" | "sense_monitor_state" | "sense_device_state"
   sampleCount: number
   metricCount: number

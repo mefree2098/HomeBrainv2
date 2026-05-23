@@ -31,6 +31,7 @@ const userProfileRoutes = require("./routes/userProfileRoutes");
 const voiceDeviceRoutes = require("./routes/voiceDeviceRoutes");
 const elevenLabsRoutes = require("./routes/elevenLabsRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
+const integrationRoutes = require("./routes/integrationRoutes");
 const tempestRoutes = require("./routes/tempestRoutes");
 const goveeAirQualityRoutes = require("./routes/goveeAirQualityRoutes");
 const rainMachineRoutes = require("./routes/rainMachineRoutes");
@@ -449,6 +450,7 @@ app.use('/api/voice', voiceDeviceRoutes);
 app.use('/api/elevenlabs', elevenLabsRoutes);
 // Settings Routes
 app.use('/api/settings', settingsRoutes);
+app.use('/api/integrations', integrationRoutes);
 // Weather Routes
 app.use('/api/weather', weatherRoutes);
 app.use('/api/tempest', tempestRoutes);

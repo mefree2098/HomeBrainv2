@@ -277,6 +277,10 @@ const SettingsSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.Mixed,
     default: null
   },
+  integrationPreferences: {
+    type: mongoose.Schema.Types.Mixed,
+    default: () => ({})
+  },
 
   // Security Settings
   enableSecurityMode: {

@@ -18,6 +18,7 @@ const STANDARD_DEVICE_SOURCE_OPTIONS: DeviceSourceOption[] = [
   { value: "homebrain-thread", label: "Thread", aliases: ["thread"], standard: true },
   { value: "homebrain-matter", label: "Matter", aliases: ["matter"], standard: true },
   { value: "ecobee", label: "Ecobee", standard: true },
+  { value: "govee", label: "Govee", standard: true },
   { value: "harmony", label: "Harmony", standard: true },
   { value: "insteon", label: "Insteon", standard: true },
   { value: "rainmachine", label: "RainMachine", standard: true },
@@ -92,6 +93,9 @@ export function getDeviceSource(device: DeviceSourceDevice | null | undefined) {
   }
   if (properties.ecobeeThermostatIdentifier || properties.ecobeeDeviceId) {
     return "ecobee"
+  }
+  if (properties.govee || properties.goveeDevice || properties.goveeDeviceId) {
+    return "govee"
   }
   if (properties.rainmachine) {
     return "rainmachine"

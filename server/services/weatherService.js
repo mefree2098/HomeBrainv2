@@ -3,6 +3,8 @@ const settingsService = require('./settingsService');
 const goveeAirQualityService = require('./goveeAirQualityService');
 const tempestService = require('./tempestService');
 const telemetryService = require('./telemetryService');
+const integrationRegistryService = require('./integrationRegistryService');
+const { getModuleDefinition } = require('./integrationModuleCatalog');
 const weatherCacheStore = require('./weatherCacheStore');
 
 const DEFAULT_FORECAST_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -446,6 +448,81 @@ async function refreshTempestForWeatherIfNeeded(tempestStation, options = {}) {
       tempestStation
     };
   }
+}
+
+async function getClimateCapabilityPreference(capabilityKey) {
+  try {
+    return await integrationRegistryService.getCapabilityPreference(capabilityKey);
+  } catch (_error) {
+    return {
+      mode: 'auto',
+      moduleId: '',
+      resourceId: '',
+      updatedAt: null
+    };
+  }
+}
+
+function buildClimateSourceDescriptor({ capability, moduleId, resourceId, label, deviceType, room, sourceKey, available, live }) {
+  const moduleDefinition = getModuleDefinition(moduleId) || {};
+  return {
+    capability,
+    moduleId,
+    moduleName: moduleDefinition.label || moduleId,
+    provider: moduleDefinition.provider || '',
+    resourceId: resourceId ? String(resourceId) : '',
+    label: label || moduleDefinition.label || '',
+    deviceType: deviceType || '',
+    room: room || '',
+    sourceKey: sourceKey || '',
+    available: available === true,
+    live: live === true
+  };
+}
+
+async function buildClimateSourceMetadata({ tempestStation, indoorAirSnapshot } = {}) {
+  const [outdoorPreference, indoorPreference] = await Promise.all([
+    getClimateCapabilityPreference('outdoor_climate'),
+    getClimateCapabilityPreference('indoor_climate')
+  ]);
+  const tempestStationId = tempestStation?.stationId ?? tempestStation?.id ?? tempestStation?.deviceId ?? '';
+  const indoorResourceId = [
+    indoorAirSnapshot?.sku,
+    indoorAirSnapshot?.device
+  ].filter(Boolean).join(':') || indoorAirSnapshot?.device || indoorAirSnapshot?.id || '';
+
+  const outdoorClimate = buildClimateSourceDescriptor({
+    capability: 'outdoor_climate',
+    moduleId: outdoorPreference.mode === 'selected' && outdoorPreference.moduleId ? outdoorPreference.moduleId : 'tempest',
+    resourceId: outdoorPreference.mode === 'selected' && outdoorPreference.resourceId ? outdoorPreference.resourceId : tempestStationId,
+    label: tempestStation?.name || 'Tempest Weather Station',
+    deviceType: 'weather_station',
+    room: tempestStation?.room || 'Outside',
+    sourceKey: tempestStationId ? `tempest_station:${tempestStationId}` : '',
+    available: Boolean(tempestStation),
+    live: tempestStation?.status?.websocketConnected === true
+  });
+
+  const indoorClimate = buildClimateSourceDescriptor({
+    capability: 'indoor_climate',
+    moduleId: indoorPreference.mode === 'selected' && indoorPreference.moduleId ? indoorPreference.moduleId : 'govee-indoor-air',
+    resourceId: indoorPreference.mode === 'selected' && indoorPreference.resourceId ? indoorPreference.resourceId : indoorResourceId,
+    label: indoorAirSnapshot?.deviceName || 'Govee Indoor Air',
+    deviceType: 'air_quality_monitor',
+    room: indoorAirSnapshot?.room || 'Inside',
+    sourceKey: indoorAirSnapshot?.sourceKey || (indoorAirSnapshot?.device ? `govee_air_quality:${indoorAirSnapshot.device}` : ''),
+    available: Boolean(indoorAirSnapshot),
+    live: indoorAirSnapshot?.isOnline !== false
+  });
+
+  return {
+    preferences: {
+      outdoorClimate: outdoorPreference,
+      indoorClimate: indoorPreference
+    },
+    outdoorClimate,
+    indoorClimate
+  };
 }
 
 async function hydratePersistentWeatherCacheEntry(cache, kind, key, ttlMs) {
@@ -963,9 +1040,19 @@ async function buildDashboardWeatherPayload(location, options = {}) {
       : createTempestFallbackWeatherPayload(location, tempestStation),
     tempestStation
   );
+  const climateSources = await buildClimateSourceMetadata({ tempestStation, indoorAirSnapshot });
 
   return {
     ...weatherPayload,
+    climate: {
+      outdoor: climateSources.outdoorClimate,
+      indoor: climateSources.indoorClimate,
+      preferences: climateSources.preferences
+    },
+    sources: {
+      outdoorClimate: climateSources.outdoorClimate,
+      indoorClimate: climateSources.indoorClimate
+    },
     tempest: tempestStation
       ? {
           available: true,

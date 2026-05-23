@@ -1087,6 +1087,8 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
 
   const headlineTemperature = tempestStation?.metrics.temperatureF ?? weather?.current.temperatureF ?? null
   const headlineFeelsLike = tempestStation?.metrics.feelsLikeF ?? weather?.current.apparentTemperatureF ?? null
+  const outdoorClimateSource = weather?.sources?.outdoorClimate ?? weather?.climate?.outdoor ?? null
+  const outdoorProviderLabel = outdoorClimateSource?.moduleName || "Tempest"
   const liveRainRate = resolveLiveRainRate(tempestStation)
   const liveRainDetected = hasLiveRain(weather, tempestStation)
   const moduleTelemetry = weather?.tempest?.moduleTelemetry ?? null
@@ -1282,7 +1284,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
                   )}
                 >
                   <Radar className="h-3.5 w-3.5" />
-                  {tempestStation.status.websocketConnected ? "Tempest Live" : "Tempest Snapshot"}
+                  {tempestStation.status.websocketConnected ? `${outdoorProviderLabel} Live` : `${outdoorProviderLabel} Snapshot`}
                 </span>
               ) : null}
               <span className="inline-flex items-center rounded-full border border-white/12 bg-white/8 px-2.5 py-1 text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-foreground/85">
