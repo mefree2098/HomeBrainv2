@@ -1,12 +1,23 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const { requireAdmin, requireUser } = require('./middlewares/auth');
 const integrationRegistryService = require('../services/integrationRegistryService');
 
 const user = requireUser();
 const admin = requireAdmin();
+const integrationRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_INTEGRATION_RATE_LIMIT_WINDOW_MS || 60_000)),
+  limit: Math.max(20, Number(process.env.HOMEBRAIN_INTEGRATION_RATE_LIMIT_MAX || 180)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many integration module requests. Please retry shortly.'
+  }
+});
 
-router.get('/', user, async (req, res) => {
+router.get('/', integrationRateLimit, user, async (req, res) => {
   try {
     const catalog = await integrationRegistryService.getCatalog({
       includeStatus: req.query.includeStatus !== 'false'
@@ -25,7 +36,7 @@ router.get('/', user, async (req, res) => {
   }
 });
 
-router.get('/capabilities/:capabilityKey/providers', user, async (req, res) => {
+router.get('/capabilities/:capabilityKey/providers', integrationRateLimit, user, async (req, res) => {
   try {
     const data = await integrationRegistryService.getCapabilityProviders(req.params.capabilityKey);
     return res.status(200).json({
@@ -41,7 +52,7 @@ router.get('/capabilities/:capabilityKey/providers', user, async (req, res) => {
   }
 });
 
-router.put('/capabilities/:capabilityKey/preference', admin, async (req, res) => {
+router.put('/capabilities/:capabilityKey/preference', integrationRateLimit, admin, async (req, res) => {
   try {
     const preferences = await integrationRegistryService.updateCapabilityPreference(
       req.params.capabilityKey,
@@ -64,7 +75,7 @@ router.put('/capabilities/:capabilityKey/preference', admin, async (req, res) =>
   }
 });
 
-router.put('/:moduleId/enabled', admin, async (req, res) => {
+router.put('/:moduleId/enabled', integrationRateLimit, admin, async (req, res) => {
   try {
     const moduleStatus = await integrationRegistryService.updateModuleEnabled(
       req.params.moduleId,
