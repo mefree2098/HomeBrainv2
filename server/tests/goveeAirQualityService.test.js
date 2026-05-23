@@ -12,6 +12,7 @@ const {
   normalizeLanTimeoutMs,
   normalizeDeviceList,
   normalizeLocalScanResponse,
+  normalizeLocalStatusDiscoveryResponse,
   normalizeLocalStateResponse,
   normalizeStateResponse
 } = goveeAirQualityService.__testHooks;
@@ -35,15 +36,18 @@ test('normalizes Govee LAN timeout requests onto fixed safe durations', () => {
 test('normalizes Govee LAN scan targets from strings and objects', () => {
   assert.deepEqual(normalizeLanTarget('192.168.1.88'), {
     host: '192.168.1.88',
-    port: 4001
+    port: 4001,
+    command: 'scan'
   });
   assert.deepEqual(normalizeLanTarget('192.168.1.88:4010'), {
     host: '192.168.1.88',
-    port: 4010
+    port: 4010,
+    command: 'scan'
   });
-  assert.deepEqual(normalizeLanTarget({ ip: '192.168.1.89', port: 4003 }), {
+  assert.deepEqual(normalizeLanTarget({ ip: '192.168.1.89', port: 4003, command: 'devStatus' }), {
     host: '192.168.1.89',
-    port: 4003
+    port: 4003,
+    command: 'devStatus'
   });
   assert.equal(normalizeLanTarget(''), null);
 });
@@ -51,16 +55,17 @@ test('normalizes Govee LAN scan targets from strings and objects', () => {
 test('builds broad Govee LAN discovery targets with direct-IP probes', () => {
   const targets = buildLanDiscoveryTargets({
     localDeviceIp: '192.168.1.88',
-    targets: ['192.168.1.99:4010', { host: '192.168.1.100', port: 4001 }]
+    targets: ['192.168.1.99:4010', { host: '192.168.1.100', port: 4001 }],
+    includeSubnetSweep: false
   });
-  const keys = new Set(targets.map((target) => `${target.host}:${target.port}`));
+  const keys = new Set(targets.map((target) => `${target.host}:${target.port}:${target.command}`));
 
-  assert.equal(keys.has('239.255.255.250:4001'), true);
-  assert.equal(keys.has('255.255.255.255:4001'), true);
-  assert.equal(keys.has('192.168.1.88:4001'), true);
-  assert.equal(keys.has('192.168.1.88:4003'), true);
-  assert.equal(keys.has('192.168.1.99:4010'), true);
-  assert.equal(keys.has('192.168.1.100:4001'), true);
+  assert.equal(keys.has('239.255.255.250:4001:scan'), true);
+  assert.equal(keys.has('255.255.255.255:4001:scan'), true);
+  assert.equal(keys.has('192.168.1.88:4001:scan'), true);
+  assert.equal(keys.has('192.168.1.88:4003:devStatus'), true);
+  assert.equal(keys.has('192.168.1.99:4010:scan'), true);
+  assert.equal(keys.has('192.168.1.100:4001:scan'), true);
   assert.equal(keys.size, targets.length);
 });
 
@@ -133,6 +138,32 @@ test('normalizes Govee LAN scan responses with local endpoint details', () => {
   assert.equal(device.port, 4003);
   assert.equal(device.isAirQualityDevice, true);
   assert.equal(device.lanApiSupported, true);
+});
+
+test('normalizes direct Govee LAN devStatus responses as discoverable devices', () => {
+  const device = normalizeLocalStatusDiscoveryResponse({
+    msg: {
+      cmd: 'devStatus',
+      data: {
+        online: true,
+        tempC: 22.5,
+        humidity: 41,
+        pm25: 5.2
+      }
+    }
+  }, { address: '192.168.1.88', port: 4002 });
+
+  assert.equal(device.sku, 'LAN');
+  assert.equal(device.device, '192.168.1.88');
+  assert.equal(device.ip, '192.168.1.88');
+  assert.equal(device.port, 4003);
+  assert.equal(device.lanApiSupported, true);
+  assert.equal(device.isAirQualityDevice, true);
+  assert.deepEqual(device.capabilities.map((capability) => capability.instance), [
+    'sensorTemperature',
+    'sensorHumidity',
+    'pm25'
+  ]);
 });
 
 test('normalizes state response into indoor weather and telemetry metrics', () => {
