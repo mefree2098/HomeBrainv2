@@ -1329,12 +1329,21 @@ struct DashboardView: View {
         }
     }
 
+    private func dashboardWidgetDisplayTitle(_ widget: DashboardWidgetItem) -> String {
+        if widget.type == .weather,
+           widget.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "weather" {
+            return "Climate"
+        }
+
+        return widget.title
+    }
+
     private func dashboardWidgetPanel(_ widget: DashboardWidgetItem, index: Int) -> some View {
         HBPanel {
             VStack(alignment: .leading, spacing: 12) {
                 if usesCompactWidgetToolbar {
                     VStack(alignment: .leading, spacing: 10) {
-                        Label(widget.title, systemImage: widgetSystemImage(widget.type))
+                        Label(dashboardWidgetDisplayTitle(widget), systemImage: widgetSystemImage(widget.type))
                             .font(.system(size: 17, weight: .bold, design: .rounded))
                             .foregroundStyle(HBPalette.textPrimary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1356,7 +1365,7 @@ struct DashboardView: View {
                     }
                 } else {
                     HStack(alignment: .top, spacing: 12) {
-                        Label(widget.title, systemImage: widgetSystemImage(widget.type))
+                        Label(dashboardWidgetDisplayTitle(widget), systemImage: widgetSystemImage(widget.type))
                             .font(.system(size: 18, weight: .bold, design: .rounded))
                             .foregroundStyle(HBPalette.textPrimary)
 
@@ -1667,7 +1676,7 @@ struct DashboardView: View {
                 }
 
                 if pendingWidgetType == .weather {
-                    Section("Weather Location") {
+                    Section("Climate Location") {
                         Picker("Source", selection: $pendingWeatherLocationMode) {
                             ForEach(DashboardWeatherLocationMode.allCases) { mode in
                                 Text(mode.title).tag(mode)
@@ -3269,34 +3278,21 @@ struct DashboardView: View {
 
                                 Spacer(minLength: 8)
 
-                                HStack(alignment: .center, spacing: 8) {
-                                    weatherInfoPopoverTrigger(
-                                        topic: .aqi(widgetID: widget.id, value: snapshot.airQualityIndex),
-                                        arrowEdge: .top
-                                    ) {
-                                        weatherAQIIndicator(value: snapshot.airQualityIndex, compact: true)
-                                    }
+                                VStack(alignment: .trailing, spacing: 6) {
+                                    weatherOutdoorClimateRow(
+                                        snapshot: snapshot,
+                                        widgetID: widget.id,
+                                        compact: true,
+                                        includeIcon: true,
+                                        weatherGlyphSize: weatherGlyphSize,
+                                        weatherGlyphFrame: weatherGlyphFrame
+                                    )
 
-                                    if let tempest = snapshot.tempest {
-                                        weatherInfoPopoverTrigger(
-                                            topic: .uv(widgetID: widget.id, value: tempest.uvIndex),
-                                            arrowEdge: .top
-                                        ) {
-                                            weatherUVIndicator(value: tempest.uvIndex, compact: true)
-                                        }
-                                    }
-
-                                    Image(systemName: weatherIconName(icon: snapshot.icon, isDay: snapshot.isDay))
-                                        .font(.system(size: weatherGlyphSize, weight: .semibold))
-                                        .foregroundStyle(
-                                            LinearGradient(
-                                                colors: [HBPalette.accentBlue, HBPalette.accentPurple],
-                                                startPoint: .topLeading,
-                                                endPoint: .bottomTrailing
-                                            )
-                                        )
-                                        .frame(width: weatherGlyphFrame, height: weatherGlyphFrame)
-                                        .background(HBGlassBackground(cornerRadius: 18, variant: .panelSoft))
+                                    weatherIndoorClimateRow(
+                                        widgetID: widget.id,
+                                        indoorAir: snapshot.indoorAir,
+                                        compact: true
+                                    )
                                 }
                             }
 
@@ -3388,24 +3384,21 @@ struct DashboardView: View {
 
                                 Spacer(minLength: 10)
 
-                                VStack(alignment: .trailing, spacing: 8) {
-                                    HStack(alignment: .center, spacing: 8) {
-                                        weatherInfoPopoverTrigger(
-                                            topic: .aqi(widgetID: widget.id, value: snapshot.airQualityIndex),
-                                            arrowEdge: .top
-                                        ) {
-                                            weatherAQIIndicator(value: snapshot.airQualityIndex, compact: compactWeatherHeader)
-                                        }
+                                VStack(alignment: .trailing, spacing: 7) {
+                                    weatherOutdoorClimateRow(
+                                        snapshot: snapshot,
+                                        widgetID: widget.id,
+                                        compact: compactWeatherHeader,
+                                        includeIcon: false,
+                                        weatherGlyphSize: weatherGlyphSize,
+                                        weatherGlyphFrame: weatherGlyphFrame
+                                    )
 
-                                        if let tempest = snapshot.tempest {
-                                            weatherInfoPopoverTrigger(
-                                                topic: .uv(widgetID: widget.id, value: tempest.uvIndex),
-                                                arrowEdge: .top
-                                            ) {
-                                                weatherUVIndicator(value: tempest.uvIndex, compact: compactWeatherHeader)
-                                            }
-                                        }
-                                    }
+                                    weatherIndoorClimateRow(
+                                        widgetID: widget.id,
+                                        indoorAir: snapshot.indoorAir,
+                                        compact: compactWeatherHeader
+                                    )
                                 }
                             }
 
@@ -3451,35 +3444,20 @@ struct DashboardView: View {
                             Spacer(minLength: 10)
 
                             VStack(alignment: .trailing, spacing: 10) {
-                                HStack(alignment: .center, spacing: 10) {
-                                    weatherInfoPopoverTrigger(
-                                        topic: .aqi(widgetID: widget.id, value: snapshot.airQualityIndex),
-                                        arrowEdge: .top
-                                    ) {
-                                        weatherAQIIndicator(value: snapshot.airQualityIndex, compact: compactWeatherHeader)
-                                    }
+                                weatherOutdoorClimateRow(
+                                    snapshot: snapshot,
+                                    widgetID: widget.id,
+                                    compact: compactWeatherHeader,
+                                    includeIcon: true,
+                                    weatherGlyphSize: weatherGlyphSize,
+                                    weatherGlyphFrame: weatherGlyphFrame
+                                )
 
-                                    if let tempest = snapshot.tempest {
-                                        weatherInfoPopoverTrigger(
-                                            topic: .uv(widgetID: widget.id, value: tempest.uvIndex),
-                                            arrowEdge: .top
-                                        ) {
-                                            weatherUVIndicator(value: tempest.uvIndex, compact: compactWeatherHeader)
-                                        }
-                                    }
-
-                                    Image(systemName: weatherIconName(icon: snapshot.icon, isDay: snapshot.isDay))
-                                        .font(.system(size: weatherGlyphSize, weight: .semibold))
-                                        .foregroundStyle(
-                                            LinearGradient(
-                                                colors: [HBPalette.accentBlue, HBPalette.accentPurple],
-                                                startPoint: .topLeading,
-                                                endPoint: .bottomTrailing
-                                            )
-                                        )
-                                        .frame(width: weatherGlyphFrame, height: weatherGlyphFrame)
-                                        .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
-                                }
+                                weatherIndoorClimateRow(
+                                    widgetID: widget.id,
+                                    indoorAir: snapshot.indoorAir,
+                                    compact: compactWeatherHeader
+                                )
 
                                 weatherStatusBadges(snapshot: snapshot, compact: tabletCompactWeatherGrid)
                             }
@@ -3809,11 +3787,11 @@ struct DashboardView: View {
             } else if locationManager.isRequesting && widget.settings.weatherLocationMode == .auto {
                 EmptyStateView(
                     title: "Finding current location",
-                    subtitle: "HomeBrain is requesting this device's location for the weather widget."
+                    subtitle: "HomeBrain is requesting this device's location for the climate widget."
                 )
             } else {
                 EmptyStateView(
-                    title: "Weather unavailable",
+                    title: "Climate unavailable",
                     subtitle: error ?? (widget.settings.weatherLocationMode == .auto
                         ? locationManager.errorMessage ?? "Allow location access or choose a saved/custom address."
                         : "Configure a saved location or add a custom address.")
@@ -4242,6 +4220,151 @@ struct DashboardView: View {
             return directionText
         }
         return "\(directionText) • \(gustText)"
+    }
+
+    private func weatherClimateScopeLabel(_ text: String, compact: Bool) -> some View {
+        Text(text)
+            .font(.system(size: compact ? 9 : 10, weight: .bold, design: .rounded))
+            .textCase(.uppercase)
+            .tracking(compact ? 1.3 : 1.6)
+            .foregroundStyle(HBPalette.textMuted)
+            .lineLimit(1)
+            .minimumScaleFactor(0.72)
+            .frame(width: compact ? 46 : 58, alignment: .trailing)
+    }
+
+    private func weatherGlyphBadge(
+        snapshot: DashboardWeatherSnapshot,
+        glyphSize: CGFloat,
+        frameSize: CGFloat,
+        compact: Bool
+    ) -> some View {
+        Image(systemName: weatherIconName(icon: snapshot.icon, isDay: snapshot.isDay))
+            .font(.system(size: glyphSize, weight: .semibold))
+            .foregroundStyle(
+                LinearGradient(
+                    colors: [HBPalette.accentBlue, HBPalette.accentPurple],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .frame(width: frameSize, height: frameSize)
+            .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
+    }
+
+    @ViewBuilder
+    private func weatherOutdoorClimateRow(
+        snapshot: DashboardWeatherSnapshot,
+        widgetID: String,
+        compact: Bool,
+        includeIcon: Bool,
+        weatherGlyphSize: CGFloat,
+        weatherGlyphFrame: CGFloat
+    ) -> some View {
+        HStack(alignment: .center, spacing: compact ? 7 : 9) {
+            weatherClimateScopeLabel("Outside", compact: compact)
+
+            weatherInfoPopoverTrigger(
+                topic: .aqi(widgetID: widgetID, value: snapshot.airQualityIndex),
+                arrowEdge: .top
+            ) {
+                weatherAQIIndicator(value: snapshot.airQualityIndex, compact: compact)
+            }
+
+            if let tempest = snapshot.tempest {
+                weatherInfoPopoverTrigger(
+                    topic: .uv(widgetID: widgetID, value: tempest.uvIndex),
+                    arrowEdge: .top
+                ) {
+                    weatherUVIndicator(value: tempest.uvIndex, compact: compact)
+                }
+            }
+
+            if includeIcon {
+                weatherGlyphBadge(
+                    snapshot: snapshot,
+                    glyphSize: weatherGlyphSize,
+                    frameSize: weatherGlyphFrame,
+                    compact: compact
+                )
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    @ViewBuilder
+    private func weatherIndoorClimateRow(
+        widgetID: String,
+        indoorAir: DashboardIndoorAirSnapshot?,
+        compact: Bool
+    ) -> some View {
+        HStack(alignment: .center, spacing: compact ? 7 : 9) {
+            weatherClimateScopeLabel("Indoor", compact: compact)
+
+            if let indoorAir {
+                weatherInfoPopoverTrigger(topic: .indoorAir(widgetID: widgetID, snapshot: indoorAir), arrowEdge: .top) {
+                    weatherIndoorInline(snapshot: indoorAir, compact: compact)
+                }
+            } else {
+                weatherIndoorInline(snapshot: nil, compact: compact)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private func weatherIndoorInline(snapshot: DashboardIndoorAirSnapshot?, compact: Bool) -> some View {
+        let tone = aqiRiskColor(snapshot?.usAqi)
+        let qualityLabel = snapshot?.qualityLabel ?? "No sensor"
+
+        return HStack(alignment: .center, spacing: compact ? 5 : 6) {
+            Text("AQI")
+                .font(.system(size: compact ? 9 : 10, weight: .bold, design: .rounded))
+                .textCase(.uppercase)
+                .tracking(1.2)
+                .foregroundStyle(HBPalette.textMuted)
+                .lineLimit(1)
+
+            Text(formattedAQI(snapshot?.usAqi))
+                .font(.system(size: compact ? 13 : 15, weight: .bold, design: .rounded))
+                .foregroundStyle(tone)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+
+            Text(qualityLabel)
+                .font(.system(size: compact ? 10 : 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .frame(maxWidth: compact ? 48 : 60, alignment: .leading)
+
+            Rectangle()
+                .fill(HBPalette.panelStroke.opacity(0.85))
+                .frame(width: 1, height: compact ? 14 : 16)
+
+            Text(formattedTemperature(snapshot?.temperatureF))
+                .font(.system(size: compact ? 12 : 13, weight: .bold, design: .rounded))
+                .foregroundStyle(HBPalette.textPrimary)
+                .lineLimit(1)
+
+            Text(formattedPercent(snapshot?.humidityPct))
+                .font(.system(size: compact ? 12 : 13, weight: .bold, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, compact ? 8 : 10)
+        .padding(.vertical, compact ? 6 : 7)
+        .background(
+            ZStack {
+                HBGlassBackground(cornerRadius: compact ? 13 : 15, variant: .panelSoft)
+                RoundedRectangle(cornerRadius: compact ? 13 : 15, style: .continuous)
+                    .fill(tone.opacity(snapshot?.usAqi == nil ? 0 : 0.12))
+            }
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: compact ? 13 : 15, style: .continuous)
+                .stroke(tone.opacity(snapshot?.usAqi == nil ? 0.18 : 0.34), lineWidth: 1)
+        )
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func weatherUVIndicator(value: Double?, compact: Bool) -> some View {

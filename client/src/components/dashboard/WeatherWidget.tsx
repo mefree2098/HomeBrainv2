@@ -35,7 +35,7 @@ interface WeatherWidgetProps {
 const WEATHER_REFRESH_INTERVAL_MS = 60_000
 const resolveCurrentPosition = () => new Promise<GeolocationPosition>((resolve, reject) => {
   if (!("geolocation" in navigator)) {
-    reject(new Error("This browser does not support location access for weather widgets."))
+    reject(new Error("This browser does not support location access for climate widgets."))
     return
   }
 
@@ -854,6 +854,72 @@ function WeatherIndicatorBadge({
   )
 }
 
+function WeatherClimateScopeLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="w-[3.9rem] shrink-0 text-right text-[0.64rem] font-semibold uppercase leading-none tracking-[0.18em] text-muted-foreground">
+      {children}
+    </span>
+  )
+}
+
+function WeatherIndoorInline({
+  indoorAir,
+  compact
+}: {
+  indoorAir: DashboardWeatherPayload["indoorAir"]["monitor"] | null
+  compact: boolean
+}) {
+  const tone = aqiToneClassName(indoorAir?.usAqi)
+  const qualityLabel = indoorAir ? describeIndoorAirLevel(indoorAir.usAqi, indoorAir.qualityLabel) : "No sensor"
+
+  return (
+    <div className={cn(
+      "inline-flex max-w-full items-center gap-2 rounded-[0.9rem] border px-2.5 py-1.5 text-xs font-semibold",
+      tone.chrome,
+      compact ? "gap-1.5 px-2 py-1.5" : ""
+    )}>
+      <span className="section-kicker leading-none">AQI</span>
+      <span className={cn("tabular-nums leading-none", tone.value)}>{formatAqi(indoorAir?.usAqi)}</span>
+      <span className={cn("max-w-[4.8rem] truncate leading-none text-muted-foreground", compact && "max-w-[3.9rem]")}>
+        {qualityLabel}
+      </span>
+      <span className="h-3.5 w-px bg-white/15" />
+      <span className="tabular-nums leading-none text-foreground">{formatTemperature(indoorAir?.temperatureF ?? null)}</span>
+      <span className="tabular-nums leading-none text-muted-foreground">{formatPercent(indoorAir?.humidityPct ?? null)}</span>
+    </div>
+  )
+}
+
+function WeatherIndoorClimateRow({
+  indoorAir,
+  compact,
+  children
+}: {
+  indoorAir: DashboardWeatherPayload["indoorAir"]["monitor"] | null
+  compact: boolean
+  children: React.ReactNode
+}) {
+  const row = (
+    <div className="flex max-w-full items-center justify-end gap-2">
+      <WeatherClimateScopeLabel>Indoor</WeatherClimateScopeLabel>
+      <WeatherIndoorInline indoorAir={indoorAir} compact={compact} />
+    </div>
+  )
+
+  if (!indoorAir) {
+    return row
+  }
+
+  return (
+    <WeatherInfoPopover
+      label="Indoor air details"
+      content={children}
+    >
+      {row}
+    </WeatherInfoPopover>
+  )
+}
+
 function WeatherCompactMetricTile({
   title,
   value,
@@ -934,6 +1000,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
   const indoorAir = weather?.indoorAir?.available ? weather.indoorAir.monitor : null
   const tempestBatteryPercent = getTempestBatteryPercent(tempestStation?.metrics.batteryVolts)
   const aqiTone = aqiToneClassName(weather?.current.airQualityIndex)
+  const indoorAqiTone = aqiToneClassName(indoorAir?.usAqi)
   const uvTone = uvToneClassName(tempestStation?.metrics.uvIndex)
 
   const fetchWeather = useCallback(async (options: { forceTempestSync?: boolean; forceIndoorAirSync?: boolean } = {}) => {
@@ -1043,7 +1110,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
       <div className="flex min-h-[180px] items-center justify-center rounded-[1.5rem] border border-white/10 bg-white/5 dark:bg-slate-950/15">
         <div className="flex items-center gap-3 text-sm text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin" />
-          Loading weather
+          Loading climate
         </div>
       </div>
     )
@@ -1053,7 +1120,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
     return (
       <div className="space-y-4 rounded-[1.5rem] border border-amber-400/20 bg-amber-50/40 p-5 dark:bg-amber-950/15">
         <div className="space-y-2">
-          <p className="section-kicker">Weather Unavailable</p>
+          <p className="section-kicker">Climate Unavailable</p>
           <p className="text-sm leading-relaxed text-muted-foreground">{error}</p>
         </div>
         <Button variant="outline" onClick={() => void fetchWeather()}>
@@ -1072,6 +1139,19 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
   const insideTileDetail = indoorAir
     ? `${formatPercent(indoorAir.humidityPct)} • ${describeIndoorAirLevel(indoorAir.usAqi, indoorAir.qualityLabel)}`
     : describeHumidityLevel(humidityValue)
+  const indoorAirPopoverContent = indoorAir ? (
+    <WeatherInfoValueCard
+      title="Indoor Air"
+      summary={`${formatAqi(indoorAir.usAqi)} AQI · ${formatTemperature(indoorAir.temperatureF)} · ${formatPercent(indoorAir.humidityPct)} · ${describeIndoorAirLevel(indoorAir.usAqi, indoorAir.qualityLabel)}`}
+      rows={[
+        { label: "Indoor AQI", value: formatAqi(indoorAir.usAqi), toneClassName: indoorAqiTone.value },
+        { label: "Temperature", value: formatTemperature(indoorAir.temperatureF), toneClassName: "text-cyan-600 dark:text-cyan-300" },
+        { label: "Humidity", value: formatPercent(indoorAir.humidityPct), toneClassName: "text-emerald-600 dark:text-emerald-300" },
+        { label: "PM2.5", value: formatPm25(indoorAir.pm25UgM3), toneClassName: "text-violet-600 dark:text-violet-300" }
+      ]}
+      footer={indoorAir.qualityAdvice || "Indoor readings are pulled from the Govee monitor and stored for charting in the Weather and Data Platform panels."}
+    />
+  ) : null
   const metricGrid = compact
     ? "grid-cols-2"
     : medium
@@ -1102,31 +1182,33 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
               </div>
             </div>
 
-            <div className="flex shrink-0 items-start gap-2.5">
-              <WeatherInfoPopover
-                label="AQI details"
-                content={(
-                  <WeatherInfoCard
-                    title="AQI"
-                    summary={`Current ${formatAqi(weather.current.airQualityIndex)} · ${describeAqiLevel(weather.current.airQualityIndex)}`}
-                    rows={[
-                      { range: "0-50", detail: "Good", toneClassName: "text-emerald-600 dark:text-emerald-300" },
-                      { range: "51-100", detail: "Moderate", toneClassName: "text-amber-600 dark:text-amber-300" },
-                      { range: "101+", detail: "Unhealthy", toneClassName: "text-rose-600 dark:text-rose-300" }
-                    ]}
-                    footer="AQI reflects how current air pollution may affect outdoor breathing comfort."
+            <div className="flex shrink-0 flex-col items-end gap-2">
+              <div className="flex items-start justify-end gap-2.5">
+                <WeatherClimateScopeLabel>Outside</WeatherClimateScopeLabel>
+                <WeatherInfoPopover
+                  label="AQI details"
+                  content={(
+                    <WeatherInfoCard
+                      title="AQI"
+                      summary={`Current ${formatAqi(weather.current.airQualityIndex)} · ${describeAqiLevel(weather.current.airQualityIndex)}`}
+                      rows={[
+                        { range: "0-50", detail: "Good", toneClassName: "text-emerald-600 dark:text-emerald-300" },
+                        { range: "51-100", detail: "Moderate", toneClassName: "text-amber-600 dark:text-amber-300" },
+                        { range: "101+", detail: "Unhealthy", toneClassName: "text-rose-600 dark:text-rose-300" }
+                      ]}
+                      footer="AQI reflects how current air pollution may affect outdoor breathing comfort."
+                    />
+                  )}
+                >
+                  <WeatherIndicatorBadge
+                    label="AQI"
+                    value={formatAqi(weather.current.airQualityIndex)}
+                    chromeClassName={aqiTone.chrome}
+                    valueClassName={aqiTone.value}
                   />
-                )}
-              >
-                <WeatherIndicatorBadge
-                  label="AQI"
-                  value={formatAqi(weather.current.airQualityIndex)}
-                  chromeClassName={aqiTone.chrome}
-                  valueClassName={aqiTone.value}
-                />
-              </WeatherInfoPopover>
+                </WeatherInfoPopover>
 
-              {tempestStation ? (
+                {tempestStation ? (
                 <WeatherInfoPopover
                   label="UV details"
                   contentClassName={moduleTelemetry ? "w-[360px] p-0" : undefined}
@@ -1160,11 +1242,15 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
                     valueClassName={uvTone.value}
                   />
                 </WeatherInfoPopover>
-              ) : null}
+                ) : null}
 
-              <div className="flex h-14 w-14 items-center justify-center rounded-[1.1rem] border border-white/15 bg-white/10 text-cyan-700 shadow-lg shadow-cyan-500/5 dark:text-cyan-300">
-                <WeatherGlyph icon={weather.current.icon} isDay={weather.current.isDay} className="h-7 w-7" />
+                <div className="flex h-14 w-14 items-center justify-center rounded-[1.1rem] border border-white/15 bg-white/10 text-cyan-700 shadow-lg shadow-cyan-500/5 dark:text-cyan-300">
+                  <WeatherGlyph icon={weather.current.icon} isDay={weather.current.isDay} className="h-7 w-7" />
+                </div>
               </div>
+              <WeatherIndoorClimateRow indoorAir={indoorAir} compact={compact || medium}>
+                {indoorAirPopoverContent}
+              </WeatherIndoorClimateRow>
             </div>
           </div>
 
@@ -1207,7 +1293,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
                 size="icon"
                 className="h-8 w-8 rounded-full border-white/15 bg-white/8"
                 onClick={() => void fetchWeather({ forceTempestSync: true, forceIndoorAirSync: true })}
-                aria-label="Refresh weather"
+                aria-label="Refresh climate"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
               </Button>

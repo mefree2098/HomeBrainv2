@@ -120,7 +120,7 @@ const ADDABLE_WIDGETS: Array<{ type: DashboardWidgetType; label: string; descrip
   { type: "summary", label: "System Summary", description: "Live devices, voice mesh, scenes, and workflow activity." },
   { type: "security", label: "Security Center", description: "Alarm state and control actions." },
   { type: "favorite-scenes", label: "Quick Scenes", description: "Pin favorite scenes and launch them instantly." },
-  { type: "weather", label: "Weather", description: "Current conditions with saved, custom, or auto-detected location." },
+  { type: "weather", label: "Climate", description: "Outdoor forecast plus indoor air, temperature, and humidity readings." },
   { type: "voice-command", label: "Voice Command", description: "Natural-language control surface for the home." },
   { type: "devices", label: "Devices", description: "A dense control grid for a selected set of devices." },
   { type: "device", label: "Device Control", description: "A dedicated control tile for one specific device." }
@@ -1215,6 +1215,18 @@ export function Dashboard() {
     return null
   }
 
+  const widgetDisplayTitle = (widget: DashboardWidgetConfig) => (
+    widget.type === "weather" && widget.title.trim().toLowerCase() === "weather"
+      ? "Climate"
+      : widget.title
+  )
+
+  const widgetDisplayType = (widget: DashboardWidgetConfig) => (
+    widget.type === "weather"
+      ? "climate"
+      : widget.type.replace("-", " ")
+  )
+
   if (!isLoaded) {
     return (
       <div className="flex h-64 items-center justify-center">
@@ -1256,8 +1268,8 @@ export function Dashboard() {
                       <Icon className="h-4 w-4" />
                     </span>
                     <div>
-                      <p className="text-sm font-semibold text-foreground">{widget.title}</p>
-                      <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">{widget.type.replace("-", " ")}</p>
+                      <p className="text-sm font-semibold text-foreground">{widgetDisplayTitle(widget)}</p>
+                      <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">{widgetDisplayType(widget)}</p>
                     </div>
                   </div>
 
