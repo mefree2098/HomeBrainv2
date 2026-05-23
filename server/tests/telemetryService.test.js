@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const telemetryService = require('../services/telemetryService');
+const TelemetrySourceSummary = require('../models/TelemetrySourceSummary');
 const { TelemetryService } = telemetryService;
 
 const {
@@ -444,6 +445,40 @@ test('resolveTelemetrySourceKey rejects object-shaped query payloads before Mong
   assert.equal(resolveTelemetrySourceKey({ sourceKey: { $ne: '' } }), '');
   assert.equal(resolveTelemetrySourceKey({ sourceType: 'device', sourceId: { $ne: '' } }), '');
   assert.equal(resolveTelemetrySourceKey({ sourceKey: 'device:abc$ne' }), '');
+});
+
+test('updateSourceSummaryForSample avoids counter path conflicts on upserted samples', async () => {
+  const calls = [];
+  const originalUpdateOne = TelemetrySourceSummary.updateOne;
+
+  TelemetrySourceSummary.updateOne = async (query, update, options) => {
+    calls.push({ query, update, options });
+    return { acknowledged: true };
+  };
+
+  try {
+    await telemetryService.updateSourceSummaryForSample({
+      sourceKey: 'govee_air_quality:abc',
+      sourceType: 'govee_air_quality',
+      sourceId: 'abc',
+      sourceName: 'Govee Indoor Air Monitor',
+      sourceCategory: 'Indoor Air',
+      sourceRoom: 'Inside',
+      sourceOrigin: 'govee',
+      streamType: 'govee_air_quality_sample',
+      metricKeys: ['temperature_f'],
+      metrics: { temperature_f: 72.5 },
+      recordedAt: new Date('2026-05-23T12:00:00.000Z')
+    }, { sampleInserted: true });
+  } finally {
+    TelemetrySourceSummary.updateOne = originalUpdateOne;
+  }
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].update.$inc.sampleCount, 1);
+  assert.equal(calls[0].update.$inc['streamCounts.govee_air_quality_sample'], 1);
+  assert.equal(Object.hasOwn(calls[0].update.$setOnInsert, 'sampleCount'), false);
+  assert.equal(Object.hasOwn(calls[0].update.$setOnInsert, 'streamCounts'), false);
 });
 
 test('normalizeDiskCapacity maps resource monitor disk output into free and total values', () => {

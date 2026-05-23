@@ -17,10 +17,20 @@ const clampPollIntervalMs = (value) => {
   return Math.max(60 * 1000, Math.min(60 * 60 * 1000, numeric));
 };
 
+const normalizeConnectionMode = (value) => {
+  const normalized = trimString(value, 'auto').toLowerCase();
+  return ['auto', 'cloud', 'local'].includes(normalized) ? normalized : 'auto';
+};
+
 const GoveeIntegrationSchema = new mongoose.Schema({
   apiKey: {
     type: String,
     default: ''
+  },
+  connectionMode: {
+    type: String,
+    enum: ['auto', 'cloud', 'local'],
+    default: 'auto'
   },
   enabled: {
     type: Boolean,
@@ -68,9 +78,40 @@ const GoveeIntegrationSchema = new mongoose.Schema({
     type: [mongoose.Schema.Types.Mixed],
     default: []
   },
+  localDeviceIp: {
+    type: String,
+    default: ''
+  },
+  localDevicePort: {
+    type: Number,
+    default: 4003,
+    min: 1,
+    max: 65535
+  },
+  localDiscoveredDevices: {
+    type: [mongoose.Schema.Types.Mixed],
+    default: []
+  },
+  lastLocalDiscoveryAt: {
+    type: Date,
+    default: null
+  },
+  lastLocalSyncAt: {
+    type: Date,
+    default: null
+  },
+  lastLocalError: {
+    type: String,
+    default: ''
+  },
   lastSample: {
     type: mongoose.Schema.Types.Mixed,
     default: null
+  },
+  lastSampleSource: {
+    type: String,
+    enum: ['cloud_api', 'local_lan', ''],
+    default: ''
   },
   isConnected: {
     type: Boolean,
@@ -106,13 +147,17 @@ const GoveeIntegrationSchema = new mongoose.Schema({
 });
 
 GoveeIntegrationSchema.pre('save', function() {
+  this.connectionMode = normalizeConnectionMode(this.connectionMode);
   this.pollIntervalMs = clampPollIntervalMs(this.pollIntervalMs);
+  const port = Math.trunc(Number(this.localDevicePort));
+  this.localDevicePort = Number.isFinite(port) && port > 0 && port <= 65535 ? port : 4003;
   this.updatedAt = new Date();
 });
 
 GoveeIntegrationSchema.statics.getDefaultIntegration = function() {
   return {
     apiKey: trimString(process.env.GOVEE_API_KEY, ''),
+    connectionMode: normalizeConnectionMode(process.env.GOVEE_CONNECTION_MODE),
     enabled: process.env.GOVEE_ENABLED === 'true',
     room: trimString(process.env.GOVEE_ROOM, 'Inside'),
     selectedDevice: trimString(process.env.GOVEE_SELECTED_DEVICE, ''),
@@ -124,7 +169,14 @@ GoveeIntegrationSchema.statics.getDefaultIntegration = function() {
     humidityOffsetPct: Number(process.env.GOVEE_HUMIDITY_OFFSET_PCT || 0),
     pm25OffsetUgM3: Number(process.env.GOVEE_PM25_OFFSET_UGM3 || 0),
     discoveredDevices: [],
+    localDeviceIp: trimString(process.env.GOVEE_LOCAL_DEVICE_IP, ''),
+    localDevicePort: Number(process.env.GOVEE_LOCAL_DEVICE_PORT || 4003),
+    localDiscoveredDevices: [],
+    lastLocalDiscoveryAt: null,
+    lastLocalSyncAt: null,
+    lastLocalError: '',
     lastSample: null,
+    lastSampleSource: '',
     isConnected: false,
     lastDiscoveryAt: null,
     lastSyncAt: null,

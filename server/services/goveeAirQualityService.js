@@ -1,4 +1,5 @@
 const axios = require('axios');
+const dgram = require('dgram');
 const { randomUUID } = require('crypto');
 const mongoose = require('mongoose');
 const Device = require('../models/Device');
@@ -12,6 +13,11 @@ const DEFAULT_POLL_INTERVAL_MS = 60 * 1000;
 const DEFAULT_HTTP_TIMEOUT_MS = 12000;
 const DEFAULT_HISTORY_HOURS = 24;
 const DEFAULT_HISTORY_LIMIT = 240;
+const DEFAULT_LAN_DISCOVERY_TIMEOUT_MS = 3500;
+const GOVEE_LAN_MULTICAST_ADDRESS = '239.255.255.250';
+const GOVEE_LAN_SCAN_PORT = 4001;
+const GOVEE_LAN_LISTEN_PORT = 4002;
+const GOVEE_LAN_CONTROL_PORT = 4003;
 const GOVEE_SOURCE_TYPE = 'govee_air_quality';
 const GOVEE_STREAM_TYPE = 'govee_air_quality_sample';
 
@@ -81,6 +87,39 @@ const clampPollIntervalMs = (value) => {
     return DEFAULT_POLL_INTERVAL_MS;
   }
   return Math.max(60 * 1000, Math.min(60 * 60 * 1000, numeric));
+};
+
+const normalizeConnectionMode = (value) => {
+  const normalized = trimString(value, 'auto').toLowerCase();
+  return ['auto', 'cloud', 'local'].includes(normalized) ? normalized : 'auto';
+};
+
+const clampUdpPort = (value, fallback = GOVEE_LAN_CONTROL_PORT) => {
+  const numeric = Math.trunc(Number(value));
+  if (!Number.isFinite(numeric) || numeric < 1 || numeric > 65535) {
+    return fallback;
+  }
+  return numeric;
+};
+
+const normalizeLanTimeoutMs = (value) => {
+  const numeric = Math.trunc(Number(value));
+  if (!Number.isFinite(numeric)) {
+    return DEFAULT_LAN_DISCOVERY_TIMEOUT_MS;
+  }
+  if (numeric <= 1_000) {
+    return 1_000;
+  }
+  if (numeric <= 2_500) {
+    return 2_500;
+  }
+  if (numeric <= 5_000) {
+    return 5_000;
+  }
+  if (numeric <= 7_500) {
+    return 7_500;
+  }
+  return 10_000;
 };
 
 const normalizeInstanceName = (value) => trimString(value, '')
@@ -279,6 +318,131 @@ function compactDiscoveredDevice(device = {}) {
   };
 }
 
+function parseLanMessagePayload(message) {
+  const raw = Buffer.isBuffer(message) ? message.toString('utf8') : trimString(message, '');
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function normalizeLocalScanResponse(payload, remote = {}) {
+  const data = payload?.msg?.data || payload?.data || payload || {};
+  const sku = trimString(data.sku || data.model || data.productName, '').toUpperCase();
+  const device = trimString(data.device || data.deviceId || data.mac, '');
+  const ip = trimString(data.ip || remote.address, '');
+
+  if (!sku || (!device && !ip)) {
+    return null;
+  }
+
+  return {
+    sku,
+    device: device || ip,
+    deviceName: trimString(data.deviceName || data.name || data.productName, `${sku} Local Device`),
+    type: trimString(data.type || data.deviceType || 'govee_lan', 'govee_lan'),
+    isAirQualityDevice: isAirQualityDevice({ sku, device, type: data.type, capabilities: data.capabilities }),
+    ip,
+    port: clampUdpPort(data.port || GOVEE_LAN_CONTROL_PORT),
+    lanApiSupported: true,
+    capabilities: Array.isArray(data.capabilities) ? data.capabilities : [],
+    firmware: {
+      bleHardware: trimString(data.bleVersionHard, ''),
+      bleSoftware: trimString(data.bleVersionSoft, ''),
+      wifiHardware: trimString(data.wifiVersionHard, ''),
+      wifiSoftware: trimString(data.wifiVersionSoft, '')
+    }
+  };
+}
+
+function getFirstPresentValue(source, keys) {
+  if (!source || typeof source !== 'object') {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(source, key) && source[key] !== undefined && source[key] !== null && source[key] !== '') {
+      return source[key];
+    }
+  }
+
+  return undefined;
+}
+
+function buildSyntheticCapability(instance, value, unit) {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  const capability = {
+    type: 'govee.lan.property',
+    instance,
+    state: { value }
+  };
+
+  if (unit) {
+    capability.parameters = { unit };
+  }
+
+  return capability;
+}
+
+function normalizeLocalStateResponse(localResponse = {}, selectedDevice = {}, integration = {}) {
+  const data = localResponse?.msg?.data || localResponse?.data || localResponse || {};
+  const capabilities = [];
+  const online = getFirstPresentValue(data, ['online', 'isOnline']);
+  const onOff = getFirstPresentValue(data, ['onOff', 'powerState']);
+  const temperature = getFirstPresentValue(data, ['sensorTemperature', 'temperature', 'temp', 'tempF', 'temperatureF', 'tempC', 'temperatureC']);
+  const humidity = getFirstPresentValue(data, ['sensorHumidity', 'humidity', 'humidityPct']);
+  const pm25 = getFirstPresentValue(data, ['pm25', 'pm2_5', 'pm2.5', 'pm25UgM3', 'particulateMatter25']);
+  const aqi = getFirstPresentValue(data, ['airQualityIndex', 'usAqi', 'aqi']);
+  const co2 = getFirstPresentValue(data, ['co2', 'co2Ppm', 'carbonDioxide']);
+  const tvoc = getFirstPresentValue(data, ['tvoc', 'tvocPpb', 'voc']);
+  const timestamp = getFirstPresentValue(data, ['observedAt', 'updatedAt', 'timestamp']);
+
+  capabilities.push(buildSyntheticCapability('online', online ?? (onOff == null ? undefined : true)));
+
+  const tempUnit = Object.prototype.hasOwnProperty.call(data, 'tempF') || Object.prototype.hasOwnProperty.call(data, 'temperatureF')
+    ? 'fahrenheit'
+    : (Object.prototype.hasOwnProperty.call(data, 'tempC') || Object.prototype.hasOwnProperty.call(data, 'temperatureC') ? 'celsius' : undefined);
+
+  capabilities.push(buildSyntheticCapability('temperature', temperature, tempUnit));
+  capabilities.push(buildSyntheticCapability('humidity', humidity, 'percent'));
+  capabilities.push(buildSyntheticCapability('pm25', pm25, 'ug/m3'));
+  capabilities.push(buildSyntheticCapability('airQualityIndex', aqi));
+  capabilities.push(buildSyntheticCapability('co2', co2, 'ppm'));
+  capabilities.push(buildSyntheticCapability('tvoc', tvoc, 'ppb'));
+
+  const normalized = normalizeStateResponse({
+    data: {
+      sku: selectedDevice.sku,
+      device: selectedDevice.device,
+      capabilities: capabilities.filter(Boolean).map((capability) => timestamp ? { ...capability, updatedAt: timestamp } : capability)
+    }
+  }, selectedDevice, integration);
+
+  return {
+    ...normalized,
+    source: 'local_lan',
+    localIp: trimString(selectedDevice.ip || integration?.localDeviceIp, ''),
+    localPayload: data
+  };
+}
+
+function sampleHasIndoorMetrics(sample) {
+  return sample?.temperatureF != null
+    || sample?.humidityPct != null
+    || sample?.pm25UgM3 != null
+    || sample?.co2Ppm != null
+    || sample?.tvocPpb != null
+    || sample?.usAqi != null;
+}
+
 function normalizeDeviceList(responseData) {
   const data = responseData?.data ?? responseData;
   const devices = Array.isArray(data?.devices)
@@ -454,7 +618,7 @@ class GoveeAirQualityService {
     }
 
     const integration = await GoveeIntegration.getIntegration();
-    if (!integration.enabled || !this.resolveApiKey(integration)) {
+    if (!this.canPoll(integration)) {
       return;
     }
 
@@ -484,6 +648,11 @@ class GoveeAirQualityService {
     };
   }
 
+  canPoll(integration) {
+    const mode = normalizeConnectionMode(integration?.connectionMode);
+    return integration?.enabled === true && (mode !== 'cloud' || Boolean(this.resolveApiKey(integration)));
+  }
+
   async requestDeviceList(apiKey) {
     const response = await axios.get(`${this.apiBase}/router/api/v1/user/devices`, {
       headers: this.apiHeaders(apiKey),
@@ -508,6 +677,148 @@ class GoveeAirQualityService {
     return response.data;
   }
 
+  discoverLocalDevices({ timeoutMs = DEFAULT_LAN_DISCOVERY_TIMEOUT_MS } = {}) {
+    return new Promise((resolve, reject) => {
+      const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+      const devices = new Map();
+      const lanTimeoutMs = normalizeLanTimeoutMs(timeoutMs);
+      let settled = false;
+
+      const cleanup = () => {
+        try {
+          socket.close();
+        } catch (_error) {
+          // Socket may already be closed after an error.
+        }
+      };
+
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve(Array.from(devices.values()));
+      };
+
+      const fail = (error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+
+      socket.on('message', (message, remote) => {
+        const payload = parseLanMessagePayload(message);
+        const device = normalizeLocalScanResponse(payload, remote);
+        if (!device) {
+          return;
+        }
+        devices.set(`${device.sku}:${device.device}:${device.ip}`, device);
+      });
+
+      socket.on('error', fail);
+
+      socket.bind(GOVEE_LAN_LISTEN_PORT, () => {
+        try {
+          socket.setBroadcast(true);
+          socket.setMulticastTTL(2);
+        } catch (_error) {
+          // Some host network stacks do not allow multicast tuning; discovery can still try.
+        }
+
+        const payload = Buffer.from(JSON.stringify({
+          msg: {
+            cmd: 'scan',
+            data: {
+              account_topic: 'reserve'
+            }
+          }
+        }));
+
+        socket.send(payload, GOVEE_LAN_SCAN_PORT, GOVEE_LAN_MULTICAST_ADDRESS, (error) => {
+          if (error) {
+            fail(error);
+          }
+        });
+      });
+
+      setTimeout(finish, lanTimeoutMs);
+    });
+  }
+
+  requestLocalDeviceState(localDevice, { timeoutMs = DEFAULT_LAN_DISCOVERY_TIMEOUT_MS } = {}) {
+    const host = trimString(localDevice?.ip || localDevice?.localDeviceIp, '');
+    const port = clampUdpPort(localDevice?.port || localDevice?.localDevicePort, GOVEE_LAN_CONTROL_PORT);
+    if (!host) {
+      throw new Error('Enter a local IP address or run local Govee discovery before testing LAN mode.');
+    }
+
+    return new Promise((resolve, reject) => {
+      const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+      const lanTimeoutMs = normalizeLanTimeoutMs(timeoutMs);
+      let settled = false;
+
+      const cleanup = () => {
+        try {
+          socket.close();
+        } catch (_error) {
+          // Socket may already be closed after an error.
+        }
+      };
+
+      const finish = (payload) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve(payload);
+      };
+
+      const fail = (error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        reject(error);
+      };
+
+      socket.on('message', (message) => {
+        const payload = parseLanMessagePayload(message);
+        const command = trimString(payload?.msg?.cmd || payload?.cmd, '');
+        if (command && command !== 'devStatus') {
+          return;
+        }
+        finish(payload);
+      });
+
+      socket.on('error', fail);
+
+      socket.bind(GOVEE_LAN_LISTEN_PORT, () => {
+        const payload = Buffer.from(JSON.stringify({
+          msg: {
+            cmd: 'devStatus',
+            data: {}
+          }
+        }));
+
+        socket.send(payload, port, host, (error) => {
+          if (error) {
+            fail(error);
+          }
+        });
+      });
+
+      setTimeout(() => {
+        fail(new Error(`No Govee LAN response from ${host}:${port}. Make sure the device supports LAN Control and is on the same network.`));
+      }, lanTimeoutMs);
+    });
+  }
+
   async getStatus() {
     if (isDatabaseUnavailableForTest()) {
       return {
@@ -515,6 +826,7 @@ class GoveeAirQualityService {
           apiKey: '',
           apiKeyConfigured: Boolean(process.env.GOVEE_API_KEY),
           apiKeySource: process.env.GOVEE_API_KEY ? 'environment' : 'none',
+          connectionMode: normalizeConnectionMode(process.env.GOVEE_CONNECTION_MODE),
           enabled: false,
           room: 'Inside',
           selectedDevice: '',
@@ -525,6 +837,13 @@ class GoveeAirQualityService {
           tempOffsetF: 0,
           humidityOffsetPct: 0,
           pm25OffsetUgM3: 0,
+          localDeviceIp: trimString(process.env.GOVEE_LOCAL_DEVICE_IP, ''),
+          localDevicePort: clampUdpPort(process.env.GOVEE_LOCAL_DEVICE_PORT),
+          localDiscoveredDevices: [],
+          lastLocalDiscoveryAt: null,
+          lastLocalSyncAt: null,
+          lastLocalError: '',
+          lastSampleSource: '',
           isConnected: false,
           lastDiscoveryAt: null,
           lastSyncAt: null,
@@ -539,10 +858,15 @@ class GoveeAirQualityService {
           lastSyncAt: null,
           lastSampleAt: null,
           lastError: '',
-          selectedDeviceOnline: null
+          selectedDeviceOnline: null,
+          lastLocalDiscoveryAt: null,
+          lastLocalSyncAt: null,
+          lastLocalError: '',
+          lastSampleSource: ''
         },
         selectedDevice: null,
         devices: [],
+        localDevices: [],
         latestSample: null
       };
     }
@@ -565,9 +889,14 @@ class GoveeAirQualityService {
         lastSyncAt: integration.lastSyncAt,
         lastSampleAt: integration.lastSampleAt,
         lastError: integration.lastError || '',
-        selectedDeviceOnline: selectedDevice ? latestSample?.isOnline ?? null : null
+        selectedDeviceOnline: selectedDevice ? latestSample?.isOnline ?? null : null,
+        lastLocalDiscoveryAt: integration.lastLocalDiscoveryAt,
+        lastLocalSyncAt: integration.lastLocalSyncAt,
+        lastLocalError: integration.lastLocalError || '',
+        lastSampleSource: integration.lastSampleSource || ''
       },
       selectedDevice,
+      localDevices: Array.isArray(integration.localDiscoveredDevices) ? integration.localDiscoveredDevices : [],
       devices,
       latestSample
     };
@@ -613,6 +942,90 @@ class GoveeAirQualityService {
     };
   }
 
+  resolveSelectedLocalDevice(integration, localDevices = []) {
+    const selectedDevice = trimString(integration?.selectedDevice, '');
+    const selectedSku = trimString(integration?.selectedSku, '');
+    const localIp = trimString(integration?.localDeviceIp, '');
+
+    if (selectedDevice && selectedSku) {
+      const match = localDevices.find((device) => device.device === selectedDevice && device.sku === selectedSku);
+      if (match) {
+        return match;
+      }
+    }
+
+    if (localIp) {
+      const match = localDevices.find((device) => device.ip === localIp);
+      return match || {
+        sku: selectedSku || 'LAN',
+        device: selectedDevice || localIp,
+        deviceName: trimString(integration?.selectedDeviceName, 'Govee Local Device'),
+        type: trimString(integration?.selectedDeviceType, 'govee_lan'),
+        isAirQualityDevice: selectedSku === 'H5106',
+        ip: localIp,
+        port: clampUdpPort(integration?.localDevicePort),
+        lanApiSupported: true,
+        capabilities: []
+      };
+    }
+
+    return localDevices.find((device) => device.isAirQualityDevice) || localDevices[0] || null;
+  }
+
+  async testLocalConnection(payload = {}) {
+    const integration = await GoveeIntegration.getIntegration();
+    const localIp = trimString(payload.localDeviceIp, integration.localDeviceIp || '');
+    const localPort = clampUdpPort(payload.localDevicePort || integration.localDevicePort);
+    const shouldDiscover = payload.discover !== false && !localIp;
+    const devices = shouldDiscover ? await this.discoverLocalDevices({ timeoutMs: payload.timeoutMs }) : [];
+    const integrationObject = typeof integration.toObject === 'function' ? integration.toObject() : integration;
+    const selectedDevice = this.resolveSelectedLocalDevice({
+      ...integrationObject,
+      localDeviceIp: localIp,
+      localDevicePort: localPort
+    }, devices);
+
+    if (!selectedDevice) {
+      return {
+        success: false,
+        devices,
+        selectedDevice: null,
+        sample: null,
+        message: 'No Govee LAN devices responded. The H5106 may not expose Govee LAN Control; use Auto mode with a cloud API key if local testing keeps returning no devices.'
+      };
+    }
+
+    try {
+      const stateResponse = await this.requestLocalDeviceState(selectedDevice, { timeoutMs: payload.timeoutMs });
+      const sample = normalizeLocalStateResponse(stateResponse, selectedDevice, integration);
+      if (!sampleHasIndoorMetrics(sample)) {
+        return {
+          success: false,
+          devices,
+          selectedDevice,
+          sample,
+          message: 'The local Govee LAN API responded, but it did not expose temperature, humidity, PM2.5, or AQI metrics for this device.'
+        };
+      }
+
+      return {
+        success: true,
+        devices,
+        selectedDevice,
+        sample,
+        message: `Local Govee LAN readings are available from ${selectedDevice.deviceName || selectedDevice.sku}.`
+      };
+    } catch (error) {
+      return {
+        success: false,
+        devices,
+        selectedDevice,
+        sample: null,
+        message: error.message || 'Local Govee LAN test failed.'
+      };
+    }
+  }
+
   async configureIntegration(payload = {}) {
     const integration = await GoveeIntegration.getIntegration();
     const nextApiKey = trimString(payload.apiKey, '');
@@ -625,11 +1038,17 @@ class GoveeAirQualityService {
       integration.enabled = payload.enabled === true;
     }
 
+    if (Object.prototype.hasOwnProperty.call(payload, 'connectionMode')) {
+      integration.connectionMode = normalizeConnectionMode(payload.connectionMode);
+    }
+
     integration.room = trimString(payload.room, integration.room || 'Inside');
     integration.pollIntervalMs = clampPollIntervalMs(payload.pollIntervalMs ?? integration.pollIntervalMs);
     integration.tempOffsetF = Number(payload.tempOffsetF || 0);
     integration.humidityOffsetPct = Number(payload.humidityOffsetPct || 0);
     integration.pm25OffsetUgM3 = Number(payload.pm25OffsetUgM3 || 0);
+    integration.localDeviceIp = trimString(payload.localDeviceIp, integration.localDeviceIp || '');
+    integration.localDevicePort = clampUdpPort(payload.localDevicePort || integration.localDevicePort);
 
     const selectedDevice = trimString(payload.selectedDevice, '');
     const selectedSku = trimString(payload.selectedSku, '');
@@ -681,18 +1100,75 @@ class GoveeAirQualityService {
   async performSync({ reason, allowDisabled }) {
     const integration = await GoveeIntegration.getIntegration();
     const apiKey = this.resolveApiKey(integration);
+    const connectionMode = normalizeConnectionMode(integration.connectionMode);
 
     if (!integration.enabled && !allowDisabled) {
       return { success: true, skipped: true, reason: 'disabled' };
     }
 
-    if (!apiKey) {
-      integration.isConnected = false;
-      integration.lastError = 'No Govee API key is configured.';
-      await integration.save();
-      return { success: false, skipped: true, reason: 'missing-api-key' };
+    let localError = null;
+    if (connectionMode !== 'cloud') {
+      try {
+        const localResult = await this.syncFromLocal(integration);
+        const persisted = await this.persistSyncSample(integration, {
+          ...localResult,
+          sampleSource: 'local_lan'
+        });
+        return {
+          success: true,
+          skipped: false,
+          reason,
+          connectionMode,
+          sampleSource: 'local_lan',
+          ...persisted
+        };
+      } catch (error) {
+        localError = error;
+        integration.lastLocalError = error.message || 'Local Govee LAN sync failed.';
+        integration.lastLocalSyncAt = new Date();
+        if (connectionMode === 'local') {
+          integration.isConnected = false;
+          integration.lastError = integration.lastLocalError;
+          await integration.save();
+          return {
+            success: false,
+            skipped: true,
+            reason: 'local-sync-failed',
+            connectionMode,
+            message: integration.lastLocalError
+          };
+        }
+      }
     }
 
+    if (!apiKey) {
+      integration.isConnected = false;
+      integration.lastError = localError
+        ? `${integration.lastLocalError} No Govee API key is configured for cloud fallback.`
+        : 'No Govee API key is configured.';
+      await integration.save();
+      return { success: false, skipped: true, reason: 'missing-api-key', connectionMode };
+    }
+
+    const cloudResult = await this.syncFromCloud(integration, apiKey);
+    const persisted = await this.persistSyncSample(integration, {
+      ...cloudResult,
+      sampleSource: 'cloud_api',
+      preserveLocalError: Boolean(localError)
+    });
+
+    return {
+      success: true,
+      skipped: false,
+      reason,
+      connectionMode,
+      sampleSource: 'cloud_api',
+      localFallbackReason: localError?.message || '',
+      ...persisted
+    };
+  }
+
+  async syncFromCloud(integration, apiKey) {
     const devices = await this.requestDeviceList(apiKey);
     integration.discoveredDevices = devices;
     integration.lastDiscoveryAt = new Date();
@@ -702,9 +1178,53 @@ class GoveeAirQualityService {
       integration.isConnected = false;
       integration.lastError = 'The Govee API did not return any devices for this account.';
       await integration.save();
-      return { success: false, skipped: true, reason: 'no-devices' };
+      throw new Error(integration.lastError);
     }
 
+    const stateResponse = await this.requestDeviceState(apiKey, selectedDevice);
+    const sample = {
+      ...normalizeStateResponse(stateResponse, selectedDevice, integration),
+      source: 'cloud_api'
+    };
+
+    return {
+      selectedDevice,
+      sample
+    };
+  }
+
+  async syncFromLocal(integration) {
+    let localDevices = Array.isArray(integration.localDiscoveredDevices) ? integration.localDiscoveredDevices : [];
+    if (!trimString(integration.localDeviceIp, '')) {
+      localDevices = await this.discoverLocalDevices();
+      integration.localDiscoveredDevices = localDevices;
+      integration.lastLocalDiscoveryAt = new Date();
+    }
+
+    const selectedDevice = this.resolveSelectedLocalDevice(integration, localDevices);
+    if (!selectedDevice) {
+      throw new Error('No local Govee LAN device is configured or discoverable.');
+    }
+
+    const stateResponse = await this.requestLocalDeviceState(selectedDevice);
+    const sample = normalizeLocalStateResponse(stateResponse, selectedDevice, integration);
+    if (!sampleHasIndoorMetrics(sample)) {
+      throw new Error('The local Govee LAN API responded but did not expose indoor air metrics for this device.');
+    }
+
+    if (!integration.localDeviceIp && selectedDevice.ip) {
+      integration.localDeviceIp = selectedDevice.ip;
+      integration.localDevicePort = clampUdpPort(selectedDevice.port);
+    }
+
+    return {
+      selectedDevice,
+      sample,
+      localDevices
+    };
+  }
+
+  async persistSyncSample(integration, { selectedDevice, sample, sampleSource, localDevices = null, preserveLocalError = false }) {
     if (!integration.selectedDevice || !integration.selectedSku) {
       integration.selectedDevice = selectedDevice.device;
       integration.selectedSku = selectedDevice.sku;
@@ -712,29 +1232,41 @@ class GoveeAirQualityService {
       integration.selectedDeviceType = selectedDevice.type;
     }
 
-    const stateResponse = await this.requestDeviceState(apiKey, selectedDevice);
-    const sample = normalizeStateResponse(stateResponse, selectedDevice, integration);
-    const device = await this.upsertHomeBrainDevice(integration, selectedDevice, sample);
-    const telemetryPayload = await this.recordTelemetrySample(device, integration, selectedDevice, sample);
+    if (Array.isArray(localDevices)) {
+      integration.localDiscoveredDevices = localDevices;
+      integration.lastLocalDiscoveryAt = new Date();
+    }
+
+    const sampleWithMode = {
+      ...sample,
+      source: sampleSource
+    };
+    const device = await this.upsertHomeBrainDevice(integration, selectedDevice, sampleWithMode);
+    const telemetryPayload = await this.recordTelemetrySample(device, integration, selectedDevice, sampleWithMode);
 
     const sampleWithSource = {
-      ...sample,
+      ...sampleWithMode,
       id: telemetryPayload.sample?._id?.toString?.() || `${sample.device}:${sample.observedAt}`,
       sourceId: telemetryPayload.sourceId,
       sourceKey: telemetryPayload.sourceKey
     };
 
     integration.lastSample = sampleWithSource;
+    integration.lastSampleSource = sampleSource;
     integration.lastSampleAt = new Date(sample.observedAt);
     integration.lastSyncAt = new Date();
+    if (sampleSource === 'local_lan') {
+      integration.lastLocalSyncAt = new Date();
+      integration.lastLocalError = '';
+    }
     integration.isConnected = true;
     integration.lastError = '';
+    if (!preserveLocalError && sampleSource === 'cloud_api') {
+      integration.lastLocalError = '';
+    }
     await integration.save();
 
     return {
-      success: true,
-      skipped: false,
-      reason,
       selectedDevice,
       sample: sampleWithSource
     };
@@ -757,6 +1289,9 @@ class GoveeAirQualityService {
         sku: selectedDevice.sku,
         deviceName: name,
         deviceType: selectedDevice.type || '',
+        connectionMode: normalizeConnectionMode(integration.connectionMode),
+        sampleSource: sample.source || integration.lastSampleSource || '',
+        localIp: selectedDevice.ip || sample.localIp || integration.localDeviceIp || '',
         lastSample: sample,
         capabilities: Array.isArray(selectedDevice.capabilities) ? selectedDevice.capabilities : []
       }
@@ -804,7 +1339,7 @@ class GoveeAirQualityService {
       sourceName: sample.deviceName || selectedDevice.deviceName || 'Govee Indoor Air Monitor',
       sourceCategory: 'Indoor Air',
       sourceRoom: trimString(integration.room, 'Inside'),
-      sourceOrigin: 'govee',
+      sourceOrigin: sample.source === 'local_lan' ? 'govee_lan' : 'govee',
       streamType: GOVEE_STREAM_TYPE,
       metricKeys,
       metrics: sample.metrics,
@@ -812,6 +1347,8 @@ class GoveeAirQualityService {
         sku: selectedDevice.sku,
         device: selectedDevice.device,
         deviceType: selectedDevice.type || '',
+        sampleSource: sample.source || '',
+        localIp: selectedDevice.ip || sample.localIp || '',
         qualityLabel: sample.qualityLabel,
         qualityCategory: sample.qualityCategory,
         stateInstances: sample.stateInstances,
@@ -866,6 +1403,8 @@ class GoveeAirQualityService {
       sku: metadata.sku || '',
       deviceName: sample?.sourceName || 'Govee Indoor Air Monitor',
       deviceType: metadata.deviceType || '',
+      source: metadata.sampleSource || (sample?.sourceOrigin === 'govee_lan' ? 'local_lan' : 'cloud_api'),
+      localIp: metadata.localIp || '',
       room: sample?.sourceRoom || 'Inside',
       isOnline: metrics.online == null ? null : Number(metrics.online) >= 0.5,
       observedAt: sample?.recordedAt instanceof Date ? sample.recordedAt.toISOString() : sample?.recordedAt || null,
@@ -931,7 +1470,11 @@ service.__testHooks = {
   deriveUsAqiFromPm25,
   describeAirQuality,
   isAirQualityDevice,
+  normalizeConnectionMode,
+  normalizeLanTimeoutMs,
   normalizeDeviceList,
+  normalizeLocalScanResponse,
+  normalizeLocalStateResponse,
   normalizeStateResponse
 };
 

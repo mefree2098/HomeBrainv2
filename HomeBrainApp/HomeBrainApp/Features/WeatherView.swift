@@ -834,9 +834,14 @@ private struct GoveeDeviceChoice: Identifiable {
     let name: String
     let type: String
     let isAirQualityDevice: Bool
+    let ip: String
+    let port: Int
 
     var id: String { "\(sku)::\(device)" }
-    var detail: String { "\(sku)\(isAirQualityDevice ? " • sensor" : "")" }
+    var detail: String {
+        let local = ip.isEmpty ? "" : " • LAN \(ip)"
+        return "\(sku)\(isAirQualityDevice ? " • sensor" : "")\(local)"
+    }
 
     static func from(_ object: [String: Any]) -> GoveeDeviceChoice? {
         let sku = JSON.string(object, "sku")
@@ -847,7 +852,9 @@ private struct GoveeDeviceChoice: Identifiable {
             device: device,
             name: JSON.string(object, "deviceName", fallback: "Govee Indoor Air"),
             type: JSON.string(object, "type"),
-            isAirQualityDevice: JSON.bool(object, "isAirQualityDevice")
+            isAirQualityDevice: JSON.bool(object, "isAirQualityDevice"),
+            ip: JSON.string(object, "ip"),
+            port: JSON.int(object, "port", fallback: 4003)
         )
     }
 }
@@ -856,6 +863,7 @@ private struct GoveeIntegrationSnapshot {
     let apiKey: String
     let apiKeyConfigured: Bool
     let apiKeySource: String
+    let connectionMode: String
     let enabled: Bool
     let room: String
     let selectedDevice: String
@@ -866,6 +874,10 @@ private struct GoveeIntegrationSnapshot {
     let tempOffsetF: Double
     let humidityOffsetPct: Double
     let pm25OffsetUgM3: Double
+    let localDeviceIp: String
+    let localDevicePort: Int
+    let lastLocalError: String
+    let lastSampleSource: String
     let lastError: String
 
     static func from(_ object: [String: Any]) -> GoveeIntegrationSnapshot {
@@ -873,6 +885,7 @@ private struct GoveeIntegrationSnapshot {
             apiKey: JSON.string(object, "apiKey"),
             apiKeyConfigured: JSON.bool(object, "apiKeyConfigured"),
             apiKeySource: JSON.string(object, "apiKeySource", fallback: "none"),
+            connectionMode: JSON.string(object, "connectionMode", fallback: "auto"),
             enabled: JSON.bool(object, "enabled"),
             room: JSON.string(object, "room", fallback: "Inside"),
             selectedDevice: JSON.string(object, "selectedDevice"),
@@ -883,6 +896,10 @@ private struct GoveeIntegrationSnapshot {
             tempOffsetF: weatherOptionalDouble(object["tempOffsetF"]) ?? 0,
             humidityOffsetPct: weatherOptionalDouble(object["humidityOffsetPct"]) ?? 0,
             pm25OffsetUgM3: weatherOptionalDouble(object["pm25OffsetUgM3"]) ?? 0,
+            localDeviceIp: JSON.string(object, "localDeviceIp"),
+            localDevicePort: JSON.int(object, "localDevicePort", fallback: 4003),
+            lastLocalError: JSON.string(object, "lastLocalError"),
+            lastSampleSource: JSON.string(object, "lastSampleSource"),
             lastError: JSON.string(object, "lastError")
         )
     }
@@ -897,6 +914,8 @@ private struct GoveeStatusSnapshot {
     let lastSampleAt: String?
     let lastSyncAt: String?
     let lastError: String
+    let lastLocalError: String
+    let lastSampleSource: String
 
     static func from(_ object: [String: Any]) -> GoveeStatusSnapshot? {
         let integration = JSON.object(object["integration"])
@@ -910,18 +929,35 @@ private struct GoveeStatusSnapshot {
         return GoveeStatusSnapshot(
             integration: GoveeIntegrationSnapshot.from(integration),
             selectedDevice: selectedDeviceObject.isEmpty ? nil : GoveeDeviceChoice.from(selectedDeviceObject),
-            devices: JSON.array(object["devices"]).compactMap { GoveeDeviceChoice.from($0) },
+            devices: mergeGoveeDevices(
+                JSON.array(object["devices"]).compactMap { GoveeDeviceChoice.from($0) },
+                JSON.array(object["localDevices"]).compactMap { GoveeDeviceChoice.from($0) }
+            ),
             latestSample: latestSampleObject.isEmpty ? nil : GoveeIndoorAirSnapshot.from(latestSampleObject),
             isConnected: JSON.bool(health, "isConnected"),
             lastSampleAt: JSON.optionalString(health, "lastSampleAt"),
             lastSyncAt: JSON.optionalString(health, "lastSyncAt"),
-            lastError: JSON.string(health, "lastError")
+            lastError: JSON.string(health, "lastError"),
+            lastLocalError: JSON.string(health, "lastLocalError"),
+            lastSampleSource: JSON.string(health, "lastSampleSource")
         )
     }
 }
 
+private func mergeGoveeDevices(_ groups: [GoveeDeviceChoice]...) -> [GoveeDeviceChoice] {
+    var ordered: [GoveeDeviceChoice] = []
+    var seen = Set<String>()
+    for device in groups.flatMap({ $0 }) {
+        guard !seen.contains(device.id) else { continue }
+        ordered.append(device)
+        seen.insert(device.id)
+    }
+    return ordered
+}
+
 private struct GoveeConfigForm {
     var apiKey = ""
+    var connectionMode = "auto"
     var enabled = false
     var room = "Inside"
     var selectedDevice = ""
@@ -932,11 +968,14 @@ private struct GoveeConfigForm {
     var tempOffsetF = "0"
     var humidityOffsetPct = "0"
     var pm25OffsetUgM3 = "0"
+    var localDeviceIp = ""
+    var localDevicePort = "4003"
 
     mutating func hydrate(from status: GoveeStatusSnapshot) {
         apiKey = status.integration.apiKeyConfigured || weatherIsMaskedSecret(status.integration.apiKey)
             ? tempestConfiguredSecretPlaceholder
             : status.integration.apiKey
+        connectionMode = status.integration.connectionMode.isEmpty ? "auto" : status.integration.connectionMode
         enabled = status.integration.enabled
         room = status.integration.room
         selectedDevice = status.integration.selectedDevice
@@ -947,6 +986,8 @@ private struct GoveeConfigForm {
         tempOffsetF = String(format: "%.2f", status.integration.tempOffsetF)
         humidityOffsetPct = String(format: "%.2f", status.integration.humidityOffsetPct)
         pm25OffsetUgM3 = String(format: "%.2f", status.integration.pm25OffsetUgM3)
+        localDeviceIp = status.integration.localDeviceIp
+        localDevicePort = String(status.integration.localDevicePort)
     }
 
     mutating func select(_ device: GoveeDeviceChoice?) {
@@ -961,16 +1002,23 @@ private struct GoveeConfigForm {
         selectedSku = device.sku
         selectedDeviceName = device.name
         selectedDeviceType = device.type
+        if !device.ip.isEmpty {
+            localDeviceIp = device.ip
+            localDevicePort = String(device.port)
+        }
     }
 
     func payload() -> [String: Any] {
         var result: [String: Any] = [
+            "connectionMode": ["auto", "cloud", "local"].contains(connectionMode) ? connectionMode : "auto",
             "enabled": enabled,
             "room": room.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Inside" : room.trimmingCharacters(in: .whitespacesAndNewlines),
             "pollIntervalMs": max(60, Int(pollIntervalSeconds.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 60) * 1000,
             "tempOffsetF": Double(tempOffsetF.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0,
             "humidityOffsetPct": Double(humidityOffsetPct.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0,
-            "pm25OffsetUgM3": Double(pm25OffsetUgM3.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+            "pm25OffsetUgM3": Double(pm25OffsetUgM3.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0,
+            "localDeviceIp": localDeviceIp.trimmingCharacters(in: .whitespacesAndNewlines),
+            "localDevicePort": max(1, min(65535, Int(localDevicePort.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 4003))
         ]
 
         if selectedDevice.isEmpty || selectedSku.isEmpty {
@@ -1141,6 +1189,8 @@ struct WeatherView: View {
     @State private var isSyncingTempest = false
     @State private var isLoadingGovee = false
     @State private var isTestingGovee = false
+    @State private var isDiscoveringLocalGovee = false
+    @State private var isTestingLocalGovee = false
     @State private var isSavingGovee = false
     @State private var isSyncingGovee = false
 
@@ -2544,11 +2594,25 @@ struct WeatherView: View {
                                     .foregroundStyle(HBPalette.textSecondary)
                             }
 
+                            Picker("Connection", selection: $goveeForm.connectionMode) {
+                                Text("Auto: local first").tag("auto")
+                                Text("Local LAN only").tag("local")
+                                Text("Cloud API only").tag("cloud")
+                            }
+                            .pickerStyle(.segmented)
+
                             if usesCompactWeatherLayout {
                                 VStack(spacing: 10) {
                                     TextField("Room label", text: $goveeForm.room)
                                         .hbPanelTextField()
                                     TextField("Poll interval seconds", text: $goveeForm.pollIntervalSeconds)
+                                        .keyboardType(.numberPad)
+                                        .hbPanelTextField()
+                                    TextField("Local device IP", text: $goveeForm.localDeviceIp)
+                                        .textInputAutocapitalization(.never)
+                                        .disableAutocorrection(true)
+                                        .hbPanelTextField()
+                                    TextField("LAN port", text: $goveeForm.localDevicePort)
                                         .keyboardType(.numberPad)
                                         .hbPanelTextField()
                                 }
@@ -2557,6 +2621,13 @@ struct WeatherView: View {
                                     TextField("Room label", text: $goveeForm.room)
                                         .hbPanelTextField()
                                     TextField("Poll interval seconds", text: $goveeForm.pollIntervalSeconds)
+                                        .keyboardType(.numberPad)
+                                        .hbPanelTextField()
+                                    TextField("Local device IP", text: $goveeForm.localDeviceIp)
+                                        .textInputAutocapitalization(.never)
+                                        .disableAutocorrection(true)
+                                        .hbPanelTextField()
+                                    TextField("LAN port", text: $goveeForm.localDevicePort)
                                         .keyboardType(.numberPad)
                                         .hbPanelTextField()
                                 }
@@ -2601,9 +2672,19 @@ struct WeatherView: View {
                             MetricCard(
                                 title: "Sync Status",
                                 value: goveeStatus?.lastSampleAt.map(formatTimestamp) ?? "Not synced",
-                                subtitle: "Last API sync \(formatTimestamp(goveeStatus?.lastSyncAt))",
+                                subtitle: (goveeStatus?.lastSampleSource == "local_lan" ? "Local LAN" : "Cloud/API") + " • \(formatTimestamp(goveeStatus?.lastSyncAt))",
                                 tint: HBPalette.accentPurple
                             )
+
+                            if let localError = goveeStatus?.lastLocalError, !localError.isEmpty {
+                                Text(localError)
+                                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                                    .foregroundStyle(HBPalette.accentOrange)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .padding(14)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(HBGlassBackground(cornerRadius: 18, variant: .panelSoft))
+                            }
 
                             if let lastError = goveeStatus?.lastError, !lastError.isEmpty {
                                 Text(lastError)
@@ -2644,6 +2725,24 @@ struct WeatherView: View {
             }
             .buttonStyle(HBSecondaryButtonStyle(compact: true))
             .disabled(isTestingGovee)
+
+            Button {
+                Task { await handleDiscoverLocalGovee() }
+            } label: {
+                Label(isDiscoveringLocalGovee ? "Discovering..." : "Discover Local", systemImage: "wifi")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(HBSecondaryButtonStyle(compact: true))
+            .disabled(isDiscoveringLocalGovee)
+
+            Button {
+                Task { await handleTestLocalGovee() }
+            } label: {
+                Label(isTestingLocalGovee ? "Testing LAN..." : "Test Local", systemImage: "antenna.radiowaves.left.and.right")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(HBSecondaryButtonStyle(compact: true))
+            .disabled(isTestingLocalGovee)
 
             Button {
                 Task { await handleSyncGovee() }
@@ -2939,6 +3038,58 @@ struct WeatherView: View {
             }
             adminInfoMessage = JSON.string(root, "message", fallback: "Govee API key verified.")
             adminErrorMessage = nil
+        } catch {
+            adminErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func handleDiscoverLocalGovee() async {
+        guard isAdmin else { return }
+        isDiscoveringLocalGovee = true
+        defer { isDiscoveringLocalGovee = false }
+
+        do {
+            let response = try await session.apiClient.post("/api/govee-air-quality/local/discover", body: ["timeoutMs": 3500])
+            let root = JSON.object(response)
+            let devices = JSON.array(root["devices"]).compactMap { GoveeDeviceChoice.from($0) }
+            discoveredGoveeDevices = mergeGoveeDevices(discoveredGoveeDevices, devices)
+            if let preferred = devices.first(where: { $0.isAirQualityDevice }) ?? devices.first {
+                goveeForm.select(preferred)
+            }
+            adminInfoMessage = JSON.string(root, "message", fallback: devices.isEmpty ? "No local Govee LAN devices responded." : "Local Govee devices discovered.")
+            adminErrorMessage = nil
+        } catch {
+            adminErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func handleTestLocalGovee() async {
+        guard isAdmin else { return }
+        isTestingLocalGovee = true
+        defer { isTestingLocalGovee = false }
+
+        do {
+            let body: [String: Any] = [
+                "localDeviceIp": goveeForm.localDeviceIp.trimmingCharacters(in: .whitespacesAndNewlines),
+                "localDevicePort": Int(goveeForm.localDevicePort.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 4003,
+                "discover": goveeForm.localDeviceIp.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ]
+            let response = try await session.apiClient.post("/api/govee-air-quality/local/test", body: body)
+            let root = JSON.object(response)
+            let devices = JSON.array(root["devices"]).compactMap { GoveeDeviceChoice.from($0) }
+            discoveredGoveeDevices = mergeGoveeDevices(discoveredGoveeDevices, devices)
+            let selected = JSON.object(root["selectedDevice"])
+            if let selectedDevice = GoveeDeviceChoice.from(selected) {
+                discoveredGoveeDevices = mergeGoveeDevices(discoveredGoveeDevices, [selectedDevice])
+                goveeForm.select(selectedDevice)
+            }
+            let message = JSON.string(root, "message", fallback: "Local Govee LAN test finished.")
+            if JSON.bool(root, "success") {
+                adminInfoMessage = message
+                adminErrorMessage = nil
+            } else {
+                adminErrorMessage = message
+            }
         } catch {
             adminErrorMessage = error.localizedDescription
         }

@@ -49,6 +49,42 @@ router.post('/test', async (req, res) => {
   }
 });
 
+router.post('/local/discover', async (req, res) => {
+  try {
+    const devices = await goveeAirQualityService.discoverLocalDevices({
+      timeoutMs: req.body?.timeoutMs
+    });
+    return res.status(200).json({
+      success: true,
+      devices,
+      message: devices.length > 0
+        ? `Found ${devices.length} local Govee LAN device${devices.length === 1 ? '' : 's'}.`
+        : 'No local Govee LAN devices responded.'
+    });
+  } catch (error) {
+    console.error('GoveeAirQualityRoutes: Local discovery failed:', error.message);
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to discover local Govee LAN devices',
+      devices: []
+    });
+  }
+});
+
+router.post('/local/test', async (req, res) => {
+  try {
+    const result = await goveeAirQualityService.testLocalConnection(req.body || {});
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('GoveeAirQualityRoutes: Local test failed:', error.message);
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to test local Govee LAN connectivity',
+      devices: []
+    });
+  }
+});
+
 router.post('/configure', async (req, res) => {
   try {
     const result = await goveeAirQualityService.configureIntegration(req.body || {});

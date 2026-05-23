@@ -7,6 +7,9 @@ export interface GoveeDiscoveredDevice {
   deviceName: string
   type: string
   isAirQualityDevice: boolean
+  ip?: string
+  port?: number
+  lanApiSupported?: boolean
   capabilities: Array<{
     type: string
     instance: string
@@ -18,6 +21,7 @@ export interface GoveeIntegrationStatus {
   apiKey: string
   apiKeyConfigured?: boolean
   apiKeySource?: "stored" | "environment" | "none"
+  connectionMode?: "auto" | "cloud" | "local"
   enabled: boolean
   room: string
   selectedDevice: string
@@ -28,6 +32,13 @@ export interface GoveeIntegrationStatus {
   tempOffsetF: number
   humidityOffsetPct: number
   pm25OffsetUgM3: number
+  localDeviceIp?: string
+  localDevicePort?: number
+  localDiscoveredDevices?: GoveeDiscoveredDevice[]
+  lastLocalDiscoveryAt?: string | null
+  lastLocalSyncAt?: string | null
+  lastLocalError?: string
+  lastSampleSource?: "cloud_api" | "local_lan" | ""
   isConnected: boolean
   lastDiscoveryAt: string | null
   lastSyncAt: string | null
@@ -47,15 +58,21 @@ export interface GoveeStatusResponse {
     lastSampleAt: string | null
     lastError: string
     selectedDeviceOnline: boolean | null
+    lastLocalDiscoveryAt?: string | null
+    lastLocalSyncAt?: string | null
+    lastLocalError?: string
+    lastSampleSource?: "cloud_api" | "local_lan" | ""
   }
   selectedDevice: GoveeDiscoveredDevice | null
   devices: GoveeDiscoveredDevice[]
+  localDevices?: GoveeDiscoveredDevice[]
   latestSample: GoveeIndoorAirSnapshot | null
   message?: string
 }
 
 export interface ConfigureGoveePayload {
   apiKey?: string
+  connectionMode?: "auto" | "cloud" | "local"
   enabled: boolean
   room: string
   selectedDevice?: string
@@ -67,6 +84,8 @@ export interface ConfigureGoveePayload {
   tempOffsetF: number
   humidityOffsetPct: number
   pm25OffsetUgM3: number
+  localDeviceIp?: string
+  localDevicePort?: number
 }
 
 const extractMessage = (error: any) => error?.response?.data?.message || error?.response?.data?.error || error.message
@@ -89,6 +108,36 @@ export const testGoveeConnection = async (apiKey?: string) => {
       message: string
       devices: GoveeDiscoveredDevice[]
       airQualityDevices: GoveeDiscoveredDevice[]
+    }
+  } catch (error: any) {
+    console.error(error)
+    throw new Error(extractMessage(error))
+  }
+}
+
+export const discoverLocalGovee = async (timeoutMs = 3500) => {
+  try {
+    const response = await api.post("/api/govee-air-quality/local/discover", { timeoutMs })
+    return response.data as {
+      success: boolean
+      message: string
+      devices: GoveeDiscoveredDevice[]
+    }
+  } catch (error: any) {
+    console.error(error)
+    throw new Error(extractMessage(error))
+  }
+}
+
+export const testLocalGovee = async (payload: { localDeviceIp?: string; localDevicePort?: number; discover?: boolean } = {}) => {
+  try {
+    const response = await api.post("/api/govee-air-quality/local/test", payload)
+    return response.data as {
+      success: boolean
+      message: string
+      devices: GoveeDiscoveredDevice[]
+      selectedDevice: GoveeDiscoveredDevice | null
+      sample?: GoveeIndoorAirSnapshot | null
     }
   } catch (error: any) {
     console.error(error)

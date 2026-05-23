@@ -2210,8 +2210,6 @@ class TelemetryService {
       },
       $setOnInsert: {
         sourceKey,
-        sampleCount: 0,
-        streamCounts: {},
         lastValues: {},
         createdAt: now
       },
@@ -2225,6 +2223,9 @@ class TelemetryService {
         sampleCount: 1,
         [`streamCounts.${streamType}`]: 1
       };
+    } else {
+      update.$setOnInsert.sampleCount = 0;
+      update.$setOnInsert.streamCounts = {};
     }
 
     await TelemetrySourceSummary.updateOne({ sourceKey }, update, { upsert: true });
