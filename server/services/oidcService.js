@@ -8,7 +8,7 @@ const OIDCAuthorizationCode = require('../models/OIDCAuthorizationCode');
 const UserService = require('./userService');
 const authSessionService = require('./authSessionService');
 const { generateAccessToken } = require('../utils/auth');
-const { getAxiomCallbackUrl } = require('../utils/platformUrls');
+const { getAxiomCallbackUrl, getAudiobookCallbackUrl } = require('../utils/platformUrls');
 const { getRequestOrigin } = require('../utils/publicOrigin');
 const { ALL_USER_PLATFORMS, hasPlatformAccess } = require('../utils/userPlatforms');
 const {
@@ -21,6 +21,7 @@ const {
 } = require('../utils/authCookies');
 
 const DEFAULT_CLIENT_ID = 'homebrain-axiom';
+const DEFAULT_AUDIOBOOK_CLIENT_ID = 'homebrain-audiobook';
 const CODE_TTL_MS = Math.max(60 * 1000, Number(process.env.OIDC_CODE_TTL_MS || 5 * 60 * 1000));
 const TOKEN_TTL_SECONDS = Math.max(300, Number(process.env.OIDC_TOKEN_TTL_SECONDS || 60 * 60));
 const SUPPORTED_SCOPES = Object.freeze(['openid', 'profile', 'email']);
@@ -79,8 +80,16 @@ function getDefaultClientId() {
   return trimString(process.env.OIDC_AXIOM_CLIENT_ID) || DEFAULT_CLIENT_ID;
 }
 
+function getAudiobookClientId() {
+  return trimString(process.env.OIDC_AUDIOBOOK_CLIENT_ID) || DEFAULT_AUDIOBOOK_CLIENT_ID;
+}
+
 function deriveAxiomRedirectUri() {
   return getAxiomCallbackUrl();
+}
+
+function deriveAudiobookRedirectUri() {
+  return getAudiobookCallbackUrl();
 }
 
 function buildStandardClaims(user) {
@@ -140,6 +149,78 @@ async function getProviderSettings() {
   return OIDCProviderSettings.getSettings();
 }
 
+async function ensureManagedClient(summary, { clientId, redirectUri, name, platform, actor }) {
+  if (!clientId || !redirectUri) {
+    return;
+  }
+
+  let client = await OIDCClient.findOne({ clientId });
+  if (!client) {
+    await OIDCClient.create({
+      clientId,
+      name,
+      platform,
+      enabled: true,
+      redirectUris: [redirectUri],
+      scopes: [...SUPPORTED_SCOPES],
+      requirePkce: true,
+      tokenEndpointAuthMethod: 'none',
+      updatedBy: actor
+    });
+    summary.createdClients.push(clientId);
+    return;
+  }
+
+  let clientDirty = false;
+  const redirectUris = uniqueStrings(client.redirectUris || []);
+  if (!redirectUris.includes(redirectUri)) {
+    client.redirectUris = [...redirectUris, redirectUri];
+    clientDirty = true;
+    summary.updatedClients.push(`${clientId}:redirectUris`);
+  }
+
+  if (trimString(client.name) !== name) {
+    client.name = name;
+    clientDirty = true;
+    summary.updatedClients.push(`${clientId}:name`);
+  }
+
+  if (trimString(client.platform) !== platform) {
+    client.platform = platform;
+    clientDirty = true;
+    summary.updatedClients.push(`${clientId}:platform`);
+  }
+
+  if (client.enabled !== true) {
+    client.enabled = true;
+    clientDirty = true;
+    summary.updatedClients.push(`${clientId}:enabled`);
+  }
+
+  if (!Array.isArray(client.scopes) || client.scopes.length === 0) {
+    client.scopes = [...SUPPORTED_SCOPES];
+    clientDirty = true;
+    summary.updatedClients.push(`${clientId}:scopes`);
+  }
+
+  if (client.requirePkce !== true) {
+    client.requirePkce = true;
+    clientDirty = true;
+    summary.updatedClients.push(`${clientId}:requirePkce`);
+  }
+
+  if (trimString(client.tokenEndpointAuthMethod) !== 'none') {
+    client.tokenEndpointAuthMethod = 'none';
+    clientDirty = true;
+    summary.updatedClients.push(`${clientId}:tokenEndpointAuthMethod`);
+  }
+
+  if (clientDirty) {
+    client.updatedBy = actor;
+    await client.save();
+  }
+}
+
 async function ensureBootstrapState({ actor = 'system:oidc-bootstrap' } = {}) {
   const summary = {
     settingsUpdated: [],
@@ -175,54 +256,21 @@ async function ensureBootstrapState({ actor = 'system:oidc-bootstrap' } = {}) {
     await settings.save();
   }
 
-  const clientId = getDefaultClientId();
-  const redirectUri = deriveAxiomRedirectUri();
+  await ensureManagedClient(summary, {
+    clientId: getDefaultClientId(),
+    redirectUri: deriveAxiomRedirectUri(),
+    name: 'Axiom',
+    platform: 'axiom',
+    actor
+  });
 
-  if (!clientId || !redirectUri) {
-    return summary;
-  }
-
-  let client = await OIDCClient.findOne({ clientId });
-  if (!client) {
-    await OIDCClient.create({
-      clientId,
-      name: 'Axiom',
-      platform: 'axiom',
-      enabled: true,
-      redirectUris: [redirectUri],
-      scopes: [...SUPPORTED_SCOPES],
-      requirePkce: true,
-      tokenEndpointAuthMethod: 'none',
-      updatedBy: actor
-    });
-    summary.createdClients.push(clientId);
-    return summary;
-  }
-
-  let clientDirty = false;
-  const redirectUris = uniqueStrings(client.redirectUris || []);
-  if (!redirectUris.includes(redirectUri)) {
-    client.redirectUris = [...redirectUris, redirectUri];
-    clientDirty = true;
-    summary.updatedClients.push(`${clientId}:redirectUris`);
-  }
-
-  if (!Array.isArray(client.scopes) || client.scopes.length === 0) {
-    client.scopes = [...SUPPORTED_SCOPES];
-    clientDirty = true;
-    summary.updatedClients.push(`${clientId}:scopes`);
-  }
-
-  if (client.platform !== 'axiom') {
-    client.platform = 'axiom';
-    clientDirty = true;
-    summary.updatedClients.push(`${clientId}:platform`);
-  }
-
-  if (clientDirty) {
-    client.updatedBy = actor;
-    await client.save();
-  }
+  await ensureManagedClient(summary, {
+    clientId: getAudiobookClientId(),
+    redirectUri: deriveAudiobookRedirectUri(),
+    name: 'Audiobook Studio',
+    platform: 'audiobook',
+    actor
+  });
 
   return summary;
 }
@@ -666,6 +714,7 @@ async function handleUserInfo(req, res) {
 
 module.exports = {
   DEFAULT_CLIENT_ID,
+  DEFAULT_AUDIOBOOK_CLIENT_ID,
   SUPPORTED_SCOPES,
   buildDiscoveryDocument,
   buildJwks,

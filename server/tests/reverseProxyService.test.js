@@ -154,6 +154,36 @@ test('getRoutePresets defaults Axiom to the public gateway health endpoint', asy
   assert.equal(axiomPreset.healthCheckPath, '/healthz');
 });
 
+test('getRoutePresets includes Audiobook when a public host is configured', async (t) => {
+  const servicePath = require.resolve('../services/reverseProxyService');
+  const originalAudiobookPublicHost = process.env.AUDIOBOOK_PUBLIC_HOST;
+  const originalAudiobookPublicBaseUrl = process.env.AUDIOBOOK_PUBLIC_BASE_URL;
+  const originalAudiobookUpstreamHost = process.env.AUDIOBOOK_UPSTREAM_HOST;
+  const originalAudiobookUpstreamPort = process.env.AUDIOBOOK_UPSTREAM_PORT;
+
+  process.env.AUDIOBOOK_PUBLIC_HOST = 'audiobook.ntechr.com';
+  delete process.env.AUDIOBOOK_PUBLIC_BASE_URL;
+  delete process.env.AUDIOBOOK_UPSTREAM_HOST;
+  delete process.env.AUDIOBOOK_UPSTREAM_PORT;
+  delete require.cache[servicePath];
+
+  t.after(() => {
+    process.env.AUDIOBOOK_PUBLIC_HOST = originalAudiobookPublicHost;
+    process.env.AUDIOBOOK_PUBLIC_BASE_URL = originalAudiobookPublicBaseUrl;
+    process.env.AUDIOBOOK_UPSTREAM_HOST = originalAudiobookUpstreamHost;
+    process.env.AUDIOBOOK_UPSTREAM_PORT = originalAudiobookUpstreamPort;
+    delete require.cache[servicePath];
+  });
+
+  const freshReverseProxyService = require('../services/reverseProxyService');
+  const audiobookPreset = (await freshReverseProxyService.getRoutePresets()).find((preset) => preset.platformKey === 'audiobook');
+
+  assert.equal(audiobookPreset.hostname, 'audiobook.ntechr.com');
+  assert.equal(audiobookPreset.upstreamHost, '127.0.0.1');
+  assert.equal(audiobookPreset.upstreamPort, 8787);
+  assert.equal(audiobookPreset.healthCheckPath, '/api/health');
+});
+
 test('updateSettings requires confirmation before switching ACME from staging to production', async (t) => {
   const originalGetSettings = ReverseProxySettings.getSettings;
   const originalAuditCreate = ReverseProxyAuditLog.create;

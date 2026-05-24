@@ -80,8 +80,36 @@ function getAxiomCallbackUrl(req = null) {
   return axiomOrigin ? `${axiomOrigin}/api/identity/homebrain/callback` : '';
 }
 
+function getAudiobookPublicOrigin(req = null) {
+  const explicitBaseUrl = normalizeOrigin(process.env.AUDIOBOOK_PUBLIC_BASE_URL || '');
+  if (explicitBaseUrl) {
+    return explicitBaseUrl;
+  }
+
+  const explicitRedirectUriOrigin = normalizeOrigin(
+    process.env.OIDC_AUDIOBOOK_REDIRECT_URI || process.env.AUDIOBOOK_OIDC_REDIRECT_URI || ''
+  );
+  if (explicitRedirectUriOrigin) {
+    return explicitRedirectUriOrigin;
+  }
+
+  const explicitHost = trimString(process.env.AUDIOBOOK_PUBLIC_HOST).toLowerCase();
+  if (explicitHost) {
+    return buildOriginFromHostname(explicitHost, getHomeBrainPublicOrigin(req));
+  }
+
+  return '';
+}
+
+function getAudiobookCallbackUrl(req = null) {
+  const audiobookOrigin = getAudiobookPublicOrigin(req);
+  return audiobookOrigin ? `${audiobookOrigin}/api/auth/homebrain/callback` : '';
+}
+
 module.exports = {
   getHomeBrainPublicOrigin,
   getAxiomPublicOrigin,
-  getAxiomCallbackUrl
+  getAxiomCallbackUrl,
+  getAudiobookPublicOrigin,
+  getAudiobookCallbackUrl
 };
