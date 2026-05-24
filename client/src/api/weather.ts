@@ -239,12 +239,45 @@ export interface TempestModuleTelemetrySummary {
   windows: TempestTelemetryWindowSummary[]
 }
 
+export interface DashboardClimatePreference {
+  mode: "auto" | "selected"
+  moduleId: string
+  resourceId: string
+  updatedAt: string | null
+}
+
+export interface DashboardClimateSource {
+  capability: string
+  moduleId: string
+  moduleName: string
+  provider: string
+  resourceId: string
+  label: string
+  deviceType: string
+  room: string
+  sourceKey: string
+  available: boolean
+  live: boolean
+}
+
 export interface DashboardWeatherPayload {
   fetchedAt: string
   location: DashboardWeatherLocation
   current: DashboardWeatherCurrent
   today: DashboardWeatherToday
   hourlyForecast: WeatherHourlyForecastPoint[]
+  climate?: {
+    outdoor: DashboardClimateSource
+    indoor: DashboardClimateSource
+    preferences: {
+      outdoorClimate: DashboardClimatePreference
+      indoorClimate: DashboardClimatePreference
+    }
+  }
+  sources?: {
+    outdoorClimate: DashboardClimateSource
+    indoorClimate: DashboardClimateSource
+  }
   tempest: TempestWidgetData
   indoorAir: GoveeIndoorAirWidgetData
 }

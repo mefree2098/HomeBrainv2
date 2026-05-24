@@ -205,6 +205,31 @@ private struct DashboardIndoorAirSnapshot: Equatable {
     }
 }
 
+private struct DashboardClimateSource {
+    let moduleName: String
+    let provider: String
+    let label: String
+    let deviceType: String
+    let available: Bool
+    let live: Bool
+
+    nonisolated static func from(_ payload: Any?) -> DashboardClimateSource? {
+        let object = JSON.object(payload)
+        guard !object.isEmpty else {
+            return nil
+        }
+
+        return DashboardClimateSource(
+            moduleName: JSON.string(object, "moduleName"),
+            provider: JSON.string(object, "provider"),
+            label: JSON.string(object, "label"),
+            deviceType: JSON.string(object, "deviceType"),
+            available: JSON.bool(object, "available"),
+            live: JSON.bool(object, "live")
+        )
+    }
+}
+
 private struct DashboardWeatherSnapshot {
     let fetchedAt: String
     let locationName: String
@@ -227,6 +252,8 @@ private struct DashboardWeatherSnapshot {
     let tempest: DashboardTempestStationSnapshot?
     let moduleTelemetry: DashboardTempestModuleTelemetrySummary?
     let indoorAir: DashboardIndoorAirSnapshot?
+    let outdoorClimateSource: DashboardClimateSource?
+    let indoorClimateSource: DashboardClimateSource?
 
     nonisolated static func from(_ payload: Any?) -> DashboardWeatherSnapshot? {
         let root = JSON.object(payload)
@@ -235,6 +262,8 @@ private struct DashboardWeatherSnapshot {
         let today = JSON.object(root["today"])
         let tempest = JSON.object(root["tempest"])
         let indoorAir = JSON.object(root["indoorAir"])
+        let sources = JSON.object(root["sources"])
+        let climate = JSON.object(root["climate"])
         let source = DashboardWeatherLocationMode(rawValue: JSON.string(location, "source")) ?? .saved
 
         guard !location.isEmpty, !current.isEmpty, !today.isEmpty else {
@@ -262,7 +291,9 @@ private struct DashboardWeatherSnapshot {
             sunset: JSON.optionalString(today, "sunset"),
             tempest: JSON.bool(tempest, "available") ? DashboardTempestStationSnapshot.from(tempest["station"]) : nil,
             moduleTelemetry: DashboardTempestModuleTelemetrySummary.from(tempest["moduleTelemetry"]),
-            indoorAir: JSON.bool(indoorAir, "available") ? DashboardIndoorAirSnapshot.from(indoorAir["monitor"]) : nil
+            indoorAir: JSON.bool(indoorAir, "available") ? DashboardIndoorAirSnapshot.from(indoorAir["monitor"]) : nil,
+            outdoorClimateSource: DashboardClimateSource.from(sources["outdoorClimate"]) ?? DashboardClimateSource.from(climate["outdoor"]),
+            indoorClimateSource: DashboardClimateSource.from(sources["indoorClimate"]) ?? DashboardClimateSource.from(climate["indoor"])
         )
     }
 
@@ -303,6 +334,22 @@ private struct DashboardWeatherSnapshot {
                 qualityLabel: "Good",
                 qualityAdvice: "Indoor particulate levels look comfortable.",
                 isOnline: true
+            ),
+            outdoorClimateSource: DashboardClimateSource(
+                moduleName: "Tempest Weather Station",
+                provider: "WeatherFlow Tempest",
+                label: "Backyard Tempest",
+                deviceType: "weather_station",
+                available: true,
+                live: true
+            ),
+            indoorClimateSource: DashboardClimateSource(
+                moduleName: "Govee Indoor Air",
+                provider: "Govee",
+                label: "Govee Indoor Air",
+                deviceType: "air_quality_monitor",
+                available: true,
+                live: true
             )
         )
     }
@@ -327,6 +374,14 @@ private struct DashboardWeatherSnapshot {
         case .auto:
             return "Auto"
         }
+    }
+
+    var outdoorProviderBadgeLabel: String {
+        let provider = outdoorClimateSource?.moduleName.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if provider.localizedCaseInsensitiveContains("tempest") {
+            return "Tempest"
+        }
+        return provider.isEmpty ? "Tempest" : provider
     }
 
     var displayTemperatureF: Double? {
@@ -3862,7 +3917,7 @@ struct DashboardView: View {
                             .fixedSize(horizontal: true, vertical: false)
 
                         HBBadge(
-                            text: tempest.websocketConnected ? "Tempest Live" : "Tempest Snapshot",
+                            text: tempest.websocketConnected ? "\(snapshot.outdoorProviderBadgeLabel) Live" : "\(snapshot.outdoorProviderBadgeLabel) Snapshot",
                             foreground: HBPalette.textPrimary,
                             background: HBPalette.heroCore.opacity(0.22),
                             stroke: HBPalette.heroCore.opacity(0.42)
@@ -3880,7 +3935,7 @@ struct DashboardView: View {
                             .fixedSize(horizontal: true, vertical: false)
 
                         HBBadge(
-                            text: tempest.websocketConnected ? "Tempest Live" : "Tempest Snapshot",
+                            text: tempest.websocketConnected ? "\(snapshot.outdoorProviderBadgeLabel) Live" : "\(snapshot.outdoorProviderBadgeLabel) Snapshot",
                             foreground: HBPalette.textPrimary,
                             background: HBPalette.heroCore.opacity(0.22),
                             stroke: HBPalette.heroCore.opacity(0.42)

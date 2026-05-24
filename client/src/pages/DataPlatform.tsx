@@ -204,6 +204,13 @@ function sourceTone(source: TelemetrySourceSummary) {
 }
 
 function sourceKindLabel(source: TelemetrySourceSummary) {
+  if (source.integrationModuleName && Array.isArray(source.deviceTypes) && source.deviceTypes.length > 0) {
+    return source.deviceTypes[0]
+      .split("_")
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ")
+  }
+
   if (source.sourceType === "tempest_station") {
     return "Weather Station"
   }
@@ -228,6 +235,10 @@ function sourceKindLabel(source: TelemetrySourceSummary) {
 }
 
 function sourceHistoryLabel(source: TelemetrySourceSummary) {
+  if (source.integrationModuleName) {
+    return source.integrationModuleName.toLowerCase()
+  }
+
   if (source.sourceType === "tempest_station") {
     return "weather station"
   }
@@ -975,6 +986,12 @@ export default function DataPlatform() {
                             <span>{source.room || source.origin || "House-wide"}</span>
                             <span>{formatOverviewCount(source.sampleCount)} samples</span>
                           </div>
+                          {source.integrationModuleName ? (
+                            <div className="flex items-center justify-between gap-3 text-xs">
+                              <span>{source.integrationModuleName}</span>
+                              <span>{source.integrationCategory || "Integration"}</span>
+                            </div>
+                          ) : null}
                           <div className="flex items-center gap-2 text-xs">
                             <Clock3 className="h-3.5 w-3.5" />
                             {formatDateTime(source.lastSampleAt)}

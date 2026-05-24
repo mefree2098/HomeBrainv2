@@ -10,6 +10,7 @@ const SenseTrendSnapshot = require('../models/SenseTrendSnapshot');
 const { sendLLMRequestWithFallback } = require('./llmService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const resourceMonitorService = require('./resourceMonitorService');
+const { decorateTelemetrySourceSummary } = require('./integrationModuleCatalog');
 const TelemetrySourceSummary = require('../models/TelemetrySourceSummary');
 
 const RETENTION_DAYS = Math.max(
@@ -585,7 +586,7 @@ function buildSourceSummaryFromSnapshot(snapshot = {}) {
   const descriptors = buildMetricDescriptors(metricKeys);
   const lastValues = asPlainNumberMap(snapshot.lastValues);
 
-  return {
+  return decorateTelemetrySourceSummary({
     sourceKey: snapshot.sourceKey,
     sourceType: snapshot.sourceType,
     sourceId: snapshot.sourceId,
@@ -606,7 +607,7 @@ function buildSourceSummaryFromSnapshot(snapshot = {}) {
         : null;
       return acc;
     }, {})
-  };
+  });
 }
 
 function summarizeSourceBreakdowns(sources = []) {

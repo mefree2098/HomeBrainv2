@@ -60,6 +60,7 @@ class SettingsService {
         'codexPath', 'codexHome', 'codexHomeProfile', 'codexAwsVolumeRoot', 'codexModel',
         'localLlmEndpoint', 'localLlmModel', 'homebrainLocalLlmModel', 'spamFilterLocalLlmModel', 'llmPriorityList',
         'deviceCommandCoordinator',
+        'integrationPreferences',
         // SmartThings OAuth Settings
         'smartthingsClientId', 'smartthingsClientSecret', 'smartthingsRedirectUri', 'smartthingsUseOAuth',
         // Voice/Discovery Preferences

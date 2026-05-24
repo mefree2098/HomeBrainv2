@@ -168,6 +168,7 @@ import { HardwareOrbsTab } from "@/components/settings/HardwareOrbsTab"
 import { DeviceCommandCoordinatorTab } from "@/components/settings/DeviceCommandCoordinatorTab"
 import { DirectRadioAdminCard } from "@/components/settings/DirectRadioAdminCard"
 import { MatterThreadIntegrationCard } from "@/components/settings/MatterThreadIntegrationCard"
+import { IntegrationModulesPanel } from "@/components/settings/IntegrationModulesPanel"
 import { CodexSkillIntegration } from "./CodexSkillIntegration"
 import { OpenClawIntegration } from "./OpenClawIntegration"
 
@@ -220,6 +221,7 @@ const SETTINGS_MAIN_TABS = new Set([
 
 const SETTINGS_INTEGRATION_TABS = new Set([
   "alexa",
+  "modules",
   "codex-skill",
   "openclaw",
   "sense",
@@ -447,7 +449,7 @@ export function Settings() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const [activeSettingsTab, setActiveSettingsTab] = useState("general")
-  const [activeIntegrationTab, setActiveIntegrationTab] = useState("alexa")
+  const [activeIntegrationTab, setActiveIntegrationTab] = useState("modules")
   const [loading, setLoading] = useState(false)
   const [testingApiKey, setTestingApiKey] = useState(false)
   const [testingOpenAI, setTestingOpenAI] = useState(false)
@@ -4724,6 +4726,7 @@ export function Settings() {
               </div>
 
               <TabsList className="h-auto w-full flex-wrap justify-start gap-1 bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 p-1">
+                <TabsTrigger value="modules">Modules</TabsTrigger>
                 <TabsTrigger value="alexa">Alexa</TabsTrigger>
                 <TabsTrigger value="codex-skill">Codex Skill</TabsTrigger>
                 <TabsTrigger value="openclaw">OpenClaw</TabsTrigger>
@@ -4737,6 +4740,10 @@ export function Settings() {
                 <TabsTrigger value="ai">AI / LLM</TabsTrigger>
                 <TabsTrigger value="priority">LLM Priority</TabsTrigger>
               </TabsList>
+
+              <TabsContent value="modules" className="space-y-6">
+                <IntegrationModulesPanel />
+              </TabsContent>
 
               <TabsContent value="alexa" className="space-y-6">
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">

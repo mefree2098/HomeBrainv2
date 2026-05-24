@@ -127,6 +127,7 @@ extension DeviceItem {
         "homebrain-thread",
         "homebrain-matter",
         "ecobee",
+        "govee",
         "harmony",
         "insteon",
         "rainmachine",
@@ -208,6 +209,9 @@ extension DeviceItem {
         }
         if properties["ecobeeThermostatIdentifier"] != nil || properties["ecobeeDeviceId"] != nil {
             return "ecobee"
+        }
+        if properties["govee"] != nil || properties["goveeDevice"] != nil || properties["goveeDeviceId"] != nil {
+            return "govee"
         }
         if properties["rainmachine"] != nil {
             return "rainmachine"

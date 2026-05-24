@@ -4,6 +4,7 @@ const STANDARD_DEVICE_SOURCE_OPTIONS = Object.freeze([
   { value: 'homebrain-thread', label: 'Thread', aliases: ['thread'] },
   { value: 'homebrain-matter', label: 'Matter', aliases: ['matter'] },
   { value: 'ecobee', label: 'Ecobee', aliases: [] },
+  { value: 'govee', label: 'Govee', aliases: [] },
   { value: 'harmony', label: 'Harmony', aliases: [] },
   { value: 'insteon', label: 'Insteon', aliases: [] },
   { value: 'rainmachine', label: 'RainMachine', aliases: [] },
@@ -96,6 +97,9 @@ function getDeviceSource(device = {}) {
   }
   if (properties.ecobeeThermostatIdentifier || properties.ecobeeDeviceId) {
     return 'ecobee';
+  }
+  if (properties.govee || properties.goveeDevice || properties.goveeDeviceId) {
+    return 'govee';
   }
   if (properties.rainmachine) {
     return 'rainmachine';
