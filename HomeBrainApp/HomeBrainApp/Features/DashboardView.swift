@@ -1270,6 +1270,14 @@ struct DashboardView: View {
                                     title: "No widgets in this view",
                                     subtitle: "Enter layout editing mode and add the controls you want for this screen."
                                 )
+                            } else if dashboardGridColumnCount == 1 {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    ForEach(Array(currentDashboardWidgets.enumerated()), id: \.element.id) { index, widget in
+                                        dashboardWidgetPanel(widget, index: index)
+                                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                                    }
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             } else {
                                 Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 12) {
                                     ForEach(dashboardWidgetRows) { row in
@@ -2285,22 +2293,20 @@ struct DashboardView: View {
             securityAlarmStateTile(compact: compact)
 
             VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Security Sensors")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                            .textCase(.uppercase)
-                            .tracking(2.4)
-                            .foregroundStyle(HBPalette.textMuted)
-
-                        Text("Tap a sensor to open its device page.")
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(HBPalette.textSecondary)
+                if usesPortraitCompactLayout {
+                    VStack(alignment: .leading, spacing: 8) {
+                        securitySensorHeaderText()
+                        securitySensorHeaderControls()
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                } else {
+                    HStack(alignment: .top, spacing: 12) {
+                        securitySensorHeaderText()
 
-                    Spacer(minLength: 8)
+                        Spacer(minLength: 8)
 
-                    securitySensorHeaderControls()
+                        securitySensorHeaderControls()
+                    }
                 }
 
                 ScrollView(.vertical, showsIndicators: false) {
@@ -2336,28 +2342,18 @@ struct DashboardView: View {
             }
 
             VStack(alignment: .leading, spacing: 12) {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Door Locks")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                            .textCase(.uppercase)
-                            .tracking(2.4)
-                            .foregroundStyle(HBPalette.textMuted)
-
-                        Text("Tap a lock tile to toggle locked or unlocked.")
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(HBPalette.textSecondary)
+                if usesPortraitCompactLayout {
+                    VStack(alignment: .leading, spacing: 8) {
+                        securityDoorLocksHeaderText()
+                        securityDoorLocksHeaderBadge()
                     }
+                } else {
+                    HStack(alignment: .top, spacing: 12) {
+                        securityDoorLocksHeaderText()
 
-                    Spacer(minLength: 8)
+                        Spacer(minLength: 8)
 
-                    if securityDoorLockCount > 0 {
-                        HBBadge(
-                            text: "\(securityLockedDoorCount)/\(securityDoorLockCount) locked",
-                            foreground: HBPalette.textPrimary,
-                            background: HBPalette.panelSoft.opacity(0.9),
-                            stroke: HBPalette.panelStrokeStrong
-                        )
+                        securityDoorLocksHeaderBadge()
                     }
                 }
 
@@ -2385,29 +2381,19 @@ struct DashboardView: View {
     private func securityAlarmStateTile(compact: Bool) -> some View {
         let shape = RoundedRectangle(cornerRadius: compact ? 16 : 18, style: .continuous)
 
-        return VStack(alignment: .leading, spacing: compact ? 2 : 3) {
-            HStack(alignment: .top, spacing: 10) {
-                VStack(alignment: .leading, spacing: compact ? 0 : 1) {
-                    Text("Alarm State")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .textCase(.uppercase)
-                        .tracking(2.0)
-                        .foregroundStyle(securityStateTitleColor)
-
-                    Text(securityStatusLabel)
-                        .font(.system(size: compact ? 24 : 28, weight: .bold, design: .rounded))
-                        .foregroundStyle(securityStateValueColor)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-
-                    Text("\(securityStatusDetail) • \(systemStatus)")
-                        .font(.system(size: compact ? 12 : 13, weight: .medium, design: .rounded))
-                        .foregroundStyle(securityStateDetailColor)
-                        .lineLimit(2)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+        return VStack(alignment: .leading, spacing: compact ? 8 : 3) {
+            if usesPortraitCompactLayout {
+                securityAlarmStateLabels(compact: compact)
 
                 securityAlarmHeaderActions(compact: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                HStack(alignment: .top, spacing: 10) {
+                    securityAlarmStateLabels(compact: compact)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    securityAlarmHeaderActions(compact: true)
+                }
             }
 
             Capsule()
@@ -2430,6 +2416,68 @@ struct DashboardView: View {
                     lineWidth: securityStateBackgroundOpacity > 0 ? 1.4 : 1
                 )
         )
+    }
+
+    private func securityAlarmStateLabels(compact: Bool) -> some View {
+        VStack(alignment: .leading, spacing: compact ? 0 : 1) {
+            Text("Alarm State")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .textCase(.uppercase)
+                .tracking(2.0)
+                .foregroundStyle(securityStateTitleColor)
+
+            Text(securityStatusLabel)
+                .font(.system(size: compact ? 24 : 28, weight: .bold, design: .rounded))
+                .foregroundStyle(securityStateValueColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+
+            Text("\(securityStatusDetail) • \(systemStatus)")
+                .font(.system(size: compact ? 12 : 13, weight: .medium, design: .rounded))
+                .foregroundStyle(securityStateDetailColor)
+                .lineLimit(2)
+        }
+    }
+
+    private func securitySensorHeaderText() -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Security Sensors")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .textCase(.uppercase)
+                .tracking(2.4)
+                .foregroundStyle(HBPalette.textMuted)
+
+            Text("Tap a sensor to open its device page.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+        }
+    }
+
+    private func securityDoorLocksHeaderText() -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Door Locks")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .textCase(.uppercase)
+                .tracking(2.4)
+                .foregroundStyle(HBPalette.textMuted)
+
+            Text("Tap a lock tile to toggle locked or unlocked.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+        }
+    }
+
+    @ViewBuilder
+    private func securityDoorLocksHeaderBadge() -> some View {
+        if securityDoorLockCount > 0 {
+            HBBadge(
+                text: "\(securityLockedDoorCount)/\(securityDoorLockCount) locked",
+                foreground: HBPalette.textPrimary,
+                background: HBPalette.panelSoft.opacity(0.9),
+                stroke: HBPalette.panelStrokeStrong
+            )
+            .fixedSize(horizontal: true, vertical: false)
+        }
     }
 
     private var securityAlarmStateKey: String {
@@ -2849,7 +2897,7 @@ struct DashboardView: View {
     }
 
     private var securityDoorLockColumnCount: Int {
-        (usesPortraitCompactLayout && layoutWidth < 360) ? 3 : 4
+        usesPortraitCompactLayout ? 1 : 4
     }
 
     private func securityDoorLockContentHeight(for size: DashboardWidgetSize, compact: Bool) -> CGFloat {
@@ -2861,7 +2909,8 @@ struct DashboardView: View {
     }
 
     private func securitySensorColumns() -> [GridItem] {
-        Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: 3)
+        let count = usesPortraitCompactLayout ? 1 : 3
+        return Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: count)
     }
 
     private func securityDoorLockColumns() -> [GridItem] {
