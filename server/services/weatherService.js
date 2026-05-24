@@ -1141,6 +1141,8 @@ async function fetchWeatherDashboard(options = {}) {
   return {
     fetchedAt: new Date().toISOString(),
     forecast,
+    climate: forecast?.climate || null,
+    sources: forecast?.sources || null,
     hourlyForecast: Array.isArray(forecast.hourlyForecast) ? forecast.hourlyForecast : [],
     tempest: {
       ...tempest,

@@ -285,6 +285,8 @@ export interface DashboardWeatherPayload {
 export interface WeatherDashboardPayload {
   fetchedAt: string
   forecast: DashboardWeatherPayload
+  climate?: DashboardWeatherPayload["climate"] | null
+  sources?: DashboardWeatherPayload["sources"] | null
   hourlyForecast: WeatherHourlyForecastPoint[]
   tempest: {
     available: boolean
