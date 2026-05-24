@@ -1947,22 +1947,48 @@ struct DashboardView: View {
         }
     }
 
-    private func refreshWeather(for widget: DashboardWidgetItem, forceTempestSync: Bool = true) async {
+    private func refreshWeather(
+        for widget: DashboardWidgetItem,
+        forceTempestSync: Bool = true,
+        refreshIndoorAir: Bool = true,
+        forceIndoorAirSync: Bool = true
+    ) async {
         weatherRequestKeyByWidgetID.removeValue(forKey: widget.id)
-        await loadWeather(for: widget, force: true, forceTempestSync: forceTempestSync)
+        await loadWeather(
+            for: widget,
+            force: true,
+            forceTempestSync: forceTempestSync,
+            refreshIndoorAir: refreshIndoorAir,
+            forceIndoorAirSync: forceIndoorAirSync
+        )
     }
 
-    private func refreshVisibleWeatherWidgets(force: Bool, forceTempestSync: Bool = false) async {
+    private func refreshVisibleWeatherWidgets(
+        force: Bool,
+        forceTempestSync: Bool = false,
+        refreshIndoorAir: Bool = true
+    ) async {
         for widget in visibleWeatherWidgets {
             if force {
-                await refreshWeather(for: widget, forceTempestSync: forceTempestSync)
+                await refreshWeather(
+                    for: widget,
+                    forceTempestSync: forceTempestSync,
+                    refreshIndoorAir: refreshIndoorAir,
+                    forceIndoorAirSync: false
+                )
             } else {
-                await loadWeather(for: widget, force: false)
+                await loadWeather(for: widget, force: false, refreshIndoorAir: refreshIndoorAir)
             }
         }
     }
 
-    private func loadWeather(for widget: DashboardWidgetItem, force: Bool = false, forceTempestSync: Bool = false) async {
+    private func loadWeather(
+        for widget: DashboardWidgetItem,
+        force: Bool = false,
+        forceTempestSync: Bool = false,
+        refreshIndoorAir: Bool = true,
+        forceIndoorAirSync: Bool = false
+    ) async {
         let taskKey = weatherTaskKey(for: widget)
 
         if !force,
@@ -2018,6 +2044,12 @@ struct DashboardView: View {
 
             if forceTempestSync {
                 query.append(URLQueryItem(name: "forceTempestSync", value: "true"))
+            }
+            if forceIndoorAirSync {
+                query.append(URLQueryItem(name: "forceIndoorAirSync", value: "true"))
+            }
+            if refreshIndoorAir {
+                query.append(URLQueryItem(name: "refreshIndoorAir", value: "true"))
             }
 
             let response = try await session.apiClient.get("/api/weather/current", query: query)

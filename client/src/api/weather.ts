@@ -305,6 +305,7 @@ interface GetDashboardWeatherOptions {
   label?: string
   forceTempestSync?: boolean
   forceIndoorAirSync?: boolean
+  refreshIndoorAir?: boolean
 }
 
 export const getDashboardWeather = async (options: GetDashboardWeatherOptions = {}) => {
@@ -313,7 +314,8 @@ export const getDashboardWeather = async (options: GetDashboardWeatherOptions = 
       params: {
         ...options,
         forceTempestSync: options.forceTempestSync === true ? "true" : undefined,
-        forceIndoorAirSync: options.forceIndoorAirSync === true ? "true" : undefined
+        forceIndoorAirSync: options.forceIndoorAirSync === true ? "true" : undefined,
+        refreshIndoorAir: options.refreshIndoorAir === true ? "true" : undefined
       }
     })
 
@@ -330,7 +332,8 @@ export const getWeatherDashboard = async (options: GetDashboardWeatherOptions & 
       params: {
         ...options,
         forceTempestSync: options.forceTempestSync === true ? "true" : undefined,
-        forceIndoorAirSync: options.forceIndoorAirSync === true ? "true" : undefined
+        forceIndoorAirSync: options.forceIndoorAirSync === true ? "true" : undefined,
+        refreshIndoorAir: options.refreshIndoorAir === true ? "true" : undefined
       }
     })
 

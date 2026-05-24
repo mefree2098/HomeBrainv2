@@ -1003,9 +1003,10 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
   const indoorAqiTone = aqiToneClassName(indoorAir?.usAqi)
   const uvTone = uvToneClassName(tempestStation?.metrics.uvIndex)
 
-  const fetchWeather = useCallback(async (options: { forceTempestSync?: boolean; forceIndoorAirSync?: boolean } = {}) => {
+  const fetchWeather = useCallback(async (options: { forceTempestSync?: boolean; forceIndoorAirSync?: boolean; refreshIndoorAir?: boolean } = {}) => {
     setLoading(true)
     setError(null)
+    const refreshIndoorAir = options.refreshIndoorAir !== false
 
     try {
       let response
@@ -1014,7 +1015,8 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
         response = await getDashboardWeather({
           address: locationQuery.trim(),
           forceTempestSync: options.forceTempestSync === true,
-          forceIndoorAirSync: options.forceIndoorAirSync === true
+          forceIndoorAirSync: options.forceIndoorAirSync === true,
+          refreshIndoorAir
         })
       } else if (locationMode === "auto") {
         const position = await resolveCurrentPosition()
@@ -1023,12 +1025,14 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
           longitude: position.coords.longitude,
           label: "Current location",
           forceTempestSync: options.forceTempestSync === true,
-          forceIndoorAirSync: options.forceIndoorAirSync === true
+          forceIndoorAirSync: options.forceIndoorAirSync === true,
+          refreshIndoorAir
         })
       } else {
         response = await getDashboardWeather({
           forceTempestSync: options.forceTempestSync === true,
-          forceIndoorAirSync: options.forceIndoorAirSync === true
+          forceIndoorAirSync: options.forceIndoorAirSync === true,
+          refreshIndoorAir
         })
       }
 

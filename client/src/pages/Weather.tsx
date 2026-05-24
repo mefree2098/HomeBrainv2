@@ -323,8 +323,9 @@ export function Weather() {
   const [error, setError] = useState<string | null>(null)
   const [openModuleKey, setOpenModuleKey] = useState<WeatherModuleKey | null>(null)
 
-  const loadDashboard = useCallback(async (options: { silent?: boolean; forceTempestSync?: boolean; forceIndoorAirSync?: boolean } = {}) => {
+  const loadDashboard = useCallback(async (options: { silent?: boolean; forceTempestSync?: boolean; forceIndoorAirSync?: boolean; refreshIndoorAir?: boolean } = {}) => {
     const silent = options.silent === true
+    const refreshIndoorAir = options.refreshIndoorAir !== false
 
     if (!silent) {
       setLoading(true)
@@ -338,7 +339,8 @@ export function Weather() {
         tempestHistoryHours: 24,
         indoorAirHistoryHours: 24,
         forceTempestSync: options.forceTempestSync === true,
-        forceIndoorAirSync: options.forceIndoorAirSync === true
+        forceIndoorAirSync: options.forceIndoorAirSync === true,
+        refreshIndoorAir
       })
       setDashboard(response.dashboard)
     } catch (loadError) {
