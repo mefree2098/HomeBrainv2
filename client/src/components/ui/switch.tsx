@@ -9,7 +9,10 @@ const Switch = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <SwitchPrimitives.Root
     className={cn(
-      "peer inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full border border-white/20 bg-white/40 p-0.5 shadow-inner transition-colors duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-900/70 data-[state=checked]:bg-primary data-[state=unchecked]:bg-white/45 dark:data-[state=unchecked]:bg-slate-800/80",
+      "peer inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full border p-0.5 shadow-inner transition-colors duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50",
+      "border-slate-400/55 bg-slate-500/70 data-[state=unchecked]:!border-slate-400/55 data-[state=unchecked]:!bg-slate-500/70",
+      "data-[state=checked]:!border-primary/80 data-[state=checked]:!bg-primary data-[state=checked]:shadow-[0_0_0_1px_hsl(var(--primary)_/_0.35),0_8px_22px_hsl(var(--primary)_/_0.24)]",
+      "dark:border-white/20 dark:bg-slate-700/80 dark:data-[state=unchecked]:!border-white/20 dark:data-[state=unchecked]:!bg-slate-700/80 dark:data-[state=checked]:!border-primary/80 dark:data-[state=checked]:!bg-primary",
       className
     )}
     {...props}
