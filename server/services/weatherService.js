@@ -318,7 +318,7 @@ async function getWeatherIndoorAirSnapshot() {
 
 function isIndoorAirSnapshotStale(indoorAirSnapshot, nowMs = Date.now()) {
   if (!indoorAirSnapshot) {
-    return false;
+    return true;
   }
 
   const observedAtMs = parseUpdatedAtTimestamp(indoorAirSnapshot.observedAt);

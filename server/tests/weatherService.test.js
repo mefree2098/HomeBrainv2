@@ -244,6 +244,104 @@ test('fetchDashboardWeather skips heavy telemetry and stale indoor-air sync by d
   assert.equal(payload.indoorAir.monitor?.deviceName, 'Inside Air');
 });
 
+test('fetchDashboardWeather refreshes stale indoor-air when requested', async (t) => {
+  await setupIsolatedWeatherCache(t);
+  const originalAxiosGet = axios.get;
+  const originalGetSelectedStationSnapshot = tempestService.getSelectedStationSnapshot;
+  const originalGetLatestSnapshot = goveeAirQualityService.getLatestSnapshot;
+  const originalSyncNow = goveeAirQualityService.syncNow;
+
+  t.after(() => {
+    axios.get = originalAxiosGet;
+    tempestService.getSelectedStationSnapshot = originalGetSelectedStationSnapshot;
+    goveeAirQualityService.getLatestSnapshot = originalGetLatestSnapshot;
+    goveeAirQualityService.syncNow = originalSyncNow;
+  });
+
+  axios.get = async (url) => {
+    const requestUrl = new URL(url);
+    if (requestUrl.hostname === 'api.open-meteo.com' && requestUrl.pathname === '/v1/forecast') {
+      return {
+        data: {
+          timezone: 'America/Denver',
+          current: {
+            temperature_2m: 67.4,
+            apparent_temperature: 65.2,
+            relative_humidity_2m: 42,
+            wind_speed_10m: 7.8,
+            precipitation: 0,
+            weather_code: 2,
+            is_day: 1
+          },
+          daily: {
+            weather_code: [61],
+            temperature_2m_max: [74.3],
+            temperature_2m_min: [49.8],
+            precipitation_probability_max: [55],
+            sunrise: ['2026-03-23T07:01'],
+            sunset: ['2026-03-23T19:14']
+          }
+        }
+      };
+    }
+
+    if (requestUrl.hostname === 'air-quality-api.open-meteo.com') {
+      return {
+        data: {
+          current: {
+            us_aqi: 38
+          }
+        }
+      };
+    }
+
+    throw new Error(`Unexpected axios request: ${url}`);
+  };
+
+  tempestService.getSelectedStationSnapshot = async () => null;
+
+  let latestSnapshot = {
+    id: 'govee-old',
+    deviceName: 'Inside Air',
+    room: 'Inside',
+    observedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+    temperatureF: 72,
+    humidityPct: 32,
+    pm25UgM3: 1,
+    usAqi: 6,
+    qualityLabel: 'Good'
+  };
+  let syncCalls = 0;
+
+  goveeAirQualityService.getLatestSnapshot = async () => latestSnapshot;
+  goveeAirQualityService.syncNow = async () => {
+    syncCalls += 1;
+    latestSnapshot = {
+      ...latestSnapshot,
+      id: 'govee-new',
+      observedAt: new Date().toISOString(),
+      temperatureF: 73.1,
+      humidityPct: 35.2,
+      pm25UgM3: 4,
+      usAqi: 22
+    };
+    return { success: true, skipped: false };
+  };
+
+  const payload = await fetchDashboardWeather({
+    latitude: '39.7392',
+    longitude: '-104.9903',
+    label: 'Current location',
+    refreshIndoorAir: true
+  });
+
+  assert.equal(syncCalls, 1);
+  assert.equal(payload.indoorAir.monitor?.id, 'govee-new');
+  assert.equal(payload.indoorAir.monitor?.temperatureF, 73.1);
+  assert.equal(payload.indoorAir.monitor?.humidityPct, 35.2);
+  assert.equal(payload.indoorAir.monitor?.usAqi, 22);
+});
+
 test('fetchDashboardWeather attaches Tempest module telemetry when requested', async (t) => {
   await setupIsolatedWeatherCache(t);
   const originalAxiosGet = axios.get;

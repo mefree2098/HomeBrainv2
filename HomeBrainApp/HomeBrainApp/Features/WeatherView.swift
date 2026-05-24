@@ -2817,15 +2817,31 @@ struct WeatherView: View {
         }
     }
 
-    private func refreshAll(silent: Bool, includeTempestStatus: Bool, forceTempestSync: Bool = false, forceIndoorAirSync: Bool = false) async {
-        await loadWeatherDashboard(silent: silent, forceTempestSync: forceTempestSync, forceIndoorAirSync: forceIndoorAirSync)
+    private func refreshAll(
+        silent: Bool,
+        includeTempestStatus: Bool,
+        forceTempestSync: Bool = false,
+        forceIndoorAirSync: Bool = false,
+        refreshIndoorAir: Bool = true
+    ) async {
+        await loadWeatherDashboard(
+            silent: silent,
+            forceTempestSync: forceTempestSync,
+            forceIndoorAirSync: forceIndoorAirSync,
+            refreshIndoorAir: refreshIndoorAir
+        )
         if includeTempestStatus {
             await loadTempestStatus()
             await loadGoveeStatus()
         }
     }
 
-    private func loadWeatherDashboard(silent: Bool, forceTempestSync: Bool = false, forceIndoorAirSync: Bool = false) async {
+    private func loadWeatherDashboard(
+        silent: Bool,
+        forceTempestSync: Bool = false,
+        forceIndoorAirSync: Bool = false,
+        refreshIndoorAir: Bool = true
+    ) async {
         if silent {
             isRefreshing = true
         } else if dashboard == nil {
@@ -2848,6 +2864,9 @@ struct WeatherView: View {
         }
         if forceIndoorAirSync {
             query.append(URLQueryItem(name: "forceIndoorAirSync", value: "true"))
+        }
+        if refreshIndoorAir {
+            query.append(URLQueryItem(name: "refreshIndoorAir", value: "true"))
         }
 
         do {
