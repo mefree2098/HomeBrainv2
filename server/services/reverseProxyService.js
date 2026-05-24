@@ -24,6 +24,7 @@ const DEFAULT_EDGE_HTTPS_PORT = Number(process.env.CADDY_EDGE_HTTPS_PORT || 443)
 const DEFAULT_BIND_PORT = Number(process.env.PORT || 3000);
 const DEFAULT_ASK_URL = `http://127.0.0.1:${DEFAULT_BIND_PORT}/internal/caddy/can-issue-cert`;
 const DEFAULT_AXIOM_PUBLIC_UPSTREAM_PORT = Number(process.env.AXIOM_UPSTREAM_PORT || 4174);
+const DEFAULT_AUDIOBOOK_PUBLIC_UPSTREAM_PORT = Number(process.env.AUDIOBOOK_UPSTREAM_PORT || 8787);
 
 const ROUTE_PRESETS = Object.freeze({
   homebrain: Object.freeze({
@@ -43,6 +44,16 @@ const ROUTE_PRESETS = Object.freeze({
     upstreamHost: process.env.AXIOM_UPSTREAM_HOST || '127.0.0.1',
     upstreamPort: DEFAULT_AXIOM_PUBLIC_UPSTREAM_PORT,
     healthCheckPath: '/healthz',
+    websocketSupport: true,
+    tlsMode: 'automatic'
+  }),
+  audiobook: Object.freeze({
+    platformKey: 'audiobook',
+    displayName: 'Audiobook Studio',
+    upstreamProtocol: 'http',
+    upstreamHost: process.env.AUDIOBOOK_UPSTREAM_HOST || '127.0.0.1',
+    upstreamPort: DEFAULT_AUDIOBOOK_PUBLIC_UPSTREAM_PORT,
+    healthCheckPath: '/api/health',
     websocketSupport: true,
     tlsMode: 'automatic'
   })
@@ -254,6 +265,29 @@ function getDefaultAxiomHostname(homebrainHostname) {
   return normalizeHostname(`mail.${homebrainHostname}`);
 }
 
+function getDefaultAudiobookHostname() {
+  const explicitHost = trimString(process.env.AUDIOBOOK_PUBLIC_HOST).toLowerCase();
+  if (explicitHost) {
+    try {
+      return normalizeHostname(explicitHost);
+    } catch (_error) {
+      // noop
+    }
+  }
+
+  const baseUrl = trimString(process.env.AUDIOBOOK_PUBLIC_BASE_URL);
+  if (baseUrl) {
+    try {
+      const parsed = new URL(baseUrl);
+      return normalizeHostname(parsed.hostname);
+    } catch (_error) {
+      // noop
+    }
+  }
+
+  return null;
+}
+
 function buildUpstreamUrl(route) {
   return `${route.upstreamProtocol}://${route.upstreamHost}:${route.upstreamPort}`;
 }
@@ -262,8 +296,9 @@ function buildPresetSuggestions() {
   const homebrainHostname = getDefaultPublicHostname();
   const wwwHostname = normalizeHostname(`www.${homebrainHostname}`);
   const axiomHostname = getDefaultAxiomHostname(homebrainHostname);
+  const audiobookHostname = getDefaultAudiobookHostname();
 
-  return [
+  const suggestions = [
     {
       id: 'homebrain-primary',
       hostname: homebrainHostname,
@@ -280,6 +315,16 @@ function buildPresetSuggestions() {
       ...ROUTE_PRESETS.axiom
     }
   ];
+
+  if (audiobookHostname) {
+    suggestions.push({
+      id: 'audiobook',
+      hostname: audiobookHostname,
+      ...ROUTE_PRESETS.audiobook
+    });
+  }
+
+  return suggestions;
 }
 
 function buildBootstrapRouteSeeds() {
@@ -289,6 +334,14 @@ function buildBootstrapRouteSeeds() {
         ...route,
         enabled: false,
         notes: 'Seeded automatically for the upcoming Axiom platform. Enable this route once the Axiom upstream is live.'
+      };
+    }
+
+    if (route.platformKey === 'audiobook') {
+      return {
+        ...route,
+        enabled: false,
+        notes: 'Seeded automatically for Audiobook Studio. The Audiobook installer enables this route after the upstream is live.'
       };
     }
 

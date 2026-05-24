@@ -118,6 +118,54 @@ test('ensureBootstrapState seeds signing keys and the default Axiom client', asy
   assert.equal(createdClient.tokenEndpointAuthMethod, 'none');
 });
 
+test('ensureBootstrapState seeds Audiobook client when public URL is configured', async (t) => {
+  const originalGetSettings = OIDCProviderSettings.getSettings;
+  const originalFindOne = OIDCClient.findOne;
+  const originalCreate = OIDCClient.create;
+  const originalPublicBaseUrl = process.env.HOMEBRAIN_PUBLIC_BASE_URL;
+  const originalAudiobookPublicBaseUrl = process.env.AUDIOBOOK_PUBLIC_BASE_URL;
+  const originalAudiobookClientId = process.env.OIDC_AUDIOBOOK_CLIENT_ID;
+
+  t.after(() => {
+    OIDCProviderSettings.getSettings = originalGetSettings;
+    OIDCClient.findOne = originalFindOne;
+    OIDCClient.create = originalCreate;
+    process.env.HOMEBRAIN_PUBLIC_BASE_URL = originalPublicBaseUrl;
+    process.env.AUDIOBOOK_PUBLIC_BASE_URL = originalAudiobookPublicBaseUrl;
+    process.env.OIDC_AUDIOBOOK_CLIENT_ID = originalAudiobookClientId;
+  });
+
+  process.env.HOMEBRAIN_PUBLIC_BASE_URL = 'https://example.com';
+  process.env.AUDIOBOOK_PUBLIC_BASE_URL = 'https://audiobook.ntechr.com';
+  delete process.env.OIDC_AUDIOBOOK_CLIENT_ID;
+
+  OIDCProviderSettings.getSettings = async () => ({
+    ...generateProviderKeys(),
+    updatedBy: 'system',
+    async save() {
+      return this;
+    }
+  });
+
+  OIDCClient.findOne = async () => null;
+
+  const createdClients = [];
+  OIDCClient.create = async (payload) => {
+    createdClients.push(payload);
+    return payload;
+  };
+
+  const result = await oidcService.ensureBootstrapState({ actor: 'system:test-bootstrap' });
+  const audiobookClient = createdClients.find((client) => client.clientId === 'homebrain-audiobook');
+
+  assert.ok(result.createdClients.includes('homebrain-audiobook'));
+  assert.equal(audiobookClient.name, 'Audiobook Studio');
+  assert.equal(audiobookClient.platform, 'audiobook');
+  assert.deepEqual(audiobookClient.redirectUris, ['https://audiobook.ntechr.com/api/auth/homebrain/callback']);
+  assert.equal(audiobookClient.requirePkce, true);
+  assert.equal(audiobookClient.tokenEndpointAuthMethod, 'none');
+});
+
 test('handleAuthorize redirects an authenticated HomeBrain session back to the client callback', async (t) => {
   const originalGetSettings = OIDCProviderSettings.getSettings;
   const originalFindOne = OIDCClient.findOne;
