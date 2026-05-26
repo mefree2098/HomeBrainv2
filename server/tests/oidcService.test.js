@@ -66,6 +66,15 @@ function generateProviderKeys() {
   };
 }
 
+function restoreEnv(name, value) {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+
+  process.env[name] = value;
+}
+
 test('ensureBootstrapState seeds signing keys and the default Axiom client', async (t) => {
   const originalGetSettings = OIDCProviderSettings.getSettings;
   const originalFindOne = OIDCClient.findOne;
@@ -73,19 +82,31 @@ test('ensureBootstrapState seeds signing keys and the default Axiom client', asy
   const originalPublicBaseUrl = process.env.HOMEBRAIN_PUBLIC_BASE_URL;
   const originalRedirectUri = process.env.OIDC_AXIOM_REDIRECT_URI;
   const originalClientId = process.env.OIDC_AXIOM_CLIENT_ID;
+  const originalAudiobookPublicBaseUrl = process.env.AUDIOBOOK_PUBLIC_BASE_URL;
+  const originalAudiobookPublicHost = process.env.AUDIOBOOK_PUBLIC_HOST;
+  const originalAudiobookRedirectUri = process.env.OIDC_AUDIOBOOK_REDIRECT_URI;
+  const originalAudiobookClientId = process.env.OIDC_AUDIOBOOK_CLIENT_ID;
 
   t.after(() => {
     OIDCProviderSettings.getSettings = originalGetSettings;
     OIDCClient.findOne = originalFindOne;
     OIDCClient.create = originalCreate;
-    process.env.HOMEBRAIN_PUBLIC_BASE_URL = originalPublicBaseUrl;
-    process.env.OIDC_AXIOM_REDIRECT_URI = originalRedirectUri;
-    process.env.OIDC_AXIOM_CLIENT_ID = originalClientId;
+    restoreEnv('HOMEBRAIN_PUBLIC_BASE_URL', originalPublicBaseUrl);
+    restoreEnv('OIDC_AXIOM_REDIRECT_URI', originalRedirectUri);
+    restoreEnv('OIDC_AXIOM_CLIENT_ID', originalClientId);
+    restoreEnv('AUDIOBOOK_PUBLIC_BASE_URL', originalAudiobookPublicBaseUrl);
+    restoreEnv('AUDIOBOOK_PUBLIC_HOST', originalAudiobookPublicHost);
+    restoreEnv('OIDC_AUDIOBOOK_REDIRECT_URI', originalAudiobookRedirectUri);
+    restoreEnv('OIDC_AUDIOBOOK_CLIENT_ID', originalAudiobookClientId);
   });
 
   process.env.HOMEBRAIN_PUBLIC_BASE_URL = 'https://example.com';
   delete process.env.OIDC_AXIOM_REDIRECT_URI;
   delete process.env.OIDC_AXIOM_CLIENT_ID;
+  delete process.env.AUDIOBOOK_PUBLIC_BASE_URL;
+  delete process.env.AUDIOBOOK_PUBLIC_HOST;
+  delete process.env.OIDC_AUDIOBOOK_REDIRECT_URI;
+  delete process.env.OIDC_AUDIOBOOK_CLIENT_ID;
 
   let saved = false;
   OIDCProviderSettings.getSettings = async () => ({
@@ -130,9 +151,9 @@ test('ensureBootstrapState seeds Audiobook client when public URL is configured'
     OIDCProviderSettings.getSettings = originalGetSettings;
     OIDCClient.findOne = originalFindOne;
     OIDCClient.create = originalCreate;
-    process.env.HOMEBRAIN_PUBLIC_BASE_URL = originalPublicBaseUrl;
-    process.env.AUDIOBOOK_PUBLIC_BASE_URL = originalAudiobookPublicBaseUrl;
-    process.env.OIDC_AUDIOBOOK_CLIENT_ID = originalAudiobookClientId;
+    restoreEnv('HOMEBRAIN_PUBLIC_BASE_URL', originalPublicBaseUrl);
+    restoreEnv('AUDIOBOOK_PUBLIC_BASE_URL', originalAudiobookPublicBaseUrl);
+    restoreEnv('OIDC_AUDIOBOOK_CLIENT_ID', originalAudiobookClientId);
   });
 
   process.env.HOMEBRAIN_PUBLIC_BASE_URL = 'https://example.com';
