@@ -321,13 +321,46 @@ struct DevicesView: View {
 
                 filterPanel
 
-                ScrollView(.horizontal, showsIndicators: false) {
+                deviceSummaryBadges
+            }
+        }
+    }
+
+    private var deviceSummaryBadges: some View {
+        let showsTypeFilter = typeFilter != "all"
+        let showsSourceFilter = sourceFilter != DeviceItem.allSelectionSourcesValue
+        let showsSearchFilter = !searchText.isEmpty
+
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                HBBadge(text: "\(filteredDevices.count) matched")
+                HBBadge(text: "\(devices.filter(\.isOnline).count) online")
+                if showsTypeFilter {
+                    HBBadge(text: deviceTypeFilterLabel(typeFilter))
+                }
+                if showsSourceFilter {
+                    HBBadge(text: sourceFilterLabel)
+                }
+                if showsSearchFilter {
+                    HBBadge(text: "Search active")
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    HBBadge(text: "\(filteredDevices.count) matched")
+                    HBBadge(text: "\(devices.filter(\.isOnline).count) online")
+                }
+
+                if showsTypeFilter || showsSourceFilter || showsSearchFilter {
                     HStack(spacing: 8) {
-                        HBBadge(text: "\(filteredDevices.count) matched")
-                        HBBadge(text: "\(devices.filter(\.isOnline).count) online")
-                        HBBadge(text: deviceTypeFilterLabel(typeFilter))
-                        HBBadge(text: sourceFilter == DeviceItem.allSelectionSourcesValue ? "All sources" : sourceFilterLabel)
-                        if !searchText.isEmpty {
+                        if showsTypeFilter {
+                            HBBadge(text: deviceTypeFilterLabel(typeFilter))
+                        }
+                        if showsSourceFilter {
+                            HBBadge(text: sourceFilterLabel)
+                        }
+                        if showsSearchFilter {
                             HBBadge(text: "Search active")
                         }
                     }
@@ -457,34 +490,7 @@ struct DevicesView: View {
                     favoriteButton(for: device)
                 }
 
-                HStack(spacing: 8) {
-                    statusBadge(for: device)
-                        .fixedSize(horizontal: true, vertical: false)
-                    HBBadge(
-                        text: deviceTypeDisplayLabel(device.type),
-                        foreground: HBPalette.textPrimary,
-                        background: HBPalette.panelSoft.opacity(0.88),
-                        stroke: HBPalette.panelStrokeStrong
-                    )
-                    .fixedSize(horizontal: true, vertical: false)
-                    HBBadge(
-                        text: device.selectionSourceLabel,
-                        foreground: HBPalette.textPrimary,
-                        background: HBPalette.panelSoft.opacity(0.88),
-                        stroke: HBPalette.panelStrokeStrong
-                    )
-                    .fixedSize(horizontal: true, vertical: false)
-                    if isSmartThingsBackedDevice(device) {
-                        HBBadge(
-                            text: "Migration",
-                            foreground: HBPalette.accentBlue,
-                            background: HBPalette.accentBlue.opacity(0.12),
-                            stroke: HBPalette.accentBlue.opacity(0.55)
-                        )
-                        .fixedSize(horizontal: true, vertical: false)
-                    }
-                }
-                .lineLimit(1)
+                deviceIdentityBadges(for: device)
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(deviceControlSummary(for: device))
@@ -521,6 +527,60 @@ struct DevicesView: View {
                 Label("Delete Device", systemImage: "trash")
             }
         }
+    }
+
+    private func deviceIdentityBadges(for device: DeviceItem) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                statusBadge(for: device)
+                deviceTypeBadge(for: device)
+                deviceSourceBadge(for: device)
+                if isSmartThingsBackedDevice(device) {
+                    migrationBadge()
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    statusBadge(for: device)
+                    deviceTypeBadge(for: device)
+                }
+                HStack(spacing: 8) {
+                    deviceSourceBadge(for: device)
+                    if isSmartThingsBackedDevice(device) {
+                        migrationBadge()
+                    }
+                }
+            }
+        }
+        .lineLimit(1)
+    }
+
+    private func deviceTypeBadge(for device: DeviceItem) -> some View {
+        HBBadge(
+            text: deviceTypeDisplayLabel(device.type),
+            foreground: HBPalette.textPrimary,
+            background: HBPalette.panelSoft.opacity(0.88),
+            stroke: HBPalette.panelStrokeStrong
+        )
+    }
+
+    private func deviceSourceBadge(for device: DeviceItem) -> some View {
+        HBBadge(
+            text: device.selectionSourceLabel,
+            foreground: HBPalette.textPrimary,
+            background: HBPalette.panelSoft.opacity(0.88),
+            stroke: HBPalette.panelStrokeStrong
+        )
+    }
+
+    private func migrationBadge() -> some View {
+        HBBadge(
+            text: "Migration",
+            foreground: HBPalette.accentBlue,
+            background: HBPalette.accentBlue.opacity(0.12),
+            stroke: HBPalette.accentBlue.opacity(0.55)
+        )
     }
 
     private func favoriteButton(for device: DeviceItem) -> some View {
