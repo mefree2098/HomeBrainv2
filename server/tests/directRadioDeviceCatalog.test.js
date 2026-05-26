@@ -85,3 +85,48 @@ test('direct radio catalog leaves cloud and virtual SmartThings helpers out of n
   assert.equal(plan.instructionProfile, null);
   assert.ok(plan.warnings.some((warning) => warning.includes('cloud, virtual')));
 });
+
+test('direct radio catalog does not treat Energy Monitoring room names as Ring devices', () => {
+  const device = {
+    _id: 'meter-1',
+    name: 'Panel A Energy Monitor',
+    type: 'switch',
+    room: 'Energy Monitoring',
+    properties: {
+      source: 'smartthings',
+      smartThingsDeviceId: 'smartthings-meter-1',
+      smartThingsDeviceNetworkType: 'ZWAVE',
+      smartThingsCapabilities: ['powerMeter', 'energyMeter', 'refresh'],
+      smartThingsCategories: ['curbPowerMeter']
+    }
+  };
+
+  assert.equal(isCloudOrVirtualOnly(device), false);
+  const plan = buildMigrationPlan(device);
+  assert.equal(plan.supported, true);
+  assert.equal(plan.recommendedProtocol, 'zwave');
+  assert.equal(plan.targetSource, 'homebrain-zwave');
+  assert.ok(plan.featureSupport.some((feature) => feature.key === 'power' && feature.supported));
+  assert.ok(plan.featureSupport.some((feature) => feature.key === 'energy' && feature.supported));
+});
+
+test('direct radio catalog excludes non-radio SmartThings network types', () => {
+  const device = {
+    _id: 'hub-1',
+    name: 'Janisary Hub',
+    type: 'switch',
+    properties: {
+      source: 'smartthings',
+      smartThingsDeviceId: 'smartthings-hub-1',
+      smartThingsDeviceNetworkType: 'HUB',
+      smartThingsCapabilities: ['switch']
+    }
+  };
+
+  assert.equal(isCloudOrVirtualOnly(device), true);
+  const plan = buildMigrationPlan(device);
+  assert.equal(plan.supported, false);
+  assert.deepEqual(plan.guidedSteps, []);
+  assert.deepEqual(plan.manualSteps, []);
+  assert.equal(plan.instructionProfile, null);
+});
