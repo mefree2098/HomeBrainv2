@@ -2488,6 +2488,7 @@ test('turnOn defaults to acknowledgement-only verification and carries fallback 
   const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
   const originalPersistState = insteonService._persistDeviceRuntimeState;
   const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+  const originalDefaultVerificationMode = insteonService._defaultVerificationMode;
 
   t.after(() => {
     insteonService.hub = originalHub;
@@ -2496,11 +2497,13 @@ test('turnOn defaults to acknowledgement-only verification and carries fallback 
     insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
     insteonService._persistDeviceRuntimeState = originalPersistState;
     insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+    insteonService._defaultVerificationMode = originalDefaultVerificationMode;
   });
 
   let confirmCalls = 0;
   let scheduledRefresh = null;
   insteonService.isConnected = true;
+  insteonService._defaultVerificationMode = 'ack';
   insteonService.hub = {
     turnOn(_address, _level, callback) {
       callback(null, { ack: true, success: true });
@@ -3131,6 +3134,7 @@ test('turnOff defaults to acknowledgement-only verification', async (t) => {
   const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
   const originalPersistState = insteonService._persistDeviceRuntimeState;
   const originalScheduleRuntimeStateRefresh = insteonService._scheduleRuntimeStateRefresh;
+  const originalDefaultVerificationMode = insteonService._defaultVerificationMode;
 
   t.after(() => {
     insteonService.hub = originalHub;
@@ -3139,11 +3143,13 @@ test('turnOff defaults to acknowledgement-only verification', async (t) => {
     insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
     insteonService._persistDeviceRuntimeState = originalPersistState;
     insteonService._scheduleRuntimeStateRefresh = originalScheduleRuntimeStateRefresh;
+    insteonService._defaultVerificationMode = originalDefaultVerificationMode;
   });
 
   let confirmCalls = 0;
   let scheduledRefresh = null;
   insteonService.isConnected = true;
+  insteonService._defaultVerificationMode = 'ack';
   insteonService.hub = {
     turnOff(_address, callback) {
       callback(null, { ack: true, success: true });
