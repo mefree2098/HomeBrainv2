@@ -66,6 +66,9 @@ const SMARTTHINGS_CAMERA_CAPABILITIES = [
   'cameraEvent',
   'webrtc'
 ] as const
+const SMARTTHINGS_VIRTUAL_SWITCH_PRESENTATION_IDS = new Set([
+  '74cf66e1-ae7f-3a14-a6a8-1affef9ec321'
+])
 const SMARTTHINGS_CATEGORY_LABELS: Record<string, string> = {
   airconditioner: 'Air Conditioners',
   airpurifier: 'Air Purifiers',
@@ -220,7 +223,7 @@ const SMARTTHINGS_CATEGORY_LABELS: Record<string, string> = {
 }
 const DEVICE_TYPE_FILTERS = [
   { value: 'light', label: 'Lights' },
-  { value: 'switch', label: 'Switches' },
+  { value: 'switch', label: 'Physical Switches' },
   { value: 'virtual-switch', label: 'Virtual Switches' },
   { value: 'lock', label: 'Locks' },
   { value: 'thermostat', label: 'Thermostats' },
@@ -440,6 +443,15 @@ const hasAnySmartThingsCapability = (device: any, capabilities: readonly string[
   return capabilities.some((capability) => hasSmartThingsCapability(device, capability))
 }
 
+const hasOnlySmartThingsCapabilities = (device: any, capabilities: readonly string[]): boolean => {
+  const allowedCapabilities = new Set(capabilities.map((capability) => capability.toLowerCase()))
+  const actualCapabilities = getSmartThingsCapabilities(device)
+    .map((capability) => capability.toLowerCase())
+
+  return actualCapabilities.length > 0
+    && actualCapabilities.every((capability) => allowedCapabilities.has(capability))
+}
+
 const isSmartThingsCameraLike = (device: any): boolean => {
   if (!isSmartThingsBackedDevice(device)) {
     return false
@@ -468,6 +480,26 @@ const isSmartThingsVirtualSwitch = (device: any): boolean => {
   const descriptor = getDeviceFilterDescriptor(device)
   return /\b(?:virtual|simulated|trigger)\b/.test(descriptor)
     || (device?.room || '').toString().toLowerCase().includes('virtual switch')
+    || /\bsthm\b/.test(descriptor)
+    || (
+      descriptor.includes('home monitor switches')
+      && hasOnlySmartThingsCapabilities(device, ['switch', 'refresh'])
+    )
+    || (
+      SMARTTHINGS_VIRTUAL_SWITCH_PRESENTATION_IDS.has(
+        normalizeSmartThingsValue(device?.properties?.smartThingsPresentationId).toLowerCase()
+      )
+      && normalizeSmartThingsValue(device?.properties?.smartThingsManufacturer).toLowerCase() === 'smartthingscommunity'
+      && hasOnlySmartThingsCapabilities(device, ['switch', 'refresh'])
+    )
+}
+
+const getDeviceDisplayTypeLabel = (device: any): string => {
+  if (isSmartThingsVirtualSwitch(device)) {
+    return 'Virtual Switch'
+  }
+
+  return getDeviceTypeLabel(device?.type)
 }
 
 const getSmartThingsCategoryLabel = (category: string): string => {
@@ -641,6 +673,10 @@ const matchesDeviceTypeFilter = (device: any, filterType: string): boolean => {
       || hasSmartThingsCategory(device, 'curbPowerMeter')
       || hasSmartThingsCategory(device, 'powerMeasurementSensor')
       || supportsEnergyMonitoring(device)
+  }
+
+  if (filterType === 'switch') {
+    return device?.type === 'switch' && !isSmartThingsVirtualSwitch(device)
   }
 
   return device?.type === filterType
@@ -1645,7 +1681,7 @@ export function Devices({
                 : (device.status ? "On" : "Off")}
             </Badge>
             <Badge variant="outline">
-              {getDeviceTypeLabel(device.type)}
+              {getDeviceDisplayTypeLabel(device)}
             </Badge>
             <Badge variant="outline">
               {getDeviceSourceLabel(getDeviceSource(device))}
@@ -1887,7 +1923,7 @@ export function Devices({
                           <div className="min-w-0">
                             <h3 className="break-words font-medium">{device.name}</h3>
                             <p className="text-sm text-muted-foreground">
-                              {device.room} • {getDeviceTypeLabel(device.type)} • {getDeviceSourceLabel(getDeviceSource(device))}
+                              {device.room} • {getDeviceDisplayTypeLabel(device)} • {getDeviceSourceLabel(getDeviceSource(device))}
                             </p>
                           </div>
                         </div>
