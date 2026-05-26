@@ -33,6 +33,15 @@ function createSettings(overrides = {}) {
   };
 }
 
+function restoreEnv(name, value) {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+
+  process.env[name] = value;
+}
+
 test('buildDesiredConfig renders Caddy global options and enabled routes', async (t) => {
   const originalGetSettings = ReverseProxySettings.getSettings;
   const originalFind = ReverseProxyRoute.find;
@@ -168,10 +177,10 @@ test('getRoutePresets includes Audiobook when a public host is configured', asyn
   delete require.cache[servicePath];
 
   t.after(() => {
-    process.env.AUDIOBOOK_PUBLIC_HOST = originalAudiobookPublicHost;
-    process.env.AUDIOBOOK_PUBLIC_BASE_URL = originalAudiobookPublicBaseUrl;
-    process.env.AUDIOBOOK_UPSTREAM_HOST = originalAudiobookUpstreamHost;
-    process.env.AUDIOBOOK_UPSTREAM_PORT = originalAudiobookUpstreamPort;
+    restoreEnv('AUDIOBOOK_PUBLIC_HOST', originalAudiobookPublicHost);
+    restoreEnv('AUDIOBOOK_PUBLIC_BASE_URL', originalAudiobookPublicBaseUrl);
+    restoreEnv('AUDIOBOOK_UPSTREAM_HOST', originalAudiobookUpstreamHost);
+    restoreEnv('AUDIOBOOK_UPSTREAM_PORT', originalAudiobookUpstreamPort);
     delete require.cache[servicePath];
   });
 
@@ -262,6 +271,8 @@ test('ensureBootstrapState backfills settings and creates only missing seeded ro
   const originalPublicBaseUrl = process.env.HOMEBRAIN_PUBLIC_BASE_URL;
   const originalPublicHost = process.env.HOMEBRAIN_PUBLIC_HOST;
   const originalAxiomPublicHost = process.env.AXIOM_PUBLIC_HOST;
+  const originalAudiobookPublicHost = process.env.AUDIOBOOK_PUBLIC_HOST;
+  const originalAudiobookPublicBaseUrl = process.env.AUDIOBOOK_PUBLIC_BASE_URL;
 
   t.after(() => {
     ReverseProxySettings.getSettings = originalGetSettings;
@@ -269,12 +280,14 @@ test('ensureBootstrapState backfills settings and creates only missing seeded ro
     ReverseProxyAuditLog.create = originalAuditCreate;
     reverseProxyService.createRoute = originalCreateRoute;
     reverseProxyService.validateRoute = originalValidateRoute;
-    process.env.CADDY_ACME_EMAIL = originalAcmeEmail;
-    process.env.HOMEBRAIN_EXPECTED_PUBLIC_IP = originalExpectedPublicIp;
-    process.env.HOMEBRAIN_EXPECTED_PUBLIC_IPV6 = originalExpectedPublicIpv6;
-    process.env.HOMEBRAIN_PUBLIC_BASE_URL = originalPublicBaseUrl;
-    process.env.HOMEBRAIN_PUBLIC_HOST = originalPublicHost;
-    process.env.AXIOM_PUBLIC_HOST = originalAxiomPublicHost;
+    restoreEnv('CADDY_ACME_EMAIL', originalAcmeEmail);
+    restoreEnv('HOMEBRAIN_EXPECTED_PUBLIC_IP', originalExpectedPublicIp);
+    restoreEnv('HOMEBRAIN_EXPECTED_PUBLIC_IPV6', originalExpectedPublicIpv6);
+    restoreEnv('HOMEBRAIN_PUBLIC_BASE_URL', originalPublicBaseUrl);
+    restoreEnv('HOMEBRAIN_PUBLIC_HOST', originalPublicHost);
+    restoreEnv('AXIOM_PUBLIC_HOST', originalAxiomPublicHost);
+    restoreEnv('AUDIOBOOK_PUBLIC_HOST', originalAudiobookPublicHost);
+    restoreEnv('AUDIOBOOK_PUBLIC_BASE_URL', originalAudiobookPublicBaseUrl);
   });
 
   process.env.CADDY_ACME_EMAIL = 'ops@example.com';
@@ -283,6 +296,8 @@ test('ensureBootstrapState backfills settings and creates only missing seeded ro
   delete process.env.HOMEBRAIN_PUBLIC_BASE_URL;
   delete process.env.HOMEBRAIN_PUBLIC_HOST;
   delete process.env.AXIOM_PUBLIC_HOST;
+  delete process.env.AUDIOBOOK_PUBLIC_HOST;
+  delete process.env.AUDIOBOOK_PUBLIC_BASE_URL;
 
   let saved = false;
   ReverseProxySettings.getSettings = async () => createSettings({
