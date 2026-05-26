@@ -10,7 +10,11 @@ import {
   Lightbulb,
   Loader2,
   Lock,
+  Minus,
+  Palette,
+  Plus,
   Power,
+  PowerOff,
   RadioTower,
   Sparkles,
   Thermometer,
@@ -48,6 +52,7 @@ import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useAuth } from "@/contexts/AuthContext"
@@ -74,6 +79,10 @@ type DeviceLike = {
   status?: boolean
   isOnline?: boolean
   lastSeen?: string | Date
+  brightness?: number
+  color?: string
+  targetTemperature?: number
+  temperature?: number
   properties?: Record<string, unknown>
 }
 
@@ -130,6 +139,7 @@ const HARMONY_PRIMARY_COMMANDS = [
   { key: "home", label: "Home" },
   { key: "menu", label: "Menu" }
 ] as const
+const DETAIL_THERMOSTAT_MODES = ["auto", "cool", "heat", "off"] as const
 
 function getGuidedMigrationSteps(plan: DirectRadioMigrationPlan | null | undefined): DirectRadioMigrationGuidedStep[] {
   return Array.isArray(plan?.guidedSteps) ? plan.guidedSteps.filter((step) => step && step.id) : []
@@ -253,6 +263,27 @@ function getSmartThingsCapabilities(device: DeviceLike | null): string[] {
     .filter(Boolean)))
 }
 
+function hasSmartThingsCapability(device: DeviceLike | null, capability: string): boolean {
+  return getSmartThingsCapabilities(device).includes(capability)
+}
+
+function getSmartThingsCategories(device: DeviceLike | null): string[] {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  const rawCategories = [
+    ...(Array.isArray(properties?.smartThingsCategories) ? properties.smartThingsCategories : []),
+    ...(Array.isArray(properties?.smartthingsCategories) ? properties.smartthingsCategories : [])
+  ]
+
+  return Array.from(new Set(rawCategories
+    .map(normalizeSmartThingsValue)
+    .filter(Boolean)
+    .map((category) => category.toLowerCase())))
+}
+
+function hasSmartThingsCategory(device: DeviceLike | null, category: string): boolean {
+  return getSmartThingsCategories(device).includes(category.toLowerCase())
+}
+
 function getSourceLabel(device: DeviceLike | null): string {
   return getDeviceSourceLabel(getDeviceSource(device || undefined))
 }
@@ -261,6 +292,89 @@ function isSmartThingsBackedDevice(device: DeviceLike | null): boolean {
   const properties = device?.properties as Record<string, unknown> | undefined
   const source = (properties?.source || "").toString().trim().toLowerCase()
   return source === "smartthings" || Boolean(properties?.smartThingsDeviceId)
+}
+
+function clampBrightness(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+  return Math.max(0, Math.min(100, Math.round(value)))
+}
+
+function getLightBrightness(device: DeviceLike | null): number {
+  return clampBrightness(Number(device?.brightness))
+}
+
+function normalizeHexColor(value: unknown): string {
+  if (typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value.trim())) {
+    return value.trim().toLowerCase()
+  }
+  return "#ffffff"
+}
+
+function getLightColor(device: DeviceLike | null): string {
+  return normalizeHexColor(device?.color)
+}
+
+function looksLikeSmartThingsDimmer(device: DeviceLike | null): boolean {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  const descriptor = [
+    properties?.smartThingsDeviceTypeName,
+    properties?.smartThingsPresentationId,
+    device?.name
+  ]
+    .filter((value) => typeof value === "string" && value.trim().length > 0)
+    .join(" ")
+    .toLowerCase()
+
+  return /\bdimmer\b/.test(descriptor)
+}
+
+function hasSmartThingsLevelState(device: DeviceLike | null): boolean {
+  const properties = device?.properties as Record<string, any> | undefined
+  const levelValue = properties?.smartThingsAttributeValues?.switchLevel?.level
+  const levelMetadata = properties?.smartThingsAttributeMetadata?.switchLevel?.level
+
+  return levelValue !== undefined && levelValue !== null
+    || Boolean(levelMetadata && typeof levelMetadata === "object" && Object.keys(levelMetadata).length > 0)
+}
+
+function supportsLightFade(device: DeviceLike | null): boolean {
+  if (!device) {
+    return false
+  }
+  if (device.type === "light") {
+    return true
+  }
+  if (isSmartThingsBackedDevice(device)) {
+    if (hasSmartThingsCapability(device, "switchLevel") || hasSmartThingsCapability(device, "colorControl")) {
+      return true
+    }
+    if (device.type === "switch" && (hasSmartThingsCategory(device, "light") || looksLikeSmartThingsDimmer(device))) {
+      return true
+    }
+    if (hasSmartThingsLevelState(device)) {
+      return true
+    }
+  }
+
+  const properties = device.properties as Record<string, unknown> | undefined
+  return Boolean(properties?.supportsBrightness)
+    || (Array.isArray(properties?.directRadioFeatures) && properties.directRadioFeatures.includes("brightness"))
+    || (Array.isArray(properties?.matterFeatures) && properties.matterFeatures.includes("brightness"))
+}
+
+function supportsLightColor(device: DeviceLike | null): boolean {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  if (isSmartThingsBackedDevice(device)) {
+    if (hasSmartThingsCapability(device, "colorControl")) {
+      return true
+    }
+    return Boolean(properties?.supportsColor && supportsLightFade(device))
+  }
+
+  return Boolean(properties?.supportsColor)
+    || (Array.isArray(properties?.matterFeatures) && properties.matterFeatures.includes("color"))
 }
 
 function getFormattedInsteonAddress(device: DeviceLike | null): string | null {
@@ -470,6 +584,110 @@ function getPrimaryStateLabel(device: DeviceLike | null) {
     default:
       return device?.status ? "On" : "Off"
   }
+}
+
+function normalizeThermostatMode(value: unknown): string {
+  if (typeof value !== "string") {
+    return ""
+  }
+
+  const normalized = value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]/g, "")
+
+  if (normalized === "auto") {
+    return "auto"
+  }
+  if (normalized === "cool") {
+    return "cool"
+  }
+  if (normalized === "heat" || normalized === "auxheatonly" || normalized === "emergencyheat") {
+    return "heat"
+  }
+  if (normalized === "off") {
+    return "off"
+  }
+
+  return ""
+}
+
+function getThermostatMode(device: DeviceLike | null): string {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  const candidates = [
+    properties?.smartThingsThermostatMode,
+    properties?.ecobeeHvacMode,
+    properties?.hvacMode
+  ]
+
+  for (const candidate of candidates) {
+    const mode = normalizeThermostatMode(candidate)
+    if (mode) {
+      return mode
+    }
+  }
+
+  return "auto"
+}
+
+function getThermostatOnMode(device: DeviceLike | null): string {
+  const mode = getThermostatMode(device)
+  if (mode !== "off") {
+    return mode
+  }
+
+  const properties = device?.properties as Record<string, unknown> | undefined
+  return normalizeThermostatMode(properties?.smartThingsLastActiveThermostatMode || properties?.ecobeeLastActiveHvacMode)
+    || "auto"
+}
+
+function getThermostatTargetTemperature(device: DeviceLike | null): number {
+  const target = Number(device?.targetTemperature)
+  if (Number.isFinite(target)) {
+    return Math.round(target)
+  }
+
+  const current = Number(device?.temperature)
+  if (Number.isFinite(current)) {
+    return Math.round(current)
+  }
+
+  return 72
+}
+
+function getPrimaryActionLabel(device: DeviceLike | null): string {
+  if (!device) {
+    return "Control"
+  }
+  if (device.type === "thermostat") {
+    return getThermostatMode(device) === "off" ? "Turn On" : "Turn Off"
+  }
+  if (device.type === "lock") {
+    return device.status ? "Unlock" : "Lock"
+  }
+  if (device.type === "garage") {
+    return device.status ? "Close" : "Open"
+  }
+  return device.status ? "Turn Off" : "Turn On"
+}
+
+function getPowerAction(device: DeviceLike | null): string {
+  if (device?.type === "thermostat") {
+    return getThermostatMode(device) === "off" ? "turn_on" : "turn_off"
+  }
+  return device?.status ? "turn_off" : "turn_on"
+}
+
+function canUseSimplePowerControl(device: DeviceLike | null): boolean {
+  if (!device || isHarmonyCommandDevice(device)) {
+    return false
+  }
+  if (device.type === "camera" || device.type === "sensor") {
+    return false
+  }
+  return device.type === "thermostat"
+    || supportsLightFade(device)
+    || ["light", "switch", "lock", "garage"].includes(device.type)
 }
 
 function getDeviceHeroIcon(device: DeviceLike | null): LucideIcon {
@@ -787,6 +1005,12 @@ export function DeviceDetailsDialog({
   const [selectedHarmonyCommand, setSelectedHarmonyCommand] = useState("")
   const [harmonyHoldMs, setHarmonyHoldMs] = useState(0)
   const [sendingHarmonyCommand, setSendingHarmonyCommand] = useState(false)
+  const [sendingDirectControl, setSendingDirectControl] = useState(false)
+  const [directControlFeedback, setDirectControlFeedback] = useState<"success" | "error" | null>(null)
+  const [directControlError, setDirectControlError] = useState<string | null>(null)
+  const [lightBrightnessDraft, setLightBrightnessDraft] = useState<number | null>(null)
+  const [lightColorDraft, setLightColorDraft] = useState<string | null>(null)
+  const [thermostatSetpointDraft, setThermostatSetpointDraft] = useState<number | null>(null)
   const [migrationPlan, setMigrationPlan] = useState<DirectRadioMigrationPlan | null>(null)
   const [migrationLoading, setMigrationLoading] = useState(false)
   const [migrationStarting, setMigrationStarting] = useState<"zigbee" | "zwave" | null>(null)
@@ -882,6 +1106,19 @@ export function DeviceDetailsDialog({
     }
 
     setActiveTab("overview")
+  }, [device?._id, open])
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    setSendingDirectControl(false)
+    setDirectControlFeedback(null)
+    setDirectControlError(null)
+    setLightBrightnessDraft(null)
+    setLightColorDraft(null)
+    setThermostatSetpointDraft(null)
   }, [device?._id, open])
 
   useEffect(() => {
@@ -1137,6 +1374,10 @@ export function DeviceDetailsDialog({
     harmonyPowerCommands.off ? `Off: ${harmonyPowerCommands.off}` : "",
     harmonyPowerCommands.toggle ? `Toggle: ${harmonyPowerCommands.toggle}` : ""
   ].filter(Boolean).join(" • ") || "No power command mapping discovered yet"
+  const currentLightBrightness = lightBrightnessDraft ?? getLightBrightness(device)
+  const currentLightColor = lightColorDraft ?? getLightColor(device)
+  const currentThermostatMode = getThermostatMode(device)
+  const currentThermostatSetpoint = thermostatSetpointDraft ?? getThermostatTargetTemperature(device)
   const overviewHeroRows: DeviceTabHeroRow[] = [
     { label: "Room", value: device?.room || "Unassigned" },
     { label: "Last contact", value: formatDateTime(device?.lastSeen) },
@@ -1358,6 +1599,55 @@ export function DeviceDetailsDialog({
     }
   }
 
+  const handleDirectDeviceControl = async (action: string, value?: unknown) => {
+    if (!device?._id) {
+      return
+    }
+
+    setSendingDirectControl(true)
+    setDirectControlFeedback(null)
+    setDirectControlError(null)
+    try {
+      const response = await controlDevice({
+        deviceId: device._id,
+        action,
+        ...(value !== undefined ? { value } : {})
+      })
+      const updatedDevice = (response?.device || response) as DeviceLike
+      if (updatedDevice?._id) {
+        onDeviceUpdated?.(updatedDevice)
+      }
+      if (action === "set_brightness") {
+        setLightBrightnessDraft(null)
+      }
+      if (action === "set_color") {
+        setLightColorDraft(null)
+      }
+      if (action === "set_temperature") {
+        setThermostatSetpointDraft(null)
+      }
+      setDirectControlFeedback("success")
+      toast({
+        title: "Command sent",
+        description: `${getPrimaryActionLabel(device)} command was sent to ${device.name}.`
+      })
+      setTimeout(() => setDirectControlFeedback(null), 1800)
+    } catch (controlError) {
+      const message = controlError instanceof Error
+        ? controlError.message
+        : "Failed to send device command."
+      setDirectControlFeedback("error")
+      setDirectControlError(message)
+      toast({
+        title: "Unable to control device",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setSendingDirectControl(false)
+    }
+  }
+
   const executeGuidedMigrationStep = async (
     step: DirectRadioMigrationGuidedStep,
     protocol: "zigbee" | "zwave"
@@ -1501,6 +1791,198 @@ export function DeviceDetailsDialog({
   const appendSuggestedGroup = (group: string) => {
     const nextGroups = normalizeGroupList([...draftGroups, group])
     setGroupInput(nextGroups.join(", "))
+  }
+
+  const renderDirectControlFeedback = () => {
+    if (sendingDirectControl) {
+      return (
+        <div className="flex items-center gap-2 rounded-[1rem] border border-sky-300/15 bg-sky-300/[0.07] px-3 py-2 text-sm text-sky-50/82">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          Sending command...
+        </div>
+      )
+    }
+    if (directControlFeedback === "success") {
+      return (
+        <div className="rounded-[1rem] border border-emerald-300/15 bg-emerald-300/[0.08] px-3 py-2 text-sm text-emerald-50/82">
+          Command sent.
+        </div>
+      )
+    }
+    if (directControlFeedback === "error") {
+      return (
+        <div className="rounded-[1rem] border border-red-400/20 bg-red-400/[0.08] px-3 py-2 text-sm text-red-100">
+          {directControlError || "Command failed."}
+        </div>
+      )
+    }
+    return null
+  }
+
+  const renderDeviceSpecificControls = () => {
+    if (!device) {
+      return null
+    }
+
+    if (device.type === "thermostat") {
+      const currentTemp = Number(device.temperature)
+      const isModeOff = currentThermostatMode === "off"
+      return (
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:items-center">
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={() => {
+                const next = Math.max(55, Math.round(currentThermostatSetpoint) - 1)
+                setThermostatSetpointDraft(next)
+                void handleDirectDeviceControl("set_temperature", next)
+              }}
+              disabled={sendingDirectControl}
+            >
+              <Minus className="h-4 w-4" />
+            </Button>
+            <div className="rounded-[1.2rem] border border-white/10 bg-white/[0.04] px-4 py-4 text-center">
+              <p className="section-kicker text-white/45">Setpoint</p>
+              <p className="mt-1 text-4xl font-semibold tracking-[-0.06em] text-white">{Math.round(currentThermostatSetpoint)}°</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {Number.isFinite(currentTemp) ? `${Math.round(currentTemp)}° current` : "Current temperature unavailable"}
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={() => {
+                const next = Math.min(90, Math.round(currentThermostatSetpoint) + 1)
+                setThermostatSetpointDraft(next)
+                void handleDirectDeviceControl("set_temperature", next)
+              }}
+              disabled={sendingDirectControl}
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-4">
+            {DETAIL_THERMOSTAT_MODES.map((mode) => (
+              <Button
+                key={mode}
+                type="button"
+                variant={currentThermostatMode === mode ? "default" : "outline"}
+                size="sm"
+                onClick={() => handleDirectDeviceControl("set_mode", mode)}
+                disabled={sendingDirectControl}
+              >
+                {mode.charAt(0).toUpperCase() + mode.slice(1)}
+              </Button>
+            ))}
+          </div>
+          <Button
+            type="button"
+            variant={isModeOff ? "default" : "outline"}
+            className="w-full"
+            onClick={() => handleDirectDeviceControl("set_mode", isModeOff ? getThermostatOnMode(device) : "off")}
+            disabled={sendingDirectControl}
+          >
+            {isModeOff ? <Power className="h-4 w-4" /> : <PowerOff className="h-4 w-4" />}
+            {isModeOff ? "Turn On" : "Turn Off"}
+          </Button>
+        </div>
+      )
+    }
+
+    if (supportsLightFade(device)) {
+      return (
+        <div className="space-y-4">
+          <div className="space-y-3 rounded-[1.2rem] border border-white/10 bg-white/[0.04] p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="section-kicker text-white/45">Brightness</p>
+                <p className="mt-1 text-sm text-muted-foreground">Drag to set the live level.</p>
+              </div>
+              <p className="text-2xl font-semibold tracking-[-0.05em] text-white">{currentLightBrightness}%</p>
+            </div>
+            <Slider
+              value={[currentLightBrightness]}
+              min={0}
+              max={100}
+              step={1}
+              onValueChange={(values) => setLightBrightnessDraft(clampBrightness(values?.[0] ?? currentLightBrightness))}
+              onValueCommit={(values) => {
+                const next = clampBrightness(values?.[0] ?? currentLightBrightness)
+                setLightBrightnessDraft(next)
+                void handleDirectDeviceControl("set_brightness", next)
+              }}
+              disabled={sendingDirectControl}
+            />
+          </div>
+          {supportsLightColor(device) ? (
+            <div className="space-y-3 rounded-[1.2rem] border border-white/10 bg-white/[0.04] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="section-kicker text-white/45">Color</p>
+                  <p className="mt-1 text-sm text-muted-foreground">Choose a color, then apply it.</p>
+                </div>
+                <Badge variant="outline" className="border-white/10 bg-white/[0.06] font-mono uppercase text-white/82">
+                  {currentLightColor}
+                </Badge>
+              </div>
+              <div className="flex items-center gap-3">
+                <Input
+                  type="color"
+                  value={currentLightColor}
+                  onChange={(event) => setLightColorDraft(normalizeHexColor(event.target.value))}
+                  className="h-11 w-16 cursor-pointer border-white/10 bg-black/20 p-1"
+                  disabled={sendingDirectControl}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => handleDirectDeviceControl("set_color", currentLightColor)}
+                  disabled={sendingDirectControl}
+                >
+                  <Palette className="h-4 w-4" />
+                  Apply color
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          <Button
+            type="button"
+            variant={device.status ? "default" : "outline"}
+            className="w-full"
+            onClick={() => handleDirectDeviceControl(getPowerAction(device))}
+            disabled={sendingDirectControl}
+          >
+            {device.status ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
+            {getPrimaryActionLabel(device)}
+          </Button>
+        </div>
+      )
+    }
+
+    if (!canUseSimplePowerControl(device)) {
+      return (
+        <div className="rounded-[1.2rem] border border-dashed border-white/10 px-4 py-5 text-sm leading-relaxed text-muted-foreground">
+          This device does not expose a simple manual power control. Use groups, workflows, telemetry, or the migration helper below.
+        </div>
+      )
+    }
+
+    return (
+      <Button
+        type="button"
+        variant={device.status ? "default" : "outline"}
+        className="w-full"
+        onClick={() => handleDirectDeviceControl(getPowerAction(device))}
+        disabled={sendingDirectControl}
+      >
+        {device.status ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
+        {getPrimaryActionLabel(device)}
+      </Button>
+    )
   }
 
   return (
@@ -1867,8 +2349,8 @@ export function DeviceDetailsDialog({
                   title={device.name}
                   subtitle={`${device.room || "Unassigned"} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
                   description={harmonyCommandDevice
-                    ? "Use the full Harmony command surface here instead of squeezing it under the overview. Quick actions, direct command sending, and power-command behavior now live on their own page."
-                    : "This tab keeps device-facing controls, grouping, and source-specific options together so operational changes are separate from overview and telemetry."}
+                    ? "Harmony command catalog, quick actions, and source-aware power behavior."
+                    : "Device-facing controls, grouping, and source-specific options without overview telemetry noise."}
                   pills={[
                     { label: primaryStateLabel, tone: device?.status ? "emerald" : "sky" },
                     { label: connectivityLabel, tone: device?.isOnline === false ? "amber" : "sky" },
@@ -1880,6 +2362,21 @@ export function DeviceDetailsDialog({
 
                 <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.95fr)]">
                   <div className="space-y-5">
+                    {!harmonyCommandDevice ? (
+                      <Card className="border-white/10 bg-black/20">
+                        <CardHeader className="pb-4">
+                          <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Primary controls</CardTitle>
+                          <CardDescription>
+                            Everyday state changes with larger touch targets and less visual noise.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          {renderDeviceSpecificControls()}
+                          {renderDirectControlFeedback()}
+                        </CardContent>
+                      </Card>
+                    ) : null}
+
                     {harmonyCommandDevice ? (
                       <Card className="border-white/10 bg-black/20">
                         <CardHeader className="pb-4">

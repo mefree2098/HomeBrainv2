@@ -28,6 +28,7 @@ struct DevicesView: View {
     @State private var favoritesProfileId: String?
     @State private var pendingFavoriteDeviceIds: Set<String> = []
     @State private var highlightedDeviceID: String?
+    @State private var controlSheetDeviceID: String?
     @State private var pendingMigrationDeviceIds: Set<String> = []
     @State private var pendingMigrationPlanDeviceIds: Set<String> = []
     @State private var migrationFeedback: [String: String] = [:]
@@ -74,6 +75,10 @@ struct DevicesView: View {
     private var embeddedFocusedDevice: DeviceItem? {
         guard let embeddedFocusDeviceID else { return nil }
         return devices.first(where: { $0.id == embeddedFocusDeviceID })
+    }
+    private var controlSheetDevice: DeviceItem? {
+        guard let controlSheetDeviceID else { return nil }
+        return devices.first(where: { $0.id == controlSheetDeviceID })
     }
 
     private var gridColumns: [GridItem] {
@@ -232,6 +237,26 @@ struct DevicesView: View {
         }
         .sheet(isPresented: $showCreateSheet) {
             createDeviceSheet
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { controlSheetDeviceID != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        controlSheetDeviceID = nil
+                    }
+                }
+            )
+        ) {
+            if let controlSheetDevice {
+                deviceControlSheet(for: controlSheetDevice)
+            } else {
+                EmptyStateView(
+                    title: "Device unavailable",
+                    subtitle: "The selected device is no longer available."
+                )
+                .padding(20)
+            }
         }
         .task {
             await loadDevices(showLoading: true)
@@ -414,12 +439,17 @@ struct DevicesView: View {
                             .font(.system(size: useLandscapeCompactLayout ? 18 : 20, weight: .bold, design: .rounded))
                             .foregroundStyle(HBPalette.textPrimary)
                             .lineLimit(2)
-                        Text(device.room)
+                        Text(device.room.isEmpty ? "Unassigned" : device.room)
                             .font(.system(size: useLandscapeCompactLayout ? 13 : 14, weight: .medium, design: .rounded))
                             .foregroundStyle(HBPalette.textSecondary)
-                        Text(device.isOnline ? "Online" : "Offline")
-                            .font(.system(size: useLandscapeCompactLayout ? 11 : 12, weight: .semibold, design: .rounded))
-                            .foregroundStyle(device.isOnline ? HBPalette.accentGreen : Color.red.opacity(0.85))
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(device.isOnline ? HBPalette.accentGreen : HBPalette.accentOrange)
+                                .frame(width: 7, height: 7)
+                            Text(device.isOnline ? "Online" : "Offline")
+                                .font(.system(size: useLandscapeCompactLayout ? 11 : 12, weight: .semibold, design: .rounded))
+                                .foregroundStyle(device.isOnline ? HBPalette.accentGreen : HBPalette.accentOrange)
+                        }
                     }
 
                     Spacer(minLength: 0)
@@ -427,15 +457,11 @@ struct DevicesView: View {
                     favoriteButton(for: device)
                 }
 
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 112), spacing: 8, alignment: .leading)],
-                    alignment: .leading,
-                    spacing: 8
-                ) {
+                HStack(spacing: 8) {
                     statusBadge(for: device)
                         .fixedSize(horizontal: true, vertical: false)
                     HBBadge(
-                        text: deviceTypeDisplayLabel(device.type).uppercased(),
+                        text: deviceTypeDisplayLabel(device.type),
                         foreground: HBPalette.textPrimary,
                         background: HBPalette.panelSoft.opacity(0.88),
                         stroke: HBPalette.panelStrokeStrong
@@ -448,44 +474,44 @@ struct DevicesView: View {
                         stroke: HBPalette.panelStrokeStrong
                     )
                     .fixedSize(horizontal: true, vertical: false)
-                    if supportsLightFade(device) && device.type != "thermostat" {
+                    if isSmartThingsBackedDevice(device) {
                         HBBadge(
-                            text: "Dimmable",
-                            foreground: HBPalette.textPrimary,
-                            background: HBPalette.panelSoft.opacity(0.88),
-                            stroke: HBPalette.panelStrokeStrong
-                        )
-                        .fixedSize(horizontal: true, vertical: false)
-                    }
-                    if supportsLightColor(device) {
-                        HBBadge(
-                            text: "Color",
-                            foreground: HBPalette.textPrimary,
-                            background: HBPalette.panelSoft.opacity(0.88),
-                            stroke: HBPalette.panelStrokeStrong
+                            text: "Migration",
+                            foreground: HBPalette.accentBlue,
+                            background: HBPalette.accentBlue.opacity(0.12),
+                            stroke: HBPalette.accentBlue.opacity(0.55)
                         )
                         .fixedSize(horizontal: true, vertical: false)
                     }
                 }
+                .lineLimit(1)
 
-                if device.type == "thermostat" {
-                    thermostatControls(for: device)
-                } else if supportsLightFade(device) {
-                    lightControls(for: device)
-                } else {
-                    defaultPowerControl(for: device)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(deviceControlSummary(for: device))
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                    Text("Direct control, grouping, voice, history, and migration context.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(12)
+                .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
+
+                HStack(spacing: 8) {
+                    primaryDeviceActionButton(for: device)
+                    Button {
+                        controlSheetDeviceID = device.id
+                    } label: {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.system(size: 14, weight: .bold))
+                            .frame(width: 42, height: 42)
+                    }
+                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                    .accessibilityLabel("Open controls for \(device.name)")
                 }
 
                 controlFeedbackView(for: device)
-
-                if isSmartThingsBackedDevice(device) {
-                    directRadioMigrationPanel(for: device)
-                }
-
-                Text(voiceHint(for: device))
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                    .foregroundStyle(HBPalette.textSecondary)
-                    .lineLimit(3)
             }
         }
         .contextMenu {
@@ -520,6 +546,111 @@ struct DevicesView: View {
         .buttonStyle(.plain)
         .disabled(isPending)
         .accessibilityLabel(isFavorite ? "Remove \(device.name) from favorites" : "Add \(device.name) to favorites")
+    }
+
+    @ViewBuilder
+    private func primaryDeviceActionButton(for device: DeviceItem) -> some View {
+        if primaryDeviceActionIsProminent(for: device) {
+            Button {
+                if canUsePrimaryDeviceAction(device) {
+                    Task { await runPrimaryDeviceAction(for: device) }
+                } else {
+                    controlSheetDeviceID = device.id
+                }
+            } label: {
+                Label(primaryDeviceActionLabel(for: device), systemImage: primaryDeviceActionIcon(for: device))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(HBPrimaryButtonStyle(compact: true))
+            .disabled(pendingControls.contains(device.id))
+        } else {
+            Button {
+                if canUsePrimaryDeviceAction(device) {
+                    Task { await runPrimaryDeviceAction(for: device) }
+                } else {
+                    controlSheetDeviceID = device.id
+                }
+            } label: {
+                Label(primaryDeviceActionLabel(for: device), systemImage: primaryDeviceActionIcon(for: device))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(HBSecondaryButtonStyle(compact: true))
+            .disabled(pendingControls.contains(device.id))
+        }
+    }
+
+    private func canUsePrimaryDeviceAction(_ device: DeviceItem) -> Bool {
+        if device.type == "camera" || device.type == "sensor" {
+            return false
+        }
+        return device.type == "thermostat"
+            || supportsLightFade(device)
+            || ["light", "switch", "lock", "garage"].contains(device.type)
+    }
+
+    private func primaryDeviceActionIsProminent(for device: DeviceItem) -> Bool {
+        if device.type == "thermostat" {
+            return thermostatMode(for: device) == "off"
+        }
+        return !device.status
+    }
+
+    private func primaryDeviceActionIcon(for device: DeviceItem) -> String {
+        if !canUsePrimaryDeviceAction(device) {
+            return "slider.horizontal.3"
+        }
+        if device.type == "thermostat" {
+            return thermostatMode(for: device) == "off" ? "power.circle.fill" : "power.circle"
+        }
+        return device.status ? "power.circle" : "power.circle.fill"
+    }
+
+    private func primaryDeviceActionLabel(for device: DeviceItem) -> String {
+        if !canUsePrimaryDeviceAction(device) {
+            return "Details"
+        }
+        if device.type == "thermostat" {
+            return thermostatMode(for: device) == "off" ? "Turn On" : "Turn Off"
+        }
+        if device.type == "lock" {
+            return device.status ? "Unlock" : "Lock"
+        }
+        if device.type == "garage" {
+            return device.status ? "Close" : "Open"
+        }
+        return device.status ? "Turn Off" : "Turn On"
+    }
+
+    private func runPrimaryDeviceAction(for device: DeviceItem) async {
+        if device.type == "thermostat" {
+            let mode = thermostatMode(for: device)
+            await handleDeviceControl(
+                deviceId: device.id,
+                action: "set_mode",
+                value: mode == "off" ? thermostatOnMode(for: device) : "off"
+            )
+            return
+        }
+
+        await handleDeviceControl(deviceId: device.id, action: device.status ? "turn_off" : "turn_on")
+    }
+
+    private func deviceControlSummary(for device: DeviceItem) -> String {
+        if device.type == "thermostat" {
+            let current = device.temperature.map { " · \(Int($0.rounded()))° current" } ?? ""
+            return "\(thermostatTargetTemperature(for: device))° setpoint\(current)"
+        }
+        if supportsLightFade(device) {
+            var parts = ["\(Int(currentLightBrightness(for: device).rounded()))%"]
+            if supportsLightColor(device) {
+                parts.append("color")
+            }
+            return parts.joined(separator: " · ")
+        }
+        if isSmartThingsBackedDevice(device) {
+            return "SmartThings route preserved"
+        }
+        return "\(deviceTypeDisplayLabel(device.type)) control"
     }
 
     private func directRadioMigrationPanel(for device: DeviceItem) -> some View {
@@ -1235,6 +1366,107 @@ struct DevicesView: View {
             return "Voice: \"Hey Anna, fade \(device.name) to 30 percent\" or \"set \(device.name) to blue\""
         }
         return "Voice: \"Hey Anna, turn \(device.status ? "off" : "on") \(device.name)\""
+    }
+
+    private func deviceControlSheet(for device: DeviceItem) -> some View {
+        NavigationStack {
+            ZStack {
+                HBPageBackground()
+                    .ignoresSafeArea()
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HBPanel {
+                            HStack(alignment: .top, spacing: 14) {
+                                Image(systemName: iconName(for: device))
+                                    .font(.system(size: 18, weight: .bold))
+                                    .foregroundStyle(Color.white)
+                                    .frame(width: 46, height: 46)
+                                    .background(
+                                        LinearGradient(
+                                            colors: device.status
+                                                ? [HBPalette.accentGreen, HBPalette.accentBlue]
+                                                : [HBPalette.accentSlate, HBPalette.panelSoft],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        ),
+                                        in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                    )
+
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text(device.name)
+                                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                                        .foregroundStyle(HBPalette.textPrimary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Text("\(device.room.isEmpty ? "Unassigned" : device.room) · \(deviceTypeDisplayLabel(device.type)) · \(device.selectionSourceLabel)")
+                                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                                        .foregroundStyle(HBPalette.textSecondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    HStack(spacing: 8) {
+                                        statusBadge(for: device)
+                                        HBBadge(text: device.isOnline ? "Online" : "Offline")
+                                    }
+                                }
+                            }
+                        }
+
+                        HBPanel {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("Primary Controls")
+                                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                                    .foregroundStyle(HBPalette.textPrimary)
+
+                                if device.type == "thermostat" {
+                                    thermostatControls(for: device)
+                                } else if supportsLightFade(device) {
+                                    lightControls(for: device)
+                                } else if canUsePrimaryDeviceAction(device) {
+                                    defaultPowerControl(for: device)
+                                } else {
+                                    Text("This device does not expose a simple manual control. Use groups, workflows, telemetry, or migration guidance instead.")
+                                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                                        .foregroundStyle(HBPalette.textSecondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .padding(12)
+                                        .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
+                                }
+
+                                controlFeedbackView(for: device)
+                            }
+                        }
+
+                        if isSmartThingsBackedDevice(device) {
+                            directRadioMigrationPanel(for: device)
+                        }
+
+                        HBPanel {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Voice")
+                                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                                    .foregroundStyle(HBPalette.textPrimary)
+                                Text(voiceHint(for: device))
+                                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                                    .foregroundStyle(HBPalette.textSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    .padding(16)
+                    .padding(.bottom, 20)
+                }
+                .scrollIndicators(.hidden)
+            }
+            .navigationTitle("Controls")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") {
+                        controlSheetDeviceID = nil
+                    }
+                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                }
+            }
+        }
     }
 
     private var createDeviceSheet: some View {
