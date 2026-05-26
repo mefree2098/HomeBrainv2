@@ -118,6 +118,19 @@ function mapSmartThingsDeviceType(capabilities = new Set(), categories = new Set
     return 'garage';
   }
 
+  if (
+    hasCategory('camera') ||
+    hasCategory('visionSensor') ||
+    hasCapability('videoStream') ||
+    hasCapability('videoCapture') ||
+    hasCapability('videoCamera') ||
+    hasCapability('imageCapture') ||
+    hasCapability('cameraEvent') ||
+    hasCapability('webrtc')
+  ) {
+    return 'camera';
+  }
+
   if (hasCapability('colorControl')) {
     return 'light';
   }
@@ -143,10 +156,6 @@ function mapSmartThingsDeviceType(capabilities = new Set(), categories = new Set
 
   if (hasCapability('audioVolume') || hasCategory('audio') || hasCategory('speaker')) {
     return 'speaker';
-  }
-
-  if (hasCategory('camera')) {
-    return 'camera';
   }
 
   return capabilitySet.size > 0 ? 'switch' : null;

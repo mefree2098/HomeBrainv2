@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Slider } from "@/components/ui/slider"
 import { 
@@ -25,7 +25,8 @@ import {
   Plus,
   Loader2,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  Camera as CameraIcon
 } from "lucide-react"
 import { getDeviceGroups, getDevices, controlDevice, type DeviceGroupSummary } from "@/api/devices"
 import { DeviceDetailsDialog } from "@/components/devices/DeviceDetailsDialog"
@@ -55,6 +56,179 @@ const HARMONY_CARD_COMMANDS = [
   { key: 'volume_up', label: 'Vol +' },
   { key: 'play', label: 'Play' },
   { key: 'pause', label: 'Pause' }
+] as const
+const SMARTTHINGS_CATEGORY_FILTER_PREFIX = 'smartthings-category:'
+const SMARTTHINGS_CAMERA_CAPABILITIES = [
+  'videoStream',
+  'videoCapture',
+  'videoCamera',
+  'imageCapture',
+  'cameraEvent',
+  'webrtc'
+] as const
+const SMARTTHINGS_CATEGORY_LABELS: Record<string, string> = {
+  airconditioner: 'Air Conditioners',
+  airpurifier: 'Air Purifiers',
+  airqualitydetector: 'Air Quality Detectors',
+  airpurifyhumidifier: 'Air Purifying Humidifiers',
+  avedge: 'AV Edge',
+  bathroomheater: 'Bathroom Heaters',
+  battery: 'Batteries',
+  bed: 'Beds',
+  bidet: 'Bidets',
+  blind: 'Blinds',
+  bloodglucosemonitor: 'Blood Glucose Monitors',
+  bloodpressuremonitor: 'Blood Pressure Monitors',
+  blurayplayer: 'Blu-ray Players',
+  bluetoothtracker: 'Bluetooth Trackers',
+  bluetoothcarspeaker: 'Bluetooth Car Speakers',
+  bridges: 'Bridges',
+  button: 'Buttons',
+  camera: 'Cameras',
+  car: 'Cars',
+  cattoilet: 'Cat Toilets',
+  charger: 'Chargers',
+  chlorinesensor: 'Chlorine Sensors',
+  clothingcaremachine: 'Clothing Care Machines',
+  coffeemaker: 'Coffee Makers',
+  contactsensor: 'Contact Sensors',
+  cooktop: 'Cooktops',
+  cuberefrigerator: 'Cube Refrigerators',
+  curbpowermeter: 'Curb Power Meters',
+  cyclingsensor: 'Cycling Sensors',
+  dehumidifier: 'Dehumidifiers',
+  deliveryrobot: 'Delivery Robots',
+  dishwasher: 'Dishwashers',
+  door: 'Doors',
+  doorbell: 'Doorbells',
+  dryer: 'Dryers',
+  earbuds: 'Earbuds',
+  edgeai: 'Edge AI',
+  electricvehiclecharger: 'EV Chargers',
+  elevator: 'Elevators',
+  elliptical: 'Ellipticals',
+  environmentsensor: 'Environment Sensors',
+  fan: 'Fans',
+  faucet: 'Faucets',
+  feeder: 'Feeders',
+  fitnessmat: 'Fitness Mats',
+  flashlight: 'Flashlights',
+  flowsensor: 'Flow Sensors',
+  garagedoor: 'Garage Doors',
+  gasmeter: 'Gas Meters',
+  gasvalve: 'Gas Valves',
+  genericsensor: 'Generic Sensors',
+  healthtracker: 'Health Trackers',
+  heatpump: 'Heat Pumps',
+  heatedmattresspad: 'Heated Mattress Pads',
+  heatingcoolingmat: 'Heating and Cooling Mats',
+  homerobot: 'Home Robots',
+  hometheater: 'Home Theater',
+  hub: 'Hubs',
+  humidifier: 'Humidifiers',
+  humiditysensor: 'Humidity Sensors',
+  indoorcycle: 'Indoor Cycles',
+  irremote: 'IR Remotes',
+  irrigation: 'Irrigation',
+  kimchirefrigerator: 'Kimchi Refrigerators',
+  kitchenhood: 'Kitchen Hoods',
+  leaksensor: 'Leak Sensors',
+  light: 'Lights',
+  lightsensor: 'Light Sensors',
+  medicalthermometer: 'Medical Thermometers',
+  microfiberfilter: 'Microfiber Filters',
+  microwave: 'Microwaves',
+  mobile: 'Mobile Devices',
+  mobilepresence: 'Mobile Presence',
+  motionsensor: 'Motion Sensors',
+  multifunctionalsensor: 'Multi-Functional Sensors',
+  musicsystem: 'Music Systems',
+  networkaudio: 'Network Audio',
+  networking: 'Networking',
+  other: 'Other SmartThings Devices',
+  others: 'Other SmartThings Devices',
+  oven: 'Ovens',
+  panicbutton: 'Panic Buttons',
+  petwaterdispenser: 'Pet Water Dispensers',
+  phsensor: 'pH Sensors',
+  pillow: 'Pillows',
+  plantgrower: 'Plant Growers',
+  powermeasurementsensor: 'Power Measurement Sensors',
+  presencesensor: 'Presence Sensors',
+  printer: 'Printers',
+  printermultifunction: 'Multi-Function Printers',
+  projector: 'Projectors',
+  pump: 'Pumps',
+  rainsensor: 'Rain Sensors',
+  range: 'Ranges',
+  receiver: 'Receivers',
+  refrigerator: 'Refrigerators',
+  remotecontroller: 'Remote Controllers',
+  ricecooker: 'Rice Cookers',
+  robotcleaner: 'Robot Cleaners',
+  rower: 'Rowers',
+  safe: 'Safes',
+  scaletomeasuremassofhumanbody: 'Body Scales',
+  scanner: 'Scanners',
+  securitypanel: 'Security Panels',
+  settop: 'Set-Top Boxes',
+  shade: 'Shades',
+  ship: 'Ships',
+  shoes: 'Shoes',
+  shoescaremachine: 'Shoe Care Machines',
+  shower: 'Showers',
+  siren: 'Sirens',
+  smartlock: 'Smart Locks',
+  smartmonitor: 'Smart Monitors',
+  smartplug: 'Smart Plugs',
+  smokedetector: 'Smoke Detectors',
+  solarpanel: 'Solar Panels',
+  soundbar: 'Soundbars',
+  soundmachine: 'Sound Machines',
+  soundsensor: 'Sound Sensors',
+  speaker: 'Speakers',
+  stairclimber: 'Stair Climbers',
+  stepmachine: 'Step Machines',
+  stickvacuumcleaner: 'Stick Vacuums',
+  storage: 'Storage',
+  stove: 'Stoves',
+  switch: 'Switches',
+  tagreader: 'Tag Readers',
+  television: 'Televisions',
+  temphumiditysensor: 'Temperature and Humidity Sensors',
+  tempsensor: 'Temperature Sensors',
+  thermostat: 'Thermostats',
+  toilet: 'Toilets',
+  towelrack: 'Towel Racks',
+  tracker: 'Trackers',
+  treadmill: 'Treadmills',
+  upnpmediarenderer: 'UPnP Media Renderers',
+  vent: 'Vents',
+  visionsensor: 'Vision Sensors',
+  voiceassistance: 'Voice Assistants',
+  washer: 'Washers',
+  waterfreezedetector: 'Water Freeze Detectors',
+  waterheater: 'Water Heaters',
+  waterpurifier: 'Water Purifiers',
+  watervalve: 'Water Valves',
+  weatherstation: 'Weather Stations',
+  wifirouter: 'Wi-Fi Routers',
+  window: 'Windows',
+  windowopener: 'Window Openers',
+  winecellar: 'Wine Cellars',
+  zonesensor: 'Zone Sensors'
+}
+const DEVICE_TYPE_FILTERS = [
+  { value: 'light', label: 'Lights' },
+  { value: 'switch', label: 'Switches' },
+  { value: 'virtual-switch', label: 'Virtual Switches' },
+  { value: 'lock', label: 'Locks' },
+  { value: 'thermostat', label: 'Thermostats' },
+  { value: 'garage', label: 'Garage Doors' },
+  { value: 'sensor', label: 'Sensors' },
+  { value: 'camera', label: 'Cameras' },
+  { value: 'speaker', label: 'Speakers' },
+  { value: 'energy', label: 'Energy and Power' }
 ] as const
 
 const normalizeThermostatMode = (value: unknown): string => {
@@ -198,6 +372,10 @@ const normalizeSmartThingsValue = (value: unknown): string => {
   return ''
 }
 
+const normalizeSmartThingsCategoryToken = (value: unknown): string => {
+  return normalizeSmartThingsValue(value).toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
 const getSmartThingsCapabilities = (device: any): string[] => {
   const rawCapabilities = [
     ...(Array.isArray(device?.properties?.smartThingsCapabilities) ? device.properties.smartThingsCapabilities : []),
@@ -210,7 +388,9 @@ const getSmartThingsCapabilities = (device: any): string[] => {
 }
 
 const hasSmartThingsCapability = (device: any, capability: string): boolean => {
-  return getSmartThingsCapabilities(device).includes(capability)
+  const expected = capability.toLowerCase()
+  return getSmartThingsCapabilities(device)
+    .some((candidate) => candidate.toLowerCase() === expected)
 }
 
 const getSmartThingsCategories = (device: any): string[] => {
@@ -220,13 +400,13 @@ const getSmartThingsCategories = (device: any): string[] => {
   ]
 
   return Array.from(new Set(rawCategories
-    .map(normalizeSmartThingsValue)
+    .map(normalizeSmartThingsCategoryToken)
     .filter((category) => category.length > 0)
-    .map((category) => category.toLowerCase())))
+  ))
 }
 
 const hasSmartThingsCategory = (device: any, category: string): boolean => {
-  return getSmartThingsCategories(device).includes(category.toLowerCase())
+  return getSmartThingsCategories(device).includes(normalizeSmartThingsCategoryToken(category))
 }
 
 const isSmartThingsBackedDevice = (device: any): boolean => {
@@ -237,6 +417,91 @@ const isSmartThingsBackedDevice = (device: any): boolean => {
 const isInsteonBackedDevice = (device: any): boolean => {
   const source = (device?.properties?.source || '').toString().toLowerCase()
   return source === 'insteon' || Boolean(device?.properties?.insteonAddress)
+}
+
+const getDeviceFilterDescriptor = (device: any): string => {
+  return [
+    device?.name,
+    device?.room,
+    device?.brand,
+    device?.model,
+    device?.properties?.smartThingsDeviceName,
+    device?.properties?.smartThingsLabel,
+    device?.properties?.smartThingsDeviceTypeName,
+    device?.properties?.smartThingsPresentationId,
+    device?.properties?.smartThingsManufacturer
+  ]
+    .filter((value) => typeof value === 'string' && value.trim().length > 0)
+    .join(' ')
+    .toLowerCase()
+}
+
+const hasAnySmartThingsCapability = (device: any, capabilities: readonly string[]): boolean => {
+  return capabilities.some((capability) => hasSmartThingsCapability(device, capability))
+}
+
+const isSmartThingsCameraLike = (device: any): boolean => {
+  if (!isSmartThingsBackedDevice(device)) {
+    return false
+  }
+
+  return hasSmartThingsCategory(device, 'camera')
+    || hasSmartThingsCategory(device, 'visionSensor')
+    || hasAnySmartThingsCapability(device, SMARTTHINGS_CAMERA_CAPABILITIES)
+}
+
+const isSmartThingsSwitchLike = (device: any): boolean => {
+  return isSmartThingsBackedDevice(device) && (
+    device?.type === 'switch'
+    || hasSmartThingsCapability(device, 'switch')
+    || hasSmartThingsCapability(device, 'switchLevel')
+    || hasSmartThingsCategory(device, 'switch')
+    || (hasSmartThingsCategory(device, 'light') && hasSmartThingsCapability(device, 'switch'))
+  )
+}
+
+const isSmartThingsVirtualSwitch = (device: any): boolean => {
+  if (!isSmartThingsSwitchLike(device)) {
+    return false
+  }
+
+  const descriptor = getDeviceFilterDescriptor(device)
+  return /\b(?:virtual|simulated|trigger)\b/.test(descriptor)
+    || (device?.room || '').toString().toLowerCase().includes('virtual switch')
+}
+
+const getSmartThingsCategoryLabel = (category: string): string => {
+  const normalized = normalizeSmartThingsCategoryToken(category)
+  if (SMARTTHINGS_CATEGORY_LABELS[normalized]) {
+    return SMARTTHINGS_CATEGORY_LABELS[normalized]
+  }
+
+  return normalized
+    .replace(/sensor$/, ' Sensors')
+    .replace(/switch$/, ' Switches')
+    .replace(/lock$/, ' Locks')
+    .replace(/plug$/, ' Plugs')
+    .replace(/monitor$/, ' Monitors')
+    .replace(/meter$/, ' Meters')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/^./, (letter) => letter.toUpperCase())
+}
+
+const buildSmartThingsCategoryFilterOptions = (deviceList: any[]) => {
+  const counts = new Map<string, number>()
+
+  deviceList.forEach((device) => {
+    getSmartThingsCategories(device).forEach((category) => {
+      counts.set(category, (counts.get(category) || 0) + 1)
+    })
+  })
+
+  return Array.from(counts.entries())
+    .map(([category, count]) => ({
+      value: `${SMARTTHINGS_CATEGORY_FILTER_PREFIX}${category}`,
+      label: `${getSmartThingsCategoryLabel(category)} (${count})`
+    }))
+    .sort((left, right) => left.label.localeCompare(right.label))
 }
 
 const looksLikeSmartThingsDimmer = (device: any): boolean => {
@@ -342,6 +607,43 @@ const supportsEnergyMonitoring = (device: any): boolean => {
     || (Array.isArray(device?.properties?.matterFeatures)
       && device.properties.matterFeatures.some((feature: string) => feature === 'power' || feature === 'energy'))
   )
+}
+
+const matchesDeviceTypeFilter = (device: any, filterType: string): boolean => {
+  if (filterType === 'all') {
+    return true
+  }
+
+  if (filterType.startsWith(SMARTTHINGS_CATEGORY_FILTER_PREFIX)) {
+    const category = filterType.slice(SMARTTHINGS_CATEGORY_FILTER_PREFIX.length)
+    return hasSmartThingsCategory(device, category)
+  }
+
+  if (filterType === 'virtual-switch') {
+    return isSmartThingsVirtualSwitch(device)
+  }
+
+  if (filterType === 'camera') {
+    return device?.type === 'camera' || isSmartThingsCameraLike(device)
+  }
+
+  if (filterType === 'speaker') {
+    return device?.type === 'speaker'
+      || hasSmartThingsCategory(device, 'speaker')
+      || hasSmartThingsCategory(device, 'musicSystem')
+      || hasSmartThingsCategory(device, 'networkAudio')
+      || hasSmartThingsCapability(device, 'audioVolume')
+      || hasSmartThingsCapability(device, 'mediaPlayback')
+  }
+
+  if (filterType === 'energy') {
+    return ['energy_monitor', 'power_meter'].includes((device?.type || '').toString())
+      || hasSmartThingsCategory(device, 'curbPowerMeter')
+      || hasSmartThingsCategory(device, 'powerMeasurementSensor')
+      || supportsEnergyMonitoring(device)
+  }
+
+  return device?.type === filterType
 }
 
 const supportsHarmonyPowerControl = (device: any): boolean => {
@@ -845,6 +1147,10 @@ export function Devices({
   }
 
   const getDeviceIcon = (device: any) => {
+    if (device.type === 'camera' || isSmartThingsCameraLike(device)) {
+      return <CameraIcon className="h-5 w-5" />
+    }
+
     if (device.type === 'switch') {
       return <Power className="h-5 w-5" />
     }
@@ -1110,15 +1416,17 @@ export function Devices({
     devices,
     devices.some((device: any) => getDeviceSource(device) === 'unknown')
   )
+  const smartThingsCategoryOptions = useMemo(
+    () => buildSmartThingsCategoryFilterOptions(devices),
+    [devices]
+  )
 
   const matchesDeviceFilters = (device: any) => {
     const lowerSearch = searchTerm.toLowerCase()
     const deviceName = (device?.name || '').toString().toLowerCase()
     const deviceRoom = (device?.room || '').toString().toLowerCase()
     const matchesSearch = deviceName.includes(lowerSearch) || deviceRoom.includes(lowerSearch)
-    const matchesType =
-      filterType === "all" ||
-      device.type === filterType
+    const matchesType = matchesDeviceTypeFilter(device, filterType)
     const matchesSource = deviceMatchesSourceFilter(device, filterSource)
 
     return !isHarmonyExcludedFromHomeBrain(device) && matchesSearch && matchesType && matchesSource
@@ -1494,17 +1802,33 @@ export function Devices({
               />
             </div>
             <Select value={filterType} onValueChange={setFilterType}>
-              <SelectTrigger className="w-48">
+              <SelectTrigger className="w-56">
                 <Filter className="h-4 w-4 mr-2" />
                 <SelectValue placeholder="Filter by type" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Types</SelectItem>
-                <SelectItem value="light">Lights</SelectItem>
-                <SelectItem value="switch">Switches</SelectItem>
-                <SelectItem value="lock">Locks</SelectItem>
-                <SelectItem value="thermostat">Thermostats</SelectItem>
-                <SelectItem value="garage">Garage</SelectItem>
+                <SelectGroup>
+                  <SelectLabel>HomeBrain Types</SelectLabel>
+                  {DEVICE_TYPE_FILTERS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+                {smartThingsCategoryOptions.length > 0 ? (
+                  <>
+                    <SelectSeparator />
+                    <SelectGroup>
+                      <SelectLabel>SmartThings Categories</SelectLabel>
+                      {smartThingsCategoryOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </>
+                ) : null}
               </SelectContent>
             </Select>
             <Select value={filterSource} onValueChange={setFilterSource}>
