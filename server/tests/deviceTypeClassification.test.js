@@ -54,6 +54,32 @@ test('SmartThings actual light fixtures stay in the light category', () => {
   );
 });
 
+test('SmartThings camera profiles classify as cameras before switch or motion fallbacks', () => {
+  assert.equal(
+    mapSmartThingsDeviceType(
+      new Set(['switch', 'motionSensor', 'videoStream', 'imageCapture']),
+      new Set(['camera']),
+      smartThingsDevice({
+        name: 'Front Door Camera',
+        presentationId: 'c2c-camera-rtsp-1'
+      })
+    ),
+    'camera'
+  );
+
+  assert.equal(
+    mapSmartThingsDeviceType(
+      new Set(['motionSensor', 'cameraEvent']),
+      new Set(['visionSensor']),
+      smartThingsDevice({
+        name: 'Driveway Vision Sensor',
+        presentationId: 'c2c-camera-motion'
+      })
+    ),
+    'camera'
+  );
+});
+
 test('native direct radio dimmers classify as switches while actual bulbs stay lights', () => {
   assert.equal(
     inferDirectDeviceType(['switch', 'brightness'], { name: 'Kitchen In-Wall Dimmer Switch' }),
