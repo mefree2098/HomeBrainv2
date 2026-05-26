@@ -26,7 +26,8 @@ import {
   Loader2,
   CheckCircle2,
   AlertCircle,
-  Camera as CameraIcon
+  Camera as CameraIcon,
+  SlidersHorizontal
 } from "lucide-react"
 import { getDeviceGroups, getDevices, controlDevice, type DeviceGroupSummary } from "@/api/devices"
 import { DeviceDetailsDialog } from "@/components/devices/DeviceDetailsDialog"
@@ -724,6 +725,95 @@ const getHarmonyPowerActionLabel = (device: any): string => {
   return 'Turn On'
 }
 
+const getDeviceStateText = (device: any): string => {
+  if (device?.type === 'thermostat') {
+    return getThermostatMode(device).toUpperCase()
+  }
+  if (device?.type === 'lock') {
+    return device?.status ? 'Locked' : 'Unlocked'
+  }
+  if (device?.type === 'garage') {
+    return device?.status ? 'Open' : 'Closed'
+  }
+  return device?.status ? 'On' : 'Off'
+}
+
+const getDevicePrimaryActionLabel = (device: any): string => {
+  if (isHarmonyCommandDevice(device)) {
+    return supportsHarmonyPowerControl(device) ? getHarmonyPowerActionLabel(device) : 'Remote'
+  }
+  if (device?.type === 'thermostat') {
+    return getThermostatMode(device) === 'off' ? 'Turn On' : 'Turn Off'
+  }
+  if (device?.type === 'lock') {
+    return device?.status ? 'Unlock' : 'Lock'
+  }
+  if (device?.type === 'garage') {
+    return device?.status ? 'Close' : 'Open'
+  }
+  return device?.status ? 'Turn Off' : 'Turn On'
+}
+
+const getDevicePrimaryActionIcon = (device: any) => {
+  if (isHarmonyCommandDevice(device) && !supportsHarmonyPowerControl(device)) {
+    return <SlidersHorizontal className="h-4 w-4" />
+  }
+  const active = device?.type === 'thermostat'
+    ? getThermostatMode(device) !== 'off'
+    : Boolean(device?.status)
+  return active ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />
+}
+
+const canUsePrimaryDeviceAction = (device: any): boolean => {
+  if (!device) {
+    return false
+  }
+  if (isHarmonyCommandDevice(device)) {
+    return true
+  }
+  if (device.type === 'camera' || isSmartThingsCameraLike(device) || device.type === 'sensor') {
+    return false
+  }
+  return device.type === 'thermostat'
+    || supportsLightFade(device)
+    || ['light', 'switch', 'lock', 'garage'].includes(device.type)
+}
+
+const getDevicePrimaryActionVariant = (device: any): 'default' | 'outline' => {
+  if (isHarmonyCommandDevice(device) && !supportsHarmonyPowerControl(device)) {
+    return 'outline'
+  }
+  const active = device?.type === 'thermostat'
+    ? getThermostatMode(device) !== 'off'
+    : Boolean(device?.status)
+  return active ? 'default' : 'outline'
+}
+
+const getDeviceControlSummary = (device: any): string => {
+  if (device?.type === 'thermostat') {
+    const current = Number(device?.temperature)
+    const currentLabel = Number.isFinite(current) ? ` · ${Math.round(current)}° current` : ''
+    return `${getThermostatTargetTemperature(device)}° setpoint${currentLabel}`
+  }
+  if (supportsLightFade(device)) {
+    const capabilities = [getLightBrightness(device) > 0 ? `${getLightBrightness(device)}%` : 'Dimmable']
+    if (supportsLightColor(device)) {
+      capabilities.push('color')
+    }
+    return capabilities.join(' · ')
+  }
+  if (isHarmonyCommandDevice(device)) {
+    return supportsHarmonyPowerControl(device) ? 'Power and remote controls' : 'Remote command surface'
+  }
+  if (supportsEnergyMonitoring(device)) {
+    return 'Energy telemetry available'
+  }
+  if (isSmartThingsBackedDevice(device)) {
+    return 'SmartThings route preserved'
+  }
+  return `${getDeviceDisplayTypeLabel(device)} control`
+}
+
 const getHarmonyQuickCardActions = (device: any) => {
   const controlCommands = getHarmonyControlCommands(device)
 
@@ -1182,6 +1272,35 @@ export function Devices({
     }
   }
 
+  const handlePrimaryDeviceAction = (device: any) => {
+    if (!canUsePrimaryDeviceAction(device)) {
+      setDetailDeviceId(device._id)
+      return
+    }
+
+    if (device.type === 'thermostat') {
+      const currentMode = getThermostatMode(device)
+      handleDeviceControl(
+        device._id,
+        'set_mode',
+        currentMode === 'off' ? getThermostatOnMode(device) : 'off'
+      )
+      return
+    }
+
+    if (isHarmonyCommandDevice(device)) {
+      const powerAction = getHarmonyPowerAction(device)
+      if (!powerAction) {
+        setDetailDeviceId(device._id)
+        return
+      }
+      handleDeviceControl(device._id, powerAction)
+      return
+    }
+
+    handleDeviceControl(device._id, device.status ? 'turn_off' : 'turn_on')
+  }
+
   const getDeviceIcon = (device: any) => {
     if (device.type === 'camera' || isSmartThingsCameraLike(device)) {
       return <CameraIcon className="h-5 w-5" />
@@ -1637,6 +1756,10 @@ export function Devices({
     const isFavorite = favoriteDeviceIds.has(device._id)
     const isPendingFavorite = pendingDeviceIds.has(device._id)
     const energyMonitoring = supportsEnergyMonitoring(device)
+    const canPrimaryControl = canUsePrimaryDeviceAction(device)
+    const stateText = getDeviceStateText(device)
+    const sourceLabel = getDeviceSourceLabel(getDeviceSource(device))
+    const primaryActionLabel = canPrimaryControl ? getDevicePrimaryActionLabel(device) : "Details"
 
     return (
       <Card
@@ -1644,21 +1767,25 @@ export function Devices({
         ref={(node) => {
           deviceCardRefs.current[device._id] = node
         }}
-        className={`rounded-[1.7rem] transition-all duration-300 hover:-translate-y-1 ${
+        className={`rounded-[1.45rem] transition-all duration-300 hover:-translate-y-0.5 ${
           highlightedDeviceId === device._id
             ? 'ring-2 ring-cyan-400/80 shadow-[0_0_0_1px_rgba(34,211,238,0.25)]'
             : ''
         }`}
       >
-        <CardHeader className="space-y-4 pb-3">
+        <CardHeader className="space-y-4 p-4 pb-3 sm:p-5 sm:pb-3">
           <div className="flex items-start justify-between gap-3">
             <div className="flex min-w-0 items-start gap-3">
-              <div className={`mt-1 rounded-[1rem] p-2.5 ${device.status ? 'bg-green-500' : 'bg-gray-400'} text-white`}>
+              <div className={`mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-[1.15rem] ${device.status ? 'bg-cyan-400 text-slate-950' : 'bg-white/10 text-white/70'} shadow-[inset_0_1px_0_rgba(255,255,255,0.16)]`}>
                 {getDeviceIcon(device)}
               </div>
-              <div className="min-w-0">
-                <CardTitle className="break-words text-lg leading-snug">{device.name}</CardTitle>
-                <p className="mt-1 text-sm text-muted-foreground">{device.room}</p>
+              <div className="min-w-0 space-y-1">
+                <CardTitle className="break-words text-base leading-tight sm:text-lg">{device.name}</CardTitle>
+                <p className="text-sm text-muted-foreground">{device.room || "Unassigned"}</p>
+                <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <span className={`h-2 w-2 rounded-full ${device.isOnline === false ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                  {device.isOnline === false ? "Offline" : "Online"}
+                </div>
               </div>
             </div>
 
@@ -1674,70 +1801,53 @@ export function Devices({
             </Button>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={device.status ? "default" : "secondary"}>
-              {device.type === 'thermostat'
-                ? getThermostatMode(device).toUpperCase()
-                : (device.status ? "On" : "Off")}
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <Badge variant={device.status ? "default" : "secondary"} className="rounded-full">
+              {stateText}
             </Badge>
-            <Badge variant="outline">
+            <Badge variant="outline" className="rounded-full">
               {getDeviceDisplayTypeLabel(device)}
             </Badge>
-            <Badge variant="outline">
-              {getDeviceSourceLabel(getDeviceSource(device))}
+            <Badge variant="outline" className="rounded-full">
+              {sourceLabel}
             </Badge>
-            {renderAlexaStatusBadge(device)}
+            {energyMonitoring ? (
+              <Badge variant="outline" className="rounded-full">Energy</Badge>
+            ) : null}
+            {isSmartThingsBackedDevice(device) ? (
+              <Badge variant="outline" className="rounded-full border-cyan-300/30 bg-cyan-300/10 text-cyan-100">Migration</Badge>
+            ) : null}
           </div>
         </CardHeader>
-        <CardContent className="space-y-3">
-          {device.type === 'thermostat' ? (
-            renderThermostatControls(device)
-          ) : supportsLightFade(device) ? (
-            renderLightControls(device)
-          ) : isHarmonyCommandDevice(device) ? (
-            renderHarmonyCommandDeviceControls(device)
-          ) : (
+        <CardContent className="space-y-3 p-4 pt-0 sm:p-5 sm:pt-0">
+          <div className="rounded-[1.1rem] border border-white/10 bg-white/[0.04] px-3 py-3">
+            <p className="text-sm font-semibold text-foreground">{getDeviceControlSummary(device)}</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Direct control, grouping, voice, history, and migration context.
+            </p>
+          </div>
+          <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
             <Button
-              onClick={() => handleDeviceControl(device._id, device.status ? 'turn_off' : 'turn_on')}
-              variant={device.status ? "default" : "outline"}
-              className="w-full"
+              onClick={() => handlePrimaryDeviceAction(device)}
+              variant={canPrimaryControl ? getDevicePrimaryActionVariant(device) : "outline"}
+              className="min-w-0"
               size="sm"
               disabled={!!pendingControls[device._id]}
             >
-              {device.status ? (
-                <>
-                  <PowerOff className="h-4 w-4 mr-2" />
-                  Turn Off
-                </>
-              ) : (
-                <>
-                  <Power className="h-4 w-4 mr-2" />
-                  Turn On
-                </>
-              )}
+              {getDevicePrimaryActionIcon(device)}
+              {primaryActionLabel}
             </Button>
-          )}
-          {renderControlFeedback(device)}
-          <Button
-            variant="outline"
-            className="w-full"
-            size="sm"
-            onClick={() => setDetailDeviceId(device._id)}
-          >
-            <BarChart3 className="mr-2 h-4 w-4" />
-            {energyMonitoring ? "Details & Chart" : "Details"}
-          </Button>
-          <div className="rounded-[1rem] border border-white/10 bg-white/10 px-3 py-2 text-xs text-muted-foreground dark:bg-slate-950/20">
-            {device.type === 'thermostat'
-              ? `Voice: "Hey Anna, set ${device.name} to ${getThermostatTargetTemperature(device)} degrees"`
-              : supportsLightFade(device)
-                ? `Voice: "Hey Anna, fade ${device.name} to 30 percent" or "set ${device.name} to blue"`
-                : isHarmonyCommandDevice(device)
-                  ? supportsHarmonyPowerControl(device)
-                    ? `Power controls are available here, and extra Harmony commands like volume or media buttons live in Details.`
-                    : `This Harmony device exposes remote commands in Details instead of a simple on/off power toggle.`
-                  : `Voice: "Hey Anna, turn ${device.status ? 'off' : 'on'} ${device.name}"`}
+            <Button
+              variant="outline"
+              className="px-3"
+              size="sm"
+              onClick={() => setDetailDeviceId(device._id)}
+            >
+              <SlidersHorizontal className="h-4 w-4" />
+              <span className="sr-only">Open controls for {device.name}</span>
+            </Button>
           </div>
+          {renderControlFeedback(device)}
         </CardContent>
       </Card>
     )
@@ -1939,9 +2049,7 @@ export function Devices({
                             <Heart className="h-4 w-4" fill={isFavorite ? 'currentColor' : 'none'} />
                           </Button>
                           <Badge variant={device.status ? "default" : "secondary"}>
-                            {device.type === 'thermostat'
-                              ? getThermostatMode(device).toUpperCase()
-                              : (device.status ? "On" : "Off")}
+                            {getDeviceStateText(device)}
                           </Badge>
                           {renderAlexaStatusBadge(device)}
                           <Button
@@ -1954,52 +2062,14 @@ export function Devices({
                             {supportsEnergyMonitoring(device) ? "Details & Chart" : "Details"}
                           </Button>
                           <Button
-                            onClick={() => {
-                              if (device.type === 'thermostat') {
-                                const currentMode = getThermostatMode(device)
-                                handleDeviceControl(
-                                  device._id,
-                                  'set_mode',
-                                  currentMode === 'off' ? getThermostatOnMode(device) : 'off'
-                                )
-                                return
-                              }
-                              if (isHarmonyCommandDevice(device) && !supportsHarmonyPowerControl(device)) {
-                                setDetailDeviceId(device._id)
-                                return
-                              }
-                              handleDeviceControl(device._id, getHarmonyPowerAction(device) || (device.status ? 'turn_off' : 'turn_on'))
-                            }}
-                            variant={device.type === 'thermostat'
-                              ? (getThermostatMode(device) !== 'off' ? "default" : "outline")
-                              : (isHarmonyCommandDevice(device) && !supportsHarmonyPowerControl(device)
-                                ? "outline"
-                                : (device.status ? "default" : "outline"))}
+                            onClick={() => handlePrimaryDeviceAction(device)}
+                            variant={canUsePrimaryDeviceAction(device) ? getDevicePrimaryActionVariant(device) : "outline"}
                             size="sm"
                             disabled={!!pendingControls[device._id]}
                             className="min-w-[8.5rem]"
                           >
-                            {isHarmonyCommandDevice(device) && !supportsHarmonyPowerControl(device) ? (
-                              <>
-                                <BarChart3 className="h-4 w-4 mr-2" />
-                                Remote
-                              </>
-                            ) : isHarmonyCommandDevice(device) && getHarmonyPowerAction(device) === 'toggle' ? (
-                              <>
-                                <Power className="h-4 w-4 mr-2" />
-                                {getHarmonyPowerActionLabel(device)}
-                              </>
-                            ) : (device.type === 'thermostat' ? getThermostatMode(device) !== 'off' : device.status) ? (
-                              <>
-                                <PowerOff className="h-4 w-4 mr-2" />
-                                Turn Off
-                              </>
-                            ) : (
-                              <>
-                                <Power className="h-4 w-4 mr-2" />
-                                Turn On
-                              </>
-                            )}
+                            {getDevicePrimaryActionIcon(device)}
+                            {canUsePrimaryDeviceAction(device) ? getDevicePrimaryActionLabel(device) : "Details"}
                           </Button>
                           {renderControlFeedback(device)}
                         </div>
@@ -2014,98 +2084,21 @@ export function Devices({
 
         <TabsContent value="rooms" className="space-y-6">
           {filteredRoomDevices.map((room) => (
-            <Card key={room.name} className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Home className="h-5 w-5 text-blue-600" />
-                  {room.name}
-                  <Badge variant="outline" className="ml-auto">
-                    {room.devices.length} devices
-                  </Badge>
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                    {room.devices.map((device) => {
-                      const isFavorite = favoriteDeviceIds.has(device._id)
-                      const isPendingFavorite = pendingDeviceIds.has(device._id)
-
-                      return (
-                        <div key={device._id} className="rounded-lg border bg-white/50 p-4 transition-colors hover:bg-white/80 dark:bg-slate-900/40 dark:hover:bg-slate-900/70">
-                          <div className="mb-3 flex items-start justify-between gap-3">
-                            <div className="flex min-w-0 items-start gap-2">
-                              <div className={`p-1.5 rounded-full ${device.status ? 'bg-green-500' : 'bg-gray-400'} text-white`}>
-                                {getDeviceIcon(device)}
-                              </div>
-                              <div className="min-w-0">
-                                <span className="block break-words text-sm font-medium leading-snug">{device.name}</span>
-                                <p className="text-xs text-muted-foreground">
-                                  {getDeviceSourceLabel(getDeviceSource(device))}
-                                </p>
-                              </div>
-                            </div>
-                            <div className="flex shrink-0 items-center gap-1">
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className={`h-7 w-7 ${isFavorite ? 'text-red-500 hover:text-red-500' : 'text-muted-foreground hover:text-red-500'}`}
-                                onClick={() => toggleDeviceFavorite(device._id, !isFavorite)}
-                                disabled={!hasProfile || isPendingFavorite}
-                                aria-label={isFavorite ? `Remove ${device.name} from favorites` : `Add ${device.name} to favorites`}
-                              >
-                                <Heart className="h-3.5 w-3.5" fill={isFavorite ? 'currentColor' : 'none'} />
-                              </Button>
-                              <Badge variant={device.status ? "default" : "secondary"} className="text-xs">
-                                {device.type === 'thermostat'
-                                  ? getThermostatMode(device).toUpperCase()
-                                  : (device.status ? "On" : "Off")}
-                              </Badge>
-                              {renderAlexaStatusBadge(device)}
-                            </div>
-                          </div>
-                          {device.type === 'thermostat' ? (
-                            renderThermostatControls(device, true)
-                          ) : supportsLightFade(device) ? (
-                            renderLightControls(device, true)
-                          ) : isHarmonyCommandDevice(device) ? (
-                            renderHarmonyCommandDeviceControls(device, true)
-                          ) : (
-                            <Button
-                              onClick={() => handleDeviceControl(device._id, device.status ? 'turn_off' : 'turn_on')}
-                              variant={device.status ? "default" : "outline"}
-                              className="w-full"
-                              size="sm"
-                              disabled={!!pendingControls[device._id]}
-                            >
-                              {device.status ? (
-                                <>
-                                  <PowerOff className="h-3 w-3 mr-2" />
-                                  Turn Off
-                                </>
-                              ) : (
-                                <>
-                                  <Power className="h-3 w-3 mr-2" />
-                                  Turn On
-                                </>
-                              )}
-                            </Button>
-                          )}
-                          {renderControlFeedback(device)}
-                          <Button
-                            variant="outline"
-                            className="mt-3 w-full"
-                            size="sm"
-                            onClick={() => setDetailDeviceId(device._id)}
-                          >
-                            <BarChart3 className="mr-2 h-3 w-3" />
-                            {supportsEnergyMonitoring(device) ? "Details & Chart" : "Details"}
-                          </Button>
-                        </div>
-                      )
-                    })}
-                  </div>
-              </CardContent>
-            </Card>
+            <section
+              key={room.name}
+              className="space-y-4 rounded-[1.45rem] border border-border/50 bg-white/50 p-4 backdrop-blur-sm dark:bg-slate-950/25"
+            >
+              <div className="flex items-center gap-2">
+                <Home className="h-5 w-5 text-blue-600" />
+                <h3 className="text-lg font-semibold text-foreground">{room.name}</h3>
+                <Badge variant="outline" className="ml-auto rounded-full">
+                  {room.devices.length} devices
+                </Badge>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                {room.devices.map((device) => renderGridDeviceCard(device))}
+              </div>
+            </section>
           ))}
         </TabsContent>
       </Tabs>
