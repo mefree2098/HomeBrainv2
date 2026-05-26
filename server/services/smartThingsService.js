@@ -1685,6 +1685,12 @@ class SmartThingsService {
       changed = true;
     }
 
+    const networkType = apiDevice?.deviceNetworkType || apiDevice?.type || null;
+    if ((existingDevice?.properties?.smartThingsDeviceNetworkType || null) !== networkType) {
+      updates['properties.smartThingsDeviceNetworkType'] = networkType;
+      changed = true;
+    }
+
     const presentationId = apiDevice?.presentationId || null;
     if ((existingDevice?.properties?.smartThingsPresentationId || null) !== presentationId) {
       updates['properties.smartThingsPresentationId'] = presentationId;

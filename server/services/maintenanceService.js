@@ -511,6 +511,7 @@ class MaintenanceService {
         smartThingsLabel: device.label || null,
         smartThingsLocationId: device.locationId || null,
         smartThingsRoomId: device.roomId || null,
+        smartThingsDeviceNetworkType: device.deviceNetworkType || device.type || null,
         smartThingsCapabilities: Array.from(capabilities),
         smartThingsCategories: Array.from(categories),
         smartThingsHealthState: device.healthState || null,

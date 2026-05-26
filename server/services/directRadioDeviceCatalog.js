@@ -141,6 +141,34 @@ const CLOUD_ONLY_KEYWORDS = [
   'web request'
 ];
 
+const SMARTTHINGS_NON_DIRECT_RADIO_NETWORK_TYPES = new Set([
+  'ble',
+  'cloud',
+  'edgechild',
+  'endpointapp',
+  'hub',
+  'lan',
+  'matter',
+  'ocf',
+  'viper',
+  'virtual'
+]);
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function descriptorHasKeyword(descriptor, keyword) {
+  const pattern = escapeRegex(keyword).replace(/\s+/g, '\\s+');
+  return new RegExp(`\\b${pattern}\\b`).test(descriptor);
+}
+
+function normalizeSmartThingsNetworkType(value) {
+  return normalizeString(value)
+    .toLowerCase()
+    .replace(/[\s_-]/g, '');
+}
+
 function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -273,6 +301,14 @@ function getDirectProtocol(device) {
 
 function inferProtocolFromSmartThings(device) {
   const descriptor = getDeviceDescriptor(device);
+  const networkType = normalizeSmartThingsNetworkType(device?.properties?.smartThingsDeviceNetworkType);
+  if (networkType === 'zigbee') {
+    return 'zigbee';
+  }
+  if (networkType === 'zwave' || networkType === 'zw') {
+    return 'zwave';
+  }
+
   const capabilities = new Set(getSmartThingsCapabilities(device));
   const categories = new Set(getSmartThingsCategories(device));
   const features = inferFeaturesFromSmartThings(device);
@@ -324,6 +360,7 @@ function inferProtocolFromSmartThings(device) {
 function isCloudOrVirtualOnly(device) {
   const source = normalizeString(device?.properties?.source).toLowerCase();
   const descriptor = getDeviceDescriptor(device);
+  const networkType = normalizeSmartThingsNetworkType(device?.properties?.smartThingsDeviceNetworkType);
 
   if (source && source !== 'smartthings') {
     return false;
@@ -332,8 +369,11 @@ function isCloudOrVirtualOnly(device) {
   if (device?.properties?.smartThingsDeviceNetworkType === 'CLOUD') {
     return true;
   }
+  if (networkType && SMARTTHINGS_NON_DIRECT_RADIO_NETWORK_TYPES.has(networkType)) {
+    return true;
+  }
 
-  return CLOUD_ONLY_KEYWORDS.some((keyword) => descriptor.includes(keyword));
+  return CLOUD_ONLY_KEYWORDS.some((keyword) => descriptorHasKeyword(descriptor, keyword));
 }
 
 function normalizeFeature(feature) {
