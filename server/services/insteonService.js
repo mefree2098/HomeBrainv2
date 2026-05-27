@@ -12416,6 +12416,18 @@ class InsteonService {
       const displayLinkedAddress = normalizedLinkedAddress
         ? this._formatInsteonAddress(normalizedLinkedAddress)
         : String(rawLinkedAddress);
+      let upsertResult = null;
+      if (normalizedLinkedAddress) {
+        upsertResult = await this._upsertInsteonDevice({
+          address: normalizedLinkedAddress,
+          group: link.group,
+          insteonType: link.type,
+          markLinkedToCurrentPlm: true
+        });
+        if (upsertResult?.device) {
+          this._emitDeviceRealtimeUpdate(upsertResult.device);
+        }
+      }
 
       console.log(`InsteonService: Device linked successfully - Address: ${displayLinkedAddress}`);
       return {
@@ -12424,7 +12436,10 @@ class InsteonService {
         address: rawLinkedAddress,
         normalizedAddress: normalizedLinkedAddress,
         group: link.group,
-        type: link.type
+        type: link.type,
+        device: upsertResult?.device || null,
+        deviceAction: upsertResult?.action || null,
+        removedDuplicates: upsertResult?.removedDuplicates || 0
       };
     } catch (error) {
       console.error('InsteonService: Device linking failed:', error.message);

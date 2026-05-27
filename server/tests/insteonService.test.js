@@ -3616,13 +3616,31 @@ test('setBrightness routes string zero values to turnOff', async (t) => {
 test('linkDevice accepts id-based link confirmations', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
+  const originalUpsertInsteonDevice = insteonService._upsertInsteonDevice;
+  const originalEmitDeviceRealtimeUpdate = insteonService._emitDeviceRealtimeUpdate;
 
   t.after(() => {
     insteonService.hub = originalHub;
     insteonService.isConnected = originalConnected;
+    insteonService._upsertInsteonDevice = originalUpsertInsteonDevice;
+    insteonService._emitDeviceRealtimeUpdate = originalEmitDeviceRealtimeUpdate;
   });
 
   insteonService.isConnected = true;
+  let upsertPayload = null;
+  let emittedDevice = null;
+  const linkedDevice = { _id: 'linked-device-id', name: 'Linked Insteon Dimmer' };
+  insteonService._upsertInsteonDevice = async (payload) => {
+    upsertPayload = payload;
+    return {
+      action: 'created',
+      device: linkedDevice,
+      removedDuplicates: 0
+    };
+  };
+  insteonService._emitDeviceRealtimeUpdate = (device) => {
+    emittedDevice = device;
+  };
   insteonService.hub = {
     link(callback) {
       callback(null, {
@@ -3639,6 +3657,15 @@ test('linkDevice accepts id-based link confirmations', async (t) => {
   assert.equal(result.address, '11.22.33');
   assert.equal(result.normalizedAddress, '112233');
   assert.equal(result.group, 1);
+  assert.deepEqual(upsertPayload, {
+    address: '112233',
+    group: 1,
+    insteonType: 'dimmer',
+    markLinkedToCurrentPlm: true
+  });
+  assert.equal(result.device, linkedDevice);
+  assert.equal(result.deviceAction, 'created');
+  assert.equal(emittedDevice, linkedDevice);
 });
 
 test('_linkDeviceRemote writes responder and controller links when controller links are enabled', async (t) => {

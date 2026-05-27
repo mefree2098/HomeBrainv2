@@ -806,11 +806,11 @@ export const setInsteonDeviceBrightness = async (deviceId: string, brightness: n
   }
 };
 
-// Description: Link new device to PLM
+// Description: Put the PLM into manual linking mode and add the linked device to HomeBrain
 // Endpoint: POST /api/insteon/devices/link
 // Request: { timeout?: number }
-// Response: { success: boolean, message: string, address?: string, group?: number, type?: string }
-export const linkInsteonDevice = async (timeout?: number) => {
+// Response: { success: boolean, message: string, address?: string, group?: number, type?: string, device?: object }
+export const linkInsteonDevice = async (timeout = 60) => {
   try {
     const response = await api.post('/api/insteon/devices/link', { timeout });
     return response.data;
