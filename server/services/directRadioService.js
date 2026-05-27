@@ -68,6 +68,18 @@ function boundedIntervalMs(value, fallback = DEFAULT_HARDWARE_SCAN_INTERVAL_MS) 
   return Math.max(15_000, Math.min(10 * 60_000, Math.round(parsed)));
 }
 
+function enumMemberName(enumObject, value) {
+  if (enumObject && value !== undefined && value !== null && enumObject[value] !== undefined) {
+    return String(enumObject[value]);
+  }
+  return value === undefined || value === null ? 'unknown' : String(value);
+}
+
+function getNumericNodeId(value) {
+  const nodeId = Number(value?.nodeId ?? value?.id ?? value);
+  return Number.isFinite(nodeId) ? nodeId : null;
+}
+
 function uniqueStrings(values) {
   return Array.from(new Set(values.filter(Boolean)));
 }
@@ -545,7 +557,9 @@ class DirectRadioService {
       inclusionUntil: null,
       exclusionUntil: null,
       s2DskPin: '',
-      pendingDsk: null
+      pendingDsk: null,
+      addNodeStatusEnum: null,
+      removeNodeStatusEnum: null
     };
     this.activeMigrations = new Map();
   }
@@ -915,10 +929,12 @@ class DirectRadioService {
         },
         inclusionUserCallbacks: this.buildZWaveInclusionCallbacks(zwave)
       });
+      this.attachZWaveMigrationRequestHandlers(driver, zwave);
 
       driver.on('driver ready', () => {
         this.zwave.started = true;
         this.zwave.error = null;
+        this.attachZWaveControllerMigrationListeners(driver.controller);
         this.log('info', 'zwave', 'Z-Wave driver ready', {
           serialPath,
           homeId: driver.controller?.homeId || null
@@ -936,6 +952,13 @@ class DirectRadioService {
           nodeId: node?.id || null
         });
         void this.handleZWaveNodeChanged(node, 'node added');
+      });
+      driver.on('node removed', (node, reason) => {
+        this.log('info', 'zwave', 'Z-Wave node removed', {
+          nodeId: node?.id || null,
+          reason: reason === undefined ? null : String(reason)
+        });
+        this.recordZWaveNodeRemoved(node, reason);
       });
       driver.on('node ready', (node) => {
         this.log('info', 'zwave', 'Z-Wave node ready', {
@@ -1010,6 +1033,249 @@ class DirectRadioService {
         this.log('warn', 'zwave', 'Z-Wave inclusion user callback aborted');
       }
     };
+  }
+
+  attachZWaveMigrationRequestHandlers(driver, zwave) {
+    if (!driver || driver.__homebrainMigrationRequestHandlersAttached || typeof driver.registerRequestHandler !== 'function') {
+      return;
+    }
+
+    try {
+      const serialApi = require('@zwave-js/serial/serialapi');
+      this.zwave.removeNodeStatusEnum = serialApi.RemoveNodeStatus;
+      this.zwave.addNodeStatusEnum = serialApi.AddNodeStatus;
+
+      if (!driver.__homebrainMigrationWaitWrapped && typeof driver.waitForMessage === 'function') {
+        const waitForMessage = driver.waitForMessage.bind(driver);
+        driver.waitForMessage = async (...args) => {
+          const message = await waitForMessage(...args);
+          this.observeZWaveMigrationMessage(message);
+          return message;
+        };
+        driver.__homebrainMigrationWaitWrapped = true;
+      }
+
+      driver.registerRequestHandler(zwave.FunctionType.RemoveNodeFromNetwork, (message) => {
+        this.observeZWaveMigrationMessage(message);
+        return false;
+      });
+      driver.registerRequestHandler(zwave.FunctionType.AddNodeToNetwork, (message) => {
+        this.observeZWaveMigrationMessage(message);
+        return false;
+      });
+      driver.__homebrainMigrationRequestHandlersAttached = true;
+    } catch (error) {
+      this.log('warn', 'zwave', 'Unable to attach Z-Wave migration status handlers', {
+        error: error.message
+      });
+    }
+  }
+
+  attachZWaveControllerMigrationListeners(controller) {
+    if (!controller || controller.__homebrainMigrationListenersAttached || typeof controller.on !== 'function') {
+      return;
+    }
+
+    controller.on('exclusion failed', () => {
+      this.recordZWaveExclusionFailed('The Z-Wave controller reported that exclusion failed.');
+    });
+    controller.on('inclusion failed', () => {
+      this.recordZWaveInclusionFailed('The Z-Wave controller reported that inclusion failed.');
+    });
+    controller.__homebrainMigrationListenersAttached = true;
+  }
+
+  observeZWaveMigrationMessage(message) {
+    if (!message || message.status === undefined || message.status === null) {
+      return;
+    }
+
+    const functionName = enumMemberName({ 74: 'AddNodeToNetwork', 75: 'RemoveNodeFromNetwork' }, message.functionType);
+    const constructorName = message.constructor?.name || '';
+    if (functionName === 'RemoveNodeFromNetwork' || constructorName === 'RemoveNodeFromNetworkRequestStatusReport') {
+      this.recordZWaveExclusionStatus(message.status, message.statusContext || {});
+    } else if (functionName === 'AddNodeToNetwork' || constructorName === 'AddNodeToNetworkRequestStatusReport') {
+      this.recordZWaveInclusionStatus(message.status, message.statusContext || {});
+    }
+  }
+
+  appendMigrationEvent(migration, event) {
+    if (!migration) {
+      return;
+    }
+    const events = Array.isArray(migration.zwaveEvents) ? migration.zwaveEvents : [];
+    migration.zwaveEvents = [...events.slice(-19), event];
+    migration.updatedAt = event.timestamp || new Date().toISOString();
+  }
+
+  findCurrentMigrationSession(protocol, statuses = []) {
+    const statusSet = new Set(statuses.filter(Boolean));
+    const now = Date.now();
+    return Array.from(this.activeMigrations.values())
+      .filter((migration) => migration?.protocol === protocol)
+      .filter((migration) => statusSet.size === 0 || statusSet.has(migration.status))
+      .filter((migration) => {
+        if (migration.status === 'completed' || migration.status === 'excluded') {
+          return true;
+        }
+        return Number(migration.expiresAt || 0) > now || Number(migration.exclusionExpiresAt || 0) > now;
+      })
+      .sort((left, right) => (
+        new Date(right.updatedAt || right.startedAt || 0).getTime()
+        - new Date(left.updatedAt || left.startedAt || 0).getTime()
+      ))[0] || null;
+  }
+
+  findMigrationSession({ migrationId, deviceId, protocol } = {}) {
+    const safeMigrationId = trimString(migrationId);
+    if (safeMigrationId && this.activeMigrations.has(safeMigrationId)) {
+      return this.activeMigrations.get(safeMigrationId);
+    }
+
+    const safeDeviceId = trimString(deviceId);
+    const candidates = Array.from(this.activeMigrations.values())
+      .filter((migration) => !safeDeviceId || String(migration.sourceDeviceId) === safeDeviceId)
+      .filter((migration) => !protocol || migration.protocol === protocol)
+      .sort((left, right) => (
+        new Date(right.updatedAt || right.startedAt || 0).getTime()
+        - new Date(left.updatedAt || left.startedAt || 0).getTime()
+      ));
+    return candidates[0] || null;
+  }
+
+  recordZWaveExclusionStatus(status, statusContext = {}) {
+    const migration = this.findCurrentMigrationSession('zwave', ['excluding']);
+    if (!migration || status === undefined || status === null) {
+      return;
+    }
+
+    const timestamp = new Date().toISOString();
+    const statusName = enumMemberName(this.zwave.removeNodeStatusEnum, status);
+    const nodeId = getNumericNodeId(statusContext);
+    this.appendMigrationEvent(migration, {
+      kind: 'exclusion',
+      status,
+      statusName,
+      nodeId,
+      timestamp
+    });
+
+    if (statusName === 'NodeFound') {
+      migration.exclusionNodeFoundAt = timestamp;
+    }
+    if (['RemovingSlave', 'RemovingController'].includes(statusName) && nodeId !== null) {
+      migration.exclusionNodeId = nodeId;
+    }
+    if (statusName === 'Done') {
+      migration.status = 'excluded';
+      migration.exclusionStatus = 'verified';
+      migration.exclusionVerifiedAt = timestamp;
+      migration.exclusionNodeId = nodeId ?? migration.exclusionNodeId ?? null;
+      migration.expiresAt = Math.max(Number(migration.expiresAt || 0), Date.now() + 15 * 60 * 1000);
+      this.log('info', 'zwave', 'Z-Wave exclusion verified by controller status', {
+        migrationId: migration.id,
+        deviceId: migration.sourceDeviceId,
+        nodeId: migration.exclusionNodeId
+      });
+    }
+    if (statusName === 'Failed') {
+      migration.status = 'exclusion_failed';
+      migration.exclusionStatus = 'failed';
+      migration.exclusionFailedAt = timestamp;
+      this.log('warn', 'zwave', 'Z-Wave exclusion failed during migration', {
+        migrationId: migration.id,
+        deviceId: migration.sourceDeviceId
+      });
+    }
+  }
+
+  recordZWaveNodeRemoved(node, reason) {
+    const migration = this.findCurrentMigrationSession('zwave', ['excluding']);
+    if (!migration) {
+      return;
+    }
+
+    const timestamp = new Date().toISOString();
+    const nodeId = getNumericNodeId(node);
+    this.appendMigrationEvent(migration, {
+      kind: 'node_removed',
+      statusName: 'NodeRemoved',
+      nodeId,
+      reason: reason === undefined ? null : String(reason),
+      timestamp
+    });
+    migration.status = 'excluded';
+    migration.exclusionStatus = 'verified';
+    migration.exclusionVerifiedAt = migration.exclusionVerifiedAt || timestamp;
+    migration.exclusionNodeId = nodeId ?? migration.exclusionNodeId ?? null;
+    migration.expiresAt = Math.max(Number(migration.expiresAt || 0), Date.now() + 15 * 60 * 1000);
+  }
+
+  recordZWaveExclusionFailed(message) {
+    const migration = this.findCurrentMigrationSession('zwave', ['excluding']);
+    if (!migration) {
+      return;
+    }
+
+    const timestamp = new Date().toISOString();
+    this.appendMigrationEvent(migration, {
+      kind: 'exclusion_failed',
+      statusName: 'Failed',
+      message,
+      timestamp
+    });
+    migration.status = 'exclusion_failed';
+    migration.exclusionStatus = 'failed';
+    migration.exclusionFailedAt = timestamp;
+  }
+
+  recordZWaveInclusionStatus(status, statusContext = {}) {
+    const migration = this.findCurrentMigrationSession('zwave', ['pairing']);
+    if (!migration || status === undefined || status === null) {
+      return;
+    }
+
+    const timestamp = new Date().toISOString();
+    const statusName = enumMemberName(this.zwave.addNodeStatusEnum, status);
+    const nodeId = getNumericNodeId(statusContext);
+    this.appendMigrationEvent(migration, {
+      kind: 'inclusion',
+      status,
+      statusName,
+      nodeId,
+      timestamp
+    });
+
+    if (['AddingSlave', 'AddingController'].includes(statusName) && nodeId !== null) {
+      migration.inclusionNodeId = nodeId;
+    }
+    if (statusName === 'Failed') {
+      migration.status = 'pairing_failed';
+      migration.inclusionStatus = 'failed';
+      migration.inclusionFailedAt = timestamp;
+      this.log('warn', 'zwave', 'Z-Wave inclusion failed during migration', {
+        migrationId: migration.id,
+        deviceId: migration.sourceDeviceId
+      });
+    }
+  }
+
+  recordZWaveInclusionFailed(message) {
+    const migration = this.findCurrentMigrationSession('zwave', ['pairing']);
+    if (!migration) {
+      return;
+    }
+
+    const timestamp = new Date().toISOString();
+    this.appendMigrationEvent(migration, {
+      kind: 'inclusion_failed',
+      statusName: 'Failed',
+      message,
+      timestamp
+    });
+    migration.status = 'pairing_failed';
+    migration.inclusionStatus = 'failed';
+    migration.inclusionFailedAt = timestamp;
   }
 
   getZWaveController() {
@@ -1326,7 +1592,12 @@ class DirectRadioService {
 
     migration.status = 'completed';
     migration.completedAt = new Date().toISOString();
+    migration.inclusionStatus = 'verified';
+    migration.inclusionVerifiedAt = migration.completedAt;
+    migration.updatedAt = migration.completedAt;
     migration.directIdentity = identity;
+    migration.directDeviceId = updated?._id?.toString?.() || existing._id?.toString?.() || null;
+    migration.validation = validation;
     this.log('info', identity.protocol, 'SmartThings migration completed on direct radio', {
       migrationId,
       deviceId: updated?._id?.toString?.() || existing._id?.toString?.() || null,
@@ -1411,7 +1682,7 @@ class DirectRadioService {
     return buildMigrationPlan(device, options);
   }
 
-  async startMigration({ deviceId, protocol, durationSeconds, dskPin } = {}) {
+  async startMigration({ deviceId, protocol, durationSeconds, dskPin, migrationId } = {}) {
     const safeDeviceId = normalizeObjectId(deviceId);
     const device = await Device.findById(safeDeviceId).lean();
     if (!device) {
@@ -1434,24 +1705,69 @@ class DirectRadioService {
     }
 
     const seconds = boundedSeconds(durationSeconds);
-    const migrationId = `migration-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-    const migration = {
-      id: migrationId,
+    const now = Date.now();
+    const requestedMigrationId = trimString(migrationId);
+    let migration = null;
+    if (requestedMigrationId) {
+      migration = this.activeMigrations.get(requestedMigrationId) || null;
+      if (!migration) {
+        const error = new Error('Migration session not found. Restart the guided migration from HomeBrain.');
+        error.status = 404;
+        throw error;
+      }
+    } else if (targetProtocol === 'zwave') {
+      migration = Array.from(this.activeMigrations.values())
+        .filter((entry) => entry.sourceDeviceId === safeDeviceId && entry.protocol === 'zwave')
+        .filter((entry) => ['excluded', 'excluding'].includes(entry.status))
+        .sort((left, right) => (
+          new Date(right.updatedAt || right.startedAt || 0).getTime()
+          - new Date(left.updatedAt || left.startedAt || 0).getTime()
+        ))[0] || null;
+    }
+
+    if (targetProtocol === 'zwave') {
+      if (!migration || migration.sourceDeviceId !== safeDeviceId || !migration.exclusionVerifiedAt) {
+        const error = new Error('Z-Wave exclusion has not been verified yet. Keep this workflow on the exclusion step until HomeBrain receives the controller confirmation.');
+        error.status = 409;
+        throw error;
+      }
+    }
+
+    if (!migration || migration.status === 'completed') {
+      migration = {
+        id: requestedMigrationId || `migration-${now}-${crypto.randomBytes(4).toString('hex')}`,
+        sourceDeviceId: String(device._id),
+        smartThingsDeviceId: device.properties?.smartThingsDeviceId || null,
+        protocol: targetProtocol,
+        startedAt: new Date(now).toISOString()
+      };
+    }
+
+    Object.assign(migration, {
       sourceDeviceId: String(device._id),
       smartThingsDeviceId: device.properties?.smartThingsDeviceId || null,
       protocol: targetProtocol,
       status: 'pairing',
-      startedAt: new Date().toISOString(),
-      expiresAt: Date.now() + seconds * 1000,
-      plan
-    };
-    this.activeMigrations.set(migrationId, migration);
+      pairingStartedAt: new Date(now).toISOString(),
+      expiresAt: now + seconds * 1000,
+      plan,
+      updatedAt: new Date(now).toISOString()
+    });
+    this.activeMigrations.set(migration.id, migration);
 
-    if (targetProtocol === 'zigbee') {
-      await this.startPairing('zigbee', { durationSeconds: seconds });
-    } else {
-      this.zwave.s2DskPin = trimString(dskPin);
-      await this.startPairing('zwave', { durationSeconds: seconds });
+    try {
+      if (targetProtocol === 'zigbee') {
+        await this.startPairing('zigbee', { durationSeconds: seconds });
+      } else {
+        this.zwave.s2DskPin = trimString(dskPin);
+        await this.startPairing('zwave', { durationSeconds: seconds });
+      }
+    } catch (error) {
+      migration.status = 'pairing_failed';
+      migration.inclusionStatus = 'failed';
+      migration.inclusionFailedAt = new Date().toISOString();
+      migration.updatedAt = migration.inclusionFailedAt;
+      throw error;
     }
 
     return {
@@ -1461,6 +1777,231 @@ class DirectRadioService {
         recommendedProtocol: targetProtocol,
         manualSteps: plan.manualSteps
       }
+    };
+  }
+
+  buildMigrationVerificationResult(migration, result = {}) {
+    const expiresAt = result.expiresAt ?? migration.exclusionExpiresAt ?? migration.expiresAt ?? null;
+    const secondsRemaining = expiresAt
+      ? Math.max(0, Math.ceil((Number(expiresAt) - Date.now()) / 1000))
+      : 0;
+    return {
+      migrationId: migration.id,
+      deviceId: migration.sourceDeviceId || null,
+      protocol: migration.protocol,
+      phase: result.phase || null,
+      status: result.status || 'pending',
+      verified: result.status === 'verified',
+      canAdvance: result.status === 'verified',
+      message: result.message || '',
+      guidance: result.guidance || [],
+      evidence: {
+        exclusionVerifiedAt: migration.exclusionVerifiedAt || null,
+        inclusionVerifiedAt: migration.inclusionVerifiedAt || null,
+        completedAt: migration.completedAt || null,
+        directIdentity: migration.directIdentity || null,
+        directDeviceId: migration.directDeviceId || null,
+        validation: migration.validation || null,
+        zwaveEvents: Array.isArray(migration.zwaveEvents) ? migration.zwaveEvents.slice(-8) : [],
+        expiresAt,
+        secondsRemaining
+      }
+    };
+  }
+
+  verifyMigrationExclusion(migration) {
+    if (migration.exclusionVerifiedAt) {
+      return this.buildMigrationVerificationResult(migration, {
+        phase: 'physical_exclusion',
+        status: 'verified',
+        message: 'Z-Wave exclusion verified. The controller received the device removal confirmation, so HomeBrain can open inclusion next.'
+      });
+    }
+
+    if (migration.status === 'exclusion_failed' || migration.exclusionFailedAt) {
+      return this.buildMigrationVerificationResult(migration, {
+        phase: 'physical_exclusion',
+        status: 'failed',
+        message: 'Z-Wave exclusion failed. Re-open exclusion and repeat the physical exclude action at the switch.',
+        guidance: [
+          'Tap the local on/up paddle once, then wait a few seconds.',
+          'If nothing reports back, toggle on/up and off/down quickly 3 times.',
+          'Keep the switch powered and make sure the Zooz stick is close enough to hear the device.'
+        ]
+      });
+    }
+
+    const expiresAt = Number(migration.exclusionExpiresAt || migration.expiresAt || 0);
+    if (expiresAt > Date.now()) {
+      return this.buildMigrationVerificationResult(migration, {
+        phase: 'physical_exclusion',
+        status: 'pending',
+        message: 'HomeBrain has not received the Z-Wave exclusion confirmation yet. Stay on this step until the controller reports Done.',
+        guidance: [
+          'Tap the local on/up paddle once.',
+          'If the switch does not exclude, quickly toggle on/up and off/down 3 times.',
+          'Do not start inclusion until this step verifies.'
+        ],
+        expiresAt
+      });
+    }
+
+    return this.buildMigrationVerificationResult(migration, {
+      phase: 'physical_exclusion',
+      status: 'failed',
+      message: 'The Z-Wave exclusion window closed without a controller confirmation.',
+      guidance: [
+        'Start Z-Wave exclusion again from HomeBrain.',
+        'Repeat the physical exclude action at the switch while the window is open.',
+        'Move the switch or Zooz stick closer if the controller still does not report the removal.'
+      ],
+      expiresAt
+    });
+  }
+
+  verifyMigrationInclusion(migration) {
+    const phase = migration.protocol === 'zigbee' ? 'physical_pairing' : 'physical_inclusion';
+    if (migration.status === 'completed' && migration.inclusionVerifiedAt) {
+      return this.buildMigrationVerificationResult(migration, {
+        phase,
+        status: 'verified',
+        message: migration.protocol === 'zigbee'
+          ? 'Zigbee pairing verified. HomeBrain created or updated the native device record from coordinator data.'
+          : 'Z-Wave inclusion verified. HomeBrain received the new node and updated the native device record.'
+      });
+    }
+
+    if (migration.status === 'pairing_failed' || migration.inclusionFailedAt) {
+      return this.buildMigrationVerificationResult(migration, {
+        phase,
+        status: 'failed',
+        message: migration.protocol === 'zigbee'
+          ? 'Zigbee pairing failed before HomeBrain discovered the device.'
+          : 'Z-Wave inclusion failed before HomeBrain received a verified node.',
+        guidance: migration.protocol === 'zigbee'
+          ? [
+              'Open pairing again and factory reset the device while permit-join is active.',
+              'Keep battery devices awake until HomeBrain captures the interview data.'
+            ]
+          : [
+              'Open inclusion again only after exclusion has verified.',
+              'Tap the local paddle once; if no node appears, use the quick 3-toggle sequence.',
+              'Leave the switch powered until HomeBrain reports the interview.'
+            ]
+      });
+    }
+
+    const expiresAt = Number(migration.expiresAt || 0);
+    if (expiresAt > Date.now()) {
+      return this.buildMigrationVerificationResult(migration, {
+        phase,
+        status: 'pending',
+        message: migration.protocol === 'zigbee'
+          ? 'HomeBrain has not discovered the Zigbee device yet. Stay on this step while permit-join is open.'
+          : 'HomeBrain has not received the new Z-Wave node yet. Stay on this step until inclusion verifies.',
+        guidance: migration.protocol === 'zigbee'
+          ? [
+              'Keep the device in pairing mode until HomeBrain shows the native device.',
+              'Wake battery sensors again if discovery starts but attributes are missing.'
+            ]
+          : [
+              'Tap the local on/up paddle once or press the module button once.',
+              'If no node appears, use the quick 3-toggle sequence.',
+              'Do not finish migration until HomeBrain verifies the included node.'
+            ],
+        expiresAt
+      });
+    }
+
+    return this.buildMigrationVerificationResult(migration, {
+      phase,
+      status: 'failed',
+      message: migration.protocol === 'zigbee'
+        ? 'The Zigbee pairing window closed without a verified HomeBrain device.'
+        : 'The Z-Wave inclusion window closed without a verified HomeBrain node.',
+      guidance: migration.protocol === 'zigbee'
+        ? [
+            'Open pairing again and repeat the device reset/pair action.',
+            'Move the device closer to the SONOFF coordinator for the first join.'
+          ]
+        : [
+            'Open inclusion again and repeat the switch include action.',
+            'If inclusion repeatedly times out, run exclusion again first, then retry inclusion close to the Zooz stick.'
+          ],
+      expiresAt
+    });
+  }
+
+  async verifyMigrationReadiness(migration) {
+    if (migration.status !== 'completed') {
+      return this.verifyMigrationInclusion(migration);
+    }
+
+    const device = await Device.findById(migration.sourceDeviceId).lean();
+    const expectedSource = protocolSource(migration.protocol);
+    const directProtocol = normalizeSourceText(device?.properties?.homebrainDirect?.protocol);
+    const directRouteReady = normalizeSourceText(device?.properties?.source) === expectedSource
+      && directProtocol === migration.protocol
+      && device?.isOnline !== false;
+
+    return this.buildMigrationVerificationResult(migration, directRouteReady
+      ? {
+          phase: 'verification',
+          status: 'verified',
+          message: 'HomeBrain verified the native route, online state, and migration metadata. Keep SmartThings available until you are satisfied the real control path behaves correctly.'
+        }
+      : {
+          phase: 'verification',
+          status: 'failed',
+          message: 'HomeBrain found the migration session, but the native route is not ready on the device record yet.',
+          guidance: [
+            'Wait for the radio interview to finish and refresh the device details.',
+            'Do not retire the SmartThings route until HomeBrain shows the native route online.'
+          ]
+        });
+  }
+
+  async verifyMigrationStep({ migrationId, deviceId, protocol, phase, stepId } = {}) {
+    const safeDeviceId = trimString(deviceId) ? normalizeObjectId(deviceId) : '';
+    const normalizedProtocol = normalizeSourceText(protocol);
+    const migration = this.findMigrationSession({
+      migrationId,
+      deviceId: safeDeviceId,
+      protocol: ['zigbee', 'zwave'].includes(normalizedProtocol) ? normalizedProtocol : undefined
+    });
+    if (!migration) {
+      const error = new Error('Migration session not found. Start the guided migration from HomeBrain before verifying this step.');
+      error.status = 404;
+      throw error;
+    }
+    if (safeDeviceId && migration.sourceDeviceId !== safeDeviceId) {
+      const error = new Error('Migration session does not match this device.');
+      error.status = 409;
+      throw error;
+    }
+
+    const normalizedPhase = normalizeSourceText(phase);
+    let verification;
+    if (normalizedPhase === 'physical_exclusion' || normalizedPhase === 'exclusion') {
+      verification = this.verifyMigrationExclusion(migration);
+    } else if (['physical_inclusion', 'physical_pairing', 'permit_join', 'inclusion'].includes(normalizedPhase)) {
+      verification = this.verifyMigrationInclusion(migration);
+    } else if (normalizedPhase === 'verification') {
+      verification = await this.verifyMigrationReadiness(migration);
+    } else {
+      verification = this.buildMigrationVerificationResult(migration, {
+        phase: normalizedPhase || null,
+        status: 'verified',
+        message: 'Step does not require radio verification.'
+      });
+    }
+
+    return {
+      verification: {
+        ...verification,
+        stepId: stepId || null
+      },
+      migration
     };
   }
 
@@ -1548,12 +2089,72 @@ class DirectRadioService {
     }
 
     const seconds = boundedSeconds(options.durationSeconds);
+    let migration = null;
+    const safeDeviceId = trimString(options.deviceId) ? normalizeObjectId(options.deviceId) : '';
+    if (safeDeviceId) {
+      const device = await Device.findById(safeDeviceId).lean();
+      if (!device) {
+        const error = new Error('Device not found');
+        error.status = 404;
+        throw error;
+      }
+      const plan = buildMigrationPlan(device, { protocol: 'zwave' });
+      if (!plan.supported) {
+        const error = new Error('This SmartThings device looks cloud-only or virtual and cannot be migrated to a direct radio.');
+        error.status = 400;
+        throw error;
+      }
+
+      const requestedMigrationId = trimString(options.migrationId);
+      const existingMigration = requestedMigrationId
+        ? this.activeMigrations.get(requestedMigrationId)
+        : Array.from(this.activeMigrations.values())
+          .filter((entry) => entry.sourceDeviceId === safeDeviceId && entry.protocol === 'zwave')
+          .filter((entry) => !['completed'].includes(entry.status))
+          .sort((left, right) => (
+            new Date(right.updatedAt || right.startedAt || 0).getTime()
+            - new Date(left.updatedAt || left.startedAt || 0).getTime()
+          ))[0];
+      const now = Date.now();
+      migration = existingMigration || {
+        id: requestedMigrationId || `migration-${now}-${crypto.randomBytes(4).toString('hex')}`,
+        sourceDeviceId: String(device._id),
+        smartThingsDeviceId: device.properties?.smartThingsDeviceId || null,
+        protocol: 'zwave',
+        startedAt: new Date(now).toISOString()
+      };
+      Object.assign(migration, {
+        sourceDeviceId: String(device._id),
+        smartThingsDeviceId: device.properties?.smartThingsDeviceId || null,
+        protocol: 'zwave',
+        status: 'excluding',
+        exclusionStatus: 'waiting',
+        exclusionStartedAt: new Date(now).toISOString(),
+        exclusionExpiresAt: now + seconds * 1000,
+        expiresAt: now + seconds * 1000,
+        plan,
+        updatedAt: new Date(now).toISOString()
+      });
+      this.activeMigrations.set(migration.id, migration);
+    }
+
     const zwave = require('zwave-js');
     this.log('info', 'zwave', 'Opening Z-Wave exclusion window', {
       durationSeconds: seconds,
-      serialPath: this.detected.zwave?.path || null
+      serialPath: this.detected.zwave?.path || null,
+      migrationId: migration?.id || null
     });
-    await controller.beginExclusion({ strategy: zwave.ExclusionStrategy.ExcludeOnly });
+    try {
+      await controller.beginExclusion({ strategy: zwave.ExclusionStrategy.ExcludeOnly });
+    } catch (error) {
+      if (migration) {
+        migration.status = 'exclusion_failed';
+        migration.exclusionStatus = 'failed';
+        migration.exclusionFailedAt = new Date().toISOString();
+        migration.updatedAt = migration.exclusionFailedAt;
+      }
+      throw error;
+    }
     this.zwave.exclusionUntil = new Date(Date.now() + seconds * 1000).toISOString();
     const stopTimer = setTimeout(() => {
       void this.stopPairing('zwave').catch(() => {});
@@ -1562,9 +2163,15 @@ class DirectRadioService {
       stopTimer.unref();
     }
     this.log('info', 'zwave', 'Z-Wave exclusion window is open', {
-      expiresAt: this.zwave.exclusionUntil
+      expiresAt: this.zwave.exclusionUntil,
+      migrationId: migration?.id || null
     });
-    return { protocol, mode: 'exclusion', expiresAt: this.zwave.exclusionUntil };
+    return {
+      protocol,
+      mode: 'exclusion',
+      expiresAt: this.zwave.exclusionUntil,
+      migration
+    };
   }
 
   async stopPairing(protocol = 'all') {
@@ -1880,7 +2487,10 @@ class DirectRadioService {
     const zigbeeDevices = this.zigbee.controller?.getDevices?.() || [];
     const zwaveNodes = this.getZWaveController()?.nodes;
     const activeMigrations = Array.from(this.activeMigrations.values())
-      .filter((migration) => migration.expiresAt > Date.now() && migration.status === 'pairing');
+      .filter((migration) => (
+        ['excluding', 'excluded', 'pairing', 'exclusion_failed', 'pairing_failed'].includes(migration.status)
+        && (Number(migration.expiresAt || 0) > Date.now() || Number(migration.exclusionExpiresAt || 0) > Date.now() || migration.status === 'excluded')
+      ));
     const zigbeePortDetails = this.getDetectedPortDetails('zigbee');
     const zwavePortDetails = this.getDetectedPortDetails('zwave');
     const zigbeeDiagnostics = this.buildControllerDiagnostics('zigbee', zigbeePortDetails);

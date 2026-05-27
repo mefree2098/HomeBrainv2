@@ -107,6 +107,20 @@ export type DirectRadioMigrationGuidedStep = {
   confirmLabel: string;
 };
 
+export type DirectRadioMigrationVerification = {
+  migrationId: string;
+  deviceId: string | null;
+  protocol: DirectRadioProtocol;
+  phase: string | null;
+  stepId?: string | null;
+  status: 'verified' | 'pending' | 'failed' | string;
+  verified: boolean;
+  canAdvance: boolean;
+  message: string;
+  guidance: string[];
+  evidence?: Record<string, unknown>;
+};
+
 export const getDirectRadioStatus = async () => {
   try {
     const response = await api.get('/api/direct-radios/status');
@@ -205,6 +219,7 @@ export const startDirectRadioMigration = async (payload: {
   protocol: DirectRadioProtocol;
   durationSeconds?: number;
   dskPin?: string;
+  migrationId?: string | null;
 }) => {
   try {
     const response = await api.post('/api/direct-radios/migrations', payload);
@@ -238,15 +253,41 @@ export const stopDirectRadioPairing = async (protocol: DirectRadioProtocol | 'al
   }
 };
 
-export const startZWaveExclusion = async (durationSeconds?: number) => {
+export const startZWaveExclusion = async (
+  durationSeconds?: number,
+  options: { deviceId?: string; migrationId?: string | null } = {}
+) => {
   try {
     const response = await api.post('/api/direct-radios/exclusion/start', {
       protocol: 'zwave',
-      durationSeconds
+      durationSeconds,
+      deviceId: options.deviceId,
+      migrationId: options.migrationId
     });
     return response.data;
   } catch (error) {
     console.error('Error starting Z-Wave exclusion:', error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const verifyDirectRadioMigrationStep = async (payload: {
+  migrationId?: string | null;
+  deviceId: string;
+  protocol: DirectRadioProtocol;
+  phase: string;
+  stepId: string;
+}) => {
+  try {
+    const response = await api.post('/api/direct-radios/migrations/verify-step', payload);
+    return response.data as {
+      success: boolean;
+      verification: DirectRadioMigrationVerification;
+      migration?: unknown;
+      status?: DirectRadioStatus;
+    };
+  } catch (error) {
+    console.error('Error verifying direct radio migration step:', error);
     throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };
