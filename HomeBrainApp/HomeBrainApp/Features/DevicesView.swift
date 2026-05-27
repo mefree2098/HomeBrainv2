@@ -940,6 +940,19 @@ struct DevicesView: View {
                 .foregroundStyle(HBPalette.accentBlue)
                 .fixedSize(horizontal: false, vertical: true)
 
+            if !workflow.verificationGuidance.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(workflow.verificationGuidance.enumerated()), id: \.offset) { _, guidance in
+                        Text(guidance)
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(8)
+                .background(HBPalette.accentOrange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+
             if let currentStep {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(currentStep.instructions.enumerated()), id: \.offset) { index, instruction in
@@ -1872,46 +1885,67 @@ struct DevicesView: View {
     private func migrationActionMessage(for step: DirectRadioMigrationGuidedStepRecord, protocolName: String) -> String {
         switch step.action {
         case "start_zwave_exclusion":
-            return "HomeBrain opened Z-Wave exclusion on the Zooz stick. Trigger the device remove/exclude action below, then continue."
+            return "HomeBrain opened Z-Wave exclusion on the Zooz stick. Trigger the device remove/exclude action below; HomeBrain will verify the controller response before continuing."
         case "start_direct_migration":
             return protocolName == "zigbee"
-                ? "HomeBrain opened Zigbee pairing. Complete the device action below, then continue."
-                : "HomeBrain opened Z-Wave inclusion. Complete the device action below, then continue."
+                ? "HomeBrain opened Zigbee pairing. Complete the device action below; HomeBrain will verify discovery before continuing."
+                : "HomeBrain opened Z-Wave inclusion. Complete the device action below; HomeBrain will verify the new node before continuing."
         default:
             return "Complete the current device step, then continue."
         }
     }
 
+    private func migrationStepRequiresVerification(_ step: DirectRadioMigrationGuidedStepRecord?) -> Bool {
+        guard let step else { return false }
+        return ["physical_exclusion", "physical_inclusion", "physical_pairing", "verification"].contains(step.phase)
+    }
+
     private func executeDirectRadioMigrationStep(
         _ step: DirectRadioMigrationGuidedStepRecord,
         device: DeviceItem,
-        protocolName: String
-    ) async throws {
+        protocolName: String,
+        migrationId: String?
+    ) async throws -> String? {
         switch step.action {
         case "start_zwave_exclusion":
-            _ = try await session.apiClient.post(
+            var body: [String: Any] = [
+                "protocol": "zwave",
+                "durationSeconds": step.durationSeconds ?? 120,
+                "deviceId": device.id
+            ]
+            if let migrationId, !migrationId.isEmpty {
+                body["migrationId"] = migrationId
+            }
+            let response = try await session.apiClient.post(
                 "/api/direct-radios/exclusion/start",
-                body: [
-                    "protocol": "zwave",
-                    "durationSeconds": step.durationSeconds ?? 120
-                ]
+                body: body
             )
+            let root = JSON.object(response)
+            let result = JSON.object(root["result"])
+            let migration = JSON.object(result["migration"])
+            return JSON.optionalString(migration, "id") ?? migrationId
         case "start_direct_migration":
+            var body: [String: Any] = [
+                "deviceId": device.id,
+                "protocol": protocolName,
+                "durationSeconds": step.durationSeconds ?? (protocolName == "zwave" ? 240 : 180)
+            ]
+            if let migrationId, !migrationId.isEmpty {
+                body["migrationId"] = migrationId
+            }
             let response = try await session.apiClient.post(
                 "/api/direct-radios/migrations",
-                body: [
-                    "deviceId": device.id,
-                    "protocol": protocolName,
-                    "durationSeconds": step.durationSeconds ?? (protocolName == "zwave" ? 240 : 180)
-                ]
+                body: body
             )
             let root = JSON.object(response)
             let returnedPlan = JSON.object(root["plan"])
             if !returnedPlan.isEmpty {
                 migrationPlans[device.id] = DirectRadioMigrationPlanRecord.from(returnedPlan)
             }
+            let migration = JSON.object(root["migration"])
+            return JSON.optionalString(migration, "id") ?? migrationId
         default:
-            break
+            return migrationId
         }
     }
 
@@ -1919,19 +1953,26 @@ struct DevicesView: View {
         plan: DirectRadioMigrationPlanRecord,
         device: DeviceItem,
         protocolName: String,
-        startIndex: Int
-    ) async throws -> (stepIndex: Int, statusMessage: String) {
+        startIndex: Int,
+        migrationId: String?
+    ) async throws -> (stepIndex: Int, statusMessage: String, migrationId: String?) {
         var stepIndex = startIndex
         var statusMessage = ""
+        var currentMigrationId = migrationId
 
         while stepIndex < plan.guidedSteps.count, plan.guidedSteps[stepIndex].automatic {
             let step = plan.guidedSteps[stepIndex]
-            try await executeDirectRadioMigrationStep(step, device: device, protocolName: protocolName)
+            currentMigrationId = try await executeDirectRadioMigrationStep(
+                step,
+                device: device,
+                protocolName: protocolName,
+                migrationId: currentMigrationId
+            )
             statusMessage = migrationActionMessage(for: step, protocolName: protocolName)
             stepIndex += 1
         }
 
-        return (stepIndex, statusMessage)
+        return (stepIndex, statusMessage, currentMigrationId)
     }
 
     private func startDirectRadioMigration(_ device: DeviceItem, protocolName: String) async {
@@ -1954,8 +1995,10 @@ struct DevicesView: View {
             migrationWorkflows[device.id] = DirectRadioMigrationWorkflowRecord(
                 protocolName: protocolName,
                 plan: previewPlan,
+                migrationId: nil,
                 stepIndex: min(1, max(previewPlan.guidedSteps.count - 1, 0)),
                 statusMessage: "Guided migration started. Complete the current device action.",
+                verificationGuidance: [],
                 complete: false
             )
             return
@@ -1974,14 +2017,17 @@ struct DevicesView: View {
                 plan: selectedPlan,
                 device: device,
                 protocolName: protocolName,
-                startIndex: 0
+                startIndex: 0,
+                migrationId: nil
             )
             let safeIndex = min(result.stepIndex, max(selectedPlan.guidedSteps.count - 1, 0))
             migrationWorkflows[device.id] = DirectRadioMigrationWorkflowRecord(
                 protocolName: protocolName,
                 plan: selectedPlan,
+                migrationId: result.migrationId,
                 stepIndex: safeIndex,
                 statusMessage: result.statusMessage.isEmpty ? "Guided migration started." : result.statusMessage,
+                verificationGuidance: [],
                 complete: false
             )
             migrationFeedback[device.id] = selectedPlan.guidedSteps[safeIndex].title
@@ -1989,6 +2035,29 @@ struct DevicesView: View {
             migrationFeedback[device.id] = "Migration could not start: \(error.localizedDescription)"
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func verifyDirectRadioMigrationStep(
+        workflow: DirectRadioMigrationWorkflowRecord,
+        step: DirectRadioMigrationGuidedStepRecord,
+        device: DeviceItem
+    ) async throws -> DirectRadioMigrationStepVerificationRecord {
+        var body: [String: Any] = [
+            "deviceId": device.id,
+            "protocol": workflow.protocolName,
+            "phase": step.phase,
+            "stepId": step.id
+        ]
+        if let migrationId = workflow.migrationId, !migrationId.isEmpty {
+            body["migrationId"] = migrationId
+        }
+
+        let response = try await session.apiClient.post(
+            "/api/direct-radios/migrations/verify-step",
+            body: body
+        )
+        let root = JSON.object(response)
+        return DirectRadioMigrationStepVerificationRecord.from(JSON.object(root["verification"]))
     }
 
     private func advanceDirectRadioMigrationWorkflow(_ device: DeviceItem) async {
@@ -2006,16 +2075,37 @@ struct DevicesView: View {
             workflow.stepIndex = min(workflow.stepIndex + 1, max(workflow.plan.guidedSteps.count - 1, 0))
             workflow.complete = workflow.stepIndex >= workflow.plan.guidedSteps.count - 1
             workflow.statusMessage = workflow.complete ? "Guided workflow complete." : "Next migration step ready."
+            workflow.verificationGuidance = []
             migrationWorkflows[device.id] = workflow
             migrationFeedback[device.id] = workflow.statusMessage
             return
         }
 
         do {
+            let currentStep = workflow.currentStep
+            if migrationStepRequiresVerification(currentStep), let currentStep {
+                let verification = try await verifyDirectRadioMigrationStep(
+                    workflow: workflow,
+                    step: currentStep,
+                    device: device
+                )
+                if (workflow.migrationId ?? "").isEmpty, !verification.migrationId.isEmpty {
+                    workflow.migrationId = verification.migrationId
+                }
+                if !verification.canAdvance {
+                    workflow.statusMessage = verification.message
+                    workflow.verificationGuidance = verification.guidance
+                    migrationWorkflows[device.id] = workflow
+                    migrationFeedback[device.id] = verification.message
+                    return
+                }
+            }
+
             let nextStartIndex = workflow.stepIndex + 1
             if nextStartIndex >= workflow.plan.guidedSteps.count {
                 workflow.complete = true
-                workflow.statusMessage = "Guided workflow complete. Verify HomeBrain state, battery, and controls before retiring SmartThings."
+                workflow.statusMessage = "Guided workflow complete. HomeBrain verified the native migration gate before finishing."
+                workflow.verificationGuidance = []
                 migrationWorkflows[device.id] = workflow
                 migrationFeedback[device.id] = workflow.statusMessage
                 return
@@ -2025,16 +2115,20 @@ struct DevicesView: View {
                 plan: workflow.plan,
                 device: device,
                 protocolName: workflow.protocolName,
-                startIndex: nextStartIndex
+                startIndex: nextStartIndex,
+                migrationId: workflow.migrationId
             )
+            workflow.migrationId = result.migrationId ?? workflow.migrationId
 
             if result.stepIndex >= workflow.plan.guidedSteps.count {
                 workflow.stepIndex = max(workflow.plan.guidedSteps.count - 1, 0)
                 workflow.complete = true
-                workflow.statusMessage = "Guided workflow complete. Verify HomeBrain state, battery, and controls before retiring SmartThings."
+                workflow.statusMessage = "Guided workflow complete. HomeBrain verified the native migration gate before finishing."
+                workflow.verificationGuidance = []
             } else {
                 workflow.stepIndex = result.stepIndex
                 workflow.statusMessage = result.statusMessage.isEmpty ? "Next migration step ready." : result.statusMessage
+                workflow.verificationGuidance = []
             }
 
             migrationWorkflows[device.id] = workflow
@@ -2697,8 +2791,10 @@ private struct DirectRadioMigrationGuidedStepRecord: Identifiable {
 private struct DirectRadioMigrationWorkflowRecord {
     let protocolName: String
     var plan: DirectRadioMigrationPlanRecord
+    var migrationId: String?
     var stepIndex: Int
     var statusMessage: String
+    var verificationGuidance: [String]
     var complete: Bool
 
     var currentStep: DirectRadioMigrationGuidedStepRecord? {
@@ -2710,6 +2806,24 @@ private struct DirectRadioMigrationWorkflowRecord {
 
     var protocolLabel: String {
         protocolName == "zigbee" ? "Zigbee" : "Z-Wave"
+    }
+}
+
+private struct DirectRadioMigrationStepVerificationRecord {
+    let migrationId: String
+    let status: String
+    let canAdvance: Bool
+    let message: String
+    let guidance: [String]
+
+    nonisolated static func from(_ object: [String: Any]) -> DirectRadioMigrationStepVerificationRecord {
+        DirectRadioMigrationStepVerificationRecord(
+            migrationId: JSON.string(object, "migrationId"),
+            status: JSON.string(object, "status", fallback: "pending"),
+            canAdvance: JSON.bool(object, "canAdvance"),
+            message: JSON.string(object, "message", fallback: "HomeBrain is still waiting for migration verification."),
+            guidance: JSON.stringArray(object["guidance"])
+        )
     }
 }
 

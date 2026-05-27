@@ -688,7 +688,7 @@ function buildGuidedMigrationSteps(protocol, device) {
           phase: 'physical_exclusion',
           protocol: 'zwave',
           instructions: guidance.exclusion,
-          confirmLabel: 'I completed the exclusion action'
+          confirmLabel: 'Verify exclusion'
         }),
         buildGuidedStep({
           id: 'start-homebrain-zwave-inclusion',
@@ -712,7 +712,7 @@ function buildGuidedMigrationSteps(protocol, device) {
           phase: 'physical_inclusion',
           protocol: 'zwave',
           instructions: guidance.inclusion,
-          confirmLabel: 'I completed the inclusion action'
+          confirmLabel: 'Verify inclusion'
         }),
         buildGuidedStep({
           id: 'verify-homebrain-zwave-migration',
@@ -724,7 +724,7 @@ function buildGuidedMigrationSteps(protocol, device) {
             'Verify primary state, battery if present, and each important feature before retiring the SmartThings entry.',
             'After validation, keep the SmartThings integration installed but use the HomeBrain-native device in automations and Security Center.'
           ],
-          confirmLabel: 'Finish'
+          confirmLabel: 'Verify HomeBrain route'
         })
       ]
     };
@@ -755,7 +755,7 @@ function buildGuidedMigrationSteps(protocol, device) {
           phase: 'physical_pairing',
           protocol: 'zigbee',
           instructions: guidance.pairing,
-          confirmLabel: 'I completed the pairing action'
+          confirmLabel: 'Verify pairing'
         }),
         buildGuidedStep({
           id: 'verify-homebrain-zigbee-migration',
@@ -767,7 +767,7 @@ function buildGuidedMigrationSteps(protocol, device) {
             'Verify primary state, temperature, battery, tamper, acceleration, axis, color, power, or energy fields that apply to this device.',
             'Wake battery sensors again if any expected attributes are missing before retiring the SmartThings entry.'
           ],
-          confirmLabel: 'Finish'
+          confirmLabel: 'Verify HomeBrain route'
         })
       ]
     };

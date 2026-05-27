@@ -28,6 +28,7 @@ import {
   getDirectRadioMigrationPlan,
   startDirectRadioMigration,
   startZWaveExclusion,
+  verifyDirectRadioMigrationStep,
   type DirectRadioMigrationGuidedStep,
   type DirectRadioMigrationPlan
 } from "@/api/directRadios"
@@ -115,8 +116,10 @@ type LiveEnergySnapshot = {
 type MigrationFlowState = {
   protocol: "zigbee" | "zwave"
   plan: DirectRadioMigrationPlan
+  migrationId?: string | null
   stepIndex: number
   statusMessage: string
+  verificationGuidance?: string[]
   complete?: boolean
 }
 
@@ -150,14 +153,18 @@ function getGuidedMigrationSteps(plan: DirectRadioMigrationPlan | null | undefin
 
 function getMigrationActionMessage(step: DirectRadioMigrationGuidedStep, protocol: "zigbee" | "zwave") {
   if (step.action === "start_zwave_exclusion") {
-    return "HomeBrain opened Z-Wave exclusion on the Zooz stick. Trigger the device remove/exclude action below, then continue."
+    return "HomeBrain opened Z-Wave exclusion on the Zooz stick. Trigger the device remove/exclude action below; HomeBrain will verify the controller response before continuing."
   }
   if (step.action === "start_direct_migration") {
     return protocol === "zigbee"
-      ? "HomeBrain opened Zigbee pairing. Complete the device action below, then continue."
-      : "HomeBrain opened Z-Wave inclusion. Complete the device action below, then continue."
+      ? "HomeBrain opened Zigbee pairing. Complete the device action below; HomeBrain will verify discovery before continuing."
+      : "HomeBrain opened Z-Wave inclusion. Complete the device action below; HomeBrain will verify the new node before continuing."
   }
   return "Complete the current device step, then continue."
+}
+
+function migrationStepRequiresVerification(step: DirectRadioMigrationGuidedStep | undefined) {
+  return ["physical_exclusion", "physical_inclusion", "physical_pairing", "verification"].includes(step?.phase || "")
 }
 
 function isMigrationProtocol(value: unknown): value is "zigbee" | "zwave" {
@@ -1686,46 +1693,57 @@ export function DeviceDetailsDialog({
 
   const executeGuidedMigrationStep = async (
     step: DirectRadioMigrationGuidedStep,
-    protocol: "zigbee" | "zwave"
+    protocol: "zigbee" | "zwave",
+    migrationId?: string | null
   ) => {
     if (!device?._id) {
-      return
+      return { migrationId }
     }
 
     if (step.action === "start_zwave_exclusion") {
-      await startZWaveExclusion(step.durationSeconds || 120)
-      return
+      const response = await startZWaveExclusion(step.durationSeconds || 120, {
+        deviceId: device._id,
+        migrationId
+      })
+      return { migrationId: response?.result?.migration?.id || migrationId }
     }
 
     if (step.action === "start_direct_migration") {
       const response = await startDirectRadioMigration({
         deviceId: device._id,
         protocol,
-        durationSeconds: step.durationSeconds || (protocol === "zwave" ? 240 : 180)
+        durationSeconds: step.durationSeconds || (protocol === "zwave" ? 240 : 180),
+        migrationId
       })
       if (response.plan) {
         setMigrationPlan(response.plan)
       }
+      return { migrationId: response?.migration?.id || migrationId }
     }
+
+    return { migrationId }
   }
 
   const advancePastAutomatedMigrationSteps = async (
     plan: DirectRadioMigrationPlan,
     protocol: "zigbee" | "zwave",
-    startIndex: number
+    startIndex: number,
+    migrationId?: string | null
   ) => {
     const steps = getGuidedMigrationSteps(plan)
     let stepIndex = startIndex
     let statusMessage = ""
+    let currentMigrationId = migrationId
 
     while (stepIndex < steps.length && steps[stepIndex]?.automatic) {
       const step = steps[stepIndex]
-      await executeGuidedMigrationStep(step, protocol)
+      const result = await executeGuidedMigrationStep(step, protocol, currentMigrationId)
+      currentMigrationId = result.migrationId
       statusMessage = getMigrationActionMessage(step, protocol)
       stepIndex += 1
     }
 
-    return { stepIndex, statusMessage }
+    return { stepIndex, statusMessage, migrationId: currentMigrationId }
   }
 
   const handleStartDirectMigration = async (protocol: "zigbee" | "zwave") => {
@@ -1747,8 +1765,10 @@ export function DeviceDetailsDialog({
       setMigrationFlow({
         protocol,
         plan: selectedPlan,
+        migrationId: result.migrationId,
         stepIndex,
-        statusMessage: result.statusMessage || "Guided migration started."
+        statusMessage: result.statusMessage || "Guided migration started.",
+        verificationGuidance: []
       })
       toast({
         title: "Guided migration started",
@@ -1777,16 +1797,41 @@ export function DeviceDetailsDialog({
     const currentStep = steps[migrationFlow.stepIndex]
     setMigrationStarting(migrationFlow.protocol)
     try {
+      if (migrationStepRequiresVerification(currentStep)) {
+        const response = await verifyDirectRadioMigrationStep({
+          migrationId: migrationFlow.migrationId,
+          deviceId: device._id,
+          protocol: migrationFlow.protocol,
+          phase: currentStep.phase,
+          stepId: currentStep.id
+        })
+        const verification = response.verification
+        if (!verification.canAdvance) {
+          setMigrationFlow({
+            ...migrationFlow,
+            statusMessage: verification.message,
+            verificationGuidance: verification.guidance || []
+          })
+          toast({
+            title: verification.status === "failed" ? "Migration verification failed" : "Still waiting for verification",
+            description: verification.message,
+            variant: verification.status === "failed" ? "destructive" : undefined
+          })
+          return
+        }
+      }
+
       const nextStartIndex = migrationFlow.stepIndex + 1
       if (nextStartIndex >= steps.length) {
         setMigrationFlow({
           ...migrationFlow,
           complete: true,
-          statusMessage: "Guided workflow complete. Verify the direct HomeBrain device before retiring the SmartThings entry."
+          statusMessage: "Guided workflow complete. HomeBrain verified the native migration gate before finishing.",
+          verificationGuidance: []
         })
         toast({
           title: "Migration workflow complete",
-          description: "Now verify HomeBrain state, battery, and controls before retiring the old SmartThings entry."
+          description: "HomeBrain verified the native migration gate. Keep SmartThings available until the new route behaves correctly in real use."
         })
         return
       }
@@ -1794,20 +1839,25 @@ export function DeviceDetailsDialog({
       const result = await advancePastAutomatedMigrationSteps(
         migrationFlow.plan,
         migrationFlow.protocol,
-        nextStartIndex
+        nextStartIndex,
+        migrationFlow.migrationId
       )
       if (result.stepIndex >= steps.length) {
         setMigrationFlow({
           ...migrationFlow,
+          migrationId: result.migrationId || migrationFlow.migrationId,
           stepIndex: steps.length - 1,
           complete: true,
-          statusMessage: "Guided workflow complete. Verify the direct HomeBrain device before retiring the SmartThings entry."
+          statusMessage: "Guided workflow complete. HomeBrain verified the native migration gate before finishing.",
+          verificationGuidance: []
         })
       } else {
         setMigrationFlow({
           ...migrationFlow,
+          migrationId: result.migrationId || migrationFlow.migrationId,
           stepIndex: result.stepIndex,
-          statusMessage: result.statusMessage || `Completed ${currentStep?.title || "the previous step"}.`
+          statusMessage: result.statusMessage || `Completed ${currentStep?.title || "the previous step"}.`,
+          verificationGuidance: []
         })
       }
     } catch (advanceError) {
@@ -2716,6 +2766,13 @@ export function DeviceDetailsDialog({
                                           </Badge>
                                         </div>
                                         <p className="text-sm leading-relaxed text-sky-50/76">{migrationFlow.statusMessage}</p>
+                                        {migrationFlow.verificationGuidance && migrationFlow.verificationGuidance.length > 0 ? (
+                                          <div className="space-y-1 rounded-lg border border-amber-300/20 bg-amber-300/10 p-3 text-sm leading-relaxed text-amber-50/88">
+                                            {migrationFlow.verificationGuidance.map((item, index) => (
+                                              <p key={`migration-guidance-${index}`}>{item}</p>
+                                            ))}
+                                          </div>
+                                        ) : null}
                                         <div className="space-y-2 text-sm leading-relaxed text-muted-foreground">
                                           {currentStep.instructions.map((instruction, index) => (
                                             <p key={`${currentStep.id}-${index}`}>{index + 1}. {instruction}</p>

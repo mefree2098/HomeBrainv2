@@ -181,7 +181,9 @@ router.post('/exclusion/start', async (req, res) => {
   try {
     const protocol = String(req.body?.protocol || 'zwave').trim().toLowerCase();
     const result = await directRadioService.startExclusion(protocol, {
-      durationSeconds: req.body?.durationSeconds
+      durationSeconds: req.body?.durationSeconds,
+      deviceId: req.body?.deviceId,
+      migrationId: req.body?.migrationId
     });
     res.status(200).json({
       success: true,
@@ -207,13 +209,33 @@ router.get('/migration-plan/:deviceId', async (req, res) => {
   }
 });
 
+router.post('/migrations/verify-step', async (req, res) => {
+  try {
+    const result = await directRadioService.verifyMigrationStep({
+      migrationId: req.body?.migrationId,
+      deviceId: req.body?.deviceId,
+      protocol: String(req.body?.protocol || '').trim().toLowerCase(),
+      phase: req.body?.phase,
+      stepId: req.body?.stepId
+    });
+    res.status(200).json({
+      success: true,
+      ...result,
+      status: await directRadioService.getStatus()
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to verify migration step');
+  }
+});
+
 router.post('/migrations', async (req, res) => {
   try {
     const result = await directRadioService.startMigration({
       deviceId: req.body?.deviceId,
       protocol: String(req.body?.protocol || '').trim().toLowerCase(),
       durationSeconds: req.body?.durationSeconds,
-      dskPin: req.body?.dskPin
+      dskPin: req.body?.dskPin,
+      migrationId: req.body?.migrationId
     });
     res.status(200).json({
       success: true,
