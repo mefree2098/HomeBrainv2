@@ -49,9 +49,32 @@ export type DirectRadioStatus = {
   diagnostics?: string[];
   controllers: {
     zigbee: DirectRadioControllerStatus;
-    zwave: DirectRadioControllerStatus;
+      zwave: DirectRadioControllerStatus;
+  };
+  pairings?: {
+    zigbee?: DirectRadioPairingSession | null;
+    zwave?: DirectRadioPairingSession | null;
   };
   migrations: unknown[];
+};
+
+export type DirectRadioPairingSession = {
+  id: string;
+  protocol: DirectRadioProtocol;
+  mode: string;
+  status: 'opening' | 'active' | 'awaiting_dsk' | 'completed' | 'failed' | 'expired' | 'stopped' | string;
+  startedAt?: string | null;
+  expiresAt?: string | null;
+  secondsRemaining?: number;
+  pendingDsk?: string | null;
+  detectedIdentity?: Record<string, unknown> | null;
+  directDeviceId?: string | null;
+  directDeviceName?: string | null;
+  message?: string | null;
+  completedAt?: string | null;
+  failedAt?: string | null;
+  expiredAt?: string | null;
+  events?: Array<Record<string, unknown>>;
 };
 
 export type DirectRadioLogEntry = {
@@ -233,12 +256,31 @@ export const startDirectRadioMigration = async (payload: {
 export const startDirectRadioPairing = async (payload: {
   protocol: DirectRadioProtocol;
   durationSeconds?: number;
+  dskPin?: string;
 }) => {
   try {
     const response = await api.post('/api/direct-radios/pairing/start', payload);
     return response.data;
   } catch (error) {
     console.error('Error starting direct radio pairing:', error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const submitZWaveDskPin = async (pin: string) => {
+  try {
+    const response = await api.post('/api/direct-radios/pairing/zwave/dsk-pin', { pin });
+    return response.data as {
+      success: boolean;
+      result?: {
+        accepted?: boolean;
+        pendingRequest?: boolean;
+        pairing?: DirectRadioPairingSession | null;
+      };
+      status?: DirectRadioStatus;
+    };
+  } catch (error) {
+    console.error('Error submitting Z-Wave DSK PIN:', error);
     throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };

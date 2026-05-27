@@ -672,10 +672,16 @@ class DirectRadioService {
       exclusionUntil: null,
       s2DskPin: '',
       pendingDsk: null,
+      pendingDskRequest: null,
       addNodeStatusEnum: null,
       removeNodeStatusEnum: null
     };
     this.activeMigrations = new Map();
+    this.activePairings = new Map();
+    this.pairingTimers = {
+      zigbee: null,
+      zwave: null
+    };
   }
 
   publishLog(input = {}) {
@@ -689,6 +695,166 @@ class DirectRadioService {
       message,
       details
     });
+  }
+
+  clearPairingTimer(protocol) {
+    const timer = this.pairingTimers?.[protocol];
+    if (timer) {
+      clearTimeout(timer);
+      this.pairingTimers[protocol] = null;
+    }
+  }
+
+  getPairingBaseline(protocol) {
+    if (protocol === 'zigbee') {
+      const devices = this.zigbee.controller?.getDevices?.() || [];
+      return devices
+        .filter((device) => device?.type !== 'Coordinator')
+        .map((device) => trimString(device?.ieeeAddr))
+        .filter(Boolean);
+    }
+
+    if (protocol === 'zwave') {
+      const nodes = this.getZWaveController()?.nodes;
+      if (!nodes || typeof nodes.values !== 'function') {
+        return [];
+      }
+      return Array.from(nodes.values())
+        .filter((node) => node && !node.isControllerNode)
+        .map((node) => String(node.id || '').trim())
+        .filter(Boolean);
+    }
+
+    return [];
+  }
+
+  createPairingSession(protocol, seconds, options = {}) {
+    const now = Date.now();
+    const session = {
+      id: `pairing-${protocol}-${now}-${crypto.randomBytes(4).toString('hex')}`,
+      protocol,
+      mode: protocol === 'zigbee' ? 'permit_join' : 'inclusion',
+      status: 'opening',
+      startedAt: new Date(now).toISOString(),
+      expiresAt: now + seconds * 1000,
+      baselineIdentities: this.getPairingBaseline(protocol),
+      detectedIdentity: null,
+      directDeviceId: null,
+      directDeviceName: null,
+      pendingDsk: null,
+      message: options.message || null,
+      events: []
+    };
+    this.activePairings.set(protocol, session);
+    return session;
+  }
+
+  appendPairingEvent(protocol, event = {}) {
+    const session = this.activePairings.get(protocol);
+    if (!session) {
+      return null;
+    }
+    const timestamp = event.timestamp || new Date().toISOString();
+    session.events = [
+      ...(Array.isArray(session.events) ? session.events : []).slice(-19),
+      {
+        ...event,
+        timestamp
+      }
+    ];
+    session.updatedAt = timestamp;
+    return session;
+  }
+
+  markPairingFailed(protocol, message, details = {}) {
+    const session = this.activePairings.get(protocol);
+    if (!session || ['completed', 'failed', 'expired', 'stopped'].includes(session.status)) {
+      return session || null;
+    }
+    const timestamp = new Date().toISOString();
+    session.status = 'failed';
+    session.failedAt = timestamp;
+    session.message = message || `${protocol} pairing failed.`;
+    this.appendPairingEvent(protocol, {
+      kind: 'failed',
+      message: session.message,
+      details,
+      timestamp
+    });
+    return session;
+  }
+
+  markPairingActive(protocol, message) {
+    const session = this.activePairings.get(protocol);
+    if (!session || ['completed', 'failed', 'expired', 'stopped'].includes(session.status)) {
+      return session || null;
+    }
+    session.status = 'active';
+    if (message) {
+      session.message = message;
+    }
+    session.updatedAt = new Date().toISOString();
+    return session;
+  }
+
+  completePairingSession(protocol, identity, device, reason) {
+    const session = this.activePairings.get(protocol);
+    if (!session || ['completed', 'failed', 'expired', 'stopped'].includes(session.status)) {
+      return session || null;
+    }
+
+    const identityId = trimString(identity?.id);
+    const strongReason = ['node added', 'node ready', 'deviceJoined', 'deviceInterview'].includes(reason);
+    const isNewIdentity = identityId && !session.baselineIdentities.includes(identityId);
+    if (!strongReason && !isNewIdentity) {
+      return session;
+    }
+
+    const timestamp = new Date().toISOString();
+    session.status = 'completed';
+    session.completedAt = timestamp;
+    session.detectedIdentity = identity || null;
+    session.directDeviceId = device?._id?.toString?.() || null;
+    session.directDeviceName = device?.name || null;
+    session.message = device?.name
+      ? `${device.name} joined HomeBrain.`
+      : `${protocol === 'zwave' ? 'Z-Wave' : 'Zigbee'} device joined HomeBrain.`;
+    this.appendPairingEvent(protocol, {
+      kind: 'completed',
+      reason,
+      identity: identity || null,
+      directDeviceId: session.directDeviceId,
+      directDeviceName: session.directDeviceName,
+      timestamp
+    });
+    this.clearPairingTimer(protocol);
+    void this.stopPairing(protocol).catch((error) => {
+      console.warn(`DirectRadioService: Failed to close ${protocol} pairing after completion: ${error.message}`);
+    });
+    return session;
+  }
+
+  armPairingTimer(protocol, sessionId, seconds) {
+    this.clearPairingTimer(protocol);
+    const timer = setTimeout(() => {
+      const session = this.activePairings.get(protocol);
+      if (session?.id === sessionId && !['completed', 'failed', 'stopped'].includes(session.status)) {
+        session.status = 'expired';
+        session.expiredAt = new Date().toISOString();
+        session.message = `${protocol === 'zwave' ? 'Z-Wave inclusion' : 'Zigbee pairing'} window expired before HomeBrain detected a completed device.`;
+        this.appendPairingEvent(protocol, {
+          kind: 'expired',
+          message: session.message
+        });
+      }
+      void this.stopPairing(protocol).catch((error) => {
+        console.warn(`DirectRadioService: Failed to auto-stop ${protocol} pairing: ${error.message}`);
+      });
+    }, seconds * 1000);
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
+    this.pairingTimers[protocol] = timer;
   }
 
   async start(options = {}) {
@@ -1131,6 +1297,7 @@ class DirectRadioService {
         this.zwave.pendingDsk = dsk;
         const configuredPin = trimString(this.zwave.s2DskPin || process.env.HOMEBRAIN_ZWAVE_S2_DSK_PIN);
         if (/^\d{5}$/.test(configuredPin)) {
+          this.zwave.pendingDsk = null;
           this.log('info', 'zwave', 'Z-Wave S2 DSK PIN supplied from configuration', {
             dsk
           });
@@ -1139,13 +1306,130 @@ class DirectRadioService {
         this.log('warn', 'zwave', 'Z-Wave S2 DSK PIN required', {
           dsk
         });
+        this.markZWaveDskRequired(dsk);
         console.warn(`DirectRadioService: Z-Wave S2 DSK PIN required for ${dsk}`);
+        const submittedPin = await this.waitForZWaveDskPin(dsk);
+        if (/^\d{5}$/.test(submittedPin)) {
+          this.zwave.pendingDsk = null;
+          this.log('info', 'zwave', 'Z-Wave S2 DSK PIN submitted for active inclusion', {
+            dsk
+          });
+          return submittedPin;
+        }
+        this.markPairingFailed('zwave', 'Z-Wave S2 pairing timed out waiting for the 5 digit DSK PIN.', {
+          dsk
+        });
         return false;
       },
       abort: () => {
         this.zwave.pendingDsk = null;
+        this.resolvePendingZWaveDsk(false);
+        this.markPairingFailed('zwave', 'Z-Wave inclusion was aborted before security completed.');
         this.log('warn', 'zwave', 'Z-Wave inclusion user callback aborted');
       }
+    };
+  }
+
+  markZWaveDskRequired(dsk) {
+    const session = this.activePairings.get('zwave');
+    if (!session || ['completed', 'failed', 'expired', 'stopped'].includes(session.status)) {
+      return null;
+    }
+    session.status = 'awaiting_dsk';
+    session.pendingDsk = dsk;
+    session.message = 'Z-Wave S2 security requires the 5 digit DSK PIN from the switch label or QR code.';
+    this.appendPairingEvent('zwave', {
+      kind: 'dsk_required',
+      dsk,
+      message: session.message
+    });
+    return session;
+  }
+
+  waitForZWaveDskPin(dsk) {
+    this.resolvePendingZWaveDsk(false);
+    const session = this.activePairings.get('zwave');
+    const expiresAt = Number(session?.expiresAt || 0);
+    const timeoutMs = Math.max(10_000, Math.min(120_000, expiresAt > Date.now() ? expiresAt - Date.now() : 90_000));
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        this.resolvePendingZWaveDsk(false);
+      }, timeoutMs);
+      if (typeof timeout.unref === 'function') {
+        timeout.unref();
+      }
+      this.zwave.pendingDskRequest = {
+        dsk,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + timeoutMs).toISOString(),
+        timeout,
+        resolve
+      };
+    });
+  }
+
+  resolvePendingZWaveDsk(value) {
+    const pending = this.zwave.pendingDskRequest;
+    if (!pending) {
+      return false;
+    }
+    this.zwave.pendingDskRequest = null;
+    if (pending.timeout) {
+      clearTimeout(pending.timeout);
+    }
+    pending.resolve(value);
+    return true;
+  }
+
+  submitZWaveDskPin(pin) {
+    const safePin = trimString(pin);
+    if (!/^\d{5}$/.test(safePin)) {
+      const error = new Error('Enter the 5 digit DSK PIN printed on the Z-Wave device label or QR code.');
+      error.status = 400;
+      throw error;
+    }
+
+    const hadPendingRequest = this.resolvePendingZWaveDsk(safePin);
+    this.zwave.s2DskPin = safePin;
+    this.zwave.pendingDsk = null;
+    this.markPairingActive('zwave', hadPendingRequest
+      ? 'Z-Wave S2 PIN submitted. Keep the switch powered while HomeBrain finishes the interview.'
+      : 'Z-Wave S2 PIN saved for the active inclusion attempt.');
+    this.appendPairingEvent('zwave', {
+      kind: 'dsk_pin_submitted',
+      pendingRequest: hadPendingRequest
+    });
+
+    return {
+      accepted: true,
+      pendingRequest: hadPendingRequest,
+      pairing: this.serializePairingSession(this.activePairings.get('zwave'))
+    };
+  }
+
+  serializePairingSession(session) {
+    if (!session) {
+      return null;
+    }
+    const expiresAt = Number(session.expiresAt || 0);
+    return {
+      id: session.id,
+      protocol: session.protocol,
+      mode: session.mode,
+      status: session.status,
+      startedAt: session.startedAt || null,
+      expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
+      secondsRemaining: expiresAt ? Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000)) : 0,
+      pendingDsk: session.pendingDsk || null,
+      detectedIdentity: session.detectedIdentity || null,
+      directDeviceId: session.directDeviceId || null,
+      directDeviceName: session.directDeviceName || null,
+      message: session.message || null,
+      completedAt: session.completedAt || null,
+      failedAt: session.failedAt || null,
+      expiredAt: session.expiredAt || null,
+      events: Array.isArray(session.events) ? session.events.slice(-8) : []
     };
   }
 
@@ -1645,6 +1929,7 @@ class DirectRadioService {
       identity: identity.id
     });
     this.emitDeviceUpdate(device);
+    this.completePairingSession(identity.protocol, identity, device, update?.properties?.homebrainDirect?.lastReason || 'direct device update');
     return device;
   }
 
@@ -2433,16 +2718,29 @@ class DirectRadioService {
         error.status = 503;
         throw error;
       }
+      this.clearPairingTimer('zigbee');
+      const session = this.createPairingSession('zigbee', seconds);
       this.log('info', 'zigbee', 'Opening Zigbee permit-join window', {
         durationSeconds: seconds,
-        serialPath: this.detected.zigbee?.path || null
+        serialPath: this.detected.zigbee?.path || null,
+        pairingId: session.id
       });
       await this.zigbee.controller.permitJoin(seconds);
       this.zigbee.permitJoinUntil = new Date(Date.now() + seconds * 1000).toISOString();
+      session.status = 'active';
+      session.expiresAt = Date.now() + seconds * 1000;
+      session.message = 'Zigbee permit-join is open. HomeBrain will finish as soon as a device joins or interviews.';
+      this.armPairingTimer('zigbee', session.id, seconds);
       this.log('info', 'zigbee', 'Zigbee permit-join window is open', {
-        expiresAt: this.zigbee.permitJoinUntil
+        expiresAt: this.zigbee.permitJoinUntil,
+        pairingId: session.id
       });
-      return { protocol, mode: 'permit_join', expiresAt: this.zigbee.permitJoinUntil };
+      return {
+        protocol,
+        mode: 'permit_join',
+        expiresAt: this.zigbee.permitJoinUntil,
+        pairing: this.serializePairingSession(session)
+      };
     }
 
     if (protocol === 'zwave') {
@@ -2458,24 +2756,36 @@ class DirectRadioService {
         throw error;
       }
       const zwave = require('zwave-js');
+      this.clearPairingTimer('zwave');
+      const session = this.createPairingSession('zwave', seconds);
+      this.zwave.s2DskPin = trimString(options.dskPin);
+      this.zwave.pendingDsk = null;
       this.log('info', 'zwave', 'Opening Z-Wave inclusion window', {
         durationSeconds: seconds,
-        serialPath: this.detected.zwave?.path || null
+        serialPath: this.detected.zwave?.path || null,
+        pairingId: session.id
       });
-      await controller.beginInclusion({ strategy: zwave.InclusionStrategy.Default });
-      this.zwave.inclusionUntil = new Date(Date.now() + seconds * 1000).toISOString();
-      const stopTimer = setTimeout(() => {
-        void this.stopPairing('zwave').catch((error) => {
-          console.warn(`DirectRadioService: Failed to auto-stop Z-Wave inclusion: ${error.message}`);
-        });
-      }, seconds * 1000);
-      if (typeof stopTimer.unref === 'function') {
-        stopTimer.unref();
+      try {
+        await controller.beginInclusion({ strategy: zwave.InclusionStrategy.Default });
+      } catch (error) {
+        this.markPairingFailed('zwave', error.message || 'Z-Wave inclusion failed to start.');
+        throw error;
       }
+      this.zwave.inclusionUntil = new Date(Date.now() + seconds * 1000).toISOString();
+      session.status = 'active';
+      session.expiresAt = Date.now() + seconds * 1000;
+      session.message = 'Z-Wave inclusion is open. HomeBrain will finish as soon as the controller reports a node.';
+      this.armPairingTimer('zwave', session.id, seconds);
       this.log('info', 'zwave', 'Z-Wave inclusion window is open', {
-        expiresAt: this.zwave.inclusionUntil
+        expiresAt: this.zwave.inclusionUntil,
+        pairingId: session.id
       });
-      return { protocol, mode: 'inclusion', expiresAt: this.zwave.inclusionUntil };
+      return {
+        protocol,
+        mode: 'inclusion',
+        expiresAt: this.zwave.inclusionUntil,
+        pairing: this.serializePairingSession(session)
+      };
     }
 
     const error = new Error('Protocol must be zigbee or zwave');
@@ -2624,6 +2934,7 @@ class DirectRadioService {
     }
 
     const zwave = require('zwave-js');
+    this.clearPairingTimer('zwave');
     this.log('info', 'zwave', 'Opening Z-Wave exclusion window', {
       durationSeconds: seconds,
       serialPath: this.detected.zwave?.path || null,
@@ -2647,6 +2958,7 @@ class DirectRadioService {
     if (typeof stopTimer.unref === 'function') {
       stopTimer.unref();
     }
+    this.pairingTimers.zwave = stopTimer;
     this.log('info', 'zwave', 'Z-Wave exclusion window is open', {
       expiresAt: this.zwave.exclusionUntil,
       migrationId: migration?.id || null
@@ -2661,12 +2973,20 @@ class DirectRadioService {
 
   async stopPairing(protocol = 'all') {
     if ((protocol === 'zigbee' || protocol === 'all') && this.zigbee.controller && this.zigbee.started) {
+      this.clearPairingTimer('zigbee');
       await this.zigbee.controller.permitJoin(0);
       this.zigbee.permitJoinUntil = null;
+      const session = this.activePairings.get('zigbee');
+      if (session && !['completed', 'failed', 'expired'].includes(session.status)) {
+        session.status = 'stopped';
+        session.stoppedAt = new Date().toISOString();
+        session.message = session.message || 'Zigbee pairing was stopped.';
+      }
       this.log('info', 'zigbee', 'Zigbee permit-join window closed');
     }
 
     if ((protocol === 'zwave' || protocol === 'all') && this.getZWaveController()) {
+      this.clearPairingTimer('zwave');
       const controller = this.getZWaveController();
       if (typeof controller.stopInclusion === 'function') {
         await controller.stopInclusion().catch(() => {});
@@ -2676,6 +2996,14 @@ class DirectRadioService {
       }
       this.zwave.inclusionUntil = null;
       this.zwave.exclusionUntil = null;
+      this.zwave.pendingDsk = null;
+      this.resolvePendingZWaveDsk(false);
+      const session = this.activePairings.get('zwave');
+      if (session && !['completed', 'failed', 'expired'].includes(session.status)) {
+        session.status = 'stopped';
+        session.stoppedAt = new Date().toISOString();
+        session.message = session.message || 'Z-Wave pairing was stopped.';
+      }
       this.log('info', 'zwave', 'Z-Wave inclusion/exclusion windows closed');
     }
 
@@ -3014,6 +3342,10 @@ class DirectRadioService {
           pendingDsk: this.zwave.pendingDsk,
           pairedNodeCount: zwaveNodes && typeof zwaveNodes.size === 'number' ? zwaveNodes.size : 0
         }
+      },
+      pairings: {
+        zigbee: this.serializePairingSession(this.activePairings.get('zigbee')),
+        zwave: this.serializePairingSession(this.activePairings.get('zwave'))
       },
       migrations: activeMigrations
     };

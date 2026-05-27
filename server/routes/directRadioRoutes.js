@@ -152,7 +152,8 @@ router.post('/pairing/start', async (req, res) => {
   try {
     const protocol = String(req.body?.protocol || '').trim().toLowerCase();
     const result = await directRadioService.startPairing(protocol, {
-      durationSeconds: req.body?.durationSeconds
+      durationSeconds: req.body?.durationSeconds,
+      dskPin: req.body?.dskPin
     });
     res.status(200).json({
       success: true,
@@ -161,6 +162,19 @@ router.post('/pairing/start', async (req, res) => {
     });
   } catch (error) {
     sendError(res, error, 'Failed to start direct radio pairing');
+  }
+});
+
+router.post('/pairing/zwave/dsk-pin', async (req, res) => {
+  try {
+    const result = directRadioService.submitZWaveDskPin(req.body?.pin || req.body?.dskPin);
+    res.status(200).json({
+      success: true,
+      result,
+      status: await directRadioService.getStatus()
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to submit Z-Wave DSK PIN');
   }
 });
 
