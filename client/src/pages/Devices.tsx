@@ -74,6 +74,11 @@ const SMARTTHINGS_UNKNOWN_NETWORK_TYPES = new Set([
   'unknown',
   'unknownnetworktype'
 ])
+const SMARTTHINGS_DIRECT_RADIO_NETWORK_TYPES = new Set([
+  'zigbee',
+  'zw',
+  'zwave'
+])
 const SMARTTHINGS_PHYSICAL_SWITCH_ROOM_LABEL = 'Physical Switches'
 const SMARTTHINGS_CATEGORY_LABELS: Record<string, string> = {
   airconditioner: 'Air Conditioners',
@@ -537,9 +542,7 @@ const isKnownPhysicalSmartThingsSwitch = (device: any): boolean => {
   }
 
   const networkType = getSmartThingsNetworkType(device)
-  return networkType.length > 0
-    && !SMARTTHINGS_UNKNOWN_NETWORK_TYPES.has(networkType)
-    && networkType !== 'virtual'
+  return SMARTTHINGS_DIRECT_RADIO_NETWORK_TYPES.has(networkType)
 }
 
 const hasVirtualSwitchRoomLabel = (device: any): boolean => {

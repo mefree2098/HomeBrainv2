@@ -231,6 +231,7 @@ extension DeviceItem {
         [
             name,
             room,
+            displayRoom,
             type,
             selectionSource,
             selectionSourceLabel,
@@ -304,6 +305,100 @@ extension DeviceItem {
 
         return [SelectionSourceOption(value: allSelectionSourcesValue, label: "All sources")]
             + sortedSources.map { SelectionSourceOption(value: $0, label: selectionSourceLabel($0)) }
+    }
+
+    private nonisolated static let physicalSmartThingsSwitchRoomLabel = "Physical Switches"
+    private nonisolated static let virtualSwitchRoomLabels = Set([
+        "home monitor switches",
+        "virtual switches"
+    ])
+    private nonisolated static let directRadioSmartThingsNetworkTypes = Set([
+        "zigbee",
+        "zw",
+        "zwave"
+    ])
+
+    private nonisolated static func normalizedSmartThingsValue(_ value: Any) -> String {
+        if let string = value as? String {
+            return string.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let object = value as? [String: Any] {
+            if let id = object["id"] as? String, !id.isEmpty {
+                return id.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if let capabilityId = object["capabilityId"] as? String, !capabilityId.isEmpty {
+                return capabilityId.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if let name = object["name"] as? String, !name.isEmpty {
+                return name.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            if let value = object["value"] as? String, !value.isEmpty {
+                return value.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        return ""
+    }
+
+    private nonisolated func smartThingsStringSet(keys: [String], lowercased: Bool = false) -> Set<String> {
+        let values = keys.flatMap { key in
+            properties[key] as? [Any] ?? []
+        }
+
+        return Set(
+            values
+                .map(DeviceItem.normalizedSmartThingsValue)
+                .filter { !$0.isEmpty }
+                .map { lowercased ? $0.lowercased() : $0 }
+        )
+    }
+
+    nonisolated var smartThingsDeviceNetworkType: String {
+        JSON.string(properties, "smartThingsDeviceNetworkType")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "[\\s_-]+", with: "", options: .regularExpression)
+    }
+
+    nonisolated var isSmartThingsBackedDevice: Bool {
+        let source = JSON.string(properties, "source").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return source == "smartthings"
+            || !JSON.string(properties, "smartThingsDeviceId").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !JSON.string(properties, "smartThingsId").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    nonisolated var hasSmartThingsDirectRadioNetworkType: Bool {
+        DeviceItem.directRadioSmartThingsNetworkTypes.contains(smartThingsDeviceNetworkType)
+    }
+
+    nonisolated var isKnownPhysicalSmartThingsSwitch: Bool {
+        guard isSmartThingsBackedDevice, hasSmartThingsDirectRadioNetworkType else {
+            return false
+        }
+
+        let capabilities = smartThingsStringSet(
+            keys: ["smartThingsCapabilities", "smartthingsCapabilities"]
+        )
+        let categories = smartThingsStringSet(
+            keys: ["smartThingsCategories", "smartthingsCategories"],
+            lowercased: true
+        )
+        return type.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "switch"
+            || capabilities.contains("switch")
+            || categories.contains("switch")
+    }
+
+    nonisolated var displayRoom: String {
+        let trimmedRoom = room.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedRoom.isEmpty else {
+            return "Unassigned"
+        }
+
+        if DeviceItem.virtualSwitchRoomLabels.contains(trimmedRoom.lowercased()),
+           isKnownPhysicalSmartThingsSwitch {
+            return DeviceItem.physicalSmartThingsSwitchRoomLabel
+        }
+
+        return trimmedRoom
     }
 }
 

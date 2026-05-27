@@ -110,6 +110,54 @@ test('direct radio catalog does not treat Energy Monitoring room names as Ring d
   assert.ok(plan.featureSupport.some((feature) => feature.key === 'energy' && feature.supported));
 });
 
+test('direct radio catalog honors SmartThings direct-radio network type before virtual room labels', () => {
+  const device = {
+    _id: 'cold-storage-switch',
+    name: 'Cold Storage Switch',
+    type: 'switch',
+    room: 'Virtual Switches',
+    properties: {
+      source: 'smartthings',
+      smartThingsDeviceId: 'smartthings-cold-storage-switch',
+      smartThingsDeviceNetworkType: 'ZWAVE',
+      smartThingsCapabilities: ['switch', 'refresh'],
+      smartThingsCategories: ['switch']
+    }
+  };
+
+  assert.equal(isCloudOrVirtualOnly(device), false);
+  const plan = buildMigrationPlan(device);
+  assert.equal(plan.supported, true);
+  assert.equal(plan.cloudOrVirtualOnly, false);
+  assert.equal(plan.recommendedProtocol, 'zwave');
+  assert.equal(plan.targetSource, 'homebrain-zwave');
+  assert.ok(plan.guidedSteps.some((step) => step.action === 'start_zwave_exclusion'));
+  assert.ok(!plan.warnings.some((warning) => warning.includes('cloud, virtual')));
+});
+
+test('direct radio catalog still blocks explicit SmartThings virtual network types', () => {
+  const device = {
+    _id: 'explicit-virtual-switch',
+    name: 'Explicit Virtual Switch',
+    type: 'switch',
+    room: 'Virtual Switches',
+    properties: {
+      source: 'smartthings',
+      smartThingsDeviceId: 'smartthings-explicit-virtual-switch',
+      smartThingsDeviceNetworkType: 'VIRTUAL',
+      smartThingsCapabilities: ['switch'],
+      smartThingsCategories: ['switch']
+    }
+  };
+
+  assert.equal(isCloudOrVirtualOnly(device), true);
+  const plan = buildMigrationPlan(device);
+  assert.equal(plan.supported, false);
+  assert.equal(plan.cloudOrVirtualOnly, true);
+  assert.deepEqual(plan.guidedSteps, []);
+  assert.equal(plan.instructionProfile, null);
+});
+
 test('direct radio catalog excludes non-radio SmartThings network types', () => {
   const device = {
     _id: 'hub-1',

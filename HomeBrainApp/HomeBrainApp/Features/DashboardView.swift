@@ -1675,7 +1675,7 @@ struct DashboardView: View {
                         Picker("Device", selection: $pendingWidgetDeviceID) {
                             Text("Select a device").tag("")
                             ForEach(filteredPendingDevices) { device in
-                                Text("\(device.name) · \(device.room) · \(device.selectionSourceLabel)").tag(device.id)
+                                Text("\(device.name) · \(device.displayRoom) · \(device.selectionSourceLabel)").tag(device.id)
                             }
                         }
 
@@ -1722,7 +1722,7 @@ struct DashboardView: View {
                                         VStack(alignment: .leading, spacing: 2) {
                                             Text(device.name)
                                                 .foregroundStyle(HBPalette.textPrimary)
-                                            Text("\(device.room) • \(device.type)")
+                                            Text("\(device.displayRoom) • \(device.type)")
                                                 .font(.system(size: 12, weight: .medium, design: .rounded))
                                                 .foregroundStyle(HBPalette.textSecondary)
                                             Text(device.selectionSourceLabel)
@@ -5558,8 +5558,8 @@ struct DashboardView: View {
                             .font(.system(size: compact ? 17 : (useLandscapeCompactLayout ? 20 : 22), weight: .bold, design: .rounded))
                             .foregroundStyle(HBPalette.textPrimary)
                             .lineLimit(2)
-                        if !device.room.isEmpty {
-                            Text(device.room)
+                        if !device.displayRoom.isEmpty {
+                            Text(device.displayRoom)
                                 .font(.system(size: compact ? 12 : (useLandscapeCompactLayout ? 13 : 15), weight: .medium, design: .rounded))
                                 .foregroundStyle(HBPalette.textSecondary)
                         }
@@ -6047,7 +6047,7 @@ struct DashboardView: View {
                             .lineLimit(2)
                             .minimumScaleFactor(0.68)
                             .frame(maxWidth: .infinity, minHeight: 38, alignment: .topLeading)
-                        Text(device.room)
+                        Text(device.displayRoom)
                             .font(.system(size: 11, weight: .medium, design: .rounded))
                             .foregroundStyle(HBPalette.textSecondary)
                             .lineLimit(1)
