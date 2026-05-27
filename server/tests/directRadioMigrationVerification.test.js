@@ -87,6 +87,49 @@ test('Z-Wave migration observes controller status reports that are awaited inter
   assert.equal(migration.exclusionNodeId, 42);
 });
 
+test('SmartThings-backed Z-Wave migration exclusion verifies only after SmartThings removes the device', async () => {
+  const service = createService();
+  const migration = {
+    id: 'migration-smartthings-exclusion',
+    sourceDeviceId: DEVICE_ID,
+    smartThingsDeviceId: 'smartthings-device-1',
+    protocol: 'zwave',
+    status: 'awaiting_smartthings_exclusion',
+    exclusionStatus: 'waiting_smartthings',
+    exclusionExpiresAt: Date.now() + 60_000,
+    expiresAt: Date.now() + 60_000,
+    startedAt: new Date().toISOString()
+  };
+  service.activeMigrations.set(migration.id, migration);
+
+  service.smartThingsService = {
+    getDevice: async () => ({ deviceId: migration.smartThingsDeviceId })
+  };
+  let result = await service.verifyMigrationStep({
+    migrationId: migration.id,
+    phase: 'physical_exclusion'
+  });
+  assert.equal(result.verification.status, 'pending');
+  assert.equal(result.verification.canAdvance, false);
+
+  service.smartThingsService = {
+    getDevice: async () => {
+      const error = new Error('SmartThings device not found');
+      error.status = 404;
+      throw error;
+    }
+  };
+  result = await service.verifyMigrationStep({
+    migrationId: migration.id,
+    phase: 'physical_exclusion'
+  });
+  assert.equal(result.verification.status, 'verified');
+  assert.equal(result.verification.canAdvance, true);
+  assert.equal(migration.status, 'excluded');
+  assert.ok(migration.exclusionVerifiedAt);
+  assert.ok(migration.smartThingsRemovalVerifiedAt);
+});
+
 test('direct-radio migration inclusion does not advance until HomeBrain completes the native device record', async () => {
   const service = createService();
   const migration = {

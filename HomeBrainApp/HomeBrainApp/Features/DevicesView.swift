@@ -1885,7 +1885,7 @@ struct DevicesView: View {
     private func migrationActionMessage(for step: DirectRadioMigrationGuidedStepRecord, protocolName: String) -> String {
         switch step.action {
         case "start_zwave_exclusion":
-            return "HomeBrain opened Z-Wave exclusion on the Zooz stick. Trigger the device remove/exclude action below; HomeBrain will verify the controller response before continuing."
+            return "HomeBrain is watching SmartThings for removal. Use the SmartThings app or hub Z-Wave exclusion, then verify before HomeBrain opens native inclusion."
         case "start_direct_migration":
             return protocolName == "zigbee"
                 ? "HomeBrain opened Zigbee pairing. Complete the device action below; HomeBrain will verify discovery before continuing."
@@ -1982,7 +1982,7 @@ struct DevicesView: View {
 
         pendingMigrationDeviceIds.insert(device.id)
         migrationFeedback[device.id] = protocolName == "zwave"
-            ? "Opening guided Z-Wave exclusion first."
+            ? "Preparing SmartThings Z-Wave exclusion verification."
             : "Opening guided Zigbee pairing."
 
         defer {
@@ -2005,7 +2005,10 @@ struct DevicesView: View {
         }
 
         do {
-            let response = try await session.apiClient.get("/api/direct-radios/migration-plan/\(device.id)?protocol=\(protocolName)")
+            let response = try await session.apiClient.get(
+                "/api/direct-radios/migration-plan/\(device.id)",
+                query: [URLQueryItem(name: "protocol", value: protocolName)]
+            )
             let root = JSON.object(response)
             let selectedPlan = DirectRadioMigrationPlanRecord.from(JSON.object(root["plan"]))
             guard !selectedPlan.guidedSteps.isEmpty else {
@@ -2888,7 +2891,7 @@ private struct DirectRadioMigrationPlanRecord {
             return "HomeBrain will not open an exclusion, pairing, or migration window for this device. Keep it on its current integration unless you replace it with native radio hardware."
         }
         if normalizedRecommendedProtocol == "zwave" {
-            return "Z-Wave transition starts with exclusion from the old network. HomeBrain opens exclusion on the Zooz stick; you trigger the physical exclude/remove action on the device before inclusion."
+            return "Z-Wave transition starts with exclusion from the SmartThings hub. HomeBrain waits for SmartThings removal before opening native inclusion on the Zooz stick."
         }
         return "HomeBrain keeps the SmartThings-backed record until you verify the native HomeBrain replacement. Confirm battery, state, and controls before retiring SmartThings."
     }
@@ -2915,7 +2918,7 @@ private struct DirectRadioMigrationPlanRecord {
     nonisolated static func preview(for device: DeviceItem, protocolName: String = "unknown") -> DirectRadioMigrationPlanRecord {
         let selectedProtocol = protocolName == "zigbee" || protocolName == "zwave" ? protocolName : "unknown"
         let firstAction = selectedProtocol == "zwave" ? "start_zwave_exclusion" : "start_direct_migration"
-        let firstTitle = selectedProtocol == "zwave" ? "Open HomeBrain Z-Wave exclusion" : "Open HomeBrain Zigbee pairing"
+        let firstTitle = selectedProtocol == "zwave" ? "Prepare SmartThings exclusion check" : "Open HomeBrain Zigbee pairing"
         let secondTitle = selectedProtocol == "zwave" ? "Trigger exclusion on \(device.name)" : "Put \(device.name) into Zigbee pairing mode"
         let guidedSteps = [
             DirectRadioMigrationGuidedStepRecord(

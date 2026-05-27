@@ -153,7 +153,7 @@ function getGuidedMigrationSteps(plan: DirectRadioMigrationPlan | null | undefin
 
 function getMigrationActionMessage(step: DirectRadioMigrationGuidedStep, protocol: "zigbee" | "zwave") {
   if (step.action === "start_zwave_exclusion") {
-    return "HomeBrain opened Z-Wave exclusion on the Zooz stick. Trigger the device remove/exclude action below; HomeBrain will verify the controller response before continuing."
+    return "HomeBrain is watching SmartThings for removal. Use the SmartThings app or hub Z-Wave exclusion, then verify before HomeBrain opens native inclusion."
   }
   if (step.action === "start_direct_migration") {
     return protocol === "zigbee"
@@ -2718,7 +2718,7 @@ export function DeviceDetailsDialog({
                                 {!migrationPlan.supported
                                   ? "HomeBrain will not open an exclusion, pairing, or migration window for this device. Keep it on its current integration unless you replace it with native radio hardware."
                                   : recommendedProtocol === "zwave"
-                                  ? "Z-Wave transition starts with exclusion from the old network. HomeBrain opens exclusion on the Zooz stick; you still trigger the physical exclude/remove action on the device before including it natively."
+                                  ? "Z-Wave transition starts with exclusion from the SmartThings hub. HomeBrain waits for SmartThings removal before opening native inclusion on the Zooz stick."
                                   : "HomeBrain does not delete the SmartThings device during this workflow. Verify native HomeBrain state, battery, and controls first, then retire or hide the old SmartThings-backed entry."}
                               </div>
 

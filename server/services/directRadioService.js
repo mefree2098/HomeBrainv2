@@ -1727,7 +1727,7 @@ class DirectRadioService {
 
     if (targetProtocol === 'zwave') {
       if (!migration || migration.sourceDeviceId !== safeDeviceId || !migration.exclusionVerifiedAt) {
-        const error = new Error('Z-Wave exclusion has not been verified yet. Keep this workflow on the exclusion step until HomeBrain receives the controller confirmation.');
+        const error = new Error('Z-Wave exclusion has not been verified yet. Keep this workflow on the SmartThings exclusion step until HomeBrain verifies that SmartThings removed the device.');
         error.status = 409;
         throw error;
       }
@@ -1809,7 +1809,81 @@ class DirectRadioService {
     };
   }
 
-  verifyMigrationExclusion(migration) {
+  async verifySmartThingsExclusion(migration) {
+    const smartThingsDeviceId = trimString(migration.smartThingsDeviceId);
+    if (!smartThingsDeviceId) {
+      return this.buildMigrationVerificationResult(migration, {
+        phase: 'physical_exclusion',
+        status: 'failed',
+        message: 'This migration does not have a SmartThings device ID to verify against.',
+        guidance: [
+          'Refresh the device details and restart the guided migration from the SmartThings-backed device record.'
+        ]
+      });
+    }
+
+    const smartThings = this.smartThingsService || require('./smartThingsService');
+    try {
+      await smartThings.getDevice(smartThingsDeviceId);
+    } catch (error) {
+      if ([404, 410].includes(Number(error.status))) {
+        const timestamp = new Date().toISOString();
+        migration.status = 'excluded';
+        migration.exclusionStatus = 'verified';
+        migration.exclusionVerifiedAt = timestamp;
+        migration.smartThingsRemovalVerifiedAt = timestamp;
+        migration.updatedAt = timestamp;
+        migration.expiresAt = Math.max(Number(migration.expiresAt || 0), Date.now() + 15 * 60 * 1000);
+        this.log('info', 'zwave', 'SmartThings Z-Wave exclusion verified by missing SmartThings device record', {
+          migrationId: migration.id,
+          deviceId: migration.sourceDeviceId,
+          smartThingsDeviceId
+        });
+        return this.buildMigrationVerificationResult(migration, {
+          phase: 'physical_exclusion',
+          status: 'verified',
+          message: 'SmartThings no longer reports this Z-Wave device. HomeBrain can now open native Z-Wave inclusion.'
+        });
+      }
+
+      return this.buildMigrationVerificationResult(migration, {
+        phase: 'physical_exclusion',
+        status: 'pending',
+        message: `HomeBrain could not verify SmartThings exclusion yet: ${error.message}`,
+        guidance: [
+          'Open the SmartThings app and remove the device from SmartThings, or use the hub Z-Wave exclusion utility.',
+          'Trigger the physical exclude action at the switch while the SmartThings hub is in exclusion/removal mode.',
+          'Then tap Verify SmartThings exclusion again.'
+        ]
+      });
+    }
+
+    const expiresAt = Number(migration.exclusionExpiresAt || migration.expiresAt || 0);
+    const timedOut = expiresAt > 0 && expiresAt <= Date.now();
+    return this.buildMigrationVerificationResult(migration, {
+      phase: 'physical_exclusion',
+      status: timedOut ? 'failed' : 'pending',
+      message: timedOut
+        ? 'SmartThings still reports this device after the exclusion window. HomeBrain will not start native inclusion yet.'
+        : 'SmartThings still reports this device. Stay on this step until SmartThings removes it from the old Z-Wave network.',
+      guidance: [
+        'In SmartThings, delete the device so the SmartThings hub enters Z-Wave exclusion, or open Hub > Z-Wave utilities > Z-Wave exclusion.',
+        'At the switch, tap the local on/up paddle once. If it does not remove, toggle on/up and off/down quickly 3 times.',
+        'Do not start HomeBrain inclusion until SmartThings removal verifies.'
+      ],
+      expiresAt
+    });
+  }
+
+  async verifyMigrationExclusion(migration) {
+    if (
+      migration.status === 'awaiting_smartthings_exclusion'
+      || migration.exclusionStatus === 'waiting_smartthings'
+      || migration.smartThingsDeviceId
+    ) {
+      return this.verifySmartThingsExclusion(migration);
+    }
+
     if (migration.exclusionVerifiedAt) {
       return this.buildMigrationVerificationResult(migration, {
         phase: 'physical_exclusion',
@@ -1983,7 +2057,7 @@ class DirectRadioService {
     const normalizedPhase = normalizeSourceText(phase);
     let verification;
     if (normalizedPhase === 'physical_exclusion' || normalizedPhase === 'exclusion') {
-      verification = this.verifyMigrationExclusion(migration);
+      verification = await this.verifyMigrationExclusion(migration);
     } else if (['physical_inclusion', 'physical_pairing', 'permit_join', 'inclusion'].includes(normalizedPhase)) {
       verification = this.verifyMigrationInclusion(migration);
     } else if (normalizedPhase === 'verification') {
@@ -2070,13 +2144,76 @@ class DirectRadioService {
   }
 
   async startExclusion(protocol, options = {}) {
-    await this.start();
     if (protocol !== 'zwave') {
       const error = new Error('Only Z-Wave supports controller-driven exclusion.');
       error.status = 400;
       throw error;
     }
 
+    const seconds = boundedSeconds(options.durationSeconds);
+    const safeDeviceId = trimString(options.deviceId) ? normalizeObjectId(options.deviceId) : '';
+    if (safeDeviceId) {
+      const device = await Device.findById(safeDeviceId).lean();
+      if (!device) {
+        const error = new Error('Device not found');
+        error.status = 404;
+        throw error;
+      }
+      const plan = buildMigrationPlan(device, { protocol: 'zwave' });
+      if (!plan.supported) {
+        const error = new Error('This SmartThings device looks cloud-only or virtual and cannot be migrated to a direct radio.');
+        error.status = 400;
+        throw error;
+      }
+
+      const smartThingsDeviceId = trimString(device.properties?.smartThingsDeviceId);
+      if (smartThingsDeviceId) {
+        const requestedMigrationId = trimString(options.migrationId);
+        const existingMigration = requestedMigrationId
+          ? this.activeMigrations.get(requestedMigrationId)
+          : Array.from(this.activeMigrations.values())
+            .filter((entry) => entry.sourceDeviceId === safeDeviceId && entry.protocol === 'zwave')
+            .filter((entry) => !['completed'].includes(entry.status))
+            .sort((left, right) => (
+              new Date(right.updatedAt || right.startedAt || 0).getTime()
+              - new Date(left.updatedAt || left.startedAt || 0).getTime()
+            ))[0];
+        const now = Date.now();
+        const migration = existingMigration || {
+          id: requestedMigrationId || `migration-${now}-${crypto.randomBytes(4).toString('hex')}`,
+          sourceDeviceId: String(device._id),
+          smartThingsDeviceId,
+          protocol: 'zwave',
+          startedAt: new Date(now).toISOString()
+        };
+        Object.assign(migration, {
+          sourceDeviceId: String(device._id),
+          smartThingsDeviceId,
+          protocol: 'zwave',
+          status: 'awaiting_smartthings_exclusion',
+          exclusionStatus: 'waiting_smartthings',
+          exclusionStartedAt: new Date(now).toISOString(),
+          exclusionExpiresAt: now + seconds * 1000,
+          expiresAt: now + seconds * 1000,
+          plan,
+          updatedAt: new Date(now).toISOString()
+        });
+        this.activeMigrations.set(migration.id, migration);
+        this.log('info', 'zwave', 'Prepared SmartThings Z-Wave exclusion verification', {
+          migrationId: migration.id,
+          deviceId: migration.sourceDeviceId,
+          smartThingsDeviceId
+        });
+        return {
+          protocol,
+          mode: 'smartthings_exclusion',
+          expiresAt: new Date(migration.exclusionExpiresAt).toISOString(),
+          migration
+        };
+      }
+    }
+
+    await this.start();
     const controller = this.getZWaveController();
     if (!controller || !this.zwave.started) {
       this.log('warn', 'zwave', 'Cannot open Z-Wave exclusion because the controller is not ready', {
@@ -2088,9 +2225,7 @@ class DirectRadioService {
       throw error;
     }
 
-    const seconds = boundedSeconds(options.durationSeconds);
     let migration = null;
-    const safeDeviceId = trimString(options.deviceId) ? normalizeObjectId(options.deviceId) : '';
     if (safeDeviceId) {
       const device = await Device.findById(safeDeviceId).lean();
       if (!device) {
@@ -2488,7 +2623,7 @@ class DirectRadioService {
     const zwaveNodes = this.getZWaveController()?.nodes;
     const activeMigrations = Array.from(this.activeMigrations.values())
       .filter((migration) => (
-        ['excluding', 'excluded', 'pairing', 'exclusion_failed', 'pairing_failed'].includes(migration.status)
+        ['awaiting_smartthings_exclusion', 'excluding', 'excluded', 'pairing', 'exclusion_failed', 'pairing_failed'].includes(migration.status)
         && (Number(migration.expiresAt || 0) > Date.now() || Number(migration.exclusionExpiresAt || 0) > Date.now() || migration.status === 'excluded')
       ));
     const zigbeePortDetails = this.getDetectedPortDetails('zigbee');

@@ -248,11 +248,22 @@ final class APIClient {
             return nil
         }
 
-        let basePath = components.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        let normalizedPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let pathParts = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        let requestPath = pathParts.first.map(String.init) ?? ""
+        let inlineQueryItems: [URLQueryItem]
+        if pathParts.count > 1 {
+            inlineQueryItems = URLComponents(string: "?\(String(pathParts[1]))")?.queryItems ?? []
+        } else {
+            inlineQueryItems = []
+        }
+
+        let basePath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let normalizedPath = requestPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let pathComponents = [basePath, normalizedPath].filter { !$0.isEmpty }
-        components.percentEncodedPath = pathComponents.isEmpty ? "" : "/\(pathComponents.joined(separator: "/"))"
-        components.queryItems = query.isEmpty ? nil : query
+        components.path = pathComponents.isEmpty ? "" : "/\(pathComponents.joined(separator: "/"))"
+
+        let queryItems = inlineQueryItems + query
+        components.queryItems = queryItems.isEmpty ? nil : queryItems
 
         return components.url
     }

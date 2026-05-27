@@ -480,7 +480,7 @@ function getZWavePhysicalInstructions(device, features = new Set()) {
         }),
         exclusion: [
           `Remove the interior cover on ${name} and keep the door open with the lock powered.`,
-          'After HomeBrain opens exclusion, press and release interior button A once. On older SmartCode models this may be labeled Program.',
+          'After SmartThings starts deletion or hub Z-Wave exclusion, press and release interior button A once. On older SmartCode models this may be labeled Program.',
           'Wait for the lock status LED or keypad to report success before moving to inclusion.'
         ],
         inclusion: [
@@ -549,7 +549,7 @@ function getZWavePhysicalInstructions(device, features = new Set()) {
       profile: instructionProfile('zwave-garage-controller', 'Z-Wave garage controller', 'medium'),
       exclusion: [
         `Stand near ${name} and locate the Z-Wave/link button on the controller module.`,
-        'After HomeBrain opens exclusion, press and release the Z-Wave/link button once. Many Linear/GoControl garage modules beep once when the command is accepted.'
+        'After SmartThings starts deletion or hub Z-Wave exclusion, press and release the Z-Wave/link button once. Many Linear/GoControl garage modules beep once when the command is accepted.'
       ],
       inclusion: [
         `Keep ${name}'s controller module powered and near the Zooz stick if possible.`,
@@ -563,7 +563,7 @@ function getZWavePhysicalInstructions(device, features = new Set()) {
       profile: instructionProfile('zwave-switch-dimmer-outlet', 'Z-Wave switch, dimmer, outlet, or meter', 'medium'),
       exclusion: [
         `Go to ${name} and identify the local paddle, switch, service button, or Z-Wave button.`,
-        'After HomeBrain opens exclusion, tap the local on/up paddle once. If it does not exclude, toggle on/up and off/down quickly 3 times; many Zooz/GE/Jasco style devices use that sequence.',
+        'After SmartThings starts deletion or hub Z-Wave exclusion, tap the local on/up paddle once. If it does not exclude, toggle on/up and off/down quickly 3 times; many Zooz/GE/Jasco style devices use that sequence.',
         'For plug-in modules, press the physical button once or three times quickly if one tap does not work.'
       ],
       inclusion: [
@@ -578,7 +578,7 @@ function getZWavePhysicalInstructions(device, features = new Set()) {
     profile: instructionProfile('zwave-generic', 'Generic Z-Wave device', 'low'),
     exclusion: [
       `Put ${name} near the Zooz stick if it is portable or battery powered.`,
-      'After HomeBrain opens exclusion, press the device Z-Wave, learn, program, link, or action button once. If the device is a wall control, try the on/up paddle once, then the quick 3-toggle sequence if needed.'
+      'After SmartThings starts deletion or hub Z-Wave exclusion, press the device Z-Wave, learn, program, link, or action button once. If the device is a wall control, try the on/up paddle once, then the quick 3-toggle sequence if needed.'
     ],
     inclusion: [
       `Keep ${name} powered and awake while HomeBrain inclusion is open.`,
@@ -670,25 +670,28 @@ function buildGuidedMigrationSteps(protocol, device) {
       guidedSteps: [
         buildGuidedStep({
           id: 'start-homebrain-zwave-exclusion',
-          title: 'Open HomeBrain Z-Wave exclusion',
+          title: 'Prepare SmartThings exclusion check',
           phase: 'exclusion',
           protocol: 'zwave',
           action: 'start_zwave_exclusion',
           automatic: true,
           durationSeconds: 120,
           instructions: [
-            'HomeBrain will put the Zooz ZST39 controller into Z-Wave exclusion mode.',
-            'Do this even if the device is still listed in SmartThings; Z-Wave exclusion clears the device network link before HomeBrain inclusion.'
+            'HomeBrain will watch SmartThings for removal of this Z-Wave device.',
+            'Start exclusion from the SmartThings app or SmartThings hub before HomeBrain opens native inclusion.'
           ],
-          confirmLabel: 'Start exclusion'
+          confirmLabel: 'Prepare exclusion check'
         }),
         buildGuidedStep({
           id: 'trigger-device-zwave-exclusion',
-          title: `Trigger exclusion on ${name}`,
+          title: `Remove ${name} from SmartThings`,
           phase: 'physical_exclusion',
           protocol: 'zwave',
-          instructions: guidance.exclusion,
-          confirmLabel: 'Verify exclusion'
+          instructions: [
+            'In SmartThings, delete this device so the SmartThings hub enters Z-Wave exclusion, or open Hub > Z-Wave utilities > Z-Wave exclusion.',
+            ...guidance.exclusion
+          ],
+          confirmLabel: 'Verify SmartThings exclusion'
         }),
         buildGuidedStep({
           id: 'start-homebrain-zwave-inclusion',
