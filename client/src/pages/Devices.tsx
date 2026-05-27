@@ -74,6 +74,7 @@ const SMARTTHINGS_UNKNOWN_NETWORK_TYPES = new Set([
   'unknown',
   'unknownnetworktype'
 ])
+const SMARTTHINGS_PHYSICAL_SWITCH_ROOM_LABEL = 'Physical Switches'
 const SMARTTHINGS_CATEGORY_LABELS: Record<string, string> = {
   airconditioner: 'Air Conditioners',
   airpurifier: 'Air Purifiers',
@@ -483,13 +484,17 @@ const isSmartThingsCameraLike = (device: any): boolean => {
     || hasAnySmartThingsCapability(device, SMARTTHINGS_CAMERA_CAPABILITIES)
 }
 
-const isSmartThingsSwitchLike = (device: any): boolean => {
-  return isSmartThingsBackedDevice(device) && (
-    device?.type === 'switch'
-    || hasSmartThingsCapability(device, 'switch')
+const hasSmartThingsSwitchCapabilityOrCategory = (device: any): boolean => {
+  return hasSmartThingsCapability(device, 'switch')
     || hasSmartThingsCapability(device, 'switchLevel')
     || hasSmartThingsCategory(device, 'switch')
     || (hasSmartThingsCategory(device, 'light') && hasSmartThingsCapability(device, 'switch'))
+}
+
+const isSmartThingsSwitchLike = (device: any): boolean => {
+  return isSmartThingsBackedDevice(device) && (
+    device?.type === 'switch'
+    || hasSmartThingsSwitchCapabilityOrCategory(device)
   )
 }
 
@@ -524,6 +529,33 @@ const isSmartThingsVirtualSwitch = (device: any): boolean => {
       && normalizeSmartThingsValue(device?.properties?.smartThingsManufacturer).toLowerCase() === 'smartthingscommunity'
       && hasOnlySmartThingsCapabilities(device, ['switch', 'refresh'])
     )
+}
+
+const isKnownPhysicalSmartThingsSwitch = (device: any): boolean => {
+  if (!isSmartThingsBackedDevice(device) || !hasSmartThingsSwitchCapabilityOrCategory(device)) {
+    return false
+  }
+
+  const networkType = getSmartThingsNetworkType(device)
+  return networkType.length > 0
+    && !SMARTTHINGS_UNKNOWN_NETWORK_TYPES.has(networkType)
+    && networkType !== 'virtual'
+}
+
+const hasVirtualSwitchRoomLabel = (device: any): boolean => {
+  const roomDescriptor = getDeviceRoomDescriptor(device)
+  return roomDescriptor.includes('virtual switch')
+    || roomDescriptor.includes('home monitor switches')
+}
+
+const getDeviceDisplayRoom = (device: any): string => {
+  const room = (device?.room || '').toString().trim()
+
+  if (room && hasVirtualSwitchRoomLabel(device) && isKnownPhysicalSmartThingsSwitch(device)) {
+    return SMARTTHINGS_PHYSICAL_SWITCH_ROOM_LABEL
+  }
+
+  return room || 'Unassigned'
 }
 
 const getDeviceDisplayTypeLabel = (device: any): string => {
@@ -916,7 +948,7 @@ export function Devices({
         return
       }
 
-      const roomName = device.room || 'Unassigned'
+      const roomName = getDeviceDisplayRoom(device)
       const existing = roomMap.get(roomName)
       if (existing) {
         existing.push(device)
@@ -1610,7 +1642,7 @@ export function Devices({
   const matchesDeviceFilters = (device: any) => {
     const lowerSearch = searchTerm.toLowerCase()
     const deviceName = (device?.name || '').toString().toLowerCase()
-    const deviceRoom = (device?.room || '').toString().toLowerCase()
+    const deviceRoom = getDeviceDisplayRoom(device).toLowerCase()
     const matchesSearch = deviceName.includes(lowerSearch) || deviceRoom.includes(lowerSearch)
     const matchesType = matchesDeviceTypeFilter(device, filterType)
     const matchesSource = deviceMatchesSourceFilter(device, filterSource)
@@ -1625,7 +1657,7 @@ export function Devices({
 
     return [...deviceList].sort((a: any, b: any) => {
       const sourceCompare = getDeviceSource(a).localeCompare(getDeviceSource(b))
-      const roomCompare = (a?.room || '').toString().localeCompare((b?.room || '').toString())
+      const roomCompare = getDeviceDisplayRoom(a).localeCompare(getDeviceDisplayRoom(b))
       const nameCompare = (a?.name || '').toString().localeCompare((b?.name || '').toString())
 
       if (sortMode === 'source') {
@@ -1812,7 +1844,7 @@ export function Devices({
               </div>
               <div className="min-w-0 space-y-1">
                 <CardTitle className="break-words text-base leading-tight sm:text-lg">{device.name}</CardTitle>
-                <p className="text-sm text-muted-foreground">{device.room || "Unassigned"}</p>
+                <p className="text-sm text-muted-foreground">{getDeviceDisplayRoom(device)}</p>
                 <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                   <span className={`h-2 w-2 rounded-full ${device.isOnline === false ? 'bg-amber-400' : 'bg-emerald-400'}`} />
                   {device.isOnline === false ? "Offline" : "Online"}
@@ -2064,7 +2096,7 @@ export function Devices({
                           <div className="min-w-0">
                             <h3 className="break-words font-medium">{device.name}</h3>
                             <p className="text-sm text-muted-foreground">
-                              {device.room} • {getDeviceDisplayTypeLabel(device)} • {getDeviceSourceLabel(getDeviceSource(device))}
+                              {getDeviceDisplayRoom(device)} • {getDeviceDisplayTypeLabel(device)} • {getDeviceSourceLabel(getDeviceSource(device))}
                             </p>
                           </div>
                         </div>
