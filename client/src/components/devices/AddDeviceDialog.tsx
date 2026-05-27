@@ -169,6 +169,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
   const [zwaveDskPin, setZwaveDskPin] = useState("")
   const [submittingDsk, setSubmittingDsk] = useState(false)
   const [repairingZWaveNodeId, setRepairingZWaveNodeId] = useState<number | null>(null)
+  const [zwaveControllerNodeIds, setZwaveControllerNodeIds] = useState<Set<number> | null>(null)
   const [matterSetupCode, setMatterSetupCode] = useState("")
   const [matterTransport, setMatterTransport] = useState<MatterTransport>("thread")
   const [matterKnownAddress, setMatterKnownAddress] = useState("")
@@ -201,15 +202,54 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       setZwaveDskPin("")
       setSubmittingDsk(false)
       setRepairingZWaveNodeId(null)
+      setZwaveControllerNodeIds(null)
     }
   }, [open])
 
+  const updateZWaveControllerNodes = (nodes: Array<{ id?: number | null; isControllerNode?: boolean }> | undefined) => {
+    const nodeIds = new Set(
+      (Array.isArray(nodes) ? nodes : [])
+        .filter((node) => node && node.isControllerNode !== true)
+        .map((node) => Number(node.id))
+        .filter((nodeId) => Number.isFinite(nodeId) && nodeId > 0)
+    )
+    setZwaveControllerNodeIds(nodeIds)
+  }
+
+  useEffect(() => {
+    if (!open || protocol !== "zwave") {
+      return
+    }
+
+    let cancelled = false
+    const loadNodes = async () => {
+      try {
+        const response = await getDirectRadioStatus()
+        if (!cancelled) {
+          updateZWaveControllerNodes(response.status.controllers.zwave.nodes)
+        }
+      } catch (_error) {
+        if (!cancelled) {
+          setZwaveControllerNodeIds(new Set())
+        }
+      }
+    }
+
+    void loadNodes()
+    return () => {
+      cancelled = true
+    }
+  }, [open, protocol])
+
   const zwaveRepairCandidates = useMemo(
     () => devices
-      .filter(isIncompleteZWaveDevice)
+      .filter((device) => {
+        const nodeId = getZWaveNodeId(device)
+        return isIncompleteZWaveDevice(device) && nodeId !== null && zwaveControllerNodeIds?.has(nodeId)
+      })
       .sort((left, right) => (getZWaveNodeId(right) || 0) - (getZWaveNodeId(left) || 0))
       .slice(0, 4),
-    [devices]
+    [devices, zwaveControllerNodeIds]
   )
 
   useEffect(() => {
@@ -259,6 +299,9 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
         const response = await getDirectRadioStatus()
         if (cancelled) {
           return
+        }
+        if (activeProtocol === "zwave") {
+          updateZWaveControllerNodes(response.status.controllers.zwave.nodes)
         }
         const pairing = response.status.pairings?.[activeProtocol as DirectRadioProtocol] || null
         setCurrentPairing(pairing)
