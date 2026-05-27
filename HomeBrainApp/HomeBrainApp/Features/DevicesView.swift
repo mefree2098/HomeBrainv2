@@ -1885,10 +1885,10 @@ struct DevicesView: View {
     private func migrationActionMessage(for step: DirectRadioMigrationGuidedStepRecord, protocolName: String) -> String {
         switch step.action {
         case "start_zwave_exclusion":
-            return "HomeBrain is watching SmartThings for removal. Use the SmartThings app or hub Z-Wave exclusion, then verify before HomeBrain opens native inclusion."
+            return "HomeBrain requested SmartThings removal over API and is watching for removal, an exclusion-counter change, or OFFLINE health before opening native inclusion."
         case "start_direct_migration":
             return protocolName == "zigbee"
-                ? "HomeBrain opened Zigbee pairing. Complete the device action below; HomeBrain will verify discovery before continuing."
+                ? "HomeBrain requested SmartThings removal and opened Zigbee pairing. Complete the device action below; HomeBrain will verify discovery before continuing."
                 : "HomeBrain opened Z-Wave inclusion. Complete the device action below; HomeBrain will verify the new node before continuing."
         default:
             return "Complete the current device step, then continue."
@@ -1982,7 +1982,7 @@ struct DevicesView: View {
 
         pendingMigrationDeviceIds.insert(device.id)
         migrationFeedback[device.id] = protocolName == "zwave"
-            ? "Preparing SmartThings Z-Wave exclusion verification."
+            ? "Requesting SmartThings Z-Wave removal."
             : "Opening guided Zigbee pairing."
 
         defer {
@@ -2918,7 +2918,7 @@ private struct DirectRadioMigrationPlanRecord {
     nonisolated static func preview(for device: DeviceItem, protocolName: String = "unknown") -> DirectRadioMigrationPlanRecord {
         let selectedProtocol = protocolName == "zigbee" || protocolName == "zwave" ? protocolName : "unknown"
         let firstAction = selectedProtocol == "zwave" ? "start_zwave_exclusion" : "start_direct_migration"
-        let firstTitle = selectedProtocol == "zwave" ? "Prepare SmartThings exclusion check" : "Open HomeBrain Zigbee pairing"
+        let firstTitle = selectedProtocol == "zwave" ? "Start SmartThings Z-Wave removal" : "Open HomeBrain Zigbee pairing"
         let secondTitle = selectedProtocol == "zwave" ? "Trigger exclusion on \(device.name)" : "Put \(device.name) into Zigbee pairing mode"
         let guidedSteps = [
             DirectRadioMigrationGuidedStepRecord(

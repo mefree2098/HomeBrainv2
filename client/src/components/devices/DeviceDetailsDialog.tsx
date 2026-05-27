@@ -153,11 +153,11 @@ function getGuidedMigrationSteps(plan: DirectRadioMigrationPlan | null | undefin
 
 function getMigrationActionMessage(step: DirectRadioMigrationGuidedStep, protocol: "zigbee" | "zwave") {
   if (step.action === "start_zwave_exclusion") {
-    return "HomeBrain is watching SmartThings for removal. Use the SmartThings app or hub Z-Wave exclusion, then verify before HomeBrain opens native inclusion."
+    return "HomeBrain requested SmartThings removal over API and is watching for removal, an exclusion-counter change, or OFFLINE health before opening native inclusion."
   }
   if (step.action === "start_direct_migration") {
     return protocol === "zigbee"
-      ? "HomeBrain opened Zigbee pairing. Complete the device action below; HomeBrain will verify discovery before continuing."
+      ? "HomeBrain requested SmartThings removal and opened Zigbee pairing. Complete the device action below; HomeBrain will verify discovery before continuing."
       : "HomeBrain opened Z-Wave inclusion. Complete the device action below; HomeBrain will verify the new node before continuing."
   }
   return "Complete the current device step, then continue."
