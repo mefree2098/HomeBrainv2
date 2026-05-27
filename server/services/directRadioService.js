@@ -88,6 +88,120 @@ function normalizeSourceText(value) {
   return trimString(value).toLowerCase();
 }
 
+function normalizeSmartThingsState(value) {
+  return trimString(value).toUpperCase();
+}
+
+function isSmartThingsDeviceGoneError(error) {
+  const status = Number(error?.status ?? error?.response?.status);
+  return [404, 410].includes(status);
+}
+
+function getSmartThingsHubId(device = {}) {
+  return trimString(device?.parentDeviceId || device?.zwave?.hubId || device?.zigbee?.hubId || device?.hubId);
+}
+
+function getSmartThingsProvisioningState(device = {}) {
+  return normalizeSmartThingsState(
+    device?.zwave?.provisioningState
+      || device?.zigbee?.provisioningState
+      || device?.provisioningState
+  );
+}
+
+function isSmartThingsUnprovisionedState(value) {
+  return [
+    'EXCLUDED',
+    'REMOVED',
+    'DELETED',
+    'UNPROVISIONED',
+    'NOT_PROVISIONED',
+    'NOT PROVISIONED'
+  ].includes(normalizeSmartThingsState(value));
+}
+
+function getNewestSmartThingsTimestamp(value) {
+  let newest = 0;
+  const visit = (entry) => {
+    if (!entry || typeof entry !== 'object') {
+      return;
+    }
+    for (const item of Object.values(entry)) {
+      if (item && typeof item === 'object') {
+        visit(item);
+      } else if (typeof item === 'string') {
+        const parsed = Date.parse(item);
+        if (Number.isFinite(parsed) && parsed > newest) {
+          newest = parsed;
+        }
+      }
+    }
+  };
+  visit(value);
+  return newest > 0 ? new Date(newest).toISOString() : null;
+}
+
+function summarizeSmartThingsExclusionEvidence({
+  device = null,
+  health = null,
+  hubHealth = null,
+  status = null,
+  localDevice = null,
+  source = ''
+} = {}) {
+  const localHealth = localDevice?.properties?.smartThingsHealthState || null;
+  const resolvedHealth = health || localHealth || null;
+  return {
+    source: source || null,
+    deviceId: device?.deviceId || localDevice?.properties?.smartThingsDeviceId || null,
+    deviceType: device?.type || localDevice?.properties?.smartThingsDeviceNetworkType || null,
+    label: device?.label || localDevice?.name || null,
+    provisioningState: getSmartThingsProvisioningState(device) || null,
+    healthState: resolvedHealth?.state || null,
+    healthUpdatedAt: resolvedHealth?.lastUpdatedDate || null,
+    hubId: getSmartThingsHubId(device) || null,
+    hubConnectivity: hubHealth?.connectivity || null,
+    hubRadioState: hubHealth?.hubRadioState || null,
+    newestStatusAt: getNewestSmartThingsTimestamp(status || localDevice?.properties?.smartThingsStatus || null),
+    observedAt: new Date().toISOString()
+  };
+}
+
+function collectSmartThingsExclusionCounters(value, pathParts = [], counters = []) {
+  if (!value || typeof value !== 'object') {
+    return counters;
+  }
+
+  for (const [key, item] of Object.entries(value)) {
+    const nextPath = [...pathParts, key];
+    const normalizedPath = nextPath.join('.').toLowerCase();
+    if (
+      typeof item === 'number'
+      && Number.isFinite(item)
+      && /exclu/.test(normalizedPath)
+    ) {
+      counters.push({
+        path: nextPath.join('.'),
+        value: item
+      });
+    } else if (item && typeof item === 'object') {
+      collectSmartThingsExclusionCounters(item, nextPath, counters);
+    }
+  }
+
+  return counters;
+}
+
+function findSmartThingsExclusionCounterIncrease(before, after) {
+  const previous = new Map(
+    collectSmartThingsExclusionCounters(before).map((entry) => [entry.path, entry.value])
+  );
+  return collectSmartThingsExclusionCounters(after).find((entry) => {
+    const oldValue = previous.get(entry.path);
+    return typeof oldValue === 'number' && entry.value > oldValue;
+  }) || null;
+}
+
 function normalizeObjectId(value, label = 'Device id') {
   const id = trimString(value);
   if (!/^[0-9a-fA-F]{24}$/.test(id) || !mongoose.Types.ObjectId.isValid(id)) {
@@ -1756,6 +1870,15 @@ class DirectRadioService {
     this.activeMigrations.set(migration.id, migration);
 
     try {
+      if (targetProtocol === 'zigbee' && migration.smartThingsDeviceId && !migration.smartThingsRemovalRequest) {
+        const removalRequest = await this.requestSmartThingsDeviceRemoval(migration, device);
+        this.log(removalRequest.status === 'failed' ? 'warn' : 'info', 'zigbee', 'Requested SmartThings Zigbee device removal before opening HomeBrain pairing', {
+          migrationId: migration.id,
+          deviceId: migration.sourceDeviceId,
+          smartThingsDeviceId: migration.smartThingsDeviceId,
+          removalRequestStatus: removalRequest.status
+        });
+      }
       if (targetProtocol === 'zigbee') {
         await this.startPairing('zigbee', { durationSeconds: seconds });
       } else {
@@ -1803,10 +1926,212 @@ class DirectRadioService {
         directDeviceId: migration.directDeviceId || null,
         validation: migration.validation || null,
         zwaveEvents: Array.isArray(migration.zwaveEvents) ? migration.zwaveEvents.slice(-8) : [],
+        smartThings: migration.smartThingsExclusionEvidence || null,
         expiresAt,
         secondsRemaining
       }
     };
+  }
+
+  getSmartThingsService() {
+    return this.smartThingsService || require('./smartThingsService');
+  }
+
+  async getLocalMigrationDevice(migration) {
+    const sourceDeviceId = trimString(migration?.sourceDeviceId);
+    if (!sourceDeviceId || Device.db?.readyState !== 1) {
+      return null;
+    }
+
+    try {
+      return await Device.findById(sourceDeviceId).lean();
+    } catch (error) {
+      console.warn(`DirectRadioService: Failed to load migration source device ${sourceDeviceId}: ${error.message}`);
+      return null;
+    }
+  }
+
+  async collectSmartThingsExclusionEvidence(migration) {
+    const smartThingsDeviceId = trimString(migration.smartThingsDeviceId);
+    const smartThings = this.getSmartThingsService();
+    const evidence = {
+      device: null,
+      health: null,
+      hubHealth: null,
+      status: null,
+      localDevice: await this.getLocalMigrationDevice(migration),
+      gone: false,
+      error: null
+    };
+
+    try {
+      evidence.device = await smartThings.getDevice(smartThingsDeviceId);
+    } catch (error) {
+      if (isSmartThingsDeviceGoneError(error)) {
+        evidence.gone = true;
+        migration.smartThingsExclusionEvidence = summarizeSmartThingsExclusionEvidence({
+          localDevice: evidence.localDevice,
+          source: 'missing_device'
+        });
+        return evidence;
+      }
+      evidence.error = error;
+      return evidence;
+    }
+
+    const hubId = getSmartThingsHubId(evidence.device);
+    if (typeof smartThings.getDeviceHealth === 'function') {
+      try {
+        evidence.health = await smartThings.getDeviceHealth(smartThingsDeviceId);
+      } catch (error) {
+        this.log('warn', migration.protocol || 'smartthings', 'SmartThings device health was not available during migration verification', {
+          migrationId: migration.id,
+          smartThingsDeviceId,
+          error: error.message
+        });
+      }
+    }
+
+    if (hubId && typeof smartThings.getHubHealth === 'function') {
+      try {
+        evidence.hubHealth = await smartThings.getHubHealth(hubId);
+      } catch (error) {
+        this.log('warn', migration.protocol || 'smartthings', 'SmartThings hub health was not available during migration verification', {
+          migrationId: migration.id,
+          smartThingsDeviceId,
+          hubId,
+          error: error.message
+        });
+      }
+    }
+
+    if (typeof smartThings.getDeviceStatus === 'function') {
+      try {
+        evidence.status = await smartThings.getDeviceStatus(smartThingsDeviceId);
+      } catch (error) {
+        this.log('warn', migration.protocol || 'smartthings', 'SmartThings device status was not available during migration verification', {
+          migrationId: migration.id,
+          smartThingsDeviceId,
+          error: error.message
+        });
+      }
+    }
+
+    migration.smartThingsExclusionEvidence = summarizeSmartThingsExclusionEvidence({
+      device: evidence.device,
+      health: evidence.health,
+      hubHealth: evidence.hubHealth,
+      status: evidence.status,
+      localDevice: evidence.localDevice,
+      source: 'smartthings_api'
+    });
+    return evidence;
+  }
+
+  markSmartThingsExclusionVerified(migration, { source, message, removalVerified = false } = {}) {
+    const timestamp = new Date().toISOString();
+    migration.status = 'excluded';
+    migration.exclusionStatus = 'verified';
+    migration.exclusionVerifiedAt = timestamp;
+    migration.smartThingsExclusionVerifiedAt = timestamp;
+    if (removalVerified) {
+      migration.smartThingsRemovalVerifiedAt = timestamp;
+    }
+    migration.smartThingsExclusionVerificationSource = source || 'smartthings_api';
+    migration.updatedAt = timestamp;
+    migration.expiresAt = Math.max(Number(migration.expiresAt || 0), Date.now() + 15 * 60 * 1000);
+    this.log('info', migration.protocol || 'smartthings', 'SmartThings migration exclusion verified', {
+      migrationId: migration.id,
+      deviceId: migration.sourceDeviceId,
+      smartThingsDeviceId: migration.smartThingsDeviceId,
+      source: migration.smartThingsExclusionVerificationSource
+    });
+    return this.buildMigrationVerificationResult(migration, {
+      phase: 'physical_exclusion',
+      status: 'verified',
+      message: message || 'SmartThings no longer has a live route to this device. HomeBrain can now open native inclusion.'
+    });
+  }
+
+  async requestSmartThingsDeviceRemoval(migration, sourceDevice) {
+    const smartThingsDeviceId = trimString(migration?.smartThingsDeviceId || sourceDevice?.properties?.smartThingsDeviceId);
+    if (!smartThingsDeviceId) {
+      return { status: 'skipped', reason: 'missing_smartthings_device_id' };
+    }
+
+    const smartThings = this.getSmartThingsService();
+    let deviceDetails = null;
+    if (typeof smartThings.getDevice === 'function') {
+      try {
+        deviceDetails = await smartThings.getDevice(smartThingsDeviceId);
+      } catch (error) {
+        if (isSmartThingsDeviceGoneError(error)) {
+          migration.smartThingsRemovalRequest = {
+            status: 'already_missing',
+            requestedAt: new Date().toISOString()
+          };
+          migration.smartThingsExclusionEvidence = summarizeSmartThingsExclusionEvidence({
+            localDevice: sourceDevice,
+            source: 'already_missing'
+          });
+          return migration.smartThingsRemovalRequest;
+        }
+        migration.smartThingsRemovalRequest = {
+          status: 'failed',
+          requestedAt: new Date().toISOString(),
+          error: error.message,
+          statusCode: Number(error?.status ?? error?.response?.status) || null
+        };
+        return migration.smartThingsRemovalRequest;
+      }
+    }
+
+    const hubId = getSmartThingsHubId(deviceDetails);
+    if (hubId && typeof smartThings.getHubHealth === 'function') {
+      try {
+        migration.smartThingsHubHealthBeforeExclusion = await smartThings.getHubHealth(hubId);
+      } catch (error) {
+        this.log('warn', migration.protocol || 'smartthings', 'SmartThings hub baseline was not available before removal request', {
+          migrationId: migration.id,
+          smartThingsDeviceId,
+          hubId,
+          error: error.message
+        });
+      }
+    }
+
+    try {
+      const response = typeof smartThings.deleteDevice === 'function'
+        ? await smartThings.deleteDevice(smartThingsDeviceId)
+        : null;
+      migration.smartThingsRemovalRequest = {
+        status: 'requested',
+        requestedAt: new Date().toISOString(),
+        response: response || null
+      };
+      return migration.smartThingsRemovalRequest;
+    } catch (error) {
+      if (isSmartThingsDeviceGoneError(error)) {
+        migration.smartThingsRemovalRequest = {
+          status: 'already_missing',
+          requestedAt: new Date().toISOString()
+        };
+        return migration.smartThingsRemovalRequest;
+      }
+      migration.smartThingsRemovalRequest = {
+        status: 'failed',
+        requestedAt: new Date().toISOString(),
+        error: error.message,
+        statusCode: Number(error?.status ?? error?.response?.status) || null
+      };
+      this.log('warn', migration.protocol || 'smartthings', 'SmartThings device removal request failed during migration start', {
+        migrationId: migration.id,
+        smartThingsDeviceId,
+        error: error.message,
+        statusCode: migration.smartThingsRemovalRequest.statusCode
+      });
+      return migration.smartThingsRemovalRequest;
+    }
   }
 
   async verifySmartThingsExclusion(migration) {
@@ -1822,39 +2147,54 @@ class DirectRadioService {
       });
     }
 
-    const smartThings = this.smartThingsService || require('./smartThingsService');
-    try {
-      await smartThings.getDevice(smartThingsDeviceId);
-    } catch (error) {
-      if ([404, 410].includes(Number(error.status))) {
-        const timestamp = new Date().toISOString();
-        migration.status = 'excluded';
-        migration.exclusionStatus = 'verified';
-        migration.exclusionVerifiedAt = timestamp;
-        migration.smartThingsRemovalVerifiedAt = timestamp;
-        migration.updatedAt = timestamp;
-        migration.expiresAt = Math.max(Number(migration.expiresAt || 0), Date.now() + 15 * 60 * 1000);
-        this.log('info', 'zwave', 'SmartThings Z-Wave exclusion verified by missing SmartThings device record', {
-          migrationId: migration.id,
-          deviceId: migration.sourceDeviceId,
-          smartThingsDeviceId
-        });
-        return this.buildMigrationVerificationResult(migration, {
-          phase: 'physical_exclusion',
-          status: 'verified',
-          message: 'SmartThings no longer reports this Z-Wave device. HomeBrain can now open native Z-Wave inclusion.'
-        });
-      }
-
+    const evidence = await this.collectSmartThingsExclusionEvidence(migration);
+    if (evidence.gone) {
+      return this.markSmartThingsExclusionVerified(migration, {
+        source: 'missing_device',
+        removalVerified: true,
+        message: 'SmartThings no longer reports this device. HomeBrain can now open native inclusion.'
+      });
+    }
+    if (evidence.error) {
       return this.buildMigrationVerificationResult(migration, {
         phase: 'physical_exclusion',
         status: 'pending',
-        message: `HomeBrain could not verify SmartThings exclusion yet: ${error.message}`,
+        message: `HomeBrain could not verify SmartThings exclusion yet: ${evidence.error.message}`,
         guidance: [
-          'Open the SmartThings app and remove the device from SmartThings, or use the hub Z-Wave exclusion utility.',
+          'Start SmartThings removal again from HomeBrain, or use the hub Z-Wave exclusion utility if SmartThings rejects the API request.',
           'Trigger the physical exclude action at the switch while the SmartThings hub is in exclusion/removal mode.',
           'Then tap Verify SmartThings exclusion again.'
         ]
+      });
+    }
+
+    const counterIncrease = findSmartThingsExclusionCounterIncrease(
+      migration.smartThingsHubHealthBeforeExclusion?.hubRadioState || migration.smartThingsHubHealthBeforeExclusion,
+      evidence.hubHealth?.hubRadioState || evidence.hubHealth
+    );
+    if (counterIncrease) {
+      migration.smartThingsExclusionCounter = counterIncrease;
+      return this.markSmartThingsExclusionVerified(migration, {
+        source: 'hub_exclusion_counter',
+        message: `SmartThings reported an exclusion counter increase at ${counterIncrease.path}. HomeBrain can now open native inclusion.`
+      });
+    }
+
+    const hubConnectivity = normalizeSmartThingsState(evidence.hubHealth?.connectivity);
+    const healthState = normalizeSmartThingsState(
+      evidence.health?.state || evidence.localDevice?.properties?.smartThingsHealthState?.state
+    );
+    const provisioningState = getSmartThingsProvisioningState(evidence.device);
+    if (isSmartThingsUnprovisionedState(provisioningState)) {
+      return this.markSmartThingsExclusionVerified(migration, {
+        source: 'device_unprovisioned',
+        message: 'SmartThings reports this device is no longer provisioned on its old radio network. HomeBrain can now open native inclusion.'
+      });
+    }
+    if (healthState === 'OFFLINE' && hubConnectivity !== 'DISCONNECTED') {
+      return this.markSmartThingsExclusionVerified(migration, {
+        source: 'device_health_offline',
+        message: 'SmartThings still has a stale device tile, but its device health is OFFLINE. HomeBrain will treat the old SmartThings radio route as gone and can now open native inclusion.'
       });
     }
 
@@ -1864,12 +2204,12 @@ class DirectRadioService {
       phase: 'physical_exclusion',
       status: timedOut ? 'failed' : 'pending',
       message: timedOut
-        ? 'SmartThings still reports this device after the exclusion window. HomeBrain will not start native inclusion yet.'
-        : 'SmartThings still reports this device. Stay on this step until SmartThings removes it from the old Z-Wave network.',
+        ? 'SmartThings still reports this device as reachable after the exclusion window. HomeBrain will not start native inclusion yet.'
+        : 'SmartThings still reports this device as reachable. Stay on this step until SmartThings removal, the hub exclusion counter, or device health verifies.',
       guidance: [
-        'In SmartThings, delete the device so the SmartThings hub enters Z-Wave exclusion, or open Hub > Z-Wave utilities > Z-Wave exclusion.',
-        'At the switch, tap the local on/up paddle once. If it does not remove, toggle on/up and off/down quickly 3 times.',
-        'Do not start HomeBrain inclusion until SmartThings removal verifies.'
+        'Use HomeBrain Start SmartThings removal to request SmartThings removal over API, or open Hub > Z-Wave utilities > Z-Wave exclusion if SmartThings rejects the API request.',
+        'At the switch, tap the local on/up paddle once. If it does not exclude, toggle on/up and off/down quickly 3 times.',
+        'Do not start HomeBrain inclusion until SmartThings removal, exclusion counter, unprovisioned state, or OFFLINE health verifies.'
       ],
       expiresAt
     });
@@ -2198,16 +2538,26 @@ class DirectRadioService {
           plan,
           updatedAt: new Date(now).toISOString()
         });
+        const removalRequest = await this.requestSmartThingsDeviceRemoval(migration, device);
+        if (removalRequest.status === 'already_missing') {
+          this.markSmartThingsExclusionVerified(migration, {
+            source: 'missing_device_at_start',
+            removalVerified: true,
+            message: 'SmartThings no longer reports this device. HomeBrain can now open native Z-Wave inclusion.'
+          });
+        }
         this.activeMigrations.set(migration.id, migration);
-        this.log('info', 'zwave', 'Prepared SmartThings Z-Wave exclusion verification', {
+        this.log('info', 'zwave', 'Requested SmartThings Z-Wave removal and prepared exclusion verification', {
           migrationId: migration.id,
           deviceId: migration.sourceDeviceId,
-          smartThingsDeviceId
+          smartThingsDeviceId,
+          removalRequestStatus: removalRequest.status
         });
         return {
           protocol,
-          mode: 'smartthings_exclusion',
+          mode: removalRequest.status === 'requested' ? 'smartthings_api_exclusion' : 'smartthings_exclusion',
           expiresAt: new Date(migration.exclusionExpiresAt).toISOString(),
+          smartThingsRemovalRequest: removalRequest,
           migration
         };
       }

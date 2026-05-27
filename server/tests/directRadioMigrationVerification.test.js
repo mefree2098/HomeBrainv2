@@ -87,7 +87,7 @@ test('Z-Wave migration observes controller status reports that are awaited inter
   assert.equal(migration.exclusionNodeId, 42);
 });
 
-test('SmartThings-backed Z-Wave migration exclusion verifies only after SmartThings removes the device', async () => {
+test('SmartThings-backed Z-Wave migration exclusion verifies after SmartThings removes the device', async () => {
   const service = createService();
   const migration = {
     id: 'migration-smartthings-exclusion',
@@ -128,6 +128,129 @@ test('SmartThings-backed Z-Wave migration exclusion verifies only after SmartThi
   assert.equal(migration.status, 'excluded');
   assert.ok(migration.exclusionVerifiedAt);
   assert.ok(migration.smartThingsRemovalVerifiedAt);
+});
+
+test('SmartThings-backed Z-Wave migration accepts offline SmartThings health as stale-tile exclusion evidence', async () => {
+  const service = createService();
+  const migration = {
+    id: 'migration-smartthings-offline-exclusion',
+    sourceDeviceId: DEVICE_ID,
+    smartThingsDeviceId: 'smartthings-device-2',
+    protocol: 'zwave',
+    status: 'awaiting_smartthings_exclusion',
+    exclusionStatus: 'waiting_smartthings',
+    exclusionExpiresAt: Date.now() + 60_000,
+    expiresAt: Date.now() + 60_000,
+    startedAt: new Date().toISOString()
+  };
+  service.activeMigrations.set(migration.id, migration);
+
+  service.smartThingsService = {
+    getDevice: async () => ({
+      deviceId: migration.smartThingsDeviceId,
+      type: 'ZWAVE',
+      parentDeviceId: 'hub-1',
+      zwave: {
+        hubId: 'hub-1',
+        provisioningState: 'PROVISIONED'
+      }
+    }),
+    getDeviceHealth: async () => ({
+      deviceId: migration.smartThingsDeviceId,
+      state: 'OFFLINE',
+      lastUpdatedDate: new Date().toISOString()
+    }),
+    getHubHealth: async () => ({
+      hubId: 'hub-1',
+      connectivity: 'CONNECTED'
+    }),
+    getDeviceStatus: async () => ({
+      components: {
+        main: {
+          switch: {
+            switch: {
+              value: 'off',
+              timestamp: '2026-05-23T18:18:44.775Z'
+            }
+          }
+        }
+      }
+    })
+  };
+
+  const result = await service.verifyMigrationStep({
+    migrationId: migration.id,
+    phase: 'physical_exclusion'
+  });
+  assert.equal(result.verification.status, 'verified');
+  assert.equal(result.verification.canAdvance, true);
+  assert.equal(migration.status, 'excluded');
+  assert.equal(migration.smartThingsExclusionVerificationSource, 'device_health_offline');
+  assert.ok(migration.smartThingsExclusionEvidence);
+  assert.equal(migration.smartThingsExclusionEvidence.healthState, 'OFFLINE');
+});
+
+test('SmartThings-backed Z-Wave migration verifies when hub exclusion counter increases', async () => {
+  const service = createService();
+  const migration = {
+    id: 'migration-smartthings-counter-exclusion',
+    sourceDeviceId: DEVICE_ID,
+    smartThingsDeviceId: 'smartthings-device-3',
+    protocol: 'zwave',
+    status: 'awaiting_smartthings_exclusion',
+    exclusionStatus: 'waiting_smartthings',
+    exclusionExpiresAt: Date.now() + 60_000,
+    expiresAt: Date.now() + 60_000,
+    smartThingsHubHealthBeforeExclusion: {
+      hubRadioState: {
+        zwave: {
+          excludedDevices: 0
+        }
+      }
+    },
+    startedAt: new Date().toISOString()
+  };
+  service.activeMigrations.set(migration.id, migration);
+
+  service.smartThingsService = {
+    getDevice: async () => ({
+      deviceId: migration.smartThingsDeviceId,
+      type: 'ZWAVE',
+      parentDeviceId: 'hub-1',
+      zwave: {
+        hubId: 'hub-1',
+        provisioningState: 'PROVISIONED'
+      }
+    }),
+    getDeviceHealth: async () => ({
+      deviceId: migration.smartThingsDeviceId,
+      state: 'ONLINE',
+      lastUpdatedDate: new Date().toISOString()
+    }),
+    getHubHealth: async () => ({
+      hubId: 'hub-1',
+      connectivity: 'CONNECTED',
+      hubRadioState: {
+        zwave: {
+          excludedDevices: 1
+        }
+      }
+    }),
+    getDeviceStatus: async () => ({ components: {} })
+  };
+
+  const result = await service.verifyMigrationStep({
+    migrationId: migration.id,
+    phase: 'physical_exclusion'
+  });
+  assert.equal(result.verification.status, 'verified');
+  assert.equal(result.verification.canAdvance, true);
+  assert.equal(migration.status, 'excluded');
+  assert.equal(migration.smartThingsExclusionVerificationSource, 'hub_exclusion_counter');
+  assert.deepEqual(migration.smartThingsExclusionCounter, {
+    path: 'zwave.excludedDevices',
+    value: 1
+  });
 });
 
 test('direct-radio migration inclusion does not advance until HomeBrain completes the native device record', async () => {

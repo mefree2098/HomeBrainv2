@@ -3100,6 +3100,66 @@ class SmartThingsService {
   }
 
   /**
+   * Delete a SmartThings device. For hub-connected Z-Wave devices, SmartThings
+   * uses device removal to put the owning hub into Z-Wave exclusion mode.
+   * @param {string} deviceId - Device ID
+   * @returns {Promise<Object>} Delete response
+   */
+  async deleteDevice(deviceId) {
+    try {
+      console.log(`SmartThingsService: Deleting device ${deviceId}`);
+
+      const data = await this.makeAuthenticatedRequest(`/devices/${deviceId}`, {
+        method: 'DELETE'
+      });
+
+      console.log('SmartThingsService: Device delete request accepted');
+      return data || {};
+    } catch (error) {
+      console.error('SmartThingsService: Error deleting device:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Get device health
+   * @param {string} deviceId - Device ID
+   * @returns {Promise<Object>} Device health
+   */
+  async getDeviceHealth(deviceId) {
+    try {
+      console.log(`SmartThingsService: Fetching device health for ${deviceId}`);
+
+      const data = await this.makeAuthenticatedRequest(`/devices/${deviceId}/health`);
+
+      console.log('SmartThingsService: Successfully fetched device health');
+      return data;
+    } catch (error) {
+      console.error('SmartThingsService: Error fetching device health:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Get SmartThings hub health
+   * @param {string} hubDeviceId - Hub device ID
+   * @returns {Promise<Object>} Hub health
+   */
+  async getHubHealth(hubDeviceId) {
+    try {
+      console.log(`SmartThingsService: Fetching hub health for ${hubDeviceId}`);
+
+      const data = await this.makeAuthenticatedRequest(`/installed-hubs/${hubDeviceId}/health`);
+
+      console.log('SmartThingsService: Successfully fetched hub health');
+      return data;
+    } catch (error) {
+      console.error('SmartThingsService: Error fetching hub health:', error.message);
+      throw error;
+    }
+  }
+
+  /**
    * Get device status
    * @param {string} deviceId - Device ID
    * @returns {Promise<Object>} Device status
