@@ -1012,6 +1012,49 @@ test('getPanelById reports when newer HomeBrain firmware is available', async (t
   assert.equal(result.updateAvailable, true);
 });
 
+test('getPanelById ignores firmware timestamp churn when the fingerprint is unchanged', async (t) => {
+  const originalFindById = WallPanel.findById;
+
+  const panelDoc = {
+    _id: 'panel-same-fingerprint',
+    name: 'Office Orb',
+    room: 'Office',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'online',
+    firmwareVersion: 'panel-20260427T153736Z-aa508cf8',
+    settings: {
+      registered: true,
+      registrationCode: 'HBWP-ABCD-EF12-3456',
+      claimToken: '',
+      claimTokenExpires: null,
+      modeOrder: ['room']
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+  });
+
+  WallPanel.findById = async () => panelDoc;
+
+  const service = new WallPanelService({
+    projectRoot: '/tmp/homebrain',
+    panelFirmwareProjectDir: '/tmp/homebrain/embedded/elecrow-wall-panel'
+  });
+  service.panelFirmwareVersionCache = {
+    value: 'panel-20260501T224312Z-aa508cf8',
+    expiresAt: Date.now() + 60_000
+  };
+
+  const result = await service.getPanelById('panel-same-fingerprint');
+
+  assert.equal(result.latestFirmwareVersion, 'panel-20260501T224312Z-aa508cf8');
+  assert.equal(result.updateAvailable, false);
+});
+
 test('buildPanelOtaArtifact falls back to Homebrew PlatformIO when pio is missing from PATH', async (t) => {
   withPanelWifiBuildSettings(t);
   const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'wall-panel-ota-'));
