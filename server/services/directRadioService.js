@@ -80,6 +80,16 @@ function getNumericNodeId(value) {
   return Number.isFinite(nodeId) ? nodeId : null;
 }
 
+function parseOptionalBoolean(value, fallback = false) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  return parseEnabledFlag(value, fallback);
+}
+
 function uniqueStrings(values) {
   return Array.from(new Set(values.filter(Boolean)));
 }
@@ -1231,6 +1241,7 @@ class DirectRadioService {
         this.log('info', 'zwave', 'Z-Wave node added', {
           nodeId: node?.id || null
         });
+        this.attachZWaveNodeStatusListeners(node);
         void this.handleZWaveNodeChanged(node, 'node added');
       });
       driver.on('node removed', (node, reason) => {
@@ -1246,12 +1257,14 @@ class DirectRadioService {
           manufacturer: node?.manufacturer || null,
           productLabel: node?.productLabel || null
         });
+        this.attachZWaveNodeStatusListeners(node);
         void this.handleZWaveNodeChanged(node, 'node ready');
       });
       driver.on('node value updated', (node) => {
         this.log('info', 'zwave', 'Z-Wave node value updated', {
           nodeId: node?.id || null
         });
+        this.attachZWaveNodeStatusListeners(node);
         void this.handleZWaveNodeChanged(node, 'node value updated');
       });
       driver.on('error', (error) => {
@@ -1405,6 +1418,123 @@ class DirectRadioService {
       accepted: true,
       pendingRequest: hadPendingRequest,
       pairing: this.serializePairingSession(this.activePairings.get('zwave'))
+    };
+  }
+
+  async refreshZWaveNodeInfo(nodeId, options = {}) {
+    await this.start();
+    const { node } = this.getZWaveNode(nodeId);
+    if (typeof node.refreshInfo !== 'function') {
+      const error = new Error('This Z-Wave node does not support a HomeBrain re-interview request');
+      error.status = 501;
+      throw error;
+    }
+
+    this.attachZWaveNodeStatusListeners(node);
+    const numericNodeId = Number(node.id);
+    const waitForWakeup = parseOptionalBoolean(options.waitForWakeup, false);
+    const resetSecurityClasses = parseOptionalBoolean(options.resetSecurityClasses, false);
+    const pingFirst = parseOptionalBoolean(options.pingFirst, true);
+    const before = this.serializeZWaveNodeSummary(node);
+    let ping = null;
+    let pingError = null;
+
+    if (pingFirst && typeof node.ping === 'function') {
+      try {
+        ping = await node.ping(true);
+      } catch (error) {
+        ping = false;
+        pingError = error.message;
+      }
+    }
+
+    this.log('info', 'zwave', 'Z-Wave node re-interview requested', {
+      nodeId: numericNodeId,
+      waitForWakeup,
+      resetSecurityClasses,
+      ping,
+      pingError
+    });
+
+    await node.refreshInfo({
+      resetSecurityClasses,
+      waitForWakeup
+    });
+
+    void this.handleZWaveNodeChanged(node, 'refresh-info requested').catch((error) => {
+      this.log('warn', 'zwave', 'Failed to save Z-Wave node after re-interview request', {
+        nodeId: numericNodeId,
+        error: error.message
+      });
+    });
+
+    return {
+      node: this.serializeZWaveNodeSummary(node),
+      before,
+      ping,
+      pingError,
+      waitForWakeup,
+      resetSecurityClasses,
+      message: `HomeBrain requested a fresh Z-Wave interview for node ${numericNodeId}.`
+    };
+  }
+
+  async removeFailedZWaveNode(nodeId, options = {}) {
+    await this.start();
+    const { controller, node } = this.getZWaveNode(nodeId);
+    const numericNodeId = Number(node.id);
+    const confirm = parseOptionalBoolean(options.confirm, false);
+    const force = parseOptionalBoolean(options.force, false);
+    if (!confirm) {
+      const error = new Error('Confirm failed-node removal before deleting a Z-Wave node from HomeBrain');
+      error.status = 400;
+      throw error;
+    }
+    if (typeof controller.removeFailedNode !== 'function') {
+      const error = new Error('This Z-Wave controller does not support failed-node removal');
+      error.status = 501;
+      throw error;
+    }
+
+    let failed = null;
+    if (typeof controller.isFailedNode === 'function') {
+      try {
+        failed = await controller.isFailedNode(numericNodeId);
+      } catch (error) {
+        this.log('warn', 'zwave', 'Unable to verify Z-Wave failed-node status before removal', {
+          nodeId: numericNodeId,
+          error: error.message
+        });
+      }
+    }
+
+    if (failed === false && !force) {
+      const error = new Error(`Z-Wave node ${numericNodeId} is still responding. Re-interview it first, or force removal only after confirming it is a ghost node.`);
+      error.status = 409;
+      error.failed = false;
+      throw error;
+    }
+
+    await controller.removeFailedNode(numericNodeId);
+    const query = {
+      'properties.homebrainDirect.protocol': 'zwave',
+      'properties.homebrainDirect.nodeId': numericNodeId
+    };
+    const deleteResult = await Device.deleteMany(query);
+
+    this.log('warn', 'zwave', 'Z-Wave failed node removed from HomeBrain', {
+      nodeId: numericNodeId,
+      failed,
+      force,
+      deletedDeviceCount: deleteResult?.deletedCount ?? null
+    });
+
+    return {
+      nodeId: numericNodeId,
+      failed,
+      force,
+      deletedDeviceCount: deleteResult?.deletedCount ?? 0,
+      message: `Z-Wave node ${numericNodeId} was removed from the controller.`
     };
   }
 
@@ -1680,6 +1810,125 @@ class DirectRadioService {
     return this.zwave.driver?.controller || null;
   }
 
+  getZWaveNode(nodeId, options = {}) {
+    const numericNodeId = getNumericNodeId(nodeId);
+    if (!Number.isInteger(numericNodeId) || numericNodeId <= 0) {
+      const error = new Error('Z-Wave node id is invalid');
+      error.status = 400;
+      throw error;
+    }
+
+    const controller = this.getZWaveController();
+    if (!controller?.nodes || typeof controller.nodes.get !== 'function') {
+      const error = new Error('Z-Wave controller nodes are not available yet');
+      error.status = 503;
+      throw error;
+    }
+
+    const node = controller.nodes.get(numericNodeId);
+    if (!node) {
+      const error = new Error(`Z-Wave node ${numericNodeId} is not present on the controller`);
+      error.status = 404;
+      throw error;
+    }
+    if (node.isControllerNode && options.allowController !== true) {
+      const error = new Error('The Z-Wave controller node cannot be repaired as a device');
+      error.status = 400;
+      throw error;
+    }
+
+    return {
+      controller,
+      node,
+      nodeId: numericNodeId
+    };
+  }
+
+  getZWaveNodeFeatures(node) {
+    try {
+      return this.normalizeZWaveNode(node, 'status')?.update?.properties?.directRadioFeatures || [];
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  serializeZWaveNodeSummary(node) {
+    if (!node) {
+      return null;
+    }
+    const nodeId = getNumericNodeId(node);
+    const features = this.getZWaveNodeFeatures(node);
+    const manufacturer = trimString(node.deviceConfig?.manufacturer || node.manufacturer);
+    const productLabel = trimString(node.deviceConfig?.label || node.productLabel);
+    const interviewStage = node.interviewStage === undefined || node.interviewStage === null
+      ? null
+      : String(node.interviewStage);
+
+    return {
+      id: nodeId,
+      name: trimString(node.name) || productLabel || (nodeId ? `Z-Wave Node ${nodeId}` : 'Z-Wave Node'),
+      isControllerNode: node.isControllerNode === true,
+      ready: node.ready === true,
+      status: node.status === undefined ? null : node.status,
+      interviewStage,
+      isListening: node.isListening === undefined ? null : node.isListening,
+      isFrequentListening: node.isFrequentListening === undefined ? null : node.isFrequentListening,
+      manufacturerId: node.manufacturerId || null,
+      productType: node.productType || null,
+      productId: node.productId || null,
+      manufacturer: manufacturer || null,
+      productLabel: productLabel || null,
+      features,
+      incomplete: node.isControllerNode !== true && (
+        node.ready !== true
+        || features.length === 0
+        || (!node.manufacturerId && !node.productType && !node.productId && !manufacturer && !productLabel)
+      )
+    };
+  }
+
+  getZWaveNodeSummaries() {
+    const nodes = this.getZWaveController()?.nodes;
+    if (!nodes || typeof nodes.values !== 'function') {
+      return [];
+    }
+
+    return Array.from(nodes.values())
+      .map((node) => this.serializeZWaveNodeSummary(node))
+      .filter(Boolean)
+      .sort((left, right) => Number(left.id || 0) - Number(right.id || 0));
+  }
+
+  attachZWaveNodeStatusListeners(node) {
+    if (!node || node.__homebrainStatusListenersAttached || typeof node.on !== 'function') {
+      return;
+    }
+
+    const updateFromNode = (reason) => {
+      if (node.isControllerNode) {
+        return;
+      }
+      this.log('info', 'zwave', `Z-Wave node ${reason}`, {
+        nodeId: node.id || null,
+        interviewStage: node.interviewStage === undefined ? null : String(node.interviewStage),
+        ready: node.ready === undefined ? null : Boolean(node.ready)
+      });
+      void this.handleZWaveNodeChanged(node, reason).catch((error) => {
+        this.log('warn', 'zwave', 'Failed to update Z-Wave node after status event', {
+          nodeId: node.id || null,
+          reason,
+          error: error.message
+        });
+      });
+    };
+
+    node.on('interview completed', () => updateFromNode('interview completed'));
+    node.on('interview failed', () => updateFromNode('interview failed'));
+    node.on('ready', () => updateFromNode('ready'));
+    node.on('node info received', () => updateFromNode('node info received'));
+    node.__homebrainStatusListenersAttached = true;
+  }
+
   async syncZigbeeDevices() {
     const devices = this.zigbee.controller?.getDevices?.() || [];
     this.log('info', 'zigbee', 'Synchronizing Zigbee device inventory', {
@@ -1708,6 +1957,7 @@ class DirectRadioService {
       if (!node || node.isControllerNode) {
         continue;
       }
+      this.attachZWaveNodeStatusListeners(node);
       // eslint-disable-next-line no-await-in-loop
       await this.handleZWaveNodeChanged(node, 'sync');
     }
@@ -3340,7 +3590,8 @@ class DirectRadioService {
           inclusionUntil: this.zwave.inclusionUntil,
           exclusionUntil: this.zwave.exclusionUntil,
           pendingDsk: this.zwave.pendingDsk,
-          pairedNodeCount: zwaveNodes && typeof zwaveNodes.size === 'number' ? zwaveNodes.size : 0
+          pairedNodeCount: zwaveNodes && typeof zwaveNodes.size === 'number' ? zwaveNodes.size : 0,
+          nodes: this.getZWaveNodeSummaries()
         }
       },
       pairings: {

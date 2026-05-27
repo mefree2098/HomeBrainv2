@@ -59,6 +59,7 @@ struct DevicesView: View {
     @State private var addDeviceDurationSeconds = 180
     @State private var addDevicePendingDsk = ""
     @State private var addDeviceDskPin = ""
+    @State private var addDeviceRepairingZWaveNodeId: Int?
     @State private var newName = ""
     @State private var newType = "light"
     @State private var newRoom = ""
@@ -1611,6 +1612,10 @@ struct DevicesView: View {
                                 nativeRadioAddFields
                             }
 
+                            if addDeviceMode == "zwave" && !zwaveRepairCandidates.isEmpty {
+                                zwaveRepairPanel
+                            }
+
                             if addDeviceBusy {
                                 HStack(spacing: 8) {
                                     ProgressView()
@@ -1715,6 +1720,72 @@ struct DevicesView: View {
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private var zwaveRepairCandidates: [DeviceItem] {
+        Array(
+            devices
+                .filter(isIncompleteZWaveDirectDevice)
+                .sorted { (zWaveNodeId(for: $0) ?? 0) > (zWaveNodeId(for: $1) ?? 0) }
+                .prefix(4)
+        )
+    }
+
+    private var zwaveRepairPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(HBPalette.accentOrange)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Already-paired Z-Wave nodes need interview repair.")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.accentOrange)
+                    Text("Use this when inclusion times out because the switch is already on the Zooz network.")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            ForEach(zwaveRepairCandidates) { device in
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(device.name)
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+                            .lineLimit(1)
+                        Text(zwaveRepairSubtitle(for: device))
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                            .lineLimit(2)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    let nodeId = zWaveNodeId(for: device)
+                    Button {
+                        Task { await repairZWaveNode(device) }
+                    } label: {
+                        if addDeviceRepairingZWaveNodeId == nodeId {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Label("Repair", systemImage: "wrench.and.screwdriver")
+                        }
+                    }
+                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                    .disabled(addDeviceBusy || addDeviceRepairingZWaveNodeId != nil || nodeId == nil)
+                }
+                .padding(10)
+                .background(HBGlassBackground(cornerRadius: 10, variant: .panelSoft))
+            }
+        }
+        .padding(12)
+        .background(HBPalette.accentOrange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(HBPalette.accentOrange.opacity(0.35), lineWidth: 1)
+        )
     }
 
     private var matterAddFields: some View {
@@ -2675,6 +2746,42 @@ struct DevicesView: View {
         }
     }
 
+    private func repairZWaveNode(_ device: DeviceItem) async {
+        guard let nodeId = zWaveNodeId(for: device) else {
+            addDeviceStatusMessage = "HomeBrain could not find the Z-Wave node id for that device."
+            return
+        }
+        if previewMode {
+            addDeviceStatusMessage = "HomeBrain would request a fresh Z-Wave interview for node \(nodeId)."
+            return
+        }
+
+        addDeviceRepairingZWaveNodeId = nodeId
+        addDeviceStatusMessage = "Requesting a fresh Z-Wave interview for \(device.name)."
+        errorMessage = nil
+        defer { addDeviceRepairingZWaveNodeId = nil }
+
+        do {
+            let response = try await session.apiClient.post(
+                "/api/direct-radios/zwave/nodes/\(nodeId)/refresh-info",
+                body: [
+                    "waitForWakeup": false,
+                    "pingFirst": true
+                ]
+            )
+            let root = JSON.object(response)
+            let result = JSON.object(root["result"])
+            let ping = result["ping"] as? Bool
+            addDeviceStatusMessage = ping == false
+                ? "HomeBrain requested a fresh interview for node \(nodeId), but it did not answer the first ping. Tap the switch once and refresh devices."
+                : "HomeBrain requested a fresh interview for node \(nodeId). Tap the switch once if it does not update in a few seconds."
+            await loadDevices(showLoading: false)
+        } catch {
+            addDeviceStatusMessage = error.localizedDescription
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func startInsteonAdd() async {
         if previewMode {
             addDeviceStatusMessage = "Insteon PLM link mode would start on real HomeBrain hardware."
@@ -2963,6 +3070,35 @@ struct DevicesView: View {
                 .filter { !$0.isEmpty }
                 .map { $0.lowercased() }
         )
+    }
+
+    private func zWaveNodeId(for device: DeviceItem) -> Int? {
+        let direct = JSON.object(device.properties["homebrainDirect"])
+        let nodeId = JSON.int(direct, "nodeId")
+        return nodeId > 0 ? nodeId : nil
+    }
+
+    private func isIncompleteZWaveDirectDevice(_ device: DeviceItem) -> Bool {
+        guard device.selectionSource == "homebrain-zwave",
+              let nodeId = zWaveNodeId(for: device),
+              nodeId != 1 else {
+            return false
+        }
+
+        let direct = JSON.object(device.properties["homebrainDirect"])
+        let hasIdentity = direct["manufacturerId"] != nil
+            || direct["productType"] != nil
+            || direct["productId"] != nil
+        return !device.isOnline
+            || propertyStringSet(for: device, key: "directRadioFeatures").isEmpty
+            || !hasIdentity
+    }
+
+    private func zwaveRepairSubtitle(for device: DeviceItem) -> String {
+        let node = zWaveNodeId(for: device).map { "Node \($0)" } ?? "Node ?"
+        let featureCount = propertyStringSet(for: device, key: "directRadioFeatures").count
+        let state = device.isOnline ? "not fully interviewed" : "offline"
+        return "\(node) · \(featureCount) features · \(state)"
     }
 
     private func looksLikeSmartThingsDimmer(_ device: DeviceItem) -> Bool {
