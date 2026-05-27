@@ -10,12 +10,12 @@ This plan is based on the live HomeBrain inventory from `/api/devices`, the live
 | --- | ---: |
 | HomeBrain devices total | 273 |
 | SmartThings-backed HomeBrain records | 147 |
-| Direct Zigbee/Z-Wave migration candidates | 81 |
+| Direct Zigbee/Z-Wave migration candidates | 82 |
 | Zigbee candidates | 57 |
-| Z-Wave candidates | 24 |
+| Z-Wave candidates | 25 |
 | Physical but not direct-radio candidates | 30 |
 | SmartThings hub or child endpoint records | 2 |
-| Virtual switches/helpers skipped | 34 |
+| Virtual switches/helpers skipped | 33 |
 
 ## Radio Readiness
 
@@ -59,6 +59,7 @@ Build the mesh before moving lots of battery devices. Powered Zigbee repeaters a
 | Backyard Zigbee Repeater | Outside | ZIGBEE | ZIGBEE | firmware, power, switch |
 | Garage Zigbee Repeater | Outside | ZIGBEE | ZIGBEE | firmware, power, switch |
 | ISY | Downstairs | ZWAVE | ZWAVE | switch |
+| Cold Storage Switch | Physical Switches | ZWAVE | ZWAVE | switch |
 | Dishwasher Energy Monitor | Energy Monitoring | ZWAVE | ZWAVE | energy, power, switch |
 | Dryer Energy Monitor | Energy Monitoring | ZWAVE | ZWAVE | energy, power, switch |
 | Home AC Energy Monitor | Energy Monitoring | ZWAVE | ZWAVE | brightness, switch |
@@ -232,7 +233,6 @@ These are SmartThings virtual switches/helpers, STHM helpers, theater triggers, 
 | Theater OnOff Virtual Switch | Vault | VIRTUAL | switch | switch |
 | Ask Alexa Weather | Virtual Switches | LAN | switch | switch |
 | Cave Trigger | Virtual Switches | LAN | switch | switch |
-| Cold Storage Switch | Virtual Switches | ZWAVE | switch | switch |
 | Comms Closet Leak Sensor | Virtual Switches | VIRTUAL | switch | switch |
 | Fight Night Lights Trigger | Virtual Switches | VIRTUAL | switch | brightness, colorTemperature, switch |
 | Guest Bathroom Leak Sensor | Virtual Switches | VIRTUAL | switch | switch |

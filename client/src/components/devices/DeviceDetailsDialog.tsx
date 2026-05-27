@@ -120,6 +120,9 @@ type MigrationFlowState = {
   complete?: boolean
 }
 
+const SMARTTHINGS_DIRECT_RADIO_NETWORK_TYPES = new Set(["zigbee", "zw", "zwave"])
+const SMARTTHINGS_PHYSICAL_SWITCH_ROOM_LABEL = "Physical Switches"
+
 const HISTORY_HOURS = 24
 const HISTORY_LIMIT = 720
 const TELEMETRY_RANGE_OPTIONS = [
@@ -284,6 +287,13 @@ function hasSmartThingsCategory(device: DeviceLike | null, category: string): bo
   return getSmartThingsCategories(device).includes(category.toLowerCase())
 }
 
+function getSmartThingsNetworkType(device: DeviceLike | null): string {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  return normalizeSmartThingsValue(properties?.smartThingsDeviceNetworkType)
+    .toLowerCase()
+    .replace(/[\s_-]/g, "")
+}
+
 function getSourceLabel(device: DeviceLike | null): string {
   return getDeviceSourceLabel(getDeviceSource(device || undefined))
 }
@@ -292,6 +302,31 @@ function isSmartThingsBackedDevice(device: DeviceLike | null): boolean {
   const properties = device?.properties as Record<string, unknown> | undefined
   const source = (properties?.source || "").toString().trim().toLowerCase()
   return source === "smartthings" || Boolean(properties?.smartThingsDeviceId)
+}
+
+function hasSmartThingsSwitchCapabilityOrCategory(device: DeviceLike | null): boolean {
+  return hasSmartThingsCapability(device, "switch")
+    || hasSmartThingsCapability(device, "switchLevel")
+    || hasSmartThingsCategory(device, "switch")
+}
+
+function isKnownPhysicalSmartThingsSwitch(device: DeviceLike | null): boolean {
+  return isSmartThingsBackedDevice(device)
+    && hasSmartThingsSwitchCapabilityOrCategory(device)
+    && SMARTTHINGS_DIRECT_RADIO_NETWORK_TYPES.has(getSmartThingsNetworkType(device))
+}
+
+function getDeviceDisplayRoom(device: DeviceLike | null): string {
+  const room = (device?.room || "").trim()
+  const normalizedRoom = room.toLowerCase()
+  if (
+    room
+    && isKnownPhysicalSmartThingsSwitch(device)
+    && (normalizedRoom.includes("virtual switch") || normalizedRoom.includes("home monitor switches"))
+  ) {
+    return SMARTTHINGS_PHYSICAL_SWITCH_ROOM_LABEL
+  }
+  return room || "Unassigned"
 }
 
 function clampBrightness(value: number): number {
@@ -1350,6 +1385,7 @@ export function DeviceDetailsDialog({
   )
   const telemetryEvents = telemetrySeries?.events ?? []
   const deviceTypeLabel = useMemo(() => getDeviceTypeLabel(device), [device])
+  const deviceRoom = useMemo(() => getDeviceDisplayRoom(device), [device])
   const primaryStateLabel = useMemo(() => getPrimaryStateLabel(device), [device])
   const connectivityLabel = device?.isOnline === false ? "Offline" : "Online"
   const HeroIcon = useMemo(() => getDeviceHeroIcon(device), [device])
@@ -1379,7 +1415,7 @@ export function DeviceDetailsDialog({
   const currentThermostatMode = getThermostatMode(device)
   const currentThermostatSetpoint = thermostatSetpointDraft ?? getThermostatTargetTemperature(device)
   const overviewHeroRows: DeviceTabHeroRow[] = [
-    { label: "Room", value: device?.room || "Unassigned" },
+    { label: "Room", value: deviceRoom },
     { label: "Last contact", value: formatDateTime(device?.lastSeen) },
     { label: "Groups", value: groupSummary }
   ]
@@ -1401,7 +1437,7 @@ export function DeviceDetailsDialog({
     }
   ]
   const alexaHeroRows: DeviceTabHeroRow[] = [
-    { label: "Room hint", value: device?.room || "Unassigned" },
+    { label: "Room hint", value: deviceRoom },
     { label: "Current groups", value: groupSummary },
     { label: "HomeBrain source", value: getSourceLabel(device) }
   ]
@@ -1434,7 +1470,7 @@ export function DeviceDetailsDialog({
     },
     {
       label: "Placement",
-      value: device?.room || "Unassigned",
+      value: deviceRoom,
       hint: `${deviceTypeLabel} via ${getSourceLabel(device)}`,
       icon: House,
       tone: "violet"
@@ -2034,7 +2070,7 @@ export function DeviceDetailsDialog({
                   icon={HeroIcon}
                   eyebrow="System overview"
                   title={device.name}
-                  subtitle={`${device.room || "Unassigned"} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
+                  subtitle={`${deviceRoom} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
                   description={overviewCopy}
                   pills={[
                     { label: primaryStateLabel, tone: device?.status ? "emerald" : "sky" },
@@ -2288,7 +2324,7 @@ export function DeviceDetailsDialog({
                       <CardContent className="space-y-0">
                         <DeviceDetailRow label="Current state" value={primaryStateLabel} />
                         <DeviceDetailRow label="Connectivity" value={connectivityLabel} />
-                        <DeviceDetailRow label="Room" value={device.room || "Unassigned"} />
+                        <DeviceDetailRow label="Room" value={deviceRoom} />
                         <DeviceDetailRow label="Type" value={deviceTypeLabel} />
                         <DeviceDetailRow label="Source" value={getSourceLabel(device)} />
                         {getSourceLabel(device) === "Harmony" && harmonyEntityType ? (
@@ -2347,7 +2383,7 @@ export function DeviceDetailsDialog({
                   icon={HeroIcon}
                   eyebrow="Direct controls"
                   title={device.name}
-                  subtitle={`${device.room || "Unassigned"} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
+                  subtitle={`${deviceRoom} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
                   description={harmonyCommandDevice
                     ? "Harmony command catalog, quick actions, and source-aware power behavior."
                     : "Device-facing controls, grouping, and source-specific options without overview telemetry noise."}
@@ -2860,7 +2896,7 @@ export function DeviceDetailsDialog({
                     icon={HeroIcon}
                     eyebrow="Voice exposure"
                     title={device.name}
-                    subtitle={`${device.room || "Unassigned"} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
+                    subtitle={`${deviceRoom} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
                     description="Publish this device to Alexa discovery with a HomeBrain-managed name, aliases, and room hint, without burying the editor below a fixed overview slab."
                     pills={[
                       { label: primaryStateLabel, tone: device?.status ? "emerald" : "sky" },
@@ -2885,7 +2921,7 @@ export function DeviceDetailsDialog({
                         entityName={device.name}
                         exposure={alexaExposure}
                         loading={alexaExposureLoading}
-                        defaultRoomHint={device.room}
+                        defaultRoomHint={deviceRoom}
                         compact={false}
                         onSave={onAlexaExposureUpdated}
                       />
@@ -2913,7 +2949,7 @@ export function DeviceDetailsDialog({
                       </CardHeader>
                       <CardContent className="space-y-0">
                         <DeviceDetailRow label="Current state" value={primaryStateLabel} />
-                        <DeviceDetailRow label="Room" value={device.room || "Unassigned"} />
+                        <DeviceDetailRow label="Room" value={deviceRoom} />
                         <DeviceDetailRow label="Source" value={getSourceLabel(device)} />
                         <DeviceDetailRow label="Groups" value={groupSummary} />
                       </CardContent>
@@ -2927,7 +2963,7 @@ export function DeviceDetailsDialog({
                   icon={HeroIcon}
                   eyebrow="Telemetry history"
                   title={device.name}
-                  subtitle={`${device.room || "Unassigned"} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
+                  subtitle={`${deviceRoom} • ${deviceTypeLabel} • ${getSourceLabel(device)}`}
                   description={liveSnapshot.supportsEnergyMonitoring
                     ? "Use the full history surface for trend validation, telemetry filtering, and timeline review without keeping the overview locked in place above it."
                     : "This device does not expose live energy telemetry, so the history view focuses on stored state changes, metric coverage, and telemetry timelines."}

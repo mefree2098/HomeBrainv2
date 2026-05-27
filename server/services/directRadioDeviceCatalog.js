@@ -154,6 +154,12 @@ const SMARTTHINGS_NON_DIRECT_RADIO_NETWORK_TYPES = new Set([
   'virtual'
 ]);
 
+const SMARTTHINGS_DIRECT_RADIO_NETWORK_TYPES = new Set([
+  'zigbee',
+  'zw',
+  'zwave'
+]);
+
 function escapeRegex(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -167,6 +173,11 @@ function normalizeSmartThingsNetworkType(value) {
   return normalizeString(value)
     .toLowerCase()
     .replace(/[\s_-]/g, '');
+}
+
+function hasSmartThingsDirectRadioNetworkType(device) {
+  const networkType = normalizeSmartThingsNetworkType(device?.properties?.smartThingsDeviceNetworkType);
+  return SMARTTHINGS_DIRECT_RADIO_NETWORK_TYPES.has(networkType);
 }
 
 function normalizeString(value) {
@@ -363,6 +374,10 @@ function isCloudOrVirtualOnly(device) {
   const networkType = normalizeSmartThingsNetworkType(device?.properties?.smartThingsDeviceNetworkType);
 
   if (source && source !== 'smartthings') {
+    return false;
+  }
+
+  if (hasSmartThingsDirectRadioNetworkType(device)) {
     return false;
   }
 

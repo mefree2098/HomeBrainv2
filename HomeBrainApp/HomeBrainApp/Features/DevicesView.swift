@@ -289,7 +289,7 @@ struct DevicesView: View {
                         .font(.system(size: useLandscapeCompactLayout ? 20 : 22, weight: .bold, design: .rounded))
                         .foregroundStyle(HBPalette.textPrimary)
 
-                    Text(embeddedFocusedDevice?.room ?? "Close this panel to return to the Security Center exactly where you left it.")
+                    Text(embeddedFocusedDevice?.displayRoom ?? "Close this panel to return to the Security Center exactly where you left it.")
                         .font(.system(size: 14, weight: .medium, design: .rounded))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
@@ -472,7 +472,7 @@ struct DevicesView: View {
                             .font(.system(size: useLandscapeCompactLayout ? 18 : 20, weight: .bold, design: .rounded))
                             .foregroundStyle(HBPalette.textPrimary)
                             .lineLimit(2)
-                        Text(device.room.isEmpty ? "Unassigned" : device.room)
+                        Text(device.displayRoom)
                             .font(.system(size: useLandscapeCompactLayout ? 13 : 14, weight: .medium, design: .rounded))
                             .foregroundStyle(HBPalette.textSecondary)
                         HStack(spacing: 6) {
@@ -1458,7 +1458,7 @@ struct DevicesView: View {
                                         .font(.system(size: 26, weight: .bold, design: .rounded))
                                         .foregroundStyle(HBPalette.textPrimary)
                                         .fixedSize(horizontal: false, vertical: true)
-                                    Text("\(device.room.isEmpty ? "Unassigned" : device.room) · \(deviceTypeDisplayLabel(device.type)) · \(device.selectionSourceLabel)")
+                                    Text("\(device.displayRoom) · \(deviceTypeDisplayLabel(device.type)) · \(device.selectionSourceLabel)")
                                         .font(.system(size: 14, weight: .medium, design: .rounded))
                                         .foregroundStyle(HBPalette.textSecondary)
                                         .fixedSize(horizontal: false, vertical: true)
