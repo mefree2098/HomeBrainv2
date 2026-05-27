@@ -284,3 +284,96 @@ test('direct-radio migration inclusion does not advance until HomeBrain complete
   assert.equal(result.verification.status, 'verified');
   assert.equal(result.verification.canAdvance, true);
 });
+
+test('Z-Wave generic pairing waits for a submitted S2 DSK PIN instead of aborting', async () => {
+  const service = createService();
+  service.activePairings.set('zwave', {
+    id: 'pairing-zwave-test',
+    protocol: 'zwave',
+    mode: 'inclusion',
+    status: 'active',
+    startedAt: new Date().toISOString(),
+    expiresAt: Date.now() + 60_000,
+    baselineIdentities: [],
+    events: []
+  });
+
+  const callbacks = service.buildZWaveInclusionCallbacks({
+    SecurityClass: {
+      S2_AccessControl: 1,
+      S2_Authenticated: 2,
+      S2_Unauthenticated: 3,
+      S0_Legacy: 4
+    }
+  });
+  const pinPromise = callbacks.validateDSKAndEnterPIN('12345-11111-22222-33333-44444-55555-66666-77777');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const waitingPairing = service.serializePairingSession(service.activePairings.get('zwave'));
+  assert.equal(waitingPairing.status, 'awaiting_dsk');
+  assert.equal(waitingPairing.pendingDsk, '12345-11111-22222-33333-44444-55555-66666-77777');
+
+  const submitResult = service.submitZWaveDskPin('12345');
+  assert.equal(submitResult.accepted, true);
+  assert.equal(await pinPromise, '12345');
+  assert.equal(service.zwave.pendingDsk, null);
+});
+
+test('generic pairing session completes immediately when an included direct device is upserted', () => {
+  const service = createService();
+  service.activePairings.set('zwave', {
+    id: 'pairing-zwave-complete',
+    protocol: 'zwave',
+    mode: 'inclusion',
+    status: 'active',
+    startedAt: new Date().toISOString(),
+    expiresAt: Date.now() + 60_000,
+    baselineIdentities: ['3'],
+    events: []
+  });
+
+  const session = service.completePairingSession(
+    'zwave',
+    { protocol: 'zwave', id: '3', source: 'homebrain-zwave' },
+    { _id: { toString: () => 'device-node-3' }, name: 'Cold Storage Switch' },
+    'node added'
+  );
+
+  assert.equal(session.status, 'completed');
+  assert.equal(session.directDeviceId, 'device-node-3');
+  assert.equal(session.directDeviceName, 'Cold Storage Switch');
+  assert.equal(session.detectedIdentity.id, '3');
+});
+
+test('generic pairing baseline ignores already-known Z-Wave nodes', () => {
+  const service = createService();
+  service.zwave.driver = {
+    controller: {
+      nodes: new Map([
+        [1, { id: 1, isControllerNode: true }],
+        [3, { id: 3, isControllerNode: false }]
+      ])
+    }
+  };
+
+  const session = service.createPairingSession('zwave', 60);
+  session.status = 'active';
+  assert.deepEqual(session.baselineIdentities, ['3']);
+
+  const unchanged = service.completePairingSession(
+    'zwave',
+    { protocol: 'zwave', id: '3', source: 'homebrain-zwave' },
+    { _id: { toString: () => 'device-node-3' }, name: 'Existing Z-Wave Node' },
+    'node value updated'
+  );
+  assert.equal(unchanged.status, 'active');
+
+  const completed = service.completePairingSession(
+    'zwave',
+    { protocol: 'zwave', id: '4', source: 'homebrain-zwave' },
+    { _id: { toString: () => 'device-node-4' }, name: 'New Z-Wave Node' },
+    'node value updated'
+  );
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.detectedIdentity.id, '4');
+});

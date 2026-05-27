@@ -57,6 +57,8 @@ struct DevicesView: View {
     @State private var addDeviceBusy = false
     @State private var addDeviceStatusMessage: String?
     @State private var addDeviceDurationSeconds = 180
+    @State private var addDevicePendingDsk = ""
+    @State private var addDeviceDskPin = ""
     @State private var newName = ""
     @State private var newType = "light"
     @State private var newRoom = ""
@@ -1619,6 +1621,37 @@ struct DevicesView: View {
                                 }
                             }
 
+                            if addDeviceMode == "zwave" && !addDevicePendingDsk.isEmpty {
+                                VStack(alignment: .leading, spacing: 10) {
+                                    Text("S2 security needs the 5 digit DSK PIN.")
+                                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                                        .foregroundStyle(HBPalette.accentOrange)
+                                    Text("DSK challenge: \(addDevicePendingDsk)")
+                                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(HBPalette.textSecondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    HStack(spacing: 8) {
+                                        TextField("5 digit PIN", text: $addDeviceDskPin)
+                                            .keyboardType(.numberPad)
+                                            .hbPanelTextField()
+                                            .onChange(of: addDeviceDskPin) { _, newValue in
+                                                addDeviceDskPin = String(newValue.filter(\.isNumber).prefix(5))
+                                            }
+                                        Button("Submit PIN") {
+                                            Task { await submitAddDeviceDskPin() }
+                                        }
+                                        .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                                        .disabled(addDeviceDskPin.count != 5)
+                                    }
+                                }
+                                .padding(12)
+                                .background(HBPalette.accentOrange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .stroke(HBPalette.accentOrange.opacity(0.35), lineWidth: 1)
+                                )
+                            }
+
                             if let addDeviceStatusMessage {
                                 Text(addDeviceStatusMessage)
                                     .font(.system(size: 12, weight: .semibold, design: .rounded))
@@ -2544,6 +2577,8 @@ struct DevicesView: View {
         }
 
         addDeviceBusy = true
+        addDevicePendingDsk = ""
+        addDeviceDskPin = ""
         defer { addDeviceBusy = false }
 
         do {
@@ -2559,9 +2594,81 @@ struct DevicesView: View {
             let expiresAt = JSON.optionalString(result, "expiresAt") ?? ""
             let suffix = expiresAt.isEmpty ? "" : " Window expires at \(JSON.displayDate(from: expiresAt))."
             addDeviceStatusMessage = protocolName == "zwave"
-                ? "Z-Wave inclusion is live. Perform the device include action; HomeBrain adds the node when zwave-js reports it.\(suffix)"
+                ? "Z-Wave inclusion is live. Perform the device include action; HomeBrain will move on as soon as the controller detects the node.\(suffix)"
                 : "Zigbee permit-join is live. Pair or reset the device; HomeBrain adds it after join and interview.\(suffix)"
-            await loadDevices(showLoading: false)
+            await monitorDirectRadioAdd(protocolName: protocolName, durationSeconds: addDeviceDurationSeconds)
+        } catch {
+            addDeviceStatusMessage = error.localizedDescription
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func monitorDirectRadioAdd(protocolName: String, durationSeconds: Int) async {
+        let deadline = Date().addingTimeInterval(TimeInterval(durationSeconds + 30))
+
+        while Date() < deadline && showCreateSheet {
+            do {
+                let response = try await session.apiClient.get("/api/direct-radios/status")
+                let root = JSON.object(response)
+                let status = JSON.object(root["status"])
+                let pairings = JSON.object(status["pairings"])
+                let pairing = JSON.object(pairings[protocolName])
+                let pairingStatus = JSON.string(pairing, "status")
+                let message = JSON.string(pairing, "message")
+
+                if protocolName == "zwave" {
+                    let pendingDsk = JSON.string(pairing, "pendingDsk")
+                    if pairingStatus == "awaiting_dsk" && !pendingDsk.isEmpty {
+                        addDevicePendingDsk = pendingDsk
+                        addDeviceStatusMessage = "Z-Wave found the switch and needs the 5 digit DSK PIN to finish S2 security."
+                    }
+                }
+
+                if pairingStatus == "completed" {
+                    addDevicePendingDsk = ""
+                    addDeviceStatusMessage = message.isEmpty ? "\(addDeviceModeLabel(protocolName)) device joined HomeBrain." : message
+                    await loadDevices(showLoading: false)
+                    return
+                }
+
+                if pairingStatus == "failed" || pairingStatus == "expired" {
+                    addDeviceStatusMessage = message.isEmpty ? "\(addDeviceModeLabel(protocolName)) pairing did not complete." : message
+                    errorMessage = addDeviceStatusMessage
+                    await loadDevices(showLoading: false)
+                    return
+                }
+
+                await loadDevices(showLoading: false)
+            } catch {
+                addDeviceStatusMessage = error.localizedDescription
+                errorMessage = error.localizedDescription
+                return
+            }
+
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+        }
+
+        if showCreateSheet {
+            addDeviceStatusMessage = "\(addDeviceModeLabel(protocolName)) pairing window ended before HomeBrain verified a new device. Start pairing again and repeat the physical include action while the window is open."
+            errorMessage = addDeviceStatusMessage
+        }
+    }
+
+    private func submitAddDeviceDskPin() async {
+        let pin = String(addDeviceDskPin.filter(\.isNumber).prefix(5))
+        guard pin.count == 5 else {
+            addDeviceStatusMessage = "Enter the 5 digit DSK PIN from the switch label or QR code."
+            return
+        }
+
+        do {
+            _ = try await session.apiClient.post(
+                "/api/direct-radios/pairing/zwave/dsk-pin",
+                body: ["pin": pin]
+            )
+            addDeviceDskPin = ""
+            addDevicePendingDsk = ""
+            addDeviceStatusMessage = "Z-Wave S2 PIN submitted. Keep the switch powered while HomeBrain finishes the interview."
         } catch {
             addDeviceStatusMessage = error.localizedDescription
             errorMessage = error.localizedDescription

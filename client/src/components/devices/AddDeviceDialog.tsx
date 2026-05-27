@@ -12,7 +12,14 @@ import {
   Zap
 } from "lucide-react"
 
-import { startDirectRadioPairing, stopDirectRadioPairing, type DirectRadioProtocol } from "@/api/directRadios"
+import {
+  getDirectRadioStatus,
+  startDirectRadioPairing,
+  stopDirectRadioPairing,
+  submitZWaveDskPin,
+  type DirectRadioPairingSession,
+  type DirectRadioProtocol
+} from "@/api/directRadios"
 import { getMatterCommissioningSessions, startMatterCommissioning, type MatterTransport } from "@/api/matter"
 import { linkInsteonDevice } from "@/api/insteon"
 import type { DeviceRecord } from "@/api/devices"
@@ -86,6 +93,32 @@ const protocolMatchesDevice = (device: DeviceRecord, protocol: AddDeviceProtocol
   return source === "homebrain-matter" || source === "homebrain-thread"
 }
 
+const getDirectIdentity = (device: DeviceRecord, protocol: AddDeviceProtocol) => {
+  const direct = device.properties?.homebrainDirect
+  if (protocol === "zwave") {
+    const nodeId = direct?.nodeId
+    return nodeId === undefined || nodeId === null ? "" : String(nodeId)
+  }
+  if (protocol === "zigbee") {
+    return typeof direct?.ieeeAddr === "string" ? direct.ieeeAddr : ""
+  }
+  return ""
+}
+
+const getDirectLastSeenTime = (device: DeviceRecord) => {
+  const value = device.properties?.homebrainDirect?.lastSeen || device.lastSeen
+  if (!value || value === "Just now") {
+    return value === "Just now" ? Date.now() : 0
+  }
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime()
+}
+
+const isZWaveControllerNode = (device: DeviceRecord) => (
+  getDeviceSource(device) === "homebrain-zwave"
+  && Number(device.properties?.homebrainDirect?.nodeId) === 1
+)
+
 const formatExpiration = (value: string | null) => {
   if (!value) {
     return ""
@@ -103,10 +136,15 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
   const [busy, setBusy] = useState(false)
   const [activeProtocol, setActiveProtocol] = useState<AddDeviceProtocol | null>(null)
   const [baselineIds, setBaselineIds] = useState<Set<string>>(new Set())
+  const [baselineDirectIdentities, setBaselineDirectIdentities] = useState<Set<string>>(new Set())
+  const [pairingStartedAt, setPairingStartedAt] = useState<number>(0)
+  const [currentPairing, setCurrentPairing] = useState<DirectRadioPairingSession | null>(null)
   const [foundDevice, setFoundDevice] = useState<DeviceRecord | null>(null)
   const [expiresAt, setExpiresAt] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [zwaveDskPin, setZwaveDskPin] = useState("")
+  const [submittingDsk, setSubmittingDsk] = useState(false)
   const [matterSetupCode, setMatterSetupCode] = useState("")
   const [matterTransport, setMatterTransport] = useState<MatterTransport>("thread")
   const [matterKnownAddress, setMatterKnownAddress] = useState("")
@@ -134,6 +172,10 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       setExpiresAt(null)
       setStatusMessage(null)
       setErrorMessage(null)
+      setCurrentPairing(null)
+      setPairingStartedAt(0)
+      setZwaveDskPin("")
+      setSubmittingDsk(false)
     }
   }, [open])
 
@@ -142,16 +184,24 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       return
     }
 
-    const discovered = devices.find((device) => (
-      !baselineIds.has(device._id) && protocolMatchesDevice(device, activeProtocol)
-    ))
+    const discovered = devices.find((device) => {
+      if (!protocolMatchesDevice(device, activeProtocol) || isZWaveControllerNode(device)) {
+        return false
+      }
+      const directIdentity = getDirectIdentity(device, activeProtocol)
+      const identityIsNew = directIdentity ? !baselineDirectIdentities.has(directIdentity) : false
+      const rowIsNew = !baselineIds.has(device._id)
+      const refreshedDuringPairing = pairingStartedAt > 0 && getDirectLastSeenTime(device) >= pairingStartedAt - 2_000
+      return rowIsNew || identityIsNew || refreshedDuringPairing
+    })
 
     if (discovered) {
       setFoundDevice(discovered)
       setBusy(false)
+      setCurrentPairing(null)
       setStatusMessage(`${discovered.name} was added to HomeBrain.`)
     }
-  }, [activeProtocol, baselineIds, devices, foundDevice])
+  }, [activeProtocol, baselineDirectIdentities, baselineIds, devices, foundDevice, pairingStartedAt])
 
   useEffect(() => {
     if (!open || !activeProtocol || foundDevice || !onRefresh) {
@@ -165,14 +215,76 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
     return () => window.clearInterval(poll)
   }, [activeProtocol, foundDevice, onRefresh, open])
 
-  const captureBaseline = () => {
+  useEffect(() => {
+    if (!open || !activeProtocol || foundDevice || !["zwave", "zigbee"].includes(activeProtocol)) {
+      return
+    }
+
+    let cancelled = false
+    const pollStatus = async () => {
+      try {
+        const response = await getDirectRadioStatus()
+        if (cancelled) {
+          return
+        }
+        const pairing = response.status.pairings?.[activeProtocol as DirectRadioProtocol] || null
+        setCurrentPairing(pairing)
+
+        if (activeProtocol === "zwave") {
+          const pendingDsk = pairing?.pendingDsk || response.status.controllers.zwave.pendingDsk || null
+          if (pendingDsk && pairing?.status === "awaiting_dsk") {
+            setStatusMessage("Z-Wave found the switch and needs the 5 digit DSK PIN to finish S2 security.")
+          }
+        }
+
+        if (pairing?.status === "completed") {
+          setBusy(false)
+          setActiveProtocol(null)
+          setExpiresAt(null)
+          setStatusMessage(pairing.message || `${activeLabel} device joined HomeBrain.`)
+          await onRefresh?.()
+          return
+        }
+
+        if (pairing?.status === "failed" || pairing?.status === "expired") {
+          setBusy(false)
+          setActiveProtocol(null)
+          setErrorMessage(pairing.message || `${activeLabel} pairing did not complete.`)
+          await onRefresh?.()
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setErrorMessage(error instanceof Error ? error.message : "Unable to read pairing status.")
+        }
+      }
+    }
+
+    void pollStatus()
+    const poll = window.setInterval(() => {
+      void pollStatus()
+    }, 1_500)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(poll)
+    }
+  }, [activeLabel, activeProtocol, foundDevice, onRefresh, open])
+
+  const captureBaseline = (targetProtocol: AddDeviceProtocol = protocol) => {
     setBaselineIds(new Set(devices.map((device) => device._id)))
+    setBaselineDirectIdentities(new Set(devices
+      .map((device) => getDirectIdentity(device, targetProtocol))
+      .filter(Boolean)
+    ))
+    setPairingStartedAt(Date.now())
+    setCurrentPairing(null)
     setFoundDevice(null)
     setErrorMessage(null)
+    setZwaveDskPin("")
   }
 
   const startDirectRadioAdd = async (targetProtocol: DirectRadioProtocol) => {
-    captureBaseline()
+    captureBaseline(targetProtocol)
     setBusy(true)
     setActiveProtocol(targetProtocol)
     try {
@@ -183,9 +295,10 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       })
       const nextExpiresAt = response?.result?.expiresAt || null
       setExpiresAt(nextExpiresAt)
+      setCurrentPairing(response?.result?.pairing || null)
       setStatusMessage(
         targetProtocol === "zwave"
-          ? `Z-Wave inclusion is live${formatExpiration(nextExpiresAt) ? ` until ${formatExpiration(nextExpiresAt)}` : ""}. HomeBrain will add the node when the controller reports it.`
+          ? `Z-Wave inclusion is live${formatExpiration(nextExpiresAt) ? ` until ${formatExpiration(nextExpiresAt)}` : ""}. HomeBrain will move on as soon as the controller detects the node.`
           : `Zigbee permit-join is live${formatExpiration(nextExpiresAt) ? ` until ${formatExpiration(nextExpiresAt)}` : ""}. HomeBrain will add the device after interview.`
       )
       await onRefresh?.()
@@ -279,6 +392,27 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
     }
   }
 
+  const submitDskPin = async () => {
+    const pin = zwaveDskPin.trim()
+    if (!/^\d{5}$/.test(pin)) {
+      setErrorMessage("Enter the 5 digit DSK PIN from the switch label or QR code.")
+      return
+    }
+    setSubmittingDsk(true)
+    setErrorMessage(null)
+    try {
+      const response = await submitZWaveDskPin(pin)
+      setCurrentPairing(response.status?.pairings?.zwave || response.result?.pairing || currentPairing)
+      setStatusMessage("Z-Wave S2 PIN submitted. Keep the switch powered while HomeBrain finishes the interview.")
+      setZwaveDskPin("")
+      await onRefresh?.()
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to submit the Z-Wave DSK PIN.")
+    } finally {
+      setSubmittingDsk(false)
+    }
+  }
+
   const startSelectedProtocol = () => {
     if (protocol === "zwave" || protocol === "zigbee") {
       void startDirectRadioAdd(protocol)
@@ -291,6 +425,9 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
 
   const selectedIcon = selectedProtocol.icon
   const Icon = selectedIcon
+  const pendingZWaveDsk = activeProtocol === "zwave" && currentPairing?.status === "awaiting_dsk"
+    ? currentPairing.pendingDsk || null
+    : null
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -445,6 +582,33 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
           )}>
             {foundDevice ? <CheckCircle2 className="mt-0.5 h-4 w-4" /> : <RefreshCw className="mt-0.5 h-4 w-4" />}
             <span>{statusMessage}</span>
+          </div>
+        ) : null}
+
+        {pendingZWaveDsk ? (
+          <div className="space-y-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-4">
+            <div className="flex items-start gap-3 text-sm text-amber-800 dark:text-amber-100">
+              <AlertTriangle className="mt-0.5 h-4 w-4" />
+              <div className="min-w-0 space-y-1">
+                <p className="font-semibold">S2 security needs the 5 digit DSK PIN.</p>
+                <p className="break-all text-xs opacity-90">DSK challenge: {pendingZWaveDsk}</p>
+              </div>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+              <Input
+                inputMode="numeric"
+                pattern="[0-9]*"
+                maxLength={5}
+                value={zwaveDskPin}
+                onChange={(event) => setZwaveDskPin(event.target.value.replace(/\D/g, "").slice(0, 5))}
+                placeholder="5 digit PIN"
+                disabled={submittingDsk}
+              />
+              <Button type="button" onClick={() => void submitDskPin()} disabled={submittingDsk || !/^\d{5}$/.test(zwaveDskPin)}>
+                {submittingDsk ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Submit PIN
+              </Button>
+            </div>
           </div>
         ) : null}
 
