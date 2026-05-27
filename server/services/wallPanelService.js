@@ -44,6 +44,10 @@ const PANEL_OTA_BUILD_STALE_MS = Math.max(
   60_000,
   Number(process.env.HOMEBRAIN_PANEL_OTA_BUILD_STALE_MS || 2 * 60 * 1000)
 );
+const PANEL_STATE_HEARTBEAT_INTERVAL_MS = Math.max(
+  5_000,
+  Number(process.env.HOMEBRAIN_PANEL_STATE_HEARTBEAT_INTERVAL_MS || 30_000)
+);
 
 const PANEL_MODE_ORDER = Object.freeze(['thermostat', 'room', 'home', 'media', 'quiet']);
 const PANEL_MODE_SET = new Set(PANEL_MODE_ORDER);
@@ -294,6 +298,12 @@ function extractPanelFirmwareTimestamp(value) {
   return Number.isNaN(date.getTime()) ? null : date.getTime();
 }
 
+function extractPanelFirmwareFingerprint(value) {
+  const normalized = trimString(value).toLowerCase();
+  const match = normalized.match(/^panel-\d{8}t\d{6}z-([a-z0-9]+)(?:-.+)?$/);
+  return match ? match[1] : '';
+}
+
 function normalizeComparableVersion(value) {
   return trimString(value)
     .toLowerCase()
@@ -335,6 +345,12 @@ function isFirmwareUpdateAvailable(installedVersion, latestVersion) {
 
   const installedTimestamp = extractPanelFirmwareTimestamp(installed);
   const latestTimestamp = extractPanelFirmwareTimestamp(latest);
+  const installedFingerprint = extractPanelFirmwareFingerprint(installed);
+  const latestFingerprint = extractPanelFirmwareFingerprint(latest);
+
+  if (installedFingerprint && latestFingerprint && installedFingerprint === latestFingerprint) {
+    return false;
+  }
 
   if (installedTimestamp !== null && latestTimestamp !== null) {
     if (latestTimestamp !== installedTimestamp) {
@@ -2001,6 +2017,37 @@ class WallPanelService {
     };
   }
 
+  async markPanelStatePoll(panelDoc, now = new Date()) {
+    const panelId = toId(panelDoc?._id || panelDoc?.id);
+    if (!panelId || WallPanel.db?.readyState !== 1) {
+      return false;
+    }
+
+    const nowTime = now.getTime();
+    const previousTime = panelDoc.lastSeen ? new Date(panelDoc.lastSeen).getTime() : 0;
+    const currentStatus = trimString(panelDoc.status).toLowerCase();
+    const staleHeartbeat = !Number.isFinite(previousTime)
+      || previousTime <= 0
+      || nowTime - previousTime >= PANEL_STATE_HEARTBEAT_INTERVAL_MS;
+    const shouldPromoteOnline = currentStatus === 'offline' || currentStatus === 'error';
+
+    if (!staleHeartbeat && !shouldPromoteOnline) {
+      return false;
+    }
+
+    const $set = { lastSeen: now };
+    if (shouldPromoteOnline) {
+      $set.status = 'online';
+    }
+
+    await WallPanel.updateOne({ _id: panelId }, { $set });
+    panelDoc.lastSeen = now;
+    if (shouldPromoteOnline) {
+      panelDoc.status = 'online';
+    }
+    return true;
+  }
+
   async getPanelWifiBuildConfig() {
     const settings = await Settings.getSettings();
     const wifi = getPanelWifiBuildConfigFromSettings(settings);
@@ -3150,7 +3197,11 @@ class WallPanelService {
   }
 
   async getPanelState(panelId, credentials = {}, origin = '') {
-    const panel = normalizePanelDocument(await ensurePanelAccess(panelId, credentials));
+    const panelDoc = await ensurePanelAccess(panelId, credentials);
+    void this.markPanelStatePoll(panelDoc).catch((error) => {
+      console.warn(`WallPanelService: Failed to record panel state heartbeat for ${panelId}: ${error.message}`);
+    });
+    const panel = normalizePanelDocument(panelDoc);
     const needsAllDevices = uniqueIds([
       panel?.settings?.roomControl?.lightDeviceId,
       ...(Array.isArray(panel?.settings?.roomControl?.favoriteDeviceIds)
