@@ -60,6 +60,7 @@ struct DevicesView: View {
     @State private var addDevicePendingDsk = ""
     @State private var addDeviceDskPin = ""
     @State private var addDeviceRepairingZWaveNodeId: Int?
+    @State private var addDeviceKnownZWaveNodeIds: Set<Int>?
     @State private var newName = ""
     @State private var newType = "light"
     @State private var newRoom = ""
@@ -1671,6 +1672,13 @@ struct DevicesView: View {
                 .padding(18)
             }
             .toolbar(.hidden, for: .navigationBar)
+            .task(id: addDeviceMode) {
+                if addDeviceMode == "zwave" {
+                    await loadZWaveRepairNodeIds()
+                } else {
+                    addDeviceKnownZWaveNodeIds = nil
+                }
+            }
         }
     }
 
@@ -1725,7 +1733,13 @@ struct DevicesView: View {
     private var zwaveRepairCandidates: [DeviceItem] {
         Array(
             devices
-                .filter(isIncompleteZWaveDirectDevice)
+                .filter { device in
+                    guard let nodeId = zWaveNodeId(for: device),
+                          let knownNodeIds = addDeviceKnownZWaveNodeIds else {
+                        return false
+                    }
+                    return knownNodeIds.contains(nodeId) && isIncompleteZWaveDirectDevice(device)
+                }
                 .sorted { (zWaveNodeId(for: $0) ?? 0) > (zWaveNodeId(for: $1) ?? 0) }
                 .prefix(4)
         )
@@ -2682,6 +2696,9 @@ struct DevicesView: View {
                 let response = try await session.apiClient.get("/api/direct-radios/status")
                 let root = JSON.object(response)
                 let status = JSON.object(root["status"])
+                if protocolName == "zwave" {
+                    updateKnownZWaveNodeIds(from: status)
+                }
                 let pairings = JSON.object(status["pairings"])
                 let pairing = JSON.object(pairings[protocolName])
                 let pairingStatus = JSON.string(pairing, "status")
@@ -2746,6 +2763,37 @@ struct DevicesView: View {
         }
     }
 
+    private func updateKnownZWaveNodeIds(from status: [String: Any]) {
+        let controllers = JSON.object(status["controllers"])
+        let zwave = JSON.object(controllers["zwave"])
+        let nodeIds = Set(
+            JSON.array(zwave["nodes"])
+                .filter { !JSON.bool($0, "isControllerNode") }
+                .map { JSON.int($0, "id") }
+                .filter { $0 > 0 }
+        )
+        addDeviceKnownZWaveNodeIds = nodeIds
+    }
+
+    private func loadZWaveRepairNodeIds() async {
+        if previewMode {
+            addDeviceKnownZWaveNodeIds = Set(
+                UIPreviewData.devices
+                    .compactMap { zWaveNodeId(for: $0) }
+                    .filter { $0 != 1 }
+            )
+            return
+        }
+
+        do {
+            let response = try await session.apiClient.get("/api/direct-radios/status")
+            let root = JSON.object(response)
+            updateKnownZWaveNodeIds(from: JSON.object(root["status"]))
+        } catch {
+            addDeviceKnownZWaveNodeIds = []
+        }
+    }
+
     private func repairZWaveNode(_ device: DeviceItem) async {
         guard let nodeId = zWaveNodeId(for: device) else {
             addDeviceStatusMessage = "HomeBrain could not find the Z-Wave node id for that device."
@@ -2770,6 +2818,7 @@ struct DevicesView: View {
                 ]
             )
             let root = JSON.object(response)
+            updateKnownZWaveNodeIds(from: JSON.object(root["status"]))
             let result = JSON.object(root["result"])
             let ping = result["ping"] as? Bool
             addDeviceStatusMessage = ping == false
