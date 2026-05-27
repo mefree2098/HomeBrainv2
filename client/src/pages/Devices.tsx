@@ -70,6 +70,10 @@ const SMARTTHINGS_CAMERA_CAPABILITIES = [
 const SMARTTHINGS_VIRTUAL_SWITCH_PRESENTATION_IDS = new Set([
   '74cf66e1-ae7f-3a14-a6a8-1affef9ec321'
 ])
+const SMARTTHINGS_UNKNOWN_NETWORK_TYPES = new Set([
+  'unknown',
+  'unknownnetworktype'
+])
 const SMARTTHINGS_CATEGORY_LABELS: Record<string, string> = {
   airconditioner: 'Air Conditioners',
   airpurifier: 'Air Purifiers',
@@ -380,6 +384,10 @@ const normalizeSmartThingsCategoryToken = (value: unknown): string => {
   return normalizeSmartThingsValue(value).toLowerCase().replace(/[^a-z0-9]/g, '')
 }
 
+const normalizeSmartThingsNetworkType = (value: unknown): string => {
+  return normalizeSmartThingsValue(value).toLowerCase().replace(/[\s_-]/g, '')
+}
+
 const getSmartThingsCapabilities = (device: any): string[] => {
   const rawCapabilities = [
     ...(Array.isArray(device?.properties?.smartThingsCapabilities) ? device.properties.smartThingsCapabilities : []),
@@ -426,7 +434,6 @@ const isInsteonBackedDevice = (device: any): boolean => {
 const getDeviceFilterDescriptor = (device: any): string => {
   return [
     device?.name,
-    device?.room,
     device?.brand,
     device?.model,
     device?.properties?.smartThingsDeviceName,
@@ -438,6 +445,19 @@ const getDeviceFilterDescriptor = (device: any): string => {
     .filter((value) => typeof value === 'string' && value.trim().length > 0)
     .join(' ')
     .toLowerCase()
+}
+
+const getDeviceRoomDescriptor = (device: any): string => {
+  return (device?.room || '').toString().trim().toLowerCase()
+}
+
+const getSmartThingsNetworkType = (device: any): string => {
+  return normalizeSmartThingsNetworkType(device?.properties?.smartThingsDeviceNetworkType)
+}
+
+const hasKnownSmartThingsNetworkType = (device: any): boolean => {
+  const networkType = getSmartThingsNetworkType(device)
+  return networkType.length > 0 && !SMARTTHINGS_UNKNOWN_NETWORK_TYPES.has(networkType)
 }
 
 const hasAnySmartThingsCapability = (device: any, capabilities: readonly string[]): boolean => {
@@ -479,11 +499,22 @@ const isSmartThingsVirtualSwitch = (device: any): boolean => {
   }
 
   const descriptor = getDeviceFilterDescriptor(device)
+  const roomDescriptor = getDeviceRoomDescriptor(device)
+  const networkType = getSmartThingsNetworkType(device)
+
+  if (networkType === 'virtual') {
+    return true
+  }
+
+  if (hasKnownSmartThingsNetworkType(device)) {
+    return false
+  }
+
   return /\b(?:virtual|simulated|trigger)\b/.test(descriptor)
-    || (device?.room || '').toString().toLowerCase().includes('virtual switch')
+    || roomDescriptor.includes('virtual switch')
     || /\bsthm\b/.test(descriptor)
     || (
-      descriptor.includes('home monitor switches')
+      roomDescriptor.includes('home monitor switches')
       && hasOnlySmartThingsCapabilities(device, ['switch', 'refresh'])
     )
     || (
