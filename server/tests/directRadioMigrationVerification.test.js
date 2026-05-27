@@ -377,3 +377,76 @@ test('generic pairing baseline ignores already-known Z-Wave nodes', () => {
   assert.equal(completed.status, 'completed');
   assert.equal(completed.detectedIdentity.id, '4');
 });
+
+test('Z-Wave node refresh requests a fresh interview for an already-included node', async () => {
+  const service = createService();
+  service.started = true;
+  let refreshOptions = null;
+  let pingTryReallyHard = null;
+  const node = {
+    id: 4,
+    isControllerNode: false,
+    ready: false,
+    status: 0,
+    valueDB: { hasValue: () => false },
+    ping: async (tryReallyHard) => {
+      pingTryReallyHard = tryReallyHard;
+      return false;
+    },
+    refreshInfo: async (options) => {
+      refreshOptions = options;
+    }
+  };
+  service.zwave.driver = {
+    controller: {
+      nodes: new Map([
+        [1, { id: 1, isControllerNode: true }],
+        [4, node]
+      ])
+    }
+  };
+
+  const result = await service.refreshZWaveNodeInfo(4, {
+    waitForWakeup: false,
+    pingFirst: true
+  });
+
+  assert.equal(pingTryReallyHard, true);
+  assert.deepEqual(refreshOptions, {
+    resetSecurityClasses: false,
+    waitForWakeup: false
+  });
+  assert.equal(result.node.id, 4);
+  assert.equal(result.node.incomplete, true);
+  assert.equal(result.ping, false);
+});
+
+test('Z-Wave failed-node removal refuses a responding node unless forced', async () => {
+  const service = createService();
+  service.started = true;
+  let removeCalled = false;
+  const node = {
+    id: 4,
+    isControllerNode: false,
+    ready: false,
+    status: 0,
+    valueDB: { hasValue: () => false }
+  };
+  service.zwave.driver = {
+    controller: {
+      nodes: new Map([
+        [4, node]
+      ]),
+      isFailedNode: async () => false,
+      removeFailedNode: async () => {
+        removeCalled = true;
+      }
+    }
+  };
+
+  await assert.rejects(
+    () => service.removeFailedZWaveNode(4, { confirm: true }),
+    /still responding/
+  );
+  assert.equal(removeCalled, false);
+});

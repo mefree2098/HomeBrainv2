@@ -178,6 +178,39 @@ router.post('/pairing/zwave/dsk-pin', async (req, res) => {
   }
 });
 
+router.post('/zwave/nodes/:nodeId/refresh-info', async (req, res) => {
+  try {
+    const result = await directRadioService.refreshZWaveNodeInfo(req.params.nodeId, {
+      waitForWakeup: req.body?.waitForWakeup,
+      resetSecurityClasses: req.body?.resetSecurityClasses,
+      pingFirst: req.body?.pingFirst
+    });
+    res.status(200).json({
+      success: true,
+      result,
+      status: await directRadioService.getStatus()
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to refresh Z-Wave node information');
+  }
+});
+
+router.post('/zwave/nodes/:nodeId/remove-failed', async (req, res) => {
+  try {
+    const result = await directRadioService.removeFailedZWaveNode(req.params.nodeId, {
+      confirm: req.body?.confirm,
+      force: req.body?.force
+    });
+    res.status(200).json({
+      success: true,
+      result,
+      status: await directRadioService.getStatus()
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to remove failed Z-Wave node');
+  }
+});
+
 router.post('/pairing/stop', async (req, res) => {
   try {
     const protocol = String(req.body?.protocol || 'all').trim().toLowerCase();

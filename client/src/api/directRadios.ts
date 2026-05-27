@@ -40,6 +40,25 @@ export type DirectRadioControllerStatus = {
   lastStartResult?: unknown;
   pairedDeviceCount?: number;
   pairedNodeCount?: number;
+  nodes?: DirectRadioZWaveNode[];
+};
+
+export type DirectRadioZWaveNode = {
+  id: number | null;
+  name: string;
+  isControllerNode: boolean;
+  ready: boolean;
+  status: number | string | null;
+  interviewStage: string | null;
+  isListening: boolean | null;
+  isFrequentListening: boolean | null;
+  manufacturerId: number | string | null;
+  productType: number | string | null;
+  productId: number | string | null;
+  manufacturer: string | null;
+  productLabel: string | null;
+  features: string[];
+  incomplete: boolean;
 };
 
 export type DirectRadioStatus = {
@@ -281,6 +300,56 @@ export const submitZWaveDskPin = async (pin: string) => {
     };
   } catch (error) {
     console.error('Error submitting Z-Wave DSK PIN:', error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const refreshZWaveNodeInfo = async (
+  nodeId: number | string,
+  options: {
+    waitForWakeup?: boolean;
+    resetSecurityClasses?: boolean;
+    pingFirst?: boolean;
+  } = {}
+) => {
+  try {
+    const response = await api.post(`/api/direct-radios/zwave/nodes/${encodeURIComponent(String(nodeId))}/refresh-info`, options);
+    return response.data as {
+      success: boolean;
+      result?: {
+        node?: DirectRadioZWaveNode | null;
+        before?: DirectRadioZWaveNode | null;
+        ping?: boolean | null;
+        pingError?: string | null;
+        message?: string | null;
+      };
+      status?: DirectRadioStatus;
+    };
+  } catch (error) {
+    console.error('Error refreshing Z-Wave node info:', error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const removeFailedZWaveNode = async (
+  nodeId: number | string,
+  options: { confirm: boolean; force?: boolean }
+) => {
+  try {
+    const response = await api.post(`/api/direct-radios/zwave/nodes/${encodeURIComponent(String(nodeId))}/remove-failed`, options);
+    return response.data as {
+      success: boolean;
+      result?: {
+        nodeId?: number;
+        failed?: boolean | null;
+        force?: boolean;
+        deletedDeviceCount?: number;
+        message?: string | null;
+      };
+      status?: DirectRadioStatus;
+    };
+  } catch (error) {
+    console.error('Error removing failed Z-Wave node:', error);
     throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };

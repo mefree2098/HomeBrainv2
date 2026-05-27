@@ -9,11 +9,13 @@ import {
   RadioTower,
   RefreshCw,
   StopCircle,
+  Wrench,
   Zap
 } from "lucide-react"
 
 import {
   getDirectRadioStatus,
+  refreshZWaveNodeInfo,
   startDirectRadioPairing,
   stopDirectRadioPairing,
   submitZWaveDskPin,
@@ -119,6 +121,27 @@ const isZWaveControllerNode = (device: DeviceRecord) => (
   && Number(device.properties?.homebrainDirect?.nodeId) === 1
 )
 
+const getZWaveNodeId = (device: DeviceRecord) => {
+  const nodeId = Number(device.properties?.homebrainDirect?.nodeId)
+  return Number.isFinite(nodeId) && nodeId > 0 ? nodeId : null
+}
+
+const getDirectFeatures = (device: DeviceRecord) => {
+  const features = device.properties?.directRadioFeatures
+  return Array.isArray(features) ? features.map(String).filter(Boolean) : []
+}
+
+const isIncompleteZWaveDevice = (device: DeviceRecord) => {
+  if (getDeviceSource(device) !== "homebrain-zwave" || isZWaveControllerNode(device)) {
+    return false
+  }
+  const direct = device.properties?.homebrainDirect && typeof device.properties.homebrainDirect === "object"
+    ? device.properties.homebrainDirect as Record<string, unknown>
+    : {}
+  const hasIdentity = Boolean(direct.manufacturerId || direct.productType || direct.productId)
+  return device.isOnline === false || getDirectFeatures(device).length === 0 || !hasIdentity
+}
+
 const formatExpiration = (value: string | null) => {
   if (!value) {
     return ""
@@ -145,6 +168,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [zwaveDskPin, setZwaveDskPin] = useState("")
   const [submittingDsk, setSubmittingDsk] = useState(false)
+  const [repairingZWaveNodeId, setRepairingZWaveNodeId] = useState<number | null>(null)
   const [matterSetupCode, setMatterSetupCode] = useState("")
   const [matterTransport, setMatterTransport] = useState<MatterTransport>("thread")
   const [matterKnownAddress, setMatterKnownAddress] = useState("")
@@ -176,8 +200,17 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       setPairingStartedAt(0)
       setZwaveDskPin("")
       setSubmittingDsk(false)
+      setRepairingZWaveNodeId(null)
     }
   }, [open])
+
+  const zwaveRepairCandidates = useMemo(
+    () => devices
+      .filter(isIncompleteZWaveDevice)
+      .sort((left, right) => (getZWaveNodeId(right) || 0) - (getZWaveNodeId(left) || 0))
+      .slice(0, 4),
+    [devices]
+  )
 
   useEffect(() => {
     if (!activeProtocol || foundDevice) {
@@ -413,6 +446,35 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
     }
   }
 
+  const repairZWaveNode = async (device: DeviceRecord) => {
+    const nodeId = getZWaveNodeId(device)
+    if (!nodeId) {
+      setErrorMessage("HomeBrain could not find the Z-Wave node id for that device.")
+      return
+    }
+
+    setRepairingZWaveNodeId(nodeId)
+    setErrorMessage(null)
+    setStatusMessage(`Requesting a fresh Z-Wave interview for ${device.name || `Node ${nodeId}`}.`)
+    try {
+      const response = await refreshZWaveNodeInfo(nodeId, {
+        waitForWakeup: false,
+        pingFirst: true
+      })
+      const ping = response.result?.ping
+      setStatusMessage(
+        ping === false
+          ? `HomeBrain requested a fresh interview for node ${nodeId}, but it did not answer the first ping. Tap the switch once and refresh devices.`
+          : `HomeBrain requested a fresh interview for node ${nodeId}. Tap the switch once if it does not update in a few seconds.`
+      )
+      await onRefresh?.()
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to repair the Z-Wave node.")
+    } finally {
+      setRepairingZWaveNodeId(null)
+    }
+  }
+
   const startSelectedProtocol = () => {
     if (protocol === "zwave" || protocol === "zigbee") {
       void startDirectRadioAdd(protocol)
@@ -475,6 +537,40 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
               title="Start inclusion, then perform the switch include action."
               detail="For an already excluded switch, use the manufacturer include tap pattern while this window is live."
             />
+            {zwaveRepairCandidates.length > 0 ? (
+              <div className="space-y-3 rounded-lg border border-amber-500/35 bg-amber-500/10 p-4">
+                <div className="flex items-start gap-3 text-sm text-amber-800 dark:text-amber-100">
+                  <AlertTriangle className="mt-0.5 h-4 w-4" />
+                  <div className="min-w-0 space-y-1">
+                    <p className="font-semibold">Already-paired Z-Wave nodes need interview repair.</p>
+                    <p className="text-xs opacity-90">Use this when inclusion times out because the switch is already on the Zooz network.</p>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {zwaveRepairCandidates.map((device) => {
+                    const nodeId = getZWaveNodeId(device)
+                    return (
+                      <div key={device._id} className="flex flex-col gap-2 rounded-lg border border-border/60 bg-background/70 p-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-foreground">{device.name}</p>
+                          <p className="text-xs text-muted-foreground">Node {nodeId || "?"} · {getDirectFeatures(device).length || 0} features · {device.isOnline === false ? "offline" : "not fully interviewed"}</p>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => void repairZWaveNode(device)}
+                          disabled={busy || repairingZWaveNodeId === nodeId}
+                        >
+                          {repairingZWaveNodeId === nodeId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wrench className="mr-2 h-4 w-4" />}
+                          Repair Interview
+                        </Button>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : null}
           </TabsContent>
 
           <TabsContent value="zigbee" className="space-y-4">
