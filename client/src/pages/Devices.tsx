@@ -27,9 +27,11 @@ import {
   CheckCircle2,
   AlertCircle,
   Camera as CameraIcon,
+  PlusCircle,
   SlidersHorizontal
 } from "lucide-react"
 import { getDeviceGroups, getDevices, controlDevice, type DeviceGroupSummary } from "@/api/devices"
+import { AddDeviceDialog } from "@/components/devices/AddDeviceDialog"
 import { DeviceDetailsDialog } from "@/components/devices/DeviceDetailsDialog"
 import { useAlexaExposureRegistry } from "@/hooks/useAlexaExposureRegistry"
 import { useToast } from "@/hooks/useToast"
@@ -923,6 +925,7 @@ export function Devices({
   const [sortMode, setSortMode] = useState("default")
   const [viewMode, setViewMode] = useState("grid")
   const [activeTab, setActiveTab] = useState("all")
+  const [showAddDeviceDialog, setShowAddDeviceDialog] = useState(false)
   const [highlightedDeviceId, setHighlightedDeviceId] = useState<string | null>(null)
   const [detailDeviceId, setDetailDeviceId] = useState<string | null>(null)
   const [lightBrightnessDrafts, setLightBrightnessDrafts] = useState<Record<string, number>>({})
@@ -1984,6 +1987,14 @@ export function Devices({
         
         <div className="flex items-center gap-2">
           <Button
+            variant="outline"
+            onClick={() => setShowAddDeviceDialog(true)}
+            className="gap-2"
+          >
+            <PlusCircle className="h-4 w-4" />
+            Add Device
+          </Button>
+          <Button
             variant={viewMode === "grid" ? "default" : "outline"}
             size="icon"
             onClick={() => setViewMode("grid")}
@@ -2168,6 +2179,13 @@ export function Devices({
           ))}
         </TabsContent>
       </Tabs>
+
+      <AddDeviceDialog
+        devices={devices}
+        open={showAddDeviceDialog}
+        onOpenChange={setShowAddDeviceDialog}
+        onRefresh={refreshDevicesSnapshot}
+      />
 
       <DeviceDetailsDialog
         device={detailDevice}

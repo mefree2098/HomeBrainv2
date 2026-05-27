@@ -53,12 +53,17 @@ struct DevicesView: View {
     @State private var matterThreadDataset = ""
 
     @State private var showCreateSheet = false
+    @State private var addDeviceMode = "zwave"
+    @State private var addDeviceBusy = false
+    @State private var addDeviceStatusMessage: String?
+    @State private var addDeviceDurationSeconds = 180
     @State private var newName = ""
     @State private var newType = "light"
     @State private var newRoom = ""
     @State private var contentWidth: CGFloat = 0
 
     private let availableTypes = ["all", "light", "lock", "thermostat", "garage", "sensor", "switch", "camera"]
+    private let addDeviceModes = ["zwave", "zigbee", "insteon", "matter", "manual"]
     private let thermostatModes = ["auto", "cool", "heat", "off"]
 
     private enum ControlFeedback: Equatable {
@@ -1557,14 +1562,11 @@ struct DevicesView: View {
 
                         Spacer()
 
-                        Button("Create") {
-                            Task { await createDevice() }
+                        Button(addDevicePrimaryButtonTitle) {
+                            Task { await runAddDeviceAction() }
                         }
                         .buttonStyle(HBPrimaryButtonStyle())
-                        .disabled(
-                            newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                || newRoom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        )
+                        .disabled(addDevicePrimaryButtonDisabled)
                     }
 
                     HBPanel {
@@ -1575,7 +1577,7 @@ struct DevicesView: View {
                                 .tracking(2.6)
                                 .foregroundStyle(HBPalette.textMuted)
 
-                            Text("Add a new endpoint to the device matrix")
+                            Text("Add a native endpoint")
                                 .font(.system(size: 28, weight: .bold, design: .rounded))
                                 .foregroundStyle(
                                     LinearGradient(
@@ -1585,23 +1587,43 @@ struct DevicesView: View {
                                     )
                                 )
 
-                            TextField("Name", text: $newName)
-                                .hbPanelTextField()
-                            TextField("Room", text: $newRoom)
-                                .hbPanelTextField()
-
                             HStack {
-                                Text("Type")
+                                Text("Protocol")
                                     .font(.system(size: 14, weight: .semibold, design: .rounded))
                                     .foregroundStyle(HBPalette.textSecondary)
                                 Spacer()
-                                Picker("Type", selection: $newType) {
-                                    ForEach(availableTypes.filter { $0 != "all" }, id: \.self) { type in
-                                        Text(deviceTypeDisplayLabel(type)).tag(type)
+                                Picker("Protocol", selection: $addDeviceMode) {
+                                    ForEach(addDeviceModes, id: \.self) { mode in
+                                        Text(addDeviceModeLabel(mode)).tag(mode)
                                     }
                                 }
                                 .pickerStyle(.menu)
                                 .tint(HBPalette.accentBlue)
+                            }
+
+                            if addDeviceMode == "manual" {
+                                manualCreateFields
+                            } else if addDeviceMode == "matter" {
+                                matterAddFields
+                            } else {
+                                nativeRadioAddFields
+                            }
+
+                            if addDeviceBusy {
+                                HStack(spacing: 8) {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text("Waiting for HomeBrain hardware confirmation...")
+                                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(HBPalette.textSecondary)
+                                }
+                            }
+
+                            if let addDeviceStatusMessage {
+                                Text(addDeviceStatusMessage)
+                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(HBPalette.textSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                         }
                     }
@@ -1611,6 +1633,152 @@ struct DevicesView: View {
                 .padding(18)
             }
             .toolbar(.hidden, for: .navigationBar)
+        }
+    }
+
+    private var manualCreateFields: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            TextField("Name", text: $newName)
+                .hbPanelTextField()
+            TextField("Room", text: $newRoom)
+                .hbPanelTextField()
+
+            HStack {
+                Text("Type")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+                Spacer()
+                Picker("Type", selection: $newType) {
+                    ForEach(availableTypes.filter { $0 != "all" }, id: \.self) { type in
+                        Text(deviceTypeDisplayLabel(type)).tag(type)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(HBPalette.accentBlue)
+            }
+        }
+    }
+
+    private var nativeRadioAddFields: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Window")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+                Spacer()
+                Picker("Window", selection: $addDeviceDurationSeconds) {
+                    Text("1 min").tag(60)
+                    Text("3 min").tag(180)
+                    Text("5 min").tag(300)
+                    Text("10 min").tag(600)
+                }
+                .pickerStyle(.menu)
+                .tint(HBPalette.accentBlue)
+                .disabled(addDeviceBusy)
+            }
+
+            Text(nativeAddGuidance)
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var matterAddFields: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            TextField("Matter QR or manual code", text: $matterSetupCode)
+                .hbPanelTextField()
+                .disabled(addDeviceBusy)
+
+            HStack(spacing: 8) {
+                Picker("Transport", selection: $matterTransport) {
+                    Text("Thread").tag("thread")
+                    Text("IP").tag("ip")
+                    Text("Wi-Fi").tag("wifi")
+                    Text("Ethernet").tag("ethernet")
+                    Text("BLE").tag("ble")
+                }
+                .pickerStyle(.menu)
+                .tint(HBPalette.accentBlue)
+                .disabled(addDeviceBusy)
+
+                TextField("Known IP", text: $matterKnownAddress)
+                    .hbPanelTextField()
+                    .disabled(addDeviceBusy)
+            }
+
+            HStack(spacing: 8) {
+                TextField("Room", text: $matterRoom)
+                    .hbPanelTextField()
+                    .disabled(addDeviceBusy)
+                TextField("Name", text: $matterDeviceName)
+                    .hbPanelTextField()
+                    .disabled(addDeviceBusy)
+            }
+
+            if matterTransport == "wifi" {
+                HStack(spacing: 8) {
+                    TextField("Wi-Fi SSID", text: $matterWifiSsid)
+                        .hbPanelTextField()
+                        .disabled(addDeviceBusy)
+                    SecureField("Password", text: $matterWifiPassword)
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(addDeviceBusy)
+                }
+            }
+
+            if matterTransport == "thread" {
+                TextField("Thread dataset override", text: $matterThreadDataset)
+                    .hbPanelTextField()
+                    .disabled(addDeviceBusy)
+            }
+        }
+    }
+
+    private var addDevicePrimaryButtonTitle: String {
+        switch addDeviceMode {
+        case "zwave": return addDeviceBusy ? "Starting..." : "Start Z-Wave"
+        case "zigbee": return addDeviceBusy ? "Opening..." : "Open Zigbee"
+        case "insteon": return addDeviceBusy ? "Linking..." : "Link Insteon"
+        case "matter": return matterIsCommissioning || addDeviceBusy ? "Commissioning..." : "Commission"
+        default: return "Create"
+        }
+    }
+
+    private var addDevicePrimaryButtonDisabled: Bool {
+        if addDeviceBusy || matterIsCommissioning {
+            return true
+        }
+        if addDeviceMode == "manual" {
+            return newName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || newRoom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        if addDeviceMode == "matter" {
+            return matterSetupCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return false
+    }
+
+    private var nativeAddGuidance: String {
+        switch addDeviceMode {
+        case "zwave":
+            return "HomeBrain opens native Z-Wave inclusion on the Zooz controller. Perform the switch include action while the window is live; the device is added when zwave-js reports the new node."
+        case "zigbee":
+            return "HomeBrain opens Zigbee permit-join on the SONOFF coordinator. Reset or pair the device; it appears after join and interview."
+        case "insteon":
+            return "HomeBrain puts the PLM into link mode. Press the device set/link button; the PLM confirmation now creates or updates the HomeBrain device row."
+        default:
+            return ""
+        }
+    }
+
+    private func addDeviceModeLabel(_ mode: String) -> String {
+        switch mode {
+        case "zwave": return "Z-Wave"
+        case "zigbee": return "Zigbee"
+        case "insteon": return "Insteon"
+        case "matter": return "Matter"
+        default: return "Manual"
         }
     }
 
@@ -2346,6 +2514,89 @@ struct DevicesView: View {
             newRoom = ""
             newType = "light"
         } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func runAddDeviceAction() async {
+        addDeviceStatusMessage = nil
+        errorMessage = nil
+
+        switch addDeviceMode {
+        case "manual":
+            await createDevice()
+        case "zwave", "zigbee":
+            await startDirectRadioAdd(protocolName: addDeviceMode)
+        case "insteon":
+            await startInsteonAdd()
+        case "matter":
+            await startMatterCommissioning()
+            addDeviceStatusMessage = matterStatusMessage ?? "Matter commissioning started. HomeBrain will add the device after commissioning completes."
+        default:
+            await createDevice()
+        }
+    }
+
+    private func startDirectRadioAdd(protocolName: String) async {
+        if previewMode {
+            addDeviceStatusMessage = "\(addDeviceModeLabel(protocolName)) pairing would start on real HomeBrain hardware."
+            return
+        }
+
+        addDeviceBusy = true
+        defer { addDeviceBusy = false }
+
+        do {
+            let response = try await session.apiClient.post(
+                "/api/direct-radios/pairing/start",
+                body: [
+                    "protocol": protocolName,
+                    "durationSeconds": addDeviceDurationSeconds
+                ]
+            )
+            let root = JSON.object(response)
+            let result = JSON.object(root["result"])
+            let expiresAt = JSON.optionalString(result, "expiresAt") ?? ""
+            let suffix = expiresAt.isEmpty ? "" : " Window expires at \(JSON.displayDate(from: expiresAt))."
+            addDeviceStatusMessage = protocolName == "zwave"
+                ? "Z-Wave inclusion is live. Perform the device include action; HomeBrain adds the node when zwave-js reports it.\(suffix)"
+                : "Zigbee permit-join is live. Pair or reset the device; HomeBrain adds it after join and interview.\(suffix)"
+            await loadDevices(showLoading: false)
+        } catch {
+            addDeviceStatusMessage = error.localizedDescription
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func startInsteonAdd() async {
+        if previewMode {
+            addDeviceStatusMessage = "Insteon PLM link mode would start on real HomeBrain hardware."
+            return
+        }
+
+        addDeviceBusy = true
+        defer { addDeviceBusy = false }
+
+        do {
+            let response = try await session.apiClient.post(
+                "/api/insteon/devices/link",
+                body: ["timeout": 90]
+            )
+            let root = JSON.object(response)
+            let linkedAddress = JSON.optionalString(root, "normalizedAddress")
+                ?? JSON.optionalString(root, "address")
+                ?? "device"
+            let deviceObject = JSON.object(root["device"])
+            let linkedDevice = DeviceItem.from(deviceObject)
+            if !linkedDevice.id.isEmpty {
+                upsertDevice(linkedDevice)
+                addDeviceStatusMessage = "\(linkedDevice.name) was linked and added to HomeBrain."
+            } else {
+                addDeviceStatusMessage = "Insteon linked \(linkedAddress). Refreshing device list."
+            }
+            await loadDevices(showLoading: false)
+        } catch {
+            addDeviceStatusMessage = error.localizedDescription
             errorMessage = error.localizedDescription
         }
     }
