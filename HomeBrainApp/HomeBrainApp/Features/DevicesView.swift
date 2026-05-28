@@ -540,10 +540,11 @@ struct DevicesView: View {
                             Text(device.isOnline ? "Online" : "Offline")
                                 .font(.system(size: useLandscapeCompactLayout ? 11 : 12, weight: .semibold, design: .rounded))
                                 .foregroundStyle(device.isOnline ? HBPalette.accentGreen : HBPalette.accentOrange)
-                            if let batteryStatus = batteryStatusText(for: device) {
-                                Text("· \(batteryStatus)")
+                            if deviceSupportsBattery(device) {
+                                Text("·")
                                     .font(.system(size: useLandscapeCompactLayout ? 11 : 12, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(batteryStatusColor(for: device))
+                                    .foregroundStyle(HBPalette.textSecondary)
+                                batteryIndicator(for: device, compact: true)
                             }
                         }
                     }
@@ -598,9 +599,7 @@ struct DevicesView: View {
                 statusBadge(for: device)
                 deviceTypeBadge(for: device)
                 deviceSourceBadge(for: device)
-                if let batteryStatus = batteryStatusText(for: device) {
-                    HBBadge(text: batteryStatus)
-                }
+                batteryIndicator(for: device, compact: true)
                 if isSmartThingsBackedDevice(device) || needsMigrationFinalization(device) {
                     migrationBadge()
                 }
@@ -613,9 +612,7 @@ struct DevicesView: View {
                 }
                 HStack(spacing: 8) {
                     deviceSourceBadge(for: device)
-                    if let batteryStatus = batteryStatusText(for: device) {
-                        HBBadge(text: batteryStatus)
-                    }
+                    batteryIndicator(for: device, compact: true)
                     if isSmartThingsBackedDevice(device) || needsMigrationFinalization(device) {
                         migrationBadge()
                     }
@@ -1867,9 +1864,7 @@ struct DevicesView: View {
                                     HStack(spacing: 8) {
                                         statusBadge(for: device)
                                         HBBadge(text: device.isOnline ? "Online" : "Offline")
-                                        if let batteryStatus = batteryStatusText(for: device) {
-                                            HBBadge(text: batteryStatus)
-                                        }
+                                        batteryIndicator(for: device, compact: true)
                                     }
                                 }
                             }
@@ -2076,10 +2071,14 @@ struct DevicesView: View {
                                     .font(.system(size: 13, weight: .semibold, design: .rounded))
                                     .foregroundStyle(HBPalette.textSecondary)
                                 Spacer(minLength: 12)
-                                Text(row.value)
-                                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                                    .foregroundStyle(HBPalette.textPrimary)
-                                    .multilineTextAlignment(.trailing)
+                                if row.label == "Battery" {
+                                    batteryIndicator(for: device, compact: false)
+                                } else {
+                                    Text(row.value)
+                                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                                        .foregroundStyle(HBPalette.textPrimary)
+                                        .multilineTextAlignment(.trailing)
+                                }
                             }
                         }
                     }
@@ -4032,7 +4031,26 @@ struct DevicesView: View {
         guard let battery = batteryLevel(for: device) else {
             return batteryVoltage(for: device) == nil ? HBPalette.textSecondary : HBPalette.accentGreen
         }
-        return battery <= 25 ? HBPalette.accentOrange : HBPalette.accentGreen
+        return hbBatteryTint(for: battery)
+    }
+
+    private func batteryFallbackText(for device: DeviceItem) -> String? {
+        guard batteryLevel(for: device) == nil, let voltage = batteryVoltage(for: device) else {
+            return nil
+        }
+        return "\(formatNumber(voltage, digits: 2))V"
+    }
+
+    @ViewBuilder
+    private func batteryIndicator(for device: DeviceItem, compact: Bool = true) -> some View {
+        if deviceSupportsBattery(device) {
+            HBBatteryIndicator(
+                percent: batteryLevel(for: device),
+                fallbackText: batteryFallbackText(for: device),
+                isAwaitingReport: batteryLevel(for: device) == nil && batteryVoltage(for: device) == nil,
+                compact: compact
+            )
+        }
     }
 
     private func sensorStateLabel(for device: DeviceItem) -> String? {

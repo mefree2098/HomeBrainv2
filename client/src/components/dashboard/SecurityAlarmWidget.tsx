@@ -202,13 +202,31 @@ const formatAlarmStateDetail = (alarmState?: string | null) => {
 }
 
 const batteryClassName = (sensor: SecuritySensor) => {
-  if (sensor.batteryState === "critical") {
+  if (sensor.batteryState === "critical" || (sensor.batteryLevel != null && sensor.batteryLevel <= 15)) {
     return "text-red-600 dark:text-red-300"
   }
-  if (sensor.batteryState === "low") {
+  if (sensor.batteryState === "low" || (sensor.batteryLevel != null && sensor.batteryLevel <= 35)) {
     return "text-amber-600 dark:text-amber-300"
   }
-  return "text-muted-foreground"
+  return "text-emerald-600 dark:text-emerald-300"
+}
+
+function SecurityBatteryIndicator({ sensor }: { sensor: SecuritySensor }) {
+  if (sensor.batteryLevel == null) {
+    return null
+  }
+
+  return (
+    <span
+      className={cn("mt-0.5 inline-flex shrink-0 items-center gap-1", batteryClassName(sensor))}
+      aria-label={`${sensor.batteryLevel}% battery`}
+    >
+      <Battery className="h-3.5 w-3.5" aria-hidden="true" />
+      <span className="text-[9px] font-bold leading-none tracking-[0.08em]">
+        {sensor.batteryLevel}%
+      </span>
+    </span>
+  )
 }
 
 const getSensorSelectionKey = (sensor: SecuritySensor) => (
@@ -1223,9 +1241,7 @@ export function SecurityAlarmWidget({
                               {sensor.name}
                             </p>
 
-                            {sensor.batteryLevel != null ? (
-                              <Battery className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", batteryClassName(sensor))} aria-hidden="true" />
-                            ) : null}
+                            <SecurityBatteryIndicator sensor={sensor} />
                           </div>
                           <span className={cn("mt-2 line-clamp-1 min-w-0 text-[10px] font-semibold", compactSensorStatusClassName(sensor))}>
                             {getCompactSensorStatus(sensor)}

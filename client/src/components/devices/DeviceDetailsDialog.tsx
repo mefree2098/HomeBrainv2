@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, type ReactNode } from "react"
 import {
   type LucideIcon,
   Activity,
@@ -532,8 +532,54 @@ function getDeviceBatteryLabel(device: DeviceLike | null): string | null {
   return deviceSupportsBattery(device) ? "Awaiting report" : null
 }
 
-function getBatteryTone(level: number): "emerald" | "amber" {
-  return level <= 25 ? "amber" : "emerald"
+function getBatteryTone(level: number): "emerald" | "amber" | "red" {
+  if (level <= 15) {
+    return "red"
+  }
+  return level <= 35 ? "amber" : "emerald"
+}
+
+function getBatteryIndicatorClassName(level: number | null): string {
+  if (level === null) {
+    return "border-white/10 bg-white/5 text-muted-foreground"
+  }
+  if (level <= 15) {
+    return "border-red-400/30 bg-red-400/10 text-red-200"
+  }
+  if (level <= 35) {
+    return "border-amber-400/30 bg-amber-400/10 text-amber-200"
+  }
+  return "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
+}
+
+function DeviceBatteryIndicator({ device }: { device: DeviceLike | null }) {
+  const level = getDeviceBatteryLevel(device)
+  const voltage = getDeviceBatteryVoltage(device)
+  const label = getDeviceBatteryLabel(device)
+
+  if (!label) {
+    return null
+  }
+
+  const displayValue = level !== null
+    ? `${level}%`
+    : voltage !== null
+      ? `${voltage}V`
+      : "Pending"
+
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[0.68rem] font-bold uppercase leading-none tracking-[0.08em]",
+        getBatteryIndicatorClassName(level)
+      )}
+      title={`Battery ${label}`}
+      aria-label={`Battery ${label}`}
+    >
+      <Battery className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      <span>{displayValue}</span>
+    </span>
+  )
 }
 
 function getLightBrightness(device: DeviceLike | null): number {
@@ -1062,10 +1108,10 @@ type DeviceTelemetryMetricCardProps = {
 
 type DeviceOverviewStatCardProps = {
   label: string
-  value: string
+  value: ReactNode
   hint: string
   icon: LucideIcon
-  tone?: "sky" | "emerald" | "amber" | "violet"
+  tone?: "sky" | "emerald" | "amber" | "red" | "violet"
 }
 
 function DeviceOverviewStatCard({
@@ -1079,6 +1125,7 @@ function DeviceOverviewStatCard({
     sky: "border-cyan-400/20 bg-cyan-400/10 text-cyan-200",
     emerald: "border-emerald-400/20 bg-emerald-400/10 text-emerald-200",
     amber: "border-amber-400/20 bg-amber-400/10 text-amber-200",
+    red: "border-red-400/20 bg-red-400/10 text-red-200",
     violet: "border-violet-400/20 bg-violet-400/10 text-violet-200"
   }[tone]
 
@@ -1098,7 +1145,7 @@ function DeviceOverviewStatCard({
 
 type DeviceStatusPillProps = {
   label: string
-  tone?: "sky" | "emerald" | "amber" | "neutral"
+  tone?: "sky" | "emerald" | "amber" | "red" | "neutral"
 }
 
 function DeviceStatusPill({ label, tone = "neutral" }: DeviceStatusPillProps) {
@@ -1106,6 +1153,7 @@ function DeviceStatusPill({ label, tone = "neutral" }: DeviceStatusPillProps) {
     sky: "border-cyan-400/18 bg-cyan-400/10 text-cyan-100",
     emerald: "border-emerald-400/18 bg-emerald-400/10 text-emerald-100",
     amber: "border-amber-400/18 bg-amber-400/10 text-amber-100",
+    red: "border-red-400/18 bg-red-400/10 text-red-100",
     neutral: "border-white/10 bg-white/6 text-white/78"
   }[tone]
 
@@ -1121,7 +1169,7 @@ function DeviceStatusPill({ label, tone = "neutral" }: DeviceStatusPillProps) {
 
 type DeviceDetailRowProps = {
   label: string
-  value: string
+  value: ReactNode
   mono?: boolean
 }
 
@@ -1138,7 +1186,7 @@ function DeviceDetailRow({ label, value, mono = false }: DeviceDetailRowProps) {
 
 type DeviceTabHeroRow = {
   label: string
-  value: string
+  value: ReactNode
 }
 
 type DeviceTabHeroProps = {
@@ -1793,7 +1841,7 @@ export function DeviceDetailsDialog({
   const overviewHeroRows: DeviceTabHeroRow[] = [
     { label: "Room", value: deviceRoom },
     { label: "Last contact", value: formatDateTime(device?.lastSeen) },
-    ...(batteryLabel ? [{ label: "Battery", value: batteryLabel }] : []),
+    ...(batteryLabel ? [{ label: "Battery", value: <DeviceBatteryIndicator device={device} /> }] : []),
     { label: "Groups", value: groupSummary }
   ]
   const controlsHeroRows: DeviceTabHeroRow[] = [
@@ -1848,7 +1896,7 @@ export function DeviceDetailsDialog({
     ...(batteryLabel
       ? [{
           label: "Battery",
-          value: batteryLabel,
+          value: <DeviceBatteryIndicator device={device} />,
           hint: batteryLevel !== null && batteryLevel <= 25
             ? "Low enough for an automation threshold or notification."
             : "Available for low-battery workflow triggers.",
@@ -3214,7 +3262,7 @@ export function DeviceDetailsDialog({
                         <DeviceDetailRow label="Type" value={deviceTypeLabel} />
                         <DeviceDetailRow label="Source" value={getSourceLabel(device)} />
                         {batteryLabel ? (
-                          <DeviceDetailRow label="Battery" value={batteryLabel} />
+                          <DeviceDetailRow label="Battery" value={<DeviceBatteryIndicator device={device} />} />
                         ) : null}
                         {sensorReadings.map((reading) => (
                           <DeviceDetailRow key={reading.label} label={reading.label} value={reading.value} />

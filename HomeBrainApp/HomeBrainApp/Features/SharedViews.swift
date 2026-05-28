@@ -585,6 +585,78 @@ struct HBTempestBatteryBadge: View {
     }
 }
 
+func hbBatterySymbolName(for percent: Int?) -> String {
+    guard let percent else { return "battery.0" }
+    switch percent {
+    case 88...:
+        return "battery.100"
+    case 63...87:
+        return "battery.75"
+    case 38...62:
+        return "battery.50"
+    case 13...37:
+        return "battery.25"
+    default:
+        return "battery.0"
+    }
+}
+
+func hbBatteryTint(for percent: Int?) -> Color {
+    guard let percent else { return HBPalette.textSecondary }
+    switch percent {
+    case ...15:
+        return HBPalette.accentRed
+    case 16...35:
+        return HBPalette.accentOrange
+    default:
+        return HBPalette.accentGreen
+    }
+}
+
+struct HBBatteryIndicator: View {
+    let percent: Int?
+    var fallbackText: String? = nil
+    var isAwaitingReport: Bool = false
+    var compact: Bool = true
+
+    private var displayText: String {
+        if let percent {
+            return "\(percent)%"
+        }
+        if let fallbackText, !fallbackText.isEmpty {
+            return fallbackText
+        }
+        return isAwaitingReport ? "Pending" : "--"
+    }
+
+    private var accessibilityLabelText: String {
+        if let percent {
+            return "Battery \(percent) percent"
+        }
+        if let fallbackText, !fallbackText.isEmpty {
+            return "Battery \(fallbackText)"
+        }
+        return isAwaitingReport ? "Battery awaiting report" : "Battery unavailable"
+    }
+
+    var body: some View {
+        HStack(spacing: compact ? 4 : 5) {
+            Image(systemName: hbBatterySymbolName(for: percent))
+                .font(.system(size: compact ? 11 : 12, weight: .bold))
+                .foregroundStyle(hbBatteryTint(for: percent))
+
+            Text(displayText)
+                .font(.system(size: compact ? 10 : 11, weight: .bold, design: .rounded))
+                .monospacedDigit()
+                .tracking(0.5)
+                .foregroundStyle(hbBatteryTint(for: percent))
+        }
+        .lineLimit(1)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabelText)
+    }
+}
+
 private func weatherLastSyncedDate(from value: String?) -> Date? {
     JSON.date(from: value)
 }

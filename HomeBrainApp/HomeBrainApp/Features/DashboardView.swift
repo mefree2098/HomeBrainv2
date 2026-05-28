@@ -3291,10 +3291,8 @@ struct DashboardView: View {
 
                     Spacer(minLength: 4)
 
-                    if sensor.batteryLevel != nil {
-                        Image(systemName: compactSecurityBatterySymbolName(for: sensor))
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(securityBatteryTint(sensor))
+                    if let batteryLevel = sensor.batteryLevel {
+                        HBBatteryIndicator(percent: batteryLevel, compact: true)
                     }
                 }
 
