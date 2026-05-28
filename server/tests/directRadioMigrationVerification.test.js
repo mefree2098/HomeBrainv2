@@ -117,6 +117,50 @@ test('direct radio refresh preserves SmartThings-inferred switch features after 
   assert.ok(merged.properties.directRadioCapabilities.some((capability) => capability.type === 'switch'));
 });
 
+test('direct radio refresh infers renamed generic door sensor features', () => {
+  const existing = {
+    name: 'Theater Door Sensor',
+    type: 'sensor',
+    room: 'Vault',
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x000d6f000b010d0c',
+        generatedName: 'Zigbee 010d0c',
+        generatedRoom: 'Unassigned'
+      },
+      directRadioFeatures: []
+    }
+  };
+  const update = {
+    name: 'Zigbee 010d0c',
+    type: 'sensor',
+    room: 'Unassigned',
+    isOnline: true,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x000d6f000b010d0c'
+      },
+      directRadioFeatures: []
+    }
+  };
+
+  const merged = mergeDirectDeviceUpdateForExisting(existing, update);
+
+  assert.equal(merged.name, 'Theater Door Sensor');
+  assert.equal(merged.room, 'Vault');
+  assert.ok(merged.properties.directRadioFeatures.includes('contact'));
+  assert.ok(merged.properties.directRadioFeatures.includes('battery'));
+  assert.ok(merged.properties.directRadioFeatures.includes('tamper'));
+  assert.ok(merged.properties.directRadioFeatures.includes('temperature'));
+  assert.equal(merged.properties.supportsContactSensor, true);
+  assert.equal(merged.properties.supportsBattery, true);
+  assert.ok(merged.properties.directRadioCapabilities.some((capability) => capability.type === 'contact_sensor'));
+});
+
 test('Zigbee feature inference falls back to endpoint clusters for Innr SP 224 plugs', () => {
   const features = inferFeaturesFromZigbeeDefinition(null, {
     modelID: 'SP 224',
