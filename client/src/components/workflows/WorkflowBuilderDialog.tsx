@@ -45,6 +45,7 @@ type DeviceLite = {
   room: string;
   groups?: string[];
   brightness?: number;
+  colorTemperature?: number;
   temperature?: number;
   targetTemperature?: number;
   properties?: Record<string, unknown>;
@@ -103,6 +104,7 @@ const DEVICE_ACTION_LABELS: Record<string, string> = {
   toggle: "Toggle",
   set_brightness: "Set brightness",
   set_color: "Set color",
+  set_color_temperature: "Set white temperature",
   set_temperature: "Set temperature",
   lock: "Lock",
   unlock: "Unlock",
@@ -225,6 +227,7 @@ function formatTriggerPropertyLabel(property: string) {
   }
 
   if ([
+    "directRadioState.batteryLevel",
     "homeBrainBatteryLevel",
     "directBatteryLevel",
     "batteryLevel",
@@ -232,6 +235,28 @@ function formatTriggerPropertyLabel(property: string) {
     "smartThingsBatteryLevel"
   ].includes(property)) {
     return "Battery level (%)";
+  }
+
+  if (property === "directRadioState.contactOpen") {
+    return "Contact open";
+  }
+  if (property === "directRadioState.motionActive") {
+    return "Motion active";
+  }
+  if (property === "directRadioState.vibrationActive" || property === "directRadioState.accelerationActive") {
+    return "Vibration active";
+  }
+  if (property === "directRadioState.tamperActive") {
+    return "Tamper active";
+  }
+  if (property === "directRadioState.temperatureF") {
+    return "Temperature (°F)";
+  }
+  if (property === "directRadioState.humidity") {
+    return "Humidity (%)";
+  }
+  if (property === "directRadioState.illuminance") {
+    return "Illuminance (lx)";
   }
 
   if (property === "sense.currentPowerW") {
@@ -316,7 +341,11 @@ function clampPercentValue(value: unknown): number | null {
 
 function collectBatteryTriggerOptions(device: DeviceLite | undefined): TriggerPropertyOption[] {
   const properties = (device?.properties as Record<string, unknown> | undefined) || {};
+  const directRadioState = properties.directRadioState && typeof properties.directRadioState === "object"
+    ? properties.directRadioState as Record<string, unknown>
+    : {};
   const candidates = [
+    { key: "directRadioState.batteryLevel", value: directRadioState.batteryLevel },
     { key: "homeBrainBatteryLevel", value: properties.homeBrainBatteryLevel },
     { key: "directBatteryLevel", value: properties.directBatteryLevel },
     { key: "batteryLevel", value: properties.batteryLevel },
@@ -334,6 +363,26 @@ function collectBatteryTriggerOptions(device: DeviceLite | undefined): TriggerPr
         batteryMetric: true
       }]
     : [];
+}
+
+function collectDirectRadioStateTriggerOptions(device: DeviceLite | undefined): TriggerPropertyOption[] {
+  const properties = (device?.properties as Record<string, unknown> | undefined) || {};
+  const state = properties.directRadioState && typeof properties.directRadioState === "object"
+    ? properties.directRadioState as Record<string, unknown>
+    : {};
+  const candidates: TriggerPropertyOption[] = [
+    { key: "directRadioState.contactOpen", label: "Contact open", kind: "boolean" },
+    { key: "directRadioState.motionActive", label: "Motion active", kind: "boolean" },
+    { key: "directRadioState.vibrationActive", label: "Vibration active", kind: "boolean" },
+    { key: "directRadioState.accelerationActive", label: "Acceleration active", kind: "boolean" },
+    { key: "directRadioState.tamperActive", label: "Tamper active", kind: "boolean" },
+    { key: "directRadioState.waterDetected", label: "Water detected", kind: "boolean" },
+    { key: "directRadioState.temperatureF", label: "Temperature (°F)", kind: "number", unit: "°F" },
+    { key: "directRadioState.humidity", label: "Humidity (%)", kind: "number", unit: "%" },
+    { key: "directRadioState.illuminance", label: "Illuminance (lx)", kind: "number", unit: "lx" }
+  ];
+
+  return candidates.filter((option) => getNestedRecordValue(state, option.key.replace(/^directRadioState\./, "").split(".")) !== undefined);
 }
 
 function collectSmartThingsAttributeOptions(
@@ -437,6 +486,7 @@ function getTriggerPropertyOptions(device: DeviceLite | undefined): TriggerPrope
   const attributeValues = (device?.properties as Record<string, unknown> | undefined)?.smartThingsAttributeValues;
   const attributeMetadata = (device?.properties as Record<string, unknown> | undefined)?.smartThingsAttributeMetadata;
   options.push(...collectBatteryTriggerOptions(device));
+  options.push(...collectDirectRadioStateTriggerOptions(device));
   options.push(...collectSenseTriggerOptions(device));
   options.push(...collectSmartThingsAttributeOptions(attributeValues, attributeMetadata));
 
@@ -756,6 +806,15 @@ function supportsBrightnessAction(device: DeviceLite | null | undefined) {
     || hasSmartThingsLevelState(properties)
 }
 
+function supportsColorTemperatureAction(device: DeviceLite | null | undefined) {
+  const properties = device?.properties
+  return Boolean(properties?.supportsColorTemperature)
+    || Number.isFinite(Number((device as Record<string, unknown> | null | undefined)?.colorTemperature))
+    || propertyListIncludes(properties, ["smartThingsCapabilities", "smartthingsCapabilities"], "colorTemperature")
+    || propertyListIncludes(properties, ["directRadioFeatures"], "colorTemperature")
+    || propertyListIncludes(properties, ["matterFeatures"], "colorTemperature")
+}
+
 function getDeviceActionChoices(device: DeviceLite | null | undefined) {
   if (isWorkflowEnergyMonitorDevice(device)) {
     return []
@@ -788,8 +847,13 @@ function getDeviceActionChoices(device: DeviceLite | null | undefined) {
   }
 
   switch ((device?.type || "").toLowerCase()) {
-    case "light":
-      return ["turn_on", "turn_off", "set_brightness", "set_color"];
+    case "light": {
+      const choices = ["turn_on", "turn_off", "set_brightness", "set_color"];
+      if (supportsColorTemperatureAction(device)) {
+        choices.push("set_color_temperature");
+      }
+      return choices;
+    }
     case "thermostat":
       return ["turn_on", "turn_off", "set_temperature"];
     case "lock":
@@ -886,6 +950,12 @@ function buildDeviceControlParameters(options: {
 
   if (requestedAction === "set_temperature") {
     nextParameters.temperature = clampActionNumber(currentParameters.temperature, 72, -50, 150);
+  }
+
+  if (requestedAction === "set_color_temperature") {
+    const colorTemperature = clampActionNumber(currentParameters.colorTemperature ?? currentParameters.value, 4000, 1500, 6500);
+    nextParameters.colorTemperature = colorTemperature;
+    nextParameters.value = colorTemperature;
   }
 
   if (requestedAction === "harmony_command") {
@@ -1882,6 +1952,7 @@ export function WorkflowBuilderDialog({
                       const showNumericValue = action.type === "device_control"
                         && (
                           actionValue === "set_brightness"
+                          || actionValue === "set_color_temperature"
                           || actionValue === "set_temperature"
                           || (actionValue === "turn_on" && actionConfig.supportsTurnOnValue)
                         );
@@ -2056,18 +2127,28 @@ export function WorkflowBuilderDialog({
                                 {showNumericValue && (
                                   <div className="grid gap-4 md:max-w-[320px]">
                                     <div className="space-y-2">
-                                      <Label>{actionValue === "set_temperature" ? "Temperature" : "Value"}</Label>
+                                      <Label>
+                                        {actionValue === "set_temperature"
+                                          ? "Temperature"
+                                          : actionValue === "set_color_temperature"
+                                            ? "White temperature (K)"
+                                            : "Value"}
+                                      </Label>
                                       <Input
                                         type="number"
                                         value={String(
                                           actionValue === "set_temperature"
                                             ? action.parameters?.temperature ?? 72
+                                            : actionValue === "set_color_temperature"
+                                              ? action.parameters?.colorTemperature ?? action.parameters?.value ?? 4000
                                             : action.parameters?.brightness ?? action.parameters?.value ?? 100
                                         )}
                                         onChange={(event) => {
                                           const numeric = Number(event.target.value);
                                           if (actionValue === "set_temperature") {
                                             updateAction(index, { parameters: { ...action.parameters, temperature: numeric } });
+                                          } else if (actionValue === "set_color_temperature") {
+                                            updateAction(index, { parameters: { ...action.parameters, colorTemperature: numeric, value: numeric } });
                                           } else {
                                             updateAction(index, { parameters: { ...action.parameters, brightness: numeric, value: numeric } });
                                           }

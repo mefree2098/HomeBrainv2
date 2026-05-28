@@ -36,6 +36,7 @@ struct DevicesView: View {
 
     @State private var lightBrightnessDrafts: [String: Double] = [:]
     @State private var lightColorDrafts: [String: String] = [:]
+    @State private var lightColorTemperatureDrafts: [String: Double] = [:]
     @State private var thermostatTemperatureDrafts: [String: Double] = [:]
     @State private var pendingControls: Set<String> = []
     @State private var controlFeedback: [String: ControlFeedback] = [:]
@@ -776,7 +777,13 @@ struct DevicesView: View {
             if supportsLightColor(device) {
                 parts.append("color")
             }
+            if supportsLightColorTemperature(device) {
+                parts.append("\(Int(currentLightColorTemperature(for: device)))K")
+            }
             return parts.joined(separator: " · ")
+        }
+        if device.type == "sensor" {
+            return sensorSummary(for: device)
         }
         if isSmartThingsBackedDevice(device) {
             return "SmartThings route preserved"
@@ -1229,6 +1236,8 @@ struct DevicesView: View {
         let text: String
         if device.type == "thermostat" {
             text = thermostatMode(for: device).uppercased()
+        } else if device.type == "sensor" {
+            text = sensorStateLabel(for: device) ?? (device.status ? "Active" : "Clear")
         } else {
             text = device.status ? "On" : "Off"
         }
@@ -1425,6 +1434,7 @@ struct DevicesView: View {
         let pending = pendingControls.contains(device.id)
         let brightness = currentLightBrightness(for: device)
         let colorHex = currentLightColor(for: device)
+        let colorTemperature = currentLightColorTemperature(for: device)
 
         return VStack(spacing: 10) {
             HStack {
@@ -1496,6 +1506,51 @@ struct DevicesView: View {
                         .buttonStyle(HBPrimaryButtonStyle())
                         .frame(maxWidth: .infinity)
                         .disabled(pending)
+                    }
+                }
+            }
+
+            if supportsLightColorTemperature(device) {
+                VStack(spacing: 8) {
+                    HStack {
+                        Text("White")
+                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                        Spacer()
+                        Text("\(Int(colorTemperature.rounded()))K")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+                    }
+
+                    Slider(
+                        value: Binding(
+                            get: { currentLightColorTemperature(for: device) },
+                            set: { lightColorTemperatureDrafts[device.id] = clampColorTemperature($0) }
+                        ),
+                        in: 1500...6500,
+                        step: 50,
+                        onEditingChanged: { editing in
+                            guard !editing else { return }
+                            let kelvin = Int(currentLightColorTemperature(for: device).rounded())
+                            Task { await handleDeviceControl(deviceId: device.id, action: "set_color_temperature", value: kelvin) }
+                        }
+                    )
+                    .tint(HBPalette.accentBlue)
+                    .disabled(pending)
+
+                    HStack(spacing: 8) {
+                        ForEach([
+                            ("Warm", 2700),
+                            ("Neutral", 4000),
+                            ("Cold", 5000)
+                        ], id: \.0) { preset in
+                            Button(preset.0) {
+                                Task { await handleDeviceControl(deviceId: device.id, action: "set_color_temperature", value: preset.1) }
+                            }
+                            .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                            .frame(maxWidth: .infinity)
+                            .disabled(pending)
+                        }
                     }
                 }
             }
@@ -3242,6 +3297,8 @@ struct DevicesView: View {
                 lightBrightnessDrafts.removeValue(forKey: deviceId)
             } else if action == "set_color" {
                 lightColorDrafts.removeValue(forKey: deviceId)
+            } else if action == "set_color_temperature" {
+                lightColorTemperatureDrafts.removeValue(forKey: deviceId)
             } else if action == "set_temperature" {
                 thermostatTemperatureDrafts.removeValue(forKey: deviceId)
             }
@@ -3297,6 +3354,14 @@ struct DevicesView: View {
                 updated.color = normalized
                 updated.status = true
                 lightColorDrafts[deviceId] = normalized
+            }
+
+        case "set_color_temperature":
+            if let numeric = numberValue(from: value) {
+                let kelvin = clampColorTemperature(numeric)
+                updated.colorTemperature = kelvin
+                updated.status = true
+                lightColorTemperatureDrafts[deviceId] = kelvin
             }
 
         case "set_temperature":
@@ -3818,6 +3883,14 @@ struct DevicesView: View {
         return clamped.rounded()
     }
 
+    private func clampColorTemperature(_ value: Double) -> Double {
+        min(6500, max(1500, value)).rounded()
+    }
+
+    private func directRadioState(for device: DeviceItem) -> [String: Any] {
+        JSON.object(device.properties["directRadioState"])
+    }
+
     private func percentValue(_ value: Any?) -> Int? {
         let numeric: Double?
         if let value = value as? Double {
@@ -3840,7 +3913,9 @@ struct DevicesView: View {
     private func batteryLevel(for device: DeviceItem) -> Int? {
         let attributeValues = JSON.object(device.properties["smartThingsAttributeValues"])
         let batteryAttributes = JSON.object(attributeValues["battery"])
+        let directState = directRadioState(for: device)
         let candidates: [Any?] = [
+            directState["batteryLevel"],
             device.properties["homeBrainBatteryLevel"],
             device.properties["directBatteryLevel"],
             device.properties["batteryLevel"],
@@ -3860,6 +3935,43 @@ struct DevicesView: View {
         return nil
     }
 
+    private func sensorStateLabel(for device: DeviceItem) -> String? {
+        let state = directRadioState(for: device)
+        if state["contactOpen"] != nil {
+            return boolValue(state["contactOpen"]) ? "Open" : "Closed"
+        }
+        let contact = stringValue(state["contact"]).lowercased()
+        if contact == "open" || contact == "closed" {
+            return contact == "open" ? "Open" : "Closed"
+        }
+        if state["motionActive"] != nil {
+            return boolValue(state["motionActive"]) ? "Motion" : "Clear"
+        }
+        if state["vibrationActive"] != nil || state["accelerationActive"] != nil {
+            return boolValue(state["vibrationActive"]) || boolValue(state["accelerationActive"]) ? "Vibration" : "Clear"
+        }
+        if state["tamperActive"] != nil || state["tamper"] != nil {
+            return boolValue(state["tamperActive"]) || boolValue(state["tamper"]) ? "Tamper" : "Clear"
+        }
+        if state["waterDetected"] != nil {
+            return boolValue(state["waterDetected"]) ? "Wet" : "Dry"
+        }
+        return nil
+    }
+
+    private func sensorSummary(for device: DeviceItem) -> String {
+        let state = directRadioState(for: device)
+        let values: [String?] = [
+            sensorStateLabel(for: device),
+            numberValue(from: state["temperatureF"] ?? device.temperature).map { "\(Int($0.rounded()))°" },
+            batteryLevel(for: device).map { "\($0)% battery" },
+            numberValue(from: state["humidity"]).map { "\(Int($0.rounded()))% humidity" },
+            numberValue(from: state["illuminance"]).map { "\(Int($0.rounded())) lx" }
+        ]
+        let parts = values.compactMap { $0 }.filter { !$0.isEmpty }
+        return parts.isEmpty ? "Sensor telemetry" : parts.joined(separator: " · ")
+    }
+
     private func currentLightBrightness(for device: DeviceItem) -> Double {
         if let draft = lightBrightnessDrafts[device.id] {
             return clampBrightness(draft)
@@ -3875,6 +3987,19 @@ struct DevicesView: View {
             return normalized
         }
         return "#ffffff"
+    }
+
+    private func currentLightColorTemperature(for device: DeviceItem) -> Double {
+        if let draft = lightColorTemperatureDrafts[device.id] {
+            return clampColorTemperature(draft)
+        }
+        if let value = device.colorTemperature {
+            return clampColorTemperature(value)
+        }
+        if let value = numberValue(from: directRadioState(for: device)["colorTemperatureK"]) {
+            return clampColorTemperature(value)
+        }
+        return 4000
     }
 
     private func colorBinding(for device: DeviceItem) -> Binding<Color> {
@@ -4158,6 +4283,17 @@ struct DevicesView: View {
         }
 
         return boolValue(device.properties["supportsColor"])
+    }
+
+    private func supportsLightColorTemperature(_ device: DeviceItem) -> Bool {
+        if isSmartThingsBackedDevice(device) {
+            let capabilities = smartThingsCapabilities(for: device)
+            return capabilities.contains("colorTemperature") || boolValue(device.properties["supportsColorTemperature"])
+        }
+
+        return boolValue(device.properties["supportsColorTemperature"])
+            || propertyStringSet(for: device, key: "directRadioFeatures").contains("colortemperature")
+            || propertyStringSet(for: device, key: "matterFeatures").contains("colortemperature")
     }
 
     private func stringValue(_ value: Any?) -> String {

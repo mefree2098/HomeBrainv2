@@ -60,6 +60,7 @@ nonisolated struct DeviceItem: Identifiable {
     var isOnline: Bool
     var brightness: Double
     var color: String
+    var colorTemperature: Double? = nil
     var temperature: Double?
     var targetTemperature: Double?
     var properties: [String: Any]
@@ -77,6 +78,7 @@ nonisolated struct DeviceItem: Identifiable {
             isOnline: JSON.bool(object, "isOnline", fallback: true),
             brightness: JSON.double(object, "brightness"),
             color: normalizedHexColor(object["color"]),
+            colorTemperature: optionalDouble(object["colorTemperature"]),
             temperature: optionalDouble(object["temperature"]),
             targetTemperature: optionalDouble(object["targetTemperature"]),
             properties: properties,

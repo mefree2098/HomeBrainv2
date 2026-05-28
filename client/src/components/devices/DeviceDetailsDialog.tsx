@@ -99,6 +99,7 @@ type DeviceLike = {
   lastSeen?: string | Date
   brightness?: number
   color?: string
+  colorTemperature?: number
   targetTemperature?: number
   temperature?: number
   properties?: Record<string, unknown>
@@ -437,9 +438,13 @@ function clampPercent(value: unknown): number | null {
 
 function getDeviceBatteryLevel(device: DeviceLike | null): number | null {
   const properties = device?.properties as Record<string, unknown> | undefined
+  const directRadioState = properties?.directRadioState && typeof properties.directRadioState === "object"
+    ? properties.directRadioState as Record<string, unknown>
+    : {}
   const attributeValues = properties?.smartThingsAttributeValues as Record<string, unknown> | undefined
   const batteryAttributes = attributeValues?.battery as Record<string, unknown> | undefined
   const candidates = [
+    directRadioState.batteryLevel,
     properties?.homeBrainBatteryLevel,
     properties?.directBatteryLevel,
     properties?.batteryLevel,
@@ -477,6 +482,27 @@ function normalizeHexColor(value: unknown): string {
 
 function getLightColor(device: DeviceLike | null): string {
   return normalizeHexColor(device?.color)
+}
+
+function clampColorTemperature(value: unknown): number {
+  const numeric = toFiniteNumber(value)
+  if (numeric === null) {
+    return 4000
+  }
+  return Math.max(1500, Math.min(6500, Math.round(numeric)))
+}
+
+function getDirectRadioState(device: DeviceLike | null): Record<string, unknown> {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  const state = properties?.directRadioState
+  return state && typeof state === "object" && !Array.isArray(state)
+    ? state as Record<string, unknown>
+    : {}
+}
+
+function getLightColorTemperature(device: DeviceLike | null): number {
+  const state = getDirectRadioState(device)
+  return clampColorTemperature(device?.colorTemperature ?? state.colorTemperatureK)
 }
 
 function looksLikeSmartThingsDimmer(device: DeviceLike | null): boolean {
@@ -555,6 +581,21 @@ function supportsLightColor(device: DeviceLike | null): boolean {
 
   return Boolean(properties?.supportsColor)
     || (Array.isArray(properties?.matterFeatures) && properties.matterFeatures.includes("color"))
+}
+
+function supportsLightColorTemperature(device: DeviceLike | null): boolean {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  if (!device) {
+    return false
+  }
+  if (isSmartThingsBackedDevice(device)) {
+    return hasSmartThingsCapability(device, "colorTemperature")
+      || Boolean(properties?.supportsColorTemperature)
+  }
+
+  return Boolean(properties?.supportsColorTemperature)
+    || hasDirectRadioFeature(device, "colorTemperature")
+    || (Array.isArray(properties?.matterFeatures) && properties.matterFeatures.includes("colorTemperature"))
 }
 
 function getFormattedInsteonAddress(device: DeviceLike | null): string | null {
@@ -753,6 +794,34 @@ function getDeviceTypeLabel(device: DeviceLike | null) {
   return formatTokenLabel(device?.type, "Device")
 }
 
+function getSensorStateLabel(device: DeviceLike | null): string | null {
+  const state = getDirectRadioState(device)
+  if (state.contactOpen !== undefined) {
+    return state.contactOpen ? "Open" : "Closed"
+  }
+  if (typeof state.contact === "string") {
+    return state.contact.toLowerCase() === "open" ? "Open" : "Closed"
+  }
+  if (state.motionActive !== undefined) {
+    return Boolean(state.motionActive) ? "Motion" : "Clear"
+  }
+  if (state.vibrationActive !== undefined || state.accelerationActive !== undefined) {
+    return Boolean(state.vibrationActive || state.accelerationActive) ? "Vibration" : "Clear"
+  }
+  if (state.tamperActive !== undefined || state.tamper !== undefined) {
+    return Boolean(state.tamperActive || state.tamper) ? "Tamper" : "Clear"
+  }
+  if (state.waterDetected !== undefined) {
+    return Boolean(state.waterDetected) ? "Wet" : "Dry"
+  }
+  return null
+}
+
+function formatSensorReading(value: unknown, unit = ""): string | null {
+  const numeric = toFiniteNumber(value)
+  return numeric === null ? null : `${Math.round(numeric)}${unit}`
+}
+
 function getPrimaryStateLabel(device: DeviceLike | null) {
   const type = String(device?.type || "").trim().toLowerCase()
 
@@ -761,6 +830,8 @@ function getPrimaryStateLabel(device: DeviceLike | null) {
       return device?.status ? "Locked" : "Unlocked"
     case "garage":
       return device?.status ? "Open" : "Closed"
+    case "sensor":
+      return getSensorStateLabel(device) || (device?.status ? "Active" : "Clear")
     default:
       return device?.status ? "On" : "Off"
   }
@@ -1198,6 +1269,7 @@ export function DeviceDetailsDialog({
   const [directControlError, setDirectControlError] = useState<string | null>(null)
   const [lightBrightnessDraft, setLightBrightnessDraft] = useState<number | null>(null)
   const [lightColorDraft, setLightColorDraft] = useState<string | null>(null)
+  const [lightColorTemperatureDraft, setLightColorTemperatureDraft] = useState<number | null>(null)
   const [thermostatSetpointDraft, setThermostatSetpointDraft] = useState<number | null>(null)
   const [migrationPlan, setMigrationPlan] = useState<DirectRadioMigrationPlan | null>(null)
   const [migrationLoading, setMigrationLoading] = useState(false)
@@ -1635,11 +1707,22 @@ export function DeviceDetailsDialog({
   ].filter(Boolean).join(" • ") || "No power command mapping discovered yet"
   const currentLightBrightness = lightBrightnessDraft ?? getLightBrightness(device)
   const currentLightColor = lightColorDraft ?? getLightColor(device)
+  const currentLightColorTemperature = lightColorTemperatureDraft ?? getLightColorTemperature(device)
   const currentThermostatMode = getThermostatMode(device)
   const currentThermostatSetpoint = thermostatSetpointDraft ?? getThermostatTargetTemperature(device)
   const batteryLevel = getDeviceBatteryLevel(device)
   const batteryLabel = batteryLevel !== null ? `${batteryLevel}%` : null
   const batteryTone = batteryLevel !== null ? getBatteryTone(batteryLevel) : "emerald"
+  const directRadioState = getDirectRadioState(device)
+  const sensorReadings = [
+    { label: "Contact", value: getSensorStateLabel(device) },
+    { label: "Temperature", value: formatSensorReading(directRadioState.temperatureF ?? device?.temperature, "°") },
+    { label: "Humidity", value: formatSensorReading(directRadioState.humidity, "%") },
+    { label: "Illuminance", value: formatSensorReading(directRadioState.illuminance, " lx") },
+    { label: "Vibration", value: directRadioState.vibrationActive === undefined && directRadioState.accelerationActive === undefined ? null : (Boolean(directRadioState.vibrationActive || directRadioState.accelerationActive) ? "Detected" : "Clear") },
+    { label: "Tamper", value: directRadioState.tamperActive === undefined && directRadioState.tamper === undefined ? null : (Boolean(directRadioState.tamperActive || directRadioState.tamper) ? "Detected" : "Clear") },
+    { label: "Battery voltage", value: formatSensorReading(directRadioState.batteryVoltage, " V") }
+  ].filter((entry): entry is { label: string; value: string } => Boolean(entry.value))
   const overviewHeroRows: DeviceTabHeroRow[] = [
     { label: "Room", value: deviceRoom },
     { label: "Last contact", value: formatDateTime(device?.lastSeen) },
@@ -1940,6 +2023,9 @@ export function DeviceDetailsDialog({
       }
       if (action === "set_color") {
         setLightColorDraft(null)
+      }
+      if (action === "set_color_temperature") {
+        setLightColorTemperatureDraft(null)
       }
       if (action === "set_temperature") {
         setThermostatSetpointDraft(null)
@@ -2673,6 +2759,50 @@ export function DeviceDetailsDialog({
               </div>
             </div>
           ) : null}
+          {supportsLightColorTemperature(device) ? (
+            <div className="space-y-3 rounded-[1.2rem] border border-white/10 bg-white/[0.04] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="section-kicker text-white/45">White</p>
+                  <p className="mt-1 text-sm text-muted-foreground">Tune warm to cool white.</p>
+                </div>
+                <Badge variant="outline" className="border-white/10 bg-white/[0.06] text-white/82">
+                  {currentLightColorTemperature}K
+                </Badge>
+              </div>
+              <Slider
+                value={[currentLightColorTemperature]}
+                min={1500}
+                max={6500}
+                step={50}
+                onValueChange={(values) => setLightColorTemperatureDraft(clampColorTemperature(values?.[0] ?? currentLightColorTemperature))}
+                onValueCommit={(values) => {
+                  const next = clampColorTemperature(values?.[0] ?? currentLightColorTemperature)
+                  setLightColorTemperatureDraft(next)
+                  void handleDirectDeviceControl("set_color_temperature", next)
+                }}
+                disabled={sendingDirectControl}
+              />
+              <div className="grid gap-2 sm:grid-cols-3">
+                {[
+                  { label: "Warm", value: 2700 },
+                  { label: "Neutral", value: 4000 },
+                  { label: "Cold", value: 5000 }
+                ].map((preset) => (
+                  <Button
+                    key={preset.label}
+                    type="button"
+                    variant={Math.abs(currentLightColorTemperature - preset.value) <= 75 ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => handleDirectDeviceControl("set_color_temperature", preset.value)}
+                    disabled={sendingDirectControl}
+                  >
+                    {preset.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           <Button
             type="button"
             variant={device.status ? "default" : "outline"}
@@ -3019,6 +3149,9 @@ export function DeviceDetailsDialog({
                         {batteryLabel ? (
                           <DeviceDetailRow label="Battery" value={batteryLabel} />
                         ) : null}
+                        {sensorReadings.map((reading) => (
+                          <DeviceDetailRow key={reading.label} label={reading.label} value={reading.value} />
+                        ))}
                         {getSourceLabel(device) === "Harmony" && harmonyEntityType ? (
                           <DeviceDetailRow
                             label="Harmony target"

@@ -52,6 +52,44 @@ test('extractDeviceMetrics maps device state and smartthings telemetry into char
   assert.equal(metrics.motion_active, 0);
 });
 
+test('extractDeviceMetrics maps direct-radio sensor state into standard telemetry metrics', () => {
+  const metrics = extractDeviceMetrics({
+    _id: 'device-zigbee-contact-1',
+    isOnline: true,
+    status: true,
+    temperature: 70.6,
+    properties: {
+      source: 'homebrain-zigbee',
+      directRadioState: {
+        contactOpen: true,
+        batteryLevel: 87,
+        batteryLow: false,
+        batteryVoltage: 3,
+        temperatureC: 21.4,
+        temperatureF: 70.6,
+        vibrationActive: true,
+        tamperActive: false,
+        humidity: 44,
+        illuminance: 112
+      }
+    }
+  });
+
+  assert.equal(metrics.online, 1);
+  assert.equal(metrics.status, 1);
+  assert.equal(metrics.temperature, 70.6);
+  assert.equal(metrics.temperature_c, 21.4);
+  assert.equal(metrics.temperature_f, 70.6);
+  assert.equal(metrics.contact_open, 1);
+  assert.equal(metrics.battery_pct, 87);
+  assert.equal(metrics.battery_low, 0);
+  assert.equal(metrics.battery_volts, 3);
+  assert.equal(metrics.vibration_active, 1);
+  assert.equal(metrics.tamper_active, 0);
+  assert.equal(metrics.humidity_pct, 44);
+  assert.equal(metrics.illuminance_lux, 112);
+});
+
 test('extractDeviceMetrics captures Tempest connectivity telemetry without duplicating observation metrics', () => {
   const metrics = extractDeviceMetrics({
     _id: 'tempest-device-1',

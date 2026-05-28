@@ -105,6 +105,7 @@ const METRIC_LABELS = {
   voltage_l2_v: 'L2 Voltage',
   frequency_hz: 'Frequency',
   battery_pct: 'Battery',
+  battery_low: 'Battery Low',
   humidity_pct: 'Humidity',
   pm2_5_ugm3: 'PM2.5',
   air_quality_index: 'Indoor AQI',
@@ -126,12 +127,16 @@ const METRIC_LABELS = {
   contact_open: 'Contact Open',
   motion_active: 'Motion',
   occupancy_active: 'Occupancy',
+  vibration_active: 'Vibration',
+  acceleration_active: 'Acceleration',
+  tamper_active: 'Tamper',
   presence_present: 'Presence',
   locked: 'Locked',
   water_detected: 'Water Detected',
   smoke_detected: 'Smoke Detected',
   carbon_monoxide_detected: 'CO Detected',
   illuminance_lux: 'Illuminance',
+  temperature_c: 'Temperature',
   temperature_f: 'Temperature',
   feels_like_f: 'Feels Like',
   dew_point_f: 'Dew Point',
@@ -206,6 +211,7 @@ const FEATURED_METRIC_PRIORITY = [
   'daily_energy_kwh',
   'energy_kwh',
   'battery_pct',
+  'battery_low',
   'battery_volts',
   'brightness_pct',
   'status',
@@ -213,7 +219,7 @@ const FEATURED_METRIC_PRIORITY = [
   'websocket_connected'
 ];
 
-const INTERESTING_METRIC_PATTERN = /(temp|humid|power|energy|battery|level|speed|volume|pressure|illuminance|lux|uv|rain|motion|contact|occup|presence|lock|water|smoke|carbon|co2|air|heat|cool|fan|setpoint|signal|rssi|volt|current|watt|percent|pct|status|online|active|execution|success|fail|duration|action)/i;
+const INTERESTING_METRIC_PATTERN = /(temp|humid|power|energy|battery|level|speed|volume|pressure|illuminance|lux|uv|rain|motion|contact|occup|presence|lock|water|smoke|carbon|co2|air|heat|cool|fan|setpoint|signal|rssi|volt|current|watt|percent|pct|status|online|active|tamper|vibration|accel|execution|success|fail|duration|action)/i;
 const IGNORED_METRIC_PARTS = new Set([
   'id',
   '_id',
@@ -281,7 +287,7 @@ const BOOLEAN_STATE_MAP = {
   true: 1,
   false: 0
 };
-const BINARY_METRIC_PATTERN = /(^|_)(online|status|open|closed|locked|active|detected|present|occupied|water|smoke|carbon|contact|motion|occupancy|presence|connected|listening)($|_)/i;
+const BINARY_METRIC_PATTERN = /(^|_)(online|status|open|closed|locked|active|detected|present|occupied|water|smoke|carbon|contact|motion|occupancy|presence|tamper|vibration|acceleration|connected|listening)($|_)/i;
 const TIMELINE_PRIORITY_KEYS = new Set([
   'status',
   'online',
@@ -289,6 +295,9 @@ const TIMELINE_PRIORITY_KEYS = new Set([
   'contact_open',
   'motion_active',
   'occupancy_active',
+  'vibration_active',
+  'acceleration_active',
+  'tamper_active',
   'presence_present',
   'water_detected',
   'smoke_detected',
@@ -868,6 +877,12 @@ function formatBinaryMetricState(key, value) {
       return active ? 'Motion' : 'Idle';
     case 'occupancy_active':
       return active ? 'Occupied' : 'Clear';
+    case 'vibration_active':
+      return active ? 'Vibration' : 'Clear';
+    case 'acceleration_active':
+      return active ? 'Acceleration' : 'Clear';
+    case 'tamper_active':
+      return active ? 'Tamper' : 'Clear';
     case 'presence_present':
       return active ? 'Present' : 'Away';
     case 'water_detected':
@@ -923,6 +938,15 @@ function describeTimelineEvent(metricKey, previousValue, nextValue) {
   }
   if (metricKey === 'motion_active') {
     return Number(nextValue) >= 0.5 ? 'Motion Detected' : 'Motion Cleared';
+  }
+  if (metricKey === 'vibration_active') {
+    return Number(nextValue) >= 0.5 ? 'Vibration Detected' : 'Vibration Cleared';
+  }
+  if (metricKey === 'acceleration_active') {
+    return Number(nextValue) >= 0.5 ? 'Acceleration Detected' : 'Acceleration Cleared';
+  }
+  if (metricKey === 'tamper_active') {
+    return Number(nextValue) >= 0.5 ? 'Tamper Detected' : 'Tamper Cleared';
   }
   if (metricKey === 'presence_present') {
     return Number(nextValue) >= 0.5 ? 'Presence Detected' : 'Presence Cleared';
@@ -1228,6 +1252,25 @@ function extractDeviceMetrics(device = {}) {
   addMetric(metrics, 'water_detected', smartThingsValues?.waterSensor?.water);
   addMetric(metrics, 'smoke_detected', smartThingsValues?.smokeDetector?.smoke);
   addMetric(metrics, 'carbon_monoxide_detected', smartThingsValues?.carbonMonoxideDetector?.carbonMonoxide);
+
+  const directRadioState = properties.directRadioState && typeof properties.directRadioState === 'object'
+    ? properties.directRadioState
+    : {};
+  addMetric(metrics, 'battery_pct', directRadioState.batteryLevel ?? properties.homeBrainBatteryLevel ?? properties.batteryLevel);
+  addMetric(metrics, 'battery_low', directRadioState.batteryLow);
+  addMetric(metrics, 'battery_volts', directRadioState.batteryVoltage);
+  addMetric(metrics, 'contact_open', directRadioState.contactOpen ?? directRadioState.contact);
+  addMetric(metrics, 'motion_active', directRadioState.motionActive ?? directRadioState.motion);
+  addMetric(metrics, 'occupancy_active', directRadioState.occupancyActive ?? directRadioState.occupancy);
+  addMetric(metrics, 'vibration_active', directRadioState.vibrationActive ?? directRadioState.vibration);
+  addMetric(metrics, 'acceleration_active', directRadioState.accelerationActive ?? directRadioState.acceleration);
+  addMetric(metrics, 'tamper_active', directRadioState.tamperActive ?? directRadioState.tamper);
+  addMetric(metrics, 'water_detected', directRadioState.waterDetected ?? directRadioState.water);
+  addMetric(metrics, 'humidity_pct', directRadioState.humidity);
+  addMetric(metrics, 'illuminance_lux', directRadioState.illuminance);
+  addMetric(metrics, 'temperature_c', directRadioState.temperatureC);
+  addMetric(metrics, 'temperature_f', directRadioState.temperatureF);
+  addMetric(metrics, 'color_temperature_k', directRadioState.colorTemperatureK);
 
   collectInterestingMetrics(properties, [], metrics);
 
