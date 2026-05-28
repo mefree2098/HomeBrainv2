@@ -194,8 +194,17 @@ class LetsEncryptService {
         if (challengeType === 'http-01') {
           // Handle HTTP-01 challenge
           const keyAuthorization = await client.getChallengeKeyAuthorization(challenge);
-          const challengePath = path.join(this.challengeDir, challenge.token);
-          const challengeUrl = `http://${domain}/.well-known/acme-challenge/${challenge.token}`;
+          const token = typeof challenge.token === 'string' ? challenge.token.trim() : '';
+          if (!/^[A-Za-z0-9_-]+$/.test(token)) {
+            throw new Error('ACME challenge token contained invalid characters');
+          }
+
+          const challengeRoot = path.resolve(this.challengeDir);
+          const challengePath = path.resolve(challengeRoot, token);
+          if (!challengePath.startsWith(`${challengeRoot}${path.sep}`)) {
+            throw new Error('ACME challenge path escaped the challenge directory');
+          }
+          const challengeUrl = `http://${domain}/.well-known/acme-challenge/${token}`;
 
           console.log(`Setting up HTTP-01 challenge at: ${challengePath}`);
           console.log(`HTTP-01 challenge URL: ${challengeUrl}`);

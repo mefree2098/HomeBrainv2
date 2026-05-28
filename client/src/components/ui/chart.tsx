@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils"
 
 // Format: { THEME_NAME: CSS_SELECTOR }
 const THEMES = { light: "", dark: ".dark" } as const
+const SAFE_COLOR_PATTERN = /^(#[0-9a-fA-F]{3,8}|(?:rgb|hsl)a?\([\d\s.,%/-]+\)|var\(--[A-Za-z0-9_-]+\))$/
 
 export type ChartConfig = {
   [k in string]: {
@@ -76,6 +77,12 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
     return null
   }
 
+  const safeCssIdentifier = (value: string) => value.replace(/[^A-Za-z0-9_-]/g, "")
+  const safeCssColor = (value?: string) => {
+    const normalized = typeof value === "string" ? value.trim() : ""
+    return SAFE_COLOR_PATTERN.test(normalized) ? normalized : ""
+  }
+
   return (
     <style
       dangerouslySetInnerHTML={{
@@ -88,7 +95,9 @@ ${colorConfig
     const color =
       itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ||
       itemConfig.color
-    return color ? `  --color-${key}: ${color};` : null
+    const safeColor = safeCssColor(color)
+    const safeKey = safeCssIdentifier(key)
+    return safeColor && safeKey ? `  --color-${safeKey}: ${safeColor};` : null
   })
   .join("\n")}
 }
@@ -363,4 +372,3 @@ export {
   ChartLegendContent,
   ChartStyle,
 }
-

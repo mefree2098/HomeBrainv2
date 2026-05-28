@@ -1,4 +1,5 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const alexaBridgeService = require('../services/alexaBridgeService');
 const alexaBrokerService = require('../services/alexaBrokerService');
 const alexaCustomSkillService = require('../services/alexaCustomSkillService');
@@ -6,6 +7,22 @@ const { requireAdmin } = require('./middlewares/auth');
 
 const router = express.Router();
 const admin = requireAdmin();
+const { ipKeyGenerator } = rateLimit;
+const brokerReadRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_ALEXA_BROKER_RATE_LIMIT_WINDOW_MS || 60 * 1000)),
+  limit: Math.max(60, Number(process.env.HOMEBRAIN_ALEXA_BROKER_RATE_LIMIT_MAX || 600)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator(req) {
+    return typeof ipKeyGenerator === 'function'
+      ? ipKeyGenerator(req.ip)
+      : (req.ip || req.socket?.remoteAddress || 'unknown');
+  },
+  message: {
+    success: false,
+    error: 'Too many Alexa broker requests. Please retry shortly.'
+  }
+});
 
 async function brokerAuth(req, res, next) {
   try {
@@ -426,7 +443,7 @@ router.post('/broker/register', async (req, res) => {
   }
 });
 
-router.get('/broker/health', brokerAuth, async (_req, res) => {
+router.get('/broker/health', brokerReadRateLimit, brokerAuth, async (_req, res) => {
   try {
     const health = await alexaBridgeService.buildHealth();
     return res.status(200).json(health);
@@ -439,7 +456,7 @@ router.get('/broker/health', brokerAuth, async (_req, res) => {
   }
 });
 
-router.get('/broker/catalog', brokerAuth, async (_req, res) => {
+router.get('/broker/catalog', brokerReadRateLimit, brokerAuth, async (req, res) => {
   try {
     const catalog = await alexaBridgeService.getCatalog();
     await alexaBridgeService.appendActivity(req.alexaBrokerRegistration, {

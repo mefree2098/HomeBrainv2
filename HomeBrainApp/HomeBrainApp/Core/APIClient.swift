@@ -76,16 +76,8 @@ final class APIClient {
         return (data, suggestedFilename(from: response))
     }
 
-    func streamURL(_ path: String, query: [URLQueryItem] = [], includeAccessTokenQuery: Bool = false) -> URL? {
-        var resolvedQuery = query
-
-        if includeAccessTokenQuery,
-           let accessToken = sessionStore.accessToken,
-           !accessToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            resolvedQuery.append(URLQueryItem(name: "token", value: accessToken))
-        }
-
-        return buildURL(path: path, query: resolvedQuery)
+    func streamURL(_ path: String, query: [URLQueryItem] = []) -> URL? {
+        buildURL(path: path, query: query)
     }
 
     func mediaURL(_ path: String) -> URL? {

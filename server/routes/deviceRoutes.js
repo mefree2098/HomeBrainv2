@@ -30,6 +30,10 @@ function shouldIncludeRawDevicePayload(req) {
     && (req.query.includeRaw === '1' || req.query.includeRaw === 'true');
 }
 
+function queryString(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 function deviceActionStatusCode(error) {
   if (error.status) {
     return error.status;
@@ -63,11 +67,14 @@ router.get('/', async (req, res) => {
     console.log('GET /api/devices - Query params:', req.query);
     
     const filters = {};
-    if (req.query.room) filters.room = req.query.room;
-    if (req.query.type) filters.type = req.query.type;
+    const room = queryString(req.query.room);
+    const type = queryString(req.query.type);
+    const source = queryString(req.query.source);
+    if (room) filters.room = room;
+    if (type) filters.type = type;
     if (req.query.status !== undefined) filters.status = req.query.status === 'true';
     if (req.query.isOnline !== undefined) filters.isOnline = req.query.isOnline === 'true';
-    if (req.query.source) filters.source = req.query.source;
+    if (source) filters.source = source;
     
     const refreshSmartThings = req.query.refresh === '1' || req.query.refresh === 'true';
     const includeExcludedHarmony = req.query.includeExcludedHarmony === '1' || req.query.includeExcludedHarmony === 'true';

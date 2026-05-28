@@ -31,6 +31,7 @@ const {
 const AUDIO_ROOT = path.join(__dirname, '..', 'data', 'alexa-custom-audio');
 const MAX_AUDIO_TEXT_LENGTH = Math.max(120, Number(process.env.HOMEBRAIN_ALEXA_CUSTOM_AUDIO_TEXT_LIMIT || 320));
 const AUDIO_TTL_SECONDS = Math.max(60, Number(process.env.HOMEBRAIN_ALEXA_CUSTOM_AUDIO_TTL_SECONDS || 900));
+const AUDIO_CLIP_ID_PATTERN = /^[a-f0-9]{20}$/;
 
 function escapeRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -82,9 +83,12 @@ class AlexaCustomSkillService {
   }
 
   getSigningSecret() {
-    return trimString(process.env.HOMEBRAIN_ALEXA_AUDIO_SIGNING_SECRET)
-      || trimString(process.env.JWT_SECRET)
-      || 'homebrain-alexa-custom-audio-secret';
+    const signingSecret = trimString(process.env.HOMEBRAIN_ALEXA_AUDIO_SIGNING_SECRET)
+      || trimString(process.env.JWT_SECRET);
+    if (!signingSecret) {
+      throw new Error('Alexa custom audio signing secret is not configured');
+    }
+    return signingSecret;
   }
 
   buildAudioToken(clipId, expiresAtMs) {
@@ -161,6 +165,12 @@ class AlexaCustomSkillService {
     await this.initialize();
 
     const normalizedClipId = trimString(clipId);
+    if (!AUDIO_CLIP_ID_PATTERN.test(normalizedClipId)) {
+      const error = new Error('Alexa audio clip id is invalid');
+      error.status = 400;
+      throw error;
+    }
+
     if (!normalizedClipId || !this.verifyAudioToken(normalizedClipId, token)) {
       const error = new Error('Alexa audio token is invalid or expired');
       error.status = 401;

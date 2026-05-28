@@ -12,6 +12,11 @@ const voiceAcknowledgmentService = require('../services/voiceAcknowledgmentServi
 
 console.log('voiceWebSocket.js loaded with enhanced logging');
 
+const MAX_AUDIO_SESSION_BYTES = Math.max(
+  1024 * 1024,
+  Number(process.env.HOMEBRAIN_VOICE_AUDIO_SESSION_MAX_BYTES || 20 * 1024 * 1024)
+);
+
 function hashDeviceToken(token) {
   return crypto.createHash('sha256').update(String(token || ''), 'utf8').digest('hex');
 }
@@ -956,7 +961,8 @@ class VoiceWebSocketServer {
         format: typeof format === 'string' ? format.toUpperCase() : 'S16LE',
         startedAt: new Date(),
         lastSequence: typeof sequence === 'number' ? sequence : -1,
-        chunkCount: 0
+        chunkCount: 0,
+        totalBytes: 0
       };
       this.audioSessions.set(deviceId, session);
       console.log(`Started audio session ${resolvedSessionId} for device ${deviceId}`);
@@ -973,7 +979,23 @@ class VoiceWebSocketServer {
 
     if (audioData) {
       try {
-        session.chunks.push(Buffer.from(audioData, 'base64'));
+        const chunk = Buffer.from(audioData, 'base64');
+        if (session.totalBytes + chunk.length > MAX_AUDIO_SESSION_BYTES) {
+          console.warn(`Audio session ${resolvedSessionId} for device ${deviceId} exceeded ${MAX_AUDIO_SESSION_BYTES} bytes; dropping buffered audio`);
+          this.audioSessions.delete(deviceId);
+          await this.updateDeviceAudioState(deviceId, {
+            audioStreamActive: false,
+            lastTranscriptError: 'Audio session exceeded maximum size'
+          });
+          this.sendMessage(deviceId, {
+            type: 'audio_error',
+            sessionId: resolvedSessionId,
+            error: 'Audio session exceeded maximum size'
+          });
+          return;
+        }
+        session.chunks.push(chunk);
+        session.totalBytes += chunk.length;
       } catch (error) {
         console.error(`Failed to decode audio chunk for device ${deviceId}:`, error.message);
       }
@@ -1161,6 +1183,8 @@ class VoiceWebSocketServer {
 
   async handleDisconnection(deviceId, code, reason) {
     console.log(`Voice device ${deviceId} disconnected: ${code} - ${reason}`);
+    this.deviceConnections.delete(deviceId);
+    this.audioSessions.delete(deviceId);
 
     try {
       // Update device status to offline
@@ -1169,10 +1193,6 @@ class VoiceWebSocketServer {
         lastSeen: new Date(),
         audioStreamActive: false
       });
-
-      // Remove from active connections
-      this.deviceConnections.delete(deviceId);
-
     } catch (error) {
       console.error(`Error handling disconnection for device ${deviceId}:`, error);
     }

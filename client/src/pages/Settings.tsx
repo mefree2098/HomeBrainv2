@@ -2844,36 +2844,7 @@ export function Settings() {
 
   const handleTestElevenLabsKey = async () => {
     const formApiKey = watch('elevenlabsApiKey');
-    
-    // If no API key in form field or it's the placeholder, get the existing one from the backend
-    let apiKeyToTest = formApiKey;
-    
-    if (!apiKeyToTest || apiKeyToTest.trim() === '' || isMaskedSecretPlaceholder(apiKeyToTest)) {
-      try {
-        console.log('No API key in form, fetching existing key from backend...');
-        const settingResponse = await getSetting('elevenlabsApiKey');
-        
-        if (settingResponse.success && settingResponse.value) {
-          apiKeyToTest = settingResponse.value;
-          console.log('Using existing API key from backend for test');
-        } else {
-          toast({
-            title: "Error", 
-            description: "No ElevenLabs API key found. Please enter an API key to test.",
-            variant: "destructive"
-          });
-          return;
-        }
-      } catch (error) {
-        console.error('Failed to fetch existing API key:', error);
-        toast({
-          title: "Error",
-          description: "Please enter an ElevenLabs API key to test",
-          variant: "destructive"
-        });
-        return;
-      }
-    }
+    const apiKeyToTest = !formApiKey || isMaskedSecretPlaceholder(formApiKey) ? '' : formApiKey;
 
     setTestingApiKey(true);
     try {
@@ -2902,36 +2873,7 @@ export function Settings() {
   const handleTestOpenAIKey = async () => {
     const formApiKey = watch('openaiApiKey');
     const formModel = watch('openaiModel');
-    
-    // If no API key in form field or it's the placeholder, get the existing one from the backend
-    let apiKeyToTest = formApiKey;
-    
-    if (!apiKeyToTest || apiKeyToTest.trim() === '' || isMaskedSecretPlaceholder(apiKeyToTest)) {
-      try {
-        console.log('No API key in form, fetching existing key from backend...');
-        const settingResponse = await getSetting('openaiApiKey');
-        
-        if (settingResponse.success && settingResponse.value) {
-          apiKeyToTest = settingResponse.value;
-          console.log('Using existing API key from backend for test');
-        } else {
-          toast({
-            title: "Error", 
-            description: "No OpenAI API key found. Please enter an API key to test.",
-            variant: "destructive"
-          });
-          return;
-        }
-      } catch (error) {
-        console.error('Failed to fetch existing API key:', error);
-        toast({
-          title: "Error",
-          description: "Please enter an OpenAI API key to test",
-          variant: "destructive"
-        });
-        return;
-      }
-    }
+    const apiKeyToTest = !formApiKey || isMaskedSecretPlaceholder(formApiKey) ? '' : formApiKey;
 
     setTestingOpenAI(true);
     try {
@@ -2960,36 +2902,7 @@ export function Settings() {
   const handleTestAnthropicKey = async () => {
     const formApiKey = watch('anthropicApiKey');
     const formModel = watch('anthropicModel');
-    
-    // If no API key in form field or it's the placeholder, get the existing one from the backend
-    let apiKeyToTest = formApiKey;
-    
-    if (!apiKeyToTest || apiKeyToTest.trim() === '' || isMaskedSecretPlaceholder(apiKeyToTest)) {
-      try {
-        console.log('No API key in form, fetching existing key from backend...');
-        const settingResponse = await getSetting('anthropicApiKey');
-        
-        if (settingResponse.success && settingResponse.value) {
-          apiKeyToTest = settingResponse.value;
-          console.log('Using existing API key from backend for test');
-        } else {
-          toast({
-            title: "Error", 
-            description: "No Anthropic API key found. Please enter an API key to test.",
-            variant: "destructive"
-          });
-          return;
-        }
-      } catch (error) {
-        console.error('Failed to fetch existing API key:', error);
-        toast({
-          title: "Error",
-          description: "Please enter an Anthropic API key to test",
-          variant: "destructive"
-        });
-        return;
-      }
-    }
+    const apiKeyToTest = !formApiKey || isMaskedSecretPlaceholder(formApiKey) ? '' : formApiKey;
 
     setTestingAnthropic(true);
     try {

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState, ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from "react";
 import { getCurrentUser as apiGetCurrentUser, login as apiLogin, logout as apiLogout, register as apiRegister } from "../api/auth";
 import { hasPlatformAccess, isAdminRole, type User, type UserPlatform, type UserRole } from "../../../shared/types/user";
 
@@ -34,7 +34,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [currentUser, setCurrentUser] = useState<User | null>(() => getStoredUser());
   const [isLoading, setIsLoading] = useState(true);
 
-  const setStoredUser = (userData: User | null) => {
+  const setStoredUser = useCallback((userData: User | null) => {
     if (userData) {
       localStorage.setItem("userData", JSON.stringify(userData));
       setCurrentUser(userData);
@@ -44,9 +44,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     localStorage.removeItem("userData");
     setCurrentUser(null);
-  };
+  }, []);
 
-  const resetAuth = () => {
+  const resetAuth = useCallback(() => {
     // Clean up legacy token storage from older browser builds. HttpOnly cookies
     // are cleared by the server through /api/auth/logout or failed refreshes.
     localStorage.removeItem("refreshToken");
@@ -55,18 +55,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setCurrentUser(null);
     setIsAuthenticated(false);
     setIsLoading(false);
-  };
+  }, []);
 
-  const setAuthData = (userData: User) => {
+  const setAuthData = useCallback((userData: User) => {
     setStoredUser(userData);
     setIsLoading(false);
-  };
+  }, [setStoredUser]);
 
-  const refreshCurrentUser = async () => {
+  const refreshCurrentUser = useCallback(async () => {
     const userData = await apiGetCurrentUser();
     setStoredUser(userData);
     return userData;
-  };
+  }, [setStoredUser]);
 
   useEffect(() => {
     let cancelled = false;
@@ -95,9 +95,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [resetAuth, setStoredUser]);
 
-  const login = async (email: string, password: string) => {
+  const login = useCallback(async (email: string, password: string) => {
     try {
       setIsLoading(true);
       const response = await apiLogin(email, password);
@@ -107,9 +107,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       resetAuth();
       throw new Error(error?.message || 'Login failed');
     }
-  };
+  }, [resetAuth, setAuthData]);
 
-  const register = async (email: string, password: string) => {
+  const register = useCallback(async (email: string, password: string) => {
     try {
       setIsLoading(true);
       const response = await apiRegister(email, password);
@@ -119,9 +119,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       resetAuth();
       throw new Error(error?.message || 'Registration failed');
     }
-  };
+  }, [resetAuth, setAuthData]);
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     try {
       await apiLogout();
     } catch (error) {
@@ -129,27 +129,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       resetAuth();
     }
-  };
+  }, [resetAuth]);
 
   const isAdmin = useMemo(() => isAdminRole(currentUser?.role), [currentUser?.role]);
-  const hasRole = (role: UserRole) => currentUser?.role === role;
-  const hasPlatform = (platform: UserPlatform) => hasPlatformAccess(currentUser, platform);
-  const hasHomeBrainAccess = hasPlatform("homebrain");
+  const hasRole = useCallback((role: UserRole) => currentUser?.role === role, [currentUser?.role]);
+  const hasPlatform = useCallback((platform: UserPlatform) => hasPlatformAccess(currentUser, platform), [currentUser]);
+  const hasHomeBrainAccess = useMemo(() => hasPlatformAccess(currentUser, "homebrain"), [currentUser]);
+  const value = useMemo(() => ({
+    currentUser,
+    isAuthenticated,
+    isLoading,
+    isAdmin,
+    hasHomeBrainAccess,
+    login,
+    register,
+    logout,
+    refreshCurrentUser,
+    hasRole,
+    hasPlatform
+  }), [
+    currentUser,
+    isAuthenticated,
+    isLoading,
+    isAdmin,
+    hasHomeBrainAccess,
+    login,
+    register,
+    logout,
+    refreshCurrentUser,
+    hasRole,
+    hasPlatform
+  ]);
 
   return (
-      <AuthContext.Provider value={{
-        currentUser,
-        isAuthenticated,
-        isLoading,
-        isAdmin,
-        hasHomeBrainAccess,
-        login,
-        register,
-        logout,
-        refreshCurrentUser,
-        hasRole,
-        hasPlatform
-      }}>
+      <AuthContext.Provider value={value}>
         {children}
       </AuthContext.Provider>
   );

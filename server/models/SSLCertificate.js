@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const crypto = require('crypto');
+const { getJwtSecret } = require('../utils/startupSecrets');
 
 const sslCertificateSchema = new mongoose.Schema({
   domain: {
@@ -134,7 +135,7 @@ sslCertificateSchema.pre('save', function() {
 // Instance method to encrypt private key
 sslCertificateSchema.methods.encryptPrivateKey = function(privateKey) {
   const algorithm = 'aes-256-cbc';
-  const key = crypto.scryptSync(process.env.JWT_SECRET || 'homebrain-ssl-secret', 'salt', 32);
+  const key = crypto.scryptSync(getJwtSecret(), 'salt', 32);
   const iv = crypto.randomBytes(16);
 
   const cipher = crypto.createCipheriv(algorithm, key, iv);
@@ -147,7 +148,7 @@ sslCertificateSchema.methods.encryptPrivateKey = function(privateKey) {
 // Instance method to decrypt private key
 sslCertificateSchema.methods.decryptPrivateKey = function() {
   const algorithm = 'aes-256-cbc';
-  const key = crypto.scryptSync(process.env.JWT_SECRET || 'homebrain-ssl-secret', 'salt', 32);
+  const key = crypto.scryptSync(getJwtSecret(), 'salt', 32);
 
   const parts = this.privateKey.split(':');
   const iv = Buffer.from(parts.shift(), 'hex');

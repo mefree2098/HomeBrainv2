@@ -49,5 +49,9 @@ const reverseProxyAuditLogSchema = new mongoose.Schema({
 reverseProxyAuditLogSchema.index({ createdAt: -1 });
 reverseProxyAuditLogSchema.index({ hostname: 1, createdAt: -1 });
 reverseProxyAuditLogSchema.index({ routeId: 1, createdAt: -1 });
+reverseProxyAuditLogSchema.index(
+  { createdAt: 1 },
+  { expireAfterSeconds: Math.max(86400, Number(process.env.REVERSE_PROXY_AUDIT_TTL_SECONDS || 90 * 24 * 60 * 60)) }
+);
 
 module.exports = mongoose.model('ReverseProxyAuditLog', reverseProxyAuditLogSchema);

@@ -4,6 +4,10 @@ const wakeWordTrainingService = require('./wakeWordTrainingService');
 const voiceAcknowledgmentService = require('./voiceAcknowledgmentService');
 const { normalizeDashboardViews } = require('../utils/dashboardViews');
 
+function escapeRegexLiteral(value = '') {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 const normalizeVisibleSensorIds = (sensorIds) => {
   if (sensorIds === undefined || sensorIds === null) {
     return null;
@@ -215,7 +219,7 @@ class UserProfileService {
       }
       
       if (filters.name) {
-        query.name = { $regex: filters.name, $options: 'i' };
+        query.name = { $regex: escapeRegexLiteral(filters.name), $options: 'i' };
       }
       
       const profiles = await UserProfile.find(query)

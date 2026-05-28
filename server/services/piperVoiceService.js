@@ -12,6 +12,7 @@ const HUGGING_FACE_BASE_URL = 'https://huggingface.co/rhasspy/piper-voices/resol
 const HUGGING_FACE_VOICES_URL = `${HUGGING_FACE_BASE_URL}/voices.json`;
 const DEFAULT_VOICE_ID = 'en_US-amy-medium';
 const CATALOG_TTL_MS = 1000 * 60 * 60; // 1 hour
+const VOICE_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 
 let cachedCatalog = null;
 let catalogFetchedAt = 0;
@@ -330,7 +331,17 @@ async function downloadVoice(id) {
 
 async function removeVoice(id) {
   await ensureVoiceDirectory();
-  const voiceDir = path.join(VOICES_ROOT, id);
+  const voiceId = typeof id === 'string' ? id.trim() : '';
+  if (!voiceId || voiceId === '.' || voiceId === '..' || !VOICE_ID_PATTERN.test(voiceId) || voiceId.includes('..')) {
+    throw new Error('Invalid Piper voice id');
+  }
+
+  const voicesRoot = path.resolve(VOICES_ROOT);
+  const voiceDir = path.resolve(voicesRoot, voiceId);
+  if (voiceDir !== voicesRoot && !voiceDir.startsWith(`${voicesRoot}${path.sep}`)) {
+    throw new Error('Invalid Piper voice path');
+  }
+
   await fsExtra.remove(voiceDir);
 
   const remaining = await listInstalledVoices();

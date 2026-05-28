@@ -11,7 +11,7 @@ const { hideBin } = require('yargs/helpers');
 const dgram = require('dgram');
 const os = require('os');
 const crypto = require('crypto');
-const { exec } = require('child_process');
+const { spawn } = require('child_process');
 const packageInfo = require('./package.json');
 let WebRtcVad = null;
 try {
@@ -38,6 +38,21 @@ const slugify = (value) => {
   if (!value) return '';
   return value.toString().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 };
+
+function runCommand(command, args = []) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, { stdio: 'ignore' });
+    child.on('error', () => resolve(false));
+    child.on('close', (code) => resolve(code === 0));
+  });
+}
+
+async function playAudioFile(filePath) {
+  return await runCommand('mpg123', ['-q', filePath])
+    || await runCommand('ffplay', ['-nodisp', '-autoexit', '-loglevel', 'quiet', filePath])
+    || await runCommand('play', ['-q', filePath])
+    || await runCommand('aplay', ['-q', filePath]);
+}
 
 // Parse command line arguments
 const argv = yargs(hideBin(process.argv))
@@ -1784,8 +1799,6 @@ class HomeBrainRemoteDevice {
 
     // If a specific ElevenLabs voice is provided, fetch audio from the hub and play it.
     // Otherwise, fall back to local TTS or beep.
-    const tryExec = (cmd) => new Promise((resolve) => exec(cmd, (err) => resolve(!err)));
-
     let usedRemote = false;
     try {
       const voiceId = voice && voice !== 'default' ? voice : null;
@@ -1805,8 +1818,7 @@ class HomeBrainRemoteDevice {
           const buf = Buffer.from(arrayBuf);
           const tmpPath = path.join(os.tmpdir(), `hb_el_${Date.now()}.mp3`);
           await fsp.writeFile(tmpPath, buf);
-          // Play via mpg123/ffplay/play/aplay
-          const played = await tryExec(`mpg123 -q "${tmpPath}"`) || await tryExec(`ffplay -nodisp -autoexit -loglevel quiet "${tmpPath}"`) || await tryExec(`play -q "${tmpPath}"`) || await tryExec(`aplay -q "${tmpPath}"`);
+          const played = await playAudioFile(tmpPath);
           try { await fsp.unlink(tmpPath); } catch (_) {}
           if (played) {
             usedRemote = true;
@@ -1819,14 +1831,14 @@ class HomeBrainRemoteDevice {
 
     if (!usedRemote) {
       // Local TTS
-      const escaped = (text || '').replace(/"/g, '\\"');
+      const ttsText = String(text || '');
       let played = false;
       try {
-        played = await tryExec(`espeak -s 175 -a 150 "${escaped}" 2>/dev/null`);
+        played = await runCommand('espeak', ['-s', '175', '-a', '150', ttsText]);
         if (!played) {
           const tmpWav = path.join(os.tmpdir(), `hb_tts_${Date.now()}.wav`);
-          const ok = await tryExec(`pico2wave -w "${tmpWav}" "${escaped}" && aplay -q "${tmpWav}"`);
-          played = ok;
+          const rendered = await runCommand('pico2wave', ['-w', tmpWav, ttsText]);
+          played = rendered && await playAudioFile(tmpWav);
           try { await fsp.unlink(tmpWav); } catch (_) {}
         }
       } catch (_) {}
@@ -1846,7 +1858,7 @@ class HomeBrainRemoteDevice {
           const wavBuffer = wav.encode([buffer], { sampleRate, float: true, bitDepth: 32 });
           const tmpPath = path.join(os.tmpdir(), `hb_ping_${Date.now()}.wav`);
           await fsp.writeFile(tmpPath, wavBuffer);
-          const ok = await tryExec(`aplay -q "${tmpPath}"`) || await tryExec(`play -q "${tmpPath}"`);
+          const ok = await playAudioFile(tmpPath);
           try { await fsp.unlink(tmpPath); } catch (_) {}
           if (!ok) {
             console.warn('No audio player available (aplay/play). Unable to play TTS or beep.');
@@ -1862,8 +1874,12 @@ class HomeBrainRemoteDevice {
 
   verifyCommand(command) {
     return new Promise((resolve, reject) => {
-      exec(`command -v ${command}`, (error) => {
-        if (error) {
+      const child = spawn('which', [command], { stdio: 'ignore' });
+      child.on('error', () => {
+        reject(new Error(`"${command}" executable not found in PATH`));
+      });
+      child.on('close', (code) => {
+        if (code !== 0) {
           reject(new Error(`"${command}" executable not found in PATH`));
         } else {
           resolve();
