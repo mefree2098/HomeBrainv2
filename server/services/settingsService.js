@@ -282,12 +282,12 @@ class SettingsService {
 
   async getSanitizedSetting(key) {
     try {
-      console.log(`SettingsService: Getting sanitized setting: ${key}`);
+      console.log('SettingsService: Getting sanitized setting:', String(key || ''));
       const settings = await this.getSettings();
       const value = settings[key];
       return this.isSensitiveField(key) ? maskSecretValue(value) : value;
     } catch (error) {
-      console.error(`SettingsService: Error getting sanitized setting ${key}:`, error.message);
+      console.error('SettingsService: Error getting sanitized setting:', String(key || ''), error.message);
       throw new Error(`Failed to get setting: ${key}`);
     }
   }
