@@ -613,6 +613,16 @@ function getDirectRadioState(device: DeviceLike | null): Record<string, unknown>
     : {}
 }
 
+function getSensorTemperatureF(device: DeviceLike | null): number | null {
+  const state = getDirectRadioState(device)
+  const temperatureF = toFiniteNumber(state.temperatureF ?? device?.temperature)
+  if (temperatureF !== null) {
+    return temperatureF
+  }
+  const temperatureC = toFiniteNumber(state.temperatureC)
+  return temperatureC === null ? null : ((temperatureC * 9 / 5) + 32)
+}
+
 function getLightColorTemperature(device: DeviceLike | null): number {
   const state = getDirectRadioState(device)
   return clampColorTemperature(device?.colorTemperature ?? state.colorTemperatureK)
@@ -1831,7 +1841,7 @@ export function DeviceDetailsDialog({
   const directRadioState = getDirectRadioState(device)
   const sensorReadings = [
     { label: "Contact", value: getSensorStateLabel(device) },
-    { label: "Temperature", value: formatSensorReading(directRadioState.temperatureF ?? device?.temperature, "°") },
+    { label: "Temperature", value: formatSensorReading(getSensorTemperatureF(device), "°") },
     { label: "Humidity", value: formatSensorReading(directRadioState.humidity, "%") },
     { label: "Illuminance", value: formatSensorReading(directRadioState.illuminance, " lx") },
     { label: "Vibration", value: directRadioState.vibrationActive === undefined && directRadioState.accelerationActive === undefined ? null : (Boolean(directRadioState.vibrationActive || directRadioState.accelerationActive) ? "Detected" : "Clear") },

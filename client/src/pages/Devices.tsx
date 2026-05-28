@@ -508,7 +508,9 @@ function DeviceBatteryIndicator({ device }: { device: any }) {
 
 const formatSensorTemperature = (device: any): string | null => {
   const state = getDirectRadioState(device)
-  const numeric = toFiniteNumber(state.temperatureF ?? device?.temperature)
+  const temperatureF = toFiniteNumber(state.temperatureF ?? device?.temperature)
+  const temperatureC = toFiniteNumber(state.temperatureC)
+  const numeric = temperatureF ?? (temperatureC === null ? null : ((temperatureC * 9 / 5) + 32))
   return numeric === null ? null : `${Math.round(numeric)}°`
 }
 
@@ -655,6 +657,12 @@ const isSmartThingsMigrationFinalized = (device: any): boolean => {
   return Boolean(migration?.finalizedAt)
     || Boolean(validation?.finalized)
     || validationStatus === 'passed'
+}
+
+const isRetiredSmartThingsMigrationSource = (device: any): boolean => {
+  const migration = getSmartThingsMigration(device)
+  const status = (migration?.status || '').toString().trim().toLowerCase()
+  return Boolean(migration?.retiredSource) || status === 'finalized_source'
 }
 
 const needsMigrationFinalization = (device: any): boolean => {
@@ -1993,7 +2001,11 @@ export function Devices({
     const matchesType = matchesDeviceTypeFilter(device, filterType)
     const matchesSource = deviceMatchesSourceFilter(device, filterSource)
 
-    return !isHarmonyExcludedFromHomeBrain(device) && matchesSearch && matchesType && matchesSource
+    return !isHarmonyExcludedFromHomeBrain(device)
+      && !isRetiredSmartThingsMigrationSource(device)
+      && matchesSearch
+      && matchesType
+      && matchesSource
   }
 
   const sortDevices = (deviceList: any[]) => {

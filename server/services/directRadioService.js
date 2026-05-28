@@ -434,6 +434,171 @@ function normalizeSourceText(value) {
   return trimString(value).toLowerCase();
 }
 
+function getDeviceIdString(device) {
+  return trimString(device?._id?.toString?.() || device?._id || device?.id);
+}
+
+function getDeviceProperties(device) {
+  return device?.properties && typeof device.properties === 'object'
+    ? device.properties
+    : {};
+}
+
+function toPlainDeviceSnapshot(device) {
+  if (!device) {
+    return {};
+  }
+  if (typeof device.toObject === 'function') {
+    return device.toObject({ depopulate: true });
+  }
+  return { ...device };
+}
+
+function getSmartThingsMigration(device) {
+  const migration = getDeviceProperties(device).smartThingsMigration;
+  return migration && typeof migration === 'object' && !Array.isArray(migration)
+    ? migration
+    : null;
+}
+
+function isRetiredSmartThingsMigrationSource(device) {
+  const migration = getSmartThingsMigration(device);
+  return migration?.retiredSource === true
+    || normalizeSourceText(migration?.status) === 'finalized_source';
+}
+
+function normalizeMigrationNameTokens(...values) {
+  const ignored = new Set([
+    'a',
+    'an',
+    'and',
+    'device',
+    'sensor',
+    'the'
+  ]);
+  return new Set(values
+    .map((value) => trimString(value).toLowerCase())
+    .filter(Boolean)
+    .flatMap((value) => value
+      .replace(/open\s*\/\s*closed/g, 'open closed')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length > 1 && !ignored.has(token))));
+}
+
+function scoreTokenOverlap(left, right) {
+  if (!(left instanceof Set) || !(right instanceof Set) || left.size === 0 || right.size === 0) {
+    return 0;
+  }
+  let overlap = 0;
+  left.forEach((token) => {
+    if (right.has(token)) {
+      overlap += 1;
+    }
+  });
+  return overlap / Math.max(left.size, right.size);
+}
+
+function smartThingsNetworkTypeMatchesProtocol(properties = {}, protocol = '') {
+  const networkType = normalizeSourceText(properties.smartThingsDeviceNetworkType)
+    .replace(/[^a-z0-9]+/g, '');
+  if (protocol === 'zigbee') {
+    return networkType === 'zigbee';
+  }
+  if (protocol === 'zwave') {
+    return networkType === 'zwave' || networkType === 'zw';
+  }
+  return false;
+}
+
+function readSmartThingsBatteryLevel(device) {
+  const properties = getDeviceProperties(device);
+  return clampPercent(
+    properties.smartThingsBatteryLevel
+    ?? properties.batteryLevel
+    ?? properties.battery
+    ?? properties.smartThingsAttributeValues?.battery?.battery
+    ?? properties.smartThingsAttributeValues?.battery?.batteryLevel
+  );
+}
+
+function readSmartThingsTemperatureF(device) {
+  const topLevel = toFiniteNumber(device?.temperature);
+  if (topLevel !== null) {
+    return topLevel;
+  }
+
+  const properties = getDeviceProperties(device);
+  const temperature = toFiniteNumber(
+    properties.smartThingsAttributeValues?.temperatureMeasurement?.temperature
+    ?? properties.smartThingsAttributeValues?.temperature?.temperature
+    ?? properties.smartThingsAttributeValues?.temperature
+  );
+  if (temperature === null) {
+    return null;
+  }
+
+  const unit = trimString(
+    properties.smartThingsAttributeMetadata?.temperatureMeasurement?.temperature?.unit
+    ?? properties.smartThingsAttributeMetadata?.temperature?.temperature?.unit
+    ?? properties.smartThingsAttributeMetadata?.temperature?.unit
+  ).toUpperCase();
+  return unit === 'C' || unit === 'CELSIUS'
+    ? celsiusToFahrenheit(temperature)
+    : temperature;
+}
+
+function copySmartThingsHistoryProperties(sourceProperties = {}) {
+  const history = {};
+  Object.entries(sourceProperties).forEach(([key, value]) => {
+    if (/^smartthings/i.test(key) || key === 'componentIds') {
+      history[key] = value;
+    }
+  });
+  return history;
+}
+
+function mergeSmartThingsTelemetryFallback(snapshot = {}, sourceDevice = null) {
+  const next = {
+    ...snapshot,
+    properties: {
+      ...(snapshot.properties && typeof snapshot.properties === 'object' ? snapshot.properties : {})
+    }
+  };
+  const directState = next.properties.directRadioState && typeof next.properties.directRadioState === 'object'
+    ? { ...next.properties.directRadioState }
+    : {};
+
+  const temperatureF = readSmartThingsTemperatureF(sourceDevice);
+  if (temperatureF !== null) {
+    if (directState.temperatureF === undefined) {
+      directState.temperatureF = temperatureF;
+    }
+    if (directState.temperatureC === undefined) {
+      directState.temperatureC = Math.round(((temperatureF - 32) * 5 / 9) * 10) / 10;
+    }
+    if (!Object.prototype.hasOwnProperty.call(next, 'temperature') || next.temperature === undefined) {
+      next.temperature = temperatureF;
+    }
+  }
+
+  const batteryLevel = readSmartThingsBatteryLevel(sourceDevice);
+  if (batteryLevel !== null && directState.batteryLevel === undefined) {
+    directState.batteryLevel = batteryLevel;
+  }
+  if (batteryLevel !== null) {
+    next.properties.homeBrainBatteryLevel ??= batteryLevel;
+    next.properties.batteryLevel ??= batteryLevel;
+  }
+
+  if (Object.keys(directState).length > 0) {
+    next.properties.directRadioState = directState;
+  }
+
+  return next;
+}
+
 function normalizeSmartThingsState(value) {
   return trimString(value).toUpperCase();
 }
@@ -1821,6 +1986,132 @@ function readZigbeeRuntimeState(zigbeeDevice, options = {}) {
     ...directStateToTopLevel(directState),
     ...(Object.keys(directState).length > 0 ? { directRadioState: directState } : {})
   };
+}
+
+function scoreDetachedSmartThingsMigrationSource(directDevice, sourceDevice, protocol) {
+  if (!directDevice || !sourceDevice || isRetiredSmartThingsMigrationSource(sourceDevice)) {
+    return -Infinity;
+  }
+  const sourceProperties = getDeviceProperties(sourceDevice);
+  if (!smartThingsNetworkTypeMatchesProtocol(sourceProperties, protocol)) {
+    return -Infinity;
+  }
+
+  let score = 0;
+  if (normalizeSourceText(sourceProperties.source) === 'smartthings') {
+    score += 15;
+  }
+  if (normalizeSourceText(directDevice.room) && normalizeSourceText(directDevice.room) === normalizeSourceText(sourceDevice.room)) {
+    score += 30;
+  }
+  if (normalizeSourceText(directDevice.type) && normalizeSourceText(directDevice.type) === normalizeSourceText(sourceDevice.type)) {
+    score += 20;
+  }
+
+  const directTokens = normalizeMigrationNameTokens(
+    directDevice.name,
+    directDevice.brand,
+    directDevice.model,
+    directDevice.properties?.homebrainDirect?.manufacturerName,
+    directDevice.properties?.homebrainDirect?.modelID,
+    directDevice.properties?.homebrainDirect?.generatedName
+  );
+  const sourceTokens = normalizeMigrationNameTokens(
+    sourceDevice.name,
+    sourceDevice.brand,
+    sourceDevice.model,
+    sourceProperties.smartThingsLabel,
+    sourceProperties.smartThingsDeviceName,
+    sourceProperties.smartThingsManufacturer,
+    sourceProperties.smartThingsDeviceTypeName
+  );
+  score += Math.round(scoreTokenOverlap(directTokens, sourceTokens) * 35);
+
+  const directFeatures = new Set([
+    ...(Array.isArray(directDevice.properties?.directRadioFeatures) ? directDevice.properties.directRadioFeatures : []),
+    ...inferFeaturesFromExistingDirectRecord(directDevice)
+  ].map(normalizeFeature).filter(Boolean));
+  const sourceFeatures = new Set(inferFeaturesFromSmartThings(sourceDevice).map(normalizeFeature).filter(Boolean));
+  let featureOverlap = 0;
+  directFeatures.forEach((feature) => {
+    if (sourceFeatures.has(feature)) {
+      featureOverlap += 1;
+    }
+  });
+  score += Math.min(30, featureOverlap * 10);
+
+  const directManufacturer = normalizeSourceText(directDevice.brand || directDevice.properties?.homebrainDirect?.manufacturerName);
+  const sourceManufacturer = normalizeSourceText(sourceProperties.smartThingsManufacturer || sourceDevice.brand);
+  if (directManufacturer && sourceManufacturer && (
+    directManufacturer === sourceManufacturer
+    || directManufacturer.includes(sourceManufacturer)
+    || sourceManufacturer.includes(directManufacturer)
+  )) {
+    score += 15;
+  }
+
+  return score;
+}
+
+function buildRecoveredSmartThingsMigrationSnapshot({
+  directDevice,
+  sourceDevice,
+  protocol,
+  migrationId,
+  validation
+} = {}) {
+  const directProperties = getDeviceProperties(directDevice);
+  const sourceProperties = getDeviceProperties(sourceDevice);
+  const sourceDeviceId = getDeviceIdString(sourceDevice);
+  const directDeviceId = getDeviceIdString(directDevice);
+  const features = uniqueStrings([
+    ...(Array.isArray(directProperties.directRadioFeatures) ? directProperties.directRadioFeatures : []),
+    ...inferFeaturesFromExistingDirectRecord(directDevice),
+    ...inferFeaturesFromSmartThings(sourceDevice)
+  ].map(normalizeFeature)).sort();
+  const recoveredAt = new Date().toISOString();
+  const baseSnapshot = mergeSmartThingsTelemetryFallback({
+    name: directDevice.name,
+    type: directDevice.type,
+    room: directDevice.room,
+    groups: directDevice.groups,
+    status: directDevice.status,
+    brightness: directDevice.brightness,
+    color: directDevice.color,
+    colorTemperature: directDevice.colorTemperature,
+    temperature: directDevice.temperature,
+    targetTemperature: directDevice.targetTemperature,
+    isOnline: directDevice.isOnline !== false,
+    lastSeen: directDevice.lastSeen || new Date(),
+    brand: directDevice.brand,
+    model: directDevice.model,
+    properties: {
+      ...copySmartThingsHistoryProperties(sourceProperties),
+      ...directProperties,
+      source: protocolSource(protocol),
+      directRadioFeatures: features,
+      directRadioCapabilities: buildNormalizedCapabilities(features, protocol),
+      ...buildDirectFeatureProperties(features)
+    }
+  }, sourceDevice);
+
+  baseSnapshot.properties.smartThingsMigration = {
+    ...(getSmartThingsMigration(directDevice) || {}),
+    migratedAt: getSmartThingsMigration(directDevice)?.migratedAt || recoveredAt,
+    recoveredAt,
+    previousSource: sourceProperties.source || 'smartthings',
+    smartThingsDeviceId: sourceProperties.smartThingsDeviceId || null,
+    sourceDeviceId,
+    sourceDeviceName: sourceDevice.name || null,
+    sourceRoom: sourceDevice.room || null,
+    directDeviceId,
+    migrationId: trimString(migrationId)
+      || getSmartThingsMigration(directDevice)?.migrationId
+      || `recovered-${sourceDeviceId}-${directDeviceId}`,
+    validation
+  };
+
+  return baseSnapshot;
 }
 
 function extractZigbeeOnOffReadResponse(response) {
@@ -3906,9 +4197,11 @@ class DirectRadioService {
     const existing = selectPrimaryDirectDeviceRecord(existingRecords);
     const payload = mergeDirectDeviceUpdateForExisting(existing, update);
 
-    const device = existing
+    let device = existing
       ? await Device.findByIdAndUpdate(existing._id, payload, { returnDocument: 'after', runValidators: true })
       : await new Device(payload).save();
+
+    device = await this.attachRecoveredSmartThingsMigrationIfMatched(device, identity);
 
     this.log('info', identity.protocol, existing ? 'Direct radio device updated' : 'Direct radio device created', {
       deviceId: device?._id?.toString?.() || null,
@@ -3941,6 +4234,98 @@ class DirectRadioService {
       }
     }
     return null;
+  }
+
+  async findDetachedSmartThingsMigrationSource(directDevice, protocol) {
+    const directDeviceId = getDeviceIdString(directDevice);
+    if (!directDeviceId || !['zigbee', 'zwave'].includes(protocol)) {
+      return null;
+    }
+
+    const networkTypes = protocol === 'zigbee'
+      ? ['ZIGBEE', 'zigbee', 'Zigbee']
+      : ['ZWAVE', 'zwave', 'ZWave', 'ZW', 'zw'];
+    const candidates = await Device.find({
+      _id: { $ne: directDeviceId },
+      $and: [
+        {
+          $or: [
+            { 'properties.source': 'smartthings' },
+            { 'properties.smartThingsDeviceId': { $exists: true, $ne: null } }
+          ]
+        },
+        {
+          $or: [
+            { 'properties.smartThingsMigration.retiredSource': { $exists: false } },
+            { 'properties.smartThingsMigration.retiredSource': { $ne: true } }
+          ]
+        },
+        { 'properties.smartThingsDeviceNetworkType': { $in: networkTypes } }
+      ]
+    });
+
+    const scored = (Array.isArray(candidates) ? candidates : [])
+      .map((candidate) => ({
+        candidate,
+        score: scoreDetachedSmartThingsMigrationSource(directDevice, candidate, protocol)
+      }))
+      .filter((entry) => entry.score >= 55)
+      .sort((left, right) => right.score - left.score);
+
+    return scored[0]?.candidate || null;
+  }
+
+  buildRecoveredSmartThingsMigrationSnapshot(directDevice, sourceDevice, protocol, migrationId = null) {
+    const baseSnapshot = toPlainDeviceSnapshot(directDevice);
+    const features = uniqueStrings([
+      ...(Array.isArray(getDeviceProperties(baseSnapshot).directRadioFeatures)
+        ? getDeviceProperties(baseSnapshot).directRadioFeatures
+        : []),
+      ...inferFeaturesFromExistingDirectRecord(baseSnapshot),
+      ...inferFeaturesFromSmartThings(sourceDevice)
+    ].map(normalizeFeature)).sort();
+    const directUpdate = mergeSmartThingsTelemetryFallback({
+      ...baseSnapshot,
+      properties: {
+        ...getDeviceProperties(baseSnapshot),
+        directRadioFeatures: features
+      }
+    }, sourceDevice);
+    const validation = this.buildMigrationValidation(sourceDevice, directUpdate, features);
+    return buildRecoveredSmartThingsMigrationSnapshot({
+      directDevice: directUpdate,
+      sourceDevice,
+      protocol,
+      migrationId,
+      validation
+    });
+  }
+
+  async attachRecoveredSmartThingsMigrationIfMatched(device, identity, migrationId = null) {
+    const protocol = identity?.protocol;
+    if (!device || !['zigbee', 'zwave'].includes(protocol) || getSmartThingsMigration(device)) {
+      return device;
+    }
+
+    const sourceDevice = await this.findDetachedSmartThingsMigrationSource(device, protocol);
+    if (!sourceDevice) {
+      return device;
+    }
+
+    const snapshot = this.buildRecoveredSmartThingsMigrationSnapshot(device, sourceDevice, protocol, migrationId);
+    const updated = await Device.findByIdAndUpdate(device._id, {
+      temperature: snapshot.temperature,
+      properties: snapshot.properties,
+      updatedAt: new Date()
+    }, { returnDocument: 'after', runValidators: true });
+
+    this.log('info', protocol, 'Recovered SmartThings migration context for detached native device', {
+      deviceId: getDeviceIdString(updated || device),
+      sourceDeviceId: getDeviceIdString(sourceDevice),
+      migrationId: snapshot.properties.smartThingsMigration?.migrationId || null
+    });
+
+    return updated || device;
   }
 
   async completeMigration(migrationId, identity, update) {
@@ -4130,27 +4515,61 @@ class DirectRadioService {
     };
   }
 
+  async markSmartThingsMigrationSourceRetired(sourceDevice, directDevice, finalization, migration = {}) {
+    const sourceDeviceId = getDeviceIdString(sourceDevice);
+    const directDeviceId = getDeviceIdString(directDevice);
+    if (!sourceDeviceId || !directDeviceId || sourceDeviceId === directDeviceId) {
+      return null;
+    }
+
+    const sourceProperties = getDeviceProperties(sourceDevice);
+    const sourceMigration = getSmartThingsMigration(sourceDevice) || {};
+    const finalizedAt = finalization?.finalizedAt || new Date().toISOString();
+    const nextProperties = {
+      ...sourceProperties,
+      smartThingsMigration: {
+        ...sourceMigration,
+        migratedAt: sourceMigration.migratedAt || migration.migratedAt || finalizedAt,
+        previousSource: sourceMigration.previousSource || sourceProperties.source || 'smartthings',
+        smartThingsDeviceId: sourceMigration.smartThingsDeviceId || sourceProperties.smartThingsDeviceId || null,
+        sourceDeviceId,
+        sourceDeviceName: sourceDevice.name || null,
+        directDeviceId,
+        replacementDeviceId: directDeviceId,
+        migrationId: migration.migrationId || sourceMigration.migrationId || null,
+        finalizedAt,
+        finalizedBy: 'homebrain',
+        retiredAt: finalizedAt,
+        retiredSource: true,
+        status: 'finalized_source',
+        validation: finalization?.validation || migration.validation || null
+      }
+    };
+
+    const updatedSource = await Device.findByIdAndUpdate(sourceDeviceId, {
+      properties: nextProperties,
+      updatedAt: new Date()
+    }, { returnDocument: 'after', runValidators: true });
+
+    this.log('info', 'smartthings', 'Retired SmartThings source after native migration finalization', {
+      sourceDeviceId,
+      directDeviceId,
+      migrationId: nextProperties.smartThingsMigration.migrationId
+    });
+    this.emitDeviceUpdate(updatedSource);
+    return updatedSource;
+  }
+
   async finalizeDeviceMigration({ deviceId, migrationId, reason } = {}) {
     const safeDeviceId = normalizeObjectId(deviceId);
-    const device = await Device.findById(safeDeviceId);
+    let device = await Device.findById(safeDeviceId);
     if (!device) {
       const error = new Error('Device not found');
       error.status = 404;
       throw error;
     }
 
-    const properties = device.properties && typeof device.properties === 'object'
-      ? device.properties
-      : {};
-    const migration = properties.smartThingsMigration && typeof properties.smartThingsMigration === 'object'
-      ? properties.smartThingsMigration
-      : null;
-    if (!migration) {
-      const error = new Error('This device does not have an open SmartThings migration to finalize.');
-      error.status = 400;
-      throw error;
-    }
-
+    let properties = getDeviceProperties(device);
     const direct = properties.homebrainDirect && typeof properties.homebrainDirect === 'object'
       ? properties.homebrainDirect
       : {};
@@ -4161,6 +4580,35 @@ class DirectRadioService {
       const error = new Error('Native direct-radio protocol is not ready for this migrated device.');
       error.status = 409;
       throw error;
+    }
+
+    let migration = getSmartThingsMigration(device);
+    let sourceDevice = null;
+    if (!migration) {
+      sourceDevice = await this.findDetachedSmartThingsMigrationSource(device, protocol);
+      if (!sourceDevice) {
+        const error = new Error('This device does not have an open SmartThings migration to finalize.');
+        error.status = 400;
+        throw error;
+      }
+      const recoveredSnapshot = this.buildRecoveredSmartThingsMigrationSnapshot(
+        device,
+        sourceDevice,
+        protocol,
+        migrationId
+      );
+      device = {
+        ...toPlainDeviceSnapshot(device),
+        ...recoveredSnapshot,
+        properties: recoveredSnapshot.properties
+      };
+      properties = recoveredSnapshot.properties;
+      migration = getSmartThingsMigration(device);
+    } else if (migration.sourceDeviceId) {
+      const maybeSource = await Device.findById(migration.sourceDeviceId).catch(() => null);
+      if (maybeSource && getDeviceIdString(maybeSource) !== safeDeviceId) {
+        sourceDevice = maybeSource;
+      }
     }
 
     const validation = this.buildMigrationFinalizationValidation(device, protocol, reason);
@@ -4191,10 +4639,18 @@ class DirectRadioService {
     };
 
     const updated = await Device.findByIdAndUpdate(device._id, {
+      temperature: device.temperature,
       properties: nextProperties,
       isOnline: device.isOnline !== false,
       updatedAt: new Date()
     }, { returnDocument: 'after', runValidators: true });
+
+    const retiredSourceDevice = sourceDevice
+      ? await this.markSmartThingsMigrationSourceRetired(sourceDevice, updated || device, {
+        finalizedAt,
+        validation: nextProperties.smartThingsMigration.validation
+      }, nextProperties.smartThingsMigration)
+      : null;
 
     this.log('info', protocol, 'SmartThings migration finalized on direct radio', {
       deviceId: updated?._id?.toString?.() || safeDeviceId,
@@ -4207,6 +4663,7 @@ class DirectRadioService {
 
     return {
       device: updated,
+      retiredSourceDevice,
       finalization: {
         deviceId: updated?._id?.toString?.() || safeDeviceId,
         protocol,
@@ -6036,9 +6493,11 @@ directRadioService._test = {
   enrichSerialPortForDirectRadios,
   inferFeaturesFromZigbeeDefinition,
   looksLikeSonoffMg24ThreadStick,
+  mergeSmartThingsTelemetryFallback,
   mergeDirectDeviceUpdateForExisting,
   normalizeSerialPort,
   selectPrimaryDirectDeviceRecord,
+  scoreDetachedSmartThingsMigrationSource,
   scorePortForProtocol
 };
 

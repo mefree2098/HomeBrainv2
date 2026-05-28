@@ -56,6 +56,12 @@ const HARMONY_VISIBLE_DEVICE_QUERY = Object.freeze({
     { 'properties.harmonyExcludeFromHomeBrain': { $ne: true } }
   ]
 });
+const RETIRED_SMARTTHINGS_MIGRATION_SOURCE_QUERY = Object.freeze({
+  $or: [
+    { 'properties.smartThingsMigration.retiredSource': { $exists: false } },
+    { 'properties.smartThingsMigration.retiredSource': { $ne: true } }
+  ]
+});
 let cachedInsteonService = null;
 const getInsteonService = () => {
   if (!cachedInsteonService) {
@@ -234,17 +240,31 @@ function mergeMongoQuery(baseQuery = {}, extraQuery = {}) {
     return { ...baseQuery };
   }
 
+  const queryParts = (query) => {
+    const keys = Object.keys(query || {});
+    return keys.length === 1 && Array.isArray(query.$and) ? query.$and : [query];
+  };
+
   return {
-    $and: [baseQuery, extraQuery]
+    $and: [
+      ...queryParts(baseQuery),
+      ...queryParts(extraQuery)
+    ]
   };
 }
 
 function buildVisibleDeviceQuery(filters = {}, options = {}) {
+  let query = { ...filters };
   if (options.includeExcludedHarmony === true) {
-    return { ...filters };
+    return options.includeRetiredMigrationSources === true
+      ? query
+      : mergeMongoQuery(query, RETIRED_SMARTTHINGS_MIGRATION_SOURCE_QUERY);
   }
 
-  return mergeMongoQuery(filters, HARMONY_VISIBLE_DEVICE_QUERY);
+  query = mergeMongoQuery(query, HARMONY_VISIBLE_DEVICE_QUERY);
+  return options.includeRetiredMigrationSources === true
+    ? query
+    : mergeMongoQuery(query, RETIRED_SMARTTHINGS_MIGRATION_SOURCE_QUERY);
 }
 
 async function ensureDeviceGroupRegistryEntries(groups = []) {
