@@ -1460,3 +1460,54 @@ test('delay action resume state completes immediately when restart missed the de
   assert.equal(result.actionResults.length, 1);
   assert.equal(result.actionResults[0].message, 'Delay complete (0s)');
 });
+
+test('alexa_speak action sends a workflow announcement through the Alexa bridge', async (t) => {
+  const alexaBridgeService = require('../services/alexaBridgeService');
+  const originalSendAlexaSpeech = alexaBridgeService.sendAlexaSpeech;
+  let capturedCall = null;
+
+  t.after(() => {
+    alexaBridgeService.sendAlexaSpeech = originalSendAlexaSpeech;
+  });
+
+  alexaBridgeService.sendAlexaSpeech = async (target, parameters, context) => {
+    capturedCall = { target, parameters, context };
+    return {
+      success: true,
+      deviceId: 'kitchen-echo',
+      deviceName: 'Kitchen Alexa',
+      brokerAccountId: parameters.brokerAccountId,
+      providerResponse: {
+        accepted: true
+      }
+    };
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'alexa_speak',
+      target: {
+        kind: 'alexa_device',
+        alexaDeviceId: 'kitchen-echo',
+        name: 'Kitchen Alexa',
+        brokerAccountId: 'acct-1'
+      },
+      parameters: {
+        message: 'Front Door has opened',
+        brokerAccountId: 'acct-1'
+      }
+    }
+  ], {
+    context: {
+      workflowId: 'workflow-1',
+      triggeringDeviceId: 'front-door'
+    }
+  });
+
+  assert.equal(result.status, 'success');
+  assert.equal(capturedCall.target.alexaDeviceId, 'kitchen-echo');
+  assert.equal(capturedCall.parameters.message, 'Front Door has opened');
+  assert.equal(capturedCall.context.workflowId, 'workflow-1');
+  assert.equal(result.actionResults[0].target, 'kitchen-echo');
+  assert.equal(result.actionResults[0].message, 'Alexa announcement sent to Kitchen Alexa');
+});

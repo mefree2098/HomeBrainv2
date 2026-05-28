@@ -24,6 +24,7 @@ const MAX_SCENE_PROMPT_ENTRIES = 25;
 const MIN_KEYWORD_LENGTH = 3;
 const MAX_AUTOMATIONS_PER_REQUEST = 12;
 const VALID_TRIGGER_TYPES = new Set(['time', 'device_state', 'weather', 'location', 'sensor', 'schedule', 'manual', 'security_alarm_status']);
+const VALID_ACTION_TYPES = new Set(['device_control', 'scene_activate', 'notification', 'delay', 'condition', 'workflow_control', 'variable_control', 'repeat', 'isy_network_resource', 'http_request', 'alexa_speak']);
 const VALID_SECURITY_ALARM_STATES = new Set(['disarmed', 'armedStay', 'armedAway', 'triggered', 'arming', 'disarming']);
 const VALID_SOLAR_SCHEDULE_EVENTS = new Set(['sunrise', 'sunset']);
 const DYNAMIC_TARGET_CONTEXT_KEYS = new Set(['triggeringDeviceId']);
@@ -1453,6 +1454,22 @@ async function buildSceneContext() {
   }
 }
 
+async function buildAlexaDeviceContext() {
+  try {
+    const alexaBridgeService = require('./alexaBridgeService');
+    const result = await alexaBridgeService.listAlexaDevices();
+    return Array.isArray(result?.devices) ? result.devices : [];
+  } catch (error) {
+    console.warn(`AutomationService: Unable to load Alexa device context: ${error.message}`);
+    return [];
+  }
+}
+
+function shouldIncludeAlexaDeviceContext(text = '') {
+  const normalized = sanitizeString(text).toLowerCase();
+  return /\b(alexa|echo)\b/.test(normalized) || /\b(announce|announcement)\b/.test(normalized);
+}
+
 /**
  * Validate and fix automation structure
  */
@@ -1572,7 +1589,7 @@ async function validateAndFixAutomation(automation) {
     const fixedAction = { ...action };
 
     // Validate action type
-    if (!['device_control', 'scene_activate', 'notification', 'delay', 'condition', 'workflow_control', 'variable_control', 'repeat', 'isy_network_resource', 'http_request'].includes(action.type)) {
+    if (!VALID_ACTION_TYPES.has(action.type)) {
       issues.push(`Invalid action type at index ${index}: ${action.type}`);
       return null;
     }
@@ -1689,6 +1706,41 @@ async function validateAndFixAutomation(automation) {
       return null;
     }
 
+    if (action.type === 'alexa_speak') {
+      const parameters = action.parameters && typeof action.parameters === 'object' ? action.parameters : {};
+      const targetCandidate = typeof action.target === 'string'
+        ? sanitizeString(action.target)
+        : sanitizeString(
+            action.target?.alexaDeviceId
+            || action.target?.deviceId
+            || action.target?.id
+            || action.target?.endpointId
+            || action.target?.value
+            || parameters.alexaDeviceId
+            || parameters.deviceId
+          );
+      const message = sanitizeString(parameters.message || parameters.text || parameters.speech || action.message);
+      if (!targetCandidate) {
+        issues.push(`Alexa device target missing at index ${index}`);
+        return null;
+      }
+      if (!message) {
+        issues.push(`Alexa speech message missing at index ${index}`);
+        return null;
+      }
+      if (typeof action.target !== 'string' && (!action.target || typeof action.target !== 'object')) {
+        fixedAction.target = targetCandidate;
+        fixed = true;
+      }
+      if (parameters.message !== message) {
+        fixedAction.parameters = {
+          ...parameters,
+          message
+        };
+        fixed = true;
+      }
+    }
+
     return fixedAction;
   }).filter(action => action !== null);
 
@@ -1792,6 +1844,7 @@ async function generateAutomationDraftsFromText(text, roomContext = null, option
     // Build comprehensive context
     const devicesByRoom = await buildDeviceContext();
     const scenes = await buildSceneContext();
+    const alexaDevices = shouldIncludeAlexaDeviceContext(text) ? await buildAlexaDeviceContext() : [];
     const flatDevices = flattenDevices(devicesByRoom);
 
     // For direct control requests like "turn on the vault light", bypass automation creation
@@ -1845,6 +1898,7 @@ async function generateAutomationDraftsFromText(text, roomContext = null, option
     const deviceListForPrompt = formatDeviceList(promptDeviceContext);
     const deviceGroupListForPrompt = formatDeviceGroupList(deviceGroups);
     const sceneListForPrompt = formatSceneList(promptScenes);
+    const alexaDeviceListForPrompt = formatAlexaDeviceList(alexaDevices);
 
     const originalDeviceCount = flatDevices.length;
     const promptDeviceCount = flattenDevices(promptDeviceContext).length;
@@ -1867,7 +1921,8 @@ async function generateAutomationDraftsFromText(text, roomContext = null, option
           roomContext,
           deviceListForPrompt,
           deviceGroupListForPrompt,
-          sceneListForPrompt
+          sceneListForPrompt,
+          alexaDeviceListForPrompt
         )
       : buildAutomationPrompt(
           text,
@@ -1877,7 +1932,8 @@ async function generateAutomationDraftsFromText(text, roomContext = null, option
           roomContext,
           deviceListForPrompt,
           deviceGroupListForPrompt,
-          sceneListForPrompt
+          sceneListForPrompt,
+          alexaDeviceListForPrompt
         );
 
     const settingsDoc = await Settings.getSettings();
@@ -1949,6 +2005,7 @@ async function generateAutomationDraftsFromText(text, roomContext = null, option
               deviceList: deviceListForPrompt,
               deviceGroupList: deviceGroupListForPrompt,
               sceneList: sceneListForPrompt,
+              alexaDeviceList: alexaDeviceListForPrompt,
               existingAutomation
             });
             continue;
@@ -1980,6 +2037,7 @@ async function generateAutomationDraftsFromText(text, roomContext = null, option
             deviceList: deviceListForPrompt,
             deviceGroupList: deviceGroupListForPrompt,
             sceneList: sceneListForPrompt,
+            alexaDeviceList: alexaDeviceListForPrompt,
             existingAutomation
           });
           continue;
@@ -2165,10 +2223,11 @@ const AUTOMATION_JSON_TEMPLATE = `{
 /**
  * Build detailed automation prompt for LLM
  */
-function buildAutomationPrompt(text, devicesByRoom, deviceGroups, scenes, roomContext, preformattedDeviceList, preformattedDeviceGroupList, preformattedSceneList) {
+function buildAutomationPrompt(text, devicesByRoom, deviceGroups, scenes, roomContext, preformattedDeviceList, preformattedDeviceGroupList, preformattedSceneList, preformattedAlexaDeviceList) {
   const deviceList = preformattedDeviceList ?? formatDeviceList(devicesByRoom);
   const deviceGroupList = preformattedDeviceGroupList ?? formatDeviceGroupList(deviceGroups);
   const sceneList = preformattedSceneList ?? formatSceneList(scenes);
+  const alexaDeviceList = preformattedAlexaDeviceList ?? 'None';
 
   return `You are an expert at creating smart home automations. Convert the user's request into a JSON object that matches the schema below.
 
@@ -2179,7 +2238,7 @@ OUTPUT REQUIREMENTS (FOLLOW EXACTLY):
 4. Every automation in "automations" must include the fields: name, description, trigger, actions, category, priority.
 5. The trigger must include a "type" key and a "conditions" object (empty object is fine for manual triggers).
 6. The actions array must contain at least one item. Each action must have "type", "target", and "parameters".
-7. Choose device IDs, device group names, and scene identifiers strictly from the provided context. Never invent IDs, group names, or placeholders.
+7. Choose device IDs, device group names, scene identifiers, and Alexa device IDs strictly from the provided context. Never invent IDs, group names, or placeholders.
 8. Respond with valid JSON even when uncertain; never omit required fields.
 
 REQUIRED JSON TEMPLATE (values are examples, not literals to reuse):
@@ -2192,7 +2251,7 @@ IMPORTANT RULES:
 4. Use a fixed device ID in trigger.conditions.deviceId for device_state triggers.
 5. When an action should target the same device that caused a device_state trigger, prefer the dynamic target {"kind":"context","key":"triggeringDeviceId"} instead of copying the device ID into the action target.
 6. When a broad request should control many devices and a matching device group exists, prefer {"kind":"device_group","group":"Exact Group Name"} over enumerating many separate device_control actions.
-7. ONLY use device IDs from the provided device list, exact device group names from the provided device group list, and scene IDs from the provided scene list. Never invent IDs, group names, or placeholders.
+7. ONLY use device IDs from the provided device list, exact device group names from the provided device group list, scene IDs from the provided scene list, and Alexa device IDs from the Alexa announcement device list. Never invent IDs, group names, or placeholders.
 8. Match each action to the device's allowed capabilities and source restrictions.
 9. Brightness values must be 0-100. Temperature values should be whole-number Fahrenheit unless specified otherwise.
 10. Delay actions support long timers. Use the full requested duration in seconds, up to 86400 seconds. Do not reduce 30 minutes to 600 seconds.
@@ -2205,6 +2264,7 @@ IMPORTANT RULES:
 17. For numeric telemetry triggers such as Sense power, SmartThings power, energy, humidity, or temperature thresholds, prefer trigger type "device_state" and use the device's listed trigger property path (for example "sense.currentPowerW" or "smartThingsAttributeValues.powerMeter.power") with an explicit operator and numeric value.
 18. When the request says a condition must stay true for a period of time before firing, add "forSeconds" to the device_state trigger conditions.
 19. When the request says "greater than", "above", "over", or "more than", use operator "gt". When it says "less than", "below", or "under", use operator "lt". For energy-monitoring devices, prefer threshold operators over exact numeric equality unless the user explicitly asks for an exact value.
+20. When the request asks an Alexa or Echo device to say, speak, announce, or tell a message, use an alexa_speak action and target an Alexa device ID from the Alexa announcement device list.
 
 AVAILABLE DEVICES:
 ${deviceList}
@@ -2214,6 +2274,9 @@ ${deviceGroupList}
 
 AVAILABLE SCENES:
 ${sceneList}
+
+ALEXA ANNOUNCEMENT DEVICES:
+${alexaDeviceList}
 
 ${roomContext ? `ROOM CONTEXT: The user is currently in the "${roomContext}" room.\n` : ''}
 
@@ -2239,13 +2302,14 @@ REQUIRED JSON STRUCTURE:
       },
       "actions": [
         {
-          "type": "<action_type>",  // choose one: device_control, scene_activate, notification, delay
-          "target": "DEVICE_ID_FROM_LIST_ABOVE or SCENE_ID_FROM_LIST_ABOVE or {\\"kind\\":\\"context\\",\\"key\\":\\"triggeringDeviceId\\"} or {\\"kind\\":\\"device_group\\",\\"group\\":\\"Exact Group Name\\"}",
+          "type": "<action_type>",  // choose one: device_control, scene_activate, notification, delay, condition, alexa_speak
+          "target": "DEVICE_ID_FROM_LIST_ABOVE or SCENE_ID_FROM_LIST_ABOVE or ALEXA_DEVICE_ID_FROM_LIST_ABOVE or {\\"kind\\":\\"context\\",\\"key\\":\\"triggeringDeviceId\\"} or {\\"kind\\":\\"device_group\\",\\"group\\":\\"Exact Group Name\\"}",
           "parameters": {
             // For device_control: {"action": "<device_action>", "brightness": 0-100, "temperature": number, "color": "#hex"}
             // Valid device actions include: turn_on, turn_off, toggle, set_brightness, set_color, set_temperature, lock, unlock, open, close
             // For scene_activate: {}
             // For notification: {"message": "text"}
+            // For alexa_speak: {"message": "text to speak", "brokerAccountId": "optional broker account id from Alexa device list"}
             // For delay: {"seconds": number}
           }
         }
@@ -2281,6 +2345,7 @@ TRIGGER TYPE EXAMPLES:
 - "30 minutes before sunrise" -> type: "schedule", conditions: {"event": "sunrise", "offset": -30}
 - "when the alarm is armed stay, turn off all interior lights" -> if a matching group exists, use one device_control action with target {"kind":"device_group","group":"Interior Lights"}
 - "when a fan switch turns on, wait 30 minutes, then turn that same switch off" -> use type: "device_state", a delay action with {"seconds": 1800}, and a device_control action targeting {"kind":"context","key":"triggeringDeviceId"}
+- "when the front door contact opens, have Kitchen Alexa say Front Door has opened" -> use type: "device_state" for the contact trigger, then an alexa_speak action with target set to the Kitchen Alexa device ID and parameters {"message":"Front Door has opened"}
 - "manual trigger" -> type: "manual", conditions: {}
 
 USER REQUEST: "${text}"
@@ -2354,6 +2419,19 @@ function formatSceneList(scenes = []) {
   ).join('\n');
 }
 
+function formatAlexaDeviceList(alexaDevices = []) {
+  if (!Array.isArray(alexaDevices) || !alexaDevices.length) {
+    return 'None';
+  }
+
+  return alexaDevices.map((device) => {
+    const room = sanitizeString(device.room) ? `, Room: ${device.room}` : '';
+    const account = sanitizeString(device.brokerAccountId) ? `, Broker account: ${device.brokerAccountId}` : '';
+    const online = typeof device.online === 'boolean' ? `, Online: ${device.online}` : '';
+    return `  - ${device.name || device.id} (ID: ${device.id || device.deviceId}${room}, Type: ${device.type || 'alexa_device'}${account}${online})`;
+  }).join('\n');
+}
+
 function formatAutomationForPrompt(automation = {}) {
   return JSON.stringify({
     name: automation.name || '',
@@ -2375,11 +2453,13 @@ function buildAutomationRevisionPrompt(
   roomContext,
   preformattedDeviceList,
   preformattedDeviceGroupList,
-  preformattedSceneList
+  preformattedSceneList,
+  preformattedAlexaDeviceList
 ) {
   const deviceList = preformattedDeviceList ?? formatDeviceList(devicesByRoom);
   const deviceGroupList = preformattedDeviceGroupList ?? formatDeviceGroupList(deviceGroups);
   const sceneList = preformattedSceneList ?? formatSceneList(scenes);
+  const alexaDeviceList = preformattedAlexaDeviceList ?? 'None';
   const existingAutomationJson = formatAutomationForPrompt(existingAutomation);
 
   return `You are an expert at revising smart home automations. Update the EXISTING automation below so it matches the user's requested changes.
@@ -2392,7 +2472,7 @@ OUTPUT REQUIREMENTS (FOLLOW EXACTLY):
 5. The revised automation must include the fields: name, description, trigger, actions, category, priority.
 6. The trigger must include a "type" key and a "conditions" object (empty object is fine for manual triggers).
 7. The actions array must contain at least one item. Each action must have "type", "target", and "parameters".
-8. Choose device IDs, device group names, and scene identifiers strictly from the provided context. Never invent IDs, group names, or placeholders.
+8. Choose device IDs, device group names, scene identifiers, and Alexa device IDs strictly from the provided context. Never invent IDs, group names, or placeholders.
 
 REQUIRED JSON TEMPLATE:
 ${AUTOMATION_JSON_TEMPLATE}
@@ -2408,6 +2488,7 @@ REVISION RULES:
 8. For numeric telemetry triggers such as Sense power, SmartThings power, energy, humidity, or temperature thresholds, prefer trigger type "device_state" and use the device's listed trigger property path with an explicit operator and numeric value.
 9. When the request says a condition must stay true for a period of time before firing, add "forSeconds" to the device_state trigger conditions.
 10. When the request says "greater than", "above", "over", or "more than", use operator "gt". When it says "less than", "below", or "under", use operator "lt".
+11. When the request asks an Alexa or Echo device to say, speak, announce, or tell a message, use an alexa_speak action and target an Alexa device ID from the Alexa announcement device list.
 
 EXISTING AUTOMATION TO REVISE:
 ${existingAutomationJson}
@@ -2420,6 +2501,9 @@ ${deviceGroupList}
 
 AVAILABLE SCENES:
 ${sceneList}
+
+ALEXA ANNOUNCEMENT DEVICES:
+${alexaDeviceList}
 
 ${roomContext ? `ROOM CONTEXT: The user is currently in the "${roomContext}" room.\n` : ''}USER REQUEST: "${text}"
 
@@ -2434,6 +2518,7 @@ function buildAutomationRetryPrompt({
   deviceList,
   deviceGroupList,
   sceneList,
+  alexaDeviceList,
   existingAutomation
 }) {
   const revisionContext = mode === 'revise' && existingAutomation
@@ -2451,8 +2536,9 @@ Please fix these issues and return a corrected JSON object. Remember:
 - Only use device IDs or exact device names from the provided list
 - Only use exact device group names from the provided device group list
 - Only use scene IDs or exact scene names from the provided scene list
+- Only use Alexa device IDs from the Alexa announcement device list for alexa_speak actions
 - Ensure all action types are valid for the target device types
-- Use valid action types: device_control, scene_activate, notification, delay, condition
+- Use valid action types: device_control, scene_activate, notification, delay, condition, alexa_speak
 - Use {"kind":"context","key":"triggeringDeviceId"} only when an action should target the same device that caused a device_state trigger
 - Use {"kind":"device_group","group":"Exact Group Name"} when a broad request should apply to many devices and a matching group exists
 ${mode === 'revise' ? '- Return a FULL revised replacement for the existing automation, not a patch' : ''}
@@ -2467,6 +2553,9 @@ ${deviceGroupList || 'None'}
 
 AVAILABLE SCENES:
 ${sceneList || 'None'}
+
+ALEXA ANNOUNCEMENT DEVICES:
+${alexaDeviceList || 'None'}
 
 ${countInstruction}`;
 }

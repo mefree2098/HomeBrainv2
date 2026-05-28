@@ -14,7 +14,8 @@ export type WorkflowActionType =
   | "variable_control"
   | "repeat"
   | "isy_network_resource"
-  | "http_request";
+  | "http_request"
+  | "alexa_speak";
 
 export interface WorkflowTrigger {
   type: WorkflowTriggerType;
@@ -37,7 +38,18 @@ export interface WorkflowDeviceGroupTarget {
   value?: string;
 }
 
-export type WorkflowActionTarget = string | WorkflowContextTarget | WorkflowDeviceGroupTarget | null;
+export interface WorkflowAlexaTarget {
+  kind?: string;
+  type?: string;
+  alexaDeviceId?: string;
+  deviceId?: string;
+  id?: string;
+  name?: string;
+  label?: string;
+  brokerAccountId?: string;
+}
+
+export type WorkflowActionTarget = string | WorkflowContextTarget | WorkflowDeviceGroupTarget | WorkflowAlexaTarget | null;
 
 export interface WorkflowAction {
   type: WorkflowActionType;

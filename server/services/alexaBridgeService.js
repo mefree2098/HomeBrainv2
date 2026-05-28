@@ -18,6 +18,10 @@ const DEFAULT_LINK_CODE_TTL_MINUTES = 15;
 const MAX_LINK_CODES = 10;
 const BROKER_TIMEOUT_MS = 10000;
 
+function trimString(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 function sha256(value) {
   return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
 }
@@ -235,6 +239,43 @@ function buildGroupControlAction(groupName, actionName, value) {
       group: groupName
     },
     parameters
+  };
+}
+
+function normalizeAlexaSpeechTarget(target, parameters = {}) {
+  if (typeof target === 'string') {
+    return {
+      alexaDeviceId: trimString(target),
+      brokerAccountId: trimString(parameters.brokerAccountId),
+      deviceName: trimString(parameters.deviceName || parameters.name || parameters.label)
+    };
+  }
+
+  if (!target || typeof target !== 'object' || Array.isArray(target)) {
+    return {
+      alexaDeviceId: trimString(parameters.alexaDeviceId || parameters.deviceId || parameters.id),
+      brokerAccountId: trimString(parameters.brokerAccountId),
+      deviceName: trimString(parameters.deviceName || parameters.name || parameters.label)
+    };
+  }
+
+  return {
+    alexaDeviceId: trimString(
+      target.alexaDeviceId
+      || target.deviceId
+      || target.id
+      || target.endpointId
+      || target.value
+    ),
+    brokerAccountId: trimString(target.brokerAccountId || parameters.brokerAccountId),
+    deviceName: trimString(
+      target.deviceName
+      || target.name
+      || target.label
+      || parameters.deviceName
+      || parameters.name
+      || parameters.label
+    )
   };
 }
 
@@ -1247,6 +1288,123 @@ class AlexaBridgeService {
         reason: error.response?.data?.error || error.message || 'Failed to load broker audit log',
         auditLogs: []
       };
+    }
+  }
+
+  async listAlexaDevices(options = {}) {
+    const registration = await this.ensureRegistration();
+    const query = trimString(options.brokerAccountId)
+      ? `?brokerAccountId=${encodeURIComponent(trimString(options.brokerAccountId))}`
+      : '';
+
+    try {
+      const result = await this.callBroker(`/api/alexa/devices${query}`, 'get');
+      if (result.skipped) {
+        return {
+          available: false,
+          reason: result.reason,
+          devices: [],
+          count: 0
+        };
+      }
+
+      const devices = Array.isArray(result.data?.devices) ? result.data.devices : [];
+      await this.appendActivity(registration, {
+        direction: 'outbound',
+        type: 'alexa_devices_listed',
+        status: result.data?.available === false ? 'warning' : 'success',
+        message: result.data?.available === false
+          ? 'Alexa device service is not available'
+          : `Loaded ${devices.length} Alexa announcement target(s)`,
+        details: {
+          count: devices.length,
+          reason: result.data?.reason || ''
+        }
+      });
+
+      return {
+        available: result.data?.available !== false,
+        reason: result.data?.reason || '',
+        devices,
+        count: Number(result.data?.count ?? devices.length),
+        updatedAt: result.data?.updatedAt || null
+      };
+    } catch (error) {
+      return {
+        available: false,
+        reason: error.response?.data?.error || error.response?.data?.message || error.message || 'Failed to load Alexa devices',
+        devices: [],
+        count: 0
+      };
+    }
+  }
+
+  async sendAlexaSpeech(target, parameters = {}, context = {}) {
+    const registration = await this.ensureRegistration();
+    const resolvedTarget = normalizeAlexaSpeechTarget(target, parameters);
+    const message = trimString(parameters.message || parameters.text || parameters.speech);
+    if (!resolvedTarget.alexaDeviceId) {
+      throw new Error('Alexa device target is required');
+    }
+    if (!message) {
+      throw new Error('Alexa speech message is required');
+    }
+
+    const payload = {
+      brokerAccountId: resolvedTarget.brokerAccountId || undefined,
+      deviceName: resolvedTarget.deviceName || undefined,
+      message,
+      locale: trimString(parameters.locale) || undefined,
+      workflowId: context.workflowId || undefined,
+      executionHistoryId: context.executionHistoryId || undefined,
+      executionCorrelationId: context.executionCorrelationId || undefined
+    };
+
+    try {
+      const result = await this.callBroker(
+        `/api/alexa/devices/${encodeURIComponent(resolvedTarget.alexaDeviceId)}/speak`,
+        'post',
+        payload
+      );
+      if (result.skipped) {
+        const error = new Error(result.reason || 'Alexa broker is not available');
+        error.status = 503;
+        throw error;
+      }
+
+      await this.appendActivity(registration, {
+        direction: 'outbound',
+        type: 'alexa_device_speak',
+        status: 'success',
+        message: `Sent Alexa announcement to ${resolvedTarget.deviceName || resolvedTarget.alexaDeviceId}`,
+        details: {
+          alexaDeviceId: resolvedTarget.alexaDeviceId,
+          brokerAccountId: resolvedTarget.brokerAccountId || '',
+          workflowId: context.workflowId || ''
+        }
+      });
+
+      return {
+        success: result.data?.success !== false,
+        deviceId: result.data?.deviceId || resolvedTarget.alexaDeviceId,
+        deviceName: result.data?.deviceName || resolvedTarget.deviceName,
+        brokerAccountId: result.data?.brokerAccountId || resolvedTarget.brokerAccountId,
+        message,
+        providerResponse: result.data?.providerResponse || null
+      };
+    } catch (error) {
+      await this.appendActivity(registration, {
+        direction: 'outbound',
+        type: 'alexa_device_speak_failed',
+        status: 'error',
+        message: error.response?.data?.error || error.response?.data?.message || error.message || 'Alexa announcement failed',
+        details: {
+          alexaDeviceId: resolvedTarget.alexaDeviceId,
+          brokerAccountId: resolvedTarget.brokerAccountId || '',
+          workflowId: context.workflowId || ''
+        }
+      }).catch(() => {});
+      throw error;
     }
   }
 

@@ -49,6 +49,7 @@ function nodeTypeForAction(actionType) {
     case 'delay':
       return 'delay';
     case 'notification':
+    case 'alexa_speak':
       return 'notification';
     case 'condition':
       return 'condition';

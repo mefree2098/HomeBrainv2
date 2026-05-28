@@ -349,6 +349,41 @@ router.get('/voice-users', admin, async (_req, res) => {
   }
 });
 
+router.get('/devices', admin, async (req, res) => {
+  try {
+    const result = await alexaBridgeService.listAlexaDevices({
+      brokerAccountId: req.query?.brokerAccountId
+    });
+    return res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    console.error('GET /api/alexa/devices - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch Alexa devices'
+    });
+  }
+});
+
+router.post('/devices/:alexaDeviceId/speak', admin, async (req, res) => {
+  try {
+    const result = await alexaBridgeService.sendAlexaSpeech(req.params.alexaDeviceId, req.body || {});
+    return res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    const statusCode = error.message.includes('required') ? 400 : error.status || error.response?.status || 500;
+    console.error(`POST /api/alexa/devices/${req.params.alexaDeviceId}/speak - Error:`, error.message);
+    return res.status(statusCode).json({
+      success: false,
+      error: error.response?.data?.error || error.response?.data?.message || error.message || 'Failed to send Alexa speech'
+    });
+  }
+});
+
 router.put('/voice-users/:voiceUserId', admin, async (req, res) => {
   try {
     const voiceUser = await alexaCustomSkillService.updateVoiceUser(req.params.voiceUserId, req.body || {});

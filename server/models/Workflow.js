@@ -16,7 +16,7 @@ const workflowActionSchema = new mongoose.Schema({
   type: {
     type: String,
     required: true,
-    enum: ['device_control', 'scene_activate', 'notification', 'delay', 'condition', 'workflow_control', 'variable_control', 'repeat', 'isy_network_resource', 'http_request']
+    enum: ['device_control', 'scene_activate', 'notification', 'delay', 'condition', 'workflow_control', 'variable_control', 'repeat', 'isy_network_resource', 'http_request', 'alexa_speak']
   },
   target: {
     type: mongoose.Schema.Types.Mixed,

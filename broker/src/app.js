@@ -8,6 +8,7 @@ const {
 } = require('../../shared/alexa/messages');
 const { extractCustomSkillIdentity } = require('../../shared/alexa/customSkill');
 const { AlexaEventGatewayService, resolveEventRegion } = require('./eventGatewayService');
+const { AlexaDeviceService } = require('./alexaDeviceService');
 
 function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -705,6 +706,10 @@ function createApp(options = {}) {
     store,
     autoStart: false
   });
+  const alexaDeviceService = options.alexaDeviceService || new AlexaDeviceService({
+    store,
+    eventGatewayService
+  });
 
   if (options.startDispatcher !== false) {
     eventGatewayService.start();
@@ -1096,6 +1101,75 @@ function createApp(options = {}) {
       return res.status(error.status || 500).json({
         success: false,
         error: error.message
+      });
+    }
+  });
+
+  app.get('/api/alexa/devices', async (req, res) => {
+    try {
+      const hub = await requireHubAuth(store, req);
+      const result = await alexaDeviceService.listDevices({
+        hubId: hub.hubId,
+        brokerAccountId: trimString(req.query.brokerAccountId)
+      });
+
+      return res.status(200).json({
+        success: true,
+        hubId: hub.hubId,
+        ...result
+      });
+    } catch (error) {
+      return res.status(error.status || error.response?.status || 500).json({
+        success: false,
+        error: error.response?.data?.error || error.response?.data?.message || error.message
+      });
+    }
+  });
+
+  app.post('/api/alexa/devices/:alexaDeviceId/speak', async (req, res) => {
+    let hub = null;
+    try {
+      hub = await requireHubAuth(store, req);
+      const result = await alexaDeviceService.speak({
+        hubId: hub.hubId,
+        brokerAccountId: req.body?.brokerAccountId,
+        deviceId: req.params.alexaDeviceId,
+        deviceName: req.body?.deviceName,
+        message: req.body?.message,
+        locale: req.body?.locale
+      });
+
+      await store.appendAudit({
+        type: 'alexa_device_speak',
+        severity: 'info',
+        hubId: hub.hubId,
+        brokerAccountId: result.brokerAccountId,
+        message: `Sent Alexa announcement to ${result.deviceName || result.deviceId}`,
+        details: {
+          deviceId: result.deviceId,
+          status: result.status
+        }
+      });
+
+      return res.status(200).json(result);
+    } catch (error) {
+      if (hub?.hubId) {
+        await store.appendAudit({
+          type: 'alexa_device_speak_failed',
+          severity: 'error',
+          hubId: hub.hubId,
+          brokerAccountId: trimString(req.body?.brokerAccountId),
+          message: error.response?.data?.error || error.response?.data?.message || error.message,
+          details: {
+            deviceId: req.params.alexaDeviceId,
+            status: error.response?.status || error.status || 500
+          }
+        }).catch(() => {});
+      }
+
+      return res.status(error.status || error.response?.status || 500).json({
+        success: false,
+        error: error.response?.data?.error || error.response?.data?.message || error.message
       });
     }
   });
