@@ -25,7 +25,7 @@
     "yargs": "^17.7.2",
     "node-wav": "^0.0.2",
     "audio-buffer-utils": "^5.1.2",
-    "onnxruntime-node": "^1.19.0",
+    "onnxruntime-node": "^1.26.0",
     "tflite-node": "1.0.0"
   },
   "engines": {
