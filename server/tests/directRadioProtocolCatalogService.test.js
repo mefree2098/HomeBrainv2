@@ -37,6 +37,22 @@ test('Zigbee catalog exposes converter metadata and HomeBrain capabilities for I
   assert.ok(entry.toZigbee.some((converter) => converter.keys.includes('state')));
 });
 
+test('Zigbee protocol catalog infers siren alarm and chime capabilities', () => {
+  const features = directRadioProtocolCatalogService._test.inferZigbeeFeaturesFromExposes([
+    { type: 'enum', name: 'warning_mode', property: 'warning_mode' },
+    { type: 'enum', name: 'melody', property: 'melody' },
+    { type: 'binary', name: 'tamper', property: 'tamper' }
+  ], {
+    model: 'SIRZB-110',
+    vendor: 'Example',
+    description: 'Zigbee siren alarm sounder'
+  });
+
+  assert.ok(features.includes('alarm'));
+  assert.ok(features.includes('chime'));
+  assert.ok(features.includes('tamper'));
+});
+
 test('Z-Wave catalog lookup expands config parameters and association metadata for ZW4008 switches', async () => {
   const entry = await directRadioProtocolCatalogService.lookupZWaveCatalogEntry({
     manufacturerId: '0x041b',
@@ -52,6 +68,16 @@ test('Z-Wave catalog lookup expands config parameters and association metadata f
   assert.ok(entry.associations.some((association) => association.label === 'Lifeline'));
   const manualUrl = new URL(entry.metadata.manual);
   assert.equal(manualUrl.hostname, 'products.z-wavealliance.org');
+});
+
+test('Z-Wave protocol catalog infers siren alarm capabilities from config text', () => {
+  const features = directRadioProtocolCatalogService._test.inferZWaveFeaturesFromText([
+    'Aeotec Siren 6',
+    'Z-Wave Plus siren with sound switch and chime tones'
+  ]);
+
+  assert.ok(features.includes('alarm'));
+  assert.ok(features.includes('chime'));
 });
 
 test('Matter catalog matches runtime descriptors to standard device types and HomeBrain capabilities', async () => {

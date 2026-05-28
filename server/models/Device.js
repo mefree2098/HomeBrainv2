@@ -15,6 +15,7 @@ const schema = new mongoose.Schema({
       'thermostat',
       'garage',
       'sensor',
+      'siren',
       'switch',
       'camera',
       'speaker',

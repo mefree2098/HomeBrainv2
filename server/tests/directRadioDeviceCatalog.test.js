@@ -100,6 +100,56 @@ test('direct radio catalog maps SmartThings multipurpose sensors toward Zigbee',
   assert.ok(plan.manualSteps.some((step) => step.includes('Zigbee pairing') || step.includes('Connect button')));
 });
 
+test('direct radio catalog maps SmartThings Z-Wave sirens with alarm support', () => {
+  const device = {
+    _id: 'siren-zwave-1',
+    name: 'Aeotec Siren',
+    type: 'siren',
+    brand: 'Aeotec',
+    properties: {
+      source: 'smartthings',
+      smartThingsDeviceId: 'smartthings-siren-zwave-1',
+      smartThingsDeviceNetworkType: 'ZWAVE',
+      smartThingsCapabilities: ['alarm', 'switch'],
+      smartThingsCategories: ['siren']
+    }
+  };
+
+  const plan = buildMigrationPlan(device);
+  assert.equal(inferProtocolFromSmartThings(device), 'zwave');
+  assert.deepEqual(inferFeaturesFromSmartThings(device), ['alarm', 'switch']);
+  assert.equal(plan.supported, true);
+  assert.equal(plan.recommendedProtocol, 'zwave');
+  assert.equal(plan.targetSource, 'homebrain-zwave');
+  assert.equal(plan.instructionProfile.key, 'zwave-siren');
+  assert.ok(plan.featureSupport.some((feature) => feature.key === 'alarm' && feature.supported));
+});
+
+test('direct radio catalog maps SmartThings Zigbee sirens with alarm and chime support', () => {
+  const device = {
+    _id: 'siren-zigbee-1',
+    name: 'Zigbee Warning Siren',
+    type: 'siren',
+    properties: {
+      source: 'smartthings',
+      smartThingsDeviceId: 'smartthings-siren-zigbee-1',
+      smartThingsDeviceNetworkType: 'ZIGBEE',
+      smartThingsCapabilities: ['alarm', 'chime', 'switch', 'tamperAlert'],
+      smartThingsCategories: ['siren']
+    }
+  };
+
+  const plan = buildMigrationPlan(device);
+  assert.equal(inferProtocolFromSmartThings(device), 'zigbee');
+  assert.deepEqual(inferFeaturesFromSmartThings(device), ['alarm', 'chime', 'switch', 'tamper']);
+  assert.equal(plan.supported, true);
+  assert.equal(plan.recommendedProtocol, 'zigbee');
+  assert.equal(plan.targetSource, 'homebrain-zigbee');
+  assert.equal(plan.instructionProfile.key, 'zigbee-siren-alarm');
+  assert.ok(plan.featureSupport.some((feature) => feature.key === 'alarm' && feature.supported));
+  assert.ok(plan.featureSupport.some((feature) => feature.key === 'chime' && feature.supported));
+});
+
 test('direct radio catalog leaves cloud and virtual SmartThings helpers out of native migration', () => {
   const device = {
     _id: 'virtual-1',

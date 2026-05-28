@@ -28,6 +28,8 @@ import {
   CheckCircle2,
   AlertCircle,
   Camera as CameraIcon,
+  Siren,
+  Speaker,
   PlusCircle,
   SlidersHorizontal
 } from "lucide-react"
@@ -243,6 +245,7 @@ const DEVICE_TYPE_FILTERS = [
   { value: 'thermostat', label: 'Thermostats' },
   { value: 'garage', label: 'Garage Doors' },
   { value: 'sensor', label: 'Sensors' },
+  { value: 'siren', label: 'Sirens' },
   { value: 'camera', label: 'Cameras' },
   { value: 'speaker', label: 'Speakers' },
   { value: 'energy', label: 'Energy and Power' }
@@ -564,6 +567,8 @@ const getDeviceTypeLabel = (type: string): string => {
       return 'Garage'
     case 'sensor':
       return 'Sensor'
+    case 'siren':
+      return 'Siren'
     case 'camera':
       return 'Camera'
     case 'speaker':
@@ -1676,6 +1681,14 @@ export function Devices({
   const getDeviceIcon = (device: any) => {
     if (device.type === 'camera' || isSmartThingsCameraLike(device)) {
       return <CameraIcon className="h-5 w-5" />
+    }
+
+    if (device.type === 'siren') {
+      return <Siren className="h-5 w-5" />
+    }
+
+    if (device.type === 'speaker') {
+      return <Speaker className="h-5 w-5" />
     }
 
     if (device.type === 'switch') {

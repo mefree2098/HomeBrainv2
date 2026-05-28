@@ -80,6 +80,20 @@ test('SmartThings camera profiles classify as cameras before switch or motion fa
   );
 });
 
+test('SmartThings sirens classify as sirens before switch fallback', () => {
+  assert.equal(
+    mapSmartThingsDeviceType(
+      new Set(['alarm', 'switch']),
+      new Set(['siren']),
+      smartThingsDevice({
+        name: 'Master Bedroom Siren',
+        presentationId: 'generic-siren'
+      })
+    ),
+    'siren'
+  );
+});
+
 test('native direct radio dimmers classify as switches while actual bulbs stay lights', () => {
   assert.equal(
     inferDirectDeviceType(['switch', 'brightness'], { name: 'Kitchen In-Wall Dimmer Switch' }),
@@ -99,5 +113,17 @@ test('native direct radio dimmers classify as switches while actual bulbs stay l
   assert.equal(
     inferDirectDeviceType(['switch', 'brightness', 'colorTemperature'], { name: 'Hall Tunable White Bulb' }),
     'light'
+  );
+});
+
+test('native direct radio alarm-capable devices classify as sirens', () => {
+  assert.equal(
+    inferDirectDeviceType(['alarm', 'switch'], { name: 'Aeotec Siren' }),
+    'siren'
+  );
+
+  assert.equal(
+    inferDirectDeviceType(['switch'], { name: 'Utility Sounder Alarm' }),
+    'siren'
   );
 });

@@ -460,6 +460,8 @@ function inferZigbeeFeaturesFromExposes(exposes = [], definition = {}) {
     if (/\bwater\b|\bleak\b|\bflood\b/.test(text)) addFeature(features, 'water');
     if (/\bsmoke\b/.test(text)) addFeature(features, 'smoke');
     if (/\bcarbon_monoxide\b|\bcarbon monoxide\b|\bco\b/.test(text)) addFeature(features, 'carbonMonoxide');
+    if (/\b(?:siren|alarm|warning|warning_mode|warningmode)\b/.test(text)) addFeature(features, 'alarm');
+    if (/\b(?:chime|melody|tone|sound)\b/.test(text)) addFeature(features, 'chime');
     if (/\bpower\b|\bwatt\b/.test(text)) addFeature(features, 'power');
     if (/\benergy\b|\bkwh\b/.test(text)) addFeature(features, 'energy');
     if (/\bvoltage\b/.test(text)) addFeature(features, 'voltage');
@@ -491,6 +493,8 @@ function inferZigbeeFeaturesFromExposes(exposes = [], definition = {}) {
   if (/\b(?:motion|occupancy|pir)\b/.test(descriptor)) addFeature(features, 'motion');
   if (/\b(?:contact|door|window)\b/.test(descriptor)) addFeature(features, 'contact');
   if (/\b(?:button|remote|fob)\b/.test(descriptor)) addFeature(features, 'button');
+  if (/\b(?:siren|alarm|sounder|warning)\b/.test(descriptor)) addFeature(features, 'alarm');
+  if (/\b(?:chime|melody|tone)\b/.test(descriptor)) addFeature(features, 'chime');
 
   return Array.from(features).sort();
 }

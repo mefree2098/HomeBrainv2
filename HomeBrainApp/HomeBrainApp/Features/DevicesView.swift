@@ -97,7 +97,7 @@ struct DevicesView: View {
     @State private var savingDeviceDetails = false
     @State private var contentWidth: CGFloat = 0
 
-    private let availableTypes = ["all", "light", "lock", "thermostat", "garage", "sensor", "switch", "camera"]
+    private let availableTypes = ["all", "light", "lock", "thermostat", "garage", "sensor", "siren", "switch", "camera", "speaker"]
     private let addDeviceModes = ["zwave", "zigbee", "insteon", "matter", "manual"]
     private let thermostatModes = ["auto", "cool", "heat", "off"]
 
@@ -3846,6 +3846,10 @@ struct DevicesView: View {
             return "door.garage.closed"
         case "camera":
             return "camera"
+        case "siren":
+            return "bell"
+        case "speaker":
+            return "speaker.wave.3"
         case "sensor":
             return "sensor.tag.radiowaves.forward"
         default:
@@ -3869,8 +3873,12 @@ struct DevicesView: View {
             return "Garage"
         case "sensor":
             return "Sensors"
+        case "siren":
+            return "Sirens"
         case "camera":
             return "Cameras"
+        case "speaker":
+            return "Speakers"
         default:
             return type.capitalized
         }
@@ -3890,8 +3898,12 @@ struct DevicesView: View {
             return "Garage"
         case "sensor":
             return "Sensor"
+        case "siren":
+            return "Siren"
         case "camera":
             return "Camera"
+        case "speaker":
+            return "Speaker"
         default:
             return type.capitalized
         }
