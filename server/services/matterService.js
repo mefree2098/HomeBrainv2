@@ -7,6 +7,7 @@ const axios = require('axios');
 const semver = require('semver');
 const Device = require('../models/Device');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
+const { buildNormalizedCapabilities } = require('./directRadioDeviceCatalog');
 const directRadioProtocolCatalogService = require('./directRadioProtocolCatalogService');
 const {
   MATTER_SOURCE,
@@ -281,6 +282,27 @@ function normalizeTransport(value) {
     return MATTER_TRANSPORTS.ble;
   }
   return MATTER_TRANSPORTS.ip;
+}
+
+function mergeCapabilities(...capabilityLists) {
+  const merged = [];
+  const seen = new Set();
+  capabilityLists.flat().forEach((capability) => {
+    if (!capability || typeof capability !== 'object') {
+      return;
+    }
+    const key = [
+      capability.protocol || '',
+      capability.type || '',
+      capability.property || ''
+    ].join(':');
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    merged.push(capability);
+  });
+  return merged;
 }
 
 function resolveLocalSerialById() {
@@ -3698,6 +3720,16 @@ class MatterService {
         : inferFeaturesFromMatterDescriptor(endpointDescriptorFromRecord(descriptor))),
       ...(catalogEntry?.matterFeatures || [])
     ]);
+    const matterCapabilities = mergeCapabilities(
+      catalogEntry?.capabilities || [],
+      buildNormalizedCapabilities(features, 'matter')
+    );
+    const threadCapabilities = transport === MATTER_TRANSPORTS.thread
+      ? mergeCapabilities(
+          threadCatalogEntry?.capabilities || [],
+          buildNormalizedCapabilities(features, 'thread')
+        )
+      : undefined;
     const homeBrainType = descriptor.homeBrainType || catalogEntry?.homeBrainType || inferHomeBrainTypeFromFeatures(features, descriptor);
     const state = this.extractStateFromMatterDescriptor(descriptor);
     const identity = {
@@ -3747,9 +3779,9 @@ class MatterService {
           lastSyncedAt: new Date().toISOString()
         },
         matterDeviceCatalog: directRadioProtocolCatalogService.compactCatalogForDevice(catalogEntry),
-        matterCapabilities: catalogEntry?.capabilities || [],
+        matterCapabilities,
         threadDeviceCatalog: threadCatalogEntry ? directRadioProtocolCatalogService.compactCatalogForDevice(threadCatalogEntry) : undefined,
-        threadCapabilities: threadCatalogEntry?.capabilities || undefined,
+        threadCapabilities,
         matterState: state.rawState || {}
       }
     };
