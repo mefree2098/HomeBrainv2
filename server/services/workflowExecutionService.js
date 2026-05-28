@@ -427,6 +427,9 @@ function getActionValue(actionName, parameters = {}) {
   if (actionName === 'set_color' || actionName === 'setcolor') {
     return parameters.color;
   }
+  if (actionName === 'set_color_temperature' || actionName === 'setcolortemperature') {
+    return parameters.colorTemperature ?? parameters.color_temperature;
+  }
   if (actionName === 'turn_on' && Object.prototype.hasOwnProperty.call(parameters, 'brightness')) {
     return parameters.brightness;
   }

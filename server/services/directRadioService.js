@@ -121,9 +121,20 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
     properties: {
       ...existingProperties,
       ...updateProperties,
+      directRadioState: {
+        ...(existingProperties.directRadioState && typeof existingProperties.directRadioState === 'object'
+          ? existingProperties.directRadioState
+          : {}),
+        ...(updateProperties.directRadioState && typeof updateProperties.directRadioState === 'object'
+          ? updateProperties.directRadioState
+          : {})
+      },
       homebrainDirect: mergedDirect
     }
   };
+  if (Object.keys(merged.properties.directRadioState).length === 0) {
+    delete merged.properties.directRadioState;
+  }
   const mergedFeatures = uniqueStrings([
     ...updateFeatures,
     ...existingFeatures,
@@ -145,6 +156,18 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
 
     if (!Object.prototype.hasOwnProperty.call(update, 'brightness') || update.brightness === undefined) {
       merged.brightness = existing.brightness;
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(update, 'color') || update.color === undefined) {
+      merged.color = existing.color;
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(update, 'colorTemperature') || update.colorTemperature === undefined) {
+      merged.colorTemperature = existing.colorTemperature;
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(update, 'temperature') || update.temperature === undefined) {
+      merged.temperature = existing.temperature;
     }
 
     if (!shouldReplaceGeneratedDirectName(existing.name, generatedName, existingDirect.generatedName)) {
@@ -765,6 +788,31 @@ function kelvinToMired(kelvin) {
   return Math.round(1000000 / numeric);
 }
 
+function miredToKelvin(mired) {
+  const numeric = Number(mired);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return undefined;
+  }
+  return Math.round(1000000 / numeric);
+}
+
+function roundTo(value, digits = 2) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return undefined;
+  }
+  const multiplier = 10 ** digits;
+  return Math.round(numeric * multiplier) / multiplier;
+}
+
+function celsiusToFahrenheit(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return undefined;
+  }
+  return roundTo((numeric * 9) / 5 + 32, 1);
+}
+
 async function withTimeout(promise, timeoutMs, message) {
   let timeoutHandle;
   try {
@@ -1015,6 +1063,112 @@ function normalizeZigbeePercent(value, scale = 'percent') {
   return clampPercent(numeric);
 }
 
+function normalizeZigbeeActiveState(value) {
+  return normalizeZigbeeSwitchState(value);
+}
+
+function normalizeZigbeeContactOpen(value) {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === 'boolean') {
+    return !value;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value <= 0;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (['open', 'opened', 'active', 'detected', 'alarm'].includes(normalized)) {
+    return true;
+  }
+  if (['closed', 'close', 'inactive', 'clear', 'cleared', 'normal'].includes(normalized)) {
+    return false;
+  }
+  if (['true', '1', 'yes'].includes(normalized)) {
+    return false;
+  }
+  if (['false', '0', 'no'].includes(normalized)) {
+    return true;
+  }
+  return undefined;
+}
+
+function normalizeZigbeeBatteryPercent(value, key = '') {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return undefined;
+  }
+
+  const normalizedKey = normalizeSourceText(key);
+  if (normalizedKey.includes('percentage') && numeric > 100 && numeric <= 200) {
+    return clampPercent(numeric / 2);
+  }
+  if (numeric > 100 && numeric <= 200) {
+    return clampPercent(numeric / 2);
+  }
+  return clampPercent(numeric);
+}
+
+function normalizeZigbeeBatteryVoltage(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return undefined;
+  }
+  if (numeric > 1000) {
+    return roundTo(numeric / 1000, 2);
+  }
+  if (numeric > 10) {
+    return roundTo(numeric / 10, 2);
+  }
+  return roundTo(numeric, 2);
+}
+
+function normalizeZigbeeTemperatureC(value, scale = 'auto') {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return undefined;
+  }
+  if (scale === 'centi' || Math.abs(numeric) > 200) {
+    return roundTo(numeric / 100, 1);
+  }
+  return roundTo(numeric, 1);
+}
+
+function normalizeZigbeeHumidityPercent(value, scale = 'auto') {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return undefined;
+  }
+  const percent = scale === 'centi' || numeric > 100 ? numeric / 100 : numeric;
+  return clampPercent(percent);
+}
+
+function normalizeZigbeeIlluminanceLux(value, scale = 'auto') {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return undefined;
+  }
+  if (scale === 'zcl') {
+    if (numeric <= 0) {
+      return 0;
+    }
+    return roundTo(10 ** ((numeric - 1) / 10000), 1);
+  }
+  return Math.max(0, roundTo(numeric, 1));
+}
+
+function normalizeZigbeeColorTemperatureKelvin(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return undefined;
+  }
+  if (numeric >= 1000) {
+    return Math.round(numeric);
+  }
+  return miredToKelvin(numeric);
+}
+
 function readZigbeeStateObjectValue(zigbeeDevice, keys = []) {
   const stateObjects = [
     zigbeeDevice?.state,
@@ -1035,7 +1189,281 @@ function readZigbeeStateObjectValue(zigbeeDevice, keys = []) {
   return undefined;
 }
 
-function readZigbeeRuntimeState(zigbeeDevice) {
+function assignDefined(target, key, value) {
+  if (value !== undefined && value !== null) {
+    target[key] = value;
+  }
+}
+
+function assignDefinedIfMissing(target, key, value) {
+  if (!Object.prototype.hasOwnProperty.call(target, key)) {
+    assignDefined(target, key, value);
+  }
+}
+
+function readZigbeeMessageData(message) {
+  return message?.data && typeof message.data === 'object' && !Array.isArray(message.data)
+    ? message.data
+    : {};
+}
+
+function hasDirectFeature(features, feature) {
+  const expected = normalizeFeature(feature).toLowerCase();
+  return (Array.isArray(features) ? features : [])
+    .map((entry) => normalizeFeature(entry).toLowerCase())
+    .includes(expected);
+}
+
+function applyZoneStatusToDirectState(directState, zoneStatus, features = []) {
+  const numeric = Number(zoneStatus);
+  if (!Number.isFinite(numeric)) {
+    return;
+  }
+
+  const alarmActive = Boolean(numeric & 0x0001 || numeric & 0x0002);
+  assignDefined(directState, 'tamper', Boolean(numeric & 0x0004));
+  assignDefined(directState, 'tamperActive', Boolean(numeric & 0x0004));
+  assignDefined(directState, 'batteryLow', Boolean(numeric & 0x0008));
+
+  if (hasDirectFeature(features, 'water')) {
+    assignDefined(directState, 'waterDetected', alarmActive);
+    return;
+  }
+  if (hasDirectFeature(features, 'motion')) {
+    assignDefined(directState, 'motionActive', alarmActive);
+    assignDefined(directState, 'motion', alarmActive ? 'active' : 'inactive');
+    return;
+  }
+  if (hasDirectFeature(features, 'vibration') || hasDirectFeature(features, 'acceleration')) {
+    assignDefined(directState, 'vibrationActive', alarmActive);
+    assignDefined(directState, 'vibration', alarmActive ? 'active' : 'inactive');
+    assignDefined(directState, 'accelerationActive', alarmActive);
+    assignDefined(directState, 'acceleration', alarmActive ? 'active' : 'inactive');
+    return;
+  }
+
+  assignDefined(directState, 'contactOpen', alarmActive);
+  assignDefined(directState, 'contact', alarmActive ? 'open' : 'closed');
+}
+
+function extractZigbeeMessageState(message, features = []) {
+  const directState = {};
+  const data = readZigbeeMessageData(message);
+  const cluster = normalizeZigbeeClusterToken(message?.cluster ?? message?.clusterID ?? message?.clusterId);
+
+  if (cluster === 'ssiaszone') {
+    applyZoneStatusToDirectState(directState, data.zoneStatus ?? data.zonestatus, features);
+  }
+
+  if (cluster === 'genpowercfg') {
+    const batteryLevel = normalizeZigbeeBatteryPercent(
+      data.batteryPercentageRemaining ?? data.batterypercentageremaining ?? data.battery ?? data.batteryLevel,
+      data.batteryPercentageRemaining !== undefined || data.batterypercentageremaining !== undefined
+        ? 'batteryPercentageRemaining'
+        : 'battery'
+    );
+    assignDefined(directState, 'batteryLevel', batteryLevel);
+    assignDefined(directState, 'batteryVoltage', normalizeZigbeeBatteryVoltage(data.batteryVoltage ?? data.batteryvoltage));
+    const low = normalizeZigbeeActiveState(data.batteryLow ?? data.battery_low);
+    assignDefined(directState, 'batteryLow', low);
+  }
+
+  if (cluster === 'mstemperaturemeasurement') {
+    const temperatureC = normalizeZigbeeTemperatureC(data.measuredValue ?? data.measuredvalue ?? data.temperature, 'centi');
+    assignDefined(directState, 'temperatureC', temperatureC);
+    assignDefined(directState, 'temperatureF', celsiusToFahrenheit(temperatureC));
+  }
+
+  if (cluster === 'msrelativehumidity') {
+    assignDefined(directState, 'humidity', normalizeZigbeeHumidityPercent(data.measuredValue ?? data.measuredvalue ?? data.humidity, 'centi'));
+  }
+
+  if (cluster === 'msilluminancemeasurement') {
+    assignDefined(directState, 'illuminance', normalizeZigbeeIlluminanceLux(data.measuredValue ?? data.measuredvalue ?? data.illuminance, 'zcl'));
+  }
+
+  if (cluster === 'lightingcolorctrl') {
+    const colorTemperatureK = normalizeZigbeeColorTemperatureKelvin(
+      data.colorTemperature ?? data.colorTemperatureMireds ?? data.colorTemp ?? data.colortemp ?? data.color_temp
+    );
+    assignDefined(directState, 'colorTemperatureK', colorTemperatureK);
+    assignDefined(directState, 'colorTemperatureMired', colorTemperatureK ? kelvinToMired(colorTemperatureK) : undefined);
+  }
+
+  if (cluster === 'genonoff') {
+    assignDefined(directState, 'switch', normalizeZigbeeSwitchState(data.onOff ?? data.onoff ?? data.state));
+  }
+
+  if (cluster === 'genlevelctrl') {
+    assignDefined(directState, 'brightness', normalizeZigbeePercent(data.currentLevel ?? data.current_level ?? data.level, 'level'));
+  }
+
+  return directState;
+}
+
+function mergeDirectState(target, source) {
+  Object.entries(source || {}).forEach(([key, value]) => {
+    assignDefined(target, key, value);
+  });
+  return target;
+}
+
+function readZigbeeStateObject(zigbeeDevice, directState) {
+  const contactOpen = normalizeZigbeeContactOpen(readZigbeeStateObjectValue(zigbeeDevice, ['contact', 'door', 'window']));
+  assignDefinedIfMissing(directState, 'contactOpen', contactOpen);
+  if (contactOpen !== undefined && directState.contact === undefined) {
+    directState.contact = contactOpen ? 'open' : 'closed';
+  }
+
+  const motionActive = normalizeZigbeeActiveState(readZigbeeStateObjectValue(zigbeeDevice, ['motion', 'occupancy', 'presence']));
+  assignDefinedIfMissing(directState, 'motionActive', motionActive);
+  if (motionActive !== undefined && directState.motion === undefined) {
+    directState.motion = motionActive ? 'active' : 'inactive';
+  }
+
+  const vibrationActive = normalizeZigbeeActiveState(readZigbeeStateObjectValue(zigbeeDevice, ['vibration', 'vibration_detected']));
+  assignDefinedIfMissing(directState, 'vibrationActive', vibrationActive);
+  if (vibrationActive !== undefined && directState.vibration === undefined) {
+    directState.vibration = vibrationActive ? 'active' : 'inactive';
+  }
+
+  const accelerationActive = normalizeZigbeeActiveState(readZigbeeStateObjectValue(zigbeeDevice, ['acceleration', 'acceleration_x']));
+  assignDefinedIfMissing(directState, 'accelerationActive', accelerationActive);
+  if (accelerationActive !== undefined && directState.acceleration === undefined) {
+    directState.acceleration = accelerationActive ? 'active' : 'inactive';
+  }
+
+  const tamperActive = normalizeZigbeeActiveState(readZigbeeStateObjectValue(zigbeeDevice, ['tamper', 'tamper_alarm']));
+  assignDefinedIfMissing(directState, 'tamper', tamperActive);
+  assignDefinedIfMissing(directState, 'tamperActive', tamperActive);
+
+  const waterDetected = normalizeZigbeeActiveState(readZigbeeStateObjectValue(zigbeeDevice, ['water_leak', 'water', 'leak']));
+  assignDefinedIfMissing(directState, 'waterDetected', waterDetected);
+
+  const batteryLevel = normalizeZigbeeBatteryPercent(
+    readZigbeeStateObjectValue(zigbeeDevice, ['battery', 'batteryLevel', 'battery_level']),
+    'battery'
+  );
+  assignDefinedIfMissing(directState, 'batteryLevel', batteryLevel);
+  assignDefinedIfMissing(directState, 'batteryVoltage', normalizeZigbeeBatteryVoltage(readZigbeeStateObjectValue(zigbeeDevice, ['voltage', 'batteryVoltage', 'battery_voltage'])));
+  assignDefinedIfMissing(directState, 'batteryLow', normalizeZigbeeActiveState(readZigbeeStateObjectValue(zigbeeDevice, ['battery_low', 'batteryLow'])));
+
+  const temperatureC = normalizeZigbeeTemperatureC(readZigbeeStateObjectValue(zigbeeDevice, ['temperature']), 'auto');
+  assignDefinedIfMissing(directState, 'temperatureC', temperatureC);
+  assignDefinedIfMissing(directState, 'temperatureF', celsiusToFahrenheit(temperatureC));
+  assignDefinedIfMissing(directState, 'humidity', normalizeZigbeeHumidityPercent(readZigbeeStateObjectValue(zigbeeDevice, ['humidity']), 'auto'));
+  assignDefinedIfMissing(directState, 'illuminance', normalizeZigbeeIlluminanceLux(readZigbeeStateObjectValue(zigbeeDevice, ['illuminance', 'illuminance_lux']), 'auto'));
+
+  const colorTemperatureK = normalizeZigbeeColorTemperatureKelvin(
+    readZigbeeStateObjectValue(zigbeeDevice, ['color_temp', 'colorTemperature', 'color_temperature', 'colortemp'])
+  );
+  assignDefinedIfMissing(directState, 'colorTemperatureK', colorTemperatureK);
+  assignDefinedIfMissing(directState, 'colorTemperatureMired', colorTemperatureK ? kelvinToMired(colorTemperatureK) : undefined);
+}
+
+function readZigbeeEndpointSensorAttributes(zigbeeDevice, directState, features = []) {
+  for (const endpoint of getZigbeeEndpoints(zigbeeDevice)) {
+    if (directState.contactOpen === undefined && directState.motionActive === undefined && directState.waterDetected === undefined) {
+      applyZoneStatusToDirectState(
+        directState,
+        readZigbeeEndpointAttribute(endpoint, ['ssIasZone', 'ssiaszone', 1280], ['zoneStatus', 'zonestatus']),
+        features
+      );
+    }
+
+    if (directState.batteryLevel === undefined) {
+      assignDefined(directState, 'batteryLevel', normalizeZigbeeBatteryPercent(
+        readZigbeeEndpointAttribute(endpoint, ['genPowerCfg', 'genpowercfg', 1], ['batteryPercentageRemaining', 'batterypercentageremaining']),
+        'batteryPercentageRemaining'
+      ));
+    }
+    if (directState.batteryVoltage === undefined) {
+      assignDefined(directState, 'batteryVoltage', normalizeZigbeeBatteryVoltage(
+        readZigbeeEndpointAttribute(endpoint, ['genPowerCfg', 'genpowercfg', 1], ['batteryVoltage', 'batteryvoltage'])
+      ));
+    }
+
+    if (directState.temperatureC === undefined) {
+      const temperatureC = normalizeZigbeeTemperatureC(
+        readZigbeeEndpointAttribute(endpoint, ['msTemperatureMeasurement', 'mstemperaturemeasurement', 1026], ['measuredValue', 'measuredvalue']),
+        'centi'
+      );
+      assignDefined(directState, 'temperatureC', temperatureC);
+      assignDefined(directState, 'temperatureF', celsiusToFahrenheit(temperatureC));
+    }
+
+    if (directState.humidity === undefined) {
+      assignDefined(directState, 'humidity', normalizeZigbeeHumidityPercent(
+        readZigbeeEndpointAttribute(endpoint, ['msRelativeHumidity', 'msrelativehumidity', 1029], ['measuredValue', 'measuredvalue']),
+        'centi'
+      ));
+    }
+
+    if (directState.illuminance === undefined) {
+      assignDefined(directState, 'illuminance', normalizeZigbeeIlluminanceLux(
+        readZigbeeEndpointAttribute(endpoint, ['msIlluminanceMeasurement', 'msilluminancemeasurement', 1024], ['measuredValue', 'measuredvalue']),
+        'zcl'
+      ));
+    }
+
+    if (directState.colorTemperatureK === undefined) {
+      const colorTemperatureK = normalizeZigbeeColorTemperatureKelvin(readZigbeeEndpointAttribute(
+        endpoint,
+        ['lightingColorCtrl', 'lightingcolorctrl', 768],
+        ['colorTemperature', 'colorTemperatureMireds', 'colorTemp', 'colortemp', 'color_temp']
+      ));
+      assignDefined(directState, 'colorTemperatureK', colorTemperatureK);
+      assignDefined(directState, 'colorTemperatureMired', colorTemperatureK ? kelvinToMired(colorTemperatureK) : undefined);
+    }
+  }
+}
+
+function directStateToTopLevel(directState = {}) {
+  const topLevel = {};
+  if (Object.prototype.hasOwnProperty.call(directState, 'contactOpen')) {
+    topLevel.status = Boolean(directState.contactOpen);
+  } else if (Object.prototype.hasOwnProperty.call(directState, 'motionActive')) {
+    topLevel.status = Boolean(directState.motionActive);
+  } else if (Object.prototype.hasOwnProperty.call(directState, 'vibrationActive')) {
+    topLevel.status = Boolean(directState.vibrationActive);
+  } else if (Object.prototype.hasOwnProperty.call(directState, 'accelerationActive')) {
+    topLevel.status = Boolean(directState.accelerationActive);
+  } else if (Object.prototype.hasOwnProperty.call(directState, 'waterDetected')) {
+    topLevel.status = Boolean(directState.waterDetected);
+  } else if (Object.prototype.hasOwnProperty.call(directState, 'tamperActive')) {
+    topLevel.status = Boolean(directState.tamperActive);
+  }
+
+  assignDefined(topLevel, 'temperature', directState.temperatureF);
+  assignDefined(topLevel, 'colorTemperature', directState.colorTemperatureK);
+  return topLevel;
+}
+
+function inferFeaturesFromDirectRadioState(directState = {}) {
+  const features = [];
+  if (directState.contactOpen !== undefined || directState.contact !== undefined) features.push('contact');
+  if (directState.motionActive !== undefined || directState.motion !== undefined) features.push('motion');
+  if (directState.vibrationActive !== undefined || directState.vibration !== undefined) features.push('vibration');
+  if (directState.accelerationActive !== undefined || directState.acceleration !== undefined) features.push('acceleration');
+  if (directState.tamper !== undefined || directState.tamperActive !== undefined) features.push('tamper');
+  if (directState.batteryLevel !== undefined || directState.batteryLow !== undefined || directState.batteryVoltage !== undefined) features.push('battery');
+  if (directState.temperatureC !== undefined || directState.temperatureF !== undefined) features.push('temperature');
+  if (directState.humidity !== undefined) features.push('humidity');
+  if (directState.illuminance !== undefined) features.push('illuminance');
+  if (directState.waterDetected !== undefined) features.push('water');
+  if (directState.colorTemperatureK !== undefined) features.push('colorTemperature');
+  return uniqueStrings(features.map(normalizeFeature)).sort();
+}
+
+function readZigbeeDirectRadioState(zigbeeDevice, options = {}) {
+  const directState = {};
+  mergeDirectState(directState, extractZigbeeMessageState(options.message, options.features));
+  readZigbeeStateObject(zigbeeDevice, directState);
+  readZigbeeEndpointSensorAttributes(zigbeeDevice, directState, options.features);
+  return directState;
+}
+
+function readZigbeeRuntimeState(zigbeeDevice, options = {}) {
   const endpoints = getZigbeeEndpoints(zigbeeDevice);
   let status = normalizeZigbeeSwitchState(readZigbeeStateObjectValue(zigbeeDevice, [
     'state',
@@ -1076,9 +1504,12 @@ function readZigbeeRuntimeState(zigbeeDevice) {
     }
   }
 
+  const directState = readZigbeeDirectRadioState(zigbeeDevice, options);
   return {
     ...(status !== undefined ? { status } : {}),
-    ...(brightness !== undefined ? { brightness } : {})
+    ...(brightness !== undefined ? { brightness } : {}),
+    ...directStateToTopLevel(directState),
+    ...(Object.keys(directState).length > 0 ? { directRadioState: directState } : {})
   };
 }
 
@@ -1101,6 +1532,20 @@ function extractZigbeeBrightnessReadResponse(response) {
   }
 
   return normalizeZigbeePercent(response.currentLevel ?? response.current_level ?? response.level, 'level');
+}
+
+function extractZigbeeColorTemperatureReadResponse(response) {
+  if (!response || typeof response !== 'object') {
+    return undefined;
+  }
+
+  return normalizeZigbeeColorTemperatureKelvin(
+    response.colorTemperature
+    ?? response.colorTemperatureMireds
+    ?? response.colorTemp
+    ?? response.colortemp
+    ?? response.color_temp
+  );
 }
 
 function normalizeZigbeeClusterToken(value) {
@@ -1177,6 +1622,8 @@ function inferFeaturesFromZigbeeDefinition(definition, zigbeeDevice) {
       [/\billuminance\b/, 'illuminance'],
       [/\bbattery\b|\bbattery_low\b/, 'battery'],
       [/\btamper\b/, 'tamper'],
+      [/\bvibration\b|\baccelerat/, 'vibration'],
+      [/\baccelerat/, 'acceleration'],
       [/\baction\b|\bbutton\b/, 'button'],
       [/\bwater_leak\b|\bwater\b/, 'water'],
       [/\bpower\b/, 'power'],
@@ -1959,9 +2406,10 @@ class DirectRadioService {
         this.log('info', 'zigbee', 'Zigbee message received', {
           ieeeAddr: payload?.device?.ieeeAddr || null,
           cluster: payload?.cluster || null,
-          type: payload?.type || null
+          type: payload?.type || null,
+          dataKeys: payload?.data && typeof payload.data === 'object' ? Object.keys(payload.data).slice(0, 12) : []
         });
-        void this.handleZigbeeDeviceChanged(payload?.device, 'message');
+        void this.handleZigbeeDeviceChanged(payload?.device, 'message', { message: payload });
       });
       controller.on('adapterDisconnected', () => {
         this.zigbee.started = false;
@@ -2889,7 +3337,7 @@ class DirectRadioService {
     }
   }
 
-  normalizeZigbeeDevice(zigbeeDevice, reason = 'sync') {
+  normalizeZigbeeDevice(zigbeeDevice, reason = 'sync', options = {}) {
     if (!zigbeeDevice) {
       return null;
     }
@@ -2907,7 +3355,7 @@ class DirectRadioService {
         definition
       });
     }
-    const features = uniqueStrings([
+    const baseFeatures = uniqueStrings([
       ...inferFeaturesFromZigbeeDefinition(definition, zigbeeDevice),
       ...(Array.isArray(catalogEntry?.homebrainFeatures) ? catalogEntry.homebrainFeatures : [])
     ].map(normalizeFeature)).sort();
@@ -2922,7 +3370,15 @@ class DirectRadioService {
       || `Zigbee ${directId.slice(-6)}`;
     const status = zigbeeDevice.interviewCompleted !== false;
 
-    const runtimeState = readZigbeeRuntimeState(zigbeeDevice);
+    const runtimeState = readZigbeeRuntimeState(zigbeeDevice, {
+      features: baseFeatures,
+      message: options.message
+    });
+    const { directRadioState, ...runtimeUpdate } = runtimeState;
+    const features = uniqueStrings([
+      ...baseFeatures,
+      ...inferFeaturesFromDirectRadioState(directRadioState)
+    ].map(normalizeFeature)).sort();
 
     return {
       identity: {
@@ -2940,7 +3396,7 @@ class DirectRadioService {
           manufacturerName: zigbeeDevice.manufacturerName
         }),
         room: 'Unassigned',
-        ...runtimeState,
+        ...runtimeUpdate,
         isOnline: status,
         lastSeen: new Date(),
         brand: trimString(catalogEntry?.vendor || definition?.vendor || zigbeeDevice.manufacturerName) || undefined,
@@ -2958,6 +3414,8 @@ class DirectRadioService {
             lastSeen: new Date().toISOString(),
             catalog: directRadioProtocolCatalogService.buildCatalogReference(catalogEntry)
           },
+          ...(directRadioState ? { directRadioState } : {}),
+          ...(directRadioState?.batteryLevel !== undefined ? { homeBrainBatteryLevel: directRadioState.batteryLevel, batteryLevel: directRadioState.batteryLevel } : {}),
           directRadioFeatures: features,
           directRadioCapabilities: buildNormalizedCapabilities(features, 'zigbee'),
           directRadioCatalog: directRadioProtocolCatalogService.compactCatalogForDevice(catalogEntry),
@@ -3082,8 +3540,8 @@ class DirectRadioService {
     return inferDirectDeviceType(features.map(normalizeFeature), context);
   }
 
-  async handleZigbeeDeviceChanged(zigbeeDevice, reason) {
-    const normalized = this.normalizeZigbeeDevice(zigbeeDevice, reason);
+  async handleZigbeeDeviceChanged(zigbeeDevice, reason, options = {}) {
+    const normalized = this.normalizeZigbeeDevice(zigbeeDevice, reason, options);
     if (!normalized) {
       return null;
     }
@@ -3096,7 +3554,13 @@ class DirectRadioService {
         : null,
       observedBrightness: Object.prototype.hasOwnProperty.call(normalized.update || {}, 'brightness')
         ? normalized.update.brightness
-        : null
+        : null,
+      observedColorTemperature: Object.prototype.hasOwnProperty.call(normalized.update || {}, 'colorTemperature')
+        ? normalized.update.colorTemperature
+        : null,
+      directStateKeys: normalized.update?.properties?.directRadioState
+        ? Object.keys(normalized.update.properties.directRadioState)
+        : []
     });
     return this.upsertDirectDevice(normalized.identity, normalized.update);
   }
@@ -4808,6 +5272,38 @@ class DirectRadioService {
     ), 'level');
   }
 
+  async readZigbeeColorTemperatureState(endpoint, device) {
+    if (!endpoint) {
+      return undefined;
+    }
+
+    if (typeof endpoint.read === 'function') {
+      try {
+        const response = await withTimeout(
+          endpoint.read('lightingColorCtrl', ['colorTemperature']),
+          5_000,
+          'Zigbee color temperature readback timed out'
+        );
+        const colorTemperature = extractZigbeeColorTemperatureReadResponse(response);
+        if (colorTemperature !== undefined) {
+          return colorTemperature;
+        }
+      } catch (error) {
+        this.log('warn', 'zigbee', 'Zigbee color temperature readback failed after command', {
+          deviceId: device?._id?.toString?.() || null,
+          name: device?.name || null,
+          error: error.message
+        });
+      }
+    }
+
+    return normalizeZigbeeColorTemperatureKelvin(readZigbeeEndpointAttribute(
+      endpoint,
+      ['lightingColorCtrl', 'lightingcolorctrl', 768],
+      ['colorTemperature', 'colorTemperatureMireds', 'colorTemp', 'colortemp', 'color_temp']
+    ));
+  }
+
   async controlZigbeeDevice(device, normalizedAction, commandValue, updateData = {}) {
     const zigbeeDevice = this.getDirectNodeForDevice(device);
     const endpoint = readZigbeeEndpoint(zigbeeDevice, normalizedAction);
@@ -4891,6 +5387,15 @@ class DirectRadioService {
           10_000,
           'Zigbee color temperature command timed out before the device acknowledged it'
         );
+        const observedColorTemperature = await this.readZigbeeColorTemperatureState(endpoint, device);
+        updateData.colorTemperature = observedColorTemperature ?? Math.round(Number(commandValue));
+        updateData.status = true;
+        this.log('info', 'zigbee', 'Zigbee color temperature command readback completed', {
+          deviceId: device?._id?.toString?.() || null,
+          name: device?.name || null,
+          expectedColorTemperature: Math.round(Number(commandValue)),
+          observedColorTemperature: observedColorTemperature ?? null
+        });
         break;
       }
       case 'lock':
@@ -5039,6 +5544,14 @@ class DirectRadioService {
       if (!Object.prototype.hasOwnProperty.call(normalized.update, 'brightness')
         && Object.prototype.hasOwnProperty.call(commandState, 'brightness')) {
         merged.brightness = commandState.brightness;
+      }
+      if (!Object.prototype.hasOwnProperty.call(normalized.update, 'color')
+        && Object.prototype.hasOwnProperty.call(commandState, 'color')) {
+        merged.color = commandState.color;
+      }
+      if (!Object.prototype.hasOwnProperty.call(normalized.update, 'colorTemperature')
+        && Object.prototype.hasOwnProperty.call(commandState, 'colorTemperature')) {
+        merged.colorTemperature = commandState.colorTemperature;
       }
     }
 

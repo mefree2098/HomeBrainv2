@@ -198,6 +198,77 @@ test('Zigbee normalization reads on/off state from endpoint attributes', () => {
   assert.equal(normalized.update.status, true);
 });
 
+test('Zigbee normalization captures color temperature from RGBW endpoint attributes', () => {
+  const service = createService();
+  const normalized = service.normalizeZigbeeDevice({
+    ieeeAddr: '0xf0d1b80000008d11',
+    modelID: 'FLEX RGBW',
+    manufacturerName: 'LEDVANCE',
+    interviewCompleted: true,
+    endpoints: [
+      {
+        ID: 1,
+        inputClusters: [0, 3, 4, 5, 6, 8, 768],
+        getClusterAttributeValue(cluster, attribute) {
+          if (cluster === 'lightingColorCtrl' && attribute === 'colorTemperature') {
+            return 370;
+          }
+          return undefined;
+        }
+      }
+    ]
+  }, 'sync');
+
+  assert.equal(normalized.update.colorTemperature, 2703);
+  assert.equal(normalized.update.properties.directRadioState.colorTemperatureK, 2703);
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('colorTemperature'));
+  assert.equal(normalized.update.properties.supportsColorTemperature, true);
+});
+
+test('Zigbee normalization captures contact, temperature, tamper, and battery state from sensor reports', () => {
+  const service = createService();
+  const normalized = service.normalizeZigbeeDevice({
+    ieeeAddr: '0x000d6f000b11f6e5',
+    modelID: 'MCT-340 E',
+    manufacturerName: 'Visonic',
+    interviewCompleted: true,
+    endpoints: [
+      {
+        ID: 1,
+        inputClusters: [1, 1026, 1280],
+        getClusterAttributeValue(cluster, attribute) {
+          if (cluster === 'ssIasZone' && attribute === 'zoneStatus') {
+            return 0x000d;
+          }
+          if (cluster === 'genPowerCfg' && attribute === 'batteryPercentageRemaining') {
+            return 174;
+          }
+          if (cluster === 'msTemperatureMeasurement' && attribute === 'measuredValue') {
+            return 2145;
+          }
+          return undefined;
+        }
+      }
+    ]
+  }, 'message');
+
+  const state = normalized.update.properties.directRadioState;
+  assert.equal(normalized.update.status, true);
+  assert.equal(normalized.update.temperature, 70.7);
+  assert.equal(state.contactOpen, true);
+  assert.equal(state.contact, 'open');
+  assert.equal(state.tamperActive, true);
+  assert.equal(state.batteryLow, true);
+  assert.equal(state.batteryLevel, 87);
+  assert.equal(state.temperatureC, 21.5);
+  assert.equal(state.temperatureF, 70.7);
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('contact'));
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('battery'));
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('tamper'));
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('temperature'));
+  assert.equal(normalized.update.properties.supportsContactSensor, true);
+});
+
 test('Zigbee control reads back on/off state after command acknowledgement', async () => {
   const service = createService();
   const calls = [];
@@ -244,6 +315,55 @@ test('Zigbee control reads back on/off state after command acknowledgement', asy
   });
   assert.equal(updateData.status, true);
   assert.equal(updateData.isOnline, true);
+});
+
+test('Zigbee control reads back color temperature after command acknowledgement', async () => {
+  const service = createService();
+  const calls = [];
+  const endpoint = {
+    ID: 1,
+    inputClusters: [6, 8, 768],
+    async command(cluster, command, payload) {
+      calls.push({ type: 'command', cluster, command, payload });
+      return {};
+    },
+    async read(cluster, attributes) {
+      calls.push({ type: 'read', cluster, attributes });
+      return { colorTemperature: 250 };
+    }
+  };
+  service.getDirectNodeForDevice = () => ({
+    getEndpoint() {
+      return endpoint;
+    }
+  });
+
+  const updateData = {};
+  await service.controlZigbeeDevice({
+    _id: DEVICE_ID,
+    name: 'Vault LED Strip',
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0xf0d1b80000008d11'
+      }
+    }
+  }, 'setcolortemperature', 4000, updateData);
+
+  assert.deepEqual(calls[0], {
+    type: 'command',
+    cluster: 'lightingColorCtrl',
+    command: 'moveToColorTemp',
+    payload: { colortemp: 250, transtime: 0 }
+  });
+  assert.deepEqual(calls[1], {
+    type: 'read',
+    cluster: 'lightingColorCtrl',
+    attributes: ['colorTemperature']
+  });
+  assert.equal(updateData.colorTemperature, 4000);
+  assert.equal(updateData.status, true);
 });
 
 test('Zigbee control selects command-capable endpoints beyond the usual 1/2 switch endpoints', async () => {
@@ -363,12 +483,14 @@ test('direct radio post-command refresh keeps command state when Zigbee has no s
   }, {
     preserveCommandState: {
       status: true,
-      brightness: 75
+      brightness: 75,
+      colorTemperature: 4000
     }
   });
 
   assert.equal(refreshed.status, true);
   assert.equal(refreshed.brightness, 75);
+  assert.equal(refreshed.colorTemperature, 4000);
 });
 
 test('direct radio migration finalization persists passed validation for native route', async () => {

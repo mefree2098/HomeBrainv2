@@ -231,6 +231,8 @@ function inferZigbeeFeaturesFromExposes(exposes = [], definition = {}) {
     if (/\billuminance\b|\blux\b|\bluminance\b/.test(text)) addFeature(features, 'illuminance');
     if (/\bbattery\b|\bbattery_low\b/.test(text)) addFeature(features, 'battery');
     if (/\btamper\b/.test(text)) addFeature(features, 'tamper');
+    if (/\bvibration\b/.test(text)) addFeature(features, 'vibration');
+    if (/\baccelerat/.test(text)) addFeature(features, 'acceleration');
     if (/\baction\b|\bbutton\b|\bscene\b/.test(text)) addFeature(features, 'button');
     if (/\bwater\b|\bleak\b|\bflood\b/.test(text)) addFeature(features, 'water');
     if (/\bsmoke\b/.test(text)) addFeature(features, 'smoke');

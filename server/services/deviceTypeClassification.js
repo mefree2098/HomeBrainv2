@@ -149,6 +149,9 @@ function mapSmartThingsDeviceType(capabilities = new Set(), categories = new Set
     hasCapability('presenceSensor') ||
     hasCapability('waterSensor') ||
     hasCapability('humidityMeasurement') ||
+    hasCapability('temperatureMeasurement') ||
+    hasCapability('tamperAlert') ||
+    hasCapability('accelerationSensor') ||
     hasCategory('sensor')
   ) {
     return 'sensor';
@@ -177,7 +180,20 @@ function inferDirectDeviceType(features = [], context = {}) {
   if (featureSet.has('switch') || featureSet.has('brightness') || featureSet.has('power') || featureSet.has('energy') || featureSet.has('alarm')) {
     return 'switch';
   }
-  if (featureSet.has('contact') || featureSet.has('motion') || featureSet.has('water') || featureSet.has('smoke') || featureSet.has('battery')) {
+  if (
+    featureSet.has('contact') ||
+    featureSet.has('motion') ||
+    featureSet.has('water') ||
+    featureSet.has('smoke') ||
+    featureSet.has('battery') ||
+    featureSet.has('temperature') ||
+    featureSet.has('humidity') ||
+    featureSet.has('illuminance') ||
+    featureSet.has('tamper') ||
+    featureSet.has('vibration') ||
+    featureSet.has('acceleration') ||
+    featureSet.has('axis')
+  ) {
     return 'sensor';
   }
 

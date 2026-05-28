@@ -19,6 +19,8 @@ export type DeviceRecord = {
   status?: boolean;
   isOnline?: boolean;
   brightness?: number;
+  color?: string;
+  colorTemperature?: number;
   temperature?: number;
   targetTemperature?: number;
   properties?: Record<string, unknown>;
