@@ -79,6 +79,96 @@ function shouldReplaceGeneratedDirectRoom(existing, generated, previousGenerated
   return existingRoom.toLowerCase() === 'unassigned';
 }
 
+function inferFeaturesFromExistingDirectRecord(record) {
+  if (!record || typeof record !== 'object') {
+    return [];
+  }
+
+  const properties = record.properties && typeof record.properties === 'object'
+    ? record.properties
+    : {};
+  const features = [];
+  const add = (feature) => {
+    const normalized = normalizeFeature(feature);
+    if (normalized) {
+      features.push(normalized);
+    }
+  };
+
+  inferFeaturesFromDirectRadioState(properties.directRadioState).forEach(add);
+
+  const supportFlags = {
+    supportsBattery: 'battery',
+    supportsContactSensor: 'contact',
+    supportsMotionSensor: 'motion',
+    supportsTemperatureSensor: 'temperature',
+    supportsHumiditySensor: 'humidity',
+    supportsIlluminanceSensor: 'illuminance',
+    supportsTamperSensor: 'tamper',
+    supportsAccelerationSensor: 'acceleration',
+    supportsVibrationSensor: 'vibration',
+    supportsWaterSensor: 'water',
+    supportsColorTemperature: 'colorTemperature',
+    supportsColor: 'color',
+    supportsBrightness: 'brightness',
+    supportsPowerMeter: 'power',
+    supportsEnergyMeter: 'energy'
+  };
+  Object.entries(supportFlags).forEach(([flag, feature]) => {
+    if (properties[flag] === true) {
+      add(feature);
+    }
+  });
+
+  const text = [
+    record.name,
+    record.type,
+    record.brand,
+    record.model,
+    properties.homebrainDirect?.generatedName,
+    properties.homebrainDirect?.modelID,
+    properties.homebrainDirect?.manufacturerName
+  ].filter(Boolean).join(' ').toLowerCase();
+  const isSensor = trimString(record.type).toLowerCase() === 'sensor' || /\bsensor\b/.test(text);
+
+  if (/\b(?:door|window|contact|open[\s-]?close|multipurpose)\b/.test(text)) {
+    add('contact');
+    add('battery');
+    add('tamper');
+    add('temperature');
+  }
+  if (/\b(?:motion|occupancy)\b/.test(text)) {
+    add('motion');
+    add('battery');
+  }
+  if (/\b(?:vibration|accelerat|tilt|shake)\b/.test(text)) {
+    add('vibration');
+    add('acceleration');
+    add('battery');
+  }
+  if (/\b(?:water|leak|flood)\b/.test(text)) {
+    add('water');
+    add('battery');
+  }
+  if (/\b(?:temperature|temp|thermometer)\b/.test(text)) {
+    add('temperature');
+    add('battery');
+  }
+  if (/\b(?:humidity|humid)\b/.test(text)) {
+    add('humidity');
+    add('battery');
+  }
+  if (/\b(?:illuminance|lux|light level)\b/.test(text)) {
+    add('illuminance');
+    add('battery');
+  }
+  if (isSensor && features.length === 0) {
+    add('battery');
+  }
+
+  return uniqueStrings(features).sort();
+}
+
 function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
   const existingProperties = existing?.properties && typeof existing.properties === 'object'
     ? existing.properties
@@ -101,6 +191,7 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
   const inferredSmartThingsFeatures = inferFeaturesFromSmartThings(existing)
     .map(normalizeFeature)
     .filter(Boolean);
+  const inferredExistingDirectFeatures = inferFeaturesFromExistingDirectRecord(existing);
 
   const generatedName = trimString(update.name);
   const generatedRoom = normalizeDirectRoom(update.room);
@@ -138,7 +229,8 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
   const mergedFeatures = uniqueStrings([
     ...updateFeatures,
     ...existingFeatures,
-    ...inferredSmartThingsFeatures
+    ...inferredSmartThingsFeatures,
+    ...inferredExistingDirectFeatures
   ]).sort();
   if (mergedFeatures.length > 0) {
     merged.properties.directRadioFeatures = mergedFeatures;
