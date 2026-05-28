@@ -1,13 +1,25 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const deviceService = require('../services/deviceService');
 const deviceEnergySampleService = require('../services/deviceEnergySampleService');
+const directRadioService = require('../services/directRadioService');
 const { serializeDevices } = require('../services/devicePayloadService');
 const { requireUser, requireAdmin } = require('./middlewares/auth');
 
 // Apply authentication middleware to all device routes
 router.use(requireUser());
 const admin = requireAdmin();
+const lockCodeRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_LOCK_CODE_RATE_LIMIT_WINDOW_MS || 5 * 60 * 1000)),
+  limit: Math.max(10, Number(process.env.HOMEBRAIN_LOCK_CODE_RATE_LIMIT_MAX || 120)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: 'Too many lock PIN management requests. Please retry shortly.'
+  }
+});
 
 function actorFromRequest(req) {
   return String(req.user?.email || req.user?._id || req.user?.id || 'unknown');
@@ -16,6 +28,30 @@ function actorFromRequest(req) {
 function shouldIncludeRawDevicePayload(req) {
   return req.user?.role === 'admin'
     && (req.query.includeRaw === '1' || req.query.includeRaw === 'true');
+}
+
+function deviceActionStatusCode(error) {
+  if (error.status) {
+    return error.status;
+  }
+  const message = error.message || '';
+  if (message === 'Device not found') {
+    return 404;
+  }
+  if (
+    message.includes('requires') ||
+    message.includes('only available') ||
+    message.includes('does not expose') ||
+    message.includes('must be') ||
+    message.includes('rejected') ||
+    message.includes('required')
+  ) {
+    return 400;
+  }
+  if (message.includes('not ready')) {
+    return 409;
+  }
+  return 500;
 }
 
 /**
@@ -151,6 +187,126 @@ router.get('/:id/energy-history', async (req, res) => {
     res.status(statusCode).json({
       success: false,
       error: error.message || 'Failed to fetch device energy history'
+    });
+  }
+});
+
+/**
+ * GET /api/devices/:id/lock-codes
+ * Get redacted native lock PIN slot state for a HomeBrain Z-Wave lock
+ */
+router.get('/:id/lock-codes', lockCodeRateLimit, admin, async (req, res) => {
+  try {
+    console.log('GET /api/devices/:id/lock-codes - Device ID:', req.params.id);
+
+    const state = await directRadioService.getLockCodeState(req.params.id, {
+      refresh: req.query.refresh === '1' || req.query.refresh === 'true'
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Lock PIN slots fetched successfully',
+      data: state
+    });
+  } catch (error) {
+    console.error('GET /api/devices/:id/lock-codes - Error:', error.message);
+    console.error(error.stack);
+
+    res.status(deviceActionStatusCode(error)).json({
+      success: false,
+      error: error.message || 'Failed to fetch lock PIN slots'
+    });
+  }
+});
+
+/**
+ * PUT /api/devices/:id/lock-codes/:slot
+ * Create, update, rename, or enable/disable a native Z-Wave lock PIN slot
+ */
+router.put('/:id/lock-codes/:slot', lockCodeRateLimit, admin, async (req, res) => {
+  try {
+    console.log('PUT /api/devices/:id/lock-codes/:slot - Device ID:', req.params.id, 'Slot:', req.params.slot);
+
+    const state = await directRadioService.setLockCode(
+      req.params.id,
+      {
+        ...req.body,
+        slot: req.params.slot
+      },
+      {
+        actor: actorFromRequest(req)
+      }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Lock PIN slot updated successfully',
+      data: state
+    });
+  } catch (error) {
+    console.error('PUT /api/devices/:id/lock-codes/:slot - Error:', error.message);
+    console.error(error.stack);
+
+    res.status(deviceActionStatusCode(error)).json({
+      success: false,
+      error: error.message || 'Failed to update lock PIN slot'
+    });
+  }
+});
+
+/**
+ * DELETE /api/devices/:id/lock-codes/:slot
+ * Delete a native Z-Wave lock PIN slot
+ */
+router.delete('/:id/lock-codes/:slot', lockCodeRateLimit, admin, async (req, res) => {
+  try {
+    console.log('DELETE /api/devices/:id/lock-codes/:slot - Device ID:', req.params.id, 'Slot:', req.params.slot);
+
+    const state = await directRadioService.deleteLockCode(req.params.id, req.params.slot, {
+      actor: actorFromRequest(req)
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Lock PIN slot deleted successfully',
+      data: state
+    });
+  } catch (error) {
+    console.error('DELETE /api/devices/:id/lock-codes/:slot - Error:', error.message);
+    console.error(error.stack);
+
+    res.status(deviceActionStatusCode(error)).json({
+      success: false,
+      error: error.message || 'Failed to delete lock PIN slot'
+    });
+  }
+});
+
+/**
+ * GET /api/devices/:id/lock-code-events
+ * Get HomeBrain and on-lock native audit events for a HomeBrain Z-Wave lock
+ */
+router.get('/:id/lock-code-events', lockCodeRateLimit, admin, async (req, res) => {
+  try {
+    console.log('GET /api/devices/:id/lock-code-events - Device ID:', req.params.id);
+
+    const audit = await directRadioService.getLockCodeAudit(req.params.id, {
+      limit: req.query.limit,
+      includeDeviceLog: req.query.includeDeviceLog !== '0' && req.query.includeDeviceLog !== 'false'
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Lock PIN audit events fetched successfully',
+      data: audit
+    });
+  } catch (error) {
+    console.error('GET /api/devices/:id/lock-code-events - Error:', error.message);
+    console.error(error.stack);
+
+    res.status(deviceActionStatusCode(error)).json({
+      success: false,
+      error: error.message || 'Failed to fetch lock PIN audit events'
     });
   }
 });
