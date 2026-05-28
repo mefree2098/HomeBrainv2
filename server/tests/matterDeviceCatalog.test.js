@@ -6,6 +6,7 @@ const {
   inferFeaturesFromMatterDescriptor,
   inferHomeBrainTypeFromFeatures
 } = require('../services/matterDeviceCatalog');
+const directRadioProtocolCatalogService = require('../services/directRadioProtocolCatalogService');
 const Device = require('../models/Device');
 const matterService = require('../services/matterService');
 
@@ -55,11 +56,15 @@ test('Matter catalog maps lights, locks, thermostat, energy and camera capabilit
 test('Matter service stores catalog match and normalized capabilities when adding devices', async (t) => {
   const originalFindOne = Device.findOne;
   const originalSave = Device.prototype.save;
+  const originalLookupMatterCatalogEntry = directRadioProtocolCatalogService.lookupMatterCatalogEntry;
+  const originalLookupThreadCatalogEntry = directRadioProtocolCatalogService.lookupThreadCatalogEntry;
   let savedDevice = null;
 
   t.after(() => {
     Device.findOne = originalFindOne;
     Device.prototype.save = originalSave;
+    directRadioProtocolCatalogService.lookupMatterCatalogEntry = originalLookupMatterCatalogEntry;
+    directRadioProtocolCatalogService.lookupThreadCatalogEntry = originalLookupThreadCatalogEntry;
   });
 
   Device.findOne = async () => null;
@@ -67,6 +72,43 @@ test('Matter service stores catalog match and normalized capabilities when addin
     savedDevice = this;
     return this;
   };
+  directRadioProtocolCatalogService.lookupMatterCatalogEntry = async () => ({
+    protocol: 'matter',
+    source: 'test',
+    entryKind: 'certified-product-model',
+    productName: 'Office Matter Lamp',
+    matterFeatures: ['switch'],
+    homebrainFeatures: ['switch'],
+    homeBrainType: 'light',
+    capabilities: [
+      {
+        type: 'switch',
+        property: 'power',
+        protocol: 'matter',
+        readable: true,
+        writable: true,
+        values: ['on', 'off']
+      }
+    ]
+  });
+  directRadioProtocolCatalogService.lookupThreadCatalogEntry = async () => ({
+    protocol: 'thread',
+    source: 'test',
+    entryKind: 'runtime-thread-descriptor',
+    matterCatalog: { protocol: 'matter' },
+    homebrainFeatures: ['switch'],
+    homeBrainType: 'light',
+    capabilities: [
+      {
+        type: 'switch',
+        property: 'power',
+        protocol: 'thread',
+        readable: true,
+        writable: true,
+        values: ['on', 'off']
+      }
+    ]
+  });
 
   const device = await matterService.upsertMatterDeviceFromDescriptor({
     nodeId: '1234',
@@ -92,8 +134,10 @@ test('Matter service stores catalog match and normalized capabilities when addin
   assert.equal(device.properties.matter.catalog.protocol, 'matter');
   assert.equal(device.properties.matter.threadCatalog.protocol, 'thread');
   assert.ok(device.properties.matterFeatures.includes('switch'));
+  assert.ok(device.properties.matterFeatures.includes('brightness'));
   assert.ok(device.properties.matterCapabilities.some((capability) => capability.type === 'dimmer'));
   assert.ok(device.properties.threadCapabilities.some((capability) => capability.protocol === 'thread'));
+  assert.ok(device.properties.threadCapabilities.some((capability) => capability.type === 'dimmer'));
 });
 
 test('Matter service detects SONOFF MG24 serial ports and parses known addresses', () => {
