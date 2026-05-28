@@ -167,6 +167,7 @@ import { RainMachineIntegrationCard } from "@/components/rainmachine/RainMachine
 import { HardwareOrbsTab } from "@/components/settings/HardwareOrbsTab"
 import { DeviceCommandCoordinatorTab } from "@/components/settings/DeviceCommandCoordinatorTab"
 import { DirectRadioAdminCard } from "@/components/settings/DirectRadioAdminCard"
+import { DeviceCatalogUpdateCard } from "@/components/settings/DeviceCatalogUpdateCard"
 import { MatterThreadIntegrationCard } from "@/components/settings/MatterThreadIntegrationCard"
 import { IntegrationModulesPanel } from "@/components/settings/IntegrationModulesPanel"
 import { CodexSkillIntegration } from "./CodexSkillIntegration"
@@ -5487,6 +5488,7 @@ export function Settings() {
               </TabsContent>
 
               <TabsContent value="devices" className="space-y-6">
+                <DeviceCatalogUpdateCard />
                 <MatterThreadIntegrationCard />
                 <DirectRadioAdminCard />
 

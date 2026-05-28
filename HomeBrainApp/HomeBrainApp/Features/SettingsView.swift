@@ -2453,6 +2453,172 @@ private struct DirectRadioLogEntryRecord: Identifiable {
     }
 }
 
+private struct DeviceCatalogUpdateSourceRecord {
+    let success: Bool
+    let sourceUrl: String
+    let existingCount: Int
+    let fetchedCount: Int
+    let addedCount: Int
+    let totalCount: Int
+    let error: String
+
+    nonisolated static func from(_ object: [String: Any]) -> DeviceCatalogUpdateSourceRecord {
+        DeviceCatalogUpdateSourceRecord(
+            success: JSON.bool(object, "success", fallback: true),
+            sourceUrl: JSON.string(object, "sourceUrl"),
+            existingCount: JSON.int(object, "existingCount"),
+            fetchedCount: JSON.int(object, "fetchedCount"),
+            addedCount: JSON.int(object, "addedCount"),
+            totalCount: JSON.int(object, "totalCount"),
+            error: JSON.string(object, "error")
+        )
+    }
+}
+
+private struct DeviceCatalogUpdateStatusRecord {
+    let running: Bool
+    let scheduled: Bool
+    let lastRunAt: String
+    let lastSuccessAt: String
+    let nextDueAt: String
+    let due: Bool
+    let errors: [[String: Any]]
+    let sources: [String: DeviceCatalogUpdateSourceRecord]
+
+    var addedLastRun: Int {
+        sources.values.reduce(0) { total, source in
+            total + source.addedCount
+        }
+    }
+
+    var statusLabel: String {
+        if running { return "Checking Now" }
+        if !errors.isEmpty { return "Last Check Failed" }
+        if !lastSuccessAt.isEmpty { return "Last Check Successful" }
+        return "Not Checked Yet"
+    }
+
+    nonisolated static func from(_ object: [String: Any]) -> DeviceCatalogUpdateStatusRecord {
+        let update = JSON.object(object["update"])
+        let catalogUpdate = JSON.object(update["catalogUpdate"])
+        let fallbackStatus = JSON.object(object["status"])
+        let status = catalogUpdate.isEmpty ? fallbackStatus : catalogUpdate
+        let sourceObjects = JSON.object(status["sources"])
+        let sources = sourceObjects.reduce(into: [String: DeviceCatalogUpdateSourceRecord]()) { result, entry in
+            result[entry.key] = DeviceCatalogUpdateSourceRecord.from(JSON.object(entry.value))
+        }
+
+        return DeviceCatalogUpdateStatusRecord(
+            running: JSON.bool(update, "running"),
+            scheduled: JSON.bool(update, "scheduled"),
+            lastRunAt: JSON.string(status, "lastRunAt"),
+            lastSuccessAt: JSON.string(status, "lastSuccessAt"),
+            nextDueAt: JSON.string(status, "nextDueAt"),
+            due: JSON.bool(status, "due"),
+            errors: JSON.array(status["errors"]),
+            sources: sources
+        )
+    }
+}
+
+private struct DeviceCatalogProtocolRecord: Identifiable {
+    let id: String
+    let title: String
+    let source: String
+    let primaryCount: Int
+    let secondary: String
+    let addedLastRun: Int
+    let errors: Int
+
+    nonisolated static func records(from object: [String: Any], update: DeviceCatalogUpdateStatusRecord?) -> [DeviceCatalogProtocolRecord] {
+        [
+            record(
+                id: "zigbee",
+                title: "Zigbee",
+                object: JSON.object(object["zigbee"]),
+                primaryKey: "definitionCount",
+                secondary: { item in
+                    "\(JSON.int(item, "vendorCount")) vendors, \(JSON.int(item, "exposesCount")) exposes"
+                },
+                update: update
+            ),
+            record(
+                id: "zwave",
+                title: "Z-Wave",
+                object: JSON.object(object["zwave"]),
+                primaryKey: "deviceConfigCount",
+                secondary: { item in
+                    "\(JSON.int(item, "manufacturerCount")) manufacturers"
+                },
+                update: update
+            ),
+            record(
+                id: "matter",
+                title: "Matter",
+                object: JSON.object(object["matter"]),
+                primaryKey: "certifiedProductCount",
+                secondary: { item in
+                    "\(JSON.int(item, "standardDeviceTypeCount")) standard types, \(JSON.int(item, "vendorProductCount")) vendors"
+                },
+                update: update
+            ),
+            record(
+                id: "thread",
+                title: "Thread",
+                object: JSON.object(object["thread"]),
+                primaryKey: "certifiedProductCount",
+                secondary: { item in
+                    let snapshot = JSON.object(item["snapshot"])
+                    let updatedAt = JSON.string(snapshot, "updatedAt")
+                    return updatedAt.isEmpty ? "Matter-over-Thread enrichment" : "Snapshot \(settingsFormatDateTime(updatedAt))"
+                },
+                update: update
+            ),
+            record(
+                id: "insteon",
+                title: "INSTEON",
+                object: JSON.object(object["insteon"]),
+                primaryKey: "productEntryCount",
+                secondary: { item in
+                    "\(JSON.int(item, "categoryCount")) categories, \(JSON.int(item, "entryCount")) profiles"
+                },
+                update: update
+            )
+        ]
+    }
+
+    private nonisolated static func record(
+        id: String,
+        title: String,
+        object: [String: Any],
+        primaryKey: String,
+        secondary: ([String: Any]) -> String,
+        update: DeviceCatalogUpdateStatusRecord?
+    ) -> DeviceCatalogProtocolRecord {
+        DeviceCatalogProtocolRecord(
+            id: id,
+            title: title,
+            source: JSON.string(object, "source"),
+            primaryCount: JSON.int(object, primaryKey),
+            secondary: secondary(object),
+            addedLastRun: update?.sources[id]?.addedCount ?? 0,
+            errors: JSON.array(object["errors"]).count
+        )
+    }
+}
+
+private struct DeviceCatalogSummaryRecord {
+    let generatedAt: String
+    let protocols: [DeviceCatalogProtocolRecord]
+
+    nonisolated static func from(_ object: [String: Any], update: DeviceCatalogUpdateStatusRecord?) -> DeviceCatalogSummaryRecord {
+        DeviceCatalogSummaryRecord(
+            generatedAt: JSON.string(object, "generatedAt"),
+            protocols: DeviceCatalogProtocolRecord.records(from: object, update: update)
+        )
+    }
+}
+
 private struct SettingsDeviceIntegrationsPane: View {
     @EnvironmentObject private var session: SessionStore
 
@@ -2471,6 +2637,10 @@ private struct SettingsDeviceIntegrationsPane: View {
     @State private var directRadioLoading = false
     @State private var directRadioLogsLoading = false
     @State private var directRadioLiveLogs = true
+    @State private var deviceCatalogSummary: DeviceCatalogSummaryRecord?
+    @State private var deviceCatalogUpdate: DeviceCatalogUpdateStatusRecord?
+    @State private var deviceCatalogLoading = false
+    @State private var deviceCatalogChecking = false
 
     var body: some View {
         Form {
@@ -2507,6 +2677,7 @@ private struct SettingsDeviceIntegrationsPane: View {
                 actionButton("Resume Runtime Monitoring", key: "insteon-resume", method: .post, path: "/api/insteon/maintenance/runtime-monitoring/start", body: ["immediate": true])
             }
 
+            deviceCatalogSection
             directRadioOperationsSection
             directRadioSerialPortsSection
             directRadioLogsSection
@@ -2531,11 +2702,177 @@ private struct SettingsDeviceIntegrationsPane: View {
         .hbFormStyle()
         .task {
             await loadDirectRadioStatusAndLogs()
+            await loadDeviceCatalogStatus()
         }
         .task(id: directRadioLiveLogs) {
             guard directRadioLiveLogs else { return }
             await pollDirectRadioLogs()
         }
+    }
+
+    private var deviceCatalogSection: some View {
+        Section("Device Catalog Library") {
+            if deviceCatalogLoading && deviceCatalogSummary == nil {
+                ProgressView("Loading catalog status...")
+            } else if let update = deviceCatalogUpdate {
+                deviceCatalogMetricRow(
+                    title: "Status",
+                    value: update.statusLabel,
+                    detail: update.scheduled ? "Monthly job active" : "Scheduler inactive",
+                    systemImage: update.errors.isEmpty ? "checkmark.circle" : "exclamationmark.triangle",
+                    tint: update.errors.isEmpty ? HBPalette.accentGreen : HBPalette.accentOrange
+                )
+                deviceCatalogMetricRow(
+                    title: "Last Run",
+                    value: settingsFormatDateTime(update.lastRunAt),
+                    detail: update.lastSuccessAt.isEmpty ? "No successful run yet" : "Last success \(settingsFormatDateTime(update.lastSuccessAt))",
+                    systemImage: "clock",
+                    tint: HBPalette.accentBlue
+                )
+                deviceCatalogMetricRow(
+                    title: "Next Scheduled",
+                    value: settingsFormatDateTime(update.nextDueAt),
+                    detail: update.due ? "Due now" : "Monthly cadence",
+                    systemImage: "calendar.badge.clock",
+                    tint: HBPalette.accentBlue
+                )
+                deviceCatalogMetricRow(
+                    title: "New Last Check",
+                    value: "\(update.addedLastRun)",
+                    detail: "Matter, Thread, and INSTEON sources",
+                    systemImage: "plus.square.on.square",
+                    tint: HBPalette.accentGreen
+                )
+            } else {
+                Text("Catalog status has not loaded yet.")
+                    .font(.footnote)
+                    .foregroundStyle(HBPalette.textSecondary)
+            }
+
+            if let summary = deviceCatalogSummary {
+                ForEach(summary.protocols) { catalog in
+                    deviceCatalogProtocolRow(catalog)
+                }
+                if !summary.generatedAt.isEmpty {
+                    Text("Generated \(settingsFormatDateTime(summary.generatedAt))")
+                        .font(.caption)
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+            }
+
+            if let update = deviceCatalogUpdate {
+                ForEach(["matter", "thread", "insteon"], id: \.self) { key in
+                    if let source = update.sources[key] {
+                        deviceCatalogSourceRow(key: key, source: source)
+                    }
+                }
+            }
+
+            HStack {
+                Button {
+                    Task { await loadDeviceCatalogStatus() }
+                } label: {
+                    if deviceCatalogLoading {
+                        ProgressView()
+                    } else {
+                        Label("Refresh Status", systemImage: "arrow.clockwise")
+                    }
+                }
+                .disabled(deviceCatalogLoading || deviceCatalogChecking)
+
+                Button {
+                    Task { await checkDeviceCatalogNow() }
+                } label: {
+                    if deviceCatalogChecking || deviceCatalogUpdate?.running == true {
+                        ProgressView()
+                    } else {
+                        Label("Check Now", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                }
+                .disabled(deviceCatalogLoading || deviceCatalogChecking || deviceCatalogUpdate?.running == true)
+            }
+        }
+    }
+
+    private func deviceCatalogMetricRow(
+        title: String,
+        value: String,
+        detail: String,
+        systemImage: String,
+        tint: Color
+    ) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: systemImage)
+                .foregroundStyle(tint)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(HBPalette.textSecondary)
+                Text(value)
+                    .font(.subheadline.weight(.semibold))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(HBPalette.textSecondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func deviceCatalogProtocolRow(_ catalog: DeviceCatalogProtocolRecord) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(catalog.title)
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Text("\(catalog.primaryCount)")
+                    .font(.subheadline.monospacedDigit().weight(.bold))
+            }
+            Text(catalog.secondary)
+                .font(.caption)
+                .foregroundStyle(HBPalette.textSecondary)
+            HStack(spacing: 10) {
+                Text(catalog.id == "zigbee" || catalog.id == "zwave"
+                     ? "Package backed"
+                     : "\(catalog.addedLastRun) new last check")
+                if catalog.errors > 0 {
+                    Text("\(catalog.errors) catalog errors")
+                        .foregroundStyle(HBPalette.accentRed)
+                }
+            }
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(HBPalette.textMuted)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func deviceCatalogSourceRow(key: String, source: DeviceCatalogUpdateSourceRecord) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(key.uppercased())
+                    .font(.caption.weight(.bold))
+                Spacer()
+                Text(source.success && source.error.isEmpty ? "Successful" : "Failed")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(source.success && source.error.isEmpty ? HBPalette.accentGreen : HBPalette.accentRed)
+            }
+            Text("Added \(source.addedCount) of \(source.fetchedCount) fetched; total \(source.totalCount).")
+                .font(.caption)
+                .foregroundStyle(HBPalette.textSecondary)
+            if !source.sourceUrl.isEmpty {
+                Text(source.sourceUrl)
+                    .font(.system(.caption2, design: .monospaced))
+                    .lineLimit(2)
+                    .textSelection(.enabled)
+                    .foregroundStyle(HBPalette.textMuted)
+            }
+            if !source.error.isEmpty {
+                Text(source.error)
+                    .font(.caption)
+                    .foregroundStyle(HBPalette.accentRed)
+            }
+        }
+        .padding(.vertical, 3)
     }
 
     private var directRadioOperationsSection: some View {
@@ -2790,6 +3127,45 @@ private struct SettingsDeviceIntegrationsPane: View {
         if path.contains("/api/direct-radios") {
             await loadDirectRadioStatusAndLogs()
         }
+        if path.contains("/api/direct-radios/catalog") {
+            await loadDeviceCatalogStatus()
+        }
+    }
+
+    private func loadDeviceCatalogStatus() async {
+        deviceCatalogLoading = true
+        defer { deviceCatalogLoading = false }
+
+        do {
+            let statusResponse = try await session.apiClient.get("/api/direct-radios/catalog/update/status")
+            let statusRoot = JSON.object(statusResponse)
+            let update = DeviceCatalogUpdateStatusRecord.from(statusRoot)
+            deviceCatalogUpdate = update
+
+            let summaryResponse = try await session.apiClient.get("/api/direct-radios/catalog/summary")
+            let summaryRoot = JSON.object(summaryResponse)
+            deviceCatalogSummary = DeviceCatalogSummaryRecord.from(JSON.object(summaryRoot["summary"]), update: update)
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    private func checkDeviceCatalogNow() async {
+        deviceCatalogChecking = true
+        defer { deviceCatalogChecking = false }
+
+        do {
+            let response = try await session.apiClient.post(
+                "/api/direct-radios/catalog/update/run",
+                body: ["force": true]
+            )
+            resultPayload = response
+            await loadDeviceCatalogStatus()
+            let added = deviceCatalogUpdate?.addedLastRun ?? 0
+            message = "Device catalog check complete. \(added) new external record\(added == 1 ? "" : "s") added."
+        } catch {
+            message = error.localizedDescription
+        }
     }
 
     private func loadDirectRadioStatusAndLogs() async {
@@ -2973,7 +3349,7 @@ private struct AuthSessionRecord: Identifiable {
     }
 }
 
-private func settingsFormatDateTime(_ value: String) -> String {
+nonisolated private func settingsFormatDateTime(_ value: String) -> String {
     guard let date = ISO8601DateFormatter().date(from: value) else {
         return value.isEmpty ? "Unknown" : value
     }
