@@ -51,6 +51,13 @@ struct DevicesView: View {
     @State private var migrationPlans: [String: DirectRadioMigrationPlanRecord] = [:]
     @State private var migrationPlanErrors: [String: String] = [:]
     @State private var migrationWorkflows: [String: DirectRadioMigrationWorkflowRecord] = [:]
+    @State private var lockCodeStates: [String: NativeLockCodeState] = [:]
+    @State private var lockCodeEvents: [String: [NativeLockCodeEvent]] = [:]
+    @State private var lockCodeDrafts: [String: NativeLockCodeDraft] = [:]
+    @State private var lockCodeLoadingDeviceIds: Set<String> = []
+    @State private var lockCodeSavingDeviceIds: Set<String> = []
+    @State private var lockCodeDeletingKeys: Set<String> = []
+    @State private var lockCodeErrors: [String: String] = [:]
     @State private var matterControllerReady = false
     @State private var matterRcpDetected = false
     @State private var matterOtbrOnline = false
@@ -1535,6 +1542,218 @@ struct DevicesView: View {
         }
     }
 
+    private func lockPinManagementPanel(for device: DeviceItem) -> some View {
+        let native = isNativeZWaveLock(device)
+        let state = lockCodeStates[device.id]
+        let events = lockCodeEvents[device.id] ?? []
+        let draft = lockCodeDraft(for: device)
+        let isLoading = lockCodeLoadingDeviceIds.contains(device.id)
+        let isSaving = lockCodeSavingDeviceIds.contains(device.id)
+        let slotOptions = lockCodeSlotOptions(for: device)
+        let selectedSlot = state?.slots.first(where: { $0.slot == draft.slot })
+        let minPinLength = state?.capabilities.minPinLength ?? 4
+        let maxPinLength = state?.capabilities.maxPinLength ?? 8
+
+        return HBPanel {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .center) {
+                    Label("Lock PINs", systemImage: "key.fill")
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                    Spacer()
+                    if native {
+                        Button {
+                            Task { await loadLockCodes(for: device, refresh: true) }
+                        } label: {
+                            Image(systemName: isLoading ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
+                        }
+                        .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                        .disabled(isLoading)
+                    }
+                }
+
+                if !native {
+                    Text("Migrate this lock to HomeBrain Z-Wave before writing PIN slots.")
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(12)
+                        .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
+                } else {
+                    if let error = lockCodeErrors[device.id] {
+                        InlineErrorView(message: error) {
+                            Task { await loadLockCodes(for: device, refresh: true) }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Assigned Slots")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                        if isLoading && state == nil {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("Loading slots...")
+                                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                            }
+                            .foregroundStyle(HBPalette.textSecondary)
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
+                        } else if let slots = state?.slots, !slots.isEmpty {
+                            ForEach(slots) { slot in
+                                HStack(spacing: 10) {
+                                    Button {
+                                        updateLockCodeDraft(for: device) { draft in
+                                            draft.slot = slot.slot
+                                            draft.name = slot.name
+                                            draft.pin = ""
+                                            draft.enabled = slot.enabled
+                                        }
+                                    } label: {
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(slot.name)
+                                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                                .foregroundStyle(HBPalette.textPrimary)
+                                                .lineLimit(1)
+                                            Text("Slot \(slot.slot) · \(slot.enabled ? "Enabled" : "Disabled")")
+                                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                                .foregroundStyle(HBPalette.textSecondary)
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                    .buttonStyle(.plain)
+
+                                    Button {
+                                        Task { await deleteLockCode(for: device, slot: slot.slot) }
+                                    } label: {
+                                        if lockCodeDeletingKeys.contains("\(device.id):\(slot.slot)") {
+                                            ProgressView()
+                                                .controlSize(.small)
+                                        } else {
+                                            Image(systemName: "trash")
+                                        }
+                                    }
+                                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                                    .disabled(isSaving)
+                                }
+                                .padding(12)
+                                .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
+                            }
+                        } else {
+                            Text("No assigned PIN slots are reported by the lock.")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(HBPalette.textSecondary)
+                                .padding(12)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 10) {
+                            Picker("Slot", selection: Binding(
+                                get: { lockCodeDraft(for: device).slot },
+                                set: { value in
+                                    updateLockCodeDraft(for: device) { draft in
+                                        draft.slot = value
+                                        if let slot = lockCodeStates[device.id]?.slots.first(where: { $0.slot == value }) {
+                                            draft.name = slot.name
+                                            draft.enabled = slot.enabled
+                                        }
+                                        draft.pin = ""
+                                    }
+                                }
+                            )) {
+                                ForEach(slotOptions, id: \.self) { slot in
+                                    Text("\(slot)").tag(slot)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .frame(width: 96)
+
+                            TextField(selectedSlot?.name ?? "Code \(draft.slot)", text: Binding(
+                                get: { lockCodeDraft(for: device).name },
+                                set: { value in
+                                    updateLockCodeDraft(for: device) { $0.name = value }
+                                }
+                            ))
+                            .hbPanelTextField()
+                        }
+
+                        SecureField("\(minPinLength)-\(maxPinLength) digit PIN", text: Binding(
+                            get: { lockCodeDraft(for: device).pin },
+                            set: { value in
+                                updateLockCodeDraft(for: device) {
+                                    $0.pin = value.filter { $0.isNumber }
+                                }
+                            }
+                        ))
+                        .keyboardType(.numberPad)
+                        .hbPanelTextField()
+
+                        Toggle("Enabled", isOn: Binding(
+                            get: { lockCodeDraft(for: device).enabled },
+                            set: { value in
+                                updateLockCodeDraft(for: device) { $0.enabled = value }
+                            }
+                        ))
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+
+                        Button {
+                            Task { await saveLockCode(for: device) }
+                        } label: {
+                            if isSaving {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .frame(maxWidth: .infinity)
+                            } else {
+                                Label("Save PIN Slot", systemImage: "square.and.arrow.down")
+                                    .frame(maxWidth: .infinity)
+                            }
+                        }
+                        .buttonStyle(HBPrimaryButtonStyle())
+                        .disabled(isSaving || isLoading)
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("PIN Activity")
+                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                        if events.isEmpty {
+                            Text("No PIN activity has been recorded yet.")
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(HBPalette.textSecondary)
+                                .padding(12)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
+                        } else {
+                            ForEach(events.prefix(8)) { event in
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack {
+                                        Text(event.codeName ?? event.slot.map { "Slot \($0)" } ?? event.actionLabel)
+                                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(HBPalette.textPrimary)
+                                        Spacer()
+                                        HBBadge(text: event.source == "lock" ? "Lock" : "HomeBrain")
+                                    }
+                                    Text("\(event.actionLabel) · \(event.slot.map { "Slot \($0)" } ?? "No slot") · \(event.displayDate)")
+                                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                                        .foregroundStyle(HBPalette.textSecondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                .padding(12)
+                                .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private func voiceHint(for device: DeviceItem) -> String {
         if device.type == "thermostat" {
             return "Voice: \"Hey Anna, set \(device.name) to \(thermostatTargetTemperature(for: device)) degrees\""
@@ -1614,6 +1833,10 @@ struct DevicesView: View {
                             }
                         }
 
+                        if device.type == "lock" {
+                            lockPinManagementPanel(for: device)
+                        }
+
                         if isSmartThingsBackedDevice(device) {
                             directRadioMigrationPanel(for: device)
                         }
@@ -1643,6 +1866,10 @@ struct DevicesView: View {
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 prepareDeviceEditor(for: device)
+                prepareLockCodeDraft(for: device)
+                if device.type == "lock", isNativeZWaveLock(device) {
+                    Task { await loadLockCodes(for: device) }
+                }
             }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
@@ -2767,6 +2994,210 @@ struct DevicesView: View {
         }
     }
 
+    private func preferredLockCodeSlot(for device: DeviceItem) -> Int {
+        let state = lockCodeStates[device.id]
+        return state?.availableSlots.first
+            ?? state?.slots.first?.slot
+            ?? 1
+    }
+
+    private func lockCodeSlotOptions(for device: DeviceItem) -> [Int] {
+        var slots = Set<Int>()
+        if let state = lockCodeStates[device.id] {
+            state.slots.forEach { slots.insert($0.slot) }
+            state.availableSlots.forEach { slots.insert($0) }
+            if slots.isEmpty {
+                let maxSlots = max(1, min(state.capabilities.maxSlots == 0 ? 30 : state.capabilities.maxSlots, 30))
+                (1...maxSlots).forEach { slots.insert($0) }
+            }
+        } else {
+            (1...30).forEach { slots.insert($0) }
+        }
+        return slots.sorted()
+    }
+
+    private func lockCodeDraft(for device: DeviceItem) -> NativeLockCodeDraft {
+        lockCodeDrafts[device.id] ?? NativeLockCodeDraft(slot: preferredLockCodeSlot(for: device))
+    }
+
+    private func updateLockCodeDraft(for device: DeviceItem, _ update: (inout NativeLockCodeDraft) -> Void) {
+        var draft = lockCodeDraft(for: device)
+        update(&draft)
+        lockCodeDrafts[device.id] = draft
+    }
+
+    private func prepareLockCodeDraft(for device: DeviceItem) {
+        guard device.type == "lock" else { return }
+        if lockCodeDrafts[device.id] == nil {
+            lockCodeDrafts[device.id] = NativeLockCodeDraft(slot: preferredLockCodeSlot(for: device))
+        }
+    }
+
+    private func applyLockCodeState(_ state: NativeLockCodeState, for device: DeviceItem) {
+        lockCodeStates[device.id] = state
+        var draft = lockCodeDraft(for: device)
+        let options = Set(lockCodeSlotOptions(for: device))
+        if !options.contains(draft.slot) {
+            draft.slot = preferredLockCodeSlot(for: device)
+            draft.name = ""
+            draft.pin = ""
+            draft.enabled = true
+        }
+        lockCodeDrafts[device.id] = draft
+    }
+
+    private func loadLockCodes(for device: DeviceItem, refresh: Bool = false) async {
+        guard device.type == "lock", isNativeZWaveLock(device) else {
+            return
+        }
+        if lockCodeLoadingDeviceIds.contains(device.id) {
+            return
+        }
+
+        if previewMode {
+            applyLockCodeState(.preview(for: device), for: device)
+            lockCodeEvents[device.id] = NativeLockCodeEvent.previewEvents
+            return
+        }
+
+        lockCodeLoadingDeviceIds.insert(device.id)
+        lockCodeErrors.removeValue(forKey: device.id)
+        defer {
+            lockCodeLoadingDeviceIds.remove(device.id)
+        }
+
+        do {
+            async let stateResponse = session.apiClient.get(
+                "/api/devices/\(device.id)/lock-codes",
+                query: [URLQueryItem(name: "refresh", value: refresh ? "true" : "false")]
+            )
+            async let eventsResponse = session.apiClient.get(
+                "/api/devices/\(device.id)/lock-code-events",
+                query: [URLQueryItem(name: "limit", value: "30")]
+            )
+
+            let stateRoot = JSON.object(try await stateResponse)
+            let state = NativeLockCodeState.from(JSON.object(stateRoot["data"]))
+            applyLockCodeState(state, for: device)
+
+            let eventsRoot = JSON.object(try await eventsResponse)
+            let eventsData = JSON.object(eventsRoot["data"])
+            lockCodeEvents[device.id] = JSON.array(eventsData["events"]).map(NativeLockCodeEvent.from)
+        } catch {
+            lockCodeErrors[device.id] = error.localizedDescription
+        }
+    }
+
+    private func refreshLockCodeEvents(for device: DeviceItem) async {
+        guard !previewMode else {
+            lockCodeEvents[device.id] = NativeLockCodeEvent.previewEvents
+            return
+        }
+        do {
+            let response = try await session.apiClient.get(
+                "/api/devices/\(device.id)/lock-code-events",
+                query: [URLQueryItem(name: "limit", value: "30")]
+            )
+            let root = JSON.object(response)
+            let data = JSON.object(root["data"])
+            lockCodeEvents[device.id] = JSON.array(data["events"]).map(NativeLockCodeEvent.from)
+        } catch {
+            lockCodeErrors[device.id] = error.localizedDescription
+        }
+    }
+
+    private func saveLockCode(for device: DeviceItem) async {
+        guard device.type == "lock", isNativeZWaveLock(device) else {
+            return
+        }
+        if lockCodeSavingDeviceIds.contains(device.id) {
+            return
+        }
+
+        var draft = lockCodeDraft(for: device)
+        let existing = lockCodeStates[device.id]?.slots.first(where: { $0.slot == draft.slot })
+        let pin = draft.pin.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = draft.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? (existing?.name ?? "Code \(draft.slot)")
+            : draft.name.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard existing != nil || !pin.isEmpty else {
+            lockCodeErrors[device.id] = "Enter a PIN for an empty slot."
+            return
+        }
+
+        if previewMode {
+            let state = lockCodeStates[device.id] ?? .preview(for: device)
+            applyLockCodeState(state.upserting(slot: draft.slot, name: name, enabled: draft.enabled), for: device)
+            lockCodeDrafts[device.id]?.pin = ""
+            lockCodeEvents[device.id] = NativeLockCodeEvent.previewEvents
+            return
+        }
+
+        lockCodeSavingDeviceIds.insert(device.id)
+        lockCodeErrors.removeValue(forKey: device.id)
+        defer {
+            lockCodeSavingDeviceIds.remove(device.id)
+        }
+
+        do {
+            var body: [String: Any] = [
+                "name": name,
+                "enabled": draft.enabled
+            ]
+            if !pin.isEmpty {
+                body["pin"] = pin
+            }
+
+            let response = try await session.apiClient.put(
+                "/api/devices/\(device.id)/lock-codes/\(draft.slot)",
+                body: body
+            )
+            let root = JSON.object(response)
+            let state = NativeLockCodeState.from(JSON.object(root["data"]))
+            applyLockCodeState(state, for: device)
+            draft.name = ""
+            draft.pin = ""
+            lockCodeDrafts[device.id] = draft
+            await refreshLockCodeEvents(for: device)
+        } catch {
+            lockCodeErrors[device.id] = error.localizedDescription
+        }
+    }
+
+    private func deleteLockCode(for device: DeviceItem, slot: Int) async {
+        guard device.type == "lock", isNativeZWaveLock(device) else {
+            return
+        }
+        let key = "\(device.id):\(slot)"
+        if lockCodeDeletingKeys.contains(key) {
+            return
+        }
+
+        if previewMode {
+            if let state = lockCodeStates[device.id] {
+                applyLockCodeState(state.removing(slot: slot), for: device)
+            }
+            return
+        }
+
+        lockCodeDeletingKeys.insert(key)
+        lockCodeErrors.removeValue(forKey: device.id)
+        defer {
+            lockCodeDeletingKeys.remove(key)
+        }
+
+        do {
+            let response = try await session.apiClient.delete("/api/devices/\(device.id)/lock-codes/\(slot)")
+            let root = JSON.object(response)
+            let state = NativeLockCodeState.from(JSON.object(root["data"]))
+            applyLockCodeState(state, for: device)
+            await refreshLockCodeEvents(for: device)
+        } catch {
+            lockCodeErrors[device.id] = error.localizedDescription
+        }
+    }
+
     private func handleDeviceControl(deviceId: String, action: String, value: Any? = nil) async {
         pendingControls.insert(deviceId)
         controlFeedback.removeValue(forKey: deviceId)
@@ -3587,6 +4018,16 @@ struct DevicesView: View {
             || protocolName == "zwave"
     }
 
+    private func isNativeZWaveLock(_ device: DeviceItem) -> Bool {
+        guard device.type == "lock" else {
+            return false
+        }
+        let source = stringValue(device.properties["source"]).lowercased()
+        let direct = JSON.object(device.properties["homebrainDirect"])
+        let protocolName = stringValue(direct["protocol"]).lowercased()
+        return source == "homebrain-zwave" || protocolName == "zwave"
+    }
+
     private func smartThingsMigration(for device: DeviceItem) -> [String: Any] {
         JSON.object(device.properties["smartThingsMigration"])
     }
@@ -3691,6 +4132,205 @@ struct DevicesView: View {
             }
         }
         return false
+    }
+}
+
+private struct NativeLockCodeDraft {
+    var slot: Int
+    var name: String = ""
+    var pin: String = ""
+    var enabled: Bool = true
+}
+
+private struct NativeLockCodeCapabilities {
+    let maxSlots: Int
+    let minPinLength: Int
+    let maxPinLength: Int
+    let supportsNames: Bool
+    let supportsLockAudit: Bool
+
+    nonisolated static func from(_ object: [String: Any]) -> NativeLockCodeCapabilities {
+        NativeLockCodeCapabilities(
+            maxSlots: JSON.int(object, "maxSlots"),
+            minPinLength: JSON.int(object, "minPinLength", fallback: 4),
+            maxPinLength: JSON.int(object, "maxPinLength", fallback: 8),
+            supportsNames: JSON.bool(object, "supportsNames"),
+            supportsLockAudit: JSON.bool(object, "supportsLockAudit")
+        )
+    }
+}
+
+private struct NativeLockCodeSlot: Identifiable {
+    let id: Int
+    let slot: Int
+    let name: String
+    let enabled: Bool
+    let source: String
+    let updatedAt: String?
+    let updatedBy: String?
+
+    nonisolated static func from(_ object: [String: Any]) -> NativeLockCodeSlot {
+        let slot = JSON.int(object, "slot", fallback: 1)
+        return NativeLockCodeSlot(
+            id: slot,
+            slot: slot,
+            name: JSON.string(object, "name", fallback: "Code \(slot)"),
+            enabled: JSON.bool(object, "enabled", fallback: true),
+            source: JSON.string(object, "source", fallback: "lock"),
+            updatedAt: JSON.optionalString(object, "updatedAt"),
+            updatedBy: JSON.optionalString(object, "updatedBy")
+        )
+    }
+}
+
+private struct NativeLockCodeEvent: Identifiable {
+    let id: String
+    let source: String
+    let action: String
+    let label: String
+    let slot: Int?
+    let codeName: String?
+    let actor: String?
+    let createdAt: Any?
+
+    var actionLabel: String {
+        let raw = action.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return "Event" }
+        return raw
+            .replacingOccurrences(of: "_", with: " ")
+            .split(separator: " ")
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+    }
+
+    var displayDate: String {
+        JSON.displayDate(from: createdAt)
+    }
+
+    nonisolated static func from(_ object: [String: Any]) -> NativeLockCodeEvent {
+        let slotValue = JSON.int(object, "slot")
+        return NativeLockCodeEvent(
+            id: JSON.string(object, "id", fallback: UUID().uuidString),
+            source: JSON.string(object, "source", fallback: "homebrain"),
+            action: JSON.string(object, "action", fallback: "event"),
+            label: JSON.string(object, "label", fallback: "Lock event"),
+            slot: slotValue > 0 ? slotValue : nil,
+            codeName: JSON.optionalString(object, "codeName"),
+            actor: JSON.optionalString(object, "actor"),
+            createdAt: object["createdAt"]
+        )
+    }
+
+    nonisolated static var previewEvents: [NativeLockCodeEvent] {
+        [
+            NativeLockCodeEvent(
+                id: "preview-lock-code-used",
+                source: "homebrain",
+                action: "unlock",
+                label: "Unlocked by PIN",
+                slot: 1,
+                codeName: "Household",
+                actor: nil,
+                createdAt: Date()
+            )
+        ]
+    }
+}
+
+private struct NativeLockCodeState {
+    let deviceId: String
+    let deviceName: String
+    let nodeId: Int
+    let capabilities: NativeLockCodeCapabilities
+    let slots: [NativeLockCodeSlot]
+    let availableSlots: [Int]
+
+    nonisolated static func from(_ object: [String: Any]) -> NativeLockCodeState {
+        let capabilities = NativeLockCodeCapabilities.from(JSON.object(object["capabilities"]))
+        let slots = JSON.array(object["slots"]).map(NativeLockCodeSlot.from)
+        let availableSlots = (object["availableSlots"] as? [Any] ?? [])
+            .compactMap { value -> Int? in
+                if let intValue = value as? Int {
+                    return intValue
+                }
+                if let numberValue = value as? NSNumber {
+                    return numberValue.intValue
+                }
+                if let stringValue = value as? String {
+                    return Int(stringValue)
+                }
+                return nil
+            }
+            .filter { $0 > 0 }
+        return NativeLockCodeState(
+            deviceId: JSON.string(object, "deviceId"),
+            deviceName: JSON.string(object, "deviceName", fallback: "Lock"),
+            nodeId: JSON.int(object, "nodeId"),
+            capabilities: capabilities,
+            slots: slots,
+            availableSlots: availableSlots
+        )
+    }
+
+    nonisolated static func preview(for device: DeviceItem) -> NativeLockCodeState {
+        NativeLockCodeState(
+            deviceId: device.id,
+            deviceName: device.name,
+            nodeId: 9,
+            capabilities: NativeLockCodeCapabilities(
+                maxSlots: 30,
+                minPinLength: 4,
+                maxPinLength: 8,
+                supportsNames: false,
+                supportsLockAudit: true
+            ),
+            slots: [
+                NativeLockCodeSlot(
+                    id: 1,
+                    slot: 1,
+                    name: "Household",
+                    enabled: true,
+                    source: "homebrain",
+                    updatedAt: nil,
+                    updatedBy: nil
+                )
+            ],
+            availableSlots: Array(2...30)
+        )
+    }
+
+    nonisolated func upserting(slot: Int, name: String, enabled: Bool) -> NativeLockCodeState {
+        let nextSlot = NativeLockCodeSlot(
+            id: slot,
+            slot: slot,
+            name: name,
+            enabled: enabled,
+            source: "homebrain",
+            updatedAt: nil,
+            updatedBy: nil
+        )
+        let remaining = slots.filter { $0.slot != slot }
+        return NativeLockCodeState(
+            deviceId: deviceId,
+            deviceName: deviceName,
+            nodeId: nodeId,
+            capabilities: capabilities,
+            slots: (remaining + [nextSlot]).sorted { $0.slot < $1.slot },
+            availableSlots: availableSlots.filter { $0 != slot }
+        )
+    }
+
+    nonisolated func removing(slot: Int) -> NativeLockCodeState {
+        var nextAvailable = Set(availableSlots)
+        nextAvailable.insert(slot)
+        return NativeLockCodeState(
+            deviceId: deviceId,
+            deviceName: deviceName,
+            nodeId: nodeId,
+            capabilities: capabilities,
+            slots: slots.filter { $0.slot != slot },
+            availableSlots: nextAvailable.sorted()
+        )
     }
 }
 

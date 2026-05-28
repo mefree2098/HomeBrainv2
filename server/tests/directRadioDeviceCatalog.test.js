@@ -42,6 +42,42 @@ test('direct radio catalog maps Z-Wave lock migration with battery support', () 
   assert.ok(!plan.manualSteps.join(' ').includes('manufacturer instructions'));
 });
 
+test('direct radio catalog maps Kwikset SmartCode 916 locks with native PIN support', () => {
+  const device = {
+    _id: 'kwikset-916',
+    name: 'Kwikset 99160-002 916 Z-Wave SmartCode Touchscreen Electronic Deadbolt',
+    type: 'lock',
+    brand: 'Kwikset',
+    model: '99160-002 916 SmartCode',
+    properties: {
+      source: 'smartthings',
+      smartThingsDeviceId: 'smartthings-kwikset-916',
+      smartThingsDeviceNetworkType: 'ZWAVE',
+      smartThingsCapabilities: ['lock', 'lockCodes', 'battery', 'refresh'],
+      smartThingsCategories: ['smartlock']
+    }
+  };
+
+  const plan = buildMigrationPlan(device);
+
+  assert.equal(inferProtocolFromSmartThings(device), 'zwave');
+  assert.deepEqual(inferFeaturesFromSmartThings(device), ['battery', 'lock', 'lockCodes']);
+  assert.equal(plan.supported, true);
+  assert.equal(plan.recommendedProtocol, 'zwave');
+  assert.equal(plan.targetSource, 'homebrain-zwave');
+  assert.equal(plan.instructionProfile.key, 'zwave-lock-kwikset-smartcode');
+  assert.ok(plan.instructionProfile.reference.includes('99160-002'));
+  assert.ok(plan.featureSupport.some((feature) => feature.key === 'lockCodes' && feature.supported));
+  assert.ok(plan.guidedSteps.some((step) => step.action === 'start_zwave_exclusion'));
+  assert.ok(plan.guidedSteps.some((step) => step.action === 'start_direct_migration' && step.durationSeconds >= 240));
+  const planText = [
+    ...plan.manualSteps,
+    ...plan.guidedSteps.flatMap((step) => step.instructions)
+  ].join(' ');
+  assert.ok(planText.includes('button A'));
+  assert.ok(planText.includes('Program'));
+});
+
 test('direct radio catalog maps SmartThings multipurpose sensors toward Zigbee', () => {
   const device = {
     _id: 'sensor-1',

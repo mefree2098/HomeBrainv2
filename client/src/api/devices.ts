@@ -75,6 +75,51 @@ export type DeviceEnergySample = {
   } | null;
 }
 
+export type LockCodeCapabilities = {
+  supported: boolean;
+  maxSlots: number;
+  minPinLength: number;
+  maxPinLength: number;
+  supportsNames: boolean;
+  maxNameLength: number | null;
+  supportsAdminCode: boolean;
+  supportsAdminCodeDeactivation: boolean;
+  supportsLockAudit: boolean;
+}
+
+export type LockCodeSlot = {
+  slot: number;
+  name: string;
+  enabled: boolean;
+  occupied: boolean;
+  userType?: string;
+  source?: string;
+  updatedAt?: string | null;
+  updatedBy?: string | null;
+}
+
+export type LockCodeEvent = {
+  id: string;
+  source: string;
+  type: string;
+  action: string;
+  label: string;
+  slot?: number | null;
+  codeName?: string | null;
+  actor?: string | null;
+  createdAt?: string | null;
+}
+
+export type LockCodeState = {
+  deviceId: string;
+  deviceName: string;
+  nodeId: number | null;
+  native: boolean;
+  capabilities: LockCodeCapabilities;
+  slots: LockCodeSlot[];
+  availableSlots: number[];
+}
+
 // Description: Get all smart home devices
 // Endpoint: GET /api/devices
 // Request: {}
@@ -254,6 +299,76 @@ export const getDeviceById = async (deviceId: string) => {
     return response.data.data;
   } catch (error) {
     console.error('Error fetching device by ID:', error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+}
+
+export const getDeviceLockCodes = async (
+  deviceId: string,
+  options: { refresh?: boolean } = {}
+) => {
+  try {
+    console.log('Fetching native lock PIN slots:', deviceId);
+    const params = new URLSearchParams();
+    if (options.refresh) params.append('refresh', 'true');
+    const queryString = params.toString();
+    const url = queryString
+      ? `/api/devices/${deviceId}/lock-codes?${queryString}`
+      : `/api/devices/${deviceId}/lock-codes`;
+    const response = await api.get(url);
+    console.log('Successfully fetched native lock PIN slots');
+    return response.data.data as LockCodeState;
+  } catch (error) {
+    console.error('Error fetching native lock PIN slots:', error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+}
+
+export const setDeviceLockCode = async (
+  deviceId: string,
+  slot: number,
+  payload: { name?: string; pin?: string; enabled?: boolean }
+) => {
+  try {
+    console.log('Setting native lock PIN slot:', deviceId, slot);
+    const response = await api.put(`/api/devices/${deviceId}/lock-codes/${slot}`, payload);
+    console.log('Successfully set native lock PIN slot');
+    return response.data.data as LockCodeState;
+  } catch (error) {
+    console.error('Error setting native lock PIN slot:', error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+}
+
+export const deleteDeviceLockCode = async (deviceId: string, slot: number) => {
+  try {
+    console.log('Deleting native lock PIN slot:', deviceId, slot);
+    const response = await api.delete(`/api/devices/${deviceId}/lock-codes/${slot}`);
+    console.log('Successfully deleted native lock PIN slot');
+    return response.data.data as LockCodeState;
+  } catch (error) {
+    console.error('Error deleting native lock PIN slot:', error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+}
+
+export const getDeviceLockCodeEvents = async (
+  deviceId: string,
+  options: { limit?: number } = {}
+) => {
+  try {
+    console.log('Fetching native lock PIN audit events:', deviceId);
+    const params = new URLSearchParams();
+    if (options.limit) params.append('limit', String(options.limit));
+    const queryString = params.toString();
+    const url = queryString
+      ? `/api/devices/${deviceId}/lock-code-events?${queryString}`
+      : `/api/devices/${deviceId}/lock-code-events`;
+    const response = await api.get(url);
+    console.log('Successfully fetched native lock PIN audit events');
+    return response.data.data as { deviceId: string; deviceName: string; nodeId: number | null; events: LockCodeEvent[] };
+  } catch (error) {
+    console.error('Error fetching native lock PIN audit events:', error);
     throw new Error(error?.response?.data?.error || error.message);
   }
 }

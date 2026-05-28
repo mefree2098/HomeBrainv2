@@ -5,8 +5,10 @@ const mongoose = require('mongoose');
 const os = require('os');
 const path = require('path');
 const Device = require('../models/Device');
+const EventStreamEvent = require('../models/EventStreamEvent');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const directRadioEngineLogService = require('./directRadioEngineLogService');
+const eventStreamService = require('./eventStreamService');
 const {
   DIRECT_RADIO_SOURCES,
   buildDirectFeatureProperties,
@@ -1243,6 +1245,177 @@ function findZWaveValueByLabel(node, pattern) {
   } catch (_error) {
     return undefined;
   }
+}
+
+function normalizeLockCodeSlot(value) {
+  const slot = Number(value);
+  return Number.isInteger(slot) && slot > 0 ? slot : null;
+}
+
+function normalizeLockCodeName(value, fallback) {
+  return trimString(value).slice(0, 80) || fallback;
+}
+
+function normalizeLockPin(value, limits = {}) {
+  const pin = trimString(value);
+  const minLength = Number.isFinite(Number(limits.minPinLength)) ? Number(limits.minPinLength) : 4;
+  const maxLength = Number.isFinite(Number(limits.maxPinLength)) ? Number(limits.maxPinLength) : 10;
+  if (!/^\d+$/.test(pin) || pin.length < minLength || pin.length > maxLength) {
+    throw new Error(`PIN must be ${minLength}-${maxLength} digits.`);
+  }
+  return pin;
+}
+
+function enumLabel(enumObject, value, fallback = 'unknown') {
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  return enumObject?.[value] || enumObject?.[String(value)] || String(value);
+}
+
+function operationSucceeded(result, okEnum) {
+  if (result === undefined) {
+    return true;
+  }
+  if (typeof result === 'number') {
+    return result === okEnum;
+  }
+  if (result?.status !== undefined) {
+    return Number(result.status) >= 254;
+  }
+  return result === okEnum;
+}
+
+function getLockCodeAssignments(device) {
+  const assignments = device?.properties?.lockCodes?.assignments;
+  return assignments && typeof assignments === 'object' && !Array.isArray(assignments)
+    ? assignments
+    : {};
+}
+
+function getAssignmentForSlot(device, slot) {
+  const assignments = getLockCodeAssignments(device);
+  const entry = assignments[String(slot)];
+  return entry && typeof entry === 'object' && !Array.isArray(entry) ? entry : {};
+}
+
+function getZWaveAccessControl(node) {
+  return node?.accessControl || null;
+}
+
+function getZWaveLockCodeCapabilities(node, accessControl) {
+  const zwave = require('zwave-js');
+  const userCapabilities = accessControl?.getUserCapabilitiesCached?.() || {};
+  const credentialCapabilities = accessControl?.getCredentialCapabilitiesCached?.() || {};
+  const pinCapabilities = credentialCapabilities?.supportedCredentialTypes?.get?.(zwave.UserCredentialType.PINCode)
+    || credentialCapabilities?.supportedCredentialTypes?.values?.().next?.()?.value
+    || {};
+  const maxSlots = Number(userCapabilities.maxUsers || pinCapabilities.numberOfCredentialSlots || 0);
+  const minPinLength = Number(pinCapabilities.minCredentialLength || 4);
+  const maxPinLength = Number(pinCapabilities.maxCredentialLength || 10);
+
+  return {
+    supported: Boolean(accessControl),
+    maxSlots: Number.isFinite(maxSlots) && maxSlots > 0 ? maxSlots : 0,
+    minPinLength: Number.isFinite(minPinLength) && minPinLength > 0 ? minPinLength : 4,
+    maxPinLength: Number.isFinite(maxPinLength) && maxPinLength > 0 ? maxPinLength : 10,
+    supportsNames: Number(userCapabilities.maxUserNameLength || 0) > 0,
+    maxNameLength: Number(userCapabilities.maxUserNameLength || 0) || null,
+    supportsAdminCode: credentialCapabilities.supportsAdminCode === true,
+    supportsAdminCodeDeactivation: credentialCapabilities.supportsAdminCodeDeactivation === true,
+    supportsLockAudit: Boolean(node?.commandClasses?.['Door Lock Logging']?.getRecord)
+  };
+}
+
+function codeNameForSlot(device, slot, userData = {}) {
+  const assignment = getAssignmentForSlot(device, slot);
+  return normalizeLockCodeName(assignment.name || userData.userName, `Code ${slot}`);
+}
+
+function lockEventActionFromLabel(label) {
+  const normalized = trimString(label).toLowerCase();
+  if (!normalized) {
+    return 'unknown';
+  }
+  if (normalized.includes('illegal') || normalized.includes('invalid')) {
+    return 'invalid_code';
+  }
+  if (normalized.includes('code') && normalized.includes('delete')) {
+    return 'code_deleted';
+  }
+  if (normalized.includes('code') && (normalized.includes('add') || normalized.includes('change'))) {
+    return 'code_changed';
+  }
+  if (normalized.includes('unlock')) {
+    return 'unlock';
+  }
+  if (normalized.includes('lock')) {
+    return 'lock';
+  }
+  return 'unknown';
+}
+
+function extractLockUserId(value) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  for (const [key, entry] of Object.entries(value)) {
+    const normalizedKey = trimString(key).toLowerCase();
+    const numeric = Number(entry);
+    if (
+      Number.isInteger(numeric)
+      && numeric > 0
+      && (
+        normalizedKey === 'userid'
+        || normalizedKey === 'user id'
+        || normalizedKey === 'user'
+        || (normalizedKey.includes('user') && normalizedKey.includes('id'))
+      )
+    ) {
+      return numeric;
+    }
+  }
+
+  return null;
+}
+
+function serializeLockCodeSlot(device, userData = {}) {
+  const slot = normalizeLockCodeSlot(userData.userId);
+  if (!slot) {
+    return null;
+  }
+  const assignment = getAssignmentForSlot(device, slot);
+  return {
+    slot,
+    name: codeNameForSlot(device, slot, userData),
+    enabled: userData.active !== false,
+    occupied: true,
+    userType: enumLabel(require('zwave-js').UserCredentialUserType, userData.userType, 'General'),
+    source: assignment.source || 'lock',
+    updatedAt: assignment.updatedAt || null,
+    updatedBy: assignment.updatedBy || null
+  };
+}
+
+function serializeDoorLockLogRecord(device, record, index) {
+  if (!record || typeof record !== 'object') {
+    return null;
+  }
+  const zwave = require('zwave-js');
+  const userId = normalizeLockCodeSlot(record.userId);
+  const eventType = enumLabel(zwave.DoorLockLoggingEventType, record.eventType, 'Unknown');
+  const label = trimString(record.label) || eventType;
+  return {
+    id: `lock-record-${index}-${record.timestamp || Date.now()}`,
+    source: 'lock',
+    type: 'door_lock_log',
+    action: lockEventActionFromLabel(label || eventType),
+    label,
+    slot: userId,
+    codeName: userId ? codeNameForSlot(device, userId) : null,
+    createdAt: record.timestamp || null
+  };
 }
 
 class DirectRadioService {
@@ -2551,6 +2724,103 @@ class DirectRadioService {
       .sort((left, right) => Number(left.id || 0) - Number(right.id || 0));
   }
 
+  async findDeviceForZWaveNode(node) {
+    const nodeId = normalizeLockCodeSlot(node?.id);
+    if (!nodeId || Device.db?.readyState !== 1) {
+      return null;
+    }
+
+    return Device.findOne({
+      $or: [
+        { 'properties.homebrainDirect.nodeId': nodeId },
+        { 'properties.homebrainDirect.nodeId': String(nodeId) }
+      ]
+    });
+  }
+
+  async publishZWaveLockCodeEvent(node, event = {}) {
+    const device = await this.findDeviceForZWaveNode(node);
+    if (!device || device.type !== 'lock') {
+      return null;
+    }
+
+    const slot = normalizeLockCodeSlot(event.slot || event.userId);
+    const payload = {
+      deviceId: device._id?.toString?.() || String(device._id || ''),
+      deviceName: device.name || null,
+      nodeId: normalizeLockCodeSlot(node?.id),
+      slot,
+      codeName: slot ? codeNameForSlot(device, slot) : null,
+      action: event.action || 'unknown',
+      label: event.label || null,
+      source: event.source || 'zwave',
+      actor: event.actor || null,
+      notification: event.notification || null
+    };
+
+    return eventStreamService.publishSafe({
+      type: event.type || 'lock_code.used',
+      source: 'homebrain-zwave',
+      category: 'security',
+      severity: event.severity || 'info',
+      payload,
+      tags: ['lock', 'pin', 'zwave', `device:${payload.deviceId}`]
+    });
+  }
+
+  handleZWaveLockNotification(node, endpoint, ccId, args = {}) {
+    const label = trimString(args.eventLabel || args.label);
+    const eventText = `${label} ${trimString(args.label)}`.toLowerCase();
+    if (!/\b(lock|unlock|code|keypad|access)\b/.test(eventText)) {
+      return;
+    }
+
+    const userId = extractLockUserId(args.parameters);
+    void this.publishZWaveLockCodeEvent(node, {
+      type: userId ? 'lock_code.used' : 'lock.state_event',
+      action: lockEventActionFromLabel(label),
+      userId,
+      label,
+      notification: {
+        endpoint: endpoint?.index ?? null,
+        commandClass: ccId ?? null,
+        type: args.type ?? null,
+        event: args.event ?? null,
+        parameters: args.parameters || null
+      }
+    }).catch((error) => {
+      this.log('warn', 'zwave', 'Failed to record Z-Wave lock notification', {
+        nodeId: node?.id || null,
+        error: error.message
+      });
+    });
+  }
+
+  handleZWaveLockUserChanged(node, eventType, args = {}) {
+    const slot = normalizeLockCodeSlot(args.userId || args.credentialSlot);
+    if (!slot) {
+      return;
+    }
+
+    const type = eventType === 'deleted'
+      ? 'lock_code.deleted'
+      : eventType === 'added'
+        ? 'lock_code.added'
+        : 'lock_code.modified';
+    void this.publishZWaveLockCodeEvent(node, {
+      type,
+      action: `code_${eventType}`,
+      userId: slot,
+      label: `Lock code ${eventType}`
+    }).catch((error) => {
+      this.log('warn', 'zwave', 'Failed to record Z-Wave lock code change event', {
+        nodeId: node?.id || null,
+        slot,
+        error: error.message
+      });
+    });
+  }
+
   attachZWaveNodeStatusListeners(node) {
     if (!node || node.__homebrainStatusListenersAttached || typeof node.on !== 'function') {
       return;
@@ -2578,6 +2848,10 @@ class DirectRadioService {
     node.on('interview failed', () => updateFromNode('interview failed'));
     node.on('ready', () => updateFromNode('ready'));
     node.on('node info received', () => updateFromNode('node info received'));
+    node.on('notification', (...args) => this.handleZWaveLockNotification(node, ...args));
+    node.on('user added', (_endpoint, args) => this.handleZWaveLockUserChanged(node, 'added', args));
+    node.on('user modified', (_endpoint, args) => this.handleZWaveLockUserChanged(node, 'modified', args));
+    node.on('user deleted', (_endpoint, args) => this.handleZWaveLockUserChanged(node, 'deleted', args));
     node.__homebrainStatusListenersAttached = true;
   }
 
@@ -2720,6 +2994,9 @@ class DirectRadioService {
     if (hasValue(zwave.DoorLockCCValues.currentMode) || hasValue(zwave.DoorLockCCValues.targetMode)) {
       features.add('lock');
       features.add('battery');
+    }
+    if (getZWaveAccessControl(node)) {
+      features.add('lockCodes');
     }
     if (hasValue(zwave.BatteryCCValues.level)) features.add('battery');
     if (hasValue(zwave.ColorSwitchCCValues.hexColor)) features.add('color');
@@ -4154,6 +4431,298 @@ class DirectRadioService {
     }
 
     return null;
+  }
+
+  async getNativeZWaveLockContext(deviceId) {
+    const device = await Device.findById(deviceId);
+    if (!device) {
+      const error = new Error('Device not found');
+      error.status = 404;
+      throw error;
+    }
+    if (device.type !== 'lock') {
+      const error = new Error('Lock PIN management is only available for lock devices');
+      error.status = 400;
+      throw error;
+    }
+
+    const source = normalizeSourceText(device?.properties?.source);
+    const protocol = normalizeSourceText(device?.properties?.homebrainDirect?.protocol);
+    if (source !== DIRECT_RADIO_SOURCES.zwave && protocol !== 'zwave') {
+      const error = new Error('Lock PIN management requires a HomeBrain-native Z-Wave lock. Migrate this SmartThings lock to HomeBrain Z-Wave first.');
+      error.status = 400;
+      throw error;
+    }
+
+    await this.start();
+    const node = this.getDirectNodeForDevice(device);
+    if (!node) {
+      const error = new Error('Z-Wave node is not ready for this lock');
+      error.status = 409;
+      throw error;
+    }
+
+    const accessControl = getZWaveAccessControl(node);
+    if (!accessControl) {
+      const error = new Error('This Z-Wave lock does not expose User Code or User Credential control');
+      error.status = 400;
+      throw error;
+    }
+
+    return { device, node, accessControl };
+  }
+
+  async readZWaveLockUsers(device, accessControl, options = {}) {
+    const refresh = options.refresh === true;
+    let users = [];
+    if (!refresh && typeof accessControl.getUsersCached === 'function') {
+      users = accessControl.getUsersCached() || [];
+    }
+    if ((refresh || users.length === 0) && typeof accessControl.getUsers === 'function') {
+      users = await accessControl.getUsers();
+    }
+
+    return users
+      .map((user) => serializeLockCodeSlot(device, user))
+      .filter(Boolean)
+      .sort((left, right) => left.slot - right.slot);
+  }
+
+  async readZWaveLockAuditFromDevice(device, node, options = {}) {
+    const limit = Math.max(1, Math.min(100, Number(options.limit) || 25));
+    const api = node?.commandClasses?.['Door Lock Logging'];
+    if (!api || typeof api.getRecord !== 'function') {
+      return [];
+    }
+
+    let count = 0;
+    if (typeof api.getRecordsCount === 'function') {
+      try {
+        count = Number(await api.getRecordsCount()) || 0;
+      } catch (error) {
+        this.log('warn', 'zwave', 'Unable to read Z-Wave door lock audit count', {
+          deviceId: device?._id?.toString?.() || null,
+          nodeId: node?.id || null,
+          error: error.message
+        });
+      }
+    }
+
+    const records = [];
+    const maxRecord = count > 0 ? Math.min(count, limit) : limit;
+    for (let recordNumber = 1; recordNumber <= maxRecord; recordNumber += 1) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const record = await api.getRecord(recordNumber);
+        const serialized = serializeDoorLockLogRecord(device, record, recordNumber);
+        if (serialized) {
+          records.push(serialized);
+        }
+      } catch (error) {
+        this.log('warn', 'zwave', 'Unable to read Z-Wave door lock audit record', {
+          deviceId: device?._id?.toString?.() || null,
+          nodeId: node?.id || null,
+          recordNumber,
+          error: error.message
+        });
+        break;
+      }
+    }
+
+    return records;
+  }
+
+  async readHomeBrainLockAudit(device, node, options = {}) {
+    const limit = Math.max(1, Math.min(100, Number(options.limit) || 25));
+    if (EventStreamEvent.db?.readyState !== 1) {
+      return [];
+    }
+
+    const deviceId = device?._id?.toString?.() || String(device?._id || '');
+    const nodeId = normalizeLockCodeSlot(node?.id || device?.properties?.homebrainDirect?.nodeId);
+    const query = {
+      category: 'security',
+      type: { $in: ['lock_code.used', 'lock.state_event', 'lock_code.added', 'lock_code.modified', 'lock_code.deleted', 'lock_code.set'] },
+      $or: [
+        { 'payload.deviceId': deviceId },
+        ...(nodeId ? [{ 'payload.nodeId': nodeId }] : [])
+      ]
+    };
+
+    const docs = await EventStreamEvent.find(query)
+      .sort({ createdAt: -1 })
+      .limit(limit);
+
+    return docs.map((doc) => {
+      const event = typeof doc.toObject === 'function' ? doc.toObject() : doc;
+      const payload = event.payload || {};
+      return {
+        id: event._id?.toString?.() || String(event._id || ''),
+        source: 'homebrain',
+        type: event.type,
+        action: payload.action || 'unknown',
+        label: payload.label || event.type,
+        slot: normalizeLockCodeSlot(payload.slot),
+        codeName: payload.codeName || (payload.slot ? codeNameForSlot(device, payload.slot) : null),
+        actor: payload.actor || null,
+        createdAt: event.createdAt || null
+      };
+    }).reverse();
+  }
+
+  async getLockCodeState(deviceId, options = {}) {
+    const { device, node, accessControl } = await this.getNativeZWaveLockContext(deviceId);
+    const capabilities = getZWaveLockCodeCapabilities(node, accessControl);
+    const slots = await this.readZWaveLockUsers(device, accessControl, {
+      refresh: options.refresh === true
+    });
+    const maxSlots = capabilities.maxSlots || Math.max(0, ...slots.map((slot) => slot.slot));
+    const occupied = new Set(slots.map((slot) => slot.slot));
+
+    return {
+      deviceId: device._id?.toString?.() || String(device._id || ''),
+      deviceName: device.name,
+      nodeId: normalizeLockCodeSlot(node.id),
+      native: true,
+      capabilities: {
+        ...capabilities,
+        maxSlots
+      },
+      slots,
+      availableSlots: Array.from({ length: maxSlots }, (_value, index) => index + 1)
+        .filter((slot) => !occupied.has(slot))
+    };
+  }
+
+  async setLockCode(deviceId, payload = {}, options = {}) {
+    const { device, node, accessControl } = await this.getNativeZWaveLockContext(deviceId);
+    const capabilities = getZWaveLockCodeCapabilities(node, accessControl);
+    const zwave = require('zwave-js');
+    const slot = normalizeLockCodeSlot(payload.slot || payload.userId);
+    if (!slot || (capabilities.maxSlots > 0 && slot > capabilities.maxSlots)) {
+      throw new Error(`Lock code slot must be between 1 and ${capabilities.maxSlots || 'the supported slot count'}.`);
+    }
+
+    const name = normalizeLockCodeName(payload.name, `Code ${slot}`);
+    const enabled = payload.enabled !== false;
+    const pinProvided = trimString(payload.pin).length > 0;
+
+    if (pinProvided) {
+      const pin = normalizeLockPin(payload.pin, capabilities);
+      if (capabilities.supportsNames) {
+        await accessControl.setUser(slot, { active: true, userName: name });
+      }
+      const credentialResult = await accessControl.setCredential(
+        slot,
+        zwave.UserCredentialType.PINCode,
+        slot,
+        pin
+      );
+      if (!operationSucceeded(credentialResult, zwave.SetCredentialResult.OK)) {
+        throw new Error(`Lock rejected PIN update: ${enumLabel(zwave.SetCredentialResult, credentialResult, 'unknown')}`);
+      }
+    }
+
+    if (typeof accessControl.setUser === 'function' && (pinProvided || Object.prototype.hasOwnProperty.call(payload, 'enabled') || capabilities.supportsNames)) {
+      const userResult = await accessControl.setUser(slot, {
+        active: enabled,
+        ...(capabilities.supportsNames ? { userName: name } : {})
+      });
+      if (!operationSucceeded(userResult, zwave.SetUserResult.OK)) {
+        throw new Error(`Lock rejected user update: ${enumLabel(zwave.SetUserResult, userResult, 'unknown')}`);
+      }
+    }
+
+    const now = new Date().toISOString();
+    const actor = trimString(options.actor || payload.actor) || 'unknown';
+    await Device.updateOne(
+      { _id: device._id },
+      {
+        $set: {
+          [`properties.lockCodes.assignments.${slot}`]: {
+            name,
+            enabled,
+            source: 'homebrain',
+            updatedAt: now,
+            updatedBy: actor
+          },
+          'properties.lockCodes.lastManagedAt': now,
+          'properties.lockCodes.lastManagedBy': actor
+        }
+      }
+    );
+
+    await this.publishZWaveLockCodeEvent(node, {
+      type: 'lock_code.set',
+      action: pinProvided ? 'code_set' : 'code_named',
+      userId: slot,
+      label: pinProvided ? 'Lock PIN set' : 'Lock PIN label updated',
+      actor,
+      source: 'homebrain'
+    });
+
+    return this.getLockCodeState(deviceId, { refresh: false });
+  }
+
+  async deleteLockCode(deviceId, slotValue, options = {}) {
+    const { device, node, accessControl } = await this.getNativeZWaveLockContext(deviceId);
+    const slot = normalizeLockCodeSlot(slotValue);
+    if (!slot) {
+      throw new Error('Lock code slot is required');
+    }
+
+    const zwave = require('zwave-js');
+    const result = await accessControl.deleteUser(slot);
+    if (!operationSucceeded(result, zwave.SetUserResult.OK)) {
+      throw new Error(`Lock rejected PIN deletion: ${enumLabel(zwave.SetUserResult, result, 'unknown')}`);
+    }
+
+    const now = new Date().toISOString();
+    const actor = trimString(options.actor) || 'unknown';
+    await Device.updateOne(
+      { _id: device._id },
+      {
+        $unset: {
+          [`properties.lockCodes.assignments.${slot}`]: ''
+        },
+        $set: {
+          'properties.lockCodes.lastManagedAt': now,
+          'properties.lockCodes.lastManagedBy': actor
+        }
+      }
+    );
+
+    await this.publishZWaveLockCodeEvent(node, {
+      type: 'lock_code.deleted',
+      action: 'code_deleted',
+      userId: slot,
+      label: 'Lock PIN deleted',
+      actor,
+      source: 'homebrain'
+    });
+
+    return this.getLockCodeState(deviceId, { refresh: false });
+  }
+
+  async getLockCodeAudit(deviceId, options = {}) {
+    const { device, node } = await this.getNativeZWaveLockContext(deviceId);
+    const limit = Math.max(1, Math.min(100, Number(options.limit) || 50));
+    const [homebrain, lock] = await Promise.all([
+      this.readHomeBrainLockAudit(device, node, { limit }),
+      options.includeDeviceLog === false
+        ? Promise.resolve([])
+        : this.readZWaveLockAuditFromDevice(device, node, { limit })
+    ]);
+
+    return {
+      deviceId: device._id?.toString?.() || String(device._id || ''),
+      deviceName: device.name,
+      nodeId: normalizeLockCodeSlot(node.id),
+      events: [...homebrain, ...lock]
+        .filter((event) => event && event.createdAt)
+        .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+        .slice(0, limit)
+    };
   }
 
   async controlDevice(device, normalizedAction, commandValue, updateData = {}) {

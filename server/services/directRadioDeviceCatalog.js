@@ -730,7 +730,7 @@ function getZWavePhysicalInstructions(device, features = new Set()) {
     if (/\b(?:kwikset|weiser|smartcode)\b/.test(descriptor)) {
       return {
         profile: instructionProfile('zwave-lock-kwikset-smartcode', 'Kwikset/Weiser SmartCode Z-Wave lock', 'high', {
-          reference: 'Kwikset SmartCode Z-Wave locks use the interior A/Program button during controller inclusion and exclusion.'
+          reference: 'Kwikset SmartCode 916 / 99160-002 Z-Wave locks use the interior A/Program button during controller inclusion and exclusion.'
         }),
         exclusion: [
           `Remove the interior cover on ${name} and keep the door open with the lock powered.`,

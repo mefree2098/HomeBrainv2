@@ -7,6 +7,7 @@ import {
   Cpu,
   Gauge,
   House,
+  KeyRound,
   Lightbulb,
   Loader2,
   Lock,
@@ -16,15 +17,28 @@ import {
   Power,
   PowerOff,
   RadioTower,
+  RefreshCw,
   Save,
   Sparkles,
   Thermometer,
+  Trash2,
   Wind,
   Workflow,
   Zap
 } from "lucide-react"
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
-import { controlDevice, getDeviceEnergyHistory, type DeviceEnergySample, updateDevice } from "@/api/devices"
+import {
+  controlDevice,
+  deleteDeviceLockCode,
+  getDeviceEnergyHistory,
+  getDeviceLockCodeEvents,
+  getDeviceLockCodes,
+  setDeviceLockCode,
+  type DeviceEnergySample,
+  type LockCodeEvent,
+  type LockCodeState,
+  updateDevice
+} from "@/api/devices"
 import {
   finalizeDirectRadioMigration,
   getDirectRadioMigrationPlan,
@@ -337,6 +351,19 @@ function isDirectRadioBackedDevice(device: DeviceLike | null): boolean {
     || source === "homebrain-zwave"
     || protocol === "zigbee"
     || protocol === "zwave"
+}
+
+function isNativeZWaveLock(device: DeviceLike | null): boolean {
+  if (device?.type !== "lock") {
+    return false
+  }
+  const properties = device.properties as Record<string, unknown> | undefined
+  const source = (properties?.source || "").toString().trim().toLowerCase()
+  const protocol = ((properties?.homebrainDirect as Record<string, unknown> | undefined)?.protocol || "")
+    .toString()
+    .trim()
+    .toLowerCase()
+  return source === "homebrain-zwave" || protocol === "zwave"
 }
 
 function isSmartThingsBackedDevice(device: DeviceLike | null): boolean {
@@ -1144,6 +1171,16 @@ export function DeviceDetailsDialog({
   const [migrationFlow, setMigrationFlow] = useState<MigrationFlowState | null>(null)
   const [finalizingMigration, setFinalizingMigration] = useState(false)
   const [migrationFinalizationError, setMigrationFinalizationError] = useState<string | null>(null)
+  const [lockCodeState, setLockCodeState] = useState<LockCodeState | null>(null)
+  const [lockCodeEvents, setLockCodeEvents] = useState<LockCodeEvent[]>([])
+  const [lockCodeLoading, setLockCodeLoading] = useState(false)
+  const [lockCodeSaving, setLockCodeSaving] = useState(false)
+  const [lockCodeError, setLockCodeError] = useState<string | null>(null)
+  const [lockCodeDeletingSlot, setLockCodeDeletingSlot] = useState<number | null>(null)
+  const [lockCodeDraftSlot, setLockCodeDraftSlot] = useState("1")
+  const [lockCodeDraftName, setLockCodeDraftName] = useState("")
+  const [lockCodeDraftPin, setLockCodeDraftPin] = useState("")
+  const [lockCodeDraftEnabled, setLockCodeDraftEnabled] = useState(true)
   const [activeTab, setActiveTab] = useState<"overview" | "controls" | "alexa" | "history">("overview")
   const { toast } = useToast()
   const { isAdmin } = useAuth()
@@ -1152,6 +1189,7 @@ export function DeviceDetailsDialog({
   const insteonAddress = useMemo(() => getFormattedInsteonAddress(device), [device])
   const harmonyCommandDevice = useMemo(() => isHarmonyCommandDevice(device), [device])
   const smartThingsBacked = useMemo(() => isSmartThingsBackedDevice(device), [device])
+  const nativeZWaveLock = useMemo(() => isNativeZWaveLock(device), [device])
   const migrationNeedsFinalization = useMemo(() => needsMigrationFinalization(device), [device])
   const harmonyPowerCommands = useMemo(() => getHarmonyPowerCommands(device), [device])
   const harmonyCommands = useMemo(() => getHarmonyCommandMetadata(device), [device])
@@ -1284,6 +1322,27 @@ export function DeviceDetailsDialog({
     setLightColorDraft(null)
     setThermostatSetpointDraft(null)
   }, [device?._id, open])
+
+  useEffect(() => {
+    if (!open || !device?._id || device.type !== "lock" || !nativeZWaveLock) {
+      setLockCodeState(null)
+      setLockCodeEvents([])
+      setLockCodeLoading(false)
+      setLockCodeSaving(false)
+      setLockCodeError(null)
+      setLockCodeDeletingSlot(null)
+      setLockCodeDraftSlot("1")
+      setLockCodeDraftName("")
+      setLockCodeDraftPin("")
+      setLockCodeDraftEnabled(true)
+      return
+    }
+
+    setLockCodeDraftName("")
+    setLockCodeDraftPin("")
+    setLockCodeDraftEnabled(true)
+    void loadNativeLockCodes(false)
+  }, [device?._id, nativeZWaveLock, open])
 
   useEffect(() => {
     if (!open || !device?._id || !smartThingsBacked) {
@@ -2082,6 +2141,332 @@ export function DeviceDetailsDialog({
     setGroupInput(nextGroups.join(", "))
   }
 
+  async function loadNativeLockCodes(refresh = false) {
+    if (!device?._id) {
+      return
+    }
+
+    setLockCodeLoading(true)
+    setLockCodeError(null)
+    try {
+      const [state, audit] = await Promise.all([
+        getDeviceLockCodes(device._id, { refresh }),
+        getDeviceLockCodeEvents(device._id, { limit: 30 })
+      ])
+      const slots = Array.isArray(state.slots) ? state.slots : []
+      const availableSlots = Array.isArray(state.availableSlots) ? state.availableSlots : []
+      const preferredSlot = availableSlots[0] ?? slots[0]?.slot ?? 1
+      setLockCodeState(state)
+      setLockCodeEvents(Array.isArray(audit.events) ? audit.events : [])
+      setLockCodeDraftSlot((current) => current || String(preferredSlot))
+    } catch (loadError) {
+      const message = loadError instanceof Error
+        ? loadError.message
+        : "Failed to load native lock PIN slots."
+      setLockCodeError(message)
+      setLockCodeState(null)
+      setLockCodeEvents([])
+    } finally {
+      setLockCodeLoading(false)
+    }
+  }
+
+  const handleSaveLockCode = async () => {
+    if (!device?._id || !lockCodeState) {
+      return
+    }
+
+    const slot = Number(lockCodeDraftSlot)
+    const existingSlot = lockCodeState.slots.find((entry) => entry.slot === slot)
+    const pin = lockCodeDraftPin.trim()
+    const name = lockCodeDraftName.trim() || existingSlot?.name || `Code ${slot}`
+
+    if (!Number.isInteger(slot) || slot <= 0) {
+      setLockCodeError("Choose a valid PIN slot.")
+      return
+    }
+
+    if (!existingSlot && !pin) {
+      setLockCodeError("Enter a PIN for an empty slot.")
+      return
+    }
+
+    setLockCodeSaving(true)
+    setLockCodeError(null)
+    try {
+      const nextState = await setDeviceLockCode(device._id, slot, {
+        name,
+        enabled: lockCodeDraftEnabled,
+        ...(pin ? { pin } : {})
+      })
+      setLockCodeState(nextState)
+      setLockCodeDraftPin("")
+      setLockCodeDraftName("")
+      const audit = await getDeviceLockCodeEvents(device._id, { limit: 30 })
+      setLockCodeEvents(Array.isArray(audit.events) ? audit.events : [])
+      toast({
+        title: "PIN slot saved",
+        description: `${name} is assigned to slot ${slot}.`
+      })
+    } catch (saveError) {
+      const message = saveError instanceof Error
+        ? saveError.message
+        : "Failed to save lock PIN slot."
+      setLockCodeError(message)
+      toast({
+        title: "Unable to save PIN slot",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setLockCodeSaving(false)
+    }
+  }
+
+  const handleDeleteLockCode = async (slot: number) => {
+    if (!device?._id || !window.confirm(`Delete PIN slot ${slot}?`)) {
+      return
+    }
+
+    setLockCodeDeletingSlot(slot)
+    setLockCodeError(null)
+    try {
+      const nextState = await deleteDeviceLockCode(device._id, slot)
+      setLockCodeState(nextState)
+      const audit = await getDeviceLockCodeEvents(device._id, { limit: 30 })
+      setLockCodeEvents(Array.isArray(audit.events) ? audit.events : [])
+      toast({
+        title: "PIN slot deleted",
+        description: `Slot ${slot} was removed from ${device.name}.`
+      })
+    } catch (deleteError) {
+      const message = deleteError instanceof Error
+        ? deleteError.message
+        : "Failed to delete lock PIN slot."
+      setLockCodeError(message)
+      toast({
+        title: "Unable to delete PIN slot",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setLockCodeDeletingSlot(null)
+    }
+  }
+
+  const renderLockPinManagement = () => {
+    if (!device || device.type !== "lock") {
+      return null
+    }
+
+    const slotOptions = (() => {
+      const values = new Set<number>()
+      lockCodeState?.slots.forEach((slot) => values.add(slot.slot))
+      lockCodeState?.availableSlots.forEach((slot) => values.add(slot))
+      if (values.size === 0) {
+        const maxSlots = lockCodeState?.capabilities.maxSlots || 30
+        Array.from({ length: Math.min(maxSlots, 30) }, (_value, index) => index + 1)
+          .forEach((slot) => values.add(slot))
+      }
+      return Array.from(values).sort((left, right) => left - right)
+    })()
+    const selectedSlot = Number(lockCodeDraftSlot)
+    const selectedSlotRecord = lockCodeState?.slots.find((slot) => slot.slot === selectedSlot)
+    const minPinLength = lockCodeState?.capabilities.minPinLength || 4
+    const maxPinLength = lockCodeState?.capabilities.maxPinLength || 8
+
+    return (
+      <Card className="border-white/10 bg-black/20">
+        <CardHeader className="pb-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <CardTitle className="flex items-center gap-2 font-body text-[1.15rem] tracking-[-0.05em] text-white">
+                <KeyRound className="h-4 w-4 text-cyan-200" />
+                Lock PINs
+              </CardTitle>
+              <CardDescription>
+                {nativeZWaveLock
+                  ? `Node ${lockCodeState?.nodeId ?? "?"} native slot control`
+                  : "Native HomeBrain Z-Wave migration required"}
+              </CardDescription>
+            </div>
+            {nativeZWaveLock ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => loadNativeLockCodes(true)}
+                disabled={lockCodeLoading}
+                aria-label="Refresh lock PIN slots"
+              >
+                {lockCodeLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              </Button>
+            ) : null}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {!nativeZWaveLock ? (
+            <div className="rounded-[1.1rem] border border-amber-300/15 bg-amber-300/[0.08] px-4 py-3 text-sm text-amber-50/88">
+              Migrate this lock to HomeBrain Z-Wave before writing PIN slots.
+            </div>
+          ) : (
+            <>
+              {lockCodeError ? (
+                <div className="rounded-[1rem] border border-red-400/20 bg-red-400/[0.08] px-3 py-2 text-sm text-red-100">
+                  {lockCodeError}
+                </div>
+              ) : null}
+
+              <div className="grid gap-3 lg:grid-cols-[minmax(0,0.75fr)_minmax(0,1fr)]">
+                <div className="space-y-3">
+                  <p className="section-kicker text-white/45">Assigned slots</p>
+                  {lockCodeLoading && !lockCodeState ? (
+                    <div className="flex items-center gap-2 rounded-[1rem] border border-white/10 bg-white/[0.04] px-4 py-5 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Loading slots...
+                    </div>
+                  ) : lockCodeState?.slots.length ? (
+                    <div className="space-y-2">
+                      {lockCodeState.slots.map((slot) => (
+                        <div
+                          key={slot.slot}
+                          className="flex items-center justify-between gap-3 rounded-[1rem] border border-white/10 bg-white/[0.04] px-3 py-3"
+                        >
+                          <button
+                            type="button"
+                            className="min-w-0 flex-1 text-left"
+                            onClick={() => {
+                              setLockCodeDraftSlot(String(slot.slot))
+                              setLockCodeDraftName(slot.name)
+                              setLockCodeDraftEnabled(slot.enabled)
+                              setLockCodeDraftPin("")
+                            }}
+                          >
+                            <p className="truncate text-sm font-medium text-white">{slot.name}</p>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              Slot {slot.slot} • {slot.enabled ? "Enabled" : "Disabled"}
+                            </p>
+                          </button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            onClick={() => handleDeleteLockCode(slot.slot)}
+                            disabled={lockCodeDeletingSlot === slot.slot || lockCodeSaving}
+                            aria-label={`Delete PIN slot ${slot.slot}`}
+                          >
+                            {lockCodeDeletingSlot === slot.slot
+                              ? <Loader2 className="h-4 w-4 animate-spin" />
+                              : <Trash2 className="h-4 w-4" />}
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-[1rem] border border-dashed border-white/10 px-4 py-5 text-sm text-muted-foreground">
+                      No assigned PIN slots are reported by the lock.
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-3 rounded-[1.1rem] border border-white/10 bg-white/[0.04] p-4">
+                  <div className="grid gap-3 sm:grid-cols-[120px_minmax(0,1fr)]">
+                    <div className="space-y-2">
+                      <Label>Slot</Label>
+                      <Select value={lockCodeDraftSlot} onValueChange={setLockCodeDraftSlot}>
+                        <SelectTrigger className="border-white/10 bg-black/20">
+                          <SelectValue placeholder="Slot" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {slotOptions.map((slot) => (
+                            <SelectItem key={slot} value={String(slot)}>
+                              {slot}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Name</Label>
+                      <Input
+                        value={lockCodeDraftName}
+                        placeholder={selectedSlotRecord?.name || `Code ${lockCodeDraftSlot}`}
+                        onChange={(event) => setLockCodeDraftName(event.target.value)}
+                        className="border-white/10 bg-black/20"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+                    <div className="space-y-2">
+                      <Label>PIN</Label>
+                      <Input
+                        type="password"
+                        inputMode="numeric"
+                        value={lockCodeDraftPin}
+                        placeholder={`${minPinLength}-${maxPinLength} digits`}
+                        onChange={(event) => setLockCodeDraftPin(event.target.value.replace(/\D/g, ""))}
+                        className="border-white/10 bg-black/20"
+                      />
+                    </div>
+                    <div className="flex h-10 items-center gap-3 rounded-[0.9rem] border border-white/10 bg-black/18 px-3">
+                      <Switch
+                        checked={lockCodeDraftEnabled}
+                        onCheckedChange={setLockCodeDraftEnabled}
+                        id="lock-code-enabled"
+                      />
+                      <Label htmlFor="lock-code-enabled" className="text-sm">Enabled</Label>
+                    </div>
+                  </div>
+
+                  <Button
+                    type="button"
+                    className="w-full"
+                    onClick={handleSaveLockCode}
+                    disabled={lockCodeSaving || lockCodeLoading}
+                  >
+                    {lockCodeSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                    Save PIN slot
+                  </Button>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <p className="section-kicker text-white/45">PIN activity</p>
+                {lockCodeEvents.length === 0 ? (
+                  <div className="rounded-[1rem] border border-dashed border-white/10 px-4 py-5 text-sm text-muted-foreground">
+                    No PIN activity has been recorded yet.
+                  </div>
+                ) : (
+                  <div className="max-h-[260px] space-y-2 overflow-y-auto pr-1">
+                    {lockCodeEvents.map((event) => (
+                      <div key={event.id} className="rounded-[1rem] border border-white/10 bg-white/[0.04] px-3 py-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-sm font-medium text-white">
+                            {event.codeName || (event.slot ? `Slot ${event.slot}` : formatTokenLabel(event.action, "Lock event"))}
+                          </p>
+                          <Badge variant="outline" className="border-white/10 bg-white/[0.06] text-white/78">
+                            {event.source === "lock" ? "Lock" : "HomeBrain"}
+                          </Badge>
+                        </div>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {formatTokenLabel(event.action, "Event")} • {event.slot ? `Slot ${event.slot}` : "No slot"} • {formatDateTime(event.createdAt)}
+                        </p>
+                        {event.actor ? (
+                          <p className="mt-1 text-xs text-muted-foreground">Actor: {event.actor}</p>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+    )
+  }
+
   const renderDirectControlFeedback = () => {
     if (sendingDirectControl) {
       return (
@@ -2748,6 +3133,8 @@ export function DeviceDetailsDialog({
                         </CardContent>
                       </Card>
                     ) : null}
+
+                    {device.type === "lock" ? renderLockPinManagement() : null}
 
                     {harmonyCommandDevice ? (
                       <Card className="border-white/10 bg-black/20">
