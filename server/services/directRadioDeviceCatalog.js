@@ -36,6 +36,9 @@ const FEATURE_LABELS = Object.freeze({
   carbonMonoxide: 'Carbon monoxide state',
   thermostat: 'Thermostat mode and setpoints',
   fan: 'Thermostat fan mode',
+  cover: 'Cover / shade position',
+  garage: 'Garage / barrier operator',
+  valve: 'Valve state',
   pressure: 'Pressure',
   weight: 'Weight',
   voltage: 'Voltage',
@@ -412,6 +415,257 @@ function buildFeatureSupport(features, protocol = 'unknown') {
       label: FEATURE_LABELS[feature] || feature,
       supported: preferred.has(feature),
       support: preferred.has(feature) ? 'native' : 'best_effort'
+    }));
+}
+
+function buildNormalizedCapabilities(features, protocol = 'unknown') {
+  const featureSet = new Set(uniqueStrings(features.map(normalizeFeature)));
+  const readable = true;
+  const capabilityProtocol = protocol === DIRECT_RADIO_SOURCES.zigbee
+    ? 'zigbee'
+    : protocol === DIRECT_RADIO_SOURCES.zwave
+      ? 'zwave'
+      : protocol;
+  const capabilityByFeature = {
+    switch: {
+      type: 'switch',
+      property: 'power',
+      readable,
+      writable: true,
+      values: ['on', 'off']
+    },
+    light: {
+      type: 'light',
+      property: 'power',
+      readable,
+      writable: true,
+      values: ['on', 'off']
+    },
+    brightness: {
+      type: 'dimmer',
+      property: 'brightness',
+      readable,
+      writable: true,
+      min: 0,
+      max: 100,
+      unit: '%'
+    },
+    color: {
+      type: 'color',
+      property: 'color',
+      readable,
+      writable: true
+    },
+    colorTemperature: {
+      type: 'color_temperature',
+      property: 'color_temperature',
+      readable,
+      writable: true
+    },
+    contact: {
+      type: 'contact_sensor',
+      property: 'contact',
+      readable,
+      writable: false,
+      values: ['open', 'closed']
+    },
+    motion: {
+      type: 'motion_sensor',
+      property: 'motion',
+      readable,
+      writable: false
+    },
+    temperature: {
+      type: 'temperature_sensor',
+      property: 'temperature',
+      readable,
+      writable: false
+    },
+    humidity: {
+      type: 'humidity_sensor',
+      property: 'humidity',
+      readable,
+      writable: false,
+      unit: '%'
+    },
+    illuminance: {
+      type: 'illuminance_sensor',
+      property: 'illuminance',
+      readable,
+      writable: false,
+      unit: 'lx'
+    },
+    battery: {
+      type: 'battery',
+      property: 'battery_level',
+      readable,
+      writable: false,
+      unit: '%'
+    },
+    tamper: {
+      type: 'tamper_sensor',
+      property: 'tamper',
+      readable,
+      writable: false
+    },
+    acceleration: {
+      type: 'acceleration_sensor',
+      property: 'acceleration',
+      readable,
+      writable: false
+    },
+    axis: {
+      type: 'axis_sensor',
+      property: 'axis',
+      readable,
+      writable: false
+    },
+    lock: {
+      type: 'lock',
+      property: 'lock',
+      readable,
+      writable: true,
+      values: ['locked', 'unlocked']
+    },
+    lockCodes: {
+      type: 'lock_codes',
+      property: 'lock_codes',
+      readable,
+      writable: true
+    },
+    power: {
+      type: 'power_meter',
+      property: 'power',
+      readable,
+      writable: false,
+      unit: 'W'
+    },
+    energy: {
+      type: 'energy_meter',
+      property: 'energy',
+      readable,
+      writable: false,
+      unit: 'kWh'
+    },
+    alarm: {
+      type: 'alarm',
+      property: 'alarm',
+      readable,
+      writable: true
+    },
+    chime: {
+      type: 'chime',
+      property: 'chime',
+      readable,
+      writable: true
+    },
+    button: {
+      type: 'button',
+      property: 'button',
+      readable,
+      writable: false
+    },
+    presence: {
+      type: 'presence_sensor',
+      property: 'presence',
+      readable,
+      writable: false
+    },
+    water: {
+      type: 'water_sensor',
+      property: 'water',
+      readable,
+      writable: false
+    },
+    smoke: {
+      type: 'smoke_sensor',
+      property: 'smoke',
+      readable,
+      writable: false
+    },
+    carbonMonoxide: {
+      type: 'carbon_monoxide_sensor',
+      property: 'carbon_monoxide',
+      readable,
+      writable: false
+    },
+    thermostat: {
+      type: 'thermostat',
+      property: 'thermostat',
+      readable,
+      writable: true
+    },
+    fan: {
+      type: 'fan',
+      property: 'fan',
+      readable,
+      writable: true
+    },
+    cover: {
+      type: 'cover',
+      property: 'position',
+      readable,
+      writable: true,
+      min: 0,
+      max: 100,
+      unit: '%'
+    },
+    garage: {
+      type: 'garage',
+      property: 'door',
+      readable,
+      writable: true
+    },
+    valve: {
+      type: 'valve',
+      property: 'valve',
+      readable,
+      writable: true
+    },
+    pressure: {
+      type: 'pressure_sensor',
+      property: 'pressure',
+      readable,
+      writable: false
+    },
+    weight: {
+      type: 'weight_sensor',
+      property: 'weight',
+      readable,
+      writable: false
+    },
+    voltage: {
+      type: 'voltage_sensor',
+      property: 'voltage',
+      readable,
+      writable: false,
+      unit: 'V'
+    },
+    firmware: {
+      type: 'firmware',
+      property: 'firmware',
+      readable,
+      writable: false
+    },
+    health: {
+      type: 'health',
+      property: 'health',
+      readable,
+      writable: false
+    }
+  };
+
+  return Array.from(featureSet)
+    .sort()
+    .map((feature) => capabilityByFeature[feature] || {
+      type: feature,
+      property: feature,
+      readable,
+      writable: false
+    })
+    .map((capability) => ({
+      ...capability,
+      protocol: capabilityProtocol
     }));
 }
 
@@ -879,7 +1133,10 @@ function buildDirectFeatureProperties(features) {
     supportsEnergyMeter: featureSet.has('energy'),
     supportsThermostat: featureSet.has('thermostat'),
     supportsAlarm: featureSet.has('alarm'),
-    supportsLockCodes: featureSet.has('lockCodes')
+    supportsLockCodes: featureSet.has('lockCodes'),
+    supportsCover: featureSet.has('cover'),
+    supportsGarage: featureSet.has('garage'),
+    supportsValve: featureSet.has('valve')
   };
 }
 
@@ -889,6 +1146,7 @@ module.exports = {
   FEATURE_LABELS,
   buildDirectFeatureProperties,
   buildFeatureSupport,
+  buildNormalizedCapabilities,
   buildGuidedMigrationSteps,
   buildMigrationPlan,
   getDirectProtocol,

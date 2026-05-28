@@ -371,13 +371,7 @@ struct AppShellView: View {
                 HBPageBackground()
                     .ignoresSafeArea()
 
-                Group {
-                    if usesSidebarDrawer {
-                        compactShell
-                    } else {
-                        regularShell
-                    }
-                }
+                responsiveShell
                 .padding(.top, topBarHeight + topBarBottomSpacing + compactTopBarClearance)
 
                 topBar
@@ -492,23 +486,22 @@ struct AppShellView: View {
         }
     }
 
-    private var regularShell: some View {
-        HStack(spacing: shellPadding) {
-            sidebar
-                .frame(width: sidebarWidth)
-            detailStack
-        }
-        .padding(.horizontal, shellPadding)
-        .padding(.bottom, shellPadding)
-        .animation(.easeInOut(duration: 0.25), value: sidebarWidth)
-    }
-
-    private var compactShell: some View {
+    private var responsiveShell: some View {
         ZStack(alignment: .leading) {
-            detailStack
-                .padding(.horizontal, shellPadding)
+            HStack(spacing: usesSidebarDrawer ? 0 : shellPadding) {
+                sidebar
+                    .frame(width: usesSidebarDrawer ? 0 : sidebarWidth)
+                    .opacity(usesSidebarDrawer ? 0 : 1)
+                    .clipped()
+                    .allowsHitTesting(!usesSidebarDrawer)
+                    .accessibilityHidden(usesSidebarDrawer)
 
-            if isCompactSidebarVisible {
+                detailStack
+                    .padding(.horizontal, usesSidebarDrawer ? shellPadding : 0)
+            }
+            .padding(.horizontal, usesSidebarDrawer ? 0 : shellPadding)
+
+            if usesSidebarDrawer && isCompactSidebarVisible {
                 HBPalette.pageBottom.opacity(isSidebarCollapsed ? 0.12 : 0.20)
                     .onTapGesture {
                         withAnimation(.easeInOut(duration: 0.25)) {

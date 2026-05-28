@@ -10,11 +10,13 @@ const directRadioEngineLogService = require('./directRadioEngineLogService');
 const {
   DIRECT_RADIO_SOURCES,
   buildDirectFeatureProperties,
+  buildNormalizedCapabilities,
   buildMigrationPlan,
   inferFeaturesFromSmartThings,
   isDirectRadioDevice,
   normalizeFeature
 } = require('./directRadioDeviceCatalog');
+const directRadioProtocolCatalogService = require('./directRadioProtocolCatalogService');
 const {
   inferDirectDeviceType,
   isDirectLightContext
@@ -127,6 +129,10 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
   ]).sort();
   if (mergedFeatures.length > 0) {
     merged.properties.directRadioFeatures = mergedFeatures;
+    merged.properties.directRadioCapabilities = buildNormalizedCapabilities(
+      mergedFeatures,
+      mergedDirect.protocol || updateProperties.source || existingProperties.source || 'unknown'
+    );
     Object.assign(merged.properties, buildDirectFeatureProperties(mergedFeatures));
   }
 
@@ -853,7 +859,8 @@ function collectZigbeeClusterTokens(zigbeeDevice) {
 
 function extractZigbeeDefinition(converters, zigbeeDevice) {
   try {
-    return converters?.findByDevice?.(zigbeeDevice) || null;
+    const definition = converters?.findByDevice?.(zigbeeDevice) || null;
+    return definition && typeof definition.then === 'function' ? null : definition;
   } catch (_error) {
     return null;
   }
@@ -2333,14 +2340,29 @@ class DirectRadioService {
       return null;
     }
 
-    const definition = extractZigbeeDefinition(this.zigbee.converters, zigbeeDevice);
-    const features = inferFeaturesFromZigbeeDefinition(definition, zigbeeDevice);
+    const catalogMatchInput = {
+      modelID: zigbeeDevice.modelID,
+      manufacturerName: zigbeeDevice.manufacturerName
+    };
+    let definition = null;
+    let catalogEntry = directRadioProtocolCatalogService.findZigbeeCatalogEntry(catalogMatchInput);
+    if (!catalogEntry) {
+      definition = extractZigbeeDefinition(this.zigbee.converters, zigbeeDevice);
+      catalogEntry = directRadioProtocolCatalogService.findZigbeeCatalogEntry({
+        ...catalogMatchInput,
+        definition
+      });
+    }
+    const features = uniqueStrings([
+      ...inferFeaturesFromZigbeeDefinition(definition, zigbeeDevice),
+      ...(Array.isArray(catalogEntry?.homebrainFeatures) ? catalogEntry.homebrainFeatures : [])
+    ].map(normalizeFeature)).sort();
     const directId = trimString(zigbeeDevice.ieeeAddr);
     if (!directId) {
       return null;
     }
 
-    const name = trimString(definition?.description)
+    const name = trimString(catalogEntry?.description || definition?.description)
       || trimString(zigbeeDevice.modelID)
       || trimString(zigbeeDevice.manufacturerName)
       || `Zigbee ${directId.slice(-6)}`;
@@ -2356,17 +2378,17 @@ class DirectRadioService {
         name,
         type: this.inferDeviceTypeFromFeatures(features, {
           name,
-          model: definition?.model || zigbeeDevice.modelID,
-          vendor: definition?.vendor,
-          description: definition?.description,
+          model: catalogEntry?.model || definition?.model || zigbeeDevice.modelID,
+          vendor: catalogEntry?.vendor || definition?.vendor,
+          description: catalogEntry?.description || definition?.description,
           manufacturerName: zigbeeDevice.manufacturerName
         }),
         room: 'Unassigned',
         status: false,
         isOnline: status,
         lastSeen: new Date(),
-        brand: trimString(definition?.vendor || zigbeeDevice.manufacturerName) || undefined,
-        model: trimString(definition?.model || zigbeeDevice.modelID) || undefined,
+        brand: trimString(catalogEntry?.vendor || definition?.vendor || zigbeeDevice.manufacturerName) || undefined,
+        model: trimString(catalogEntry?.model || definition?.model || zigbeeDevice.modelID) || undefined,
         properties: {
           source: DIRECT_RADIO_SOURCES.zigbee,
           homebrainDirect: {
@@ -2377,9 +2399,12 @@ class DirectRadioService {
             manufacturerName: zigbeeDevice.manufacturerName || null,
             interviewCompleted: zigbeeDevice.interviewCompleted !== false,
             lastReason: reason,
-            lastSeen: new Date().toISOString()
+            lastSeen: new Date().toISOString(),
+            catalog: directRadioProtocolCatalogService.buildCatalogReference(catalogEntry)
           },
           directRadioFeatures: features,
+          directRadioCapabilities: buildNormalizedCapabilities(features, 'zigbee'),
+          directRadioCatalog: directRadioProtocolCatalogService.compactCatalogForDevice(catalogEntry),
           ...buildDirectFeatureProperties(features)
         }
       }
@@ -2425,6 +2450,12 @@ class DirectRadioService {
     if (findZWaveValueByLabel(node, /\benergy\b/i) !== undefined) features.add('energy');
     if (findZWaveValueByLabel(node, /\bwater|leak\b/i) !== undefined) features.add('water');
     if (findZWaveValueByLabel(node, /\btamper\b/i) !== undefined) features.add('tamper');
+
+    const catalogEntry = directRadioProtocolCatalogService.getZWaveNodeCatalogEntry(node);
+    (Array.isArray(catalogEntry?.homebrainFeatures) ? catalogEntry.homebrainFeatures : [])
+      .map(normalizeFeature)
+      .filter(Boolean)
+      .forEach((feature) => features.add(feature));
 
     const currentLockMode = getZWaveValue(node, zwave.DoorLockCCValues.currentMode);
     const binaryValue = getZWaveValue(node, zwave.BinarySwitchCCValues.currentValue);
@@ -2474,10 +2505,13 @@ class DirectRadioService {
             isListening: node.isListening,
             isFrequentListening: node.isFrequentListening,
             lastReason: reason,
-            lastSeen: new Date().toISOString()
+            lastSeen: new Date().toISOString(),
+            catalog: directRadioProtocolCatalogService.buildCatalogReference(catalogEntry)
           },
           homeBrainBatteryLevel: batteryLevel,
           directRadioFeatures: directFeatures,
+          directRadioCapabilities: buildNormalizedCapabilities(directFeatures, 'zwave'),
+          directRadioCatalog: directRadioProtocolCatalogService.compactCatalogForDevice(catalogEntry),
           ...buildDirectFeatureProperties(directFeatures)
         }
       }
@@ -2595,6 +2629,7 @@ class DirectRadioService {
       ...(update.properties || {}),
       source,
       directRadioFeatures: features,
+      directRadioCapabilities: buildNormalizedCapabilities(features, identity.protocol),
       ...buildDirectFeatureProperties(features),
       smartThingsMigration: {
         migratedAt: new Date().toISOString(),

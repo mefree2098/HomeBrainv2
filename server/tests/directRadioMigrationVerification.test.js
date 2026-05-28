@@ -67,6 +67,7 @@ test('direct radio refresh preserves user-edited name and room while updating li
   assert.equal(merged.properties.homebrainDirect.nodeId, 6);
   assert.equal(merged.properties.homebrainDirect.generatedName, '39348 / 39455 / ZW4008');
   assert.deepEqual(merged.properties.directRadioFeatures, ['illuminance', 'switch']);
+  assert.ok(merged.properties.directRadioCapabilities.some((capability) => capability.type === 'switch'));
 });
 
 test('direct radio refresh preserves SmartThings-inferred switch features after Zigbee migration', () => {
@@ -112,6 +113,7 @@ test('direct radio refresh preserves SmartThings-inferred switch features after 
   assert.equal(merged.type, 'switch');
   assert.equal(merged.properties.source, 'homebrain-zigbee');
   assert.ok(merged.properties.directRadioFeatures.includes('switch'));
+  assert.ok(merged.properties.directRadioCapabilities.some((capability) => capability.type === 'switch'));
 });
 
 test('Zigbee feature inference falls back to endpoint clusters for Innr SP 224 plugs', () => {
@@ -129,6 +131,28 @@ test('Zigbee feature inference falls back to endpoint clusters for Innr SP 224 p
   assert.ok(features.includes('switch'));
   assert.ok(features.includes('power'));
   assert.ok(features.includes('energy'));
+});
+
+test('Zigbee normalization enriches devices from the installed converter catalog', () => {
+  const service = createService();
+  const normalized = service.normalizeZigbeeDevice({
+    ieeeAddr: '0x00158d0000000000',
+    modelID: 'SP 224',
+    manufacturerName: 'innr',
+    interviewCompleted: true,
+    endpoints: [
+      {
+        ID: 1,
+        inputClusters: [0, 3, 4, 5, 6]
+      }
+    ]
+  }, 'sync');
+
+  assert.equal(normalized.update.model, 'SP 224');
+  assert.equal(normalized.update.brand, 'Innr');
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('switch'));
+  assert.equal(normalized.update.properties.homebrainDirect.catalog.model, 'SP 224');
+  assert.ok(normalized.update.properties.directRadioCatalog.exposes.some((expose) => expose.type === 'switch'));
 });
 
 test('direct radio upsert prefers complete switch records over stale partial duplicates', () => {
