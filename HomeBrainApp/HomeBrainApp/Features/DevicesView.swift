@@ -158,7 +158,7 @@ struct DevicesView: View {
             } else {
                 matchesType = device.type == typeFilter
             }
-            return matchesSearchAndSource && matchesType
+            return !isRetiredSmartThingsMigrationSource(device) && matchesSearchAndSource && matchesType
         }
     }
 
@@ -546,6 +546,12 @@ struct DevicesView: View {
                                     .foregroundStyle(HBPalette.textSecondary)
                                 batteryIndicator(for: device, compact: true)
                             }
+                            if sensorTemperatureF(for: device) != nil {
+                                Text("·")
+                                    .font(.system(size: useLandscapeCompactLayout ? 11 : 12, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(HBPalette.textSecondary)
+                                temperatureIndicator(for: device)
+                            }
                         }
                     }
 
@@ -599,7 +605,6 @@ struct DevicesView: View {
                 statusBadge(for: device)
                 deviceTypeBadge(for: device)
                 deviceSourceBadge(for: device)
-                batteryIndicator(for: device, compact: true)
                 if isSmartThingsBackedDevice(device) || needsMigrationFinalization(device) {
                     migrationBadge()
                 }
@@ -612,7 +617,6 @@ struct DevicesView: View {
                 }
                 HStack(spacing: 8) {
                     deviceSourceBadge(for: device)
-                    batteryIndicator(for: device, compact: true)
                     if isSmartThingsBackedDevice(device) || needsMigrationFinalization(device) {
                         migrationBadge()
                     }
@@ -4053,6 +4057,31 @@ struct DevicesView: View {
         }
     }
 
+    private func sensorTemperatureF(for device: DeviceItem) -> Double? {
+        let state = directRadioState(for: device)
+        if let temperatureF = numberValue(from: state["temperatureF"] ?? device.temperature) {
+            return temperatureF
+        }
+        if let temperatureC = numberValue(from: state["temperatureC"]) {
+            return (temperatureC * 9 / 5) + 32
+        }
+        return nil
+    }
+
+    @ViewBuilder
+    private func temperatureIndicator(for device: DeviceItem) -> some View {
+        if let temperature = sensorTemperatureF(for: device) {
+            HStack(spacing: 3) {
+                Image(systemName: "thermometer.medium")
+                    .font(.system(size: 11, weight: .bold))
+                Text("\(formatNumber(temperature))°")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+            }
+            .foregroundStyle(HBPalette.accentBlue)
+            .accessibilityLabel("Temperature \(formatNumber(temperature)) degrees")
+        }
+    }
+
     private func sensorStateLabel(for device: DeviceItem) -> String? {
         let state = directRadioState(for: device)
         if state["contactOpen"] != nil {
@@ -4094,8 +4123,7 @@ struct DevicesView: View {
             rows.append(("Sensor state", sensorState))
         }
 
-        let temperatureF = numberValue(from: state["temperatureF"] ?? device.temperature)
-            ?? numberValue(from: state["temperatureC"]).map { ($0 * 9 / 5) + 32 }
+        let temperatureF = sensorTemperatureF(for: device)
         if let temperatureF {
             rows.append(("Temperature", "\(formatNumber(temperatureF))°"))
         }
@@ -4119,7 +4147,7 @@ struct DevicesView: View {
         let state = directRadioState(for: device)
         let values: [String?] = [
             sensorStateLabel(for: device),
-            numberValue(from: state["temperatureF"] ?? device.temperature).map { "\(Int($0.rounded()))°" },
+            sensorTemperatureF(for: device).map { "\(Int($0.rounded()))°" },
             batteryStatusText(for: device),
             numberValue(from: state["humidity"]).map { "\(Int($0.rounded()))% humidity" },
             numberValue(from: state["illuminance"]).map { "\(Int($0.rounded())) lx" }
@@ -4377,6 +4405,12 @@ struct DevicesView: View {
         return JSON.optionalString(migration, "finalizedAt") != nil
             || boolValue(validation["finalized"])
             || validationStatus == "passed"
+    }
+
+    private func isRetiredSmartThingsMigrationSource(_ device: DeviceItem) -> Bool {
+        let migration = smartThingsMigration(for: device)
+        let status = stringValue(migration["status"]).lowercased()
+        return boolValue(migration["retiredSource"]) || status == "finalized_source"
     }
 
     private func needsMigrationFinalization(_ device: DeviceItem) -> Bool {

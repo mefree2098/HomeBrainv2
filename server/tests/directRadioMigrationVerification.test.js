@@ -7,10 +7,13 @@ const Device = require('../models/Device');
 const DirectRadioService = directRadioService.DirectRadioService;
 const {
   inferFeaturesFromZigbeeDefinition,
+  mergeSmartThingsTelemetryFallback,
   mergeDirectDeviceUpdateForExisting,
-  selectPrimaryDirectDeviceRecord
+  selectPrimaryDirectDeviceRecord,
+  scoreDetachedSmartThingsMigrationSource
 } = directRadioService._test;
 const DEVICE_ID = '507f1f77bcf86cd799439011';
+const SOURCE_DEVICE_ID = '507f1f77bcf86cd799439012';
 
 function createService() {
   const service = new DirectRadioService();
@@ -687,6 +690,178 @@ test('direct radio migration finalization persists passed validation for native 
     Device.findById = originalFindById;
     Device.findByIdAndUpdate = originalFindByIdAndUpdate;
   }
+});
+
+test('direct radio migration finalization recovers detached SmartThings source and retires duplicate source', async () => {
+  const service = createService();
+  service.emitDeviceUpdate = () => {};
+
+  const originalFindById = Device.findById;
+  const originalFind = Device.find;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const directDevice = {
+    _id: DEVICE_ID,
+    name: 'Vault Door Sensor',
+    type: 'sensor',
+    room: 'Vault',
+    status: false,
+    isOnline: true,
+    temperature: undefined,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x000d6f000b11f6e5',
+        manufacturerName: 'Visonic',
+        modelID: 'MCT-340 E'
+      },
+      directRadioFeatures: ['battery', 'contact', 'tamper', 'temperature'],
+      directRadioState: {
+        contactOpen: false,
+        contact: 'closed',
+        batteryLevel: 33
+      },
+      homeBrainBatteryLevel: 33,
+      batteryLevel: 33
+    }
+  };
+  const sourceDevice = {
+    _id: SOURCE_DEVICE_ID,
+    name: 'Vault Door',
+    type: 'sensor',
+    room: 'Vault',
+    status: true,
+    isOnline: true,
+    temperature: 75.2,
+    properties: {
+      source: 'smartthings',
+      smartThingsDeviceId: 'decc41de-30d6-4eac-96d9-82ff3b4e7f05',
+      smartThingsDeviceName: 'Visonic Open/Closed Sensor',
+      smartThingsLabel: 'Vault Door',
+      smartThingsCapabilities: ['contactSensor', 'temperatureMeasurement', 'battery', 'firmwareUpdate', 'refresh'],
+      smartThingsCategories: ['contactsensor'],
+      smartThingsManufacturer: 'SmartThingsCommunity',
+      smartThingsDeviceNetworkType: 'ZIGBEE',
+      smartThingsBatteryLevel: 33,
+      smartThingsAttributeValues: {
+        temperatureMeasurement: {
+          temperature: 75.2
+        },
+        battery: {
+          battery: 33
+        }
+      },
+      smartThingsAttributeMetadata: {
+        temperatureMeasurement: {
+          temperature: {
+            unit: 'F'
+          }
+        }
+      }
+    }
+  };
+  const persistedUpdates = [];
+  Device.findById = async (id) => (String(id) === DEVICE_ID ? directDevice : null);
+  Device.find = async () => [sourceDevice];
+  Device.findByIdAndUpdate = async (id, update) => {
+    persistedUpdates.push({ id: String(id), update });
+    const base = String(id) === SOURCE_DEVICE_ID ? sourceDevice : directDevice;
+    return {
+      ...base,
+      ...update,
+      _id: String(id),
+      properties: update.properties
+    };
+  };
+
+  try {
+    const result = await service.finalizeDeviceMigration({
+      deviceId: DEVICE_ID,
+      reason: 'Native contact state verified'
+    });
+
+    const directUpdate = persistedUpdates.find((entry) => entry.id === DEVICE_ID)?.update;
+    const sourceUpdate = persistedUpdates.find((entry) => entry.id === SOURCE_DEVICE_ID)?.update;
+    assert.equal(result.finalization.validation.status, 'passed');
+    assert.equal(directUpdate.temperature, 75.2);
+    assert.equal(directUpdate.properties.directRadioState.temperatureF, 75.2);
+    assert.equal(directUpdate.properties.smartThingsMigration.sourceDeviceId, SOURCE_DEVICE_ID);
+    assert.equal(directUpdate.properties.smartThingsMigration.smartThingsDeviceId, 'decc41de-30d6-4eac-96d9-82ff3b4e7f05');
+    assert.equal(sourceUpdate.properties.smartThingsMigration.retiredSource, true);
+    assert.equal(sourceUpdate.properties.smartThingsMigration.status, 'finalized_source');
+    assert.equal(sourceUpdate.properties.smartThingsMigration.directDeviceId, DEVICE_ID);
+  } finally {
+    Device.findById = originalFindById;
+    Device.find = originalFind;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+  }
+});
+
+test('detached SmartThings migration matching scores matching native sensor above unrelated candidates', () => {
+  const directDevice = {
+    name: 'Vault Door Sensor',
+    type: 'sensor',
+    room: 'Vault',
+    brand: 'Visonic',
+    model: 'MCT-340 E',
+    properties: {
+      homebrainDirect: {
+        protocol: 'zigbee',
+        manufacturerName: 'Visonic',
+        modelID: 'MCT-340 E'
+      },
+      directRadioFeatures: ['contact', 'battery', 'temperature']
+    }
+  };
+  const sourceDevice = {
+    name: 'Vault Door',
+    type: 'sensor',
+    room: 'Vault',
+    properties: {
+      source: 'smartthings',
+      smartThingsLabel: 'Vault Door',
+      smartThingsDeviceName: 'Visonic Open/Closed Sensor',
+      smartThingsCapabilities: ['contactSensor', 'battery', 'temperatureMeasurement'],
+      smartThingsDeviceNetworkType: 'ZIGBEE'
+    }
+  };
+  const unrelated = {
+    name: 'Kitchen Motion',
+    type: 'sensor',
+    room: 'Kitchen',
+    properties: {
+      source: 'smartthings',
+      smartThingsCapabilities: ['motionSensor', 'battery'],
+      smartThingsDeviceNetworkType: 'ZIGBEE'
+    }
+  };
+
+  assert.ok(scoreDetachedSmartThingsMigrationSource(directDevice, sourceDevice, 'zigbee') >= 55);
+  assert.ok(scoreDetachedSmartThingsMigrationSource(directDevice, unrelated, 'zigbee') < 55);
+  assert.equal(scoreDetachedSmartThingsMigrationSource(directDevice, sourceDevice, 'zwave'), -Infinity);
+});
+
+test('SmartThings telemetry fallback carries available temperature without replacing native battery', () => {
+  const snapshot = mergeSmartThingsTelemetryFallback({
+    properties: {
+      directRadioState: {
+        contactOpen: false,
+        batteryLevel: 41
+      },
+      homeBrainBatteryLevel: 41,
+      batteryLevel: 41
+    }
+  }, {
+    temperature: 75.2,
+    properties: {
+      smartThingsBatteryLevel: 33
+    }
+  });
+
+  assert.equal(snapshot.temperature, 75.2);
+  assert.equal(snapshot.properties.directRadioState.temperatureF, 75.2);
+  assert.equal(snapshot.properties.directRadioState.batteryLevel, 41);
+  assert.equal(snapshot.properties.homeBrainBatteryLevel, 41);
 });
 
 test('direct radio upsert prefers complete switch records over stale partial duplicates', () => {
