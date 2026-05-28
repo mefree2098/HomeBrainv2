@@ -540,10 +540,10 @@ struct DevicesView: View {
                             Text(device.isOnline ? "Online" : "Offline")
                                 .font(.system(size: useLandscapeCompactLayout ? 11 : 12, weight: .semibold, design: .rounded))
                                 .foregroundStyle(device.isOnline ? HBPalette.accentGreen : HBPalette.accentOrange)
-                            if let battery = batteryLevel(for: device) {
-                                Text("· \(battery)% battery")
+                            if let batteryStatus = batteryStatusText(for: device) {
+                                Text("· \(batteryStatus)")
                                     .font(.system(size: useLandscapeCompactLayout ? 11 : 12, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(battery <= 25 ? HBPalette.accentOrange : HBPalette.accentGreen)
+                                    .foregroundStyle(batteryStatusColor(for: device))
                             }
                         }
                     }
@@ -598,8 +598,8 @@ struct DevicesView: View {
                 statusBadge(for: device)
                 deviceTypeBadge(for: device)
                 deviceSourceBadge(for: device)
-                if let battery = batteryLevel(for: device) {
-                    HBBadge(text: "\(battery)% battery")
+                if let batteryStatus = batteryStatusText(for: device) {
+                    HBBadge(text: batteryStatus)
                 }
                 if isSmartThingsBackedDevice(device) || needsMigrationFinalization(device) {
                     migrationBadge()
@@ -613,8 +613,8 @@ struct DevicesView: View {
                 }
                 HStack(spacing: 8) {
                     deviceSourceBadge(for: device)
-                    if let battery = batteryLevel(for: device) {
-                        HBBadge(text: "\(battery)% battery")
+                    if let batteryStatus = batteryStatusText(for: device) {
+                        HBBadge(text: batteryStatus)
                     }
                     if isSmartThingsBackedDevice(device) || needsMigrationFinalization(device) {
                         migrationBadge()
@@ -1867,8 +1867,8 @@ struct DevicesView: View {
                                     HStack(spacing: 8) {
                                         statusBadge(for: device)
                                         HBBadge(text: device.isOnline ? "Online" : "Offline")
-                                        if let battery = batteryLevel(for: device) {
-                                            HBBadge(text: "\(battery)% battery")
+                                        if let batteryStatus = batteryStatusText(for: device) {
+                                            HBBadge(text: batteryStatus)
                                         }
                                     }
                                 }
@@ -1913,6 +1913,8 @@ struct DevicesView: View {
                         if needsMigrationFinalization(device) {
                             directRadioMigrationFinalizationPanel(for: device)
                         }
+
+                        deviceTelemetryDetailsPanel(for: device)
 
                         HBPanel {
                             VStack(alignment: .leading, spacing: 8) {
@@ -2053,6 +2055,37 @@ struct DevicesView: View {
                 }
                 .buttonStyle(HBPrimaryButtonStyle())
                 .disabled(!canSave)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func deviceTelemetryDetailsPanel(for device: DeviceItem) -> some View {
+        let rows = deviceTelemetryRows(for: device)
+        if !rows.isEmpty {
+            HBPanel {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Telemetry")
+                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                                Text(row.label)
+                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(HBPalette.textSecondary)
+                                Spacer(minLength: 12)
+                                Text(row.value)
+                                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                                    .foregroundStyle(HBPalette.textPrimary)
+                                    .multilineTextAlignment(.trailing)
+                            }
+                        }
+                    }
+                    .padding(12)
+                    .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
+                }
             }
         }
     }
@@ -3869,6 +3902,10 @@ struct DevicesView: View {
         return nil
     }
 
+    private func formatNumber(_ value: Double, digits: Int = 0) -> String {
+        String(format: "%.\(digits)f", value)
+    }
+
     private func normalizedHexColor(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let regex = try? NSRegularExpression(pattern: "^#[0-9a-fA-F]{6}$"),
@@ -3932,7 +3969,70 @@ struct DevicesView: View {
             }
         }
 
+        if let voltage = batteryVoltage(for: device) {
+            return batteryLevelFromVoltage(voltage)
+        }
+
         return nil
+    }
+
+    private func batteryVoltage(for device: DeviceItem) -> Double? {
+        let directState = directRadioState(for: device)
+        let candidates: [Any?] = [
+            directState["batteryVoltage"],
+            device.properties["homeBrainBatteryVoltage"],
+            device.properties["directBatteryVoltage"],
+            device.properties["batteryVoltage"],
+            device.properties["matterBatteryVoltage"]
+        ]
+
+        for candidate in candidates {
+            if let voltage = numberValue(from: candidate), voltage > 0 {
+                return (voltage * 100).rounded() / 100
+            }
+        }
+
+        return nil
+    }
+
+    private func batteryLevelFromVoltage(_ voltage: Double) -> Int? {
+        if voltage >= 2, voltage <= 3.3 {
+            return percentValue(((voltage - 2.1) / 0.9) * 100)
+        }
+        if voltage >= 1, voltage <= 1.8 {
+            return percentValue(((voltage - 1) / 0.6) * 100)
+        }
+        if voltage >= 4, voltage <= 6.6 {
+            return percentValue(((voltage - 4.2) / 1.8) * 100)
+        }
+        return nil
+    }
+
+    private func deviceSupportsBattery(_ device: DeviceItem) -> Bool {
+        if boolValue(device.properties["supportsBattery"]) {
+            return true
+        }
+        if batteryLevel(for: device) != nil || batteryVoltage(for: device) != nil {
+            return true
+        }
+        return propertyStringSet(for: device, key: "directRadioFeatures").contains("battery")
+    }
+
+    private func batteryStatusText(for device: DeviceItem) -> String? {
+        if let battery = batteryLevel(for: device) {
+            return "\(battery)% battery"
+        }
+        if let voltage = batteryVoltage(for: device) {
+            return "\(formatNumber(voltage, digits: 2)) V battery"
+        }
+        return deviceSupportsBattery(device) ? "Battery awaiting report" : nil
+    }
+
+    private func batteryStatusColor(for device: DeviceItem) -> Color {
+        guard let battery = batteryLevel(for: device) else {
+            return batteryVoltage(for: device) == nil ? HBPalette.textSecondary : HBPalette.accentGreen
+        }
+        return battery <= 25 ? HBPalette.accentOrange : HBPalette.accentGreen
     }
 
     private func sensorStateLabel(for device: DeviceItem) -> String? {
@@ -3959,12 +4059,50 @@ struct DevicesView: View {
         return nil
     }
 
+    private func deviceTelemetryRows(for device: DeviceItem) -> [(label: String, value: String)] {
+        let state = directRadioState(for: device)
+        var rows: [(label: String, value: String)] = []
+
+        if let batteryStatus = batteryStatusText(for: device) {
+            rows.append(("Battery", batteryStatus))
+        }
+        if let voltage = batteryVoltage(for: device) {
+            rows.append(("Battery voltage", "\(formatNumber(voltage, digits: 2)) V"))
+        }
+        if state["batteryLow"] != nil {
+            rows.append(("Battery low", boolValue(state["batteryLow"]) ? "Yes" : "No"))
+        }
+        if let sensorState = sensorStateLabel(for: device) {
+            rows.append(("Sensor state", sensorState))
+        }
+
+        let temperatureF = numberValue(from: state["temperatureF"] ?? device.temperature)
+            ?? numberValue(from: state["temperatureC"]).map { ($0 * 9 / 5) + 32 }
+        if let temperatureF {
+            rows.append(("Temperature", "\(formatNumber(temperatureF))°"))
+        }
+        if let humidity = numberValue(from: state["humidity"]) {
+            rows.append(("Humidity", "\(formatNumber(humidity))%"))
+        }
+        if let illuminance = numberValue(from: state["illuminance"]) {
+            rows.append(("Illuminance", "\(formatNumber(illuminance)) lx"))
+        }
+        if state["vibrationActive"] != nil || state["accelerationActive"] != nil {
+            rows.append(("Vibration", boolValue(state["vibrationActive"]) || boolValue(state["accelerationActive"]) ? "Detected" : "Clear"))
+        }
+        if state["tamperActive"] != nil || state["tamper"] != nil {
+            rows.append(("Tamper", boolValue(state["tamperActive"]) || boolValue(state["tamper"]) ? "Detected" : "Clear"))
+        }
+
+        return rows
+    }
+
     private func sensorSummary(for device: DeviceItem) -> String {
         let state = directRadioState(for: device)
         let values: [String?] = [
             sensorStateLabel(for: device),
             numberValue(from: state["temperatureF"] ?? device.temperature).map { "\(Int($0.rounded()))°" },
-            batteryLevel(for: device).map { "\($0)% battery" },
+            batteryStatusText(for: device),
             numberValue(from: state["humidity"]).map { "\(Int($0.rounded()))% humidity" },
             numberValue(from: state["illuminance"]).map { "\(Int($0.rounded())) lx" }
         ]

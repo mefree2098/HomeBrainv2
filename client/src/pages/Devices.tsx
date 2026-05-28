@@ -397,7 +397,72 @@ const getDeviceBatteryLevel = (device: any): number | null => {
     }
   }
 
+  const inferred = inferBatteryLevelFromVoltage(getDeviceBatteryVoltage(device))
+  if (inferred !== null) {
+    return inferred
+  }
+
   return null
+}
+
+const inferBatteryLevelFromVoltage = (value: unknown): number | null => {
+  const voltage = toFiniteNumber(value)
+  if (voltage === null) {
+    return null
+  }
+  if (voltage >= 2 && voltage <= 3.3) {
+    return clampPercent(((voltage - 2.1) / 0.9) * 100)
+  }
+  if (voltage >= 1 && voltage <= 1.8) {
+    return clampPercent(((voltage - 1) / 0.6) * 100)
+  }
+  if (voltage >= 4 && voltage <= 6.6) {
+    return clampPercent(((voltage - 4.2) / 1.8) * 100)
+  }
+  return null
+}
+
+const getDeviceBatteryVoltage = (device: any): number | null => {
+  const state = getDirectRadioState(device)
+  const properties = device?.properties || {}
+  const candidates = [
+    state.batteryVoltage,
+    properties.homeBrainBatteryVoltage,
+    properties.directBatteryVoltage,
+    properties.batteryVoltage,
+    properties.matterBatteryVoltage
+  ]
+  for (const candidate of candidates) {
+    const voltage = toFiniteNumber(candidate)
+    if (voltage !== null && voltage > 0) {
+      return Math.round(voltage * 100) / 100
+    }
+  }
+  return null
+}
+
+const deviceSupportsBattery = (device: any): boolean => {
+  const properties = device?.properties || {}
+  if (properties.supportsBattery === true) {
+    return true
+  }
+  if (getDeviceBatteryLevel(device) !== null || getDeviceBatteryVoltage(device) !== null) {
+    return true
+  }
+  const features = Array.isArray(properties.directRadioFeatures) ? properties.directRadioFeatures : []
+  return features.map((feature: unknown) => String(feature || '').toLowerCase()).includes('battery')
+}
+
+const getDeviceBatteryLabel = (device: any): string | null => {
+  const level = getDeviceBatteryLevel(device)
+  if (level !== null) {
+    return `${level}% battery`
+  }
+  const voltage = getDeviceBatteryVoltage(device)
+  if (voltage !== null) {
+    return `${voltage} V battery`
+  }
+  return deviceSupportsBattery(device) ? 'Battery awaiting report' : null
 }
 
 const formatSensorTemperature = (device: any): string | null => {
@@ -434,7 +499,7 @@ const getSensorSummary = (device: any): string => {
   const parts = [
     getSensorStateLabel(device),
     formatSensorTemperature(device),
-    getDeviceBatteryLevel(device) !== null ? `${getDeviceBatteryLevel(device)}% battery` : null,
+    getDeviceBatteryLabel(device),
     state.humidity !== undefined ? `${Math.round(Number(state.humidity))}% humidity` : null,
     state.illuminance !== undefined ? `${Math.round(Number(state.illuminance))} lx` : null
   ].filter(Boolean)
@@ -2084,7 +2149,7 @@ export function Devices({
     const stateText = getDeviceStateText(device)
     const sourceLabel = getDeviceSourceLabel(getDeviceSource(device))
     const primaryActionLabel = canPrimaryControl ? getDevicePrimaryActionLabel(device) : "Details"
-    const batteryLevel = getDeviceBatteryLevel(device)
+    const batteryLabel = getDeviceBatteryLabel(device)
 
     return (
       <Card
@@ -2139,8 +2204,8 @@ export function Devices({
             {energyMonitoring ? (
               <Badge variant="outline" className="rounded-full">Energy</Badge>
             ) : null}
-            {batteryLevel !== null ? (
-              <Badge variant="outline" className="rounded-full">{batteryLevel}% battery</Badge>
+            {batteryLabel ? (
+              <Badge variant="outline" className="rounded-full">{batteryLabel}</Badge>
             ) : null}
             {(isSmartThingsBackedDevice(device) || needsMigrationFinalization(device)) ? (
               <Badge variant="outline" className="rounded-full border-cyan-300/30 bg-cyan-300/10 text-cyan-100">Migration</Badge>
