@@ -132,6 +132,43 @@ function installLockContext(t, { device = nativeLockDevice(), accessControl = ma
   };
 }
 
+test('native Z-Wave lock normalization exposes battery level for display and automations', () => {
+  const service = new DirectRadioService();
+  const values = new Map([
+    [zwave.DoorLockCCValues.currentMode.id, zwave.DoorLockMode.Secured],
+    [zwave.BatteryCCValues.level.id, 72]
+  ]);
+  const node = {
+    id: 9,
+    name: 'Kwikset 916',
+    status: 4,
+    isListening: false,
+    isFrequentListening: false,
+    manufacturerId: 144,
+    productType: 3,
+    productId: 8,
+    productLabel: 'SmartCode 916',
+    deviceConfig: {
+      manufacturer: 'Kwikset',
+      label: 'SmartCode 916'
+    },
+    valueDB: {
+      hasValue: (id) => values.has(id),
+      getValue: (id) => values.get(id),
+      findValues: () => [],
+      getMetadata: () => null
+    }
+  };
+
+  const normalized = service.normalizeZWaveNode(node, 'test');
+
+  assert.equal(normalized.update.type, 'lock');
+  assert.equal(normalized.update.properties.homeBrainBatteryLevel, 72);
+  assert.equal(normalized.update.properties.batteryLevel, 72);
+  assert.equal(normalized.update.properties.supportsBattery, true);
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('battery'));
+});
+
 test('native Z-Wave lock PIN state redacts codes and preserves HomeBrain labels', async (t) => {
   const { service } = installLockContext(t);
 

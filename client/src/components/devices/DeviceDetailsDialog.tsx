@@ -3,6 +3,7 @@ import {
   type LucideIcon,
   Activity,
   BarChart3,
+  Battery,
   Clock3,
   Cpu,
   Gauge,
@@ -427,6 +428,40 @@ function clampBrightness(value: number): number {
     return 0
   }
   return Math.max(0, Math.min(100, Math.round(value)))
+}
+
+function clampPercent(value: unknown): number | null {
+  const numeric = toFiniteNumber(value)
+  return numeric === null ? null : Math.max(0, Math.min(100, Math.round(numeric)))
+}
+
+function getDeviceBatteryLevel(device: DeviceLike | null): number | null {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  const attributeValues = properties?.smartThingsAttributeValues as Record<string, unknown> | undefined
+  const batteryAttributes = attributeValues?.battery as Record<string, unknown> | undefined
+  const candidates = [
+    properties?.homeBrainBatteryLevel,
+    properties?.directBatteryLevel,
+    properties?.batteryLevel,
+    properties?.matterBatteryLevel,
+    properties?.smartThingsBatteryLevel,
+    properties?.battery,
+    batteryAttributes?.battery,
+    batteryAttributes?.batteryLevel
+  ]
+
+  for (const candidate of candidates) {
+    const percent = clampPercent(candidate)
+    if (percent !== null) {
+      return percent
+    }
+  }
+
+  return null
+}
+
+function getBatteryTone(level: number): "emerald" | "amber" {
+  return level <= 25 ? "amber" : "emerald"
 }
 
 function getLightBrightness(device: DeviceLike | null): number {
@@ -1602,9 +1637,13 @@ export function DeviceDetailsDialog({
   const currentLightColor = lightColorDraft ?? getLightColor(device)
   const currentThermostatMode = getThermostatMode(device)
   const currentThermostatSetpoint = thermostatSetpointDraft ?? getThermostatTargetTemperature(device)
+  const batteryLevel = getDeviceBatteryLevel(device)
+  const batteryLabel = batteryLevel !== null ? `${batteryLevel}%` : null
+  const batteryTone = batteryLevel !== null ? getBatteryTone(batteryLevel) : "emerald"
   const overviewHeroRows: DeviceTabHeroRow[] = [
     { label: "Room", value: deviceRoom },
     { label: "Last contact", value: formatDateTime(device?.lastSeen) },
+    ...(batteryLabel ? [{ label: "Battery", value: batteryLabel }] : []),
     { label: "Groups", value: groupSummary }
   ]
   const controlsHeroRows: DeviceTabHeroRow[] = [
@@ -1656,6 +1695,17 @@ export function DeviceDetailsDialog({
       icon: RadioTower,
       tone: device?.isOnline === false ? "amber" : "sky"
     },
+    ...(batteryLabel
+      ? [{
+          label: "Battery",
+          value: batteryLabel,
+          hint: batteryLevel !== null && batteryLevel <= 25
+            ? "Low enough for an automation threshold or notification."
+            : "Available for low-battery workflow triggers.",
+          icon: Battery,
+          tone: batteryTone
+        }]
+      : []),
     {
       label: "Placement",
       value: deviceRoom,
@@ -2713,6 +2763,7 @@ export function DeviceDetailsDialog({
                   pills={[
                     { label: primaryStateLabel, tone: device?.status ? "emerald" : "sky" },
                     { label: connectivityLabel, tone: device?.isOnline === false ? "amber" : "sky" },
+                    ...(batteryLabel ? [{ label: `Battery ${batteryLabel}`, tone: batteryTone }] : []),
                     { label: liveSnapshot.supportsEnergyMonitoring ? "Energy telemetry" : "Control profile" }
                   ]}
                   summaryTitle="Status summary"
@@ -2965,6 +3016,9 @@ export function DeviceDetailsDialog({
                         <DeviceDetailRow label="Room" value={deviceRoom} />
                         <DeviceDetailRow label="Type" value={deviceTypeLabel} />
                         <DeviceDetailRow label="Source" value={getSourceLabel(device)} />
+                        {batteryLabel ? (
+                          <DeviceDetailRow label="Battery" value={batteryLabel} />
+                        ) : null}
                         {getSourceLabel(device) === "Harmony" && harmonyEntityType ? (
                           <DeviceDetailRow
                             label="Harmony target"

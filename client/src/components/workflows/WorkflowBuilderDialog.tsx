@@ -119,6 +119,7 @@ type TriggerPropertyOption = {
   kind: TriggerPropertyKind;
   unit?: string;
   energyMetric?: boolean;
+  batteryMetric?: boolean;
 };
 
 const NUMERIC_TRIGGER_OPERATORS = ["eq", "neq", "gt", "gte", "lt", "lte"] as const;
@@ -176,6 +177,9 @@ function formatSmartThingsAttributeLabel(path: string[], unit?: string) {
   const aliasKey = `${capability || ""}.${attribute || ""}`;
 
   switch (aliasKey) {
+    case "battery.battery":
+    case "battery.batteryLevel":
+      return `Battery level${suffix || " (%)"}`;
     case "powerMeter.power":
       return `Power draw${suffix}`;
     case "energyMeter.energy":
@@ -218,6 +222,16 @@ function formatTriggerPropertyLabel(property: string) {
 
   if (property === "targetTemperature") {
     return "Target temperature";
+  }
+
+  if ([
+    "homeBrainBatteryLevel",
+    "directBatteryLevel",
+    "batteryLevel",
+    "matterBatteryLevel",
+    "smartThingsBatteryLevel"
+  ].includes(property)) {
+    return "Battery level (%)";
   }
 
   if (property === "sense.currentPowerW") {
@@ -290,6 +304,38 @@ function getNestedRecordValue(source: unknown, path: string[]): unknown {
   return current;
 }
 
+function toFiniteNumber(value: unknown): number | null {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function clampPercentValue(value: unknown): number | null {
+  const numeric = toFiniteNumber(value);
+  return numeric === null ? null : Math.max(0, Math.min(100, Math.round(numeric)));
+}
+
+function collectBatteryTriggerOptions(device: DeviceLite | undefined): TriggerPropertyOption[] {
+  const properties = (device?.properties as Record<string, unknown> | undefined) || {};
+  const candidates = [
+    { key: "homeBrainBatteryLevel", value: properties.homeBrainBatteryLevel },
+    { key: "directBatteryLevel", value: properties.directBatteryLevel },
+    { key: "batteryLevel", value: properties.batteryLevel },
+    { key: "matterBatteryLevel", value: properties.matterBatteryLevel },
+    { key: "smartThingsBatteryLevel", value: properties.smartThingsBatteryLevel }
+  ];
+
+  const match = candidates.find((candidate) => clampPercentValue(candidate.value) !== null);
+  return match
+    ? [{
+        key: match.key,
+        label: "Battery level (%)",
+        kind: "number",
+        unit: "%",
+        batteryMetric: true
+      }]
+    : [];
+}
+
 function collectSmartThingsAttributeOptions(
   node: unknown,
   metadataNode: unknown,
@@ -320,12 +366,15 @@ function collectSmartThingsAttributeOptions(
 
     const metadata = getNestedRecordValue(metadataNode, [key]) as Record<string, unknown> | undefined;
     const unit = typeof metadata?.unit === "string" && metadata.unit.trim() ? metadata.unit.trim() : undefined;
+    const optionKey = `smartThingsAttributeValues.${nextPrefix.join(".")}`;
+    const aliasKey = `${nextPrefix[nextPrefix.length - 2] || ""}.${nextPrefix[nextPrefix.length - 1] || ""}`;
     options.push({
-      key: `smartThingsAttributeValues.${nextPrefix.join(".")}`,
+      key: optionKey,
       label: formatSmartThingsAttributeLabel(nextPrefix, unit),
       kind: inferTriggerPropertyKind(value),
       unit,
-      energyMetric: isEnergyTriggerProperty(`smartThingsAttributeValues.${nextPrefix.join(".")}`)
+      energyMetric: isEnergyTriggerProperty(optionKey),
+      batteryMetric: aliasKey === "battery.battery" || aliasKey === "battery.batteryLevel"
     });
   });
 
@@ -387,11 +436,15 @@ function getTriggerPropertyOptions(device: DeviceLite | undefined): TriggerPrope
 
   const attributeValues = (device?.properties as Record<string, unknown> | undefined)?.smartThingsAttributeValues;
   const attributeMetadata = (device?.properties as Record<string, unknown> | undefined)?.smartThingsAttributeMetadata;
+  options.push(...collectBatteryTriggerOptions(device));
   options.push(...collectSenseTriggerOptions(device));
   options.push(...collectSmartThingsAttributeOptions(attributeValues, attributeMetadata));
 
   const unique = new Map<string, TriggerPropertyOption>();
   options.forEach((option) => {
+    if (option.batteryMetric && Array.from(unique.values()).some((entry) => entry.batteryMetric)) {
+      return;
+    }
     if (!unique.has(option.key)) {
       unique.set(option.key, option);
     }
@@ -405,6 +458,9 @@ function getDefaultTriggerValue(option: TriggerPropertyOption) {
   }
 
   if (option.kind === "number") {
+    if (option.batteryMetric) {
+      return 20
+    }
     return option.energyMetric ? 25 : 0
   }
 
@@ -430,6 +486,9 @@ function normalizeTriggerOperator(value: unknown, kind: TriggerPropertyKind) {
 
 function getDefaultTriggerOperator(option: TriggerPropertyOption, previousOperator: unknown) {
   const normalizedPrevious = normalizeTriggerOperator(previousOperator, option.kind);
+  if (option.kind === "number" && option.batteryMetric && normalizedPrevious === "eq") {
+    return "lt";
+  }
   if (option.kind === "number" && option.energyMetric && normalizedPrevious === "eq") {
     return "gt";
   }
@@ -1189,8 +1248,10 @@ export function WorkflowBuilderDialog({
   const selectedTriggerOperator = normalizeTriggerOperator(triggerConditions.operator, selectedTriggerPropertyOption.kind);
   const selectedTriggerOperatorOptions = getTriggerOperatorOptions(selectedTriggerPropertyOption.kind);
   const energyThresholdTrigger = Boolean(selectedTriggerPropertyOption.energyMetric);
+  const batteryThresholdTrigger = Boolean(selectedTriggerPropertyOption.batteryMetric);
+  const thresholdTrigger = energyThresholdTrigger || batteryThresholdTrigger;
   const triggerValueLabel = selectedTriggerPropertyOption.kind === "number"
-    ? `${energyThresholdTrigger ? "Threshold" : "Value"}${selectedTriggerPropertyOption.unit ? ` (${selectedTriggerPropertyOption.unit})` : ""}`
+    ? `${thresholdTrigger ? "Threshold" : "Value"}${selectedTriggerPropertyOption.unit ? ` (${selectedTriggerPropertyOption.unit})` : ""}`
     : "Value";
   const triggerSummary = useMemo(
     () => describeTrigger(triggerType, triggerConditions, devices),
@@ -1736,6 +1797,12 @@ export function WorkflowBuilderDialog({
                       {energyThresholdTrigger && (
                         <p className="text-xs text-muted-foreground">
                           Use <span className="font-medium text-foreground">Greater than</span> for turn-on thresholds, or <span className="font-medium text-foreground">Less than</span> with hold time to detect when an appliance has really finished.
+                        </p>
+                      )}
+
+                      {batteryThresholdTrigger && (
+                        <p className="text-xs text-muted-foreground">
+                          Use <span className="font-medium text-foreground">Less than</span> for low-battery notifications, with an optional hold time to avoid duplicate alerts around the threshold.
                         </p>
                       )}
 
