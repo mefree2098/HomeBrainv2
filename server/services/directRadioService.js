@@ -3068,6 +3068,7 @@ class DirectRadioService {
             catalog: directRadioProtocolCatalogService.buildCatalogReference(catalogEntry)
           },
           homeBrainBatteryLevel: batteryLevel,
+          batteryLevel,
           directRadioFeatures: directFeatures,
           directRadioCapabilities: buildNormalizedCapabilities(directFeatures, 'zwave'),
           directRadioCatalog: directRadioProtocolCatalogService.compactCatalogForDevice(catalogEntry),

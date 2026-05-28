@@ -539,6 +539,11 @@ struct DevicesView: View {
                             Text(device.isOnline ? "Online" : "Offline")
                                 .font(.system(size: useLandscapeCompactLayout ? 11 : 12, weight: .semibold, design: .rounded))
                                 .foregroundStyle(device.isOnline ? HBPalette.accentGreen : HBPalette.accentOrange)
+                            if let battery = batteryLevel(for: device) {
+                                Text("· \(battery)% battery")
+                                    .font(.system(size: useLandscapeCompactLayout ? 11 : 12, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(battery <= 25 ? HBPalette.accentOrange : HBPalette.accentGreen)
+                            }
                         }
                     }
 
@@ -592,6 +597,9 @@ struct DevicesView: View {
                 statusBadge(for: device)
                 deviceTypeBadge(for: device)
                 deviceSourceBadge(for: device)
+                if let battery = batteryLevel(for: device) {
+                    HBBadge(text: "\(battery)% battery")
+                }
                 if isSmartThingsBackedDevice(device) || needsMigrationFinalization(device) {
                     migrationBadge()
                 }
@@ -604,6 +612,9 @@ struct DevicesView: View {
                 }
                 HStack(spacing: 8) {
                     deviceSourceBadge(for: device)
+                    if let battery = batteryLevel(for: device) {
+                        HBBadge(text: "\(battery)% battery")
+                    }
                     if isSmartThingsBackedDevice(device) || needsMigrationFinalization(device) {
                         migrationBadge()
                     }
@@ -1801,6 +1812,9 @@ struct DevicesView: View {
                                     HStack(spacing: 8) {
                                         statusBadge(for: device)
                                         HBBadge(text: device.isOnline ? "Online" : "Offline")
+                                        if let battery = batteryLevel(for: device) {
+                                            HBBadge(text: "\(battery)% battery")
+                                        }
                                     }
                                 }
                             }
@@ -3802,6 +3816,48 @@ struct DevicesView: View {
     private func clampBrightness(_ value: Double) -> Double {
         let clamped = min(100, max(0, value))
         return clamped.rounded()
+    }
+
+    private func percentValue(_ value: Any?) -> Int? {
+        let numeric: Double?
+        if let value = value as? Double {
+            numeric = value
+        } else if let value = value as? NSNumber {
+            numeric = value.doubleValue
+        } else if let value = value as? String {
+            numeric = Double(value.trimmingCharacters(in: .whitespacesAndNewlines))
+        } else {
+            numeric = nil
+        }
+
+        guard let numeric, numeric.isFinite else {
+            return nil
+        }
+
+        return Int(min(100, max(0, numeric)).rounded())
+    }
+
+    private func batteryLevel(for device: DeviceItem) -> Int? {
+        let attributeValues = JSON.object(device.properties["smartThingsAttributeValues"])
+        let batteryAttributes = JSON.object(attributeValues["battery"])
+        let candidates: [Any?] = [
+            device.properties["homeBrainBatteryLevel"],
+            device.properties["directBatteryLevel"],
+            device.properties["batteryLevel"],
+            device.properties["matterBatteryLevel"],
+            device.properties["smartThingsBatteryLevel"],
+            device.properties["battery"],
+            batteryAttributes["battery"],
+            batteryAttributes["batteryLevel"]
+        ]
+
+        for candidate in candidates {
+            if let percent = percentValue(candidate) {
+                return percent
+            }
+        }
+
+        return nil
     }
 
     private func currentLightBrightness(for device: DeviceItem) -> Double {
