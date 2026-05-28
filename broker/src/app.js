@@ -1,5 +1,6 @@
 const express = require('express');
 const axios = require('axios');
+const rateLimit = require('express-rate-limit');
 const brokerStore = require('./store');
 const {
   buildAddOrUpdateReport,
@@ -325,35 +326,24 @@ function getRateLimitConfig() {
 }
 
 function createRateLimitMiddleware() {
-  const buckets = new Map();
   const { windowMs, maxRequests } = getRateLimitConfig();
+  const { ipKeyGenerator } = rateLimit;
 
-  return function rateLimitMiddleware(req, res, next) {
-    const now = Date.now();
-    const key = trimString(req.headers['x-forwarded-for'])
-      .split(',')[0]
-      .trim()
-      || trimString(req.socket?.remoteAddress)
-      || 'unknown';
-    const bucket = buckets.get(key);
-
-    if (!bucket || now - bucket.startedAt >= windowMs) {
-      buckets.set(key, { startedAt: now, count: 1 });
-      next();
-      return;
+  return rateLimit({
+    windowMs,
+    limit: maxRequests,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator(req) {
+      return typeof ipKeyGenerator === 'function'
+        ? ipKeyGenerator(req.ip)
+        : (trimString(req.socket?.remoteAddress) || 'unknown');
+    },
+    message: {
+      success: false,
+      error: 'Rate limit exceeded'
     }
-
-    bucket.count += 1;
-    if (bucket.count > maxRequests) {
-      res.status(429).json({
-        success: false,
-        error: 'Rate limit exceeded'
-      });
-      return;
-    }
-
-    next();
-  };
+  });
 }
 
 async function proxyToHub(store, hubId, kind, method = 'get', body = null) {
