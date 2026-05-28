@@ -26,7 +26,7 @@ const CODE_TTL_MS = Math.max(60 * 1000, Number(process.env.OIDC_CODE_TTL_MS || 5
 const TOKEN_TTL_SECONDS = Math.max(300, Number(process.env.OIDC_TOKEN_TTL_SECONDS || 60 * 60));
 const SUPPORTED_SCOPES = Object.freeze(['openid', 'profile', 'email']);
 const SUPPORTED_TOKEN_AUTH_METHODS = Object.freeze(['none', 'client_secret_post', 'client_secret_basic']);
-const SUPPORTED_PKCE_METHODS = Object.freeze(['plain', 'S256']);
+const SUPPORTED_PKCE_METHODS = Object.freeze(['S256']);
 
 class OIDCRequestError extends Error {
   constructor(error, description, status = 400, options = {}) {
@@ -362,7 +362,7 @@ async function parseAuthorizeRequest(query = {}) {
   const scopes = normalizeScopes(query.scope);
   const prompts = splitPrompt(query.prompt);
   const codeChallenge = trimString(query.code_challenge);
-  const codeChallengeMethod = trimString(query.code_challenge_method) || (codeChallenge ? 'plain' : '');
+  const codeChallengeMethod = trimString(query.code_challenge_method) || (codeChallenge ? 'S256' : '');
 
   if (responseType !== 'code') {
     throw new OIDCRequestError('unsupported_response_type', 'Only authorization code flow is supported.');
@@ -520,7 +520,7 @@ async function validateClientAuthentication(req, client, body = {}) {
 function verifyPkce(codeVerifier, authorizationCode, client) {
   const verifier = trimString(codeVerifier);
   const challenge = trimString(authorizationCode.codeChallenge);
-  const method = trimString(authorizationCode.codeChallengeMethod) || 'plain';
+  const method = trimString(authorizationCode.codeChallengeMethod) || 'S256';
 
   if (!challenge) {
     if (client.requirePkce) {
@@ -533,7 +533,7 @@ function verifyPkce(codeVerifier, authorizationCode, client) {
     throw new OIDCRequestError('invalid_request', 'code_verifier is required.');
   }
 
-  const derivedChallenge = method === 'S256' ? sha256Base64Url(verifier) : verifier;
+  const derivedChallenge = sha256Base64Url(verifier);
   if (derivedChallenge !== challenge) {
     throw new OIDCRequestError('invalid_grant', 'PKCE verification failed.');
   }

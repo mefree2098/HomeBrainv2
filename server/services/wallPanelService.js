@@ -255,6 +255,22 @@ function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function secureEqual(left, right) {
+  const leftValue = trimString(left);
+  const rightValue = trimString(right);
+  if (!leftValue || !rightValue) {
+    return false;
+  }
+
+  const leftBuffer = Buffer.from(leftValue, 'utf8');
+  const rightBuffer = Buffer.from(rightValue, 'utf8');
+  if (leftBuffer.length !== rightBuffer.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
 function isPanelWifiPlaceholder(value) {
   return PANEL_WIFI_PLACEHOLDER_VALUES.has(trimString(value));
 }
@@ -803,11 +819,11 @@ function credentialsMatchPanel(panel, credentials = {}) {
   const registrationCode = trimString(credentials.registrationCode);
   const claimToken = trimString(credentials.claimToken);
 
-  if (registrationCode && registrationCode === normalized.settings.registrationCode) {
+  if (registrationCode && secureEqual(registrationCode, normalized.settings.registrationCode)) {
     return true;
   }
 
-  if (claimToken && claimToken === normalized.settings.claimToken) {
+  if (claimToken && secureEqual(claimToken, normalized.settings.claimToken)) {
     const expiresAt = normalized.settings.claimTokenExpires
       ? new Date(normalized.settings.claimTokenExpires).getTime()
       : 0;

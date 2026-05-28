@@ -926,16 +926,16 @@ function getSensorStateLabel(device: DeviceLike | null): string | null {
     return state.contact.toLowerCase() === "open" ? "Open" : "Closed"
   }
   if (state.motionActive !== undefined) {
-    return Boolean(state.motionActive) ? "Motion" : "Clear"
+    return state.motionActive ? "Motion" : "Clear"
   }
   if (state.vibrationActive !== undefined || state.accelerationActive !== undefined) {
-    return Boolean(state.vibrationActive || state.accelerationActive) ? "Vibration" : "Clear"
+    return state.vibrationActive || state.accelerationActive ? "Vibration" : "Clear"
   }
   if (state.tamperActive !== undefined || state.tamper !== undefined) {
-    return Boolean(state.tamperActive || state.tamper) ? "Tamper" : "Clear"
+    return state.tamperActive || state.tamper ? "Tamper" : "Clear"
   }
   if (state.waterDetected !== undefined) {
-    return Boolean(state.waterDetected) ? "Wet" : "Dry"
+    return state.waterDetected ? "Wet" : "Dry"
   }
   return null
 }
@@ -1844,8 +1844,8 @@ export function DeviceDetailsDialog({
     { label: "Temperature", value: formatSensorReading(getSensorTemperatureF(device), "°") },
     { label: "Humidity", value: formatSensorReading(directRadioState.humidity, "%") },
     { label: "Illuminance", value: formatSensorReading(directRadioState.illuminance, " lx") },
-    { label: "Vibration", value: directRadioState.vibrationActive === undefined && directRadioState.accelerationActive === undefined ? null : (Boolean(directRadioState.vibrationActive || directRadioState.accelerationActive) ? "Detected" : "Clear") },
-    { label: "Tamper", value: directRadioState.tamperActive === undefined && directRadioState.tamper === undefined ? null : (Boolean(directRadioState.tamperActive || directRadioState.tamper) ? "Detected" : "Clear") },
+    { label: "Vibration", value: directRadioState.vibrationActive === undefined && directRadioState.accelerationActive === undefined ? null : (directRadioState.vibrationActive || directRadioState.accelerationActive ? "Detected" : "Clear") },
+    { label: "Tamper", value: directRadioState.tamperActive === undefined && directRadioState.tamper === undefined ? null : (directRadioState.tamperActive || directRadioState.tamper ? "Detected" : "Clear") },
     { label: "Battery voltage", value: formatSensorReading(directRadioState.batteryVoltage, " V") }
   ].filter((entry): entry is { label: string; value: string } => Boolean(entry.value))
   const overviewHeroRows: DeviceTabHeroRow[] = [

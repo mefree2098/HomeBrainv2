@@ -79,7 +79,9 @@ async function verifyAccessToken(token, allowedRoles = ALL_ROLES, req = null, op
   let jwtError = null;
   if (process.env.JWT_SECRET) {
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const decoded = jwt.verify(token, process.env.JWT_SECRET, {
+        algorithms: ['HS256']
+      });
       if (decoded?.sid) {
         await authSessionService.assertSessionActive(decoded.sub, decoded.sid);
       }

@@ -110,6 +110,5 @@ module.exports = {
   getHomeBrainPublicOrigin,
   getAxiomPublicOrigin,
   getAxiomCallbackUrl,
-  getAudiobookPublicOrigin,
   getAudiobookCallbackUrl
 };

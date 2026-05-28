@@ -439,7 +439,7 @@ router.get('/broker/health', brokerAuth, async (_req, res) => {
   }
 });
 
-router.get('/broker/catalog', brokerAuth, async (_req, res) => {
+router.get('/broker/catalog', brokerAuth, async (req, res) => {
   try {
     const catalog = await alexaBridgeService.getCatalog();
     await alexaBridgeService.appendActivity(req.alexaBrokerRegistration, {

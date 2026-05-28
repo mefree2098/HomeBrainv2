@@ -102,6 +102,7 @@ const deviceLibraryUpdateService = require("./services/deviceLibraryUpdateServic
 const telemetryService = require("./services/telemetryService");
 const openclawMcpService = require("./services/openclawMcpService");
 const { sendNotFound, sendUnhandledError } = require("./utils/apiErrorResponses");
+const { assertRequiredAuthSecrets } = require("./utils/startupSecrets");
 const cors = require("cors");
 const http = require("http");
 const fs = require("fs");
@@ -169,13 +170,7 @@ function buildAllowedOrigins() {
 }
 
 function buildCorsOptions(req = null) {
-  const requestOrigin = req?.get?.('host')
-    ? normalizeOrigin(`${req.protocol || (req.secure ? 'https' : 'http')}://${req.get('host')}`)
-    : '';
-  const allowedOrigins = [
-    ...buildAllowedOrigins(),
-    requestOrigin
-  ].filter(Boolean);
+  const allowedOrigins = buildAllowedOrigins();
 
   return {
     origin(origin, callback) {
@@ -267,6 +262,14 @@ if (!process.env.DATABASE_URL) {
   process.exit(-1);
 }
 
+try {
+  assertRequiredAuthSecrets();
+} catch (error) {
+  console.error(`Error: ${error.message}`);
+  console.error('Set strong JWT_SECRET and REFRESH_TOKEN_SECRET values before starting HomeBrain.');
+  process.exit(-1);
+}
+
 const SMARTTHINGS_WEBHOOK_DEFAULT_PATH = '/api/smartthings/webhook';
 
 const normalizeWebhookPath = (value, fallback) => {
@@ -286,6 +289,8 @@ const normalizeWebhookPath = (value, fallback) => {
 
   return withLeadingSlash.replace(/\/+$/, '');
 };
+
+const smartThingsWebhookPath = normalizeWebhookPath(process.env.SMARTTHINGS_WEBHOOK_PATH, SMARTTHINGS_WEBHOOK_DEFAULT_PATH);
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -313,8 +318,8 @@ app.use((req, res, next) => {
 app.use(express.json({
   limit: '8mb',
   verify: (req, res, buf) => {
-    if (buf && buf.length) {
-      req.rawBody = Buffer.from(buf);
+    if (req.method === 'POST' && req.path === smartThingsWebhookPath && buf && buf.length) {
+      req.rawBody = buf;
     }
   }
 }));
@@ -461,7 +466,6 @@ app.use('/api/sense', senseRoutes);
 // Security Alarm Routes
 app.use('/api/security-alarm', securityAlarmRoutes);
   // SmartThings Routes
-const smartThingsWebhookPath = normalizeWebhookPath(process.env.SMARTTHINGS_WEBHOOK_PATH, SMARTTHINGS_WEBHOOK_DEFAULT_PATH);
 app.use(smartThingsWebhookPath, smartThingsWebhookRoutes);
 app.use('/api/smartthings', smartThingsRoutes);
 // Ecobee Routes

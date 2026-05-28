@@ -245,10 +245,7 @@ module.exports = {
   DASHBOARD_WEATHER_LOCATION_MODES,
   DASHBOARD_WIDGET_SIZES,
   DASHBOARD_WIDGET_TYPES,
-  createDashboardEntityId,
   createDefaultDashboardView,
   createEmptyDashboardView,
-  normalizeDashboardView,
-  normalizeDashboardViews,
-  normalizeWidget
+  normalizeDashboardViews
 };

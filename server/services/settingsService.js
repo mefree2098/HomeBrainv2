@@ -1,6 +1,34 @@
 const Settings = require('../models/Settings');
 
+const SENSITIVE_SETTING_FIELDS = new Set([
+  'elevenlabsApiKey',
+  'smartthingsToken',
+  'smartthingsClientSecret',
+  'openaiApiKey',
+  'anthropicApiKey',
+  'isyPassword',
+  'hardwareOrbWifiPassword',
+  'smbBackupPassword'
+]);
+
+function maskSecretValue(value) {
+  if (!value) {
+    return value;
+  }
+
+  const normalized = String(value);
+  if (normalized.length <= 4) {
+    return '********';
+  }
+
+  return normalized.replace(/.(?=.{4})/g, '*');
+}
+
 class SettingsService {
+  isSensitiveField(key) {
+    return SENSITIVE_SETTING_FIELDS.has(key);
+  }
+
   isMaskedSecretValue(value) {
     if (typeof value !== 'string') {
       return false;
@@ -75,21 +103,10 @@ class SettingsService {
         'smbBackupPassword', 'smbBackupDomain', 'smbBackupScheduleEnabled',
         'smbBackupScheduleTime', 'smbBackupRetentionCount'
       ];
-      const sensitiveFields = new Set([
-        'elevenlabsApiKey',
-        'smartthingsToken',
-        'smartthingsClientSecret',
-        'openaiApiKey',
-        'anthropicApiKey',
-        'isyPassword',
-        'hardwareOrbWifiPassword',
-        'smbBackupPassword'
-      ]);
-      
       const sanitizedUpdates = {};
       Object.keys(updates).forEach(key => {
         if (allowedFields.includes(key)) {
-          if (sensitiveFields.has(key)) {
+          if (this.isSensitiveField(key)) {
             if (this.isMaskedSecretValue(updates[key])) {
               return;
             }
@@ -259,6 +276,18 @@ class SettingsService {
       return value;
     } catch (error) {
       console.error(`SettingsService: Error getting setting ${key}:`, error.message);
+      throw new Error(`Failed to get setting: ${key}`);
+    }
+  }
+
+  async getSanitizedSetting(key) {
+    try {
+      console.log(`SettingsService: Getting sanitized setting: ${key}`);
+      const settings = await this.getSettings();
+      const value = settings[key];
+      return this.isSensitiveField(key) ? maskSecretValue(value) : value;
+    } catch (error) {
+      console.error(`SettingsService: Error getting sanitized setting ${key}:`, error.message);
       throw new Error(`Failed to get setting: ${key}`);
     }
   }

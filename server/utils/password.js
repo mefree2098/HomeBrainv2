@@ -1,12 +1,17 @@
 const bcrypt = require('bcrypt');
 
+const PASSWORD_COST = Math.max(
+  12,
+  Number.parseInt(process.env.HOMEBRAIN_PASSWORD_BCRYPT_COST || '12', 10) || 12
+);
+
 /**
  * Hashes the password using bcrypt algorithm
  * @param {string} password - The password to hash
  * @return {string} Password hash
  */
 const generatePasswordHash = async (password) => {
-  const salt = await bcrypt.genSalt();
+  const salt = await bcrypt.genSalt(PASSWORD_COST);
   const hash = await bcrypt.hash(password, salt);
   return hash;
 };

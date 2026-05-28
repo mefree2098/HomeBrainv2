@@ -1,9 +1,9 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const UserService = require('../services/userService.js');
 const authSessionService = require('../services/authSessionService.js');
 const { requireUser, extractToken, verifyAccessToken } = require('./middlewares/auth.js');
 const User = require('../models/User.js');
-const { generateAccessToken } = require('../utils/auth.js');
 const { ALL_ROLES, ROLES } = require('../../shared/config/roles.js');
 const oidcService = require('../services/oidcService');
 const { getAxiomPublicOrigin } = require('../utils/platformUrls');
@@ -16,7 +16,71 @@ const {
 } = require('../utils/authCookies');
 
 const router = express.Router();
+const { ipKeyGenerator } = rateLimit;
 const TOKEN_JSON_CLIENT_TYPES = new Set(['ios', 'android', 'desktop', 'api', 'watchos']);
+
+function rateLimitIpKey(req) {
+  return typeof ipKeyGenerator === 'function'
+    ? ipKeyGenerator(req.ip)
+    : (req.ip || req.socket?.remoteAddress || 'unknown');
+}
+
+function buildEmailAwareRateLimitKey(req = {}) {
+  const email = trimString(req.body?.email).toLowerCase();
+  return `${rateLimitIpKey(req)}:${email || 'unknown-email'}`;
+}
+
+function buildClientRateLimitKey(req = {}) {
+  return `${rateLimitIpKey(req)}:${getRequestClientType(req)}`;
+}
+
+const loginRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_LOGIN_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000)),
+  limit: Math.max(5, Number(process.env.HOMEBRAIN_LOGIN_RATE_LIMIT_MAX || 25)),
+  keyGenerator: buildEmailAwareRateLimitKey,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many login attempts. Please retry shortly.'
+  }
+});
+
+const registrationRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_REGISTER_RATE_LIMIT_WINDOW_MS || 60 * 60 * 1000)),
+  limit: Math.max(2, Number(process.env.HOMEBRAIN_REGISTER_RATE_LIMIT_MAX || 10)),
+  keyGenerator: rateLimitIpKey,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many registration attempts. Please retry shortly.'
+  }
+});
+
+const refreshRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_REFRESH_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000)),
+  limit: Math.max(30, Number(process.env.HOMEBRAIN_REFRESH_RATE_LIMIT_MAX || 240)),
+  keyGenerator: buildClientRateLimitKey,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many token refresh attempts. Please retry shortly.'
+  }
+});
+
+const oidcExchangeRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_OIDC_EXCHANGE_RATE_LIMIT_WINDOW_MS || 5 * 60 * 1000)),
+  limit: Math.max(10, Number(process.env.HOMEBRAIN_OIDC_EXCHANGE_RATE_LIMIT_MAX || 60)),
+  keyGenerator: buildClientRateLimitKey,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many OIDC exchange attempts. Please retry shortly.'
+  }
+});
 
 function trimString(value, fallback = '') {
   return typeof value === 'string' ? value.trim() : fallback;
@@ -68,7 +132,7 @@ function getRefreshTokenFromRequest(req) {
     || (shouldReturnTokenJson(req) ? trimString(req.body?.refreshToken) : '');
 }
 
-router.post('/login', async (req, res) => {
+router.post('/login', loginRateLimit, async (req, res) => {
   const sendError = msg => res.status(400).json({ message: msg });
   const { email, password } = req.body;
 
@@ -111,7 +175,7 @@ router.post('/login', async (req, res) => {
   }
 });
 
-router.post('/oidc/exchange', async (req, res) => {
+router.post('/oidc/exchange', oidcExchangeRateLimit, async (req, res) => {
   try {
     const decoded = await oidcService.verifyIssuedAccessToken(req);
     const user = await UserService.get(decoded.sub);
@@ -124,8 +188,9 @@ router.post('/oidc/exchange', async (req, res) => {
       return res.status(403).json({ message: 'User account is inactive' });
     }
 
+    const sessionIssue = await authSessionService.issueSession(user, req);
     return res.status(200).json({
-      accessToken: generateAccessToken(user)
+      accessToken: sessionIssue.tokens.accessToken
     });
   } catch (error) {
     return res.status(error.status || 401).json({
@@ -134,7 +199,7 @@ router.post('/oidc/exchange', async (req, res) => {
   }
 });
 
-router.post('/register', async (req, res, next) => {
+router.post('/register', registrationRateLimit, async (req, res, next) => {
   try {
     const registrationOpen = await UserService.canPublicRegister();
     if (!registrationOpen) {
@@ -169,7 +234,7 @@ router.post('/register', async (req, res, next) => {
 });
 
 router.post('/logout', async (req, res) => {
-  const { email } = req.body || {};
+  const email = trimString(req.body?.email);
   const explicitRefreshToken = req.body?.refreshToken || getCookieValue(req, SESSION_TOKEN_COOKIE_NAME);
 
   let user = null;
@@ -211,7 +276,7 @@ router.post('/logout', async (req, res) => {
   res.status(200).json({ message: 'User logged out successfully.' });
 });
 
-router.post('/refresh', async (req, res) => {
+router.post('/refresh', refreshRateLimit, async (req, res) => {
   const refreshToken = getRefreshTokenFromRequest(req);
 
   console.log('Refresh token request received');

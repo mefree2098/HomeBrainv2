@@ -70,17 +70,6 @@ function getSlotSpokenValue(intent = {}, slotName) {
   return '';
 }
 
-function extractSlotValue(slots = {}, names = []) {
-  const candidates = Array.isArray(names) ? names : [names];
-  for (const name of candidates) {
-    const value = getSlotSpokenValue({ slots }, name);
-    if (value) {
-      return value;
-    }
-  }
-  return '';
-}
-
 function buildResponse({
   text = '',
   ssml = '',
@@ -185,7 +174,6 @@ module.exports = {
   buildResponse,
   escapeSsml,
   extractCustomSkillIdentity,
-  extractSlotValue,
   getSlotSpokenValue,
   normalizeCustomSkillRequest,
   trimString

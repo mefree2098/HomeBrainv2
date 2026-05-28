@@ -6,6 +6,17 @@ const { requireAdmin, requireUser } = require('./middlewares/auth');
 const user = requireUser();
 const admin = requireAdmin();
 
+function queryString(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function queryStringList(value) {
+  if (Array.isArray(value)) {
+    return value.map(queryString).filter(Boolean);
+  }
+  return queryString(value);
+}
+
 router.get('/overview', user, async (_req, res) => {
   try {
     const overview = await telemetryService.getOverview();
@@ -25,12 +36,12 @@ router.get('/overview', user, async (_req, res) => {
 router.get('/series', user, async (req, res) => {
   try {
     const series = await telemetryService.getSeries({
-      sourceKey: req.query.sourceKey,
-      sourceType: req.query.sourceType,
-      sourceId: req.query.sourceId,
-      metricKeys: req.query.metricKeys,
-      hours: req.query.hours,
-      maxPoints: req.query.maxPoints
+      sourceKey: queryString(req.query.sourceKey),
+      sourceType: queryString(req.query.sourceType),
+      sourceId: queryString(req.query.sourceId),
+      metricKeys: queryStringList(req.query.metricKeys),
+      hours: queryString(req.query.hours),
+      maxPoints: queryString(req.query.maxPoints)
     });
 
     return res.status(200).json({

@@ -105,7 +105,9 @@ test('dispatch resolves a mapped Alexa profile and returns a personalized who-am
 test('resolveAudioClip validates signed tokens and returns stored mp3 data', async (t) => {
   const originalReadFile = require('fs').promises.readFile;
   const originalAccess = require('fs').promises.access;
-  const clipId = 'clip-test';
+  const originalSigningSecret = process.env.HOMEBRAIN_ALEXA_AUDIO_SIGNING_SECRET;
+  process.env.HOMEBRAIN_ALEXA_AUDIO_SIGNING_SECRET = 'test-alexa-audio-signing-secret';
+  const clipId = 'abcdef1234567890abcd';
   const token = alexaCustomSkillService.buildAudioToken(clipId, Date.now() + 60_000);
 
   require('fs').promises.access = async () => true;
@@ -114,6 +116,11 @@ test('resolveAudioClip validates signed tokens and returns stored mp3 data', asy
   t.after(() => {
     require('fs').promises.readFile = originalReadFile;
     require('fs').promises.access = originalAccess;
+    if (originalSigningSecret === undefined) {
+      delete process.env.HOMEBRAIN_ALEXA_AUDIO_SIGNING_SECRET;
+    } else {
+      process.env.HOMEBRAIN_ALEXA_AUDIO_SIGNING_SECRET = originalSigningSecret;
+    }
   });
 
   const result = await alexaCustomSkillService.resolveAudioClip(clipId, token);
@@ -127,8 +134,10 @@ test('ensureAudioClip returns the mounted Alexa custom-skill audio route', async
   const originalWriteFile = require('fs').promises.writeFile;
   const originalAccess = require('fs').promises.access;
   const originalPublicOrigin = process.env.HOMEBRAIN_PUBLIC_BASE_URL;
+  const originalSigningSecret = process.env.HOMEBRAIN_ALEXA_AUDIO_SIGNING_SECRET;
 
   process.env.HOMEBRAIN_PUBLIC_BASE_URL = 'https://homebrain.example.com';
+  process.env.HOMEBRAIN_ALEXA_AUDIO_SIGNING_SECRET = 'test-alexa-audio-signing-secret';
   require('fs').promises.access = async () => {
     const error = new Error('missing');
     error.code = 'ENOENT';
@@ -139,6 +148,11 @@ test('ensureAudioClip returns the mounted Alexa custom-skill audio route', async
 
   t.after(() => {
     process.env.HOMEBRAIN_PUBLIC_BASE_URL = originalPublicOrigin;
+    if (originalSigningSecret === undefined) {
+      delete process.env.HOMEBRAIN_ALEXA_AUDIO_SIGNING_SECRET;
+    } else {
+      process.env.HOMEBRAIN_ALEXA_AUDIO_SIGNING_SECRET = originalSigningSecret;
+    }
     require('fs').promises.writeFile = originalWriteFile;
     require('fs').promises.access = originalAccess;
     require('../services/elevenLabsService').textToSpeech = originalTextToSpeech;

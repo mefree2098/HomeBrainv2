@@ -8,6 +8,10 @@ const { requireUser, requireAdmin } = require('./middlewares/auth');
 const auth = requireUser();
 const admin = requireAdmin();
 
+function queryString(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 /**
  * GET /api/profiles
  * Get all user profiles
@@ -16,7 +20,8 @@ router.get('/', auth, async (req, res) => {
   try {
     console.log('GET /api/profiles - Fetching all user profiles');
     
-    const { active, name } = req.query;
+    const { active } = req.query;
+    const name = queryString(req.query.name);
     const filters = {};
     
     if (active !== undefined) {

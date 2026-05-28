@@ -37,6 +37,23 @@ function getCodexOwnerId(req) {
   return String(req.user?.email || req.user?._id || req.user?.id || 'unknown-admin');
 }
 
+async function resolveApiKeyForTest(providedValue, settingKey, label) {
+  const candidate = typeof providedValue === 'string' ? providedValue.trim() : '';
+  if (candidate && !settingsService.isMaskedSecretValue(candidate)) {
+    return candidate;
+  }
+
+  const storedValue = await settingsService.getSetting(settingKey);
+  const storedCandidate = typeof storedValue === 'string' ? storedValue.trim() : '';
+  if (storedCandidate) {
+    return storedCandidate;
+  }
+
+  const error = new Error(`${label} API key is required for testing`);
+  error.status = 400;
+  throw error;
+}
+
 /**
  * GET /api/settings
  * Get application settings (sanitized for frontend)
@@ -104,19 +121,10 @@ router.post('/test-elevenlabs', auth, async (req, res) => {
   try {
     console.log('POST /api/settings/test-elevenlabs - Testing ElevenLabs connectivity');
     
-    const { apiKey } = req.body;
+    const { apiKey } = req.body || {};
     
-    console.log('Request body keys:', Object.keys(req.body));
-    console.log('API key received:', apiKey ? `${apiKey.substring(0, 8)}...` : 'undefined/null');
-    console.log('API key length:', apiKey ? apiKey.length : 0);
-    
-    if (!apiKey || apiKey.trim() === '') {
-      console.log('API key validation failed - empty or missing');
-      return res.status(400).json({
-        success: false,
-        message: 'API key is required for testing'
-      });
-    }
+    console.log('Request body keys:', Object.keys(req.body || {}));
+    const apiKeyToTest = await resolveApiKeyForTest(apiKey, 'elevenlabsApiKey', 'ElevenLabs');
     
     // Test the API key by making a request to ElevenLabs
     const axios = require('axios');
@@ -125,7 +133,7 @@ router.post('/test-elevenlabs', auth, async (req, res) => {
       console.log('Making request to ElevenLabs API...');
       const response = await axios.get('https://api.elevenlabs.io/v1/voices', {
         headers: {
-          'xi-api-key': apiKey.trim(),
+          'xi-api-key': apiKeyToTest,
           'Content-Type': 'application/json'
         },
         timeout: 10000
@@ -166,9 +174,9 @@ router.post('/test-elevenlabs', auth, async (req, res) => {
   } catch (error) {
     console.error('Error in POST /api/settings/test-elevenlabs:', error.message);
     console.error('Full error:', error);
-    res.status(500).json({
+    res.status(error.status || 500).json({
       success: false,
-      message: 'Failed to test ElevenLabs API key',
+      message: error.status ? error.message : 'Failed to test ElevenLabs API key',
       error: error.message
     });
   }
@@ -182,19 +190,11 @@ router.post('/test-openai', auth, async (req, res) => {
   try {
     console.log('POST /api/settings/test-openai - Testing OpenAI connectivity');
     
-    const { apiKey, model } = req.body;
+    const { apiKey, model } = req.body || {};
     
-    console.log('Request body keys:', Object.keys(req.body));
-    console.log('API key received:', apiKey ? `${apiKey.substring(0, 8)}...` : 'undefined/null');
+    console.log('Request body keys:', Object.keys(req.body || {}));
     console.log('Model specified:', model || 'none');
-    
-    if (!apiKey || apiKey.trim() === '') {
-      console.log('API key validation failed - empty or missing');
-      return res.status(400).json({
-        success: false,
-        message: 'API key is required for testing'
-      });
-    }
+    const apiKeyToTest = await resolveApiKeyForTest(apiKey, 'openaiApiKey', 'OpenAI');
 
     const testModel = (typeof model === 'string' && model.trim())
       ? model.trim()
@@ -205,7 +205,7 @@ router.post('/test-openai', auth, async (req, res) => {
 
       await testOpenAIModelCompatibility(
         testModel,
-        apiKey.trim(),
+        apiKeyToTest,
         'Return JSON with one key: {"status":"ok"}'
       );
       
@@ -257,9 +257,9 @@ router.post('/test-openai', auth, async (req, res) => {
   } catch (error) {
     console.error('Error in POST /api/settings/test-openai:', error.message);
     console.error('Full error:', error);
-    res.status(500).json({
+    res.status(error.status || 500).json({
       success: false,
-      message: 'Failed to test OpenAI API key',
+      message: error.status ? error.message : 'Failed to test OpenAI API key',
       error: error.message
     });
   }
@@ -273,19 +273,11 @@ router.post('/test-anthropic', auth, async (req, res) => {
   try {
     console.log('POST /api/settings/test-anthropic - Testing Anthropic connectivity');
     
-    const { apiKey, model } = req.body;
+    const { apiKey, model } = req.body || {};
     
-    console.log('Request body keys:', Object.keys(req.body));
-    console.log('API key received:', apiKey ? `${apiKey.substring(0, 8)}...` : 'undefined/null');
+    console.log('Request body keys:', Object.keys(req.body || {}));
     console.log('Model specified:', model || 'none');
-    
-    if (!apiKey || apiKey.trim() === '') {
-      console.log('API key validation failed - empty or missing');
-      return res.status(400).json({
-        success: false,
-        message: 'API key is required for testing'
-      });
-    }
+    const apiKeyToTest = await resolveApiKeyForTest(apiKey, 'anthropicApiKey', 'Anthropic');
     
     // Test the API key by making a request to Anthropic
     const Anthropic = require('@anthropic-ai/sdk');
@@ -293,7 +285,7 @@ router.post('/test-anthropic', auth, async (req, res) => {
     try {
       console.log('Creating Anthropic client and testing connection...');
       const anthropic = new Anthropic({
-        apiKey: apiKey.trim()
+        apiKey: apiKeyToTest
       });
       
       // Make a simple message request to test the key
@@ -344,9 +336,9 @@ router.post('/test-anthropic', auth, async (req, res) => {
   } catch (error) {
     console.error('Error in POST /api/settings/test-anthropic:', error.message);
     console.error('Full error:', error);
-    res.status(500).json({
+    res.status(error.status || 500).json({
       success: false,
-      message: 'Failed to test Anthropic API key',
+      message: error.status ? error.message : 'Failed to test Anthropic API key',
       error: error.message
     });
   }
@@ -615,7 +607,7 @@ router.get('/:key', auth, async (req, res) => {
   try {
     console.log(`GET /api/settings/${req.params.key} - Fetching specific setting`);
 
-    const value = await settingsService.getSetting(req.params.key);
+    const value = await settingsService.getSanitizedSetting(req.params.key);
 
     console.log(`Successfully retrieved setting: ${req.params.key}`);
     res.status(200).json({

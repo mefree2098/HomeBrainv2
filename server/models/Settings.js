@@ -1,5 +1,17 @@
 const mongoose = require('mongoose');
 
+let cachedSettingsDocument = null;
+let cachedSettingsFetchedAt = 0;
+
+function getSettingsCacheTtlMs() {
+  return Math.max(0, Number(process.env.HOMEBRAIN_SETTINGS_CACHE_TTL_MS || 5000));
+}
+
+function cacheSettingsDocument(settings) {
+  cachedSettingsDocument = settings || null;
+  cachedSettingsFetchedAt = settings ? Date.now() : 0;
+}
+
 const HarmonyKnownHubSchema = new mongoose.Schema({
   ip: {
     type: String,
@@ -411,10 +423,21 @@ SettingsSchema.pre('save', function() {
   this.lastModified = new Date();
 });
 
+SettingsSchema.post('save', function(doc) {
+  cacheSettingsDocument(doc);
+});
+
 // Static method to get or create settings
 SettingsSchema.statics.getSettings = async function() {
-  console.log('Settings: Getting application settings');
-  
+  const cacheTtlMs = getSettingsCacheTtlMs();
+  if (
+    cacheTtlMs > 0 &&
+    cachedSettingsDocument &&
+    Date.now() - cachedSettingsFetchedAt < cacheTtlMs
+  ) {
+    return cachedSettingsDocument;
+  }
+
   let settings = await this.findOne();
   
   if (!settings) {
@@ -484,7 +507,8 @@ SettingsSchema.statics.getSettings = async function() {
     console.log('Settings: Migrated local model role settings');
     await settings.save();
   }
-  
+
+  cacheSettingsDocument(settings);
   return settings;
 };
 
@@ -503,6 +527,7 @@ SettingsSchema.statics.updateSettings = async function(updates) {
   
   await settings.save();
   console.log('Settings: Successfully updated settings');
+  cacheSettingsDocument(settings);
   
   return settings;
 };
