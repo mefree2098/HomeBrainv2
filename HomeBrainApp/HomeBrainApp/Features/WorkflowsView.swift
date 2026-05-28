@@ -123,6 +123,39 @@ private enum WorkflowEditorError: LocalizedError {
     }
 }
 
+private enum WorkflowTriggerPropertyKind {
+    case boolean
+    case number
+    case string
+}
+
+private struct WorkflowTriggerPropertyOption: Identifiable {
+    let key: String
+    let label: String
+    let kind: WorkflowTriggerPropertyKind
+    let unit: String?
+    let batteryMetric: Bool
+    let energyMetric: Bool
+
+    var id: String { key }
+
+    init(
+        key: String,
+        label: String,
+        kind: WorkflowTriggerPropertyKind,
+        unit: String? = nil,
+        batteryMetric: Bool = false,
+        energyMetric: Bool = false
+    ) {
+        self.key = key
+        self.label = label
+        self.kind = kind
+        self.unit = unit
+        self.batteryMetric = batteryMetric
+        self.energyMetric = energyMetric
+    }
+}
+
 struct WorkflowsView: View {
     @EnvironmentObject private var session: SessionStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -247,6 +280,33 @@ struct WorkflowsView: View {
         }
     }
 
+    private var selectedTriggerDevice: DeviceItem? {
+        devices.first { $0.id == triggerDeviceId }
+    }
+
+    private var currentTriggerPropertyOptions: [WorkflowTriggerPropertyOption] {
+        var options = triggerPropertyOptions(for: selectedTriggerDevice)
+        let current = triggerProperty.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !current.isEmpty, !options.contains(where: { $0.key == current }) {
+            options.append(WorkflowTriggerPropertyOption(
+                key: current,
+                label: "Custom: \(current)",
+                kind: .string
+            ))
+        }
+        return options
+    }
+
+    private var triggerPropertySelection: Binding<String> {
+        Binding(
+            get: { triggerProperty },
+            set: { newValue in
+                triggerProperty = newValue
+                applyTriggerPropertyDefaults(for: newValue)
+            }
+        )
+    }
+
     private var filteredTargetDevices: [DeviceItem] {
         sortedDevices.filter {
             $0.matchesSelectionFilters(searchText: targetDeviceSearch, sourceFilter: targetDeviceSource)
@@ -362,6 +422,9 @@ struct WorkflowsView: View {
         }
         .onChange(of: runtimeHistoryPage) { _, _ in
             handleRuntimeHistoryPageChange()
+        }
+        .onChange(of: triggerDeviceId) { _, _ in
+            normalizeTriggerPropertyForSelectedDevice()
         }
     }
 
@@ -734,9 +797,17 @@ struct WorkflowsView: View {
                                 Text("\(device.name) · \(device.room) · \(device.selectionSourceLabel)").tag(device.id)
                             }
                         }
-                        TextField("Property", text: $triggerProperty)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
+                        if currentTriggerPropertyOptions.isEmpty {
+                            TextField("Property", text: $triggerProperty)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                        } else {
+                            Picker("Property", selection: triggerPropertySelection) {
+                                ForEach(currentTriggerPropertyOptions) { option in
+                                    Text(option.label).tag(option.key)
+                                }
+                            }
+                        }
                         Picker("Operator", selection: $triggerOperator) {
                             ForEach(triggerOperators, id: \.self) { item in
                                 Text(item).tag(item)
@@ -1835,6 +1906,343 @@ struct WorkflowsView: View {
             await refreshWorkflowScreen(silent: true)
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func triggerFeatureToken(_ value: Any?) -> String {
+        String(describing: value ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: #"[\s_-]+"#, with: "", options: .regularExpression)
+            .lowercased()
+    }
+
+    private func triggerFeatureMatches(_ value: Any?, feature: String) -> Bool {
+        let normalized = triggerFeatureToken(value)
+        let target = triggerFeatureToken(feature)
+        guard !normalized.isEmpty, !target.isEmpty else { return false }
+        if normalized == target {
+            return true
+        }
+
+        let aliases: [String: [String]] = [
+            "battery": ["batterysensor"],
+            "contact": ["contactsensor"],
+            "motion": ["motionsensor", "occupancy", "occupancysensor"],
+            "vibration": ["vibrationsensor"],
+            "acceleration": ["accelerationsensor"],
+            "tamper": ["tampersensor", "tamperalert"],
+            "water": ["watersensor", "leak", "leaksensor"],
+            "temperature": ["temperaturemeasurement", "temperaturesensor"],
+            "humidity": ["relativehumiditymeasurement", "humiditysensor"],
+            "illuminance": ["illuminancemeasurement", "illuminancesensor", "lightsensor"],
+            "colortemperature": ["colortemperature", "whitetemperature"],
+            "power": ["powermeter", "powersensor"],
+            "energy": ["energymeter", "energysensor"],
+            "voltage": ["voltagemeasurement", "voltagesensor"],
+            "current": ["currentmeasurement", "currentsensor"]
+        ]
+
+        return aliases[target]?.contains(normalized) == true
+    }
+
+    private func directFeatureSupported(_ device: DeviceItem?, feature: String, supportFlags: [String] = []) -> Bool {
+        guard let device else { return false }
+
+        if supportFlags.contains(where: { JSON.bool(device.properties, $0) }) {
+            return true
+        }
+
+        if JSON.stringArray(device.properties["directRadioFeatures"]).contains(where: { triggerFeatureMatches($0, feature: feature) }) {
+            return true
+        }
+
+        return JSON.array(device.properties["directRadioCapabilities"]).contains { capability in
+            triggerFeatureMatches(capability["type"], feature: feature)
+                || triggerFeatureMatches(capability["property"], feature: feature)
+        }
+    }
+
+    private func directRadioState(for device: DeviceItem?) -> [String: Any] {
+        JSON.object(device?.properties["directRadioState"])
+    }
+
+    private func nestedValue(_ source: [String: Any], path: [String]) -> Any? {
+        var current: Any? = source
+        for segment in path {
+            guard let object = current as? [String: Any],
+                  let value = object[segment] else {
+                return nil
+            }
+            current = value
+        }
+        return current
+    }
+
+    private func hasDirectRadioStateValue(_ state: [String: Any], key: String) -> Bool {
+        let path = key
+            .replacingOccurrences(of: "directRadioState.", with: "")
+            .split(separator: ".")
+            .map(String.init)
+        return nestedValue(state, path: path) != nil
+    }
+
+    private func propertyKind(for value: Any?) -> WorkflowTriggerPropertyKind {
+        switch value {
+        case is Bool:
+            return .boolean
+        case is NSNumber:
+            return .number
+        case is Int, is Double, is Float:
+            return .number
+        default:
+            return .string
+        }
+    }
+
+    private func finiteDouble(_ value: Any?) -> Double? {
+        if let raw = value as? Double, raw.isFinite {
+            return raw
+        }
+        if let raw = value as? NSNumber {
+            let parsed = raw.doubleValue
+            return parsed.isFinite ? parsed : nil
+        }
+        if let raw = value as? String, let parsed = Double(raw), parsed.isFinite {
+            return parsed
+        }
+        return nil
+    }
+
+    private func triggerPropertyLabel(_ key: String) -> String {
+        switch key {
+        case "status":
+            return "Status"
+        case "isOnline":
+            return "Online state"
+        case "brightness":
+            return "Brightness (%)"
+        case "temperature":
+            return "Temperature"
+        case "targetTemperature":
+            return "Target temperature"
+        case "colorTemperature", "directRadioState.colorTemperatureK":
+            return "White temperature (K)"
+        case "directRadioState.batteryLevel", "homeBrainBatteryLevel", "directBatteryLevel", "batteryLevel", "matterBatteryLevel", "smartThingsBatteryLevel":
+            return "Battery level (%)"
+        case "directRadioState.batteryLow":
+            return "Battery low"
+        case "directRadioState.batteryVoltage":
+            return "Battery voltage (V)"
+        case "directRadioState.contactOpen":
+            return "Contact open"
+        case "directRadioState.motionActive":
+            return "Motion active"
+        case "directRadioState.vibrationActive":
+            return "Vibration active"
+        case "directRadioState.accelerationActive":
+            return "Acceleration active"
+        case "directRadioState.tamperActive":
+            return "Tamper active"
+        case "directRadioState.waterDetected":
+            return "Water detected"
+        case "directRadioState.temperatureF":
+            return "Temperature (deg F)"
+        case "directRadioState.humidity":
+            return "Humidity (%)"
+        case "directRadioState.illuminance":
+            return "Illuminance (lx)"
+        case "directRadioState.powerW":
+            return "Power draw (W)"
+        case "directRadioState.energyKwh":
+            return "Energy total (kWh)"
+        case "directRadioState.voltageV":
+            return "Voltage (V)"
+        case "directRadioState.currentA":
+            return "Current (A)"
+        default:
+            return key
+                .replacingOccurrences(of: "smartThingsAttributeValues.", with: "")
+                .replacingOccurrences(of: ".", with: " / ")
+                .replacingOccurrences(of: "_", with: " ")
+                .capitalized
+        }
+    }
+
+    private func collectBatteryTriggerOptions(for device: DeviceItem?) -> [WorkflowTriggerPropertyOption] {
+        guard let device else { return [] }
+        let state = directRadioState(for: device)
+        let candidates: [(key: String, value: Any?)] = [
+            ("directRadioState.batteryLevel", state["batteryLevel"]),
+            ("homeBrainBatteryLevel", device.properties["homeBrainBatteryLevel"]),
+            ("directBatteryLevel", device.properties["directBatteryLevel"]),
+            ("batteryLevel", device.properties["batteryLevel"]),
+            ("matterBatteryLevel", device.properties["matterBatteryLevel"]),
+            ("smartThingsBatteryLevel", device.properties["smartThingsBatteryLevel"])
+        ]
+        let match = candidates.first { finiteDouble($0.value) != nil }
+        let supportsBattery = match != nil || directFeatureSupported(device, feature: "battery", supportFlags: ["supportsBattery"])
+        guard supportsBattery else { return [] }
+
+        var options = [
+            WorkflowTriggerPropertyOption(
+                key: match?.key ?? "directRadioState.batteryLevel",
+                label: "Battery level (%)",
+                kind: .number,
+                unit: "%",
+                batteryMetric: true
+            )
+        ]
+        options.append(WorkflowTriggerPropertyOption(
+            key: "directRadioState.batteryLow",
+            label: "Battery low",
+            kind: .boolean
+        ))
+        options.append(WorkflowTriggerPropertyOption(
+            key: "directRadioState.batteryVoltage",
+            label: "Battery voltage (V)",
+            kind: .number,
+            unit: "V"
+        ))
+        return options
+    }
+
+    private func collectDirectRadioTriggerOptions(for device: DeviceItem?) -> [WorkflowTriggerPropertyOption] {
+        let state = directRadioState(for: device)
+        let candidates: [(option: WorkflowTriggerPropertyOption, feature: String, supportFlags: [String])] = [
+            (WorkflowTriggerPropertyOption(key: "directRadioState.contactOpen", label: "Contact open", kind: .boolean), "contact", ["supportsContactSensor"]),
+            (WorkflowTriggerPropertyOption(key: "directRadioState.motionActive", label: "Motion active", kind: .boolean), "motion", ["supportsMotionSensor"]),
+            (WorkflowTriggerPropertyOption(key: "directRadioState.vibrationActive", label: "Vibration active", kind: .boolean), "vibration", ["supportsVibrationSensor"]),
+            (WorkflowTriggerPropertyOption(key: "directRadioState.accelerationActive", label: "Acceleration active", kind: .boolean), "acceleration", ["supportsAccelerationSensor"]),
+            (WorkflowTriggerPropertyOption(key: "directRadioState.tamperActive", label: "Tamper active", kind: .boolean), "tamper", ["supportsTamperSensor"]),
+            (WorkflowTriggerPropertyOption(key: "directRadioState.waterDetected", label: "Water detected", kind: .boolean), "water", ["supportsWaterSensor"]),
+            (WorkflowTriggerPropertyOption(key: "directRadioState.temperatureF", label: "Temperature (deg F)", kind: .number, unit: "deg F"), "temperature", ["supportsTemperatureSensor"]),
+            (WorkflowTriggerPropertyOption(key: "directRadioState.humidity", label: "Humidity (%)", kind: .number, unit: "%"), "humidity", ["supportsHumiditySensor"]),
+            (WorkflowTriggerPropertyOption(key: "directRadioState.illuminance", label: "Illuminance (lx)", kind: .number, unit: "lx"), "illuminance", ["supportsIlluminanceSensor"]),
+            (WorkflowTriggerPropertyOption(key: "directRadioState.colorTemperatureK", label: "White temperature (K)", kind: .number, unit: "K"), "colorTemperature", ["supportsColorTemperature"]),
+            (WorkflowTriggerPropertyOption(key: "directRadioState.powerW", label: "Power draw (W)", kind: .number, unit: "W", energyMetric: true), "power", ["supportsPowerMeter"]),
+            (WorkflowTriggerPropertyOption(key: "directRadioState.energyKwh", label: "Energy total (kWh)", kind: .number, unit: "kWh", energyMetric: true), "energy", ["supportsEnergyMeter"]),
+            (WorkflowTriggerPropertyOption(key: "directRadioState.voltageV", label: "Voltage (V)", kind: .number, unit: "V"), "voltage", ["supportsVoltage"]),
+            (WorkflowTriggerPropertyOption(key: "directRadioState.currentA", label: "Current (A)", kind: .number, unit: "A", energyMetric: true), "current", ["supportsCurrent"])
+        ]
+
+        return candidates
+            .filter { hasDirectRadioStateValue(state, key: $0.option.key) || directFeatureSupported(device, feature: $0.feature, supportFlags: $0.supportFlags) }
+            .map(\.option)
+    }
+
+    private func collectSmartThingsAttributeOptions(from node: [String: Any], prefix: [String] = []) -> [WorkflowTriggerPropertyOption] {
+        var options: [WorkflowTriggerPropertyOption] = []
+
+        for key in node.keys.sorted() {
+            guard let value = node[key] else { continue }
+            if key == "byComponent", let components = value as? [String: Any] {
+                for componentKey in components.keys.sorted() {
+                    guard componentKey != "main",
+                          let componentValue = components[componentKey] as? [String: Any] else {
+                        continue
+                    }
+                    options.append(contentsOf: collectSmartThingsAttributeOptions(from: componentValue, prefix: prefix + [key, componentKey]))
+                }
+                continue
+            }
+
+            let nextPrefix = prefix + [key]
+            if let child = value as? [String: Any], !child.isEmpty {
+                options.append(contentsOf: collectSmartThingsAttributeOptions(from: child, prefix: nextPrefix))
+                continue
+            }
+
+            let optionKey = "smartThingsAttributeValues.\(nextPrefix.joined(separator: "."))"
+            options.append(WorkflowTriggerPropertyOption(
+                key: optionKey,
+                label: triggerPropertyLabel(optionKey),
+                kind: propertyKind(for: value),
+                batteryMetric: nextPrefix.suffix(2).joined(separator: ".") == "battery.battery",
+                energyMetric: optionKey.contains("powerMeter.power") || optionKey.contains("energyMeter.energy")
+            ))
+        }
+
+        return options
+    }
+
+    private func triggerPropertyOptions(for device: DeviceItem?) -> [WorkflowTriggerPropertyOption] {
+        var options: [WorkflowTriggerPropertyOption] = [
+            WorkflowTriggerPropertyOption(key: "status", label: "Status", kind: .boolean),
+            WorkflowTriggerPropertyOption(key: "isOnline", label: "Online state", kind: .boolean)
+        ]
+
+        if let device {
+            if device.brightness > 0 || directFeatureSupported(device, feature: "brightness", supportFlags: ["supportsBrightness"]) {
+                options.append(WorkflowTriggerPropertyOption(key: "brightness", label: "Brightness (%)", kind: .number, unit: "%"))
+            }
+            if device.temperature != nil {
+                options.append(WorkflowTriggerPropertyOption(key: "temperature", label: "Temperature", kind: .number))
+            }
+            if device.targetTemperature != nil {
+                options.append(WorkflowTriggerPropertyOption(key: "targetTemperature", label: "Target temperature", kind: .number))
+            }
+            if device.colorTemperature != nil || directFeatureSupported(device, feature: "colorTemperature", supportFlags: ["supportsColorTemperature"]) {
+                options.append(WorkflowTriggerPropertyOption(key: "colorTemperature", label: "White temperature (K)", kind: .number, unit: "K"))
+            }
+
+            options.append(contentsOf: collectBatteryTriggerOptions(for: device))
+            options.append(contentsOf: collectDirectRadioTriggerOptions(for: device))
+            options.append(contentsOf: collectSmartThingsAttributeOptions(from: JSON.object(device.properties["smartThingsAttributeValues"])))
+        }
+
+        var seen = Set<String>()
+        return options.filter { option in
+            if seen.contains(option.key) {
+                return false
+            }
+            seen.insert(option.key)
+            return true
+        }
+    }
+
+    private func defaultTriggerOperator(for option: WorkflowTriggerPropertyOption) -> String {
+        if option.kind == .number, option.batteryMetric {
+            return "lt"
+        }
+        if option.kind == .number, option.energyMetric {
+            return "gt"
+        }
+        return "eq"
+    }
+
+    private func defaultTriggerValue(for option: WorkflowTriggerPropertyOption) -> String {
+        switch option.kind {
+        case .boolean:
+            return "true"
+        case .number:
+            if option.batteryMetric {
+                return "20"
+            }
+            return option.energyMetric ? "25" : "0"
+        case .string:
+            return ""
+        }
+    }
+
+    private func applyTriggerPropertyDefaults(for key: String) {
+        guard let option = currentTriggerPropertyOptions.first(where: { $0.key == key }) else {
+            return
+        }
+        triggerOperator = defaultTriggerOperator(for: option)
+        triggerValue = defaultTriggerValue(for: option)
+    }
+
+    private func normalizeTriggerPropertyForSelectedDevice() {
+        let options = triggerPropertyOptions(for: selectedTriggerDevice)
+        guard !options.isEmpty else {
+            triggerProperty = "status"
+            return
+        }
+        if !options.contains(where: { $0.key == triggerProperty }) {
+            let option = options.first { $0.key == "status" } ?? options[0]
+            triggerProperty = option.key
+            triggerOperator = defaultTriggerOperator(for: option)
+            triggerValue = defaultTriggerValue(for: option)
         }
     }
 

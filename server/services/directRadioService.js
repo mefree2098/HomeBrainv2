@@ -112,7 +112,9 @@ function inferFeaturesFromExistingDirectRecord(record) {
     supportsColor: 'color',
     supportsBrightness: 'brightness',
     supportsPowerMeter: 'power',
-    supportsEnergyMeter: 'energy'
+    supportsEnergyMeter: 'energy',
+    supportsVoltage: 'voltage',
+    supportsCurrent: 'current'
   };
   Object.entries(supportFlags).forEach(([flag, feature]) => {
     if (properties[flag] === true) {
@@ -1216,6 +1218,107 @@ function normalizeZigbeeBatteryVoltage(value) {
   return roundTo(numeric, 2);
 }
 
+function looksLikeBatteryVoltage(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return false;
+  }
+  return numeric <= 50 || (numeric >= 1000 && numeric <= 10000);
+}
+
+function normalizeZigbeeBatteryVoltageFromState(value) {
+  return looksLikeBatteryVoltage(value)
+    ? normalizeZigbeeBatteryVoltage(value)
+    : undefined;
+}
+
+function coerceZigbeeNumericValue(value) {
+  if (typeof value === 'bigint') {
+    const numeric = Number(value);
+    return Number.isSafeInteger(numeric) ? numeric : null;
+  }
+
+  const direct = toFiniteNumber(value);
+  if (direct !== null) {
+    return direct;
+  }
+
+  if (Array.isArray(value)) {
+    const parts = value.map((entry) => toFiniteNumber(entry));
+    if (parts.some((entry) => entry === null)) {
+      return null;
+    }
+    if (parts.length === 1) {
+      return parts[0];
+    }
+    return parts.reduce((total, part) => (total * 65536) + part, 0);
+  }
+
+  if (value && typeof value === 'object') {
+    for (const key of ['value', 'rawValue', 'measuredValue', 'measuredvalue', 'data']) {
+      const nested = coerceZigbeeNumericValue(value[key]);
+      if (nested !== null) {
+        return nested;
+      }
+    }
+    const low = coerceZigbeeNumericValue(value.low ?? value.lo ?? value.lsb);
+    const high = coerceZigbeeNumericValue(value.high ?? value.hi ?? value.msb);
+    if (low !== null && high !== null) {
+      return (high * 65536) + low;
+    }
+  }
+
+  return null;
+}
+
+function normalizeZigbeeScaledNumber(value, multiplier = 1, divisor = 1, digits = 2) {
+  const numeric = coerceZigbeeNumericValue(value);
+  if (numeric === null) {
+    return undefined;
+  }
+
+  const numericMultiplier = coerceZigbeeNumericValue(multiplier) ?? 1;
+  const numericDivisor = coerceZigbeeNumericValue(divisor) ?? 1;
+  if (!Number.isFinite(numericMultiplier) || !Number.isFinite(numericDivisor) || numericDivisor === 0) {
+    return undefined;
+  }
+
+  return roundTo((numeric * numericMultiplier) / numericDivisor, digits);
+}
+
+function normalizeZigbeePowerWatts(value, multiplier = 1, divisor = 1) {
+  return normalizeZigbeeScaledNumber(value, multiplier, divisor, 2);
+}
+
+function normalizeZigbeeEnergyKwh(value, multiplier = 1, divisor = 1) {
+  return normalizeZigbeeScaledNumber(value, multiplier, divisor, 4);
+}
+
+function normalizeZigbeeVoltageVolts(value, multiplier = 1, divisor = 1) {
+  const scaled = normalizeZigbeeScaledNumber(value, multiplier, divisor, 2);
+  if (scaled === undefined) {
+    return undefined;
+  }
+  if (Math.abs(scaled) > 1000) {
+    return roundTo(scaled / 1000, 2);
+  }
+  if (Math.abs(scaled) > 400) {
+    return roundTo(scaled / 10, 2);
+  }
+  return scaled;
+}
+
+function normalizeZigbeeCurrentAmps(value, multiplier = 1, divisor = 1) {
+  const scaled = normalizeZigbeeScaledNumber(value, multiplier, divisor, 3);
+  if (scaled === undefined) {
+    return undefined;
+  }
+  if (Math.abs(scaled) > 100) {
+    return roundTo(scaled / 1000, 3);
+  }
+  return scaled;
+}
+
 function normalizeZigbeeTemperatureC(value, scale = 'auto') {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) {
@@ -1382,6 +1485,39 @@ function extractZigbeeMessageState(message, features = []) {
     assignDefined(directState, 'colorTemperatureMired', colorTemperatureK ? kelvinToMired(colorTemperatureK) : undefined);
   }
 
+  if (cluster === 'haelectricalmeasurement') {
+    const powerMultiplier = data.acPowerMultiplier ?? data.acpowermultiplier ?? data.powerMultiplier ?? data.multiplier;
+    const powerDivisor = data.acPowerDivisor ?? data.acpowerdivisor ?? data.powerDivisor ?? data.divisor;
+    const voltageMultiplier = data.acVoltageMultiplier ?? data.acvoltagemultiplier ?? data.voltageMultiplier ?? data.multiplier;
+    const voltageDivisor = data.acVoltageDivisor ?? data.acvoltagedivisor ?? data.voltageDivisor ?? data.divisor;
+    const currentMultiplier = data.acCurrentMultiplier ?? data.accurrentmultiplier ?? data.currentMultiplier ?? data.multiplier;
+    const currentDivisor = data.acCurrentDivisor ?? data.accurrentdivisor ?? data.currentDivisor ?? data.divisor;
+
+    assignDefined(directState, 'powerW', normalizeZigbeePowerWatts(
+      data.activePower ?? data.activepower ?? data.power,
+      powerMultiplier,
+      powerDivisor
+    ));
+    assignDefined(directState, 'voltageV', normalizeZigbeeVoltageVolts(
+      data.rmsVoltage ?? data.rmsvoltage ?? data.voltage,
+      voltageMultiplier,
+      voltageDivisor
+    ));
+    assignDefined(directState, 'currentA', normalizeZigbeeCurrentAmps(
+      data.rmsCurrent ?? data.rmscurrent ?? data.current,
+      currentMultiplier,
+      currentDivisor
+    ));
+  }
+
+  if (cluster === 'semetering') {
+    assignDefined(directState, 'energyKwh', normalizeZigbeeEnergyKwh(
+      data.currentSummDelivered ?? data.currentsummdelivered ?? data.energy,
+      data.multiplier,
+      data.divisor
+    ));
+  }
+
   if (cluster === 'genonoff') {
     assignDefined(directState, 'switch', normalizeZigbeeSwitchState(data.onOff ?? data.onoff ?? data.state));
   }
@@ -1437,7 +1573,12 @@ function readZigbeeStateObject(zigbeeDevice, directState) {
     'battery'
   );
   assignDefinedIfMissing(directState, 'batteryLevel', batteryLevel);
-  assignDefinedIfMissing(directState, 'batteryVoltage', normalizeZigbeeBatteryVoltage(readZigbeeStateObjectValue(zigbeeDevice, ['voltage', 'batteryVoltage', 'battery_voltage'])));
+  assignDefinedIfMissing(directState, 'batteryVoltage', normalizeZigbeeBatteryVoltage(
+    readZigbeeStateObjectValue(zigbeeDevice, ['batteryVoltage', 'battery_voltage'])
+  ));
+  assignDefinedIfMissing(directState, 'batteryVoltage', normalizeZigbeeBatteryVoltageFromState(
+    readZigbeeStateObjectValue(zigbeeDevice, ['voltage'])
+  ));
   assignDefinedIfMissing(directState, 'batteryLow', normalizeZigbeeActiveState(readZigbeeStateObjectValue(zigbeeDevice, ['battery_low', 'batteryLow'])));
 
   const temperatureC = normalizeZigbeeTemperatureC(readZigbeeStateObjectValue(zigbeeDevice, ['temperature']), 'auto');
@@ -1451,6 +1592,18 @@ function readZigbeeStateObject(zigbeeDevice, directState) {
   );
   assignDefinedIfMissing(directState, 'colorTemperatureK', colorTemperatureK);
   assignDefinedIfMissing(directState, 'colorTemperatureMired', colorTemperatureK ? kelvinToMired(colorTemperatureK) : undefined);
+  assignDefinedIfMissing(directState, 'powerW', normalizeZigbeePowerWatts(
+    readZigbeeStateObjectValue(zigbeeDevice, ['power_w', 'powerW', 'activePower', 'active_power', 'power'])
+  ));
+  assignDefinedIfMissing(directState, 'energyKwh', normalizeZigbeeEnergyKwh(
+    readZigbeeStateObjectValue(zigbeeDevice, ['energy_kwh', 'energyKwh', 'energy', 'currentSummDelivered', 'current_summ_delivered'])
+  ));
+  assignDefinedIfMissing(directState, 'voltageV', normalizeZigbeeVoltageVolts(
+    readZigbeeStateObjectValue(zigbeeDevice, ['voltage_v', 'voltageV', 'rmsVoltage', 'rms_voltage', 'mainsVoltage', 'mains_voltage', 'voltage'])
+  ));
+  assignDefinedIfMissing(directState, 'currentA', normalizeZigbeeCurrentAmps(
+    readZigbeeStateObjectValue(zigbeeDevice, ['current_a', 'currentA', 'rmsCurrent', 'rms_current', 'current'])
+  ));
 }
 
 function readZigbeeEndpointSensorAttributes(zigbeeDevice, directState, features = []) {
@@ -1507,6 +1660,38 @@ function readZigbeeEndpointSensorAttributes(zigbeeDevice, directState, features 
       assignDefined(directState, 'colorTemperatureK', colorTemperatureK);
       assignDefined(directState, 'colorTemperatureMired', colorTemperatureK ? kelvinToMired(colorTemperatureK) : undefined);
     }
+
+    const electricalClusters = ['haElectricalMeasurement', 'haelectricalmeasurement', 2820];
+    if (directState.powerW === undefined) {
+      assignDefined(directState, 'powerW', normalizeZigbeePowerWatts(
+        readZigbeeEndpointAttribute(endpoint, electricalClusters, ['activePower', 'activepower', 'power']),
+        readZigbeeEndpointAttribute(endpoint, electricalClusters, ['acPowerMultiplier', 'acpowermultiplier', 'powerMultiplier', 'multiplier']),
+        readZigbeeEndpointAttribute(endpoint, electricalClusters, ['acPowerDivisor', 'acpowerdivisor', 'powerDivisor', 'divisor'])
+      ));
+    }
+    if (directState.voltageV === undefined) {
+      assignDefined(directState, 'voltageV', normalizeZigbeeVoltageVolts(
+        readZigbeeEndpointAttribute(endpoint, electricalClusters, ['rmsVoltage', 'rmsvoltage', 'voltage']),
+        readZigbeeEndpointAttribute(endpoint, electricalClusters, ['acVoltageMultiplier', 'acvoltagemultiplier', 'voltageMultiplier', 'multiplier']),
+        readZigbeeEndpointAttribute(endpoint, electricalClusters, ['acVoltageDivisor', 'acvoltagedivisor', 'voltageDivisor', 'divisor'])
+      ));
+    }
+    if (directState.currentA === undefined) {
+      assignDefined(directState, 'currentA', normalizeZigbeeCurrentAmps(
+        readZigbeeEndpointAttribute(endpoint, electricalClusters, ['rmsCurrent', 'rmscurrent', 'current']),
+        readZigbeeEndpointAttribute(endpoint, electricalClusters, ['acCurrentMultiplier', 'accurrentmultiplier', 'currentMultiplier', 'multiplier']),
+        readZigbeeEndpointAttribute(endpoint, electricalClusters, ['acCurrentDivisor', 'accurrentdivisor', 'currentDivisor', 'divisor'])
+      ));
+    }
+
+    if (directState.energyKwh === undefined) {
+      const meteringClusters = ['seMetering', 'semetering', 1794];
+      assignDefined(directState, 'energyKwh', normalizeZigbeeEnergyKwh(
+        readZigbeeEndpointAttribute(endpoint, meteringClusters, ['currentSummDelivered', 'currentsummdelivered', 'energy']),
+        readZigbeeEndpointAttribute(endpoint, meteringClusters, ['multiplier']),
+        readZigbeeEndpointAttribute(endpoint, meteringClusters, ['divisor'])
+      ));
+    }
   }
 }
 
@@ -1544,6 +1729,10 @@ function inferFeaturesFromDirectRadioState(directState = {}) {
   if (directState.illuminance !== undefined) features.push('illuminance');
   if (directState.waterDetected !== undefined) features.push('water');
   if (directState.colorTemperatureK !== undefined) features.push('colorTemperature');
+  if (directState.powerW !== undefined) features.push('power');
+  if (directState.energyKwh !== undefined) features.push('energy');
+  if (directState.voltageV !== undefined) features.push('voltage');
+  if (directState.currentA !== undefined) features.push('current');
   return uniqueStrings(features.map(normalizeFeature)).sort();
 }
 

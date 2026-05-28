@@ -313,6 +313,62 @@ test('Zigbee normalization captures contact, temperature, tamper, and battery st
   assert.equal(normalized.update.properties.supportsContactSensor, true);
 });
 
+test('Zigbee normalization captures direct electrical measurement telemetry', () => {
+  const service = createService();
+  const normalized = service.normalizeZigbeeDevice({
+    ieeeAddr: '0x5c0272fffeadf493',
+    modelID: 'SP 224',
+    manufacturerName: 'innr',
+    interviewCompleted: true,
+    endpoints: [
+      {
+        ID: 1,
+        inputClusters: [0, 3, 4, 5, 6, 2820, 1794],
+        getClusterAttributeValue(cluster, attribute) {
+          const clusterKey = String(cluster).toLowerCase();
+          if (clusterKey === 'haelectricalmeasurement' || cluster === 2820) {
+            const values = {
+              activePower: 123,
+              acPowerMultiplier: 1,
+              acPowerDivisor: 10,
+              rmsVoltage: 1215,
+              acVoltageMultiplier: 1,
+              acVoltageDivisor: 10,
+              rmsCurrent: 1525,
+              acCurrentMultiplier: 1,
+              acCurrentDivisor: 1000
+            };
+            return values[attribute];
+          }
+          if (clusterKey === 'semetering' || cluster === 1794) {
+            const values = {
+              currentSummDelivered: 4567,
+              multiplier: 1,
+              divisor: 1000
+            };
+            return values[attribute];
+          }
+          return undefined;
+        }
+      }
+    ]
+  }, 'message');
+
+  const state = normalized.update.properties.directRadioState;
+  assert.equal(state.powerW, 12.3);
+  assert.equal(state.energyKwh, 4.567);
+  assert.equal(state.voltageV, 121.5);
+  assert.equal(state.currentA, 1.525);
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('power'));
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('energy'));
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('voltage'));
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('current'));
+  assert.equal(normalized.update.properties.supportsPowerMeter, true);
+  assert.equal(normalized.update.properties.supportsEnergyMeter, true);
+  assert.equal(normalized.update.properties.supportsVoltage, true);
+  assert.equal(normalized.update.properties.supportsCurrent, true);
+});
+
 test('Zigbee control reads back on/off state after command acknowledgement', async () => {
   const service = createService();
   const calls = [];

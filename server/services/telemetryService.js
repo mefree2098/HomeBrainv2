@@ -103,6 +103,8 @@ const METRIC_LABELS = {
   current_share_pct: 'Current Share',
   voltage_l1_v: 'L1 Voltage',
   voltage_l2_v: 'L2 Voltage',
+  voltage_v: 'Voltage',
+  current_a: 'Current',
   frequency_hz: 'Frequency',
   battery_pct: 'Battery',
   battery_low: 'Battery Low',
@@ -829,6 +831,9 @@ function inferMetricUnit(key) {
   if (/_v$/.test(key)) {
     return 'V';
   }
+  if (/_a$/.test(key)) {
+    return 'A';
+  }
   if (/_hz$/.test(key)) {
     return 'Hz';
   }
@@ -1271,6 +1276,10 @@ function extractDeviceMetrics(device = {}) {
   addMetric(metrics, 'temperature_c', directRadioState.temperatureC);
   addMetric(metrics, 'temperature_f', directRadioState.temperatureF);
   addMetric(metrics, 'color_temperature_k', directRadioState.colorTemperatureK);
+  addMetric(metrics, 'power_w', directRadioState.powerW);
+  addMetric(metrics, 'energy_kwh', directRadioState.energyKwh);
+  addMetric(metrics, 'voltage_v', directRadioState.voltageV);
+  addMetric(metrics, 'current_a', directRadioState.currentA);
 
   collectInterestingMetrics(properties, [], metrics);
 
