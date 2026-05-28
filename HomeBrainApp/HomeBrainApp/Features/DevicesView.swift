@@ -45,6 +45,7 @@ struct DevicesView: View {
     @State private var highlightedDeviceID: String?
     @State private var controlSheetDeviceID: String?
     @State private var pendingMigrationDeviceIds: Set<String> = []
+    @State private var pendingMigrationFinalizationDeviceIds: Set<String> = []
     @State private var pendingMigrationPlanDeviceIds: Set<String> = []
     @State private var migrationFeedback: [String: String] = [:]
     @State private var migrationPlans: [String: DirectRadioMigrationPlanRecord] = [:]
@@ -584,7 +585,7 @@ struct DevicesView: View {
                 statusBadge(for: device)
                 deviceTypeBadge(for: device)
                 deviceSourceBadge(for: device)
-                if isSmartThingsBackedDevice(device) {
+                if isSmartThingsBackedDevice(device) || needsMigrationFinalization(device) {
                     migrationBadge()
                 }
             }
@@ -596,7 +597,7 @@ struct DevicesView: View {
                 }
                 HStack(spacing: 8) {
                     deviceSourceBadge(for: device)
-                    if isSmartThingsBackedDevice(device) {
+                    if isSmartThingsBackedDevice(device) || needsMigrationFinalization(device) {
                         migrationBadge()
                     }
                 }
@@ -761,6 +762,9 @@ struct DevicesView: View {
         }
         if isSmartThingsBackedDevice(device) {
             return "SmartThings route preserved"
+        }
+        if needsMigrationFinalization(device) {
+            return "Native route pending finalization"
         }
         return "\(deviceTypeDisplayLabel(device.type)) control"
     }
@@ -1030,6 +1034,54 @@ struct DevicesView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(HBPalette.accentBlue.opacity(0.25), lineWidth: 1)
+        )
+    }
+
+    private func directRadioMigrationFinalizationPanel(for device: DeviceItem) -> some View {
+        let isPending = pendingMigrationFinalizationDeviceIds.contains(device.id)
+        let feedback = migrationFeedback[device.id]
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(HBPalette.accentGreen)
+                Text("Finalize migration")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+                Spacer(minLength: 0)
+                if isPending {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+
+            Text("After native state and controls work, HomeBrain can mark this device as fully moved off the SmartThings route.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button {
+                Task { await finalizeDirectRadioMigration(device) }
+            } label: {
+                Label("Finalize Migration", systemImage: "checkmark.circle.fill")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(HBPrimaryButtonStyle(compact: true))
+            .disabled(isPending)
+
+            if let feedback {
+                Text(feedback)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .background(HBPalette.accentGreen.opacity(0.10), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(HBPalette.accentGreen.opacity(0.28), lineWidth: 1)
         )
     }
 
@@ -1564,6 +1616,10 @@ struct DevicesView: View {
 
                         if isSmartThingsBackedDevice(device) {
                             directRadioMigrationPanel(for: device)
+                        }
+
+                        if needsMigrationFinalization(device) {
+                            directRadioMigrationFinalizationPanel(for: device)
                         }
 
                         HBPanel {
@@ -2638,6 +2694,52 @@ struct DevicesView: View {
         }
     }
 
+    private func finalizeDirectRadioMigration(_ device: DeviceItem) async {
+        if pendingMigrationFinalizationDeviceIds.contains(device.id) {
+            return
+        }
+
+        pendingMigrationFinalizationDeviceIds.insert(device.id)
+        migrationFeedback[device.id] = "Finalizing native HomeBrain migration."
+        defer {
+            pendingMigrationFinalizationDeviceIds.remove(device.id)
+        }
+
+        if previewMode {
+            migrationFeedback[device.id] = "Migration finalized."
+            return
+        }
+
+        do {
+            let migration = smartThingsMigration(for: device)
+            var body: [String: Any] = [
+                "deviceId": device.id,
+                "reason": "Native HomeBrain controls verified from iOS"
+            ]
+            if let migrationId = JSON.optionalString(migration, "migrationId") {
+                body["migrationId"] = migrationId
+            }
+
+            let response = try await session.apiClient.post(
+                "/api/direct-radios/migrations/finalize",
+                body: body
+            )
+            let root = JSON.object(response)
+            let updated = DeviceItem.from(JSON.object(root["device"]))
+            if !updated.id.isEmpty {
+                upsertDevice(updated)
+            }
+            migrationFeedback[device.id] = "Migration finalized on native HomeBrain radio."
+            Task {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                await loadDevices(showLoading: false)
+            }
+        } catch {
+            migrationFeedback[device.id] = "Migration could not be finalized: \(error.localizedDescription)"
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func loadDirectRadioMigrationPlan(for device: DeviceItem) async {
         guard isSmartThingsBackedDevice(device),
               migrationPlans[device.id] == nil,
@@ -3475,14 +3577,39 @@ struct DevicesView: View {
             || !levelMetadata.isEmpty
     }
 
-    private func isSmartThingsBackedDevice(_ device: DeviceItem) -> Bool {
+    private func isDirectRadioBackedDevice(_ device: DeviceItem) -> Bool {
         let source = stringValue(device.properties["source"]).lowercased()
         let direct = JSON.object(device.properties["homebrainDirect"])
         let protocolName = stringValue(direct["protocol"]).lowercased()
-        let isDirectRadio = source == "homebrain-zigbee"
+        return source == "homebrain-zigbee"
             || source == "homebrain-zwave"
             || protocolName == "zigbee"
             || protocolName == "zwave"
+    }
+
+    private func smartThingsMigration(for device: DeviceItem) -> [String: Any] {
+        JSON.object(device.properties["smartThingsMigration"])
+    }
+
+    private func isSmartThingsMigrationFinalized(_ device: DeviceItem) -> Bool {
+        let migration = smartThingsMigration(for: device)
+        guard !migration.isEmpty else { return false }
+        let validation = JSON.object(migration["validation"])
+        let validationStatus = stringValue(validation["status"]).lowercased()
+        return JSON.optionalString(migration, "finalizedAt") != nil
+            || boolValue(validation["finalized"])
+            || validationStatus == "passed"
+    }
+
+    private func needsMigrationFinalization(_ device: DeviceItem) -> Bool {
+        return isDirectRadioBackedDevice(device)
+            && !smartThingsMigration(for: device).isEmpty
+            && !isSmartThingsMigrationFinalized(device)
+    }
+
+    private func isSmartThingsBackedDevice(_ device: DeviceItem) -> Bool {
+        let source = stringValue(device.properties["source"]).lowercased()
+        let isDirectRadio = isDirectRadioBackedDevice(device)
         let hasDeviceId = !stringValue(device.properties["smartThingsDeviceId"]).isEmpty
         return source == "smartthings" || (!isDirectRadio && hasDeviceId)
     }

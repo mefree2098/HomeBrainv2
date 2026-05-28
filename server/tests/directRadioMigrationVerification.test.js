@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const directRadioService = require('../services/directRadioService');
+const Device = require('../models/Device');
 
 const DirectRadioService = directRadioService.DirectRadioService;
 const {
@@ -245,6 +246,56 @@ test('Zigbee control reads back on/off state after command acknowledgement', asy
   assert.equal(updateData.isOnline, true);
 });
 
+test('Zigbee control selects command-capable endpoints beyond the usual 1/2 switch endpoints', async () => {
+  const service = createService();
+  const calls = [];
+  const endpointOne = { ID: 1, inputClusters: [0, 3] };
+  const endpointTwo = { ID: 2, inputClusters: [0, 3] };
+  const endpointThree = {
+    ID: 3,
+    inputClusters: [0, 3, 4, 5, 6, 8, 768],
+    async command(cluster, command, payload) {
+      calls.push({ endpoint: 3, type: 'command', cluster, command, payload });
+      return {};
+    },
+    async read(cluster, attributes) {
+      calls.push({ endpoint: 3, type: 'read', cluster, attributes });
+      return { onOff: 1 };
+    }
+  };
+  service.getDirectNodeForDevice = () => ({
+    getEndpoint(id) {
+      return {
+        1: endpointOne,
+        2: endpointTwo,
+        3: endpointThree
+      }[id] || null;
+    }
+  });
+
+  const updateData = {};
+  await service.controlZigbeeDevice({
+    _id: DEVICE_ID,
+    name: 'Vault Can Light',
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x84182600000638c0'
+      }
+    }
+  }, 'turnon', true, updateData);
+
+  assert.deepEqual(calls[0], {
+    endpoint: 3,
+    type: 'command',
+    cluster: 'genOnOff',
+    command: 'on',
+    payload: {}
+  });
+  assert.equal(updateData.status, true);
+});
+
 test('direct radio merge keeps existing state when Zigbee refresh has no state payload', () => {
   const merged = mergeDirectDeviceUpdateForExisting({
     name: 'Vault Overhead Lights',
@@ -318,6 +369,72 @@ test('direct radio post-command refresh keeps command state when Zigbee has no s
 
   assert.equal(refreshed.status, true);
   assert.equal(refreshed.brightness, 75);
+});
+
+test('direct radio migration finalization persists passed validation for native route', async () => {
+  const service = createService();
+  service.emitDeviceUpdate = () => {};
+
+  const originalFindById = Device.findById;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const device = {
+    _id: {
+      toString: () => DEVICE_ID
+    },
+    name: 'Vault Overhead Lights',
+    type: 'switch',
+    room: 'Vault',
+    status: true,
+    isOnline: true,
+    properties: {
+      source: 'homebrain-zigbee',
+      smartThingsDeviceId: 'smartthings-device-1',
+      smartThingsCapabilities: ['switch', 'firmwareUpdate', 'refresh'],
+      smartThingsCategories: ['switch'],
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x5c0272fffeadf493'
+      },
+      directRadioFeatures: ['switch'],
+      smartThingsMigration: {
+        migratedAt: '2026-05-28T02:50:00.000Z',
+        previousSource: 'smartthings',
+        smartThingsDeviceId: 'smartthings-device-1',
+        migrationId: 'migration-old',
+        validation: {
+          status: 'needs_review'
+        }
+      }
+    }
+  };
+  let persistedUpdate = null;
+  Device.findById = async () => device;
+  Device.findByIdAndUpdate = async (_id, update) => {
+    persistedUpdate = update;
+    return {
+      ...device,
+      ...update,
+      properties: update.properties
+    };
+  };
+
+  try {
+    const result = await service.finalizeDeviceMigration({
+      deviceId: DEVICE_ID,
+      reason: 'Native switch command verified'
+    });
+
+    assert.equal(result.finalization.protocol, 'zigbee');
+    assert.equal(result.finalization.validation.status, 'passed');
+    assert.equal(result.finalization.validation.finalized, true);
+    assert.ok(result.finalization.finalizedAt);
+    assert.equal(persistedUpdate.properties.smartThingsMigration.validation.status, 'passed');
+    assert.equal(persistedUpdate.properties.smartThingsMigration.validation.finalized, true);
+    assert.ok(persistedUpdate.properties.smartThingsMigration.finalizedAt);
+  } finally {
+    Device.findById = originalFindById;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+  }
 });
 
 test('direct radio upsert prefers complete switch records over stale partial duplicates', () => {

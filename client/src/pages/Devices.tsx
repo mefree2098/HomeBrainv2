@@ -439,6 +439,34 @@ const isSmartThingsBackedDevice = (device: any): boolean => {
   return source === 'smartthings' || (!isDirectRadio && Boolean(device?.properties?.smartThingsDeviceId))
 }
 
+const getSmartThingsMigration = (device: any): Record<string, any> | null => {
+  const migration = device?.properties?.smartThingsMigration
+  return migration && typeof migration === 'object' ? migration : null
+}
+
+const isSmartThingsMigrationFinalized = (device: any): boolean => {
+  const migration = getSmartThingsMigration(device)
+  const validation = migration?.validation && typeof migration.validation === 'object'
+    ? migration.validation
+    : null
+  const validationStatus = (validation?.status || '').toString().trim().toLowerCase()
+  return Boolean(migration?.finalizedAt)
+    || Boolean(validation?.finalized)
+    || validationStatus === 'passed'
+}
+
+const needsMigrationFinalization = (device: any): boolean => {
+  const source = (device?.properties?.source || '').toString().trim().toLowerCase()
+  const protocol = (device?.properties?.homebrainDirect?.protocol || '').toString().trim().toLowerCase()
+  const isDirectRadio = source === 'homebrain-zigbee'
+    || source === 'homebrain-zwave'
+    || protocol === 'zigbee'
+    || protocol === 'zwave'
+  return isDirectRadio
+    && Boolean(getSmartThingsMigration(device))
+    && !isSmartThingsMigrationFinalized(device)
+}
+
 const isInsteonBackedDevice = (device: any): boolean => {
   const source = (device?.properties?.source || '').toString().toLowerCase()
   return source === 'insteon' || Boolean(device?.properties?.insteonAddress)
@@ -1927,7 +1955,7 @@ export function Devices({
             {energyMonitoring ? (
               <Badge variant="outline" className="rounded-full">Energy</Badge>
             ) : null}
-            {isSmartThingsBackedDevice(device) ? (
+            {(isSmartThingsBackedDevice(device) || needsMigrationFinalization(device)) ? (
               <Badge variant="outline" className="rounded-full border-cyan-300/30 bg-cyan-300/10 text-cyan-100">Migration</Badge>
             ) : null}
           </div>

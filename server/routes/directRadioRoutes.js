@@ -344,6 +344,32 @@ router.post('/migrations/verify-step', async (req, res) => {
   }
 });
 
+router.post('/migrations/finalize', async (req, res) => {
+  try {
+    const result = await directRadioService.finalizeDeviceMigration({
+      deviceId: req.body?.deviceId,
+      migrationId: req.body?.migrationId,
+      reason: req.body?.reason
+    });
+    res.status(200).json({
+      success: true,
+      ...result,
+      status: await directRadioService.getStatus()
+    });
+  } catch (error) {
+    if (error.validation) {
+      res.status(error.status || 409).json({
+        success: false,
+        message: error.message,
+        error: error.message,
+        validation: error.validation
+      });
+      return;
+    }
+    sendError(res, error, 'Failed to finalize device migration');
+  }
+});
+
 router.post('/migrations', async (req, res) => {
   try {
     const result = await directRadioService.startMigration({
