@@ -313,6 +313,36 @@ test('Zigbee normalization captures contact, temperature, tamper, and battery st
   assert.equal(normalized.update.properties.supportsContactSensor, true);
 });
 
+test('Zigbee normalization estimates battery level from voltage-only sensor reports', () => {
+  const service = createService();
+  const normalized = service.normalizeZigbeeDevice({
+    ieeeAddr: '0x000d6f000b010d0c',
+    modelID: 'MCT-340 E',
+    manufacturerName: 'Visonic',
+    interviewCompleted: true,
+    endpoints: [
+      {
+        ID: 1,
+        inputClusters: [1, 1280],
+        getClusterAttributeValue(cluster, attribute) {
+          if (cluster === 'ssIasZone' && attribute === 'zoneStatus') {
+            return 0x0000;
+          }
+          if (cluster === 'genPowerCfg' && attribute === 'batteryVoltage') {
+            return 24;
+          }
+          return undefined;
+        }
+      }
+    ]
+  }, 'message');
+
+  const state = normalized.update.properties.directRadioState;
+  assert.equal(state.batteryVoltage, 2.4);
+  assert.equal(state.batteryLevel, 33);
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('battery'));
+});
+
 test('Zigbee normalization captures direct electrical measurement telemetry', () => {
   const service = createService();
   const normalized = service.normalizeZigbeeDevice({

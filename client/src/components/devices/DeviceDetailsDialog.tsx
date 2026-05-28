@@ -436,6 +436,44 @@ function clampPercent(value: unknown): number | null {
   return numeric === null ? null : Math.max(0, Math.min(100, Math.round(numeric)))
 }
 
+function inferBatteryLevelFromVoltage(value: unknown): number | null {
+  const voltage = toFiniteNumber(value)
+  if (voltage === null) {
+    return null
+  }
+  if (voltage >= 2 && voltage <= 3.3) {
+    return clampPercent(((voltage - 2.1) / 0.9) * 100)
+  }
+  if (voltage >= 1 && voltage <= 1.8) {
+    return clampPercent(((voltage - 1) / 0.6) * 100)
+  }
+  if (voltage >= 4 && voltage <= 6.6) {
+    return clampPercent(((voltage - 4.2) / 1.8) * 100)
+  }
+  return null
+}
+
+function getDeviceBatteryVoltage(device: DeviceLike | null): number | null {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  const directRadioState = properties?.directRadioState && typeof properties.directRadioState === "object"
+    ? properties.directRadioState as Record<string, unknown>
+    : {}
+  const candidates = [
+    directRadioState.batteryVoltage,
+    properties?.homeBrainBatteryVoltage,
+    properties?.directBatteryVoltage,
+    properties?.batteryVoltage,
+    properties?.matterBatteryVoltage
+  ]
+  for (const candidate of candidates) {
+    const voltage = toFiniteNumber(candidate)
+    if (voltage !== null && voltage > 0) {
+      return Math.round(voltage * 100) / 100
+    }
+  }
+  return null
+}
+
 function getDeviceBatteryLevel(device: DeviceLike | null): number | null {
   const properties = device?.properties as Record<string, unknown> | undefined
   const directRadioState = properties?.directRadioState && typeof properties.directRadioState === "object"
@@ -462,7 +500,36 @@ function getDeviceBatteryLevel(device: DeviceLike | null): number | null {
     }
   }
 
+  const inferred = inferBatteryLevelFromVoltage(getDeviceBatteryVoltage(device))
+  if (inferred !== null) {
+    return inferred
+  }
+
   return null
+}
+
+function deviceSupportsBattery(device: DeviceLike | null): boolean {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  if (properties?.supportsBattery === true) {
+    return true
+  }
+  if (getDeviceBatteryLevel(device) !== null || getDeviceBatteryVoltage(device) !== null) {
+    return true
+  }
+  const features = Array.isArray(properties?.directRadioFeatures) ? properties.directRadioFeatures : []
+  return features.map((feature) => String(feature || "").toLowerCase()).includes("battery")
+}
+
+function getDeviceBatteryLabel(device: DeviceLike | null): string | null {
+  const level = getDeviceBatteryLevel(device)
+  if (level !== null) {
+    return `${level}%`
+  }
+  const voltage = getDeviceBatteryVoltage(device)
+  if (voltage !== null) {
+    return `${voltage} V`
+  }
+  return deviceSupportsBattery(device) ? "Awaiting report" : null
 }
 
 function getBatteryTone(level: number): "emerald" | "amber" {
@@ -1711,7 +1778,7 @@ export function DeviceDetailsDialog({
   const currentThermostatMode = getThermostatMode(device)
   const currentThermostatSetpoint = thermostatSetpointDraft ?? getThermostatTargetTemperature(device)
   const batteryLevel = getDeviceBatteryLevel(device)
-  const batteryLabel = batteryLevel !== null ? `${batteryLevel}%` : null
+  const batteryLabel = getDeviceBatteryLabel(device)
   const batteryTone = batteryLevel !== null ? getBatteryTone(batteryLevel) : "emerald"
   const directRadioState = getDirectRadioState(device)
   const sensorReadings = [

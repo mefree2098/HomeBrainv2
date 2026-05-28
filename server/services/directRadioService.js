@@ -1232,6 +1232,34 @@ function normalizeZigbeeBatteryVoltageFromState(value) {
     : undefined;
 }
 
+function inferZigbeeBatteryPercentFromVoltage(value) {
+  const volts = normalizeZigbeeBatteryVoltage(value);
+  if (!Number.isFinite(volts)) {
+    return undefined;
+  }
+
+  if (volts >= 2 && volts <= 3.3) {
+    return clampPercent(((volts - 2.1) / 0.9) * 100);
+  }
+
+  if (volts >= 1 && volts <= 1.8) {
+    return clampPercent(((volts - 1) / 0.6) * 100);
+  }
+
+  if (volts >= 4 && volts <= 6.6) {
+    return clampPercent(((volts - 4.2) / 1.8) * 100);
+  }
+
+  return undefined;
+}
+
+function fillBatteryPercentFromVoltage(directState) {
+  if (!directState || directState.batteryLevel !== undefined || directState.batteryVoltage === undefined) {
+    return;
+  }
+  assignDefined(directState, 'batteryLevel', inferZigbeeBatteryPercentFromVoltage(directState.batteryVoltage));
+}
+
 function coerceZigbeeNumericValue(value) {
   if (typeof value === 'bigint') {
     const numeric = Number(value);
@@ -1741,6 +1769,7 @@ function readZigbeeDirectRadioState(zigbeeDevice, options = {}) {
   mergeDirectState(directState, extractZigbeeMessageState(options.message, options.features));
   readZigbeeStateObject(zigbeeDevice, directState);
   readZigbeeEndpointSensorAttributes(zigbeeDevice, directState, options.features);
+  fillBatteryPercentFromVoltage(directState);
   return directState;
 }
 
