@@ -10,6 +10,7 @@ import { Slider } from "@/components/ui/slider"
 import { 
   ArrowLeft,
   BarChart3,
+  Battery,
   Search, 
   Filter, 
   Grid3X3, 
@@ -463,6 +464,46 @@ const getDeviceBatteryLabel = (device: any): string | null => {
     return `${voltage} V battery`
   }
   return deviceSupportsBattery(device) ? 'Battery awaiting report' : null
+}
+
+const getBatteryToneClassName = (level: number | null): string => {
+  if (level === null) {
+    return 'border-white/10 bg-white/5 text-muted-foreground'
+  }
+  if (level <= 15) {
+    return 'border-red-400/30 bg-red-400/10 text-red-200'
+  }
+  if (level <= 35) {
+    return 'border-amber-400/30 bg-amber-400/10 text-amber-200'
+  }
+  return 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200'
+}
+
+function DeviceBatteryIndicator({ device }: { device: any }) {
+  const level = getDeviceBatteryLevel(device)
+  const voltage = getDeviceBatteryVoltage(device)
+  const label = getDeviceBatteryLabel(device)
+
+  if (!label) {
+    return null
+  }
+
+  const displayValue = level !== null
+    ? `${level}%`
+    : voltage !== null
+      ? `${voltage}V`
+      : 'Pending'
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[0.68rem] font-bold uppercase leading-none tracking-[0.08em] ${getBatteryToneClassName(level)}`}
+      title={label}
+      aria-label={label}
+    >
+      <Battery className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+      <span>{displayValue}</span>
+    </span>
+  )
 }
 
 const formatSensorTemperature = (device: any): string | null => {
@@ -2149,7 +2190,6 @@ export function Devices({
     const stateText = getDeviceStateText(device)
     const sourceLabel = getDeviceSourceLabel(getDeviceSource(device))
     const primaryActionLabel = canPrimaryControl ? getDevicePrimaryActionLabel(device) : "Details"
-    const batteryLabel = getDeviceBatteryLabel(device)
 
     return (
       <Card
@@ -2204,9 +2244,7 @@ export function Devices({
             {energyMonitoring ? (
               <Badge variant="outline" className="rounded-full">Energy</Badge>
             ) : null}
-            {batteryLabel ? (
-              <Badge variant="outline" className="rounded-full">{batteryLabel}</Badge>
-            ) : null}
+            <DeviceBatteryIndicator device={device} />
             {(isSmartThingsBackedDevice(device) || needsMigrationFinalization(device)) ? (
               <Badge variant="outline" className="rounded-full border-cyan-300/30 bg-cyan-300/10 text-cyan-100">Migration</Badge>
             ) : null}
