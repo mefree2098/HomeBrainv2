@@ -70,7 +70,11 @@ test('extractDeviceMetrics maps direct-radio sensor state into standard telemetr
         vibrationActive: true,
         tamperActive: false,
         humidity: 44,
-        illuminance: 112
+        illuminance: 112,
+        powerW: 12.3,
+        energyKwh: 4.567,
+        voltageV: 121.5,
+        currentA: 1.525
       }
     }
   });
@@ -88,6 +92,10 @@ test('extractDeviceMetrics maps direct-radio sensor state into standard telemetr
   assert.equal(metrics.tamper_active, 0);
   assert.equal(metrics.humidity_pct, 44);
   assert.equal(metrics.illuminance_lux, 112);
+  assert.equal(metrics.power_w, 12.3);
+  assert.equal(metrics.energy_kwh, 4.567);
+  assert.equal(metrics.voltage_v, 121.5);
+  assert.equal(metrics.current_a, 1.525);
 });
 
 test('extractDeviceMetrics captures Tempest connectivity telemetry without duplicating observation metrics', () => {

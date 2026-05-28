@@ -789,7 +789,8 @@ class AutomationSchedulerService {
     const propertyKey = typeof conditions.property === 'string' && conditions.property.trim()
       ? conditions.property.trim()
       : 'status';
-    const leftValue = resolveDeviceProperty(refreshedDevice, propertyKey, refreshedDevice.status);
+    const propertyFallback = propertyKey === 'status' ? refreshedDevice.status : undefined;
+    const leftValue = resolveDeviceProperty(refreshedDevice, propertyKey, propertyFallback);
 
     const operator = conditions.operator || (conditions.condition === 'above'
       ? '>'

@@ -43,6 +43,7 @@ const FEATURE_LABELS = Object.freeze({
   pressure: 'Pressure',
   weight: 'Weight',
   voltage: 'Voltage',
+  current: 'Current',
   firmware: 'Firmware status',
   health: 'Health / online state'
 });
@@ -82,6 +83,7 @@ const SMARTTHINGS_CAPABILITY_FEATURES = Object.freeze({
   pressureMeasurement: ['pressure'],
   weightMeasurement: ['weight'],
   voltageMeasurement: ['voltage'],
+  currentMeasurement: ['current'],
   firmwareUpdate: ['firmware'],
   healthCheck: ['health']
 });
@@ -130,7 +132,8 @@ const ZWAVE_PREFERRED_FEATURES = new Set([
   'carbonMonoxide',
   'thermostat',
   'fan',
-  'voltage'
+  'voltage',
+  'current'
 ]);
 
 const CLOUD_ONLY_KEYWORDS = [
@@ -651,6 +654,13 @@ function buildNormalizedCapabilities(features, protocol = 'unknown') {
       writable: false,
       unit: 'V'
     },
+    current: {
+      type: 'current_sensor',
+      property: 'current',
+      readable,
+      writable: false,
+      unit: 'A'
+    },
     firmware: {
       type: 'firmware',
       property: 'firmware',
@@ -1150,6 +1160,8 @@ function buildDirectFeatureProperties(features) {
     supportsWaterSensor: featureSet.has('water'),
     supportsPowerMeter: featureSet.has('power'),
     supportsEnergyMeter: featureSet.has('energy'),
+    supportsVoltage: featureSet.has('voltage'),
+    supportsCurrent: featureSet.has('current'),
     supportsThermostat: featureSet.has('thermostat'),
     supportsAlarm: featureSet.has('alarm'),
     supportsLockCodes: featureSet.has('lockCodes'),

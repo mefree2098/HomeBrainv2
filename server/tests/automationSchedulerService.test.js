@@ -483,6 +483,106 @@ test('device_state triggers can evaluate SmartThings power thresholds with hold 
   });
 });
 
+test('device_state triggers evaluate direct-radio sensor and battery feature paths', async (t) => {
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const originalFindById = Device.findById;
+  let currentDevice = {
+    _id: deviceId,
+    name: 'Vault Door Sensor',
+    room: 'Vault',
+    status: false,
+    properties: {
+      source: 'homebrain-zigbee',
+      supportsBattery: true,
+      supportsContactSensor: true,
+      supportsTemperatureSensor: true,
+      directRadioState: {
+        batteryLevel: 7,
+        contactOpen: true,
+        temperatureF: 82.4
+      }
+    }
+  };
+
+  Device.findById = () => ({
+    lean: async () => currentDevice
+  });
+
+  automationSchedulerService.triggerStateCache.clear();
+  automationSchedulerService.pendingTriggerContexts.clear();
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    automationSchedulerService.triggerStateCache.clear();
+    automationSchedulerService.pendingTriggerContexts.clear();
+  });
+
+  const buildAutomation = (id, property, operator, value) => ({
+    _id: { toString: () => id },
+    enabled: true,
+    cooldown: 0,
+    trigger: {
+      type: 'device_state',
+      conditions: {
+        deviceId,
+        property,
+        operator,
+        value
+      }
+    }
+  });
+
+  assert.equal(
+    await automationSchedulerService.shouldRunAutomation(
+      buildAutomation('battery-low', 'directRadioState.batteryLevel', 'lt', 10),
+      new Date('2026-04-02T10:00:00.000Z')
+    ),
+    true
+  );
+  assert.deepEqual(automationSchedulerService.consumePendingTriggerContext('battery-low'), {
+    triggeringDeviceId: deviceId,
+    triggeringDeviceName: 'Vault Door Sensor',
+    triggeringDeviceRoom: 'Vault',
+    triggerProperty: 'directRadioState.batteryLevel',
+    triggerValue: 7
+  });
+
+  assert.equal(
+    await automationSchedulerService.shouldRunAutomation(
+      buildAutomation('temperature-high', 'directRadioState.temperatureF', 'gt', 80),
+      new Date('2026-04-02T10:00:01.000Z')
+    ),
+    true
+  );
+
+  assert.equal(
+    await automationSchedulerService.shouldRunAutomation(
+      buildAutomation('contact-open', 'directRadioState.contactOpen', 'eq', true),
+      new Date('2026-04-02T10:00:02.000Z')
+    ),
+    true
+  );
+
+  currentDevice = {
+    ...currentDevice,
+    properties: {
+      ...currentDevice.properties,
+      directRadioState: {
+        contactOpen: false
+      }
+    }
+  };
+
+  assert.equal(
+    await automationSchedulerService.shouldRunAutomation(
+      buildAutomation('missing-battery', 'directRadioState.batteryLevel', 'lt', 10),
+      new Date('2026-04-02T10:00:03.000Z')
+    ),
+    false
+  );
+  assert.deepEqual(automationSchedulerService.consumePendingTriggerContext('missing-battery'), {});
+});
+
 test('schedule triggers can fire at sunset using weather-derived solar time', async (t) => {
   const originalFetchDashboardWeather = weatherService.fetchDashboardWeather;
   const automationId = new mongoose.Types.ObjectId().toString();

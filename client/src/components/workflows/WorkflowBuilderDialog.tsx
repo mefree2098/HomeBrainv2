@@ -226,6 +226,10 @@ function formatTriggerPropertyLabel(property: string) {
     return "Target temperature";
   }
 
+  if (property === "colorTemperature") {
+    return "White temperature (K)";
+  }
+
   if ([
     "directRadioState.batteryLevel",
     "homeBrainBatteryLevel",
@@ -237,6 +241,12 @@ function formatTriggerPropertyLabel(property: string) {
     return "Battery level (%)";
   }
 
+  if (property === "directRadioState.batteryLow") {
+    return "Battery low";
+  }
+  if (property === "directRadioState.batteryVoltage") {
+    return "Battery voltage (V)";
+  }
   if (property === "directRadioState.contactOpen") {
     return "Contact open";
   }
@@ -257,6 +267,24 @@ function formatTriggerPropertyLabel(property: string) {
   }
   if (property === "directRadioState.illuminance") {
     return "Illuminance (lx)";
+  }
+  if (property === "directRadioState.waterDetected") {
+    return "Water detected";
+  }
+  if (property === "directRadioState.colorTemperatureK") {
+    return "White temperature (K)";
+  }
+  if (property === "directRadioState.powerW") {
+    return "Power draw (W)";
+  }
+  if (property === "directRadioState.energyKwh") {
+    return "Energy total (kWh)";
+  }
+  if (property === "directRadioState.voltageV") {
+    return "Voltage (V)";
+  }
+  if (property === "directRadioState.currentA") {
+    return "Current (A)";
   }
 
   if (property === "sense.currentPowerW") {
@@ -292,7 +320,10 @@ function isEnergyTriggerProperty(key: string) {
     || key === "sense.trends.day.energyKwh"
     || key === "sense.trends.day.consumptionTotalKwh"
     || key === "smartThingsAttributeValues.powerMeter.power"
-    || key === "smartThingsAttributeValues.energyMeter.energy";
+    || key === "smartThingsAttributeValues.energyMeter.energy"
+    || key === "directRadioState.powerW"
+    || key === "directRadioState.energyKwh"
+    || key === "directRadioState.currentA";
 }
 
 function getTriggerOperatorOptions(kind: TriggerPropertyKind) {
@@ -339,11 +370,86 @@ function clampPercentValue(value: unknown): number | null {
   return numeric === null ? null : Math.max(0, Math.min(100, Math.round(numeric)));
 }
 
-function collectBatteryTriggerOptions(device: DeviceLite | undefined): TriggerPropertyOption[] {
-  const properties = (device?.properties as Record<string, unknown> | undefined) || {};
-  const directRadioState = properties.directRadioState && typeof properties.directRadioState === "object"
+function normalizeFeatureToken(value: unknown) {
+  return String(value || "")
+    .trim()
+    .replace(/[\s_-]+/g, "")
+    .toLowerCase();
+}
+
+function featureTokenMatches(value: unknown, feature: string) {
+  const normalized = normalizeFeatureToken(value);
+  const target = normalizeFeatureToken(feature);
+  if (!normalized || !target) {
+    return false;
+  }
+  if (normalized === target) {
+    return true;
+  }
+
+  const aliases: Record<string, string[]> = {
+    battery: ["batterysensor"],
+    contact: ["contactsensor"],
+    motion: ["motionsensor", "occupancy", "occupancysensor"],
+    vibration: ["vibrationsensor"],
+    acceleration: ["accelerationsensor"],
+    tamper: ["tampersensor", "tamperalert"],
+    water: ["watersensor", "leak", "leaksensor"],
+    temperature: ["temperaturemeasurement", "temperaturesensor"],
+    humidity: ["relativehumiditymeasurement", "humiditysensor"],
+    illuminance: ["illuminancemeasurement", "illuminancesensor", "lightsensor"],
+    colortemperature: ["colortemperature", "whitetemperature"],
+    power: ["powermeter", "powersensor"],
+    energy: ["energymeter", "energysensor"],
+    voltage: ["voltagemeasurement", "voltagesensor"],
+    current: ["currentmeasurement", "currentsensor"]
+  };
+
+  return (aliases[target] || []).includes(normalized);
+}
+
+function getDeviceProperties(device: DeviceLite | undefined): Record<string, unknown> {
+  return (device?.properties as Record<string, unknown> | undefined) || {};
+}
+
+function getDirectRadioState(device: DeviceLite | undefined): Record<string, unknown> {
+  const properties = getDeviceProperties(device);
+  return properties.directRadioState && typeof properties.directRadioState === "object"
     ? properties.directRadioState as Record<string, unknown>
     : {};
+}
+
+function directFeatureSupported(device: DeviceLite | undefined, feature: string, supportFlags: string[] = []) {
+  const properties = getDeviceProperties(device);
+  if (supportFlags.some((flag) => properties[flag] === true)) {
+    return true;
+  }
+
+  if (Array.isArray(properties.directRadioFeatures)
+    && properties.directRadioFeatures.some((entry) => featureTokenMatches(entry, feature))) {
+    return true;
+  }
+
+  if (Array.isArray(properties.directRadioCapabilities)) {
+    return properties.directRadioCapabilities.some((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return false;
+      }
+      const capability = entry as Record<string, unknown>;
+      return featureTokenMatches(capability.type, feature) || featureTokenMatches(capability.property, feature);
+    });
+  }
+
+  return false;
+}
+
+function hasDirectRadioStateValue(state: Record<string, unknown>, key: string) {
+  return getNestedRecordValue(state, key.replace(/^directRadioState\./, "").split(".")) !== undefined;
+}
+
+function collectBatteryTriggerOptions(device: DeviceLite | undefined): TriggerPropertyOption[] {
+  const properties = getDeviceProperties(device);
+  const directRadioState = getDirectRadioState(device);
   const candidates = [
     { key: "directRadioState.batteryLevel", value: directRadioState.batteryLevel },
     { key: "homeBrainBatteryLevel", value: properties.homeBrainBatteryLevel },
@@ -354,35 +460,62 @@ function collectBatteryTriggerOptions(device: DeviceLite | undefined): TriggerPr
   ];
 
   const match = candidates.find((candidate) => clampPercentValue(candidate.value) !== null);
-  return match
-    ? [{
-        key: match.key,
-        label: "Battery level (%)",
-        kind: "number",
-        unit: "%",
-        batteryMetric: true
-      }]
-    : [];
+  const supportsBattery = Boolean(match) || directFeatureSupported(device, "battery", ["supportsBattery"]);
+  if (!supportsBattery) {
+    return [];
+  }
+
+  const options: TriggerPropertyOption[] = [{
+    key: match?.key || "directRadioState.batteryLevel",
+    label: "Battery level (%)",
+    kind: "number",
+    unit: "%",
+    batteryMetric: true
+  }];
+
+  if (directRadioState.batteryLow !== undefined || directFeatureSupported(device, "battery", ["supportsBattery"])) {
+    options.push({
+      key: "directRadioState.batteryLow",
+      label: "Battery low",
+      kind: "boolean"
+    });
+  }
+
+  if (directRadioState.batteryVoltage !== undefined || directFeatureSupported(device, "battery", ["supportsBattery"])) {
+    options.push({
+      key: "directRadioState.batteryVoltage",
+      label: "Battery voltage (V)",
+      kind: "number",
+      unit: "V"
+    });
+  }
+
+  return options;
 }
 
 function collectDirectRadioStateTriggerOptions(device: DeviceLite | undefined): TriggerPropertyOption[] {
-  const properties = (device?.properties as Record<string, unknown> | undefined) || {};
-  const state = properties.directRadioState && typeof properties.directRadioState === "object"
-    ? properties.directRadioState as Record<string, unknown>
-    : {};
-  const candidates: TriggerPropertyOption[] = [
-    { key: "directRadioState.contactOpen", label: "Contact open", kind: "boolean" },
-    { key: "directRadioState.motionActive", label: "Motion active", kind: "boolean" },
-    { key: "directRadioState.vibrationActive", label: "Vibration active", kind: "boolean" },
-    { key: "directRadioState.accelerationActive", label: "Acceleration active", kind: "boolean" },
-    { key: "directRadioState.tamperActive", label: "Tamper active", kind: "boolean" },
-    { key: "directRadioState.waterDetected", label: "Water detected", kind: "boolean" },
-    { key: "directRadioState.temperatureF", label: "Temperature (°F)", kind: "number", unit: "°F" },
-    { key: "directRadioState.humidity", label: "Humidity (%)", kind: "number", unit: "%" },
-    { key: "directRadioState.illuminance", label: "Illuminance (lx)", kind: "number", unit: "lx" }
+  const state = getDirectRadioState(device);
+  const candidates: Array<TriggerPropertyOption & { feature: string; supportFlags?: string[] }> = [
+    { key: "directRadioState.contactOpen", label: "Contact open", kind: "boolean", feature: "contact", supportFlags: ["supportsContactSensor"] },
+    { key: "directRadioState.motionActive", label: "Motion active", kind: "boolean", feature: "motion", supportFlags: ["supportsMotionSensor"] },
+    { key: "directRadioState.vibrationActive", label: "Vibration active", kind: "boolean", feature: "vibration", supportFlags: ["supportsVibrationSensor"] },
+    { key: "directRadioState.accelerationActive", label: "Acceleration active", kind: "boolean", feature: "acceleration", supportFlags: ["supportsAccelerationSensor"] },
+    { key: "directRadioState.tamperActive", label: "Tamper active", kind: "boolean", feature: "tamper", supportFlags: ["supportsTamperSensor"] },
+    { key: "directRadioState.waterDetected", label: "Water detected", kind: "boolean", feature: "water", supportFlags: ["supportsWaterSensor"] },
+    { key: "directRadioState.temperatureF", label: "Temperature (°F)", kind: "number", unit: "°F", feature: "temperature", supportFlags: ["supportsTemperatureSensor"] },
+    { key: "directRadioState.humidity", label: "Humidity (%)", kind: "number", unit: "%", feature: "humidity", supportFlags: ["supportsHumiditySensor"] },
+    { key: "directRadioState.illuminance", label: "Illuminance (lx)", kind: "number", unit: "lx", feature: "illuminance", supportFlags: ["supportsIlluminanceSensor"] },
+    { key: "directRadioState.colorTemperatureK", label: "White temperature (K)", kind: "number", unit: "K", feature: "colorTemperature", supportFlags: ["supportsColorTemperature"] },
+    { key: "directRadioState.powerW", label: "Power draw (W)", kind: "number", unit: "W", energyMetric: true, feature: "power", supportFlags: ["supportsPowerMeter"] },
+    { key: "directRadioState.energyKwh", label: "Energy total (kWh)", kind: "number", unit: "kWh", energyMetric: true, feature: "energy", supportFlags: ["supportsEnergyMeter"] },
+    { key: "directRadioState.voltageV", label: "Voltage (V)", kind: "number", unit: "V", feature: "voltage", supportFlags: ["supportsVoltage"] },
+    { key: "directRadioState.currentA", label: "Current (A)", kind: "number", unit: "A", energyMetric: true, feature: "current", supportFlags: ["supportsCurrent"] }
   ];
 
-  return candidates.filter((option) => getNestedRecordValue(state, option.key.replace(/^directRadioState\./, "").split(".")) !== undefined);
+  return candidates
+    .filter((option) => hasDirectRadioStateValue(state, option.key)
+      || directFeatureSupported(device, option.feature, option.supportFlags || []))
+    .map(({ feature, supportFlags, ...option }) => option);
 }
 
 function collectSmartThingsAttributeOptions(
@@ -473,7 +606,7 @@ function getTriggerPropertyOptions(device: DeviceLite | undefined): TriggerPrope
     { key: "isOnline", label: "Online state", kind: "boolean" }
   ];
 
-  if (typeof device?.brightness === "number") {
+  if (typeof device?.brightness === "number" || directFeatureSupported(device, "brightness", ["supportsBrightness"])) {
     options.push({ key: "brightness", label: "Brightness (%)", kind: "number", unit: "%" });
   }
   if (typeof device?.temperature === "number") {
@@ -481,6 +614,9 @@ function getTriggerPropertyOptions(device: DeviceLite | undefined): TriggerPrope
   }
   if (typeof device?.targetTemperature === "number") {
     options.push({ key: "targetTemperature", label: "Target temperature", kind: "number" });
+  }
+  if (typeof device?.colorTemperature === "number" || directFeatureSupported(device, "colorTemperature", ["supportsColorTemperature"])) {
+    options.push({ key: "colorTemperature", label: "White temperature (K)", kind: "number", unit: "K" });
   }
 
   const attributeValues = (device?.properties as Record<string, unknown> | undefined)?.smartThingsAttributeValues;
