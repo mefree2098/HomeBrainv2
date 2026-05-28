@@ -1055,6 +1055,59 @@ test('getPanelById ignores firmware timestamp churn when the fingerprint is unch
   assert.equal(result.updateAvailable, false);
 });
 
+test('pushFirmwareUpdate rejects timestamp-only firmware churn before queuing OTA', async (t) => {
+  const originalFindById = WallPanel.findById;
+  let saveCount = 0;
+
+  const panelDoc = {
+    _id: 'panel-noop-ota',
+    name: 'Office Orb',
+    room: 'Office',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'online',
+    firmwareVersion: 'panel-20260427T153736Z-aa508cf8',
+    ota: {
+      status: 'idle',
+      phase: 'idle'
+    },
+    settings: {
+      registered: true,
+      registrationCode: 'HBWP-ABCD-EF12-3456',
+      claimToken: '',
+      claimTokenExpires: null,
+      modeOrder: ['room']
+    },
+    async save() {
+      saveCount += 1;
+      return this;
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+  });
+
+  WallPanel.findById = async () => panelDoc;
+
+  const service = new WallPanelService({
+    projectRoot: '/tmp/homebrain',
+    panelFirmwareProjectDir: '/tmp/homebrain/embedded/elecrow-wall-panel'
+  });
+  service.panelFirmwareVersionCache = {
+    value: 'panel-20260501T224312Z-aa508cf8',
+    expiresAt: Date.now() + 60_000
+  };
+
+  await assert.rejects(
+    () => service.pushFirmwareUpdate('panel-noop-ota'),
+    /already has the latest HomeBrain firmware content/i
+  );
+  assert.equal(saveCount, 0);
+});
+
 test('buildPanelOtaArtifact falls back to Homebrew PlatformIO when pio is missing from PATH', async (t) => {
   withPanelWifiBuildSettings(t);
   const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'wall-panel-ota-'));
@@ -1787,6 +1840,77 @@ test('reportPanelOtaStatus preserves known OTA bytesTotal when download updates 
   assert.equal(capturedUpdates.status, 'downloading');
   assert.equal(capturedOptions.allowMissingJob, true);
   assert.equal(capturedOptions.touchLastSeen, true);
+});
+
+test('cancelPanelOtaJob cancels an active OTA and removes the staged artifact', async (t) => {
+  const originalFindById = WallPanel.findById;
+  const originalPublishSafe = eventStreamService.publishSafe;
+  const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'wall-panel-cancel-'));
+  const artifactPath = path.join(tempRoot, 'server', 'data', 'wall-panel-ota', 'panel-cancel', 'job-cancel.bin');
+
+  const panelDoc = {
+    _id: 'panel-cancel',
+    name: 'Office Orb',
+    room: 'Office',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'updating',
+    firmwareVersion: 'panel-20260427T153736Z-aa508cf8',
+    ota: {
+      jobId: 'job-cancel',
+      status: 'ready',
+      phase: 'ready',
+      progress: 60,
+      targetVersion: 'panel-20260501T224312Z-aa508cf8',
+      currentVersion: 'panel-20260427T153736Z-aa508cf8',
+      message: 'Firmware package is ready.',
+      previousPanelStatus: 'online',
+      artifactPath,
+      artifactSizeBytes: 8,
+      bytesTransferred: 0,
+      bytesTotal: 8
+    },
+    settings: {
+      registered: true,
+      registrationCode: 'HBWP-ABCD-EF12-3456'
+    },
+    async save() {
+      return this;
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+    eventStreamService.publishSafe = originalPublishSafe;
+  });
+  t.after(async () => {
+    await fs.promises.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  await fs.promises.mkdir(path.dirname(artifactPath), { recursive: true });
+  await fs.promises.writeFile(artifactPath, Buffer.from('firmware'));
+
+  WallPanel.findById = async () => panelDoc;
+  eventStreamService.publishSafe = async () => {};
+
+  const service = new WallPanelService({
+    projectRoot: tempRoot,
+    panelOtaArtifactsDir: path.join(tempRoot, 'server', 'data', 'wall-panel-ota')
+  });
+
+  const result = await service.cancelPanelOtaJob('panel-cancel', {
+    reason: 'Cancelled from test.'
+  });
+
+  assert.equal(result.status, 'online');
+  assert.equal(result.ota.status, 'cancelled');
+  assert.equal(result.ota.phase, 'cancelled');
+  assert.equal(result.ota.progress, 0);
+  assert.equal(result.ota.message, 'Cancelled from test.');
+  assert.equal(panelDoc.ota.artifactPath, '');
+  assert.equal(await fs.promises.stat(artifactPath).catch(() => null), null);
 });
 
 test('pushFirmwareUpdate recovers a stale orb OTA build before queuing a new update', async (t) => {

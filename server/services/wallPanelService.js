@@ -192,6 +192,11 @@ function otaStatusIsActive(status) {
   return ACTIVE_OTA_STATUSES.has(trimString(status));
 }
 
+function otaStatusCanBeCancelled(status) {
+  const normalizedStatus = trimString(status);
+  return ACTIVE_OTA_STATUSES.has(normalizedStatus) || normalizedStatus === 'failed' || normalizedStatus === 'cancelled';
+}
+
 function otaActivationCanFinalize(ota = {}) {
   const normalized = normalizeOtaState(ota);
   if (!normalized.targetVersion) {
@@ -2534,7 +2539,7 @@ class WallPanelService {
 
     if (updates.status === 'completed') {
       panel.status = 'online';
-    } else if (updates.status === 'failed') {
+    } else if (updates.status === 'failed' || updates.status === 'cancelled') {
       panel.status = trimString(panel.ota.previousPanelStatus) || 'online';
     } else if (otaStatusIsActive(panel.ota.status)) {
       panel.status = 'updating';
@@ -2659,10 +2664,14 @@ class WallPanelService {
       throw createError(400, `Hardware profile ${panel.hardwareProfile} is not OTA-capable yet`);
     }
 
+    const targetVersion = await this.getLatestPanelFirmwareVersion().catch(() => buildPanelFirmwareVersion());
+    if (!isFirmwareUpdateAvailable(panel.firmwareVersion, targetVersion)) {
+      throw createError(409, 'This hardware orb already has the latest HomeBrain firmware content. No OTA push is needed.');
+    }
+
     await this.getPanelWifiBuildConfig();
 
     const jobId = crypto.randomUUID();
-    const targetVersion = await this.getLatestPanelFirmwareVersion().catch(() => buildPanelFirmwareVersion());
     const panelDoc = await getPanelDocument(panelId);
     panelDoc.status = 'updating';
     panelDoc.ota = mergeOtaState(panelDoc.ota || {}, {
@@ -2705,6 +2714,68 @@ class WallPanelService {
     });
 
     return this.serializePanelForResponse(panelDoc);
+  }
+
+  async cancelPanelOtaJob(panelId, input = {}) {
+    const panel = await getPanelDocument(panelId);
+    const currentOta = normalizeOtaState(panel.ota || {});
+
+    if (!currentOta.jobId || currentOta.status === 'idle') {
+      return this.serializePanelForResponse(panel);
+    }
+
+    if (!otaStatusCanBeCancelled(currentOta.status)) {
+      throw createError(409, 'This hardware orb firmware update is not active and cannot be cancelled');
+    }
+
+    const activeJob = otaStatusIsActive(currentOta.status);
+    const message = trimString(input.reason) || 'Firmware update was cancelled.';
+    panel.ota = activeJob
+      ? mergeOtaState(currentOta, {
+        status: 'cancelled',
+        phase: 'cancelled',
+        progress: 0,
+        message,
+        lastError: '',
+        completedAt: new Date()
+      })
+      : mergeOtaState(currentOta, {
+        jobId: '',
+        status: 'idle',
+        phase: 'idle',
+        progress: 0,
+        targetVersion: '',
+        currentVersion: trimString(panel.firmwareVersion),
+        message: '',
+        lastError: '',
+        hardwareProfile: '',
+        artifactPath: '',
+        artifactSizeBytes: 0,
+        bytesTransferred: 0,
+        bytesTotal: 0,
+        requestedAt: null,
+        startedAt: null,
+        completedAt: null
+      });
+    panel.status = trimString(panel.ota.previousPanelStatus) || 'online';
+    await panel.save();
+
+    await this.cleanupPanelOtaArtifact(panel, currentOta.artifactPath).catch(() => null);
+
+    void eventStreamService.publishSafe({
+      type: 'wall_panel.ota_cancelled',
+      source: 'wall_panel',
+      category: 'panel',
+      severity: 'warn',
+      payload: {
+        panelId: toId(panel._id),
+        jobId: currentOta.jobId,
+        message
+      },
+      tags: ['wall-panel', 'ota']
+    });
+
+    return this.serializePanelForResponse(panel);
   }
 
   async flashPanelInitialFirmware(panel, { jobId, targetVersion, origin = '', serialPath = '' }) {

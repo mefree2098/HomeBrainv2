@@ -18,13 +18,15 @@ import {
   Thermometer,
   Tv,
   Upload,
-  Wifi
+  Wifi,
+  XCircle
 } from "lucide-react"
 
 import { getDevices, type DeviceRecord } from "@/api/devices"
 import { getHarmonyHubs } from "@/api/harmony"
 import { getSettings, updateSettings } from "@/api/settings"
 import {
+  cancelWallPanelFirmwareUpdate,
   getWallPanelProvisioning,
   getWallPanelUsbProvisioningPorts,
   getWallPanels,
@@ -275,6 +277,8 @@ const otaStatusLabel = (status?: string) => {
       return "Completed"
     case "failed":
       return "Failed"
+    case "cancelled":
+      return "Cancelled"
     default:
       return "Idle"
   }
@@ -414,6 +418,7 @@ export function HardwareOrbsTab() {
   const [loadingProvisioningKey, setLoadingProvisioningKey] = useState("")
   const [rotatingProvisioningKey, setRotatingProvisioningKey] = useState("")
   const [pushingUpdateKey, setPushingUpdateKey] = useState("")
+  const [cancellingOtaKey, setCancellingOtaKey] = useState("")
   const [rotationSavingKey, setRotationSavingKey] = useState("")
   const [orbWifiDraft, setOrbWifiDraft] = useState<OrbWifiDraft>(DEFAULT_ORB_WIFI_DRAFT)
   const [orbWifiSavedSsid, setOrbWifiSavedSsid] = useState("")
@@ -628,6 +633,10 @@ export function HardwareOrbsTab() {
 
   const selectedPanelOta = selectedPanel?.ota
   const selectedPanelOtaBusy = isOtaBusy(selectedPanel)
+  const selectedPanelOtaStatus = normalizeString(selectedPanelOta?.status)
+  const selectedPanelOtaCancellable = Boolean(
+    selectedPanel && (selectedPanelOtaBusy || selectedPanelOtaStatus === "failed" || selectedPanelOtaStatus === "cancelled")
+  )
   const selectedPanelMountOffsetTenths = getMountOffsetTenths(selectedPanel)
   const selectedPanelFirmwareVersion = normalizeString(selectedPanel?.firmwareVersion)
   const selectedPanelLatestFirmwareVersion = normalizeString(selectedPanel?.latestFirmwareVersion)
@@ -638,6 +647,11 @@ export function HardwareOrbsTab() {
     selectedPanelFirmwareVersion
     && selectedPanelLatestFirmwareVersion
     && selectedPanelFirmwareVersion === selectedPanelLatestFirmwareVersion
+  )
+  const selectedPanelFirmwareContentCurrent = Boolean(
+    selectedPanelFirmwareVersion
+    && selectedPanelLatestFirmwareVersion
+    && !selectedPanelFirmwareUpdateAvailable
   )
   const onlineCount = panels.filter((panel) => panel.status === "online").length
   const provisionedCount = panels.filter((panel) => panel.settings?.registered === true).length
@@ -893,6 +907,13 @@ export function HardwareOrbsTab() {
       })
       return
     }
+    if (!panel.updateAvailable) {
+      toast({
+        title: "Firmware already current",
+        description: "This orb already has the latest HomeBrain firmware content. No OTA push is needed."
+      })
+      return
+    }
 
     setPushingUpdateKey(panel.id)
     try {
@@ -911,6 +932,30 @@ export function HardwareOrbsTab() {
       })
     } finally {
       setPushingUpdateKey("")
+    }
+  }
+
+  const handleCancelFirmwareUpdate = async (panel: WallPanelRecord) => {
+    setCancellingOtaKey(panel.id)
+    try {
+      const response = await cancelWallPanelFirmwareUpdate(
+        panel.id,
+        "Cancelled from Hardware Orbs settings."
+      )
+      replacePanel(response.panel)
+      toast({
+        title: "Firmware update cancelled",
+        description: `${response.panel.name} is no longer waiting on that OTA job.`
+      })
+      void loadOrbData({ silent: true, focusPanelId: panel.id })
+    } catch (error: any) {
+      toast({
+        title: "Cancel failed",
+        description: error?.message || "Unable to cancel the hardware orb OTA update.",
+        variant: "destructive"
+      })
+    } finally {
+      setCancellingOtaKey("")
     }
   }
 
@@ -1435,7 +1480,7 @@ export function HardwareOrbsTab() {
                       type="button"
                       className="w-full sm:w-auto min-w-[15rem] h-auto min-h-11 whitespace-normal px-5 py-3 text-center leading-tight bg-cyan-600 hover:bg-cyan-700 text-white"
                       onClick={() => void handlePushFirmwareUpdate(selectedPanel)}
-                      disabled={!orbWifiConfigured || !selectedPanel.settings?.registered || selectedPanelOtaBusy || pushingUpdateKey === selectedPanel.id}
+                      disabled={!orbWifiConfigured || !selectedPanel.settings?.registered || !selectedPanelFirmwareUpdateAvailable || selectedPanelOtaBusy || pushingUpdateKey === selectedPanel.id}
                     >
                       {pushingUpdateKey === selectedPanel.id ? (
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -1462,6 +1507,18 @@ export function HardwareOrbsTab() {
                         <Badge variant="destructive" className="w-fit">
                           Update recommended
                         </Badge>
+                      </div>
+                    </div>
+                  ) : selectedPanelFirmwareContentCurrent ? (
+                    <div className="rounded-2xl border border-emerald-400/25 bg-emerald-500/[0.07] p-4">
+                      <div className="flex items-start gap-3">
+                        <CheckCircle className="mt-0.5 h-5 w-5 text-emerald-500" />
+                        <div>
+                          <p className="text-sm font-medium text-foreground">Firmware content is current</p>
+                          <p className="text-xs text-muted-foreground">
+                            The version labels differ, but HomeBrain sees the same firmware fingerprint on the orb and the latest build.
+                          </p>
+                        </div>
                       </div>
                     </div>
                   ) : null}
@@ -1502,7 +1559,26 @@ export function HardwareOrbsTab() {
                             {selectedPanelOta.message || "HomeBrain is coordinating this firmware push."}
                           </p>
                         </div>
-                        <p className="text-sm font-medium">{Math.max(0, Math.min(100, Number(selectedPanelOta.progress || 0)))}%</p>
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                          <p className="text-sm font-medium">{Math.max(0, Math.min(100, Number(selectedPanelOta.progress || 0)))}%</p>
+                          {selectedPanelOtaCancellable ? (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-9"
+                              onClick={() => void handleCancelFirmwareUpdate(selectedPanel)}
+                              disabled={cancellingOtaKey === selectedPanel.id}
+                            >
+                              {cancellingOtaKey === selectedPanel.id ? (
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              ) : (
+                                <XCircle className="mr-2 h-4 w-4" />
+                              )}
+                              {selectedPanelOtaStatus === "failed" || selectedPanelOtaStatus === "cancelled" ? "Dismiss" : "Cancel"}
+                            </Button>
+                          ) : null}
+                        </div>
                       </div>
                       <Progress value={Math.max(0, Math.min(100, Number(selectedPanelOta.progress || 0)))} className="mt-3" />
                       <div className="mt-3 flex flex-wrap gap-4 text-xs text-muted-foreground">
