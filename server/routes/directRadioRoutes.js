@@ -3,6 +3,7 @@ const rateLimit = require('express-rate-limit');
 const directRadioService = require('../services/directRadioService');
 const directRadioEngineLogService = require('../services/directRadioEngineLogService');
 const directRadioProtocolCatalogService = require('../services/directRadioProtocolCatalogService');
+const deviceLibraryUpdateService = require('../services/deviceLibraryUpdateService');
 const { requireAdmin } = require('./middlewares/auth');
 
 const router = express.Router();
@@ -205,10 +206,11 @@ router.get('/catalog/insteon/lookup', (req, res) => {
 
 router.get('/catalog/update/status', (_req, res) => {
   try {
-    const status = directRadioProtocolCatalogService.getUpdateStatus();
+    const update = deviceLibraryUpdateService.getStatus();
     res.status(200).json({
       success: true,
-      status
+      status: update.catalogUpdate,
+      update
     });
   } catch (error) {
     sendError(res, error, 'Failed to get device library update status');
@@ -217,12 +219,14 @@ router.get('/catalog/update/status', (_req, res) => {
 
 router.post('/catalog/update/run', async (req, res) => {
   try {
-    const result = await directRadioProtocolCatalogService.refreshExternalCatalogs({
-      force: req.body?.force === true
+    const result = await deviceLibraryUpdateService.tick({
+      force: req.body?.force === true,
+      source: 'manual'
     });
     res.status(200).json({
       success: result.success,
-      result
+      result,
+      update: deviceLibraryUpdateService.getStatus()
     });
   } catch (error) {
     sendError(res, error, 'Failed to update device libraries');

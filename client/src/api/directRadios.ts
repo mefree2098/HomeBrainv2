@@ -3,6 +3,7 @@ import api from './api';
 export type DirectRadioProtocol = 'zigbee' | 'zwave';
 export type DirectRadioLogProtocol = DirectRadioProtocol | 'system';
 export type ZWaveSecurityMode = 'insecure' | 'default' | 's2' | 's0';
+export type DeviceCatalogProtocol = 'zigbee' | 'zwave' | 'matter' | 'thread' | 'insteon';
 
 export type DirectRadioSerialPort = {
   path?: string;
@@ -110,6 +111,82 @@ export type DirectRadioLogEntry = {
   details?: Record<string, unknown>;
 };
 
+export type DeviceCatalogUpdateSource = {
+  success?: boolean;
+  sourceUrl?: string;
+  existingCount?: number;
+  fetchedCount?: number;
+  addedCount?: number;
+  totalCount?: number;
+  error?: string;
+};
+
+export type DeviceCatalogUpdateStatus = {
+  lastRunAt?: string | null;
+  lastSuccessAt?: string | null;
+  finishedAt?: string | null;
+  nextDueAt?: string | null;
+  due?: boolean;
+  refreshIntervalMs?: number;
+  sources?: Partial<Record<DeviceCatalogProtocol, DeviceCatalogUpdateSource>>;
+  errors?: Array<{ source?: string; message?: string }>;
+  snapshots?: Partial<Record<DeviceCatalogProtocol, {
+    count?: number;
+    updatedAt?: string | null;
+    sourceUrl?: string;
+  }>>;
+};
+
+export type DeviceLibraryUpdateServiceStatus = {
+  running: boolean;
+  scheduled: boolean;
+  lastResult?: (DeviceCatalogUpdateStatus & {
+    success?: boolean;
+    skipped?: boolean;
+    reason?: string;
+    source?: string;
+    startedAt?: string;
+    finishedAt?: string;
+  }) | null;
+  catalogUpdate: DeviceCatalogUpdateStatus;
+};
+
+export type DeviceCatalogProtocolSummary = {
+  source?: string;
+  sourceVersion?: string | null;
+  definitionCount?: number;
+  vendorCount?: number;
+  zigbeeModelCount?: number;
+  fingerprintModelCount?: number;
+  exposesCount?: number;
+  deviceConfigCount?: number;
+  manufacturerCount?: number;
+  standardDeviceTypeCount?: number;
+  certifiedProductCount?: number;
+  vendorProductCount?: number;
+  productEntryCount?: number;
+  categoryCount?: number;
+  entryCount?: number;
+  featureCounts?: Record<string, number>;
+  snapshot?: {
+    count?: number;
+    updatedAt?: string | null;
+    sourceUrl?: string;
+  };
+  errors?: Array<{ message?: string } | string>;
+  note?: string;
+};
+
+export type DeviceCatalogSummary = {
+  generatedAt?: string;
+  zigbee?: DeviceCatalogProtocolSummary;
+  zwave?: DeviceCatalogProtocolSummary;
+  matter?: DeviceCatalogProtocolSummary;
+  thread?: DeviceCatalogProtocolSummary;
+  insteon?: DeviceCatalogProtocolSummary;
+  updates?: DeviceCatalogUpdateStatus;
+};
+
 export type DirectRadioMigrationPlan = {
   deviceId: string | null;
   smartThingsDeviceId: string | null;
@@ -181,6 +258,51 @@ export const getDirectRadioSerialPorts = async () => {
     return response.data as { success: boolean; serialPorts: DirectRadioSerialPort[] };
   } catch (error) {
     console.error('Error fetching direct radio serial ports:', error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const getDeviceCatalogSummary = async () => {
+  try {
+    const response = await api.get('/api/direct-radios/catalog/summary');
+    return response.data as { success: boolean; summary: DeviceCatalogSummary };
+  } catch (error) {
+    console.error('Error fetching device catalog summary:', error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const getDeviceCatalogUpdateStatus = async () => {
+  try {
+    const response = await api.get('/api/direct-radios/catalog/update/status');
+    return response.data as {
+      success: boolean;
+      status: DeviceCatalogUpdateStatus;
+      update?: DeviceLibraryUpdateServiceStatus;
+    };
+  } catch (error) {
+    console.error('Error fetching device catalog update status:', error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const runDeviceCatalogUpdate = async ({ force = true }: { force?: boolean } = {}) => {
+  try {
+    const response = await api.post('/api/direct-radios/catalog/update/run', { force });
+    return response.data as {
+      success: boolean;
+      result: DeviceCatalogUpdateStatus & {
+        success?: boolean;
+        skipped?: boolean;
+        reason?: string;
+        sources?: Partial<Record<DeviceCatalogProtocol, DeviceCatalogUpdateSource>>;
+        errors?: Array<{ source?: string; message?: string }>;
+        status?: DeviceCatalogUpdateStatus;
+      };
+      update?: DeviceLibraryUpdateServiceStatus;
+    };
+  } catch (error) {
+    console.error('Error running device catalog update:', error);
     throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };
