@@ -6,6 +6,7 @@ const {
   inferFeaturesFromMatterDescriptor,
   inferHomeBrainTypeFromFeatures
 } = require('../services/matterDeviceCatalog');
+const Device = require('../models/Device');
 const matterService = require('../services/matterService');
 
 test('Matter catalog maps Thread contact sensors with battery support', () => {
@@ -49,6 +50,50 @@ test('Matter catalog maps lights, locks, thermostat, energy and camera capabilit
     inferFeaturesFromMatterDescriptor({ productName: 'Matter Camera', deviceTypeNames: ['Camera'] }),
     { productName: 'Matter Camera' }
   ), 'camera');
+});
+
+test('Matter service stores catalog match and normalized capabilities when adding devices', async (t) => {
+  const originalFindOne = Device.findOne;
+  const originalSave = Device.prototype.save;
+  let savedDevice = null;
+
+  t.after(() => {
+    Device.findOne = originalFindOne;
+    Device.prototype.save = originalSave;
+  });
+
+  Device.findOne = async () => null;
+  Device.prototype.save = async function save() {
+    savedDevice = this;
+    return this;
+  };
+
+  const device = await matterService.upsertMatterDeviceFromDescriptor({
+    nodeId: '1234',
+    endpointId: 1,
+    name: 'Office Matter Lamp',
+    productName: 'Office Matter Lamp',
+    vendorName: 'Example',
+    basicInformation: {
+      vendorId: 1,
+      productId: 257,
+      productName: 'Office Matter Lamp'
+    },
+    deviceTypeNames: ['DimmableLight'],
+    clusterIds: [6, 8],
+    clusterNames: ['OnOff', 'LevelControl'],
+    features: ['switch', 'brightness'],
+    state: {}
+  }, {
+    transport: 'thread'
+  });
+
+  assert.equal(device, savedDevice);
+  assert.equal(device.properties.matter.catalog.protocol, 'matter');
+  assert.equal(device.properties.matter.threadCatalog.protocol, 'thread');
+  assert.ok(device.properties.matterFeatures.includes('switch'));
+  assert.ok(device.properties.matterCapabilities.some((capability) => capability.type === 'dimmer'));
+  assert.ok(device.properties.threadCapabilities.some((capability) => capability.protocol === 'thread'));
 });
 
 test('Matter service detects SONOFF MG24 serial ports and parses known addresses', () => {

@@ -7,6 +7,7 @@ const axios = require('axios');
 const semver = require('semver');
 const Device = require('../models/Device');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
+const directRadioProtocolCatalogService = require('./directRadioProtocolCatalogService');
 const {
   MATTER_SOURCE,
   MATTER_TRANSPORTS,
@@ -3608,6 +3609,9 @@ class MatterService {
     const deviceTypeNames = (Array.isArray(deviceTypes) ? deviceTypes : [deviceTypes])
       .map((entry) => normalizeString(entry?.name || entry?.deviceTypeName || entry?.typeName || entry?.code || entry?.deviceType))
       .filter(Boolean);
+    const deviceTypeIds = (Array.isArray(deviceTypes) ? deviceTypes : [deviceTypes])
+      .map((entry) => normalizeClusterId(entry?.id ?? entry?.deviceTypeId ?? entry?.code ?? entry?.deviceType))
+      .filter((value) => value !== null);
     const clusterIds = [
       ...(Array.isArray(descriptor.serverList) ? descriptor.serverList : []),
       ...(Array.isArray(descriptor.clientList) ? descriptor.clientList : [])
@@ -3635,6 +3639,7 @@ class MatterService {
       endpointName,
       productName,
       vendorName,
+      deviceTypeIds: Array.from(new Set(deviceTypeIds)).sort((a, b) => a - b),
       deviceTypeNames,
       clusterIds: Array.from(new Set(clusterIds)).sort((a, b) => a - b),
       clusterNames,
@@ -3676,10 +3681,24 @@ class MatterService {
   }
 
   async upsertMatterDeviceFromDescriptor(descriptor, options = {}) {
-    const features = normalizeFeatureList(descriptor.features?.length
-      ? descriptor.features
-      : inferFeaturesFromMatterDescriptor(endpointDescriptorFromRecord(descriptor)));
-    const homeBrainType = descriptor.homeBrainType || inferHomeBrainTypeFromFeatures(features, descriptor);
+    const transport = normalizeTransport(options.transport);
+    const catalogEntry = await directRadioProtocolCatalogService.lookupMatterCatalogEntry({
+      ...descriptor,
+      transport
+    });
+    const threadCatalogEntry = transport === MATTER_TRANSPORTS.thread
+      ? await directRadioProtocolCatalogService.lookupThreadCatalogEntry({
+          ...descriptor,
+          transport
+        })
+      : null;
+    const features = normalizeFeatureList([
+      ...(descriptor.features?.length
+        ? descriptor.features
+        : inferFeaturesFromMatterDescriptor(endpointDescriptorFromRecord(descriptor))),
+      ...(catalogEntry?.matterFeatures || [])
+    ]);
+    const homeBrainType = descriptor.homeBrainType || catalogEntry?.homeBrainType || inferHomeBrainTypeFromFeatures(features, descriptor);
     const state = this.extractStateFromMatterDescriptor(descriptor);
     const identity = {
       source: MATTER_SOURCE,
@@ -3715,15 +3734,22 @@ class MatterService {
             : {}),
           nodeId: identity.nodeId,
           endpointId: identity.endpointId,
-          transport: normalizeTransport(options.transport),
+          transport,
           clusterIds: descriptor.clusterIds || [],
           clusterNames: descriptor.clusterNames || [],
+          deviceTypeIds: descriptor.deviceTypeIds || [],
           deviceTypeNames: descriptor.deviceTypeNames || [],
           productName: descriptor.productName || '',
           vendorName: descriptor.vendorName || '',
           endpointName: descriptor.endpointName || '',
+          catalog: directRadioProtocolCatalogService.buildCatalogReference(catalogEntry),
+          threadCatalog: directRadioProtocolCatalogService.buildCatalogReference(threadCatalogEntry),
           lastSyncedAt: new Date().toISOString()
         },
+        matterDeviceCatalog: directRadioProtocolCatalogService.compactCatalogForDevice(catalogEntry),
+        matterCapabilities: catalogEntry?.capabilities || [],
+        threadDeviceCatalog: threadCatalogEntry ? directRadioProtocolCatalogService.compactCatalogForDevice(threadCatalogEntry) : undefined,
+        threadCapabilities: threadCatalogEntry?.capabilities || undefined,
         matterState: state.rawState || {}
       }
     };

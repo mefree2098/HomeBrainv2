@@ -4850,6 +4850,10 @@ test('_upsertInsteonDevice upgrades switch metadata to light and applies resolve
   assert.equal(existingDevice.model, '2477D');
   assert.equal(existingDevice.properties.deviceCategory, 1);
   assert.equal(existingDevice.properties.subcategory, 46);
+  assert.equal(existingDevice.properties.insteonCatalog.protocol, 'insteon');
+  assert.equal(existingDevice.properties.insteonCatalog.category, '0x01');
+  assert.ok(existingDevice.properties.insteonFeatures.includes('brightness'));
+  assert.ok(existingDevice.properties.insteonCapabilities.some((capability) => capability.type === 'dimmer'));
   assert.equal(existingDevice.properties.supportsBrightness, true);
   assert.equal(existingDevice.properties.linkedToCurrentPlm, true);
 });

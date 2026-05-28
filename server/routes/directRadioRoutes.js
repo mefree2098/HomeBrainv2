@@ -49,6 +49,14 @@ function catalogOptions(req) {
     zigbeeModel: req.query.zigbeeModel,
     productType: req.query.productType,
     productId: req.query.productId,
+    vendorId: req.query.vendorId,
+    deviceTypeId: req.query.deviceTypeId,
+    category: req.query.category,
+    deviceCategory: req.query.deviceCategory,
+    subcategory: req.query.subcategory,
+    deviceSubcategory: req.query.deviceSubcategory,
+    productKey: req.query.productKey,
+    transport: req.query.transport,
     firmwareVersion: req.query.firmwareVersion,
     limit: req.query.limit,
     includeExposes: req.query.includeExposes,
@@ -126,6 +134,98 @@ router.get('/catalog/zwave/lookup', async (req, res) => {
     });
   } catch (error) {
     sendError(res, error, 'Failed to look up Z-Wave device catalog entry');
+  }
+});
+
+router.get('/catalog/matter', async (req, res) => {
+  try {
+    const catalog = await directRadioProtocolCatalogService.searchMatterCatalog(catalogOptions(req));
+    res.status(200).json({
+      success: true,
+      catalog
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to search Matter device catalog');
+  }
+});
+
+router.get('/catalog/matter/lookup', async (req, res) => {
+  try {
+    const entry = await directRadioProtocolCatalogService.lookupMatterCatalogEntry(catalogOptions(req));
+    res.status(entry ? 200 : 404).json({
+      success: Boolean(entry),
+      entry: directRadioProtocolCatalogService.compactCatalogForDevice
+        ? directRadioProtocolCatalogService.compactCatalogForDevice(entry)
+        : entry,
+      message: entry ? undefined : 'No Matter catalog entry matched those identifiers.'
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to look up Matter device catalog entry');
+  }
+});
+
+router.get('/catalog/thread', (req, res) => {
+  try {
+    const catalog = directRadioProtocolCatalogService.searchThreadCatalog(catalogOptions(req));
+    res.status(200).json({
+      success: true,
+      catalog
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to search Thread device catalog');
+  }
+});
+
+router.get('/catalog/insteon', (req, res) => {
+  try {
+    const catalog = directRadioProtocolCatalogService.searchInsteonCatalog(catalogOptions(req));
+    res.status(200).json({
+      success: true,
+      catalog
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to search INSTEON device catalog');
+  }
+});
+
+router.get('/catalog/insteon/lookup', (req, res) => {
+  try {
+    const entry = directRadioProtocolCatalogService.lookupInsteonCatalogEntry(catalogOptions(req));
+    res.status(entry ? 200 : 404).json({
+      success: Boolean(entry),
+      entry: directRadioProtocolCatalogService.compactCatalogForDevice
+        ? directRadioProtocolCatalogService.compactCatalogForDevice(entry)
+        : entry,
+      message: entry ? undefined : 'No INSTEON catalog entry matched those identifiers.'
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to look up INSTEON device catalog entry');
+  }
+});
+
+router.get('/catalog/update/status', (_req, res) => {
+  try {
+    const status = directRadioProtocolCatalogService.getUpdateStatus();
+    res.status(200).json({
+      success: true,
+      status
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to get device library update status');
+  }
+});
+
+router.post('/catalog/update/run', async (req, res) => {
+  try {
+    const result = await directRadioProtocolCatalogService.refreshExternalCatalogs({
+      force: req.body?.force === true
+    });
+    res.status(200).json({
+      success: result.success,
+      result
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to update device libraries');
   }
 });
 
