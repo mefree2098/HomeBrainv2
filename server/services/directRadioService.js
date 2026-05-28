@@ -1294,11 +1294,11 @@ class DirectRadioService {
         },
         inclusionUserCallbacks: this.buildZWaveInclusionCallbacks(zwave)
       });
-      this.attachZWaveMigrationRequestHandlers(driver, zwave);
 
       driver.on('driver ready', () => {
         this.zwave.started = true;
         this.zwave.error = null;
+        this.attachZWaveMigrationRequestHandlers(driver, zwave);
         this.attachZWaveControllerMigrationListeners(driver.controller);
         this.log('info', 'zwave', 'Z-Wave driver ready', {
           serialPath,
