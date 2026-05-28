@@ -15,12 +15,15 @@ import {
 
 import {
   getDirectRadioStatus,
+  startZWaveExclusion,
   refreshZWaveNodeInfo,
   startDirectRadioPairing,
   stopDirectRadioPairing,
   submitZWaveDskPin,
+  type DirectRadioZWaveNode,
   type DirectRadioPairingSession,
-  type DirectRadioProtocol
+  type DirectRadioProtocol,
+  type ZWaveSecurityMode
 } from "@/api/directRadios"
 import { getMatterCommissioningSessions, startMatterCommissioning, type MatterTransport } from "@/api/matter"
 import { linkInsteonDevice } from "@/api/insteon"
@@ -41,6 +44,12 @@ import { getDeviceSource } from "@/lib/deviceSources"
 import { cn } from "@/lib/utils"
 
 type AddDeviceProtocol = "zwave" | "zigbee" | "insteon" | "matter"
+type ZWaveRepairCandidate = {
+  key: string
+  nodeId: number
+  name: string
+  subtitle: string
+}
 
 type AddDeviceDialogProps = {
   devices: DeviceRecord[]
@@ -167,9 +176,11 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [zwaveDskPin, setZwaveDskPin] = useState("")
+  const [zwaveSecurityMode, setZwaveSecurityMode] = useState<ZWaveSecurityMode>("insecure")
   const [submittingDsk, setSubmittingDsk] = useState(false)
   const [repairingZWaveNodeId, setRepairingZWaveNodeId] = useState<number | null>(null)
   const [zwaveControllerNodeIds, setZwaveControllerNodeIds] = useState<Set<number> | null>(null)
+  const [zwaveControllerNodes, setZwaveControllerNodes] = useState<DirectRadioZWaveNode[]>([])
   const [matterSetupCode, setMatterSetupCode] = useState("")
   const [matterTransport, setMatterTransport] = useState<MatterTransport>("thread")
   const [matterKnownAddress, setMatterKnownAddress] = useState("")
@@ -203,16 +214,19 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       setSubmittingDsk(false)
       setRepairingZWaveNodeId(null)
       setZwaveControllerNodeIds(null)
+      setZwaveControllerNodes([])
     }
   }, [open])
 
-  const updateZWaveControllerNodes = (nodes: Array<{ id?: number | null; isControllerNode?: boolean }> | undefined) => {
+  const updateZWaveControllerNodes = (nodes: DirectRadioZWaveNode[] | undefined) => {
+    const controllerNodes = (Array.isArray(nodes) ? nodes : [])
+      .filter((node) => node && node.isControllerNode !== true && Number(node.id) > 0)
     const nodeIds = new Set(
-      (Array.isArray(nodes) ? nodes : [])
-        .filter((node) => node && node.isControllerNode !== true)
+      controllerNodes
         .map((node) => Number(node.id))
         .filter((nodeId) => Number.isFinite(nodeId) && nodeId > 0)
     )
+    setZwaveControllerNodes(controllerNodes)
     setZwaveControllerNodeIds(nodeIds)
   }
 
@@ -241,16 +255,50 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
     }
   }, [open, protocol])
 
-  const zwaveRepairCandidates = useMemo(
-    () => devices
+  const zwaveRepairCandidates = useMemo<ZWaveRepairCandidate[]>(() => {
+    if (!zwaveControllerNodeIds) {
+      return []
+    }
+    const byNodeId = new Map<number, DeviceRecord>()
+    devices.forEach((device) => {
+      const nodeId = getZWaveNodeId(device)
+      if (nodeId) {
+        byNodeId.set(nodeId, device)
+      }
+    })
+
+    const candidates: ZWaveRepairCandidate[] = devices
       .filter((device) => {
         const nodeId = getZWaveNodeId(device)
-        return isIncompleteZWaveDevice(device) && nodeId !== null && zwaveControllerNodeIds?.has(nodeId)
+        return isIncompleteZWaveDevice(device) && nodeId !== null && zwaveControllerNodeIds.has(nodeId)
       })
-      .sort((left, right) => (getZWaveNodeId(right) || 0) - (getZWaveNodeId(left) || 0))
-      .slice(0, 4),
-    [devices, zwaveControllerNodeIds]
-  )
+      .map((device) => {
+        const nodeId = getZWaveNodeId(device) || 0
+        return {
+          key: device._id,
+          nodeId,
+          name: device.name || `Z-Wave Node ${nodeId}`,
+          subtitle: `Node ${nodeId} · ${getDirectFeatures(device).length || 0} features · ${device.isOnline === false ? "offline" : "not fully interviewed"}`
+        }
+      })
+
+    zwaveControllerNodes.forEach((node) => {
+      const nodeId = Number(node.id)
+      if (!Number.isFinite(nodeId) || nodeId <= 0 || !node.incomplete || byNodeId.has(nodeId)) {
+        return
+      }
+      candidates.push({
+        key: `controller-node-${nodeId}`,
+        nodeId,
+        name: node.name || `Z-Wave Node ${nodeId}`,
+        subtitle: `Node ${nodeId} · controller-only partial add · ${node.ready ? "ready" : "not fully interviewed"}`
+      })
+    })
+
+    return candidates
+      .sort((left, right) => right.nodeId - left.nodeId)
+      .slice(0, 6)
+  }, [devices, zwaveControllerNodeIds, zwaveControllerNodes])
 
   useEffect(() => {
     if (!activeProtocol || foundDevice) {
@@ -309,7 +357,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
         if (activeProtocol === "zwave") {
           const pendingDsk = pairing?.pendingDsk || response.status.controllers.zwave.pendingDsk || null
           if (pendingDsk && pairing?.status === "awaiting_dsk") {
-            setStatusMessage("Z-Wave found the switch and needs the 5 digit DSK PIN to finish S2 security.")
+            setStatusMessage("Z-Wave secure inclusion needs the first 5 digits printed on the device DSK label. 00000 is not a valid fallback.")
           }
         }
 
@@ -367,14 +415,15 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       const seconds = Math.max(30, Math.min(900, Number(durationSeconds) || 180))
       const response = await startDirectRadioPairing({
         protocol: targetProtocol,
-        durationSeconds: seconds
+        durationSeconds: seconds,
+        zwaveSecurityMode: targetProtocol === "zwave" ? zwaveSecurityMode : undefined
       })
       const nextExpiresAt = response?.result?.expiresAt || null
       setExpiresAt(nextExpiresAt)
       setCurrentPairing(response?.result?.pairing || null)
       setStatusMessage(
         targetProtocol === "zwave"
-          ? `Z-Wave inclusion is live${formatExpiration(nextExpiresAt) ? ` until ${formatExpiration(nextExpiresAt)}` : ""}. HomeBrain will move on as soon as the controller detects the node.`
+          ? `Z-Wave ${zwaveSecurityMode === "insecure" ? "standard" : "secure"} inclusion is live${formatExpiration(nextExpiresAt) ? ` until ${formatExpiration(nextExpiresAt)}` : ""}. ${zwaveSecurityMode === "insecure" ? "No DSK PIN is required." : "Use the first 5 digits from the printed DSK label if prompted."}`
           : `Zigbee permit-join is live${formatExpiration(nextExpiresAt) ? ` until ${formatExpiration(nextExpiresAt)}` : ""}. HomeBrain will add the device after interview.`
       )
       await onRefresh?.()
@@ -489,8 +538,8 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
     }
   }
 
-  const repairZWaveNode = async (device: DeviceRecord) => {
-    const nodeId = getZWaveNodeId(device)
+  const repairZWaveNode = async (candidate: ZWaveRepairCandidate) => {
+    const nodeId = candidate.nodeId
     if (!nodeId) {
       setErrorMessage("HomeBrain could not find the Z-Wave node id for that device.")
       return
@@ -498,7 +547,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
 
     setRepairingZWaveNodeId(nodeId)
     setErrorMessage(null)
-    setStatusMessage(`Requesting a fresh Z-Wave interview for ${device.name || `Node ${nodeId}`}.`)
+    setStatusMessage(`Requesting a fresh Z-Wave interview for ${candidate.name || `Node ${nodeId}`}.`)
     try {
       const response = await refreshZWaveNodeInfo(nodeId, {
         waitForWakeup: false,
@@ -515,6 +564,25 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       setErrorMessage(error instanceof Error ? error.message : "Unable to repair the Z-Wave node.")
     } finally {
       setRepairingZWaveNodeId(null)
+    }
+  }
+
+  const startZWaveCleanupExclusion = async () => {
+    setBusy(true)
+    setActiveProtocol("zwave")
+    setErrorMessage(null)
+    try {
+      const seconds = Math.max(30, Math.min(900, Number(durationSeconds) || 180))
+      const response = await startZWaveExclusion(seconds)
+      const nextExpiresAt = response?.result?.expiresAt || response?.status?.controllers?.zwave?.exclusionUntil || null
+      setExpiresAt(nextExpiresAt)
+      setStatusMessage(`Z-Wave exclusion cleanup is live${formatExpiration(nextExpiresAt) ? ` until ${formatExpiration(nextExpiresAt)}` : ""}. Tap the switch exclude action now, then retry standard inclusion.`)
+      await onRefresh?.()
+    } catch (error) {
+      setActiveProtocol(null)
+      setErrorMessage(error instanceof Error ? error.message : "Unable to start Z-Wave exclusion cleanup.")
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -580,29 +648,40 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
               title="Start inclusion, then perform the switch include action."
               detail="For an already excluded switch, use the manufacturer include tap pattern while this window is live."
             />
+            <Field label="Security">
+              <Select value={zwaveSecurityMode} onValueChange={(value) => setZwaveSecurityMode(value as ZWaveSecurityMode)} disabled={busy}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="insecure">Standard switch add, no PIN</SelectItem>
+                  <SelectItem value="s2">Secure S2, printed DSK required</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
             {zwaveRepairCandidates.length > 0 ? (
               <div className="space-y-3 rounded-lg border border-amber-500/35 bg-amber-500/10 p-4">
                 <div className="flex items-start gap-3 text-sm text-amber-800 dark:text-amber-100">
                   <AlertTriangle className="mt-0.5 h-4 w-4" />
                   <div className="min-w-0 space-y-1">
-                    <p className="font-semibold">Already-paired Z-Wave nodes need interview repair.</p>
-                    <p className="text-xs opacity-90">Use this when inclusion times out because the switch is already on the Zooz network.</p>
+                    <p className="font-semibold">Incomplete Z-Wave nodes are already on the Zooz network.</p>
+                    <p className="text-xs opacity-90">Repair can retry interview. If the node came from a bad PIN attempt, run exclusion cleanup before adding again.</p>
                   </div>
                 </div>
                 <div className="space-y-2">
-                  {zwaveRepairCandidates.map((device) => {
-                    const nodeId = getZWaveNodeId(device)
+                  {zwaveRepairCandidates.map((candidate) => {
+                    const nodeId = candidate.nodeId
                     return (
-                      <div key={device._id} className="flex flex-col gap-2 rounded-lg border border-border/60 bg-background/70 p-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div key={candidate.key} className="flex flex-col gap-2 rounded-lg border border-border/60 bg-background/70 p-3 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-foreground">{device.name}</p>
-                          <p className="text-xs text-muted-foreground">Node {nodeId || "?"} · {getDirectFeatures(device).length || 0} features · {device.isOnline === false ? "offline" : "not fully interviewed"}</p>
+                          <p className="truncate text-sm font-semibold text-foreground">{candidate.name}</p>
+                          <p className="text-xs text-muted-foreground">{candidate.subtitle}</p>
                         </div>
                         <Button
                           type="button"
                           variant="outline"
                           size="sm"
-                          onClick={() => void repairZWaveNode(device)}
+                          onClick={() => void repairZWaveNode(candidate)}
                           disabled={busy || repairingZWaveNodeId === nodeId}
                         >
                           {repairingZWaveNodeId === nodeId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wrench className="mr-2 h-4 w-4" />}
@@ -612,6 +691,10 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
                     )
                   })}
                 </div>
+                <Button type="button" variant="outline" size="sm" onClick={() => void startZWaveCleanupExclusion()} disabled={busy}>
+                  <StopCircle className="mr-2 h-4 w-4" />
+                  Start Exclusion Cleanup
+                </Button>
               </div>
             ) : null}
           </TabsContent>
@@ -730,6 +813,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
               <AlertTriangle className="mt-0.5 h-4 w-4" />
               <div className="min-w-0 space-y-1">
                 <p className="font-semibold">S2 security needs the 5 digit DSK PIN.</p>
+                <p className="text-xs opacity-90">Use the first 5 digits printed on the switch, QR label, box, or manual insert. This is not a displayed PIN, and 00000 will fail unless that is literally printed.</p>
                 <p className="break-all text-xs opacity-90">DSK challenge: {pendingZWaveDsk}</p>
               </div>
             </div>
@@ -771,7 +855,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
           </Button>
           <Button type="button" onClick={startSelectedProtocol} disabled={busy || (protocol === "matter" && !matterSetupCode.trim())}>
             {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlusCircle className="mr-2 h-4 w-4" />}
-            {protocol === "zwave" ? "Start Z-Wave" : protocol === "zigbee" ? "Open Zigbee" : protocol === "insteon" ? "Link Insteon" : "Commission Matter"}
+            {protocol === "zwave" ? `Start Z-Wave ${zwaveSecurityMode === "insecure" ? "Standard" : "Secure"}` : protocol === "zigbee" ? "Open Zigbee" : protocol === "insteon" ? "Link Insteon" : "Commission Matter"}
           </Button>
         </div>
 

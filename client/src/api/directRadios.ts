@@ -2,6 +2,7 @@ import api from './api';
 
 export type DirectRadioProtocol = 'zigbee' | 'zwave';
 export type DirectRadioLogProtocol = DirectRadioProtocol | 'system';
+export type ZWaveSecurityMode = 'insecure' | 'default' | 's2' | 's0';
 
 export type DirectRadioSerialPort = {
   path?: string;
@@ -82,6 +83,7 @@ export type DirectRadioPairingSession = {
   protocol: DirectRadioProtocol;
   mode: string;
   status: 'opening' | 'active' | 'awaiting_dsk' | 'completed' | 'failed' | 'expired' | 'stopped' | string;
+  zwaveSecurityMode?: ZWaveSecurityMode | string | null;
   startedAt?: string | null;
   expiresAt?: string | null;
   secondsRemaining?: number;
@@ -261,6 +263,7 @@ export const startDirectRadioMigration = async (payload: {
   protocol: DirectRadioProtocol;
   durationSeconds?: number;
   dskPin?: string;
+  zwaveSecurityMode?: ZWaveSecurityMode;
   migrationId?: string | null;
 }) => {
   try {
@@ -276,6 +279,7 @@ export const startDirectRadioPairing = async (payload: {
   protocol: DirectRadioProtocol;
   durationSeconds?: number;
   dskPin?: string;
+  zwaveSecurityMode?: ZWaveSecurityMode;
 }) => {
   try {
     const response = await api.post('/api/direct-radios/pairing/start', payload);

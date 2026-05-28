@@ -1,6 +1,21 @@
 import SwiftUI
 import UIKit
 
+private struct AddDeviceZWaveNodeSummary: Identifiable {
+    let id: Int
+    let name: String
+    let ready: Bool
+    let incomplete: Bool
+    let featureCount: Int
+}
+
+private struct AddDeviceZWaveRepairCandidate: Identifiable {
+    let id: String
+    let nodeId: Int
+    let name: String
+    let subtitle: String
+}
+
 struct DevicesView: View {
     let previewMode: Bool
     let embeddedFocusDeviceID: String?
@@ -59,8 +74,10 @@ struct DevicesView: View {
     @State private var addDeviceDurationSeconds = 180
     @State private var addDevicePendingDsk = ""
     @State private var addDeviceDskPin = ""
+    @State private var addDeviceZWaveSecurityMode = "insecure"
     @State private var addDeviceRepairingZWaveNodeId: Int?
     @State private var addDeviceKnownZWaveNodeIds: Set<Int>?
+    @State private var addDeviceKnownZWaveNodes: [AddDeviceZWaveNodeSummary] = []
     @State private var newName = ""
     @State private var newType = "light"
     @State private var newRoom = ""
@@ -1632,6 +1649,10 @@ struct DevicesView: View {
                                     Text("S2 security needs the 5 digit DSK PIN.")
                                         .font(.system(size: 12, weight: .bold, design: .rounded))
                                         .foregroundStyle(HBPalette.accentOrange)
+                                    Text("Use the first 5 digits printed on the switch, QR label, box, or manual insert. This is not a displayed PIN; 00000 will fail unless that is literally printed.")
+                                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                        .foregroundStyle(HBPalette.textSecondary)
+                                        .fixedSize(horizontal: false, vertical: true)
                                     Text("DSK challenge: \(addDevicePendingDsk)")
                                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
                                         .foregroundStyle(HBPalette.textSecondary)
@@ -1677,6 +1698,7 @@ struct DevicesView: View {
                     await loadZWaveRepairNodeIds()
                 } else {
                     addDeviceKnownZWaveNodeIds = nil
+                    addDeviceKnownZWaveNodes = []
                 }
             }
         }
@@ -1723,6 +1745,22 @@ struct DevicesView: View {
                 .disabled(addDeviceBusy)
             }
 
+            if addDeviceMode == "zwave" {
+                HStack {
+                    Text("Security")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                    Spacer()
+                    Picker("Security", selection: $addDeviceZWaveSecurityMode) {
+                        Text("Standard, no PIN").tag("insecure")
+                        Text("Secure S2").tag("s2")
+                    }
+                    .pickerStyle(.menu)
+                    .tint(HBPalette.accentBlue)
+                    .disabled(addDeviceBusy)
+                }
+            }
+
             Text(nativeAddGuidance)
                 .font(.system(size: 13, weight: .medium, design: .rounded))
                 .foregroundStyle(HBPalette.textSecondary)
@@ -1730,19 +1768,45 @@ struct DevicesView: View {
         }
     }
 
-    private var zwaveRepairCandidates: [DeviceItem] {
-        Array(
-            devices
-                .filter { device in
-                    guard let nodeId = zWaveNodeId(for: device),
-                          let knownNodeIds = addDeviceKnownZWaveNodeIds else {
-                        return false
-                    }
-                    return knownNodeIds.contains(nodeId) && isIncompleteZWaveDirectDevice(device)
-                }
-                .sorted { (zWaveNodeId(for: $0) ?? 0) > (zWaveNodeId(for: $1) ?? 0) }
-                .prefix(4)
-        )
+    private var zwaveRepairCandidates: [AddDeviceZWaveRepairCandidate] {
+        guard let knownNodeIds = addDeviceKnownZWaveNodeIds else {
+            return []
+        }
+
+        var devicesByNodeId: [Int: DeviceItem] = [:]
+        devices.forEach { device in
+            if let nodeId = zWaveNodeId(for: device) {
+                devicesByNodeId[nodeId] = device
+            }
+        }
+
+        var candidates = devices.compactMap { device -> AddDeviceZWaveRepairCandidate? in
+            guard let nodeId = zWaveNodeId(for: device),
+                  knownNodeIds.contains(nodeId),
+                  isIncompleteZWaveDirectDevice(device) else {
+                return nil
+            }
+            return AddDeviceZWaveRepairCandidate(
+                id: device.id,
+                nodeId: nodeId,
+                name: device.name,
+                subtitle: zwaveRepairSubtitle(for: device)
+            )
+        }
+
+        addDeviceKnownZWaveNodes.forEach { node in
+            guard node.incomplete, devicesByNodeId[node.id] == nil else {
+                return
+            }
+            candidates.append(AddDeviceZWaveRepairCandidate(
+                id: "controller-node-\(node.id)",
+                nodeId: node.id,
+                name: node.name,
+                subtitle: "Node \(node.id) · controller-only partial add · \(node.featureCount) features · \(node.ready ? "ready" : "not fully interviewed")"
+            ))
+        }
+
+        return Array(candidates.sorted { $0.nodeId > $1.nodeId }.prefix(6))
     }
 
     private var zwaveRepairPanel: some View {
@@ -1751,24 +1815,24 @@ struct DevicesView: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(HBPalette.accentOrange)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Already-paired Z-Wave nodes need interview repair.")
+                    Text("Incomplete Z-Wave nodes are already on the Zooz network.")
                         .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(HBPalette.accentOrange)
-                    Text("Use this when inclusion times out because the switch is already on the Zooz network.")
+                    Text("Repair can retry interview. If the node came from a bad PIN attempt, run exclusion cleanup before adding again.")
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .foregroundStyle(HBPalette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
-            ForEach(zwaveRepairCandidates) { device in
+            ForEach(zwaveRepairCandidates) { candidate in
                 HStack(spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(device.name)
+                        Text(candidate.name)
                             .font(.system(size: 13, weight: .bold, design: .rounded))
                             .foregroundStyle(HBPalette.textPrimary)
                             .lineLimit(1)
-                        Text(zwaveRepairSubtitle(for: device))
+                        Text(candidate.subtitle)
                             .font(.system(size: 11, weight: .semibold, design: .rounded))
                             .foregroundStyle(HBPalette.textSecondary)
                             .lineLimit(2)
@@ -1776,11 +1840,10 @@ struct DevicesView: View {
 
                     Spacer(minLength: 8)
 
-                    let nodeId = zWaveNodeId(for: device)
                     Button {
-                        Task { await repairZWaveNode(device) }
+                        Task { await repairZWaveNode(candidate) }
                     } label: {
-                        if addDeviceRepairingZWaveNodeId == nodeId {
+                        if addDeviceRepairingZWaveNodeId == candidate.nodeId {
                             ProgressView()
                                 .controlSize(.small)
                         } else {
@@ -1788,11 +1851,19 @@ struct DevicesView: View {
                         }
                     }
                     .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                    .disabled(addDeviceBusy || addDeviceRepairingZWaveNodeId != nil || nodeId == nil)
+                    .disabled(addDeviceBusy || addDeviceRepairingZWaveNodeId != nil)
                 }
                 .padding(10)
                 .background(HBGlassBackground(cornerRadius: 10, variant: .panelSoft))
             }
+
+            Button {
+                Task { await startZWaveCleanupExclusion() }
+            } label: {
+                Label("Start Exclusion Cleanup", systemImage: "minus.circle")
+            }
+            .buttonStyle(HBSecondaryButtonStyle(compact: true))
+            .disabled(addDeviceBusy)
         }
         .padding(12)
         .background(HBPalette.accentOrange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -1855,7 +1926,7 @@ struct DevicesView: View {
 
     private var addDevicePrimaryButtonTitle: String {
         switch addDeviceMode {
-        case "zwave": return addDeviceBusy ? "Starting..." : "Start Z-Wave"
+        case "zwave": return addDeviceBusy ? "Starting..." : "Start Z-Wave \(addDeviceZWaveSecurityMode == "insecure" ? "Standard" : "Secure")"
         case "zigbee": return addDeviceBusy ? "Opening..." : "Open Zigbee"
         case "insteon": return addDeviceBusy ? "Linking..." : "Link Insteon"
         case "matter": return matterIsCommissioning || addDeviceBusy ? "Commissioning..." : "Commission"
@@ -1880,7 +1951,9 @@ struct DevicesView: View {
     private var nativeAddGuidance: String {
         switch addDeviceMode {
         case "zwave":
-            return "HomeBrain opens native Z-Wave inclusion on the Zooz controller. Perform the switch include action while the window is live; the device is added when zwave-js reports the new node."
+            return addDeviceZWaveSecurityMode == "insecure"
+                ? "HomeBrain opens standard Z-Wave inclusion on the Zooz controller. This is the correct default for wall switches when you do not have the printed DSK PIN."
+                : "HomeBrain opens secure S2 inclusion. Use this only when you have the first 5 digits from the device DSK label or QR code."
         case "zigbee":
             return "HomeBrain opens Zigbee permit-join on the SONOFF coordinator. Reset or pair the device; it appears after join and interview."
         case "insteon":
@@ -2667,19 +2740,23 @@ struct DevicesView: View {
         defer { addDeviceBusy = false }
 
         do {
+            var body: [String: Any] = [
+                "protocol": protocolName,
+                "durationSeconds": addDeviceDurationSeconds
+            ]
+            if protocolName == "zwave" {
+                body["zwaveSecurityMode"] = addDeviceZWaveSecurityMode
+            }
             let response = try await session.apiClient.post(
                 "/api/direct-radios/pairing/start",
-                body: [
-                    "protocol": protocolName,
-                    "durationSeconds": addDeviceDurationSeconds
-                ]
+                body: body
             )
             let root = JSON.object(response)
             let result = JSON.object(root["result"])
             let expiresAt = JSON.optionalString(result, "expiresAt") ?? ""
             let suffix = expiresAt.isEmpty ? "" : " Window expires at \(JSON.displayDate(from: expiresAt))."
             addDeviceStatusMessage = protocolName == "zwave"
-                ? "Z-Wave inclusion is live. Perform the device include action; HomeBrain will move on as soon as the controller detects the node.\(suffix)"
+                ? "Z-Wave \(addDeviceZWaveSecurityMode == "insecure" ? "standard" : "secure") inclusion is live. \(addDeviceZWaveSecurityMode == "insecure" ? "No DSK PIN is required." : "Use the first 5 digits from the printed DSK label if prompted.")\(suffix)"
                 : "Zigbee permit-join is live. Pair or reset the device; HomeBrain adds it after join and interview.\(suffix)"
             await monitorDirectRadioAdd(protocolName: protocolName, durationSeconds: addDeviceDurationSeconds)
         } catch {
@@ -2708,7 +2785,7 @@ struct DevicesView: View {
                     let pendingDsk = JSON.string(pairing, "pendingDsk")
                     if pairingStatus == "awaiting_dsk" && !pendingDsk.isEmpty {
                         addDevicePendingDsk = pendingDsk
-                        addDeviceStatusMessage = "Z-Wave found the switch and needs the 5 digit DSK PIN to finish S2 security."
+                        addDeviceStatusMessage = "Z-Wave secure inclusion needs the first 5 digits printed on the device DSK label. 00000 is not a valid fallback."
                     }
                 }
 
@@ -2745,7 +2822,7 @@ struct DevicesView: View {
     private func submitAddDeviceDskPin() async {
         let pin = String(addDeviceDskPin.filter(\.isNumber).prefix(5))
         guard pin.count == 5 else {
-            addDeviceStatusMessage = "Enter the 5 digit DSK PIN from the switch label or QR code."
+            addDeviceStatusMessage = "Enter the first 5 digits printed on the Z-Wave DSK label or QR code."
             return
         }
 
@@ -2766,13 +2843,27 @@ struct DevicesView: View {
     private func updateKnownZWaveNodeIds(from status: [String: Any]) {
         let controllers = JSON.object(status["controllers"])
         let zwave = JSON.object(controllers["zwave"])
+        let nodes = JSON.array(zwave["nodes"])
+            .filter { !JSON.bool($0, "isControllerNode") }
         let nodeIds = Set(
-            JSON.array(zwave["nodes"])
-                .filter { !JSON.bool($0, "isControllerNode") }
+            nodes
                 .map { JSON.int($0, "id") }
                 .filter { $0 > 0 }
         )
         addDeviceKnownZWaveNodeIds = nodeIds
+        addDeviceKnownZWaveNodes = nodes.compactMap { node in
+            let nodeId = JSON.int(node, "id")
+            guard nodeId > 0 else {
+                return nil
+            }
+            return AddDeviceZWaveNodeSummary(
+                id: nodeId,
+                name: JSON.string(node, "name", fallback: "Z-Wave Node \(nodeId)"),
+                ready: JSON.bool(node, "ready"),
+                incomplete: JSON.bool(node, "incomplete"),
+                featureCount: JSON.stringArray(node["features"]).count
+            )
+        }
     }
 
     private func loadZWaveRepairNodeIds() async {
@@ -2782,6 +2873,7 @@ struct DevicesView: View {
                     .compactMap { zWaveNodeId(for: $0) }
                     .filter { $0 != 1 }
             )
+            addDeviceKnownZWaveNodes = []
             return
         }
 
@@ -2791,21 +2883,19 @@ struct DevicesView: View {
             updateKnownZWaveNodeIds(from: JSON.object(root["status"]))
         } catch {
             addDeviceKnownZWaveNodeIds = []
+            addDeviceKnownZWaveNodes = []
         }
     }
 
-    private func repairZWaveNode(_ device: DeviceItem) async {
-        guard let nodeId = zWaveNodeId(for: device) else {
-            addDeviceStatusMessage = "HomeBrain could not find the Z-Wave node id for that device."
-            return
-        }
+    private func repairZWaveNode(_ candidate: AddDeviceZWaveRepairCandidate) async {
+        let nodeId = candidate.nodeId
         if previewMode {
             addDeviceStatusMessage = "HomeBrain would request a fresh Z-Wave interview for node \(nodeId)."
             return
         }
 
         addDeviceRepairingZWaveNodeId = nodeId
-        addDeviceStatusMessage = "Requesting a fresh Z-Wave interview for \(device.name)."
+        addDeviceStatusMessage = "Requesting a fresh Z-Wave interview for \(candidate.name)."
         errorMessage = nil
         defer { addDeviceRepairingZWaveNodeId = nil }
 
@@ -2825,6 +2915,36 @@ struct DevicesView: View {
                 ? "HomeBrain requested a fresh interview for node \(nodeId), but it did not answer the first ping. Tap the switch once and refresh devices."
                 : "HomeBrain requested a fresh interview for node \(nodeId). Tap the switch once if it does not update in a few seconds."
             await loadDevices(showLoading: false)
+        } catch {
+            addDeviceStatusMessage = error.localizedDescription
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func startZWaveCleanupExclusion() async {
+        if previewMode {
+            addDeviceStatusMessage = "HomeBrain would open Z-Wave exclusion cleanup. Use the switch exclude action, then retry standard inclusion."
+            return
+        }
+
+        addDeviceBusy = true
+        addDevicePendingDsk = ""
+        errorMessage = nil
+        defer { addDeviceBusy = false }
+
+        do {
+            let response = try await session.apiClient.post(
+                "/api/direct-radios/exclusion/start",
+                body: [
+                    "protocol": "zwave",
+                    "durationSeconds": addDeviceDurationSeconds
+                ]
+            )
+            let root = JSON.object(response)
+            let result = JSON.object(root["result"])
+            let expiresAt = JSON.optionalString(result, "expiresAt") ?? ""
+            let suffix = expiresAt.isEmpty ? "" : " Window expires at \(JSON.displayDate(from: expiresAt))."
+            addDeviceStatusMessage = "Z-Wave exclusion cleanup is live. Tap the switch exclude action now, then retry standard inclusion.\(suffix)"
         } catch {
             addDeviceStatusMessage = error.localizedDescription
             errorMessage = error.localizedDescription

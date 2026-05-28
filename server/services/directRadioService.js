@@ -90,6 +90,47 @@ function parseOptionalBoolean(value, fallback = false) {
   return parseEnabledFlag(value, fallback);
 }
 
+function normalizeZWaveSecurityMode(value, fallback = 'insecure') {
+  const normalized = trimString(value).toLowerCase();
+  if (!normalized) {
+    return fallback;
+  }
+  if (['insecure', 'none', 'no_security', 'no-security', 'standard', 'switch'].includes(normalized)) {
+    return 'insecure';
+  }
+  if (['s0', 'security_s0', 'security-s0'].includes(normalized)) {
+    return 's0';
+  }
+  if (['s2', 'security_s2', 'security-s2', 'secure'].includes(normalized)) {
+    return 's2';
+  }
+  if (['default', 'auto'].includes(normalized)) {
+    return 'default';
+  }
+  return fallback;
+}
+
+function shouldUseSecureZWaveMigration(device = {}, plan = {}) {
+  const values = [
+    device.type,
+    device.name,
+    device.category,
+    device.properties?.smartThingsDeviceType,
+    device.properties?.smartThingsDeviceCategory,
+    device.properties?.smartThingsPresentation?.dashboard?.states?.[0]?.label
+  ];
+  const features = [
+    ...(Array.isArray(plan.features) ? plan.features : []),
+    ...(Array.isArray(device.properties?.directRadioFeatures) ? device.properties.directRadioFeatures : []),
+    ...(Array.isArray(device.capabilities) ? device.capabilities : [])
+  ];
+  const text = [...values, ...features]
+    .map((entry) => trimString(entry).toLowerCase())
+    .filter(Boolean)
+    .join(' ');
+  return /\block\b|garage|barrier|access\s*control|door\s*control|alarm|siren|security/.test(text);
+}
+
 function uniqueStrings(values) {
   return Array.from(new Set(values.filter(Boolean)));
 }
@@ -844,6 +885,40 @@ class DirectRadioService {
     return session;
   }
 
+  async reconcileActiveZWavePairingFromController() {
+    const session = this.activePairings.get('zwave');
+    if (!session || ['completed', 'failed', 'expired', 'stopped'].includes(session.status)) {
+      return null;
+    }
+    if (Device.db?.readyState !== 1) {
+      return null;
+    }
+
+    const nodes = this.getZWaveController()?.nodes;
+    if (!nodes || typeof nodes.values !== 'function') {
+      return null;
+    }
+
+    for (const node of nodes.values()) {
+      if (!node || node.isControllerNode) {
+        continue;
+      }
+      const identityId = String(node.id || '').trim();
+      if (!identityId || session.baselineIdentities.includes(identityId)) {
+        continue;
+      }
+      this.log('info', 'zwave', 'Z-Wave pairing detected a new controller node before interview completion', {
+        nodeId: node.id || null,
+        pairingId: session.id,
+        securityMode: session.zwaveSecurityMode || null
+      });
+      this.attachZWaveNodeStatusListeners(node);
+      return this.handleZWaveNodeChanged(node, 'node added');
+    }
+
+    return null;
+  }
+
   armPairingTimer(protocol, sessionId, seconds) {
     this.clearPairingTimer(protocol);
     const timer = setTimeout(() => {
@@ -1343,6 +1418,33 @@ class DirectRadioService {
     };
   }
 
+  buildZWaveInclusionOptions(zwave, securityMode) {
+    const mode = normalizeZWaveSecurityMode(securityMode, 'insecure');
+    switch (mode) {
+      case 's2':
+        return {
+          mode,
+          options: { strategy: zwave.InclusionStrategy.Security_S2 }
+        };
+      case 's0':
+        return {
+          mode,
+          options: { strategy: zwave.InclusionStrategy.Security_S0 }
+        };
+      case 'default':
+        return {
+          mode,
+          options: { strategy: zwave.InclusionStrategy.Default }
+        };
+      case 'insecure':
+      default:
+        return {
+          mode: 'insecure',
+          options: { strategy: zwave.InclusionStrategy.Insecure }
+        };
+    }
+  }
+
   markZWaveDskRequired(dsk) {
     const session = this.activePairings.get('zwave');
     if (!session || ['completed', 'failed', 'expired', 'stopped'].includes(session.status)) {
@@ -1350,7 +1452,7 @@ class DirectRadioService {
     }
     session.status = 'awaiting_dsk';
     session.pendingDsk = dsk;
-    session.message = 'Z-Wave S2 security requires the 5 digit DSK PIN from the switch label or QR code.';
+    session.message = 'Z-Wave S2 security requires the first 5 digits from the device DSK label or QR code. If you do not have that label, stop this attempt, exclude/reset the partial node, and retry with Standard/no PIN inclusion.';
     this.appendPairingEvent('zwave', {
       kind: 'dsk_required',
       dsk,
@@ -1548,6 +1650,7 @@ class DirectRadioService {
       protocol: session.protocol,
       mode: session.mode,
       status: session.status,
+      zwaveSecurityMode: session.zwaveSecurityMode || null,
       startedAt: session.startedAt || null,
       expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
       secondsRemaining: expiresAt ? Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000)) : 0,
@@ -2331,7 +2434,7 @@ class DirectRadioService {
     return buildMigrationPlan(device, options);
   }
 
-  async startMigration({ deviceId, protocol, durationSeconds, dskPin, migrationId } = {}) {
+  async startMigration({ deviceId, protocol, durationSeconds, dskPin, migrationId, zwaveSecurityMode, securityMode } = {}) {
     const safeDeviceId = normalizeObjectId(deviceId);
     const device = await Device.findById(safeDeviceId).lean();
     if (!device) {
@@ -2418,7 +2521,13 @@ class DirectRadioService {
         await this.startPairing('zigbee', { durationSeconds: seconds });
       } else {
         this.zwave.s2DskPin = trimString(dskPin);
-        await this.startPairing('zwave', { durationSeconds: seconds });
+        await this.startPairing('zwave', {
+          durationSeconds: seconds,
+          zwaveSecurityMode: normalizeZWaveSecurityMode(
+            zwaveSecurityMode ?? securityMode,
+            shouldUseSecureZWaveMigration(device, plan) ? 'default' : 'insecure'
+          )
+        });
       }
     } catch (error) {
       migration.status = 'pairing_failed';
@@ -3007,16 +3116,26 @@ class DirectRadioService {
       }
       const zwave = require('zwave-js');
       this.clearPairingTimer('zwave');
-      const session = this.createPairingSession('zwave', seconds);
+      const { mode: zwaveSecurityMode, options: inclusionOptions } = this.buildZWaveInclusionOptions(
+        zwave,
+        options.zwaveSecurityMode ?? options.securityMode
+      );
+      const session = this.createPairingSession('zwave', seconds, {
+        message: zwaveSecurityMode === 'insecure'
+          ? 'Z-Wave standard inclusion is opening without S2 security, so no DSK PIN is required.'
+          : 'Z-Wave secure inclusion is opening. HomeBrain may ask for the first 5 digits from the device DSK label.'
+      });
+      session.zwaveSecurityMode = zwaveSecurityMode;
       this.zwave.s2DskPin = trimString(options.dskPin);
       this.zwave.pendingDsk = null;
       this.log('info', 'zwave', 'Opening Z-Wave inclusion window', {
         durationSeconds: seconds,
         serialPath: this.detected.zwave?.path || null,
-        pairingId: session.id
+        pairingId: session.id,
+        securityMode: zwaveSecurityMode
       });
       try {
-        await controller.beginInclusion({ strategy: zwave.InclusionStrategy.Default });
+        await controller.beginInclusion(inclusionOptions);
       } catch (error) {
         this.markPairingFailed('zwave', error.message || 'Z-Wave inclusion failed to start.');
         throw error;
@@ -3024,11 +3143,14 @@ class DirectRadioService {
       this.zwave.inclusionUntil = new Date(Date.now() + seconds * 1000).toISOString();
       session.status = 'active';
       session.expiresAt = Date.now() + seconds * 1000;
-      session.message = 'Z-Wave inclusion is open. HomeBrain will finish as soon as the controller reports a node.';
+      session.message = zwaveSecurityMode === 'insecure'
+        ? 'Z-Wave standard inclusion is open. No DSK PIN is required; HomeBrain will finish as soon as the controller reports the new node.'
+        : 'Z-Wave secure inclusion is open. If prompted, enter the first 5 digits printed on the device DSK label or QR code.';
       this.armPairingTimer('zwave', session.id, seconds);
       this.log('info', 'zwave', 'Z-Wave inclusion window is open', {
         expiresAt: this.zwave.inclusionUntil,
-        pairingId: session.id
+        pairingId: session.id,
+        securityMode: zwaveSecurityMode
       });
       return {
         protocol,
@@ -3547,6 +3669,12 @@ class DirectRadioService {
   }
 
   async getStatus() {
+    await this.reconcileActiveZWavePairingFromController().catch((error) => {
+      this.log('warn', 'zwave', 'Unable to reconcile active Z-Wave pairing from controller nodes', {
+        error: error.message
+      });
+    });
+
     const zigbeeDevices = this.zigbee.controller?.getDevices?.() || [];
     const zwaveNodes = this.getZWaveController()?.nodes;
     const activeMigrations = Array.from(this.activeMigrations.values())

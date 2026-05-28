@@ -153,7 +153,8 @@ router.post('/pairing/start', async (req, res) => {
     const protocol = String(req.body?.protocol || '').trim().toLowerCase();
     const result = await directRadioService.startPairing(protocol, {
       durationSeconds: req.body?.durationSeconds,
-      dskPin: req.body?.dskPin
+      dskPin: req.body?.dskPin,
+      zwaveSecurityMode: req.body?.zwaveSecurityMode || req.body?.securityMode
     });
     res.status(200).json({
       success: true,
@@ -282,7 +283,8 @@ router.post('/migrations', async (req, res) => {
       protocol: String(req.body?.protocol || '').trim().toLowerCase(),
       durationSeconds: req.body?.durationSeconds,
       dskPin: req.body?.dskPin,
-      migrationId: req.body?.migrationId
+      migrationId: req.body?.migrationId,
+      zwaveSecurityMode: req.body?.zwaveSecurityMode || req.body?.securityMode
     });
     res.status(200).json({
       success: true,
