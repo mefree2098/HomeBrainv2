@@ -2,6 +2,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const directRadioService = require('../services/directRadioService');
 const directRadioEngineLogService = require('../services/directRadioEngineLogService');
+const directRadioProtocolCatalogService = require('../services/directRadioProtocolCatalogService');
 const { requireAdmin } = require('./middlewares/auth');
 
 const router = express.Router();
@@ -37,6 +38,24 @@ function parsePositiveInt(value, fallback, maximum = 1000) {
   return Math.min(maximum, numeric);
 }
 
+function catalogOptions(req) {
+  return {
+    q: req.query.q || req.query.query,
+    vendor: req.query.vendor,
+    manufacturer: req.query.manufacturer,
+    manufacturerId: req.query.manufacturerId,
+    model: req.query.model,
+    modelID: req.query.modelID,
+    zigbeeModel: req.query.zigbeeModel,
+    productType: req.query.productType,
+    productId: req.query.productId,
+    firmwareVersion: req.query.firmwareVersion,
+    limit: req.query.limit,
+    includeExposes: req.query.includeExposes,
+    includeConfig: req.query.includeConfig
+  };
+}
+
 router.get('/status', async (_req, res) => {
   try {
     const status = await directRadioService.refreshHardwareStatus({ log: false });
@@ -58,6 +77,55 @@ router.get('/serial-ports', async (_req, res) => {
     });
   } catch (error) {
     sendError(res, error, 'Failed to list serial ports');
+  }
+});
+
+router.get('/catalog/summary', async (_req, res) => {
+  try {
+    const summary = await directRadioProtocolCatalogService.getSummary();
+    res.status(200).json({
+      success: true,
+      summary
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to summarize direct radio device catalog');
+  }
+});
+
+router.get('/catalog/zigbee', async (req, res) => {
+  try {
+    const catalog = directRadioProtocolCatalogService.searchZigbeeCatalog(catalogOptions(req));
+    res.status(200).json({
+      success: true,
+      catalog
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to search Zigbee device catalog');
+  }
+});
+
+router.get('/catalog/zwave', async (req, res) => {
+  try {
+    const catalog = await directRadioProtocolCatalogService.searchZWaveCatalog(catalogOptions(req));
+    res.status(200).json({
+      success: true,
+      catalog
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to search Z-Wave device catalog');
+  }
+});
+
+router.get('/catalog/zwave/lookup', async (req, res) => {
+  try {
+    const entry = await directRadioProtocolCatalogService.lookupZWaveCatalogEntry(catalogOptions(req));
+    res.status(entry ? 200 : 404).json({
+      success: Boolean(entry),
+      entry,
+      message: entry ? undefined : 'No Z-Wave catalog entry matched those identifiers.'
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to look up Z-Wave device catalog entry');
   }
 });
 
