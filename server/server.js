@@ -98,6 +98,7 @@ const alexaBrokerService = require("./services/alexaBrokerService");
 const platformUpdateMonitorService = require("./services/platformUpdateMonitorService");
 const directRadioService = require("./services/directRadioService");
 const matterService = require("./services/matterService");
+const deviceLibraryUpdateService = require("./services/deviceLibraryUpdateService");
 const telemetryService = require("./services/telemetryService");
 const openclawMcpService = require("./services/openclawMcpService");
 const { sendNotFound, sendUnhandledError } = require("./utils/apiErrorResponses");
@@ -637,6 +638,7 @@ async function startAutomationRuntimeServices() {
 
   automationSchedulerService.start();
   platformUpdateMonitorService.start();
+  deviceLibraryUpdateService.start();
 
   directRadioService.start()
     .then((status) => {
@@ -811,6 +813,12 @@ async function gracefulShutdown(signal) {
     await matterService.shutdown();
   } catch (error) {
     console.error('Error stopping Matter service:', error.message);
+  }
+
+  try {
+    deviceLibraryUpdateService.stop();
+  } catch (error) {
+    console.error('Error stopping device library update service:', error.message);
   }
 
   console.log('Preserving running automation executions for resume after restart');

@@ -11,6 +11,7 @@ const Scene = require('../models/Scene');
 const Settings = require('../models/Settings');
 const Workflow = require('../models/Workflow');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
+const directRadioProtocolCatalogService = require('./directRadioProtocolCatalogService');
 const insteonEngineLogService = require('./insteonEngineLogService');
 
 let cachedWorkflowService = null;
@@ -8707,8 +8708,17 @@ class InsteonService {
       .filter((value) => typeof value === 'string' && value.trim())
       .join(' ')
       .toLowerCase();
+    const catalogEntry = directRadioProtocolCatalogService.lookupInsteonCatalogEntry({
+      ...resolvedInfo,
+      insteonType,
+      productKey: resolvedInfo?.productKey
+    });
+    const catalogFeatures = Array.isArray(catalogEntry?.homebrainFeatures)
+      ? catalogEntry.homebrainFeatures
+      : [];
     const inferredSupportsBrightness = (
       resolvedCategory === 0x01
+      || catalogFeatures.includes('brightness')
       || existingProperties.supportsBrightness === true
       || existingDevice?.type === 'light'
       || this._looksLikeInsteonFaderDescriptor(descriptor)
@@ -8719,7 +8729,11 @@ class InsteonService {
       source: 'insteon',
       insteonAddress: normalizedAddress,
       deviceCategory: resolvedCategory,
-      subcategory: resolvedSubcategory
+      subcategory: resolvedSubcategory,
+      insteonCatalog: directRadioProtocolCatalogService.buildCatalogReference(catalogEntry),
+      insteonDeviceCatalog: directRadioProtocolCatalogService.compactCatalogForDevice(catalogEntry),
+      insteonCapabilities: catalogEntry?.capabilities || [],
+      insteonFeatures: catalogFeatures
     };
 
     if (Number.isInteger(group)) {
@@ -8741,6 +8755,8 @@ class InsteonService {
       existingDevice.brand = existingDevice.brand || 'Insteon';
       if (typeof resolvedInfo.productKey === 'string' && resolvedInfo.productKey.trim()) {
         existingDevice.model = resolvedInfo.productKey.trim();
+      } else if (!existingDevice.model && catalogEntry?.model) {
+        existingDevice.model = catalogEntry.model;
       }
       if (!existingDevice.type) {
         existingDevice.type = inferredSupportsBrightness && inferredType === 'switch'
@@ -8792,7 +8808,7 @@ class InsteonService {
       room: 'Unassigned',
       status: false,
       brand: 'Insteon',
-      model: resolvedInfo.productKey || 'Unknown',
+      model: resolvedInfo.productKey || catalogEntry?.model || 'Unknown',
       properties: mergedProperties,
       isOnline: true,
       lastSeen: now
