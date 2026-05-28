@@ -1279,8 +1279,12 @@ class SmartThingsService {
         }
       }
 
-      const apiError = new Error(`SmartThings API request failed: ${error.response?.data?.message || error.message}`);
+      const method = trimString(requestOptions.method || 'GET').toUpperCase() || 'GET';
+      const statusText = status ? ` ${status}` : '';
+      const apiError = new Error(`SmartThings API ${method} ${endpoint} failed${statusText}: ${error.response?.data?.message || error.message}`);
       apiError.status = status;
+      apiError.endpoint = endpoint;
+      apiError.method = method;
       apiError.data = error.response?.data;
       throw apiError;
     }

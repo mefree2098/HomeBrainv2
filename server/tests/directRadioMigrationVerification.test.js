@@ -319,6 +319,56 @@ test('Z-Wave generic pairing waits for a submitted S2 DSK PIN instead of abortin
   assert.equal(service.zwave.pendingDsk, null);
 });
 
+test('Z-Wave generic pairing defaults to standard inclusion without a DSK PIN prompt', async () => {
+  const service = createService();
+  const zwave = require('zwave-js');
+  let inclusionOptions = null;
+  service.start = async () => {};
+  service.zwave.started = true;
+  service.zwave.driver = {
+    controller: {
+      nodes: new Map([
+        [1, { id: 1, isControllerNode: true }]
+      ]),
+      beginInclusion: async (options) => {
+        inclusionOptions = options;
+        return true;
+      }
+    }
+  };
+
+  const result = await service.startPairing('zwave', { durationSeconds: 60 });
+  assert.equal(inclusionOptions.strategy, zwave.InclusionStrategy.Insecure);
+  assert.equal(result.pairing.zwaveSecurityMode, 'insecure');
+  assert.match(result.pairing.message, /No DSK PIN is required/);
+});
+
+test('Z-Wave pairing can explicitly request secure S2 inclusion', async () => {
+  const service = createService();
+  const zwave = require('zwave-js');
+  let inclusionOptions = null;
+  service.start = async () => {};
+  service.zwave.started = true;
+  service.zwave.driver = {
+    controller: {
+      nodes: new Map([
+        [1, { id: 1, isControllerNode: true }]
+      ]),
+      beginInclusion: async (options) => {
+        inclusionOptions = options;
+        return true;
+      }
+    }
+  };
+
+  const result = await service.startPairing('zwave', {
+    durationSeconds: 60,
+    zwaveSecurityMode: 's2'
+  });
+  assert.equal(inclusionOptions.strategy, zwave.InclusionStrategy.Security_S2);
+  assert.equal(result.pairing.zwaveSecurityMode, 's2');
+});
+
 test('generic pairing session completes immediately when an included direct device is upserted', () => {
   const service = createService();
   service.activePairings.set('zwave', {
