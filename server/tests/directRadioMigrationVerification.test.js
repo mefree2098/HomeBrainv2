@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const directRadioService = require('../services/directRadioService');
 
 const DirectRadioService = directRadioService.DirectRadioService;
+const { mergeDirectDeviceUpdateForExisting, selectPrimaryDirectDeviceRecord } = directRadioService._test;
 const DEVICE_ID = '507f1f77bcf86cd799439011';
 
 function createService() {
@@ -19,6 +20,77 @@ function createService() {
   };
   return service;
 }
+
+test('direct radio refresh preserves user-edited name and room while updating live state', () => {
+  const existing = {
+    name: 'Cold Storage Switch',
+    type: 'switch',
+    room: 'Cold Storage',
+    properties: {
+      source: 'homebrain-zwave',
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: 6,
+        generatedName: '39348 / 39455 / ZW4008',
+        generatedRoom: 'Unassigned'
+      },
+      directRadioFeatures: ['switch']
+    }
+  };
+  const update = {
+    name: '39348 / 39455 / ZW4008',
+    type: 'switch',
+    room: 'Unassigned',
+    status: true,
+    isOnline: true,
+    properties: {
+      source: 'homebrain-zwave',
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: 6,
+        status: 4
+      },
+      directRadioFeatures: ['illuminance', 'switch'],
+      supportsSwitch: true
+    }
+  };
+
+  const merged = mergeDirectDeviceUpdateForExisting(existing, update);
+
+  assert.equal(merged.name, 'Cold Storage Switch');
+  assert.equal(merged.room, 'Cold Storage');
+  assert.equal(merged.status, true);
+  assert.equal(merged.properties.homebrainDirect.nodeId, 6);
+  assert.equal(merged.properties.homebrainDirect.generatedName, '39348 / 39455 / ZW4008');
+  assert.deepEqual(merged.properties.directRadioFeatures, ['illuminance', 'switch']);
+});
+
+test('direct radio upsert prefers complete switch records over stale partial duplicates', () => {
+  const selected = selectPrimaryDirectDeviceRecord([
+    {
+      _id: 'partial-a',
+      name: 'Z-Wave Node 7',
+      type: 'sensor',
+      isOnline: true,
+      updatedAt: '2026-05-28T00:59:00.000Z',
+      properties: {
+        directRadioFeatures: []
+      }
+    },
+    {
+      _id: 'complete-switch',
+      name: '39348 / 39455 / ZW4008',
+      type: 'switch',
+      isOnline: true,
+      updatedAt: '2026-05-28T00:58:00.000Z',
+      properties: {
+        directRadioFeatures: ['illuminance', 'switch']
+      }
+    }
+  ]);
+
+  assert.equal(selected._id, 'complete-switch');
+});
 
 test('Z-Wave migration exclusion does not advance until controller reports Done', async () => {
   const service = createService();

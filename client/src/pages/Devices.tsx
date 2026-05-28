@@ -439,6 +439,22 @@ const isInsteonBackedDevice = (device: any): boolean => {
   return source === 'insteon' || Boolean(device?.properties?.insteonAddress)
 }
 
+const getDirectRadioFeatures = (device: any): string[] => {
+  return Array.isArray(device?.properties?.directRadioFeatures)
+    ? device.properties.directRadioFeatures
+        .map((feature: unknown) => String(feature || '').trim().toLowerCase())
+        .filter(Boolean)
+    : []
+}
+
+const hasDirectRadioFeature = (device: any, feature: string): boolean => {
+  return getDirectRadioFeatures(device).includes(feature.toLowerCase())
+}
+
+const supportsDirectRadioPowerControl = (device: any): boolean => {
+  return hasDirectRadioFeature(device, 'switch') || hasDirectRadioFeature(device, 'lock')
+}
+
 const getDeviceFilterDescriptor = (device: any): string => {
   return [
     device?.name,
@@ -673,8 +689,7 @@ const supportsLightFade = (device: any): boolean => {
   }
 
   return Boolean(device?.properties?.supportsBrightness)
-    || (Array.isArray(device?.properties?.directRadioFeatures)
-      && device.properties.directRadioFeatures.includes('brightness'))
+    || hasDirectRadioFeature(device, 'brightness')
     || (Array.isArray(device?.properties?.matterFeatures)
       && device.properties.matterFeatures.includes('brightness'))
 }
@@ -841,6 +856,9 @@ const canUsePrimaryDeviceAction = (device: any): boolean => {
   }
   if (device.type === 'camera' || isSmartThingsCameraLike(device) || device.type === 'sensor') {
     return false
+  }
+  if (supportsDirectRadioPowerControl(device)) {
+    return true
   }
   return device.type === 'thermostat'
     || supportsLightFade(device)

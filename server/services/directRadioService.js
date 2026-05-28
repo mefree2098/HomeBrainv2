@@ -38,6 +38,146 @@ function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function normalizeDirectRoom(value) {
+  return trimString(value) || 'Unassigned';
+}
+
+function shouldReplaceGeneratedDirectName(existing, generated, previousGenerated) {
+  const existingName = trimString(existing);
+  const generatedName = trimString(generated);
+  const previousGeneratedName = trimString(previousGenerated);
+
+  if (!existingName) {
+    return true;
+  }
+  if (!generatedName) {
+    return false;
+  }
+  if (existingName === generatedName || (previousGeneratedName && existingName === previousGeneratedName)) {
+    return true;
+  }
+
+  return /^(?:z-wave node|zigbee device|direct radio device)\b/i.test(existingName);
+}
+
+function shouldReplaceGeneratedDirectRoom(existing, generated, previousGenerated) {
+  const existingRoom = normalizeDirectRoom(existing);
+  const generatedRoom = normalizeDirectRoom(generated);
+  const previousGeneratedRoom = normalizeDirectRoom(previousGenerated);
+
+  if (!trimString(existing)) {
+    return true;
+  }
+  if (existingRoom === generatedRoom || existingRoom === previousGeneratedRoom) {
+    return true;
+  }
+
+  return existingRoom.toLowerCase() === 'unassigned';
+}
+
+function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
+  const existingProperties = existing?.properties && typeof existing.properties === 'object'
+    ? existing.properties
+    : {};
+  const existingDirect = existingProperties.homebrainDirect && typeof existingProperties.homebrainDirect === 'object'
+    ? existingProperties.homebrainDirect
+    : {};
+  const updateProperties = update.properties && typeof update.properties === 'object'
+    ? update.properties
+    : {};
+  const updateDirect = updateProperties.homebrainDirect && typeof updateProperties.homebrainDirect === 'object'
+    ? updateProperties.homebrainDirect
+    : {};
+
+  const generatedName = trimString(update.name);
+  const generatedRoom = normalizeDirectRoom(update.room);
+  const mergedDirect = {
+    ...existingDirect,
+    ...updateDirect
+  };
+
+  if (generatedName) {
+    mergedDirect.generatedName = generatedName;
+  }
+  if (generatedRoom) {
+    mergedDirect.generatedRoom = generatedRoom;
+  }
+
+  const merged = {
+    ...update,
+    properties: {
+      ...existingProperties,
+      ...updateProperties,
+      homebrainDirect: mergedDirect
+    }
+  };
+
+  if (existing) {
+    if (!shouldReplaceGeneratedDirectName(existing.name, generatedName, existingDirect.generatedName)) {
+      merged.name = existing.name;
+    }
+
+    if (!shouldReplaceGeneratedDirectRoom(existing.room, generatedRoom, existingDirect.generatedRoom)) {
+      merged.room = existing.room;
+    }
+
+    if (!trimString(merged.type)) {
+      merged.type = existing.type;
+    }
+  }
+
+  return merged;
+}
+
+function directFeatureCount(record) {
+  const features = Array.isArray(record?.properties?.directRadioFeatures)
+    ? record.properties.directRadioFeatures
+    : [];
+  return features.filter((feature) => trimString(feature).length > 0).length;
+}
+
+function directRecordTimestamp(record) {
+  const value = record?.updatedAt || record?.lastSeen || record?.createdAt;
+  const parsed = value ? new Date(value).getTime() : 0;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isGenericDirectRadioName(value) {
+  return /^(?:z-wave node \d+|zigbee device\b|direct radio device\b)/i.test(trimString(value));
+}
+
+function isIncompleteDirectRadioDuplicate(record) {
+  return directFeatureCount(record) === 0
+    && isGenericDirectRadioName(record?.name)
+    && record?.type === 'sensor';
+}
+
+function selectPrimaryDirectDeviceRecord(records = []) {
+  const candidates = Array.isArray(records) ? records.filter(Boolean) : [];
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  return candidates
+    .slice()
+    .sort((left, right) => {
+      const leftScore = (directFeatureCount(left) * 100)
+        + (isGenericDirectRadioName(left?.name) ? 0 : 20)
+        + (left?.isOnline === true ? 10 : 0)
+        + (['switch', 'light', 'lock', 'thermostat', 'garage'].includes(left?.type) ? 5 : 0);
+      const rightScore = (directFeatureCount(right) * 100)
+        + (isGenericDirectRadioName(right?.name) ? 0 : 20)
+        + (right?.isOnline === true ? 10 : 0)
+        + (['switch', 'light', 'lock', 'thermostat', 'garage'].includes(right?.type) ? 5 : 0);
+
+      if (leftScore !== rightScore) {
+        return rightScore - leftScore;
+      }
+
+      return directRecordTimestamp(right) - directRecordTimestamp(left);
+    })[0];
+}
+
 function parseEnabledFlag(value, fallback = true) {
   const normalized = trimString(value).toLowerCase();
   if (!normalized) {
@@ -2260,17 +2400,15 @@ class DirectRadioService {
 
     const query = identity.protocol === 'zigbee'
       ? { 'properties.homebrainDirect.ieeeAddr': identity.id }
-      : { 'properties.homebrainDirect.nodeId': Number(identity.id) };
-    const existing = await Device.findOne(query);
-    const mergedProperties = {
-      ...(existing?.properties && typeof existing.properties === 'object' ? existing.properties : {}),
-      ...(update.properties || {})
-    };
-
-    const payload = {
-      ...update,
-      properties: mergedProperties
-    };
+      : {
+        $or: [
+          { 'properties.homebrainDirect.nodeId': Number(identity.id) },
+          { 'properties.homebrainDirect.nodeId': String(identity.id) }
+        ]
+      };
+    const existingRecords = await Device.find(query);
+    const existing = selectPrimaryDirectDeviceRecord(existingRecords);
+    const payload = mergeDirectDeviceUpdateForExisting(existing, update);
 
     const device = existing
       ? await Device.findByIdAndUpdate(existing._id, payload, { returnDocument: 'after', runValidators: true })
@@ -2281,6 +2419,19 @@ class DirectRadioService {
       name: device?.name || update?.name || null,
       identity: identity.id
     });
+    const duplicateIds = (existingRecords || [])
+      .filter((record) => String(record?._id || '') !== String(device?._id || ''))
+      .filter(isIncompleteDirectRadioDuplicate)
+      .map((record) => record._id)
+      .filter(Boolean);
+    if (duplicateIds.length > 0 && directFeatureCount(device) > 0) {
+      await Device.deleteMany({ _id: { $in: duplicateIds } });
+      this.log('info', identity.protocol, 'Removed stale partial direct radio duplicates', {
+        deviceId: device?._id?.toString?.() || null,
+        identity: identity.id,
+        duplicateCount: duplicateIds.length
+      });
+    }
     this.emitDeviceUpdate(device);
     this.completePairingSession(identity.protocol, identity, device, update?.properties?.homebrainDirect?.lastReason || 'direct device update');
     return device;
@@ -3592,7 +3743,7 @@ class DirectRadioService {
     const normalized = protocol === 'zigbee'
       ? this.normalizeZigbeeDevice(node, 'refresh')
       : this.normalizeZWaveNode(node, 'refresh');
-    return normalized?.update || null;
+    return normalized?.update ? mergeDirectDeviceUpdateForExisting(device, normalized.update) : null;
   }
 
   getDetectedPortDetails(protocol) {
@@ -3762,7 +3913,9 @@ directRadioService._test = {
   choosePortForProtocol,
   enrichSerialPortForDirectRadios,
   looksLikeSonoffMg24ThreadStick,
+  mergeDirectDeviceUpdateForExisting,
   normalizeSerialPort,
+  selectPrimaryDirectDeviceRecord,
   scorePortForProtocol
 };
 
