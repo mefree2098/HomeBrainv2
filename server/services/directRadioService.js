@@ -137,6 +137,14 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
   }
 
   if (existing) {
+    if (!Object.prototype.hasOwnProperty.call(update, 'status') || update.status === undefined) {
+      merged.status = existing.status;
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(update, 'brightness') || update.brightness === undefined) {
+      merged.brightness = existing.brightness;
+    }
+
     if (!shouldReplaceGeneratedDirectName(existing.name, generatedName, existingDirect.generatedName)) {
       merged.name = existing.name;
     }
@@ -791,6 +799,163 @@ function readZigbeeEndpoint(zigbeeDevice) {
   }
 
   return null;
+}
+
+function getZigbeeEndpoints(zigbeeDevice) {
+  if (Array.isArray(zigbeeDevice?.endpoints)) {
+    return zigbeeDevice.endpoints;
+  }
+
+  return [readZigbeeEndpoint(zigbeeDevice)].filter(Boolean);
+}
+
+function readZigbeeEndpointAttribute(endpoint, clusterCandidates = [], attributeCandidates = []) {
+  if (!endpoint) {
+    return undefined;
+  }
+
+  if (typeof endpoint.getClusterAttributeValue === 'function') {
+    for (const cluster of clusterCandidates) {
+      for (const attribute of attributeCandidates) {
+        try {
+          const value = endpoint.getClusterAttributeValue(cluster, attribute);
+          if (value !== undefined && value !== null) {
+            return value;
+          }
+        } catch (_error) {
+          // Try the next cluster/attribute representation.
+        }
+      }
+    }
+  }
+
+  const clusters = endpoint.clusters && typeof endpoint.clusters === 'object'
+    ? endpoint.clusters
+    : null;
+  if (!clusters) {
+    return undefined;
+  }
+
+  for (const cluster of clusterCandidates) {
+    const clusterValue = clusters[cluster] || clusters[String(cluster)] || clusters[normalizeZigbeeClusterToken(cluster)];
+    if (!clusterValue || typeof clusterValue !== 'object') {
+      continue;
+    }
+
+    for (const attribute of attributeCandidates) {
+      const directValue = clusterValue[attribute];
+      if (directValue !== undefined && directValue !== null) {
+        return directValue;
+      }
+
+      const attributeValue = clusterValue.attributes?.[attribute];
+      if (attributeValue !== undefined && attributeValue !== null) {
+        return attributeValue;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeZigbeeSwitchState(value) {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value > 0;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (['on', 'true', '1', 'open', 'opened', 'active'].includes(normalized)) {
+    return true;
+  }
+  if (['off', 'false', '0', 'closed', 'inactive'].includes(normalized)) {
+    return false;
+  }
+  return undefined;
+}
+
+function normalizeZigbeePercent(value, scale = 'percent') {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return undefined;
+  }
+
+  if (scale === 'level') {
+    return clampPercent(Math.round((Math.max(0, Math.min(254, numeric)) / 254) * 100));
+  }
+
+  return clampPercent(numeric);
+}
+
+function readZigbeeStateObjectValue(zigbeeDevice, keys = []) {
+  const stateObjects = [
+    zigbeeDevice?.state,
+    zigbeeDevice?.meta?.state,
+    zigbeeDevice?.properties?.state,
+    zigbeeDevice?.latestState
+  ].filter((entry) => entry && typeof entry === 'object');
+
+  for (const stateObject of stateObjects) {
+    for (const key of keys) {
+      const value = stateObject[key];
+      if (value !== undefined && value !== null) {
+        return value;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function readZigbeeRuntimeState(zigbeeDevice) {
+  const endpoints = getZigbeeEndpoints(zigbeeDevice);
+  let status = normalizeZigbeeSwitchState(readZigbeeStateObjectValue(zigbeeDevice, [
+    'state',
+    'switch',
+    'power',
+    'onOff',
+    'on_off',
+    'on'
+  ]));
+
+  if (status === undefined) {
+    for (const endpoint of endpoints) {
+      status = normalizeZigbeeSwitchState(readZigbeeEndpointAttribute(
+        endpoint,
+        ['genOnOff', 'genonoff', 6],
+        ['onOff', 'onoff', 'state']
+      ));
+      if (status !== undefined) {
+        break;
+      }
+    }
+  }
+
+  let brightness = normalizeZigbeePercent(readZigbeeStateObjectValue(zigbeeDevice, [
+    'brightness',
+    'level'
+  ]));
+  if (brightness === undefined) {
+    for (const endpoint of endpoints) {
+      brightness = normalizeZigbeePercent(readZigbeeEndpointAttribute(
+        endpoint,
+        ['genLevelCtrl', 'genlevelctrl', 8],
+        ['currentLevel', 'current_level']
+      ), 'level');
+      if (brightness !== undefined) {
+        break;
+      }
+    }
+  }
+
+  return {
+    ...(status !== undefined ? { status } : {}),
+    ...(brightness !== undefined ? { brightness } : {})
+  };
 }
 
 function normalizeZigbeeClusterToken(value) {
@@ -2368,6 +2533,8 @@ class DirectRadioService {
       || `Zigbee ${directId.slice(-6)}`;
     const status = zigbeeDevice.interviewCompleted !== false;
 
+    const runtimeState = readZigbeeRuntimeState(zigbeeDevice);
+
     return {
       identity: {
         protocol: 'zigbee',
@@ -2384,7 +2551,7 @@ class DirectRadioService {
           manufacturerName: zigbeeDevice.manufacturerName
         }),
         room: 'Unassigned',
-        status: false,
+        ...runtimeState,
         isOnline: status,
         lastSeen: new Date(),
         brand: trimString(catalogEntry?.vendor || definition?.vendor || zigbeeDevice.manufacturerName) || undefined,
@@ -2530,7 +2697,13 @@ class DirectRadioService {
     this.log('info', 'zigbee', 'Zigbee device state normalized', {
       reason,
       ieeeAddr: normalized.identity?.id || null,
-      features: normalized.update?.properties?.directRadioFeatures || []
+      features: normalized.update?.properties?.directRadioFeatures || [],
+      observedStatus: Object.prototype.hasOwnProperty.call(normalized.update || {}, 'status')
+        ? normalized.update.status
+        : null,
+      observedBrightness: Object.prototype.hasOwnProperty.call(normalized.update || {}, 'brightness')
+        ? normalized.update.brightness
+        : null
     });
     return this.upsertDirectDevice(normalized.identity, normalized.update);
   }

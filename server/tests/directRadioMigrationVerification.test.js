@@ -155,6 +155,83 @@ test('Zigbee normalization enriches devices from the installed converter catalog
   assert.ok(normalized.update.properties.directRadioCatalog.exposes.some((expose) => expose.type === 'switch'));
 });
 
+test('Zigbee normalization preserves state when no on/off attribute is observed', () => {
+  const service = createService();
+  const normalized = service.normalizeZigbeeDevice({
+    ieeeAddr: '0x00158d0000000001',
+    modelID: 'SP 224',
+    manufacturerName: 'innr',
+    interviewCompleted: true,
+    endpoints: [
+      {
+        ID: 1,
+        inputClusters: [0, 3, 4, 5, 6]
+      }
+    ]
+  }, 'message');
+
+  assert.equal(Object.prototype.hasOwnProperty.call(normalized.update, 'status'), false);
+});
+
+test('Zigbee normalization reads on/off state from endpoint attributes', () => {
+  const service = createService();
+  const normalized = service.normalizeZigbeeDevice({
+    ieeeAddr: '0x00158d0000000002',
+    modelID: 'SP 224',
+    manufacturerName: 'innr',
+    interviewCompleted: true,
+    endpoints: [
+      {
+        ID: 1,
+        inputClusters: [0, 3, 4, 5, 6],
+        getClusterAttributeValue(cluster, attribute) {
+          if (cluster === 'genOnOff' && attribute === 'onOff') {
+            return 1;
+          }
+          return undefined;
+        }
+      }
+    ]
+  }, 'message');
+
+  assert.equal(normalized.update.status, true);
+});
+
+test('direct radio merge keeps existing state when Zigbee refresh has no state payload', () => {
+  const merged = mergeDirectDeviceUpdateForExisting({
+    name: 'Vault Overhead Lights',
+    type: 'switch',
+    room: 'Vault',
+    status: true,
+    brightness: 75,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x5c0272fffeadf493'
+      },
+      directRadioFeatures: ['switch']
+    }
+  }, {
+    name: 'SP 224',
+    type: 'switch',
+    room: 'Unassigned',
+    isOnline: true,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x5c0272fffeadf493',
+        lastReason: 'message'
+      },
+      directRadioFeatures: ['switch']
+    }
+  });
+
+  assert.equal(merged.status, true);
+  assert.equal(merged.brightness, 75);
+});
+
 test('direct radio upsert prefers complete switch records over stale partial duplicates', () => {
   const selected = selectPrimaryDirectDeviceRecord([
     {
