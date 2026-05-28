@@ -81,6 +81,11 @@ struct DevicesView: View {
     @State private var newName = ""
     @State private var newType = "light"
     @State private var newRoom = ""
+    @State private var editDeviceID: String?
+    @State private var editDeviceName = ""
+    @State private var editDeviceRoom = ""
+    @State private var editDeviceType = "switch"
+    @State private var savingDeviceDetails = false
     @State private var contentWidth: CGFloat = 0
 
     private let availableTypes = ["all", "light", "lock", "thermostat", "garage", "sensor", "switch", "camera"]
@@ -668,6 +673,9 @@ struct DevicesView: View {
     private func canUsePrimaryDeviceAction(_ device: DeviceItem) -> Bool {
         if device.type == "camera" || device.type == "sensor" {
             return false
+        }
+        if supportsDirectRadioPowerControl(device) {
+            return true
         }
         return device.type == "thermostat"
             || supportsLightFade(device)
@@ -1509,6 +1517,8 @@ struct DevicesView: View {
                             }
                         }
 
+                        deviceIdentityEditor(for: device)
+
                         HBPanel {
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("Primary Controls")
@@ -1557,6 +1567,9 @@ struct DevicesView: View {
             }
             .navigationTitle("Controls")
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                prepareDeviceEditor(for: device)
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
@@ -1564,6 +1577,83 @@ struct DevicesView: View {
                     }
                     .buttonStyle(HBSecondaryButtonStyle(compact: true))
                 }
+            }
+        }
+    }
+
+    private func prepareDeviceEditor(for device: DeviceItem) {
+        guard editDeviceID != device.id else { return }
+        editDeviceID = device.id
+        editDeviceName = device.name
+        editDeviceRoom = device.room.isEmpty ? "Unassigned" : device.room
+        editDeviceType = availableTypes.contains(device.type) && device.type != "all" ? device.type : "switch"
+    }
+
+    private func deviceDetailsChanged(for device: DeviceItem) -> Bool {
+        let name = editDeviceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let room = editDeviceRoom.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Unassigned"
+            : editDeviceRoom.trimmingCharacters(in: .whitespacesAndNewlines)
+        let type = availableTypes.contains(editDeviceType) && editDeviceType != "all" ? editDeviceType : device.type
+
+        return name != device.name
+            || room != (device.room.isEmpty ? "Unassigned" : device.room)
+            || type != device.type
+    }
+
+    private func deviceIdentityEditor(for device: DeviceItem) -> some View {
+        let canSave = deviceDetailsChanged(for: device)
+            && !editDeviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !savingDeviceDetails
+
+        return HBPanel {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Device Details")
+                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    TextField("Name", text: $editDeviceName)
+                        .hbPanelTextField()
+                        .disabled(savingDeviceDetails)
+
+                    TextField("Room", text: $editDeviceRoom)
+                        .hbPanelTextField()
+                        .disabled(savingDeviceDetails)
+
+                    HStack {
+                        Text("Type")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                        Spacer()
+                        Picker("Type", selection: $editDeviceType) {
+                            ForEach(availableTypes.filter { $0 != "all" }, id: \.self) { type in
+                                Text(deviceTypeDisplayLabel(type)).tag(type)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .tint(HBPalette.accentBlue)
+                        .disabled(savingDeviceDetails)
+                    }
+                }
+
+                Button {
+                    Task { await saveDeviceDetails(for: device) }
+                } label: {
+                    if savingDeviceDetails {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Saving")
+                        }
+                        .frame(maxWidth: .infinity)
+                    } else {
+                        Label("Save Details", systemImage: "checkmark.circle.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(HBPrimaryButtonStyle())
+                .disabled(!canSave)
             }
         }
     }
@@ -2659,6 +2749,48 @@ struct DevicesView: View {
         }
     }
 
+    private func saveDeviceDetails(for device: DeviceItem) async {
+        let name = editDeviceName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            errorMessage = "Device name is required."
+            return
+        }
+
+        let roomDraft = editDeviceRoom.trimmingCharacters(in: .whitespacesAndNewlines)
+        let room = roomDraft.isEmpty ? "Unassigned" : roomDraft
+        let type = availableTypes.contains(editDeviceType) && editDeviceType != "all" ? editDeviceType : device.type
+
+        savingDeviceDetails = true
+        defer { savingDeviceDetails = false }
+
+        if previewMode {
+            var updated = device
+            updated.name = name
+            updated.room = room
+            updated.type = type
+            upsertDevice(updated)
+            editDeviceID = nil
+            prepareDeviceEditor(for: updated)
+            return
+        }
+
+        do {
+            let response = try await session.apiClient.put("/api/devices/\(device.id)", body: [
+                "name": name,
+                "room": room,
+                "type": type
+            ])
+            let object = JSON.object(response)
+            let data = JSON.object(object["data"])
+            let updated = DeviceItem.from(JSON.object(data["device"]))
+            upsertDevice(updated)
+            editDeviceID = nil
+            prepareDeviceEditor(for: updated)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func createDevice() async {
         if previewMode {
             let created = DeviceItem(
@@ -3328,6 +3460,11 @@ struct DevicesView: View {
         return boolValue(device.properties["supportsBrightness"])
             || propertyStringSet(for: device, key: "directRadioFeatures").contains("brightness")
             || propertyStringSet(for: device, key: "matterFeatures").contains("brightness")
+    }
+
+    private func supportsDirectRadioPowerControl(_ device: DeviceItem) -> Bool {
+        let features = propertyStringSet(for: device, key: "directRadioFeatures")
+        return features.contains("switch") || features.contains("lock")
     }
 
     private func supportsLightColor(_ device: DeviceItem) -> Bool {

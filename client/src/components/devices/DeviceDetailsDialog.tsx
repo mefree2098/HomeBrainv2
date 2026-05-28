@@ -16,6 +16,7 @@ import {
   Power,
   PowerOff,
   RadioTower,
+  Save,
   Sparkles,
   Thermometer,
   Wind,
@@ -146,6 +147,24 @@ const HARMONY_PRIMARY_COMMANDS = [
   { key: "menu", label: "Menu" }
 ] as const
 const DETAIL_THERMOSTAT_MODES = ["auto", "cool", "heat", "off"] as const
+const EDITABLE_DEVICE_TYPES = [
+  "light",
+  "switch",
+  "lock",
+  "thermostat",
+  "garage",
+  "sensor",
+  "camera"
+] as const
+const EDITABLE_DEVICE_TYPE_LABELS: Record<(typeof EDITABLE_DEVICE_TYPES)[number], string> = {
+  light: "Light",
+  switch: "Switch",
+  lock: "Lock",
+  thermostat: "Thermostat",
+  garage: "Garage",
+  sensor: "Sensor",
+  camera: "Camera"
+}
 
 function getGuidedMigrationSteps(plan: DirectRadioMigrationPlan | null | undefined): DirectRadioMigrationGuidedStep[] {
   return Array.isArray(plan?.guidedSteps) ? plan.guidedSteps.filter((step) => step && step.id) : []
@@ -402,8 +421,25 @@ function supportsLightFade(device: DeviceLike | null): boolean {
 
   const properties = device.properties as Record<string, unknown> | undefined
   return Boolean(properties?.supportsBrightness)
-    || (Array.isArray(properties?.directRadioFeatures) && properties.directRadioFeatures.includes("brightness"))
+    || hasDirectRadioFeature(device, "brightness")
     || (Array.isArray(properties?.matterFeatures) && properties.matterFeatures.includes("brightness"))
+}
+
+function getDirectRadioFeatures(device: DeviceLike | null): string[] {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  return Array.isArray(properties?.directRadioFeatures)
+    ? properties.directRadioFeatures
+        .map((feature) => String(feature || "").trim().toLowerCase())
+        .filter(Boolean)
+    : []
+}
+
+function hasDirectRadioFeature(device: DeviceLike | null, feature: string): boolean {
+  return getDirectRadioFeatures(device).includes(feature.toLowerCase())
+}
+
+function supportsDirectRadioPowerControl(device: DeviceLike | null): boolean {
+  return hasDirectRadioFeature(device, "switch") || hasDirectRadioFeature(device, "lock")
 }
 
 function supportsLightColor(device: DeviceLike | null): boolean {
@@ -727,6 +763,9 @@ function canUseSimplePowerControl(device: DeviceLike | null): boolean {
   if (device.type === "camera" || device.type === "sensor") {
     return false
   }
+  if (supportsDirectRadioPowerControl(device)) {
+    return true
+  }
   return device.type === "thermostat"
     || supportsLightFade(device)
     || ["light", "switch", "lock", "garage"].includes(device.type)
@@ -1039,6 +1078,10 @@ export function DeviceDetailsDialog({
   const [telemetryError, setTelemetryError] = useState<string | null>(null)
   const [telemetryMetricKeys, setTelemetryMetricKeys] = useState<string[]>([])
   const [telemetryRangeHours, setTelemetryRangeHours] = useState<number>(24 * 7)
+  const [deviceNameDraft, setDeviceNameDraft] = useState("")
+  const [deviceRoomDraft, setDeviceRoomDraft] = useState("")
+  const [deviceTypeDraft, setDeviceTypeDraft] = useState<string>("switch")
+  const [savingDeviceDetails, setSavingDeviceDetails] = useState(false)
   const [groupInput, setGroupInput] = useState("")
   const [savingGroups, setSavingGroups] = useState(false)
   const [harmonyRepeatPowerCommands, setHarmonyRepeatPowerCommands] = useState(false)
@@ -1099,6 +1142,16 @@ export function DeviceDetailsDialog({
     return normalizeGroupList(availableGroups).filter((group) => !activeKeys.has(group.toLowerCase()))
   }, [availableGroups, draftGroups])
   const groupsChanged = !sameStringList(currentGroups, draftGroups)
+  const normalizedDeviceNameDraft = deviceNameDraft.trim()
+  const normalizedDeviceRoomDraft = deviceRoomDraft.trim() || "Unassigned"
+  const normalizedDeviceTypeDraft = EDITABLE_DEVICE_TYPES.includes(deviceTypeDraft as (typeof EDITABLE_DEVICE_TYPES)[number])
+    ? deviceTypeDraft
+    : device?.type || "switch"
+  const deviceDetailsChanged = Boolean(device) && (
+    normalizedDeviceNameDraft !== device.name
+    || normalizedDeviceRoomDraft !== (device.room || "Unassigned")
+    || normalizedDeviceTypeDraft !== device.type
+  )
   const harmonyOptionsChanged = harmonyCommandDevice && (
     harmonyRepeatPowerCommands !== harmonyRepeatPowerCommandsSaved
     || harmonyExcludeFromHomeBrain !== harmonyExcludeFromHomeBrainSaved
@@ -1109,6 +1162,11 @@ export function DeviceDetailsDialog({
       return
     }
 
+    setDeviceNameDraft(device?.name || "")
+    setDeviceRoomDraft(device?.room || "Unassigned")
+    setDeviceTypeDraft(EDITABLE_DEVICE_TYPES.includes((device?.type || "") as (typeof EDITABLE_DEVICE_TYPES)[number])
+      ? device?.type || "switch"
+      : "switch")
     setGroupInput(currentGroups.join(", "))
   }, [currentGroups, open, device?._id])
 
@@ -1522,6 +1580,50 @@ export function DeviceDetailsDialog({
 
       return baseSelection.concat(metricKey)
     })
+  }
+
+  const handleSaveDeviceDetails = async () => {
+    if (!device?._id) {
+      return
+    }
+
+    if (!normalizedDeviceNameDraft) {
+      toast({
+        title: "Device name required",
+        description: "Give this device a name before saving.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setSavingDeviceDetails(true)
+    try {
+      const response = await updateDevice(device._id, {
+        name: normalizedDeviceNameDraft,
+        room: normalizedDeviceRoomDraft,
+        type: normalizedDeviceTypeDraft
+      })
+      const updatedDevice = (response?.device || response) as DeviceLike
+      onDeviceUpdated?.(updatedDevice)
+      setDeviceNameDraft(updatedDevice?.name || normalizedDeviceNameDraft)
+      setDeviceRoomDraft(updatedDevice?.room || normalizedDeviceRoomDraft)
+      setDeviceTypeDraft(updatedDevice?.type || normalizedDeviceTypeDraft)
+      toast({
+        title: "Device details updated",
+        description: `${updatedDevice?.name || normalizedDeviceNameDraft} is ready in ${updatedDevice?.room || normalizedDeviceRoomDraft}.`
+      })
+    } catch (saveError) {
+      const message = saveError instanceof Error
+        ? saveError.message
+        : "Failed to update device details."
+      toast({
+        title: "Unable to save device details",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setSavingDeviceDetails(false)
+    }
   }
 
   const handleSaveGroups = async () => {
@@ -2448,6 +2550,80 @@ export function DeviceDetailsDialog({
 
                 <div className="grid gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(320px,0.95fr)]">
                   <div className="space-y-5">
+                    <Card className="border-white/10 bg-black/20">
+                      <CardHeader className="pb-4">
+                        <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Device identity</CardTitle>
+                        <CardDescription>Name, room, and control type.</CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,0.85fr)_180px]">
+                          <div className="space-y-2">
+                            <Label htmlFor="device-name-input">Name</Label>
+                            <Input
+                              id="device-name-input"
+                              className="bg-black/20"
+                              value={deviceNameDraft}
+                              onChange={(event) => setDeviceNameDraft(event.target.value)}
+                              disabled={savingDeviceDetails}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label htmlFor="device-room-input">Room</Label>
+                            <Input
+                              id="device-room-input"
+                              className="bg-black/20"
+                              value={deviceRoomDraft}
+                              onChange={(event) => setDeviceRoomDraft(event.target.value)}
+                              disabled={savingDeviceDetails}
+                            />
+                          </div>
+                          <div className="space-y-2">
+                            <Label>Type</Label>
+                            <Select
+                              value={normalizedDeviceTypeDraft}
+                              onValueChange={setDeviceTypeDraft}
+                              disabled={savingDeviceDetails}
+                            >
+                              <SelectTrigger className="bg-black/20">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {EDITABLE_DEVICE_TYPES.map((type) => (
+                                  <SelectItem key={type} value={type}>
+                                    {EDITABLE_DEVICE_TYPE_LABELS[type]}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <p className="text-xs text-muted-foreground">
+                            {deviceDetailsChanged ? "Device details have unsaved changes." : "No unsaved device detail changes."}
+                          </p>
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={handleSaveDeviceDetails}
+                            disabled={!deviceDetailsChanged || savingDeviceDetails || !normalizedDeviceNameDraft}
+                          >
+                            {savingDeviceDetails ? (
+                              <>
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                Saving
+                              </>
+                            ) : (
+                              <>
+                                <Save className="mr-2 h-4 w-4" />
+                                Save details
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+
                     {!harmonyCommandDevice ? (
                       <Card className="border-white/10 bg-black/20">
                         <CardHeader className="pb-4">
