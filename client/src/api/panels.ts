@@ -60,7 +60,7 @@ export type WallPanelRecord = {
   updatedAt?: string | null
   ota?: {
     jobId?: string
-    status?: 'idle' | 'queued' | 'building' | 'ready' | 'flashing' | 'downloading' | 'installing' | 'rebooting' | 'provisioned' | 'completed' | 'failed'
+    status?: 'idle' | 'queued' | 'building' | 'ready' | 'flashing' | 'downloading' | 'installing' | 'rebooting' | 'provisioned' | 'completed' | 'failed' | 'cancelled'
     phase?: string
     progress?: number
     targetVersion?: string
@@ -219,6 +219,21 @@ export const rotateWallPanelRegistrationCode = async (panelId: string) => {
 export const pushWallPanelFirmwareUpdate = async (panelId: string) => {
   try {
     const response = await api.post(`/api/panels/${encodeURIComponent(panelId)}/ota/push`)
+    return response.data as {
+      success: boolean
+      panel: WallPanelRecord
+    }
+  } catch (error) {
+    console.error(error)
+    throw new Error(getApiErrorMessage(error))
+  }
+}
+
+export const cancelWallPanelFirmwareUpdate = async (panelId: string, reason?: string) => {
+  try {
+    const response = await api.post(`/api/panels/${encodeURIComponent(panelId)}/ota/cancel`, {
+      reason
+    })
     return response.data as {
       success: boolean
       panel: WallPanelRecord

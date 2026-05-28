@@ -1,4 +1,5 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 
 const router = express.Router();
 const wallPanelService = require('../services/wallPanelService');
@@ -6,6 +7,16 @@ const { requireAdmin } = require('./middlewares/auth');
 const { getRequestOrigin } = require('../utils/publicOrigin');
 
 const admin = requireAdmin();
+const panelFirmwareMutationRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_PANEL_FIRMWARE_RATE_LIMIT_WINDOW_MS || 60_000)),
+  limit: Math.max(5, Number(process.env.HOMEBRAIN_PANEL_FIRMWARE_RATE_LIMIT_MAX || 30)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many hardware orb firmware requests. Please retry shortly.'
+  }
+});
 
 function extractPanelCredentials(req) {
   return {
@@ -244,7 +255,7 @@ router.get('/:panelId/state', async (req, res) => {
   }
 });
 
-router.post('/:panelId/ota/push', admin, async (req, res) => {
+router.post('/:panelId/ota/push', panelFirmwareMutationRateLimit, admin, async (req, res) => {
   try {
     const panel = await wallPanelService.pushFirmwareUpdate(
       req.params.panelId,
@@ -259,6 +270,25 @@ router.post('/:panelId/ota/push', admin, async (req, res) => {
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || 'Failed to start the wall panel OTA update'
+    });
+  }
+});
+
+router.post('/:panelId/ota/cancel', panelFirmwareMutationRateLimit, admin, async (req, res) => {
+  try {
+    const panel = await wallPanelService.cancelPanelOtaJob(
+      req.params.panelId,
+      req.body || {}
+    );
+    return res.status(200).json({
+      success: true,
+      panel
+    });
+  } catch (error) {
+    console.error('POST /api/panels/:panelId/ota/cancel - Error:', error.message);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Failed to cancel the wall panel OTA update'
     });
   }
 });
