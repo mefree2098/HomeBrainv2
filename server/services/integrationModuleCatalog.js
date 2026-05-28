@@ -17,6 +17,18 @@ const CAPABILITY_DEFINITIONS = [
   { key: 'alerts_source', label: 'Alerts Source', section: 'Alerts', selectable: false }
 ];
 
+const SHARED_DEVICE_TYPES = Object.freeze([
+  'light',
+  'switch',
+  'lock',
+  'sensor',
+  'siren',
+  'thermostat',
+  'garage',
+  'camera',
+  'speaker'
+]);
+
 const INTEGRATION_MODULE_DEFINITIONS = [
   {
     id: 'tempest',
@@ -95,7 +107,7 @@ const INTEGRATION_MODULE_DEFINITIONS = [
     apiBasePath: '/api/smartthings',
     deviceSource: 'smartthings',
     capabilities: ['device_control', 'security_platform', 'workflow_actions', 'workflow_conditions', 'alerts_source'],
-    deviceTypes: ['light', 'switch', 'lock', 'sensor', 'thermostat', 'garage', 'camera', 'speaker'],
+    deviceTypes: SHARED_DEVICE_TYPES,
     telemetrySourceTypes: ['device']
   },
   {
@@ -108,7 +120,7 @@ const INTEGRATION_MODULE_DEFINITIONS = [
     apiBasePath: '/api/direct-radios',
     deviceSource: 'homebrain-native',
     capabilities: ['native_radio', 'device_control', 'workflow_actions', 'workflow_conditions', 'alerts_source'],
-    deviceTypes: ['light', 'switch', 'lock', 'sensor', 'thermostat', 'garage', 'camera', 'speaker'],
+    deviceTypes: SHARED_DEVICE_TYPES,
     telemetrySourceTypes: ['device']
   },
   {

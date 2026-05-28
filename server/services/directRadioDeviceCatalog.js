@@ -103,6 +103,8 @@ const ZIGBEE_PREFERRED_FEATURES = new Set([
   'vibration',
   'acceleration',
   'axis',
+  'alarm',
+  'chime',
   'power',
   'energy',
   'button',
@@ -865,6 +867,19 @@ function getZigbeePhysicalInstructions(device, features = new Set()) {
   const descriptor = getDeviceDescriptor(device);
   const name = normalizeString(device?.name) || 'the device';
 
+  if (features.has('alarm') || /\b(?:siren|alarm|sounder)\b/.test(descriptor)) {
+    return {
+      profile: instructionProfile('zigbee-siren-alarm', 'Zigbee siren/alarm', 'medium', {
+        reference: 'Zigbee sirens usually enter pairing mode from a hold-to-reset or recessed pair button while permit-join is open.'
+      }),
+      pairing: [
+        `Plug in or power ${name} near the SONOFF coordinator before opening pairing.`,
+        'Hold the siren reset, pair, or link button until the LED enters its pairing blink pattern.',
+        'After discovery, verify alarm off, chime/tone, tamper, and battery attributes that the device exposes before using it in Security Center.'
+      ]
+    };
+  }
+
   if (/\b(?:multipurpose|multifunctional|smartthings.*contact|contactsensor|bf69d6e0|7c42baaf)\b/.test(descriptor) || features.has('contact')) {
     return {
       profile: instructionProfile('zigbee-smartthings-contact-multipurpose', 'SmartThings/Aeotec contact or multipurpose sensor', 'high', {
@@ -1164,6 +1179,7 @@ function buildDirectFeatureProperties(features) {
     supportsCurrent: featureSet.has('current'),
     supportsThermostat: featureSet.has('thermostat'),
     supportsAlarm: featureSet.has('alarm'),
+    supportsChime: featureSet.has('chime'),
     supportsLockCodes: featureSet.has('lockCodes'),
     supportsCover: featureSet.has('cover'),
     supportsGarage: featureSet.has('garage'),

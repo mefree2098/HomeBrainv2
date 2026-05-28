@@ -6179,6 +6179,18 @@ class DirectRadioService {
           'Zigbee unlock command timed out before the device acknowledged it'
         );
         break;
+      case 'alarmoff':
+      case 'turnoffalarm':
+      case 'silencealarm': {
+        await withTimeout(
+          endpoint.command('genOnOff', 'off', {}),
+          10_000,
+          'Zigbee alarm off command timed out before the device acknowledged it'
+        );
+        const observedStatus = await this.readZigbeeOnOffState(endpoint, device);
+        updateData.status = observedStatus ?? false;
+        break;
+      }
       default:
         throw new Error('This Zigbee device does not support the requested action yet');
     }
@@ -6262,6 +6274,7 @@ class DirectRadioService {
         break;
       case 'alarmoff':
       case 'turnoffalarm':
+      case 'silencealarm':
         if (device?.properties?.supportsAlarm) {
           await this.setZWaveValue(node, zwave.BinarySwitchCCValues.targetValue, false).catch(async () => {
             await this.setZWaveValue(node, zwave.SoundSwitchCCValues.volume, 0);

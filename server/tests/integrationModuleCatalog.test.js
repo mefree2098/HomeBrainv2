@@ -45,6 +45,12 @@ test('telemetry summaries are decorated with owning module metadata', () => {
   assert.equal(decorated.deviceTypes.includes('air_quality_monitor'), true);
 });
 
+test('device integration catalog includes first-class siren type for SmartThings and native radios', () => {
+  assert.equal(getModuleDefinition('smartthings').deviceTypes.includes('siren'), true);
+  assert.equal(getModuleDefinition('homebrain-native-radios').deviceTypes.includes('siren'), true);
+  assert.equal(getModuleDefinition('homebrain-native-radios').deviceTypes.includes('speaker'), true);
+});
+
 test('integration preferences normalize selected and auto modes safely', () => {
   assert.deepEqual(integrationRegistryService.normalizeIntegrationPreferences({
     capabilities: {

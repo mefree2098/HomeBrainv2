@@ -20,6 +20,8 @@ import {
   RadioTower,
   RefreshCw,
   Save,
+  Siren,
+  Speaker,
   Sparkles,
   Thermometer,
   Trash2,
@@ -172,7 +174,9 @@ const EDITABLE_DEVICE_TYPES = [
   "thermostat",
   "garage",
   "sensor",
-  "camera"
+  "siren",
+  "camera",
+  "speaker"
 ] as const
 const EDITABLE_DEVICE_TYPE_LABELS: Record<(typeof EDITABLE_DEVICE_TYPES)[number], string> = {
   light: "Light",
@@ -181,7 +185,9 @@ const EDITABLE_DEVICE_TYPE_LABELS: Record<(typeof EDITABLE_DEVICE_TYPES)[number]
   thermostat: "Thermostat",
   garage: "Garage",
   sensor: "Sensor",
-  camera: "Camera"
+  siren: "Siren",
+  camera: "Camera",
+  speaker: "Speaker"
 }
 
 function getGuidedMigrationSteps(plan: DirectRadioMigrationPlan | null | undefined): DirectRadioMigrationGuidedStep[] {
@@ -1082,6 +1088,10 @@ function getDeviceHeroIcon(device: DeviceLike | null): LucideIcon {
       return Lock
     case "thermostat":
       return Thermometer
+    case "siren":
+      return Siren
+    case "speaker":
+      return Speaker
     default:
       return Cpu
   }

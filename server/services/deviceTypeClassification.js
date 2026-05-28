@@ -114,6 +114,10 @@ function mapSmartThingsDeviceType(capabilities = new Set(), categories = new Set
     return 'lock';
   }
 
+  if (hasCapability('alarm') || hasCategory('siren')) {
+    return 'siren';
+  }
+
   if (hasCapability('garageDoorControl') || hasCapability('doorControl') || hasCategory('garageDoor') || hasCategory('garage')) {
     return 'garage';
   }
@@ -171,13 +175,16 @@ function isDirectLightContext(context = {}) {
 
 function inferDirectDeviceType(features = [], context = {}) {
   const featureSet = toNormalizedSet(features, { lower: true });
+  const descriptor = directDescriptor(context);
 
   if (featureSet.has('lock')) return 'lock';
   if (featureSet.has('thermostat')) return 'thermostat';
+  if (featureSet.has('alarm') || /\b(?:siren|alarm|sounder)\b/.test(descriptor)) return 'siren';
+  if (featureSet.has('speaker') || featureSet.has('chime')) return 'speaker';
   if (featureSet.has('color') || featureSet.has('colortemperature') || featureSet.has('light') || isDirectLightContext(context)) {
     return 'light';
   }
-  if (featureSet.has('switch') || featureSet.has('brightness') || featureSet.has('power') || featureSet.has('energy') || featureSet.has('alarm')) {
+  if (featureSet.has('switch') || featureSet.has('brightness') || featureSet.has('power') || featureSet.has('energy')) {
     return 'switch';
   }
   if (
