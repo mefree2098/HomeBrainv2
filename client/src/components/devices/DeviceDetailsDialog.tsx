@@ -26,6 +26,7 @@ import {
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
 import { controlDevice, getDeviceEnergyHistory, type DeviceEnergySample, updateDevice } from "@/api/devices"
 import {
+  finalizeDirectRadioMigration,
   getDirectRadioMigrationPlan,
   startDirectRadioMigration,
   startZWaveExclusion,
@@ -342,6 +343,31 @@ function isSmartThingsBackedDevice(device: DeviceLike | null): boolean {
   const properties = device?.properties as Record<string, unknown> | undefined
   const source = (properties?.source || "").toString().trim().toLowerCase()
   return source === "smartthings" || (!isDirectRadioBackedDevice(device) && Boolean(properties?.smartThingsDeviceId))
+}
+
+function getSmartThingsMigration(device: DeviceLike | null): Record<string, unknown> | null {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  const migration = properties?.smartThingsMigration
+  return migration && typeof migration === "object"
+    ? migration as Record<string, unknown>
+    : null
+}
+
+function isSmartThingsMigrationFinalized(device: DeviceLike | null): boolean {
+  const migration = getSmartThingsMigration(device)
+  const validation = migration?.validation && typeof migration.validation === "object"
+    ? migration.validation as Record<string, unknown>
+    : null
+  const validationStatus = String(validation?.status || "").trim().toLowerCase()
+  return Boolean(migration?.finalizedAt)
+    || Boolean(validation?.finalized)
+    || validationStatus === "passed"
+}
+
+function needsMigrationFinalization(device: DeviceLike | null): boolean {
+  return isDirectRadioBackedDevice(device)
+    && Boolean(getSmartThingsMigration(device))
+    && !isSmartThingsMigrationFinalized(device)
 }
 
 function hasSmartThingsSwitchCapabilityOrCategory(device: DeviceLike | null): boolean {
@@ -1116,6 +1142,8 @@ export function DeviceDetailsDialog({
   const [migrationStarting, setMigrationStarting] = useState<"zigbee" | "zwave" | null>(null)
   const [migrationError, setMigrationError] = useState<string | null>(null)
   const [migrationFlow, setMigrationFlow] = useState<MigrationFlowState | null>(null)
+  const [finalizingMigration, setFinalizingMigration] = useState(false)
+  const [migrationFinalizationError, setMigrationFinalizationError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<"overview" | "controls" | "alexa" | "history">("overview")
   const { toast } = useToast()
   const { isAdmin } = useAuth()
@@ -1124,6 +1152,7 @@ export function DeviceDetailsDialog({
   const insteonAddress = useMemo(() => getFormattedInsteonAddress(device), [device])
   const harmonyCommandDevice = useMemo(() => isHarmonyCommandDevice(device), [device])
   const smartThingsBacked = useMemo(() => isSmartThingsBackedDevice(device), [device])
+  const migrationNeedsFinalization = useMemo(() => needsMigrationFinalization(device), [device])
   const harmonyPowerCommands = useMemo(() => getHarmonyPowerCommands(device), [device])
   const harmonyCommands = useMemo(() => getHarmonyCommandMetadata(device), [device])
   const groupedHarmonyCommands = useMemo(() => groupHarmonyCommands(harmonyCommands), [harmonyCommands])
@@ -1239,6 +1268,8 @@ export function DeviceDetailsDialog({
     }
 
     setActiveTab("overview")
+    setFinalizingMigration(false)
+    setMigrationFinalizationError(null)
   }, [device?._id, open])
 
   useEffect(() => {
@@ -1823,6 +1854,43 @@ export function DeviceDetailsDialog({
       })
     } finally {
       setSendingDirectControl(false)
+    }
+  }
+
+  const handleFinalizeMigration = async () => {
+    if (!device?._id) {
+      return
+    }
+
+    setFinalizingMigration(true)
+    setMigrationFinalizationError(null)
+    try {
+      const migration = getSmartThingsMigration(device)
+      const response = await finalizeDirectRadioMigration({
+        deviceId: device._id,
+        migrationId: typeof migration?.migrationId === "string" ? migration.migrationId : null,
+        reason: "Native HomeBrain controls verified from device details"
+      })
+      const updatedDevice = (response?.device || null) as DeviceLike | null
+      if (updatedDevice?._id) {
+        onDeviceUpdated?.(updatedDevice)
+      }
+      toast({
+        title: "Migration finalized",
+        description: `${updatedDevice?.name || device.name} now uses the native HomeBrain radio route.`
+      })
+    } catch (finalizeError) {
+      const message = finalizeError instanceof Error
+        ? finalizeError.message
+        : "Failed to finalize migration."
+      setMigrationFinalizationError(message)
+      toast({
+        title: "Migration still needs attention",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setFinalizingMigration(false)
     }
   }
 
@@ -3056,6 +3124,38 @@ export function DeviceDetailsDialog({
                               )
                             })()
                           ) : null}
+                        </CardContent>
+                      </Card>
+                    ) : null}
+
+                    {migrationNeedsFinalization ? (
+                      <Card className="border-emerald-300/20 bg-emerald-300/[0.07]">
+                        <CardHeader className="pb-4">
+                          <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Finalize migration</CardTitle>
+                          <CardDescription>
+                            Mark this device as fully moved after native HomeBrain state and controls have been verified.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                          <div className="rounded-[1.15rem] border border-emerald-300/15 bg-black/20 p-4 text-sm leading-relaxed text-emerald-50/82">
+                            HomeBrain will confirm the device is online on its direct Zigbee or Z-Wave route, has a native radio identity, and still covers the SmartThings features before clearing the migration review state.
+                          </div>
+                          {migrationFinalizationError ? (
+                            <div className="rounded-[1.15rem] border border-red-500/25 bg-red-500/10 px-4 py-3 text-sm text-red-100">
+                              {migrationFinalizationError}
+                            </div>
+                          ) : null}
+                          <Button
+                            type="button"
+                            className="w-full bg-emerald-300 text-slate-950 hover:bg-emerald-200"
+                            onClick={handleFinalizeMigration}
+                            disabled={finalizingMigration}
+                          >
+                            {finalizingMigration ? (
+                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            ) : null}
+                            Finalize Migration
+                          </Button>
                         </CardContent>
                       </Card>
                     ) : null}

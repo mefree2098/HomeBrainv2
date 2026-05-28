@@ -406,3 +406,27 @@ export const verifyDirectRadioMigrationStep = async (payload: {
     throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };
+
+export const finalizeDirectRadioMigration = async (payload: {
+  deviceId: string;
+  migrationId?: string | null;
+  reason?: string;
+}) => {
+  try {
+    const response = await api.post('/api/direct-radios/migrations/finalize', payload);
+    return response.data as {
+      success: boolean;
+      device?: unknown;
+      finalization?: {
+        deviceId: string;
+        protocol: DirectRadioProtocol;
+        finalizedAt: string;
+        validation?: Record<string, unknown>;
+      };
+      status?: DirectRadioStatus;
+    };
+  } catch (error) {
+    console.error('Error finalizing direct radio migration:', error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};

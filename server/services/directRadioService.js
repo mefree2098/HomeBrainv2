@@ -781,32 +781,154 @@ async function withTimeout(promise, timeoutMs, message) {
   }
 }
 
-function readZigbeeEndpoint(zigbeeDevice) {
-  if (!zigbeeDevice) {
-    return null;
+const ZIGBEE_COMMON_ENDPOINT_IDS = [1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 242];
+
+function getZigbeeEndpointId(endpoint) {
+  const numeric = Number(endpoint?.ID ?? endpoint?.id ?? endpoint?.endpointID ?? endpoint?.endpointId);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function collectZigbeeEndpointClusterTokens(endpoint) {
+  const tokens = new Set();
+
+  [
+    endpoint?.inputClusters,
+    endpoint?.outputClusters,
+    endpoint?.profile?.inputClusters,
+    endpoint?.profile?.outputClusters,
+    endpoint?.simpleDescriptor?.inputClusters,
+    endpoint?.simpleDescriptor?.outputClusters
+  ].forEach((clusters) => {
+    if (!Array.isArray(clusters)) {
+      return;
+    }
+    clusters.forEach((cluster) => {
+      const token = normalizeZigbeeClusterToken(cluster);
+      if (token) {
+        tokens.add(token);
+      }
+    });
+  });
+
+  if (endpoint?.clusters && typeof endpoint.clusters === 'object') {
+    Object.keys(endpoint.clusters).forEach((cluster) => {
+      const token = normalizeZigbeeClusterToken(cluster);
+      if (token) {
+        tokens.add(token);
+      }
+    });
   }
 
-  if (typeof zigbeeDevice.getEndpoint === 'function') {
-    return zigbeeDevice.getEndpoint(1)
-      || zigbeeDevice.getEndpoint(2)
-      || null;
-  }
-
-  if (Array.isArray(zigbeeDevice.endpoints)) {
-    return zigbeeDevice.endpoints.find((endpoint) => endpoint.ID === 1 || endpoint.ID === 2)
-      || zigbeeDevice.endpoints[0]
-      || null;
-  }
-
-  return null;
+  return tokens;
 }
 
 function getZigbeeEndpoints(zigbeeDevice) {
-  if (Array.isArray(zigbeeDevice?.endpoints)) {
-    return zigbeeDevice.endpoints;
+  if (!zigbeeDevice) {
+    return [];
   }
 
-  return [readZigbeeEndpoint(zigbeeDevice)].filter(Boolean);
+  const endpoints = [];
+  const seen = new Set();
+  const seenObjects = new Set();
+  const addEndpoint = (endpoint) => {
+    if (!endpoint || typeof endpoint !== 'object') {
+      return;
+    }
+    if (seenObjects.has(endpoint)) {
+      return;
+    }
+    const id = getZigbeeEndpointId(endpoint);
+    const key = id === null ? `object:${endpoints.length}` : `id:${id}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seenObjects.add(endpoint);
+    seen.add(key);
+    endpoints.push(endpoint);
+  };
+
+  if (Array.isArray(zigbeeDevice.endpoints)) {
+    zigbeeDevice.endpoints.forEach(addEndpoint);
+  }
+
+  if (typeof zigbeeDevice.getEndpoint === 'function') {
+    const knownIds = Array.isArray(zigbeeDevice.endpoints)
+      ? zigbeeDevice.endpoints.map(getZigbeeEndpointId).filter((id) => id !== null)
+      : [];
+    uniqueStrings([...knownIds, ...ZIGBEE_COMMON_ENDPOINT_IDS].map(String)).forEach((candidateId) => {
+      try {
+        addEndpoint(zigbeeDevice.getEndpoint(Number(candidateId)));
+      } catch (_error) {
+        // Some zigbee-herdsman device shims throw for missing endpoint IDs.
+      }
+    });
+  }
+
+  return endpoints;
+}
+
+function getZigbeeClusterPreferenceForAction(action) {
+  switch (normalizeSourceText(action)) {
+    case 'setbrightness':
+      return ['genLevelCtrl', 'genlevelctrl', 8, 'genOnOff', 'genonoff', 6];
+    case 'setcolor':
+    case 'setcolortemperature':
+      return ['lightingColorCtrl', 'lightingcolorctrl', 768];
+    case 'lock':
+    case 'unlock':
+      return ['closuresDoorLock', 'closuresdoorlock', 257];
+    case 'toggle':
+    case 'turnon':
+    case 'turnoff':
+    default:
+      return ['genOnOff', 'genonoff', 6];
+  }
+}
+
+function scoreZigbeeEndpoint(endpoint, action) {
+  const id = getZigbeeEndpointId(endpoint);
+  const clusters = collectZigbeeEndpointClusterTokens(endpoint);
+  const preferredClusters = getZigbeeClusterPreferenceForAction(action)
+    .map(normalizeZigbeeClusterToken)
+    .filter(Boolean);
+  let score = 0;
+
+  if (typeof endpoint?.command === 'function') {
+    score += 100;
+  }
+  preferredClusters.forEach((cluster) => {
+    if (clusters.has(cluster)) {
+      score += 35;
+    }
+  });
+  ['genonoff', 'genlevelctrl', 'lightingcolorctrl', 'closuresdoorlock'].forEach((cluster) => {
+    if (clusters.has(cluster)) {
+      score += 8;
+    }
+  });
+  if (id === 1) {
+    score += 8;
+  } else if (id === 2 || id === 3) {
+    score += 6;
+  } else if (id !== null && id > 3 && id < 20) {
+    score += 2;
+  } else if (id === 242) {
+    score -= 60;
+  }
+
+  return score;
+}
+
+function readZigbeeEndpoint(zigbeeDevice, action = null) {
+  const endpoints = getZigbeeEndpoints(zigbeeDevice);
+  if (endpoints.length === 0) {
+    return null;
+  }
+
+  return endpoints
+    .slice()
+    .sort((left, right) => scoreZigbeeEndpoint(right, action) - scoreZigbeeEndpoint(left, action))[0]
+    || null;
 }
 
 function readZigbeeEndpointAttribute(endpoint, clusterCandidates = [], attributeCandidates = []) {
@@ -1005,39 +1127,11 @@ function normalizeZigbeeClusterToken(value) {
 }
 
 function collectZigbeeClusterTokens(zigbeeDevice) {
-  const endpoints = Array.isArray(zigbeeDevice?.endpoints)
-    ? zigbeeDevice.endpoints
-    : [readZigbeeEndpoint(zigbeeDevice)].filter(Boolean);
+  const endpoints = getZigbeeEndpoints(zigbeeDevice);
   const tokens = new Set();
 
   endpoints.forEach((endpoint) => {
-    [
-      endpoint?.inputClusters,
-      endpoint?.outputClusters,
-      endpoint?.profile?.inputClusters,
-      endpoint?.profile?.outputClusters,
-      endpoint?.simpleDescriptor?.inputClusters,
-      endpoint?.simpleDescriptor?.outputClusters
-    ].forEach((clusters) => {
-      if (!Array.isArray(clusters)) {
-        return;
-      }
-      clusters.forEach((cluster) => {
-        const token = normalizeZigbeeClusterToken(cluster);
-        if (token) {
-          tokens.add(token);
-        }
-      });
-    });
-
-    if (endpoint?.clusters && typeof endpoint.clusters === 'object') {
-      Object.keys(endpoint.clusters).forEach((cluster) => {
-        const token = normalizeZigbeeClusterToken(cluster);
-        if (token) {
-          tokens.add(token);
-        }
-      });
-    }
+    collectZigbeeEndpointClusterTokens(endpoint).forEach((token) => tokens.add(token));
   });
 
   return tokens;
@@ -2915,6 +3009,161 @@ class DirectRadioService {
     };
   }
 
+  buildMigrationFinalizationValidation(device, protocol, reason) {
+    const properties = device?.properties && typeof device.properties === 'object'
+      ? device.properties
+      : {};
+    const direct = properties.homebrainDirect && typeof properties.homebrainDirect === 'object'
+      ? properties.homebrainDirect
+      : {};
+    const expectedSource = protocolSource(protocol);
+    const source = normalizeSourceText(properties.source);
+    const directProtocol = normalizeSourceText(direct.protocol);
+    const features = uniqueStrings(Array.isArray(properties.directRadioFeatures)
+      ? properties.directRadioFeatures
+      : []);
+    const featureSet = new Set(features.map(normalizeFeature));
+    const previousFeatures = inferFeaturesFromSmartThings(device);
+    const optionalSmartThingsFeatures = new Set(['firmware', 'health']);
+    const requiredPreviousFeatures = previousFeatures
+      .map(normalizeFeature)
+      .filter((feature) => feature && !optionalSmartThingsFeatures.has(feature));
+    const identity = protocol === 'zigbee'
+      ? trimString(direct.ieeeAddr)
+      : trimString(direct.nodeId);
+    const checks = [
+      {
+        key: 'native_route',
+        label: 'Native HomeBrain route',
+        previous: properties.smartThingsMigration?.previousSource || 'smartthings',
+        homebrain: source,
+        matched: source === expectedSource && directProtocol === protocol,
+        required: true
+      },
+      {
+        key: 'identity',
+        label: 'Direct radio identity',
+        previous: properties.smartThingsMigration?.smartThingsDeviceId || properties.smartThingsDeviceId || null,
+        homebrain: identity || null,
+        matched: Boolean(identity),
+        required: true
+      },
+      {
+        key: 'online',
+        label: 'Online state',
+        previous: null,
+        homebrain: device?.isOnline !== false,
+        matched: device?.isOnline !== false,
+        required: true
+      },
+      {
+        key: 'features',
+        label: 'Feature coverage',
+        previous: requiredPreviousFeatures.length > 0 ? requiredPreviousFeatures : previousFeatures,
+        homebrain: features,
+        matched: requiredPreviousFeatures.length === 0
+          ? features.length > 0
+          : requiredPreviousFeatures.every((feature) => featureSet.has(normalizeFeature(feature))),
+        required: true
+      }
+    ];
+
+    return {
+      validatedAt: new Date().toISOString(),
+      status: checks.every((check) => check.matched) ? 'passed' : 'needs_review',
+      finalized: checks.every((check) => check.matched),
+      method: 'native_route_confirmation',
+      reason: trimString(reason) || 'Native HomeBrain route and controls verified',
+      checks
+    };
+  }
+
+  async finalizeDeviceMigration({ deviceId, migrationId, reason } = {}) {
+    const safeDeviceId = normalizeObjectId(deviceId);
+    const device = await Device.findById(safeDeviceId);
+    if (!device) {
+      const error = new Error('Device not found');
+      error.status = 404;
+      throw error;
+    }
+
+    const properties = device.properties && typeof device.properties === 'object'
+      ? device.properties
+      : {};
+    const migration = properties.smartThingsMigration && typeof properties.smartThingsMigration === 'object'
+      ? properties.smartThingsMigration
+      : null;
+    if (!migration) {
+      const error = new Error('This device does not have an open SmartThings migration to finalize.');
+      error.status = 400;
+      throw error;
+    }
+
+    const direct = properties.homebrainDirect && typeof properties.homebrainDirect === 'object'
+      ? properties.homebrainDirect
+      : {};
+    const protocol = normalizeSourceText(direct.protocol)
+      || (normalizeSourceText(properties.source) === DIRECT_RADIO_SOURCES.zigbee ? 'zigbee' : '')
+      || (normalizeSourceText(properties.source) === DIRECT_RADIO_SOURCES.zwave ? 'zwave' : '');
+    if (!['zigbee', 'zwave'].includes(protocol)) {
+      const error = new Error('Native direct-radio protocol is not ready for this migrated device.');
+      error.status = 409;
+      throw error;
+    }
+
+    const validation = this.buildMigrationFinalizationValidation(device, protocol, reason);
+    if (validation.status !== 'passed') {
+      const error = new Error('HomeBrain cannot finalize this migration until the native radio route is ready.');
+      error.status = 409;
+      error.validation = validation;
+      throw error;
+    }
+
+    const finalizedAt = new Date().toISOString();
+    const nextProperties = {
+      ...properties,
+      source: protocolSource(protocol),
+      smartThingsMigration: {
+        ...migration,
+        migrationId: trimString(migrationId) || migration.migrationId || null,
+        finalizedAt,
+        finalizedBy: 'homebrain',
+        validation: {
+          ...(migration.validation && typeof migration.validation === 'object' ? migration.validation : {}),
+          ...validation,
+          finalizedAt,
+          finalized: true,
+          status: 'passed'
+        }
+      }
+    };
+
+    const updated = await Device.findByIdAndUpdate(device._id, {
+      properties: nextProperties,
+      isOnline: device.isOnline !== false,
+      updatedAt: new Date()
+    }, { returnDocument: 'after', runValidators: true });
+
+    this.log('info', protocol, 'SmartThings migration finalized on direct radio', {
+      deviceId: updated?._id?.toString?.() || safeDeviceId,
+      name: updated?.name || device.name || null,
+      protocol,
+      migrationId: nextProperties.smartThingsMigration.migrationId,
+      validation: nextProperties.smartThingsMigration.validation
+    });
+    this.emitDeviceUpdate(updated);
+
+    return {
+      device: updated,
+      finalization: {
+        deviceId: updated?._id?.toString?.() || safeDeviceId,
+        protocol,
+        finalizedAt,
+        validation: nextProperties.smartThingsMigration.validation
+      }
+    };
+  }
+
   emitDeviceUpdate(device) {
     if (!device) {
       return;
@@ -3991,7 +4240,7 @@ class DirectRadioService {
 
   async controlZigbeeDevice(device, normalizedAction, commandValue, updateData = {}) {
     const zigbeeDevice = this.getDirectNodeForDevice(device);
-    const endpoint = readZigbeeEndpoint(zigbeeDevice);
+    const endpoint = readZigbeeEndpoint(zigbeeDevice, normalizedAction);
     if (!endpoint || typeof endpoint.command !== 'function') {
       throw new Error('Zigbee device endpoint is not ready');
     }
