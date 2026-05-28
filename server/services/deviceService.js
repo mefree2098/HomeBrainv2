@@ -990,7 +990,9 @@ class DeviceService {
           deviceUpdateEmitter.emit('devices:update', optimisticPayload);
         }
 
-        const remoteUpdate = await getDirectRadioService().refreshDirectDeviceState(device);
+        const remoteUpdate = await getDirectRadioService().refreshDirectDeviceState(device, {
+          preserveCommandState: updateData
+        });
         if (remoteUpdate) {
           Object.assign(updateData, remoteUpdate);
         }
