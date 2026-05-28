@@ -197,6 +197,54 @@ test('Zigbee normalization reads on/off state from endpoint attributes', () => {
   assert.equal(normalized.update.status, true);
 });
 
+test('Zigbee control reads back on/off state after command acknowledgement', async () => {
+  const service = createService();
+  const calls = [];
+  const endpoint = {
+    ID: 1,
+    async command(cluster, command, payload) {
+      calls.push({ type: 'command', cluster, command, payload });
+      return {};
+    },
+    async read(cluster, attributes) {
+      calls.push({ type: 'read', cluster, attributes });
+      return { onOff: 1 };
+    }
+  };
+  service.getDirectNodeForDevice = () => ({
+    getEndpoint() {
+      return endpoint;
+    }
+  });
+
+  const updateData = {};
+  await service.controlZigbeeDevice({
+    _id: DEVICE_ID,
+    name: 'Vault Overhead Lights',
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x5c0272fffeadf493'
+      }
+    }
+  }, 'turnon', true, updateData);
+
+  assert.deepEqual(calls[0], {
+    type: 'command',
+    cluster: 'genOnOff',
+    command: 'on',
+    payload: {}
+  });
+  assert.deepEqual(calls[1], {
+    type: 'read',
+    cluster: 'genOnOff',
+    attributes: ['onOff']
+  });
+  assert.equal(updateData.status, true);
+  assert.equal(updateData.isOnline, true);
+});
+
 test('direct radio merge keeps existing state when Zigbee refresh has no state payload', () => {
   const merged = mergeDirectDeviceUpdateForExisting({
     name: 'Vault Overhead Lights',
@@ -230,6 +278,46 @@ test('direct radio merge keeps existing state when Zigbee refresh has no state p
 
   assert.equal(merged.status, true);
   assert.equal(merged.brightness, 75);
+});
+
+test('direct radio post-command refresh keeps command state when Zigbee has no state payload', async () => {
+  const service = createService();
+  service.getDirectNodeForDevice = () => ({
+    ieeeAddr: '0x5c0272fffeadf493',
+    modelID: 'SP 224',
+    manufacturerName: 'innr',
+    interviewCompleted: true,
+    endpoints: [
+      {
+        ID: 1,
+        inputClusters: [0, 3, 4, 5, 6]
+      }
+    ]
+  });
+
+  const refreshed = await service.refreshDirectDeviceState({
+    name: 'Vault Overhead Lights',
+    type: 'switch',
+    room: 'Vault',
+    status: false,
+    brightness: 75,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x5c0272fffeadf493'
+      },
+      directRadioFeatures: ['switch']
+    }
+  }, {
+    preserveCommandState: {
+      status: true,
+      brightness: 75
+    }
+  });
+
+  assert.equal(refreshed.status, true);
+  assert.equal(refreshed.brightness, 75);
 });
 
 test('direct radio upsert prefers complete switch records over stale partial duplicates', () => {

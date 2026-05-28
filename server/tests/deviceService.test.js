@@ -446,6 +446,7 @@ test('controlDevice routes HomeBrain Zigbee commands through the direct radio se
   };
 
   let receivedCommand = null;
+  let refreshOptions = null;
   let persistedUpdate = null;
   let sampledDeviceCount = 0;
 
@@ -469,11 +470,14 @@ test('controlDevice routes HomeBrain Zigbee commands through the direct radio se
     };
     updateData.status = true;
   };
-  directRadioService.refreshDirectDeviceState = async () => ({
-    status: true,
-    isOnline: true,
-    power: 8.5
-  });
+  directRadioService.refreshDirectDeviceState = async (_device, options) => {
+    refreshOptions = options;
+    return {
+      status: true,
+      isOnline: true,
+      power: 8.5
+    };
+  };
   deviceEnergySampleService.recordSamplesForDevices = async (devices) => {
     sampledDeviceCount = devices.length;
   };
@@ -484,6 +488,7 @@ test('controlDevice routes HomeBrain Zigbee commands through the direct radio se
   assert.equal(receivedCommand.device.name, 'Native Zigbee Plug');
   assert.equal(receivedCommand.action, 'turnon');
   assert.equal(receivedCommand.commandValue, true);
+  assert.equal(refreshOptions.preserveCommandState.status, true);
   assert.equal(persistedUpdate.status, true);
   assert.equal(persistedUpdate.isOnline, true);
   assert.equal(persistedUpdate.power, 8.5);

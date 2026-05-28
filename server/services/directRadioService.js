@@ -958,6 +958,27 @@ function readZigbeeRuntimeState(zigbeeDevice) {
   };
 }
 
+function extractZigbeeOnOffReadResponse(response) {
+  if (!response || typeof response !== 'object') {
+    return undefined;
+  }
+
+  const candidate = response.onOff
+    ?? response.onoff
+    ?? response.state
+    ?? response.switch
+    ?? response.power;
+  return normalizeZigbeeSwitchState(candidate);
+}
+
+function extractZigbeeBrightnessReadResponse(response) {
+  if (!response || typeof response !== 'object') {
+    return undefined;
+  }
+
+  return normalizeZigbeePercent(response.currentLevel ?? response.current_level ?? response.level, 'level');
+}
+
 function normalizeZigbeeClusterToken(value) {
   if (value === undefined || value === null) {
     return '';
@@ -3904,6 +3925,70 @@ class DirectRadioService {
     throw new Error('Direct radio protocol is not configured for this device');
   }
 
+  async readZigbeeOnOffState(endpoint, device) {
+    if (!endpoint) {
+      return undefined;
+    }
+
+    if (typeof endpoint.read === 'function') {
+      try {
+        const response = await withTimeout(
+          endpoint.read('genOnOff', ['onOff']),
+          5_000,
+          'Zigbee on/off readback timed out'
+        );
+        const status = extractZigbeeOnOffReadResponse(response);
+        if (status !== undefined) {
+          return status;
+        }
+      } catch (error) {
+        this.log('warn', 'zigbee', 'Zigbee on/off readback failed after command', {
+          deviceId: device?._id?.toString?.() || null,
+          name: device?.name || null,
+          error: error.message
+        });
+      }
+    }
+
+    return normalizeZigbeeSwitchState(readZigbeeEndpointAttribute(
+      endpoint,
+      ['genOnOff', 'genonoff', 6],
+      ['onOff', 'onoff', 'state']
+    ));
+  }
+
+  async readZigbeeBrightnessState(endpoint, device) {
+    if (!endpoint) {
+      return undefined;
+    }
+
+    if (typeof endpoint.read === 'function') {
+      try {
+        const response = await withTimeout(
+          endpoint.read('genLevelCtrl', ['currentLevel']),
+          5_000,
+          'Zigbee brightness readback timed out'
+        );
+        const brightness = extractZigbeeBrightnessReadResponse(response);
+        if (brightness !== undefined) {
+          return brightness;
+        }
+      } catch (error) {
+        this.log('warn', 'zigbee', 'Zigbee brightness readback failed after command', {
+          deviceId: device?._id?.toString?.() || null,
+          name: device?.name || null,
+          error: error.message
+        });
+      }
+    }
+
+    return normalizeZigbeePercent(readZigbeeEndpointAttribute(
+      endpoint,
+      ['genLevelCtrl', 'genlevelctrl', 8],
+      ['currentLevel', 'current_level']
+    ), 'level');
+  }
+
   async controlZigbeeDevice(device, normalizedAction, commandValue, updateData = {}) {
     const zigbeeDevice = this.getDirectNodeForDevice(device);
     const endpoint = readZigbeeEndpoint(zigbeeDevice);
@@ -3932,6 +4017,17 @@ class DirectRadioService {
           10_000,
           'Zigbee on/off command timed out before the device acknowledged it'
         );
+        const observedStatus = await this.readZigbeeOnOffState(endpoint, device);
+        if (observedStatus !== undefined) {
+          updateData.status = observedStatus;
+        }
+        this.log('info', 'zigbee', 'Zigbee on/off command readback completed', {
+          deviceId: device?._id?.toString?.() || null,
+          name: device?.name || null,
+          action: normalizedAction,
+          expectedStatus: command === 'toggle' ? null : command === 'on',
+          observedStatus: observedStatus ?? null
+        });
         break;
       }
       case 'setbrightness': {
@@ -3941,6 +4037,17 @@ class DirectRadioService {
           10_000,
           'Zigbee brightness command timed out before the device acknowledged it'
         );
+        const observedBrightness = await this.readZigbeeBrightnessState(endpoint, device);
+        if (observedBrightness !== undefined) {
+          updateData.brightness = observedBrightness;
+          updateData.status = observedBrightness > 0;
+        }
+        this.log('info', 'zigbee', 'Zigbee brightness command readback completed', {
+          deviceId: device?._id?.toString?.() || null,
+          name: device?.name || null,
+          expectedBrightness: Math.max(0, Math.min(100, Number(commandValue))),
+          observedBrightness: observedBrightness ?? null
+        });
         break;
       }
       case 'setcolor': {
@@ -4083,7 +4190,7 @@ class DirectRadioService {
     });
   }
 
-  async refreshDirectDeviceState(device) {
+  async refreshDirectDeviceState(device, options = {}) {
     if (!isDirectRadioDevice(device)) {
       return null;
     }
@@ -4097,7 +4204,26 @@ class DirectRadioService {
     const normalized = protocol === 'zigbee'
       ? this.normalizeZigbeeDevice(node, 'refresh')
       : this.normalizeZWaveNode(node, 'refresh');
-    return normalized?.update ? mergeDirectDeviceUpdateForExisting(device, normalized.update) : null;
+    if (!normalized?.update) {
+      return null;
+    }
+
+    const merged = mergeDirectDeviceUpdateForExisting(device, normalized.update);
+    const commandState = options?.preserveCommandState && typeof options.preserveCommandState === 'object'
+      ? options.preserveCommandState
+      : null;
+    if (commandState) {
+      if (!Object.prototype.hasOwnProperty.call(normalized.update, 'status')
+        && Object.prototype.hasOwnProperty.call(commandState, 'status')) {
+        merged.status = commandState.status;
+      }
+      if (!Object.prototype.hasOwnProperty.call(normalized.update, 'brightness')
+        && Object.prototype.hasOwnProperty.call(commandState, 'brightness')) {
+        merged.brightness = commandState.brightness;
+      }
+    }
+
+    return merged;
   }
 
   getDetectedPortDetails(protocol) {
