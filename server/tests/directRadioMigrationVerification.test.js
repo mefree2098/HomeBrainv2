@@ -4,7 +4,11 @@ const assert = require('node:assert/strict');
 const directRadioService = require('../services/directRadioService');
 
 const DirectRadioService = directRadioService.DirectRadioService;
-const { mergeDirectDeviceUpdateForExisting, selectPrimaryDirectDeviceRecord } = directRadioService._test;
+const {
+  inferFeaturesFromZigbeeDefinition,
+  mergeDirectDeviceUpdateForExisting,
+  selectPrimaryDirectDeviceRecord
+} = directRadioService._test;
 const DEVICE_ID = '507f1f77bcf86cd799439011';
 
 function createService() {
@@ -63,6 +67,68 @@ test('direct radio refresh preserves user-edited name and room while updating li
   assert.equal(merged.properties.homebrainDirect.nodeId, 6);
   assert.equal(merged.properties.homebrainDirect.generatedName, '39348 / 39455 / ZW4008');
   assert.deepEqual(merged.properties.directRadioFeatures, ['illuminance', 'switch']);
+});
+
+test('direct radio refresh preserves SmartThings-inferred switch features after Zigbee migration', () => {
+  const existing = {
+    name: 'Vault Overhead Lights',
+    type: 'switch',
+    room: 'Vault',
+    properties: {
+      source: 'homebrain-zigbee',
+      smartThingsDeviceId: 'f6d7fcd7-9504-4c74-baa6-7404c8aa2fd3',
+      smartThingsCapabilities: ['switch', 'firmwareUpdate', 'refresh'],
+      smartThingsCategories: ['switch'],
+      smartThingsDeviceNetworkType: 'ZIGBEE',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x5c0272fffeadf493',
+        generatedName: 'SP 224',
+        generatedRoom: 'Unassigned'
+      },
+      directRadioFeatures: []
+    }
+  };
+  const update = {
+    name: 'SP 224',
+    type: 'sensor',
+    room: 'Unassigned',
+    status: false,
+    isOnline: true,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x5c0272fffeadf493'
+      },
+      directRadioFeatures: []
+    }
+  };
+
+  const merged = mergeDirectDeviceUpdateForExisting(existing, update);
+
+  assert.equal(merged.name, 'Vault Overhead Lights');
+  assert.equal(merged.room, 'Vault');
+  assert.equal(merged.type, 'switch');
+  assert.equal(merged.properties.source, 'homebrain-zigbee');
+  assert.ok(merged.properties.directRadioFeatures.includes('switch'));
+});
+
+test('Zigbee feature inference falls back to endpoint clusters for Innr SP 224 plugs', () => {
+  const features = inferFeaturesFromZigbeeDefinition(null, {
+    modelID: 'SP 224',
+    manufacturerName: 'innr',
+    endpoints: [
+      {
+        ID: 1,
+        inputClusters: [0, 3, 4, 5, 6, 2820, 1794]
+      }
+    ]
+  });
+
+  assert.ok(features.includes('switch'));
+  assert.ok(features.includes('power'));
+  assert.ok(features.includes('energy'));
 });
 
 test('direct radio upsert prefers complete switch records over stale partial duplicates', () => {

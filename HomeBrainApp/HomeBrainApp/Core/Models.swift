@@ -361,9 +361,17 @@ extension DeviceItem {
 
     nonisolated var isSmartThingsBackedDevice: Bool {
         let source = JSON.string(properties, "source").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let protocolName = JSON.string(JSON.object(properties["homebrainDirect"]), "protocol")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let isDirectRadio = source == "homebrain-zigbee"
+            || source == "homebrain-zwave"
+            || protocolName == "zigbee"
+            || protocolName == "zwave"
+
         return source == "smartthings"
-            || !JSON.string(properties, "smartThingsDeviceId").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || !JSON.string(properties, "smartThingsId").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || (!isDirectRadio && !JSON.string(properties, "smartThingsDeviceId").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            || (!isDirectRadio && !JSON.string(properties, "smartThingsId").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     nonisolated var hasSmartThingsDirectRadioNetworkType: Bool {

@@ -111,6 +111,24 @@ struct DevicesView: View {
         guard let controlSheetDeviceID else { return nil }
         return devices.first(where: { $0.id == controlSheetDeviceID })
     }
+    private var availableRoomNames: [String] {
+        var rooms = Set(["Unassigned"])
+        devices.forEach { device in
+            let room = device.room.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !room.isEmpty {
+                rooms.insert(room)
+            }
+        }
+        return rooms.sorted { left, right in
+            if left.localizedCaseInsensitiveCompare("Unassigned") == .orderedSame {
+                return true
+            }
+            if right.localizedCaseInsensitiveCompare("Unassigned") == .orderedSame {
+                return false
+            }
+            return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
+        }
+    }
 
     private var gridColumns: [GridItem] {
         if useTwoColumnLayout {
@@ -1601,6 +1619,24 @@ struct DevicesView: View {
             || type != device.type
     }
 
+    private func roomOptions(selectedRoom: String) -> [String] {
+        var rooms = Set(availableRoomNames)
+        let selected = selectedRoom.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !selected.isEmpty {
+            rooms.insert(selected)
+        }
+        rooms.insert("Unassigned")
+        return rooms.sorted { left, right in
+            if left.localizedCaseInsensitiveCompare("Unassigned") == .orderedSame {
+                return true
+            }
+            if right.localizedCaseInsensitiveCompare("Unassigned") == .orderedSame {
+                return false
+            }
+            return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
+        }
+    }
+
     private func deviceIdentityEditor(for device: DeviceItem) -> some View {
         let canSave = deviceDetailsChanged(for: device)
             && !editDeviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1617,9 +1653,20 @@ struct DevicesView: View {
                         .hbPanelTextField()
                         .disabled(savingDeviceDetails)
 
-                    TextField("Room", text: $editDeviceRoom)
-                        .hbPanelTextField()
+                    HStack {
+                        Text("Room")
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                        Spacer()
+                        Picker("Room", selection: $editDeviceRoom) {
+                            ForEach(roomOptions(selectedRoom: editDeviceRoom), id: \.self) { room in
+                                Text(room).tag(room)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .tint(HBPalette.accentBlue)
                         .disabled(savingDeviceDetails)
+                    }
 
                     HStack {
                         Text("Type")
@@ -3430,8 +3477,14 @@ struct DevicesView: View {
 
     private func isSmartThingsBackedDevice(_ device: DeviceItem) -> Bool {
         let source = stringValue(device.properties["source"]).lowercased()
+        let direct = JSON.object(device.properties["homebrainDirect"])
+        let protocolName = stringValue(direct["protocol"]).lowercased()
+        let isDirectRadio = source == "homebrain-zigbee"
+            || source == "homebrain-zwave"
+            || protocolName == "zigbee"
+            || protocolName == "zwave"
         let hasDeviceId = !stringValue(device.properties["smartThingsDeviceId"]).isEmpty
-        return source == "smartthings" || hasDeviceId
+        return source == "smartthings" || (!isDirectRadio && hasDeviceId)
     }
 
     private func supportsLightFade(_ device: DeviceItem) -> Bool {

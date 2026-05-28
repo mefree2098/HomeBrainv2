@@ -431,7 +431,12 @@ const hasSmartThingsCategory = (device: any, category: string): boolean => {
 
 const isSmartThingsBackedDevice = (device: any): boolean => {
   const source = (device?.properties?.source || '').toString().toLowerCase()
-  return source === 'smartthings' || Boolean(device?.properties?.smartThingsDeviceId)
+  const protocol = (device?.properties?.homebrainDirect?.protocol || '').toString().trim().toLowerCase()
+  const isDirectRadio = source === 'homebrain-zigbee'
+    || source === 'homebrain-zwave'
+    || protocol === 'zigbee'
+    || protocol === 'zwave'
+  return source === 'smartthings' || (!isDirectRadio && Boolean(device?.properties?.smartThingsDeviceId))
 }
 
 const isInsteonBackedDevice = (device: any): boolean => {
@@ -1796,6 +1801,27 @@ export function Devices({
 
     return Array.from(groups.values()).sort((left, right) => left.localeCompare(right))
   }, [deviceGroups, devices])
+  const availableRoomNames = useMemo(() => {
+    const rooms = new Map<string, string>()
+    rooms.set('unassigned', 'Unassigned')
+
+    devices.forEach((device: any) => {
+      const room = String(device?.room || '').trim()
+      if (!room) {
+        return
+      }
+      const key = room.toLowerCase()
+      if (!rooms.has(key)) {
+        rooms.set(key, room)
+      }
+    })
+
+    return Array.from(rooms.values()).sort((left, right) => {
+      if (left.toLowerCase() === 'unassigned') return -1
+      if (right.toLowerCase() === 'unassigned') return 1
+      return left.localeCompare(right)
+    })
+  }, [devices])
 
   useEffect(() => {
     if (!focusDeviceId || !Array.isArray(devices) || devices.length === 0) {
@@ -2209,6 +2235,7 @@ export function Devices({
         device={detailDevice}
         open={Boolean(detailDeviceId)}
         availableGroups={availableDeviceGroups}
+        availableRooms={availableRoomNames}
         alexaExposure={detailDevice ? getExposure('device', detailDevice._id) : null}
         alexaExposureLoading={loadingAlexaExposure}
         onOpenChange={(nextOpen) => {

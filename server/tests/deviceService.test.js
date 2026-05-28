@@ -413,6 +413,8 @@ test('controlDevice routes HomeBrain Zigbee commands through the direct radio se
   const originalRefreshDirectDeviceState = directRadioService.refreshDirectDeviceState;
   const originalRecordSamplesForDevices = deviceEnergySampleService.recordSamplesForDevices;
   const originalEmit = deviceUpdateEmitter.emit;
+  const originalEnsureSmartThingsState = deviceService.ensureSmartThingsState;
+  const originalControlSmartThingsDevice = deviceService.controlSmartThingsDevice;
 
   t.after(() => {
     Device.findById = originalFindById;
@@ -421,6 +423,8 @@ test('controlDevice routes HomeBrain Zigbee commands through the direct radio se
     directRadioService.refreshDirectDeviceState = originalRefreshDirectDeviceState;
     deviceEnergySampleService.recordSamplesForDevices = originalRecordSamplesForDevices;
     deviceUpdateEmitter.emit = originalEmit;
+    deviceService.ensureSmartThingsState = originalEnsureSmartThingsState;
+    deviceService.controlSmartThingsDevice = originalControlSmartThingsDevice;
   });
 
   const nativeDevice = {
@@ -435,7 +439,9 @@ test('controlDevice routes HomeBrain Zigbee commands through the direct radio se
         protocol: 'zigbee',
         ieeeAddr: '0x00124b0025aa55cc'
       },
-      directRadioFeatures: ['switch', 'power']
+      directRadioFeatures: ['switch', 'power'],
+      smartThingsDeviceId: 'old-smartthings-id',
+      smartThingsCapabilities: ['switch']
     }
   };
 
@@ -447,6 +453,12 @@ test('controlDevice routes HomeBrain Zigbee commands through the direct radio se
   Device.findByIdAndUpdate = async (_id, update) => {
     persistedUpdate = update;
     return { ...nativeDevice, ...update };
+  };
+  deviceService.ensureSmartThingsState = async () => {
+    throw new Error('SmartThings refresh should not run for native direct-radio devices');
+  };
+  deviceService.controlSmartThingsDevice = async () => {
+    throw new Error('SmartThings control should not run for native direct-radio devices');
   };
   directRadioService.controlDevice = async (device, action, commandValue, updateData) => {
     receivedCommand = {

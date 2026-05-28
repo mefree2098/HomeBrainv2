@@ -1379,8 +1379,17 @@ class DeviceService {
   }
 
   isSmartThingsDevice(device) {
-    const source = (device?.properties?.source || '').toString().toLowerCase();
-    return (source === 'smartthings' || !!device?.properties?.smartThingsDeviceId)
+    const source = canonicalizeDeviceSource(device?.properties?.source || '');
+    const protocol = (device?.properties?.homebrainDirect?.protocol || '').toString().trim().toLowerCase();
+    if (
+      source === 'homebrain-zigbee'
+      || source === 'homebrain-zwave'
+      || protocol === 'zigbee'
+      || protocol === 'zwave'
+    ) {
+      return false;
+    }
+    return (source === 'smartthings' || !source)
       && !!device?.properties?.smartThingsDeviceId;
   }
 

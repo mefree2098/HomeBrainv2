@@ -92,6 +92,7 @@ type Props = {
   device: DeviceLike | null
   open: boolean
   availableGroups?: string[]
+  availableRooms?: string[]
   alexaExposure?: AlexaExposureSummary | null
   alexaExposureLoading?: boolean
   onOpenChange: (open: boolean) => void
@@ -324,10 +325,23 @@ function getSourceLabel(device: DeviceLike | null): string {
   return getDeviceSourceLabel(getDeviceSource(device || undefined))
 }
 
+function isDirectRadioBackedDevice(device: DeviceLike | null): boolean {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  const source = (properties?.source || "").toString().trim().toLowerCase()
+  const protocol = ((properties?.homebrainDirect as Record<string, unknown> | undefined)?.protocol || "")
+    .toString()
+    .trim()
+    .toLowerCase()
+  return source === "homebrain-zigbee"
+    || source === "homebrain-zwave"
+    || protocol === "zigbee"
+    || protocol === "zwave"
+}
+
 function isSmartThingsBackedDevice(device: DeviceLike | null): boolean {
   const properties = device?.properties as Record<string, unknown> | undefined
   const source = (properties?.source || "").toString().trim().toLowerCase()
-  return source === "smartthings" || Boolean(properties?.smartThingsDeviceId)
+  return source === "smartthings" || (!isDirectRadioBackedDevice(device) && Boolean(properties?.smartThingsDeviceId))
 }
 
 function hasSmartThingsSwitchCapabilityOrCategory(device: DeviceLike | null): boolean {
@@ -1064,6 +1078,7 @@ export function DeviceDetailsDialog({
   device,
   open,
   availableGroups = [],
+  availableRooms = [],
   alexaExposure = null,
   alexaExposureLoading = false,
   onOpenChange,
@@ -1156,6 +1171,24 @@ export function DeviceDetailsDialog({
     harmonyRepeatPowerCommands !== harmonyRepeatPowerCommandsSaved
     || harmonyExcludeFromHomeBrain !== harmonyExcludeFromHomeBrainSaved
   )
+  const roomOptions = useMemo(() => {
+    const rooms = new Map<string, string>()
+    ;["Unassigned", device?.room, deviceRoomDraft, ...availableRooms].forEach((entry) => {
+      const room = String(entry || "").trim()
+      if (!room) {
+        return
+      }
+      const key = room.toLowerCase()
+      if (!rooms.has(key)) {
+        rooms.set(key, room)
+      }
+    })
+    return Array.from(rooms.values()).sort((left, right) => {
+      if (left.toLowerCase() === "unassigned") return -1
+      if (right.toLowerCase() === "unassigned") return 1
+      return left.localeCompare(right)
+    })
+  }, [availableRooms, device?.room, deviceRoomDraft])
 
   useEffect(() => {
     if (!open) {
@@ -2569,13 +2602,22 @@ export function DeviceDetailsDialog({
                           </div>
                           <div className="space-y-2">
                             <Label htmlFor="device-room-input">Room</Label>
-                            <Input
-                              id="device-room-input"
-                              className="bg-black/20"
-                              value={deviceRoomDraft}
-                              onChange={(event) => setDeviceRoomDraft(event.target.value)}
+                            <Select
+                              value={normalizedDeviceRoomDraft}
+                              onValueChange={setDeviceRoomDraft}
                               disabled={savingDeviceDetails}
-                            />
+                            >
+                              <SelectTrigger id="device-room-input" className="bg-black/20">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {roomOptions.map((room) => (
+                                  <SelectItem key={room} value={room}>
+                                    {room}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                           </div>
                           <div className="space-y-2">
                             <Label>Type</Label>
