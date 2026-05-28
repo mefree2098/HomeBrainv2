@@ -88,6 +88,15 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
   const updateDirect = updateProperties.homebrainDirect && typeof updateProperties.homebrainDirect === 'object'
     ? updateProperties.homebrainDirect
     : {};
+  const updateFeatures = Array.isArray(updateProperties.directRadioFeatures)
+    ? updateProperties.directRadioFeatures.map(normalizeFeature).filter(Boolean)
+    : [];
+  const existingFeatures = Array.isArray(existingProperties.directRadioFeatures)
+    ? existingProperties.directRadioFeatures.map(normalizeFeature).filter(Boolean)
+    : [];
+  const inferredSmartThingsFeatures = inferFeaturesFromSmartThings(existing)
+    .map(normalizeFeature)
+    .filter(Boolean);
 
   const generatedName = trimString(update.name);
   const generatedRoom = normalizeDirectRoom(update.room);
@@ -111,6 +120,15 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
       homebrainDirect: mergedDirect
     }
   };
+  const mergedFeatures = uniqueStrings([
+    ...updateFeatures,
+    ...existingFeatures,
+    ...inferredSmartThingsFeatures
+  ]).sort();
+  if (mergedFeatures.length > 0) {
+    merged.properties.directRadioFeatures = mergedFeatures;
+    Object.assign(merged.properties, buildDirectFeatureProperties(mergedFeatures));
+  }
 
   if (existing) {
     if (!shouldReplaceGeneratedDirectName(existing.name, generatedName, existingDirect.generatedName)) {
@@ -122,6 +140,10 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
     }
 
     if (!trimString(merged.type)) {
+      merged.type = existing.type;
+    }
+
+    if (trimString(existing.type) && merged.type === 'sensor' && existing.type !== 'sensor') {
       merged.type = existing.type;
     }
   }
@@ -727,6 +749,24 @@ function kelvinToMired(kelvin) {
   return Math.round(1000000 / numeric);
 }
 
+async function withTimeout(promise, timeoutMs, message) {
+  let timeoutHandle;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(message || 'Operation timed out'));
+        }, timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
+
 function readZigbeeEndpoint(zigbeeDevice) {
   if (!zigbeeDevice) {
     return null;
@@ -747,6 +787,70 @@ function readZigbeeEndpoint(zigbeeDevice) {
   return null;
 }
 
+function normalizeZigbeeClusterToken(value) {
+  if (value === undefined || value === null) {
+    return '';
+  }
+
+  if (typeof value === 'number') {
+    const clusterNames = {
+      1: 'genpowercfg',
+      6: 'genonoff',
+      8: 'genlevelctrl',
+      257: 'closuresdoorlock',
+      768: 'lightingcolorctrl',
+      1024: 'msilluminancemeasurement',
+      1026: 'mstemperaturemeasurement',
+      1029: 'msrelativehumidity',
+      1280: 'ssiaszone',
+      1794: 'semetering',
+      2820: 'haelectricalmeasurement'
+    };
+    return clusterNames[value] || String(value);
+  }
+
+  return String(value).trim().toLowerCase().replace(/[\s_-]/g, '');
+}
+
+function collectZigbeeClusterTokens(zigbeeDevice) {
+  const endpoints = Array.isArray(zigbeeDevice?.endpoints)
+    ? zigbeeDevice.endpoints
+    : [readZigbeeEndpoint(zigbeeDevice)].filter(Boolean);
+  const tokens = new Set();
+
+  endpoints.forEach((endpoint) => {
+    [
+      endpoint?.inputClusters,
+      endpoint?.outputClusters,
+      endpoint?.profile?.inputClusters,
+      endpoint?.profile?.outputClusters,
+      endpoint?.simpleDescriptor?.inputClusters,
+      endpoint?.simpleDescriptor?.outputClusters
+    ].forEach((clusters) => {
+      if (!Array.isArray(clusters)) {
+        return;
+      }
+      clusters.forEach((cluster) => {
+        const token = normalizeZigbeeClusterToken(cluster);
+        if (token) {
+          tokens.add(token);
+        }
+      });
+    });
+
+    if (endpoint?.clusters && typeof endpoint.clusters === 'object') {
+      Object.keys(endpoint.clusters).forEach((cluster) => {
+        const token = normalizeZigbeeClusterToken(cluster);
+        if (token) {
+          tokens.add(token);
+        }
+      });
+    }
+  });
+
+  return tokens;
+}
+
 function extractZigbeeDefinition(converters, zigbeeDevice) {
   try {
     return converters?.findByDevice?.(zigbeeDevice) || null;
@@ -758,6 +862,7 @@ function extractZigbeeDefinition(converters, zigbeeDevice) {
 function inferFeaturesFromZigbeeDefinition(definition, zigbeeDevice) {
   const features = new Set();
   const exposes = Array.isArray(definition?.exposes) ? definition.exposes : [];
+  const clusters = collectZigbeeClusterTokens(zigbeeDevice);
   const deviceText = [
     definition?.model,
     definition?.vendor,
@@ -800,6 +905,23 @@ function inferFeaturesFromZigbeeDefinition(definition, zigbeeDevice) {
   };
 
   exposes.forEach(visitExpose);
+  if (clusters.has('genonoff')) features.add('switch');
+  if (clusters.has('genlevelctrl')) features.add('brightness');
+  if (clusters.has('lightingcolorctrl')) {
+    features.add('color');
+    features.add('colorTemperature');
+  }
+  if (clusters.has('haelectricalmeasurement')) features.add('power');
+  if (clusters.has('semetering')) features.add('energy');
+  if (clusters.has('genpowercfg')) features.add('battery');
+  if (clusters.has('closuresdoorlock')) features.add('lock');
+  if (clusters.has('msilluminancemeasurement')) features.add('illuminance');
+  if (clusters.has('mstemperaturemeasurement')) features.add('temperature');
+  if (clusters.has('msrelativehumidity')) features.add('humidity');
+  if (clusters.has('ssiaszone')) features.add('contact');
+  if (/\b(?:plug|outlet|socket|relay|switch)\b/.test(deviceText) || /\bsp\s*224\b/.test(deviceText)) {
+    features.add('switch');
+  }
   if (isDirectLightContext(deviceText)) {
     features.add('light');
     features.add('switch');
@@ -3597,35 +3719,59 @@ class DirectRadioService {
           : normalizedAction === 'toggle'
             ? 'toggle'
             : 'off';
-        await endpoint.command('genOnOff', command, {});
+        await withTimeout(
+          endpoint.command('genOnOff', command, {}),
+          10_000,
+          'Zigbee on/off command timed out before the device acknowledged it'
+        );
         break;
       }
       case 'setbrightness': {
         const level = Math.round((Math.max(0, Math.min(100, Number(commandValue))) / 100) * 254);
-        await endpoint.command('genLevelCtrl', 'moveToLevelWithOnOff', { level, transtime: 0 });
+        await withTimeout(
+          endpoint.command('genLevelCtrl', 'moveToLevelWithOnOff', { level, transtime: 0 }),
+          10_000,
+          'Zigbee brightness command timed out before the device acknowledged it'
+        );
         break;
       }
       case 'setcolor': {
         const rgb = hexToRgbPercent(commandValue);
         if (!rgb) throw new Error('Color value must be a valid hex color string');
-        await endpoint.command('lightingColorCtrl', 'moveToColor', {
-          colorx: Math.round((rgb.red / 255) * 65279),
-          colory: Math.round((rgb.green / 255) * 65279),
-          transtime: 0
-        });
+        await withTimeout(
+          endpoint.command('lightingColorCtrl', 'moveToColor', {
+            colorx: Math.round((rgb.red / 255) * 65279),
+            colory: Math.round((rgb.green / 255) * 65279),
+            transtime: 0
+          }),
+          10_000,
+          'Zigbee color command timed out before the device acknowledged it'
+        );
         break;
       }
       case 'setcolortemperature': {
         const colortemp = kelvinToMired(commandValue);
         if (!colortemp) throw new Error('Color temperature must be a valid kelvin value');
-        await endpoint.command('lightingColorCtrl', 'moveToColorTemp', { colortemp, transtime: 0 });
+        await withTimeout(
+          endpoint.command('lightingColorCtrl', 'moveToColorTemp', { colortemp, transtime: 0 }),
+          10_000,
+          'Zigbee color temperature command timed out before the device acknowledged it'
+        );
         break;
       }
       case 'lock':
-        await endpoint.command('closuresDoorLock', 'lockDoor', {});
+        await withTimeout(
+          endpoint.command('closuresDoorLock', 'lockDoor', {}),
+          10_000,
+          'Zigbee lock command timed out before the device acknowledged it'
+        );
         break;
       case 'unlock':
-        await endpoint.command('closuresDoorLock', 'unlockDoor', {});
+        await withTimeout(
+          endpoint.command('closuresDoorLock', 'unlockDoor', {}),
+          10_000,
+          'Zigbee unlock command timed out before the device acknowledged it'
+        );
         break;
       default:
         throw new Error('This Zigbee device does not support the requested action yet');
@@ -3912,6 +4058,7 @@ directRadioService._test = {
   addFallbackSerialPortCandidates,
   choosePortForProtocol,
   enrichSerialPortForDirectRadios,
+  inferFeaturesFromZigbeeDefinition,
   looksLikeSonoffMg24ThreadStick,
   mergeDirectDeviceUpdateForExisting,
   normalizeSerialPort,
