@@ -141,6 +141,53 @@ test('direct radio refresh preserves known Z-Wave catalog identity during incomp
   assert.deepEqual(merged.properties.directRadioFeatures, ['alarm', 'button', 'switch']);
 });
 
+test('direct radio refresh does not rename cataloged devices to generic Z-Wave node names after failed interviews', () => {
+  const existing = {
+    name: 'ZW080',
+    type: 'siren',
+    room: 'Unassigned',
+    model: 'ZW080',
+    properties: {
+      source: 'homebrain-zwave',
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: 13,
+        generatedName: 'ZW080',
+        catalog: {
+          label: 'ZW080'
+        }
+      },
+      directRadioFeatures: ['alarm', 'button', 'switch'],
+      directRadioCatalog: {
+        label: 'ZW080'
+      }
+    }
+  };
+  const update = {
+    name: 'Z-Wave Node 13',
+    type: 'sensor',
+    room: 'Unassigned',
+    isOnline: false,
+    properties: {
+      source: 'homebrain-zwave',
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: 13,
+        ready: false,
+        status: 3,
+        lastReason: 'interview failed'
+      },
+      directRadioFeatures: []
+    }
+  };
+
+  const merged = mergeDirectDeviceUpdateForExisting(existing, update);
+
+  assert.equal(merged.name, 'ZW080');
+  assert.equal(merged.type, 'siren');
+  assert.deepEqual(merged.properties.directRadioFeatures, ['alarm', 'button', 'switch']);
+});
+
 test('direct radio refresh preserves SmartThings-inferred switch features after Zigbee migration', () => {
   const existing = {
     name: 'Vault Overhead Lights',
