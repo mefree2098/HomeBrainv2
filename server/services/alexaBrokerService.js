@@ -11,9 +11,12 @@ const DEFAULT_DISPLAY_NAME = 'HomeBrain Alexa Broker';
 const DEFAULT_CLIENT_ID = 'homebrain-alexa-skill';
 const DEFAULT_PORT = 4301;
 const DEFAULT_BIND_HOST = '127.0.0.1';
-const DEFAULT_DEVICE_DISCOVERY_PATH = '/v1/devices';
-const DEFAULT_DEVICE_SPEAK_PATH = '/v1/devices/{deviceId}/speak';
-const DEFAULT_DEVICE_SERVICE_TIMEOUT_MS = 10000;
+const DEFAULT_ALEXA_COMMAND_PROVIDER = 'disabled';
+const DEFAULT_ALEXA_COMMAND_TYPE = 'announce';
+const DEFAULT_ALEXA_COMMAND_LOCALE = 'en-US';
+const DEFAULT_ALEXA_COMMAND_AMAZON_PAGE = 'amazon.com';
+const DEFAULT_ALEXA_COMMAND_SERVICE_HOST = 'pitangui.amazon.com';
+const DEFAULT_ALEXA_COMMAND_TIMEOUT_MS = 10000;
 const DEFAULT_LOG_LIMIT = 500;
 const DEFAULT_LIFECYCLE_LIMIT = 50;
 const DEFAULT_MONITOR_INTERVAL_MS = 15000;
@@ -81,17 +84,43 @@ function sanitizeUrl(value, fallback = '') {
   return new URL(normalized).toString();
 }
 
-function normalizeProviderPath(value, fallback) {
+function normalizeAlexaCommandProvider(value, fallback = DEFAULT_ALEXA_COMMAND_PROVIDER) {
   const normalized = trimString(value);
-  if (!normalized) {
-    return fallback;
+  return ['disabled', 'homebrain', 'asp'].includes(normalized) ? normalized : fallback;
+}
+
+function normalizeAlexaCommandType(value, fallback = DEFAULT_ALEXA_COMMAND_TYPE) {
+  const normalized = trimString(value);
+  return ['announce', 'speak', 'ssml'].includes(normalized) ? normalized : fallback;
+}
+
+function parseAlexaCommandTargets(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => ({
+      key: trimString(entry?.key),
+      alexaDeviceId: trimString(entry?.alexaDeviceId || entry?.deviceId || entry?.target),
+      displayName: trimString(entry?.displayName || entry?.name),
+      room: trimString(entry?.room),
+      enabled: entry?.enabled !== false
+    })).filter((entry) => entry.key && entry.alexaDeviceId);
   }
 
-  if (normalized.startsWith('/') || /^https?:\/\//i.test(normalized)) {
-    return normalized;
-  }
-
-  return `/${normalized}`;
+  return String(value || '')
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [keyPart, rest = ''] = line.split('=');
+      const [devicePart, displayPart = '', roomPart = ''] = rest.split('|');
+      return {
+        key: trimString(keyPart),
+        alexaDeviceId: trimString(devicePart),
+        displayName: trimString(displayPart),
+        room: trimString(roomPart),
+        enabled: true
+      };
+    })
+    .filter((entry) => entry.key && entry.alexaDeviceId);
 }
 
 function sanitizePositiveInteger(value, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
@@ -420,18 +449,35 @@ class AlexaBrokerService {
       updated = true;
     }
 
-    if (!trimString(config.deviceDiscoveryPath)) {
-      config.deviceDiscoveryPath = DEFAULT_DEVICE_DISCOVERY_PATH;
+    const alexaCommandProvider = normalizeAlexaCommandProvider(config.alexaCommandProvider);
+    if (config.alexaCommandProvider !== alexaCommandProvider) {
+      config.alexaCommandProvider = DEFAULT_ALEXA_COMMAND_PROVIDER;
       updated = true;
     }
 
-    if (!trimString(config.deviceSpeakPath)) {
-      config.deviceSpeakPath = DEFAULT_DEVICE_SPEAK_PATH;
+    const alexaCommandDefaultType = normalizeAlexaCommandType(config.alexaCommandDefaultType);
+    if (config.alexaCommandDefaultType !== alexaCommandDefaultType) {
+      config.alexaCommandDefaultType = DEFAULT_ALEXA_COMMAND_TYPE;
       updated = true;
     }
 
-    if (!config.deviceServiceTimeoutMs) {
-      config.deviceServiceTimeoutMs = DEFAULT_DEVICE_SERVICE_TIMEOUT_MS;
+    if (!trimString(config.alexaCommandLocale)) {
+      config.alexaCommandLocale = DEFAULT_ALEXA_COMMAND_LOCALE;
+      updated = true;
+    }
+
+    if (!trimString(config.alexaCommandAmazonPage)) {
+      config.alexaCommandAmazonPage = DEFAULT_ALEXA_COMMAND_AMAZON_PAGE;
+      updated = true;
+    }
+
+    if (!trimString(config.alexaCommandServiceHost)) {
+      config.alexaCommandServiceHost = DEFAULT_ALEXA_COMMAND_SERVICE_HOST;
+      updated = true;
+    }
+
+    if (!config.alexaCommandTimeoutMs) {
+      config.alexaCommandTimeoutMs = DEFAULT_ALEXA_COMMAND_TIMEOUT_MS;
       updated = true;
     }
 
@@ -467,19 +513,6 @@ class AlexaBrokerService {
   }
 
   buildRuntimeEnv(config) {
-    const deviceServiceBaseUrl = trimString(config.deviceServiceBaseUrl)
-      || trimString(process.env.HOMEBRAIN_ALEXA_DEVICE_SERVICE_BASE_URL || process.env.HOMEBRAIN_ALEXA_DEVICE_API_BASE_URL);
-    const deviceServiceToken = trimString(config.deviceServiceToken)
-      || trimString(process.env.HOMEBRAIN_ALEXA_DEVICE_SERVICE_TOKEN || process.env.HOMEBRAIN_ALEXA_DEVICE_API_TOKEN);
-    const deviceDiscoveryPath = normalizeProviderPath(
-      config.deviceDiscoveryPath || process.env.HOMEBRAIN_ALEXA_DEVICE_DISCOVERY_PATH,
-      DEFAULT_DEVICE_DISCOVERY_PATH
-    );
-    const deviceSpeakPath = normalizeProviderPath(
-      config.deviceSpeakPath || process.env.HOMEBRAIN_ALEXA_DEVICE_SPEAK_PATH,
-      DEFAULT_DEVICE_SPEAK_PATH
-    );
-
     return {
       ...process.env,
       PORT: String(sanitizePositiveInteger(config.servicePort, DEFAULT_PORT, { min: 1, max: 65535 })),
@@ -498,13 +531,17 @@ class AlexaBrokerService {
       HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS: String(sanitizePositiveInteger(config.refreshTokenTtlSeconds, 15552000)),
       HOMEBRAIN_ALEXA_LWA_TOKEN_URL: sanitizeUrl(config.lwaTokenUrl, 'https://api.amazon.com/auth/o2/token'),
       HOMEBRAIN_ALEXA_EVENT_GATEWAY_URL: sanitizeUrl(config.eventGatewayUrl, 'https://api.amazonalexa.com/v3/events'),
-      HOMEBRAIN_ALEXA_DEVICE_SERVICE_BASE_URL: deviceServiceBaseUrl,
-      HOMEBRAIN_ALEXA_DEVICE_SERVICE_TOKEN: deviceServiceToken,
-      HOMEBRAIN_ALEXA_DEVICE_DISCOVERY_PATH: deviceDiscoveryPath,
-      HOMEBRAIN_ALEXA_DEVICE_SPEAK_PATH: deviceSpeakPath,
-      HOMEBRAIN_ALEXA_DEVICE_SERVICE_TIMEOUT_MS: String(sanitizePositiveInteger(
-        config.deviceServiceTimeoutMs || process.env.HOMEBRAIN_ALEXA_DEVICE_SERVICE_TIMEOUT_MS || process.env.HOMEBRAIN_ALEXA_DEVICE_API_TIMEOUT_MS,
-        DEFAULT_DEVICE_SERVICE_TIMEOUT_MS,
+      HOMEBRAIN_ALEXA_COMMAND_PROVIDER: normalizeAlexaCommandProvider(config.alexaCommandProvider),
+      HOMEBRAIN_ALEXA_COMMAND_DEFAULT_TYPE: normalizeAlexaCommandType(config.alexaCommandDefaultType),
+      HOMEBRAIN_ALEXA_COMMAND_LOCALE: trimString(config.alexaCommandLocale) || DEFAULT_ALEXA_COMMAND_LOCALE,
+      HOMEBRAIN_ALEXA_COMMAND_AMAZON_PAGE: trimString(config.alexaCommandAmazonPage) || DEFAULT_ALEXA_COMMAND_AMAZON_PAGE,
+      HOMEBRAIN_ALEXA_COMMAND_SERVICE_HOST: trimString(config.alexaCommandServiceHost) || DEFAULT_ALEXA_COMMAND_SERVICE_HOST,
+      HOMEBRAIN_ALEXA_COMMAND_SESSION_COOKIE: trimString(config.alexaCommandSessionCookie),
+      HOMEBRAIN_ALEXA_COMMAND_SESSION_DATA: trimString(config.alexaCommandSessionData),
+      HOMEBRAIN_ALEXA_COMMAND_TARGETS_JSON: JSON.stringify(parseAlexaCommandTargets(config.alexaCommandTargets)),
+      HOMEBRAIN_ALEXA_COMMAND_TIMEOUT_MS: String(sanitizePositiveInteger(
+        config.alexaCommandTimeoutMs,
+        DEFAULT_ALEXA_COMMAND_TIMEOUT_MS,
         { min: 1000, max: 60000 }
       )),
       HOMEBRAIN_ALEXA_RATE_LIMIT_WINDOW_MS: String(sanitizePositiveInteger(config.rateLimitWindowMs, 60000)),
@@ -817,11 +854,15 @@ class AlexaBrokerService {
       'refreshTokenTtlSeconds',
       'lwaTokenUrl',
       'eventGatewayUrl',
-      'deviceServiceBaseUrl',
-      'deviceServiceToken',
-      'deviceDiscoveryPath',
-      'deviceSpeakPath',
-      'deviceServiceTimeoutMs',
+      'alexaCommandProvider',
+      'alexaCommandDefaultType',
+      'alexaCommandLocale',
+      'alexaCommandAmazonPage',
+      'alexaCommandServiceHost',
+      'alexaCommandSessionCookie',
+      'alexaCommandSessionData',
+      'alexaCommandTargets',
+      'alexaCommandTimeoutMs',
       'rateLimitWindowMs',
       'rateLimitMax',
       'allowManualRegistration'
@@ -884,31 +925,48 @@ class AlexaBrokerService {
       }
     }
 
-    if (Object.prototype.hasOwnProperty.call(updates, 'deviceServiceBaseUrl')) {
-      config.deviceServiceBaseUrl = trimString(updates.deviceServiceBaseUrl)
-        ? sanitizeBaseUrl(updates.deviceServiceBaseUrl)
-        : '';
+    if (Object.prototype.hasOwnProperty.call(updates, 'alexaCommandProvider')) {
+      config.alexaCommandProvider = normalizeAlexaCommandProvider(updates.alexaCommandProvider);
     }
 
-    if (Object.prototype.hasOwnProperty.call(updates, 'deviceServiceToken')) {
-      const value = updates.deviceServiceToken;
+    if (Object.prototype.hasOwnProperty.call(updates, 'alexaCommandDefaultType')) {
+      config.alexaCommandDefaultType = normalizeAlexaCommandType(updates.alexaCommandDefaultType);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'alexaCommandLocale')) {
+      config.alexaCommandLocale = trimString(updates.alexaCommandLocale) || DEFAULT_ALEXA_COMMAND_LOCALE;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'alexaCommandAmazonPage')) {
+      config.alexaCommandAmazonPage = trimString(updates.alexaCommandAmazonPage) || DEFAULT_ALEXA_COMMAND_AMAZON_PAGE;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'alexaCommandServiceHost')) {
+      config.alexaCommandServiceHost = trimString(updates.alexaCommandServiceHost) || DEFAULT_ALEXA_COMMAND_SERVICE_HOST;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'alexaCommandSessionCookie')) {
+      const value = updates.alexaCommandSessionCookie;
       if (!isMaskedSecret(value) && trimString(value)) {
-        config.deviceServiceToken = trimString(value);
+        config.alexaCommandSessionCookie = trimString(value);
       }
     }
 
-    if (Object.prototype.hasOwnProperty.call(updates, 'deviceDiscoveryPath')) {
-      config.deviceDiscoveryPath = normalizeProviderPath(updates.deviceDiscoveryPath, DEFAULT_DEVICE_DISCOVERY_PATH);
+    if (Object.prototype.hasOwnProperty.call(updates, 'alexaCommandSessionData')) {
+      const value = updates.alexaCommandSessionData;
+      if (!isMaskedSecret(value) && trimString(value)) {
+        config.alexaCommandSessionData = trimString(value);
+      }
     }
 
-    if (Object.prototype.hasOwnProperty.call(updates, 'deviceSpeakPath')) {
-      config.deviceSpeakPath = normalizeProviderPath(updates.deviceSpeakPath, DEFAULT_DEVICE_SPEAK_PATH);
+    if (Object.prototype.hasOwnProperty.call(updates, 'alexaCommandTargets')) {
+      config.alexaCommandTargets = parseAlexaCommandTargets(updates.alexaCommandTargets);
     }
 
-    if (Object.prototype.hasOwnProperty.call(updates, 'deviceServiceTimeoutMs')) {
-      config.deviceServiceTimeoutMs = sanitizePositiveInteger(
-        updates.deviceServiceTimeoutMs,
-        config.deviceServiceTimeoutMs || DEFAULT_DEVICE_SERVICE_TIMEOUT_MS,
+    if (Object.prototype.hasOwnProperty.call(updates, 'alexaCommandTimeoutMs')) {
+      config.alexaCommandTimeoutMs = sanitizePositiveInteger(
+        updates.alexaCommandTimeoutMs,
+        config.alexaCommandTimeoutMs || DEFAULT_ALEXA_COMMAND_TIMEOUT_MS,
         { min: 1000, max: 60000 }
       );
     }
@@ -1506,11 +1564,11 @@ class AlexaBrokerService {
       healthMessage: probe.available ? '' : probe.message,
       oauthClientSecretConfigured: Boolean(trimString(config.oauthClientSecret)),
       eventClientSecretConfigured: Boolean(trimString(config.eventClientSecret)),
-      deviceServiceConfigured: Boolean(trimString(config.deviceServiceBaseUrl)),
-      deviceServiceTokenConfigured: Boolean(trimString(config.deviceServiceToken)),
+      alexaCommandSessionConfigured: Boolean(trimString(config.alexaCommandSessionCookie) || trimString(config.alexaCommandSessionData)),
       oauthClientSecretMasked: maskSecret(config.oauthClientSecret),
       eventClientSecretMasked: maskSecret(config.eventClientSecret),
-      deviceServiceTokenMasked: maskSecret(config.deviceServiceToken)
+      alexaCommandSessionCookieMasked: maskSecret(config.alexaCommandSessionCookie),
+      alexaCommandSessionDataMasked: maskSecret(config.alexaCommandSessionData)
     };
   }
 }

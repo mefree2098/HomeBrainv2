@@ -37,14 +37,24 @@ export type AlexaBrokerServiceStatus = {
   eventClientId?: string;
   eventClientSecret?: string;
   eventClientSecretConfigured?: boolean;
-  deviceServiceBaseUrl?: string;
-  deviceServiceToken?: string;
-  deviceServiceTokenConfigured?: boolean;
-  deviceServiceTokenMasked?: string;
-  deviceDiscoveryPath?: string;
-  deviceSpeakPath?: string;
-  deviceServiceTimeoutMs?: number;
-  deviceServiceConfigured?: boolean;
+  alexaCommandProvider?: 'disabled' | 'homebrain' | 'asp';
+  alexaCommandDefaultType?: 'announce' | 'speak' | 'ssml';
+  alexaCommandLocale?: string;
+  alexaCommandAmazonPage?: string;
+  alexaCommandServiceHost?: string;
+  alexaCommandSessionCookie?: string;
+  alexaCommandSessionData?: string;
+  alexaCommandSessionConfigured?: boolean;
+  alexaCommandSessionCookieMasked?: string;
+  alexaCommandSessionDataMasked?: string;
+  alexaCommandTargets?: Array<{
+    key?: string;
+    alexaDeviceId?: string;
+    displayName?: string;
+    room?: string;
+    enabled?: boolean;
+  }>;
+  alexaCommandTimeoutMs?: number;
   allowedClientIds?: string[];
   allowedRedirectUris?: string[];
   storeFile?: string;
@@ -261,7 +271,7 @@ export const getAlexaDevices = async (params: { brokerAccountId?: string } = {})
 
 export const speakAlexaDevice = async (
   alexaDeviceId: string,
-  payload: { message: string; brokerAccountId?: string; locale?: string; deviceName?: string }
+  payload: { message: string; brokerAccountId?: string; locale?: string; deviceName?: string; type?: 'announce' | 'speak' | 'ssml' }
 ) => {
   try {
     const response = await api.post(`/api/alexa/devices/${encodeURIComponent(alexaDeviceId)}/speak`, payload);

@@ -1314,7 +1314,7 @@ class AlexaBridgeService {
         type: 'alexa_devices_listed',
         status: result.data?.available === false ? 'warning' : 'success',
         message: result.data?.available === false
-          ? 'Alexa device service is not available'
+          ? 'HomeBrain Alexa command bridge is not available'
           : `Loaded ${devices.length} Alexa announcement target(s)`,
         details: {
           count: devices.length,
@@ -1355,6 +1355,7 @@ class AlexaBridgeService {
       deviceName: resolvedTarget.deviceName || undefined,
       message,
       locale: trimString(parameters.locale) || undefined,
+      type: trimString(parameters.type || parameters.announceType) || undefined,
       workflowId: context.workflowId || undefined,
       executionHistoryId: context.executionHistoryId || undefined,
       executionCorrelationId: context.executionCorrelationId || undefined

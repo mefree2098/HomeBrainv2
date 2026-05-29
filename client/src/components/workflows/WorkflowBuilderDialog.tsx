@@ -2574,7 +2574,7 @@ export function WorkflowBuilderDialog({
                                   </Select>
                                   {alexaDevices.length === 0 && (
                                     <p className="text-xs text-muted-foreground">
-                                      Pair and configure the Alexa device service to choose announcement targets.
+                                      Enable the HomeBrain Alexa command bridge to choose announcement targets.
                                     </p>
                                   )}
                                 </div>

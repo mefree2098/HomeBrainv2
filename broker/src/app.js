@@ -1126,7 +1126,8 @@ function createApp(options = {}) {
         deviceId: req.params.alexaDeviceId,
         deviceName: req.body?.deviceName,
         message: req.body?.message,
-        locale: req.body?.locale
+        locale: req.body?.locale,
+        type: req.body?.type
       });
 
       await store.appendAudit({

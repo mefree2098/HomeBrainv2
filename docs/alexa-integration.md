@@ -2,13 +2,13 @@
 
 If you need a step-by-step admin deployment guide, use [alexa-admin-setup.md](alexa-admin-setup.md). This document is the architecture and rollout note.
 
-Last verified: 2026-05-28
+Last verified: 2026-05-29
 
 HomeBrain now supports a two-layer Alexa architecture:
 
 - Alexa Smart Home for no-keyword control of HomeBrain devices, groups, scenes, and safe manual workflows
 - Alexa Custom Skill scaffolding for later speaker-aware personalization and richer workflow verbs
-- Workflow-side Alexa announcements through a broker-owned Alexa device provider adapter
+- Workflow-side Alexa announcements through the HomeBrain-native Alexa command bridge
 
 This document covers the deployment model, managed broker settings, and the production-readiness checklist.
 
@@ -23,7 +23,7 @@ The Alexa stack is split across four pieces:
    - Handles Alexa OAuth/account linking
    - Stores paired hubs, linked households, tokens, grants, queued proactive events, metrics, and audit data
    - Relays Alexa directives to the correct HomeBrain hub
-   - Queries configured Alexa announcement targets and relays workflow speech requests to the configured Alexa device service
+   - Queries configured Alexa announcement targets and relays workflow speech requests through the HomeBrain-native Alexa command bridge
 3. Alexa Smart Home Lambda
    - Handles `AcceptGrant`, `Discover`, `ReportState`, controller directives, and scene activation
    - Resolves Alexa bearer tokens through the broker before relaying any request
@@ -48,48 +48,44 @@ Current UI naming:
 
 ## Broker Configuration
 
-The broker supports both private/dev and public modes. Configure these values from the HomeBrain `Alexa Broker` admin page so they are stored with the managed broker configuration in the database. Shell environment variables are still supported as a fallback for manual broker runs, but they are not the primary production setup.
+The managed broker supports both private/dev and public modes. Configure broker settings from the HomeBrain `Alexa Broker` admin page so they are stored with the managed broker configuration in the database. The HomeBrain service passes those database-backed values into the broker process at runtime; production operators should not create `.env`-only settings for this capability.
 
-At minimum, configure:
+At minimum, configure these UI fields:
 
-```dotenv
-HOMEBRAIN_BROKER_PUBLIC_BASE_URL=https://broker.example.com
-HOMEBRAIN_ALEXA_OAUTH_CLIENT_ID=homebrain-alexa-skill
-HOMEBRAIN_ALEXA_OAUTH_CLIENT_SECRET=<shared-or-managed-secret>
-HOMEBRAIN_ALEXA_ALLOWED_CLIENT_IDS=homebrain-alexa-skill
-HOMEBRAIN_ALEXA_ALLOWED_REDIRECT_URIS=https://pitangui.amazon.com/api/skill/link/...,https://layla.amazon.com/api/skill/link/...
-HOMEBRAIN_ALEXA_EVENT_CLIENT_ID=<lwa-client-id>
-HOMEBRAIN_ALEXA_EVENT_CLIENT_SECRET=<lwa-client-secret>
-```
+- Broker public base URL
+- OAuth client ID and shared client secret
+- Allowed Alexa client IDs
+- Allowed Alexa redirect URIs
+- LWA event client ID and secret
 
-Useful optional overrides:
+Useful optional UI fields include:
 
-```dotenv
-HOMEBRAIN_BROKER_STORE_FILE=/var/lib/homebrain-alexa/store.json
-HOMEBRAIN_ALEXA_AUTH_CODE_TTL_MS=300000
-HOMEBRAIN_ALEXA_ACCESS_TOKEN_TTL_SECONDS=3600
-HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS=15552000
-HOMEBRAIN_ALEXA_LWA_TOKEN_URL=https://api.amazon.com/auth/o2/token
-HOMEBRAIN_ALEXA_EVENT_GATEWAY_URL=https://api.amazonalexa.com/v3/events
-```
+- Broker store file
+- Authorization-code, access-token, and refresh-token lifetimes
+- LWA token URL
+- Alexa event-gateway URL
 
-Optional outbound Alexa device provider settings, also managed from the `Alexa Broker` page:
+## HomeBrain Alexa Command Bridge
 
-```dotenv
-HOMEBRAIN_ALEXA_DEVICE_SERVICE_BASE_URL=https://alexa-device-service.example.com
-HOMEBRAIN_ALEXA_DEVICE_SERVICE_TOKEN=<provider-token>
-HOMEBRAIN_ALEXA_DEVICE_DISCOVERY_PATH=/v1/devices
-HOMEBRAIN_ALEXA_DEVICE_SPEAK_PATH=/v1/devices/{deviceId}/speak
-HOMEBRAIN_ALEXA_DEVICE_SERVICE_TIMEOUT_MS=10000
-```
+Outbound workflow speech is configured from the `Alexa Broker` page and stored in the database. The default provider is `disabled`. For the current consumer-Echo deployment, choose `HomeBrain Native`.
 
-The broker exposes `GET /api/alexa/devices` to the HomeBrain hub for workflow target selection and `POST /api/alexa/devices/:alexaDeviceId/speak` for workflow announcements. Provider responses are normalized into `{ id, name, room, type, brokerAccountId, online }` records for the visual workflow builder.
+HomeBrain Native stores:
 
-Important platform boundary: Smart Home account linking and `AcceptGrant` credentials are for Alexa event-gateway work such as discovery updates and change reports. Echo/device enumeration and voice announcements require a compatible provider surface, such as an [Alexa Smart Properties](https://developer.amazon.com/en-US/docs/alexa/alexa-smart-properties/about-asp-core.html) partner API or another explicitly configured Alexa device service. HomeBrain keeps this behind the broker configuration model so provider credentials are edited in the UI, stored in the database, masked in status responses, and supplied to the broker runtime when HomeBrain starts or deploys the managed broker. For the Smart Home side, Amazon documents the event-gateway grant flow separately in the [`Alexa.Authorization` interface](https://developer.amazon.com/en-US/docs/alexa/device-apis/alexa-authorization.html).
+- Alexa session cookie or session-data JSON
+- Amazon page and Alexa service host, normally `amazon.com` and `pitangui.amazon.com` for the US
+- default command type, normally `announce`
+- target mappings such as `kitchen = G090XXXXXXXXXXXX | Kitchen Alexa | Kitchen`
+- command timeout and locale
+
+The managed broker injects those DB-backed settings into its runtime when HomeBrain starts or deploys the broker. Operators should not create shell-only `.env` settings for this path.
+
+The broker exposes `GET /api/alexa/devices` to the HomeBrain hub for workflow target selection and `POST /api/alexa/devices/:alexaDeviceId/speak` for workflow announcements. HomeBrain Native uses the stored Alexa session to enumerate Echo devices and send announce/speak/SSML commands directly from the broker. Responses are normalized into `{ id, name, room, type, brokerAccountId, online }` records for the visual workflow builder.
+
+Important platform boundary: Smart Home account linking and `AcceptGrant` credentials are for Alexa event-gateway work such as discovery updates and change reports. Consumer Echo enumeration and announcements are not the same official Smart Home surface. HomeBrain Native is the practical personal-deployment path and may require re-authentication if Amazon invalidates the stored session. [Alexa Smart Properties](https://developer.amazon.com/en-US/docs/alexa/alexa-smart-properties/about-asp-core.html) remains the future enterprise route. For the Smart Home side, Amazon documents the event-gateway grant flow separately in the [`Alexa.Authorization` interface](https://developer.amazon.com/en-US/docs/alexa/device-apis/alexa-authorization.html).
 
 For production, keep Alexa account-linking refresh tokens long-lived and leave the Alexa console PKCE toggle off until the broker OAuth flow is upgraded to support it.
 
-HomeBrain manages these broker variables through the `Alexa Broker` admin page. The preferred deploy flow there also creates or updates the broker reverse-proxy route and applies the managed Caddy config before restarting the broker. The environment blocks above are fallback references for manual shell/service-manager paths.
+HomeBrain manages these broker values through the `Alexa Broker` admin page. The preferred deploy flow there also creates or updates the broker reverse-proxy route and applies the managed Caddy config before restarting the broker.
 
 Operational notes from the validated setup:
 
@@ -98,9 +94,9 @@ Operational notes from the validated setup:
 - The broker public hostname must resolve in public DNS before Alexa mobile account linking can load.
 - For the managed broker, Alexa uses the public broker origin, but HomeBrain pairing and internal catalog/state/execute sync should use the local managed broker control URL, normally `http://127.0.0.1:4301`.
 
-## Smart Home Lambda Environment
+## Smart Home Lambda Deployment Values
 
-The Smart Home Lambda needs:
+The Smart Home Lambda is outside the managed HomeBrain service, so these values are set in the Lambda deployment configuration or IaC template:
 
 ```dotenv
 HOMEBRAIN_BROKER_BASE_URL=https://broker.example.com
@@ -108,9 +104,9 @@ HOMEBRAIN_BROKER_HUB_ID=<optional-default-hub-id-for-dev>
 HOMEBRAIN_ALEXA_EVENT_REGION=NA
 ```
 
-## Custom Skill Lambda Environment
+## Custom Skill Lambda Deployment Values
 
-The current custom-skill Lambda only requires the broker base URL:
+The current custom-skill Lambda only requires the broker base URL in the Lambda deployment configuration:
 
 ```dotenv
 HOMEBRAIN_BROKER_BASE_URL=https://broker.example.com
