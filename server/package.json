@@ -42,7 +42,7 @@
     "mongoose": "^9.2.2",
     "node-forge": "^1.4.0",
     "openai": "^6.25.0",
-    "serialport": "^13.0.0",
+    "serialport": "^8.0.8",
     "ws": "^8.21.0",
     "yazl": "^3.3.1",
     "zigbee-herdsman": "^10.0.7",
