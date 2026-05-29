@@ -156,6 +156,21 @@ const buildSecurityAlarmError = (message, statusCode = 400) => {
   return error;
 };
 
+const getSmartThingsMigration = (device) => {
+  const migration = device?.properties?.smartThingsMigration;
+  return migration && typeof migration === 'object' ? migration : null;
+};
+
+const isRetiredSmartThingsMigrationSource = (device) => {
+  const migration = getSmartThingsMigration(device);
+  return migration?.retiredSource === true || migration?.status === 'finalized_source';
+};
+
+const getMigrationReplacementDeviceId = (device) => {
+  const migration = getSmartThingsMigration(device);
+  return normalizeString(migration?.directDeviceId || migration?.replacementDeviceId);
+};
+
 const findNestedBatteryLevel = (value, depth = 0) => {
   if (!value || typeof value !== 'object' || depth > 5) {
     return null;
@@ -183,6 +198,10 @@ const getDeviceLookupKeys = (device) => uniqueStrings([
   normalizeString(device?._id?.toString?.() || device?._id),
   normalizeString(device?.id),
   normalizeString(device?.properties?.smartThingsDeviceId),
+  normalizeString(device?.properties?.smartThingsMigration?.smartThingsDeviceId),
+  normalizeString(device?.properties?.smartThingsMigration?.sourceDeviceId),
+  normalizeString(device?.properties?.smartThingsMigration?.directDeviceId),
+  normalizeString(device?.properties?.smartThingsMigration?.replacementDeviceId),
   normalizeString(device?.properties?.insteonAddress),
   normalizeString(device?.properties?.ecobeeSensorId),
   normalizeString(device?.properties?.ecobeeSensorKey),
@@ -192,6 +211,55 @@ const getDeviceLookupKeys = (device) => uniqueStrings([
 ]);
 
 const getLocalDeviceId = (device) => normalizeString(device?._id?.toString?.() || device?._id || device?.id);
+
+const setPreferredSecurityLookupDevice = (deviceMap, key, candidate, enabledPlatforms) => {
+  const safeKey = normalizeString(key);
+  if (!safeKey || !candidate) {
+    return;
+  }
+
+  const current = deviceMap.get(safeKey);
+  if (!current) {
+    deviceMap.set(safeKey, candidate);
+    return;
+  }
+
+  const currentAllowed = isDeviceAllowedForSecurityPlatforms(current, enabledPlatforms);
+  const candidateAllowed = isDeviceAllowedForSecurityPlatforms(candidate, enabledPlatforms);
+  if (candidateAllowed !== currentAllowed) {
+    if (candidateAllowed) {
+      deviceMap.set(safeKey, candidate);
+    }
+    return;
+  }
+
+  const currentPlatform = getSecurityPlatformForDevice(current);
+  const candidatePlatform = getSecurityPlatformForDevice(candidate);
+  if (
+    enabledPlatforms?.homebrain !== false
+    && candidatePlatform === 'homebrain'
+    && currentPlatform !== 'homebrain'
+  ) {
+    deviceMap.set(safeKey, candidate);
+    return;
+  }
+
+  if (
+    enabledPlatforms?.homebrain === false
+    && enabledPlatforms?.smartthings !== false
+    && candidatePlatform === 'smartthings'
+    && currentPlatform !== 'smartthings'
+  ) {
+    deviceMap.set(safeKey, candidate);
+    return;
+  }
+
+  const currentRetired = isRetiredSmartThingsMigrationSource(current);
+  const candidateRetired = isRetiredSmartThingsMigrationSource(candidate);
+  if (currentRetired !== candidateRetired && !candidateRetired) {
+    deviceMap.set(safeKey, candidate);
+  }
+};
 
 const getDeviceCapabilities = (device) => uniqueStrings([
   ...(Array.isArray(device?.properties?.smartThingsCapabilities) ? device.properties.smartThingsCapabilities : []),
@@ -1076,12 +1144,28 @@ class SecurityAlarmService {
   getSecuritySensors(alarm, devices = [], options = {}) {
     const enabledPlatforms = options.enabledPlatforms || null;
     const deviceMap = new Map();
+    const devicesByLocalId = new Map();
 
     devices.forEach((device) => {
+      const localDeviceId = getLocalDeviceId(device);
+      if (localDeviceId) {
+        devicesByLocalId.set(localDeviceId, device);
+      }
       getDeviceLookupKeys(device).forEach((key) => {
-        if (key) {
-          deviceMap.set(key, device);
-        }
+        setPreferredSecurityLookupDevice(deviceMap, key, device, enabledPlatforms);
+      });
+    });
+
+    devices.forEach((device) => {
+      if (!isRetiredSmartThingsMigrationSource(device)) {
+        return;
+      }
+      const replacement = devicesByLocalId.get(getMigrationReplacementDeviceId(device));
+      if (!replacement) {
+        return;
+      }
+      getDeviceLookupKeys(device).forEach((key) => {
+        setPreferredSecurityLookupDevice(deviceMap, key, replacement, enabledPlatforms);
       });
     });
 
@@ -2029,6 +2113,81 @@ class SecurityAlarmService {
       console.error('SecurityAlarmService: Error adding zone:', error.message);
       throw new Error('Failed to add security zone');
     }
+  }
+
+  async remapZonesForMigratedDevice(sourceDevice, directDevice) {
+    const directDeviceId = getLocalDeviceId(directDevice);
+    const sourceKeys = uniqueStrings([
+      ...getDeviceLookupKeys(sourceDevice),
+      normalizeString(getSmartThingsMigration(directDevice)?.sourceDeviceId),
+      normalizeString(getSmartThingsMigration(directDevice)?.smartThingsDeviceId),
+      normalizeString(sourceDevice?.properties?.smartThingsDeviceId)
+    ]).filter((key) => key && key !== directDeviceId);
+
+    if (!directDeviceId || sourceKeys.length === 0) {
+      return {
+        remappedZoneCount: 0,
+        alarmIds: []
+      };
+    }
+
+    const alarms = await SecurityAlarm.find({ 'zones.deviceId': { $in: sourceKeys } });
+    const remappedAlarmIds = [];
+    let remappedZoneCount = 0;
+
+    for (const alarm of Array.isArray(alarms) ? alarms : []) {
+      if (!Array.isArray(alarm?.zones) || alarm.zones.length === 0) {
+        continue;
+      }
+
+      const directZone = alarm.zones.find((zone) => normalizeString(zone?.deviceId) === directDeviceId);
+      const nextZones = [];
+      let changed = false;
+      let targetZone = directZone || null;
+
+      for (const zone of alarm.zones) {
+        const zoneDeviceId = normalizeString(zone?.deviceId);
+        if (!sourceKeys.includes(zoneDeviceId)) {
+          nextZones.push(zone);
+          continue;
+        }
+
+        changed = true;
+        remappedZoneCount += 1;
+        if (targetZone && targetZone !== zone) {
+          targetZone.enabled = targetZone.enabled !== false || zone.enabled !== false;
+          targetZone.bypassed = Boolean(targetZone.bypassed || zone.bypassed);
+          targetZone.bypassable = targetZone.bypassable !== false || zone.bypassable !== false;
+          if (!normalizeString(targetZone.name)) {
+            targetZone.name = normalizeString(zone.name) || normalizeString(directDevice?.name) || 'Security zone';
+          }
+          continue;
+        }
+
+        zone.deviceId = directDeviceId;
+        zone.name = normalizeString(zone.name) || normalizeString(directDevice?.name) || 'Security zone';
+        zone.deviceType = normalizeString(zone.deviceType) || inferSensorType(directDevice, zone);
+        targetZone = zone;
+        nextZones.push(zone);
+      }
+
+      if (!changed) {
+        continue;
+      }
+
+      alarm.zones = nextZones;
+      await alarm.save({ validateBeforeSave: false });
+      remappedAlarmIds.push(normalizeString(alarm?._id?.toString?.() || alarm?._id));
+    }
+
+    if (remappedZoneCount > 0) {
+      requestSecurityAlarmAutomationEvaluation('native migration zone remap');
+    }
+
+    return {
+      remappedZoneCount,
+      alarmIds: remappedAlarmIds.filter(Boolean)
+    };
   }
 
   /**
