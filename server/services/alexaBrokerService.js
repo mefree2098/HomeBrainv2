@@ -11,6 +11,9 @@ const DEFAULT_DISPLAY_NAME = 'HomeBrain Alexa Broker';
 const DEFAULT_CLIENT_ID = 'homebrain-alexa-skill';
 const DEFAULT_PORT = 4301;
 const DEFAULT_BIND_HOST = '127.0.0.1';
+const DEFAULT_DEVICE_DISCOVERY_PATH = '/v1/devices';
+const DEFAULT_DEVICE_SPEAK_PATH = '/v1/devices/{deviceId}/speak';
+const DEFAULT_DEVICE_SERVICE_TIMEOUT_MS = 10000;
 const DEFAULT_LOG_LIMIT = 500;
 const DEFAULT_LIFECYCLE_LIMIT = 50;
 const DEFAULT_MONITOR_INTERVAL_MS = 15000;
@@ -76,6 +79,19 @@ function sanitizeUrl(value, fallback = '') {
   }
 
   return new URL(normalized).toString();
+}
+
+function normalizeProviderPath(value, fallback) {
+  const normalized = trimString(value);
+  if (!normalized) {
+    return fallback;
+  }
+
+  if (normalized.startsWith('/') || /^https?:\/\//i.test(normalized)) {
+    return normalized;
+  }
+
+  return `/${normalized}`;
 }
 
 function sanitizePositiveInteger(value, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
@@ -404,6 +420,21 @@ class AlexaBrokerService {
       updated = true;
     }
 
+    if (!trimString(config.deviceDiscoveryPath)) {
+      config.deviceDiscoveryPath = DEFAULT_DEVICE_DISCOVERY_PATH;
+      updated = true;
+    }
+
+    if (!trimString(config.deviceSpeakPath)) {
+      config.deviceSpeakPath = DEFAULT_DEVICE_SPEAK_PATH;
+      updated = true;
+    }
+
+    if (!config.deviceServiceTimeoutMs) {
+      config.deviceServiceTimeoutMs = DEFAULT_DEVICE_SERVICE_TIMEOUT_MS;
+      updated = true;
+    }
+
     const allowedClientIds = uniqueStrings(config.allowedClientIds);
     if (allowedClientIds.length === 0) {
       config.allowedClientIds = [trimString(config.oauthClientId) || DEFAULT_CLIENT_ID];
@@ -436,6 +467,19 @@ class AlexaBrokerService {
   }
 
   buildRuntimeEnv(config) {
+    const deviceServiceBaseUrl = trimString(config.deviceServiceBaseUrl)
+      || trimString(process.env.HOMEBRAIN_ALEXA_DEVICE_SERVICE_BASE_URL || process.env.HOMEBRAIN_ALEXA_DEVICE_API_BASE_URL);
+    const deviceServiceToken = trimString(config.deviceServiceToken)
+      || trimString(process.env.HOMEBRAIN_ALEXA_DEVICE_SERVICE_TOKEN || process.env.HOMEBRAIN_ALEXA_DEVICE_API_TOKEN);
+    const deviceDiscoveryPath = normalizeProviderPath(
+      config.deviceDiscoveryPath || process.env.HOMEBRAIN_ALEXA_DEVICE_DISCOVERY_PATH,
+      DEFAULT_DEVICE_DISCOVERY_PATH
+    );
+    const deviceSpeakPath = normalizeProviderPath(
+      config.deviceSpeakPath || process.env.HOMEBRAIN_ALEXA_DEVICE_SPEAK_PATH,
+      DEFAULT_DEVICE_SPEAK_PATH
+    );
+
     return {
       ...process.env,
       PORT: String(sanitizePositiveInteger(config.servicePort, DEFAULT_PORT, { min: 1, max: 65535 })),
@@ -454,6 +498,15 @@ class AlexaBrokerService {
       HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS: String(sanitizePositiveInteger(config.refreshTokenTtlSeconds, 15552000)),
       HOMEBRAIN_ALEXA_LWA_TOKEN_URL: sanitizeUrl(config.lwaTokenUrl, 'https://api.amazon.com/auth/o2/token'),
       HOMEBRAIN_ALEXA_EVENT_GATEWAY_URL: sanitizeUrl(config.eventGatewayUrl, 'https://api.amazonalexa.com/v3/events'),
+      HOMEBRAIN_ALEXA_DEVICE_SERVICE_BASE_URL: deviceServiceBaseUrl,
+      HOMEBRAIN_ALEXA_DEVICE_SERVICE_TOKEN: deviceServiceToken,
+      HOMEBRAIN_ALEXA_DEVICE_DISCOVERY_PATH: deviceDiscoveryPath,
+      HOMEBRAIN_ALEXA_DEVICE_SPEAK_PATH: deviceSpeakPath,
+      HOMEBRAIN_ALEXA_DEVICE_SERVICE_TIMEOUT_MS: String(sanitizePositiveInteger(
+        config.deviceServiceTimeoutMs || process.env.HOMEBRAIN_ALEXA_DEVICE_SERVICE_TIMEOUT_MS || process.env.HOMEBRAIN_ALEXA_DEVICE_API_TIMEOUT_MS,
+        DEFAULT_DEVICE_SERVICE_TIMEOUT_MS,
+        { min: 1000, max: 60000 }
+      )),
       HOMEBRAIN_ALEXA_RATE_LIMIT_WINDOW_MS: String(sanitizePositiveInteger(config.rateLimitWindowMs, 60000)),
       HOMEBRAIN_ALEXA_RATE_LIMIT_MAX: String(sanitizePositiveInteger(config.rateLimitMax, 120)),
       HOMEBRAIN_ALEXA_ALLOW_MANUAL_REGISTRATION: config.allowManualRegistration === true ? 'true' : 'false'
@@ -764,6 +817,11 @@ class AlexaBrokerService {
       'refreshTokenTtlSeconds',
       'lwaTokenUrl',
       'eventGatewayUrl',
+      'deviceServiceBaseUrl',
+      'deviceServiceToken',
+      'deviceDiscoveryPath',
+      'deviceSpeakPath',
+      'deviceServiceTimeoutMs',
       'rateLimitWindowMs',
       'rateLimitMax',
       'allowManualRegistration'
@@ -824,6 +882,35 @@ class AlexaBrokerService {
       if (!isMaskedSecret(value) && trimString(value)) {
         config.eventClientSecret = trimString(value);
       }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'deviceServiceBaseUrl')) {
+      config.deviceServiceBaseUrl = trimString(updates.deviceServiceBaseUrl)
+        ? sanitizeBaseUrl(updates.deviceServiceBaseUrl)
+        : '';
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'deviceServiceToken')) {
+      const value = updates.deviceServiceToken;
+      if (!isMaskedSecret(value) && trimString(value)) {
+        config.deviceServiceToken = trimString(value);
+      }
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'deviceDiscoveryPath')) {
+      config.deviceDiscoveryPath = normalizeProviderPath(updates.deviceDiscoveryPath, DEFAULT_DEVICE_DISCOVERY_PATH);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'deviceSpeakPath')) {
+      config.deviceSpeakPath = normalizeProviderPath(updates.deviceSpeakPath, DEFAULT_DEVICE_SPEAK_PATH);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'deviceServiceTimeoutMs')) {
+      config.deviceServiceTimeoutMs = sanitizePositiveInteger(
+        updates.deviceServiceTimeoutMs,
+        config.deviceServiceTimeoutMs || DEFAULT_DEVICE_SERVICE_TIMEOUT_MS,
+        { min: 1000, max: 60000 }
+      );
     }
 
     if (Object.prototype.hasOwnProperty.call(updates, 'storeFile')) {
@@ -1419,8 +1506,11 @@ class AlexaBrokerService {
       healthMessage: probe.available ? '' : probe.message,
       oauthClientSecretConfigured: Boolean(trimString(config.oauthClientSecret)),
       eventClientSecretConfigured: Boolean(trimString(config.eventClientSecret)),
+      deviceServiceConfigured: Boolean(trimString(config.deviceServiceBaseUrl)),
+      deviceServiceTokenConfigured: Boolean(trimString(config.deviceServiceToken)),
       oauthClientSecretMasked: maskSecret(config.oauthClientSecret),
-      eventClientSecretMasked: maskSecret(config.eventClientSecret)
+      eventClientSecretMasked: maskSecret(config.eventClientSecret),
+      deviceServiceTokenMasked: maskSecret(config.deviceServiceToken)
     };
   }
 }

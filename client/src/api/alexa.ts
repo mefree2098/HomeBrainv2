@@ -37,6 +37,14 @@ export type AlexaBrokerServiceStatus = {
   eventClientId?: string;
   eventClientSecret?: string;
   eventClientSecretConfigured?: boolean;
+  deviceServiceBaseUrl?: string;
+  deviceServiceToken?: string;
+  deviceServiceTokenConfigured?: boolean;
+  deviceServiceTokenMasked?: string;
+  deviceDiscoveryPath?: string;
+  deviceSpeakPath?: string;
+  deviceServiceTimeoutMs?: number;
+  deviceServiceConfigured?: boolean;
   allowedClientIds?: string[];
   allowedRedirectUris?: string[];
   storeFile?: string;
