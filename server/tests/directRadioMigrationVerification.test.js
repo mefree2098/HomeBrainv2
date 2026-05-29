@@ -430,6 +430,47 @@ test('Zigbee normalization captures contact, temperature, tamper, and battery st
   assert.equal(normalized.update.properties.supportsContactSensor, true);
 });
 
+test('Zigbee message handling reads live IAS zone status during sleepy contact check-in', async () => {
+  const service = createService();
+  let capturedUpdate = null;
+  service.upsertDirectDevice = async (_identity, update) => {
+    capturedUpdate = update;
+    return { _id: DEVICE_ID, ...update };
+  };
+
+  const endpoint = {
+    ID: 1,
+    inputClusters: [1, 1280],
+    getClusterAttributeValue() {
+      return undefined;
+    },
+    async read(cluster, attributes) {
+      assert.equal(cluster, 'ssIasZone');
+      assert.deepEqual(attributes, ['zoneStatus']);
+      return { zoneStatus: 0x0001 };
+    }
+  };
+
+  await service.handleZigbeeDeviceChanged({
+    ieeeAddr: '0x000d6f000b11f6e5',
+    modelID: 'MCT-340 E',
+    manufacturerName: 'Visonic',
+    interviewCompleted: true,
+    endpoints: [endpoint]
+  }, 'message', {
+    message: {
+      cluster: 'genPollCtrl',
+      data: {}
+    }
+  });
+
+  assert.ok(capturedUpdate);
+  assert.equal(capturedUpdate.status, true);
+  assert.equal(capturedUpdate.properties.directRadioState.contactOpen, true);
+  assert.equal(capturedUpdate.properties.directRadioState.contact, 'open');
+  assert.ok(capturedUpdate.properties.directRadioFeatures.includes('contact'));
+});
+
 test('Zigbee normalization estimates battery level from voltage-only sensor reports', () => {
   const service = createService();
   const normalized = service.normalizeZigbeeDevice({
@@ -911,6 +952,99 @@ test('direct radio migration finalization recovers detached SmartThings source a
   }
 });
 
+test('recovered SmartThings migration context is repaired when strict matching rejects the old source', async () => {
+  const service = createService();
+  const originalFindById = Device.findById;
+  const originalFind = Device.find;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const directDevice = {
+    _id: DEVICE_ID,
+    name: 'Garage Door Sensor',
+    type: 'sensor',
+    room: 'Outside',
+    brand: 'Ecolink',
+    model: 'TILTZWAVE1',
+    status: false,
+    isOnline: true,
+    properties: {
+      source: 'homebrain-zwave',
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: 9,
+        manufacturerName: 'Ecolink',
+        modelID: 'TILTZWAVE1'
+      },
+      directRadioFeatures: ['battery', 'contact', 'garage'],
+      smartThingsMigration: {
+        recoveredAt: '2026-05-29T02:01:50.539Z',
+        migratedAt: '2026-05-29T02:01:50.539Z',
+        previousSource: 'smartthings',
+        smartThingsDeviceId: 'wrong-smartthings-id',
+        sourceDeviceId: SOURCE_DEVICE_ID,
+        sourceDeviceName: 'Greenhouse',
+        directDeviceId: DEVICE_ID,
+        migrationId: `recovered-${SOURCE_DEVICE_ID}-${DEVICE_ID}`
+      }
+    }
+  };
+  const wrongSource = {
+    _id: SOURCE_DEVICE_ID,
+    name: 'Greenhouse',
+    type: 'sensor',
+    room: 'Outside',
+    properties: {
+      source: 'smartthings',
+      smartThingsLabel: 'Greenhouse',
+      smartThingsDeviceName: 'Z-Wave Contact Sensor',
+      smartThingsDeviceId: 'wrong-smartthings-id',
+      smartThingsCapabilities: ['contactSensor', 'battery'],
+      smartThingsDeviceNetworkType: 'ZWAVE'
+    }
+  };
+  const correctSource = {
+    _id: '507f1f77bcf86cd799439099',
+    name: 'Garage Tilt Sensor',
+    type: 'sensor',
+    room: 'Outside',
+    properties: {
+      source: 'smartthings',
+      smartThingsLabel: 'Garage Tilt Sensor',
+      smartThingsDeviceName: 'Z-Wave Contact Sensor',
+      smartThingsDeviceId: 'garage-smartthings-id',
+      smartThingsCapabilities: ['contactSensor', 'battery'],
+      smartThingsDeviceNetworkType: 'ZWAVE'
+    }
+  };
+  let persistedUpdate = null;
+
+  Device.findById = async (id) => (String(id) === SOURCE_DEVICE_ID ? wrongSource : null);
+  Device.find = async () => [wrongSource, correctSource];
+  Device.findByIdAndUpdate = async (_id, update) => {
+    persistedUpdate = update;
+    return {
+      ...directDevice,
+      ...update,
+      properties: update.properties
+    };
+  };
+
+  try {
+    const repaired = await service.repairRecoveredSmartThingsMigrationIfMismatched(directDevice, {
+      protocol: 'zwave',
+      id: '9'
+    });
+
+    assert.ok(persistedUpdate);
+    assert.equal(repaired.properties.smartThingsMigration.sourceDeviceId, correctSource._id);
+    assert.equal(repaired.properties.smartThingsMigration.sourceDeviceName, 'Garage Tilt Sensor');
+    assert.equal(repaired.properties.smartThingsMigration.smartThingsDeviceId, 'garage-smartthings-id');
+  } finally {
+    Device.findById = originalFindById;
+    Device.find = originalFind;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+  }
+});
+
 test('detached SmartThings migration matching scores matching native sensor above unrelated candidates', () => {
   const directDevice = {
     name: 'Vault Door Sensor',
@@ -953,6 +1087,51 @@ test('detached SmartThings migration matching scores matching native sensor abov
   assert.ok(scoreDetachedSmartThingsMigrationSource(directDevice, sourceDevice, 'zigbee') >= 55);
   assert.ok(scoreDetachedSmartThingsMigrationSource(directDevice, unrelated, 'zigbee') < 55);
   assert.equal(scoreDetachedSmartThingsMigrationSource(directDevice, sourceDevice, 'zwave'), -Infinity);
+});
+
+test('detached SmartThings migration matching rejects generic same-room sensor overlap without identity evidence', () => {
+  const directDevice = {
+    name: 'Garage Door Sensor',
+    type: 'sensor',
+    room: 'Outside',
+    brand: 'Ecolink',
+    model: 'TILTZWAVE1',
+    properties: {
+      homebrainDirect: {
+        protocol: 'zwave',
+        manufacturerName: 'Ecolink',
+        modelID: 'TILTZWAVE1'
+      },
+      directRadioFeatures: ['battery', 'contact', 'garage']
+    }
+  };
+  const unrelated = {
+    name: 'Greenhouse',
+    type: 'sensor',
+    room: 'Outside',
+    properties: {
+      source: 'smartthings',
+      smartThingsLabel: 'Greenhouse',
+      smartThingsDeviceName: 'Z-Wave Contact Sensor',
+      smartThingsCapabilities: ['contactSensor', 'battery'],
+      smartThingsDeviceNetworkType: 'ZWAVE'
+    }
+  };
+  const correctSource = {
+    name: 'Garage Tilt Sensor',
+    type: 'sensor',
+    room: 'Outside',
+    properties: {
+      source: 'smartthings',
+      smartThingsLabel: 'Garage Tilt Sensor',
+      smartThingsDeviceName: 'Z-Wave Contact Sensor',
+      smartThingsCapabilities: ['contactSensor', 'battery'],
+      smartThingsDeviceNetworkType: 'ZWAVE'
+    }
+  };
+
+  assert.equal(scoreDetachedSmartThingsMigrationSource(directDevice, unrelated, 'zwave'), -Infinity);
+  assert.ok(scoreDetachedSmartThingsMigrationSource(directDevice, correctSource, 'zwave') >= 55);
 });
 
 test('SmartThings telemetry fallback carries available temperature without replacing native battery', () => {

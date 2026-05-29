@@ -702,6 +702,49 @@ function scoreTokenOverlap(left, right) {
   return overlap / Math.max(left.size, right.size);
 }
 
+function countTokenOverlap(left, right) {
+  if (!(left instanceof Set) || !(right instanceof Set) || left.size === 0 || right.size === 0) {
+    return 0;
+  }
+
+  let overlap = 0;
+  left.forEach((token) => {
+    if (right.has(token)) {
+      overlap += 1;
+    }
+  });
+  return overlap;
+}
+
+function filterStrongMigrationTokens(tokens) {
+  const weakTokens = new Set([
+    'battery',
+    'closed',
+    'contact',
+    'generic',
+    'open',
+    'sensor',
+    'smartthings',
+    'zw',
+    'zwave',
+    'wave',
+    'z'
+  ]);
+
+  return new Set(Array.from(tokens || [])
+    .map((token) => trimString(token).toLowerCase())
+    .filter((token) => token && !weakTokens.has(token) && !/^\d+$/.test(token)));
+}
+
+function hasManufacturerIdentityMatch(directManufacturer, sourceManufacturer) {
+  const direct = normalizeSourceText(directManufacturer);
+  const source = normalizeSourceText(sourceManufacturer);
+  if (!direct || !source || source.includes('smartthings')) {
+    return false;
+  }
+  return direct === source || direct.includes(source) || source.includes(direct);
+}
+
 function smartThingsNetworkTypeMatchesProtocol(properties = {}, protocol = '') {
   const networkType = normalizeSourceText(properties.smartThingsDeviceNetworkType)
     .replace(/[^a-z0-9]+/g, '');
@@ -1526,6 +1569,61 @@ function readZigbeeEndpointAttribute(endpoint, clusterCandidates = [], attribute
   return undefined;
 }
 
+function endpointHasZigbeeCluster(endpoint, clusterCandidates = []) {
+  const endpointClusters = collectZigbeeEndpointClusterTokens(endpoint);
+  return clusterCandidates
+    .map(normalizeZigbeeClusterToken)
+    .some((cluster) => cluster && endpointClusters.has(cluster));
+}
+
+function readZigbeeAttributeFromResponse(response, attributeCandidates = []) {
+  if (!response || typeof response !== 'object') {
+    return undefined;
+  }
+
+  for (const attribute of attributeCandidates) {
+    if (response[attribute] !== undefined && response[attribute] !== null) {
+      return response[attribute];
+    }
+    const normalized = normalizeSourceText(attribute);
+    if (response[normalized] !== undefined && response[normalized] !== null) {
+      return response[normalized];
+    }
+  }
+
+  return undefined;
+}
+
+async function readZigbeeLiveSensorState(zigbeeDevice, options = {}) {
+  const endpoints = getZigbeeEndpoints(zigbeeDevice)
+    .filter((endpoint) => endpointHasZigbeeCluster(endpoint, ['ssIasZone', 'ssiaszone', 1280]));
+  if (endpoints.length === 0) {
+    return {};
+  }
+
+  const timeoutMs = Number(options.timeoutMs || process.env.HOMEBRAIN_ZIGBEE_SENSOR_READ_TIMEOUT_MS || 2500);
+  for (const endpoint of endpoints) {
+    if (typeof endpoint?.read !== 'function') {
+      continue;
+    }
+    try {
+      const response = await withTimeout(
+        endpoint.read('ssIasZone', ['zoneStatus'], { sendPolicy: 'immediate' }),
+        timeoutMs,
+        'Timed out reading Zigbee IAS zone status'
+      );
+      const zoneStatus = readZigbeeAttributeFromResponse(response, ['zoneStatus', 'zonestatus']);
+      if (zoneStatus !== undefined && zoneStatus !== null) {
+        return { zoneStatus };
+      }
+    } catch (_error) {
+      // Sleepy IAS devices are only readable during their brief awake/check-in window.
+    }
+  }
+
+  return {};
+}
+
 function normalizeZigbeeSwitchState(value) {
   if (value === undefined || value === null) {
     return undefined;
@@ -2171,6 +2269,9 @@ function readZigbeeDirectRadioState(zigbeeDevice, options = {}) {
   mergeDirectState(directState, extractZigbeeMessageState(options.message, options.features));
   readZigbeeStateObject(zigbeeDevice, directState);
   readZigbeeEndpointSensorAttributes(zigbeeDevice, directState, options.features);
+  if (options.liveSensorState?.zoneStatus !== undefined && options.liveSensorState?.zoneStatus !== null) {
+    applyZoneStatusToDirectState(directState, options.liveSensorState.zoneStatus, options.features);
+  }
   fillBatteryPercentFromVoltage(directState);
   return directState;
 }
@@ -2262,6 +2363,37 @@ function scoreDetachedSmartThingsMigrationSource(directDevice, sourceDevice, pro
     sourceProperties.smartThingsManufacturer,
     sourceProperties.smartThingsDeviceTypeName
   );
+  const directNameTokens = filterStrongMigrationTokens(normalizeMigrationNameTokens(
+    directDevice.name,
+    directDevice.properties?.homebrainDirect?.generatedName
+  ));
+  const sourceNameTokens = filterStrongMigrationTokens(normalizeMigrationNameTokens(
+    sourceDevice.name,
+    sourceProperties.smartThingsLabel
+  ));
+  const directIdentityTokens = filterStrongMigrationTokens(normalizeMigrationNameTokens(
+    directDevice.brand,
+    directDevice.model,
+    directDevice.properties?.homebrainDirect?.manufacturerName,
+    directDevice.properties?.homebrainDirect?.modelID,
+    directDevice.properties?.homebrainDirect?.generatedName
+  ));
+  const sourceIdentityTokens = filterStrongMigrationTokens(normalizeMigrationNameTokens(
+    sourceDevice.brand,
+    sourceDevice.model,
+    sourceProperties.smartThingsManufacturer,
+    sourceProperties.smartThingsDeviceTypeName,
+    sourceProperties.smartThingsDeviceName
+  ));
+  const directManufacturer = normalizeSourceText(directDevice.brand || directDevice.properties?.homebrainDirect?.manufacturerName);
+  const sourceManufacturer = normalizeSourceText(sourceProperties.smartThingsManufacturer || sourceDevice.brand);
+  const nameEvidence = countTokenOverlap(directNameTokens, sourceNameTokens);
+  const identityEvidence = countTokenOverlap(directIdentityTokens, sourceIdentityTokens);
+  const manufacturerEvidence = hasManufacturerIdentityMatch(directManufacturer, sourceManufacturer);
+  if (nameEvidence === 0 && !(manufacturerEvidence && identityEvidence >= 2)) {
+    return -Infinity;
+  }
+
   score += Math.round(scoreTokenOverlap(directTokens, sourceTokens) * 35);
 
   const directFeatures = new Set([
@@ -2277,13 +2409,7 @@ function scoreDetachedSmartThingsMigrationSource(directDevice, sourceDevice, pro
   });
   score += Math.min(30, featureOverlap * 10);
 
-  const directManufacturer = normalizeSourceText(directDevice.brand || directDevice.properties?.homebrainDirect?.manufacturerName);
-  const sourceManufacturer = normalizeSourceText(sourceProperties.smartThingsManufacturer || sourceDevice.brand);
-  if (directManufacturer && sourceManufacturer && (
-    directManufacturer === sourceManufacturer
-    || directManufacturer.includes(sourceManufacturer)
-    || sourceManufacturer.includes(directManufacturer)
-  )) {
+  if (manufacturerEvidence) {
     score += 15;
   }
 
@@ -4895,7 +5021,8 @@ class DirectRadioService {
 
     const runtimeState = readZigbeeRuntimeState(zigbeeDevice, {
       features: baseFeatures,
-      message: options.message
+      message: options.message,
+      liveSensorState: options.liveSensorState
     });
     const { directRadioState, ...runtimeUpdate } = runtimeState;
     const features = uniqueStrings([
@@ -5110,13 +5237,28 @@ class DirectRadioService {
   }
 
   async handleZigbeeDeviceChanged(zigbeeDevice, reason, options = {}) {
-    const normalized = this.normalizeZigbeeDevice(zigbeeDevice, reason, options);
+    const shouldReadLiveSensorState = ['message', 'deviceAnnounce', 'deviceInterview', 'refresh'].includes(reason);
+    const liveSensorState = shouldReadLiveSensorState
+      ? await readZigbeeLiveSensorState(zigbeeDevice).catch((error) => {
+        this.log('debug', 'zigbee', 'Unable to read live Zigbee IAS zone status', {
+          reason,
+          ieeeAddr: trimString(zigbeeDevice?.ieeeAddr) || null,
+          error: error?.message || String(error || 'Unknown Zigbee read error')
+        });
+        return {};
+      })
+      : {};
+    const normalized = this.normalizeZigbeeDevice(zigbeeDevice, reason, {
+      ...options,
+      liveSensorState
+    });
     if (!normalized) {
       return null;
     }
     this.log('info', 'zigbee', 'Zigbee device state normalized', {
       reason,
       ieeeAddr: normalized.identity?.id || null,
+      liveZoneStatus: liveSensorState?.zoneStatus ?? null,
       features: normalized.update?.properties?.directRadioFeatures || [],
       observedStatus: Object.prototype.hasOwnProperty.call(normalized.update || {}, 'status')
         ? normalized.update.status
@@ -5202,6 +5344,7 @@ class DirectRadioService {
       : await new Device(payload).save();
 
     device = await this.attachRecoveredSmartThingsMigrationIfMatched(device, identity);
+    device = await this.repairRecoveredSmartThingsMigrationIfMismatched(device, identity);
 
     this.log('info', identity.protocol, existing ? 'Direct radio device updated' : 'Direct radio device created', {
       deviceId: device?._id?.toString?.() || null,
@@ -5342,6 +5485,59 @@ class DirectRadioService {
     this.log('info', protocol, 'Recovered SmartThings migration context for detached native device', {
       deviceId: getDeviceIdString(updated || device),
       sourceDeviceId: getDeviceIdString(sourceDevice),
+      migrationId: snapshot.properties.smartThingsMigration?.migrationId || null
+    });
+
+    return updated || device;
+  }
+
+  async repairRecoveredSmartThingsMigrationIfMismatched(device, identity) {
+    const protocol = identity?.protocol;
+    const migration = getSmartThingsMigration(device);
+    if (
+      !device
+      || !['zigbee', 'zwave'].includes(protocol)
+      || !migration?.recoveredAt
+      || migration?.finalizedAt
+    ) {
+      return device;
+    }
+
+    const currentSourceDeviceId = trimString(migration.sourceDeviceId);
+    const currentSource = currentSourceDeviceId
+      ? await Device.findById(currentSourceDeviceId).catch(() => null)
+      : null;
+    const currentScore = currentSource
+      ? scoreDetachedSmartThingsMigrationSource(device, currentSource, protocol)
+      : -Infinity;
+    if (currentScore >= 55) {
+      return device;
+    }
+
+    const replacementSource = await this.findDetachedSmartThingsMigrationSource(device, protocol);
+    const replacementSourceDeviceId = getDeviceIdString(replacementSource);
+    if (!replacementSource || replacementSourceDeviceId === currentSourceDeviceId) {
+      return device;
+    }
+
+    const snapshot = this.buildRecoveredSmartThingsMigrationSnapshot(
+      device,
+      replacementSource,
+      protocol,
+      migration.migrationId
+    );
+    const updated = await Device.findByIdAndUpdate(device._id, {
+      temperature: snapshot.temperature,
+      properties: snapshot.properties,
+      updatedAt: new Date()
+    }, { returnDocument: 'after', runValidators: true });
+
+    this.log('info', protocol, 'Repaired mismatched recovered SmartThings migration context', {
+      deviceId: getDeviceIdString(updated || device),
+      previousSourceDeviceId: currentSourceDeviceId || null,
+      previousSourceName: currentSource?.name || migration.sourceDeviceName || null,
+      replacementSourceDeviceId,
+      replacementSourceName: replacementSource?.name || null,
       migrationId: snapshot.properties.smartThingsMigration?.migrationId || null
     });
 
@@ -5576,6 +5772,7 @@ class DirectRadioService {
       directDeviceId,
       migrationId: nextProperties.smartThingsMigration.migrationId
     });
+    await this.remapSecurityZonesForMigratedDevice(updatedSource || sourceDevice, directDevice);
     this.emitDeviceUpdate(updatedSource);
     return updatedSource;
   }
@@ -5691,6 +5888,33 @@ class DirectRadioService {
         validation: nextProperties.smartThingsMigration.validation
       }
     };
+  }
+
+  async remapSecurityZonesForMigratedDevice(sourceDevice, directDevice) {
+    try {
+      const SecurityAlarm = require('../models/SecurityAlarm');
+      if (SecurityAlarm.db?.readyState !== 1) {
+        return null;
+      }
+      const securityAlarmService = require('./securityAlarmService');
+      const result = await securityAlarmService.remapZonesForMigratedDevice(sourceDevice, directDevice);
+      if (result?.remappedZoneCount > 0) {
+        this.log('info', 'security', 'Remapped security alarm zones to native migrated device', {
+          sourceDeviceId: getDeviceIdString(sourceDevice),
+          directDeviceId: getDeviceIdString(directDevice),
+          remappedZoneCount: result.remappedZoneCount,
+          alarmIds: result.alarmIds || []
+        });
+      }
+      return result;
+    } catch (error) {
+      this.log('warn', 'security', 'Failed to remap security alarm zones for native migration', {
+        sourceDeviceId: getDeviceIdString(sourceDevice),
+        directDeviceId: getDeviceIdString(directDevice),
+        error: error?.message || String(error || 'Unknown security zone remap error')
+      });
+      return null;
+    }
   }
 
   emitDeviceUpdate(device) {

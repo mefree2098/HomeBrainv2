@@ -299,6 +299,106 @@ test('getAlarmStatus scopes sensors and locks to the enabled HomeBrain security 
   assert.equal(status.doorLocks[0].sourceLabel, 'HomeBrain Z-Wave');
 });
 
+test('getAlarmStatus resolves retired SmartThings security zones to native HomeBrain replacements', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+  const originalDeviceFind = Device.find;
+  const originalEnsureSmartThingsState = deviceService.ensureSmartThingsState;
+  const originalIsSmartThingsConfiguredForSthm = securityAlarmService.isSmartThingsConfiguredForSthm;
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+    Device.find = originalDeviceFind;
+    deviceService.ensureSmartThingsState = originalEnsureSmartThingsState;
+    securityAlarmService.isSmartThingsConfiguredForSthm = originalIsSmartThingsConfiguredForSthm;
+  });
+
+  const now = new Date('2026-05-07T12:15:00.000Z');
+  const alarm = {
+    alarmState: 'armedStay',
+    enabledPlatforms: {
+      homebrain: true,
+      smartthings: false
+    },
+    lastArmed: now,
+    lastDisarmed: null,
+    lastTriggered: null,
+    zones: [
+      {
+        name: 'Garage Entry',
+        deviceId: 'smartthings-garage-source',
+        deviceType: 'doorWindow',
+        enabled: true,
+        bypassed: false
+      }
+    ],
+    isOnline: true,
+    lastSyncWithSmartThings: null,
+    batteryLevel: null,
+    signalStrength: null,
+    save: async function save() {
+      return this;
+    }
+  };
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+  securityAlarmService.isSmartThingsConfiguredForSthm = async () => false;
+  deviceService.ensureSmartThingsState = async () => {};
+  Device.find = () => ({
+    lean: async () => ([
+      {
+        _id: 'native-garage-contact',
+        name: 'Garage Entry Contact',
+        type: 'sensor',
+        room: 'Garage',
+        status: true,
+        isOnline: true,
+        lastSeen: now,
+        properties: {
+          source: 'homebrain-zigbee',
+          directRadioFeatures: ['contact', 'battery'],
+          smartThingsDeviceId: 'smartthings-garage-device',
+          smartThingsMigration: {
+            sourceDeviceId: 'smartthings-garage-source',
+            smartThingsDeviceId: 'smartthings-garage-device'
+          }
+        }
+      },
+      {
+        _id: 'smartthings-garage-source',
+        name: 'Garage Entry SmartThings',
+        type: 'sensor',
+        room: 'Garage',
+        status: false,
+        isOnline: true,
+        lastSeen: now,
+        properties: {
+          source: 'smartthings',
+          smartThingsDeviceId: 'smartthings-garage-device',
+          smartThingsCapabilities: ['contactSensor'],
+          smartThingsMigration: {
+            directDeviceId: 'native-garage-contact',
+            replacementDeviceId: 'native-garage-contact',
+            retiredSource: true,
+            status: 'finalized_source'
+          }
+        }
+      }
+    ])
+  });
+
+  const status = await securityAlarmService.getAlarmStatus();
+
+  assert.equal(status.zoneCount, 1);
+  assert.equal(status.sensorCount, 1);
+  assert.equal(status.monitoredSensorCount, 1);
+  assert.equal(status.activeSensorCount, 1);
+  assert.equal(status.sensors[0].deviceId, 'native-garage-contact');
+  assert.equal(status.sensors[0].zoneDeviceId, 'smartthings-garage-source');
+  assert.equal(status.sensors[0].sourceLabel, 'HomeBrain Zigbee');
+  assert.equal(status.sensors[0].monitorState, 'Monitored');
+  assert.equal(status.sensors[0].stateLabel, 'Open');
+});
+
 test('getAlarmStatus scopes sensors and locks to the enabled SmartThings security platform', async (t) => {
   const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
   const originalDeviceFind = Device.find;
