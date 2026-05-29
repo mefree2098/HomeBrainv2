@@ -3798,7 +3798,17 @@ class DirectRadioService {
 
     let rawPorts = [];
     try {
-      rawPorts = await SerialPortModule.list();
+      // serialport v8 exports the class directly (with a static .list); v9+
+      // exports { SerialPort } with the static .list on the class. Support both.
+      const listSerialPorts = typeof SerialPortModule.list === 'function'
+        ? SerialPortModule.list.bind(SerialPortModule)
+        : (typeof SerialPortModule.SerialPort?.list === 'function'
+          ? SerialPortModule.SerialPort.list.bind(SerialPortModule.SerialPort)
+          : null);
+      if (!listSerialPorts) {
+        throw new Error('serialport.list is not available');
+      }
+      rawPorts = await listSerialPorts();
     } catch (error) {
       this.serialPorts = [];
       this.zigbee.error = `Failed to list serial ports: ${error.message}`;
