@@ -368,6 +368,19 @@ router.post('/zwave/nodes/:nodeId/refresh-info', async (req, res) => {
   }
 });
 
+router.post('/zigbee/devices/:ieeeAddr/reinterview', async (req, res) => {
+  try {
+    const result = await directRadioService.reinterviewZigbeeDevice(req.params.ieeeAddr);
+    res.status(200).json({
+      success: true,
+      result,
+      status: await directRadioService.getStatus()
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to re-interview Zigbee device');
+  }
+});
+
 router.post('/zwave/nodes/:nodeId/replace-failed', async (req, res) => {
   try {
     const result = await directRadioService.replaceFailedZWaveNode(req.params.nodeId, {

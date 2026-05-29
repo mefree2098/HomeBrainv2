@@ -4370,6 +4370,114 @@ class DirectRadioService {
     };
   }
 
+  // Re-run a Zigbee device's interview. For IAS Zone sensors (door/contact/
+  // motion) this re-runs enrollment (CIE address write + enroll response), which
+  // is what makes a sensor actually report open/closed. This is the Zigbee
+  // analogue of the Z-Wave re-interview/repair flow.
+  async reinterviewZigbeeDevice(ieeeAddr) {
+    const address = trimString(ieeeAddr);
+    if (!address) {
+      const error = new Error('A Zigbee IEEE address is required to re-interview.');
+      error.status = 400;
+      throw error;
+    }
+    await this.start();
+    const controller = this.zigbee.controller;
+    if (!controller || !this.zigbee.started) {
+      const error = new Error('Zigbee coordinator is not ready.');
+      error.status = 503;
+      throw error;
+    }
+    const device = typeof controller.getDeviceByIeeeAddr === 'function'
+      ? controller.getDeviceByIeeeAddr(address)
+      : null;
+    if (!device) {
+      const error = new Error(`No Zigbee device is paired with IEEE address ${address}.`);
+      error.status = 404;
+      throw error;
+    }
+    if (typeof device.interview !== 'function') {
+      const error = new Error('This Zigbee device does not support a HomeBrain re-interview request.');
+      error.status = 501;
+      throw error;
+    }
+
+    // Sleepy battery sensors must be awake during the interview for IAS Zone
+    // enrollment to complete; surface that guidance when it fails.
+    const isSleepy = device.type === 'EndDevice' || device.powerSource === 'Battery';
+    this.log('info', 'zigbee', 'Zigbee device re-interview requested', {
+      ieeeAddr: address,
+      modelID: device.modelID || null,
+      isSleepy
+    });
+
+    try {
+      // ignoreCache=true forces a full re-interview, re-running IAS Zone
+      // enrollment for contact/motion sensors.
+      await device.interview(true);
+    } catch (error) {
+      this.log('warn', 'zigbee', 'Zigbee device re-interview failed', {
+        ieeeAddr: address,
+        error: error.message
+      });
+      const wrapped = new Error(isSleepy
+        ? `Re-interview failed: ${error.message}. Wake the sensor (open/close it or press its button) and retry so IAS Zone enrollment can complete.`
+        : `Re-interview failed: ${error.message}.`);
+      wrapped.status = 502;
+      throw wrapped;
+    }
+
+    await this.handleZigbeeDeviceChanged(device, 'reinterview').catch((error) => {
+      this.log('warn', 'zigbee', 'Failed to save Zigbee device after re-interview', {
+        ieeeAddr: address,
+        error: error.message
+      });
+    });
+
+    return {
+      ieeeAddr: address,
+      modelID: device.modelID || null,
+      interviewCompleted: device.interviewCompleted !== false,
+      iasZone: this.readZigbeeIasEnrollment(device),
+      isSleepy,
+      message: `HomeBrain re-ran the Zigbee interview for ${address}.`
+    };
+  }
+
+  // Best-effort read of a Zigbee IAS Zone sensor's enrollment state (whether it
+  // is actually enrolled to report open/closed). Returns null if not readable.
+  readZigbeeIasEnrollment(device) {
+    try {
+      const endpoints = Array.isArray(device?.endpoints) ? device.endpoints : [];
+      let coordinatorIeee = null;
+      try {
+        coordinatorIeee = this.zigbee.controller?.getDevicesByType?.('Coordinator')?.[0]?.ieeeAddr || null;
+      } catch (_error) {
+        coordinatorIeee = null;
+      }
+      for (const endpoint of endpoints) {
+        if (typeof endpoint?.getClusterAttributeValue !== 'function') {
+          continue;
+        }
+        if (!endpointHasZigbeeCluster(endpoint, ['ssIasZone', 'ssiaszone', 1280])) {
+          continue;
+        }
+        const cieAddr = endpoint.getClusterAttributeValue('ssIasZone', 'iasCieAddr');
+        const zoneState = endpoint.getClusterAttributeValue('ssIasZone', 'zoneState');
+        return {
+          enrolled: Number(zoneState) === 1,
+          zoneState: zoneState ?? null,
+          cieAddr: cieAddr ?? null,
+          coordinatorIeee,
+          cieMatchesCoordinator: Boolean(cieAddr && coordinatorIeee && String(cieAddr) === String(coordinatorIeee))
+        };
+      }
+    } catch (_error) {
+      // best-effort only
+    }
+    return null;
+  }
+
   async replaceFailedZWaveNode(nodeId, options = {}) {
     await this.start();
     const { controller, node } = this.getZWaveNode(nodeId);
