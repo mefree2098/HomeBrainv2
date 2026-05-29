@@ -6395,6 +6395,242 @@ class InsteonService {
     return this._snapshotLinkedStatusRun(run);
   }
 
+  _normalizeRelinkRunRequest(payload = {}) {
+    const clampInt = (value, min, max, fallback) => {
+      const num = Number(value);
+      if (!Number.isFinite(num)) {
+        return fallback;
+      }
+      return Math.max(min, Math.min(max, Math.round(num)));
+    };
+    return {
+      group: clampInt(payload.group ?? payload.linkGroup, 0, 255, DEFAULT_ISY_IMPORT_GROUP),
+      linkMode: String(payload.linkMode || 'remote').toLowerCase() === 'manual' ? 'manual' : 'remote',
+      perDeviceTimeoutMs: clampInt(payload.perDeviceTimeoutMs, 3000, 60000, 9000),
+      retries: clampInt(payload.retries, 0, 5, 1),
+      pauseBetweenMs: clampInt(payload.pauseBetweenMs, 0, 10000, 400)
+    };
+  }
+
+  // Rebuild the PLM all-link database for every tracked INSTEON device. Used when the
+  // PLM's link table has been lost/emptied: modern (i2cs) devices reject direct commands
+  // from a PLM that is not in their database, so without these links commands silently
+  // fail (the device never ACKs). Reuses the proven per-device _linkDeviceRemote primitive
+  // (the same call ISY import uses) and reports per-device progress for a live log.
+  async relinkAllTrackedDevices(request = {}, { onProgress = () => {}, shouldCancel = () => false } = {}) {
+    const options = this._normalizeRelinkRunRequest(request);
+
+    if (!this.isConnected || !this.hub) {
+      await this.connect();
+    }
+
+    const throwIfCancelled = (message) => {
+      if (shouldCancel()) {
+        const error = new Error(message);
+        error.code = 'RELINK_CANCELLED';
+        error.isCancelled = true;
+        throw error;
+      }
+    };
+
+    let plmDeviceId = null;
+    try {
+      const plmInfo = await this.getPLMInfo();
+      plmDeviceId = this._normalizePossibleInsteonAddress(plmInfo?.deviceId) || null;
+    } catch (_error) {
+      plmDeviceId = null;
+    }
+
+    const trackedDevices = await Device.find(this._buildTrackedInsteonDeviceQuery())
+      .select('_id name type properties')
+      .lean();
+
+    const targets = [];
+    const seen = new Set();
+    for (const device of trackedDevices) {
+      const address = this._normalizePossibleInsteonAddress(device?.properties?.insteonAddress);
+      if (!address || seen.has(address)) {
+        continue;
+      }
+      seen.add(address);
+      targets.push({
+        deviceId: device?._id ? String(device._id) : null,
+        address,
+        displayAddress: this._formatInsteonAddress(address),
+        name: typeof device?.name === 'string' && device.name.trim() ? device.name.trim() : null
+      });
+    }
+
+    if (targets.length === 0) {
+      throw new Error('No tracked INSTEON devices with addresses were found to re-link');
+    }
+
+    onProgress({
+      message: `Re-linking ${targets.length} INSTEON device${targets.length === 1 ? '' : 's'} to the PLM (${options.linkMode} mode, group ${options.group})`,
+      stage: 'start',
+      progress: 0
+    });
+
+    const devices = [];
+    const summary = { total: targets.length, linked: 0, responderOnly: 0, failed: 0 };
+
+    let index = 0;
+    for (const target of targets) {
+      throwIfCancelled('Re-link cancelled by user.');
+      index += 1;
+      const progress = Math.round(((index - 1) / targets.length) * 100);
+      const label = `${target.displayAddress}${target.name ? ` (${target.name})` : ''}`;
+      onProgress({
+        message: `(${index}/${targets.length}) Linking ${label}${options.linkMode === 'manual' ? ' - press the device set button now' : ''}`,
+        stage: 'link',
+        progress,
+        address: target.displayAddress
+      });
+
+      let linkError = null;
+      let linkResult = null;
+      for (let attempt = 0; attempt <= options.retries; attempt += 1) {
+        throwIfCancelled('Re-link cancelled by user.');
+        try {
+          if (options.linkMode === 'manual') {
+            await this._linkDeviceManual(target.address, {
+              group: options.group,
+              timeoutMs: options.perDeviceTimeoutMs
+            });
+            linkResult = null;
+          } else {
+            linkResult = await this._linkDeviceRemote(target.address, {
+              group: options.group,
+              timeoutMs: options.perDeviceTimeoutMs,
+              ensureControllerLinks: true
+            });
+          }
+          linkError = null;
+          break;
+        } catch (error) {
+          linkError = error instanceof Error ? error : new Error(String(error));
+          if (attempt < options.retries) {
+            await this._sleep(options.pauseBetweenMs);
+          }
+        }
+      }
+
+      if (linkError) {
+        summary.failed += 1;
+        devices.push({ ...target, status: 'failed', error: linkError.message });
+        onProgress({
+          message: `Failed to link ${label}: ${linkError.message}`,
+          stage: 'link',
+          level: 'error',
+          address: target.displayAddress
+        });
+      } else if (options.linkMode === 'remote' && linkResult && linkResult.controllerLinkError) {
+        summary.responderOnly += 1;
+        devices.push({ ...target, status: 'responder-only', warning: linkResult.controllerLinkError.message });
+        onProgress({
+          message: `Linked ${label} as responder only; status updates may not reach HomeBrain (${linkResult.controllerLinkError.message})`,
+          stage: 'link',
+          level: 'warn',
+          address: target.displayAddress
+        });
+      } else {
+        summary.linked += 1;
+        devices.push({ ...target, status: 'linked' });
+        onProgress({
+          message: `Linked ${label}`,
+          stage: 'link',
+          level: 'info',
+          address: target.displayAddress
+        });
+      }
+
+      if (options.pauseBetweenMs > 0) {
+        await this._sleep(options.pauseBetweenMs);
+      }
+    }
+
+    const message = `Re-link complete: ${summary.linked} linked, ${summary.responderOnly} responder-only, ${summary.failed} failed of ${summary.total}.`;
+    this._logEngineInfo('Completed INSTEON re-link of tracked devices', {
+      stage: 'maintenance',
+      details: { ...summary, group: options.group, linkMode: options.linkMode }
+    });
+    onProgress({ message, stage: 'complete', progress: 100 });
+
+    return {
+      success: true,
+      message,
+      group: options.group,
+      linkMode: options.linkMode,
+      plmDeviceId,
+      plmDisplayAddress: plmDeviceId ? this._formatInsteonAddress(plmDeviceId) : null,
+      summary,
+      devices
+    };
+  }
+
+  startRelinkRun(payload = {}) {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    const run = {
+      id,
+      status: 'running',
+      createdAt: now,
+      updatedAt: now,
+      finishedAt: null,
+      request: this._normalizeRelinkRunRequest(payload),
+      cancelRequested: false,
+      logs: [],
+      result: null,
+      error: null
+    };
+
+    this._linkedStatusRuns.set(id, run);
+    this._pruneLinkedStatusRuns();
+    this._appendLinkedStatusRunLog(id, {
+      message: 'Queued INSTEON re-link run',
+      stage: 'queued',
+      progress: 0
+    });
+
+    (async () => {
+      try {
+        const result = await this.relinkAllTrackedDevices(run.request, {
+          onProgress: (entry) => this._appendLinkedStatusRunLog(run.id, entry),
+          shouldCancel: () => Boolean(this._linkedStatusRuns.get(run.id)?.cancelRequested)
+        });
+
+        const storedRun = this._linkedStatusRuns.get(run.id);
+        if (!storedRun) {
+          return;
+        }
+        storedRun.status = 'completed';
+        storedRun.result = result;
+        storedRun.error = null;
+        storedRun.finishedAt = new Date().toISOString();
+        storedRun.updatedAt = storedRun.finishedAt;
+      } catch (error) {
+        const storedRun = this._linkedStatusRuns.get(run.id);
+        if (!storedRun) {
+          return;
+        }
+        const cancelled = error?.code === 'RELINK_CANCELLED' || error?.isCancelled === true;
+        storedRun.status = cancelled ? 'cancelled' : 'failed';
+        storedRun.result = null;
+        storedRun.error = cancelled ? 'Re-link cancelled by user.' : (error.message || 'INSTEON re-link failed.');
+        storedRun.finishedAt = new Date().toISOString();
+        storedRun.updatedAt = storedRun.finishedAt;
+        this._appendLinkedStatusRunLog(run.id, {
+          message: storedRun.error,
+          stage: 'complete',
+          level: cancelled ? 'warn' : 'error',
+          progress: 100
+        });
+      }
+    })();
+
+    return this._snapshotLinkedStatusRun(run);
+  }
+
   async testISYConnection(payload = {}) {
     try {
       const connection = await this._resolveISYConnection(payload);

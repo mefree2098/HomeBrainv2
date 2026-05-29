@@ -149,6 +149,9 @@ import {
   startInsteonLinkedStatusRun,
   getInsteonLinkedStatusRun,
   cancelInsteonLinkedStatusRun,
+  startInsteonRelinkRun,
+  getInsteonRelinkRun,
+  cancelInsteonRelinkRun,
   testInsteonISYConnection,
   extractInsteonISYData,
   syncInsteonFromISY,
@@ -549,6 +552,11 @@ export function Settings() {
   const [insteonLinkedStatusRunId, setInsteonLinkedStatusRunId] = useState<string | null>(null)
   const [insteonLinkedStatusRunStatus, setInsteonLinkedStatusRunStatus] = useState<string | null>(null)
   const [insteonLinkedStatusRunLogs, setInsteonLinkedStatusRunLogs] = useState<InsteonIsySyncRunLogEntry[]>([])
+  const [insteonRelinkRunId, setInsteonRelinkRunId] = useState<string | null>(null)
+  const [insteonRelinkRunStatus, setInsteonRelinkRunStatus] = useState<string | null>(null)
+  const [insteonRelinkRunLogs, setInsteonRelinkRunLogs] = useState<InsteonIsySyncRunLogEntry[]>([])
+  const [relinkingInsteon, setRelinkingInsteon] = useState(false)
+  const [cancellingInsteonRelink, setCancellingInsteonRelink] = useState(false)
   const [insteonSyncRunId, setInsteonSyncRunId] = useState<string | null>(null)
   const [insteonSyncRunStatus, setInsteonSyncRunStatus] = useState<string | null>(null)
   const [insteonSyncRunLogs, setInsteonSyncRunLogs] = useState<InsteonIsySyncRunLogEntry[]>([])
@@ -2253,6 +2261,169 @@ export function Settings() {
     } finally {
       await loadInsteonRuntimeStatus({ quiet: true })
       setCancellingInsteonLinkedStatusQuery(false)
+    }
+  }
+
+  const handleStartInsteonRelink = async () => {
+    const endpoint = insteonPortValue.trim()
+    if (!endpoint) {
+      toast({
+        title: "Endpoint required",
+        description: "Enter or scan an INSTEON PLM endpoint first.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    const confirmed = window.confirm(
+      "Re-link ALL INSTEON devices to this PLM?\n\nThis rebuilds the PLM's all-link database (needed after it was lost/emptied) and can take several minutes. Devices should be powered on and reachable. You can cancel at any time."
+    )
+    if (!confirmed) {
+      return
+    }
+
+    setRelinkingInsteon(true)
+    setCancellingInsteonRelink(false)
+    setInsteonRelinkRunId(null)
+    setInsteonRelinkRunStatus("running")
+    setInsteonRelinkRunLogs([])
+    try {
+      await updateSettings({ insteonPort: endpoint })
+      const startResponse = await startInsteonRelinkRun()
+      const runId = startResponse?.runId || startResponse?.run?.id
+      if (!runId) {
+        throw new Error("Re-link run started but no run id was returned by the server.")
+      }
+
+      setInsteonRelinkRunId(runId)
+      if (Array.isArray(startResponse?.run?.logs)) {
+        setInsteonRelinkRunLogs(startResponse.run.logs)
+      }
+      if (startResponse?.run?.status) {
+        setInsteonRelinkRunStatus(startResponse.run.status)
+      }
+
+      const pollingStartedAt = Date.now()
+      const maxPollDurationMs = 1000 * 60 * 60 * 4 // 4 hours
+      let consecutivePollFailures = 0
+
+      while (true) {
+        if (Date.now() - pollingStartedAt > maxPollDurationMs) {
+          throw new Error("Re-link is still running after 4 hours; polling timed out. You can refresh and continue monitoring with the same run id.")
+        }
+
+        try {
+          const statusResponse = await getInsteonRelinkRun(runId)
+          const run = statusResponse?.run
+          if (!run) {
+            throw new Error("Re-link run status response did not include a run snapshot.")
+          }
+
+          consecutivePollFailures = 0
+          setInsteonRelinkRunStatus(run.status || null)
+          setInsteonRelinkRunLogs(Array.isArray(run.logs) ? run.logs : [])
+
+          const isTerminal = run.status === "completed"
+            || run.status === "failed"
+            || run.status === "cancelled"
+
+          if (isTerminal) {
+            if (run.status === "completed" && run.result) {
+              const summary = run.result.summary || {}
+              toast({
+                title: "Re-link complete",
+                description: `Linked ${summary.linked ?? 0} of ${summary.total ?? 0} device${(summary.total ?? 0) === 1 ? "" : "s"} (${summary.responderOnly ?? 0} responder-only, ${summary.failed ?? 0} failed).`
+              })
+            } else if (run.status === "cancelled") {
+              toast({
+                title: "Re-link cancelled",
+                description: run.error || "Re-link was cancelled."
+              })
+            } else if (run.status === "failed") {
+              throw new Error(run.error || "Re-link failed.")
+            }
+
+            break
+          }
+        } catch (pollError: any) {
+          consecutivePollFailures += 1
+          if (consecutivePollFailures >= 5) {
+            throw new Error(pollError?.message || "Failed to poll re-link progress updates.")
+          }
+        }
+
+        await sleep(1000)
+      }
+    } catch (error: any) {
+      toast({
+        title: "Re-link failed",
+        description: error?.message || "Unable to re-link INSTEON devices.",
+        variant: "destructive"
+      })
+    } finally {
+      await loadInsteonRuntimeStatus({ quiet: true })
+      setRelinkingInsteon(false)
+      setCancellingInsteonRelink(false)
+    }
+  }
+
+  const handleCancelInsteonRelink = async () => {
+    if (!insteonRelinkRunId || !relinkingInsteon) {
+      return
+    }
+
+    setCancellingInsteonRelink(true)
+    try {
+      const response = await cancelInsteonRelinkRun(insteonRelinkRunId)
+      if (response?.run?.status) {
+        setInsteonRelinkRunStatus(response.run.status)
+      }
+      if (Array.isArray(response?.run?.logs)) {
+        setInsteonRelinkRunLogs(response.run.logs)
+      }
+      toast({
+        title: "Cancel requested",
+        description: response?.message || "Waiting for the current device operation to finish."
+      })
+    } catch (error: any) {
+      toast({
+        title: "Cancel request failed",
+        description: error?.message || "Unable to request cancellation for the re-link run.",
+        variant: "destructive"
+      })
+    } finally {
+      setCancellingInsteonRelink(false)
+    }
+  }
+
+  const handleCopyInsteonRelinkLogs = async () => {
+    if (insteonRelinkRunLogs.length === 0) {
+      toast({
+        title: "No logs to copy",
+        description: "Start a re-link first or wait for log output.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    try {
+      const text = insteonRelinkRunLogs
+        .map((entry) => `[${entry?.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : "--:--:--"}]${entry?.stage ? ` [${entry.stage}]` : ""} ${entry?.message || ""}`)
+        .join("\n")
+      const copied = await copyTextToClipboard(text)
+      if (!copied) {
+        throw new Error("Clipboard unavailable")
+      }
+      toast({
+        title: "Re-link log copied",
+        description: `Copied ${insteonRelinkRunLogs.length} log line${insteonRelinkRunLogs.length === 1 ? "" : "s"} to clipboard.`
+      })
+    } catch (error: any) {
+      toast({
+        title: "Copy failed",
+        description: error?.message || "Unable to copy re-link logs.",
+        variant: "destructive"
+      })
     }
   }
 
@@ -5652,6 +5823,44 @@ export function Settings() {
                         </>
                       )}
                     </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleStartInsteonRelink}
+                      disabled={relinkingInsteon}
+                    >
+                      {relinkingInsteon ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Re-linking...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2" />
+                          Re-link All Devices
+                        </>
+                      )}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleCancelInsteonRelink}
+                      disabled={!relinkingInsteon || !insteonRelinkRunId || cancellingInsteonRelink}
+                    >
+                      {cancellingInsteonRelink ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Cancelling...
+                        </>
+                      ) : (
+                        <>
+                          <XCircle className="h-4 w-4 mr-2" />
+                          Cancel Re-link
+                        </>
+                      )}
+                    </Button>
                   </div>
 
                   {insteonSerialPortCandidates.length > 0 && (
@@ -5966,6 +6175,58 @@ export function Settings() {
                       </div>
                       <p className="text-muted-foreground">
                         Log updates refresh every second while the query run is active.
+                      </p>
+                    </div>
+                  )}
+
+                  {(relinkingInsteon || insteonRelinkRunLogs.length > 0) && (
+                    <div className="rounded-md border border-slate-200 bg-white/70 dark:bg-slate-900/40 p-3 text-xs space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <p className="font-medium">Re-link devices to PLM</p>
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          <p className="text-muted-foreground whitespace-nowrap">
+                            Status: {formatLinkedStatusRunStatusLabel(insteonRelinkRunStatus)}
+                            {insteonRelinkRunId ? ` • Run ${insteonRelinkRunId.slice(0, 8)}` : ""}
+                          </p>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={handleCopyInsteonRelinkLogs}
+                            disabled={insteonRelinkRunLogs.length === 0}
+                            className="h-7 px-2"
+                          >
+                            <Copy className="h-3.5 w-3.5 mr-1" />
+                            Copy Logs
+                          </Button>
+                        </div>
+                      </div>
+                      <p className="text-muted-foreground">
+                        Rebuilds the PLM all-link database so it can control your devices and hear their status changes. Runs one device at a time; a few battery/sleeping devices may need a manual set-button tap if they fail.
+                      </p>
+                      <div className="max-h-64 overflow-y-auto rounded border border-slate-200/70 bg-slate-950/85 p-2 font-mono text-[11px] leading-5 text-slate-100 dark:border-slate-800/70">
+                        {insteonRelinkRunLogs.length > 0 ? (
+                          insteonRelinkRunLogs.map((entry, index) => {
+                            const levelClass = entry?.level === "error"
+                              ? "text-red-300"
+                              : entry?.level === "warn"
+                                ? "text-amber-300"
+                                : "text-slate-100"
+
+                            return (
+                              <p key={`insteon-relink-log-${index}`} className={levelClass}>
+                                <span className="text-slate-400">
+                                  [{entry?.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : "--:--:--"}]
+                                </span> {entry?.stage ? `[${entry.stage}] ` : ""}{entry?.message || "No message"}
+                              </p>
+                            )
+                          })
+                        ) : (
+                          <p className="text-slate-400">Waiting for re-link log output...</p>
+                        )}
+                      </div>
+                      <p className="text-muted-foreground">
+                        Log updates refresh every second while the re-link run is active.
                       </p>
                     </div>
                   )}
