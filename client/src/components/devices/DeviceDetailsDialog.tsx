@@ -12,6 +12,7 @@ import {
   Lightbulb,
   Loader2,
   Lock,
+  LockOpen,
   Minus,
   Palette,
   Plus,
@@ -495,16 +496,21 @@ function getDeviceBatteryLevel(device: DeviceLike | null): number | null {
     : {}
   const attributeValues = properties?.smartThingsAttributeValues as Record<string, unknown> | undefined
   const batteryAttributes = attributeValues?.battery as Record<string, unknown> | undefined
+  const smartThingsBatteryCandidates = isDirectRadioBackedDevice(device)
+    ? []
+    : [
+        properties?.smartThingsBatteryLevel,
+        properties?.battery,
+        batteryAttributes?.battery,
+        batteryAttributes?.batteryLevel
+      ]
   const candidates = [
     directRadioState.batteryLevel,
     properties?.homeBrainBatteryLevel,
     properties?.directBatteryLevel,
     properties?.batteryLevel,
     properties?.matterBatteryLevel,
-    properties?.smartThingsBatteryLevel,
-    properties?.battery,
-    batteryAttributes?.battery,
-    batteryAttributes?.batteryLevel
+    ...smartThingsBatteryCandidates
   ]
 
   for (const candidate of candidates) {
@@ -1063,7 +1069,20 @@ function getPowerAction(device: DeviceLike | null): string {
   if (device?.type === "thermostat") {
     return getThermostatMode(device) === "off" ? "turn_on" : "turn_off"
   }
+  if (device?.type === "lock") {
+    return device.status ? "unlock" : "lock"
+  }
+  if (device?.type === "garage") {
+    return device.status ? "close" : "open"
+  }
   return device?.status ? "turn_off" : "turn_on"
+}
+
+function getPrimaryActionIcon(device: DeviceLike | null): LucideIcon {
+  if (device?.type === "lock") {
+    return device.status ? LockOpen : Lock
+  }
+  return device?.status ? PowerOff : Power
 }
 
 function canUseSimplePowerControl(device: DeviceLike | null): boolean {
@@ -2781,6 +2800,7 @@ export function DeviceDetailsDialog({
     if (!device) {
       return null
     }
+    const PrimaryActionIcon = getPrimaryActionIcon(device)
 
     if (device.type === "thermostat") {
       const currentTemp = Number(device.temperature)
@@ -2958,7 +2978,7 @@ export function DeviceDetailsDialog({
             onClick={() => handleDirectDeviceControl(getPowerAction(device))}
             disabled={sendingDirectControl}
           >
-            {device.status ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
+            <PrimaryActionIcon className="h-4 w-4" />
             {getPrimaryActionLabel(device)}
           </Button>
         </div>
@@ -3027,7 +3047,7 @@ export function DeviceDetailsDialog({
             onClick={() => handleDirectDeviceControl(getPowerAction(device))}
             disabled={sendingDirectControl}
           >
-            {device.status ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
+            <PrimaryActionIcon className="h-4 w-4" />
             {getPrimaryActionLabel(device)}
           </Button>
         </div>
@@ -3050,7 +3070,7 @@ export function DeviceDetailsDialog({
         onClick={() => handleDirectDeviceControl(getPowerAction(device))}
         disabled={sendingDirectControl}
       >
-        {device.status ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
+        <PrimaryActionIcon className="h-4 w-4" />
         {getPrimaryActionLabel(device)}
       </Button>
     )

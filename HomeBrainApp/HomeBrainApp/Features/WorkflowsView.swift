@@ -1966,6 +1966,17 @@ struct WorkflowsView: View {
         JSON.object(device?.properties["directRadioState"])
     }
 
+    private func isDirectRadioBackedDevice(_ device: DeviceItem?) -> Bool {
+        guard let device else { return false }
+        let source = (device.properties["source"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let direct = JSON.object(device.properties["homebrainDirect"])
+        let protocolName = (direct["protocol"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return source == "homebrain-zigbee"
+            || source == "homebrain-zwave"
+            || protocolName == "zigbee"
+            || protocolName == "zwave"
+    }
+
     private func nestedValue(_ source: [String: Any], path: [String]) -> Any? {
         var current: Any? = source
         for segment in path {
@@ -2071,14 +2082,16 @@ struct WorkflowsView: View {
     private func collectBatteryTriggerOptions(for device: DeviceItem?) -> [WorkflowTriggerPropertyOption] {
         guard let device else { return [] }
         let state = directRadioState(for: device)
-        let candidates: [(key: String, value: Any?)] = [
+        var candidates: [(key: String, value: Any?)] = [
             ("directRadioState.batteryLevel", state["batteryLevel"]),
             ("homeBrainBatteryLevel", device.properties["homeBrainBatteryLevel"]),
             ("directBatteryLevel", device.properties["directBatteryLevel"]),
             ("batteryLevel", device.properties["batteryLevel"]),
-            ("matterBatteryLevel", device.properties["matterBatteryLevel"]),
-            ("smartThingsBatteryLevel", device.properties["smartThingsBatteryLevel"])
+            ("matterBatteryLevel", device.properties["matterBatteryLevel"])
         ]
+        if !isDirectRadioBackedDevice(device) {
+            candidates.append(("smartThingsBatteryLevel", device.properties["smartThingsBatteryLevel"]))
+        }
         let match = candidates.first { finiteDouble($0.value) != nil }
         let supportsBattery = match != nil || directFeatureSupported(device, feature: "battery", supportFlags: ["supportsBattery"])
         guard supportsBattery else { return [] }

@@ -209,6 +209,15 @@ const getDeviceCategories = (device) => uniqueStrings([
   ...(Array.isArray(device?.properties?.matterCategories) ? device.properties.matterCategories : [])
 ].map((value) => normalizeString(value).toLowerCase()));
 
+const isDirectRadioBackedDevice = (device) => {
+  const source = normalizeString(device?.properties?.source).toLowerCase();
+  const protocol = normalizeString(device?.properties?.homebrainDirect?.protocol).toLowerCase();
+  return source === 'homebrain-zigbee'
+    || source === 'homebrain-zwave'
+    || protocol === 'zigbee'
+    || protocol === 'zwave';
+};
+
 const extractBatteryLevel = (device) => {
   if (!device || typeof device !== 'object') {
     return null;
@@ -219,18 +228,28 @@ const extractBatteryLevel = (device) => {
     return Math.max(0, Math.min(100, Math.round(directBattery)));
   }
 
-  for (const key of BATTERY_PROPERTY_KEYS) {
+  const isDirectRadio = isDirectRadioBackedDevice(device);
+  const batteryPropertyKeys = isDirectRadio
+    ? BATTERY_PROPERTY_KEYS.filter((key) => !['smartThingsBatteryLevel', 'battery', 'batteryPercent', 'batteryPercentage'].includes(key))
+    : BATTERY_PROPERTY_KEYS;
+
+  for (const key of batteryPropertyKeys) {
     const candidate = toNumber(device?.properties?.[key]);
     if (candidate !== null) {
       return Math.max(0, Math.min(100, Math.round(candidate)));
     }
   }
 
-  const nestedBattery = findNestedBatteryLevel(device?.properties?.smartThingsAttributeValues)
-    ?? findNestedBatteryLevel(device?.properties?.directRadioState)
-    ?? findNestedBatteryLevel(device?.properties?.homebrainDirect)
-    ?? findNestedBatteryLevel(device?.properties?.matterState)
-    ?? findNestedBatteryLevel(device?.properties?.matter);
+  const nestedBattery = isDirectRadio
+    ? findNestedBatteryLevel(device?.properties?.directRadioState)
+      ?? findNestedBatteryLevel(device?.properties?.homebrainDirect)
+      ?? findNestedBatteryLevel(device?.properties?.matterState)
+      ?? findNestedBatteryLevel(device?.properties?.matter)
+    : findNestedBatteryLevel(device?.properties?.smartThingsAttributeValues)
+      ?? findNestedBatteryLevel(device?.properties?.directRadioState)
+      ?? findNestedBatteryLevel(device?.properties?.homebrainDirect)
+      ?? findNestedBatteryLevel(device?.properties?.matterState)
+      ?? findNestedBatteryLevel(device?.properties?.matter);
   if (nestedBattery !== null) {
     return Math.max(0, Math.min(100, Math.round(nestedBattery)));
   }

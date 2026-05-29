@@ -17,6 +17,7 @@ import {
   List,
   Lightbulb,
   Lock,
+  LockOpen,
   Thermometer,
   Home,
   Power,
@@ -382,16 +383,21 @@ const getDeviceBatteryLevel = (device: any): number | null => {
   const properties = device?.properties || {}
   const state = getDirectRadioState(device)
   const batteryAttributes = properties?.smartThingsAttributeValues?.battery || {}
+  const smartThingsBatteryCandidates = isDirectRadioBackedDevice(device)
+    ? []
+    : [
+        properties.smartThingsBatteryLevel,
+        properties.battery,
+        batteryAttributes.battery,
+        batteryAttributes.batteryLevel
+      ]
   const candidates = [
     state.batteryLevel,
     properties.homeBrainBatteryLevel,
     properties.directBatteryLevel,
     properties.batteryLevel,
     properties.matterBatteryLevel,
-    properties.smartThingsBatteryLevel,
-    properties.battery,
-    batteryAttributes.battery,
-    batteryAttributes.batteryLevel
+    ...smartThingsBatteryCandidates
   ]
 
   for (const candidate of candidates) {
@@ -638,14 +644,18 @@ const hasSmartThingsCategory = (device: any, category: string): boolean => {
   return getSmartThingsCategories(device).includes(normalizeSmartThingsCategoryToken(category))
 }
 
-const isSmartThingsBackedDevice = (device: any): boolean => {
+const isDirectRadioBackedDevice = (device: any): boolean => {
   const source = (device?.properties?.source || '').toString().toLowerCase()
   const protocol = (device?.properties?.homebrainDirect?.protocol || '').toString().trim().toLowerCase()
-  const isDirectRadio = source === 'homebrain-zigbee'
+  return source === 'homebrain-zigbee'
     || source === 'homebrain-zwave'
     || protocol === 'zigbee'
     || protocol === 'zwave'
-  return source === 'smartthings' || (!isDirectRadio && Boolean(device?.properties?.smartThingsDeviceId))
+}
+
+const isSmartThingsBackedDevice = (device: any): boolean => {
+  const source = (device?.properties?.source || '').toString().toLowerCase()
+  return source === 'smartthings' || (!isDirectRadioBackedDevice(device) && Boolean(device?.properties?.smartThingsDeviceId))
 }
 
 const getSmartThingsMigration = (device: any): Record<string, any> | null => {
@@ -1105,6 +1115,9 @@ const getDevicePrimaryActionLabel = (device: any): string => {
 const getDevicePrimaryActionIcon = (device: any) => {
   if (isHarmonyCommandDevice(device) && !supportsHarmonyPowerControl(device)) {
     return <SlidersHorizontal className="h-4 w-4" />
+  }
+  if (device?.type === 'lock') {
+    return device?.status ? <LockOpen className="h-4 w-4" /> : <Lock className="h-4 w-4" />
   }
   const active = device?.type === 'thermostat'
     ? getThermostatMode(device) !== 'off'
@@ -1672,6 +1685,16 @@ export function Devices({
         return
       }
       handleDeviceControl(device._id, powerAction)
+      return
+    }
+
+    if (device.type === 'lock') {
+      handleDeviceControl(device._id, device.status ? 'unlock' : 'lock')
+      return
+    }
+
+    if (device.type === 'garage') {
+      handleDeviceControl(device._id, device.status ? 'close' : 'open')
       return
     }
 

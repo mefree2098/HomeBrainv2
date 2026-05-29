@@ -91,14 +91,15 @@ function makeAccessControl(overrides = {}) {
   return accessControl;
 }
 
-function installLockContext(t, { device = nativeLockDevice(), accessControl = makeAccessControl() } = {}) {
+function installLockContext(t, { device = nativeLockDevice(), accessControl = makeAccessControl(), nodeOverrides = {} } = {}) {
   const service = new DirectRadioService();
   const updateCalls = [];
   const published = [];
   const node = {
     id: 9,
     accessControl,
-    commandClasses: {}
+    commandClasses: {},
+    ...nodeOverrides
   };
 
   const originalFindById = Device.findById;
@@ -169,6 +170,122 @@ test('native Z-Wave lock normalization exposes battery level for display and aut
   assert.ok(normalized.update.properties.directRadioFeatures.includes('battery'));
 });
 
+test('native Z-Wave lock normalization treats 0 battery as awaiting a real report', () => {
+  const service = new DirectRadioService();
+  const values = new Map([
+    [zwave.DoorLockCCValues.currentMode.id, zwave.DoorLockMode.Secured],
+    [zwave.BatteryCCValues.level.id, 0]
+  ]);
+  const node = {
+    id: 9,
+    name: 'Kwikset 916',
+    status: 4,
+    manufacturerId: 144,
+    productType: 1,
+    productId: 1,
+    productLabel: 'SmartCode 916',
+    valueDB: {
+      hasValue: (id) => values.has(id),
+      getValue: (id) => values.get(id),
+      findValues: () => [],
+      getMetadata: () => null
+    }
+  };
+
+  const normalized = service.normalizeZWaveNode(node, 'test');
+
+  assert.equal(normalized.update.type, 'lock');
+  assert.equal(normalized.update.properties.homeBrainBatteryLevel, null);
+  assert.equal(normalized.update.properties.batteryLevel, null);
+  assert.equal(normalized.update.properties.homeBrainBatteryReportPending, true);
+  assert.equal(normalized.update.properties.directRadioState, undefined);
+  assert.equal(normalized.update.properties.supportsBattery, true);
+});
+
+test('native Z-Wave lock normalization maps Z-Wave low-battery sentinel to alertable telemetry', () => {
+  const service = new DirectRadioService();
+  const values = new Map([
+    [zwave.DoorLockCCValues.currentMode.id, zwave.DoorLockMode.Secured],
+    [zwave.BatteryCCValues.level.id, 255]
+  ]);
+  const node = {
+    id: 9,
+    name: 'Kwikset 916',
+    status: 4,
+    manufacturerId: 144,
+    productType: 1,
+    productId: 1,
+    productLabel: 'SmartCode 916',
+    valueDB: {
+      hasValue: (id) => values.has(id),
+      getValue: (id) => values.get(id),
+      findValues: () => [],
+      getMetadata: () => null
+    }
+  };
+
+  const normalized = service.normalizeZWaveNode(node, 'test');
+
+  assert.equal(normalized.update.properties.homeBrainBatteryLevel, 1);
+  assert.equal(normalized.update.properties.batteryLevel, 1);
+  assert.equal(normalized.update.properties.homeBrainBatteryLow, true);
+  assert.equal(normalized.update.properties.directRadioState.batteryLevel, 1);
+  assert.equal(normalized.update.properties.directRadioState.batteryLow, true);
+});
+
+test('direct Z-Wave lock merge drops stale SmartThings lock-code support and battery state', () => {
+  const merged = directRadioService._test.mergeDirectDeviceUpdateForExisting(
+    nativeLockDevice({
+      properties: {
+        source: 'homebrain-zwave',
+        smartThingsBatteryLevel: 0,
+        directRadioFeatures: ['battery', 'lock', 'lockCodes'],
+        directRadioState: { batteryLevel: 0 },
+        supportsLockCodes: true,
+        homebrainDirect: { protocol: 'zwave', nodeId: 9 },
+        lockCodes: { assignments: { 1: { name: 'Guest' } } }
+      }
+    }),
+    {
+      type: 'lock',
+      properties: {
+        source: 'homebrain-zwave',
+        homebrainDirect: { protocol: 'zwave', nodeId: 9 },
+        directRadioFeatures: ['battery', 'lock'],
+        homeBrainBatteryLevel: null,
+        batteryLevel: null,
+        homeBrainBatteryReportPending: true
+      }
+    }
+  );
+
+  assert.ok(!merged.properties.directRadioFeatures.includes('lockCodes'));
+  assert.equal(merged.properties.supportsLockCodes, false);
+  assert.equal(merged.properties.lockCodes.supported, false);
+  assert.equal(merged.properties.directRadioState, undefined);
+});
+
+test('Z-Wave lock commands remap legacy power actions to Door Lock CC targets', async () => {
+  const service = new DirectRadioService();
+  const writes = [];
+  service.getDirectNodeForDevice = () => ({ id: 9, ready: true, status: 4 });
+  service.setZWaveValue = async (_node, valueDef, value) => {
+    writes.push({ valueId: valueDef.id, value });
+  };
+
+  await service.controlZWaveDevice({
+    _id: 'native-lock-1',
+    name: 'Front Deadbolt',
+    type: 'lock',
+    status: false,
+    properties: { homebrainDirect: { nodeId: 9 } }
+  }, 'turnon', true, {});
+
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].valueId, zwave.DoorLockCCValues.targetMode.id);
+  assert.equal(writes[0].value, zwave.DoorLockMode.Secured);
+});
+
 test('native Z-Wave lock PIN state redacts codes and preserves HomeBrain labels', async (t) => {
   const { service } = installLockContext(t);
 
@@ -185,6 +302,21 @@ test('native Z-Wave lock PIN state redacts codes and preserves HomeBrain labels'
   assert.equal(Object.prototype.hasOwnProperty.call(state.slots[0], 'pin'), false);
   assert.ok(state.availableSlots.includes(1));
   assert.ok(!state.availableSlots.includes(4));
+});
+
+test('native Z-Wave lock PIN state uses endpoint access-control APIs when node accessControl is absent', async (t) => {
+  const accessControl = makeAccessControl();
+  const { service } = installLockContext(t, {
+    accessControl: null,
+    nodeOverrides: {
+      getEndpoint: (index) => (index === 0 ? { accessControl } : null)
+    }
+  });
+
+  const state = await service.getLockCodeState('native-lock-1');
+
+  assert.equal(state.native, true);
+  assert.equal(state.slots[0].slot, 4);
 });
 
 test('native Z-Wave lock PIN set writes credential slot and records assignment metadata', async (t) => {

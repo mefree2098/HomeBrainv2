@@ -287,12 +287,19 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
   if (Object.keys(merged.properties.directRadioState).length === 0) {
     delete merged.properties.directRadioState;
   }
-  const mergedFeatures = uniqueStrings([
+  let mergedFeatures = uniqueStrings([
     ...updateFeatures,
     ...existingFeatures,
     ...inferredSmartThingsFeatures,
     ...inferredExistingDirectFeatures
   ]).sort();
+  const updateSource = normalizeSourceText(updateProperties.source);
+  const updateProtocol = normalizeSourceText(updateProperties.homebrainDirect?.protocol);
+  const updateIsZWaveLock = (updateSource === DIRECT_RADIO_SOURCES.zwave || updateProtocol === 'zwave')
+    && updateFeatures.includes('lock');
+  if (updateIsZWaveLock && !updateFeatures.includes('lockCodes')) {
+    mergedFeatures = mergedFeatures.filter((feature) => feature !== 'lockCodes');
+  }
   if (mergedFeatures.length > 0) {
     merged.properties.directRadioFeatures = mergedFeatures;
     merged.properties.directRadioCapabilities = buildNormalizedCapabilities(
@@ -300,6 +307,24 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
       mergedDirect.protocol || updateProperties.source || existingProperties.source || 'unknown'
     );
     Object.assign(merged.properties, buildDirectFeatureProperties(mergedFeatures));
+  }
+  if (updateIsZWaveLock && !updateFeatures.includes('lockCodes')) {
+    merged.properties.supportsLockCodes = false;
+    if (merged.properties.lockCodes && typeof merged.properties.lockCodes === 'object') {
+      merged.properties.lockCodes = {
+        ...merged.properties.lockCodes,
+        supported: false,
+        unavailableReason: 'secure_access_control_missing'
+      };
+    }
+  }
+  const nativeBatteryPending = updateIsZWaveLock && updateProperties.homeBrainBatteryReportPending === true;
+  if (nativeBatteryPending && merged.properties.directRadioState) {
+    delete merged.properties.directRadioState.batteryLevel;
+    delete merged.properties.directRadioState.batteryLow;
+    if (Object.keys(merged.properties.directRadioState).length === 0) {
+      delete merged.properties.directRadioState;
+    }
   }
 
   if (existing) {
@@ -642,7 +667,8 @@ function mergeSmartThingsTelemetryFallback(snapshot = {}, sourceDevice = null) {
     }
   }
 
-  const batteryLevel = readSmartThingsBatteryLevel(sourceDevice);
+  const nativeBatteryPending = next.properties.homeBrainBatteryReportPending === true;
+  const batteryLevel = nativeBatteryPending ? null : readSmartThingsBatteryLevel(sourceDevice);
   if (batteryLevel !== null && directState.batteryLevel === undefined) {
     directState.batteryLevel = batteryLevel;
   }
@@ -1083,6 +1109,40 @@ function clampPercent(value) {
     return null;
   }
   return Math.max(0, Math.min(100, Math.round(numeric)));
+}
+
+function normalizeZWaveBatteryReport(value, options = {}) {
+  const numeric = toFiniteNumber(value);
+  if (numeric === null) {
+    return {
+      level: null,
+      low: false,
+      pending: options.pendingWhenMissing === true
+    };
+  }
+
+  if (numeric === 255) {
+    return {
+      level: 1,
+      low: true,
+      pending: false
+    };
+  }
+
+  if (numeric === 0 && options.zeroIsUnknown === true) {
+    return {
+      level: null,
+      low: false,
+      pending: true
+    };
+  }
+
+  const level = clampPercent(numeric);
+  return {
+    level,
+    low: level !== null && level <= 5,
+    pending: false
+  };
 }
 
 function hexToRgbPercent(color) {
@@ -2675,7 +2735,31 @@ function getAssignmentForSlot(device, slot) {
 }
 
 function getZWaveAccessControl(node) {
-  return node?.accessControl || null;
+  const candidates = [
+    node,
+    (() => {
+      try {
+        return node?.getEndpoint?.(0);
+      } catch (_error) {
+        return null;
+      }
+    })(),
+    (() => {
+      try {
+        return node?.getEndpoint?.(1);
+      } catch (_error) {
+        return null;
+      }
+    })()
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate?.accessControl) {
+      return candidate.accessControl;
+    }
+  }
+
+  return null;
 }
 
 function getZWaveLockCodeCapabilities(node, accessControl) {
@@ -4394,7 +4478,8 @@ class DirectRadioService {
       features.add('lock');
       features.add('battery');
     }
-    if (getZWaveAccessControl(node)) {
+    const accessControl = getZWaveAccessControl(node);
+    if (accessControl) {
       features.add('lockCodes');
     }
     if (hasValue(zwave.BatteryCCValues.level)) features.add('battery');
@@ -4443,10 +4528,20 @@ class DirectRadioService {
     const currentLockMode = getZWaveValue(node, zwave.DoorLockCCValues.currentMode);
     const binaryValue = getZWaveValue(node, zwave.BinarySwitchCCValues.currentValue);
     const multilevelValue = getZWaveValue(node, zwave.MultilevelSwitchCCValues.currentValue);
-    const batteryLevel = clampPercent(getZWaveValue(node, zwave.BatteryCCValues.level));
     const brightness = clampPercent(multilevelValue);
     const locked = currentLockMode === zwave.DoorLockMode.Secured || currentLockMode === true || currentLockMode === 'Secured';
     const hasLock = features.has('lock');
+    const batteryReport = normalizeZWaveBatteryReport(getZWaveValue(node, zwave.BatteryCCValues.level), {
+      zeroIsUnknown: hasLock,
+      pendingWhenMissing: hasLock && features.has('battery')
+    });
+    const directRadioState = {};
+    if (batteryReport.level !== null) {
+      directRadioState.batteryLevel = batteryReport.level;
+    }
+    if (batteryReport.low) {
+      directRadioState.batteryLow = true;
+    }
     const hasSwitch = features.has('switch');
     const nodeName = trimString(node.name)
       || trimString(node.deviceConfig?.label)
@@ -4492,8 +4587,11 @@ class DirectRadioService {
             lastSeen: new Date().toISOString(),
             catalog: directRadioProtocolCatalogService.buildCatalogReference(catalogEntry)
           },
-          homeBrainBatteryLevel: batteryLevel,
-          batteryLevel,
+          homeBrainBatteryLevel: batteryReport.level,
+          batteryLevel: batteryReport.level,
+          homeBrainBatteryLow: batteryReport.low,
+          homeBrainBatteryReportPending: batteryReport.pending,
+          ...(Object.keys(directRadioState).length > 0 ? { directRadioState } : {}),
           directRadioFeatures: directFeatures,
           directRadioCapabilities: buildNormalizedCapabilities(directFeatures, 'zwave'),
           directRadioCatalog,
@@ -6064,7 +6162,8 @@ class DirectRadioService {
 
     const accessControl = getZWaveAccessControl(node);
     if (!accessControl) {
-      const error = new Error('This Z-Wave lock does not expose User Code or User Credential control');
+      const error = new Error('This Z-Wave lock is paired without secure User Code/User Credential support. Exclude it from Z-Wave and add it again with secure Z-Wave/S2 access-control inclusion so HomeBrain can manage PIN slots.');
+      error.code = 'ZWAVE_LOCK_ACCESS_CONTROL_UNAVAILABLE';
       error.status = 400;
       throw error;
     }
@@ -6710,16 +6809,27 @@ class DirectRadioService {
     if (!isZWaveNodeCommandReady(node)) {
       throw new Error('Z-Wave node is not ready');
     }
+    let effectiveAction = normalizedAction;
+    if (device?.type === 'lock') {
+      if (normalizedAction === 'turnon') {
+        effectiveAction = 'lock';
+      } else if (normalizedAction === 'turnoff') {
+        effectiveAction = 'unlock';
+      } else if (normalizedAction === 'toggle') {
+        effectiveAction = device?.status ? 'unlock' : 'lock';
+      }
+    }
     const zwave = require('zwave-js');
     this.log('info', 'zwave', 'Sending Z-Wave device command', {
       deviceId: device?._id?.toString?.() || null,
       name: device?.name || null,
       nodeId: device?.properties?.homebrainDirect?.nodeId || null,
-      action: normalizedAction,
+      action: effectiveAction,
+      requestedAction: normalizedAction === effectiveAction ? undefined : normalizedAction,
       value: commandValue ?? null
     });
 
-    switch (normalizedAction) {
+    switch (effectiveAction) {
       case 'toggle':
       case 'turnon':
       case 'turnoff': {
@@ -6787,7 +6897,7 @@ class DirectRadioService {
     this.log('info', 'zwave', 'Z-Wave device command accepted', {
       deviceId: device?._id?.toString?.() || null,
       name: device?.name || null,
-      action: normalizedAction
+      action: effectiveAction
     });
   }
 
