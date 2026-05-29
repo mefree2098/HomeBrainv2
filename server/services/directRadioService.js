@@ -3618,21 +3618,131 @@ class DirectRadioService {
     }
   }
 
+  parseHexBytes(hex, length) {
+    if (typeof hex !== 'string') {
+      return null;
+    }
+    const clean = hex.trim().toLowerCase().replace(/^0x/, '');
+    if (!/^[0-9a-f]+$/.test(clean) || clean.length !== length * 2) {
+      return null;
+    }
+    const bytes = [];
+    for (let i = 0; i < clean.length; i += 2) {
+      bytes.push(parseInt(clean.slice(i, i + 2), 16));
+    }
+    return bytes;
+  }
+
+  isCompleteZigbeeNetwork(zigbee) {
+    return Boolean(
+      zigbee
+      && Number.isFinite(Number(zigbee.panID)) && Number(zigbee.panID) > 0
+      && Array.isArray(zigbee.extendedPanID) && zigbee.extendedPanID.length === 8
+      && Array.isArray(zigbee.networkKey) && zigbee.networkKey.length === 16
+      && Array.isArray(zigbee.channelList) && zigbee.channelList.length > 0
+    );
+  }
+
+  // Convert a zigbee-herdsman unified coordinator backup into Controller network
+  // credentials. Returns null when required fields are missing/invalid.
+  deriveZigbeeNetworkFromBackup(backup) {
+    if (!backup || typeof backup !== 'object') {
+      return null;
+    }
+    const networkKey = this.parseHexBytes(backup?.network_key?.key, 16);
+    const extendedPanID = this.parseHexBytes(backup?.extended_pan_id, 8);
+    let panID = null;
+    const rawPan = backup.pan_id;
+    if (typeof rawPan === 'string' && /^(0x)?[0-9a-fA-F]+$/.test(rawPan.trim())) {
+      panID = parseInt(rawPan.trim().replace(/^0x/, ''), 16);
+    } else if (Number.isFinite(Number(rawPan))) {
+      panID = Number(rawPan);
+    }
+    const channel = Number(backup.channel);
+    const channelList = Array.isArray(backup.channel_mask) && backup.channel_mask.length
+      ? backup.channel_mask.map(Number).filter((value) => Number.isFinite(value))
+      : (Number.isFinite(channel) && channel > 0 ? [channel] : null);
+    const network = { panID, extendedPanID, networkKey, channelList };
+    return this.isCompleteZigbeeNetwork(network) ? network : null;
+  }
+
+  async recoverZigbeeNetworkFromBackup() {
+    const backup = await readJsonFile(path.join(ZIGBEE_DIR, 'coordinator-backup.json'), null);
+    return this.deriveZigbeeNetworkFromBackup(backup);
+  }
+
+  // A prior paired network is implied by either the coordinator backup or a
+  // non-empty herdsman database existing on disk.
+  detectExistingZigbeeNetwork() {
+    try {
+      if (fs.existsSync(path.join(ZIGBEE_DIR, 'coordinator-backup.json'))) {
+        return true;
+      }
+      const dbPath = path.join(ZIGBEE_DIR, 'database.db');
+      if (fs.existsSync(dbPath) && fs.statSync(dbPath).size > 0) {
+        return true;
+      }
+    } catch (_error) {
+      // Treat inability to inspect as "no detectable prior network".
+    }
+    return false;
+  }
+
   async ensureControllerConfig() {
     const existing = await readJsonFile(CONFIG_PATH, {});
+
+    // --- Zigbee network credentials (safety-critical) ---
+    // Losing these and regenerating random ones makes zigbee-herdsman form a
+    // brand-new network on next start, which unpairs EVERY paired Zigbee device.
+    // So when the saved config is incomplete we recover the real credentials
+    // from the coordinator backup before ever generating new random ones, and we
+    // refuse to mint a fresh key when a prior network exists but is unrecoverable.
+    this.zigbee.networkResetRisk = false;
+    this.zigbee.networkRecovered = false;
+
+    let zigbeeNetwork = {
+      panID: Number(existing?.zigbee?.panID) || null,
+      extendedPanID: Array.isArray(existing?.zigbee?.extendedPanID) && existing.zigbee.extendedPanID.length === 8
+        ? existing.zigbee.extendedPanID
+        : null,
+      networkKey: Array.isArray(existing?.zigbee?.networkKey) && existing.zigbee.networkKey.length === 16
+        ? existing.zigbee.networkKey
+        : null,
+      channelList: Array.isArray(existing?.zigbee?.channelList) && existing.zigbee.channelList.length > 0
+        ? existing.zigbee.channelList
+        : null
+    };
+
+    if (!this.isCompleteZigbeeNetwork(zigbeeNetwork)) {
+      const recovered = await this.recoverZigbeeNetworkFromBackup();
+      if (recovered) {
+        zigbeeNetwork = recovered;
+        this.zigbee.networkRecovered = true;
+        this.log('warn', 'zigbee', 'Recovered Zigbee network credentials from coordinator-backup.json because controller-config.json was missing or incomplete. This prevents a network reset that would unpair every Zigbee device.', {
+          configPath: CONFIG_PATH
+        });
+      } else if (this.detectExistingZigbeeNetwork()) {
+        // Prior network exists but credentials are unrecoverable: refuse to mint
+        // new keys (which would silently wipe all devices). startZigbee checks
+        // this flag and aborts instead of forming a new network.
+        this.zigbee.networkResetRisk = true;
+        this.log('error', 'zigbee', 'CRITICAL: Zigbee controller-config.json is missing/incomplete and a previously paired network exists (database/backup present), but the network credentials could not be recovered. Refusing to auto-generate a new network key because that would unpair every Zigbee device. Restore controller-config.json / coordinator-backup.json from backup before starting Zigbee.', {
+          configPath: CONFIG_PATH
+        });
+      } else {
+        // Genuine first-time setup: no prior network, safe to generate fresh.
+        zigbeeNetwork = {
+          panID: 0x1a00 + crypto.randomInt(0, 0x3ff),
+          extendedPanID: randomByteArray(8),
+          networkKey: randomByteArray(16),
+          channelList: [15]
+        };
+        this.log('info', 'zigbee', 'No existing Zigbee network detected; generating fresh network credentials (first-time setup).');
+      }
+    }
+
     const next = {
-      zigbee: {
-        panID: Number(existing?.zigbee?.panID) || (0x1a00 + crypto.randomInt(0, 0x3ff)),
-        extendedPanID: Array.isArray(existing?.zigbee?.extendedPanID) && existing.zigbee.extendedPanID.length === 8
-          ? existing.zigbee.extendedPanID
-          : randomByteArray(8),
-        networkKey: Array.isArray(existing?.zigbee?.networkKey) && existing.zigbee.networkKey.length === 16
-          ? existing.zigbee.networkKey
-          : randomByteArray(16),
-        channelList: Array.isArray(existing?.zigbee?.channelList) && existing.zigbee.channelList.length > 0
-          ? existing.zigbee.channelList
-          : [15]
-      },
+      zigbee: zigbeeNetwork,
       zwave: {
         securityKeys: {
           S2_AccessControl: trimString(existing?.zwave?.securityKeys?.S2_AccessControl) || randomHex(16),
@@ -3646,6 +3756,19 @@ class DirectRadioService {
         }
       }
     };
+
+    // Never persist incomplete/placeholder Zigbee creds — that would lock in bad
+    // state that looks "complete" on the next start. Only write the zigbee
+    // section when it is complete; otherwise preserve any previously-saved
+    // complete creds, or omit the section so a later restore can heal it.
+    if (!this.isCompleteZigbeeNetwork(next.zigbee)) {
+      if (this.isCompleteZigbeeNetwork(existing?.zigbee)) {
+        next.zigbee = existing.zigbee;
+      } else {
+        delete next.zigbee;
+      }
+    }
+
     await writeJsonFile(CONFIG_PATH, next);
     return next;
   }
@@ -3775,6 +3898,33 @@ class DirectRadioService {
     return this.getStatus();
   }
 
+  /**
+   * Safely invoke a fire-and-forget async radio event handler. Any synchronous
+   * throw or async rejection is caught and logged instead of becoming an
+   * unhandled promise rejection that silently drops the device update (and can
+   * crash the process on modern Node). This is the error boundary for every
+   * Zigbee/Z-Wave event listener.
+   */
+  dispatchHandler(label, protocol, fn, context = {}) {
+    const onError = (error) => {
+      this.log('error', protocol, `Unhandled error in ${label} handler`, {
+        ...context,
+        error: error && error.message ? error.message : String(error),
+        stack: error && error.stack ? String(error.stack).split('\n').slice(0, 5).join(' | ') : null
+      });
+    };
+    try {
+      const result = fn();
+      if (result && typeof result.then === 'function') {
+        result.then(undefined, onError);
+      }
+      return result;
+    } catch (error) {
+      onError(error);
+      return undefined;
+    }
+  }
+
   async startZigbee(serialPath) {
     try {
       this.log('info', 'zigbee', 'Starting Zigbee coordinator', {
@@ -3783,6 +3933,14 @@ class DirectRadioService {
       const { Controller } = require('zigbee-herdsman');
       this.zigbee.converters = require('zigbee-herdsman-converters');
       const config = await this.ensureControllerConfig();
+      if (this.zigbee.networkResetRisk || !this.isCompleteZigbeeNetwork(config.zigbee)) {
+        this.zigbee.started = false;
+        this.zigbee.error = 'Zigbee start aborted: network credentials are missing and could not be recovered. Refusing to form a new network (which would unpair every device). Restore controller-config.json / coordinator-backup.json and retry.';
+        this.log('error', 'zigbee', 'Aborting Zigbee coordinator start to avoid forming a new network and unpairing all devices. Restore the radio state directory (controller-config.json + coordinator-backup.json) and restart.', {
+          serialPath
+        });
+        return;
+      }
       const controller = new Controller({
         network: {
           panID: config.zigbee.panID,
@@ -3812,7 +3970,7 @@ class DirectRadioService {
           ieeeAddr: payload?.device?.ieeeAddr || null,
           modelID: payload?.device?.modelID || null
         });
-        void this.handleZigbeeDeviceChanged(payload?.device, 'deviceJoined');
+        this.dispatchHandler('zigbee:deviceJoined', 'zigbee', () => this.handleZigbeeDeviceChanged(payload?.device, 'deviceJoined'), { ieeeAddr: payload?.device?.ieeeAddr || null });
       });
       controller.on('deviceInterview', (payload) => {
         this.log(payload?.status === 'successful' ? 'info' : 'warn', 'zigbee', 'Zigbee device interview update', {
@@ -3821,7 +3979,7 @@ class DirectRadioService {
           modelID: payload?.device?.modelID || null
         });
         if (payload?.status === 'successful') {
-          void this.handleZigbeeDeviceChanged(payload.device, 'deviceInterview');
+          this.dispatchHandler('zigbee:deviceInterview', 'zigbee', () => this.handleZigbeeDeviceChanged(payload.device, 'deviceInterview'), { ieeeAddr: payload?.device?.ieeeAddr || null });
         }
       });
       controller.on('deviceAnnounce', (payload) => {
@@ -3829,7 +3987,7 @@ class DirectRadioService {
           ieeeAddr: payload?.device?.ieeeAddr || null,
           networkAddress: payload?.device?.networkAddress || null
         });
-        void this.handleZigbeeDeviceChanged(payload?.device, 'deviceAnnounce');
+        this.dispatchHandler('zigbee:deviceAnnounce', 'zigbee', () => this.handleZigbeeDeviceChanged(payload?.device, 'deviceAnnounce'), { ieeeAddr: payload?.device?.ieeeAddr || null });
       });
       controller.on('message', (payload) => {
         this.log('info', 'zigbee', 'Zigbee message received', {
@@ -3838,7 +3996,7 @@ class DirectRadioService {
           type: payload?.type || null,
           dataKeys: payload?.data && typeof payload.data === 'object' ? Object.keys(payload.data).slice(0, 12) : []
         });
-        void this.handleZigbeeDeviceChanged(payload?.device, 'message', { message: payload });
+        this.dispatchHandler('zigbee:message', 'zigbee', () => this.handleZigbeeDeviceChanged(payload?.device, 'message', { message: payload }), { ieeeAddr: payload?.device?.ieeeAddr || null, cluster: payload?.cluster || null });
       });
       controller.on('adapterDisconnected', () => {
         this.zigbee.started = false;
@@ -3852,10 +4010,18 @@ class DirectRadioService {
       this.zigbee.lastStartResult = await controller.start();
       this.zigbee.started = true;
       this.zigbee.error = null;
-      this.log('info', 'zigbee', 'Zigbee coordinator started', {
-        serialPath,
-        lastStartResult: this.zigbee.lastStartResult || null
-      });
+      this.zigbee.networkReset = String(this.zigbee.lastStartResult || '').toLowerCase() === 'reset';
+      if (this.zigbee.networkReset) {
+        this.log('error', 'zigbee', 'CRITICAL: Zigbee network was RESET on startup — the coordinator formed a brand-new network, so every previously paired Zigbee device has been removed and must be re-paired. This almost always means the saved network key / coordinator backup was lost or no longer matches the configured network. Restore the radio state directory (controller-config.json + coordinator-backup.json) before re-pairing.', {
+          serialPath,
+          lastStartResult: this.zigbee.lastStartResult || null
+        });
+      } else {
+        this.log('info', 'zigbee', 'Zigbee coordinator started', {
+          serialPath,
+          lastStartResult: this.zigbee.lastStartResult || null
+        });
+      }
       await this.syncZigbeeDevices();
     } catch (error) {
       this.zigbee.started = false;
@@ -3903,20 +4069,20 @@ class DirectRadioService {
           serialPath,
           homeId: driver.controller?.homeId || null
         });
-        void this.syncZWaveNodes();
+        this.dispatchHandler('zwave:syncNodes', 'zwave', () => this.syncZWaveNodes());
       });
       driver.on('all nodes ready', () => {
         this.log('info', 'zwave', 'All Z-Wave nodes ready', {
           nodeCount: driver.controller?.nodes?.size ?? null
         });
-        void this.syncZWaveNodes();
+        this.dispatchHandler('zwave:syncNodes', 'zwave', () => this.syncZWaveNodes());
       });
       driver.on('node added', (node) => {
         this.log('info', 'zwave', 'Z-Wave node added', {
           nodeId: node?.id || null
         });
         this.attachZWaveNodeStatusListeners(node);
-        void this.handleZWaveNodeChanged(node, 'node added');
+        this.dispatchHandler('zwave:node added', 'zwave', () => this.handleZWaveNodeChanged(node, 'node added'), { nodeId: node?.id || null });
       });
       driver.on('node removed', (node, reason) => {
         this.log('info', 'zwave', 'Z-Wave node removed', {
@@ -3932,14 +4098,14 @@ class DirectRadioService {
           productLabel: node?.productLabel || null
         });
         this.attachZWaveNodeStatusListeners(node);
-        void this.handleZWaveNodeChanged(node, 'node ready');
+        this.dispatchHandler('zwave:node ready', 'zwave', () => this.handleZWaveNodeChanged(node, 'node ready'), { nodeId: node?.id || null });
       });
       driver.on('node value updated', (node) => {
         this.log('info', 'zwave', 'Z-Wave node value updated', {
           nodeId: node?.id || null
         });
         this.attachZWaveNodeStatusListeners(node);
-        void this.handleZWaveNodeChanged(node, 'node value updated');
+        this.dispatchHandler('zwave:node value updated', 'zwave', () => this.handleZWaveNodeChanged(node, 'node value updated'), { nodeId: node?.id || null });
       });
       driver.on('error', (error) => {
         this.zwave.error = error.message;
