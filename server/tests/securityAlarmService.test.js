@@ -456,7 +456,9 @@ test('getAlarmStatus returns platform-scoped siren outputs with selected state',
           supportsAlarm: true,
           homebrainDirect: {
             protocol: 'zwave',
-            nodeId: 8
+            nodeId: 8,
+            ready: false,
+            status: 3
           }
         }
       },
@@ -496,15 +498,17 @@ test('getAlarmStatus returns platform-scoped siren outputs with selected state',
   assert.equal(status.enabledPlatforms.smartthings, false);
   assert.equal(status.sirenOutputCount, 2);
   assert.equal(status.selectedSirenOutputCount, 1);
-  assert.equal(status.onlineSirenOutputCount, 2);
+  assert.equal(status.onlineSirenOutputCount, 1);
   assert.deepEqual(status.sirenOutputs.map((output) => output.deviceId), [
     'native-siren',
     'native-spare-siren'
   ]);
   assert.equal(status.sirenOutputs[0].isSelected, true);
+  assert.equal(status.sirenOutputs[0].isOnline, false);
   assert.equal(status.sirenOutputs[0].name, 'Main Siren');
   assert.equal(status.sirenOutputs[0].platform, 'homebrain');
   assert.equal(status.sirenOutputs[1].isSelected, false);
+  assert.equal(status.sirenOutputs[1].isOnline, true);
   assert.equal(status.sirenOutputs[1].platform, 'homebrain');
 });
 

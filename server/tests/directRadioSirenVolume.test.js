@@ -5,6 +5,10 @@ const zwave = require('zwave-js');
 const directRadioService = require('../services/directRadioService');
 
 const DirectRadioService = directRadioService.DirectRadioService;
+const {
+  isZWaveNodeCommandReady,
+  isZWaveNodeOnline
+} = directRadioService._test;
 
 function sirenVolumeCatalogParameter(overrides = {}) {
   return {
@@ -67,6 +71,46 @@ function nativeSirenDevice(overrides = {}) {
     ...overrides
   };
 }
+
+function zwaveNode(overrides = {}) {
+  return {
+    id: 8,
+    ready: true,
+    status: 4,
+    interviewStage: 5,
+    isControllerNode: false,
+    isListening: true,
+    valueDB: {
+      hasValue: () => false,
+      getValue: () => undefined
+    },
+    ...overrides
+  };
+}
+
+test('Z-Wave readiness treats dead or incomplete nodes as offline', () => {
+  const service = new DirectRadioService();
+  const deadNode = zwaveNode({
+    ready: false,
+    status: 3,
+    interviewStage: 1
+  });
+  const aliveNode = zwaveNode();
+
+  const deadUpdate = service.normalizeZWaveNode(deadNode, 'sync').update;
+  const aliveUpdate = service.normalizeZWaveNode(aliveNode, 'sync').update;
+
+  assert.equal(isZWaveNodeOnline(deadNode), false);
+  assert.equal(isZWaveNodeCommandReady(deadNode), false);
+  assert.equal(deadUpdate.isOnline, false);
+  assert.equal(deadUpdate.properties.homebrainDirect.ready, false);
+  assert.equal(deadUpdate.properties.homebrainDirect.status, 3);
+
+  assert.equal(isZWaveNodeOnline(aliveNode), true);
+  assert.equal(isZWaveNodeCommandReady(aliveNode), true);
+  assert.equal(aliveUpdate.isOnline, true);
+  assert.equal(aliveUpdate.properties.homebrainDirect.ready, true);
+});
 
 test('Z-Wave siren volume command writes the catalog configuration parameter', async () => {
   const service = new DirectRadioService();
