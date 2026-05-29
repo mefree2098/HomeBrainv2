@@ -37,6 +37,8 @@ type SecuritySensor = {
   deviceId: string
   localDeviceId: string | null
   zoneDeviceId: string | null
+  source?: string | null
+  sourceLabel?: string | null
   name: string
   room: string | null
   sensorType: string
@@ -58,6 +60,8 @@ type SecuritySensor = {
 type DoorLock = {
   deviceId: string
   localDeviceId: string | null
+  source?: string | null
+  sourceLabel?: string | null
   name: string
   room: string | null
   isLocked: boolean
@@ -199,6 +203,22 @@ const formatAlarmStateDetail = (alarmState?: string | null) => {
     default:
       return "System currently disarmed"
   }
+}
+
+const formatSecurityPlatformStatus = (enabledPlatforms?: AlarmStatus["enabledPlatforms"] | null) => {
+  const homebrainEnabled = enabledPlatforms?.homebrain !== false
+  const smartThingsEnabled = enabledPlatforms?.smartthings !== false
+
+  if (homebrainEnabled && smartThingsEnabled) {
+    return "HomeBrain + SmartThings"
+  }
+  if (homebrainEnabled) {
+    return "HomeBrain native"
+  }
+  if (smartThingsEnabled) {
+    return "SmartThings"
+  }
+  return "No security platform"
 }
 
 const batteryClassName = (sensor: SecuritySensor) => {
@@ -878,7 +898,10 @@ export function SecurityAlarmWidget({
     : sensors.filter((sensor) => sensor.requiresAttention).length
   const alarmTone = alarmStateTone(alarmStatus?.alarmState)
   const alarmStatusDetail = formatAlarmStateDetail(alarmStatus?.alarmState)
-  const systemStatus = alarmStatus?.isOnline ? "Online" : "Offline"
+  const systemStatus = [
+    formatSecurityPlatformStatus(enabledPlatforms),
+    alarmStatus?.isOnline ? "Online" : "Offline"
+  ].join(" • ")
 
   const sensorSummaryParts = [
     sensorCount > 0 ? `${activeSensorCount}/${sensorCount} active` : "No sensors detected",

@@ -98,6 +98,15 @@ const SECURITY_AUDIO_PROMPTS = Object.freeze({
   securityAlertPulse: '/audio/security/security-alert-pulse.mp3'
 });
 
+const HOMEBRAIN_SECURITY_SOURCES = new Set([
+  'homebrain-zigbee',
+  'homebrain-zwave',
+  'homebrain-thread',
+  'homebrain-matter',
+  'homebrain',
+  'local'
+]);
+
 const normalizeString = (value) => {
   if (typeof value !== 'string') {
     return '';
@@ -401,6 +410,33 @@ const looksLikeHomeBrainAlarmOutput = (device) => {
     .join(' ');
 
   return /\b(siren|alarm|sounder|strobe|chime)\b/.test(haystack);
+};
+
+const getSecurityPlatformForDevice = (device) => {
+  const source = canonicalizeDeviceSource(getDeviceSource(device));
+
+  if (source === 'smartthings') {
+    return 'smartthings';
+  }
+
+  if (HOMEBRAIN_SECURITY_SOURCES.has(source)) {
+    return 'homebrain';
+  }
+
+  return null;
+};
+
+const isDeviceAllowedForSecurityPlatforms = (device, enabledPlatforms) => {
+  if (!device || !enabledPlatforms) {
+    return true;
+  }
+
+  const platform = getSecurityPlatformForDevice(device);
+  if (!platform) {
+    return false;
+  }
+
+  return enabledPlatforms[platform] !== false;
 };
 
 class SecurityAlarmService {
@@ -825,7 +861,8 @@ class SecurityAlarmService {
     };
   }
 
-  getSecuritySensors(alarm, devices = []) {
+  getSecuritySensors(alarm, devices = [], options = {}) {
+    const enabledPlatforms = options.enabledPlatforms || null;
     const deviceMap = new Map();
 
     devices.forEach((device) => {
@@ -843,6 +880,10 @@ class SecurityAlarmService {
     zones.forEach((zone) => {
       const zoneDeviceId = normalizeString(zone?.deviceId);
       const matchedDevice = zoneDeviceId ? (deviceMap.get(zoneDeviceId) || null) : null;
+      if (matchedDevice && !isDeviceAllowedForSecurityPlatforms(matchedDevice, enabledPlatforms)) {
+        return;
+      }
+
       const summary = this.buildSecuritySensorSummary({ device: matchedDevice, zone });
       securitySensors.push(summary);
       if (summary.localDeviceId) {
@@ -852,7 +893,12 @@ class SecurityAlarmService {
 
     devices.forEach((device) => {
       const localDeviceId = normalizeString(device?._id?.toString?.() || device?._id || device?.id);
-      if (!localDeviceId || seenDeviceIds.has(localDeviceId) || !looksLikeSecuritySensor(device)) {
+      if (
+        !localDeviceId
+        || seenDeviceIds.has(localDeviceId)
+        || !isDeviceAllowedForSecurityPlatforms(device, enabledPlatforms)
+        || !looksLikeSecuritySensor(device)
+      ) {
         return;
       }
 
@@ -876,9 +922,13 @@ class SecurityAlarmService {
     return securitySensors;
   }
 
-  getDoorLocks(devices = []) {
+  getDoorLocks(devices = [], options = {}) {
+    const enabledPlatforms = options.enabledPlatforms || null;
     const doorLocks = devices
-      .filter((device) => normalizeString(device?.type).toLowerCase() === 'lock')
+      .filter((device) => (
+        normalizeString(device?.type).toLowerCase() === 'lock'
+        && isDeviceAllowedForSecurityPlatforms(device, enabledPlatforms)
+      ))
       .map((device) => this.buildDoorLockSummary(device));
 
     doorLocks.sort((left, right) => {
@@ -1538,8 +1588,8 @@ class SecurityAlarmService {
       if (options.refreshDoorLocks && enabledPlatforms.smartthings) {
         devices = await this.refreshSmartThingsDoorLocks(devices);
       }
-      const securitySensors = this.getSecuritySensors(alarm, devices);
-      const doorLocks = this.getDoorLocks(devices);
+      const securitySensors = this.getSecuritySensors(alarm, devices, { enabledPlatforms });
+      const doorLocks = this.getDoorLocks(devices, { enabledPlatforms });
       const sensorCount = securitySensors.length;
       const activeSensorCount = securitySensors.filter((sensor) => sensor.isActive).length;
       const monitoredSensorCount = securitySensors.filter((sensor) => sensor.isMonitored && !sensor.isBypassed).length;

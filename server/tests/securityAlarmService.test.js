@@ -169,7 +169,7 @@ test('getAlarmStatus returns security sensors and door lock summaries', async (t
   assert.equal(garageLock.smartThingsDeviceId, 'smartthings-lock-2');
 });
 
-test('getAlarmStatus includes Matter and source-agnostic sensors in HomeBrain security routines', async (t) => {
+test('getAlarmStatus scopes sensors and locks to the enabled HomeBrain security platform', async (t) => {
   const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
   const originalDeviceFind = Device.find;
   const originalEnsureSmartThingsState = deviceService.ensureSmartThingsState;
@@ -208,21 +208,36 @@ test('getAlarmStatus includes Matter and source-agnostic sensors in HomeBrain se
   Device.find = () => ({
     lean: async () => ([
       {
-        _id: 'matter-contact',
-        name: 'Matter Patio Contact',
+        _id: 'native-contact',
+        name: 'Native Patio Contact',
         type: 'sensor',
         room: 'Patio',
         status: true,
         isOnline: true,
         lastSeen: now,
         properties: {
-          source: 'homebrain-matter',
-          matterFeatures: ['contact', 'battery'],
-          matterBatteryLevel: 97,
-          matter: {
-            nodeId: '1234',
-            endpointId: 1,
-            deviceTypeNames: ['Contact Sensor']
+          source: 'homebrain-zigbee',
+          directRadioFeatures: ['contact', 'battery'],
+          homeBrainBatteryLevel: 97,
+          homebrainDirect: {
+            protocol: 'zigbee',
+            ieeeAddr: '0x00124b0025aa55cc'
+          }
+        }
+      },
+      {
+        _id: 'native-lock',
+        name: 'Native Entry Lock',
+        type: 'lock',
+        room: 'Entry',
+        status: true,
+        isOnline: true,
+        lastSeen: now,
+        properties: {
+          source: 'homebrain-zwave',
+          homebrainDirect: {
+            protocol: 'zwave',
+            nodeId: 7
           }
         }
       },
@@ -238,6 +253,33 @@ test('getAlarmStatus includes Matter and source-agnostic sensors in HomeBrain se
           source: 'tempest',
           includeInSecurityCenter: true
         }
+      },
+      {
+        _id: 'smartthings-contact',
+        name: 'SmartThings Patio Contact',
+        type: 'sensor',
+        room: 'Patio',
+        status: false,
+        isOnline: true,
+        lastSeen: now,
+        properties: {
+          source: 'smartthings',
+          smartThingsDeviceId: 'smartthings-contact-1',
+          smartThingsCapabilities: ['contactSensor']
+        }
+      },
+      {
+        _id: 'smartthings-lock',
+        name: 'SmartThings Entry Lock',
+        type: 'lock',
+        room: 'Entry',
+        status: false,
+        isOnline: true,
+        lastSeen: now,
+        properties: {
+          source: 'smartthings',
+          smartThingsDeviceId: 'smartthings-lock-1'
+        }
       }
     ])
   });
@@ -246,10 +288,120 @@ test('getAlarmStatus includes Matter and source-agnostic sensors in HomeBrain se
 
   assert.equal(status.enabledPlatforms.homebrain, true);
   assert.equal(status.enabledPlatforms.smartthings, false);
-  assert.equal(status.sensorCount, 2);
+  assert.equal(status.sensorCount, 1);
   assert.equal(status.activeSensorCount, 1);
-  assert.equal(status.sensors.some((sensor) => sensor.sourceLabel === 'HomeBrain Matter'), true);
-  assert.equal(status.sensors.some((sensor) => sensor.deviceId === 'tempest-lightning'), true);
+  assert.equal(status.sensors[0].deviceId, 'native-contact');
+  assert.equal(status.sensors[0].sourceLabel, 'HomeBrain Zigbee');
+  assert.equal(status.sensors.some((sensor) => sensor.deviceId === 'tempest-lightning'), false);
+  assert.equal(status.sensors.some((sensor) => sensor.deviceId === 'smartthings-contact'), false);
+  assert.equal(status.doorLockCount, 1);
+  assert.equal(status.doorLocks[0].deviceId, 'native-lock');
+  assert.equal(status.doorLocks[0].sourceLabel, 'HomeBrain Z-Wave');
+});
+
+test('getAlarmStatus scopes sensors and locks to the enabled SmartThings security platform', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+  const originalDeviceFind = Device.find;
+  const originalEnsureSmartThingsState = deviceService.ensureSmartThingsState;
+  const originalIsSmartThingsConfiguredForSthm = securityAlarmService.isSmartThingsConfiguredForSthm;
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+    Device.find = originalDeviceFind;
+    deviceService.ensureSmartThingsState = originalEnsureSmartThingsState;
+    securityAlarmService.isSmartThingsConfiguredForSthm = originalIsSmartThingsConfiguredForSthm;
+  });
+
+  const now = new Date('2026-05-07T12:30:00.000Z');
+  const alarm = {
+    alarmState: 'disarmed',
+    enabledPlatforms: {
+      homebrain: false,
+      smartthings: true
+    },
+    lastArmed: null,
+    lastDisarmed: now,
+    lastTriggered: null,
+    zones: [],
+    isOnline: true,
+    lastSyncWithSmartThings: now,
+    batteryLevel: null,
+    signalStrength: null,
+    save: async function save() {
+      return this;
+    }
+  };
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+  securityAlarmService.isSmartThingsConfiguredForSthm = async () => false;
+  deviceService.ensureSmartThingsState = async () => {};
+  Device.find = () => ({
+    lean: async () => ([
+      {
+        _id: 'smartthings-contact',
+        name: 'SmartThings Door Contact',
+        type: 'sensor',
+        room: 'Entry',
+        status: false,
+        isOnline: true,
+        lastSeen: now,
+        properties: {
+          source: 'smartthings',
+          smartThingsDeviceId: 'smartthings-contact-1',
+          smartThingsCapabilities: ['contactSensor']
+        }
+      },
+      {
+        _id: 'smartthings-lock',
+        name: 'SmartThings Entry Lock',
+        type: 'lock',
+        room: 'Entry',
+        status: false,
+        isOnline: true,
+        lastSeen: now,
+        properties: {
+          source: 'smartthings',
+          smartThingsDeviceId: 'smartthings-lock-1'
+        }
+      },
+      {
+        _id: 'native-contact',
+        name: 'Native Door Contact',
+        type: 'sensor',
+        room: 'Entry',
+        status: true,
+        isOnline: true,
+        lastSeen: now,
+        properties: {
+          source: 'homebrain-zigbee',
+          directRadioFeatures: ['contact']
+        }
+      },
+      {
+        _id: 'native-lock',
+        name: 'Native Entry Lock',
+        type: 'lock',
+        room: 'Entry',
+        status: true,
+        isOnline: true,
+        lastSeen: now,
+        properties: {
+          source: 'homebrain-zwave'
+        }
+      }
+    ])
+  });
+
+  const status = await securityAlarmService.getAlarmStatus();
+
+  assert.equal(status.enabledPlatforms.homebrain, false);
+  assert.equal(status.enabledPlatforms.smartthings, true);
+  assert.equal(status.sensorCount, 1);
+  assert.equal(status.sensors[0].deviceId, 'smartthings-contact');
+  assert.equal(status.sensors[0].sourceLabel, 'SmartThings');
+  assert.equal(status.doorLockCount, 1);
+  assert.equal(status.doorLocks[0].deviceId, 'smartthings-lock');
+  assert.equal(status.doorLocks[0].sourceLabel, 'SmartThings');
 });
 
 test('getAlarmStatus can force-refresh SmartThings door locks for dashboard consumers', async (t) => {
