@@ -832,6 +832,21 @@ class DeviceService {
           break;
         }
 
+        case 'setsirensound': {
+          if (!isDirectRadio || !getDirectRadioService().supportsSirenSoundControl(device)) {
+            throw new Error('Siren sound control is only available for HomeBrain-native sirens that expose a sound setting');
+          }
+          const soundCommand = getDirectRadioService().normalizeSirenSoundCommand(device, value);
+          updateData.properties = {
+            ...(device?.properties && typeof device.properties === 'object' ? device.properties : {}),
+            supportsSirenSound: true,
+            sirenSound: soundCommand.value,
+            ...(soundCommand.options.length > 0 ? { sirenSoundOptions: soundCommand.options } : {})
+          };
+          commandValue = soundCommand.value;
+          break;
+        }
+
         case 'setbrightness': {
           if (!supportsBrightnessControl) {
             throw new Error('Brightness control is only available for dimmable lights or switches');
