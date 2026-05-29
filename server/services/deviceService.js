@@ -116,7 +116,11 @@ const HARMONY_VISIBLE_DEVICE_QUERY = Object.freeze({
 const RETIRED_SMARTTHINGS_MIGRATION_SOURCE_QUERY = Object.freeze({
   $or: [
     { 'properties.smartThingsMigration.retiredSource': { $exists: false } },
-    { 'properties.smartThingsMigration.retiredSource': { $ne: true } }
+    { 'properties.smartThingsMigration.retiredSource': { $ne: true } },
+    // A native (homebrain-*) device is the live migrated device, never a retired
+    // SmartThings source tombstone -- always keep it visible even if a stale
+    // retiredSource flag lingered on it.
+    { 'properties.source': { $regex: '^homebrain-', $options: 'i' } }
   ]
 });
 let cachedInsteonService = null;

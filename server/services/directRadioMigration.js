@@ -579,12 +579,20 @@ severMigratedSmartThingsIdentity(properties = {}) {
       : {};
     const smartThingsDeviceId = migration.smartThingsDeviceId || props.smartThingsDeviceId || null;
     const smartThingsId = migration.smartThingsId || props.smartThingsId || null;
-    props.smartThingsMigration = {
+    const nextMigration = {
       ...migration,
       ...(smartThingsDeviceId ? { smartThingsDeviceId } : {}),
-      ...(smartThingsId ? { smartThingsId } : {}),
-      retiredSource: true
+      ...(smartThingsId ? { smartThingsId } : {})
     };
+    // The migrated/native device is the LIVE device, not a retired SmartThings
+    // source tombstone. Never flag it retiredSource here -- that flag hides the
+    // device from the device list (which filters out retiredSource records).
+    // Also clear any such flag a previous build wrongly set, to un-hide it.
+    delete nextMigration.retiredSource;
+    if (nextMigration.status === 'finalized_source') {
+      delete nextMigration.status;
+    }
+    props.smartThingsMigration = nextMigration;
     delete props.smartThingsDeviceId;
     delete props.smartThingsId;
     return props;
@@ -594,17 +602,30 @@ async repairMigratedSmartThingsIdentities() {
     let candidates;
     try {
       candidates = await Device.find({
-        $and: [
+        $or: [
           {
-            $or: [
-              { 'properties.smartThingsDeviceId': { $exists: true, $ne: null } },
-              { 'properties.smartThingsId': { $exists: true, $ne: null } }
+            $and: [
+              {
+                $or: [
+                  { 'properties.smartThingsDeviceId': { $exists: true, $ne: null } },
+                  { 'properties.smartThingsId': { $exists: true, $ne: null } }
+                ]
+              },
+              {
+                $or: [
+                  { 'properties.source': /^homebrain-/i },
+                  { 'properties.homebrainDirect.protocol': { $exists: true } }
+                ]
+              }
             ]
           },
           {
-            $or: [
+            // Native devices a previous build wrongly flagged as a retired
+            // SmartThings source, which hid them from the device list. Re-running
+            // the sever (which now clears retiredSource) un-hides them.
+            $and: [
               { 'properties.source': /^homebrain-/i },
-              { 'properties.homebrainDirect.protocol': { $exists: true } }
+              { 'properties.smartThingsMigration.retiredSource': true }
             ]
           }
         ]

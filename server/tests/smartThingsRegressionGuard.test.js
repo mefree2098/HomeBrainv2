@@ -27,7 +27,7 @@ test('severMigratedSmartThingsIdentity removes the top-level ST identity and rel
   assert.strictEqual(result.smartThingsId, undefined, 'top-level smartThingsId removed');
   assert.strictEqual(result.smartThingsMigration.smartThingsDeviceId, 'st-123', 'relocated into migration');
   assert.strictEqual(result.smartThingsMigration.smartThingsId, 'stid-9');
-  assert.strictEqual(result.smartThingsMigration.retiredSource, true, 'flagged retiredSource');
+  assert.notStrictEqual(result.smartThingsMigration.retiredSource, true, 'native device is NOT flagged retiredSource (that would hide it from the device list)');
   assert.strictEqual(result.smartThingsMigration.migrationId, 'mig-1', 'preserved migration metadata');
   assert.strictEqual(result.smartThingsMigration.previousSource, 'smartthings');
   assert.strictEqual(result.source, 'homebrain-zigbee', 'native source untouched');
@@ -50,7 +50,17 @@ test('severMigratedSmartThingsIdentity prefers an existing migration id and is i
 test('severMigratedSmartThingsIdentity tolerates empty/invalid input', () => {
   const result = directRadioService.severMigratedSmartThingsIdentity();
   assert.strictEqual(result.smartThingsDeviceId, undefined);
-  assert.strictEqual(result.smartThingsMigration.retiredSource, true);
+  assert.notStrictEqual(result.smartThingsMigration.retiredSource, true);
+});
+
+test('severMigratedSmartThingsIdentity clears a wrongly-set retiredSource so the native device is un-hidden', () => {
+  const result = directRadioService.severMigratedSmartThingsIdentity({
+    source: 'homebrain-zwave',
+    smartThingsMigration: { smartThingsDeviceId: 'st-9', retiredSource: true, status: 'finalized_source' }
+  });
+  assert.notStrictEqual(result.smartThingsMigration.retiredSource, true, 'retiredSource cleared');
+  assert.notStrictEqual(result.smartThingsMigration.status, 'finalized_source', 'finalized_source status cleared');
+  assert.strictEqual(result.smartThingsMigration.smartThingsDeviceId, 'st-9', 'ST id preserved');
 });
 
 test('getDeviceSource classifies a severed migrated device as native, not smartthings', () => {
