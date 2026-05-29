@@ -52,7 +52,8 @@ test('deleteDevice removes stale references from dependent HomeBrain records', a
       { deviceId, name: 'Old Siren' },
       { deviceId: '507f1f77bcf86cd799439013', name: 'Keep Siren' }
     ],
-    save: async () => {
+    save: async (options) => {
+      assert.deepEqual(options, { validateBeforeSave: false });
       saved.alarms += 1;
     }
   };
@@ -95,7 +96,8 @@ test('deleteDevice removes stale references from dependent HomeBrain records', a
         ]
       }
     ],
-    save: async () => {
+    save: async (options) => {
+      assert.deepEqual(options, { validateBeforeSave: false });
       saved.profiles += 1;
     }
   };
@@ -131,6 +133,7 @@ test('deleteDevice removes stale references from dependent HomeBrain records', a
   assert.equal(result.deletionCleanup.securityPreferenceReferencesRemoved, 1);
   assert.equal(result.deletionCleanup.dashboardWidgetsRemoved, 1);
   assert.equal(result.deletionCleanup.dashboardDeviceReferencesRemoved, 2);
+  assert.deepEqual(result.deletionCleanup.cleanupErrors, []);
   assert.equal(saved.alarms, 1);
   assert.equal(saved.profiles, 1);
   assert.deepEqual(alarm.zones.map((zone) => zone.deviceId), ['507f1f77bcf86cd799439012']);
@@ -142,6 +145,56 @@ test('deleteDevice removes stale references from dependent HomeBrain records', a
   assert.deepEqual(profile.dashboardViews[0].widgets[1].settings.favoriteDeviceSizes, {
     '507f1f77bcf86cd799439016': 'small'
   });
+});
+
+test('deleteDevice returns the deleted device when reference cleanup hits a legacy profile save error', async (t) => {
+  const originalFindByIdAndDelete = Device.findByIdAndDelete;
+  const originalAlexaDeleteMany = AlexaExposure.deleteMany;
+  const originalClaimDeleteMany = DeviceCommandClaim.deleteMany;
+  const originalEnergyDeleteMany = DeviceEnergySample.deleteMany;
+  const originalSecurityFind = SecurityAlarm.find;
+  const originalProfileFind = UserProfile.find;
+
+  t.after(() => {
+    Device.findByIdAndDelete = originalFindByIdAndDelete;
+    AlexaExposure.deleteMany = originalAlexaDeleteMany;
+    DeviceCommandClaim.deleteMany = originalClaimDeleteMany;
+    DeviceEnergySample.deleteMany = originalEnergyDeleteMany;
+    SecurityAlarm.find = originalSecurityFind;
+    UserProfile.find = originalProfileFind;
+  });
+
+  const deviceId = '507f1f77bcf86cd799439021';
+  Device.findByIdAndDelete = async () => ({
+    _id: deviceId,
+    name: 'Deleted Z-Wave Siren'
+  });
+  AlexaExposure.deleteMany = async () => ({ deletedCount: 0 });
+  DeviceCommandClaim.deleteMany = async () => ({ deletedCount: 0 });
+  DeviceEnergySample.deleteMany = async () => ({ deletedCount: 0 });
+  SecurityAlarm.find = async () => [];
+  UserProfile.find = async () => [
+    {
+      _id: '507f1f77bcf86cd799439099',
+      favorites: {
+        devices: [deviceId]
+      },
+      dashboardViews: [],
+      save: async (options) => {
+        assert.deepEqual(options, { validateBeforeSave: false });
+        throw new Error('UserProfile validation failed: legacy widget type');
+      }
+    }
+  ];
+
+  const result = await deviceService.deleteDevice(deviceId);
+
+  assert.equal(result.name, 'Deleted Z-Wave Siren');
+  assert.equal(result.deletionCleanup.userProfilesUpdated, 0);
+  assert.equal(result.deletionCleanup.favoriteReferencesRemoved, 0);
+  assert.equal(result.deletionCleanup.cleanupErrors.length, 1);
+  assert.equal(result.deletionCleanup.cleanupErrors[0].scope, 'userProfile.save');
+  assert.equal(result.deletionCleanup.cleanupErrors[0].profileId, '507f1f77bcf86cd799439099');
 });
 
 test('controlDevice routes Insteon turn_on through insteon service and skips generic DB write path', async (t) => {

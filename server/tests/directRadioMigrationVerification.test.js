@@ -1603,4 +1603,65 @@ test('Z-Wave failed-node removal force-cleans controller ghosts and matching dev
   assert.equal(result.deletedDeviceCount, 2);
   assert.equal(result.deletionCleanups.length, 2);
   assert.equal(result.deletionCleanups[0].cleanup.securitySirenOutputsRemoved, 1);
+  assert.deepEqual(result.deletionErrors, []);
+});
+
+test('Z-Wave failed-node removal still succeeds when a matching HomeBrain record cleanup fails', async (t) => {
+  const service = createService();
+  service.started = true;
+  const deviceService = require('../services/deviceService');
+  const originalFind = Device.find;
+  const originalDeleteDevice = deviceService.deleteDevice;
+  let removedNodeId = null;
+  const node = {
+    id: 14,
+    isControllerNode: false,
+    ready: false,
+    status: 3,
+    valueDB: { hasValue: () => false }
+  };
+  const nodes = new Map([
+    [14, node]
+  ]);
+  service.zwave.driver = {
+    controller: {
+      nodes,
+      isFailedNode: async () => true,
+      removeFailedNode: async (nodeId) => {
+        removedNodeId = nodeId;
+      }
+    }
+  };
+  Device.find = () => ({
+    select: () => ({
+      lean: async () => [
+        { _id: '507f1f77bcf86cd799439051', name: 'Broken Cleanup Siren' }
+      ]
+    })
+  });
+  deviceService.deleteDevice = async () => {
+    throw new Error('Failed to delete device');
+  };
+  t.after(() => {
+    Device.find = originalFind;
+    deviceService.deleteDevice = originalDeleteDevice;
+  });
+
+  const result = await service.removeFailedZWaveNode('14', {
+    confirm: true,
+    force: true
+  });
+
+  assert.equal(removedNodeId, 14);
+  assert.equal(nodes.has(14), false);
+  assert.equal(result.nodeId, 14);
+  assert.equal(result.deletedDeviceCount, 0);
+  assert.equal(result.deletionCleanups.length, 0);
+  assert.deepEqual(result.deletionErrors, [
+    {
+      deviceId: '507f1f77bcf86cd799439051',
+      name: 'Broken Cleanup Siren',
+      message: 'Failed to delete device'
+    }
+  ]);
 });
