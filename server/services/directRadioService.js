@@ -2295,6 +2295,155 @@ function findZWaveValueByLabel(node, pattern) {
   }
 }
 
+function normalizeNumber(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'string' && value.trim() === '') {
+    return null;
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function normalizeInteger(value) {
+  const numeric = normalizeNumber(value);
+  return numeric === null ? null : Math.round(numeric);
+}
+
+function normalizeCatalogVolumeOptions(options = []) {
+  return (Array.isArray(options) ? options : [])
+    .map((option) => {
+      const value = normalizeInteger(option?.value);
+      const label = trimString(option?.label || option?.name || option?.value);
+      if (value === null || !label) {
+        return null;
+      }
+      return { label, value };
+    })
+    .filter(Boolean);
+}
+
+function isSirenVolumeParameter(parameter) {
+  if (!parameter || typeof parameter !== 'object') {
+    return false;
+  }
+  if (parameter.readOnly === true || parameter.writeOnly === true || parameter.hidden === true) {
+    return false;
+  }
+  const parameterNumber = normalizeInteger(parameter.parameter);
+  if (parameterNumber === null) {
+    return false;
+  }
+  const label = [
+    parameter.label,
+    parameter.name,
+    parameter.purpose,
+    parameter.description
+  ].map((entry) => trimString(entry).toLowerCase()).filter(Boolean).join(' ');
+  return /\bvolume\b/.test(label);
+}
+
+function getSirenVolumeConfigParameterFromCatalog(catalog) {
+  const parameters = Array.isArray(catalog?.configParameters)
+    ? catalog.configParameters
+    : [];
+  const candidates = parameters.filter(isSirenVolumeParameter);
+  if (candidates.length === 0) {
+    return null;
+  }
+  return candidates.slice().sort((left, right) => {
+    const leftLabel = trimString(left.label).toLowerCase();
+    const rightLabel = trimString(right.label).toLowerCase();
+    if (leftLabel === 'volume' && rightLabel !== 'volume') return -1;
+    if (rightLabel === 'volume' && leftLabel !== 'volume') return 1;
+    return normalizeInteger(left.parameter) - normalizeInteger(right.parameter);
+  })[0];
+}
+
+function getSirenVolumeOptionsFromParameter(parameter) {
+  const explicitOptions = normalizeCatalogVolumeOptions(parameter?.options);
+  if (explicitOptions.length > 0) {
+    return explicitOptions;
+  }
+
+  const min = normalizeInteger(parameter?.minValue);
+  const max = normalizeInteger(parameter?.maxValue);
+  if (min === null || max === null || max < min || max - min > 8) {
+    return [];
+  }
+
+  return Array.from({ length: max - min + 1 }, (_entry, index) => {
+    const value = min + index;
+    return { label: String(value), value };
+  });
+}
+
+function getSirenVolumeRangeFromParameter(parameter) {
+  const options = getSirenVolumeOptionsFromParameter(parameter);
+  const optionValues = options.map((option) => option.value);
+  const min = normalizeInteger(parameter?.minValue) ?? (optionValues.length > 0 ? Math.min(...optionValues) : null);
+  const max = normalizeInteger(parameter?.maxValue) ?? (optionValues.length > 0 ? Math.max(...optionValues) : null);
+  return { min, max, options };
+}
+
+function resolveSirenVolumeValue(rawValue, parameter = null) {
+  const { min, max, options } = getSirenVolumeRangeFromParameter(parameter);
+  let nextValue = normalizeInteger(rawValue);
+  if (nextValue === null && typeof rawValue === 'string') {
+    const normalizedLabel = rawValue.trim().toLowerCase();
+    const matched = options.find((option) => option.label.toLowerCase() === normalizedLabel);
+    if (matched) {
+      nextValue = matched.value;
+    }
+  }
+
+  if (nextValue === null) {
+    throw new Error('Siren volume must be a number');
+  }
+
+  if (min !== null && nextValue < min) {
+    throw new Error(`Siren volume must be at least ${min}`);
+  }
+  if (max !== null && nextValue > max) {
+    throw new Error(`Siren volume must be at most ${max}`);
+  }
+
+  const allowedValues = new Set(options.map((option) => option.value));
+  const allowManualEntry = parameter?.allowManualEntry !== false;
+  if (allowedValues.size > 0 && !allowedValues.has(nextValue) && !allowManualEntry) {
+    throw new Error('Siren volume must match one of the supported options');
+  }
+
+  return nextValue;
+}
+
+function buildSirenVolumeProperties(parameter, value) {
+  if (!parameter) {
+    return {};
+  }
+  const options = getSirenVolumeOptionsFromParameter(parameter);
+  const properties = {
+    supportsSirenVolume: true
+  };
+  const numericValue = normalizeInteger(value);
+  if (numericValue !== null) {
+    properties.sirenVolume = numericValue;
+  }
+  if (options.length > 0) {
+    properties.sirenVolumeOptions = options;
+  }
+  return properties;
+}
+
+function hasZWaveValue(node, valueDef) {
+  try {
+    return node?.valueDB?.hasValue?.(valueDef?.id || valueDef) === true;
+  } catch (_error) {
+    return false;
+  }
+}
+
 function normalizeLockCodeSlot(value) {
   const slot = Number(value);
   return Number.isInteger(slot) && slot > 0 ? slot : null;
@@ -4070,6 +4219,19 @@ class DirectRadioService {
     if (findZWaveValueByLabel(node, /\btamper\b/i) !== undefined) features.add('tamper');
 
     const catalogEntry = directRadioProtocolCatalogService.getZWaveNodeCatalogEntry(node);
+    const directRadioCatalog = directRadioProtocolCatalogService.compactCatalogForDevice(catalogEntry);
+    const sirenVolumeParameter = getSirenVolumeConfigParameterFromCatalog(directRadioCatalog);
+    const sirenVolumeValue = sirenVolumeParameter
+      ? getZWaveValue(node, zwave.ConfigurationCCValues.paramInformation(
+        normalizeInteger(sirenVolumeParameter.parameter),
+        normalizeInteger(sirenVolumeParameter.valueBitMask) ?? undefined
+      ))
+      : getZWaveValue(node, zwave.SoundSwitchCCValues.volume);
+    const sirenVolumeProperties = sirenVolumeParameter
+      ? buildSirenVolumeProperties(sirenVolumeParameter, sirenVolumeValue)
+      : hasZWaveValue(node, zwave.SoundSwitchCCValues.volume)
+        ? { supportsSirenVolume: true, ...(normalizeInteger(sirenVolumeValue) !== null ? { sirenVolume: normalizeInteger(sirenVolumeValue) } : {}) }
+        : {};
     (Array.isArray(catalogEntry?.homebrainFeatures) ? catalogEntry.homebrainFeatures : [])
       .map(normalizeFeature)
       .filter(Boolean)
@@ -4130,7 +4292,8 @@ class DirectRadioService {
           batteryLevel,
           directRadioFeatures: directFeatures,
           directRadioCapabilities: buildNormalizedCapabilities(directFeatures, 'zwave'),
-          directRadioCatalog: directRadioProtocolCatalogService.compactCatalogForDevice(catalogEntry),
+          directRadioCatalog,
+          ...sirenVolumeProperties,
           ...buildDirectFeatureProperties(directFeatures)
         }
       }
@@ -6214,6 +6377,73 @@ class DirectRadioService {
     return result;
   }
 
+  normalizeSirenVolumeCommand(device, rawValue) {
+    const parameter = getSirenVolumeConfigParameterFromCatalog(device?.properties?.directRadioCatalog);
+    const value = resolveSirenVolumeValue(rawValue, parameter);
+    return {
+      value,
+      parameter,
+      options: parameter ? getSirenVolumeOptionsFromParameter(parameter) : []
+    };
+  }
+
+  supportsSirenVolumeControl(device) {
+    const protocol = normalizeSourceText(device?.properties?.homebrainDirect?.protocol)
+      || (normalizeSourceText(device?.properties?.source) === DIRECT_RADIO_SOURCES.zwave ? 'zwave' : '');
+    if (protocol !== 'zwave') {
+      return false;
+    }
+    const features = Array.isArray(device?.properties?.directRadioFeatures)
+      ? device.properties.directRadioFeatures.map(normalizeFeature)
+      : [];
+    const descriptor = [
+      device?.type,
+      device?.name,
+      device?.brand,
+      device?.model
+    ].map((entry) => trimString(entry).toLowerCase()).filter(Boolean).join(' ');
+    const looksLikeSiren = device?.type === 'siren'
+      || device?.properties?.supportsAlarm === true
+      || features.includes('alarm')
+      || features.includes('chime')
+      || /\b(?:siren|alarm|sounder|chime)\b/.test(descriptor);
+    if (!looksLikeSiren) {
+      return false;
+    }
+    return Boolean(
+      getSirenVolumeConfigParameterFromCatalog(device?.properties?.directRadioCatalog)
+      || device?.properties?.supportsSirenVolume === true
+    );
+  }
+
+  async setZWaveSirenVolume(device, node, rawValue, updateData = {}) {
+    const zwave = require('zwave-js');
+    const command = this.normalizeSirenVolumeCommand(device, rawValue);
+
+    if (command.parameter) {
+      await this.setZWaveValue(
+        node,
+        zwave.ConfigurationCCValues.paramInformation(
+          normalizeInteger(command.parameter.parameter),
+          normalizeInteger(command.parameter.valueBitMask) ?? undefined
+        ),
+        command.value
+      );
+    } else if (hasZWaveValue(node, zwave.SoundSwitchCCValues.volume)) {
+      await this.setZWaveValue(node, zwave.SoundSwitchCCValues.volume, command.value);
+    } else {
+      throw new Error('Siren volume control is not available for this Z-Wave device');
+    }
+
+    updateData.properties = {
+      ...(device?.properties && typeof device.properties === 'object' ? device.properties : {}),
+      ...(updateData.properties && typeof updateData.properties === 'object' ? updateData.properties : {}),
+      supportsSirenVolume: true,
+      sirenVolume: command.value,
+      ...(command.options.length > 0 ? { sirenVolumeOptions: command.options } : {})
+    };
+  }
+
   async controlZWaveDevice(device, normalizedAction, commandValue, updateData = {}) {
     const node = this.getDirectNodeForDevice(device);
     if (!node) {
@@ -6271,6 +6501,9 @@ class DirectRadioService {
         break;
       case 'unlock':
         await this.setZWaveValue(node, zwave.DoorLockCCValues.targetMode, zwave.DoorLockMode.Unsecured);
+        break;
+      case 'setsirenvolume':
+        await this.setZWaveSirenVolume(device, node, commandValue, updateData);
         break;
       case 'alarmoff':
       case 'turnoffalarm':
@@ -6332,6 +6565,23 @@ class DirectRadioService {
       if (!Object.prototype.hasOwnProperty.call(normalized.update, 'colorTemperature')
         && Object.prototype.hasOwnProperty.call(commandState, 'colorTemperature')) {
         merged.colorTemperature = commandState.colorTemperature;
+      }
+      const commandProperties = commandState.properties && typeof commandState.properties === 'object'
+        ? commandState.properties
+        : null;
+      if (commandProperties) {
+        merged.properties = merged.properties && typeof merged.properties === 'object'
+          ? merged.properties
+          : {};
+        const normalizedProperties = normalized.update.properties && typeof normalized.update.properties === 'object'
+          ? normalized.update.properties
+          : {};
+        ['supportsSirenVolume', 'sirenVolume', 'sirenVolumeOptions'].forEach((key) => {
+          if (!Object.prototype.hasOwnProperty.call(normalizedProperties, key)
+            && Object.prototype.hasOwnProperty.call(commandProperties, key)) {
+            merged.properties[key] = commandProperties[key];
+          }
+        });
       }
     }
 
@@ -6505,6 +6755,8 @@ directRadioService._test = {
   choosePortForProtocol,
   enrichSerialPortForDirectRadios,
   inferFeaturesFromZigbeeDefinition,
+  getSirenVolumeConfigParameterFromCatalog,
+  getSirenVolumeOptionsFromParameter,
   looksLikeSonoffMg24ThreadStick,
   mergeSmartThingsTelemetryFallback,
   mergeDirectDeviceUpdateForExisting,

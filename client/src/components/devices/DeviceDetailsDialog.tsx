@@ -88,6 +88,11 @@ import {
   isHarmonyExcludedFromHomeBrain,
   isHarmonyCommandDevice
 } from "@/lib/harmony"
+import {
+  getSirenVolumeOptions,
+  getSirenVolumeValue,
+  supportsSirenVolume
+} from "@/lib/sirenVolume"
 import { cn } from "@/lib/utils"
 
 type DeviceLike = {
@@ -2166,9 +2171,10 @@ export function DeviceDetailsDialog({
         setThermostatSetpointDraft(null)
       }
       setDirectControlFeedback("success")
+      const actionLabel = action === "set_siren_volume" ? "Volume" : getPrimaryActionLabel(device)
       toast({
         title: "Command sent",
-        description: `${getPrimaryActionLabel(device)} command was sent to ${device.name}.`
+        description: `${actionLabel} command was sent to ${device.name}.`
       })
       setTimeout(() => setDirectControlFeedback(null), 1800)
     } catch (controlError) {
@@ -2933,6 +2939,49 @@ export function DeviceDetailsDialog({
                     disabled={sendingDirectControl}
                   >
                     {preset.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          <Button
+            type="button"
+            variant={device.status ? "default" : "outline"}
+            className="w-full"
+            onClick={() => handleDirectDeviceControl(getPowerAction(device))}
+            disabled={sendingDirectControl}
+          >
+            {device.status ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
+            {getPrimaryActionLabel(device)}
+          </Button>
+        </div>
+      )
+    }
+
+    if (device.type === "siren" && supportsSirenVolume(device)) {
+      const volumeOptions = getSirenVolumeOptions(device)
+      const currentVolume = getSirenVolumeValue(device)
+      return (
+        <div className="space-y-4">
+          {volumeOptions.length > 0 ? (
+            <div className="space-y-3 rounded-[1.2rem] border border-white/10 bg-white/[0.04] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="section-kicker text-white/45">Volume</p>
+                <Badge variant="outline" className="border-white/10 bg-white/[0.06] text-white/82">
+                  {volumeOptions.find((option) => option.value === currentVolume)?.label || currentVolume || "--"}
+                </Badge>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {volumeOptions.map((option) => (
+                  <Button
+                    key={`${option.value}-${option.label}`}
+                    type="button"
+                    variant={option.value === currentVolume ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => handleDirectDeviceControl("set_siren_volume", option.value)}
+                    disabled={sendingDirectControl}
+                  >
+                    {option.label}
                   </Button>
                 ))}
               </div>

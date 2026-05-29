@@ -496,6 +496,94 @@ test('controlDevice routes HomeBrain Zigbee commands through the direct radio se
   assert.equal(updated.status, true);
 });
 
+test('controlDevice routes native Z-Wave siren volume through the direct radio service', async (t) => {
+  const originalFindById = Device.findById;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalControlDevice = directRadioService.controlDevice;
+  const originalRefreshDirectDeviceState = directRadioService.refreshDirectDeviceState;
+  const originalRecordSamplesForDevices = deviceEnergySampleService.recordSamplesForDevices;
+  const originalEmit = deviceUpdateEmitter.emit;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    directRadioService.controlDevice = originalControlDevice;
+    directRadioService.refreshDirectDeviceState = originalRefreshDirectDeviceState;
+    deviceEnergySampleService.recordSamplesForDevices = originalRecordSamplesForDevices;
+    deviceUpdateEmitter.emit = originalEmit;
+  });
+
+  const nativeSiren = {
+    _id: 'device-zwave-siren',
+    name: 'Kitchen Siren',
+    type: 'siren',
+    status: false,
+    isOnline: true,
+    properties: {
+      source: 'homebrain-zwave',
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: 8
+      },
+      directRadioFeatures: ['alarm', 'switch'],
+      supportsAlarm: true,
+      directRadioCatalog: {
+        protocol: 'zwave',
+        configParameters: [
+          {
+            parameter: 37,
+            valueBitMask: 255,
+            label: 'Volume',
+            minValue: 1,
+            maxValue: 3,
+            options: [
+              { label: 'Low', value: 1 },
+              { label: 'Medium', value: 2 },
+              { label: 'High', value: 3 }
+            ]
+          }
+        ]
+      }
+    }
+  };
+
+  let receivedCommand = null;
+  let persistedUpdate = null;
+
+  Device.findById = async () => ({ ...nativeSiren });
+  Device.findByIdAndUpdate = async (_id, update) => {
+    persistedUpdate = update;
+    return { ...nativeSiren, ...update };
+  };
+  directRadioService.controlDevice = async (device, action, commandValue, updateData) => {
+    receivedCommand = {
+      device,
+      action,
+      commandValue,
+      updateData
+    };
+  };
+  directRadioService.refreshDirectDeviceState = async (_device, options) => ({
+    isOnline: true,
+    properties: {
+      ...nativeSiren.properties,
+      ...options.preserveCommandState.properties
+    }
+  });
+  deviceEnergySampleService.recordSamplesForDevices = async () => {};
+  deviceUpdateEmitter.emit = () => {};
+
+  const updated = await deviceService.controlDevice('device-zwave-siren', 'set_siren_volume', 3);
+
+  assert.equal(receivedCommand.device.name, 'Kitchen Siren');
+  assert.equal(receivedCommand.action, 'setsirenvolume');
+  assert.equal(receivedCommand.commandValue, 3);
+  assert.equal(receivedCommand.updateData.properties.sirenVolume, 3);
+  assert.equal(persistedUpdate.properties.sirenVolume, 3);
+  assert.equal(persistedUpdate.properties.supportsSirenVolume, true);
+  assert.equal(updated.properties.sirenVolume, 3);
+});
+
 test('controlDevice routes Matter commands through the Matter service and refreshes state', async (t) => {
   const originalFindById = Device.findById;
   const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
