@@ -10,7 +10,7 @@ HomeBrain now supports a two-layer Alexa architecture:
 - Alexa Custom Skill scaffolding for later speaker-aware personalization and richer workflow verbs
 - Workflow-side Alexa announcements through a broker-owned Alexa device provider adapter
 
-This document covers the deployment model, required environment variables, and the production-readiness checklist.
+This document covers the deployment model, managed broker settings, and the production-readiness checklist.
 
 ## Architecture
 
@@ -46,9 +46,11 @@ Current UI naming:
 - `Alexa Broker` is the broker/service/readiness page
 - entity exposure is configured from the `Alexa` tab inside device, group, scene, and workflow detail views
 
-## Broker Environment
+## Broker Configuration
 
-The broker supports both private/dev and public modes. At minimum, set:
+The broker supports both private/dev and public modes. Configure these values from the HomeBrain `Alexa Broker` admin page so they are stored with the managed broker configuration in the database. Shell environment variables are still supported as a fallback for manual broker runs, but they are not the primary production setup.
+
+At minimum, configure:
 
 ```dotenv
 HOMEBRAIN_BROKER_PUBLIC_BASE_URL=https://broker.example.com
@@ -71,7 +73,7 @@ HOMEBRAIN_ALEXA_LWA_TOKEN_URL=https://api.amazon.com/auth/o2/token
 HOMEBRAIN_ALEXA_EVENT_GATEWAY_URL=https://api.amazonalexa.com/v3/events
 ```
 
-Optional outbound Alexa device provider settings:
+Optional outbound Alexa device provider settings, also managed from the `Alexa Broker` page:
 
 ```dotenv
 HOMEBRAIN_ALEXA_DEVICE_SERVICE_BASE_URL=https://alexa-device-service.example.com
@@ -83,11 +85,11 @@ HOMEBRAIN_ALEXA_DEVICE_SERVICE_TIMEOUT_MS=10000
 
 The broker exposes `GET /api/alexa/devices` to the HomeBrain hub for workflow target selection and `POST /api/alexa/devices/:alexaDeviceId/speak` for workflow announcements. Provider responses are normalized into `{ id, name, room, type, brokerAccountId, online }` records for the visual workflow builder.
 
-Important platform boundary: Smart Home account linking and `AcceptGrant` credentials are for Alexa event-gateway work such as discovery updates and change reports. Echo/device enumeration and voice announcements require a compatible provider surface, such as an [Alexa Smart Properties](https://developer.amazon.com/en-US/docs/alexa/alexa-smart-properties/about-asp-core.html) partner API or another explicitly configured Alexa device service. HomeBrain keeps this behind broker configuration so the hub never stores provider credentials. For the Smart Home side, Amazon documents the event-gateway grant flow separately in the [`Alexa.Authorization` interface](https://developer.amazon.com/en-US/docs/alexa/device-apis/alexa-authorization.html).
+Important platform boundary: Smart Home account linking and `AcceptGrant` credentials are for Alexa event-gateway work such as discovery updates and change reports. Echo/device enumeration and voice announcements require a compatible provider surface, such as an [Alexa Smart Properties](https://developer.amazon.com/en-US/docs/alexa/alexa-smart-properties/about-asp-core.html) partner API or another explicitly configured Alexa device service. HomeBrain keeps this behind the broker configuration model so provider credentials are edited in the UI, stored in the database, masked in status responses, and supplied to the broker runtime when HomeBrain starts or deploys the managed broker. For the Smart Home side, Amazon documents the event-gateway grant flow separately in the [`Alexa.Authorization` interface](https://developer.amazon.com/en-US/docs/alexa/device-apis/alexa-authorization.html).
 
 For production, keep Alexa account-linking refresh tokens long-lived and leave the Alexa console PKCE toggle off until the broker OAuth flow is upgraded to support it.
 
-HomeBrain can now manage these broker variables through the `Alexa Broker` admin page. The preferred deploy flow there also creates or updates the broker reverse-proxy route and applies the managed Caddy config before restarting the broker. The environment block above is still the reference if you choose the manual shell/service-manager path.
+HomeBrain manages these broker variables through the `Alexa Broker` admin page. The preferred deploy flow there also creates or updates the broker reverse-proxy route and applies the managed Caddy config before restarting the broker. The environment blocks above are fallback references for manual shell/service-manager paths.
 
 Operational notes from the validated setup:
 

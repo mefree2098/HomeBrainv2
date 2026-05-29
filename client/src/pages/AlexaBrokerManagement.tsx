@@ -52,6 +52,11 @@ type BrokerDraft = {
   allowedRedirectUris: string;
   eventClientId: string;
   eventClientSecret: string;
+  deviceServiceBaseUrl: string;
+  deviceServiceToken: string;
+  deviceDiscoveryPath: string;
+  deviceSpeakPath: string;
+  deviceServiceTimeoutMs: string;
   storeFile: string;
   authCodeTtlMs: string;
   accessTokenTtlSeconds: string;
@@ -75,6 +80,11 @@ const emptyDraft: BrokerDraft = {
   allowedRedirectUris: '',
   eventClientId: '',
   eventClientSecret: '',
+  deviceServiceBaseUrl: '',
+  deviceServiceToken: '',
+  deviceDiscoveryPath: '/v1/devices',
+  deviceSpeakPath: '/v1/devices/{deviceId}/speak',
+  deviceServiceTimeoutMs: '10000',
   storeFile: '',
   authCodeTtlMs: '300000',
   accessTokenTtlSeconds: '3600',
@@ -109,6 +119,11 @@ function hydrateDraftFromStatus(status: AlexaBrokerServiceStatus | null): Broker
     refreshTokenTtlSeconds: String(status.refreshTokenTtlSeconds || 15552000),
     lwaTokenUrl: status.lwaTokenUrl || 'https://api.amazon.com/auth/o2/token',
     eventGatewayUrl: status.eventGatewayUrl || 'https://api.amazonalexa.com/v3/events',
+    deviceServiceBaseUrl: status.deviceServiceBaseUrl || '',
+    deviceServiceToken: '',
+    deviceDiscoveryPath: status.deviceDiscoveryPath || '/v1/devices',
+    deviceSpeakPath: status.deviceSpeakPath || '/v1/devices/{deviceId}/speak',
+    deviceServiceTimeoutMs: String(status.deviceServiceTimeoutMs || 10000),
     rateLimitWindowMs: String(status.rateLimitWindowMs || 60000),
     rateLimitMax: String(status.rateLimitMax || 120),
     allowManualRegistration: status.allowManualRegistration === true,
@@ -295,6 +310,11 @@ export default function AlexaBrokerManagement() {
       refreshTokenTtlSeconds: draft.refreshTokenTtlSeconds,
       lwaTokenUrl: draft.lwaTokenUrl,
       eventGatewayUrl: draft.eventGatewayUrl,
+      deviceServiceBaseUrl: draft.deviceServiceBaseUrl,
+      deviceServiceToken: draft.deviceServiceToken,
+      deviceDiscoveryPath: draft.deviceDiscoveryPath,
+      deviceSpeakPath: draft.deviceSpeakPath,
+      deviceServiceTimeoutMs: draft.deviceServiceTimeoutMs,
       rateLimitWindowMs: draft.rateLimitWindowMs,
       rateLimitMax: draft.rateLimitMax,
       allowManualRegistration: draft.allowManualRegistration,
@@ -889,6 +909,55 @@ export default function AlexaBrokerManagement() {
                   ? 'An Alexa event secret is already stored. Leave this blank to keep it unchanged.'
                   : 'Amazon provides this after you enable proactive Alexa events.'}
               </p>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Alexa Device Provider URL</label>
+              <Input
+                value={draft.deviceServiceBaseUrl}
+                onChange={(event) => updateDraft('deviceServiceBaseUrl', event.target.value)}
+                placeholder="https://api.amazonalexa.com"
+              />
+              <p className="text-xs text-muted-foreground">
+                Used by the broker to list Echo targets and relay workflow speech actions.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Alexa Device Provider Token</label>
+              <Input
+                value={draft.deviceServiceToken}
+                onChange={(event) => updateDraft('deviceServiceToken', event.target.value)}
+                placeholder={serviceStatus?.deviceServiceTokenConfigured ? 'Configured. Enter a new value to replace it.' : 'Provider bearer token'}
+                type="password"
+              />
+              <p className="text-xs text-muted-foreground">
+                {serviceStatus?.deviceServiceTokenConfigured
+                  ? `Stored token ${serviceStatus.deviceServiceTokenMasked || 'is configured'}. Leave this blank to keep it unchanged.`
+                  : 'Store the provider access token in HomeBrain instead of a shell environment file.'}
+              </p>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Device Discovery Path</label>
+              <Input
+                value={draft.deviceDiscoveryPath}
+                onChange={(event) => updateDraft('deviceDiscoveryPath', event.target.value)}
+                placeholder="/v1/devices"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Device Speak Path</label>
+              <Input
+                value={draft.deviceSpeakPath}
+                onChange={(event) => updateDraft('deviceSpeakPath', event.target.value)}
+                placeholder="/v1/devices/{deviceId}/speak"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Device Provider Timeout (ms)</label>
+              <Input
+                value={draft.deviceServiceTimeoutMs}
+                onChange={(event) => updateDraft('deviceServiceTimeoutMs', event.target.value)}
+                placeholder="10000"
+              />
             </div>
             <div className="space-y-2 md:col-span-2">
               <label className="text-sm font-medium">Allowed Client IDs</label>

@@ -113,6 +113,26 @@ const alexaBrokerConfigSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  deviceServiceBaseUrl: {
+    type: String,
+    default: ''
+  },
+  deviceServiceToken: {
+    type: String,
+    default: ''
+  },
+  deviceDiscoveryPath: {
+    type: String,
+    default: '/v1/devices'
+  },
+  deviceSpeakPath: {
+    type: String,
+    default: '/v1/devices/{deviceId}/speak'
+  },
+  deviceServiceTimeoutMs: {
+    type: Number,
+    default: 10000
+  },
   storeFile: {
     type: String,
     default: ''
@@ -191,6 +211,10 @@ alexaBrokerConfigSchema.pre('save', function preSave() {
     .filter(Boolean)));
   this.eventClientId = String(this.eventClientId || '').trim();
   this.eventClientSecret = String(this.eventClientSecret || '').trim();
+  this.deviceServiceBaseUrl = String(this.deviceServiceBaseUrl || '').trim().replace(/\/+$/, '');
+  this.deviceServiceToken = String(this.deviceServiceToken || '').trim();
+  this.deviceDiscoveryPath = String(this.deviceDiscoveryPath || '').trim() || '/v1/devices';
+  this.deviceSpeakPath = String(this.deviceSpeakPath || '').trim() || '/v1/devices/{deviceId}/speak';
   this.storeFile = String(this.storeFile || '').trim();
   this.lwaTokenUrl = String(this.lwaTokenUrl || '').trim() || 'https://api.amazon.com/auth/o2/token';
   this.eventGatewayUrl = String(this.eventGatewayUrl || '').trim() || 'https://api.amazonalexa.com/v3/events';
@@ -227,6 +251,7 @@ alexaBrokerConfigSchema.methods.toSanitized = function toSanitized() {
   const sanitized = this.toObject();
   sanitized.oauthClientSecret = maskSecret(sanitized.oauthClientSecret);
   sanitized.eventClientSecret = maskSecret(sanitized.eventClientSecret);
+  sanitized.deviceServiceToken = maskSecret(sanitized.deviceServiceToken);
   return sanitized;
 };
 
