@@ -242,7 +242,7 @@ cleanup_orphaned_homebrain_processes() {
     if process_matches_homebrain "${pid}" "${cmd}"; then
       stale_pids+=("${pid}")
     fi
-  done < <(ps -eo pid=,args=)
+  done < <(ps -eo pid=,args= | sed 's/^[[:space:]]*//')
 
   if [[ "${#stale_pids[@]}" -eq 0 ]]; then
     return
