@@ -20,6 +20,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -791,9 +792,9 @@ function parseDeviceGroupSelectValue(value: string) {
     : null;
 }
 
-function getAlexaDeviceIdFromTarget(target: WorkflowActionTarget | undefined) {
+function getAlexaDeviceIdFromEntry(target: unknown) {
   if (typeof target === "string") {
-    return target;
+    return target.trim();
   }
   if (!target || typeof target !== "object" || Array.isArray(target)) {
     return "";
@@ -808,26 +809,90 @@ function getAlexaDeviceIdFromTarget(target: WorkflowActionTarget | undefined) {
   ).trim();
 }
 
-function buildAlexaDeviceTarget(device: AlexaDeviceSummary | undefined): WorkflowActionTarget {
+function getAlexaDeviceIdsFromTarget(target: WorkflowActionTarget | undefined): string[] {
+  if (typeof target === "string") {
+    return target.trim() ? [target.trim()] : [];
+  }
+  if (Array.isArray(target)) {
+    return target.map(getAlexaDeviceIdFromEntry).filter(Boolean);
+  }
+  if (!target || typeof target !== "object") {
+    return [];
+  }
+
+  const record = target as Record<string, unknown>;
+  const nestedTargets = Array.isArray(record.devices)
+    ? record.devices
+    : Array.isArray(record.alexaDevices)
+      ? record.alexaDevices
+      : Array.isArray(record.targets)
+        ? record.targets
+        : null;
+
+  if (nestedTargets) {
+    return nestedTargets.map(getAlexaDeviceIdFromEntry).filter(Boolean);
+  }
+
+  const singleId = getAlexaDeviceIdFromEntry(target);
+  return singleId ? [singleId] : [];
+}
+
+function buildAlexaDeviceTargetEntry(device: AlexaDeviceSummary | undefined) {
   if (!device?.id) {
     return null;
   }
 
   return {
-    kind: "alexa_device",
     alexaDeviceId: device.id,
     name: device.name,
     brokerAccountId: device.brokerAccountId || ""
   };
 }
 
-function getAlexaDeviceLabel(devices: AlexaDeviceSummary[], target: WorkflowActionTarget | undefined) {
-  const targetId = getAlexaDeviceIdFromTarget(target);
-  const match = devices.find((device) => device.id === targetId || device.deviceId === targetId);
-  if (match) {
-    return match.room ? `${match.name} (${match.room})` : match.name;
+function buildAlexaDeviceTarget(device: AlexaDeviceSummary | undefined): WorkflowActionTarget {
+  const entry = buildAlexaDeviceTargetEntry(device);
+  return entry ? { kind: "alexa_device", ...entry } : null;
+}
+
+function buildAlexaDevicesTarget(devices: AlexaDeviceSummary[]): WorkflowActionTarget {
+  const targets = devices
+    .map(buildAlexaDeviceTargetEntry)
+    .filter((entry): entry is NonNullable<ReturnType<typeof buildAlexaDeviceTargetEntry>> => Boolean(entry));
+
+  if (targets.length === 0) {
+    return null;
   }
-  return targetId || "No Alexa device selected";
+
+  if (targets.length === 1) {
+    return { kind: "alexa_device", ...targets[0] };
+  }
+
+  return {
+    kind: "alexa_devices",
+    devices: targets
+  };
+}
+
+function formatAlexaDeviceLabel(device: AlexaDeviceSummary) {
+  return device.room ? `${device.name} (${device.room})` : device.name;
+}
+
+function getAlexaDeviceLabel(devices: AlexaDeviceSummary[], target: WorkflowActionTarget | undefined) {
+  const targetIds = getAlexaDeviceIdsFromTarget(target);
+  if (targetIds.length === 0) {
+    return "No Alexa devices selected";
+  }
+
+  const labels = targetIds.map((targetId) => {
+    const match = devices.find((device) => device.id === targetId || device.deviceId === targetId);
+    return match ? formatAlexaDeviceLabel(match) : targetId;
+  });
+
+  if (labels.length <= 2) {
+    return labels.join(", ");
+  }
+
+  return `${labels.slice(0, 2).join(", ")} and ${labels.length - 2} more`;
 }
 
 function getDefaultDeviceTarget(triggerType: WorkflowTriggerType, devices: DeviceLite[]): WorkflowActionTarget {
@@ -1567,6 +1632,30 @@ export function WorkflowBuilderDialog({
             }
       };
     }));
+  };
+
+  const updateAlexaActionDevices = (index: number, action: WorkflowAction, device: AlexaDeviceSummary, checked: boolean | "indeterminate") => {
+    const selectedIds = new Set(getAlexaDeviceIdsFromTarget(action.target));
+    if (checked === true) {
+      selectedIds.add(device.id);
+    } else {
+      selectedIds.delete(device.id);
+      if (device.deviceId) {
+        selectedIds.delete(device.deviceId);
+      }
+    }
+
+    const selectedDevices = alexaDevices.filter((device) => (
+      selectedIds.has(device.id) || (device.deviceId ? selectedIds.has(device.deviceId) : false)
+    ));
+
+    updateAction(index, {
+      target: buildAlexaDevicesTarget(selectedDevices),
+      parameters: {
+        brokerAccountId: selectedDevices.length === 1 ? selectedDevices[0]?.brokerAccountId || "" : "",
+        deviceName: selectedDevices.length === 1 ? selectedDevices[0]?.name || "" : ""
+      }
+    });
   };
 
   const moveAction = (from: number, direction: -1 | 1) => {
@@ -2545,37 +2634,36 @@ export function WorkflowBuilderDialog({
                                 </div>
 
                                 <div className="space-y-2">
-                                  <Label>Alexa device</Label>
-                                  <Select
-                                    disabled={alexaDevices.length === 0}
-                                    value={getAlexaDeviceIdFromTarget(action.target)}
-                                    onValueChange={(value) => {
-                                      const selectedDevice = alexaDevices.find((device) => device.id === value || device.deviceId === value);
-                                      updateAction(index, {
-                                        target: buildAlexaDeviceTarget(selectedDevice),
-                                        parameters: {
-                                          ...action.parameters,
-                                          brokerAccountId: selectedDevice?.brokerAccountId || "",
-                                          deviceName: selectedDevice?.name || ""
-                                        }
-                                      });
-                                    }}
-                                  >
-                                    <SelectTrigger>
-                                      <SelectValue placeholder={alexaDevices.length === 0 ? "No Alexa devices" : "Select Alexa device"} />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      {alexaDevices.map((device) => (
-                                        <SelectItem key={device.id} value={device.id}>
-                                          {device.room ? `${device.name} (${device.room})` : device.name}
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
+                                  <Label>Alexa devices</Label>
+                                  {alexaDevices.length > 0 && (
+                                    <div className="max-h-48 space-y-2 overflow-auto rounded-lg border border-border/70 bg-background/70 p-3">
+                                      {alexaDevices.map((device) => {
+                                        const selectedIds = getAlexaDeviceIdsFromTarget(action.target);
+                                        const checked = selectedIds.some((id) => id === device.id || id === device.deviceId);
+                                        const checkboxId = `workflow-alexa-${index}-${device.id.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+                                        return (
+                                          <div key={device.id} className="flex items-start gap-3 rounded-md px-1 py-1.5">
+                                            <Checkbox
+                                              id={checkboxId}
+                                              checked={checked}
+                                              onCheckedChange={(nextChecked) => updateAlexaActionDevices(index, action, device, nextChecked)}
+                                            />
+                                            <label htmlFor={checkboxId} className="grid min-w-0 flex-1 cursor-pointer gap-0.5 text-sm leading-none">
+                                              <span className="truncate font-medium">{formatAlexaDeviceLabel(device)}</span>
+                                              <span className="truncate text-xs text-muted-foreground">{device.type || "Alexa device"}</span>
+                                            </label>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
                                   {alexaDevices.length === 0 && (
                                     <p className="text-xs text-muted-foreground">
                                       Enable the HomeBrain Alexa command bridge to choose announcement targets.
                                     </p>
+                                  )}
+                                  {alexaDevices.length > 0 && getAlexaDeviceIdsFromTarget(action.target).length === 0 && (
+                                    <p className="text-xs text-muted-foreground">Choose at least one Alexa device for this announcement.</p>
                                   )}
                                 </div>
 

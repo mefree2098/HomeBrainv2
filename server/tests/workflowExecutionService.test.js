@@ -1511,3 +1511,66 @@ test('alexa_speak action sends a workflow announcement through the Alexa bridge'
   assert.equal(result.actionResults[0].target, 'kitchen-echo');
   assert.equal(result.actionResults[0].message, 'Alexa announcement sent to Kitchen Alexa');
 });
+
+test('alexa_speak action sends workflow announcements to multiple Alexa devices', async (t) => {
+  const alexaBridgeService = require('../services/alexaBridgeService');
+  const originalSendAlexaSpeech = alexaBridgeService.sendAlexaSpeech;
+  const capturedCalls = [];
+
+  t.after(() => {
+    alexaBridgeService.sendAlexaSpeech = originalSendAlexaSpeech;
+  });
+
+  alexaBridgeService.sendAlexaSpeech = async (target, parameters, context) => {
+    capturedCalls.push({ target, parameters, context });
+    return {
+      success: true,
+      deviceId: target.alexaDeviceId,
+      deviceName: target.name,
+      brokerAccountId: target.brokerAccountId,
+      providerResponse: {
+        accepted: true,
+        target: target.alexaDeviceId
+      }
+    };
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'alexa_speak',
+      target: {
+        kind: 'alexa_devices',
+        devices: [
+          {
+            alexaDeviceId: 'kitchen-echo',
+            name: 'Kitchen Alexa',
+            brokerAccountId: 'acct-1'
+          },
+          {
+            alexaDeviceId: 'office-echo',
+            name: 'Office Alexa',
+            brokerAccountId: 'acct-1'
+          }
+        ]
+      },
+      parameters: {
+        message: 'Front Door has opened'
+      }
+    }
+  ], {
+    context: {
+      workflowId: 'workflow-1',
+      triggeringDeviceId: 'front-door'
+    }
+  });
+
+  assert.equal(result.status, 'success');
+  assert.equal(capturedCalls.length, 2);
+  assert.equal(capturedCalls[0].target.alexaDeviceId, 'kitchen-echo');
+  assert.equal(capturedCalls[1].target.alexaDeviceId, 'office-echo');
+  assert.equal(capturedCalls[0].parameters.message, 'Front Door has opened');
+  assert.equal(capturedCalls[1].parameters.message, 'Front Door has opened');
+  assert.deepEqual(result.actionResults[0].target, ['kitchen-echo', 'office-echo']);
+  assert.equal(result.actionResults[0].message, 'Alexa announcement sent to Kitchen Alexa and Office Alexa');
+  assert.equal(result.actionResults[0].details.alexaTargets.length, 2);
+});
