@@ -38,6 +38,7 @@ export type DirectRadioControllerStatus = {
   permitJoinUntil?: string | null;
   inclusionUntil?: string | null;
   exclusionUntil?: string | null;
+  inclusionState?: string | null;
   pendingDsk?: string | null;
   lastStartResult?: unknown;
   pairedDeviceCount?: number;

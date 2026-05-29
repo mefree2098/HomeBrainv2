@@ -1260,6 +1260,7 @@ test('Z-Wave generic pairing defaults to standard inclusion without a DSK PIN pr
   const service = createService();
   const zwave = require('zwave-js');
   let inclusionOptions = null;
+  const calls = [];
   service.start = async () => {};
   service.zwave.started = true;
   service.zwave.driver = {
@@ -1267,7 +1268,16 @@ test('Z-Wave generic pairing defaults to standard inclusion without a DSK PIN pr
       nodes: new Map([
         [1, { id: 1, isControllerNode: true }]
       ]),
+      stopInclusion: async () => {
+        calls.push('stopInclusion');
+        return false;
+      },
+      stopExclusion: async () => {
+        calls.push('stopExclusion');
+        return false;
+      },
       beginInclusion: async (options) => {
+        calls.push('beginInclusion');
         inclusionOptions = options;
         return true;
       }
@@ -1278,6 +1288,7 @@ test('Z-Wave generic pairing defaults to standard inclusion without a DSK PIN pr
   assert.equal(inclusionOptions.strategy, zwave.InclusionStrategy.Insecure);
   assert.equal(result.pairing.zwaveSecurityMode, 'insecure');
   assert.match(result.pairing.message, /No DSK PIN is required/);
+  assert.deepEqual(calls, ['stopInclusion', 'stopExclusion', 'beginInclusion']);
 });
 
 test('Z-Wave pairing can explicitly request secure S2 inclusion', async () => {
@@ -1304,6 +1315,83 @@ test('Z-Wave pairing can explicitly request secure S2 inclusion', async () => {
   });
   assert.equal(inclusionOptions.strategy, zwave.InclusionStrategy.Security_S2);
   assert.equal(result.pairing.zwaveSecurityMode, 's2');
+});
+
+test('Z-Wave pairing retries once when the controller reports inclusion was not started', async () => {
+  const service = createService();
+  service.start = async () => {};
+  service.zwave.started = true;
+  let beginCalls = 0;
+  let stopCalls = 0;
+  service.zwave.driver = {
+    controller: {
+      nodes: new Map([
+        [1, { id: 1, isControllerNode: true }]
+      ]),
+      stopInclusion: async () => {
+        stopCalls += 1;
+        return true;
+      },
+      stopExclusion: async () => false,
+      beginInclusion: async () => {
+        beginCalls += 1;
+        return beginCalls > 1;
+      }
+    }
+  };
+
+  const result = await service.startPairing('zwave', { durationSeconds: 60 });
+  assert.equal(beginCalls, 2);
+  assert.equal(stopCalls, 2);
+  assert.equal(result.pairing.status, 'active');
+  assert.ok(service.zwave.inclusionUntil);
+});
+
+test('Z-Wave pairing fails instead of reporting open when inclusion never starts', async () => {
+  const service = createService();
+  service.start = async () => {};
+  service.zwave.started = true;
+  service.zwave.driver = {
+    controller: {
+      inclusionState: 1,
+      nodes: new Map([
+        [1, { id: 1, isControllerNode: true }]
+      ]),
+      stopInclusion: async () => false,
+      stopExclusion: async () => false,
+      beginInclusion: async () => false
+    }
+  };
+
+  await assert.rejects(
+    () => service.startPairing('zwave', { durationSeconds: 60 }),
+    (error) => error.status === 409 && /Z-Wave inclusion did not start/.test(error.message)
+  );
+  assert.equal(service.zwave.inclusionUntil, null);
+  assert.equal(service.activePairings.get('zwave').status, 'failed');
+});
+
+test('Z-Wave exclusion fails instead of reporting open when exclusion never starts', async () => {
+  const service = createService();
+  service.start = async () => {};
+  service.zwave.started = true;
+  service.zwave.driver = {
+    controller: {
+      inclusionState: 2,
+      nodes: new Map([
+        [1, { id: 1, isControllerNode: true }]
+      ]),
+      stopInclusion: async () => false,
+      stopExclusion: async () => false,
+      beginExclusion: async () => false
+    }
+  };
+
+  await assert.rejects(
+    () => service.startExclusion('zwave', { durationSeconds: 60 }),
+    (error) => error.status === 409 && /Z-Wave exclusion did not start/.test(error.message)
+  );
+  assert.equal(service.zwave.exclusionUntil, null);
 });
 
 test('Z-Wave generic pairing records a detected node before interview completion', () => {

@@ -514,6 +514,10 @@ function boundedIntervalMs(value, fallback = DEFAULT_HARDWARE_SCAN_INTERVAL_MS) 
   return Math.max(15_000, Math.min(10 * 60_000, Math.round(parsed)));
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function enumMemberName(enumObject, value) {
   if (enumObject && value !== undefined && value !== null && enumObject[value] !== undefined) {
     return String(enumObject[value]);
@@ -3004,6 +3008,99 @@ class DirectRadioService {
     }
   }
 
+  getZWaveInclusionStateLabel(zwave = null) {
+    const controller = this.getZWaveController();
+    const state = controller?.inclusionState;
+    if (state === undefined || state === null) {
+      return null;
+    }
+
+    let zwaveModule = zwave;
+    if (!zwaveModule) {
+      try {
+        zwaveModule = require('zwave-js');
+      } catch (_error) {
+        zwaveModule = null;
+      }
+    }
+    return enumMemberName(zwaveModule?.InclusionState, state);
+  }
+
+  async closeZWavePairingWindow(options = {}) {
+    const controller = this.getZWaveController();
+    this.clearPairingTimer('zwave');
+    this.zwave.inclusionUntil = null;
+    this.zwave.exclusionUntil = null;
+    this.zwave.pendingDsk = null;
+    this.resolvePendingZWaveDsk(false);
+
+    const beforeState = this.getZWaveInclusionStateLabel(options.zwave);
+    const result = {
+      beforeState,
+      afterState: beforeState,
+      stoppedInclusion: false,
+      stoppedExclusion: false,
+      inclusionStopError: null,
+      exclusionStopError: null
+    };
+
+    if (controller) {
+      if (typeof controller.stopInclusion === 'function') {
+        try {
+          result.stoppedInclusion = await controller.stopInclusion();
+        } catch (error) {
+          result.inclusionStopError = error.message;
+          this.log('warn', 'zwave', 'Failed to stop existing Z-Wave inclusion window', {
+            error: error.message,
+            reason: options.reason || null,
+            beforeState
+          });
+        }
+      }
+
+      if (typeof controller.stopExclusion === 'function') {
+        try {
+          result.stoppedExclusion = await controller.stopExclusion();
+        } catch (error) {
+          result.exclusionStopError = error.message;
+          this.log('warn', 'zwave', 'Failed to stop existing Z-Wave exclusion window', {
+            error: error.message,
+            reason: options.reason || null,
+            beforeState
+          });
+        }
+      }
+      result.afterState = this.getZWaveInclusionStateLabel(options.zwave);
+    }
+
+    const session = options.markSession === false ? null : this.activePairings.get('zwave');
+    if (session && !isTerminalPairingStatus(session.status)) {
+      session.status = 'stopped';
+      session.stoppedAt = new Date().toISOString();
+      session.message = options.sessionMessage || 'Previous Z-Wave pairing was stopped before starting a new request.';
+      this.appendPairingEvent('zwave', {
+        kind: 'stopped',
+        message: session.message,
+        details: {
+          reason: options.reason || null,
+          beforeState: result.beforeState,
+          afterState: result.afterState,
+          stoppedInclusion: result.stoppedInclusion,
+          stoppedExclusion: result.stoppedExclusion
+        }
+      });
+    }
+
+    if (result.stoppedInclusion || result.stoppedExclusion || beforeState === 'Including' || beforeState === 'Excluding') {
+      this.log('info', 'zwave', 'Closed existing Z-Wave inclusion/exclusion window', {
+        reason: options.reason || null,
+        ...result
+      });
+    }
+
+    return result;
+  }
+
   getPairingBaseline(protocol) {
     if (protocol === 'zigbee') {
       const devices = this.zigbee.controller?.getDevices?.() || [];
@@ -4045,6 +4142,32 @@ class DirectRadioService {
     });
     controller.on('inclusion failed', () => {
       this.recordZWaveInclusionFailed('The Z-Wave controller reported that inclusion failed.');
+    });
+    controller.on('inclusion started', (strategy) => {
+      this.log('info', 'zwave', 'Z-Wave controller inclusion started', {
+        strategy: strategy === undefined ? null : String(strategy),
+        state: this.getZWaveInclusionStateLabel()
+      });
+    });
+    controller.on('exclusion started', () => {
+      this.log('info', 'zwave', 'Z-Wave controller exclusion started', {
+        state: this.getZWaveInclusionStateLabel()
+      });
+    });
+    controller.on('inclusion stopped', () => {
+      this.log('info', 'zwave', 'Z-Wave controller inclusion stopped', {
+        state: this.getZWaveInclusionStateLabel()
+      });
+    });
+    controller.on('exclusion stopped', () => {
+      this.log('info', 'zwave', 'Z-Wave controller exclusion stopped', {
+        state: this.getZWaveInclusionStateLabel()
+      });
+    });
+    controller.on('inclusion state changed', (state) => {
+      this.log('info', 'zwave', 'Z-Wave controller inclusion state changed', {
+        state: enumMemberName(require('zwave-js').InclusionState, state)
+      });
     });
     controller.__homebrainMigrationListenersAttached = true;
   }
@@ -6010,7 +6133,11 @@ class DirectRadioService {
         throw error;
       }
       const zwave = require('zwave-js');
-      this.clearPairingTimer('zwave');
+      const resetResult = await this.closeZWavePairingWindow({
+        zwave,
+        reason: 'start_inclusion',
+        sessionMessage: 'Previous Z-Wave add/remove window was stopped before starting inclusion.'
+      });
       const { mode: zwaveSecurityMode, options: inclusionOptions } = this.buildZWaveInclusionOptions(
         zwave,
         options.zwaveSecurityMode ?? options.securityMode
@@ -6027,12 +6154,44 @@ class DirectRadioService {
         durationSeconds: seconds,
         serialPath: this.detected.zwave?.path || null,
         pairingId: session.id,
-        securityMode: zwaveSecurityMode
+        securityMode: zwaveSecurityMode,
+        previousWindow: resetResult
       });
+      let inclusionStarted = false;
       try {
-        await controller.beginInclusion(inclusionOptions);
+        inclusionStarted = await controller.beginInclusion(inclusionOptions);
       } catch (error) {
         this.markPairingFailed('zwave', error.message || 'Z-Wave inclusion failed to start.');
+        throw error;
+      }
+      if (inclusionStarted !== true) {
+        await this.closeZWavePairingWindow({
+          zwave,
+          reason: 'retry_inclusion_after_busy',
+          markSession: false,
+          sessionMessage: 'HomeBrain reset the Z-Wave controller after the first inclusion start did not open.'
+        });
+        await delay(350);
+        try {
+          inclusionStarted = await controller.beginInclusion(inclusionOptions);
+        } catch (error) {
+          this.markPairingFailed('zwave', error.message || 'Z-Wave inclusion failed to start.');
+          throw error;
+        }
+      }
+      if (inclusionStarted !== true) {
+        const state = this.getZWaveInclusionStateLabel(zwave);
+        const message = state
+          ? `Z-Wave inclusion did not start because the controller is still ${state}. HomeBrain reset the stale window, but the controller did not accept the new inclusion request.`
+          : 'Z-Wave inclusion did not start because the controller reported it was already busy after HomeBrain reset the stale window.';
+        this.markPairingFailed('zwave', message, {
+          state,
+          previousWindow: resetResult
+        });
+        this.zwave.inclusionUntil = null;
+        const error = new Error(message);
+        error.status = 409;
+        error.code = 'ZWAVE_INCLUSION_NOT_STARTED';
         throw error;
       }
       this.zwave.inclusionUntil = new Date(Date.now() + seconds * 1000).toISOString();
@@ -6201,14 +6360,20 @@ class DirectRadioService {
     }
 
     const zwave = require('zwave-js');
-    this.clearPairingTimer('zwave');
+    const resetResult = await this.closeZWavePairingWindow({
+      zwave,
+      reason: 'start_exclusion',
+      sessionMessage: 'Previous Z-Wave add/remove window was stopped before starting exclusion.'
+    });
     this.log('info', 'zwave', 'Opening Z-Wave exclusion window', {
       durationSeconds: seconds,
       serialPath: this.detected.zwave?.path || null,
-      migrationId: migration?.id || null
+      migrationId: migration?.id || null,
+      previousWindow: resetResult
     });
+    let exclusionStarted = false;
     try {
-      await controller.beginExclusion({ strategy: zwave.ExclusionStrategy.ExcludeOnly });
+      exclusionStarted = await controller.beginExclusion({ strategy: zwave.ExclusionStrategy.ExcludeOnly });
     } catch (error) {
       if (migration) {
         migration.status = 'exclusion_failed';
@@ -6216,6 +6381,48 @@ class DirectRadioService {
         migration.exclusionFailedAt = new Date().toISOString();
         migration.updatedAt = migration.exclusionFailedAt;
       }
+      throw error;
+    }
+    if (exclusionStarted !== true) {
+      await this.closeZWavePairingWindow({
+        zwave,
+        reason: 'retry_exclusion_after_busy',
+        markSession: false,
+        sessionMessage: 'HomeBrain reset the Z-Wave controller after the first exclusion start did not open.'
+      });
+      await delay(350);
+      try {
+        exclusionStarted = await controller.beginExclusion({ strategy: zwave.ExclusionStrategy.ExcludeOnly });
+      } catch (error) {
+        if (migration) {
+          migration.status = 'exclusion_failed';
+          migration.exclusionStatus = 'failed';
+          migration.exclusionFailedAt = new Date().toISOString();
+          migration.updatedAt = migration.exclusionFailedAt;
+        }
+        throw error;
+      }
+    }
+    if (exclusionStarted !== true) {
+      const state = this.getZWaveInclusionStateLabel(zwave);
+      const message = state
+        ? `Z-Wave exclusion did not start because the controller is still ${state}. HomeBrain reset the stale window, but the controller did not accept the new exclusion request.`
+        : 'Z-Wave exclusion did not start because the controller reported it was already busy after HomeBrain reset the stale window.';
+      if (migration) {
+        migration.status = 'exclusion_failed';
+        migration.exclusionStatus = 'failed';
+        migration.exclusionFailedAt = new Date().toISOString();
+        migration.updatedAt = migration.exclusionFailedAt;
+      }
+      this.zwave.exclusionUntil = null;
+      this.log('warn', 'zwave', 'Z-Wave exclusion window did not start', {
+        migrationId: migration?.id || null,
+        state,
+        previousWindow: resetResult
+      });
+      const error = new Error(message);
+      error.status = 409;
+      error.code = 'ZWAVE_EXCLUSION_NOT_STARTED';
       throw error;
     }
     this.zwave.exclusionUntil = new Date(Date.now() + seconds * 1000).toISOString();
@@ -6253,24 +6460,10 @@ class DirectRadioService {
     }
 
     if ((protocol === 'zwave' || protocol === 'all') && this.getZWaveController()) {
-      this.clearPairingTimer('zwave');
-      const controller = this.getZWaveController();
-      if (typeof controller.stopInclusion === 'function') {
-        await controller.stopInclusion().catch(() => {});
-      }
-      if (typeof controller.stopExclusion === 'function') {
-        await controller.stopExclusion().catch(() => {});
-      }
-      this.zwave.inclusionUntil = null;
-      this.zwave.exclusionUntil = null;
-      this.zwave.pendingDsk = null;
-      this.resolvePendingZWaveDsk(false);
-      const session = this.activePairings.get('zwave');
-      if (session && !['completed', 'failed', 'expired'].includes(session.status)) {
-        session.status = 'stopped';
-        session.stoppedAt = new Date().toISOString();
-        session.message = session.message || 'Z-Wave pairing was stopped.';
-      }
+      await this.closeZWavePairingWindow({
+        reason: 'stop_pairing',
+        sessionMessage: 'Z-Wave pairing was stopped.'
+      });
       this.log('info', 'zwave', 'Z-Wave inclusion/exclusion windows closed');
     }
 
@@ -7253,6 +7446,7 @@ class DirectRadioService {
           diagnostics: zwaveDiagnostics,
           inclusionUntil: this.zwave.inclusionUntil,
           exclusionUntil: this.zwave.exclusionUntil,
+          inclusionState: this.getZWaveInclusionStateLabel(),
           pendingDsk: this.zwave.pendingDsk,
           pairedNodeCount: zwaveNodes && typeof zwaveNodes.size === 'number' ? zwaveNodes.size : 0,
           nodes: this.getZWaveNodeSummaries()
