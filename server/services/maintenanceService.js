@@ -403,6 +403,13 @@ class MaintenanceService {
         const matchingDevices = matchedDevices.filter(
           (candidate) => !isMigratedNativeSource(getDeviceSource(candidate))
         );
+        // If every match was a native (migrated) device, this SmartThings device
+        // already lives on a native radio. Skip it rather than fall through to
+        // Device.create(), which would re-insert a duplicate SmartThings tile.
+        if (matchedDevices.length > 0 && matchingDevices.length === 0) {
+          skipped += 1;
+          continue;
+        }
         const existing = selectCanonicalDevice(matchingDevices);
         const duplicateDevices = matchingDevices.filter((candidate) => (
           String(candidate?._id || '') !== String(existing?._id || '')

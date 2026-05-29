@@ -5530,8 +5530,9 @@ class DirectRadioService {
   // still carry a top-level smartThingsDeviceId (the pre-fix state) — which is
   // what lets the SmartThings sync/webhook flip them back to "smartthings".
   async repairMigratedSmartThingsIdentities() {
+    let candidates;
     try {
-      const candidates = await Device.find({
+      candidates = await Device.find({
         $and: [
           {
             $or: [
@@ -5547,25 +5548,40 @@ class DirectRadioService {
           }
         ]
       });
-      let repaired = 0;
-      for (const device of candidates) {
+    } catch (error) {
+      this.log('warn', 'system', 'Failed to query migrated SmartThings identities for repair', {
+        error: error.message
+      });
+      return 0;
+    }
+
+    let repaired = 0;
+    let failed = 0;
+    // Per-device try/catch: one bad record (e.g. legacy doc failing schema
+    // validation) must not abort the repair for every other migrated device.
+    for (const device of candidates) {
+      try {
         device.properties = this.severMigratedSmartThingsIdentity(getDeviceProperties(device));
         if (typeof device.markModified === 'function') {
           device.markModified('properties');
         }
         await device.save();
         repaired += 1;
+      } catch (error) {
+        failed += 1;
+        this.log('warn', 'system', 'Failed to repair a migrated SmartThings identity; continuing with the rest', {
+          deviceId: getDeviceIdString(device),
+          error: error.message
+        });
       }
-      if (repaired > 0) {
-        this.log('info', 'system', 'Repaired migrated devices that still carried a SmartThings identity (prevents source regression).', { repaired });
-      }
-      return repaired;
-    } catch (error) {
-      this.log('warn', 'system', 'Failed to repair migrated SmartThings identities', {
-        error: error.message
-      });
-      return 0;
     }
+    if (repaired > 0 || failed > 0) {
+      this.log(failed > 0 ? 'warn' : 'info', 'system', 'Repaired migrated devices that still carried a SmartThings identity (prevents source regression).', {
+        repaired,
+        failed
+      });
+    }
+    return repaired;
   }
 
   async completeMigration(migrationId, identity, update) {
