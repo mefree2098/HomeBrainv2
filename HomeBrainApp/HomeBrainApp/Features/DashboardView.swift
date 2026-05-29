@@ -915,6 +915,8 @@ struct DashboardView: View {
     @State private var securityVisibleSensorIDs: [String]? = nil
     @State private var securitySensorSelectionProfileId: String? = nil
     @State private var isPresentingSecuritySensorPicker = false
+    @State private var isPresentingSecuritySirenPicker = false
+    @State private var isSavingSecuritySirenSelection = false
     @State private var securityAudioPlayer: AVPlayer?
     @State private var securityEffectPlayer: AVPlayer?
     @State private var securitySpeechSynthesizer = AVSpeechSynthesizer()
@@ -1099,6 +1101,10 @@ struct DashboardView: View {
 
     private var selectedSecuritySirenOutputCount: Int {
         selectedSecuritySirenOutputs.count
+    }
+
+    private var selectedSecuritySirenOutputIDSet: Set<String> {
+        Set(selectedSecuritySirenOutputs.map(securitySirenOutputSelectionKey))
     }
 
     private var dashboardGridColumnCount: Int {
@@ -2439,19 +2445,13 @@ struct DashboardView: View {
 
                     Spacer(minLength: 8)
 
-                    HBBadge(
-                        text: "\(selectedSecuritySirenOutputCount)/\(securitySirenOutputs.count) selected",
-                        foreground: HBPalette.accentRed,
-                        background: HBPalette.accentRed.opacity(0.14),
-                        stroke: HBPalette.accentRed.opacity(0.26)
-                    )
-                    .fixedSize(horizontal: true, vertical: false)
+                    securitySirenOutputHeaderControls()
                 }
 
                 if selectedSecuritySirenOutputs.isEmpty {
                     securityEmptyStateRow(
                         title: "No sirens selected",
-                        subtitle: "Choose alarm sirens in Security Settings."
+                        subtitle: "Use the siren menu to choose alarm sirens."
                     )
                 } else {
                     LazyVGrid(columns: securitySirenOutputColumns(), spacing: 8) {
@@ -3081,6 +3081,137 @@ struct DashboardView: View {
         }
     }
 
+    private func securitySirenOutputHeaderControls() -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                securitySirenOutputHeaderBadge()
+                securitySirenOutputPickerButton()
+            }
+
+            VStack(alignment: .trailing, spacing: 8) {
+                securitySirenOutputHeaderBadge()
+                securitySirenOutputPickerButton()
+            }
+        }
+    }
+
+    private func securitySirenOutputHeaderBadge() -> some View {
+        HBBadge(
+            text: "\(selectedSecuritySirenOutputCount)/\(securitySirenOutputs.count) selected",
+            foreground: HBPalette.accentRed,
+            background: HBPalette.accentRed.opacity(0.14),
+            stroke: HBPalette.accentRed.opacity(0.26)
+        )
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func securitySirenOutputPickerButton() -> some View {
+        Button {
+            isPresentingSecuritySirenPicker.toggle()
+        } label: {
+            Image(systemName: isSavingSecuritySirenSelection ? "arrow.triangle.2.circlepath" : "speaker.wave.2.circle")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(HBPalette.textSecondary)
+                .frame(width: 32, height: 32)
+                .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
+        }
+        .buttonStyle(.plain)
+        .disabled(isSavingSecuritySirenSelection)
+        .popover(isPresented: $isPresentingSecuritySirenPicker, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
+            securitySirenOutputPickerCard()
+                .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private func securitySirenOutputPickerCard() -> some View {
+        let preferredWidth = min(max(contentWidth > 0 ? contentWidth * 0.44 : 300, 280), 360)
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Alarm Sirens")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .textCase(.uppercase)
+                        .tracking(2.0)
+                        .foregroundStyle(HBPalette.textMuted)
+
+                    Text("Selected sirens sound when the alarm is triggered.")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+
+                Spacer(minLength: 8)
+
+                Button("Done") {
+                    isPresentingSecuritySirenPicker = false
+                }
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(HBPalette.accentBlue)
+                .buttonStyle(.plain)
+            }
+
+            if securitySirenOutputs.isEmpty {
+                Text("No alarm sirens available for this security platform.")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
+            } else {
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(securitySirenOutputs) { siren in
+                            securitySirenOutputPickerRow(siren)
+                        }
+                    }
+                }
+                .frame(maxHeight: 260)
+            }
+        }
+        .frame(width: preferredWidth, alignment: .leading)
+        .padding(14)
+    }
+
+    private func securitySirenOutputSelectionKey(_ siren: DashboardSecuritySirenOutputItem) -> String {
+        siren.localDeviceId ?? siren.id
+    }
+
+    private func securitySirenOutputStatusText(for siren: DashboardSecuritySirenOutputItem) -> String {
+        if !siren.isOnline {
+            return "Offline"
+        }
+        if siren.isActive {
+            return "Sounding"
+        }
+        return siren.stateLabel.isEmpty ? "Ready" : siren.stateLabel
+    }
+
+    private func toggleSecuritySirenOutput(_ siren: DashboardSecuritySirenOutputItem) {
+        let sirenKey = securitySirenOutputSelectionKey(siren)
+        var selectedKeys = selectedSecuritySirenOutputIDSet
+
+        if selectedKeys.contains(sirenKey) {
+            selectedKeys.remove(sirenKey)
+        } else {
+            selectedKeys.insert(sirenKey)
+        }
+
+        let nextSelectedKeys = selectedKeys
+        securitySirenOutputs = securitySirenOutputs.map { output in
+            var mutableOutput = output
+            let outputKey = securitySirenOutputSelectionKey(output)
+            let shouldSelect = nextSelectedKeys.contains(outputKey)
+            mutableOutput.isSelected = shouldSelect
+            mutableOutput.isEnabled = shouldSelect
+            return mutableOutput
+        }
+
+        Task {
+            await persistSecuritySirenOutputs(Array(nextSelectedKeys).sorted())
+        }
+    }
+
     @ViewBuilder
     private func securitySensorHeaderBadges() -> some View {
         if hasCustomSecuritySensorSelection {
@@ -3367,6 +3498,52 @@ struct DashboardView: View {
             RoundedRectangle(cornerRadius: compact ? 12 : 14, style: .continuous)
                 .stroke(tint.opacity(0.32), lineWidth: 1)
         )
+    }
+
+    private func securitySirenOutputPickerRow(_ siren: DashboardSecuritySirenOutputItem) -> some View {
+        let sirenKey = securitySirenOutputSelectionKey(siren)
+        let isSelected = selectedSecuritySirenOutputIDSet.contains(sirenKey)
+        let statusText = securitySirenOutputStatusText(for: siren)
+        let statusTint = siren.isOnline ? HBPalette.accentGreen : HBPalette.textMuted
+
+        return Button {
+            toggleSecuritySirenOutput(siren)
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(isSelected ? HBPalette.accentRed : HBPalette.textMuted)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(siren.name)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .lineLimit(1)
+
+                    Text([siren.room, siren.source].compactMap { $0 }.joined(separator: " • "))
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(HBPalette.textSecondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                Text(statusText)
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(statusTint)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(isSelected ? HBPalette.accentRed.opacity(0.5) : HBPalette.panelStrokeStrong, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isSavingSecuritySirenSelection)
     }
 
     private func securityEmptyStateRow(title: String, subtitle: String) -> some View {
@@ -7986,6 +8163,42 @@ struct DashboardView: View {
             _ = try await session.apiClient.put("/api/profiles/\(profileId)/security-visible-sensors", body: payload)
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func persistSecuritySirenOutputs(_ selectedDeviceIds: [String]) async {
+        guard !previewMode else {
+            return
+        }
+
+        isSavingSecuritySirenSelection = true
+        defer {
+            isSavingSecuritySirenSelection = false
+        }
+
+        let selectedDeviceIdSet = Set(selectedDeviceIds)
+        let sirenOutputsPayload = securitySirenOutputs.compactMap { siren -> [String: Any]? in
+            let deviceId = securitySirenOutputSelectionKey(siren)
+            guard selectedDeviceIdSet.contains(deviceId) else {
+                return nil
+            }
+
+            return [
+                "deviceId": deviceId,
+                "name": siren.name,
+                "enabled": true
+            ]
+        }
+
+        do {
+            _ = try await session.apiClient.put("/api/security-alarm/settings", body: [
+                "sirenOutputs": sirenOutputsPayload
+            ])
+            await refreshSecurityStatus()
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+            await refreshSecurityStatus()
         }
     }
 
