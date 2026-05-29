@@ -996,8 +996,8 @@ class SecurityAlarmService {
       source,
       sourceLabel: this.getSecurityDeviceSourceLabel(source),
       platform: device ? getSecurityPlatformForDevice(device) : null,
-      name: this.normalizeSirenOutputName(configuredOutput?.name)
-        || normalizeString(device?.name)
+      name: normalizeString(device?.name)
+        || this.normalizeSirenOutputName(configuredOutput?.name)
         || 'Unnamed alarm siren',
       room: normalizeString(device?.room) || null,
       isSelected: Boolean(configuredOutput),
