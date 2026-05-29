@@ -642,6 +642,7 @@ private struct DashboardSecuritySensorItem: Identifiable {
     let id: String
     var localDeviceId: String?
     var smartThingsDeviceId: String?
+    var source: String?
     var name: String
     var room: String?
     var sensorType: String
@@ -667,6 +668,7 @@ private struct DashboardSecuritySensorItem: Identifiable {
             id: resolvedID,
             localDeviceId: JSON.optionalString(payload, "localDeviceId"),
             smartThingsDeviceId: JSON.optionalString(payload, "smartThingsDeviceId"),
+            source: JSON.optionalString(payload, "source"),
             name: JSON.string(payload, "name", fallback: "Unnamed security sensor"),
             room: JSON.optionalString(payload, "room"),
             sensorType: JSON.string(payload, "sensorType", fallback: "security"),
@@ -690,6 +692,7 @@ private struct DashboardSecurityDoorLockItem: Identifiable {
     let id: String
     var localDeviceId: String?
     var smartThingsDeviceId: String?
+    var source: String?
     var name: String
     var room: String?
     var isLocked: Bool
@@ -706,6 +709,7 @@ private struct DashboardSecurityDoorLockItem: Identifiable {
             id: resolvedID,
             localDeviceId: JSON.optionalString(payload, "localDeviceId"),
             smartThingsDeviceId: JSON.optionalString(payload, "smartThingsDeviceId"),
+            source: JSON.optionalString(payload, "source"),
             name: JSON.string(payload, "name", fallback: "Unnamed door lock"),
             room: JSON.optionalString(payload, "room"),
             isLocked: JSON.bool(payload, "isLocked"),
@@ -824,6 +828,8 @@ struct DashboardView: View {
     @State private var securityAudioPrompts: [String: String] = [:]
     @State private var securityExitDelaySeconds = 30
     @State private var securitySecondsUntilArmed = 0
+    @State private var securityHomeBrainPlatformEnabled = true
+    @State private var securitySmartThingsPlatformEnabled = true
     @State private var securityRequirePinForArm = false
     @State private var securityRequirePinForDisarm = false
     @State private var securityPinAction: DashboardSecurityPinAction?
@@ -2464,7 +2470,7 @@ struct DashboardView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
 
-            Text("\(securityStatusDetail) • \(systemStatus)")
+            Text("\(securityStatusDetail) • \(securitySystemStatusText)")
                 .font(.system(size: compact ? 12 : 13, weight: .medium, design: .rounded))
                 .foregroundStyle(securityStateDetailColor)
                 .lineLimit(2)
@@ -2574,6 +2580,23 @@ struct DashboardView: View {
         default:
             return "System currently disarmed"
         }
+    }
+
+    private var securityPlatformStatusText: String {
+        switch (securityHomeBrainPlatformEnabled, securitySmartThingsPlatformEnabled) {
+        case (true, true):
+            return "HomeBrain + SmartThings"
+        case (true, false):
+            return "HomeBrain native"
+        case (false, true):
+            return "SmartThings"
+        default:
+            return "No security platform"
+        }
+    }
+
+    private var securitySystemStatusText: String {
+        "\(securityPlatformStatusText) • \(systemStatus)"
     }
 
     private var securityStatusAccent: Color {
@@ -6587,6 +6610,7 @@ struct DashboardView: View {
                     id: "preview-front-door-sensor",
                     localDeviceId: "preview-front-door-sensor",
                     smartThingsDeviceId: nil,
+                    source: "homebrain-zigbee",
                     name: "Front Door Sensor",
                     room: "Entry",
                     sensorType: "doorWindow",
@@ -6607,6 +6631,7 @@ struct DashboardView: View {
                     id: "preview-hall-motion",
                     localDeviceId: "preview-hall-motion",
                     smartThingsDeviceId: nil,
+                    source: "homebrain-zigbee",
                     name: "Hall Motion Sensor",
                     room: "Upper Hall",
                     sensorType: "motion",
@@ -6627,6 +6652,7 @@ struct DashboardView: View {
                     id: "preview-garage-contact",
                     localDeviceId: nil,
                     smartThingsDeviceId: nil,
+                    source: "homebrain-zigbee",
                     name: "Garage Entry Contact",
                     room: "Garage",
                     sensorType: "doorWindow",
@@ -6649,6 +6675,7 @@ struct DashboardView: View {
                     id: "preview-lock",
                     localDeviceId: "preview-lock",
                     smartThingsDeviceId: nil,
+                    source: "homebrain-zwave",
                     name: "Front Door Lock",
                     room: "Entry",
                     isLocked: true,
@@ -6660,6 +6687,7 @@ struct DashboardView: View {
                     id: "preview-back-door-lock",
                     localDeviceId: "preview-back-door-lock",
                     smartThingsDeviceId: nil,
+                    source: "homebrain-zwave",
                     name: "Back Door Lock",
                     room: "Kitchen",
                     isLocked: false,
@@ -6752,6 +6780,7 @@ struct DashboardView: View {
         let isOnline = JSON.bool(statusObject, "isOnline", fallback: true)
         let promptObject = JSON.object(statusObject["audioPrompts"])
         let pinSettings = JSON.object(statusObject["pinSettings"])
+        let enabledPlatforms = JSON.object(statusObject["enabledPlatforms"])
 
         securityStatus = alarmState
         securityZonesActive = activeSensors
@@ -6765,6 +6794,8 @@ struct DashboardView: View {
         }
         securityExitDelaySeconds = JSON.int(statusObject, "exitDelaySeconds", fallback: 30)
         securitySecondsUntilArmed = JSON.int(statusObject, "secondsUntilArmed")
+        securityHomeBrainPlatformEnabled = JSON.bool(enabledPlatforms, "homebrain", fallback: true)
+        securitySmartThingsPlatformEnabled = JSON.bool(enabledPlatforms, "smartthings", fallback: true)
         securityRequirePinForArm = JSON.bool(pinSettings, "requireForArm")
         securityRequirePinForDisarm = JSON.bool(pinSettings, "requireForDisarm")
         systemStatus = isOnline ? "Online" : "Offline"
@@ -7166,17 +7197,46 @@ struct DashboardView: View {
         return (resolved?.isEmpty == false) ? resolved : nil
     }
 
+    private func deviceSecuritySource(_ device: DeviceItem) -> String {
+        stringValue(device.properties["source"]).lowercased()
+    }
+
+    private func securitySummarySource(_ source: String?) -> String {
+        (source ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private func canMatchSecuritySummaryBySmartThingsID(summarySource: String?, deviceSource: String, smartThingsDeviceID: String?) -> Bool {
+        guard smartThingsDeviceID?.isEmpty == false else {
+            return false
+        }
+
+        let normalizedSummarySource = securitySummarySource(summarySource)
+        return deviceSource == "smartthings" && (normalizedSummarySource.isEmpty || normalizedSummarySource == "smartthings")
+    }
+
     private func syncSecuritySummaries(with device: DeviceItem) {
         let smartThingsDeviceID = deviceSmartThingsDeviceID(device)
+        let source = deviceSecuritySource(device)
 
         if let sensorIndex = securitySensors.firstIndex(where: {
             $0.localDeviceId == device.id ||
             $0.id == device.id ||
-            ($0.smartThingsDeviceId != nil && $0.smartThingsDeviceId == smartThingsDeviceID)
+            (
+                $0.smartThingsDeviceId != nil &&
+                $0.smartThingsDeviceId == smartThingsDeviceID &&
+                canMatchSecuritySummaryBySmartThingsID(
+                    summarySource: $0.source,
+                    deviceSource: source,
+                    smartThingsDeviceID: smartThingsDeviceID
+                )
+            )
         }) {
             securitySensors[sensorIndex].name = device.name
             securitySensors[sensorIndex].room = device.room
             securitySensors[sensorIndex].smartThingsDeviceId = smartThingsDeviceID ?? securitySensors[sensorIndex].smartThingsDeviceId
+            if !source.isEmpty {
+                securitySensors[sensorIndex].source = source
+            }
             securitySensors[sensorIndex].isAvailable = true
             securitySensors[sensorIndex].isOnline = device.isOnline
             securitySensors[sensorIndex].isActive = device.status
@@ -7193,11 +7253,22 @@ struct DashboardView: View {
         if let doorLockIndex = securityDoorLocks.firstIndex(where: {
             $0.localDeviceId == device.id ||
             $0.id == device.id ||
-            ($0.smartThingsDeviceId != nil && $0.smartThingsDeviceId == smartThingsDeviceID)
+            (
+                $0.smartThingsDeviceId != nil &&
+                $0.smartThingsDeviceId == smartThingsDeviceID &&
+                canMatchSecuritySummaryBySmartThingsID(
+                    summarySource: $0.source,
+                    deviceSource: source,
+                    smartThingsDeviceID: smartThingsDeviceID
+                )
+            )
         }) {
             securityDoorLocks[doorLockIndex].name = device.name
             securityDoorLocks[doorLockIndex].room = device.room
             securityDoorLocks[doorLockIndex].smartThingsDeviceId = smartThingsDeviceID ?? securityDoorLocks[doorLockIndex].smartThingsDeviceId
+            if !source.isEmpty {
+                securityDoorLocks[doorLockIndex].source = source
+            }
             securityDoorLocks[doorLockIndex].isLocked = device.status
             securityDoorLocks[doorLockIndex].isOnline = device.isOnline
             securityDoorLocks[doorLockIndex].stateLabel = device.status ? "Locked" : "Unlocked"
