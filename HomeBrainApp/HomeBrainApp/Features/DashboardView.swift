@@ -851,6 +851,7 @@ struct DashboardView: View {
     @State private var isLoading = true
     @State private var isDashboardLoadInFlight = false
     @State private var isSecurityStatusRefreshInFlight = false
+    @State private var securityStatusRefreshSequence = 0
     @State private var errorMessage: String?
 
     @State private var devices: [DeviceItem] = []
@@ -7038,6 +7039,7 @@ struct DashboardView: View {
             async let devicesTask = session.apiClient.get("/api/devices")
             async let scenesTask = session.apiClient.get("/api/scenes")
             async let voiceTask = session.apiClient.get("/api/voice/devices")
+            let securityLoadSequence = nextSecurityStatusRefreshSequence()
             async let securityTask = session.apiClient.get("/api/security-alarm/status", query: freshSecurityStatusQueryItems())
             async let profilesTask = session.apiClient.get("/api/profiles")
 
@@ -7062,7 +7064,9 @@ struct DashboardView: View {
             devices = deviceList.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             scenes = sceneList.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             voiceDevices = voiceList.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-            applySecurityStatusResponse(securityResponse)
+            if isCurrentSecurityStatusRefresh(securityLoadSequence) {
+                applySecurityStatusResponse(securityResponse)
+            }
             applyFavoriteContext(favoritesContext)
             dashboardProfileId = dashboardContext.profileId ?? favoritesContext.profileId
             dashboardViews = dashboardContext.views
@@ -7145,12 +7149,27 @@ struct DashboardView: View {
         ]
     }
 
-    private func refreshSecurityStatus() async {
-        guard !isSecurityStatusRefreshInFlight else {
+    private func nextSecurityStatusRefreshSequence() -> Int {
+        securityStatusRefreshSequence += 1
+        return securityStatusRefreshSequence
+    }
+
+    private func isCurrentSecurityStatusRefresh(_ sequence: Int) -> Bool {
+        sequence == securityStatusRefreshSequence
+    }
+
+    private func refreshSecurityStatus(force: Bool = false) async {
+        guard force || !isSecurityStatusRefreshInFlight else {
             return
         }
+
+        let refreshSequence = nextSecurityStatusRefreshSequence()
         isSecurityStatusRefreshInFlight = true
-        defer { isSecurityStatusRefreshInFlight = false }
+        defer {
+            if isCurrentSecurityStatusRefresh(refreshSequence) {
+                isSecurityStatusRefreshInFlight = false
+            }
+        }
 
         if previewMode {
             systemStatus = "Online"
@@ -7159,11 +7178,17 @@ struct DashboardView: View {
 
         do {
             let response = try await session.apiClient.get("/api/security-alarm/status", query: freshSecurityStatusQueryItems())
+            guard isCurrentSecurityStatusRefresh(refreshSequence) else {
+                return
+            }
+
             applySecurityStatusResponse(response)
-            await refreshSecurityDoorLocksFromDevices()
             errorMessage = nil
+            await refreshSecurityDoorLocksFromDevices()
         } catch {
-            errorMessage = error.localizedDescription
+            if isCurrentSecurityStatusRefresh(refreshSequence) {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -8194,11 +8219,11 @@ struct DashboardView: View {
             _ = try await session.apiClient.put("/api/security-alarm/settings", body: [
                 "sirenOutputs": sirenOutputsPayload
             ])
-            await refreshSecurityStatus()
+            await refreshSecurityStatus(force: true)
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
-            await refreshSecurityStatus()
+            await refreshSecurityStatus(force: true)
         }
     }
 
@@ -8345,7 +8370,7 @@ struct DashboardView: View {
                 let audioKey = securityExitDelaySeconds == 30 ? "armingAway30" : nil
                 playSecurityPrompt("Arming away in \(securityExitDelaySeconds) seconds. Please leave the premises now.", audioKey: audioKey)
             }
-            await refreshSecurityStatus()
+            await refreshSecurityStatus(force: true)
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -8434,7 +8459,7 @@ struct DashboardView: View {
             _ = try await session.apiClient.post("/api/security-alarm/disarm", body: body)
             playSecurityPrompt("The security system is now disarmed. Have a great day.", audioKey: "disarmed")
             playSecurityEffect(audioKey: "securityConfirmationChime")
-            await refreshSecurityStatus()
+            await refreshSecurityStatus(force: true)
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -8470,7 +8495,7 @@ struct DashboardView: View {
             )
             playSecurityPrompt("Alarm dismissed as a false alarm. The siren has been silenced.", audioKey: "alarmDismissedFalseAlarm")
             playSecurityEffect(audioKey: "securityConfirmationChime")
-            await refreshSecurityStatus()
+            await refreshSecurityStatus(force: true)
             return true
         } catch {
             errorMessage = error.localizedDescription
@@ -8518,7 +8543,7 @@ struct DashboardView: View {
 
         do {
             _ = try await session.apiClient.post("/api/security-alarm/sync", body: [:])
-            await refreshSecurityStatus()
+            await refreshSecurityStatus(force: true)
         } catch {
             errorMessage = error.localizedDescription
         }
