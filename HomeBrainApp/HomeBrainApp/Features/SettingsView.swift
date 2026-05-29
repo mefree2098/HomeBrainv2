@@ -2675,6 +2675,10 @@ private struct SettingsDeviceIntegrationsPane: View {
                 actionButton("Clear Queue", key: "insteon-clear-queue", method: .post, path: "/api/insteon/maintenance/clear-queue")
                 actionButton("Pause Runtime Monitoring", key: "insteon-pause", method: .post, path: "/api/insteon/maintenance/runtime-monitoring/stop")
                 actionButton("Resume Runtime Monitoring", key: "insteon-resume", method: .post, path: "/api/insteon/maintenance/runtime-monitoring/start", body: ["immediate": true])
+                actionButton("Re-link All Devices to PLM", key: "insteon-relink", method: .post, path: "/api/insteon/maintenance/relink/start")
+                Text("Rebuilds the PLM all-link database for every device (needed after the link table is lost). Runs for several minutes; open the web Settings → INSTEON panel to watch live progress.")
+                    .font(.caption)
+                    .foregroundStyle(HBPalette.textSecondary)
             }
 
             deviceCatalogSection

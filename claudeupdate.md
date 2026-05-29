@@ -301,10 +301,50 @@ unchanged by this work).
 
 ---
 
-## 13. Commit reference (on `main`)
+## 13. INSTEON control — diagnosis & "Re-link all devices"
+
+After the serialport revert restored the PLM connection, INSTEON commands still didn't
+turn devices on (the app reported success). A guided, on-device diagnosis isolated it:
+
+- **serialport is fine.** `serialport@8.0.8` loads on the Jetson's Node 22 and HomeBrain
+  read `PLM ID 71B678 / firmware 9e` over native serial — full bidirectional I/O. `main`'s
+  INSTEON code + serialport version are **identical to the last-known-working baseline**
+  (only one equivalent `SerialPort`-assignment line differs), so there was no code regression.
+- **Root cause: the PLM's all-link database is empty.** A raw `Get First All-Link Record`
+  (`0269`) returned a NAK (`15`) — confirmed, not a read bug. Modern **i2cs** devices reject
+  direct commands from a PLM that isn't in their database, so they never act and never ACK;
+  the empty callback was then misreported as success (the `:10840` footgun). The PLM was not
+  reset/replaced by the user, and HomeBrain has no "Reset IM" code — the links were simply lost.
+
+**Fix — bulk re-link feature** (rebuilds the PLM ↔ device links for all tracked devices):
+- `server/services/insteonService.js`: `relinkAllTrackedDevices(request, {onProgress, shouldCancel})`
+  iterates every tracked INSTEON device and calls the proven `_linkDeviceRemote` (responder +
+  controller links, by address, with retries); `startRelinkRun` wraps it as an async, pollable
+  run reusing the existing run infrastructure; `_normalizeRelinkRunRequest` validates input.
+  Reports per-device `linked` / `responder-only` / `failed`.
+- Routes: `POST /api/insteon/maintenance/relink/start`, `GET …/relink/runs/:runId`,
+  `POST …/relink/runs/:runId/cancel`.
+- Web (`Settings → INSTEON`): "Re-link All Devices" + "Cancel Re-link" buttons and a live
+  progress/log panel.
+- iOS (`SettingsView`): "Re-link All Devices to PLM" action button + explainer.
+- Tests: `insteonRelink.test.js` (9 cases — iteration, de-dup, retries, responder-only,
+  manual mode, cancellation, empty-set, summary accounting).
+
+> Remote (no-touch) linking works for most i2cs devices; a few battery/sleeping devices may
+> report `failed` and need a manual set-button tap. Still requires hardware validation.
+
+**Still a known footgun (follow-up):** `insteonService.js:10840` treats an `undefined`
+command callback as success, so a non-responding device can show as "on." Worth hardening so
+control reports "device did not respond" — deferred (it's pre-existing baseline behavior and
+changing success semantics needs care across all callers).
+
+---
+
+## 14. Commit reference (on `main`)
 
 ```
-(this change)  fix: Z-Wave siren on/off — detect trigger from interviewed CCs + add Basic CC
+(this change)  feat: INSTEON "Re-link all devices" — rebuild empty PLM all-link database
+bc890771  fix: restore Z-Wave siren on/off by detecting trigger from interviewed CCs (#226)
 cde20e94  fix: un-hide migrated devices + restore INSTEON (revert serialport to v8) (#225)
 6fba7508  client: auto-recover from stale code-split chunks after deploy (#224)
 32fe6e4e  Native Zigbee/Z-Wave engine reliability overhaul (Phases 0–5) (#223)

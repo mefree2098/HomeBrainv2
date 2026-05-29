@@ -655,6 +655,84 @@ router.post('/devices/linked/status/runs/:runId/cancel', async (req, res) => {
   }
 });
 
+// Description: Re-link every tracked INSTEON device to the current PLM (rebuilds the
+//   all-link database after it was lost/emptied). Runs asynchronously; poll the run.
+// Endpoint: POST /api/insteon/maintenance/relink/start
+// Request: { group?: number, linkMode?: 'remote'|'manual', perDeviceTimeoutMs?: number, retries?: number, pauseBetweenMs?: number }
+// Response: { success: boolean, runId: string, run: object }
+router.post('/maintenance/relink/start', async (req, res) => {
+  console.log('InsteonRoutes: Starting INSTEON re-link of all tracked devices');
+
+  try {
+    const run = insteonService.startRelinkRun(req.body || {});
+    res.status(202).json({
+      success: true,
+      runId: run.id,
+      run
+    });
+  } catch (error) {
+    console.error('InsteonRoutes: Failed to start INSTEON re-link run:', error.message);
+    console.error(error.stack);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+router.get('/maintenance/relink/runs/:runId', async (req, res) => {
+  const runId = req.params?.runId;
+  try {
+    const run = insteonService.getLinkedStatusRun(runId);
+    if (!run) {
+      return res.status(404).json({
+        success: false,
+        message: `Re-link run "${runId}" was not found`
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      run
+    });
+  } catch (error) {
+    console.error('InsteonRoutes: Failed to fetch INSTEON re-link run:', error.message);
+    console.error(error.stack);
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+router.post('/maintenance/relink/runs/:runId/cancel', async (req, res) => {
+  const runId = req.params?.runId;
+  try {
+    const run = insteonService.cancelLinkedStatusRun(runId);
+    if (!run) {
+      return res.status(404).json({
+        success: false,
+        message: `Re-link run "${runId}" was not found`
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: ['completed', 'failed', 'cancelled'].includes(run.status)
+        ? `Re-link run is already ${run.status}.`
+        : 'Cancellation requested.',
+      run
+    });
+  } catch (error) {
+    console.error('InsteonRoutes: Failed to cancel INSTEON re-link run:', error.message);
+    console.error(error.stack);
+    return res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
 router.get('/devices/linked/status', async (req, res) => {
   console.log('InsteonRoutes: Querying linked device status from PLM');
 

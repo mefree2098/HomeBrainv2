@@ -191,6 +191,53 @@ export interface InsteonLinkedStatusRunSnapshot {
   error?: string | null;
 }
 
+export interface InsteonRelinkPayload {
+  group?: number;
+  linkMode?: 'remote' | 'manual';
+  perDeviceTimeoutMs?: number;
+  retries?: number;
+  pauseBetweenMs?: number;
+}
+
+export interface InsteonRelinkDeviceResult {
+  deviceId?: string | null;
+  address?: string;
+  displayAddress?: string;
+  name?: string | null;
+  status?: 'linked' | 'responder-only' | 'failed';
+  error?: string;
+  warning?: string;
+}
+
+export interface InsteonRelinkResult {
+  success?: boolean;
+  message?: string;
+  group?: number;
+  linkMode?: 'remote' | 'manual';
+  plmDeviceId?: string | null;
+  plmDisplayAddress?: string | null;
+  summary?: {
+    total?: number;
+    linked?: number;
+    responderOnly?: number;
+    failed?: number;
+  };
+  devices?: InsteonRelinkDeviceResult[];
+}
+
+export interface InsteonRelinkRunSnapshot {
+  id: string;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  createdAt?: string;
+  updatedAt?: string;
+  finishedAt?: string | null;
+  request?: InsteonRelinkPayload;
+  cancelRequested?: boolean;
+  logs?: InsteonIsySyncRunLogEntry[];
+  result?: InsteonRelinkResult | null;
+  error?: string | null;
+}
+
 export interface InsteonConnectionTarget {
   transport?: 'serial' | 'tcp' | string;
   serialPath?: string;
@@ -609,6 +656,47 @@ export const cancelInsteonLinkedStatusRun = async (runId: string) => {
     return response.data as { success: boolean; message?: string; run: InsteonLinkedStatusRunSnapshot };
   } catch (error) {
     console.error('Cancel linked status run error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Re-link every tracked INSTEON device to the current PLM (rebuilds the
+//   all-link database after it was lost/emptied). Runs asynchronously; poll the run.
+// Endpoint: POST /api/insteon/maintenance/relink/start
+// Request: InsteonRelinkPayload
+// Response: { success: boolean, runId: string, run: InsteonRelinkRunSnapshot }
+export const startInsteonRelinkRun = async (payload: InsteonRelinkPayload = {}) => {
+  try {
+    const response = await api.post('/api/insteon/maintenance/relink/start', payload || {});
+    return response.data as { success: boolean; runId: string; run: InsteonRelinkRunSnapshot };
+  } catch (error) {
+    console.error('Start INSTEON re-link run error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Fetch an asynchronous INSTEON re-link run status/logs/result
+// Endpoint: GET /api/insteon/maintenance/relink/runs/:runId
+// Response: { success: boolean, run: InsteonRelinkRunSnapshot }
+export const getInsteonRelinkRun = async (runId: string) => {
+  try {
+    const response = await api.get(`/api/insteon/maintenance/relink/runs/${encodeURIComponent(runId)}`);
+    return response.data as { success: boolean; run: InsteonRelinkRunSnapshot };
+  } catch (error) {
+    console.error('Get INSTEON re-link run error:', error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+// Description: Request cancellation for an asynchronous INSTEON re-link run
+// Endpoint: POST /api/insteon/maintenance/relink/runs/:runId/cancel
+// Response: { success: boolean, message: string, run: InsteonRelinkRunSnapshot }
+export const cancelInsteonRelinkRun = async (runId: string) => {
+  try {
+    const response = await api.post(`/api/insteon/maintenance/relink/runs/${encodeURIComponent(runId)}/cancel`);
+    return response.data as { success: boolean; message?: string; run: InsteonRelinkRunSnapshot };
+  } catch (error) {
+    console.error('Cancel INSTEON re-link run error:', error);
     throw new Error(error?.response?.data?.message || error.message);
   }
 };
