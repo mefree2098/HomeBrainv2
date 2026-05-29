@@ -1,5 +1,13 @@
 const mongoose = require('mongoose');
 
+const LEGACY_DEVICE_PROVIDER_FIELDS = [
+  'deviceDiscoveryPath',
+  'deviceServiceBaseUrl',
+  'deviceServiceTimeoutMs',
+  'deviceServiceToken',
+  'deviceSpeakPath'
+];
+
 function maskSecret(value) {
   const normalized = typeof value === 'string' ? value.trim() : '';
   if (!normalized) {
@@ -293,6 +301,17 @@ alexaBrokerConfigSchema.statics.getConfig = async function getConfig() {
   if (!config) {
     config = await this.create({});
   }
+  const persistedConfig = config.toObject();
+  const legacyUnset = LEGACY_DEVICE_PROVIDER_FIELDS.reduce((updates, field) => {
+    if (Object.prototype.hasOwnProperty.call(persistedConfig, field)) {
+      updates[field] = '';
+    }
+    return updates;
+  }, {});
+  if (Object.keys(legacyUnset).length > 0) {
+    await this.updateOne({ _id: config._id }, { $unset: legacyUnset });
+    config = await this.findById(config._id);
+  }
   return config;
 };
 
@@ -306,6 +325,9 @@ alexaBrokerConfigSchema.methods.setError = async function setError(message) {
 
 alexaBrokerConfigSchema.methods.toSanitized = function toSanitized() {
   const sanitized = this.toObject();
+  LEGACY_DEVICE_PROVIDER_FIELDS.forEach((field) => {
+    delete sanitized[field];
+  });
   sanitized.oauthClientSecret = maskSecret(sanitized.oauthClientSecret);
   sanitized.eventClientSecret = maskSecret(sanitized.eventClientSecret);
   sanitized.alexaCommandSessionCookie = maskSecret(sanitized.alexaCommandSessionCookie);

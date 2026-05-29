@@ -6,6 +6,7 @@ const {
   buildLocalBaseUrl,
   parseListInput
 } = require('../services/alexaBrokerService');
+const AlexaBrokerConfig = require('../models/AlexaBrokerConfig');
 
 test('buildLocalBaseUrl uses loopback when broker binds all interfaces', () => {
   assert.equal(buildLocalBaseUrl('0.0.0.0', 4301), 'http://127.0.0.1:4301');
@@ -142,6 +143,25 @@ test('updateConfig stores managed HomeBrain Alexa command bridge settings', asyn
   });
 
   assert.equal(config.alexaCommandSessionCookie, 'new-cookie');
+});
+
+test('AlexaBrokerConfig sanitized output omits legacy generic device provider settings', () => {
+  const config = new AlexaBrokerConfig({
+    alexaCommandProvider: 'homebrain'
+  });
+  config.set('deviceServiceBaseUrl', 'https://legacy-provider.example.com', { strict: false });
+  config.set('deviceServiceToken', 'legacy-secret', { strict: false });
+  config.set('deviceDiscoveryPath', '/v1/devices', { strict: false });
+  config.set('deviceSpeakPath', '/v1/devices/{deviceId}/speak', { strict: false });
+  config.set('deviceServiceTimeoutMs', 10000, { strict: false });
+
+  const sanitized = config.toSanitized();
+
+  assert.equal(Object.prototype.hasOwnProperty.call(sanitized, 'deviceServiceBaseUrl'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(sanitized, 'deviceServiceToken'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(sanitized, 'deviceDiscoveryPath'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(sanitized, 'deviceSpeakPath'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(sanitized, 'deviceServiceTimeoutMs'), false);
 });
 
 test('buildManagedReverseProxyRoutePayload derives the managed broker ingress route', () => {
