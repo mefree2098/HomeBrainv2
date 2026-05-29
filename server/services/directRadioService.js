@@ -6174,7 +6174,7 @@ class DirectRadioService {
     return buildMigrationPlan(device, options);
   }
 
-  async startMigration({ deviceId, protocol, durationSeconds, dskPin, migrationId, zwaveSecurityMode, securityMode } = {}) {
+  async startMigration({ deviceId, protocol, durationSeconds, dskPin, migrationId, zwaveSecurityMode, securityMode, exclusionConfirmed } = {}) {
     const safeDeviceId = normalizeObjectId(deviceId);
     const device = await Device.findById(safeDeviceId).lean();
     if (!device) {
@@ -6218,9 +6218,33 @@ class DirectRadioService {
     }
 
     if (targetProtocol === 'zwave') {
-      if (!migration || migration.sourceDeviceId !== safeDeviceId || !migration.exclusionVerifiedAt) {
-        const error = new Error('Z-Wave exclusion has not been verified yet. Keep this workflow on the SmartThings exclusion step until HomeBrain verifies that SmartThings removed the device.');
+      if (exclusionConfirmed === true) {
+        // The operator excluded the device themselves (SmartThings app or a
+        // device factory-reset / native general exclusion). SmartThings' cloud
+        // API cannot reliably drive Z-Wave exclusion, so rather than block on it
+        // forever, trust this explicit confirmation and proceed to native
+        // inclusion.
+        if (!migration || migration.sourceDeviceId !== safeDeviceId) {
+          migration = {
+            id: requestedMigrationId || `migration-${now}-${crypto.randomBytes(4).toString('hex')}`,
+            sourceDeviceId: String(device._id),
+            smartThingsDeviceId: device.properties?.smartThingsDeviceId || null,
+            protocol: targetProtocol,
+            startedAt: new Date(now).toISOString()
+          };
+          this.activeMigrations.set(migration.id, migration);
+        }
+        if (!migration.exclusionVerifiedAt) {
+          this.markSmartThingsExclusionVerified(migration, {
+            source: 'manual_confirmation',
+            removalVerified: false,
+            message: 'Exclusion confirmed by the operator; proceeding to native inclusion.'
+          });
+        }
+      } else if (!migration || migration.sourceDeviceId !== safeDeviceId || !migration.exclusionVerifiedAt) {
+        const error = new Error('Z-Wave exclusion has not been verified yet. Run a native HomeBrain exclusion (general Z-Wave exclusion on HomeBrain\'s own controller), or confirm you already excluded the device (SmartThings app or device reset) to proceed.');
         error.status = 409;
+        error.code = 'ZWAVE_EXCLUSION_NOT_VERIFIED';
         throw error;
       }
     }
@@ -6965,7 +6989,11 @@ class DirectRadioService {
       }
 
       const smartThingsDeviceId = trimString(device.properties?.smartThingsDeviceId);
-      if (smartThingsDeviceId) {
+      // When the caller opts into native exclusion, skip the SmartThings-API
+      // removal branch and drive a real Z-Wave general exclusion on HomeBrain's
+      // own controller (which can exclude a device even if it still believes it
+      // belongs to the SmartThings hub).
+      if (smartThingsDeviceId && options.useNativeExclusion !== true) {
         const requestedMigrationId = trimString(options.migrationId);
         const existingMigration = requestedMigrationId
           ? this.activeMigrations.get(requestedMigrationId)

@@ -422,7 +422,8 @@ router.post('/exclusion/start', async (req, res) => {
     const result = await directRadioService.startExclusion(protocol, {
       durationSeconds: req.body?.durationSeconds,
       deviceId: req.body?.deviceId,
-      migrationId: req.body?.migrationId
+      migrationId: req.body?.migrationId,
+      useNativeExclusion: req.body?.useNativeExclusion === true
     });
     res.status(200).json({
       success: true,
@@ -501,7 +502,8 @@ router.post('/migrations', async (req, res) => {
       durationSeconds: req.body?.durationSeconds,
       dskPin: req.body?.dskPin,
       migrationId: req.body?.migrationId,
-      zwaveSecurityMode: req.body?.zwaveSecurityMode || req.body?.securityMode
+      zwaveSecurityMode: req.body?.zwaveSecurityMode || req.body?.securityMode,
+      exclusionConfirmed: req.body?.exclusionConfirmed === true
     });
     res.status(200).json({
       success: true,
