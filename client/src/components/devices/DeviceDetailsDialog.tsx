@@ -89,8 +89,11 @@ import {
   isHarmonyCommandDevice
 } from "@/lib/harmony"
 import {
+  getSirenSoundOptions,
+  getSirenSoundValue,
   getSirenVolumeOptions,
   getSirenVolumeValue,
+  supportsSirenSound,
   supportsSirenVolume
 } from "@/lib/sirenVolume"
 import { cn } from "@/lib/utils"
@@ -2171,7 +2174,11 @@ export function DeviceDetailsDialog({
         setThermostatSetpointDraft(null)
       }
       setDirectControlFeedback("success")
-      const actionLabel = action === "set_siren_volume" ? "Volume" : getPrimaryActionLabel(device)
+      const actionLabel = action === "set_siren_volume"
+        ? "Volume"
+        : action === "set_siren_sound"
+          ? "Sound"
+          : getPrimaryActionLabel(device)
       toast({
         title: "Command sent",
         description: `${actionLabel} command was sent to ${device.name}.`
@@ -2958,11 +2965,37 @@ export function DeviceDetailsDialog({
       )
     }
 
-    if (device.type === "siren" && supportsSirenVolume(device)) {
+    if (device.type === "siren" && (supportsSirenVolume(device) || supportsSirenSound(device))) {
       const volumeOptions = getSirenVolumeOptions(device)
       const currentVolume = getSirenVolumeValue(device)
+      const soundOptions = getSirenSoundOptions(device)
+      const currentSound = getSirenSoundValue(device)
       return (
         <div className="space-y-4">
+          {soundOptions.length > 0 ? (
+            <div className="space-y-3 rounded-[1.2rem] border border-white/10 bg-white/[0.04] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <p className="section-kicker text-white/45">Sound</p>
+                <Badge variant="outline" className="border-white/10 bg-white/[0.06] text-white/82">
+                  {soundOptions.find((option) => option.value === currentSound)?.label || currentSound || "--"}
+                </Badge>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {soundOptions.map((option) => (
+                  <Button
+                    key={`${option.value}-${option.label}`}
+                    type="button"
+                    variant={option.value === currentSound ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => handleDirectDeviceControl("set_siren_sound", option.value)}
+                    disabled={sendingDirectControl}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {volumeOptions.length > 0 ? (
             <div className="space-y-3 rounded-[1.2rem] border border-white/10 bg-white/[0.04] p-4">
               <div className="flex items-center justify-between gap-3">

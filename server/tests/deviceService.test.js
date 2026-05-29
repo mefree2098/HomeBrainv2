@@ -532,6 +532,20 @@ test('controlDevice routes native Z-Wave siren volume through the direct radio s
         configParameters: [
           {
             parameter: 37,
+            valueBitMask: 0xff00,
+            label: 'Siren Sound',
+            minValue: 1,
+            maxValue: 5,
+            options: [
+              { label: 'Sound 1', value: 1 },
+              { label: 'Sound 2', value: 2 },
+              { label: 'Sound 3', value: 3 },
+              { label: 'Sound 4', value: 4 },
+              { label: 'Sound 5', value: 5 }
+            ]
+          },
+          {
+            parameter: 37,
             valueBitMask: 255,
             label: 'Volume',
             minValue: 1,
@@ -582,6 +596,15 @@ test('controlDevice routes native Z-Wave siren volume through the direct radio s
   assert.equal(persistedUpdate.properties.sirenVolume, 3);
   assert.equal(persistedUpdate.properties.supportsSirenVolume, true);
   assert.equal(updated.properties.sirenVolume, 3);
+
+  const updatedSound = await deviceService.controlDevice('device-zwave-siren', 'set_siren_sound', 4);
+
+  assert.equal(receivedCommand.action, 'setsirensound');
+  assert.equal(receivedCommand.commandValue, 4);
+  assert.equal(receivedCommand.updateData.properties.sirenSound, 4);
+  assert.equal(persistedUpdate.properties.sirenSound, 4);
+  assert.equal(persistedUpdate.properties.supportsSirenSound, true);
+  assert.equal(updatedSound.properties.sirenSound, 4);
 });
 
 test('controlDevice routes Matter commands through the Matter service and refreshes state', async (t) => {

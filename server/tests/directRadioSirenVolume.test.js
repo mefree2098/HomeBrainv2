@@ -24,6 +24,26 @@ function sirenVolumeCatalogParameter(overrides = {}) {
   };
 }
 
+function sirenSoundCatalogParameter(overrides = {}) {
+  return {
+    parameter: 37,
+    valueBitMask: 0xff00,
+    label: 'Siren Sound',
+    minValue: 1,
+    maxValue: 5,
+    defaultValue: 1,
+    allowManualEntry: false,
+    options: [
+      { label: 'Sound 1', value: 1 },
+      { label: 'Sound 2', value: 2 },
+      { label: 'Sound 3', value: 3 },
+      { label: 'Sound 4', value: 4 },
+      { label: 'Sound 5', value: 5 }
+    ],
+    ...overrides
+  };
+}
+
 function nativeSirenDevice(overrides = {}) {
   return {
     _id: 'native-siren-1',
@@ -41,7 +61,7 @@ function nativeSirenDevice(overrides = {}) {
       supportsAlarm: true,
       directRadioCatalog: {
         protocol: 'zwave',
-        configParameters: [sirenVolumeCatalogParameter()]
+        configParameters: [sirenSoundCatalogParameter(), sirenVolumeCatalogParameter()]
       }
     },
     ...overrides
@@ -102,3 +122,60 @@ test('Z-Wave siren volume command accepts catalog option labels and rejects out-
   );
 });
 
+test('Z-Wave siren sound command writes the catalog configuration parameter', async () => {
+  const service = new DirectRadioService();
+  const setCalls = [];
+  const node = {
+    id: 8,
+    setValue: async (valueId, value) => {
+      setCalls.push({ valueId, value });
+      return { status: zwave.SetValueStatus.Success };
+    },
+    valueDB: {
+      hasValue: () => false,
+      getValue: () => undefined
+    }
+  };
+  service.start = async () => {};
+  service.getDirectNodeForDevice = () => node;
+
+  const updateData = {};
+  await service.controlDevice(nativeSirenDevice(), 'setsirensound', 'Sound 4', updateData);
+
+  assert.equal(setCalls.length, 1);
+  assert.deepEqual(
+    setCalls[0].valueId,
+    zwave.ConfigurationCCValues.paramInformation(37, 0xff00).id
+  );
+  assert.equal(setCalls[0].value, 4);
+  assert.equal(updateData.properties.supportsSirenSound, true);
+  assert.equal(updateData.properties.sirenSound, 4);
+  assert.deepEqual(updateData.properties.sirenSoundOptions, [
+    { label: 'Sound 1', value: 1 },
+    { label: 'Sound 2', value: 2 },
+    { label: 'Sound 3', value: 3 },
+    { label: 'Sound 4', value: 4 },
+    { label: 'Sound 5', value: 5 }
+  ]);
+});
+
+test('Z-Wave siren sound command validates catalog options', () => {
+  const service = new DirectRadioService();
+  const device = nativeSirenDevice();
+
+  assert.deepEqual(service.normalizeSirenSoundCommand(device, 'Sound 5'), {
+    value: 5,
+    parameter: sirenSoundCatalogParameter(),
+    options: [
+      { label: 'Sound 1', value: 1 },
+      { label: 'Sound 2', value: 2 },
+      { label: 'Sound 3', value: 3 },
+      { label: 'Sound 4', value: 4 },
+      { label: 'Sound 5', value: 5 }
+    ]
+  });
+  assert.throws(
+    () => service.normalizeSirenSoundCommand(device, 6),
+    /Siren sound must be at most 5/
+  );
+});
