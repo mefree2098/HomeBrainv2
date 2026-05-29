@@ -47,6 +47,7 @@ import {
 import {
   finalizeDirectRadioMigration,
   getDirectRadioMigrationPlan,
+  reinterviewZigbeeDevice,
   startDirectRadioMigration,
   startZWaveExclusion,
   verifyDirectRadioMigrationStep,
@@ -383,6 +384,22 @@ function isNativeZWaveLock(device: DeviceLike | null): boolean {
     .trim()
     .toLowerCase()
   return source === "homebrain-zwave" || protocol === "zwave"
+}
+
+function isDirectRadioZigbeeDevice(device: DeviceLike | null): boolean {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  const source = (properties?.source || "").toString().trim().toLowerCase()
+  const protocol = ((properties?.homebrainDirect as Record<string, unknown> | undefined)?.protocol || "")
+    .toString()
+    .trim()
+    .toLowerCase()
+  return source === "homebrain-zigbee" || protocol === "zigbee"
+}
+
+function getDirectRadioIeeeAddr(device: DeviceLike | null): string {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  const direct = properties?.homebrainDirect as Record<string, unknown> | undefined
+  return (direct?.ieeeAddr || "").toString().trim()
 }
 
 function isSmartThingsBackedDevice(device: DeviceLike | null): boolean {
@@ -1430,6 +1447,7 @@ export function DeviceDetailsDialog({
   const [harmonyHoldMs, setHarmonyHoldMs] = useState(0)
   const [sendingHarmonyCommand, setSendingHarmonyCommand] = useState(false)
   const [sendingDirectControl, setSendingDirectControl] = useState(false)
+  const [reinterviewingZigbee, setReinterviewingZigbee] = useState(false)
   const [directControlFeedback, setDirectControlFeedback] = useState<"success" | "error" | null>(null)
   const [directControlError, setDirectControlError] = useState<string | null>(null)
   const [lightBrightnessDraft, setLightBrightnessDraft] = useState<number | null>(null)
@@ -1439,6 +1457,7 @@ export function DeviceDetailsDialog({
   const [migrationPlan, setMigrationPlan] = useState<DirectRadioMigrationPlan | null>(null)
   const [migrationLoading, setMigrationLoading] = useState(false)
   const [migrationStarting, setMigrationStarting] = useState<"zigbee" | "zwave" | null>(null)
+  const [exclusionOption, setExclusionOption] = useState<"native" | "confirm" | null>(null)
   const [migrationError, setMigrationError] = useState<string | null>(null)
   const [migrationFlow, setMigrationFlow] = useState<MigrationFlowState | null>(null)
   const [finalizingMigration, setFinalizingMigration] = useState(false)
@@ -1463,6 +1482,13 @@ export function DeviceDetailsDialog({
   const harmonyCommandDevice = useMemo(() => isHarmonyCommandDevice(device), [device])
   const smartThingsBacked = useMemo(() => isSmartThingsBackedDevice(device), [device])
   const nativeZWaveLock = useMemo(() => isNativeZWaveLock(device), [device])
+  const zigbeeBacked = useMemo(() => isDirectRadioZigbeeDevice(device), [device])
+  const zigbeeIeeeAddr = useMemo(() => getDirectRadioIeeeAddr(device), [device])
+  const zigbeeIasZone = useMemo(() => {
+    const direct = (device?.properties as Record<string, unknown> | undefined)?.homebrainDirect as Record<string, unknown> | undefined
+    const ias = direct?.iasZone
+    return ias && typeof ias === "object" ? (ias as { enrolled?: boolean }) : null
+  }, [device])
   const migrationNeedsFinalization = useMemo(() => needsMigrationFinalization(device), [device])
   const harmonyPowerCommands = useMemo(() => getHarmonyPowerCommands(device), [device])
   const harmonyCommands = useMemo(() => getHarmonyCommandMetadata(device), [device])
@@ -2004,6 +2030,44 @@ export function DeviceDetailsDialog({
     })
   }
 
+  const handleZigbeeReinterview = async () => {
+    if (!zigbeeIeeeAddr) {
+      toast({
+        title: "No Zigbee address",
+        description: "This device has no Zigbee IEEE address to re-interview.",
+        variant: "destructive"
+      })
+      return
+    }
+    setReinterviewingZigbee(true)
+    try {
+      const response = await reinterviewZigbeeDevice(zigbeeIeeeAddr)
+      const result = response?.result
+      const enrolled = result?.iasZone?.enrolled
+      const base = result?.message || "HomeBrain re-ran the Zigbee interview."
+      const enrollNote = typeof enrolled === "boolean"
+        ? enrolled
+          ? " Sensor is enrolled and should report open/closed again."
+          : " Sensor is not enrolled yet — keep it awake (open/close or press its button) and retry."
+        : ""
+      toast({
+        title: "Re-interview requested",
+        description: `${base}${enrollNote}`
+      })
+    } catch (reinterviewError) {
+      const message = reinterviewError instanceof Error
+        ? reinterviewError.message
+        : "Failed to re-interview the Zigbee device."
+      toast({
+        title: "Re-interview failed",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setReinterviewingZigbee(false)
+    }
+  }
+
   const handleSaveDeviceDetails = async () => {
     if (!device?._id) {
       return
@@ -2391,6 +2455,79 @@ export function DeviceDetailsDialog({
       })
     } finally {
       setMigrationStarting(null)
+    }
+  }
+
+  const handleNativeExclusion = async () => {
+    if (!device?._id || !migrationFlow) {
+      return
+    }
+    setExclusionOption("native")
+    try {
+      const response = await startZWaveExclusion(120, {
+        deviceId: device._id,
+        migrationId: migrationFlow.migrationId,
+        useNativeExclusion: true
+      })
+      const nextId = response?.result?.migration?.id || migrationFlow.migrationId
+      setMigrationFlow({
+        ...migrationFlow,
+        migrationId: nextId,
+        statusMessage: "HomeBrain opened Z-Wave exclusion on its own radio. Trigger the device's exclude action now (per its manual), then use “I already excluded it” to open pairing.",
+        verificationGuidance: []
+      })
+      toast({
+        title: "Native exclusion opened",
+        description: "Put the Z-Wave device into exclusion mode now (usually a button tap on the device)."
+      })
+    } catch (exclusionError) {
+      toast({
+        title: "Could not open native exclusion",
+        description: exclusionError instanceof Error ? exclusionError.message : "Failed to open exclusion.",
+        variant: "destructive"
+      })
+    } finally {
+      setExclusionOption(null)
+    }
+  }
+
+  const handleConfirmExclusionAndPair = async () => {
+    if (!device?._id || !migrationFlow) {
+      return
+    }
+    setExclusionOption("confirm")
+    try {
+      const response = await startDirectRadioMigration({
+        deviceId: device._id,
+        protocol: "zwave",
+        migrationId: migrationFlow.migrationId,
+        exclusionConfirmed: true
+      })
+      if (response.plan) {
+        setMigrationPlan(response.plan)
+      }
+      const nextId = response?.migration?.id || migrationFlow.migrationId
+      const steps = getGuidedMigrationSteps(migrationFlow.plan)
+      const inclusionIndex = steps.findIndex((step) => step.action === "start_direct_migration")
+      setMigrationFlow({
+        ...migrationFlow,
+        migrationId: nextId,
+        stepIndex: inclusionIndex >= 0 ? inclusionIndex : migrationFlow.stepIndex,
+        statusMessage: "Exclusion confirmed. HomeBrain opened Z-Wave inclusion — put the device into pairing/inclusion mode now.",
+        verificationGuidance: []
+      })
+      toast({
+        title: "Opening pairing",
+        description: "HomeBrain opened Z-Wave inclusion. Put the device into pairing mode, then continue the workflow."
+      })
+    } catch (pairError) {
+      toast({
+        title: "Could not open pairing",
+        description: pairError instanceof Error ? pairError.message : "Failed to open pairing.",
+        variant: "destructive"
+      })
+    } finally {
+      setExclusionOption(null)
     }
   }
 
@@ -3630,6 +3767,32 @@ export function DeviceDetailsDialog({
                         <CardContent className="space-y-4">
                           {renderDeviceSpecificControls()}
                           {renderDirectControlFeedback()}
+                          {zigbeeBacked && zigbeeIeeeAddr ? (
+                            <div className="space-y-2 rounded-[1.2rem] border border-white/10 bg-white/[0.04] p-4">
+                              <div>
+                                <p className="section-kicker text-white/45">Zigbee maintenance</p>
+                                <p className="mt-1 text-sm text-muted-foreground">
+                                  If this sensor stopped reporting, re-run its Zigbee interview to repair IAS Zone enrollment. Wake the device first (open/close it or press its button).
+                                </p>
+                                {zigbeeIasZone ? (
+                                  <p className={`mt-2 text-xs font-medium ${zigbeeIasZone.enrolled ? "text-emerald-300/85" : "text-amber-300/90"}`}>
+                                    {zigbeeIasZone.enrolled
+                                      ? "Enrolled — this sensor is reporting open/closed."
+                                      : "Not enrolled — this sensor won't report until it's re-interviewed."}
+                                  </p>
+                                ) : null}
+                              </div>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="w-full"
+                                onClick={() => void handleZigbeeReinterview()}
+                                disabled={reinterviewingZigbee}
+                              >
+                                {reinterviewingZigbee ? "Re-interviewing…" : "Re-interview / repair sensor"}
+                              </Button>
+                            </div>
+                          ) : null}
                         </CardContent>
                       </Card>
                     ) : null}
@@ -3962,6 +4125,34 @@ export function DeviceDetailsDialog({
                                           ) : null}
                                           {migrationFlow.complete ? "Workflow complete" : currentStep.confirmLabel}
                                         </Button>
+                                        {migrationFlow.protocol === "zwave" && !migrationFlow.complete ? (
+                                          <div className="space-y-2 rounded-lg border border-white/10 bg-white/[0.04] p-3">
+                                            <p className="section-kicker text-white/45">Stuck on exclusion?</p>
+                                            <p className="text-xs leading-relaxed text-muted-foreground">
+                                              SmartThings can't reliably exclude over its cloud API. Exclude with HomeBrain's own radio, or confirm you already excluded the device (SmartThings app or device reset) to jump straight to pairing.
+                                            </p>
+                                            <Button
+                                              type="button"
+                                              variant="outline"
+                                              className="w-full border-white/10 bg-white/[0.04]"
+                                              onClick={() => void handleNativeExclusion()}
+                                              disabled={exclusionOption !== null || migrationStarting !== null}
+                                            >
+                                              {exclusionOption === "native" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                                              Exclude with HomeBrain radio
+                                            </Button>
+                                            <Button
+                                              type="button"
+                                              variant="outline"
+                                              className="w-full border-white/10 bg-white/[0.04]"
+                                              onClick={() => void handleConfirmExclusionAndPair()}
+                                              disabled={exclusionOption !== null || migrationStarting !== null}
+                                            >
+                                              {exclusionOption === "confirm" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                                              I already excluded it — open pairing
+                                            </Button>
+                                          </div>
+                                        ) : null}
                                       </>
                                     ) : null
                                   })()}

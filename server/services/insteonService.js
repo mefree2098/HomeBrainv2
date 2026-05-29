@@ -9118,7 +9118,8 @@ class InsteonService {
 
         this.hub = new Insteon();
         if (runtimeTransport === 'serial' && serialPortModule) {
-          this.hub.SerialPort = serialPortModule;
+          // serialport v9+ exports { SerialPort }; v8 exported the class directly.
+          this.hub.SerialPort = serialPortModule.SerialPort || serialPortModule;
         }
         this._attachRuntimeListeners();
         this.lastConnectionError = null;

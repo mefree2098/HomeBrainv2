@@ -368,6 +368,19 @@ router.post('/zwave/nodes/:nodeId/refresh-info', async (req, res) => {
   }
 });
 
+router.post('/zigbee/devices/:ieeeAddr/reinterview', async (req, res) => {
+  try {
+    const result = await directRadioService.reinterviewZigbeeDevice(req.params.ieeeAddr);
+    res.status(200).json({
+      success: true,
+      result,
+      status: await directRadioService.getStatus()
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to re-interview Zigbee device');
+  }
+});
+
 router.post('/zwave/nodes/:nodeId/replace-failed', async (req, res) => {
   try {
     const result = await directRadioService.replaceFailedZWaveNode(req.params.nodeId, {
@@ -422,7 +435,8 @@ router.post('/exclusion/start', async (req, res) => {
     const result = await directRadioService.startExclusion(protocol, {
       durationSeconds: req.body?.durationSeconds,
       deviceId: req.body?.deviceId,
-      migrationId: req.body?.migrationId
+      migrationId: req.body?.migrationId,
+      useNativeExclusion: req.body?.useNativeExclusion === true
     });
     res.status(200).json({
       success: true,
@@ -501,7 +515,8 @@ router.post('/migrations', async (req, res) => {
       durationSeconds: req.body?.durationSeconds,
       dskPin: req.body?.dskPin,
       migrationId: req.body?.migrationId,
-      zwaveSecurityMode: req.body?.zwaveSecurityMode || req.body?.securityMode
+      zwaveSecurityMode: req.body?.zwaveSecurityMode || req.body?.securityMode,
+      exclusionConfirmed: req.body?.exclusionConfirmed === true
     });
     res.status(200).json({
       success: true,

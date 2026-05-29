@@ -389,6 +389,7 @@ export const startDirectRadioMigration = async (payload: {
   dskPin?: string;
   zwaveSecurityMode?: ZWaveSecurityMode;
   migrationId?: string | null;
+  exclusionConfirmed?: boolean;
 }) => {
   try {
     const response = await api.post('/api/direct-radios/migrations', payload);
@@ -455,6 +456,33 @@ export const refreshZWaveNodeInfo = async (
     };
   } catch (error) {
     console.error('Error refreshing Z-Wave node info:', error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const reinterviewZigbeeDevice = async (ieeeAddr: string) => {
+  try {
+    const response = await api.post(
+      `/api/direct-radios/zigbee/devices/${encodeURIComponent(String(ieeeAddr))}/reinterview`
+    );
+    return response.data as {
+      success: boolean;
+      result?: {
+        ieeeAddr?: string;
+        modelID?: string | null;
+        interviewCompleted?: boolean;
+        isSleepy?: boolean;
+        message?: string | null;
+        iasZone?: {
+          enrolled?: boolean;
+          zoneState?: number | null;
+          cieMatchesCoordinator?: boolean;
+        } | null;
+      };
+      status?: DirectRadioStatus;
+    };
+  } catch (error) {
+    console.error('Error re-interviewing Zigbee device:', error);
     throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };
@@ -526,14 +554,15 @@ export const stopDirectRadioPairing = async (protocol: DirectRadioProtocol | 'al
 
 export const startZWaveExclusion = async (
   durationSeconds?: number,
-  options: { deviceId?: string; migrationId?: string | null } = {}
+  options: { deviceId?: string; migrationId?: string | null; useNativeExclusion?: boolean } = {}
 ) => {
   try {
     const response = await api.post('/api/direct-radios/exclusion/start', {
       protocol: 'zwave',
       durationSeconds,
       deviceId: options.deviceId,
-      migrationId: options.migrationId
+      migrationId: options.migrationId,
+      useNativeExclusion: options.useNativeExclusion === true
     });
     return response.data;
   } catch (error) {

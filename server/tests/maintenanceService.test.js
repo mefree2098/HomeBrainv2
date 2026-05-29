@@ -279,9 +279,14 @@ test('forceSmartThingsSync dedupes duplicate HomeBrain rows for one SmartThings 
     isOnline: true,
     lastSeen: new Date('2026-04-02T12:00:00Z')
   });
-  Device.find = async (query) => {
+  Device.find = (query) => {
+    // Regression guard lookup: collect devices already migrated to a native
+    // source (none in this test). Supports the .select().lean() chain.
+    if (query['properties.smartThingsMigration.smartThingsDeviceId']) {
+      return { select: () => ({ lean: async () => [] }) };
+    }
     assert.equal(query['properties.smartThingsDeviceId'], 'smartthings-device-1');
-    return [duplicateDevice, canonicalDevice];
+    return Promise.resolve([duplicateDevice, canonicalDevice]);
   };
   Device.create = async () => {
     throw new Error('Device.create should not be called when a canonical SmartThings row already exists');
