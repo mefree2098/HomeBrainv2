@@ -74,6 +74,72 @@ test('direct radio refresh preserves user-edited name and room while updating li
   assert.ok(merged.properties.directRadioCapabilities.some((capability) => capability.type === 'switch'));
 });
 
+test('direct radio refresh preserves known Z-Wave catalog identity during incomplete re-interview updates', () => {
+  const existing = {
+    name: 'Kitchen Siren',
+    type: 'siren',
+    room: 'Upstairs',
+    brand: 'AEON Labs',
+    model: 'ZW080',
+    properties: {
+      source: 'homebrain-zwave',
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: 13,
+        manufacturerId: 134,
+        productType: 260,
+        productId: 80,
+        ready: true,
+        status: 4,
+        catalog: {
+          manufacturer: 'AEON Labs',
+          label: 'ZW080'
+        },
+        generatedName: 'ZW080',
+        generatedRoom: 'Unassigned'
+      },
+      directRadioFeatures: ['alarm', 'button', 'switch'],
+      directRadioCatalog: {
+        manufacturer: 'AEON Labs',
+        label: 'ZW080'
+      }
+    }
+  };
+  const update = {
+    name: 'Z-Wave Node 13',
+    type: 'sensor',
+    room: 'Unassigned',
+    isOnline: false,
+    properties: {
+      source: 'homebrain-zwave',
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: 13,
+        manufacturerId: null,
+        productType: null,
+        productId: null,
+        ready: false,
+        status: 0,
+        catalog: null,
+        lastReason: 'refresh-info requested'
+      },
+      directRadioFeatures: [],
+      directRadioCatalog: null
+    }
+  };
+
+  const merged = mergeDirectDeviceUpdateForExisting(existing, update);
+
+  assert.equal(merged.name, 'Kitchen Siren');
+  assert.equal(merged.type, 'siren');
+  assert.equal(merged.properties.homebrainDirect.manufacturerId, 134);
+  assert.equal(merged.properties.homebrainDirect.productType, 260);
+  assert.equal(merged.properties.homebrainDirect.productId, 80);
+  assert.equal(merged.properties.homebrainDirect.catalog.label, 'ZW080');
+  assert.equal(merged.properties.directRadioCatalog.label, 'ZW080');
+  assert.deepEqual(merged.properties.directRadioFeatures, ['alarm', 'button', 'switch']);
+});
+
 test('direct radio refresh preserves SmartThings-inferred switch features after Zigbee migration', () => {
   const existing = {
     name: 'Vault Overhead Lights',
@@ -1240,7 +1306,7 @@ test('Z-Wave pairing can explicitly request secure S2 inclusion', async () => {
   assert.equal(result.pairing.zwaveSecurityMode, 's2');
 });
 
-test('generic pairing session completes immediately when an included direct device is upserted', () => {
+test('Z-Wave generic pairing records a detected node before interview completion', () => {
   const service = createService();
   service.activePairings.set('zwave', {
     id: 'pairing-zwave-complete',
@@ -1249,18 +1315,25 @@ test('generic pairing session completes immediately when an included direct devi
     status: 'active',
     startedAt: new Date().toISOString(),
     expiresAt: Date.now() + 60_000,
-    baselineIdentities: ['3'],
+    baselineIdentities: [],
     events: []
   });
 
   const session = service.completePairingSession(
     'zwave',
     { protocol: 'zwave', id: '3', source: 'homebrain-zwave' },
-    { _id: { toString: () => 'device-node-3' }, name: 'Cold Storage Switch' },
+    {
+      _id: { toString: () => 'device-node-3' },
+      name: 'Cold Storage Switch',
+      properties: {
+        homebrainDirect: { protocol: 'zwave', nodeId: 3, ready: false, status: 0 },
+        directRadioFeatures: []
+      }
+    },
     'node added'
   );
 
-  assert.equal(session.status, 'completed');
+  assert.equal(session.status, 'interviewing');
   assert.equal(session.directDeviceId, 'device-node-3');
   assert.equal(session.directDeviceName, 'Cold Storage Switch');
   assert.equal(session.detectedIdentity.id, '3');
@@ -1292,11 +1365,93 @@ test('generic pairing baseline ignores already-known Z-Wave nodes', () => {
   const completed = service.completePairingSession(
     'zwave',
     { protocol: 'zwave', id: '4', source: 'homebrain-zwave' },
-    { _id: { toString: () => 'device-node-4' }, name: 'New Z-Wave Node' },
+    {
+      _id: { toString: () => 'device-node-4' },
+      name: 'New Z-Wave Node',
+      properties: {
+        homebrainDirect: {
+          protocol: 'zwave',
+          nodeId: 4,
+          ready: true,
+          status: 4,
+          manufacturerId: 57,
+          productType: 18770,
+          productId: 12597
+        },
+        directRadioFeatures: ['switch']
+      }
+    },
     'node value updated'
   );
   assert.equal(completed.status, 'completed');
   assert.equal(completed.detectedIdentity.id, '4');
+});
+
+test('Z-Wave generic pairing waits for interview completion after a new node is detected', () => {
+  const service = createService();
+  let stopPairingCalls = 0;
+  service.stopPairing = async () => {
+    stopPairingCalls += 1;
+  };
+  service.activePairings.set('zwave', {
+    id: 'pairing-zwave-interview',
+    protocol: 'zwave',
+    mode: 'inclusion',
+    status: 'active',
+    startedAt: new Date().toISOString(),
+    expiresAt: Date.now() + 60_000,
+    baselineIdentities: ['3'],
+    events: []
+  });
+
+  const detected = service.completePairingSession(
+    'zwave',
+    { protocol: 'zwave', id: '13', source: 'homebrain-zwave' },
+    {
+      _id: { toString: () => 'partial-node-13' },
+      name: 'Z-Wave Node 13',
+      properties: {
+        homebrainDirect: {
+          protocol: 'zwave',
+          nodeId: 13,
+          ready: false,
+          status: 0
+        },
+        directRadioFeatures: []
+      }
+    },
+    'node added'
+  );
+
+  assert.equal(detected.status, 'interviewing');
+  assert.equal(detected.detectedIdentity.id, '13');
+  assert.equal(stopPairingCalls, 0);
+
+  const completed = service.completePairingSession(
+    'zwave',
+    { protocol: 'zwave', id: '13', source: 'homebrain-zwave' },
+    {
+      _id: { toString: () => 'device-node-13' },
+      name: 'Kitchen Siren',
+      properties: {
+        homebrainDirect: {
+          protocol: 'zwave',
+          nodeId: 13,
+          ready: true,
+          status: 4,
+          manufacturerId: 134,
+          productType: 260,
+          productId: 80
+        },
+        directRadioFeatures: ['alarm', 'button', 'switch']
+      }
+    },
+    'node value updated'
+  );
+
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.directDeviceId, 'device-node-13');
+  assert.equal(stopPairingCalls, 1);
 });
 
 test('Z-Wave node refresh requests a fresh interview for an already-included node', async () => {

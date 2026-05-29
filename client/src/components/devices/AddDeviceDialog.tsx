@@ -345,6 +345,9 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       if (!protocolMatchesDevice(device, activeProtocol) || isZWaveControllerNode(device)) {
         return false
       }
+      if (activeProtocol === "zwave" && isIncompleteZWaveDevice(device)) {
+        return false
+      }
       const directIdentity = getDirectIdentity(device, activeProtocol)
       const identityIsNew = directIdentity ? !baselineDirectIdentities.has(directIdentity) : false
       const rowIsNew = !baselineIds.has(device._id)
@@ -394,6 +397,9 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
           const pendingDsk = pairing?.pendingDsk || response.status.controllers.zwave.pendingDsk || null
           if (pendingDsk && pairing?.status === "awaiting_dsk") {
             setStatusMessage("Z-Wave secure inclusion needs the first 5 digits printed on the device DSK label. 00000 is not a valid fallback.")
+          }
+          if (pairing?.status === "interviewing" && pairing.message) {
+            setStatusMessage(pairing.message)
           }
         }
 

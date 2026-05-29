@@ -101,6 +101,59 @@ function isZWaveNodeCommandReady(node) {
   return true;
 }
 
+function isTerminalPairingStatus(status) {
+  return ['completed', 'failed', 'expired', 'stopped'].includes(status);
+}
+
+function isZWavePairingCompletionReason(reason) {
+  return ['node ready', 'ready', 'interview completed'].includes(trimString(reason).toLowerCase());
+}
+
+function buildDirectDeviceQuery(identity) {
+  if (identity?.protocol === 'zigbee') {
+    return { 'properties.homebrainDirect.ieeeAddr': identity.id };
+  }
+
+  return {
+    $or: [
+      { 'properties.homebrainDirect.nodeId': Number(identity?.id) },
+      { 'properties.homebrainDirect.nodeId': String(identity?.id) }
+    ]
+  };
+}
+
+function isZWaveDirectUpdateInterviewComplete(update = {}, reason = '') {
+  const properties = update?.properties && typeof update.properties === 'object'
+    ? update.properties
+    : {};
+  const direct = properties.homebrainDirect && typeof properties.homebrainDirect === 'object'
+    ? properties.homebrainDirect
+    : {};
+  const normalizedReason = trimString(reason || direct.lastReason).toLowerCase();
+  if (normalizedReason === 'node added' || normalizedReason === 'interview failed') {
+    return false;
+  }
+
+  const ready = direct.ready === true;
+  if (!ready || isZWaveStatusUnavailable(direct.status)) {
+    return false;
+  }
+
+  const features = Array.isArray(properties.directRadioFeatures)
+    ? properties.directRadioFeatures.map(normalizeFeature).filter(Boolean)
+    : [];
+  const hasStableIdentity = direct.manufacturerId !== null && direct.manufacturerId !== undefined
+    || direct.productType !== null && direct.productType !== undefined
+    || direct.productId !== null && direct.productId !== undefined
+    || Boolean(direct.catalog)
+    || Boolean(trimString(update.brand))
+    || Boolean(trimString(update.model));
+
+  return isZWavePairingCompletionReason(normalizedReason)
+    || features.length > 0
+    || hasStableIdentity;
+}
+
 function normalizeDirectRoom(value) {
   return trimString(value) || 'Unassigned';
 }
@@ -260,6 +313,16 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
     ...existingDirect,
     ...updateDirect
   };
+  ['manufacturerId', 'productType', 'productId', 'catalog'].forEach((key) => {
+    const incoming = updateDirect[key];
+    const existingValue = existingDirect[key];
+    if ((incoming === null || incoming === undefined || incoming === '')
+      && existingValue !== null
+      && existingValue !== undefined
+      && existingValue !== '') {
+      mergedDirect[key] = existingValue;
+    }
+  });
 
   if (generatedName) {
     mergedDirect.generatedName = generatedName;
@@ -284,6 +347,10 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
       homebrainDirect: mergedDirect
     }
   };
+  if ((updateProperties.directRadioCatalog === null || updateProperties.directRadioCatalog === undefined)
+    && existingProperties.directRadioCatalog) {
+    merged.properties.directRadioCatalog = existingProperties.directRadioCatalog;
+  }
   if (Object.keys(merged.properties.directRadioState).length === 0) {
     delete merged.properties.directRadioState;
   }
@@ -3000,7 +3067,7 @@ class DirectRadioService {
 
   markPairingFailed(protocol, message, details = {}) {
     const session = this.activePairings.get(protocol);
-    if (!session || ['completed', 'failed', 'expired', 'stopped'].includes(session.status)) {
+    if (!session || isTerminalPairingStatus(session.status)) {
       return session || null;
     }
     const timestamp = new Date().toISOString();
@@ -3018,7 +3085,7 @@ class DirectRadioService {
 
   markPairingActive(protocol, message) {
     const session = this.activePairings.get(protocol);
-    if (!session || ['completed', 'failed', 'expired', 'stopped'].includes(session.status)) {
+    if (!session || isTerminalPairingStatus(session.status)) {
       return session || null;
     }
     session.status = 'active';
@@ -3029,15 +3096,53 @@ class DirectRadioService {
     return session;
   }
 
-  completePairingSession(protocol, identity, device, reason) {
+  markPairingDetected(protocol, identity, device, reason) {
     const session = this.activePairings.get(protocol);
-    if (!session || ['completed', 'failed', 'expired', 'stopped'].includes(session.status)) {
+    if (!session || isTerminalPairingStatus(session.status)) {
       return session || null;
     }
 
     const identityId = trimString(identity?.id);
-    const strongReason = ['node added', 'node ready', 'deviceJoined', 'deviceInterview'].includes(reason);
+    if (!identityId) {
+      return session;
+    }
+
+    const timestamp = new Date().toISOString();
+    session.status = protocol === 'zwave' ? 'interviewing' : 'active';
+    session.detectedIdentity = identity || null;
+    session.directDeviceId = device?._id?.toString?.() || session.directDeviceId || null;
+    session.directDeviceName = device?.name || session.directDeviceName || null;
+    session.message = protocol === 'zwave'
+      ? `Z-Wave node ${identityId} was detected. HomeBrain is waiting for the interview to finish before saving it as a usable device.`
+      : session.message;
+    this.appendPairingEvent(protocol, {
+      kind: 'detected',
+      reason,
+      identity: identity || null,
+      directDeviceId: session.directDeviceId,
+      directDeviceName: session.directDeviceName,
+      timestamp
+    });
+    return session;
+  }
+
+  completePairingSession(protocol, identity, device, reason) {
+    const session = this.activePairings.get(protocol);
+    if (!session || isTerminalPairingStatus(session.status)) {
+      return session || null;
+    }
+
+    const identityId = trimString(identity?.id);
+    const strongReason = protocol === 'zwave'
+      ? isZWaveDirectUpdateInterviewComplete(device, reason)
+      : ['deviceJoined', 'deviceInterview'].includes(reason);
     const isNewIdentity = identityId && !session.baselineIdentities.includes(identityId);
+    if (protocol === 'zwave' && !strongReason) {
+      if (isNewIdentity) {
+        return this.markPairingDetected(protocol, identity, device, reason);
+      }
+      return session;
+    }
     if (!strongReason && !isNewIdentity) {
       return session;
     }
@@ -3094,7 +3199,7 @@ class DirectRadioService {
         securityMode: session.zwaveSecurityMode || null
       });
       this.attachZWaveNodeStatusListeners(node);
-      return this.handleZWaveNodeChanged(node, 'node added');
+      return this.handleZWaveNodeChanged(node, node.ready === true ? 'node ready' : 'node added');
     }
 
     return null;
@@ -3629,7 +3734,7 @@ class DirectRadioService {
 
   markZWaveDskRequired(dsk) {
     const session = this.activePairings.get('zwave');
-    if (!session || ['completed', 'failed', 'expired', 'stopped'].includes(session.status)) {
+    if (!session || isTerminalPairingStatus(session.status)) {
       return null;
     }
     session.status = 'awaiting_dsk';
@@ -4642,25 +4747,53 @@ class DirectRadioService {
       nodeId: normalized.identity?.id || null,
       features: normalized.update?.properties?.directRadioFeatures || []
     });
+    if (!isZWaveDirectUpdateInterviewComplete(normalized.update, reason)) {
+      this.markPairingDetected('zwave', normalized.identity, null, reason);
+      const activeMigration = this.findActiveMigration('zwave');
+      if (activeMigration?.sourceDeviceId) {
+        const timestamp = new Date().toISOString();
+        activeMigration.inclusionStatus = 'interviewing';
+        activeMigration.directIdentity = normalized.identity;
+        activeMigration.pendingDirectName = normalized.update?.name || null;
+        activeMigration.updatedAt = timestamp;
+      }
+      if (Device.db?.readyState !== 1) {
+        this.log('info', 'zwave', 'Z-Wave node interview is not complete; skipping partial device persistence until the database is ready', {
+          reason,
+          nodeId: normalized.identity?.id || null
+        });
+        return null;
+      }
+      const updatedExisting = await this.upsertDirectDevice(normalized.identity, normalized.update, {
+        allowCreate: false,
+        skipActiveMigration: true,
+        suppressPairingCompletion: true
+      });
+      if (!updatedExisting) {
+        this.log('info', 'zwave', 'Z-Wave node interview is not complete; deferring HomeBrain device creation', {
+          reason,
+          nodeId: normalized.identity?.id || null,
+          ready: normalized.update?.properties?.homebrainDirect?.ready ?? null,
+          status: normalized.update?.properties?.homebrainDirect?.status ?? null
+        });
+      }
+      return updatedExisting;
+    }
     return this.upsertDirectDevice(normalized.identity, normalized.update);
   }
 
-  async upsertDirectDevice(identity, update) {
-    const activeMigration = this.findActiveMigration(identity.protocol);
+  async upsertDirectDevice(identity, update, options = {}) {
+    const activeMigration = options.skipActiveMigration ? null : this.findActiveMigration(identity.protocol);
     if (activeMigration?.sourceDeviceId) {
       return this.completeMigration(activeMigration.id, identity, update);
     }
 
-    const query = identity.protocol === 'zigbee'
-      ? { 'properties.homebrainDirect.ieeeAddr': identity.id }
-      : {
-        $or: [
-          { 'properties.homebrainDirect.nodeId': Number(identity.id) },
-          { 'properties.homebrainDirect.nodeId': String(identity.id) }
-        ]
-      };
+    const query = buildDirectDeviceQuery(identity);
     const existingRecords = await Device.find(query);
     const existing = selectPrimaryDirectDeviceRecord(existingRecords);
+    if (!existing && options.allowCreate === false) {
+      return null;
+    }
     const payload = mergeDirectDeviceUpdateForExisting(existing, update);
 
     let device = existing
@@ -4688,7 +4821,9 @@ class DirectRadioService {
       });
     }
     this.emitDeviceUpdate(device);
-    this.completePairingSession(identity.protocol, identity, device, update?.properties?.homebrainDirect?.lastReason || 'direct device update');
+    if (!options.suppressPairingCompletion) {
+      this.completePairingSession(identity.protocol, identity, device, update?.properties?.homebrainDirect?.lastReason || 'direct device update');
+    }
     return device;
   }
 

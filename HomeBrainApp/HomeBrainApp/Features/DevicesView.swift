@@ -3818,6 +3818,9 @@ struct DevicesView: View {
                         addDevicePendingDsk = pendingDsk
                         addDeviceStatusMessage = "Z-Wave secure inclusion needs the first 5 digits printed on the device DSK label. 00000 is not a valid fallback."
                     }
+                    if pairingStatus == "interviewing" && !message.isEmpty {
+                        addDeviceStatusMessage = message
+                    }
                 }
 
                 if pairingStatus == "completed" {
