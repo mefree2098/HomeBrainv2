@@ -20,6 +20,7 @@ private struct AddDeviceZWaveRepairCandidate: Identifiable {
     let controllerOnly: Bool
     let canRemoveFailed: Bool
     let forceRemoveFailed: Bool
+    let likelyLegacySiren: Bool
 }
 
 private struct SirenVolumeOption: Identifiable, Hashable {
@@ -99,6 +100,7 @@ struct DevicesView: View {
     @State private var addDeviceDskPin = ""
     @State private var addDeviceZWaveSecurityMode = "insecure"
     @State private var addDeviceRepairingZWaveNodeId: Int?
+    @State private var addDeviceReplacingZWaveNodeId: Int?
     @State private var addDeviceRemovingZWaveNodeId: Int?
     @State private var addDeviceKnownZWaveNodeIds: Set<Int>?
     @State private var addDeviceKnownZWaveNodes: [AddDeviceZWaveNodeSummary] = []
@@ -2446,6 +2448,8 @@ struct DevicesView: View {
                     Spacer()
                     Picker("Security", selection: $addDeviceZWaveSecurityMode) {
                         Text("Standard, no PIN").tag("insecure")
+                        Text("Legacy S0").tag("s0")
+                        Text("Auto secure").tag("default")
                         Text("Secure S2").tag("s2")
                     }
                     .pickerStyle(.menu)
@@ -2490,7 +2494,8 @@ struct DevicesView: View {
                 dead: dead,
                 controllerOnly: false,
                 canRemoveFailed: dead,
-                forceRemoveFailed: dead
+                forceRemoveFailed: dead,
+                likelyLegacySiren: isLikelyLegacyZWaveSirenDevice(device)
             )
         }
 
@@ -2507,7 +2512,8 @@ struct DevicesView: View {
                 dead: isDeadZWaveNodeStatus(node.status),
                 controllerOnly: true,
                 canRemoveFailed: true,
-                forceRemoveFailed: !node.ready || isDeadZWaveNodeStatus(node.status)
+                forceRemoveFailed: !node.ready || isDeadZWaveNodeStatus(node.status),
+                likelyLegacySiren: node.name.range(of: #"(?i)\b(zw080|siren|alarm|aeotec|aeon)\b"#, options: .regularExpression) != nil
             ))
         }
 
@@ -2523,7 +2529,7 @@ struct DevicesView: View {
                     Text("Incomplete Z-Wave nodes are already on the Zooz network.")
                         .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(HBPalette.accentOrange)
-                    Text("Repair retries interview. Dead or controller-only nodes can be removed from the Zooz controller, which also cleans up matching HomeBrain records.")
+                    Text("Repair retries interview. Replace keeps the node id and opens a fresh include window; Remove deletes dead controller entries and matching HomeBrain records.")
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .foregroundStyle(HBPalette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2557,9 +2563,22 @@ struct DevicesView: View {
                             }
                         }
                         .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                        .disabled(addDeviceBusy || addDeviceRepairingZWaveNodeId != nil || addDeviceRemovingZWaveNodeId != nil)
+                        .disabled(addDeviceBusy || addDeviceRepairingZWaveNodeId != nil || addDeviceReplacingZWaveNodeId != nil || addDeviceRemovingZWaveNodeId != nil)
 
                         if candidate.canRemoveFailed {
+                            Button {
+                                Task { await replaceFailedZWaveNode(candidate) }
+                            } label: {
+                                if addDeviceReplacingZWaveNodeId == candidate.nodeId {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                } else {
+                                    Label(candidate.likelyLegacySiren ? "Replace S0" : "Replace", systemImage: "plus.circle")
+                                }
+                            }
+                            .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                            .disabled(addDeviceBusy || addDeviceRepairingZWaveNodeId != nil || addDeviceReplacingZWaveNodeId != nil || addDeviceRemovingZWaveNodeId != nil)
+
                             Button {
                                 Task { await removeFailedZWaveNode(candidate) }
                             } label: {
@@ -2571,7 +2590,7 @@ struct DevicesView: View {
                                 }
                             }
                             .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                            .disabled(addDeviceBusy || addDeviceRepairingZWaveNodeId != nil || addDeviceRemovingZWaveNodeId != nil)
+                            .disabled(addDeviceBusy || addDeviceRepairingZWaveNodeId != nil || addDeviceReplacingZWaveNodeId != nil || addDeviceRemovingZWaveNodeId != nil)
                             .tint(.red)
                         }
                     }
@@ -2649,7 +2668,7 @@ struct DevicesView: View {
 
     private var addDevicePrimaryButtonTitle: String {
         switch addDeviceMode {
-        case "zwave": return addDeviceBusy ? "Starting..." : "Start Z-Wave \(addDeviceZWaveSecurityMode == "insecure" ? "Standard" : "Secure")"
+        case "zwave": return addDeviceBusy ? "Starting..." : "Start Z-Wave \(zWaveSecurityLabel(addDeviceZWaveSecurityMode))"
         case "zigbee": return addDeviceBusy ? "Opening..." : "Open Zigbee"
         case "insteon": return addDeviceBusy ? "Linking..." : "Link Insteon"
         case "matter": return matterIsCommissioning || addDeviceBusy ? "Commissioning..." : "Commission"
@@ -2674,9 +2693,7 @@ struct DevicesView: View {
     private var nativeAddGuidance: String {
         switch addDeviceMode {
         case "zwave":
-            return addDeviceZWaveSecurityMode == "insecure"
-                ? "HomeBrain opens standard Z-Wave inclusion on the Zooz controller. This is the correct default for wall switches when you do not have the printed DSK PIN; locks need Secure S2 for PIN and battery management."
-                : "HomeBrain opens secure S2 inclusion. Use this for locks and access-control devices with the first 5 digits from the device DSK label or QR code."
+            return zWaveSecurityGuidance(addDeviceZWaveSecurityMode)
         case "zigbee":
             return "HomeBrain opens Zigbee permit-join on the SONOFF coordinator. Reset or pair the device; it appears after join and interview."
         case "insteon":
@@ -2684,6 +2701,38 @@ struct DevicesView: View {
         default:
             return ""
         }
+    }
+
+    private func zWaveSecurityLabel(_ mode: String) -> String {
+        switch mode {
+        case "default": return "Auto secure"
+        case "s0": return "Legacy S0"
+        case "s2": return "Secure S2"
+        default: return "Standard"
+        }
+    }
+
+    private func zWaveSecurityGuidance(_ mode: String) -> String {
+        switch mode {
+        case "default":
+            return "HomeBrain uses S2 when available and forces legacy S0 for older secure devices."
+        case "s0":
+            return "Legacy S0 is for older sirens and secure accessories that do not use a DSK PIN."
+        case "s2":
+            return "Use Secure S2 for locks and access-control devices with the first 5 digits from the DSK label."
+        default:
+            return "Standard inclusion is for ordinary switches, dimmers, outlets, and sensors without secure pairing."
+        }
+    }
+
+    private func zWaveReplacementSecurityMode(for candidate: AddDeviceZWaveRepairCandidate) -> String {
+        if candidate.likelyLegacySiren {
+            return "s0"
+        }
+        if addDeviceZWaveSecurityMode == "default" {
+            return "s0"
+        }
+        return addDeviceZWaveSecurityMode
     }
 
     private func addDeviceModeLabel(_ mode: String) -> String {
@@ -3794,7 +3843,7 @@ struct DevicesView: View {
             let expiresAt = JSON.optionalString(result, "expiresAt") ?? ""
             let suffix = expiresAt.isEmpty ? "" : " Window expires at \(JSON.displayDate(from: expiresAt))."
             addDeviceStatusMessage = protocolName == "zwave"
-                ? "Z-Wave \(addDeviceZWaveSecurityMode == "insecure" ? "standard" : "secure") inclusion is live. \(addDeviceZWaveSecurityMode == "insecure" ? "No DSK PIN is required." : "Use the first 5 digits from the printed DSK label if prompted.")\(suffix)"
+                ? "Z-Wave \(zWaveSecurityLabel(addDeviceZWaveSecurityMode)) inclusion is live. \(zWaveSecurityGuidance(addDeviceZWaveSecurityMode))\(suffix)"
                 : "Zigbee permit-join is live. Pair or reset the device; HomeBrain adds it after join and interview.\(suffix)"
             await monitorDirectRadioAdd(protocolName: protocolName, durationSeconds: addDeviceDurationSeconds)
         } catch {
@@ -3946,6 +3995,7 @@ struct DevicesView: View {
                 "/api/direct-radios/zwave/nodes/\(nodeId)/refresh-info",
                 body: [
                     "waitForWakeup": false,
+                    "resetSecurityClasses": candidate.likelyLegacySiren,
                     "pingFirst": true
                 ]
             )
@@ -3961,6 +4011,42 @@ struct DevicesView: View {
                 addDeviceStatusMessage = "HomeBrain requested a fresh interview for node \(nodeId). If it does not update, use the device include or wake action once and refresh devices."
             }
             await loadDevices(showLoading: false)
+        } catch {
+            addDeviceStatusMessage = error.localizedDescription
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func replaceFailedZWaveNode(_ candidate: AddDeviceZWaveRepairCandidate) async {
+        let nodeId = candidate.nodeId
+        let securityMode = zWaveReplacementSecurityMode(for: candidate)
+        if previewMode {
+            addDeviceStatusMessage = "HomeBrain would open \(zWaveSecurityLabel(securityMode)) replacement for Z-Wave node \(nodeId)."
+            return
+        }
+
+        addDeviceReplacingZWaveNodeId = nodeId
+        addDeviceStatusMessage = "Opening \(zWaveSecurityLabel(securityMode)) replacement for \(candidate.name)."
+        errorMessage = nil
+        defer { addDeviceReplacingZWaveNodeId = nil }
+
+        do {
+            let response = try await session.apiClient.post(
+                "/api/direct-radios/zwave/nodes/\(nodeId)/replace-failed",
+                body: [
+                    "confirm": true,
+                    "force": candidate.forceRemoveFailed,
+                    "durationSeconds": addDeviceDurationSeconds,
+                    "zwaveSecurityMode": securityMode
+                ]
+            )
+            let root = JSON.object(response)
+            updateKnownZWaveNodeIds(from: JSON.object(root["status"]))
+            let result = JSON.object(root["result"])
+            let message = JSON.string(result, "message")
+            addDeviceStatusMessage = message.isEmpty
+                ? "\(zWaveSecurityLabel(securityMode)) replacement is live. Press the device include/action button now."
+                : message
         } catch {
             addDeviceStatusMessage = error.localizedDescription
             errorMessage = error.localizedDescription
@@ -4594,6 +4680,28 @@ struct DevicesView: View {
                 .filter { !$0.isEmpty }
                 .map { $0.lowercased() }
         )
+    }
+
+    private func isLikelyLegacyZWaveSirenDevice(_ device: DeviceItem) -> Bool {
+        let features = propertyStringSet(for: device, key: "directRadioFeatures")
+        let catalog = JSON.object(device.properties["directRadioCatalog"])
+        let directCatalog = JSON.object(JSON.object(device.properties["homebrainDirect"])["catalog"])
+        let text = [
+            device.name,
+            device.type,
+            stringValue(device.properties["brand"]),
+            stringValue(device.properties["model"]),
+            JSON.string(catalog, "label"),
+            JSON.string(catalog, "manufacturer"),
+            JSON.string(directCatalog, "label"),
+            JSON.string(directCatalog, "manufacturer"),
+            features.joined(separator: " ")
+        ]
+            .joined(separator: " ")
+            .lowercased()
+        return device.type.lowercased() == "siren"
+            || features.contains("alarm")
+            || text.range(of: #"(?i)\b(zw080|siren|alarm|aeotec|aeon)\b"#, options: .regularExpression) != nil
     }
 
     private func zWaveNodeId(for device: DeviceItem) -> Int? {

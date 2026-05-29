@@ -1502,6 +1502,61 @@ test('Z-Wave generic pairing defaults to standard inclusion without a DSK PIN pr
   assert.deepEqual(calls, ['stopInclusion', 'stopExclusion', 'beginInclusion']);
 });
 
+test('Z-Wave auto secure pairing forces S0 fallback for legacy secure devices', async () => {
+  const service = createService();
+  const zwave = require('zwave-js');
+  let inclusionOptions = null;
+  service.start = async () => {};
+  service.zwave.started = true;
+  service.zwave.driver = {
+    controller: {
+      nodes: new Map([
+        [1, { id: 1, isControllerNode: true }]
+      ]),
+      beginInclusion: async (options) => {
+        inclusionOptions = options;
+        return true;
+      }
+    }
+  };
+
+  const result = await service.startPairing('zwave', {
+    durationSeconds: 60,
+    zwaveSecurityMode: 'default'
+  });
+
+  assert.equal(inclusionOptions.strategy, zwave.InclusionStrategy.Default);
+  assert.equal(inclusionOptions.forceSecurity, true);
+  assert.equal(result.pairing.zwaveSecurityMode, 'default');
+});
+
+test('Z-Wave pairing can explicitly request legacy S0 inclusion', async () => {
+  const service = createService();
+  const zwave = require('zwave-js');
+  let inclusionOptions = null;
+  service.start = async () => {};
+  service.zwave.started = true;
+  service.zwave.driver = {
+    controller: {
+      nodes: new Map([
+        [1, { id: 1, isControllerNode: true }]
+      ]),
+      beginInclusion: async (options) => {
+        inclusionOptions = options;
+        return true;
+      }
+    }
+  };
+
+  const result = await service.startPairing('zwave', {
+    durationSeconds: 60,
+    zwaveSecurityMode: 's0'
+  });
+
+  assert.equal(inclusionOptions.strategy, zwave.InclusionStrategy.Security_S0);
+  assert.equal(result.pairing.zwaveSecurityMode, 's0');
+});
+
 test('Z-Wave pairing can explicitly request secure S2 inclusion', async () => {
   const service = createService();
   const zwave = require('zwave-js');
@@ -1794,6 +1849,54 @@ test('Z-Wave node refresh requests a fresh interview for an already-included nod
   assert.equal(result.node.id, 4);
   assert.equal(result.node.incomplete, true);
   assert.equal(result.ping, false);
+});
+
+test('Z-Wave failed-node replacement opens a legacy S0 replacement session', async (t) => {
+  const service = createService();
+  const zwave = require('zwave-js');
+  service.start = async () => {};
+  service.zwave.started = true;
+  let replaceNodeId = null;
+  let replacementOptions = null;
+  const node = {
+    id: 13,
+    isControllerNode: false,
+    ready: false,
+    status: 3,
+    valueDB: { hasValue: () => false }
+  };
+  service.zwave.driver = {
+    controller: {
+      nodes: new Map([
+        [13, node]
+      ]),
+      stopInclusion: async () => false,
+      stopExclusion: async () => false,
+      isFailedNode: async () => true,
+      replaceFailedNode: async (nodeId, options) => {
+        replaceNodeId = nodeId;
+        replacementOptions = options;
+        return true;
+      }
+    }
+  };
+  t.after(() => {
+    service.clearPairingTimer('zwave');
+  });
+
+  const result = await service.replaceFailedZWaveNode(13, {
+    confirm: true,
+    durationSeconds: 60,
+    zwaveSecurityMode: 'default'
+  });
+
+  assert.equal(replaceNodeId, 13);
+  assert.equal(replacementOptions.strategy, zwave.InclusionStrategy.Security_S0);
+  assert.equal(result.zwaveSecurityMode, 's0');
+  assert.equal(result.pairing.mode, 'replace_failed');
+  assert.equal(result.pairing.replaceNodeId, 13);
+  assert.equal(result.pairing.zwaveSecurityMode, 's0');
+  assert.match(result.message, /legacy S0 replacement is open/);
 });
 
 test('Z-Wave failed-node removal refuses a responding node unless forced', async () => {
