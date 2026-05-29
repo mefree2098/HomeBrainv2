@@ -19,6 +19,7 @@ import {
   startZWaveExclusion,
   refreshZWaveNodeInfo,
   removeFailedZWaveNode,
+  replaceFailedZWaveNode,
   startDirectRadioPairing,
   stopDirectRadioPairing,
   submitZWaveDskPin,
@@ -56,6 +57,7 @@ type ZWaveRepairCandidate = {
   controllerOnly: boolean
   canRemoveFailed: boolean
   forceRemoveFailed: boolean
+  likelyLegacySiren: boolean
 }
 
 type AddDeviceDialogProps = {
@@ -147,6 +149,28 @@ const getDirectFeatures = (device: DeviceRecord) => {
   return Array.isArray(features) ? features.map(String).filter(Boolean) : []
 }
 
+const isLikelyLegacyZWaveSirenDevice = (device: DeviceRecord) => {
+  const features = getDirectFeatures(device).map((feature) => feature.toLowerCase())
+  const catalog = device.properties?.directRadioCatalog && typeof device.properties.directRadioCatalog === "object"
+    ? device.properties.directRadioCatalog as Record<string, unknown>
+    : {}
+  const directCatalog = device.properties?.homebrainDirect?.catalog && typeof device.properties.homebrainDirect.catalog === "object"
+    ? device.properties.homebrainDirect.catalog as Record<string, unknown>
+    : {}
+  const text = [
+    device.name,
+    device.type,
+    device.brand,
+    device.model,
+    catalog.label,
+    catalog.manufacturer,
+    directCatalog.label,
+    directCatalog.manufacturer,
+    ...features
+  ].map((value) => String(value || "").toLowerCase()).join(" ")
+  return device.type === "siren" || features.includes("alarm") || /\b(?:zw080|siren|alarm|aeotec|aeon)\b/.test(text)
+}
+
 const isIncompleteZWaveDevice = (device: DeviceRecord) => {
   if (getDeviceSource(device) !== "homebrain-zwave" || isZWaveControllerNode(device)) {
     return false
@@ -192,6 +216,44 @@ const formatExpiration = (value: string | null) => {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
 }
 
+const getZWaveSecurityLabel = (mode: ZWaveSecurityMode | string) => {
+  switch (mode) {
+    case "default":
+      return "Auto secure"
+    case "s0":
+      return "Legacy S0"
+    case "s2":
+      return "Secure S2"
+    case "insecure":
+    default:
+      return "Standard"
+  }
+}
+
+const getZWaveSecurityMessage = (mode: ZWaveSecurityMode | string) => {
+  switch (mode) {
+    case "default":
+      return "HomeBrain will use S2 when available and force legacy S0 for older secure devices."
+    case "s0":
+      return "Legacy S0 is for older sirens and secure accessories that do not use a DSK PIN."
+    case "s2":
+      return "Use Secure S2 for locks and access-control devices with the printed DSK PIN."
+    case "insecure":
+    default:
+      return "Standard inclusion is for ordinary switches, dimmers, outlets, and sensors without secure pairing."
+  }
+}
+
+const getZWaveReplacementSecurityMode = (candidate: ZWaveRepairCandidate, selectedMode: ZWaveSecurityMode): ZWaveSecurityMode => {
+  if (candidate.likelyLegacySiren) {
+    return "s0"
+  }
+  if (selectedMode === "default") {
+    return "s0"
+  }
+  return selectedMode
+}
+
 export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddDeviceDialogProps) {
   const [protocol, setProtocol] = useState<AddDeviceProtocol>("zwave")
   const [durationSeconds, setDurationSeconds] = useState("180")
@@ -209,6 +271,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
   const [zwaveSecurityMode, setZwaveSecurityMode] = useState<ZWaveSecurityMode>("insecure")
   const [submittingDsk, setSubmittingDsk] = useState(false)
   const [repairingZWaveNodeId, setRepairingZWaveNodeId] = useState<number | null>(null)
+  const [replacingZWaveNodeId, setReplacingZWaveNodeId] = useState<number | null>(null)
   const [removingZWaveNodeId, setRemovingZWaveNodeId] = useState<number | null>(null)
   const [zwaveControllerNodeIds, setZwaveControllerNodeIds] = useState<Set<number> | null>(null)
   const [zwaveControllerNodes, setZwaveControllerNodes] = useState<DirectRadioZWaveNode[]>([])
@@ -318,7 +381,8 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
           dead,
           controllerOnly: false,
           canRemoveFailed: dead,
-          forceRemoveFailed: dead
+          forceRemoveFailed: dead,
+          likelyLegacySiren: isLikelyLegacyZWaveSirenDevice(device)
         }
       })
 
@@ -336,7 +400,8 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
         dead: isDeadZWaveStatus(node.status),
         controllerOnly: true,
         canRemoveFailed: true,
-        forceRemoveFailed: !node.ready || isDeadZWaveStatus(node.status)
+        forceRemoveFailed: !node.ready || isDeadZWaveStatus(node.status),
+        likelyLegacySiren: /\b(?:zw080|siren|alarm|aeotec|aeon)\b/i.test(node.name || "")
       })
     })
 
@@ -474,7 +539,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       setCurrentPairing(response?.result?.pairing || null)
       setStatusMessage(
         targetProtocol === "zwave"
-          ? `Z-Wave ${zwaveSecurityMode === "insecure" ? "standard" : "secure"} inclusion is live${formatExpiration(nextExpiresAt) ? ` until ${formatExpiration(nextExpiresAt)}` : ""}. ${zwaveSecurityMode === "insecure" ? "No DSK PIN is required." : "Use the first 5 digits from the printed DSK label if prompted."}`
+          ? `Z-Wave ${getZWaveSecurityLabel(zwaveSecurityMode)} inclusion is live${formatExpiration(nextExpiresAt) ? ` until ${formatExpiration(nextExpiresAt)}` : ""}. ${getZWaveSecurityMessage(zwaveSecurityMode)}`
           : `Zigbee permit-join is live${formatExpiration(nextExpiresAt) ? ` until ${formatExpiration(nextExpiresAt)}` : ""}. HomeBrain will add the device after interview.`
       )
       await onRefresh?.()
@@ -602,6 +667,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
     try {
       const response = await refreshZWaveNodeInfo(nodeId, {
         waitForWakeup: false,
+        resetSecurityClasses: candidate.likelyLegacySiren,
         pingFirst: true
       })
       const ping = response.result?.ping
@@ -623,6 +689,42 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       setErrorMessage(error instanceof Error ? error.message : "Unable to repair the Z-Wave node.")
     } finally {
       setRepairingZWaveNodeId(null)
+    }
+  }
+
+  const replaceFailedZWaveNodeCandidate = async (candidate: ZWaveRepairCandidate) => {
+    const nodeId = candidate.nodeId
+    if (!nodeId) {
+      setErrorMessage("HomeBrain could not find the Z-Wave node id for that controller entry.")
+      return
+    }
+
+    const replacementSecurityMode = getZWaveReplacementSecurityMode(candidate, zwaveSecurityMode)
+    const seconds = Math.max(30, Math.min(900, Number(durationSeconds) || 180))
+    setReplacingZWaveNodeId(nodeId)
+    setActiveProtocol("zwave")
+    setErrorMessage(null)
+    setStatusMessage(`Opening ${getZWaveSecurityLabel(replacementSecurityMode)} replacement for ${candidate.name || `node ${nodeId}`}.`)
+    try {
+      const response = await replaceFailedZWaveNode(nodeId, {
+        confirm: true,
+        force: candidate.forceRemoveFailed,
+        durationSeconds: seconds,
+        zwaveSecurityMode: replacementSecurityMode
+      })
+      const nextExpiresAt = response.result?.expiresAt || response.status?.controllers?.zwave?.inclusionUntil || null
+      setExpiresAt(nextExpiresAt)
+      setCurrentPairing(response.result?.pairing || response.status?.pairings?.zwave || null)
+      if (response.status?.controllers?.zwave?.nodes) {
+        updateZWaveControllerNodes(response.status.controllers.zwave.nodes)
+      }
+      setStatusMessage(response.result?.message || `${getZWaveSecurityLabel(replacementSecurityMode)} replacement is live${formatExpiration(nextExpiresAt) ? ` until ${formatExpiration(nextExpiresAt)}` : ""}. Press the device include/action button now.`)
+      await onRefresh?.()
+    } catch (error) {
+      setActiveProtocol(null)
+      setErrorMessage(error instanceof Error ? error.message : "Unable to start failed-node replacement.")
+    } finally {
+      setReplacingZWaveNodeId(null)
     }
   }
 
@@ -736,8 +838,8 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
               durationSeconds={durationSeconds}
               setDurationSeconds={setDurationSeconds}
               disabled={busy}
-              title="Start inclusion, then perform the switch include action."
-              detail="For an already excluded switch, use the manufacturer include tap pattern while this window is live."
+              title="Start inclusion, then perform the device include action."
+              detail="Use Standard for ordinary switches, Legacy S0 for older sirens, and S2 for locks with a printed DSK."
             />
             <Field label="Security">
               <Select value={zwaveSecurityMode} onValueChange={(value) => setZwaveSecurityMode(value as ZWaveSecurityMode)} disabled={busy}>
@@ -746,11 +848,13 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="insecure">Standard switch add, no PIN</SelectItem>
+                  <SelectItem value="s0">Legacy S0 siren/accessory, no PIN</SelectItem>
+                  <SelectItem value="default">Auto secure, S2 or S0</SelectItem>
                   <SelectItem value="s2">Secure S2, printed DSK required</SelectItem>
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Use Secure S2 for locks and access-control devices so HomeBrain can read lock state, battery, and PIN slots.
+                {getZWaveSecurityMessage(zwaveSecurityMode)}
               </p>
             </Field>
             {zwaveRepairCandidates.length > 0 ? (
@@ -759,13 +863,13 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
                   <AlertTriangle className="mt-0.5 h-4 w-4" />
                   <div className="min-w-0 space-y-1">
                     <p className="font-semibold">Incomplete Z-Wave nodes are already on the Zooz network.</p>
-                    <p className="text-xs opacity-90">Repair retries interview. Dead or controller-only nodes can be removed from the Zooz controller, which also cleans up matching HomeBrain records.</p>
+                    <p className="text-xs opacity-90">Repair retries interview. Replace keeps the node id and opens a fresh include window; Remove deletes dead controller entries and matching HomeBrain records.</p>
                   </div>
                 </div>
                 <div className="space-y-2">
                   {zwaveRepairCandidates.map((candidate) => {
                     const nodeId = candidate.nodeId
-                    const nodeBusy = repairingZWaveNodeId === nodeId || removingZWaveNodeId === nodeId
+                    const nodeBusy = repairingZWaveNodeId === nodeId || replacingZWaveNodeId === nodeId || removingZWaveNodeId === nodeId
                     return (
                       <div key={candidate.key} className="flex flex-col gap-2 rounded-lg border border-border/60 bg-background/70 p-3 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0">
@@ -782,6 +886,18 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
                           {repairingZWaveNodeId === nodeId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wrench className="mr-2 h-4 w-4" />}
                           Repair Interview
                         </Button>
+                        {candidate.canRemoveFailed ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => void replaceFailedZWaveNodeCandidate(candidate)}
+                            disabled={busy || nodeBusy}
+                          >
+                            {replacingZWaveNodeId === nodeId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlusCircle className="mr-2 h-4 w-4" />}
+                            {candidate.likelyLegacySiren ? "Replace S0" : "Replace Pairing"}
+                          </Button>
+                        ) : null}
                         {candidate.canRemoveFailed ? (
                           <Button
                             type="button"
@@ -962,7 +1078,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
           </Button>
           <Button type="button" onClick={startSelectedProtocol} disabled={busy || (protocol === "matter" && !matterSetupCode.trim())}>
             {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlusCircle className="mr-2 h-4 w-4" />}
-            {protocol === "zwave" ? `Start Z-Wave ${zwaveSecurityMode === "insecure" ? "Standard" : "Secure"}` : protocol === "zigbee" ? "Open Zigbee" : protocol === "insteon" ? "Link Insteon" : "Commission Matter"}
+            {protocol === "zwave" ? `Start Z-Wave ${getZWaveSecurityLabel(zwaveSecurityMode)}` : protocol === "zigbee" ? "Open Zigbee" : protocol === "insteon" ? "Link Insteon" : "Commission Matter"}
           </Button>
         </div>
 

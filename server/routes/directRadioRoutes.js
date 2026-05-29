@@ -368,6 +368,25 @@ router.post('/zwave/nodes/:nodeId/refresh-info', async (req, res) => {
   }
 });
 
+router.post('/zwave/nodes/:nodeId/replace-failed', async (req, res) => {
+  try {
+    const result = await directRadioService.replaceFailedZWaveNode(req.params.nodeId, {
+      confirm: req.body?.confirm,
+      force: req.body?.force,
+      durationSeconds: req.body?.durationSeconds,
+      dskPin: req.body?.dskPin,
+      zwaveSecurityMode: req.body?.zwaveSecurityMode || req.body?.securityMode
+    });
+    res.status(200).json({
+      success: true,
+      result,
+      status: await directRadioService.getStatus()
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to replace failed Z-Wave node');
+  }
+});
+
 router.post('/zwave/nodes/:nodeId/remove-failed', async (req, res) => {
   try {
     const result = await directRadioService.removeFailedZWaveNode(req.params.nodeId, {

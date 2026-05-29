@@ -3208,11 +3208,12 @@ class DirectRadioService {
     const session = {
       id: `pairing-${protocol}-${now}-${crypto.randomBytes(4).toString('hex')}`,
       protocol,
-      mode: protocol === 'zigbee' ? 'permit_join' : 'inclusion',
+      mode: options.mode || (protocol === 'zigbee' ? 'permit_join' : 'inclusion'),
       status: 'opening',
       startedAt: new Date(now).toISOString(),
       expiresAt: now + seconds * 1000,
       baselineIdentities: this.getPairingBaseline(protocol),
+      targetIdentity: trimString(options.targetIdentity) || null,
       detectedIdentity: null,
       directDeviceId: null,
       directDeviceName: null,
@@ -3313,13 +3314,17 @@ class DirectRadioService {
       ? isZWaveDirectUpdateInterviewComplete(device, reason)
       : ['deviceJoined', 'deviceInterview'].includes(reason);
     const isNewIdentity = identityId && !session.baselineIdentities.includes(identityId);
+    const isExpectedReplacement = protocol === 'zwave'
+      && session.mode === 'replace_failed'
+      && identityId
+      && identityId === trimString(session.targetIdentity ?? session.replaceNodeId);
     if (protocol === 'zwave' && !strongReason) {
-      if (isNewIdentity) {
+      if (isNewIdentity || isExpectedReplacement) {
         return this.markPairingDetected(protocol, identity, device, reason);
       }
       return session;
     }
-    if (!strongReason && !isNewIdentity) {
+    if (!strongReason && !isNewIdentity && !isExpectedReplacement) {
       return session;
     }
 
@@ -3388,7 +3393,12 @@ class DirectRadioService {
       if (session?.id === sessionId && !['completed', 'failed', 'stopped'].includes(session.status)) {
         session.status = 'expired';
         session.expiredAt = new Date().toISOString();
-        session.message = `${protocol === 'zwave' ? 'Z-Wave inclusion' : 'Zigbee pairing'} window expired before HomeBrain detected a completed device.`;
+        const operation = protocol === 'zwave' && session.mode === 'replace_failed'
+          ? 'Z-Wave failed-node replacement'
+          : protocol === 'zwave'
+            ? 'Z-Wave inclusion'
+            : 'Zigbee pairing';
+        session.message = `${operation} window expired before HomeBrain detected a completed device.`;
         this.appendPairingEvent(protocol, {
           kind: 'expired',
           message: session.message
@@ -3897,13 +3907,36 @@ class DirectRadioService {
       case 'default':
         return {
           mode,
-          options: { strategy: zwave.InclusionStrategy.Default }
+          options: { strategy: zwave.InclusionStrategy.Default, forceSecurity: true }
         };
       case 'insecure':
       default:
         return {
           mode: 'insecure',
           options: { strategy: zwave.InclusionStrategy.Insecure }
+        };
+    }
+  }
+
+  buildZWaveReplacementOptions(zwave, securityMode) {
+    const requestedMode = normalizeZWaveSecurityMode(securityMode, 's0');
+    const mode = requestedMode === 'default' ? 's0' : requestedMode;
+    switch (mode) {
+      case 's2':
+        return {
+          mode,
+          options: { strategy: zwave.InclusionStrategy.Security_S2 }
+        };
+      case 'insecure':
+        return {
+          mode,
+          options: { strategy: zwave.InclusionStrategy.Insecure }
+        };
+      case 's0':
+      default:
+        return {
+          mode: 's0',
+          options: { strategy: zwave.InclusionStrategy.Security_S0 }
         };
     }
   }
@@ -4044,6 +4077,129 @@ class DirectRadioService {
     };
   }
 
+  async replaceFailedZWaveNode(nodeId, options = {}) {
+    await this.start();
+    const { controller, node } = this.getZWaveNode(nodeId);
+    const numericNodeId = Number(node.id);
+    const confirm = parseOptionalBoolean(options.confirm, false);
+    const force = parseOptionalBoolean(options.force, false);
+    if (!confirm) {
+      const error = new Error('Confirm failed-node replacement before starting a Z-Wave replace window');
+      error.status = 400;
+      throw error;
+    }
+    if (typeof controller.replaceFailedNode !== 'function') {
+      const error = new Error('This Z-Wave controller does not support failed-node replacement');
+      error.status = 501;
+      throw error;
+    }
+
+    let failed = null;
+    if (typeof controller.isFailedNode === 'function') {
+      try {
+        failed = await controller.isFailedNode(numericNodeId);
+      } catch (error) {
+        this.log('warn', 'zwave', 'Unable to verify Z-Wave failed-node status before replacement', {
+          nodeId: numericNodeId,
+          error: error.message
+        });
+      }
+    }
+
+    if (failed === false && !force) {
+      const error = new Error(`Z-Wave node ${numericNodeId} is still responding. Re-interview it first, or force replacement only after confirming it is a stuck partial node.`);
+      error.status = 409;
+      error.failed = false;
+      throw error;
+    }
+
+    const zwave = require('zwave-js');
+    const seconds = boundedSeconds(options.durationSeconds);
+    const resetResult = await this.closeZWavePairingWindow({
+      zwave,
+      reason: 'start_replace_failed',
+      sessionMessage: 'Previous Z-Wave add/remove window was stopped before starting failed-node replacement.'
+    });
+    const { mode: zwaveSecurityMode, options: replacementOptions } = this.buildZWaveReplacementOptions(
+      zwave,
+      options.zwaveSecurityMode ?? options.securityMode
+    );
+    const session = this.createPairingSession('zwave', seconds, {
+      mode: 'replace_failed',
+      targetIdentity: String(numericNodeId),
+      message: zwaveSecurityMode === 's0'
+        ? `Z-Wave legacy S0 replacement is opening for node ${numericNodeId}.`
+        : `Z-Wave replacement is opening for node ${numericNodeId}.`
+    });
+    session.zwaveSecurityMode = zwaveSecurityMode;
+    session.replaceNodeId = numericNodeId;
+    this.zwave.s2DskPin = trimString(options.dskPin);
+    this.zwave.pendingDsk = null;
+
+    this.log('info', 'zwave', 'Opening Z-Wave failed-node replacement window', {
+      nodeId: numericNodeId,
+      durationSeconds: seconds,
+      pairingId: session.id,
+      securityMode: zwaveSecurityMode,
+      previousWindow: resetResult,
+      failed,
+      force
+    });
+
+    let replacementStarted = false;
+    try {
+      replacementStarted = await controller.replaceFailedNode(numericNodeId, replacementOptions);
+    } catch (error) {
+      this.markPairingFailed('zwave', error.message || 'Z-Wave failed-node replacement failed to start.', {
+        nodeId: numericNodeId,
+        failed,
+        force
+      });
+      throw error;
+    }
+
+    if (replacementStarted !== true) {
+      const state = this.getZWaveInclusionStateLabel(zwave);
+      const message = state
+        ? `Z-Wave failed-node replacement did not start because the controller is still ${state}.`
+        : 'Z-Wave failed-node replacement did not start because the controller reported it was busy.';
+      this.markPairingFailed('zwave', message, {
+        nodeId: numericNodeId,
+        state,
+        previousWindow: resetResult
+      });
+      const error = new Error(message);
+      error.status = 409;
+      error.code = 'ZWAVE_REPLACEMENT_NOT_STARTED';
+      throw error;
+    }
+
+    this.zwave.inclusionUntil = new Date(Date.now() + seconds * 1000).toISOString();
+    session.status = 'active';
+    session.expiresAt = Date.now() + seconds * 1000;
+    session.message = zwaveSecurityMode === 's0'
+      ? `Z-Wave legacy S0 replacement is open for node ${numericNodeId}. Press the siren include/action button while this window is live.`
+      : `Z-Wave replacement is open for node ${numericNodeId}. Perform the device include action while this window is live.`;
+    this.armPairingTimer('zwave', session.id, seconds);
+    this.log('info', 'zwave', 'Z-Wave failed-node replacement window is open', {
+      nodeId: numericNodeId,
+      expiresAt: this.zwave.inclusionUntil,
+      pairingId: session.id,
+      securityMode: zwaveSecurityMode
+    });
+
+    return {
+      nodeId: numericNodeId,
+      failed,
+      force,
+      mode: 'replace_failed',
+      zwaveSecurityMode,
+      expiresAt: this.zwave.inclusionUntil,
+      pairing: this.serializePairingSession(session),
+      message: session.message
+    };
+  }
+
   async removeFailedZWaveNode(nodeId, options = {}) {
     await this.start();
     const { controller, node } = this.getZWaveNode(nodeId);
@@ -4160,6 +4316,7 @@ class DirectRadioService {
       mode: session.mode,
       status: session.status,
       zwaveSecurityMode: session.zwaveSecurityMode || null,
+      replaceNodeId: session.replaceNodeId || null,
       startedAt: session.startedAt || null,
       expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
       secondsRemaining: expiresAt ? Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000)) : 0,

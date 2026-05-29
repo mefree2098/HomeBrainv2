@@ -86,6 +86,7 @@ export type DirectRadioPairingSession = {
   mode: string;
   status: 'opening' | 'active' | 'awaiting_dsk' | 'completed' | 'failed' | 'expired' | 'stopped' | string;
   zwaveSecurityMode?: ZWaveSecurityMode | string | null;
+  replaceNodeId?: number | string | null;
   startedAt?: string | null;
   expiresAt?: string | null;
   secondsRemaining?: number;
@@ -477,6 +478,38 @@ export const removeFailedZWaveNode = async (
     };
   } catch (error) {
     console.error('Error removing failed Z-Wave node:', error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const replaceFailedZWaveNode = async (
+  nodeId: number | string,
+  options: {
+    confirm: boolean;
+    force?: boolean;
+    durationSeconds?: number;
+    dskPin?: string;
+    zwaveSecurityMode?: ZWaveSecurityMode;
+  }
+) => {
+  try {
+    const response = await api.post(`/api/direct-radios/zwave/nodes/${encodeURIComponent(String(nodeId))}/replace-failed`, options);
+    return response.data as {
+      success: boolean;
+      result?: {
+        nodeId?: number;
+        failed?: boolean | null;
+        force?: boolean;
+        mode?: string;
+        zwaveSecurityMode?: ZWaveSecurityMode | string | null;
+        expiresAt?: string | null;
+        pairing?: DirectRadioPairingSession | null;
+        message?: string | null;
+      };
+      status?: DirectRadioStatus;
+    };
+  } catch (error) {
+    console.error('Error replacing failed Z-Wave node:', error);
     throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };
