@@ -1370,19 +1370,53 @@ async setZWaveSirenSound(device, node, rawValue, updateData = {}) {
 
 async controlZWaveSiren(node, on) {
     const zwave = require('zwave-js');
-    if (hasZWaveValue(node, zwave.BinarySwitchCCValues.targetValue)) {
-      await this.setZWaveValue(node, zwave.BinarySwitchCCValues.targetValue, Boolean(on));
-      return 'binary_switch';
+    // A siren's "on" must make it sound. Different sirens expose different control
+    // command classes, so try them in priority order:
+    //  - Binary Switch / Multilevel Switch: switch-style sirens (incl. Aeotec ZW080 Gen5)
+    //  - Sound Switch toneId (255 = play default tone, 0 = stop): tone-playing sirens
+    //    (e.g. Aeotec Siren 6)
+    //  - Basic: simple/legacy sirens that only expose Basic on/off
+    const candidates = [
+      { def: zwave.BinarySwitchCCValues.targetValue, value: Boolean(on), label: 'binary_switch' },
+      { def: zwave.SoundSwitchCCValues.toneId, value: on ? 255 : 0, label: 'sound_switch' },
+      { def: zwave.MultilevelSwitchCCValues.targetValue, value: on ? 99 : 0, label: 'multilevel_switch' },
+      { def: zwave.BasicCCValues.targetValue, value: on ? 255 : 0, label: 'basic' }
+    ];
+
+    // Capability is determined from the node's interviewed command classes, NOT
+    // from whether a value is currently cached -- a freshly-included siren has not
+    // cached a targetValue yet, which is exactly what made the previous check fail.
+    let definedIds = [];
+    try {
+      definedIds = typeof node.getDefinedValueIDs === 'function' ? (node.getDefinedValueIDs() || []) : [];
+    } catch (_error) {
+      definedIds = [];
     }
-    if (hasZWaveValue(node, zwave.SoundSwitchCCValues.toneId)) {
-      await this.setZWaveValue(node, zwave.SoundSwitchCCValues.toneId, on ? 255 : 0);
-      return 'sound_switch';
+    const supportsCandidate = (candidate) => {
+      const cc = (candidate.def.id || candidate.def).commandClass;
+      return definedIds.some((valueId) => valueId && valueId.commandClass === cc);
+    };
+
+    const preferred = candidates.find(supportsCandidate);
+    if (preferred) {
+      await this.setZWaveValue(node, preferred.def, preferred.value);
+      return preferred.label;
     }
-    if (hasZWaveValue(node, zwave.MultilevelSwitchCCValues.targetValue)) {
-      await this.setZWaveValue(node, zwave.MultilevelSwitchCCValues.targetValue, on ? 99 : 0);
-      return 'multilevel_switch';
+
+    // Fallback (e.g. the interview has not fully populated value IDs yet): try each
+    // trigger and use the first the controller accepts. setZWaveValue throws on
+    // NoDeviceSupport, so an unsupported CC is skipped without sending a command.
+    let lastError = null;
+    for (const candidate of candidates) {
+      try {
+        await this.setZWaveValue(node, candidate.def, candidate.value);
+        return candidate.label;
+      } catch (error) {
+        lastError = error;
+      }
     }
-    throw new Error('This Z-Wave siren does not expose a supported trigger (Binary Switch, Sound Switch tone, or Multilevel Switch).');
+    const detail = lastError ? ` (last error: ${lastError.message})` : '';
+    throw new Error(`This Z-Wave siren does not expose a supported on/off trigger -- tried Binary Switch, Sound Switch tone, Multilevel Switch, and Basic${detail}.`);
   },
 
 async controlZWaveDevice(device, normalizedAction, commandValue, updateData = {}) {
