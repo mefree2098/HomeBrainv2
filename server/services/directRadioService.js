@@ -3661,7 +3661,7 @@ class DirectRadioService {
       waitForWakeup
     });
 
-    void this.handleZWaveNodeChanged(node, 'refresh-info requested').catch((error) => {
+    await this.handleZWaveNodeChanged(node, 'refresh-info requested').catch((error) => {
       this.log('warn', 'zwave', 'Failed to save Z-Wave node after re-interview request', {
         nodeId: numericNodeId,
         error: error.message
@@ -3716,9 +3716,21 @@ class DirectRadioService {
     }
 
     await controller.removeFailedNode(numericNodeId);
+    if (typeof controller.nodes?.delete === 'function') {
+      try {
+        controller.nodes.delete(numericNodeId);
+      } catch (error) {
+        this.log('warn', 'zwave', 'Unable to evict removed Z-Wave node from the live node cache', {
+          nodeId: numericNodeId,
+          error: error.message
+        });
+      }
+    }
     const query = {
       'properties.homebrainDirect.protocol': 'zwave',
-      'properties.homebrainDirect.nodeId': numericNodeId
+      'properties.homebrainDirect.nodeId': {
+        $in: [numericNodeId, String(numericNodeId)]
+      }
     };
     const deleteResult = await Device.deleteMany(query);
 
