@@ -3924,16 +3924,30 @@ class DirectRadioService {
     const matchingDevices = await Device.find(query).select('_id name').lean();
     let deletedDeviceCount = 0;
     const deletionCleanups = [];
+    const deletionErrors = [];
     if (matchingDevices.length > 0) {
       const deviceService = require('./deviceService');
       for (const device of matchingDevices) {
-        const deletedDevice = await deviceService.deleteDevice(device._id);
-        deletedDeviceCount += 1;
-        if (deletedDevice?.deletionCleanup) {
-          deletionCleanups.push({
+        try {
+          const deletedDevice = await deviceService.deleteDevice(device._id);
+          deletedDeviceCount += 1;
+          if (deletedDevice?.deletionCleanup) {
+            deletionCleanups.push({
+              deviceId: String(device._id),
+              name: device.name || deletedDevice.name || null,
+              cleanup: deletedDevice.deletionCleanup
+            });
+          }
+        } catch (error) {
+          const deletionError = {
             deviceId: String(device._id),
-            name: device.name || deletedDevice.name || null,
-            cleanup: deletedDevice.deletionCleanup
+            name: device.name || null,
+            message: error?.message || String(error || 'Unknown device deletion error')
+          };
+          deletionErrors.push(deletionError);
+          this.log('warn', 'zwave', 'Z-Wave failed node removed, but matching HomeBrain device cleanup failed', {
+            nodeId: numericNodeId,
+            ...deletionError
           });
         }
       }
@@ -3944,7 +3958,8 @@ class DirectRadioService {
       failed,
       force,
       deletedDeviceCount,
-      deletionCleanups
+      deletionCleanups,
+      deletionErrors
     });
 
     return {
@@ -3953,6 +3968,7 @@ class DirectRadioService {
       force,
       deletedDeviceCount,
       deletionCleanups,
+      deletionErrors,
       message: `Z-Wave node ${numericNodeId} was removed from the controller.`
     };
   }

@@ -51,6 +51,35 @@ function clonePlainObject(value) {
   return { ...value };
 }
 
+function createDeletionCleanupSummary() {
+  return {
+    alexaExposuresDeleted: 0,
+    commandClaimsDeleted: 0,
+    energySamplesDeleted: 0,
+    securityZonesRemoved: 0,
+    securitySirenOutputsRemoved: 0,
+    favoriteReferencesRemoved: 0,
+    securityPreferenceReferencesRemoved: 0,
+    dashboardWidgetsRemoved: 0,
+    dashboardDeviceReferencesRemoved: 0,
+    userProfilesUpdated: 0,
+    securityAlarmsUpdated: 0,
+    cleanupErrors: []
+  };
+}
+
+function recordDeletionCleanupError(cleanup, scope, error, context = {}) {
+  if (!cleanup || !Array.isArray(cleanup.cleanupErrors)) {
+    return;
+  }
+
+  cleanup.cleanupErrors.push({
+    scope,
+    message: error?.message || String(error || 'Unknown cleanup error'),
+    ...context
+  });
+}
+
 function parseBoundedMs(value, fallback, min, max) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
@@ -674,44 +703,50 @@ class DeviceService {
 
   async cleanupDeletedDeviceReferences(deletedDevice) {
     const deviceId = normalizeIdString(deletedDevice?._id);
-    const cleanup = {
-      alexaExposuresDeleted: 0,
-      commandClaimsDeleted: 0,
-      energySamplesDeleted: 0,
-      securityZonesRemoved: 0,
-      securitySirenOutputsRemoved: 0,
-      favoriteReferencesRemoved: 0,
-      securityPreferenceReferencesRemoved: 0,
-      dashboardWidgetsRemoved: 0,
-      dashboardDeviceReferencesRemoved: 0,
-      userProfilesUpdated: 0,
-      securityAlarmsUpdated: 0
-    };
+    const cleanup = createDeletionCleanupSummary();
 
     if (!deviceId) {
       return cleanup;
     }
 
-    const [
-      alexaResult,
-      claimResult,
-      energyResult
-    ] = await Promise.all([
+    const independentCleanups = await Promise.allSettled([
       AlexaExposure.deleteMany({ entityType: 'device', entityId: deviceId }),
       DeviceCommandClaim.deleteMany({ deviceId: deletedDevice._id }),
       DeviceEnergySample.deleteMany({ deviceId: deletedDevice._id })
     ]);
+    const [
+      alexaResult,
+      claimResult,
+      energyResult
+    ] = independentCleanups;
 
-    cleanup.alexaExposuresDeleted = alexaResult?.deletedCount ?? 0;
-    cleanup.commandClaimsDeleted = claimResult?.deletedCount ?? 0;
-    cleanup.energySamplesDeleted = energyResult?.deletedCount ?? 0;
+    if (alexaResult.status === 'fulfilled') {
+      cleanup.alexaExposuresDeleted = alexaResult.value?.deletedCount ?? 0;
+    } else {
+      recordDeletionCleanupError(cleanup, 'alexaExposure', alexaResult.reason, { deviceId });
+    }
+    if (claimResult.status === 'fulfilled') {
+      cleanup.commandClaimsDeleted = claimResult.value?.deletedCount ?? 0;
+    } else {
+      recordDeletionCleanupError(cleanup, 'deviceCommandClaim', claimResult.reason, { deviceId });
+    }
+    if (energyResult.status === 'fulfilled') {
+      cleanup.energySamplesDeleted = energyResult.value?.deletedCount ?? 0;
+    } else {
+      recordDeletionCleanupError(cleanup, 'deviceEnergySample', energyResult.reason, { deviceId });
+    }
 
-    const alarms = await SecurityAlarm.find({
-      $or: [
-        { 'zones.deviceId': deviceId },
-        { 'sirenOutputs.deviceId': deviceId }
-      ]
-    });
+    let alarms = [];
+    try {
+      alarms = await SecurityAlarm.find({
+        $or: [
+          { 'zones.deviceId': deviceId },
+          { 'sirenOutputs.deviceId': deviceId }
+        ]
+      });
+    } catch (error) {
+      recordDeletionCleanupError(cleanup, 'securityAlarm.find', error, { deviceId });
+    }
 
     for (const alarm of alarms) {
       const originalZoneCount = Array.isArray(alarm.zones) ? alarm.zones.length : 0;
@@ -724,16 +759,33 @@ class DeviceService {
       const removedSirenOutputCount = originalSirenOutputCount - alarm.sirenOutputs.length;
 
       if (removedZoneCount > 0 || removedSirenOutputCount > 0) {
-        cleanup.securityZonesRemoved += removedZoneCount;
-        cleanup.securitySirenOutputsRemoved += removedSirenOutputCount;
-        cleanup.securityAlarmsUpdated += 1;
-        await alarm.save();
+        try {
+          await alarm.save({ validateBeforeSave: false });
+          cleanup.securityZonesRemoved += removedZoneCount;
+          cleanup.securitySirenOutputsRemoved += removedSirenOutputCount;
+          cleanup.securityAlarmsUpdated += 1;
+        } catch (error) {
+          recordDeletionCleanupError(cleanup, 'securityAlarm.save', error, {
+            deviceId,
+            alarmId: normalizeIdString(alarm?._id)
+          });
+        }
       }
     }
 
-    const profiles = await UserProfile.find({});
+    let profiles = [];
+    try {
+      profiles = await UserProfile.find({});
+    } catch (error) {
+      recordDeletionCleanupError(cleanup, 'userProfile.find', error, { deviceId });
+    }
+
     for (const profile of profiles) {
       let changed = false;
+      let pendingFavoriteReferencesRemoved = 0;
+      let pendingSecurityPreferenceReferencesRemoved = 0;
+      let pendingDashboardWidgetsRemoved = 0;
+      let pendingDashboardDeviceReferencesRemoved = 0;
 
       const favorites = profile.favorites || {};
       const favoriteDevices = Array.isArray(favorites.devices) ? favorites.devices : [];
@@ -744,7 +796,7 @@ class DeviceService {
           ...favorites,
           devices: nextFavoriteDevices
         };
-        cleanup.favoriteReferencesRemoved += removedFavoriteCount;
+        pendingFavoriteReferencesRemoved += removedFavoriteCount;
         changed = true;
       }
 
@@ -759,21 +811,32 @@ class DeviceService {
           ...securityPreferences,
           visibleSensorIds: nextVisibleSensorIds.length > 0 ? nextVisibleSensorIds : undefined
         };
-        cleanup.securityPreferenceReferencesRemoved += removedVisibleSensorCount;
+        pendingSecurityPreferenceReferencesRemoved += removedVisibleSensorCount;
         changed = true;
       }
 
       const dashboardCleanup = this.cleanupDashboardViewsForDeletedDevice(profile.dashboardViews || [], deviceId);
       if (dashboardCleanup.changed) {
         profile.dashboardViews = dashboardCleanup.views;
-        cleanup.dashboardWidgetsRemoved += dashboardCleanup.cleanup.dashboardWidgetsRemoved;
-        cleanup.dashboardDeviceReferencesRemoved += dashboardCleanup.cleanup.dashboardDeviceReferencesRemoved;
+        pendingDashboardWidgetsRemoved += dashboardCleanup.cleanup.dashboardWidgetsRemoved;
+        pendingDashboardDeviceReferencesRemoved += dashboardCleanup.cleanup.dashboardDeviceReferencesRemoved;
         changed = true;
       }
 
       if (changed) {
-        cleanup.userProfilesUpdated += 1;
-        await profile.save();
+        try {
+          await profile.save({ validateBeforeSave: false });
+          cleanup.favoriteReferencesRemoved += pendingFavoriteReferencesRemoved;
+          cleanup.securityPreferenceReferencesRemoved += pendingSecurityPreferenceReferencesRemoved;
+          cleanup.dashboardWidgetsRemoved += pendingDashboardWidgetsRemoved;
+          cleanup.dashboardDeviceReferencesRemoved += pendingDashboardDeviceReferencesRemoved;
+          cleanup.userProfilesUpdated += 1;
+        } catch (error) {
+          recordDeletionCleanupError(cleanup, 'userProfile.save', error, {
+            deviceId,
+            profileId: normalizeIdString(profile?._id)
+          });
+        }
       }
     }
 
@@ -794,7 +857,21 @@ class DeviceService {
         throw new Error('Device not found');
       }
 
-      deletedDevice.deletionCleanup = await this.cleanupDeletedDeviceReferences(deletedDevice);
+      try {
+        deletedDevice.deletionCleanup = await this.cleanupDeletedDeviceReferences(deletedDevice);
+      } catch (cleanupError) {
+        deletedDevice.deletionCleanup = createDeletionCleanupSummary();
+        recordDeletionCleanupError(deletedDevice.deletionCleanup, 'cleanupDeletedDeviceReferences', cleanupError, {
+          deviceId: normalizeIdString(deletedDevice?._id)
+        });
+      }
+
+      const cleanupErrorCount = Array.isArray(deletedDevice.deletionCleanup?.cleanupErrors)
+        ? deletedDevice.deletionCleanup.cleanupErrors.length
+        : 0;
+      if (cleanupErrorCount > 0) {
+        console.warn('DeviceService: Deleted device with cleanup warnings:', deletedDevice.name, deletedDevice.deletionCleanup.cleanupErrors);
+      }
       
       console.log('DeviceService: Successfully deleted device:', deletedDevice.name, deletedDevice.deletionCleanup);
       return deletedDevice;
