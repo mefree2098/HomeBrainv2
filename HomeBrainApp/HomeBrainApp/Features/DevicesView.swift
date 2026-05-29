@@ -16,6 +16,13 @@ private struct AddDeviceZWaveRepairCandidate: Identifiable {
     let subtitle: String
 }
 
+private struct SirenVolumeOption: Identifiable, Hashable {
+    let label: String
+    let value: Int
+
+    var id: Int { value }
+}
+
 struct DevicesView: View {
     let previewMode: Bool
     let embeddedFocusDeviceID: String?
@@ -1588,6 +1595,53 @@ struct DevicesView: View {
         }
     }
 
+    private func sirenVolumeControls(for device: DeviceItem) -> some View {
+        let pending = pendingControls.contains(device.id)
+        let options = sirenVolumeOptions(for: device)
+        let currentVolume = currentSirenVolume(for: device)
+        let currentLabel = options.first(where: { $0.value == currentVolume })?.label ?? currentVolume.map { String($0) } ?? "--"
+
+        return VStack(spacing: 12) {
+            if !options.isEmpty {
+                VStack(spacing: 10) {
+                    HStack {
+                        Text("Volume")
+                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                        Spacer()
+                        Text(currentLabel)
+                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+                    }
+
+                    HStack(spacing: 8) {
+                        ForEach(options) { option in
+                            if option.value == currentVolume {
+                                Button(option.label) {
+                                    Task { await handleDeviceControl(deviceId: device.id, action: "set_siren_volume", value: option.value) }
+                                }
+                                .buttonStyle(HBPrimaryButtonStyle(compact: true))
+                                .frame(maxWidth: .infinity)
+                                .disabled(pending)
+                            } else {
+                                Button(option.label) {
+                                    Task { await handleDeviceControl(deviceId: device.id, action: "set_siren_volume", value: option.value) }
+                                }
+                                .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                                .frame(maxWidth: .infinity)
+                                .disabled(pending)
+                            }
+                        }
+                    }
+                }
+                .padding(14)
+                .background(HBGlassBackground(cornerRadius: 18, variant: .panelSoft))
+            }
+
+            defaultPowerControl(for: device)
+        }
+    }
+
     @ViewBuilder
     private func controlFeedbackView(for device: DeviceItem) -> some View {
         if pendingControls.contains(device.id) {
@@ -1886,6 +1940,8 @@ struct DevicesView: View {
                                     thermostatControls(for: device)
                                 } else if supportsLightFade(device) {
                                     lightControls(for: device)
+                                } else if supportsSirenVolume(device) {
+                                    sirenVolumeControls(for: device)
                                 } else if canUsePrimaryDeviceAction(device) {
                                     defaultPowerControl(for: device)
                                 } else {
@@ -3400,6 +3456,12 @@ struct DevicesView: View {
                 lightColorTemperatureDrafts[deviceId] = kelvin
             }
 
+        case "set_siren_volume":
+            if let numeric = numberValue(from: value) {
+                updated.properties["supportsSirenVolume"] = true
+                updated.properties["sirenVolume"] = Int(numeric.rounded())
+            }
+
         case "set_temperature":
             if let target = numberValue(from: value) {
                 let clamped = clampThermostatTemperature(target)
@@ -4496,6 +4558,90 @@ struct DevicesView: View {
         return boolValue(device.properties["supportsColorTemperature"])
             || propertyStringSet(for: device, key: "directRadioFeatures").contains("colortemperature")
             || propertyStringSet(for: device, key: "matterFeatures").contains("colortemperature")
+    }
+
+    private func sirenVolumeConfigParameter(for device: DeviceItem) -> [String: Any]? {
+        let catalog = JSON.object(device.properties["directRadioCatalog"])
+        return JSON.array(catalog["configParameters"]).first { parameter in
+            if boolValue(parameter["readOnly"]) || boolValue(parameter["writeOnly"]) || boolValue(parameter["hidden"]) {
+                return false
+            }
+            guard numberValue(from: parameter["parameter"]) != nil else {
+                return false
+            }
+            let label = [
+                stringValue(parameter["label"]),
+                stringValue(parameter["name"]),
+                stringValue(parameter["purpose"]),
+                stringValue(parameter["description"])
+            ]
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+                .lowercased()
+            return label.range(of: #"\bvolume\b"#, options: .regularExpression) != nil
+        }
+    }
+
+    private func sirenVolumeOptions(from rawOptions: Any?) -> [SirenVolumeOption] {
+        JSON.array(rawOptions).compactMap { option in
+            guard let rawValue = numberValue(from: option["value"]) else {
+                return nil
+            }
+            let label = [
+                stringValue(option["label"]),
+                stringValue(option["name"]),
+                stringValue(option["value"])
+            ].first(where: { !$0.isEmpty }) ?? ""
+            guard !label.isEmpty else {
+                return nil
+            }
+            return SirenVolumeOption(label: label, value: Int(rawValue.rounded()))
+        }
+    }
+
+    private func sirenVolumeOptions(for device: DeviceItem) -> [SirenVolumeOption] {
+        let explicit = sirenVolumeOptions(from: device.properties["sirenVolumeOptions"])
+        if !explicit.isEmpty {
+            return explicit
+        }
+
+        guard let parameter = sirenVolumeConfigParameter(for: device) else {
+            return []
+        }
+        let catalogOptions = sirenVolumeOptions(from: parameter["options"])
+        if !catalogOptions.isEmpty {
+            return catalogOptions
+        }
+
+        guard let min = numberValue(from: parameter["minValue"]),
+              let max = numberValue(from: parameter["maxValue"]),
+              max >= min,
+              max - min <= 8 else {
+            return []
+        }
+        return (Int(min.rounded())...Int(max.rounded())).map { value in
+            SirenVolumeOption(label: String(value), value: value)
+        }
+    }
+
+    private func currentSirenVolume(for device: DeviceItem) -> Int? {
+        if let explicit = numberValue(from: device.properties["sirenVolume"]) {
+            return Int(explicit.rounded())
+        }
+        if let parameter = sirenVolumeConfigParameter(for: device),
+           let defaultValue = numberValue(from: parameter["defaultValue"]) {
+            return Int(defaultValue.rounded())
+        }
+        return sirenVolumeOptions(for: device).last?.value
+    }
+
+    private func supportsSirenVolume(_ device: DeviceItem) -> Bool {
+        device.type == "siren"
+            && (
+                boolValue(device.properties["supportsSirenVolume"])
+                || sirenVolumeConfigParameter(for: device) != nil
+                || !sirenVolumeOptions(for: device).isEmpty
+            )
     }
 
     private func stringValue(_ value: Any?) -> String {
