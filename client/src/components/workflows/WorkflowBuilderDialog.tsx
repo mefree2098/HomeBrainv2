@@ -26,6 +26,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
+import type { AlexaDeviceSummary } from "@/api/alexa";
 import type { DeviceGroupSummary } from "@/api/devices";
 import type { Workflow, WorkflowAction, WorkflowActionTarget, WorkflowTriggerType } from "@/api/workflows";
 import { DevicePicker } from "@/components/devices/DevicePicker";
@@ -63,6 +64,7 @@ type Props = {
   devices: DeviceLite[];
   deviceGroups?: DeviceGroupSummary[];
   scenes: SceneLite[];
+  alexaDevices?: AlexaDeviceSummary[];
   onSave: (payload: Partial<Workflow>) => Promise<void> | void;
   isSaving?: boolean;
 };
@@ -96,8 +98,17 @@ const ACTION_LABELS: Record<WorkflowAction["type"], string> = {
   variable_control: "Variable control",
   repeat: "Repeat",
   isy_network_resource: "ISY network resource",
-  http_request: "HTTP request"
+  http_request: "HTTP request",
+  alexa_speak: "Alexa announcement"
 };
+const ACTION_TYPE_OPTIONS: Array<{ value: WorkflowAction["type"]; label: string }> = [
+  { value: "device_control", label: "Control device" },
+  { value: "scene_activate", label: "Activate scene" },
+  { value: "alexa_speak", label: "Alexa announcement" },
+  { value: "delay", label: "Delay" },
+  { value: "notification", label: "Notification" },
+  { value: "condition", label: "Condition gate" }
+];
 const DEVICE_ACTION_LABELS: Record<string, string> = {
   turn_on: "Turn on",
   turn_off: "Turn off",
@@ -780,6 +791,45 @@ function parseDeviceGroupSelectValue(value: string) {
     : null;
 }
 
+function getAlexaDeviceIdFromTarget(target: WorkflowActionTarget | undefined) {
+  if (typeof target === "string") {
+    return target;
+  }
+  if (!target || typeof target !== "object" || Array.isArray(target)) {
+    return "";
+  }
+
+  return String(
+    (target as Record<string, unknown>).alexaDeviceId
+    || (target as Record<string, unknown>).deviceId
+    || (target as Record<string, unknown>).id
+    || (target as Record<string, unknown>).value
+    || ""
+  ).trim();
+}
+
+function buildAlexaDeviceTarget(device: AlexaDeviceSummary | undefined): WorkflowActionTarget {
+  if (!device?.id) {
+    return null;
+  }
+
+  return {
+    kind: "alexa_device",
+    alexaDeviceId: device.id,
+    name: device.name,
+    brokerAccountId: device.brokerAccountId || ""
+  };
+}
+
+function getAlexaDeviceLabel(devices: AlexaDeviceSummary[], target: WorkflowActionTarget | undefined) {
+  const targetId = getAlexaDeviceIdFromTarget(target);
+  const match = devices.find((device) => device.id === targetId || device.deviceId === targetId);
+  if (match) {
+    return match.room ? `${match.name} (${match.room})` : match.name;
+  }
+  return targetId || "No Alexa device selected";
+}
+
 function getDefaultDeviceTarget(triggerType: WorkflowTriggerType, devices: DeviceLite[]): WorkflowActionTarget {
   if (triggerType === "device_state") {
     return buildTriggeringDeviceTarget();
@@ -868,7 +918,9 @@ function buildGraph(triggerType: WorkflowTriggerType, actions: WorkflowAction[])
         ? "device_action"
         : action.type === "scene_activate"
           ? "scene_action"
-          : action.type;
+          : action.type === "alexa_speak"
+            ? "notification"
+            : action.type;
     nodes.push({
       id,
       type: visualType,
@@ -1249,7 +1301,8 @@ function describeAction(
   action: WorkflowAction,
   devices: DeviceLite[],
   scenes: SceneLite[],
-  triggerDeviceId: string | null
+  triggerDeviceId: string | null,
+  alexaDevices: AlexaDeviceSummary[]
 ) {
   switch (action.type) {
     case "device_control": {
@@ -1286,6 +1339,11 @@ function describeAction(
       const message = String(action.parameters?.message || "").trim();
       return message ? `Send "${message}".` : "Send a notification.";
     }
+    case "alexa_speak": {
+      const message = String(action.parameters?.message || "").trim();
+      const targetLabel = getAlexaDeviceLabel(alexaDevices, action.target);
+      return message ? `${targetLabel} -> say "${message}".` : `${targetLabel} -> say a message.`;
+    }
     case "condition":
       return "Only continue when the condition evaluates as true.";
     default:
@@ -1300,6 +1358,7 @@ export function WorkflowBuilderDialog({
   devices,
   deviceGroups: availableDeviceGroups = [],
   scenes,
+  alexaDevices = [],
   onSave,
   isSaving = false
 }: Props) {
@@ -1464,8 +1523,8 @@ export function WorkflowBuilderDialog({
     [devices, triggerConditions, triggerType]
   );
   const actionSummaries = useMemo(
-    () => actions.map((action) => describeAction(action, devices, scenes, triggerDeviceId)),
-    [actions, devices, scenes, triggerDeviceId]
+    () => actions.map((action) => describeAction(action, devices, scenes, triggerDeviceId, alexaDevices)),
+    [actions, alexaDevices, devices, scenes, triggerDeviceId]
   );
 
   const addAction = () => {
@@ -1557,6 +1616,8 @@ export function WorkflowBuilderDialog({
       ? scenes[0]?._id || null
       : nextType === "device_control"
         ? defaultControlTarget
+        : nextType === "alexa_speak"
+          ? buildAlexaDeviceTarget(alexaDevices[0])
         : null;
     const defaultDevice = typeof defaultTarget === "string"
       ? actionableDevices.find((device) => device._id === defaultTarget) || null
@@ -1568,6 +1629,12 @@ export function WorkflowBuilderDialog({
         ? { seconds: 3 }
         : nextType === "notification"
           ? { message: "" }
+          : nextType === "alexa_speak"
+            ? {
+                message: "",
+                brokerAccountId: alexaDevices[0]?.brokerAccountId || "",
+                deviceName: alexaDevices[0]?.name || ""
+              }
           : nextType === "condition"
             ? {}
             : buildDeviceControlParameters({
@@ -2146,11 +2213,9 @@ export function WorkflowBuilderDialog({
                                         <SelectValue />
                                       </SelectTrigger>
                                       <SelectContent>
-                                        <SelectItem value="device_control">Control device</SelectItem>
-                                        <SelectItem value="scene_activate">Activate scene</SelectItem>
-                                        <SelectItem value="delay">Delay</SelectItem>
-                                        <SelectItem value="notification">Notification</SelectItem>
-                                        <SelectItem value="condition">Condition gate</SelectItem>
+                                        {ACTION_TYPE_OPTIONS.map((option) => (
+                                          <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                                        ))}
                                       </SelectContent>
                                     </Select>
                                   </div>
@@ -2376,11 +2441,9 @@ export function WorkflowBuilderDialog({
                                       <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
-                                      <SelectItem value="device_control">Control device</SelectItem>
-                                      <SelectItem value="scene_activate">Activate scene</SelectItem>
-                                      <SelectItem value="delay">Delay</SelectItem>
-                                      <SelectItem value="notification">Notification</SelectItem>
-                                      <SelectItem value="condition">Condition gate</SelectItem>
+                                      {ACTION_TYPE_OPTIONS.map((option) => (
+                                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                                      ))}
                                     </SelectContent>
                                   </Select>
                                 </div>
@@ -2415,11 +2478,9 @@ export function WorkflowBuilderDialog({
                                       <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
-                                      <SelectItem value="device_control">Control device</SelectItem>
-                                      <SelectItem value="scene_activate">Activate scene</SelectItem>
-                                      <SelectItem value="delay">Delay</SelectItem>
-                                      <SelectItem value="notification">Notification</SelectItem>
-                                      <SelectItem value="condition">Condition gate</SelectItem>
+                                      {ACTION_TYPE_OPTIONS.map((option) => (
+                                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                                      ))}
                                     </SelectContent>
                                   </Select>
                                 </div>
@@ -2449,11 +2510,9 @@ export function WorkflowBuilderDialog({
                                       <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent>
-                                      <SelectItem value="device_control">Control device</SelectItem>
-                                      <SelectItem value="scene_activate">Activate scene</SelectItem>
-                                      <SelectItem value="delay">Delay</SelectItem>
-                                      <SelectItem value="notification">Notification</SelectItem>
-                                      <SelectItem value="condition">Condition gate</SelectItem>
+                                      {ACTION_TYPE_OPTIONS.map((option) => (
+                                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                                      ))}
                                     </SelectContent>
                                   </Select>
                                 </div>
@@ -2469,6 +2528,69 @@ export function WorkflowBuilderDialog({
                               </div>
                             )}
 
+                            {action.type === "alexa_speak" && (
+                              <div className="grid gap-4 xl:grid-cols-[260px_minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                                <div className="space-y-2">
+                                  <Label>Action type</Label>
+                                  <Select value={action.type} onValueChange={(value) => handleActionTypeChange(index, value as WorkflowAction["type"])}>
+                                    <SelectTrigger>
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {ACTION_TYPE_OPTIONS.map((option) => (
+                                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+
+                                <div className="space-y-2">
+                                  <Label>Alexa device</Label>
+                                  <Select
+                                    disabled={alexaDevices.length === 0}
+                                    value={getAlexaDeviceIdFromTarget(action.target)}
+                                    onValueChange={(value) => {
+                                      const selectedDevice = alexaDevices.find((device) => device.id === value || device.deviceId === value);
+                                      updateAction(index, {
+                                        target: buildAlexaDeviceTarget(selectedDevice),
+                                        parameters: {
+                                          ...action.parameters,
+                                          brokerAccountId: selectedDevice?.brokerAccountId || "",
+                                          deviceName: selectedDevice?.name || ""
+                                        }
+                                      });
+                                    }}
+                                  >
+                                    <SelectTrigger>
+                                      <SelectValue placeholder={alexaDevices.length === 0 ? "No Alexa devices" : "Select Alexa device"} />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      {alexaDevices.map((device) => (
+                                        <SelectItem key={device.id} value={device.id}>
+                                          {device.room ? `${device.name} (${device.room})` : device.name}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                  {alexaDevices.length === 0 && (
+                                    <p className="text-xs text-muted-foreground">
+                                      Pair and configure the Alexa device service to choose announcement targets.
+                                    </p>
+                                  )}
+                                </div>
+
+                                <div className="space-y-2">
+                                  <Label>Message</Label>
+                                  <Textarea
+                                    value={String(action.parameters?.message || "")}
+                                    onChange={(event) => updateAction(index, { parameters: { ...action.parameters, message: event.target.value } })}
+                                    className="min-h-[110px]"
+                                    placeholder="Front Door has opened"
+                                  />
+                                </div>
+                              </div>
+                            )}
+
                             {action.type === "condition" && (
                               <div className="space-y-4">
                                 <div className="grid gap-4 md:grid-cols-[260px_minmax(0,1fr)]">
@@ -2479,11 +2601,9 @@ export function WorkflowBuilderDialog({
                                         <SelectValue />
                                       </SelectTrigger>
                                       <SelectContent>
-                                        <SelectItem value="device_control">Control device</SelectItem>
-                                        <SelectItem value="scene_activate">Activate scene</SelectItem>
-                                        <SelectItem value="delay">Delay</SelectItem>
-                                        <SelectItem value="notification">Notification</SelectItem>
-                                        <SelectItem value="condition">Condition gate</SelectItem>
+                                        {ACTION_TYPE_OPTIONS.map((option) => (
+                                          <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                                        ))}
                                       </SelectContent>
                                     </Select>
                                   </div>

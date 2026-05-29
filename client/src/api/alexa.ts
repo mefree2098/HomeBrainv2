@@ -91,6 +91,19 @@ export type AlexaBrokerServiceStatus = {
   healthMessage?: string;
 };
 
+export type AlexaDeviceSummary = {
+  id: string;
+  deviceId?: string;
+  name: string;
+  room?: string;
+  type?: string;
+  brokerAccountId?: string;
+  locale?: string;
+  online?: boolean | null;
+  capabilities?: string[];
+  provider?: string;
+};
+
 export const getAlexaSummary = async () => {
   try {
     const response = await api.get('/api/alexa');
@@ -214,6 +227,36 @@ export const updateAlexaVoiceUser = async (voiceUserId: string, payload: {
 export const deleteAlexaVoiceUser = async (voiceUserId: string) => {
   try {
     const response = await api.delete(`/api/alexa/voice-users/${encodeURIComponent(voiceUserId)}`);
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const getAlexaDevices = async (params: { brokerAccountId?: string } = {}) => {
+  try {
+    const response = await api.get('/api/alexa/devices', { params });
+    return response.data as {
+      success: boolean;
+      available?: boolean;
+      reason?: string;
+      devices?: AlexaDeviceSummary[];
+      count?: number;
+      updatedAt?: string | null;
+    };
+  } catch (error) {
+    console.error(error);
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const speakAlexaDevice = async (
+  alexaDeviceId: string,
+  payload: { message: string; brokerAccountId?: string; locale?: string; deviceName?: string }
+) => {
+  try {
+    const response = await api.post(`/api/alexa/devices/${encodeURIComponent(alexaDeviceId)}/speak`, payload);
     return response.data;
   } catch (error) {
     console.error(error);

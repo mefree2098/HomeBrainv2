@@ -32,6 +32,14 @@ function close(server) {
   });
 }
 
+function restoreEnv(name, value) {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
+}
+
 test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', async (t) => {
   const relayToken = 'relay-secret';
   const linkedAccountsPayloads = [];
@@ -512,6 +520,123 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
 
   const persistedHub = await brokerStore.getHub('hub-test');
   assert.equal(persistedHub.registration.linkAccountUrl, `${hub.baseUrl}/api/alexa/broker/link-account`);
+});
+
+test('broker lists Alexa devices and relays speak requests through configured provider', async (t) => {
+  const relayToken = 'relay-secret';
+  const providerRequests = [];
+
+  const providerServer = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) {
+      chunks.push(chunk);
+    }
+    const rawBody = Buffer.concat(chunks).toString('utf8');
+    providerRequests.push({
+      method: req.method,
+      url: req.url,
+      authorization: req.headers.authorization,
+      body: rawBody ? JSON.parse(rawBody) : null
+    });
+
+    if (req.url.startsWith('/v1/devices') && req.method === 'GET') {
+      assert.equal(req.headers.authorization, 'Bearer provider-token');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        devices: [
+          {
+            deviceId: 'kitchen-echo',
+            displayName: 'Kitchen Alexa',
+            roomName: 'Kitchen',
+            deviceType: 'ECHO',
+            online: true
+          }
+        ]
+      }));
+      return;
+    }
+
+    if (req.url === '/v1/devices/kitchen-echo/speak' && req.method === 'POST') {
+      assert.equal(req.headers.authorization, 'Bearer provider-token');
+      assert.equal(providerRequests.at(-1).body.message, 'Front Door has opened');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        accepted: true
+      }));
+      return;
+    }
+
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      success: false,
+      error: `Unhandled provider route ${req.method} ${req.url}`
+    }));
+  });
+
+  const brokerStoreFile = path.join(os.tmpdir(), `homebrain-broker-device-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
+  const brokerStore = new BrokerStore({ filePath: brokerStoreFile });
+  await brokerStore.registerHub({
+    hubId: 'hub-test',
+    hubBaseUrl: 'https://hub.example.com',
+    relayToken,
+    mode: 'private'
+  });
+
+  const provider = await listen(providerServer);
+  const previousBaseUrl = process.env.HOMEBRAIN_ALEXA_DEVICE_SERVICE_BASE_URL;
+  const previousToken = process.env.HOMEBRAIN_ALEXA_DEVICE_SERVICE_TOKEN;
+  process.env.HOMEBRAIN_ALEXA_DEVICE_SERVICE_BASE_URL = provider.baseUrl;
+  process.env.HOMEBRAIN_ALEXA_DEVICE_SERVICE_TOKEN = 'provider-token';
+
+  const brokerServer = http.createServer(createApp({
+    store: brokerStore,
+    startDispatcher: false,
+    autoKickDispatcher: false
+  }));
+  const broker = await listen(brokerServer);
+
+  t.after(async () => {
+    restoreEnv('HOMEBRAIN_ALEXA_DEVICE_SERVICE_BASE_URL', previousBaseUrl);
+    restoreEnv('HOMEBRAIN_ALEXA_DEVICE_SERVICE_TOKEN', previousToken);
+    await Promise.all([
+      close(broker.server),
+      close(provider.server)
+    ]);
+    await fs.rm(brokerStoreFile, { force: true });
+  });
+
+  const listResponse = await fetch(`${broker.baseUrl}/api/alexa/devices`, {
+    headers: {
+      Authorization: `Bearer ${relayToken}`,
+      'X-HomeBrain-Hub-Id': 'hub-test'
+    }
+  });
+  assert.equal(listResponse.status, 200);
+  const listPayload = await listResponse.json();
+  assert.equal(listPayload.success, true);
+  assert.equal(listPayload.available, true);
+  assert.equal(listPayload.devices.length, 1);
+  assert.equal(listPayload.devices[0].id, 'kitchen-echo');
+  assert.equal(listPayload.devices[0].name, 'Kitchen Alexa');
+
+  const speakResponse = await fetch(`${broker.baseUrl}/api/alexa/devices/kitchen-echo/speak`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${relayToken}`,
+      'X-HomeBrain-Hub-Id': 'hub-test'
+    },
+    body: JSON.stringify({
+      message: 'Front Door has opened',
+      deviceName: 'Kitchen Alexa'
+    })
+  });
+  assert.equal(speakResponse.status, 200);
+  const speakPayload = await speakResponse.json();
+  assert.equal(speakPayload.success, true);
+  assert.equal(speakPayload.deviceId, 'kitchen-echo');
+  assert.equal(speakPayload.providerResponse.accepted, true);
+  assert.ok(providerRequests.some((entry) => entry.method === 'POST' && entry.url === '/v1/devices/kitchen-echo/speak'));
 });
 
 test('authorize page prefers the paired public origin over the hub id when pre-filling hubRef', async (t) => {

@@ -905,6 +905,12 @@ function describeWorkflowAction(action, options = {}) {
       return targetLabel ? `Activate scene ${targetLabel}` : 'Activate scene';
     case 'notification':
       return 'Send notification';
+    case 'alexa_speak': {
+      const message = sanitizeString(action?.parameters?.message || action?.message);
+      const alexaTargetLabel = describeActionTarget(getActionTargetCandidate(action, ['alexaDeviceId', 'deviceId']));
+      const prefix = message ? `Have Alexa say "${message}"` : 'Have Alexa speak';
+      return alexaTargetLabel ? `${prefix} on ${alexaTargetLabel}` : prefix;
+    }
     case 'delay': {
       const seconds = options.resolvedDelaySeconds ?? resolveDelaySeconds(action);
       return `Wait ${formatDurationSecondsLabel(seconds)}`;
@@ -2005,6 +2011,32 @@ async function executeNotification(action) {
   };
 }
 
+async function executeAlexaSpeak(action, context = {}) {
+  const parameters = action?.parameters && typeof action.parameters === 'object' ? action.parameters : {};
+  const message = sanitizeString(parameters.message || parameters.text || parameters.speech || action?.message);
+  if (!message) {
+    throw new Error('Alexa speech message is required');
+  }
+
+  const target = getActionTargetCandidate(action, ['alexaDeviceId', 'deviceId']);
+  if (!target) {
+    throw new Error('Alexa device target is required');
+  }
+
+  const alexaBridgeService = require('./alexaBridgeService');
+  const result = await alexaBridgeService.sendAlexaSpeech(target, {
+    ...parameters,
+    message
+  }, context);
+
+  return {
+    target: result.deviceId || target,
+    message: `Alexa announcement sent to ${result.deviceName || result.deviceId || 'selected device'}`,
+    brokerAccountId: result.brokerAccountId || parameters.brokerAccountId || null,
+    providerResponse: result.providerResponse || null
+  };
+}
+
 async function executeHttpRequest(action) {
   const parameters = action?.parameters || {};
   const method = String(parameters.method || 'GET').trim().toUpperCase();
@@ -2664,6 +2696,8 @@ async function executeAction(action, context = {}, options = {}) {
       return executeHttpRequest(action);
     case 'notification':
       return executeNotification(action);
+    case 'alexa_speak':
+      return executeAlexaSpeak(action, context);
     case 'isy_network_resource':
       return executeIsyNetworkResource(action);
     case 'delay':

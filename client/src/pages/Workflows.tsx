@@ -52,6 +52,7 @@ import {
 import { PlatformEvent, getLatestEvents, openEventStream } from "@/api/events";
 import { getDeviceGroups, getDevices, type DeviceGroupSummary } from "@/api/devices";
 import { getScenes } from "@/api/scenes";
+import { getAlexaDevices, type AlexaDeviceSummary } from "@/api/alexa";
 import { interpretVoiceCommand } from "@/api/voice";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAlexaExposureRegistry } from "@/hooks/useAlexaExposureRegistry";
@@ -565,6 +566,7 @@ export function Workflows() {
   const [devices, setDevices] = useState<DeviceLite[]>([]);
   const [deviceGroups, setDeviceGroups] = useState<DeviceGroupSummary[]>([]);
   const [scenes, setScenes] = useState<SceneLite[]>([]);
+  const [alexaDevices, setAlexaDevices] = useState<AlexaDeviceSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [runtimeRefreshing, setRuntimeRefreshing] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -654,6 +656,12 @@ export function Workflows() {
       setDevices(devicesResponse.devices || []);
       setDeviceGroups(deviceGroupsResponse.groups || []);
       setScenes(scenesResponse.scenes || []);
+      try {
+        const alexaDeviceResponse = await getAlexaDevices();
+        setAlexaDevices(Array.isArray(alexaDeviceResponse.devices) ? alexaDeviceResponse.devices : []);
+      } catch {
+        setAlexaDevices([]);
+      }
     } catch (error) {
       toast({
         title: "Failed to load workflows",
@@ -2355,6 +2363,7 @@ export function Workflows() {
         devices={devices}
         deviceGroups={deviceGroups}
         scenes={scenes}
+        alexaDevices={alexaDevices}
         onSave={handleSaveWorkflow}
         isSaving={savingWorkflow}
       />

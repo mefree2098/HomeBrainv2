@@ -23,6 +23,21 @@ const brokerReadRateLimit = rateLimit({
     error: 'Too many Alexa broker requests. Please retry shortly.'
   }
 });
+const alexaDeviceRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_ALEXA_DEVICE_RATE_LIMIT_WINDOW_MS || 60 * 1000)),
+  limit: Math.max(10, Number(process.env.HOMEBRAIN_ALEXA_DEVICE_RATE_LIMIT_MAX || 120)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator(req) {
+    return typeof ipKeyGenerator === 'function'
+      ? ipKeyGenerator(req.ip)
+      : (req.ip || req.socket?.remoteAddress || 'unknown');
+  },
+  message: {
+    success: false,
+    error: 'Too many Alexa device requests. Please retry shortly.'
+  }
+});
 
 async function brokerAuth(req, res, next) {
   try {
@@ -345,6 +360,44 @@ router.get('/voice-users', admin, async (_req, res) => {
     return res.status(500).json({
       success: false,
       error: error.message || 'Failed to fetch Alexa voice users'
+    });
+  }
+});
+
+router.get('/devices', alexaDeviceRateLimit, admin, async (req, res) => {
+  try {
+    const result = await alexaBridgeService.listAlexaDevices({
+      brokerAccountId: req.query?.brokerAccountId
+    });
+    return res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    console.error('GET /api/alexa/devices - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to fetch Alexa devices'
+    });
+  }
+});
+
+router.post('/devices/:alexaDeviceId/speak', alexaDeviceRateLimit, admin, async (req, res) => {
+  try {
+    const result = await alexaBridgeService.sendAlexaSpeech(req.params.alexaDeviceId, req.body || {});
+    return res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    const statusCode = error.message.includes('required') ? 400 : error.status || error.response?.status || 500;
+    console.error('POST /api/alexa/devices/:alexaDeviceId/speak - Error:', {
+      alexaDeviceId: req.params.alexaDeviceId,
+      message: error.message
+    });
+    return res.status(statusCode).json({
+      success: false,
+      error: error.response?.data?.error || error.response?.data?.message || error.message || 'Failed to send Alexa speech'
     });
   }
 });

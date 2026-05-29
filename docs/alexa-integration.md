@@ -2,12 +2,13 @@
 
 If you need a step-by-step admin deployment guide, use [alexa-admin-setup.md](alexa-admin-setup.md). This document is the architecture and rollout note.
 
-Last verified: 2026-04-05
+Last verified: 2026-05-28
 
 HomeBrain now supports a two-layer Alexa architecture:
 
 - Alexa Smart Home for no-keyword control of HomeBrain devices, groups, scenes, and safe manual workflows
 - Alexa Custom Skill scaffolding for later speaker-aware personalization and richer workflow verbs
+- Workflow-side Alexa announcements through a broker-owned Alexa device provider adapter
 
 This document covers the deployment model, required environment variables, and the production-readiness checklist.
 
@@ -22,6 +23,7 @@ The Alexa stack is split across four pieces:
    - Handles Alexa OAuth/account linking
    - Stores paired hubs, linked households, tokens, grants, queued proactive events, metrics, and audit data
    - Relays Alexa directives to the correct HomeBrain hub
+   - Queries configured Alexa announcement targets and relays workflow speech requests to the configured Alexa device service
 3. Alexa Smart Home Lambda
    - Handles `AcceptGrant`, `Discover`, `ReportState`, controller directives, and scene activation
    - Resolves Alexa bearer tokens through the broker before relaying any request
@@ -68,6 +70,20 @@ HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS=15552000
 HOMEBRAIN_ALEXA_LWA_TOKEN_URL=https://api.amazon.com/auth/o2/token
 HOMEBRAIN_ALEXA_EVENT_GATEWAY_URL=https://api.amazonalexa.com/v3/events
 ```
+
+Optional outbound Alexa device provider settings:
+
+```dotenv
+HOMEBRAIN_ALEXA_DEVICE_SERVICE_BASE_URL=https://alexa-device-service.example.com
+HOMEBRAIN_ALEXA_DEVICE_SERVICE_TOKEN=<provider-token>
+HOMEBRAIN_ALEXA_DEVICE_DISCOVERY_PATH=/v1/devices
+HOMEBRAIN_ALEXA_DEVICE_SPEAK_PATH=/v1/devices/{deviceId}/speak
+HOMEBRAIN_ALEXA_DEVICE_SERVICE_TIMEOUT_MS=10000
+```
+
+The broker exposes `GET /api/alexa/devices` to the HomeBrain hub for workflow target selection and `POST /api/alexa/devices/:alexaDeviceId/speak` for workflow announcements. Provider responses are normalized into `{ id, name, room, type, brokerAccountId, online }` records for the visual workflow builder.
+
+Important platform boundary: Smart Home account linking and `AcceptGrant` credentials are for Alexa event-gateway work such as discovery updates and change reports. Echo/device enumeration and voice announcements require a compatible provider surface, such as an [Alexa Smart Properties](https://developer.amazon.com/en-US/docs/alexa/alexa-smart-properties/about-asp-core.html) partner API or another explicitly configured Alexa device service. HomeBrain keeps this behind broker configuration so the hub never stores provider credentials. For the Smart Home side, Amazon documents the event-gateway grant flow separately in the [`Alexa.Authorization` interface](https://developer.amazon.com/en-US/docs/alexa/device-apis/alexa-authorization.html).
 
 For production, keep Alexa account-linking refresh tokens long-lived and leave the Alexa console PKCE toggle off until the broker OAuth flow is upgraded to support it.
 
@@ -134,6 +150,49 @@ Current interfaces:
 - `Alexa.LockController`
 - `Alexa.SceneController`
 - `Alexa.EndpointHealth`
+
+## Workflow Alexa Announcements
+
+Workflows support a first-class `alexa_speak` action. The action target is an Alexa device ID from the broker device list, and the parameters include:
+
+```json
+{
+  "message": "Front Door has opened",
+  "brokerAccountId": "optional linked account id",
+  "deviceName": "Kitchen Alexa"
+}
+```
+
+Example workflow shape:
+
+```json
+{
+  "trigger": {
+    "type": "device_state",
+    "conditions": {
+      "deviceId": "<front-door-contact-id>",
+      "property": "directRadioState.contactOpen",
+      "operator": "eq",
+      "value": true
+    }
+  },
+  "actions": [
+    {
+      "type": "alexa_speak",
+      "target": {
+        "kind": "alexa_device",
+        "alexaDeviceId": "kitchen-echo",
+        "name": "Kitchen Alexa"
+      },
+      "parameters": {
+        "message": "Front Door has opened"
+      }
+    }
+  ]
+}
+```
+
+The visual workflow builder loads Alexa announcement targets from the broker. If the provider is not configured, normal workflow loading still works and the Alexa-device selector is empty.
 
 Restricted scene/workflow content remains blocked from Alexa scene projection:
 
