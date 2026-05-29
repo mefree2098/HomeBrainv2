@@ -458,6 +458,44 @@ function isIncompleteDirectRadioDuplicate(record) {
     && record?.type === 'sensor';
 }
 
+function directRecordMatchesIdentity(record, identity = {}) {
+  const direct = record?.properties?.homebrainDirect;
+  if (!direct || typeof direct !== 'object') {
+    return false;
+  }
+
+  if (identity.protocol === 'zigbee') {
+    return trimString(direct.ieeeAddr).toLowerCase() === trimString(identity.id).toLowerCase();
+  }
+
+  if (identity.protocol === 'zwave') {
+    const recordNodeId = Number(direct.nodeId);
+    const identityNodeId = Number(identity.id);
+    return Number.isFinite(recordNodeId)
+      && Number.isFinite(identityNodeId)
+      && recordNodeId === identityNodeId;
+  }
+
+  return false;
+}
+
+function isDuplicateDirectRadioRecord(record, primary, identity) {
+  if (!record || !primary) {
+    return false;
+  }
+  if (String(record?._id || '') === String(primary?._id || '')) {
+    return false;
+  }
+  if (!directRecordMatchesIdentity(record, identity)) {
+    return false;
+  }
+  if (isIncompleteDirectRadioDuplicate(record)) {
+    return true;
+  }
+
+  return directFeatureCount(primary) > 0 && directFeatureCount(record) > 0;
+}
+
 function selectPrimaryDirectDeviceRecord(records = []) {
   const candidates = Array.isArray(records) ? records.filter(Boolean) : [];
   if (candidates.length === 0) {
@@ -470,11 +508,11 @@ function selectPrimaryDirectDeviceRecord(records = []) {
       const leftScore = (directFeatureCount(left) * 100)
         + (isGenericDirectRadioName(left?.name) ? 0 : 20)
         + (left?.isOnline === true ? 10 : 0)
-        + (['switch', 'light', 'lock', 'thermostat', 'garage'].includes(left?.type) ? 5 : 0);
+        + (['switch', 'light', 'lock', 'thermostat', 'garage', 'siren'].includes(left?.type) ? 5 : 0);
       const rightScore = (directFeatureCount(right) * 100)
         + (isGenericDirectRadioName(right?.name) ? 0 : 20)
         + (right?.isOnline === true ? 10 : 0)
-        + (['switch', 'light', 'lock', 'thermostat', 'garage'].includes(right?.type) ? 5 : 0);
+        + (['switch', 'light', 'lock', 'thermostat', 'garage', 'siren'].includes(right?.type) ? 5 : 0);
 
       if (leftScore !== rightScore) {
         return rightScore - leftScore;
@@ -2981,6 +3019,7 @@ class DirectRadioService {
     };
     this.activeMigrations = new Map();
     this.activePairings = new Map();
+    this.directDeviceUpsertLocks = new Map();
     this.pairingTimers = {
       zigbee: null,
       zwave: null
@@ -2998,6 +3037,37 @@ class DirectRadioService {
       message,
       details
     });
+  }
+
+  buildDirectDeviceUpsertLockKey(identity = {}) {
+    const protocol = trimString(identity.protocol).toLowerCase();
+    const id = trimString(identity.id);
+    return protocol && id ? `${protocol}:${id}` : '';
+  }
+
+  async withDirectDeviceUpsertLock(identity, action) {
+    const lockKey = this.buildDirectDeviceUpsertLockKey(identity);
+    if (!lockKey || typeof action !== 'function') {
+      return action?.();
+    }
+
+    const previous = this.directDeviceUpsertLocks.get(lockKey) || Promise.resolve();
+    let releaseCurrent = null;
+    const current = new Promise((resolve) => {
+      releaseCurrent = resolve;
+    });
+    const queued = previous.catch(() => {}).then(() => current);
+    this.directDeviceUpsertLocks.set(lockKey, queued);
+
+    await previous.catch(() => {});
+    try {
+      return await action();
+    } finally {
+      releaseCurrent?.();
+      if (this.directDeviceUpsertLocks.get(lockKey) === queued) {
+        this.directDeviceUpsertLocks.delete(lockKey);
+      }
+    }
   }
 
   clearPairingTimer(protocol) {
@@ -4717,12 +4787,15 @@ class DirectRadioService {
       return null;
     }
 
-    const zwave = require('zwave-js');
     const nodeId = Number(node.id);
     if (!Number.isFinite(nodeId)) {
       return null;
     }
+    if (node.isControllerNode === true) {
+      return null;
+    }
 
+    const zwave = require('zwave-js');
     const hasValue = (valueDef) => {
       try {
         return node.valueDB?.hasValue?.(valueDef.id || valueDef);
@@ -4945,6 +5018,10 @@ class DirectRadioService {
       return this.completeMigration(activeMigration.id, identity, update);
     }
 
+    return this.withDirectDeviceUpsertLock(identity, () => this.upsertDirectDeviceRecord(identity, update, options));
+  }
+
+  async upsertDirectDeviceRecord(identity, update, options = {}) {
     const query = buildDirectDeviceQuery(identity);
     const existingRecords = await Device.find(query);
     const existing = selectPrimaryDirectDeviceRecord(existingRecords);
@@ -4964,17 +5041,30 @@ class DirectRadioService {
       name: device?.name || update?.name || null,
       identity: identity.id
     });
-    const duplicateIds = (existingRecords || [])
-      .filter((record) => String(record?._id || '') !== String(device?._id || ''))
-      .filter(isIncompleteDirectRadioDuplicate)
-      .map((record) => record._id)
-      .filter(Boolean);
-    if (duplicateIds.length > 0 && directFeatureCount(device) > 0) {
-      await Device.deleteMany({ _id: { $in: duplicateIds } });
-      this.log('info', identity.protocol, 'Removed stale partial direct radio duplicates', {
+
+    const duplicateRecords = (existingRecords || [])
+      .filter((record) => isDuplicateDirectRadioRecord(record, device, identity));
+    if (duplicateRecords.length > 0 && directFeatureCount(device) > 0) {
+      const deviceService = require('./deviceService');
+      const deletedDeviceIds = [];
+      const deletionErrors = [];
+      for (const duplicate of duplicateRecords) {
+        try {
+          const deletedDevice = await deviceService.deleteDevice(duplicate._id);
+          deletedDeviceIds.push(deletedDevice?._id?.toString?.() || String(duplicate._id));
+        } catch (error) {
+          deletionErrors.push({
+            deviceId: String(duplicate?._id || ''),
+            message: error?.message || String(error || 'Unknown duplicate cleanup error')
+          });
+        }
+      }
+      this.log(deletionErrors.length > 0 ? 'warn' : 'info', identity.protocol, 'Removed duplicate direct radio device records', {
         deviceId: device?._id?.toString?.() || null,
         identity: identity.id,
-        duplicateCount: duplicateIds.length
+        duplicateCount: deletedDeviceIds.length,
+        deletedDeviceIds,
+        deletionErrors
       });
     }
     this.emitDeviceUpdate(device);
@@ -7494,6 +7584,7 @@ directRadioService._test = {
   inferFeaturesFromZigbeeDefinition,
   getSirenVolumeConfigParameterFromCatalog,
   getSirenVolumeOptionsFromParameter,
+  isDuplicateDirectRadioRecord,
   isZWaveNodeCommandReady,
   isZWaveNodeOnline,
   looksLikeSonoffMg24ThreadStick,

@@ -7,6 +7,7 @@ const Device = require('../models/Device');
 const DirectRadioService = directRadioService.DirectRadioService;
 const {
   inferFeaturesFromZigbeeDefinition,
+  isDuplicateDirectRadioRecord,
   mergeSmartThingsTelemetryFallback,
   mergeDirectDeviceUpdateForExisting,
   selectPrimaryDirectDeviceRecord,
@@ -955,6 +956,169 @@ test('direct radio upsert prefers complete switch records over stale partial dup
   ]);
 
   assert.equal(selected._id, 'complete-switch');
+});
+
+test('direct radio upserts serialize writes for the same node identity', async () => {
+  const service = createService();
+  let activeWrites = 0;
+  let maxActiveWrites = 0;
+  const completed = [];
+
+  service.upsertDirectDeviceRecord = async (_identity, _update, options) => {
+    activeWrites += 1;
+    maxActiveWrites = Math.max(maxActiveWrites, activeWrites);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    activeWrites -= 1;
+    completed.push(options.marker);
+    return { _id: options.marker };
+  };
+
+  await Promise.all([
+    service.upsertDirectDevice({ protocol: 'zwave', id: '13' }, {}, { marker: 'node-ready' }),
+    service.upsertDirectDevice({ protocol: 'zwave', id: '13' }, {}, { marker: 'ready' }),
+    service.upsertDirectDevice({ protocol: 'zwave', id: '13' }, {}, { marker: 'interview-complete' })
+  ]);
+
+  assert.equal(maxActiveWrites, 1);
+  assert.deepEqual(completed, ['node-ready', 'ready', 'interview-complete']);
+});
+
+test('direct radio duplicate detection collapses complete same-node siren rows', () => {
+  const primary = {
+    _id: 'primary-siren',
+    name: 'ZW080',
+    type: 'siren',
+    properties: {
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: 13
+      },
+      directRadioFeatures: ['alarm', 'button', 'switch']
+    }
+  };
+  const duplicate = {
+    _id: 'duplicate-siren',
+    name: 'ZW080',
+    type: 'siren',
+    properties: {
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: '13'
+      },
+      directRadioFeatures: ['alarm', 'button', 'switch']
+    }
+  };
+  const unrelated = {
+    _id: 'other-node',
+    name: 'ZW080',
+    type: 'siren',
+    properties: {
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: 14
+      },
+      directRadioFeatures: ['alarm', 'button', 'switch']
+    }
+  };
+
+  assert.equal(isDuplicateDirectRadioRecord(duplicate, primary, { protocol: 'zwave', id: '13' }), true);
+  assert.equal(isDuplicateDirectRadioRecord(primary, primary, { protocol: 'zwave', id: '13' }), false);
+  assert.equal(isDuplicateDirectRadioRecord(unrelated, primary, { protocol: 'zwave', id: '13' }), false);
+});
+
+test('direct radio upsert removes duplicate same-node records through device cleanup', async (t) => {
+  const service = createService();
+  const deviceService = require('../services/deviceService');
+  const originalFind = Device.find;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalDeleteDevice = deviceService.deleteDevice;
+  const deletedDeviceIds = [];
+  const primary = {
+    _id: '507f1f77bcf86cd799439061',
+    name: 'ZW080',
+    type: 'siren',
+    isOnline: true,
+    updatedAt: '2026-05-29T04:36:06.369Z',
+    properties: {
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: 13
+      },
+      directRadioFeatures: ['alarm', 'button', 'switch']
+    }
+  };
+  const duplicate = {
+    _id: '507f1f77bcf86cd799439062',
+    name: 'ZW080',
+    type: 'siren',
+    isOnline: true,
+    updatedAt: '2026-05-29T04:36:06.326Z',
+    properties: {
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: '13'
+      },
+      directRadioFeatures: ['alarm', 'button', 'switch']
+    }
+  };
+  const update = {
+    name: 'ZW080',
+    type: 'siren',
+    isOnline: true,
+    status: false,
+    properties: {
+      source: 'homebrain-zwave',
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: 13
+      },
+      directRadioFeatures: ['alarm', 'button', 'switch']
+    }
+  };
+
+  Device.find = async () => [primary, duplicate];
+  Device.findByIdAndUpdate = async (_id, payload) => ({
+    ...primary,
+    ...payload,
+    _id: primary._id,
+    properties: payload.properties
+  });
+  deviceService.deleteDevice = async (deviceId) => {
+    deletedDeviceIds.push(String(deviceId));
+    return {
+      _id: deviceId,
+      name: 'ZW080',
+      deletionCleanup: {
+        securitySirenOutputsRemoved: 1
+      }
+    };
+  };
+  service.attachRecoveredSmartThingsMigrationIfMatched = async (device) => device;
+  service.emitDeviceUpdate = () => {};
+  service.completePairingSession = () => {};
+  t.after(() => {
+    Device.find = originalFind;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    deviceService.deleteDevice = originalDeleteDevice;
+  });
+
+  const device = await service.upsertDirectDeviceRecord({ protocol: 'zwave', id: '13' }, update);
+
+  assert.equal(device._id, primary._id);
+  assert.deepEqual(deletedDeviceIds, [duplicate._id]);
+});
+
+test('Z-Wave controller nodes are not normalized as user devices', () => {
+  const service = createService();
+
+  const normalized = service.normalizeZWaveNode({
+    id: 1,
+    isControllerNode: true,
+    ready: true,
+    status: 4
+  }, 'node ready');
+
+  assert.equal(normalized, null);
 });
 
 test('Z-Wave migration exclusion does not advance until controller reports Done', async () => {
