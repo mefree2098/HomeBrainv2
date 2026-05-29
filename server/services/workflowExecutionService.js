@@ -2011,6 +2011,101 @@ async function executeNotification(action) {
   };
 }
 
+function getAlexaTargetId(target) {
+  if (typeof target === 'string') {
+    return sanitizeString(target);
+  }
+  if (!target || typeof target !== 'object' || Array.isArray(target)) {
+    return '';
+  }
+
+  return sanitizeString(
+    target.alexaDeviceId
+    || target.deviceId
+    || target.id
+    || target.value
+  );
+}
+
+function collectAlexaSpeechTargets(rawTarget, parameters = {}) {
+  const candidates = [];
+  const addCandidate = (candidate, inherited = {}) => {
+    if (candidate === undefined || candidate === null) {
+      return;
+    }
+    if (Array.isArray(candidate)) {
+      candidate.forEach((entry) => addCandidate(entry, inherited));
+      return;
+    }
+    if (typeof candidate === 'object') {
+      const nested = Array.isArray(candidate.devices)
+        ? candidate.devices
+        : Array.isArray(candidate.alexaDevices)
+          ? candidate.alexaDevices
+          : Array.isArray(candidate.targets)
+            ? candidate.targets
+            : null;
+      if (nested) {
+        nested.forEach((entry) => addCandidate(entry, {
+          brokerAccountId: candidate.brokerAccountId || inherited.brokerAccountId,
+          deviceName: candidate.deviceName || candidate.name || inherited.deviceName
+        }));
+        return;
+      }
+    }
+
+    const targetId = getAlexaTargetId(candidate);
+    if (!targetId) {
+      return;
+    }
+    const targetObject = typeof candidate === 'object'
+      ? candidate
+      : { alexaDeviceId: targetId };
+
+    candidates.push({
+      kind: targetObject.kind || 'alexa_device',
+      alexaDeviceId: targetId,
+      deviceId: targetObject.deviceId,
+      id: targetObject.id,
+      name: targetObject.name || targetObject.label || targetObject.deviceName || inherited.deviceName,
+      label: targetObject.label,
+      brokerAccountId: targetObject.brokerAccountId || inherited.brokerAccountId || parameters.brokerAccountId
+    });
+  };
+
+  addCandidate(rawTarget);
+
+  if (candidates.length === 0) {
+    addCandidate(parameters.alexaDevices || parameters.devices || parameters.targets);
+  }
+
+  const seen = new Set();
+  return candidates.filter((candidate) => {
+    const key = `${candidate.brokerAccountId || ''}:${candidate.alexaDeviceId}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function formatAlexaResultNames(results = []) {
+  const names = results
+    .map((result) => sanitizeString(result.deviceName || result.deviceId))
+    .filter(Boolean);
+  if (names.length === 0) {
+    return 'selected devices';
+  }
+  if (names.length === 1) {
+    return names[0];
+  }
+  if (names.length === 2) {
+    return `${names[0]} and ${names[1]}`;
+  }
+  return `${names.slice(0, 2).join(', ')} and ${names.length - 2} more`;
+}
+
 async function executeAlexaSpeak(action, context = {}) {
   const parameters = action?.parameters && typeof action.parameters === 'object' ? action.parameters : {};
   const message = sanitizeString(parameters.message || parameters.text || parameters.speech || action?.message);
@@ -2018,22 +2113,46 @@ async function executeAlexaSpeak(action, context = {}) {
     throw new Error('Alexa speech message is required');
   }
 
-  const target = getActionTargetCandidate(action, ['alexaDeviceId', 'deviceId']);
-  if (!target) {
+  const rawTarget = getActionTargetCandidate(action, ['alexaDeviceId', 'deviceId']);
+  const targets = collectAlexaSpeechTargets(rawTarget, parameters);
+  if (targets.length === 0) {
     throw new Error('Alexa device target is required');
   }
 
   const alexaBridgeService = require('./alexaBridgeService');
-  const result = await alexaBridgeService.sendAlexaSpeech(target, {
-    ...parameters,
-    message
-  }, context);
+  const results = [];
+  for (const target of targets) {
+    const result = await alexaBridgeService.sendAlexaSpeech(target, {
+      ...parameters,
+      message,
+      brokerAccountId: target.brokerAccountId || parameters.brokerAccountId,
+      deviceName: target.name || target.label || parameters.deviceName
+    }, context);
+    results.push(result);
+  }
+
+  if (results.length === 1) {
+    const [result] = results;
+    return {
+      target: result.deviceId || targets[0].alexaDeviceId,
+      message: `Alexa announcement sent to ${result.deviceName || result.deviceId || 'selected device'}`,
+      brokerAccountId: result.brokerAccountId || parameters.brokerAccountId || null,
+      providerResponse: result.providerResponse || null
+    };
+  }
 
   return {
-    target: result.deviceId || target,
-    message: `Alexa announcement sent to ${result.deviceName || result.deviceId || 'selected device'}`,
-    brokerAccountId: result.brokerAccountId || parameters.brokerAccountId || null,
-    providerResponse: result.providerResponse || null
+    target: results.map((result, index) => result.deviceId || targets[index]?.alexaDeviceId).filter(Boolean),
+    message: `Alexa announcement sent to ${formatAlexaResultNames(results)}`,
+    brokerAccountId: results.find((result) => result.brokerAccountId)?.brokerAccountId || parameters.brokerAccountId || null,
+    providerResponse: results.map((result) => result.providerResponse || null),
+    details: {
+      alexaTargets: results.map((result, index) => ({
+        deviceId: result.deviceId || targets[index]?.alexaDeviceId || '',
+        deviceName: result.deviceName || targets[index]?.name || '',
+        brokerAccountId: result.brokerAccountId || targets[index]?.brokerAccountId || ''
+      }))
+    }
   };
 }
 

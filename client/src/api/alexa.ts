@@ -122,6 +122,15 @@ export type AlexaDeviceSummary = {
   provider?: string;
 };
 
+export type AlexaDevicesResponse = {
+  success: boolean;
+  available?: boolean;
+  reason?: string;
+  devices?: AlexaDeviceSummary[];
+  count?: number;
+  updatedAt?: string | null;
+};
+
 export const getAlexaSummary = async () => {
   try {
     const response = await api.get('/api/alexa');
@@ -255,14 +264,7 @@ export const deleteAlexaVoiceUser = async (voiceUserId: string) => {
 export const getAlexaDevices = async (params: { brokerAccountId?: string } = {}) => {
   try {
     const response = await api.get('/api/alexa/devices', { params });
-    return response.data as {
-      success: boolean;
-      available?: boolean;
-      reason?: string;
-      devices?: AlexaDeviceSummary[];
-      count?: number;
-      updatedAt?: string | null;
-    };
+    return response.data as AlexaDevicesResponse;
   } catch (error) {
     console.error(error);
     throw new Error(getApiErrorMessage(error));

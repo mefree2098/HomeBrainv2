@@ -47,9 +47,25 @@ export interface WorkflowAlexaTarget {
   name?: string;
   label?: string;
   brokerAccountId?: string;
+  devices?: Array<{
+    alexaDeviceId?: string;
+    deviceId?: string;
+    id?: string;
+    name?: string;
+    label?: string;
+    brokerAccountId?: string;
+  }>;
+  alexaDevices?: Array<{
+    alexaDeviceId?: string;
+    deviceId?: string;
+    id?: string;
+    name?: string;
+    label?: string;
+    brokerAccountId?: string;
+  }>;
 }
 
-export type WorkflowActionTarget = string | WorkflowContextTarget | WorkflowDeviceGroupTarget | WorkflowAlexaTarget | null;
+export type WorkflowActionTarget = string | WorkflowContextTarget | WorkflowDeviceGroupTarget | WorkflowAlexaTarget | WorkflowAlexaTarget[] | null;
 
 export interface WorkflowAction {
   type: WorkflowActionType;

@@ -13,16 +13,20 @@ import {
   flushAlexaBrokerEvents,
   generateAlexaLinkCode,
   getAlexaBrokerServiceStatus,
+  getAlexaDevices,
   getAlexaSummary,
   installAlexaBrokerService,
   pairAlexaBroker,
   restartAlexaBrokerService,
   revokeAlexaHousehold,
+  speakAlexaDevice,
   startAlexaBrokerService,
   stopAlexaBrokerService,
   syncAlexaDiscovery,
   syncAlexaHouseholdDiscovery,
   updateAlexaBrokerServiceConfig,
+  type AlexaDeviceSummary,
+  type AlexaDevicesResponse,
   type AlexaBrokerServiceStatus
 } from '@/api/alexa';
 import {
@@ -105,6 +109,12 @@ const emptyDraft: BrokerDraft = {
   allowManualRegistration: false,
   autoStart: true
 };
+
+const DEFAULT_TEST_ANNOUNCEMENT = 'HomeBrain Alexa test announcement';
+
+function formatAlexaDeviceLabel(device: AlexaDeviceSummary) {
+  return device.room ? `${device.name} (${device.room})` : device.name;
+}
 
 function hydrateDraftFromStatus(status: AlexaBrokerServiceStatus | null): BrokerDraft {
   if (!status) {
@@ -210,6 +220,13 @@ export default function AlexaBrokerManagement() {
   const [syncingDiscovery, setSyncingDiscovery] = useState(false);
   const [flushingEvents, setFlushingEvents] = useState(false);
   const [householdActionKey, setHouseholdActionKey] = useState('');
+  const [testingCommandConfig, setTestingCommandConfig] = useState(false);
+  const [sendingTestAnnouncement, setSendingTestAnnouncement] = useState(false);
+  const [commandTestResult, setCommandTestResult] = useState<AlexaDevicesResponse | null>(null);
+  const [commandTestDevices, setCommandTestDevices] = useState<AlexaDeviceSummary[]>([]);
+  const [testAnnouncementDeviceId, setTestAnnouncementDeviceId] = useState('');
+  const [testAnnouncementText, setTestAnnouncementText] = useState(DEFAULT_TEST_ANNOUNCEMENT);
+  const [testAnnouncementResult, setTestAnnouncementResult] = useState<any>(null);
 
   const hydrateLocalDraft = useCallback((status: AlexaBrokerServiceStatus | null) => {
     setDraft(hydrateDraftFromStatus(status));
@@ -520,6 +537,90 @@ export default function AlexaBrokerManagement() {
       });
     } finally {
       setSyncingDiscovery(false);
+    }
+  };
+
+  const handleTestCommandConfig = async () => {
+    setTestingCommandConfig(true);
+    setTestAnnouncementResult(null);
+    try {
+      const response = await getAlexaDevices();
+      const devices = Array.isArray(response.devices) ? response.devices : [];
+      setCommandTestResult(response);
+      setCommandTestDevices(devices);
+      if (devices.length > 0 && !devices.some((device) => device.id === testAnnouncementDeviceId || device.deviceId === testAnnouncementDeviceId)) {
+        setTestAnnouncementDeviceId(devices[0].id);
+      }
+      toast({
+        title: response.available === false ? 'Alexa command bridge unavailable' : 'Alexa command configuration works',
+        description: response.available === false
+          ? response.reason || 'HomeBrain could not query Alexa devices.'
+          : `Loaded ${devices.length} Alexa device${devices.length === 1 ? '' : 's'}.`
+      });
+    } catch (error: any) {
+      setCommandTestResult({
+        success: false,
+        available: false,
+        reason: error?.message || 'Unable to query Alexa devices.',
+        devices: [],
+        count: 0
+      });
+      setCommandTestDevices([]);
+      toast({
+        variant: 'destructive',
+        title: 'Alexa configuration test failed',
+        description: error?.message || 'Unable to query Alexa devices.'
+      });
+    } finally {
+      setTestingCommandConfig(false);
+    }
+  };
+
+  const handleSendTestAnnouncement = async () => {
+    setSendingTestAnnouncement(true);
+    try {
+      let devices = commandTestDevices;
+      let discoveryReason = commandTestResult?.reason || '';
+      if (devices.length === 0) {
+        const response = await getAlexaDevices();
+        devices = Array.isArray(response.devices) ? response.devices : [];
+        discoveryReason = response.reason || discoveryReason;
+        setCommandTestResult(response);
+        setCommandTestDevices(devices);
+      }
+
+      const selectedDevice = devices.find((device) => device.id === testAnnouncementDeviceId || device.deviceId === testAnnouncementDeviceId) || devices[0];
+      if (!selectedDevice?.id) {
+        throw new Error(discoveryReason || 'No Alexa devices were discovered. Run Test Configuration first.');
+      }
+
+      const message = testAnnouncementText.trim() || DEFAULT_TEST_ANNOUNCEMENT;
+      const response = await speakAlexaDevice(selectedDevice.id, {
+        message,
+        type: draft.alexaCommandDefaultType,
+        locale: draft.alexaCommandLocale || undefined,
+        deviceName: selectedDevice.name,
+        brokerAccountId: selectedDevice.brokerAccountId
+      });
+      setTestAnnouncementDeviceId(selectedDevice.id);
+      setTestAnnouncementText(message);
+      setTestAnnouncementResult(response);
+      toast({
+        title: 'Test announcement sent',
+        description: `${formatAlexaDeviceLabel(selectedDevice)} should say "${message}".`
+      });
+    } catch (error: any) {
+      setTestAnnouncementResult({
+        success: false,
+        error: error?.message || 'Unable to send Alexa test announcement.'
+      });
+      toast({
+        variant: 'destructive',
+        title: 'Test announcement failed',
+        description: error?.message || 'Unable to send Alexa test announcement.'
+      });
+    } finally {
+      setSendingTestAnnouncement(false);
     }
   };
 
@@ -1100,6 +1201,119 @@ export default function AlexaBrokerManagement() {
               Reset Draft
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Alexa Command Tests</CardTitle>
+          <CardDescription>
+            Test the saved, running HomeBrain Native command bridge before wiring Alexa announcements into workflows.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" onClick={handleTestCommandConfig} disabled={testingCommandConfig}>
+              {testingCommandConfig ? (
+                <>
+                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                  Testing…
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Test Configuration
+                </>
+              )}
+            </Button>
+            <p className="text-xs text-muted-foreground">Uses the broker config that has already been saved and restarted.</p>
+          </div>
+
+          {commandTestResult ? (
+            <Alert variant={commandTestResult.available === false || commandTestResult.success === false ? 'destructive' : 'default'}>
+              {commandTestResult.available === false || commandTestResult.success === false ? (
+                <AlertCircle className="h-4 w-4" />
+              ) : (
+                <CheckCircle className="h-4 w-4" />
+              )}
+              <AlertDescription>
+                {commandTestResult.available === false || commandTestResult.success === false
+                  ? commandTestResult.reason || 'Alexa command bridge is not available.'
+                  : `Alexa returned ${commandTestDevices.length} available announcement target${commandTestDevices.length === 1 ? '' : 's'}.`}
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          {commandTestDevices.length > 0 ? (
+            <div className="grid gap-2 rounded-lg border border-border/60 bg-background/50 p-3 md:grid-cols-2 xl:grid-cols-3">
+              {commandTestDevices.map((device) => (
+                <div key={device.id} className="min-w-0 rounded-md border border-border/50 bg-background/70 p-3">
+                  <p className="truncate text-sm font-medium">{formatAlexaDeviceLabel(device)}</p>
+                  <p className="mt-1 truncate text-xs text-muted-foreground">{device.type || 'Alexa device'}</p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          <div className="grid gap-4 xl:grid-cols-[minmax(220px,0.8fr)_minmax(0,1fr)_auto]">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Test Target</label>
+              <Select
+                value={testAnnouncementDeviceId}
+                onValueChange={setTestAnnouncementDeviceId}
+                disabled={commandTestDevices.length === 0}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={commandTestDevices.length === 0 ? 'Run configuration test first' : 'Choose Alexa device'} />
+                </SelectTrigger>
+                <SelectContent>
+                  {commandTestDevices.map((device) => (
+                    <SelectItem key={device.id} value={device.id}>
+                      {formatAlexaDeviceLabel(device)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Test Announcement</label>
+              <Input
+                value={testAnnouncementText}
+                onChange={(event) => setTestAnnouncementText(event.target.value)}
+                placeholder={DEFAULT_TEST_ANNOUNCEMENT}
+              />
+            </div>
+            <div className="flex items-end">
+              <Button onClick={handleSendTestAnnouncement} disabled={sendingTestAnnouncement || testingCommandConfig}>
+                {sendingTestAnnouncement ? (
+                  <>
+                    <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                    Sending…
+                  </>
+                ) : (
+                  <>
+                    <Play className="mr-2 h-4 w-4" />
+                    Test Announcement
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+
+          {testAnnouncementResult ? (
+            <Alert variant={testAnnouncementResult.success === false ? 'destructive' : 'default'}>
+              {testAnnouncementResult.success === false ? (
+                <AlertCircle className="h-4 w-4" />
+              ) : (
+                <CheckCircle className="h-4 w-4" />
+              )}
+              <AlertDescription>
+                {testAnnouncementResult.success === false
+                  ? testAnnouncementResult.error || 'Alexa test announcement failed.'
+                  : `Last test announcement accepted by ${testAnnouncementResult.deviceName || testAnnouncementResult.deviceId || 'Alexa'}.`}
+              </AlertDescription>
+            </Alert>
+          ) : null}
         </CardContent>
       </Card>
 
