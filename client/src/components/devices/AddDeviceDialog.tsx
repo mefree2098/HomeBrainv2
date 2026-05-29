@@ -52,8 +52,10 @@ type ZWaveRepairCandidate = {
   name: string
   subtitle: string
   ready: boolean
+  dead: boolean
   controllerOnly: boolean
   canRemoveFailed: boolean
+  forceRemoveFailed: boolean
 }
 
 type AddDeviceDialogProps = {
@@ -176,6 +178,8 @@ const formatZWaveNodeStatus = (status: number | string | null | undefined) => {
       return `status ${numericStatus}`
   }
 }
+
+const isDeadZWaveStatus = (status: number | string | null | undefined) => Number(status) === 3
 
 const formatExpiration = (value: string | null) => {
   if (!value) {
@@ -304,14 +308,17 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
         const nodeId = getZWaveNodeId(device) || 0
         const controllerNode = zwaveControllerNodes.find((node) => Number(node.id) === nodeId)
         const statusLabel = formatZWaveNodeStatus(controllerNode?.status)
+        const dead = isDeadZWaveStatus(controllerNode?.status)
         return {
           key: device._id,
           nodeId,
           name: device.name || `Z-Wave Node ${nodeId}`,
           subtitle: `Node ${nodeId} · ${statusLabel} · ${getDirectFeatures(device).length || 0} features · ${device.isOnline === false ? "offline" : "not fully interviewed"}`,
           ready: controllerNode?.ready === true,
+          dead,
           controllerOnly: false,
-          canRemoveFailed: false
+          canRemoveFailed: dead,
+          forceRemoveFailed: dead
         }
       })
 
@@ -326,8 +333,10 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
         name: node.name || `Z-Wave Node ${nodeId}`,
         subtitle: `Node ${nodeId} · controller-only partial add · ${formatZWaveNodeStatus(node.status)} · ${node.ready ? "ready" : "not fully interviewed"}`,
         ready: node.ready === true,
+        dead: isDeadZWaveStatus(node.status),
         controllerOnly: true,
-        canRemoveFailed: true
+        canRemoveFailed: true,
+        forceRemoveFailed: !node.ready || isDeadZWaveStatus(node.status)
       })
     })
 
@@ -600,11 +609,13 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       if (response.status?.controllers?.zwave?.nodes) {
         updateZWaveControllerNodes(response.status.controllers.zwave.nodes)
       }
-      let nextStatusMessage = `HomeBrain requested a fresh interview for node ${nodeId}. Tap the switch once if it does not update in a few seconds.`
+      let nextStatusMessage = `HomeBrain requested a fresh interview for node ${nodeId}. If it does not update, use the device include or wake action once and refresh devices.`
       if (refreshedNode?.ready && refreshedNode?.incomplete === false) {
         nextStatusMessage = `HomeBrain finished the Z-Wave interview for node ${nodeId}.`
       } else if (ping === false) {
-        nextStatusMessage = `HomeBrain requested a fresh interview for node ${nodeId}, but it did not answer the first ping. Tap the switch once and refresh devices.`
+        nextStatusMessage = candidate.canRemoveFailed
+          ? `Node ${nodeId} did not answer and is marked dead by the Zooz controller. Remove Failed will clean up this stuck controller entry and its HomeBrain record.`
+          : `HomeBrain requested a fresh interview for node ${nodeId}, but it did not answer the first ping. Use the device include or wake action once and refresh devices.`
       }
       setStatusMessage(nextStatusMessage)
       await onRefresh?.()
@@ -628,7 +639,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
     try {
       const response = await removeFailedZWaveNode(nodeId, {
         confirm: true,
-        force: candidate.controllerOnly && !candidate.ready
+        force: candidate.forceRemoveFailed
       })
       if (response.status?.controllers?.zwave?.nodes) {
         updateZWaveControllerNodes(response.status.controllers.zwave.nodes)
@@ -748,7 +759,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
                   <AlertTriangle className="mt-0.5 h-4 w-4" />
                   <div className="min-w-0 space-y-1">
                     <p className="font-semibold">Incomplete Z-Wave nodes are already on the Zooz network.</p>
-                    <p className="text-xs opacity-90">Repair retries interview. Controller-only ghost nodes can be removed; use exclusion cleanup before adding the same device again.</p>
+                    <p className="text-xs opacity-90">Repair retries interview. Dead or controller-only nodes can be removed from the Zooz controller, which also cleans up matching HomeBrain records.</p>
                   </div>
                 </div>
                 <div className="space-y-2">

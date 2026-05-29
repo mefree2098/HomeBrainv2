@@ -16,8 +16,10 @@ private struct AddDeviceZWaveRepairCandidate: Identifiable {
     let name: String
     let subtitle: String
     let ready: Bool
+    let dead: Bool
     let controllerOnly: Bool
     let canRemoveFailed: Bool
+    let forceRemoveFailed: Bool
 }
 
 private struct SirenVolumeOption: Identifiable, Hashable {
@@ -2478,14 +2480,17 @@ struct DevicesView: View {
                 return nil
             }
             let controllerNode = addDeviceKnownZWaveNodes.first { $0.id == nodeId }
+            let dead = isDeadZWaveNodeStatus(controllerNode?.status)
             return AddDeviceZWaveRepairCandidate(
                 id: device.id,
                 nodeId: nodeId,
                 name: device.name,
                 subtitle: zwaveRepairSubtitle(for: device),
                 ready: controllerNode?.ready ?? device.isOnline,
+                dead: dead,
                 controllerOnly: false,
-                canRemoveFailed: false
+                canRemoveFailed: dead,
+                forceRemoveFailed: dead
             )
         }
 
@@ -2499,8 +2504,10 @@ struct DevicesView: View {
                 name: node.name,
                 subtitle: "Node \(node.id) · controller-only partial add · \(zWaveNodeStatusLabel(node.status)) · \(node.featureCount) features · \(node.ready ? "ready" : "not fully interviewed")",
                 ready: node.ready,
+                dead: isDeadZWaveNodeStatus(node.status),
                 controllerOnly: true,
-                canRemoveFailed: true
+                canRemoveFailed: true,
+                forceRemoveFailed: !node.ready || isDeadZWaveNodeStatus(node.status)
             ))
         }
 
@@ -2516,7 +2523,7 @@ struct DevicesView: View {
                     Text("Incomplete Z-Wave nodes are already on the Zooz network.")
                         .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(HBPalette.accentOrange)
-                    Text("Repair retries interview. Controller-only ghost nodes can be removed; use exclusion cleanup before adding the same device again.")
+                    Text("Repair retries interview. Dead or controller-only nodes can be removed from the Zooz controller, which also cleans up matching HomeBrain records.")
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .foregroundStyle(HBPalette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -3946,9 +3953,13 @@ struct DevicesView: View {
             updateKnownZWaveNodeIds(from: JSON.object(root["status"]))
             let result = JSON.object(root["result"])
             let ping = result["ping"] as? Bool
-            addDeviceStatusMessage = ping == false
-                ? "HomeBrain requested a fresh interview for node \(nodeId), but it did not answer the first ping. Tap the switch once and refresh devices."
-                : "HomeBrain requested a fresh interview for node \(nodeId). Tap the switch once if it does not update in a few seconds."
+            if ping == false && candidate.canRemoveFailed {
+                addDeviceStatusMessage = "Node \(nodeId) did not answer and is marked dead by the Zooz controller. Remove Failed will clean up this stuck controller entry and its HomeBrain record."
+            } else if ping == false {
+                addDeviceStatusMessage = "HomeBrain requested a fresh interview for node \(nodeId), but it did not answer the first ping. Use the device include or wake action once and refresh devices."
+            } else {
+                addDeviceStatusMessage = "HomeBrain requested a fresh interview for node \(nodeId). If it does not update, use the device include or wake action once and refresh devices."
+            }
             await loadDevices(showLoading: false)
         } catch {
             addDeviceStatusMessage = error.localizedDescription
@@ -3973,7 +3984,7 @@ struct DevicesView: View {
                 "/api/direct-radios/zwave/nodes/\(nodeId)/remove-failed",
                 body: [
                     "confirm": true,
-                    "force": candidate.controllerOnly && !candidate.ready
+                    "force": candidate.forceRemoveFailed
                 ]
             )
             let root = JSON.object(response)
@@ -4625,6 +4636,10 @@ struct DevicesView: View {
         default:
             return "status \(status)"
         }
+    }
+
+    private func isDeadZWaveNodeStatus(_ status: Int?) -> Bool {
+        status == 3
     }
 
     private func zwaveRepairSubtitle(for device: DeviceItem) -> String {

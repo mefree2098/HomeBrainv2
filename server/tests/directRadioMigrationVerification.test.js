@@ -1530,9 +1530,12 @@ test('Z-Wave failed-node removal refuses a responding node unless forced', async
 test('Z-Wave failed-node removal force-cleans controller ghosts and matching device rows', async (t) => {
   const service = createService();
   service.started = true;
-  const originalDeleteMany = Device.deleteMany;
+  const deviceService = require('../services/deviceService');
+  const originalFind = Device.find;
+  const originalDeleteDevice = deviceService.deleteDevice;
   let removedNodeId = null;
   let deleteQuery = null;
+  const deletedDeviceIds = [];
   const node = {
     id: 4,
     isControllerNode: false,
@@ -1552,12 +1555,30 @@ test('Z-Wave failed-node removal force-cleans controller ghosts and matching dev
       }
     }
   };
-  Device.deleteMany = async (query) => {
+  Device.find = (query) => {
     deleteQuery = query;
-    return { deletedCount: 2 };
+    return {
+      select: () => ({
+        lean: async () => [
+          { _id: '507f1f77bcf86cd799439041', name: 'Siren New' },
+          { _id: '507f1f77bcf86cd799439042', name: 'Siren Old' }
+        ]
+      })
+    };
+  };
+  deviceService.deleteDevice = async (deviceId) => {
+    deletedDeviceIds.push(String(deviceId));
+    return {
+      _id: deviceId,
+      name: `Deleted ${deviceId}`,
+      deletionCleanup: {
+        securitySirenOutputsRemoved: 1
+      }
+    };
   };
   t.after(() => {
-    Device.deleteMany = originalDeleteMany;
+    Device.find = originalFind;
+    deviceService.deleteDevice = originalDeleteDevice;
   });
 
   const result = await service.removeFailedZWaveNode('4', {
@@ -1573,7 +1594,13 @@ test('Z-Wave failed-node removal force-cleans controller ghosts and matching dev
       $in: [4, '4']
     }
   });
+  assert.deepEqual(deletedDeviceIds, [
+    '507f1f77bcf86cd799439041',
+    '507f1f77bcf86cd799439042'
+  ]);
   assert.equal(result.nodeId, 4);
   assert.equal(result.force, true);
   assert.equal(result.deletedDeviceCount, 2);
+  assert.equal(result.deletionCleanups.length, 2);
+  assert.equal(result.deletionCleanups[0].cleanup.securitySirenOutputsRemoved, 1);
 });

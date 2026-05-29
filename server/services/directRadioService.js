@@ -3921,20 +3921,38 @@ class DirectRadioService {
         $in: [numericNodeId, String(numericNodeId)]
       }
     };
-    const deleteResult = await Device.deleteMany(query);
+    const matchingDevices = await Device.find(query).select('_id name').lean();
+    let deletedDeviceCount = 0;
+    const deletionCleanups = [];
+    if (matchingDevices.length > 0) {
+      const deviceService = require('./deviceService');
+      for (const device of matchingDevices) {
+        const deletedDevice = await deviceService.deleteDevice(device._id);
+        deletedDeviceCount += 1;
+        if (deletedDevice?.deletionCleanup) {
+          deletionCleanups.push({
+            deviceId: String(device._id),
+            name: device.name || deletedDevice.name || null,
+            cleanup: deletedDevice.deletionCleanup
+          });
+        }
+      }
+    }
 
     this.log('warn', 'zwave', 'Z-Wave failed node removed from HomeBrain', {
       nodeId: numericNodeId,
       failed,
       force,
-      deletedDeviceCount: deleteResult?.deletedCount ?? null
+      deletedDeviceCount,
+      deletionCleanups
     });
 
     return {
       nodeId: numericNodeId,
       failed,
       force,
-      deletedDeviceCount: deleteResult?.deletedCount ?? 0,
+      deletedDeviceCount,
+      deletionCleanups,
       message: `Z-Wave node ${numericNodeId} was removed from the controller.`
     };
   }
