@@ -505,7 +505,7 @@ test('getAlarmStatus returns platform-scoped siren outputs with selected state',
   ]);
   assert.equal(status.sirenOutputs[0].isSelected, true);
   assert.equal(status.sirenOutputs[0].isOnline, false);
-  assert.equal(status.sirenOutputs[0].name, 'Main Siren');
+  assert.equal(status.sirenOutputs[0].name, 'Kitchen Siren');
   assert.equal(status.sirenOutputs[0].platform, 'homebrain');
   assert.equal(status.sirenOutputs[1].isSelected, false);
   assert.equal(status.sirenOutputs[1].isOnline, true);
