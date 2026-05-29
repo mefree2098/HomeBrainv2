@@ -32,6 +32,7 @@ import {
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
 import {
   controlDevice,
+  deleteDevice,
   deleteDeviceLockCode,
   getDeviceEnergyHistory,
   getDeviceLockCodeEvents,
@@ -124,6 +125,7 @@ type Props = {
   alexaExposureLoading?: boolean
   onOpenChange: (open: boolean) => void
   onDeviceUpdated?: (device: DeviceLike) => void
+  onDeviceDeleted?: (deviceId: string, device?: DeviceLike) => void
   onAlexaExposureUpdated?: (payload: {
     enabled: boolean
     friendlyName: string
@@ -1385,6 +1387,7 @@ export function DeviceDetailsDialog({
   alexaExposureLoading = false,
   onOpenChange,
   onDeviceUpdated,
+  onDeviceDeleted,
   onAlexaExposureUpdated
 }: Props) {
   const [samples, setSamples] = useState<DeviceEnergySample[]>([])
@@ -1431,6 +1434,7 @@ export function DeviceDetailsDialog({
   const [lockCodeDraftName, setLockCodeDraftName] = useState("")
   const [lockCodeDraftPin, setLockCodeDraftPin] = useState("")
   const [lockCodeDraftEnabled, setLockCodeDraftEnabled] = useState(true)
+  const [deletingDevice, setDeletingDevice] = useState(false)
   const [activeTab, setActiveTab] = useState<"overview" | "controls" | "alexa" | "history">("overview")
   const { toast } = useToast()
   const { isAdmin } = useAuth()
@@ -2022,6 +2026,43 @@ export function DeviceDetailsDialog({
       })
     } finally {
       setSavingDeviceDetails(false)
+    }
+  }
+
+  const handleDeleteDevice = async () => {
+    if (!device?._id || deletingDevice) {
+      return
+    }
+
+    const confirmed = window.confirm(
+      `Delete "${device.name}" from HomeBrain? This removes the HomeBrain record and clears security, dashboard, favorites, Alexa, and telemetry references. It will not exclude a live radio device.`
+    )
+
+    if (!confirmed) {
+      return
+    }
+
+    setDeletingDevice(true)
+    try {
+      const deletedDeviceId = device._id
+      await deleteDevice(deletedDeviceId)
+      onDeviceDeleted?.(deletedDeviceId, device)
+      onOpenChange(false)
+      toast({
+        title: "Device deleted",
+        description: `${device.name} was removed from HomeBrain.`
+      })
+    } catch (deleteError) {
+      const message = deleteError instanceof Error
+        ? deleteError.message
+        : "Failed to delete device."
+      toast({
+        title: "Unable to delete device",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setDeletingDevice(false)
     }
   }
 
@@ -3522,6 +3563,41 @@ export function DeviceDetailsDialog({
                         </div>
                       </CardContent>
                     </Card>
+
+                    {isAdmin ? (
+                      <Card className="border-rose-400/20 bg-rose-950/15">
+                        <CardHeader className="pb-4">
+                          <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Device record</CardTitle>
+                          <CardDescription>
+                            Remove stale HomeBrain records after exclusion, replacement, or controller cleanup.
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="text-sm leading-relaxed text-muted-foreground">
+                            Deletes this HomeBrain device and clears related dashboard, security, favorite, Alexa, and telemetry references.
+                          </div>
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            size="sm"
+                            onClick={handleDeleteDevice}
+                            disabled={deletingDevice}
+                          >
+                            {deletingDevice ? (
+                              <>
+                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                Deleting
+                              </>
+                            ) : (
+                              <>
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                Delete device
+                              </>
+                            )}
+                          </Button>
+                        </CardContent>
+                      </Card>
+                    ) : null}
 
                     {!harmonyCommandDevice ? (
                       <Card className="border-white/10 bg-black/20">

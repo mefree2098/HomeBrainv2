@@ -3,6 +3,11 @@ const assert = require('node:assert/strict');
 
 const Device = require('../models/Device');
 const DeviceGroup = require('../models/DeviceGroup');
+const AlexaExposure = require('../models/AlexaExposure');
+const DeviceCommandClaim = require('../models/DeviceCommandClaim');
+const DeviceEnergySample = require('../models/DeviceEnergySample');
+const SecurityAlarm = require('../models/SecurityAlarm');
+const UserProfile = require('../models/UserProfile');
 const deviceService = require('../services/deviceService');
 const deviceEnergySampleService = require('../services/deviceEnergySampleService');
 const deviceUpdateEmitter = require('../services/deviceUpdateEmitter');
@@ -11,6 +16,133 @@ const harmonyService = require('../services/harmonyService');
 const rainMachineService = require('../services/rainMachineService');
 const directRadioService = require('../services/directRadioService');
 const matterService = require('../services/matterService');
+
+test('deleteDevice removes stale references from dependent HomeBrain records', async (t) => {
+  const originalFindByIdAndDelete = Device.findByIdAndDelete;
+  const originalAlexaDeleteMany = AlexaExposure.deleteMany;
+  const originalClaimDeleteMany = DeviceCommandClaim.deleteMany;
+  const originalEnergyDeleteMany = DeviceEnergySample.deleteMany;
+  const originalSecurityFind = SecurityAlarm.find;
+  const originalProfileFind = UserProfile.find;
+
+  t.after(() => {
+    Device.findByIdAndDelete = originalFindByIdAndDelete;
+    AlexaExposure.deleteMany = originalAlexaDeleteMany;
+    DeviceCommandClaim.deleteMany = originalClaimDeleteMany;
+    DeviceEnergySample.deleteMany = originalEnergyDeleteMany;
+    SecurityAlarm.find = originalSecurityFind;
+    UserProfile.find = originalProfileFind;
+  });
+
+  const deviceId = '507f1f77bcf86cd799439011';
+  const deletedDevice = {
+    _id: deviceId,
+    name: 'Old Siren'
+  };
+  const saved = {
+    alarms: 0,
+    profiles: 0
+  };
+  const alarm = {
+    zones: [
+      { deviceId, name: 'Old contact' },
+      { deviceId: '507f1f77bcf86cd799439012', name: 'Keep contact' }
+    ],
+    sirenOutputs: [
+      { deviceId, name: 'Old Siren' },
+      { deviceId: '507f1f77bcf86cd799439013', name: 'Keep Siren' }
+    ],
+    save: async () => {
+      saved.alarms += 1;
+    }
+  };
+  const profile = {
+    favorites: {
+      devices: [deviceId, '507f1f77bcf86cd799439014'],
+      scenes: ['scene-1']
+    },
+    securityPreferences: {
+      visibleSensorIds: [deviceId, '507f1f77bcf86cd799439015']
+    },
+    dashboardViews: [
+      {
+        id: 'main',
+        name: 'Main',
+        widgets: [
+          {
+            id: 'single-device',
+            type: 'device',
+            title: 'Old Siren',
+            settings: { deviceId }
+          },
+          {
+            id: 'multi-device',
+            type: 'devices',
+            title: 'Devices',
+            settings: { deviceIds: [deviceId, '507f1f77bcf86cd799439016'] }
+          },
+          {
+            id: 'favorite-devices',
+            type: 'favorite-devices',
+            title: 'Favorites',
+            settings: {
+              favoriteDeviceSizes: {
+                [deviceId]: 'large',
+                '507f1f77bcf86cd799439016': 'small'
+              }
+            }
+          }
+        ]
+      }
+    ],
+    save: async () => {
+      saved.profiles += 1;
+    }
+  };
+
+  Device.findByIdAndDelete = async (receivedDeviceId) => {
+    assert.equal(receivedDeviceId, deviceId);
+    return deletedDevice;
+  };
+  AlexaExposure.deleteMany = async (query) => {
+    assert.deepEqual(query, { entityType: 'device', entityId: deviceId });
+    return { deletedCount: 1 };
+  };
+  DeviceCommandClaim.deleteMany = async (query) => {
+    assert.deepEqual(query, { deviceId });
+    return { deletedCount: 1 };
+  };
+  DeviceEnergySample.deleteMany = async (query) => {
+    assert.deepEqual(query, { deviceId });
+    return { deletedCount: 2 };
+  };
+  SecurityAlarm.find = async () => [alarm];
+  UserProfile.find = async () => [profile];
+
+  const result = await deviceService.deleteDevice(deviceId);
+
+  assert.equal(result.name, 'Old Siren');
+  assert.equal(result.deletionCleanup.alexaExposuresDeleted, 1);
+  assert.equal(result.deletionCleanup.commandClaimsDeleted, 1);
+  assert.equal(result.deletionCleanup.energySamplesDeleted, 2);
+  assert.equal(result.deletionCleanup.securityZonesRemoved, 1);
+  assert.equal(result.deletionCleanup.securitySirenOutputsRemoved, 1);
+  assert.equal(result.deletionCleanup.favoriteReferencesRemoved, 1);
+  assert.equal(result.deletionCleanup.securityPreferenceReferencesRemoved, 1);
+  assert.equal(result.deletionCleanup.dashboardWidgetsRemoved, 1);
+  assert.equal(result.deletionCleanup.dashboardDeviceReferencesRemoved, 2);
+  assert.equal(saved.alarms, 1);
+  assert.equal(saved.profiles, 1);
+  assert.deepEqual(alarm.zones.map((zone) => zone.deviceId), ['507f1f77bcf86cd799439012']);
+  assert.deepEqual(alarm.sirenOutputs.map((output) => output.deviceId), ['507f1f77bcf86cd799439013']);
+  assert.deepEqual(profile.favorites.devices, ['507f1f77bcf86cd799439014']);
+  assert.deepEqual(profile.securityPreferences.visibleSensorIds, ['507f1f77bcf86cd799439015']);
+  assert.deepEqual(profile.dashboardViews[0].widgets.map((widget) => widget.id), ['multi-device', 'favorite-devices']);
+  assert.deepEqual(profile.dashboardViews[0].widgets[0].settings.deviceIds, ['507f1f77bcf86cd799439016']);
+  assert.deepEqual(profile.dashboardViews[0].widgets[1].settings.favoriteDeviceSizes, {
+    '507f1f77bcf86cd799439016': 'small'
+  });
+});
 
 test('controlDevice routes Insteon turn_on through insteon service and skips generic DB write path', async (t) => {
   const originalFindById = Device.findById;
