@@ -9,6 +9,7 @@ import {
   RadioTower,
   RefreshCw,
   StopCircle,
+  Trash2,
   Wrench,
   Zap
 } from "lucide-react"
@@ -17,6 +18,7 @@ import {
   getDirectRadioStatus,
   startZWaveExclusion,
   refreshZWaveNodeInfo,
+  removeFailedZWaveNode,
   startDirectRadioPairing,
   stopDirectRadioPairing,
   submitZWaveDskPin,
@@ -49,6 +51,9 @@ type ZWaveRepairCandidate = {
   nodeId: number
   name: string
   subtitle: string
+  ready: boolean
+  controllerOnly: boolean
+  canRemoveFailed: boolean
 }
 
 type AddDeviceDialogProps = {
@@ -151,6 +156,27 @@ const isIncompleteZWaveDevice = (device: DeviceRecord) => {
   return device.isOnline === false || getDirectFeatures(device).length === 0 || !hasIdentity
 }
 
+const formatZWaveNodeStatus = (status: number | string | null | undefined) => {
+  const numericStatus = Number(status)
+  if (!Number.isFinite(numericStatus)) {
+    return "status unknown"
+  }
+  switch (numericStatus) {
+    case 0:
+      return "unknown"
+    case 1:
+      return "asleep"
+    case 2:
+      return "awake"
+    case 3:
+      return "dead"
+    case 4:
+      return "alive"
+    default:
+      return `status ${numericStatus}`
+  }
+}
+
 const formatExpiration = (value: string | null) => {
   if (!value) {
     return ""
@@ -179,6 +205,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
   const [zwaveSecurityMode, setZwaveSecurityMode] = useState<ZWaveSecurityMode>("insecure")
   const [submittingDsk, setSubmittingDsk] = useState(false)
   const [repairingZWaveNodeId, setRepairingZWaveNodeId] = useState<number | null>(null)
+  const [removingZWaveNodeId, setRemovingZWaveNodeId] = useState<number | null>(null)
   const [zwaveControllerNodeIds, setZwaveControllerNodeIds] = useState<Set<number> | null>(null)
   const [zwaveControllerNodes, setZwaveControllerNodes] = useState<DirectRadioZWaveNode[]>([])
   const [matterSetupCode, setMatterSetupCode] = useState("")
@@ -213,6 +240,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       setZwaveDskPin("")
       setSubmittingDsk(false)
       setRepairingZWaveNodeId(null)
+      setRemovingZWaveNodeId(null)
       setZwaveControllerNodeIds(null)
       setZwaveControllerNodes([])
     }
@@ -274,11 +302,16 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       })
       .map((device) => {
         const nodeId = getZWaveNodeId(device) || 0
+        const controllerNode = zwaveControllerNodes.find((node) => Number(node.id) === nodeId)
+        const statusLabel = formatZWaveNodeStatus(controllerNode?.status)
         return {
           key: device._id,
           nodeId,
           name: device.name || `Z-Wave Node ${nodeId}`,
-          subtitle: `Node ${nodeId} · ${getDirectFeatures(device).length || 0} features · ${device.isOnline === false ? "offline" : "not fully interviewed"}`
+          subtitle: `Node ${nodeId} · ${statusLabel} · ${getDirectFeatures(device).length || 0} features · ${device.isOnline === false ? "offline" : "not fully interviewed"}`,
+          ready: controllerNode?.ready === true,
+          controllerOnly: false,
+          canRemoveFailed: false
         }
       })
 
@@ -291,7 +324,10 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
         key: `controller-node-${nodeId}`,
         nodeId,
         name: node.name || `Z-Wave Node ${nodeId}`,
-        subtitle: `Node ${nodeId} · controller-only partial add · ${node.ready ? "ready" : "not fully interviewed"}`
+        subtitle: `Node ${nodeId} · controller-only partial add · ${formatZWaveNodeStatus(node.status)} · ${node.ready ? "ready" : "not fully interviewed"}`,
+        ready: node.ready === true,
+        controllerOnly: true,
+        canRemoveFailed: true
       })
     })
 
@@ -554,16 +590,54 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
         pingFirst: true
       })
       const ping = response.result?.ping
-      setStatusMessage(
-        ping === false
-          ? `HomeBrain requested a fresh interview for node ${nodeId}, but it did not answer the first ping. Tap the switch once and refresh devices.`
-          : `HomeBrain requested a fresh interview for node ${nodeId}. Tap the switch once if it does not update in a few seconds.`
-      )
+      const refreshedNode = response.result?.node
+      if (response.status?.controllers?.zwave?.nodes) {
+        updateZWaveControllerNodes(response.status.controllers.zwave.nodes)
+      }
+      let nextStatusMessage = `HomeBrain requested a fresh interview for node ${nodeId}. Tap the switch once if it does not update in a few seconds.`
+      if (refreshedNode?.ready && refreshedNode?.incomplete === false) {
+        nextStatusMessage = `HomeBrain finished the Z-Wave interview for node ${nodeId}.`
+      } else if (ping === false) {
+        nextStatusMessage = `HomeBrain requested a fresh interview for node ${nodeId}, but it did not answer the first ping. Tap the switch once and refresh devices.`
+      }
+      setStatusMessage(nextStatusMessage)
       await onRefresh?.()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Unable to repair the Z-Wave node.")
     } finally {
       setRepairingZWaveNodeId(null)
+    }
+  }
+
+  const removeFailedZWaveNodeCandidate = async (candidate: ZWaveRepairCandidate) => {
+    const nodeId = candidate.nodeId
+    if (!nodeId) {
+      setErrorMessage("HomeBrain could not find the Z-Wave node id for that controller entry.")
+      return
+    }
+
+    setRemovingZWaveNodeId(nodeId)
+    setErrorMessage(null)
+    setStatusMessage(`Removing failed Z-Wave node ${nodeId} from the Zooz controller.`)
+    try {
+      const response = await removeFailedZWaveNode(nodeId, {
+        confirm: true,
+        force: candidate.controllerOnly && !candidate.ready
+      })
+      if (response.status?.controllers?.zwave?.nodes) {
+        updateZWaveControllerNodes(response.status.controllers.zwave.nodes)
+      }
+      const deletedCount = response.result?.deletedDeviceCount ?? 0
+      setStatusMessage(
+        deletedCount > 0
+          ? `Z-Wave node ${nodeId} was removed and ${deletedCount} HomeBrain device record${deletedCount === 1 ? "" : "s"} were cleaned up.`
+          : `Z-Wave node ${nodeId} was removed from the controller.`
+      )
+      await onRefresh?.()
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to remove the failed Z-Wave node.")
+    } finally {
+      setRemovingZWaveNodeId(null)
     }
   }
 
@@ -665,12 +739,13 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
                   <AlertTriangle className="mt-0.5 h-4 w-4" />
                   <div className="min-w-0 space-y-1">
                     <p className="font-semibold">Incomplete Z-Wave nodes are already on the Zooz network.</p>
-                    <p className="text-xs opacity-90">Repair can retry interview. If the node came from a bad PIN attempt, run exclusion cleanup before adding again.</p>
+                    <p className="text-xs opacity-90">Repair retries interview. Controller-only ghost nodes can be removed; use exclusion cleanup before adding the same device again.</p>
                   </div>
                 </div>
                 <div className="space-y-2">
                   {zwaveRepairCandidates.map((candidate) => {
                     const nodeId = candidate.nodeId
+                    const nodeBusy = repairingZWaveNodeId === nodeId || removingZWaveNodeId === nodeId
                     return (
                       <div key={candidate.key} className="flex flex-col gap-2 rounded-lg border border-border/60 bg-background/70 p-3 sm:flex-row sm:items-center sm:justify-between">
                         <div className="min-w-0">
@@ -682,11 +757,23 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
                           variant="outline"
                           size="sm"
                           onClick={() => void repairZWaveNode(candidate)}
-                          disabled={busy || repairingZWaveNodeId === nodeId}
+                          disabled={busy || nodeBusy}
                         >
                           {repairingZWaveNodeId === nodeId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wrench className="mr-2 h-4 w-4" />}
                           Repair Interview
                         </Button>
+                        {candidate.canRemoveFailed ? (
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => void removeFailedZWaveNodeCandidate(candidate)}
+                            disabled={busy || nodeBusy}
+                          >
+                            {removingZWaveNodeId === nodeId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+                            Remove Failed
+                          </Button>
+                        ) : null}
                       </div>
                     )
                   })}

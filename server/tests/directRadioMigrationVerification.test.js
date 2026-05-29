@@ -1371,3 +1371,54 @@ test('Z-Wave failed-node removal refuses a responding node unless forced', async
   );
   assert.equal(removeCalled, false);
 });
+
+test('Z-Wave failed-node removal force-cleans controller ghosts and matching device rows', async (t) => {
+  const service = createService();
+  service.started = true;
+  const originalDeleteMany = Device.deleteMany;
+  let removedNodeId = null;
+  let deleteQuery = null;
+  const node = {
+    id: 4,
+    isControllerNode: false,
+    ready: false,
+    status: 0,
+    valueDB: { hasValue: () => false }
+  };
+  const nodes = new Map([
+    [4, node]
+  ]);
+  service.zwave.driver = {
+    controller: {
+      nodes,
+      isFailedNode: async () => false,
+      removeFailedNode: async (nodeId) => {
+        removedNodeId = nodeId;
+      }
+    }
+  };
+  Device.deleteMany = async (query) => {
+    deleteQuery = query;
+    return { deletedCount: 2 };
+  };
+  t.after(() => {
+    Device.deleteMany = originalDeleteMany;
+  });
+
+  const result = await service.removeFailedZWaveNode('4', {
+    confirm: true,
+    force: true
+  });
+
+  assert.equal(removedNodeId, 4);
+  assert.equal(nodes.has(4), false);
+  assert.deepEqual(deleteQuery, {
+    'properties.homebrainDirect.protocol': 'zwave',
+    'properties.homebrainDirect.nodeId': {
+      $in: [4, '4']
+    }
+  });
+  assert.equal(result.nodeId, 4);
+  assert.equal(result.force, true);
+  assert.equal(result.deletedDeviceCount, 2);
+});

@@ -5,6 +5,7 @@ private struct AddDeviceZWaveNodeSummary: Identifiable {
     let id: Int
     let name: String
     let ready: Bool
+    let status: Int?
     let incomplete: Bool
     let featureCount: Int
 }
@@ -14,6 +15,9 @@ private struct AddDeviceZWaveRepairCandidate: Identifiable {
     let nodeId: Int
     let name: String
     let subtitle: String
+    let ready: Bool
+    let controllerOnly: Bool
+    let canRemoveFailed: Bool
 }
 
 private struct SirenVolumeOption: Identifiable, Hashable {
@@ -92,6 +96,7 @@ struct DevicesView: View {
     @State private var addDeviceDskPin = ""
     @State private var addDeviceZWaveSecurityMode = "insecure"
     @State private var addDeviceRepairingZWaveNodeId: Int?
+    @State private var addDeviceRemovingZWaveNodeId: Int?
     @State private var addDeviceKnownZWaveNodeIds: Set<Int>?
     @State private var addDeviceKnownZWaveNodes: [AddDeviceZWaveNodeSummary] = []
     @State private var newName = ""
@@ -2317,6 +2322,8 @@ struct DevicesView: View {
                 if addDeviceMode == "zwave" {
                     await loadZWaveRepairNodeIds()
                 } else {
+                    addDeviceRepairingZWaveNodeId = nil
+                    addDeviceRemovingZWaveNodeId = nil
                     addDeviceKnownZWaveNodeIds = nil
                     addDeviceKnownZWaveNodes = []
                 }
@@ -2406,11 +2413,15 @@ struct DevicesView: View {
                   isIncompleteZWaveDirectDevice(device) else {
                 return nil
             }
+            let controllerNode = addDeviceKnownZWaveNodes.first { $0.id == nodeId }
             return AddDeviceZWaveRepairCandidate(
                 id: device.id,
                 nodeId: nodeId,
                 name: device.name,
-                subtitle: zwaveRepairSubtitle(for: device)
+                subtitle: zwaveRepairSubtitle(for: device),
+                ready: controllerNode?.ready ?? device.isOnline,
+                controllerOnly: false,
+                canRemoveFailed: false
             )
         }
 
@@ -2422,7 +2433,10 @@ struct DevicesView: View {
                 id: "controller-node-\(node.id)",
                 nodeId: node.id,
                 name: node.name,
-                subtitle: "Node \(node.id) · controller-only partial add · \(node.featureCount) features · \(node.ready ? "ready" : "not fully interviewed")"
+                subtitle: "Node \(node.id) · controller-only partial add · \(zWaveNodeStatusLabel(node.status)) · \(node.featureCount) features · \(node.ready ? "ready" : "not fully interviewed")",
+                ready: node.ready,
+                controllerOnly: true,
+                canRemoveFailed: true
             ))
         }
 
@@ -2438,7 +2452,7 @@ struct DevicesView: View {
                     Text("Incomplete Z-Wave nodes are already on the Zooz network.")
                         .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(HBPalette.accentOrange)
-                    Text("Repair can retry interview. If the node came from a bad PIN attempt, run exclusion cleanup before adding again.")
+                    Text("Repair retries interview. Controller-only ghost nodes can be removed; use exclusion cleanup before adding the same device again.")
                         .font(.system(size: 11, weight: .semibold, design: .rounded))
                         .foregroundStyle(HBPalette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2460,18 +2474,36 @@ struct DevicesView: View {
 
                     Spacer(minLength: 8)
 
-                    Button {
-                        Task { await repairZWaveNode(candidate) }
-                    } label: {
-                        if addDeviceRepairingZWaveNodeId == candidate.nodeId {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Label("Repair", systemImage: "wrench.and.screwdriver")
+                    VStack(alignment: .trailing, spacing: 8) {
+                        Button {
+                            Task { await repairZWaveNode(candidate) }
+                        } label: {
+                            if addDeviceRepairingZWaveNodeId == candidate.nodeId {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Label("Repair", systemImage: "wrench.and.screwdriver")
+                            }
+                        }
+                        .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                        .disabled(addDeviceBusy || addDeviceRepairingZWaveNodeId != nil || addDeviceRemovingZWaveNodeId != nil)
+
+                        if candidate.canRemoveFailed {
+                            Button {
+                                Task { await removeFailedZWaveNode(candidate) }
+                            } label: {
+                                if addDeviceRemovingZWaveNodeId == candidate.nodeId {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                } else {
+                                    Label("Remove", systemImage: "trash")
+                                }
+                            }
+                            .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                            .disabled(addDeviceBusy || addDeviceRepairingZWaveNodeId != nil || addDeviceRemovingZWaveNodeId != nil)
+                            .tint(.red)
                         }
                     }
-                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                    .disabled(addDeviceBusy || addDeviceRepairingZWaveNodeId != nil)
                 }
                 .padding(10)
                 .background(HBGlassBackground(cornerRadius: 10, variant: .panelSoft))
@@ -3794,6 +3826,7 @@ struct DevicesView: View {
                 id: nodeId,
                 name: JSON.string(node, "name", fallback: "Z-Wave Node \(nodeId)"),
                 ready: JSON.bool(node, "ready"),
+                status: node["status"] == nil ? nil : JSON.int(node, "status"),
                 incomplete: JSON.bool(node, "incomplete"),
                 featureCount: JSON.stringArray(node["features"]).count
             )
@@ -3848,6 +3881,40 @@ struct DevicesView: View {
             addDeviceStatusMessage = ping == false
                 ? "HomeBrain requested a fresh interview for node \(nodeId), but it did not answer the first ping. Tap the switch once and refresh devices."
                 : "HomeBrain requested a fresh interview for node \(nodeId). Tap the switch once if it does not update in a few seconds."
+            await loadDevices(showLoading: false)
+        } catch {
+            addDeviceStatusMessage = error.localizedDescription
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func removeFailedZWaveNode(_ candidate: AddDeviceZWaveRepairCandidate) async {
+        let nodeId = candidate.nodeId
+        if previewMode {
+            addDeviceStatusMessage = "HomeBrain would remove failed Z-Wave node \(nodeId) from the controller."
+            return
+        }
+
+        addDeviceRemovingZWaveNodeId = nodeId
+        addDeviceStatusMessage = "Removing failed Z-Wave node \(nodeId) from the Zooz controller."
+        errorMessage = nil
+        defer { addDeviceRemovingZWaveNodeId = nil }
+
+        do {
+            let response = try await session.apiClient.post(
+                "/api/direct-radios/zwave/nodes/\(nodeId)/remove-failed",
+                body: [
+                    "confirm": true,
+                    "force": candidate.controllerOnly && !candidate.ready
+                ]
+            )
+            let root = JSON.object(response)
+            updateKnownZWaveNodeIds(from: JSON.object(root["status"]))
+            let result = JSON.object(root["result"])
+            let deletedCount = JSON.int(result, "deletedDeviceCount")
+            addDeviceStatusMessage = deletedCount > 0
+                ? "Z-Wave node \(nodeId) was removed and \(deletedCount) HomeBrain device record\(deletedCount == 1 ? "" : "s") were cleaned up."
+                : "Z-Wave node \(nodeId) was removed from the controller."
             await loadDevices(showLoading: false)
         } catch {
             addDeviceStatusMessage = error.localizedDescription
@@ -4459,11 +4526,33 @@ struct DevicesView: View {
             || !hasIdentity
     }
 
+    private func zWaveNodeStatusLabel(_ status: Int?) -> String {
+        guard let status else {
+            return "status unknown"
+        }
+        switch status {
+        case 0:
+            return "unknown"
+        case 1:
+            return "asleep"
+        case 2:
+            return "awake"
+        case 3:
+            return "dead"
+        case 4:
+            return "alive"
+        default:
+            return "status \(status)"
+        }
+    }
+
     private func zwaveRepairSubtitle(for device: DeviceItem) -> String {
-        let node = zWaveNodeId(for: device).map { "Node \($0)" } ?? "Node ?"
+        let nodeId = zWaveNodeId(for: device)
+        let node = nodeId.map { "Node \($0)" } ?? "Node ?"
+        let status = nodeId.flatMap { nodeId in addDeviceKnownZWaveNodes.first { $0.id == nodeId }?.status }
         let featureCount = propertyStringSet(for: device, key: "directRadioFeatures").count
         let state = device.isOnline ? "not fully interviewed" : "offline"
-        return "\(node) · \(featureCount) features · \(state)"
+        return "\(node) · \(zWaveNodeStatusLabel(status)) · \(featureCount) features · \(state)"
     }
 
     private func looksLikeSmartThingsDimmer(_ device: DeviceItem) -> Bool {
