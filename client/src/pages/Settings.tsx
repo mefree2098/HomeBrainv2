@@ -84,6 +84,7 @@ import {
   getSmartThingsSthmDiagnostics
 } from "@/api/smartThings"
 import {
+  getSecurityStatus,
   getSecuritySettings,
   updateSecuritySettings
 } from "@/api/security"
@@ -262,6 +263,23 @@ type SecurityPinFormEntry = {
   existing?: boolean
 }
 
+type SecuritySirenCandidate = {
+  deviceId: string
+  localDeviceId?: string | null
+  smartThingsDeviceId?: string | null
+  source?: string | null
+  sourceLabel?: string | null
+  platform?: "homebrain" | "smartthings" | string | null
+  name: string
+  room?: string | null
+  isSelected?: boolean
+  isEnabled?: boolean
+  isAvailable?: boolean
+  isOnline?: boolean
+  isActive?: boolean
+  stateLabel?: string
+}
+
 const normalizeSecurityPinEntries = (pins: any): SecurityPinFormEntry[] => {
   if (!Array.isArray(pins)) {
     return []
@@ -319,6 +337,27 @@ const normalizeSecurityPinsForSave = (pins: any): Array<{ id?: string; name: str
       }
     })
 }
+
+const normalizeSecuritySirenOutputEntries = (outputs: any): string[] => {
+  if (!Array.isArray(outputs)) {
+    return []
+  }
+
+  return Array.from(new Set(
+    outputs
+      .map((output) => (
+        typeof output === "string"
+          ? output
+          : output?.localDeviceId || output?.deviceId || output?.smartThingsDeviceId
+      ))
+      .map((deviceId) => typeof deviceId === "string" ? deviceId.trim() : "")
+      .filter(Boolean)
+  ))
+}
+
+const getSecuritySirenSelectionKey = (candidate: SecuritySirenCandidate): string => (
+  candidate.localDeviceId || candidate.deviceId || candidate.smartThingsDeviceId || ""
+)
 
 const formatInsteonConnectionTarget = (target: {
   label?: string;
@@ -595,6 +634,8 @@ export function Settings() {
   const [codexPendingLoginId, setCodexPendingLoginId] = useState("")
   const [codexCallbackUrl, setCodexCallbackUrl] = useState("")
   const [codexAuthSummary, setCodexAuthSummary] = useState("")
+  const [securitySirenCandidates, setSecuritySirenCandidates] = useState<SecuritySirenCandidate[]>([])
+  const [loadingSecuritySirens, setLoadingSecuritySirens] = useState(false)
   const { register, handleSubmit, setValue, watch, reset, getValues } = useForm({
     defaultValues: {
       location: "New York, NY",
@@ -640,6 +681,7 @@ export function Settings() {
       securityPinRequireForArm: false,
       securityPinRequireForDisarm: false,
       securityPins: [],
+      securitySirenOutputDeviceIds: [],
       deviceRestartScheduleEnabled: false,
       deviceRestartScheduleFrequency: "weekly",
       deviceRestartScheduleDayOfWeek: 0,
@@ -905,13 +947,86 @@ export function Settings() {
   const securityPins = Array.isArray(watch("securityPins"))
     ? (watch("securityPins") as SecurityPinFormEntry[])
     : []
+  const securitySirenOutputDeviceIds = Array.isArray(watch("securitySirenOutputDeviceIds"))
+    ? (watch("securitySirenOutputDeviceIds") as string[])
+    : []
+  const selectedSecuritySirenIdSet = new Set(securitySirenOutputDeviceIds.filter(Boolean))
   const securityExitDelayOptions = Array.from(new Set([
     ...SECURITY_EXIT_DELAY_OPTIONS,
     securityArmAwayExitDelaySeconds
   ])).sort((left, right) => left - right)
 
+  const isSecuritySirenCandidateAllowed = (candidate: SecuritySirenCandidate) => {
+    if (!candidate || candidate.isAvailable === false) {
+      return false
+    }
+
+    const source = (candidate.source || "").toLowerCase()
+    const platform = (candidate.platform || "").toLowerCase()
+    const isSmartThings = platform === "smartthings" || source === "smartthings"
+    const isHomeBrain = platform === "homebrain"
+      || source.startsWith("homebrain-")
+      || source === "matter"
+      || source === "thread"
+      || (!isSmartThings && Boolean(candidate.localDeviceId || candidate.deviceId))
+
+    return (securityHomeBrainEnabled && isHomeBrain) || (securitySmartThingsEnabled && isSmartThings)
+  }
+
+  const visibleSecuritySirenCandidates = securitySirenCandidates.filter(isSecuritySirenCandidateAllowed)
+  const selectedVisibleSecuritySirenCount = visibleSecuritySirenCandidates.filter((candidate) => (
+    selectedSecuritySirenIdSet.has(getSecuritySirenSelectionKey(candidate))
+  )).length
+
+  const loadSecuritySirenCandidates = async (options: { showToast?: boolean } = {}) => {
+    const { showToast = false } = options
+    setLoadingSecuritySirens(true)
+    try {
+      const response = await getSecurityStatus()
+      const outputs = Array.isArray(response?.status?.sirenOutputs)
+        ? response.status.sirenOutputs
+        : []
+      setSecuritySirenCandidates(outputs)
+      if (showToast) {
+        toast({
+          title: "Security sirens refreshed",
+          description: `Loaded ${outputs.length} available alarm siren${outputs.length === 1 ? "" : "s"}.`
+        })
+      }
+    } catch (error: any) {
+      console.warn("Failed to load security sirens:", error)
+      if (showToast) {
+        toast({
+          title: "Failed to refresh security sirens",
+          description: error?.message || "Unable to load available alarm sirens",
+          variant: "destructive"
+        })
+      }
+    } finally {
+      setLoadingSecuritySirens(false)
+    }
+  }
+
   const setSecurityPins = (pins: SecurityPinFormEntry[]) => {
     setValue("securityPins", pins, { shouldDirty: true })
+  }
+
+  const setSecuritySirenOutputs = (deviceIds: string[]) => {
+    setValue("securitySirenOutputDeviceIds", Array.from(new Set(deviceIds.filter(Boolean))), { shouldDirty: true })
+  }
+
+  const toggleSecuritySirenOutput = (candidate: SecuritySirenCandidate) => {
+    const deviceId = getSecuritySirenSelectionKey(candidate)
+    if (!deviceId) {
+      return
+    }
+
+    if (selectedSecuritySirenIdSet.has(deviceId)) {
+      setSecuritySirenOutputs(securitySirenOutputDeviceIds.filter((currentId) => currentId !== deviceId))
+      return
+    }
+
+    setSecuritySirenOutputs([...securitySirenOutputDeviceIds, deviceId])
   }
 
   const addSecurityPin = () => {
@@ -991,6 +1106,10 @@ export function Settings() {
             setValue("securityPinRequireForArm", securityPinSettings.requireForArm === true)
             setValue("securityPinRequireForDisarm", securityPinSettings.requireForDisarm === true)
             setValue("securityPins", normalizeSecurityPinEntries(securitySettings.pins))
+            setValue("securitySirenOutputDeviceIds", normalizeSecuritySirenOutputEntries(securitySettings.sirenOutputs))
+            loadSecuritySirenCandidates().catch((sirenError: any) => {
+              console.warn("Failed to load security siren candidates:", sirenError)
+            })
           } catch (securitySettingsError) {
             console.warn("Failed to load security settings:", securitySettingsError)
           }
@@ -1673,6 +1792,11 @@ export function Settings() {
 
       delete settingsToSave.localLlmModel
       const securityPinsToSave = normalizeSecurityPinsForSave(settingsToSave.securityPins)
+      const visibleSecuritySirenIds = new Set(visibleSecuritySirenCandidates.map(getSecuritySirenSelectionKey).filter(Boolean))
+      const shouldFilterSecuritySirens = securitySirenCandidates.length > 0
+      const securitySirenOutputsToSave = normalizeSecuritySirenOutputEntries(settingsToSave.securitySirenOutputDeviceIds)
+        .filter((deviceId) => !shouldFilterSecuritySirens || visibleSecuritySirenIds.has(deviceId))
+        .map((deviceId) => ({ deviceId, enabled: true }))
       if (
         (settingsToSave.securityPinRequireForArm === true || settingsToSave.securityPinRequireForDisarm === true) &&
         !securityPinsToSave.some((pin) => pin.enabled !== false)
@@ -1693,7 +1817,8 @@ export function Settings() {
           requireForArm: settingsToSave.securityPinRequireForArm === true,
           requireForDisarm: settingsToSave.securityPinRequireForDisarm === true
         },
-        pins: securityPinsToSave
+        pins: securityPinsToSave,
+        sirenOutputs: securitySirenOutputsToSave
       }
       delete settingsToSave.securityHomeBrainEnabled
       delete settingsToSave.securitySmartThingsEnabled
@@ -1701,6 +1826,7 @@ export function Settings() {
       delete settingsToSave.securityPinRequireForArm
       delete settingsToSave.securityPinRequireForDisarm
       delete settingsToSave.securityPins
+      delete settingsToSave.securitySirenOutputDeviceIds
       delete settingsToSave.deviceRestartScheduleNextRunAt
       delete settingsToSave.deviceRestartScheduleLastTriggeredAt
       delete settingsToSave.smbBackupScheduleNextRunAt
@@ -1760,6 +1886,10 @@ export function Settings() {
           setValue("securityPinRequireForArm", securityPinSettings.requireForArm === true)
           setValue("securityPinRequireForDisarm", securityPinSettings.requireForDisarm === true)
           setValue("securityPins", normalizeSecurityPinEntries(securityResponse.settings.pins))
+          setValue("securitySirenOutputDeviceIds", normalizeSecuritySirenOutputEntries(securityResponse.settings.sirenOutputs))
+          loadSecuritySirenCandidates().catch((sirenError: any) => {
+            console.warn("Failed to refresh security siren candidates:", sirenError)
+          })
         }
         setIsyPasswordConfigured(Boolean(
           response.settings?.isyPassword && String(response.settings.isyPassword).trim()
@@ -7730,6 +7860,80 @@ export function Settings() {
                         ))}
                       </SelectContent>
                     </Select>
+                  </div>
+                </div>
+                <div className="rounded-lg border border-border/60 bg-slate-50/80 p-3 dark:bg-slate-950/40">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="flex items-center gap-2 font-medium">
+                        <Volume2 className="h-4 w-4 text-red-600" />
+                        Alarm Sirens
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        Selected HomeBrain sirens sound when the alarm is triggered and are silenced by disarm or dismiss.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline">
+                        {selectedVisibleSecuritySirenCount}/{visibleSecuritySirenCandidates.length} selected
+                      </Badge>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => loadSecuritySirenCandidates({ showToast: true })}
+                        disabled={loadingSecuritySirens}
+                        className="gap-2"
+                      >
+                        <RefreshCw className={`h-4 w-4 ${loadingSecuritySirens ? "animate-spin" : ""}`} />
+                        Refresh Sirens
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid gap-2 md:grid-cols-2">
+                    {visibleSecuritySirenCandidates.length > 0 ? (
+                      visibleSecuritySirenCandidates.map((candidate) => {
+                        const deviceId = getSecuritySirenSelectionKey(candidate)
+                        const selected = selectedSecuritySirenIdSet.has(deviceId)
+
+                        return (
+                          <button
+                            key={deviceId}
+                            type="button"
+                            onClick={() => toggleSecuritySirenOutput(candidate)}
+                            className={`flex min-h-[4.75rem] items-start gap-3 rounded-lg border px-3 py-3 text-left transition-colors ${
+                              selected
+                                ? "border-red-300 bg-red-50 text-red-950 dark:border-red-800 dark:bg-red-950/30 dark:text-red-50"
+                                : "border-border/50 bg-background/70 hover:bg-background dark:bg-slate-950/20"
+                            }`}
+                            aria-pressed={selected}
+                          >
+                            <span className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
+                              selected
+                                ? "border-red-400 bg-red-100 text-red-700 dark:border-red-700 dark:bg-red-900/50 dark:text-red-200"
+                                : "border-border text-transparent"
+                            }`}>
+                              <CheckCircle className="h-3.5 w-3.5" />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-medium">
+                                {candidate.name || "Unnamed alarm siren"}
+                              </span>
+                              <span className="mt-1 block text-xs text-muted-foreground">
+                                {[candidate.room, candidate.sourceLabel || candidate.source, candidate.isOnline === false ? "Offline" : candidate.stateLabel || "Ready"]
+                                  .filter(Boolean)
+                                  .join(" • ")}
+                              </span>
+                            </span>
+                          </button>
+                        )
+                      })
+                    ) : (
+                      <div className="md:col-span-2 rounded-lg border border-dashed border-border/60 bg-background/60 px-3 py-4 text-sm text-muted-foreground">
+                        {loadingSecuritySirens ? "Loading available alarm sirens..." : "No alarm sirens are available for the selected security platform."}
+                      </div>
+                    )}
                   </div>
                 </div>
                 <div className="rounded-lg border border-border/60 bg-slate-50/80 p-3 dark:bg-slate-950/40">

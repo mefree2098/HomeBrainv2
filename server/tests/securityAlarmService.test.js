@@ -404,6 +404,110 @@ test('getAlarmStatus scopes sensors and locks to the enabled SmartThings securit
   assert.equal(status.doorLocks[0].sourceLabel, 'SmartThings');
 });
 
+test('getAlarmStatus returns platform-scoped siren outputs with selected state', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+  const originalDeviceFind = Device.find;
+  const originalEnsureSmartThingsState = deviceService.ensureSmartThingsState;
+  const originalIsSmartThingsConfiguredForSthm = securityAlarmService.isSmartThingsConfiguredForSthm;
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+    Device.find = originalDeviceFind;
+    deviceService.ensureSmartThingsState = originalEnsureSmartThingsState;
+    securityAlarmService.isSmartThingsConfiguredForSthm = originalIsSmartThingsConfiguredForSthm;
+  });
+
+  const now = new Date('2026-05-07T13:00:00.000Z');
+  const alarm = {
+    alarmState: 'armedStay',
+    enabledPlatforms: {
+      homebrain: true,
+      smartthings: false
+    },
+    sirenOutputs: [
+      { deviceId: 'native-siren', name: 'Main Siren', enabled: true },
+      { deviceId: 'smartthings-siren-id', name: 'Old Siren', enabled: true }
+    ],
+    lastArmed: now,
+    lastDisarmed: null,
+    lastTriggered: null,
+    zones: [],
+    isOnline: true,
+    save: async function save() {
+      return this;
+    }
+  };
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+  securityAlarmService.isSmartThingsConfiguredForSthm = async () => false;
+  deviceService.ensureSmartThingsState = async () => {};
+  Device.find = () => ({
+    lean: async () => ([
+      {
+        _id: 'native-siren',
+        name: 'Kitchen Siren',
+        type: 'siren',
+        room: 'Kitchen',
+        status: false,
+        isOnline: true,
+        lastSeen: now,
+        properties: {
+          source: 'homebrain-zwave',
+          supportsAlarm: true,
+          homebrainDirect: {
+            protocol: 'zwave',
+            nodeId: 8
+          }
+        }
+      },
+      {
+        _id: 'native-spare-siren',
+        name: 'Hall Siren',
+        type: 'switch',
+        room: 'Hall',
+        status: true,
+        isOnline: true,
+        lastSeen: now,
+        properties: {
+          source: 'homebrain-zigbee',
+          directRadioFeatures: ['alarm', 'switch']
+        }
+      },
+      {
+        _id: 'smartthings-siren',
+        name: 'SmartThings Siren',
+        type: 'siren',
+        room: 'Entry',
+        status: false,
+        isOnline: true,
+        lastSeen: now,
+        properties: {
+          source: 'smartthings',
+          smartThingsDeviceId: 'smartthings-siren-id',
+          smartThingsCapabilities: ['alarm']
+        }
+      }
+    ])
+  });
+
+  const status = await securityAlarmService.getAlarmStatus();
+
+  assert.equal(status.enabledPlatforms.homebrain, true);
+  assert.equal(status.enabledPlatforms.smartthings, false);
+  assert.equal(status.sirenOutputCount, 2);
+  assert.equal(status.selectedSirenOutputCount, 1);
+  assert.equal(status.onlineSirenOutputCount, 2);
+  assert.deepEqual(status.sirenOutputs.map((output) => output.deviceId), [
+    'native-siren',
+    'native-spare-siren'
+  ]);
+  assert.equal(status.sirenOutputs[0].isSelected, true);
+  assert.equal(status.sirenOutputs[0].name, 'Main Siren');
+  assert.equal(status.sirenOutputs[0].platform, 'homebrain');
+  assert.equal(status.sirenOutputs[1].isSelected, false);
+  assert.equal(status.sirenOutputs[1].platform, 'homebrain');
+});
+
 test('getAlarmStatus can force-refresh SmartThings door locks for dashboard consumers', async (t) => {
   const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
   const originalDeviceFind = Device.find;
@@ -793,6 +897,71 @@ test('updateSecuritySettings stores platform selection and default exit delay', 
   assert.equal(alarm.saveCount, 1);
 });
 
+test('updateSecuritySettings stores selected siren outputs without exposing unavailable devices in status', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+  const originalDeviceFind = Device.find;
+  const originalEnsureSmartThingsState = deviceService.ensureSmartThingsState;
+  const originalIsSmartThingsConfiguredForSthm = securityAlarmService.isSmartThingsConfiguredForSthm;
+
+  const alarm = {
+    alarmState: 'disarmed',
+    exitDelay: 30,
+    entryDelay: 30,
+    enabledPlatforms: {
+      homebrain: true,
+      smartthings: false
+    },
+    zones: [],
+    sirenOutputs: [],
+    isOnline: true,
+    save: async function save() {
+      return this;
+    }
+  };
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+    Device.find = originalDeviceFind;
+    deviceService.ensureSmartThingsState = originalEnsureSmartThingsState;
+    securityAlarmService.isSmartThingsConfiguredForSthm = originalIsSmartThingsConfiguredForSthm;
+  });
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+  securityAlarmService.isSmartThingsConfiguredForSthm = async () => false;
+  deviceService.ensureSmartThingsState = async () => {};
+  Device.find = () => ({
+    lean: async () => ([
+      {
+        _id: 'native-siren',
+        name: 'Kitchen Siren',
+        type: 'siren',
+        isOnline: true,
+        properties: {
+          source: 'homebrain-zwave',
+          supportsAlarm: true
+        }
+      }
+    ])
+  });
+
+  const result = await securityAlarmService.updateSecuritySettings({
+    sirenOutputs: [
+      { deviceId: 'native-siren', name: 'Kitchen Siren', enabled: true },
+      { deviceId: 'native-siren', name: 'Duplicate', enabled: true },
+      { deviceId: 'smartthings-siren-id', name: 'Old SmartThings Siren', enabled: true }
+    ]
+  });
+
+  assert.deepEqual(result.settings.sirenOutputs, [
+    { deviceId: 'native-siren', name: 'Kitchen Siren', enabled: true },
+    { deviceId: 'smartthings-siren-id', name: 'Old SmartThings Siren', enabled: true }
+  ]);
+
+  const status = await securityAlarmService.getAlarmStatus();
+  assert.deepEqual(status.sirenOutputs.map((output) => output.deviceId), ['native-siren']);
+  assert.equal(status.selectedSirenOutputCount, 1);
+});
+
 test('updateSecuritySettings keeps one security platform enabled and clamps timing defaults', async (t) => {
   const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
 
@@ -1042,6 +1211,9 @@ test('dismissAlarm records a reason and silences HomeBrain-native alarm outputs'
       homebrain: true,
       smartthings: false
     },
+    sirenOutputs: [
+      { deviceId: 'siren-direct-1', enabled: true }
+    ],
     zones: [],
     saveCount: 0,
     disarm: async function disarm(userId) {
@@ -1075,6 +1247,16 @@ test('dismissAlarm records a reason and silences HomeBrain-native alarm outputs'
           directRadioFeatures: ['alarm', 'switch'],
           supportsAlarm: true
         }
+      },
+      {
+        _id: 'siren-direct-2',
+        name: 'Spare HomeBrain Siren',
+        type: 'siren',
+        properties: {
+          source: 'homebrain-zwave',
+          homebrainDirect: { protocol: 'zwave', nodeId: 13 },
+          supportsAlarm: true
+        }
       }
     ])
   });
@@ -1102,4 +1284,86 @@ test('dismissAlarm records a reason and silences HomeBrain-native alarm outputs'
   }]);
   assert.equal(result.lastSirenSilenceResult.homebrain.silencedOutputs.length, 1);
   assert.equal(result.lastSirenSilenceResult.smartthings.attempted, false);
+});
+
+test('triggerAlarm sounds selected HomeBrain siren outputs only', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+  const originalDeviceFind = Device.find;
+  const originalControlDevice = deviceService.controlDevice;
+
+  const alarm = {
+    alarmState: 'armedStay',
+    enabledPlatforms: {
+      homebrain: true,
+      smartthings: false
+    },
+    sirenOutputs: [
+      { deviceId: 'selected-siren', enabled: true }
+    ],
+    zones: [],
+    lastSirenTriggerResult: null,
+    saveCount: 0,
+    trigger: async function trigger(triggeredZone) {
+      this.alarmState = 'triggered';
+      this.lastTriggered = new Date('2026-05-07T14:00:00.000Z');
+      this.triggeredZone = triggeredZone;
+      return this;
+    },
+    save: async function save() {
+      this.saveCount += 1;
+      return this;
+    }
+  };
+  const capturedControls = [];
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+    Device.find = originalDeviceFind;
+    deviceService.controlDevice = originalControlDevice;
+  });
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+  Device.find = () => ({
+    lean: async () => ([
+      {
+        _id: 'selected-siren',
+        name: 'Selected HomeBrain Siren',
+        type: 'siren',
+        properties: {
+          source: 'homebrain-zwave',
+          homebrainDirect: { protocol: 'zwave', nodeId: 8 },
+          supportsAlarm: true
+        }
+      },
+      {
+        _id: 'spare-siren',
+        name: 'Spare HomeBrain Siren',
+        type: 'siren',
+        properties: {
+          source: 'homebrain-zwave',
+          homebrainDirect: { protocol: 'zwave', nodeId: 9 },
+          supportsAlarm: true
+        }
+      }
+    ])
+  });
+  deviceService.controlDevice = async (deviceId, action, value, options = {}) => {
+    capturedControls.push({ deviceId, action, value, reason: options.command?.reason });
+    return { _id: deviceId };
+  };
+
+  const result = await securityAlarmService.triggerAlarm(null, { triggeredZoneName: 'Front Door' });
+
+  assert.equal(result.alarmState, 'triggered');
+  assert.equal(result.triggeredZone, 'Front Door');
+  assert.equal(result.saveCount, 1);
+  assert.deepEqual(capturedControls, [{
+    deviceId: 'selected-siren',
+    action: 'turn_on',
+    value: true,
+    reason: 'trigger_alarm'
+  }]);
+  assert.equal(result.lastSirenTriggerResult.homebrain.soundedOutputs.length, 1);
+  assert.equal(result.lastSirenTriggerResult.homebrain.soundedOutputs[0].deviceId, 'selected-siren');
+  assert.equal(result.lastSirenTriggerResult.failedOutputs.length, 0);
 });

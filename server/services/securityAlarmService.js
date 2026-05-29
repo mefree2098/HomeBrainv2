@@ -81,6 +81,7 @@ const DEFAULT_ARM_AWAY_EXIT_DELAY_SECONDS = 30;
 const SECURITY_PIN_MIN_LENGTH = 4;
 const SECURITY_PIN_MAX_LENGTH = 8;
 const SECURITY_PIN_NAME_MAX_LENGTH = 80;
+const SECURITY_SIREN_NAME_MAX_LENGTH = 120;
 const SECURITY_PIN_HASH_ROUNDS = Math.max(
   10,
   Math.min(14, Number(process.env.SECURITY_ALARM_PIN_HASH_ROUNDS || 12) || 12)
@@ -168,6 +169,8 @@ const getDeviceLookupKeys = (device) => uniqueStrings([
     ? `${device.properties.matter.nodeId}/${device.properties.matter.endpointId}`
     : '')
 ]);
+
+const getLocalDeviceId = (device) => normalizeString(device?._id?.toString?.() || device?._id || device?.id);
 
 const getDeviceCapabilities = (device) => uniqueStrings([
   ...(Array.isArray(device?.properties?.smartThingsCapabilities) ? device.properties.smartThingsCapabilities : []),
@@ -412,6 +415,10 @@ const looksLikeHomeBrainAlarmOutput = (device) => {
   return /\b(siren|alarm|sounder|strobe|chime)\b/.test(haystack);
 };
 
+const looksLikeSecuritySirenOutput = (device) => (
+  looksLikeSmartThingsAlarmOutput(device) || looksLikeHomeBrainAlarmOutput(device)
+);
+
 const getSecurityPlatformForDevice = (device) => {
   const source = canonicalizeDeviceSource(getDeviceSource(device));
 
@@ -490,6 +497,41 @@ class SecurityAlarmService {
     }).filter((entry) => entry.id || entry.name);
   }
 
+  normalizeSirenOutputName(value) {
+    return normalizeString(value).replace(/\s+/g, ' ').slice(0, SECURITY_SIREN_NAME_MAX_LENGTH);
+  }
+
+  normalizeSirenOutputRecords(outputs = []) {
+    const source = Array.isArray(outputs) ? outputs : [];
+    const seenDeviceIds = new Set();
+    const normalized = [];
+
+    source.forEach((entry) => {
+      const rawDeviceId = typeof entry === 'string' ? entry : entry?.deviceId;
+      const deviceId = normalizeString(rawDeviceId);
+      if (!deviceId || seenDeviceIds.has(deviceId)) {
+        return;
+      }
+
+      seenDeviceIds.add(deviceId);
+      normalized.push({
+        deviceId,
+        name: this.normalizeSirenOutputName(entry?.name),
+        enabled: entry?.enabled !== false
+      });
+    });
+
+    return normalized;
+  }
+
+  getConfiguredSirenOutputs(alarm) {
+    return this.normalizeSirenOutputRecords(alarm?.sirenOutputs || []);
+  }
+
+  getSanitizedSirenOutputs(alarm) {
+    return this.getConfiguredSirenOutputs(alarm);
+  }
+
   getSecuritySettingsFromAlarm(alarm) {
     const enabledPlatforms = this.getEnabledPlatforms(alarm);
 
@@ -498,7 +540,8 @@ class SecurityAlarmService {
       exitDelaySeconds: this.normalizeExitDelaySeconds(alarm?.exitDelay, DEFAULT_ARM_AWAY_EXIT_DELAY_SECONDS),
       entryDelaySeconds: this.normalizeExitDelaySeconds(alarm?.entryDelay, 30),
       pinSettings: this.getPinSettings(alarm),
-      pins: this.getSanitizedPins(alarm)
+      pins: this.getSanitizedPins(alarm),
+      sirenOutputs: this.getSanitizedSirenOutputs(alarm)
     };
   }
 
@@ -840,7 +883,7 @@ class SecurityAlarmService {
   }
 
   buildDoorLockSummary(device) {
-    const localDeviceId = normalizeString(device?._id?.toString?.() || device?._id || device?.id);
+    const localDeviceId = getLocalDeviceId(device);
     const smartThingsDeviceId = normalizeString(device?.properties?.smartThingsDeviceId);
     const source = device ? getDeviceSource(device) : null;
     const isLocked = Boolean(device?.status);
@@ -859,6 +902,110 @@ class SecurityAlarmService {
       stateLabel: isLocked ? 'Locked' : 'Unlocked',
       lastSeen: device?.lastSeen || null
     };
+  }
+
+  getConfiguredSirenOutputEntryForDevice(device, configuredOutputs = []) {
+    if (!device || configuredOutputs.length === 0) {
+      return null;
+    }
+
+    const lookupKeys = new Set(getDeviceLookupKeys(device));
+    return configuredOutputs.find((entry) => lookupKeys.has(entry.deviceId)) || null;
+  }
+
+  buildSirenOutputSummary({ device, configuredOutput }) {
+    const localDeviceId = getLocalDeviceId(device);
+    const smartThingsDeviceId = normalizeString(device?.properties?.smartThingsDeviceId);
+    const configuredDeviceId = normalizeString(configuredOutput?.deviceId);
+    const resolvedDeviceId = localDeviceId || configuredDeviceId;
+    const source = device ? getDeviceSource(device) : null;
+    const isAvailable = Boolean(device);
+    const isOnline = isAvailable ? device.isOnline !== false : false;
+    const isActive = isAvailable ? Boolean(device?.status) : false;
+    const capabilities = getDeviceCapabilities(device);
+
+    return {
+      deviceId: resolvedDeviceId,
+      localDeviceId: localDeviceId || null,
+      smartThingsDeviceId: smartThingsDeviceId || null,
+      source,
+      sourceLabel: this.getSecurityDeviceSourceLabel(source),
+      platform: device ? getSecurityPlatformForDevice(device) : null,
+      name: this.normalizeSirenOutputName(configuredOutput?.name)
+        || normalizeString(device?.name)
+        || 'Unnamed alarm siren',
+      room: normalizeString(device?.room) || null,
+      isSelected: Boolean(configuredOutput),
+      isEnabled: configuredOutput ? configuredOutput.enabled !== false : false,
+      isAvailable,
+      isOnline,
+      isActive,
+      stateLabel: isActive ? 'Sounding' : 'Off',
+      supportsAlarm: capabilities.includes('alarm') || device?.properties?.supportsAlarm === true,
+      supportsChime: capabilities.includes('chime') || device?.properties?.supportsChime === true,
+      lastSeen: device?.lastSeen || null
+    };
+  }
+
+  getSirenOutputs(alarm, devices = [], options = {}) {
+    const enabledPlatforms = options.enabledPlatforms || null;
+    const configuredOutputs = this.getConfiguredSirenOutputs(alarm);
+    const summaries = [];
+
+    devices.forEach((device) => {
+      const localDeviceId = getLocalDeviceId(device);
+      if (
+        !localDeviceId
+        || !isDeviceAllowedForSecurityPlatforms(device, enabledPlatforms)
+        || !looksLikeSecuritySirenOutput(device)
+      ) {
+        return;
+      }
+
+      const configuredOutput = this.getConfiguredSirenOutputEntryForDevice(device, configuredOutputs);
+      summaries.push(this.buildSirenOutputSummary({ device, configuredOutput }));
+    });
+
+    summaries.sort((left, right) => {
+      if (left.isSelected !== right.isSelected) {
+        return left.isSelected ? -1 : 1;
+      }
+      if (left.isOnline !== right.isOnline) {
+        return left.isOnline ? -1 : 1;
+      }
+      return left.name.localeCompare(right.name, undefined, { sensitivity: 'base' });
+    });
+
+    return summaries;
+  }
+
+  getSirenOutputDevicesForAction(alarm, devices = [], platform, options = {}) {
+    const fallbackToAllWhenUnconfigured = options.fallbackToAllWhenUnconfigured === true;
+    const enabledPlatforms = this.getEnabledPlatforms(alarm);
+    const summaries = this.getSirenOutputs(alarm, devices, { enabledPlatforms })
+      .filter((summary) => (
+        summary.platform === platform &&
+        summary.isAvailable &&
+        summary.localDeviceId
+      ));
+    const hasConfiguredPlatformOutputs = summaries.some((summary) => summary.isSelected);
+    let selectedSummaries = summaries.filter((summary) => summary.isSelected && summary.isEnabled);
+
+    if (selectedSummaries.length === 0 && fallbackToAllWhenUnconfigured && !hasConfiguredPlatformOutputs) {
+      selectedSummaries = summaries;
+    }
+
+    const devicesById = new Map();
+    devices.forEach((device) => {
+      const localDeviceId = getLocalDeviceId(device);
+      if (localDeviceId) {
+        devicesById.set(localDeviceId, device);
+      }
+    });
+
+    return selectedSummaries
+      .map((summary) => devicesById.get(summary.localDeviceId))
+      .filter(Boolean);
   }
 
   getSecuritySensors(alarm, devices = [], options = {}) {
@@ -1094,15 +1241,17 @@ class SecurityAlarmService {
     }
   }
 
-  async silenceSmartThingsAlarmOutputs() {
+  async silenceSmartThingsAlarmOutputs(alarm = null) {
     try {
       const smartThingsDevices = await Device.find(
         {
           'properties.smartThingsDeviceId': { $exists: true, $ne: '' }
         },
-        'name properties'
+        SECURITY_STATUS_DEVICE_PROJECTION
       ).lean();
-      const alarmOutputs = smartThingsDevices.filter((device) => looksLikeSmartThingsAlarmOutput(device));
+      const alarmOutputs = this.getSirenOutputDevicesForAction(alarm, smartThingsDevices, 'smartthings', {
+        fallbackToAllWhenUnconfigured: true
+      });
 
       if (alarmOutputs.length === 0) {
         return { silenced: [], failed: [] };
@@ -1162,7 +1311,7 @@ class SecurityAlarmService {
     }
   }
 
-  async silenceHomeBrainAlarmOutputs() {
+  async soundHomeBrainAlarmOutputs(alarm = null) {
     try {
       const homeBrainDevices = await Device.find(
         {
@@ -1173,16 +1322,93 @@ class SecurityAlarmService {
             { 'properties.supportsAlarm': true }
           ]
         },
-        'name type status isOnline properties'
+        SECURITY_STATUS_DEVICE_PROJECTION
       ).lean();
-      const alarmOutputs = homeBrainDevices.filter((device) => looksLikeHomeBrainAlarmOutput(device));
+      const alarmOutputs = this.getSirenOutputDevicesForAction(alarm, homeBrainDevices, 'homebrain');
+
+      if (alarmOutputs.length === 0) {
+        return { sounded: [], failed: [] };
+      }
+
+      const results = await Promise.allSettled(alarmOutputs.map(async (device) => {
+        const localDeviceId = getLocalDeviceId(device);
+        const deviceName = normalizeString(device?.name) || localDeviceId || 'Unnamed HomeBrain alarm output';
+
+        await deviceService.controlDevice(localDeviceId, 'turn_on', true, {
+          skipIntegrationRefresh: true,
+          skipPostActionVerification: true,
+          command: {
+            source: 'security_alarm',
+            reason: 'trigger_alarm',
+            priority: 'critical'
+          }
+        });
+        return { deviceId: localDeviceId, name: deviceName, via: 'homebrain.turn_on' };
+      }));
+
+      const sounded = [];
+      const failed = [];
+
+      results.forEach((result, index) => {
+        const device = alarmOutputs[index];
+        const localDeviceId = getLocalDeviceId(device);
+        const deviceName = normalizeString(device?.name) || localDeviceId || 'Unnamed HomeBrain alarm output';
+
+        if (result.status === 'fulfilled') {
+          sounded.push(result.value);
+          return;
+        }
+
+        const message = result.reason?.message || 'Unknown HomeBrain alarm output error';
+        failed.push({
+          deviceId: localDeviceId,
+          name: deviceName,
+          error: message
+        });
+        console.warn(`SecurityAlarmService: Failed to sound HomeBrain alarm output ${deviceName} (${localDeviceId}): ${message}`);
+      });
+
+      if (sounded.length > 0) {
+        console.log(`SecurityAlarmService: Sounded ${sounded.length} HomeBrain alarm output${sounded.length === 1 ? '' : 's'}`);
+      }
+
+      return { sounded, failed };
+    } catch (error) {
+      console.warn('SecurityAlarmService: Failed to enumerate HomeBrain alarm outputs:', error.message);
+      return {
+        sounded: [],
+        failed: [{
+          deviceId: '',
+          name: 'HomeBrain alarm outputs',
+          error: error.message
+        }]
+      };
+    }
+  }
+
+  async silenceHomeBrainAlarmOutputs(alarm = null) {
+    try {
+      const homeBrainDevices = await Device.find(
+        {
+          $or: [
+            { 'properties.source': /^homebrain-/i },
+            { 'properties.source': /^matter$/i },
+            { 'properties.homebrainDirect.protocol': { $in: ['zigbee', 'zwave'] } },
+            { 'properties.supportsAlarm': true }
+          ]
+        },
+        SECURITY_STATUS_DEVICE_PROJECTION
+      ).lean();
+      const alarmOutputs = this.getSirenOutputDevicesForAction(alarm, homeBrainDevices, 'homebrain', {
+        fallbackToAllWhenUnconfigured: true
+      });
 
       if (alarmOutputs.length === 0) {
         return { silenced: [], failed: [] };
       }
 
       const results = await Promise.allSettled(alarmOutputs.map(async (device) => {
-        const localDeviceId = normalizeString(device?._id?.toString?.() || device?._id || device?.id);
+        const localDeviceId = getLocalDeviceId(device);
         const deviceName = normalizeString(device?.name) || localDeviceId || 'Unnamed HomeBrain alarm output';
 
         try {
@@ -1217,7 +1443,7 @@ class SecurityAlarmService {
 
       results.forEach((result, index) => {
         const device = alarmOutputs[index];
-        const localDeviceId = normalizeString(device?._id?.toString?.() || device?._id || device?.id);
+        const localDeviceId = getLocalDeviceId(device);
         const deviceName = normalizeString(device?.name) || localDeviceId || 'Unnamed HomeBrain alarm output';
 
         if (result.status === 'fulfilled') {
@@ -1252,7 +1478,7 @@ class SecurityAlarmService {
     }
   }
 
-  async clearTriggeredSmartThingsAlarm() {
+  async clearTriggeredSmartThingsAlarm(alarm = null) {
     const result = {
       disarmedInSmartThings: false,
       silenceSwitchTriggered: false,
@@ -1288,7 +1514,7 @@ class SecurityAlarmService {
       }
     }
 
-    const alarmOutputResult = await this.silenceSmartThingsAlarmOutputs();
+    const alarmOutputResult = await this.silenceSmartThingsAlarmOutputs(alarm);
     result.silencedOutputs = alarmOutputResult.silenced;
     result.failedOutputs = alarmOutputResult.failed;
 
@@ -1318,7 +1544,7 @@ class SecurityAlarmService {
 
     if (this.isPlatformEnabled(currentAlarm, 'smartthings')) {
       result.smartthings.attempted = true;
-      const smartThingsResult = await this.clearTriggeredSmartThingsAlarm();
+      const smartThingsResult = await this.clearTriggeredSmartThingsAlarm(currentAlarm);
       Object.assign(result.smartthings, smartThingsResult);
       result.disarmedInSmartThings = smartThingsResult.disarmedInSmartThings;
       result.silenceSwitchTriggered = smartThingsResult.silenceSwitchTriggered;
@@ -1328,7 +1554,7 @@ class SecurityAlarmService {
 
     if (this.isPlatformEnabled(currentAlarm, 'homebrain')) {
       result.homebrain.attempted = true;
-      const homeBrainResult = await this.silenceHomeBrainAlarmOutputs();
+      const homeBrainResult = await this.silenceHomeBrainAlarmOutputs(currentAlarm);
       result.homebrain.silencedOutputs = homeBrainResult.silenced;
       result.homebrain.failedOutputs = homeBrainResult.failed;
       result.silencedOutputs.push(...homeBrainResult.silenced);
@@ -1336,6 +1562,59 @@ class SecurityAlarmService {
     }
 
     return result;
+  }
+
+  async soundTriggeredAlarmOutputs(alarm = null) {
+    const currentAlarm = alarm || await SecurityAlarm.getMainAlarm();
+    const result = {
+      homebrain: {
+        attempted: false,
+        soundedOutputs: [],
+        failedOutputs: []
+      },
+      soundedOutputs: [],
+      failedOutputs: []
+    };
+
+    if (this.isPlatformEnabled(currentAlarm, 'homebrain')) {
+      result.homebrain.attempted = true;
+      const homeBrainResult = await this.soundHomeBrainAlarmOutputs(currentAlarm);
+      result.homebrain.soundedOutputs = homeBrainResult.sounded;
+      result.homebrain.failedOutputs = homeBrainResult.failed;
+      result.soundedOutputs.push(...homeBrainResult.sounded);
+      result.failedOutputs.push(...homeBrainResult.failed);
+    }
+
+    return result;
+  }
+
+  async triggerAlarm(triggeredZone = null, options = {}) {
+    try {
+      console.log('SecurityAlarmService: Triggering alarm');
+
+      const alarm = await SecurityAlarm.getMainAlarm();
+      const previousState = alarm.alarmState;
+      const triggeredZoneName = normalizeString(
+        options.triggeredZoneName || options.zoneName || triggeredZone?.name || triggeredZone
+      ) || 'manual';
+      await alarm.trigger(triggeredZoneName);
+      const sirenTriggerResult = await this.soundTriggeredAlarmOutputs(alarm);
+      alarm.lastSirenTriggerResult = sirenTriggerResult;
+      alarm.audioPrompts = this.getAudioPrompts(alarm);
+      if (typeof alarm.save === 'function') {
+        await alarm.save();
+      }
+
+      if (alarm.alarmState !== previousState) {
+        requestSecurityAlarmAutomationEvaluation(`triggered by ${triggeredZoneName}`);
+      }
+
+      console.log('SecurityAlarmService: Successfully triggered alarm');
+      return alarm;
+    } catch (error) {
+      console.error('SecurityAlarmService: Error triggering alarm:', error.message);
+      throw error;
+    }
   }
 
   /**
@@ -1590,6 +1869,7 @@ class SecurityAlarmService {
       }
       const securitySensors = this.getSecuritySensors(alarm, devices, { enabledPlatforms });
       const doorLocks = this.getDoorLocks(devices, { enabledPlatforms });
+      const sirenOutputs = this.getSirenOutputs(alarm, devices, { enabledPlatforms });
       const sensorCount = securitySensors.length;
       const activeSensorCount = securitySensors.filter((sensor) => sensor.isActive).length;
       const monitoredSensorCount = securitySensors.filter((sensor) => sensor.isMonitored && !sensor.isBypassed).length;
@@ -1601,6 +1881,8 @@ class SecurityAlarmService {
       const doorLockCount = doorLocks.length;
       const lockedDoorCount = doorLocks.filter((lock) => lock.isLocked).length;
       const unlockedDoorCount = doorLockCount - lockedDoorCount;
+      const selectedSirenOutputCount = sirenOutputs.filter((output) => output.isSelected && output.isEnabled).length;
+      const onlineSirenOutputCount = sirenOutputs.filter((output) => output.isOnline).length;
       const pendingArmReadyAt = alarm.pendingArmReadyAt || null;
       const pendingArmTimestamp = pendingArmReadyAt ? new Date(pendingArmReadyAt).getTime() : 0;
       const secondsUntilArmed = alarm.alarmState === 'arming' && pendingArmTimestamp > now
@@ -1630,6 +1912,7 @@ class SecurityAlarmService {
         dismissalReason: alarm.dismissalReason || null,
         dismissalReasonText: alarm.dismissalReasonText || '',
         lastSirenSilenceResult: alarm.lastSirenSilenceResult || null,
+        lastSirenTriggerResult: alarm.lastSirenTriggerResult || null,
         audioPrompts: this.getAudioPrompts(alarm),
         zoneCount: alarm.zones.length,
         activeZones: alarm.zones.filter(zone => zone.enabled && !zone.bypassed).length,
@@ -1645,6 +1928,10 @@ class SecurityAlarmService {
         lockedDoorCount,
         unlockedDoorCount,
         doorLocks,
+        sirenOutputCount: sirenOutputs.length,
+        selectedSirenOutputCount,
+        onlineSirenOutputCount,
+        sirenOutputs,
         isOnline: computedIsOnline,
         lastSyncWithSmartThings: alarm.lastSyncWithSmartThings,
         batteryLevel: alarm.batteryLevel,
@@ -1913,6 +2200,13 @@ class SecurityAlarmService {
         alarm.pinSettings = this.normalizePinSettings(settings, previousPinSettings);
       }
 
+      if (
+        Object.prototype.hasOwnProperty.call(settings, 'sirenOutputs') ||
+        Object.prototype.hasOwnProperty.call(settings, 'alarmOutputs')
+      ) {
+        alarm.sirenOutputs = this.normalizeSirenOutputRecords(settings.sirenOutputs ?? settings.alarmOutputs);
+      }
+
       const nextPinSettings = this.getPinSettings(alarm);
       if ((nextPinSettings.requireForArm || nextPinSettings.requireForDisarm) && !this.hasEnabledPin(alarm)) {
         throw buildSecurityAlarmError('At least one enabled security PIN is required before PIN enforcement can be enabled', 400);
@@ -1927,7 +2221,8 @@ class SecurityAlarmService {
         previousSettings.entryDelaySeconds !== updatedSettings.entryDelaySeconds ||
         previousSettings.pinSettings.requireForArm !== updatedSettings.pinSettings.requireForArm ||
         previousSettings.pinSettings.requireForDisarm !== updatedSettings.pinSettings.requireForDisarm ||
-        JSON.stringify(previousSettings.pins) !== JSON.stringify(updatedSettings.pins)
+        JSON.stringify(previousSettings.pins) !== JSON.stringify(updatedSettings.pins) ||
+        JSON.stringify(previousSettings.sirenOutputs) !== JSON.stringify(updatedSettings.sirenOutputs)
       ) {
         requestSecurityAlarmAutomationEvaluation('security settings updated');
       }

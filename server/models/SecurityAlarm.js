@@ -103,6 +103,22 @@ const SecurityAlarmSchema = new mongoose.Schema({
       default: false
     }
   }],
+
+  // Alarm outputs
+  sirenOutputs: [{
+    name: {
+      type: String,
+      default: ''
+    },
+    deviceId: {
+      type: String,
+      required: true
+    },
+    enabled: {
+      type: Boolean,
+      default: true
+    }
+  }],
   
   // Alarm history
   lastArmed: {
@@ -152,6 +168,11 @@ const SecurityAlarmSchema = new mongoose.Schema({
   },
 
   lastSirenSilenceResult: {
+    type: mongoose.Schema.Types.Mixed,
+    default: null
+  },
+
+  lastSirenTriggerResult: {
     type: mongoose.Schema.Types.Mixed,
     default: null
   },
@@ -248,6 +269,7 @@ SecurityAlarmSchema.set('toJSON', {
 // Index for faster queries
 SecurityAlarmSchema.index({ alarmState: 1 });
 SecurityAlarmSchema.index({ 'zones.deviceId': 1 });
+SecurityAlarmSchema.index({ 'sirenOutputs.deviceId': 1 });
 
 // Static method to get the main alarm system
 SecurityAlarmSchema.statics.getMainAlarm = async function() {

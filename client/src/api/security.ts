@@ -15,6 +15,12 @@ export type SecurityPinDraft = SecurityPinMetadata & {
   pin?: string;
 };
 
+export type SecuritySirenOutputDraft = {
+  deviceId: string;
+  name?: string;
+  enabled?: boolean;
+};
+
 // Description: Get security alarm system information
 // Endpoint: GET /api/security-alarm
 // Request: {}
@@ -68,7 +74,7 @@ export const getSecurityStatus = async () => {
 // Description: Get security platform and default timing settings
 // Endpoint: GET /api/security-alarm/settings
 // Request: {}
-// Response: { success: boolean, settings: { enabledPlatforms: { homebrain: boolean, smartthings: boolean }, exitDelaySeconds: number, entryDelaySeconds: number, pinSettings: object, pins: Array } }
+// Response: { success: boolean, settings: { enabledPlatforms: { homebrain: boolean, smartthings: boolean }, exitDelaySeconds: number, entryDelaySeconds: number, pinSettings: object, pins: Array, sirenOutputs: Array } }
 export const getSecuritySettings = async () => {
   try {
     const response = await api.get('/api/security-alarm/settings');
@@ -137,7 +143,7 @@ export const updateSecurityPlatforms = async (platforms: { homebrain?: boolean; 
 
 // Description: Update security platform and default timing settings
 // Endpoint: PUT /api/security-alarm/settings
-// Request: { enabledPlatforms?: { homebrain?: boolean, smartthings?: boolean }, homebrain?: boolean, smartthings?: boolean, exitDelaySeconds?: number, entryDelaySeconds?: number, pinSettings?: object, pins?: Array }
+// Request: { enabledPlatforms?: { homebrain?: boolean, smartthings?: boolean }, homebrain?: boolean, smartthings?: boolean, exitDelaySeconds?: number, entryDelaySeconds?: number, pinSettings?: object, pins?: Array, sirenOutputs?: Array }
 // Response: { success: boolean, message: string, settings: object, alarm: object }
 export const updateSecuritySettings = async (settings: {
   enabledPlatforms?: { homebrain?: boolean; smartthings?: boolean };
@@ -147,6 +153,7 @@ export const updateSecuritySettings = async (settings: {
   entryDelaySeconds?: number;
   pinSettings?: SecurityPinSettings;
   pins?: SecurityPinDraft[];
+  sirenOutputs?: SecuritySirenOutputDraft[];
 }) => {
   try {
     const response = await api.put('/api/security-alarm/settings', settings);
