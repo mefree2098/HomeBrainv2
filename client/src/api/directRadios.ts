@@ -389,6 +389,7 @@ export const startDirectRadioMigration = async (payload: {
   dskPin?: string;
   zwaveSecurityMode?: ZWaveSecurityMode;
   migrationId?: string | null;
+  exclusionConfirmed?: boolean;
 }) => {
   try {
     const response = await api.post('/api/direct-radios/migrations', payload);
@@ -553,14 +554,15 @@ export const stopDirectRadioPairing = async (protocol: DirectRadioProtocol | 'al
 
 export const startZWaveExclusion = async (
   durationSeconds?: number,
-  options: { deviceId?: string; migrationId?: string | null } = {}
+  options: { deviceId?: string; migrationId?: string | null; useNativeExclusion?: boolean } = {}
 ) => {
   try {
     const response = await api.post('/api/direct-radios/exclusion/start', {
       protocol: 'zwave',
       durationSeconds,
       deviceId: options.deviceId,
-      migrationId: options.migrationId
+      migrationId: options.migrationId,
+      useNativeExclusion: options.useNativeExclusion === true
     });
     return response.data;
   } catch (error) {

@@ -1108,6 +1108,37 @@ struct DevicesView: View {
                 }
                 .buttonStyle(HBPrimaryButtonStyle(compact: true))
                 .disabled(isPending || workflow.complete)
+
+                if workflow.protocolName == "zwave" && !workflow.complete {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Stuck on exclusion?")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .textCase(.uppercase)
+                            .tracking(1.4)
+                            .foregroundStyle(HBPalette.textMuted)
+                        Text("SmartThings can't reliably exclude over its cloud API. Exclude with HomeBrain's own radio, or confirm you already excluded the device to jump to pairing.")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button {
+                            Task { await nativeExcludeForMigration(device) }
+                        } label: {
+                            Label("Exclude with HomeBrain Radio", systemImage: "dot.radiowaves.left.and.right")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(HBSecondaryButtonStyle())
+                        .disabled(isPending)
+                        Button {
+                            Task { await confirmExclusionAndPair(device) }
+                        } label: {
+                            Label("I Already Excluded It — Open Pairing", systemImage: "checkmark.circle")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(HBSecondaryButtonStyle())
+                        .disabled(isPending)
+                    }
+                    .padding(.top, 4)
+                }
             }
         }
         .padding(10)
@@ -3302,6 +3333,95 @@ struct DevicesView: View {
             migrationFeedback[device.id] = workflow.statusMessage
         } catch {
             migrationFeedback[device.id] = "Migration step failed: \(error.localizedDescription)"
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func nativeExcludeForMigration(_ device: DeviceItem) async {
+        guard var workflow = migrationWorkflows[device.id],
+              !pendingMigrationDeviceIds.contains(device.id) else {
+            return
+        }
+        pendingMigrationDeviceIds.insert(device.id)
+        defer { pendingMigrationDeviceIds.remove(device.id) }
+
+        if previewMode {
+            workflow.statusMessage = "HomeBrain would open Z-Wave exclusion on its own radio. Trigger the device's exclude action, then continue."
+            migrationWorkflows[device.id] = workflow
+            migrationFeedback[device.id] = workflow.statusMessage
+            return
+        }
+
+        var body: [String: Any] = [
+            "protocol": "zwave",
+            "durationSeconds": 120,
+            "deviceId": device.id,
+            "useNativeExclusion": true
+        ]
+        if let migrationId = workflow.migrationId, !migrationId.isEmpty {
+            body["migrationId"] = migrationId
+        }
+        do {
+            let response = try await session.apiClient.post("/api/direct-radios/exclusion/start", body: body)
+            let root = JSON.object(response)
+            let result = JSON.object(root["result"])
+            let migration = JSON.object(result["migration"])
+            if let newId = JSON.optionalString(migration, "id"), !newId.isEmpty {
+                workflow.migrationId = newId
+            }
+            workflow.statusMessage = "HomeBrain opened Z-Wave exclusion on its own radio. Trigger the device's exclude action now, then tap “I already excluded it” to open pairing."
+            workflow.verificationGuidance = []
+            migrationWorkflows[device.id] = workflow
+            migrationFeedback[device.id] = workflow.statusMessage
+        } catch {
+            migrationFeedback[device.id] = "Native exclusion failed: \(error.localizedDescription)"
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func confirmExclusionAndPair(_ device: DeviceItem) async {
+        guard var workflow = migrationWorkflows[device.id],
+              !pendingMigrationDeviceIds.contains(device.id) else {
+            return
+        }
+        pendingMigrationDeviceIds.insert(device.id)
+        defer { pendingMigrationDeviceIds.remove(device.id) }
+
+        if previewMode {
+            workflow.statusMessage = "HomeBrain would confirm exclusion and open Z-Wave inclusion."
+            migrationWorkflows[device.id] = workflow
+            migrationFeedback[device.id] = workflow.statusMessage
+            return
+        }
+
+        var body: [String: Any] = [
+            "deviceId": device.id,
+            "protocol": "zwave",
+            "exclusionConfirmed": true
+        ]
+        if let migrationId = workflow.migrationId, !migrationId.isEmpty {
+            body["migrationId"] = migrationId
+        }
+        do {
+            let response = try await session.apiClient.post("/api/direct-radios/migrations", body: body)
+            let root = JSON.object(response)
+            let returnedPlan = JSON.object(root["plan"])
+            if !returnedPlan.isEmpty {
+                migrationPlans[device.id] = DirectRadioMigrationPlanRecord.from(returnedPlan)
+            }
+            let migration = JSON.object(root["migration"])
+            if let newId = JSON.optionalString(migration, "id"), !newId.isEmpty {
+                workflow.migrationId = newId
+            }
+            if let inclusionIndex = workflow.plan.guidedSteps.firstIndex(where: { $0.action == "start_direct_migration" }) {
+                workflow.stepIndex = inclusionIndex
+            }
+            workflow.statusMessage = "Exclusion confirmed. HomeBrain opened Z-Wave inclusion — put the device into pairing/inclusion mode now."
+            workflow.verificationGuidance = []
+            migrationWorkflows[device.id] = workflow
+            migrationFeedback[device.id] = workflow.statusMessage
+        } catch {
+            migrationFeedback[device.id] = "Could not open pairing: \(error.localizedDescription)"
             errorMessage = error.localizedDescription
         }
     }

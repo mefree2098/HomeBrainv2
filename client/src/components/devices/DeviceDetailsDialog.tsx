@@ -1457,6 +1457,7 @@ export function DeviceDetailsDialog({
   const [migrationPlan, setMigrationPlan] = useState<DirectRadioMigrationPlan | null>(null)
   const [migrationLoading, setMigrationLoading] = useState(false)
   const [migrationStarting, setMigrationStarting] = useState<"zigbee" | "zwave" | null>(null)
+  const [exclusionOption, setExclusionOption] = useState<"native" | "confirm" | null>(null)
   const [migrationError, setMigrationError] = useState<string | null>(null)
   const [migrationFlow, setMigrationFlow] = useState<MigrationFlowState | null>(null)
   const [finalizingMigration, setFinalizingMigration] = useState(false)
@@ -2449,6 +2450,79 @@ export function DeviceDetailsDialog({
       })
     } finally {
       setMigrationStarting(null)
+    }
+  }
+
+  const handleNativeExclusion = async () => {
+    if (!device?._id || !migrationFlow) {
+      return
+    }
+    setExclusionOption("native")
+    try {
+      const response = await startZWaveExclusion(120, {
+        deviceId: device._id,
+        migrationId: migrationFlow.migrationId,
+        useNativeExclusion: true
+      })
+      const nextId = response?.result?.migration?.id || migrationFlow.migrationId
+      setMigrationFlow({
+        ...migrationFlow,
+        migrationId: nextId,
+        statusMessage: "HomeBrain opened Z-Wave exclusion on its own radio. Trigger the device's exclude action now (per its manual), then use “I already excluded it” to open pairing.",
+        verificationGuidance: []
+      })
+      toast({
+        title: "Native exclusion opened",
+        description: "Put the Z-Wave device into exclusion mode now (usually a button tap on the device)."
+      })
+    } catch (exclusionError) {
+      toast({
+        title: "Could not open native exclusion",
+        description: exclusionError instanceof Error ? exclusionError.message : "Failed to open exclusion.",
+        variant: "destructive"
+      })
+    } finally {
+      setExclusionOption(null)
+    }
+  }
+
+  const handleConfirmExclusionAndPair = async () => {
+    if (!device?._id || !migrationFlow) {
+      return
+    }
+    setExclusionOption("confirm")
+    try {
+      const response = await startDirectRadioMigration({
+        deviceId: device._id,
+        protocol: "zwave",
+        migrationId: migrationFlow.migrationId,
+        exclusionConfirmed: true
+      })
+      if (response.plan) {
+        setMigrationPlan(response.plan)
+      }
+      const nextId = response?.migration?.id || migrationFlow.migrationId
+      const steps = getGuidedMigrationSteps(migrationFlow.plan)
+      const inclusionIndex = steps.findIndex((step) => step.action === "start_direct_migration")
+      setMigrationFlow({
+        ...migrationFlow,
+        migrationId: nextId,
+        stepIndex: inclusionIndex >= 0 ? inclusionIndex : migrationFlow.stepIndex,
+        statusMessage: "Exclusion confirmed. HomeBrain opened Z-Wave inclusion — put the device into pairing/inclusion mode now.",
+        verificationGuidance: []
+      })
+      toast({
+        title: "Opening pairing",
+        description: "HomeBrain opened Z-Wave inclusion. Put the device into pairing mode, then continue the workflow."
+      })
+    } catch (pairError) {
+      toast({
+        title: "Could not open pairing",
+        description: pairError instanceof Error ? pairError.message : "Failed to open pairing.",
+        variant: "destructive"
+      })
+    } finally {
+      setExclusionOption(null)
     }
   }
 
@@ -4039,6 +4113,34 @@ export function DeviceDetailsDialog({
                                           ) : null}
                                           {migrationFlow.complete ? "Workflow complete" : currentStep.confirmLabel}
                                         </Button>
+                                        {migrationFlow.protocol === "zwave" && !migrationFlow.complete ? (
+                                          <div className="space-y-2 rounded-lg border border-white/10 bg-white/[0.04] p-3">
+                                            <p className="section-kicker text-white/45">Stuck on exclusion?</p>
+                                            <p className="text-xs leading-relaxed text-muted-foreground">
+                                              SmartThings can't reliably exclude over its cloud API. Exclude with HomeBrain's own radio, or confirm you already excluded the device (SmartThings app or device reset) to jump straight to pairing.
+                                            </p>
+                                            <Button
+                                              type="button"
+                                              variant="outline"
+                                              className="w-full border-white/10 bg-white/[0.04]"
+                                              onClick={() => void handleNativeExclusion()}
+                                              disabled={exclusionOption !== null || migrationStarting !== null}
+                                            >
+                                              {exclusionOption === "native" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                                              Exclude with HomeBrain radio
+                                            </Button>
+                                            <Button
+                                              type="button"
+                                              variant="outline"
+                                              className="w-full border-white/10 bg-white/[0.04]"
+                                              onClick={() => void handleConfirmExclusionAndPair()}
+                                              disabled={exclusionOption !== null || migrationStarting !== null}
+                                            >
+                                              {exclusionOption === "confirm" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                                              I already excluded it — open pairing
+                                            </Button>
+                                          </div>
+                                        ) : null}
                                       </>
                                     ) : null
                                   })()}
