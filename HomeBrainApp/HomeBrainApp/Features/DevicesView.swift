@@ -1790,6 +1790,9 @@ struct DevicesView: View {
 
     private func zigbeeMaintenancePanel(for device: DeviceItem) -> some View {
         let isBusy = reinterviewingZigbeeDeviceId == device.id
+        let ias = JSON.object(JSON.object(device.properties["homebrainDirect"])["iasZone"])
+        let hasIas = !ias.isEmpty
+        let enrolled = boolValue(ias["enrolled"])
         return HBPanel {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Zigbee Maintenance")
@@ -1799,6 +1802,12 @@ struct DevicesView: View {
                     .font(.system(size: 13, weight: .medium, design: .rounded))
                     .foregroundStyle(HBPalette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if hasIas {
+                    Text(enrolled ? "Enrolled — reporting open/closed." : "Not enrolled — won't report until re-interviewed.")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(enrolled ? HBPalette.accentGreen : HBPalette.accentOrange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Button {
                     Task { await reinterviewZigbeeDevice(device) }
                 } label: {

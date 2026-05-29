@@ -567,6 +567,7 @@ normalizeZigbeeDevice(zigbeeDevice, reason = 'sync', options = {}) {
             modelID: zigbeeDevice.modelID || null,
             manufacturerName: zigbeeDevice.manufacturerName || null,
             interviewCompleted: zigbeeDevice.interviewCompleted !== false,
+            iasZone: this.readZigbeeIasEnrollment(zigbeeDevice),
             lastReason: reason,
             lastSeen: new Date().toISOString(),
             catalog: directRadioProtocolCatalogService.buildCatalogReference(catalogEntry)

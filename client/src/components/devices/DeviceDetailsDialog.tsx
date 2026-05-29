@@ -1484,6 +1484,11 @@ export function DeviceDetailsDialog({
   const nativeZWaveLock = useMemo(() => isNativeZWaveLock(device), [device])
   const zigbeeBacked = useMemo(() => isDirectRadioZigbeeDevice(device), [device])
   const zigbeeIeeeAddr = useMemo(() => getDirectRadioIeeeAddr(device), [device])
+  const zigbeeIasZone = useMemo(() => {
+    const direct = (device?.properties as Record<string, unknown> | undefined)?.homebrainDirect as Record<string, unknown> | undefined
+    const ias = direct?.iasZone
+    return ias && typeof ias === "object" ? (ias as { enrolled?: boolean }) : null
+  }, [device])
   const migrationNeedsFinalization = useMemo(() => needsMigrationFinalization(device), [device])
   const harmonyPowerCommands = useMemo(() => getHarmonyPowerCommands(device), [device])
   const harmonyCommands = useMemo(() => getHarmonyCommandMetadata(device), [device])
@@ -3769,6 +3774,13 @@ export function DeviceDetailsDialog({
                                 <p className="mt-1 text-sm text-muted-foreground">
                                   If this sensor stopped reporting, re-run its Zigbee interview to repair IAS Zone enrollment. Wake the device first (open/close it or press its button).
                                 </p>
+                                {zigbeeIasZone ? (
+                                  <p className={`mt-2 text-xs font-medium ${zigbeeIasZone.enrolled ? "text-emerald-300/85" : "text-amber-300/90"}`}>
+                                    {zigbeeIasZone.enrolled
+                                      ? "Enrolled — this sensor is reporting open/closed."
+                                      : "Not enrolled — this sensor won't report until it's re-interviewed."}
+                                  </p>
+                                ) : null}
                               </div>
                               <Button
                                 type="button"
