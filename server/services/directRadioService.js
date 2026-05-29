@@ -415,7 +415,16 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
       merged.temperature = existing.temperature;
     }
 
-    if (!shouldReplaceGeneratedDirectName(existing.name, generatedName, existingDirect.generatedName)) {
+    const existingStableCatalogName = trimString(
+      existingProperties.directRadioCatalog?.label
+      || existingDirect.catalog?.label
+      || existing.model
+    );
+    if (isGenericDirectRadioName(generatedName) && directFeatureCount(existing) > 0) {
+      merged.name = isGenericDirectRadioName(existing.name) && existingStableCatalogName
+        ? existingStableCatalogName
+        : existing.name;
+    } else if (!shouldReplaceGeneratedDirectName(existing.name, generatedName, existingDirect.generatedName)) {
       merged.name = existing.name;
     }
 
@@ -4881,6 +4890,7 @@ class DirectRadioService {
     const nodeName = trimString(node.name)
       || trimString(node.deviceConfig?.label)
       || trimString(node.productLabel)
+      || trimString(catalogEntry?.label || catalogEntry?.model)
       || `Z-Wave Node ${nodeId}`;
 
     const directFeatures = Array.from(features).sort();
@@ -5053,6 +5063,11 @@ class DirectRadioService {
           const deletedDevice = await deviceService.deleteDevice(duplicate._id);
           deletedDeviceIds.push(deletedDevice?._id?.toString?.() || String(duplicate._id));
         } catch (error) {
+          const stillExists = duplicate?._id ? await Device.exists({ _id: duplicate._id }) : true;
+          if (!stillExists) {
+            deletedDeviceIds.push(String(duplicate._id));
+            continue;
+          }
           deletionErrors.push({
             deviceId: String(duplicate?._id || ''),
             message: error?.message || String(error || 'Unknown duplicate cleanup error')
