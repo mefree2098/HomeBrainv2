@@ -826,11 +826,12 @@ class DeviceService {
         throw new Error('Device not found');
       }
 
-      const normalizedAction = this.normalizeAction(action);
+      let normalizedAction = this.normalizeAction(action);
 
       if (!normalizedAction) {
         throw new Error(`Unknown action: ${action}`);
       }
+      normalizedAction = this.normalizeDeviceControlAction(device, normalizedAction);
 
       const commandMetadata = {
         ...(options?.command && typeof options.command === 'object' ? options.command : {}),
@@ -1380,6 +1381,32 @@ class DeviceService {
       return '';
     }
     return action.toString().toLowerCase().replace(/[^a-z]/g, '');
+  }
+
+  normalizeDeviceControlAction(device, normalizedAction) {
+    if (device?.type === 'lock') {
+      if (normalizedAction === 'turnon') {
+        return 'lock';
+      }
+      if (normalizedAction === 'turnoff') {
+        return 'unlock';
+      }
+      if (normalizedAction === 'toggle') {
+        return device.status ? 'unlock' : 'lock';
+      }
+    }
+    if (device?.type === 'garage') {
+      if (normalizedAction === 'turnon') {
+        return 'open';
+      }
+      if (normalizedAction === 'turnoff') {
+        return 'close';
+      }
+      if (normalizedAction === 'toggle') {
+        return device.status ? 'close' : 'open';
+      }
+    }
+    return normalizedAction;
   }
 
   normalizeSmartThingsValue(value) {

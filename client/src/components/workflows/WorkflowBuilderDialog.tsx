@@ -431,6 +431,19 @@ function getDirectRadioState(device: DeviceLite | undefined): Record<string, unk
     : {};
 }
 
+function isDirectRadioBackedDevice(device: DeviceLite | undefined): boolean {
+  const properties = getDeviceProperties(device);
+  const source = (properties.source || "").toString().trim().toLowerCase();
+  const protocol = ((properties.homebrainDirect as Record<string, unknown> | undefined)?.protocol || "")
+    .toString()
+    .trim()
+    .toLowerCase();
+  return source === "homebrain-zigbee"
+    || source === "homebrain-zwave"
+    || protocol === "zigbee"
+    || protocol === "zwave";
+}
+
 function directFeatureSupported(device: DeviceLite | undefined, feature: string, supportFlags: string[] = []) {
   const properties = getDeviceProperties(device);
   if (supportFlags.some((flag) => properties[flag] === true)) {
@@ -462,13 +475,16 @@ function hasDirectRadioStateValue(state: Record<string, unknown>, key: string) {
 function collectBatteryTriggerOptions(device: DeviceLite | undefined): TriggerPropertyOption[] {
   const properties = getDeviceProperties(device);
   const directRadioState = getDirectRadioState(device);
+  const smartThingsCandidates = isDirectRadioBackedDevice(device)
+    ? []
+    : [{ key: "smartThingsBatteryLevel", value: properties.smartThingsBatteryLevel }];
   const candidates = [
     { key: "directRadioState.batteryLevel", value: directRadioState.batteryLevel },
     { key: "homeBrainBatteryLevel", value: properties.homeBrainBatteryLevel },
     { key: "directBatteryLevel", value: properties.directBatteryLevel },
     { key: "batteryLevel", value: properties.batteryLevel },
     { key: "matterBatteryLevel", value: properties.matterBatteryLevel },
-    { key: "smartThingsBatteryLevel", value: properties.smartThingsBatteryLevel }
+    ...smartThingsCandidates
   ];
 
   const match = candidates.find((candidate) => clampPercentValue(candidate.value) !== null);

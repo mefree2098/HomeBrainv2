@@ -769,6 +769,12 @@ struct DevicesView: View {
         if device.type == "thermostat" {
             return thermostatMode(for: device) == "off" ? "power.circle.fill" : "power.circle"
         }
+        if device.type == "lock" {
+            return device.status ? "lock.open.fill" : "lock.fill"
+        }
+        if device.type == "garage" {
+            return device.status ? "door.garage.closed" : "door.garage.open"
+        }
         return device.status ? "power.circle" : "power.circle.fill"
     }
 
@@ -788,6 +794,16 @@ struct DevicesView: View {
         return device.status ? "Turn Off" : "Turn On"
     }
 
+    private func primaryDeviceAction(for device: DeviceItem) -> String {
+        if device.type == "lock" {
+            return device.status ? "unlock" : "lock"
+        }
+        if device.type == "garage" {
+            return device.status ? "close" : "open"
+        }
+        return device.status ? "turn_off" : "turn_on"
+    }
+
     private func runPrimaryDeviceAction(for device: DeviceItem) async {
         if device.type == "thermostat" {
             let mode = thermostatMode(for: device)
@@ -799,7 +815,7 @@ struct DevicesView: View {
             return
         }
 
-        await handleDeviceControl(deviceId: device.id, action: device.status ? "turn_off" : "turn_on")
+        await handleDeviceControl(deviceId: device.id, action: primaryDeviceAction(for: device))
     }
 
     private func deviceControlSummary(for device: DeviceItem) -> String {
@@ -1273,6 +1289,10 @@ struct DevicesView: View {
             text = thermostatMode(for: device).uppercased()
         } else if device.type == "sensor" {
             text = sensorStateLabel(for: device) ?? (device.status ? "Active" : "Clear")
+        } else if device.type == "lock" {
+            text = device.status ? "Locked" : "Unlocked"
+        } else if device.type == "garage" {
+            text = device.status ? "Open" : "Closed"
         } else {
             text = device.status ? "On" : "Off"
         }
@@ -1287,16 +1307,19 @@ struct DevicesView: View {
 
     @ViewBuilder
     private func defaultPowerControl(for device: DeviceItem) -> some View {
+        let action = primaryDeviceAction(for: device)
+        let label = primaryDeviceActionLabel(for: device)
+        let icon = primaryDeviceActionIcon(for: device)
         if device.status {
             Button {
                 Task {
                     await handleDeviceControl(
                         deviceId: device.id,
-                        action: device.status ? "turn_off" : "turn_on"
+                        action: action
                     )
                 }
             } label: {
-                Label(device.status ? "Turn Off" : "Turn On", systemImage: device.status ? "power.circle" : "power.circle.fill")
+                Label(label, systemImage: icon)
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(HBSecondaryButtonStyle())
@@ -1306,11 +1329,11 @@ struct DevicesView: View {
                 Task {
                     await handleDeviceControl(
                         deviceId: device.id,
-                        action: device.status ? "turn_off" : "turn_on"
+                        action: action
                     )
                 }
             } label: {
-                Label(device.status ? "Turn Off" : "Turn On", systemImage: device.status ? "power.circle" : "power.circle.fill")
+                Label(label, systemImage: icon)
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(HBPrimaryButtonStyle())
@@ -2645,8 +2668,8 @@ struct DevicesView: View {
         switch addDeviceMode {
         case "zwave":
             return addDeviceZWaveSecurityMode == "insecure"
-                ? "HomeBrain opens standard Z-Wave inclusion on the Zooz controller. This is the correct default for wall switches when you do not have the printed DSK PIN."
-                : "HomeBrain opens secure S2 inclusion. Use this only when you have the first 5 digits from the device DSK label or QR code."
+                ? "HomeBrain opens standard Z-Wave inclusion on the Zooz controller. This is the correct default for wall switches when you do not have the printed DSK PIN; locks need Secure S2 for PIN and battery management."
+                : "HomeBrain opens secure S2 inclusion. Use this for locks and access-control devices with the first 5 digits from the device DSK label or QR code."
         case "zigbee":
             return "HomeBrain opens Zigbee permit-join on the SONOFF coordinator. Reset or pair the device; it appears after join and interview."
         case "insteon":
@@ -4191,17 +4214,21 @@ struct DevicesView: View {
         let attributeValues = JSON.object(device.properties["smartThingsAttributeValues"])
         let batteryAttributes = JSON.object(attributeValues["battery"])
         let directState = directRadioState(for: device)
-        let candidates: [Any?] = [
+        var candidates: [Any?] = [
             directState["batteryLevel"],
             device.properties["homeBrainBatteryLevel"],
             device.properties["directBatteryLevel"],
             device.properties["batteryLevel"],
-            device.properties["matterBatteryLevel"],
-            device.properties["smartThingsBatteryLevel"],
-            device.properties["battery"],
-            batteryAttributes["battery"],
-            batteryAttributes["batteryLevel"]
+            device.properties["matterBatteryLevel"]
         ]
+        if !isDirectRadioBackedDevice(device) {
+            candidates.append(contentsOf: [
+                device.properties["smartThingsBatteryLevel"],
+                device.properties["battery"],
+                batteryAttributes["battery"],
+                batteryAttributes["batteryLevel"]
+            ])
+        }
 
         for candidate in candidates {
             if let percent = percentValue(candidate) {

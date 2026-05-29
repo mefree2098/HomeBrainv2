@@ -732,6 +732,9 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
                   <SelectItem value="s2">Secure S2, printed DSK required</SelectItem>
                 </SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground">
+                Use Secure S2 for locks and access-control devices so HomeBrain can read lock state, battery, and PIN slots.
+              </p>
             </Field>
             {zwaveRepairCandidates.length > 0 ? (
               <div className="space-y-3 rounded-lg border border-amber-500/35 bg-amber-500/10 p-4">
