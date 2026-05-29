@@ -5387,7 +5387,9 @@ class DirectRadioService {
     }
     if (hasValue(zwave.BatteryCCValues.level)) features.add('battery');
     if (hasValue(zwave.ColorSwitchCCValues.hexColor)) features.add('color');
-    if (hasValue(zwave.SoundSwitchCCValues.toneId) || hasValue(zwave.SoundSwitchCCValues.volume)) features.add('alarm');
+    // Only treat a Sound Switch device as a triggerable alarm when it exposes
+    // toneId ("Play Tone"); volume alone cannot actually sound the siren.
+    if (hasValue(zwave.SoundSwitchCCValues.toneId)) features.add('alarm');
     if (hasValue(zwave.ThermostatModeCCValues.thermostatMode)) features.add('thermostat');
     if (findZWaveValueByLabel(node, /\btemperature\b/i) !== undefined) features.add('temperature');
     if (findZWaveValueByLabel(node, /\bhumidity\b/i) !== undefined) features.add('humidity');
@@ -8024,6 +8026,28 @@ class DirectRadioService {
     };
   }
 
+  // Sound a Z-Wave siren on/off. Prefers Binary Switch (most sirens), then Sound
+  // Switch tone play (toneId: 255 = play the configured default tone, 0 = stop)
+  // for sirens that only implement Sound Switch CC, then Multilevel Switch.
+  // Previously every siren went through Binary Switch, so a Sound-Switch-only
+  // siren threw "no support" and never actually sounded.
+  async controlZWaveSiren(node, on) {
+    const zwave = require('zwave-js');
+    if (hasZWaveValue(node, zwave.BinarySwitchCCValues.targetValue)) {
+      await this.setZWaveValue(node, zwave.BinarySwitchCCValues.targetValue, Boolean(on));
+      return 'binary_switch';
+    }
+    if (hasZWaveValue(node, zwave.SoundSwitchCCValues.toneId)) {
+      await this.setZWaveValue(node, zwave.SoundSwitchCCValues.toneId, on ? 255 : 0);
+      return 'sound_switch';
+    }
+    if (hasZWaveValue(node, zwave.MultilevelSwitchCCValues.targetValue)) {
+      await this.setZWaveValue(node, zwave.MultilevelSwitchCCValues.targetValue, on ? 99 : 0);
+      return 'multilevel_switch';
+    }
+    throw new Error('This Z-Wave siren does not expose a supported trigger (Binary Switch, Sound Switch tone, or Multilevel Switch).');
+  }
+
   async controlZWaveDevice(device, normalizedAction, commandValue, updateData = {}) {
     const node = this.getDirectNodeForDevice(device);
     if (!isZWaveNodeCommandReady(node)) {
@@ -8054,7 +8078,9 @@ class DirectRadioService {
       case 'turnon':
       case 'turnoff': {
         const target = normalizedAction === 'toggle' ? Boolean(commandValue) : normalizedAction === 'turnon';
-        if (device?.properties?.supportsBrightness || device?.brightness > 0) {
+        if (device?.type === 'siren') {
+          await this.controlZWaveSiren(node, target);
+        } else if (device?.properties?.supportsBrightness || device?.brightness > 0) {
           await this.setZWaveValue(node, zwave.MultilevelSwitchCCValues.targetValue, target ? Math.max(1, Number(device?.brightness) || 99) : 0);
         } else {
           await this.setZWaveValue(node, zwave.BinarySwitchCCValues.targetValue, target);
