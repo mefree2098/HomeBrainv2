@@ -102,6 +102,7 @@ struct DevicesView: View {
     @State private var addDeviceRepairingZWaveNodeId: Int?
     @State private var addDeviceReplacingZWaveNodeId: Int?
     @State private var addDeviceRemovingZWaveNodeId: Int?
+    @State private var reinterviewingZigbeeDeviceId: String?
     @State private var addDeviceKnownZWaveNodeIds: Set<Int>?
     @State private var addDeviceKnownZWaveNodes: [AddDeviceZWaveNodeSummary] = []
     @State private var newName = ""
@@ -1756,6 +1757,34 @@ struct DevicesView: View {
         }
     }
 
+    private func zigbeeMaintenancePanel(for device: DeviceItem) -> some View {
+        let isBusy = reinterviewingZigbeeDeviceId == device.id
+        return HBPanel {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Zigbee Maintenance")
+                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+                Text("If this sensor stopped reporting, re-run its Zigbee interview to repair IAS Zone enrollment. Wake the device first (open/close it or press its button).")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(HBPalette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    Task { await reinterviewZigbeeDevice(device) }
+                } label: {
+                    HStack(spacing: 8) {
+                        if isBusy {
+                            ProgressView().controlSize(.small)
+                        }
+                        Text(isBusy ? "Re-interviewing…" : "Re-interview / Repair Sensor")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(HBSecondaryButtonStyle())
+                .disabled(isBusy)
+            }
+        }
+    }
+
     private func lockPinManagementPanel(for device: DeviceItem) -> some View {
         let native = isNativeZWaveLock(device)
         let state = lockCodeStates[device.id]
@@ -2060,6 +2089,10 @@ struct DevicesView: View {
 
                         if needsMigrationFinalization(device) {
                             directRadioMigrationFinalizationPanel(for: device)
+                        }
+
+                        if isNativeZigbeeDevice(device) {
+                            zigbeeMaintenancePanel(for: device)
                         }
 
                         deviceTelemetryDetailsPanel(for: device)
@@ -4017,6 +4050,45 @@ struct DevicesView: View {
         }
     }
 
+    private func reinterviewZigbeeDevice(_ device: DeviceItem) async {
+        let ieeeAddr = zigbeeIeeeAddr(for: device)
+        guard !ieeeAddr.isEmpty else {
+            errorMessage = "This Zigbee device has no IEEE address to re-interview."
+            return
+        }
+        if previewMode {
+            addDeviceStatusMessage = "HomeBrain would re-run the Zigbee interview for \(device.name)."
+            return
+        }
+
+        reinterviewingZigbeeDeviceId = device.id
+        addDeviceStatusMessage = "Re-running the Zigbee interview for \(device.name). Keep the sensor awake (open/close it or press its button)."
+        errorMessage = nil
+        defer { reinterviewingZigbeeDeviceId = nil }
+
+        let encoded = ieeeAddr.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ieeeAddr
+        do {
+            let response = try await session.apiClient.post(
+                "/api/direct-radios/zigbee/devices/\(encoded)/reinterview"
+            )
+            let root = JSON.object(response)
+            let result = JSON.object(root["result"])
+            let ias = JSON.object(result["iasZone"])
+            let message = stringValue(result["message"])
+            var note = message.isEmpty ? "HomeBrain re-ran the Zigbee interview for \(device.name)." : message
+            if let enrolled = ias["enrolled"] as? Bool {
+                note += enrolled
+                    ? " Sensor is enrolled and should report open/closed again."
+                    : " Sensor is not enrolled yet — keep it awake (open/close or press its button) and retry."
+            }
+            addDeviceStatusMessage = note
+            await loadDevices(showLoading: false)
+        } catch {
+            addDeviceStatusMessage = error.localizedDescription
+            errorMessage = error.localizedDescription
+        }
+    }
+
     private func replaceFailedZWaveNode(_ candidate: AddDeviceZWaveRepairCandidate) async {
         let nodeId = candidate.nodeId
         let securityMode = zWaveReplacementSecurityMode(for: candidate)
@@ -4803,6 +4875,18 @@ struct DevicesView: View {
         let direct = JSON.object(device.properties["homebrainDirect"])
         let protocolName = stringValue(direct["protocol"]).lowercased()
         return source == "homebrain-zwave" || protocolName == "zwave"
+    }
+
+    private func isNativeZigbeeDevice(_ device: DeviceItem) -> Bool {
+        let source = stringValue(device.properties["source"]).lowercased()
+        let direct = JSON.object(device.properties["homebrainDirect"])
+        let protocolName = stringValue(direct["protocol"]).lowercased()
+        return source == "homebrain-zigbee" || protocolName == "zigbee"
+    }
+
+    private func zigbeeIeeeAddr(for device: DeviceItem) -> String {
+        let direct = JSON.object(device.properties["homebrainDirect"])
+        return stringValue(direct["ieeeAddr"])
     }
 
     private func smartThingsMigration(for device: DeviceItem) -> [String: Any] {

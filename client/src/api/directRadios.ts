@@ -459,6 +459,33 @@ export const refreshZWaveNodeInfo = async (
   }
 };
 
+export const reinterviewZigbeeDevice = async (ieeeAddr: string) => {
+  try {
+    const response = await api.post(
+      `/api/direct-radios/zigbee/devices/${encodeURIComponent(String(ieeeAddr))}/reinterview`
+    );
+    return response.data as {
+      success: boolean;
+      result?: {
+        ieeeAddr?: string;
+        modelID?: string | null;
+        interviewCompleted?: boolean;
+        isSleepy?: boolean;
+        message?: string | null;
+        iasZone?: {
+          enrolled?: boolean;
+          zoneState?: number | null;
+          cieMatchesCoordinator?: boolean;
+        } | null;
+      };
+      status?: DirectRadioStatus;
+    };
+  } catch (error) {
+    console.error('Error re-interviewing Zigbee device:', error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
 export const removeFailedZWaveNode = async (
   nodeId: number | string,
   options: { confirm: boolean; force?: boolean }

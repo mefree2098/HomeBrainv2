@@ -47,6 +47,7 @@ import {
 import {
   finalizeDirectRadioMigration,
   getDirectRadioMigrationPlan,
+  reinterviewZigbeeDevice,
   startDirectRadioMigration,
   startZWaveExclusion,
   verifyDirectRadioMigrationStep,
@@ -383,6 +384,22 @@ function isNativeZWaveLock(device: DeviceLike | null): boolean {
     .trim()
     .toLowerCase()
   return source === "homebrain-zwave" || protocol === "zwave"
+}
+
+function isDirectRadioZigbeeDevice(device: DeviceLike | null): boolean {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  const source = (properties?.source || "").toString().trim().toLowerCase()
+  const protocol = ((properties?.homebrainDirect as Record<string, unknown> | undefined)?.protocol || "")
+    .toString()
+    .trim()
+    .toLowerCase()
+  return source === "homebrain-zigbee" || protocol === "zigbee"
+}
+
+function getDirectRadioIeeeAddr(device: DeviceLike | null): string {
+  const properties = device?.properties as Record<string, unknown> | undefined
+  const direct = properties?.homebrainDirect as Record<string, unknown> | undefined
+  return (direct?.ieeeAddr || "").toString().trim()
 }
 
 function isSmartThingsBackedDevice(device: DeviceLike | null): boolean {
@@ -1430,6 +1447,7 @@ export function DeviceDetailsDialog({
   const [harmonyHoldMs, setHarmonyHoldMs] = useState(0)
   const [sendingHarmonyCommand, setSendingHarmonyCommand] = useState(false)
   const [sendingDirectControl, setSendingDirectControl] = useState(false)
+  const [reinterviewingZigbee, setReinterviewingZigbee] = useState(false)
   const [directControlFeedback, setDirectControlFeedback] = useState<"success" | "error" | null>(null)
   const [directControlError, setDirectControlError] = useState<string | null>(null)
   const [lightBrightnessDraft, setLightBrightnessDraft] = useState<number | null>(null)
@@ -1463,6 +1481,8 @@ export function DeviceDetailsDialog({
   const harmonyCommandDevice = useMemo(() => isHarmonyCommandDevice(device), [device])
   const smartThingsBacked = useMemo(() => isSmartThingsBackedDevice(device), [device])
   const nativeZWaveLock = useMemo(() => isNativeZWaveLock(device), [device])
+  const zigbeeBacked = useMemo(() => isDirectRadioZigbeeDevice(device), [device])
+  const zigbeeIeeeAddr = useMemo(() => getDirectRadioIeeeAddr(device), [device])
   const migrationNeedsFinalization = useMemo(() => needsMigrationFinalization(device), [device])
   const harmonyPowerCommands = useMemo(() => getHarmonyPowerCommands(device), [device])
   const harmonyCommands = useMemo(() => getHarmonyCommandMetadata(device), [device])
@@ -2002,6 +2022,44 @@ export function DeviceDetailsDialog({
 
       return baseSelection.concat(metricKey)
     })
+  }
+
+  const handleZigbeeReinterview = async () => {
+    if (!zigbeeIeeeAddr) {
+      toast({
+        title: "No Zigbee address",
+        description: "This device has no Zigbee IEEE address to re-interview.",
+        variant: "destructive"
+      })
+      return
+    }
+    setReinterviewingZigbee(true)
+    try {
+      const response = await reinterviewZigbeeDevice(zigbeeIeeeAddr)
+      const result = response?.result
+      const enrolled = result?.iasZone?.enrolled
+      const base = result?.message || "HomeBrain re-ran the Zigbee interview."
+      const enrollNote = typeof enrolled === "boolean"
+        ? enrolled
+          ? " Sensor is enrolled and should report open/closed again."
+          : " Sensor is not enrolled yet — keep it awake (open/close or press its button) and retry."
+        : ""
+      toast({
+        title: "Re-interview requested",
+        description: `${base}${enrollNote}`
+      })
+    } catch (reinterviewError) {
+      const message = reinterviewError instanceof Error
+        ? reinterviewError.message
+        : "Failed to re-interview the Zigbee device."
+      toast({
+        title: "Re-interview failed",
+        description: message,
+        variant: "destructive"
+      })
+    } finally {
+      setReinterviewingZigbee(false)
+    }
   }
 
   const handleSaveDeviceDetails = async () => {
@@ -3630,6 +3688,25 @@ export function DeviceDetailsDialog({
                         <CardContent className="space-y-4">
                           {renderDeviceSpecificControls()}
                           {renderDirectControlFeedback()}
+                          {zigbeeBacked && zigbeeIeeeAddr ? (
+                            <div className="space-y-2 rounded-[1.2rem] border border-white/10 bg-white/[0.04] p-4">
+                              <div>
+                                <p className="section-kicker text-white/45">Zigbee maintenance</p>
+                                <p className="mt-1 text-sm text-muted-foreground">
+                                  If this sensor stopped reporting, re-run its Zigbee interview to repair IAS Zone enrollment. Wake the device first (open/close it or press its button).
+                                </p>
+                              </div>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="w-full"
+                                onClick={() => void handleZigbeeReinterview()}
+                                disabled={reinterviewingZigbee}
+                              >
+                                {reinterviewingZigbee ? "Re-interviewing…" : "Re-interview / repair sensor"}
+                              </Button>
+                            </div>
+                          ) : null}
                         </CardContent>
                       </Card>
                     ) : null}
