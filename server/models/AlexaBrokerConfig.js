@@ -44,6 +44,29 @@ const lifecycleEventSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const alexaCommandTargetSchema = new mongoose.Schema({
+  key: {
+    type: String,
+    default: ''
+  },
+  alexaDeviceId: {
+    type: String,
+    default: ''
+  },
+  displayName: {
+    type: String,
+    default: ''
+  },
+  room: {
+    type: String,
+    default: ''
+  },
+  enabled: {
+    type: Boolean,
+    default: true
+  }
+}, { _id: false });
+
 const alexaBrokerConfigSchema = new mongoose.Schema({
   isInstalled: {
     type: Boolean,
@@ -113,23 +136,41 @@ const alexaBrokerConfigSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
-  deviceServiceBaseUrl: {
+  alexaCommandProvider: {
+    type: String,
+    enum: ['disabled', 'homebrain', 'asp'],
+    default: 'disabled'
+  },
+  alexaCommandDefaultType: {
+    type: String,
+    enum: ['announce', 'speak', 'ssml'],
+    default: 'announce'
+  },
+  alexaCommandLocale: {
+    type: String,
+    default: 'en-US'
+  },
+  alexaCommandAmazonPage: {
+    type: String,
+    default: 'amazon.com'
+  },
+  alexaCommandServiceHost: {
+    type: String,
+    default: 'pitangui.amazon.com'
+  },
+  alexaCommandSessionCookie: {
     type: String,
     default: ''
   },
-  deviceServiceToken: {
+  alexaCommandSessionData: {
     type: String,
     default: ''
   },
-  deviceDiscoveryPath: {
-    type: String,
-    default: '/v1/devices'
+  alexaCommandTargets: {
+    type: [alexaCommandTargetSchema],
+    default: []
   },
-  deviceSpeakPath: {
-    type: String,
-    default: '/v1/devices/{deviceId}/speak'
-  },
-  deviceServiceTimeoutMs: {
+  alexaCommandTimeoutMs: {
     type: Number,
     default: 10000
   },
@@ -211,10 +252,26 @@ alexaBrokerConfigSchema.pre('save', function preSave() {
     .filter(Boolean)));
   this.eventClientId = String(this.eventClientId || '').trim();
   this.eventClientSecret = String(this.eventClientSecret || '').trim();
-  this.deviceServiceBaseUrl = String(this.deviceServiceBaseUrl || '').trim().replace(/\/+$/, '');
-  this.deviceServiceToken = String(this.deviceServiceToken || '').trim();
-  this.deviceDiscoveryPath = String(this.deviceDiscoveryPath || '').trim() || '/v1/devices';
-  this.deviceSpeakPath = String(this.deviceSpeakPath || '').trim() || '/v1/devices/{deviceId}/speak';
+  this.alexaCommandProvider = ['disabled', 'homebrain', 'asp'].includes(String(this.alexaCommandProvider || '').trim())
+    ? String(this.alexaCommandProvider).trim()
+    : 'disabled';
+  this.alexaCommandDefaultType = ['announce', 'speak', 'ssml'].includes(String(this.alexaCommandDefaultType || '').trim())
+    ? String(this.alexaCommandDefaultType).trim()
+    : 'announce';
+  this.alexaCommandLocale = String(this.alexaCommandLocale || '').trim() || 'en-US';
+  this.alexaCommandAmazonPage = String(this.alexaCommandAmazonPage || '').trim() || 'amazon.com';
+  this.alexaCommandServiceHost = String(this.alexaCommandServiceHost || '').trim() || 'pitangui.amazon.com';
+  this.alexaCommandSessionCookie = String(this.alexaCommandSessionCookie || '').trim();
+  this.alexaCommandSessionData = String(this.alexaCommandSessionData || '').trim();
+  this.alexaCommandTargets = Array.isArray(this.alexaCommandTargets)
+    ? this.alexaCommandTargets.map((entry) => ({
+      key: String(entry?.key || '').trim(),
+      alexaDeviceId: String(entry?.alexaDeviceId || '').trim(),
+      displayName: String(entry?.displayName || '').trim(),
+      room: String(entry?.room || '').trim(),
+      enabled: entry?.enabled !== false
+    })).filter((entry) => entry.key && entry.alexaDeviceId)
+    : [];
   this.storeFile = String(this.storeFile || '').trim();
   this.lwaTokenUrl = String(this.lwaTokenUrl || '').trim() || 'https://api.amazon.com/auth/o2/token';
   this.eventGatewayUrl = String(this.eventGatewayUrl || '').trim() || 'https://api.amazonalexa.com/v3/events';
@@ -251,7 +308,8 @@ alexaBrokerConfigSchema.methods.toSanitized = function toSanitized() {
   const sanitized = this.toObject();
   sanitized.oauthClientSecret = maskSecret(sanitized.oauthClientSecret);
   sanitized.eventClientSecret = maskSecret(sanitized.eventClientSecret);
-  sanitized.deviceServiceToken = maskSecret(sanitized.deviceServiceToken);
+  sanitized.alexaCommandSessionCookie = maskSecret(sanitized.alexaCommandSessionCookie);
+  sanitized.alexaCommandSessionData = maskSecret(sanitized.alexaCommandSessionData);
   return sanitized;
 };
 

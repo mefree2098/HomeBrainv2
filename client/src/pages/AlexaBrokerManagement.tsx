@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/useToast';
@@ -52,11 +53,15 @@ type BrokerDraft = {
   allowedRedirectUris: string;
   eventClientId: string;
   eventClientSecret: string;
-  deviceServiceBaseUrl: string;
-  deviceServiceToken: string;
-  deviceDiscoveryPath: string;
-  deviceSpeakPath: string;
-  deviceServiceTimeoutMs: string;
+  alexaCommandProvider: 'disabled' | 'homebrain' | 'asp';
+  alexaCommandDefaultType: 'announce' | 'speak' | 'ssml';
+  alexaCommandLocale: string;
+  alexaCommandAmazonPage: string;
+  alexaCommandServiceHost: string;
+  alexaCommandSessionCookie: string;
+  alexaCommandSessionData: string;
+  alexaCommandTargets: string;
+  alexaCommandTimeoutMs: string;
   storeFile: string;
   authCodeTtlMs: string;
   accessTokenTtlSeconds: string;
@@ -80,11 +85,15 @@ const emptyDraft: BrokerDraft = {
   allowedRedirectUris: '',
   eventClientId: '',
   eventClientSecret: '',
-  deviceServiceBaseUrl: '',
-  deviceServiceToken: '',
-  deviceDiscoveryPath: '/v1/devices',
-  deviceSpeakPath: '/v1/devices/{deviceId}/speak',
-  deviceServiceTimeoutMs: '10000',
+  alexaCommandProvider: 'disabled',
+  alexaCommandDefaultType: 'announce',
+  alexaCommandLocale: 'en-US',
+  alexaCommandAmazonPage: 'amazon.com',
+  alexaCommandServiceHost: 'pitangui.amazon.com',
+  alexaCommandSessionCookie: '',
+  alexaCommandSessionData: '',
+  alexaCommandTargets: '',
+  alexaCommandTimeoutMs: '10000',
   storeFile: '',
   authCodeTtlMs: '300000',
   accessTokenTtlSeconds: '3600',
@@ -101,6 +110,19 @@ function hydrateDraftFromStatus(status: AlexaBrokerServiceStatus | null): Broker
   if (!status) {
     return emptyDraft;
   }
+
+  const alexaTargets = Array.isArray(status.alexaCommandTargets)
+    ? status.alexaCommandTargets
+      .map((target) => [
+        target.key || '',
+        [
+          target.alexaDeviceId || '',
+          target.displayName || '',
+          target.room || ''
+        ].join(' | ')
+      ].join(' = '))
+      .join('\n')
+    : '';
 
   return {
     publicBaseUrl: status.publicBaseUrl || '',
@@ -119,11 +141,15 @@ function hydrateDraftFromStatus(status: AlexaBrokerServiceStatus | null): Broker
     refreshTokenTtlSeconds: String(status.refreshTokenTtlSeconds || 15552000),
     lwaTokenUrl: status.lwaTokenUrl || 'https://api.amazon.com/auth/o2/token',
     eventGatewayUrl: status.eventGatewayUrl || 'https://api.amazonalexa.com/v3/events',
-    deviceServiceBaseUrl: status.deviceServiceBaseUrl || '',
-    deviceServiceToken: '',
-    deviceDiscoveryPath: status.deviceDiscoveryPath || '/v1/devices',
-    deviceSpeakPath: status.deviceSpeakPath || '/v1/devices/{deviceId}/speak',
-    deviceServiceTimeoutMs: String(status.deviceServiceTimeoutMs || 10000),
+    alexaCommandProvider: status.alexaCommandProvider || 'disabled',
+    alexaCommandDefaultType: status.alexaCommandDefaultType || 'announce',
+    alexaCommandLocale: status.alexaCommandLocale || 'en-US',
+    alexaCommandAmazonPage: status.alexaCommandAmazonPage || 'amazon.com',
+    alexaCommandServiceHost: status.alexaCommandServiceHost || 'pitangui.amazon.com',
+    alexaCommandSessionCookie: '',
+    alexaCommandSessionData: '',
+    alexaCommandTargets: alexaTargets,
+    alexaCommandTimeoutMs: String(status.alexaCommandTimeoutMs || 10000),
     rateLimitWindowMs: String(status.rateLimitWindowMs || 60000),
     rateLimitMax: String(status.rateLimitMax || 120),
     allowManualRegistration: status.allowManualRegistration === true,
@@ -310,11 +336,15 @@ export default function AlexaBrokerManagement() {
       refreshTokenTtlSeconds: draft.refreshTokenTtlSeconds,
       lwaTokenUrl: draft.lwaTokenUrl,
       eventGatewayUrl: draft.eventGatewayUrl,
-      deviceServiceBaseUrl: draft.deviceServiceBaseUrl,
-      deviceServiceToken: draft.deviceServiceToken,
-      deviceDiscoveryPath: draft.deviceDiscoveryPath,
-      deviceSpeakPath: draft.deviceSpeakPath,
-      deviceServiceTimeoutMs: draft.deviceServiceTimeoutMs,
+      alexaCommandProvider: draft.alexaCommandProvider,
+      alexaCommandDefaultType: draft.alexaCommandDefaultType,
+      alexaCommandLocale: draft.alexaCommandLocale,
+      alexaCommandAmazonPage: draft.alexaCommandAmazonPage,
+      alexaCommandServiceHost: draft.alexaCommandServiceHost,
+      alexaCommandSessionCookie: draft.alexaCommandSessionCookie,
+      alexaCommandSessionData: draft.alexaCommandSessionData,
+      alexaCommandTargets: draft.alexaCommandTargets,
+      alexaCommandTimeoutMs: draft.alexaCommandTimeoutMs,
       rateLimitWindowMs: draft.rateLimitWindowMs,
       rateLimitMax: draft.rateLimitMax,
       allowManualRegistration: draft.allowManualRegistration,
@@ -911,53 +941,86 @@ export default function AlexaBrokerManagement() {
               </p>
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">Alexa Device Provider URL</label>
-              <Input
-                value={draft.deviceServiceBaseUrl}
-                onChange={(event) => updateDraft('deviceServiceBaseUrl', event.target.value)}
-                placeholder="https://api.amazonalexa.com"
+              <label className="text-sm font-medium">Alexa Command Provider</label>
+              <Select
+                value={draft.alexaCommandProvider}
+                onValueChange={(value: 'disabled' | 'homebrain' | 'asp') => updateDraft('alexaCommandProvider', value)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="disabled">Disabled</SelectItem>
+                  <SelectItem value="homebrain">HomeBrain Native</SelectItem>
+                  <SelectItem value="asp">Alexa Smart Properties</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">HomeBrain Native keeps the consumer Echo bridge inside HomeBrain.</p>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Default Announcement Type</label>
+              <Select
+                value={draft.alexaCommandDefaultType}
+                onValueChange={(value: 'announce' | 'speak' | 'ssml') => updateDraft('alexaCommandDefaultType', value)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="announce">Announce</SelectItem>
+                  <SelectItem value="speak">Speak</SelectItem>
+                  <SelectItem value="ssml">SSML</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Alexa Amazon Page</label>
+              <Input value={draft.alexaCommandAmazonPage} onChange={(event) => updateDraft('alexaCommandAmazonPage', event.target.value)} placeholder="amazon.com" />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Alexa Service Host</label>
+              <Input value={draft.alexaCommandServiceHost} onChange={(event) => updateDraft('alexaCommandServiceHost', event.target.value)} placeholder="pitangui.amazon.com" />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Command Locale</label>
+              <Input value={draft.alexaCommandLocale} onChange={(event) => updateDraft('alexaCommandLocale', event.target.value)} placeholder="en-US" />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Command Timeout (ms)</label>
+              <Input value={draft.alexaCommandTimeoutMs} onChange={(event) => updateDraft('alexaCommandTimeoutMs', event.target.value)} placeholder="10000" />
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <label className="text-sm font-medium">Alexa Session Cookie</label>
+              <Textarea
+                value={draft.alexaCommandSessionCookie}
+                onChange={(event) => updateDraft('alexaCommandSessionCookie', event.target.value)}
+                rows={3}
+                placeholder={serviceStatus?.alexaCommandSessionConfigured ? 'Configured. Enter a new cookie to replace it.' : 'Paste Alexa session cookie'}
               />
               <p className="text-xs text-muted-foreground">
-                Used by the broker to list Echo targets and relay workflow speech actions.
+                {serviceStatus?.alexaCommandSessionConfigured
+                  ? 'An Alexa session is stored in HomeBrain. Leave this blank to keep it unchanged.'
+                  : 'Stored in the HomeBrain database and injected into the managed broker runtime.'}
               </p>
             </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Alexa Device Provider Token</label>
-              <Input
-                value={draft.deviceServiceToken}
-                onChange={(event) => updateDraft('deviceServiceToken', event.target.value)}
-                placeholder={serviceStatus?.deviceServiceTokenConfigured ? 'Configured. Enter a new value to replace it.' : 'Provider bearer token'}
-                type="password"
-              />
-              <p className="text-xs text-muted-foreground">
-                {serviceStatus?.deviceServiceTokenConfigured
-                  ? `Stored token ${serviceStatus.deviceServiceTokenMasked || 'is configured'}. Leave this blank to keep it unchanged.`
-                  : 'Store the provider access token in HomeBrain instead of a shell environment file.'}
-              </p>
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Device Discovery Path</label>
-              <Input
-                value={draft.deviceDiscoveryPath}
-                onChange={(event) => updateDraft('deviceDiscoveryPath', event.target.value)}
-                placeholder="/v1/devices"
+            <div className="space-y-2 md:col-span-2">
+              <label className="text-sm font-medium">Alexa Session Data JSON</label>
+              <Textarea
+                value={draft.alexaCommandSessionData}
+                onChange={(event) => updateDraft('alexaCommandSessionData', event.target.value)}
+                rows={4}
+                placeholder={serviceStatus?.alexaCommandSessionDataMasked ? 'Configured. Enter new session data JSON to replace it.' : '{"localCookie":"...","refreshToken":"..."}'}
               />
             </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Device Speak Path</label>
-              <Input
-                value={draft.deviceSpeakPath}
-                onChange={(event) => updateDraft('deviceSpeakPath', event.target.value)}
-                placeholder="/v1/devices/{deviceId}/speak"
+            <div className="space-y-2 md:col-span-2">
+              <label className="text-sm font-medium">Alexa Target Mappings</label>
+              <Textarea
+                value={draft.alexaCommandTargets}
+                onChange={(event) => updateDraft('alexaCommandTargets', event.target.value)}
+                rows={5}
+                placeholder="kitchen = G090XXXXXXXXXXXX | Kitchen Alexa | Kitchen"
               />
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Device Provider Timeout (ms)</label>
-              <Input
-                value={draft.deviceServiceTimeoutMs}
-                onChange={(event) => updateDraft('deviceServiceTimeoutMs', event.target.value)}
-                placeholder="10000"
-              />
+              <p className="text-xs text-muted-foreground">Use one mapping per line: key = Alexa serial number or device name | display name | room.</p>
             </div>
             <div className="space-y-2 md:col-span-2">
               <label className="text-sm font-medium">Allowed Client IDs</label>

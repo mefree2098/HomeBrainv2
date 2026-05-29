@@ -36,11 +36,20 @@ test('buildRuntimeEnv serializes managed Alexa broker configuration', () => {
     allowedRedirectUris: ['https://pitangui.amazon.com/api/skill/link/1'],
     eventClientId: 'event-client-id',
     eventClientSecret: 'event-client-secret',
-    deviceServiceBaseUrl: 'https://alexa-device-service.example.com',
-    deviceServiceToken: 'provider-token',
-    deviceDiscoveryPath: '/v1/devices',
-    deviceSpeakPath: '/v1/devices/{deviceId}/speak',
-    deviceServiceTimeoutMs: 10000,
+    alexaCommandProvider: 'homebrain',
+    alexaCommandDefaultType: 'announce',
+    alexaCommandLocale: 'en-US',
+    alexaCommandAmazonPage: 'amazon.com',
+    alexaCommandServiceHost: 'pitangui.amazon.com',
+    alexaCommandSessionCookie: 'session-cookie',
+    alexaCommandSessionData: '',
+    alexaCommandTargets: [{
+      key: 'kitchen',
+      alexaDeviceId: 'kitchen-echo-serial',
+      displayName: 'Kitchen Alexa',
+      room: 'Kitchen'
+    }],
+    alexaCommandTimeoutMs: 10000,
     storeFile: '/var/lib/homebrain-alexa/store.json',
     authCodeTtlMs: 300000,
     accessTokenTtlSeconds: 3600,
@@ -57,11 +66,18 @@ test('buildRuntimeEnv serializes managed Alexa broker configuration', () => {
   assert.equal(env.HOMEBRAIN_BROKER_PUBLIC_BASE_URL, 'https://alexa-broker.example.com');
   assert.equal(env.HOMEBRAIN_ALEXA_OAUTH_CLIENT_SECRET, 'super-secret');
   assert.equal(env.HOMEBRAIN_ALEXA_ALLOWED_CLIENT_IDS, 'homebrain-alexa-skill,alt-client');
-  assert.equal(env.HOMEBRAIN_ALEXA_DEVICE_SERVICE_BASE_URL, 'https://alexa-device-service.example.com');
-  assert.equal(env.HOMEBRAIN_ALEXA_DEVICE_SERVICE_TOKEN, 'provider-token');
-  assert.equal(env.HOMEBRAIN_ALEXA_DEVICE_DISCOVERY_PATH, '/v1/devices');
-  assert.equal(env.HOMEBRAIN_ALEXA_DEVICE_SPEAK_PATH, '/v1/devices/{deviceId}/speak');
-  assert.equal(env.HOMEBRAIN_ALEXA_DEVICE_SERVICE_TIMEOUT_MS, '10000');
+  assert.equal(env.HOMEBRAIN_ALEXA_COMMAND_PROVIDER, 'homebrain');
+  assert.equal(env.HOMEBRAIN_ALEXA_COMMAND_DEFAULT_TYPE, 'announce');
+  assert.equal(env.HOMEBRAIN_ALEXA_COMMAND_SESSION_COOKIE, 'session-cookie');
+  assert.equal(env.HOMEBRAIN_ALEXA_COMMAND_SERVICE_HOST, 'pitangui.amazon.com');
+  assert.equal(env.HOMEBRAIN_ALEXA_COMMAND_TIMEOUT_MS, '10000');
+  assert.deepEqual(JSON.parse(env.HOMEBRAIN_ALEXA_COMMAND_TARGETS_JSON), [{
+    key: 'kitchen',
+    alexaDeviceId: 'kitchen-echo-serial',
+    displayName: 'Kitchen Alexa',
+    room: 'Kitchen',
+    enabled: true
+  }]);
   assert.equal(
     env.HOMEBRAIN_ALEXA_ALLOWED_REDIRECT_URIS,
     'https://pitangui.amazon.com/api/skill/link/1'
@@ -69,13 +85,17 @@ test('buildRuntimeEnv serializes managed Alexa broker configuration', () => {
   assert.equal(env.HOMEBRAIN_ALEXA_ALLOW_MANUAL_REGISTRATION, 'true');
 });
 
-test('updateConfig stores managed Alexa device provider settings', async () => {
+test('updateConfig stores managed HomeBrain Alexa command bridge settings', async () => {
   const config = {
-    deviceServiceBaseUrl: '',
-    deviceServiceToken: 'old-token',
-    deviceDiscoveryPath: '/v1/devices',
-    deviceSpeakPath: '/v1/devices/{deviceId}/speak',
-    deviceServiceTimeoutMs: 10000,
+    alexaCommandProvider: 'disabled',
+    alexaCommandDefaultType: 'announce',
+    alexaCommandLocale: 'en-US',
+    alexaCommandAmazonPage: 'amazon.com',
+    alexaCommandServiceHost: 'pitangui.amazon.com',
+    alexaCommandSessionCookie: 'old-cookie',
+    alexaCommandSessionData: '',
+    alexaCommandTargets: [],
+    alexaCommandTimeoutMs: 10000,
     saveCalls: 0,
     async save() {
       this.saveCalls += 1;
@@ -88,31 +108,40 @@ test('updateConfig stores managed Alexa device provider settings', async () => {
 
   service.getConfig = async () => config;
   service.getStatus = async () => ({
-    deviceServiceBaseUrl: config.deviceServiceBaseUrl,
-    deviceServiceTokenConfigured: Boolean(config.deviceServiceToken)
+    alexaCommandProvider: config.alexaCommandProvider,
+    alexaCommandSessionConfigured: Boolean(config.alexaCommandSessionCookie || config.alexaCommandSessionData)
   });
 
   const response = await service.updateConfig({
-    deviceServiceBaseUrl: 'https://alexa-device-service.example.com/prefix',
-    deviceServiceToken: 'new-provider-token',
-    deviceDiscoveryPath: 'v2/devices',
-    deviceSpeakPath: 'v2/devices/{deviceId}/speak',
-    deviceServiceTimeoutMs: '2500'
+    alexaCommandProvider: 'homebrain',
+    alexaCommandDefaultType: 'speak',
+    alexaCommandLocale: 'en-US',
+    alexaCommandAmazonPage: 'amazon.com',
+    alexaCommandServiceHost: 'pitangui.amazon.com',
+    alexaCommandSessionCookie: 'new-cookie',
+    alexaCommandTargets: 'kitchen = kitchen-echo-serial | Kitchen Alexa | Kitchen',
+    alexaCommandTimeoutMs: '2500'
   });
 
   assert.equal(response.success, true);
-  assert.equal(config.deviceServiceBaseUrl, 'https://alexa-device-service.example.com');
-  assert.equal(config.deviceServiceToken, 'new-provider-token');
-  assert.equal(config.deviceDiscoveryPath, '/v2/devices');
-  assert.equal(config.deviceSpeakPath, '/v2/devices/{deviceId}/speak');
-  assert.equal(config.deviceServiceTimeoutMs, 2500);
+  assert.equal(config.alexaCommandProvider, 'homebrain');
+  assert.equal(config.alexaCommandDefaultType, 'speak');
+  assert.equal(config.alexaCommandSessionCookie, 'new-cookie');
+  assert.deepEqual(config.alexaCommandTargets, [{
+    key: 'kitchen',
+    alexaDeviceId: 'kitchen-echo-serial',
+    displayName: 'Kitchen Alexa',
+    room: 'Kitchen',
+    enabled: true
+  }]);
+  assert.equal(config.alexaCommandTimeoutMs, 2500);
   assert.equal(config.saveCalls, 1);
 
   await service.updateConfig({
-    deviceServiceToken: '********oken'
+    alexaCommandSessionCookie: '********okie'
   });
 
-  assert.equal(config.deviceServiceToken, 'new-provider-token');
+  assert.equal(config.alexaCommandSessionCookie, 'new-cookie');
 });
 
 test('buildManagedReverseProxyRoutePayload derives the managed broker ingress route', () => {
