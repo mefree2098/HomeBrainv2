@@ -56,6 +56,7 @@ struct DevicesView: View {
     @State private var pendingFavoriteDeviceIds: Set<String> = []
     @State private var highlightedDeviceID: String?
     @State private var controlSheetDeviceID: String?
+    @State private var pendingDeleteDevice: DeviceItem?
     @State private var pendingMigrationDeviceIds: Set<String> = []
     @State private var pendingMigrationFinalizationDeviceIds: Set<String> = []
     @State private var pendingMigrationPlanDeviceIds: Set<String> = []
@@ -327,6 +328,27 @@ struct DevicesView: View {
                 )
                 .padding(20)
             }
+        }
+        .confirmationDialog(
+            pendingDeleteDevice == nil ? "Delete Device" : "Delete \(pendingDeleteDevice?.name ?? "Device")?",
+            isPresented: Binding(
+                get: { pendingDeleteDevice != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        pendingDeleteDevice = nil
+                    }
+                }
+            ),
+            presenting: pendingDeleteDevice
+        ) { device in
+            Button("Delete \(device.name)", role: .destructive) {
+                Task { await deleteDevice(device) }
+            }
+            Button("Cancel", role: .cancel) {
+                pendingDeleteDevice = nil
+            }
+        } message: { device in
+            Text("This removes the HomeBrain device record and clears security, dashboard, favorites, Alexa, and telemetry references. It does not exclude a live radio device.")
         }
         .task {
             await loadDevices(showLoading: true)
@@ -604,7 +626,7 @@ struct DevicesView: View {
         }
         .contextMenu {
             Button(role: .destructive) {
-                Task { await deleteDevice(device) }
+                pendingDeleteDevice = device
             } label: {
                 Label("Delete Device", systemImage: "trash")
             }
@@ -2024,6 +2046,25 @@ struct DevicesView: View {
                                     .font(.system(size: 13, weight: .medium, design: .rounded))
                                     .foregroundStyle(HBPalette.textSecondary)
                                     .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+
+                        HBPanel {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("Device Record")
+                                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                                    .foregroundStyle(HBPalette.textPrimary)
+                                Text("Remove stale HomeBrain records after exclusion, replacement, or controller cleanup.")
+                                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                                    .foregroundStyle(HBPalette.textSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Button(role: .destructive) {
+                                    pendingDeleteDevice = device
+                                } label: {
+                                    Label("Delete Device", systemImage: "trash")
+                                        .frame(maxWidth: .infinity)
+                                }
+                                .buttonStyle(HBDestructiveButtonStyle())
                             }
                         }
                     }
@@ -3622,6 +3663,7 @@ struct DevicesView: View {
             prepareDeviceEditor(for: updated)
         } catch {
             errorMessage = error.localizedDescription
+            pendingDeleteDevice = nil
         }
     }
 
@@ -3989,12 +4031,21 @@ struct DevicesView: View {
         if previewMode {
             devices.removeAll { $0.id == device.id }
             favoriteDeviceIds.remove(device.id)
+            if controlSheetDeviceID == device.id {
+                controlSheetDeviceID = nil
+            }
+            pendingDeleteDevice = nil
             return
         }
 
         do {
             _ = try await session.apiClient.delete("/api/devices/\(device.id)")
             devices.removeAll { $0.id == device.id }
+            favoriteDeviceIds.remove(device.id)
+            if controlSheetDeviceID == device.id {
+                controlSheetDeviceID = nil
+            }
+            pendingDeleteDevice = nil
         } catch {
             errorMessage = error.localizedDescription
         }

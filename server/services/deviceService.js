@@ -2,7 +2,11 @@ const mongoose = require('mongoose');
 const Device = require('../models/Device');
 const DeviceGroup = require('../models/DeviceGroup');
 const AlexaExposure = require('../models/AlexaExposure');
+const DeviceCommandClaim = require('../models/DeviceCommandClaim');
+const DeviceEnergySample = require('../models/DeviceEnergySample');
+const SecurityAlarm = require('../models/SecurityAlarm');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
+const UserProfile = require('../models/UserProfile');
 const RainMachineIntegration = require('../models/RainMachineIntegration');
 const smartThingsService = require('./smartThingsService');
 const harmonyService = require('./harmonyService');
@@ -22,6 +26,30 @@ const MAX_HARMONY_COMMAND_HOLD_MS = 5000;
 const MAX_HARMONY_ACTIVITY_VERIFY_TIMEOUT_MS = 120_000;
 const MAX_HARMONY_ACTIVITY_VERIFY_INTERVAL_MS = 15_000;
 const MAX_SMARTTHINGS_POST_COMMAND_STATE_AGE_MS = 24 * 60 * 60 * 1000;
+
+function normalizeIdString(value) {
+  if (value === undefined || value === null) {
+    return '';
+  }
+
+  if (typeof value === 'object' && value._id !== undefined && value._id !== null) {
+    return normalizeIdString(value._id);
+  }
+
+  return String(value).trim();
+}
+
+function clonePlainObject(value) {
+  if (!value || typeof value !== 'object') {
+    return {};
+  }
+
+  if (typeof value.toObject === 'function') {
+    return value.toObject({ depopulate: true, versionKey: false });
+  }
+
+  return { ...value };
+}
 
 function parseBoundedMs(value, fallback, min, max) {
   const parsed = Number(value);
@@ -572,6 +600,186 @@ class DeviceService {
     }
   }
 
+  cleanupDashboardViewsForDeletedDevice(views = [], deviceId) {
+    const cleanup = {
+      dashboardWidgetsRemoved: 0,
+      dashboardDeviceReferencesRemoved: 0
+    };
+
+    if (!Array.isArray(views) || !deviceId) {
+      return { views, cleanup, changed: false };
+    }
+
+    let changed = false;
+    const nextViews = views.map((view) => {
+      const plainView = clonePlainObject(view);
+      const widgets = Array.isArray(plainView.widgets) ? plainView.widgets : [];
+      const nextWidgets = [];
+
+      widgets.forEach((widget) => {
+        const plainWidget = clonePlainObject(widget);
+        const settings = clonePlainObject(plainWidget.settings);
+        let removeWidget = false;
+
+        if (normalizeIdString(settings.deviceId) === deviceId) {
+          removeWidget = true;
+          cleanup.dashboardWidgetsRemoved += 1;
+        }
+
+        if (Array.isArray(settings.deviceIds)) {
+          const beforeLength = settings.deviceIds.length;
+          settings.deviceIds = settings.deviceIds.filter((entry) => normalizeIdString(entry) !== deviceId);
+          const removedCount = beforeLength - settings.deviceIds.length;
+          if (removedCount > 0) {
+            changed = true;
+            cleanup.dashboardDeviceReferencesRemoved += removedCount;
+          }
+          if (beforeLength > 0 && settings.deviceIds.length === 0) {
+            removeWidget = true;
+            cleanup.dashboardWidgetsRemoved += 1;
+          }
+        }
+
+        if (
+          settings.favoriteDeviceSizes &&
+          typeof settings.favoriteDeviceSizes === 'object' &&
+          !Array.isArray(settings.favoriteDeviceSizes) &&
+          Object.prototype.hasOwnProperty.call(settings.favoriteDeviceSizes, deviceId)
+        ) {
+          settings.favoriteDeviceSizes = { ...settings.favoriteDeviceSizes };
+          delete settings.favoriteDeviceSizes[deviceId];
+          changed = true;
+          cleanup.dashboardDeviceReferencesRemoved += 1;
+        }
+
+        if (removeWidget) {
+          changed = true;
+          return;
+        }
+
+        nextWidgets.push({
+          ...plainWidget,
+          settings
+        });
+      });
+
+      return {
+        ...plainView,
+        widgets: nextWidgets
+      };
+    });
+
+    return { views: nextViews, cleanup, changed };
+  }
+
+  async cleanupDeletedDeviceReferences(deletedDevice) {
+    const deviceId = normalizeIdString(deletedDevice?._id);
+    const cleanup = {
+      alexaExposuresDeleted: 0,
+      commandClaimsDeleted: 0,
+      energySamplesDeleted: 0,
+      securityZonesRemoved: 0,
+      securitySirenOutputsRemoved: 0,
+      favoriteReferencesRemoved: 0,
+      securityPreferenceReferencesRemoved: 0,
+      dashboardWidgetsRemoved: 0,
+      dashboardDeviceReferencesRemoved: 0,
+      userProfilesUpdated: 0,
+      securityAlarmsUpdated: 0
+    };
+
+    if (!deviceId) {
+      return cleanup;
+    }
+
+    const [
+      alexaResult,
+      claimResult,
+      energyResult
+    ] = await Promise.all([
+      AlexaExposure.deleteMany({ entityType: 'device', entityId: deviceId }),
+      DeviceCommandClaim.deleteMany({ deviceId: deletedDevice._id }),
+      DeviceEnergySample.deleteMany({ deviceId: deletedDevice._id })
+    ]);
+
+    cleanup.alexaExposuresDeleted = alexaResult?.deletedCount ?? 0;
+    cleanup.commandClaimsDeleted = claimResult?.deletedCount ?? 0;
+    cleanup.energySamplesDeleted = energyResult?.deletedCount ?? 0;
+
+    const alarms = await SecurityAlarm.find({
+      $or: [
+        { 'zones.deviceId': deviceId },
+        { 'sirenOutputs.deviceId': deviceId }
+      ]
+    });
+
+    for (const alarm of alarms) {
+      const originalZoneCount = Array.isArray(alarm.zones) ? alarm.zones.length : 0;
+      const originalSirenOutputCount = Array.isArray(alarm.sirenOutputs) ? alarm.sirenOutputs.length : 0;
+
+      alarm.zones = (alarm.zones || []).filter((zone) => normalizeIdString(zone?.deviceId) !== deviceId);
+      alarm.sirenOutputs = (alarm.sirenOutputs || []).filter((output) => normalizeIdString(output?.deviceId) !== deviceId);
+
+      const removedZoneCount = originalZoneCount - alarm.zones.length;
+      const removedSirenOutputCount = originalSirenOutputCount - alarm.sirenOutputs.length;
+
+      if (removedZoneCount > 0 || removedSirenOutputCount > 0) {
+        cleanup.securityZonesRemoved += removedZoneCount;
+        cleanup.securitySirenOutputsRemoved += removedSirenOutputCount;
+        cleanup.securityAlarmsUpdated += 1;
+        await alarm.save();
+      }
+    }
+
+    const profiles = await UserProfile.find({});
+    for (const profile of profiles) {
+      let changed = false;
+
+      const favorites = profile.favorites || {};
+      const favoriteDevices = Array.isArray(favorites.devices) ? favorites.devices : [];
+      const nextFavoriteDevices = favoriteDevices.filter((favoriteDeviceId) => normalizeIdString(favoriteDeviceId) !== deviceId);
+      const removedFavoriteCount = favoriteDevices.length - nextFavoriteDevices.length;
+      if (removedFavoriteCount > 0) {
+        profile.favorites = {
+          ...favorites,
+          devices: nextFavoriteDevices
+        };
+        cleanup.favoriteReferencesRemoved += removedFavoriteCount;
+        changed = true;
+      }
+
+      const securityPreferences = profile.securityPreferences || {};
+      const visibleSensorIds = Array.isArray(securityPreferences.visibleSensorIds)
+        ? securityPreferences.visibleSensorIds
+        : [];
+      const nextVisibleSensorIds = visibleSensorIds.filter((sensorId) => normalizeIdString(sensorId) !== deviceId);
+      const removedVisibleSensorCount = visibleSensorIds.length - nextVisibleSensorIds.length;
+      if (removedVisibleSensorCount > 0) {
+        profile.securityPreferences = {
+          ...securityPreferences,
+          visibleSensorIds: nextVisibleSensorIds.length > 0 ? nextVisibleSensorIds : undefined
+        };
+        cleanup.securityPreferenceReferencesRemoved += removedVisibleSensorCount;
+        changed = true;
+      }
+
+      const dashboardCleanup = this.cleanupDashboardViewsForDeletedDevice(profile.dashboardViews || [], deviceId);
+      if (dashboardCleanup.changed) {
+        profile.dashboardViews = dashboardCleanup.views;
+        cleanup.dashboardWidgetsRemoved += dashboardCleanup.cleanup.dashboardWidgetsRemoved;
+        cleanup.dashboardDeviceReferencesRemoved += dashboardCleanup.cleanup.dashboardDeviceReferencesRemoved;
+        changed = true;
+      }
+
+      if (changed) {
+        cleanup.userProfilesUpdated += 1;
+        await profile.save();
+      }
+    }
+
+    return cleanup;
+  }
+
   /**
    * Delete a device
    * @param {string} deviceId - Device ID
@@ -586,12 +794,9 @@ class DeviceService {
         throw new Error('Device not found');
       }
 
-      await AlexaExposure.deleteOne({
-        entityType: 'device',
-        entityId: deletedDevice._id.toString()
-      });
+      deletedDevice.deletionCleanup = await this.cleanupDeletedDeviceReferences(deletedDevice);
       
-      console.log('DeviceService: Successfully deleted device:', deletedDevice.name);
+      console.log('DeviceService: Successfully deleted device:', deletedDevice.name, deletedDevice.deletionCleanup);
       return deletedDevice;
     } catch (error) {
       console.error('DeviceService: Error deleting device:', error.message);

@@ -1305,6 +1305,63 @@ export function Devices({
     })
   }, [buildRoomsFromDevices])
 
+  const removeDeviceFromState = useCallback((deviceId: string) => {
+    if (!deviceId) {
+      return
+    }
+
+    setDevices(prevDevices => {
+      const normalizedPrev = Array.isArray(prevDevices) ? prevDevices : []
+      const nextDevices = normalizedPrev.filter((device: any) => device?._id !== deviceId)
+      if (nextDevices.length === normalizedPrev.length) {
+        return prevDevices
+      }
+
+      setRoomDevices(buildRoomsFromDevices(nextDevices))
+      return nextDevices
+    })
+    setDetailDeviceId(current => current === deviceId ? null : current)
+    setLightBrightnessDrafts(current => {
+      const next = { ...current }
+      delete next[deviceId]
+      return next
+    })
+    setLightColorDrafts(current => {
+      const next = { ...current }
+      delete next[deviceId]
+      return next
+    })
+    setLightColorTemperatureDrafts(current => {
+      const next = { ...current }
+      delete next[deviceId]
+      return next
+    })
+    setPendingControls(current => {
+      if (!current[deviceId]) {
+        return current
+      }
+      const next = { ...current }
+      delete next[deviceId]
+      return next
+    })
+    setControlFeedback(current => {
+      if (!current[deviceId]) {
+        return current
+      }
+      const next = { ...current }
+      delete next[deviceId]
+      return next
+    })
+    setControlErrorMessages(current => {
+      if (!current[deviceId]) {
+        return current
+      }
+      const next = { ...current }
+      delete next[deviceId]
+      return next
+    })
+  }, [buildRoomsFromDevices])
+
   useEffect(() => {
     const fetchDevices = async () => {
       try {
@@ -2588,6 +2645,9 @@ export function Devices({
         }}
         onDeviceUpdated={(updatedDevice) => {
           applyIncomingDevices([updatedDevice])
+        }}
+        onDeviceDeleted={(deviceId) => {
+          removeDeviceFromState(deviceId)
         }}
         onAlexaExposureUpdated={(payload) => {
           if (!detailDevice) {

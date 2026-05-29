@@ -419,7 +419,10 @@ router.delete('/:id', admin, async (req, res) => {
     res.status(200).json({
       success: true,
       message: 'Device deleted successfully',
-      data: { device }
+      data: {
+        device,
+        cleanup: device.deletionCleanup || null
+      }
     });
   } catch (error) {
     console.error('DELETE /api/devices/:id - Error:', error.message);
