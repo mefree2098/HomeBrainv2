@@ -25,6 +25,13 @@ const {
   describeDevices
 } = require('./deviceIdentityService');
 const { mapSmartThingsDeviceType } = require('./deviceTypeClassification');
+const { getDeviceSource } = require('./deviceSourceCatalog');
+
+// A device migrated to a native radio source (homebrain-zigbee/zwave/etc.) must
+// never be overwritten or deleted by the SmartThings sync.
+function isMigratedNativeSource(source) {
+  return typeof source === 'string' && /^homebrain-/i.test(source.trim());
+}
 
 const DEFAULT_INSTEON_SYNC_RUN_RETENTION = 20;
 const DEFAULT_INSTEON_SYNC_RUN_LOG_LIMIT = 1000;
@@ -345,6 +352,22 @@ class MaintenanceService {
       const devices = await smartThingsService.getDevices();
       console.log(`MaintenanceService: Fetched ${devices.length} SmartThings devices from API`);
 
+      // Devices the user migrated to a native radio: skip re-importing their
+      // SmartThings tile so it cannot reappear and fight the native device.
+      const migratedAwayDocs = await Device.find({
+        'properties.smartThingsMigration.smartThingsDeviceId': { $exists: true, $ne: null },
+        $or: [
+          { 'properties.source': /^homebrain-/i },
+          { 'properties.smartThingsMigration.retiredSource': true }
+        ]
+      }).select('properties.smartThingsMigration.smartThingsDeviceId').lean();
+      const migratedAwayStIds = new Set(
+        migratedAwayDocs
+          .map((doc) => doc?.properties?.smartThingsMigration?.smartThingsDeviceId)
+          .filter(Boolean)
+          .map((id) => String(id))
+      );
+
       const processedIds = [];
       const locationCounts = new Map();
       let created = 0;
@@ -359,6 +382,11 @@ class MaintenanceService {
           locationCounts.set(device.locationId, currentCount + 1);
         }
 
+        if (migratedAwayStIds.has(String(device.deviceId))) {
+          skipped += 1;
+          continue;
+        }
+
         const mappedDevice = await this.mapSmartThingsDevice(device);
 
         if (!mappedDevice) {
@@ -367,9 +395,14 @@ class MaintenanceService {
         }
 
         const identityQuery = buildSmartThingsDeviceIdentityQuery(device.deviceId);
-        const matchingDevices = identityQuery
+        const matchedDevices = identityQuery
           ? await Device.find(identityQuery)
           : [];
+        // Never let a SmartThings sync overwrite or delete a device that has
+        // already been migrated to a native radio source.
+        const matchingDevices = matchedDevices.filter(
+          (candidate) => !isMigratedNativeSource(getDeviceSource(candidate))
+        );
         const existing = selectCanonicalDevice(matchingDevices);
         const duplicateDevices = matchingDevices.filter((candidate) => (
           String(candidate?._id || '') !== String(existing?._id || '')
@@ -1558,3 +1591,4 @@ class MaintenanceService {
 }
 
 module.exports = new MaintenanceService();
+module.exports.isMigratedNativeSource = isMigratedNativeSource;

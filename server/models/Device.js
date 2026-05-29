@@ -127,6 +127,15 @@ schema.index({ type: 1, room: 1 });
 schema.index({ groups: 1 });
 schema.index({ status: 1 });
 schema.index({ isOnline: 1 });
+// Identity + source indexes: heavily queried by the SmartThings sync/webhook,
+// the native radio engine, and dedupe/migration lookups. Non-unique to stay
+// safe against any pre-existing duplicate rows; the application-level guards in
+// maintenanceService/directRadioService enforce identity correctness.
+schema.index({ 'properties.source': 1 });
+schema.index({ 'properties.smartThingsDeviceId': 1 });
+schema.index({ 'properties.smartThingsMigration.smartThingsDeviceId': 1 });
+schema.index({ 'properties.homebrainDirect.ieeeAddr': 1 });
+schema.index({ 'properties.homebrainDirect.nodeId': 1 });
 
 const Device = mongoose.model('Device', schema);
 

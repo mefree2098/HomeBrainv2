@@ -1280,7 +1280,14 @@ class SmartThingsWebhookService {
     const deviceIds = Array.from(relatedDeviceIdSet);
 
     const trackedDevices = deviceIds.length > 0
-      ? await Device.find({ 'properties.smartThingsDeviceId': { $in: deviceIds } }).lean()
+      ? await Device.find({
+        'properties.smartThingsDeviceId': { $in: deviceIds },
+        // Don't treat a device migrated to a native radio source as a
+        // SmartThings-tracked device — otherwise an inbound webhook re-stamps it
+        // as SmartThings-branded and keeps the old identity "alive".
+        'properties.smartThingsMigration.retiredSource': { $ne: true },
+        'properties.source': { $not: /^homebrain-/i }
+      }).lean()
       : [];
 
     const trackedMap = new Map();

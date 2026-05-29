@@ -3566,6 +3566,7 @@ class DirectRadioService {
     ensureDirSync(ZIGBEE_DIR);
     ensureDirSync(ZWAVE_DIR);
     await this.ensureControllerConfig();
+    await this.repairMigratedSmartThingsIdentities();
 
     if (!parseEnabledFlag(process.env.HOMEBRAIN_DIRECT_RADIOS_ENABLED, true)) {
       this.log('warn', 'system', 'Direct radio runtime is disabled by configuration');
@@ -5710,6 +5711,75 @@ class DirectRadioService {
     return updated || device;
   }
 
+  // Remove the top-level SmartThings identity hooks (smartThingsDeviceId /
+  // smartThingsId) from a migrated device's properties and relocate them under
+  // smartThingsMigration with retiredSource=true. The SmartThings full-sync and
+  // webhook both match devices by the top-level smartThingsDeviceId, so leaving
+  // it in place lets a migrated native device get its source overwritten back to
+  // "smartthings" or deleted as a duplicate. Severing it here is what prevents
+  // the regression.
+  severMigratedSmartThingsIdentity(properties = {}) {
+    const props = (properties && typeof properties === 'object' && !Array.isArray(properties))
+      ? { ...properties }
+      : {};
+    const migration = (props.smartThingsMigration && typeof props.smartThingsMigration === 'object')
+      ? { ...props.smartThingsMigration }
+      : {};
+    const smartThingsDeviceId = migration.smartThingsDeviceId || props.smartThingsDeviceId || null;
+    const smartThingsId = migration.smartThingsId || props.smartThingsId || null;
+    props.smartThingsMigration = {
+      ...migration,
+      ...(smartThingsDeviceId ? { smartThingsDeviceId } : {}),
+      ...(smartThingsId ? { smartThingsId } : {}),
+      retiredSource: true
+    };
+    delete props.smartThingsDeviceId;
+    delete props.smartThingsId;
+    return props;
+  }
+
+  // Idempotent repair for devices already migrated to a native radio source that
+  // still carry a top-level smartThingsDeviceId (the pre-fix state) — which is
+  // what lets the SmartThings sync/webhook flip them back to "smartthings".
+  async repairMigratedSmartThingsIdentities() {
+    try {
+      const candidates = await Device.find({
+        $and: [
+          {
+            $or: [
+              { 'properties.smartThingsDeviceId': { $exists: true, $ne: null } },
+              { 'properties.smartThingsId': { $exists: true, $ne: null } }
+            ]
+          },
+          {
+            $or: [
+              { 'properties.source': /^homebrain-/i },
+              { 'properties.homebrainDirect.protocol': { $exists: true } }
+            ]
+          }
+        ]
+      });
+      let repaired = 0;
+      for (const device of candidates) {
+        device.properties = this.severMigratedSmartThingsIdentity(getDeviceProperties(device));
+        if (typeof device.markModified === 'function') {
+          device.markModified('properties');
+        }
+        await device.save();
+        repaired += 1;
+      }
+      if (repaired > 0) {
+        this.log('info', 'system', 'Repaired migrated devices that still carried a SmartThings identity (prevents source regression).', { repaired });
+      }
+      return repaired;
+    } catch (error) {
+      this.log('warn', 'system', 'Failed to repair migrated SmartThings identities', {
+        error: error.message
+      });
+      return 0;
+    }
+  }
+
   async completeMigration(migrationId, identity, update) {
     const migration = this.activeMigrations.get(migrationId);
     if (!migration?.sourceDeviceId) {
@@ -5754,7 +5824,7 @@ class DirectRadioService {
       lastSeen: new Date(),
       brand: existing.brand || update.brand,
       model: existing.model || update.model,
-      properties: migratedProperties
+      properties: this.severMigratedSmartThingsIdentity(migratedProperties)
     }, { returnDocument: 'after', runValidators: true });
 
     migration.status = 'completed';
@@ -6023,7 +6093,7 @@ class DirectRadioService {
 
     const updated = await Device.findByIdAndUpdate(device._id, {
       temperature: device.temperature,
-      properties: nextProperties,
+      properties: this.severMigratedSmartThingsIdentity(nextProperties),
       isOnline: device.isOnline !== false,
       updatedAt: new Date()
     }, { returnDocument: 'after', runValidators: true });
