@@ -720,6 +720,42 @@ private struct DashboardSecurityDoorLockItem: Identifiable {
     }
 }
 
+private struct DashboardSecuritySirenOutputItem: Identifiable {
+    let id: String
+    var localDeviceId: String?
+    var smartThingsDeviceId: String?
+    var source: String?
+    var name: String
+    var room: String?
+    var isSelected: Bool
+    var isEnabled: Bool
+    var isOnline: Bool
+    var isActive: Bool
+    var stateLabel: String
+    var lastSeen: String
+
+    static func from(_ payload: [String: Any]) -> DashboardSecuritySirenOutputItem? {
+        let resolvedID = JSON.optionalString(payload, "localDeviceId")
+            ?? JSON.optionalString(payload, "deviceId")
+            ?? JSON.id(payload)
+
+        return DashboardSecuritySirenOutputItem(
+            id: resolvedID,
+            localDeviceId: JSON.optionalString(payload, "localDeviceId"),
+            smartThingsDeviceId: JSON.optionalString(payload, "smartThingsDeviceId"),
+            source: JSON.optionalString(payload, "source"),
+            name: JSON.string(payload, "name", fallback: "Unnamed alarm siren"),
+            room: JSON.optionalString(payload, "room"),
+            isSelected: JSON.bool(payload, "isSelected"),
+            isEnabled: JSON.bool(payload, "isEnabled", fallback: true),
+            isOnline: JSON.bool(payload, "isOnline", fallback: true),
+            isActive: JSON.bool(payload, "isActive"),
+            stateLabel: JSON.string(payload, "stateLabel", fallback: "Ready"),
+            lastSeen: JSON.displayDate(from: payload["lastSeen"])
+        )
+    }
+}
+
 struct DashboardView: View {
     let previewMode: Bool
     let onOpenDevice: ((String) -> Void)?
@@ -825,6 +861,7 @@ struct DashboardView: View {
     @State private var securityZonesActive = 0
     @State private var securitySensors: [DashboardSecuritySensorItem] = []
     @State private var securityDoorLocks: [DashboardSecurityDoorLockItem] = []
+    @State private var securitySirenOutputs: [DashboardSecuritySirenOutputItem] = []
     @State private var securityAudioPrompts: [String: String] = [:]
     @State private var securityExitDelaySeconds = 30
     @State private var securitySecondsUntilArmed = 0
@@ -1054,6 +1091,14 @@ struct DashboardView: View {
 
     private var securityLockedDoorCount: Int {
         securityDoorLocks.filter(\.isLocked).count
+    }
+
+    private var selectedSecuritySirenOutputs: [DashboardSecuritySirenOutputItem] {
+        securitySirenOutputs.filter { $0.isSelected && $0.isEnabled }
+    }
+
+    private var selectedSecuritySirenOutputCount: Int {
+        selectedSecuritySirenOutputs.count
     }
 
     private var dashboardGridColumnCount: Int {
@@ -2379,6 +2424,46 @@ struct DashboardView: View {
                     .background(HBGlassBackground(cornerRadius: compact ? 14 : 16, variant: .panelSoft))
             }
 
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Alarm Sirens")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .tracking(0.7)
+                            .textCase(.uppercase)
+                            .foregroundStyle(HBPalette.textSecondary)
+                        Text("Selected sirens sound when the alarm is triggered.")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    HBBadge(
+                        text: "\(selectedSecuritySirenOutputCount)/\(securitySirenOutputs.count) selected",
+                        foreground: HBPalette.accentRed,
+                        background: HBPalette.accentRed.opacity(0.14),
+                        stroke: HBPalette.accentRed.opacity(0.26)
+                    )
+                    .fixedSize(horizontal: true, vertical: false)
+                }
+
+                if selectedSecuritySirenOutputs.isEmpty {
+                    securityEmptyStateRow(
+                        title: "No sirens selected",
+                        subtitle: "Choose alarm sirens in Security Settings."
+                    )
+                } else {
+                    LazyVGrid(columns: securitySirenOutputColumns(), spacing: 8) {
+                        ForEach(selectedSecuritySirenOutputs) { siren in
+                            securitySirenOutputTile(siren, compact: compact)
+                        }
+                    }
+                }
+            }
+            .padding(compact ? 12 : 14)
+            .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
+
             VStack(alignment: .leading, spacing: 12) {
                 if usesPortraitCompactLayout {
                     VStack(alignment: .leading, spacing: 8) {
@@ -2972,6 +3057,11 @@ struct DashboardView: View {
         return Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: securityDoorLockColumnCount)
     }
 
+    private func securitySirenOutputColumns() -> [GridItem] {
+        let count = usesPortraitCompactLayout ? 1 : min(3, max(1, selectedSecuritySirenOutputCount))
+        return Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: count)
+    }
+
     private func securitySensorHeaderControls() -> some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 8) {
@@ -3244,6 +3334,39 @@ struct DashboardView: View {
             return (HBPalette.accentGreen, HBPalette.accentGreen.opacity(0.14), HBPalette.accentGreen.opacity(0.58))
         }
         return (HBPalette.accentOrange, HBPalette.accentOrange.opacity(0.14), HBPalette.accentOrange.opacity(0.6))
+    }
+
+    private func securitySirenOutputTile(_ siren: DashboardSecuritySirenOutputItem, compact: Bool) -> some View {
+        let tint = siren.isOnline ? HBPalette.accentRed : HBPalette.textMuted
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 8) {
+                Text(siren.name)
+                    .font(.system(size: compact ? 11 : 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(HBPalette.textPrimary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+
+                Spacer(minLength: 4)
+
+                Image(systemName: siren.isActive ? "speaker.wave.3.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: compact ? 12 : 13, weight: .semibold))
+                    .foregroundStyle(tint)
+            }
+
+            Text(siren.isOnline ? siren.stateLabel : "Offline")
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(tint)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, compact ? 8 : 9)
+        .frame(maxWidth: .infinity, minHeight: compact ? 60 : 66, alignment: .leading)
+        .background(HBGlassBackground(cornerRadius: compact ? 12 : 14, variant: .panelSoft))
+        .overlay(
+            RoundedRectangle(cornerRadius: compact ? 12 : 14, style: .continuous)
+                .stroke(tint.opacity(0.32), lineWidth: 1)
+        )
     }
 
     private func securityEmptyStateRow(title: String, subtitle: String) -> some View {
@@ -6696,6 +6819,22 @@ struct DashboardView: View {
                     lastSeen: "Just now"
                 )
             ]
+            securitySirenOutputs = [
+                DashboardSecuritySirenOutputItem(
+                    id: "preview-kitchen-siren",
+                    localDeviceId: "preview-kitchen-siren",
+                    smartThingsDeviceId: nil,
+                    source: "homebrain-zwave",
+                    name: "Kitchen Siren",
+                    room: "Kitchen",
+                    isSelected: true,
+                    isEnabled: true,
+                    isOnline: true,
+                    isActive: false,
+                    stateLabel: "Ready",
+                    lastSeen: "Just now"
+                )
+            ]
             securityZonesActive = securitySensors.filter(\.isActive).count
             securityZonesTotal = securitySensors.count
             systemStatus = "Online"
@@ -6771,6 +6910,7 @@ struct DashboardView: View {
         let zoneObjects = JSON.array(statusObject["zones"])
         let sensorObjects = JSON.array(statusObject["sensors"])
         let doorLockObjects = JSON.array(statusObject["doorLocks"])
+        let sirenOutputObjects = JSON.array(statusObject["sirenOutputs"])
         let totalSensors = JSON.int(statusObject, "sensorCount", fallback: JSON.int(statusObject, "zoneCount", fallback: zoneObjects.count))
         let activeSensors = JSON.int(
             statusObject,
@@ -6787,6 +6927,7 @@ struct DashboardView: View {
         securityZonesTotal = totalSensors
         securitySensors = sensorObjects.compactMap { DashboardSecuritySensorItem.from($0) }
         securityDoorLocks = doorLockObjects.compactMap { DashboardSecurityDoorLockItem.from($0) }
+        securitySirenOutputs = sirenOutputObjects.compactMap { DashboardSecuritySirenOutputItem.from($0) }
         securityAudioPrompts = promptObject.reduce(into: [String: String]()) { result, entry in
             if let value = entry.value as? String, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 result[entry.key] = value
@@ -7273,6 +7414,31 @@ struct DashboardView: View {
             securityDoorLocks[doorLockIndex].isOnline = device.isOnline
             securityDoorLocks[doorLockIndex].stateLabel = device.status ? "Locked" : "Unlocked"
             securityDoorLocks[doorLockIndex].lastSeen = device.lastSeen
+        }
+
+        if let sirenIndex = securitySirenOutputs.firstIndex(where: {
+            $0.localDeviceId == device.id ||
+            $0.id == device.id ||
+            (
+                $0.smartThingsDeviceId != nil &&
+                $0.smartThingsDeviceId == smartThingsDeviceID &&
+                canMatchSecuritySummaryBySmartThingsID(
+                    summarySource: $0.source,
+                    deviceSource: source,
+                    smartThingsDeviceID: smartThingsDeviceID
+                )
+            )
+        }) {
+            securitySirenOutputs[sirenIndex].name = device.name
+            securitySirenOutputs[sirenIndex].room = device.room
+            securitySirenOutputs[sirenIndex].smartThingsDeviceId = smartThingsDeviceID ?? securitySirenOutputs[sirenIndex].smartThingsDeviceId
+            if !source.isEmpty {
+                securitySirenOutputs[sirenIndex].source = source
+            }
+            securitySirenOutputs[sirenIndex].isOnline = device.isOnline
+            securitySirenOutputs[sirenIndex].isActive = device.status
+            securitySirenOutputs[sirenIndex].stateLabel = device.status ? "Sounding" : "Ready"
+            securitySirenOutputs[sirenIndex].lastSeen = device.lastSeen
         }
 
         securityZonesActive = securitySensors.filter(\.isActive).count

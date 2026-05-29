@@ -11,6 +11,7 @@ import {
   RefreshCw,
   SlidersHorizontal,
   ShieldX,
+  Volume2,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -27,7 +28,8 @@ import {
   disarmSecuritySystem,
   dismissTriggeredAlarm,
   getSecurityStatus,
-  syncSecurityWithSmartThings
+  syncSecurityWithSmartThings,
+  updateSecuritySettings
 } from "@/api/security"
 import { useToast } from "@/hooks/useToast"
 
@@ -70,6 +72,24 @@ type DoorLock = {
   lastSeen: string | null
 }
 
+type SirenOutput = {
+  deviceId: string
+  localDeviceId: string | null
+  smartThingsDeviceId?: string | null
+  source?: string | null
+  sourceLabel?: string | null
+  platform?: string | null
+  name: string
+  room: string | null
+  isSelected: boolean
+  isEnabled: boolean
+  isAvailable: boolean
+  isOnline: boolean
+  isActive: boolean
+  stateLabel: string
+  lastSeen: string | null
+}
+
 type AlarmStatus = {
   alarmState: string
   isArmed: boolean
@@ -99,6 +119,7 @@ type AlarmStatus = {
   dismissalReason?: string | null
   dismissalReasonText?: string | null
   lastSirenSilenceResult?: Record<string, unknown> | null
+  lastSirenTriggerResult?: Record<string, unknown> | null
   audioPrompts?: Record<string, string>
   zoneCount: number
   activeZones: number
@@ -114,6 +135,10 @@ type AlarmStatus = {
   lockedDoorCount?: number
   unlockedDoorCount?: number
   doorLocks?: DoorLock[]
+  sirenOutputCount?: number
+  selectedSirenOutputCount?: number
+  onlineSirenOutputCount?: number
+  sirenOutputs?: SirenOutput[]
   isOnline: boolean
   lastSyncWithSmartThings?: string | null
   batteryLevel?: number | null
@@ -251,6 +276,10 @@ function SecurityBatteryIndicator({ sensor }: { sensor: SecuritySensor }) {
 
 const getSensorSelectionKey = (sensor: SecuritySensor) => (
   sensor.localDeviceId || sensor.zoneDeviceId || sensor.deviceId
+)
+
+const getSirenSelectionKey = (siren: SirenOutput) => (
+  siren.localDeviceId || siren.deviceId || siren.smartThingsDeviceId || ""
 )
 
 const getCompactSensorStatus = (sensor: SecuritySensor) => {
@@ -398,6 +427,8 @@ export function SecurityAlarmWidget({
   const [pendingDoorIds, setPendingDoorIds] = useState<string[]>([])
   const [selectedSensorKeys, setSelectedSensorKeys] = useState<string[] | null>(null)
   const [sensorSelectorOpen, setSensorSelectorOpen] = useState(false)
+  const [sirenSelectorOpen, setSirenSelectorOpen] = useState(false)
+  const [savingSirenOutputs, setSavingSirenOutputs] = useState(false)
   const [dismissReason, setDismissReason] = useState<"false_alarm" | "test" | "manual" | "custom">("false_alarm")
   const [customDismissReason, setCustomDismissReason] = useState("")
   const [securityPinPrompt, setSecurityPinPrompt] = useState<SecurityPinPrompt | null>(null)
@@ -856,6 +887,7 @@ export function SecurityAlarmWidget({
   const isNarrow = compact
   const sensors = Array.isArray(alarmStatus?.sensors) ? alarmStatus.sensors : []
   const doorLocks = Array.isArray(alarmStatus?.doorLocks) ? alarmStatus.doorLocks : []
+  const sirenOutputs = Array.isArray(alarmStatus?.sirenOutputs) ? alarmStatus.sirenOutputs : []
   const hasCustomSensorSelection = selectedSensorKeys !== null
   const selectedSensorKeySet = useMemo(() => (
     selectedSensorKeys === null ? null : new Set(selectedSensorKeys)
@@ -884,6 +916,12 @@ export function SecurityAlarmWidget({
   const lockedDoorCount = typeof alarmStatus?.lockedDoorCount === "number"
     ? alarmStatus.lockedDoorCount
     : doorLocks.filter((doorLock) => doorLock.isLocked).length
+  const sirenOutputCount = typeof alarmStatus?.sirenOutputCount === "number" ? alarmStatus.sirenOutputCount : sirenOutputs.length
+  const selectedSirenOutputCount = typeof alarmStatus?.selectedSirenOutputCount === "number"
+    ? alarmStatus.selectedSirenOutputCount
+    : sirenOutputs.filter((siren) => siren.isSelected && siren.isEnabled).length
+  const selectedSirenOutputs = sirenOutputs.filter((siren) => siren.isSelected && siren.isEnabled)
+  const selectedSirenOutputKeySet = new Set(selectedSirenOutputs.map(getSirenSelectionKey).filter(Boolean))
   const isStayArmed = alarmStatus?.alarmState === "armedStay"
   const isAwayArmed = alarmStatus?.alarmState === "armedAway"
   const isTriggered = alarmStatus?.alarmState === "triggered"
@@ -956,6 +994,49 @@ export function SecurityAlarmWidget({
 
     setSelectedSensorKeys(nextSelection)
     void persistSensorSelection(nextSelection)
+  }
+
+  const toggleSirenOutputSelection = async (siren: SirenOutput) => {
+    const sirenKey = getSirenSelectionKey(siren)
+    if (!sirenKey || savingSirenOutputs) {
+      return
+    }
+
+    const nextSelectedKeys = new Set(selectedSirenOutputKeySet)
+    if (nextSelectedKeys.has(sirenKey)) {
+      nextSelectedKeys.delete(sirenKey)
+    } else {
+      nextSelectedKeys.add(sirenKey)
+    }
+
+    const nextSirenOutputs = sirenOutputs
+      .filter((candidate) => nextSelectedKeys.has(getSirenSelectionKey(candidate)))
+      .map((candidate) => ({
+        deviceId: getSirenSelectionKey(candidate),
+        name: candidate.name,
+        enabled: true
+      }))
+
+    setSavingSirenOutputs(true)
+    try {
+      await updateSecuritySettings({ sirenOutputs: nextSirenOutputs })
+      toast({
+        title: "Alarm sirens updated",
+        description: nextSirenOutputs.length > 0
+          ? `${nextSirenOutputs.length} siren${nextSirenOutputs.length === 1 ? "" : "s"} selected`
+          : "No sirens selected"
+      })
+      await fetchAlarmStatus()
+    } catch (error: any) {
+      console.error("Failed to update alarm sirens:", error)
+      toast({
+        title: "Siren update failed",
+        description: error.message || "Failed to update selected alarm sirens",
+        variant: "destructive"
+      })
+    } finally {
+      setSavingSirenOutputs(false)
+    }
   }
 
   if (loading) {
@@ -1114,6 +1195,145 @@ export function SecurityAlarmWidget({
             </div>
 
             <div className={cn("mt-3 h-1 w-10 rounded-full", alarmTone.accentClassName)} />
+          </div>
+
+          <div className={sectionShellClassName(compact)}>
+            <div className={cn("mb-3 flex gap-3", isNarrow ? "flex-col items-start" : "items-center justify-between")}>
+              <div>
+                <p className="section-kicker">Alarm Sirens</p>
+                <p className="mt-1 text-xs text-muted-foreground">Selected sirens sound when the alarm is triggered.</p>
+              </div>
+
+              <div className={cn("flex flex-wrap items-center gap-2", isNarrow ? "w-full" : "justify-end")}>
+                {sirenOutputCount > 0 ? (
+                  <span className={securityChipClassName()}>
+                    {selectedSirenOutputCount}/{sirenOutputCount} selected
+                  </span>
+                ) : null}
+                <Popover open={sirenSelectorOpen} onOpenChange={setSirenSelectorOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 rounded-full border border-white/10 bg-white/10 text-muted-foreground hover:bg-white/20 dark:bg-slate-950/10 dark:hover:bg-slate-950/20"
+                      aria-label="Choose alarm sirens"
+                      aria-expanded={sirenSelectorOpen}
+                    >
+                      {savingSirenOutputs ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <SlidersHorizontal className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    align="end"
+                    sideOffset={8}
+                    className="w-72 rounded-[1rem] border border-white/10 bg-background/95 p-3 shadow-2xl backdrop-blur"
+                  >
+                    <div className="space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                            Alarm Sirens
+                          </p>
+                          <p className="mt-1 text-[11px] text-muted-foreground">
+                            Toggle sirens without closing the picker.
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 px-3 text-[11px]"
+                          onClick={() => setSirenSelectorOpen(false)}
+                        >
+                          Done
+                        </Button>
+                      </div>
+
+                      {sirenOutputs.length > 0 ? (
+                        <ScrollArea className="max-h-64">
+                          <div className="space-y-1 pr-2">
+                            {sirenOutputs.map((siren) => {
+                              const sirenKey = getSirenSelectionKey(siren)
+                              const isChecked = selectedSirenOutputKeySet.has(sirenKey)
+
+                              return (
+                                <button
+                                  key={sirenKey}
+                                  type="button"
+                                  onClick={() => toggleSirenOutputSelection(siren)}
+                                  disabled={savingSirenOutputs}
+                                  className={cn(
+                                    "flex w-full items-center gap-3 rounded-[0.85rem] border px-3 py-2.5 text-left transition-colors disabled:opacity-70",
+                                    isChecked
+                                      ? "border-red-500/25 bg-red-500/10"
+                                      : "border-white/10 bg-white/8 hover:bg-white/12 dark:bg-slate-950/10 dark:hover:bg-slate-950/20"
+                                  )}
+                                  aria-pressed={isChecked}
+                                >
+                                  <span className={cn(
+                                    "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                                    isChecked
+                                      ? "border-red-500/30 bg-red-500/15 text-red-600 dark:text-red-300"
+                                      : "border-white/15 text-transparent"
+                                  )}>
+                                    <Check className="h-3 w-3" />
+                                  </span>
+                                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+                                    {siren.name}
+                                  </span>
+                                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                                    {siren.isOnline ? siren.stateLabel || "Ready" : "Offline"}
+                                  </span>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        </ScrollArea>
+                      ) : (
+                        <p className="rounded-[0.85rem] border border-dashed border-white/10 bg-white/10 px-3 py-3 text-sm text-muted-foreground dark:bg-slate-950/10">
+                          No alarm sirens available for this security platform.
+                        </p>
+                      )}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+            </div>
+
+            {selectedSirenOutputs.length > 0 ? (
+              <div className={cn("grid gap-2", compact ? "grid-cols-1" : "grid-cols-3")}>
+                {selectedSirenOutputs.map((siren) => (
+                  <div
+                    key={getSirenSelectionKey(siren)}
+                    className="rounded-[0.9rem] border border-red-500/22 bg-white/10 px-2.5 py-2 text-left backdrop-blur-sm dark:bg-slate-950/10"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="line-clamp-2 min-w-0 text-[11px] font-semibold leading-tight text-foreground">
+                        {siren.name}
+                      </p>
+                      <Volume2 className={cn(
+                        "mt-0.5 h-3.5 w-3.5 shrink-0",
+                        siren.isOnline ? "text-red-600 dark:text-red-300" : "text-muted-foreground"
+                      )} />
+                    </div>
+                    <p className={cn(
+                      "mt-2 text-[10px] font-semibold",
+                      siren.isOnline ? "text-red-600 dark:text-red-300" : "text-muted-foreground"
+                    )}>
+                      {siren.isOnline ? siren.stateLabel || "Ready" : "Offline"}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-[1rem] border border-dashed border-white/10 bg-white/10 px-3 py-4 text-sm text-muted-foreground dark:bg-slate-950/10">
+                No sirens selected. Use the siren menu to choose what sounds when the alarm is triggered.
+              </div>
+            )}
           </div>
 
           <div className={sectionShellClassName(compact)}>

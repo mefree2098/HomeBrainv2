@@ -226,6 +226,34 @@ router.post('/dismiss', securityAlarmActionRateLimit, auth, async (req, res) => 
 });
 
 /**
+ * POST /api/security-alarm/trigger
+ * Trigger the native security alarm and selected siren outputs
+ */
+router.post('/trigger', securityAlarmActionRateLimit, auth, async (req, res) => {
+  try {
+    console.log('POST /api/security-alarm/trigger - Triggering security system');
+
+    const alarm = await securityAlarmService.triggerAlarm(req.body?.zone || req.body?.triggeredZone || null, {
+      triggeredZoneName: req.body?.zoneName || req.body?.triggeredZoneName || req.body?.reason
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Security system triggered',
+      alarm
+    });
+  } catch (error) {
+    console.error('Error in POST /api/security-alarm/trigger:', error.message);
+    console.error('Full error:', error);
+    res.status(getSecurityAlarmErrorStatus(error)).json({
+      success: false,
+      message: error.message || 'Failed to trigger security system',
+      error: error.message
+    });
+  }
+});
+
+/**
  * PUT /api/security-alarm/platforms
  * Select which security platforms are active
  */
@@ -272,7 +300,9 @@ router.put('/settings', securityAlarmActionRateLimit, auth, async (req, res) => 
       entryDelaySeconds: req.body?.entryDelaySeconds,
       entryDelay: req.body?.entryDelay,
       pinSettings: req.body?.pinSettings,
-      pins: req.body?.pins
+      pins: req.body?.pins,
+      sirenOutputs: req.body?.sirenOutputs,
+      alarmOutputs: req.body?.alarmOutputs
     });
 
     res.status(200).json({
