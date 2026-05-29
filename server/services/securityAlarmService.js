@@ -127,6 +127,27 @@ const toNumber = (value) => {
   return null;
 };
 
+const normalizeZWaveStatus = (value) => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const normalized = value.trim().toLowerCase();
+    if (/^-?\d+$/.test(normalized)) {
+      return Number(normalized);
+    }
+    switch (normalized) {
+      case 'unknown':
+        return 0;
+      case 'dead':
+        return 3;
+      default:
+        return null;
+    }
+  }
+  return null;
+};
+
 const uniqueStrings = (values) => Array.from(new Set(values.filter(Boolean)));
 
 const buildSecurityAlarmError = (message, statusCode = 400) => {
@@ -432,6 +453,31 @@ const getSecurityPlatformForDevice = (device) => {
 
   return null;
 };
+
+const isHomeBrainZWaveDeviceRouteOnline = (device) => {
+  const source = canonicalizeDeviceSource(getDeviceSource(device));
+  const direct = device?.properties?.homebrainDirect && typeof device.properties.homebrainDirect === 'object'
+    ? device.properties.homebrainDirect
+    : {};
+  const protocol = normalizeString(direct.protocol).toLowerCase();
+
+  if (source !== 'homebrain-zwave' && protocol !== 'zwave') {
+    return device?.isOnline !== false;
+  }
+
+  const status = normalizeZWaveStatus(direct.status);
+  if (status === 0 || status === 3) {
+    return false;
+  }
+  if (direct.ready === false) {
+    return false;
+  }
+  return device?.isOnline !== false;
+};
+
+const isSecurityDeviceOnline = (device) => (
+  Boolean(device) && isHomeBrainZWaveDeviceRouteOnline(device)
+);
 
 const isDeviceAllowedForSecurityPlatforms = (device, enabledPlatforms) => {
   if (!device || !enabledPlatforms) {
@@ -826,7 +872,7 @@ class SecurityAlarmService {
     const batteryLevel = extractBatteryLevel(device);
     const batteryState = getBatteryState(batteryLevel);
     const isAvailable = Boolean(device);
-    const isOnline = isAvailable ? device.isOnline !== false : false;
+    const isOnline = isAvailable ? isSecurityDeviceOnline(device) : false;
     const isMonitored = Boolean(zone?.enabled);
     const isBypassed = Boolean(zone?.bypassed);
     const isActive = isAvailable ? Boolean(device?.status) : false;
@@ -887,7 +933,7 @@ class SecurityAlarmService {
     const smartThingsDeviceId = normalizeString(device?.properties?.smartThingsDeviceId);
     const source = device ? getDeviceSource(device) : null;
     const isLocked = Boolean(device?.status);
-    const isOnline = device?.isOnline !== false;
+    const isOnline = isSecurityDeviceOnline(device);
 
     return {
       deviceId: localDeviceId,
@@ -920,7 +966,7 @@ class SecurityAlarmService {
     const resolvedDeviceId = localDeviceId || configuredDeviceId;
     const source = device ? getDeviceSource(device) : null;
     const isAvailable = Boolean(device);
-    const isOnline = isAvailable ? device.isOnline !== false : false;
+    const isOnline = isAvailable ? isSecurityDeviceOnline(device) : false;
     const isActive = isAvailable ? Boolean(device?.status) : false;
     const capabilities = getDeviceCapabilities(device);
 

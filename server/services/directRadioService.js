@@ -33,6 +33,13 @@ const DEFAULT_PAIRING_SECONDS = 120;
 const MAX_PAIRING_SECONDS = 900;
 const DEFAULT_HARDWARE_SCAN_INTERVAL_MS = 60_000;
 const DIRECT_DEVICE_PROJECTION = 'name type room groups status brightness color colorTemperature temperature targetTemperature isOnline lastSeen properties brand model';
+const ZWAVE_NODE_STATUS = Object.freeze({
+  UNKNOWN: 0,
+  ASLEEP: 1,
+  AWAKE: 2,
+  DEAD: 3,
+  ALIVE: 4
+});
 const FALLBACK_SERIAL_DEVICE_PATTERNS = [
   /^ttyUSB\d+$/i,
   /^ttyACM\d+$/i
@@ -40,6 +47,58 @@ const FALLBACK_SERIAL_DEVICE_PATTERNS = [
 
 function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeZWaveStatus(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const normalized = value.trim().toLowerCase();
+    if (/^-?\d+$/.test(normalized)) {
+      return Number(normalized);
+    }
+    switch (normalized) {
+      case 'unknown':
+        return ZWAVE_NODE_STATUS.UNKNOWN;
+      case 'asleep':
+        return ZWAVE_NODE_STATUS.ASLEEP;
+      case 'awake':
+        return ZWAVE_NODE_STATUS.AWAKE;
+      case 'dead':
+        return ZWAVE_NODE_STATUS.DEAD;
+      case 'alive':
+        return ZWAVE_NODE_STATUS.ALIVE;
+      default:
+        return null;
+    }
+  }
+  return null;
+}
+
+function isZWaveStatusUnavailable(status) {
+  const normalized = normalizeZWaveStatus(status);
+  return normalized === ZWAVE_NODE_STATUS.UNKNOWN || normalized === ZWAVE_NODE_STATUS.DEAD;
+}
+
+function isZWaveNodeOnline(node) {
+  if (!node) {
+    return false;
+  }
+  if (node.ready !== true) {
+    return false;
+  }
+  return !isZWaveStatusUnavailable(node.status);
+}
+
+function isZWaveNodeCommandReady(node) {
+  if (!node) {
+    return false;
+  }
+  if (node.ready === false || isZWaveStatusUnavailable(node.status)) {
+    return false;
+  }
+  return true;
 }
 
 function normalizeDirectRoom(value) {
@@ -4012,6 +4071,7 @@ class DirectRadioService {
       isControllerNode: node.isControllerNode === true,
       ready: node.ready === true,
       status: node.status === undefined ? null : node.status,
+      isOnline: isZWaveNodeOnline(node),
       interviewStage,
       isListening: node.isListening === undefined ? null : node.isListening,
       isFrequentListening: node.isFrequentListening === undefined ? null : node.isFrequentListening,
@@ -4399,7 +4459,7 @@ class DirectRadioService {
         room: trimString(node.location) || 'Unassigned',
         status: hasLock ? locked : hasSwitch ? Boolean(binaryValue || (brightness && brightness > 0)) : false,
         brightness: brightness ?? undefined,
-        isOnline: node.status !== 0,
+        isOnline: isZWaveNodeOnline(node),
         lastSeen: new Date(),
         brand: trimString(node.deviceConfig?.manufacturer) || undefined,
         model: trimString(node.deviceConfig?.label || node.productLabel) || undefined,
@@ -4412,6 +4472,7 @@ class DirectRadioService {
             productType: node.productType || null,
             productId: node.productId || null,
             interviewStage: String(node.interviewStage || ''),
+            ready: node.ready === undefined ? null : Boolean(node.ready),
             status: node.status,
             isListening: node.isListening,
             isFrequentListening: node.isFrequentListening,
@@ -6634,7 +6695,7 @@ class DirectRadioService {
 
   async controlZWaveDevice(device, normalizedAction, commandValue, updateData = {}) {
     const node = this.getDirectNodeForDevice(device);
-    if (!node) {
+    if (!isZWaveNodeCommandReady(node)) {
       throw new Error('Z-Wave node is not ready');
     }
     const zwave = require('zwave-js');
@@ -6948,6 +7009,8 @@ directRadioService._test = {
   inferFeaturesFromZigbeeDefinition,
   getSirenVolumeConfigParameterFromCatalog,
   getSirenVolumeOptionsFromParameter,
+  isZWaveNodeCommandReady,
+  isZWaveNodeOnline,
   looksLikeSonoffMg24ThreadStick,
   mergeSmartThingsTelemetryFallback,
   mergeDirectDeviceUpdateForExisting,
