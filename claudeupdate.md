@@ -1,8 +1,8 @@
 # HomeBrain — Native Zigbee/Z-Wave Engine Overhaul & Follow-ups
 
 **Author:** Claude (Anthropic) working with Matt Freestone
-**Date:** 2026-05-29
-**Scope:** Reliability overhaul of the native Zigbee/Z-Wave engine, supporting UI on web + iOS, structural decomposition, and the post-deploy regression fixes.
+**Date:** 2026-05-30
+**Scope:** Reliability overhaul of the native Zigbee/Z-Wave engine, supporting UI on web + iOS, structural decomposition, the post-deploy regression fixes, the Z-Wave siren on/off fix, and the INSTEON "re-link all devices" feature.
 
 > **Status:** Everything below is merged to `main` and pushed. It has **not** yet been
 > validated on the physical Jetson + radios — deploy and hardware testing are still required.
@@ -16,13 +16,15 @@ libraries — **`zigbee-herdsman`** (Zigbee2MQTT's core), **`zwave-js`** (Home A
 Z-Wave engine). The failures you were hitting were **integration and data-model bugs, not
 protocol bugs**, so this was a targeted overhaul, not a rewrite.
 
-Delivered across three pull requests, all merged to `main`:
+Delivered across five pull requests, all merged to `main`:
 
 | PR | Merge commit | What |
 |----|--------------|------|
 | **#223** | `32fe6e4e` | Phases 0–5: reliability fixes, decomposition, web + iOS UI, DB indexes |
 | **#224** | `6fba7508` | Auto-recover from stale code-split chunks after deploy (the "loading error" screen) |
 | **#225** | `cde20e94` | Recovery fix: un-hide migrated devices + restore INSTEON (revert serialport to v8) |
+| **#226** | `bc890771` | Z-Wave siren on/off fix: detect the trigger from interviewed CCs + add Basic CC |
+| **#227** | `d73f4c2f` | INSTEON "Re-link all devices": rebuild the emptied PLM all-link database |
 
 Base before this work: `c8a587c7` ("Fix iOS security action refresh").
 
@@ -343,7 +345,7 @@ changing success semantics needs care across all callers).
 ## 14. Commit reference (on `main`)
 
 ```
-(this change)  feat: INSTEON "Re-link all devices" — rebuild empty PLM all-link database
+d73f4c2f  feat: INSTEON "Re-link all devices" — rebuild empty PLM all-link database (#227)
 bc890771  fix: restore Z-Wave siren on/off by detecting trigger from interviewed CCs (#226)
 cde20e94  fix: un-hide migrated devices + restore INSTEON (revert serialport to v8) (#225)
 6fba7508  client: auto-recover from stale code-split chunks after deploy (#224)
