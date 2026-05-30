@@ -316,6 +316,51 @@ function normalizeHarmonyDuplicateName(value) {
   return normalizeCommandName(stripHarmonyDuplicateSuffix(value));
 }
 
+function normalizeHubAliasName(value) {
+  return trimHarmonyValue(value).toLowerCase();
+}
+
+function isRememberedOnlyHubAlias(hub = {}) {
+  const source = trimHarmonyValue(hub.source).toLowerCase();
+  return source.includes('remembered')
+    && !source.includes('configured')
+    && hub.discovered !== true
+    && hub.success !== true;
+}
+
+function hasTrackedHarmonyDevices(hub = {}) {
+  return Number(hub.trackedActivityDevices || 0) > 0
+    || Number(hub.onlineActivityDevices || 0) > 0
+    || Number(hub.activeActivityDevices || 0) > 0;
+}
+
+function pruneStaleRememberedHubAliases(hubs = []) {
+  const list = Array.isArray(hubs) ? hubs : [];
+  return list.filter((hub, index) => {
+    if (!isRememberedOnlyHubAlias(hub) || hasTrackedHarmonyDevices(hub)) {
+      return true;
+    }
+
+    const hubName = normalizeHubAliasName(hub.friendlyName);
+    if (!hubName) {
+      return true;
+    }
+
+    return !list.some((peer, peerIndex) => {
+      if (peerIndex === index) {
+        return false;
+      }
+      if (normalizeHubAliasName(peer.friendlyName) !== hubName) {
+        return false;
+      }
+      return peer.success === true
+        || peer.discovered === true
+        || Boolean(trimHarmonyValue(peer.remoteId))
+        || hasTrackedHarmonyDevices(peer);
+    });
+  });
+}
+
 function mergeUniqueDevices(...collections) {
   const merged = new Map();
 
@@ -1023,7 +1068,7 @@ class HarmonyService {
       }
     }
 
-    const discovered = Array.from(hubMap.values())
+    const discovered = pruneStaleRememberedHubAliases(Array.from(hubMap.values()))
       .sort((left, right) => {
         const leftName = (left.friendlyName || left.ip || '').toString().toLowerCase();
         const rightName = (right.friendlyName || right.ip || '').toString().toLowerCase();
@@ -1831,7 +1876,7 @@ class HarmonyService {
 
     await this.mergeKnownHubs(registryUpdates);
 
-    return hydrated.sort((left, right) => {
+    return pruneStaleRememberedHubAliases(hydrated).sort((left, right) => {
       const leftName = (left.friendlyName || left.ip || '').toString().toLowerCase();
       const rightName = (right.friendlyName || right.ip || '').toString().toLowerCase();
       return leftName.localeCompare(rightName);
@@ -1840,19 +1885,19 @@ class HarmonyService {
 
   async getStatus(options = {}) {
     const timeoutMs = Number(options.timeoutMs || DEFAULT_DISCOVERY_TIMEOUT_MS);
-    const [configuredHubAddresses, discoveredHubs, knownHubs, trackedDevices, onlineDevices] = await Promise.all([
+    const [configuredHubAddresses, discoveredHubs, trackedDevices, onlineDevices] = await Promise.all([
       this.getConfiguredHubAddresses(),
       this.discoverHubs({ timeoutMs, force: false }),
-      this.getKnownHubRegistry(),
       Device.countDocuments({ 'properties.source': 'harmony' }),
       Device.countDocuments({ 'properties.source': 'harmony', isOnline: true })
     ]);
+    const visibleDiscoveredHubs = pruneStaleRememberedHubAliases(discoveredHubs);
 
     return {
       configuredHubAddresses,
-      discoveredHubs,
-      discoveredCount: discoveredHubs.filter((hub) => hub.discovered).length,
-      knownHubCount: knownHubs.length,
+      discoveredHubs: visibleDiscoveredHubs,
+      discoveredCount: visibleDiscoveredHubs.filter((hub) => hub.discovered).length,
+      knownHubCount: visibleDiscoveredHubs.length,
       trackedDevices,
       onlineDevices
     };
@@ -2416,3 +2461,4 @@ class HarmonyService {
 
 module.exports = new HarmonyService();
 module.exports.HarmonyService = HarmonyService;
+module.exports.pruneStaleRememberedHubAliases = pruneStaleRememberedHubAliases;

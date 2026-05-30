@@ -5,7 +5,7 @@ const { EventEmitter } = require('events');
 const Device = require('../models/Device');
 const harmonyServiceModule = require('../services/harmonyService');
 
-const { HarmonyService } = harmonyServiceModule;
+const { HarmonyService, pruneStaleRememberedHubAliases } = harmonyServiceModule;
 
 class FakeExplorer extends EventEmitter {
   static instances = [];
@@ -91,6 +91,61 @@ test('discoverHubs downgrades low-level socket failures into a safe empty result
 
   const result = await service.discoverHubs({ timeoutMs: 1 });
   assert.deepEqual(result, []);
+});
+
+test('pruneStaleRememberedHubAliases hides stale remembered IP aliases for the active hub', () => {
+  const hubs = pruneStaleRememberedHubAliases([
+    {
+      ip: '192.168.2.14',
+      friendlyName: 'Bedroom Hub',
+      source: 'remembered',
+      discovered: false,
+      success: false,
+      trackedActivityDevices: 0
+    },
+    {
+      ip: '192.168.2.43',
+      friendlyName: 'Bedroom Hub',
+      source: 'remembered+discovered',
+      discovered: true,
+      success: true,
+      remoteId: '9173577',
+      trackedActivityDevices: 6
+    }
+  ]);
+
+  assert.deepEqual(hubs.map((hub) => hub.ip), ['192.168.2.43']);
+});
+
+test('pruneStaleRememberedHubAliases keeps configured or tracked remembered hubs', () => {
+  const hubs = pruneStaleRememberedHubAliases([
+    {
+      ip: '192.168.2.14',
+      friendlyName: 'Bedroom Hub',
+      source: 'remembered+configured',
+      discovered: false,
+      success: false,
+      trackedActivityDevices: 0
+    },
+    {
+      ip: '192.168.2.15',
+      friendlyName: 'Bedroom Hub',
+      source: 'remembered',
+      discovered: false,
+      success: false,
+      trackedActivityDevices: 1
+    },
+    {
+      ip: '192.168.2.43',
+      friendlyName: 'Bedroom Hub',
+      source: 'remembered+discovered',
+      discovered: true,
+      success: true,
+      remoteId: '9173577'
+    }
+  ]);
+
+  assert.deepEqual(hubs.map((hub) => hub.ip), ['192.168.2.14', '192.168.2.15', '192.168.2.43']);
 });
 
 test('startBackgroundMonitoring polls Harmony activity state for known hubs', async (t) => {

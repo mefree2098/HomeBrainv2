@@ -123,6 +123,24 @@ const RETIRED_SMARTTHINGS_MIGRATION_SOURCE_QUERY = Object.freeze({
     { 'properties.source': { $regex: '^homebrain-', $options: 'i' } }
   ]
 });
+const DIRECT_RADIO_VISIBLE_DEVICE_QUERY = Object.freeze({
+  $and: [
+    { 'properties.homebrainDirect.isControllerNode': { $ne: true } },
+    {
+      $nor: [
+        {
+          'properties.source': 'homebrain-zwave',
+          'properties.homebrainDirect.nodeId': 1,
+          $or: [
+            { name: /^ZST39(?:\s|$)/i },
+            { model: /^ZST39(?:\s|$)/i },
+            { 'properties.homebrainDirect.productId': 1552 }
+          ]
+        }
+      ]
+    }
+  ]
+});
 let cachedInsteonService = null;
 const getInsteonService = () => {
   if (!cachedInsteonService) {
@@ -317,15 +335,21 @@ function mergeMongoQuery(baseQuery = {}, extraQuery = {}) {
 function buildVisibleDeviceQuery(filters = {}, options = {}) {
   let query = { ...filters };
   if (options.includeExcludedHarmony === true) {
-    return options.includeRetiredMigrationSources === true
+    query = options.includeRetiredMigrationSources === true
       ? query
       : mergeMongoQuery(query, RETIRED_SMARTTHINGS_MIGRATION_SOURCE_QUERY);
+    return options.includeDirectRadioControllerNodes === true
+      ? query
+      : mergeMongoQuery(query, DIRECT_RADIO_VISIBLE_DEVICE_QUERY);
   }
 
   query = mergeMongoQuery(query, HARMONY_VISIBLE_DEVICE_QUERY);
-  return options.includeRetiredMigrationSources === true
+  query = options.includeRetiredMigrationSources === true
     ? query
     : mergeMongoQuery(query, RETIRED_SMARTTHINGS_MIGRATION_SOURCE_QUERY);
+  return options.includeDirectRadioControllerNodes === true
+    ? query
+    : mergeMongoQuery(query, DIRECT_RADIO_VISIBLE_DEVICE_QUERY);
 }
 
 async function ensureDeviceGroupRegistryEntries(groups = []) {

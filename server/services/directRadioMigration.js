@@ -1473,20 +1473,20 @@ async verifySmartThingsExclusion(migration) {
   },
 
 async verifyMigrationExclusion(migration) {
-    if (
-      migration.status === 'awaiting_smartthings_exclusion'
-      || migration.exclusionStatus === 'waiting_smartthings'
-      || migration.smartThingsDeviceId
-    ) {
-      return this.verifySmartThingsExclusion(migration);
-    }
-
     if (migration.exclusionVerifiedAt) {
       return this.buildMigrationVerificationResult(migration, {
         phase: 'physical_exclusion',
         status: 'verified',
         message: 'Z-Wave exclusion verified. The controller received the device removal confirmation, so HomeBrain can open inclusion next.'
       });
+    }
+
+    if (
+      migration.status === 'awaiting_smartthings_exclusion'
+      || migration.exclusionStatus === 'waiting_smartthings'
+      || migration.smartThingsDeviceId
+    ) {
+      return this.verifySmartThingsExclusion(migration);
     }
 
     if (migration.status === 'exclusion_failed' || migration.exclusionFailedAt) {

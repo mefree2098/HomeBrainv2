@@ -1414,6 +1414,38 @@ test('Z-Wave migration observes controller status reports that are awaited inter
   assert.equal(migration.exclusionNodeId, 42);
 });
 
+test('SmartThings-backed Z-Wave migration trusts controller-verified native exclusion', async () => {
+  const service = createService();
+  const migration = {
+    id: 'migration-native-exclusion',
+    sourceDeviceId: DEVICE_ID,
+    smartThingsDeviceId: 'smartthings-device-native-exclusion',
+    protocol: 'zwave',
+    status: 'excluding',
+    exclusionExpiresAt: Date.now() + 60_000,
+    expiresAt: Date.now() + 60_000,
+    startedAt: new Date().toISOString()
+  };
+  service.activeMigrations.set(migration.id, migration);
+  service.smartThingsService = {
+    getDevice: async () => ({
+      deviceId: migration.smartThingsDeviceId,
+      type: 'ZWAVE'
+    })
+  };
+
+  service.recordZWaveExclusionStatus(6, { nodeId: 44 });
+  const result = await service.verifyMigrationStep({
+    migrationId: migration.id,
+    phase: 'physical_exclusion'
+  });
+
+  assert.equal(result.verification.status, 'verified');
+  assert.equal(result.verification.canAdvance, true);
+  assert.equal(migration.exclusionNodeId, 44);
+  assert.equal(migration.smartThingsRemovalVerifiedAt, undefined);
+});
+
 test('SmartThings-backed Z-Wave migration exclusion verifies after SmartThings removes the device', async () => {
   const service = createService();
   const migration = {
