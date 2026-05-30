@@ -1277,6 +1277,31 @@ test('getAllDevices hides Harmony devices excluded from HomeBrain unless explici
   assert.doesNotMatch(JSON.stringify(queries[1]), /harmonyExcludeFromHomeBrain/);
 });
 
+test('getAllDevices hides the Z-Wave controller node from normal device surfaces', async (t) => {
+  const originalFind = Device.find;
+
+  t.after(() => {
+    Device.find = originalFind;
+  });
+
+  const queries = [];
+
+  Device.find = (query = {}) => {
+    queries.push(query);
+    return {
+      sort: async () => []
+    };
+  };
+
+  await deviceService.getAllDevices();
+  await deviceService.getAllDevices({}, { includeDirectRadioControllerNodes: true });
+
+  assert.equal(queries.length, 2);
+  assert.match(JSON.stringify(queries[0]), /homebrainDirect/);
+  assert.match(JSON.stringify(queries[0]), /productId/);
+  assert.doesNotMatch(JSON.stringify(queries[1]), /productId/);
+});
+
 test('scheduleIntegrationRefresh coalesces concurrent background refreshes', async (t) => {
   const originalEnsureIntegrationState = deviceService.ensureIntegrationState;
   const originalIntegrationRefreshPromise = deviceService.integrationRefreshPromise;
