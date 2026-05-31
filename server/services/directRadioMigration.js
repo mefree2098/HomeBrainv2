@@ -118,6 +118,7 @@ const {
   summarizeSmartThingsExclusionEvidence,
   collectSmartThingsExclusionCounters,
   findSmartThingsExclusionCounterIncrease,
+  getMissingDistinctiveSmartThingsMigrationFeatures,
   normalizeObjectId,
   ensureDirSync,
   readJsonFile,
@@ -470,8 +471,7 @@ buildRecoveredSmartThingsMigrationSnapshot(directDevice, sourceDevice, protocol,
       ...(Array.isArray(getDeviceProperties(baseSnapshot).directRadioFeatures)
         ? getDeviceProperties(baseSnapshot).directRadioFeatures
         : []),
-      ...inferFeaturesFromExistingDirectRecord(baseSnapshot),
-      ...inferFeaturesFromSmartThings(sourceDevice)
+      ...inferFeaturesFromExistingDirectRecord(baseSnapshot)
     ].map(normalizeFeature)).sort();
     const directUpdate = mergeSmartThingsTelemetryFallback({
       ...baseSnapshot,
@@ -684,9 +684,43 @@ async completeMigration(migrationId, identity, update) {
     const source = protocolSource(identity.protocol);
     const features = uniqueStrings([
       ...(Array.isArray(update.properties?.directRadioFeatures) ? update.properties.directRadioFeatures : []),
-      ...inferFeaturesFromSmartThings(existing)
-    ]);
-    const validation = this.buildMigrationValidation(existing, update, features);
+      ...inferFeaturesFromExistingDirectRecord(update)
+    ].map(normalizeFeature)).sort();
+    const coverageUpdate = {
+      ...update,
+      properties: {
+        ...(update.properties || {}),
+        directRadioFeatures: features
+      }
+    };
+    const validation = this.buildMigrationValidation(existing, coverageUpdate, features);
+    const missingDistinctiveFeatures = getMissingDistinctiveSmartThingsMigrationFeatures(coverageUpdate, existing);
+    if (missingDistinctiveFeatures.length > 0) {
+      const updatedAt = new Date().toISOString();
+      migration.status = 'pairing_mismatch';
+      migration.inclusionStatus = 'mismatched_device';
+      migration.inclusionFailedAt = updatedAt;
+      migration.updatedAt = updatedAt;
+      migration.directIdentity = identity;
+      migration.validation = {
+        ...validation,
+        status: 'failed',
+        mismatch: {
+          reason: 'distinctive_feature_mismatch',
+          missingFeatures: missingDistinctiveFeatures
+        }
+      };
+      this.log('warn', identity.protocol, 'Rejected SmartThings migration pairing because the native device lacks distinctive source features', {
+        migrationId,
+        sourceDeviceId: existing._id?.toString?.() || null,
+        sourceDeviceName: existing.name || null,
+        identity: identity.id,
+        missingFeatures: missingDistinctiveFeatures
+      });
+      return this.withDirectDeviceUpsertLock(identity, () => this.upsertDirectDeviceRecord(identity, update, {
+        skipActiveMigration: true
+      }));
+    }
     const migratedProperties = {
       ...previousProperties,
       ...(update.properties || {}),
@@ -1539,6 +1573,21 @@ verifyMigrationInclusion(migration) {
         message: migration.protocol === 'zigbee'
           ? 'Zigbee pairing verified. HomeBrain created or updated the native device record from coordinator data.'
           : 'Z-Wave inclusion verified. HomeBrain received the new node and updated the native device record.'
+      });
+    }
+
+    if (migration.status === 'pairing_mismatch') {
+      return this.buildMigrationVerificationResult(migration, {
+        phase,
+        status: 'failed',
+        message: migration.protocol === 'zigbee'
+          ? 'HomeBrain discovered a Zigbee device, but it does not expose the distinctive features of the SmartThings source. The original SmartThings device was left unchanged.'
+          : 'HomeBrain received a Z-Wave node, but it does not expose the distinctive features of the SmartThings source. The original SmartThings device was left unchanged.',
+        guidance: [
+          'Reset and pair the intended physical device, not a nearby sensor that happened to join.',
+          'Verify the native device shows the same important capabilities as the SmartThings source before finishing migration.'
+        ],
+        validation: migration.validation || null
       });
     }
 
