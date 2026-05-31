@@ -11,7 +11,8 @@ const {
   mergeSmartThingsTelemetryFallback,
   mergeDirectDeviceUpdateForExisting,
   selectPrimaryDirectDeviceRecord,
-  scoreDetachedSmartThingsMigrationSource
+  scoreDetachedSmartThingsMigrationSource,
+  buildRecoveredSmartThingsMigrationSnapshot
 } = directRadioService._test;
 const DEVICE_ID = '507f1f77bcf86cd799439011';
 const SOURCE_DEVICE_ID = '507f1f77bcf86cd799439012';
@@ -1087,6 +1088,102 @@ test('detached SmartThings migration matching scores matching native sensor abov
   assert.ok(scoreDetachedSmartThingsMigrationSource(directDevice, sourceDevice, 'zigbee') >= 55);
   assert.ok(scoreDetachedSmartThingsMigrationSource(directDevice, unrelated, 'zigbee') < 55);
   assert.equal(scoreDetachedSmartThingsMigrationSource(directDevice, sourceDevice, 'zwave'), -Infinity);
+});
+
+test('detached SmartThings migration matching rejects multipurpose sensors when native features are missing', () => {
+  const directDevice = {
+    name: 'Back Door',
+    type: 'sensor',
+    room: 'Upstairs',
+    brand: 'Visonic',
+    model: 'MCT-340 E',
+    properties: {
+      homebrainDirect: {
+        protocol: 'zigbee',
+        manufacturerName: 'Visonic',
+        modelID: 'MCT-340 E'
+      },
+      directRadioFeatures: ['battery', 'contact', 'tamper', 'temperature']
+    }
+  };
+  const sourceDevice = {
+    name: 'Back Door',
+    type: 'sensor',
+    room: 'Upstairs',
+    properties: {
+      source: 'smartthings',
+      smartThingsLabel: 'Back Door',
+      smartThingsDeviceName: 'Multipurpose Sensor',
+      smartThingsManufacturer: 'SmartThingsCommunity',
+      smartThingsCapabilities: [
+        'contactSensor',
+        'temperatureMeasurement',
+        'threeAxis',
+        'accelerationSensor',
+        'battery',
+        'firmwareUpdate',
+        'refresh'
+      ],
+      smartThingsDeviceNetworkType: 'ZIGBEE'
+    }
+  };
+
+  assert.equal(scoreDetachedSmartThingsMigrationSource(directDevice, sourceDevice, 'zigbee'), -Infinity);
+});
+
+test('recovered SmartThings migration snapshot does not graft source-only features onto native device', () => {
+  const directDevice = {
+    _id: DEVICE_ID,
+    name: 'Back Door',
+    type: 'sensor',
+    room: 'Upstairs',
+    brand: 'Visonic',
+    model: 'MCT-340 E',
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x000d6f000b11f6e5',
+        manufacturerName: 'Visonic',
+        modelID: 'MCT-340 E'
+      },
+      directRadioFeatures: ['battery', 'contact', 'tamper', 'temperature']
+    }
+  };
+  const sourceDevice = {
+    _id: SOURCE_DEVICE_ID,
+    name: 'Back Door',
+    type: 'sensor',
+    room: 'Upstairs',
+    properties: {
+      source: 'smartthings',
+      smartThingsDeviceId: 'smartthings-back-door',
+      smartThingsLabel: 'Back Door',
+      smartThingsDeviceName: 'Multipurpose Sensor',
+      smartThingsManufacturer: 'SmartThingsCommunity',
+      smartThingsCapabilities: [
+        'contactSensor',
+        'temperatureMeasurement',
+        'threeAxis',
+        'accelerationSensor',
+        'battery',
+        'firmwareUpdate',
+        'refresh'
+      ],
+      smartThingsDeviceNetworkType: 'ZIGBEE'
+    }
+  };
+
+  const snapshot = buildRecoveredSmartThingsMigrationSnapshot({
+    directDevice,
+    sourceDevice,
+    protocol: 'zigbee',
+    validation: { status: 'needs_review' }
+  });
+
+  assert.deepEqual(snapshot.properties.directRadioFeatures, ['battery', 'contact', 'tamper', 'temperature']);
+  assert.equal(snapshot.properties.supportsAccelerationSensor, false);
+  assert.equal(snapshot.properties.supportsAxisSensor, undefined);
 });
 
 test('detached SmartThings migration matching rejects generic same-room sensor overlap without identity evidence', () => {

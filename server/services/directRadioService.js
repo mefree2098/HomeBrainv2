@@ -284,6 +284,7 @@ directRadioService._test = {
   mergeDirectDeviceUpdateForExisting,
   normalizeSerialPort,
   selectPrimaryDirectDeviceRecord,
+  buildRecoveredSmartThingsMigrationSnapshot,
   scoreDetachedSmartThingsMigrationSource,
   scorePortForProtocol
 };

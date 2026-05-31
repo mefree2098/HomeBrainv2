@@ -778,6 +778,51 @@ function hasManufacturerIdentityMatch(directManufacturer, sourceManufacturer) {
   return direct === source || direct.includes(source) || source.includes(direct);
 }
 
+const DISTINCTIVE_SMARTTHINGS_MIGRATION_FEATURES = Object.freeze([
+  'acceleration',
+  'alarm',
+  'axis',
+  'button',
+  'energy',
+  'garage',
+  'humidity',
+  'illuminance',
+  'lock',
+  'motion',
+  'power',
+  'vibration',
+  'water'
+]);
+
+const DISTINCTIVE_FEATURE_EQUIVALENTS = Object.freeze({
+  acceleration: ['acceleration', 'vibration'],
+  vibration: ['vibration', 'acceleration']
+});
+
+function directFeatureSetForMigration(device = {}) {
+  return new Set([
+    ...(Array.isArray(device?.properties?.directRadioFeatures) ? device.properties.directRadioFeatures : []),
+    ...inferFeaturesFromExistingDirectRecord(device)
+  ].map(normalizeFeature).filter(Boolean));
+}
+
+function sourceFeatureIsCoveredByDirect(directFeatures, sourceFeature) {
+  if (!(directFeatures instanceof Set)) {
+    return false;
+  }
+  const normalized = normalizeFeature(sourceFeature);
+  const equivalents = DISTINCTIVE_FEATURE_EQUIVALENTS[normalized] || [normalized];
+  return equivalents.some((feature) => directFeatures.has(feature));
+}
+
+function getMissingDistinctiveSmartThingsMigrationFeatures(directDevice, sourceDevice) {
+  const directFeatures = directFeatureSetForMigration(directDevice);
+  const sourceFeatures = new Set(inferFeaturesFromSmartThings(sourceDevice).map(normalizeFeature).filter(Boolean));
+  return DISTINCTIVE_SMARTTHINGS_MIGRATION_FEATURES
+    .filter((feature) => sourceFeatures.has(feature))
+    .filter((feature) => !sourceFeatureIsCoveredByDirect(directFeatures, feature));
+}
+
 function smartThingsNetworkTypeMatchesProtocol(properties = {}, protocol = '') {
   const networkType = normalizeSourceText(properties.smartThingsDeviceNetworkType)
     .replace(/[^a-z0-9]+/g, '');
@@ -2074,12 +2119,14 @@ function scoreDetachedSmartThingsMigrationSource(directDevice, sourceDevice, pro
     return -Infinity;
   }
 
+  const missingDistinctiveFeatures = getMissingDistinctiveSmartThingsMigrationFeatures(directDevice, sourceDevice);
+  if (missingDistinctiveFeatures.length > 0) {
+    return -Infinity;
+  }
+
   score += Math.round(scoreTokenOverlap(directTokens, sourceTokens) * 35);
 
-  const directFeatures = new Set([
-    ...(Array.isArray(directDevice.properties?.directRadioFeatures) ? directDevice.properties.directRadioFeatures : []),
-    ...inferFeaturesFromExistingDirectRecord(directDevice)
-  ].map(normalizeFeature).filter(Boolean));
+  const directFeatures = directFeatureSetForMigration(directDevice);
   const sourceFeatures = new Set(inferFeaturesFromSmartThings(sourceDevice).map(normalizeFeature).filter(Boolean));
   let featureOverlap = 0;
   directFeatures.forEach((feature) => {
@@ -2109,8 +2156,7 @@ function buildRecoveredSmartThingsMigrationSnapshot({
   const directDeviceId = getDeviceIdString(directDevice);
   const features = uniqueStrings([
     ...(Array.isArray(directProperties.directRadioFeatures) ? directProperties.directRadioFeatures : []),
-    ...inferFeaturesFromExistingDirectRecord(directDevice),
-    ...inferFeaturesFromSmartThings(sourceDevice)
+    ...inferFeaturesFromExistingDirectRecord(directDevice)
   ].map(normalizeFeature)).sort();
   const recoveredAt = new Date().toISOString();
   const baseSnapshot = mergeSmartThingsTelemetryFallback({
@@ -2853,6 +2899,7 @@ module.exports = {
   countTokenOverlap,
   filterStrongMigrationTokens,
   hasManufacturerIdentityMatch,
+  getMissingDistinctiveSmartThingsMigrationFeatures,
   smartThingsNetworkTypeMatchesProtocol,
   readSmartThingsBatteryLevel,
   readSmartThingsTemperatureF,
