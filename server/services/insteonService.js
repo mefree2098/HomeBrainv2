@@ -609,6 +609,10 @@ class InsteonService {
   _hasPendingHigherPriorityPlmOperation(priority = 'poll') {
     const threshold = this._getPlmOperationPriority(priority);
 
+    if (threshold >= this._getPlmOperationPriority('poll') && this._pendingRuntimeCommandAcks.size > 0) {
+      return true;
+    }
+
     if (this._activePlmOperation && this._activePlmOperation.priority < threshold) {
       return true;
     }
@@ -1982,7 +1986,7 @@ class InsteonService {
     }
 
     pollCandidates.sort((left, right) => (
-      Number(left.isOffline ? 0 : 1) - Number(right.isOffline ? 0 : 1)
+      Number(left.isOffline ? 1 : 0) - Number(right.isOffline ? 1 : 0)
     ) || (
       left.lastPolledAt - right.lastPolledAt
     ) || (
