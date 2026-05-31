@@ -383,6 +383,43 @@ test('makeAuthenticatedRequest refreshes and retries once after a SmartThings 40
   }]);
 });
 
+test('deleteDevice preserves SmartThings API failure details instead of throwing an internal ReferenceError', async (t) => {
+  const originalAxiosRequest = axios.request;
+  const originalGetValidAccessToken = smartThingsService.getValidAccessToken;
+
+  smartThingsService.getValidAccessToken = async () => 'access-token';
+  axios.request = async (config) => {
+    assert.equal(config.method, 'DELETE');
+    assert.equal(config.url, 'https://api.smartthings.com/v1/devices/device-1');
+    const error = new Error('Request failed with status code 500');
+    error.response = {
+      status: 500,
+      data: {
+        message: 'SmartThings delete failed'
+      }
+    };
+    throw error;
+  };
+
+  t.after(() => {
+    axios.request = originalAxiosRequest;
+    smartThingsService.getValidAccessToken = originalGetValidAccessToken;
+  });
+
+  await assert.rejects(
+    () => smartThingsService.deleteDevice('device-1'),
+    (error) => {
+      assert.equal(error.name, 'Error');
+      assert.equal(error.status, 500);
+      assert.equal(error.method, 'DELETE');
+      assert.equal(error.endpoint, '/devices/device-1');
+      assert.match(error.message, /SmartThings API DELETE \/devices\/device-1 failed 500: SmartThings delete failed/);
+      assert.doesNotMatch(error.message, /trimString is not defined/);
+      return true;
+    }
+  );
+});
+
 test('bootstrapConnectionState keeps prior authorization on transient probe failures', async (t) => {
   const originalGetIntegration = SmartThingsIntegration.getIntegration;
   const originalGetSettings = Settings.getSettings;
