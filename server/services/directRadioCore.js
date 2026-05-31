@@ -594,10 +594,70 @@ inferDeviceTypeFromFeatures(features = [], context = {}) {
     return inferDirectDeviceType(features.map(normalizeFeature), context);
   },
 
+getDirectUpdateReason(update = {}) {
+    return trimString(update?.properties?.homebrainDirect?.lastReason);
+  },
+
+getPairingBaselineIdentities(protocol) {
+    const normalizedProtocol = trimString(protocol, '').toLowerCase();
+    const session = this.activePairings?.get?.(normalizedProtocol);
+    return new Set((Array.isArray(session?.baselineIdentities) ? session.baselineIdentities : [])
+      .map((identity) => trimString(identity))
+      .map((identity) => identity?.toLowerCase?.())
+      .filter(Boolean));
+  },
+
+shouldCompleteActiveMigration(identity, update, migration) {
+    if (!migration?.sourceDeviceId) {
+      return false;
+    }
+
+    const protocol = trimString(identity?.protocol, '').toLowerCase();
+    if (protocol !== 'zigbee') {
+      return true;
+    }
+
+    const identityId = trimString(identity?.id)?.toLowerCase?.();
+    if (!identityId) {
+      return false;
+    }
+
+    if (this.getPairingBaselineIdentities(protocol).has(identityId)) {
+      return false;
+    }
+
+    return this.getDirectUpdateReason(update) === 'deviceInterview';
+  },
+
 async upsertDirectDevice(identity, update, options = {}) {
     const activeMigration = options.skipActiveMigration ? null : this.findActiveMigration(identity.protocol);
     if (activeMigration?.sourceDeviceId) {
-      return this.completeMigration(activeMigration.id, identity, update);
+      if (this.shouldCompleteActiveMigration(identity, update, activeMigration)) {
+        return this.completeMigration(activeMigration.id, identity, update);
+      }
+
+      const identityId = trimString(identity?.id);
+      const reason = this.getDirectUpdateReason(update);
+      const baselineIdentity = this.getPairingBaselineIdentities(identity.protocol).has(identityId?.toLowerCase?.());
+      this.log('info', identity.protocol, baselineIdentity
+        ? 'Ignored existing direct radio device update during SmartThings migration pairing'
+        : 'Waiting for Zigbee interview before completing SmartThings migration', {
+        migrationId: activeMigration.id,
+        sourceDeviceId: activeMigration.sourceDeviceId || null,
+        identity: identityId || null,
+        reason: reason || null
+      });
+
+      if (!baselineIdentity) {
+        this.markPairingDetected(identity.protocol, identity, null, reason || 'direct device update');
+        return null;
+      }
+
+      return this.withDirectDeviceUpsertLock(identity, () => this.upsertDirectDeviceRecord(identity, update, {
+        ...options,
+        skipActiveMigration: true,
+        suppressPairingCompletion: true
+      }));
     }
 
     return this.withDirectDeviceUpsertLock(identity, () => this.upsertDirectDeviceRecord(identity, update, options));

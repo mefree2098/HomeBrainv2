@@ -1,8 +1,8 @@
 const { EventEmitter } = require('events');
 const { randomUUID } = require('crypto');
 
-const DEFAULT_LOG_LIMIT = 500;
-const MAX_LOG_LIMIT = 2000;
+const DEFAULT_LOG_LIMIT = 5000;
+const MAX_LOG_LIMIT = 10000;
 
 function parsePositiveInt(value, fallback, maximum = MAX_LOG_LIMIT) {
   const numeric = Number.parseInt(String(value ?? ''), 10);
