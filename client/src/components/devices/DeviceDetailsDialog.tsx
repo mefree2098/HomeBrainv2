@@ -427,6 +427,12 @@ function isSmartThingsMigrationFinalized(device: DeviceLike | null): boolean {
     || validationStatus === "passed"
 }
 
+function isSmartThingsAwaitingNativePairing(device: DeviceLike | null): boolean {
+  const migration = getSmartThingsMigration(device)
+  const status = String(migration?.status || "").trim().toLowerCase()
+  return status === "awaiting_native_pairing"
+}
+
 function needsMigrationFinalization(device: DeviceLike | null): boolean {
   return isDirectRadioBackedDevice(device)
     && Boolean(getSmartThingsMigration(device))
@@ -1155,6 +1161,10 @@ function getDeviceOverviewCopy(
   const source = getSourceLabel(device)
   const typeLabel = getDeviceTypeLabel(device).toLowerCase()
 
+  if (isSmartThingsAwaitingNativePairing(device)) {
+    return "SmartThings removal is recorded. HomeBrain is waiting for native Zigbee pairing."
+  }
+
   if (supportsEnergyMonitoring) {
     return `${source} telemetry is available for live draw, stored history, and threshold-driven automations.`
   }
@@ -1481,6 +1491,7 @@ export function DeviceDetailsDialog({
   const insteonAddress = useMemo(() => getFormattedInsteonAddress(device), [device])
   const harmonyCommandDevice = useMemo(() => isHarmonyCommandDevice(device), [device])
   const smartThingsBacked = useMemo(() => isSmartThingsBackedDevice(device), [device])
+  const awaitingNativePairing = useMemo(() => isSmartThingsAwaitingNativePairing(device), [device])
   const nativeZWaveLock = useMemo(() => isNativeZWaveLock(device), [device])
   const zigbeeBacked = useMemo(() => isDirectRadioZigbeeDevice(device), [device])
   const zigbeeIeeeAddr = useMemo(() => getDirectRadioIeeeAddr(device), [device])
@@ -3993,7 +4004,9 @@ export function DeviceDetailsDialog({
                         <CardHeader className="pb-4">
                           <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Migrate to HomeBrain</CardTitle>
                           <CardDescription>
-                            Move this SmartThings device onto a HomeBrain radio, then retire the SmartThings entry after native state and controls are verified.
+                            {awaitingNativePairing
+                              ? "SmartThings removal is already recorded. Reopen HomeBrain pairing to finish native onboarding."
+                              : "Move this SmartThings device onto a HomeBrain radio. Zigbee migration removes the SmartThings entry before native pairing."}
                           </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-4">
@@ -4055,7 +4068,9 @@ export function DeviceDetailsDialog({
                                   ? "HomeBrain will not open an exclusion, pairing, or migration window for this device. Keep it on its current integration unless you replace it with native radio hardware."
                                   : recommendedProtocol === "zwave"
                                   ? "Z-Wave transition starts with exclusion from the SmartThings hub. HomeBrain waits for SmartThings removal before opening native inclusion on the Zooz stick."
-                                  : "HomeBrain does not delete the SmartThings device during this workflow. Verify native HomeBrain state, battery, and controls first, then retire or hide the old SmartThings-backed entry."}
+                                  : awaitingNativePairing
+                                    ? "SmartThings removal has already been requested. HomeBrain will reopen Zigbee pairing without sending another delete request."
+                                    : "HomeBrain requests SmartThings removal before opening Zigbee pairing. Verify native HomeBrain state, battery, and controls before finalizing migration."}
                               </div>
 
                               {migrationPlan.warnings.length > 0 ? (

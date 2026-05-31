@@ -1407,7 +1407,11 @@ class SmartThingsService {
         return;
       }
 
-      const trackedDevices = await Device.find({ 'properties.source': 'smartthings', 'properties.smartThingsDeviceId': { $exists: true } });
+      const trackedDevices = await Device.find({
+        'properties.source': 'smartthings',
+        'properties.smartThingsDeviceId': { $exists: true },
+        'properties.smartThingsMigration.status': { $ne: 'awaiting_native_pairing' }
+      });
       if (trackedDevices.length === 0) {
         return;
       }

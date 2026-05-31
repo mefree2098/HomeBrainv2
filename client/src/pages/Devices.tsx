@@ -680,6 +680,12 @@ const isRetiredSmartThingsMigrationSource = (device: any): boolean => {
   return Boolean(migration?.retiredSource) || status === 'finalized_source'
 }
 
+const isSmartThingsAwaitingNativePairing = (device: any): boolean => {
+  const migration = getSmartThingsMigration(device)
+  const status = (migration?.status || '').toString().trim().toLowerCase()
+  return status === 'awaiting_native_pairing'
+}
+
 const needsMigrationFinalization = (device: any): boolean => {
   const source = (device?.properties?.source || '').toString().trim().toLowerCase()
   const protocol = (device?.properties?.homebrainDirect?.protocol || '').toString().trim().toLowerCase()
@@ -1168,6 +1174,9 @@ const getDeviceControlSummary = (device: any): string => {
       capabilities.push(`${getLightColorTemperature(device)}K`)
     }
     return capabilities.join(' · ')
+  }
+  if (isSmartThingsAwaitingNativePairing(device)) {
+    return 'SmartThings removed; awaiting Zigbee pairing'
   }
   if (device?.type === 'sensor') {
     return getSensorSummary(device)
@@ -2350,7 +2359,7 @@ export function Devices({
               <Badge variant="outline" className="rounded-full">Energy</Badge>
             ) : null}
             <DeviceBatteryIndicator device={device} />
-            {(isSmartThingsBackedDevice(device) || needsMigrationFinalization(device)) ? (
+            {(isSmartThingsBackedDevice(device) || needsMigrationFinalization(device) || isSmartThingsAwaitingNativePairing(device)) ? (
               <Badge variant="outline" className="rounded-full border-cyan-300/30 bg-cyan-300/10 text-cyan-100">Migration</Badge>
             ) : null}
           </div>

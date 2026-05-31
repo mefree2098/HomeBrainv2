@@ -236,6 +236,17 @@ const buildSmartThingsRemovalFailureError = (migration, removalRequest = {}) => 
   return error;
 };
 
+const SMARTTHINGS_REMOVAL_STARTED_STATUSES = new Set([
+  'requested',
+  'already_missing',
+  'deleted',
+  'already_gone'
+]);
+
+const SMARTTHINGS_AWAITING_NATIVE_PAIRING_STATUS = 'awaiting_native_pairing';
+
+const getRemovalRequestStatus = (removalRequest) => normalizeSourceText(removalRequest?.status);
+
 module.exports = {
 attachZWaveMigrationRequestHandlers(driver, zwave) {
     if (!driver || driver.__homebrainMigrationRequestHandlersAttached || typeof driver.registerRequestHandler !== 'function') {
@@ -435,7 +446,7 @@ recordZWaveExclusionFailed(message) {
     migration.exclusionFailedAt = timestamp;
   },
 
-findActiveMigration(protocol) {
+  findActiveMigration(protocol) {
     const now = Date.now();
     for (const migration of this.activeMigrations.values()) {
       if (migration.protocol === protocol && migration.expiresAt > now && migration.status === 'pairing') {
@@ -445,7 +456,214 @@ findActiveMigration(protocol) {
     return null;
   },
 
-async findDetachedSmartThingsMigrationSource(directDevice, protocol) {
+  getSmartThingsRemovalRequestForMigration(migration = {}, sourceDevice = null) {
+    const persistedMigration = getSmartThingsMigration(sourceDevice) || {};
+    const removalRequest = migration.smartThingsRemovalRequest
+      || persistedMigration.smartThingsRemovalRequest
+      || null;
+    if (removalRequest && typeof removalRequest === 'object') {
+      return removalRequest;
+    }
+
+    const status = normalizeSourceText(
+      migration.smartThingsRemovalStatus
+      || persistedMigration.smartThingsRemovalStatus
+      || persistedMigration.smartThingsDeleteStatus
+    );
+    if (!status) {
+      return null;
+    }
+
+    return {
+      status,
+      requestedAt: migration.smartThingsRemovalRequestedAt
+        || persistedMigration.smartThingsRemovalRequestedAt
+        || persistedMigration.smartThingsDeletedAt
+        || persistedMigration.updatedAt
+        || null
+    };
+  },
+
+  hasSmartThingsRemovalAlreadyStarted(migration = {}, sourceDevice = null) {
+    const sourceProperties = getDeviceProperties(sourceDevice);
+    const persistedMigration = getSmartThingsMigration(sourceDevice) || {};
+    const migrationSmartThingsId = trimString(
+      migration.smartThingsDeviceId
+      || persistedMigration.smartThingsDeviceId
+      || sourceProperties.smartThingsDeviceId
+    );
+    const persistedSmartThingsId = trimString(
+      persistedMigration.smartThingsDeviceId
+      || sourceProperties.smartThingsDeviceId
+      || migration.smartThingsDeviceId
+    );
+
+    if (migrationSmartThingsId && persistedSmartThingsId && migrationSmartThingsId !== persistedSmartThingsId) {
+      return false;
+    }
+
+    const removalRequest = this.getSmartThingsRemovalRequestForMigration(migration, sourceDevice);
+    const status = getRemovalRequestStatus(removalRequest)
+      || normalizeSourceText(migration.smartThingsRemovalStatus)
+      || normalizeSourceText(persistedMigration.smartThingsRemovalStatus)
+      || normalizeSourceText(persistedMigration.smartThingsDeleteStatus);
+    return SMARTTHINGS_REMOVAL_STARTED_STATUSES.has(status);
+  },
+
+  async markSmartThingsSourceAwaitingNativePairing(sourceDevice, migration = {}, fields = {}) {
+    const sourceDeviceId = getDeviceIdString(sourceDevice) || trimString(migration.sourceDeviceId);
+    if (!sourceDeviceId) {
+      return null;
+    }
+
+    const now = fields.timestamp || new Date().toISOString();
+    const sourceProperties = getDeviceProperties(sourceDevice);
+    const persistedMigration = getSmartThingsMigration(sourceDevice) || {};
+    const removalRequest = this.getSmartThingsRemovalRequestForMigration(migration, sourceDevice);
+    const removalStatus = getRemovalRequestStatus(removalRequest)
+      || normalizeSourceText(migration.smartThingsRemovalStatus)
+      || normalizeSourceText(persistedMigration.smartThingsRemovalStatus)
+      || null;
+    const smartThingsDeviceId = trimString(
+      migration.smartThingsDeviceId
+      || persistedMigration.smartThingsDeviceId
+      || sourceProperties.smartThingsDeviceId
+    ) || null;
+    const pairingExpiresAt = fields.pairingExpiresAt
+      || (Number(migration.expiresAt || 0) > 0 ? new Date(Number(migration.expiresAt)).toISOString() : null);
+    const nativePairingStatus = normalizeSourceText(fields.nativePairingStatus)
+      || normalizeSourceText(persistedMigration.nativePairingStatus)
+      || 'pending';
+
+    const nextMigration = {
+      ...persistedMigration,
+      previousSource: persistedMigration.previousSource || sourceProperties.source || 'smartthings',
+      smartThingsDeviceId,
+      sourceDeviceId,
+      sourceDeviceName: sourceDevice?.name || persistedMigration.sourceDeviceName || null,
+      migrationId: trimString(migration.id) || persistedMigration.migrationId || null,
+      protocol: normalizeSourceText(migration.protocol) || normalizeSourceText(persistedMigration.protocol) || null,
+      status: SMARTTHINGS_AWAITING_NATIVE_PAIRING_STATUS,
+      nativePairingStatus,
+      pairingId: trimString(fields.pairingId || migration.pairingId || persistedMigration.pairingId) || null,
+      pairingStartedAt: migration.pairingStartedAt || persistedMigration.pairingStartedAt || null,
+      pairingExpiresAt,
+      pairingExpiredAt: nativePairingStatus === 'expired'
+        ? now
+        : (persistedMigration.pairingExpiredAt || null),
+      lastNativePairingMessage: trimString(fields.message)
+        || persistedMigration.lastNativePairingMessage
+        || null,
+      smartThingsRemovalStatus: removalStatus,
+      smartThingsRemovalRequestedAt: removalRequest?.requestedAt
+        || persistedMigration.smartThingsRemovalRequestedAt
+        || now,
+      smartThingsRemovedFromSmartThings: SMARTTHINGS_REMOVAL_STARTED_STATUSES.has(removalStatus),
+      updatedAt: now
+    };
+
+    if (removalRequest) {
+      nextMigration.smartThingsRemovalRequest = removalRequest;
+    }
+
+    const updated = await Device.findByIdAndUpdate(sourceDeviceId, {
+      isOnline: false,
+      properties: {
+        ...sourceProperties,
+        smartThingsMigration: nextMigration
+      },
+      updatedAt: new Date()
+    }, { returnDocument: 'after', runValidators: true });
+
+    if (updated) {
+      this.emitDeviceUpdate(updated);
+    }
+
+    this.log('info', normalizeSourceText(migration.protocol) || 'smartthings', 'Marked SmartThings source as awaiting native pairing', {
+      sourceDeviceId,
+      smartThingsDeviceId,
+      migrationId: nextMigration.migrationId,
+      nativePairingStatus,
+      smartThingsRemovalStatus: removalStatus
+    });
+
+    return updated;
+  },
+
+  async checkSmartThingsDeviceMissingFromList(smartThings, smartThingsDeviceId, migration = {}) {
+    if (!smartThingsDeviceId || typeof smartThings?.getDevices !== 'function') {
+      return { checked: false, missing: false };
+    }
+
+    try {
+      const devices = await smartThings.getDevices();
+      if (!Array.isArray(devices)) {
+        return { checked: false, missing: false };
+      }
+
+      const matchingDevice = devices.find((device) => trimString(device?.deviceId) === smartThingsDeviceId) || null;
+      const result = {
+        checked: true,
+        missing: !matchingDevice,
+        deviceCount: devices.length,
+        device: matchingDevice
+      };
+      if (result.missing) {
+        this.log('info', migration.protocol || 'smartthings', 'SmartThings device absent from live device list during migration recovery', {
+          migrationId: migration.id || null,
+          smartThingsDeviceId,
+          deviceCount: devices.length
+        });
+      }
+      return result;
+    } catch (error) {
+      this.log('warn', migration.protocol || 'smartthings', 'Unable to check SmartThings device list during removal recovery', {
+        migrationId: migration.id || null,
+        smartThingsDeviceId,
+        error: error.message
+      });
+      return { checked: false, missing: false, error };
+    }
+  },
+
+  async markActiveMigrationPairingExpired(protocol, session = {}) {
+    const normalizedProtocol = normalizeSourceText(protocol);
+    const sessionId = trimString(session?.id);
+    const candidates = Array.from(this.activeMigrations.values())
+      .filter((migration) => migration?.protocol === normalizedProtocol && migration.status === 'pairing')
+      .filter((migration) => !sessionId || !migration.pairingId || migration.pairingId === sessionId)
+      .sort((left, right) => (
+        new Date(right.updatedAt || right.pairingStartedAt || right.startedAt || 0).getTime()
+        - new Date(left.updatedAt || left.pairingStartedAt || left.startedAt || 0).getTime()
+      ));
+    const migration = candidates[0] || null;
+    if (!migration) {
+      return null;
+    }
+
+    const timestamp = new Date().toISOString();
+    migration.status = 'pairing_failed';
+    migration.inclusionStatus = 'failed';
+    migration.inclusionFailedAt = timestamp;
+    migration.pairingExpiredAt = timestamp;
+    migration.updatedAt = timestamp;
+
+    if (normalizedProtocol === 'zigbee' && this.hasSmartThingsRemovalAlreadyStarted(migration)) {
+      const sourceDevice = await Device.findById(migration.sourceDeviceId).lean().catch(() => null);
+      if (sourceDevice) {
+        await this.markSmartThingsSourceAwaitingNativePairing(sourceDevice, migration, {
+          nativePairingStatus: 'expired',
+          pairingId: sessionId || migration.pairingId || null,
+          timestamp,
+          message: 'SmartThings removal was already requested, but HomeBrain did not see the Zigbee device join.'
+        });
+      }
+    }
+
+    return migration;
+  },
+
+  async findDetachedSmartThingsMigrationSource(directDevice, protocol) {
     const directDeviceId = getDeviceIdString(directDevice);
     if (!directDeviceId || !['zigbee', 'zwave'].includes(protocol)) {
       return null;
@@ -1273,8 +1491,16 @@ async startMigration({ deviceId, protocol, durationSeconds, dskPin, migrationId,
 
     try {
       if (targetProtocol === 'zigbee' && migration.smartThingsDeviceId && !migration.smartThingsRemovalRequest) {
-        const removalRequest = await this.requestSmartThingsDeviceRemoval(migration, device);
-        this.log(removalRequest.status === 'failed' ? 'warn' : 'info', 'zigbee', 'Requested SmartThings Zigbee device removal before opening HomeBrain pairing', {
+        const removalAlreadyStarted = this.hasSmartThingsRemovalAlreadyStarted(migration, device);
+        const removalRequest = removalAlreadyStarted
+          ? this.getSmartThingsRemovalRequestForMigration(migration, device)
+          : await this.requestSmartThingsDeviceRemoval(migration, device);
+        migration.smartThingsRemovalRequest = removalRequest;
+        migration.smartThingsRemovalStatus = getRemovalRequestStatus(removalRequest) || null;
+        migration.smartThingsRemovalRequestedAt = removalRequest?.requestedAt || new Date().toISOString();
+        this.log(removalRequest.status === 'failed' ? 'warn' : 'info', 'zigbee', removalAlreadyStarted
+          ? 'Reusing previous SmartThings Zigbee removal request before opening HomeBrain pairing'
+          : 'Requested SmartThings Zigbee device removal before opening HomeBrain pairing', {
           migrationId: migration.id,
           deviceId: migration.sourceDeviceId,
           smartThingsDeviceId: migration.smartThingsDeviceId,
@@ -1283,9 +1509,36 @@ async startMigration({ deviceId, protocol, durationSeconds, dskPin, migrationId,
         if (removalRequest.status === 'failed') {
           throw buildSmartThingsRemovalFailureError(migration, removalRequest);
         }
+        await this.markSmartThingsSourceAwaitingNativePairing(device, migration, {
+          nativePairingStatus: 'opening',
+          message: removalAlreadyStarted
+            ? 'SmartThings removal was already requested; HomeBrain is reopening native Zigbee pairing.'
+            : 'SmartThings removal was requested; HomeBrain is opening native Zigbee pairing.'
+        }).catch((error) => {
+          this.log('warn', 'zigbee', 'Failed to persist SmartThings source removal state before pairing', {
+            migrationId: migration.id,
+            sourceDeviceId: migration.sourceDeviceId,
+            error: error.message
+          });
+        });
       }
       if (targetProtocol === 'zigbee') {
-        await this.startPairing('zigbee', { durationSeconds: seconds });
+        const pairingResult = await this.startPairing('zigbee', { durationSeconds: seconds });
+        migration.pairingId = pairingResult?.pairing?.id || null;
+        if (this.hasSmartThingsRemovalAlreadyStarted(migration, device)) {
+          await this.markSmartThingsSourceAwaitingNativePairing(device, migration, {
+            nativePairingStatus: 'active',
+            pairingId: migration.pairingId,
+            message: 'SmartThings removal was requested; HomeBrain Zigbee pairing is open.'
+          }).catch((error) => {
+            this.log('warn', 'zigbee', 'Failed to persist active Zigbee pairing state on SmartThings source', {
+              migrationId: migration.id,
+              sourceDeviceId: migration.sourceDeviceId,
+              pairingId: migration.pairingId,
+              error: error.message
+            });
+          });
+        }
       } else {
         this.zwave.s2DskPin = trimString(dskPin);
         await this.startPairing('zwave', {
@@ -1301,6 +1554,18 @@ async startMigration({ deviceId, protocol, durationSeconds, dskPin, migrationId,
       migration.inclusionStatus = 'failed';
       migration.inclusionFailedAt = new Date().toISOString();
       migration.updatedAt = migration.inclusionFailedAt;
+      if (targetProtocol === 'zigbee' && this.hasSmartThingsRemovalAlreadyStarted(migration, device)) {
+        await this.markSmartThingsSourceAwaitingNativePairing(device, migration, {
+          nativePairingStatus: 'failed',
+          message: error.message || 'HomeBrain could not open native Zigbee pairing after SmartThings removal.'
+        }).catch((persistError) => {
+          this.log('warn', 'zigbee', 'Failed to persist failed Zigbee pairing state on SmartThings source', {
+            migrationId: migration.id,
+            sourceDeviceId: migration.sourceDeviceId,
+            error: persistError.message
+          });
+        });
+      }
       throw error;
     }
 
@@ -1476,14 +1741,19 @@ async requestSmartThingsDeviceRemoval(migration, sourceDevice) {
       try {
         deviceDetails = await smartThings.getDevice(smartThingsDeviceId);
       } catch (error) {
-        if (isSmartThingsDeviceGoneError(error)) {
+        const missingFromList = isSmartThingsDeviceGoneError(error)
+          ? { checked: false, missing: true }
+          : await this.checkSmartThingsDeviceMissingFromList(smartThings, smartThingsDeviceId, migration);
+        if (isSmartThingsDeviceGoneError(error) || missingFromList.missing) {
           migration.smartThingsRemovalRequest = {
             status: 'already_missing',
-            requestedAt: new Date().toISOString()
+            requestedAt: new Date().toISOString(),
+            verifiedBy: missingFromList.missing ? 'device_list_absent' : 'device_detail_missing',
+            detailError: error.message
           };
           migration.smartThingsExclusionEvidence = summarizeSmartThingsExclusionEvidence({
             localDevice: sourceDevice,
-            source: 'already_missing'
+            source: missingFromList.missing ? 'missing_from_device_list' : 'already_missing'
           });
           return migration.smartThingsRemovalRequest;
         }
@@ -1718,17 +1988,27 @@ verifyMigrationInclusion(migration) {
     }
 
     if (migration.status === 'pairing_failed' || migration.inclusionFailedAt) {
+      const smartThingsRemovalStarted = migration.protocol === 'zigbee'
+        && this.hasSmartThingsRemovalAlreadyStarted(migration);
       return this.buildMigrationVerificationResult(migration, {
         phase,
         status: 'failed',
-        message: migration.protocol === 'zigbee'
-          ? 'Zigbee pairing failed before HomeBrain discovered the device.'
-          : 'Z-Wave inclusion failed before HomeBrain received a verified node.',
+        message: smartThingsRemovalStarted
+          ? 'SmartThings removal was already requested, but HomeBrain did not see the Zigbee device join.'
+          : migration.protocol === 'zigbee'
+            ? 'Zigbee pairing failed before HomeBrain discovered the device.'
+            : 'Z-Wave inclusion failed before HomeBrain received a verified node.',
         guidance: migration.protocol === 'zigbee'
-          ? [
-              'Open pairing again and factory reset the device while permit-join is active.',
-              'Keep battery devices awake until HomeBrain captures the interview data.'
-            ]
+          ? smartThingsRemovalStarted
+            ? [
+                'Reopen pairing from this HomeBrain device. HomeBrain will not send another SmartThings delete request.',
+                'Factory reset the physical sensor while permit-join is active.',
+                'Keep the battery sensor awake until HomeBrain captures the interview data.'
+              ]
+            : [
+                'Open pairing again and factory reset the device while permit-join is active.',
+                'Keep battery devices awake until HomeBrain captures the interview data.'
+              ]
           : [
               'Open inclusion again only after exclusion has verified.',
               'Tap the local paddle once; if no node appears, use the quick 3-toggle sequence.',

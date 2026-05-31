@@ -1287,6 +1287,7 @@ class SmartThingsWebhookService {
         // SmartThings-tracked device — otherwise an inbound webhook re-stamps it
         // as SmartThings-branded and keeps the old identity "alive".
         'properties.smartThingsMigration.retiredSource': { $ne: true },
+        'properties.smartThingsMigration.status': { $ne: 'awaiting_native_pairing' },
         'properties.source': { $not: /^homebrain-/i }
       }).lean()
       : [];

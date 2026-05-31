@@ -1025,6 +1025,315 @@ test('Zigbee migration aborts pairing when SmartThings delete is not authorized'
   }
 });
 
+test('Zigbee migration marks the SmartThings source as awaiting native pairing after removal starts', async () => {
+  const service = createService();
+  service.emitDeviceUpdate = () => {};
+
+  const originalFindById = Device.findById;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const sourceDevice = {
+    _id: {
+      toString: () => DEVICE_ID
+    },
+    name: 'Front Door',
+    type: 'sensor',
+    room: 'Upstairs',
+    status: false,
+    isOnline: true,
+    brand: 'SmartThings',
+    model: 'Multipurpose Sensor',
+    properties: {
+      source: 'smartthings',
+      smartThingsDeviceId: 'smartthings-front-door',
+      smartThingsCapabilities: [
+        'contactSensor',
+        'temperatureMeasurement',
+        'threeAxis',
+        'accelerationSensor',
+        'battery',
+        'refresh'
+      ],
+      smartThingsCategories: ['MultiFunctionalSensor'],
+      smartThingsDeviceNetworkType: 'ZIGBEE'
+    }
+  };
+  const persistedUpdates = [];
+  const removedDeviceIds = [];
+
+  Device.findById = () => ({
+    lean: async () => sourceDevice
+  });
+  Device.findByIdAndUpdate = async (_id, update) => {
+    persistedUpdates.push(update);
+    return {
+      ...sourceDevice,
+      ...update,
+      properties: update.properties
+    };
+  };
+  service.smartThingsService = {
+    getDevice: async () => ({
+      deviceId: 'smartthings-front-door',
+      type: 'ZIGBEE',
+      parentDeviceId: 'hub-1'
+    }),
+    deleteDevice: async (deviceId) => {
+      removedDeviceIds.push(deviceId);
+      return {};
+    }
+  };
+  service.startPairing = async () => ({
+    pairing: {
+      id: 'pairing-front-door'
+    }
+  });
+
+  try {
+    const result = await service.startMigration({
+      deviceId: DEVICE_ID,
+      protocol: 'zigbee',
+      durationSeconds: 60
+    });
+
+    assert.deepEqual(removedDeviceIds, ['smartthings-front-door']);
+    assert.equal(result.migration.pairingId, 'pairing-front-door');
+    assert.equal(result.migration.smartThingsRemovalRequest.status, 'requested');
+    assert.equal(persistedUpdates.length, 2);
+    const finalUpdate = persistedUpdates[persistedUpdates.length - 1];
+    assert.equal(finalUpdate.isOnline, false);
+    assert.equal(finalUpdate.properties.smartThingsMigration.status, 'awaiting_native_pairing');
+    assert.equal(finalUpdate.properties.smartThingsMigration.nativePairingStatus, 'active');
+    assert.equal(finalUpdate.properties.smartThingsMigration.smartThingsRemovalStatus, 'requested');
+    assert.equal(finalUpdate.properties.smartThingsMigration.smartThingsDeviceId, 'smartthings-front-door');
+    assert.equal(finalUpdate.properties.smartThingsMigration.pairingId, 'pairing-front-door');
+  } finally {
+    Device.findById = originalFindById;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+  }
+});
+
+test('Zigbee migration retry reuses prior SmartThings removal instead of deleting again', async () => {
+  const service = createService();
+  service.emitDeviceUpdate = () => {};
+
+  const originalFindById = Device.findById;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const sourceDevice = {
+    _id: {
+      toString: () => DEVICE_ID
+    },
+    name: 'Front Door',
+    type: 'sensor',
+    room: 'Upstairs',
+    status: false,
+    isOnline: false,
+    properties: {
+      source: 'smartthings',
+      smartThingsDeviceId: 'smartthings-front-door',
+      smartThingsCapabilities: ['contactSensor', 'temperatureMeasurement', 'battery'],
+      smartThingsDeviceNetworkType: 'ZIGBEE',
+      smartThingsMigration: {
+        status: 'awaiting_native_pairing',
+        nativePairingStatus: 'expired',
+        smartThingsDeviceId: 'smartthings-front-door',
+        smartThingsRemovalStatus: 'requested',
+        smartThingsRemovalRequest: {
+          status: 'requested',
+          requestedAt: '2026-05-31T14:20:50.426Z'
+        }
+      }
+    }
+  };
+  let deleteCalled = false;
+  let startPairingCalled = false;
+
+  Device.findById = () => ({
+    lean: async () => sourceDevice
+  });
+  Device.findByIdAndUpdate = async (_id, update) => ({
+    ...sourceDevice,
+    ...update,
+    properties: update.properties
+  });
+  service.smartThingsService = {
+    getDevice: async () => {
+      throw new Error('SmartThings should not be queried after removal was already recorded');
+    },
+    deleteDevice: async () => {
+      deleteCalled = true;
+      throw new Error('SmartThings delete should not run again');
+    }
+  };
+  service.startPairing = async () => {
+    startPairingCalled = true;
+    return {
+      pairing: {
+        id: 'pairing-retry'
+      }
+    };
+  };
+
+  try {
+    const result = await service.startMigration({
+      deviceId: DEVICE_ID,
+      protocol: 'zigbee',
+      durationSeconds: 60
+    });
+
+    assert.equal(deleteCalled, false);
+    assert.equal(startPairingCalled, true);
+    assert.equal(result.migration.smartThingsRemovalRequest.status, 'requested');
+    assert.equal(result.migration.pairingId, 'pairing-retry');
+  } finally {
+    Device.findById = originalFindById;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+  }
+});
+
+test('Zigbee migration recovers limbo source when SmartThings detail 403s but live list is missing the device', async () => {
+  const service = createService();
+  service.emitDeviceUpdate = () => {};
+
+  const originalFindById = Device.findById;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const sourceDevice = {
+    _id: {
+      toString: () => DEVICE_ID
+    },
+    name: 'Front Door',
+    type: 'sensor',
+    room: 'Upstairs',
+    status: false,
+    isOnline: true,
+    properties: {
+      source: 'smartthings',
+      smartThingsDeviceId: 'smartthings-front-door',
+      smartThingsCapabilities: ['contactSensor', 'temperatureMeasurement', 'battery'],
+      smartThingsDeviceNetworkType: 'ZIGBEE'
+    }
+  };
+  let deleteCalled = false;
+  let persistedUpdate = null;
+
+  Device.findById = () => ({
+    lean: async () => sourceDevice
+  });
+  Device.findByIdAndUpdate = async (_id, update) => {
+    persistedUpdate = update;
+    return {
+      ...sourceDevice,
+      ...update,
+      properties: update.properties
+    };
+  };
+  service.smartThingsService = {
+    getDevice: async () => {
+      const error = new Error('SmartThings API GET /devices/smartthings-front-door failed 403: Forbidden');
+      error.status = 403;
+      throw error;
+    },
+    getDevices: async () => [
+      { deviceId: 'other-smartthings-device', label: 'Other Sensor' }
+    ],
+    deleteDevice: async () => {
+      deleteCalled = true;
+      throw new Error('Delete should not be called after live list proves the device is gone');
+    }
+  };
+  service.startPairing = async () => ({
+    pairing: {
+      id: 'pairing-limbo'
+    }
+  });
+
+  try {
+    const result = await service.startMigration({
+      deviceId: DEVICE_ID,
+      protocol: 'zigbee',
+      durationSeconds: 60
+    });
+
+    assert.equal(deleteCalled, false);
+    assert.equal(result.migration.smartThingsRemovalRequest.status, 'already_missing');
+    assert.equal(result.migration.smartThingsRemovalRequest.verifiedBy, 'device_list_absent');
+    assert.equal(result.migration.pairingId, 'pairing-limbo');
+    assert.equal(persistedUpdate.isOnline, false);
+    assert.equal(persistedUpdate.properties.smartThingsMigration.status, 'awaiting_native_pairing');
+    assert.equal(persistedUpdate.properties.smartThingsMigration.nativePairingStatus, 'active');
+    assert.equal(persistedUpdate.properties.smartThingsMigration.smartThingsRemovalStatus, 'already_missing');
+  } finally {
+    Device.findById = originalFindById;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+  }
+});
+
+test('expired Zigbee migration keeps removed SmartThings source offline and retryable', async () => {
+  const service = createService();
+  service.emitDeviceUpdate = () => {};
+
+  const originalFindById = Device.findById;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const sourceDevice = {
+    _id: {
+      toString: () => DEVICE_ID
+    },
+    name: 'Front Door',
+    type: 'sensor',
+    room: 'Upstairs',
+    isOnline: true,
+    properties: {
+      source: 'smartthings',
+      smartThingsDeviceId: 'smartthings-front-door',
+      smartThingsDeviceNetworkType: 'ZIGBEE'
+    }
+  };
+  const migration = {
+    id: 'migration-timeout',
+    sourceDeviceId: DEVICE_ID,
+    smartThingsDeviceId: 'smartthings-front-door',
+    protocol: 'zigbee',
+    status: 'pairing',
+    pairingId: 'pairing-timeout',
+    expiresAt: Date.now() - 1000,
+    smartThingsRemovalRequest: {
+      status: 'requested',
+      requestedAt: '2026-05-31T14:20:50.426Z'
+    }
+  };
+  let persistedUpdate = null;
+
+  service.activeMigrations.set(migration.id, migration);
+  Device.findById = () => ({
+    lean: async () => sourceDevice
+  });
+  Device.findByIdAndUpdate = async (_id, update) => {
+    persistedUpdate = update;
+    return {
+      ...sourceDevice,
+      ...update,
+      properties: update.properties
+    };
+  };
+
+  try {
+    const expired = await service.markActiveMigrationPairingExpired('zigbee', {
+      id: 'pairing-timeout'
+    });
+
+    assert.equal(expired.status, 'pairing_failed');
+    assert.equal(expired.inclusionStatus, 'failed');
+    assert.ok(expired.inclusionFailedAt);
+    assert.equal(persistedUpdate.isOnline, false);
+    assert.equal(persistedUpdate.properties.smartThingsMigration.status, 'awaiting_native_pairing');
+    assert.equal(persistedUpdate.properties.smartThingsMigration.nativePairingStatus, 'expired');
+    assert.equal(persistedUpdate.properties.smartThingsMigration.pairingId, 'pairing-timeout');
+    assert.equal(persistedUpdate.properties.smartThingsMigration.smartThingsRemovedFromSmartThings, true);
+  } finally {
+    Device.findById = originalFindById;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+  }
+});
+
 test('active Zigbee migration waits for a new device interview before completing', async () => {
   const service = createService();
   const migration = {

@@ -358,7 +358,8 @@ class MaintenanceService {
         'properties.smartThingsMigration.smartThingsDeviceId': { $exists: true, $ne: null },
         $or: [
           { 'properties.source': /^homebrain-/i },
-          { 'properties.smartThingsMigration.retiredSource': true }
+          { 'properties.smartThingsMigration.retiredSource': true },
+          { 'properties.smartThingsMigration.status': 'awaiting_native_pairing' }
         ]
       }).select('properties.smartThingsMigration.smartThingsDeviceId').lean();
       const migratedAwayStIds = new Set(
@@ -454,7 +455,8 @@ class MaintenanceService {
       if (processedIds.length > 0) {
         const removalResult = await Device.deleteMany({
           'properties.source': 'smartthings',
-          'properties.smartThingsDeviceId': { $nin: processedIds }
+          'properties.smartThingsDeviceId': { $nin: processedIds },
+          'properties.smartThingsMigration.status': { $ne: 'awaiting_native_pairing' }
         });
         removed = removalResult.deletedCount || 0;
       }
