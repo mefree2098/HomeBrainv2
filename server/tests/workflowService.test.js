@@ -43,6 +43,74 @@ test('createWorkflowFromText can reach automationService after startup dependenc
   assert.equal(result.message, 'Handled directly for test');
 });
 
+test('syncWorkflowToAutomation preserves empty manual trigger conditions', async (t) => {
+  const Workflow = require('../models/Workflow');
+  const Automation = require('../models/Automation');
+  const workflowService = require('../services/workflowService');
+
+  const workflowId = new mongoose.Types.ObjectId();
+  const workflowRecord = {
+    _id: workflowId,
+    name: 'Manual Laundry Fan Test',
+    description: 'Manual workflow with minimized trigger conditions',
+    enabled: true,
+    category: 'custom',
+    priority: 5,
+    cooldown: 0,
+    trigger: {
+      type: 'manual'
+    },
+    actions: [
+      {
+        type: 'device_control',
+        target: new mongoose.Types.ObjectId().toString(),
+        parameters: { action: 'turn_off' }
+      }
+    ],
+    graph: null,
+    linkedAutomationId: null,
+    save: async function saveWorkflow() {
+      return this;
+    }
+  };
+
+  const originalWorkflowFindById = Workflow.findById;
+  const originalAutomationFindOne = Automation.findOne;
+  const originalAutomationFindById = Automation.findById;
+  const originalAutomationSave = Automation.prototype.save;
+  let savedAutomation = null;
+
+  Workflow.findById = async () => workflowRecord;
+  Automation.findOne = (query = {}) => {
+    if (query.name) {
+      return {
+        select: async () => null
+      };
+    }
+    return null;
+  };
+  Automation.findById = async () => null;
+  Automation.prototype.save = async function saveAutomation() {
+    await this.validate();
+    savedAutomation = this;
+    return this;
+  };
+
+  t.after(() => {
+    Workflow.findById = originalWorkflowFindById;
+    Automation.findOne = originalAutomationFindOne;
+    Automation.findById = originalAutomationFindById;
+    Automation.prototype.save = originalAutomationSave;
+  });
+
+  const automation = await workflowService.syncWorkflowToAutomation(workflowId);
+
+  assert.ok(automation._id);
+  assert.equal(savedAutomation.trigger.type, 'manual');
+  assert.deepEqual(savedAutomation.trigger.conditions, {});
+  assert.equal(workflowRecord.linkedAutomationId.toString(), automation._id.toString());
+});
+
 test('createWorkflowFromText creates multiple workflows when multiple automations are returned', async (t) => {
   const Workflow = require('../models/Workflow');
   const Automation = require('../models/Automation');
