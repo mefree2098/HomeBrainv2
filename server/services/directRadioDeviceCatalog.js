@@ -61,7 +61,7 @@ const SMARTTHINGS_CAPABILITY_FEATURES = Object.freeze({
   battery: ['battery'],
   tamperAlert: ['tamper'],
   vibrationSensor: ['vibration'],
-  accelerationSensor: ['acceleration'],
+  accelerationSensor: ['acceleration', 'vibration'],
   threeAxis: ['axis'],
   lock: ['lock'],
   lockCodes: ['lockCodes'],

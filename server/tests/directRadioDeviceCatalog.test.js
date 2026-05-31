@@ -94,7 +94,7 @@ test('direct radio catalog maps SmartThings multipurpose sensors toward Zigbee',
   const plan = buildMigrationPlan(device);
   assert.equal(plan.recommendedProtocol, 'zigbee');
   assert.equal(plan.targetSource, 'homebrain-zigbee');
-  assert.deepEqual(plan.features, ['acceleration', 'axis', 'battery', 'contact', 'temperature']);
+  assert.deepEqual(plan.features, ['acceleration', 'axis', 'battery', 'contact', 'temperature', 'vibration']);
   assert.ok(plan.guidedSteps.some((step) => step.action === 'start_direct_migration'));
   assert.equal(
     plan.guidedSteps.find((step) => step.id === 'start-homebrain-zigbee-permit-join')?.durationSeconds,

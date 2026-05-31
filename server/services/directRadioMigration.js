@@ -1249,16 +1249,26 @@ async completeMigration(migrationId, identity, update) {
       ? existing.properties
       : {};
     const source = protocolSource(identity.protocol);
-    const features = uniqueStrings([
+    let features = uniqueStrings([
       ...(Array.isArray(update.properties?.directRadioFeatures) ? update.properties.directRadioFeatures : []),
       ...inferFeaturesFromExistingDirectRecord(update)
     ].map(normalizeFeature)).sort();
-    const coverageUpdate = {
+    const coverageUpdate = mergeSmartThingsTelemetryFallback({
       ...update,
       properties: {
         ...(update.properties || {}),
         directRadioFeatures: features
       }
+    }, existing);
+    features = uniqueStrings([
+      ...(Array.isArray(coverageUpdate.properties?.directRadioFeatures) ? coverageUpdate.properties.directRadioFeatures : []),
+      ...inferFeaturesFromExistingDirectRecord(coverageUpdate)
+    ].map(normalizeFeature)).sort();
+    coverageUpdate.properties = {
+      ...(coverageUpdate.properties || {}),
+      directRadioFeatures: features,
+      directRadioCapabilities: buildNormalizedCapabilities(features, identity.protocol),
+      ...buildDirectFeatureProperties(features)
     };
     const validation = this.buildMigrationValidation(existing, coverageUpdate, features);
     const missingDistinctiveFeatures = getMissingDistinctiveSmartThingsMigrationFeatures(coverageUpdate, existing);
@@ -1290,7 +1300,7 @@ async completeMigration(migrationId, identity, update) {
     }
     const migratedProperties = {
       ...previousProperties,
-      ...(update.properties || {}),
+      ...(coverageUpdate.properties || {}),
       source,
       directRadioFeatures: features,
       directRadioCapabilities: buildNormalizedCapabilities(features, identity.protocol),
@@ -1305,12 +1315,12 @@ async completeMigration(migrationId, identity, update) {
     };
 
     let updated = await Device.findByIdAndUpdate(existing._id, {
-      status: update.status,
-      brightness: update.brightness,
-      isOnline: update.isOnline !== false,
+      status: coverageUpdate.status,
+      brightness: coverageUpdate.brightness,
+      isOnline: coverageUpdate.isOnline !== false,
       lastSeen: new Date(),
-      brand: existing.brand || update.brand,
-      model: existing.model || update.model,
+      brand: existing.brand || coverageUpdate.brand,
+      model: existing.model || coverageUpdate.model,
       properties: this.severMigratedSmartThingsIdentity(migratedProperties)
     }, { returnDocument: 'after', runValidators: true });
 
@@ -1559,6 +1569,18 @@ async finalizeDeviceMigration({ deviceId, migrationId, reason } = {}) {
         sourceDevice = maybeSource;
       }
     }
+
+    const validationSnapshot = mergeSmartThingsTelemetryFallback({
+      ...toPlainDeviceSnapshot(device),
+      properties
+    }, sourceDevice || device);
+    device = {
+      ...toPlainDeviceSnapshot(device),
+      ...validationSnapshot,
+      properties: validationSnapshot.properties
+    };
+    properties = validationSnapshot.properties;
+    migration = getSmartThingsMigration(device);
 
     const validation = this.buildMigrationFinalizationValidation(device, protocol, reason);
     if (validation.status !== 'passed') {
