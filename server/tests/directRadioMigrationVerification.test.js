@@ -143,6 +143,79 @@ test('direct radio refresh preserves known Z-Wave catalog identity during incomp
   assert.deepEqual(merged.properties.directRadioFeatures, ['alarm', 'button', 'switch']);
 });
 
+test('direct radio refresh clears stale Zigbee state when the interview shell is incomplete', () => {
+  const existing = {
+    name: 'Front Door',
+    type: 'sensor',
+    room: 'Upstairs',
+    status: false,
+    isOnline: true,
+    temperature: 64.6,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x000d6f00057c3ef1',
+        modelID: null,
+        manufacturerName: null,
+        interviewCompleted: true
+      },
+      directRadioFeatures: ['acceleration', 'axis', 'battery', 'contact', 'temperature', 'vibration'],
+      directRadioState: {
+        contactOpen: false,
+        contact: 'closed',
+        batteryLevel: 17,
+        temperatureF: 64.6,
+        acceleration: 'inactive',
+        vibration: 'inactive',
+        axis: [17, 9, 1011]
+      },
+      directRadioCatalog: {
+        label: '3321-S'
+      },
+      homeBrainBatteryLevel: 17,
+      batteryLevel: 17,
+      supportsContactSensor: true,
+      supportsVibrationSensor: true
+    }
+  };
+  const update = {
+    name: 'Zigbee 7c3ef1',
+    type: 'sensor',
+    room: 'Unassigned',
+    isOnline: false,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x000d6f00057c3ef1',
+        modelID: null,
+        manufacturerName: null,
+        interviewCompleted: false,
+        incomplete: true,
+        incompleteReason: 'missing_zigbee_interview_identity_and_state'
+      },
+      directRadioFeatures: [],
+      directRadioCapabilities: [],
+      supportsContactSensor: false,
+      supportsVibrationSensor: false
+    }
+  };
+
+  const merged = mergeDirectDeviceUpdateForExisting(existing, update);
+
+  assert.equal(merged.isOnline, false);
+  assert.equal(merged.properties.homebrainDirect.incomplete, true);
+  assert.deepEqual(merged.properties.directRadioFeatures, []);
+  assert.deepEqual(merged.properties.directRadioCapabilities, []);
+  assert.equal(merged.properties.directRadioState, undefined);
+  assert.equal(merged.properties.directRadioCatalog, undefined);
+  assert.equal(merged.properties.homeBrainBatteryLevel, undefined);
+  assert.equal(merged.properties.batteryLevel, undefined);
+  assert.equal(merged.properties.supportsContactSensor, false);
+  assert.equal(merged.properties.supportsVibrationSensor, false);
+});
+
 test('direct radio refresh does not rename cataloged devices to generic Z-Wave node names after failed interviews', () => {
   const existing = {
     name: 'ZW080',
