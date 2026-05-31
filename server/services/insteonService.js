@@ -743,6 +743,28 @@ class InsteonService {
     ) !== false;
   }
 
+  _isExplicitFastOffCommandRequested(options = {}) {
+    const explicitVariant = String(options?.commandVariant || '').trim().toLowerCase();
+    if (['fast', 'fast_off', 'turn_off_fast'].includes(explicitVariant)) {
+      return true;
+    }
+
+    return options?.useFastOffCommand === true || options?.useFastCommand === true;
+  }
+
+  _shouldFallbackFromFastOff(error, options = {}) {
+    if (this._isExplicitFastOffCommandRequested(options)) {
+      return false;
+    }
+
+    const code = String(error?.code || '').trim().toUpperCase();
+    if (['INSTEON_DEVICE_NO_RESPONSE', 'INSTEON_COMMAND_TIMEOUT'].includes(code)) {
+      return true;
+    }
+
+    return /target device did not respond|timeout turning off device/i.test(String(error?.message || ''));
+  }
+
   _shouldUseFastGroupOnCommand(options = {}) {
     const explicitVariant = String(options?.commandVariant || '').trim().toLowerCase();
     if (['fast', 'scene_on_fast', 'turn_on_fast'].includes(explicitVariant)) {
@@ -11264,6 +11286,7 @@ class InsteonService {
         };
       }
 
+      pendingRuntimeAckWaiter?.cancel();
       this._logEngineWarn(`PLM command accepted by modem but target device did not respond: ${String(options.label || timeoutMessage)}`, {
         stage: 'command',
         direction: 'inbound',
@@ -12511,7 +12534,47 @@ class InsteonService {
           }
         );
       } catch (error) {
-        if (this._shouldAttemptCommandStateRecovery(options)) {
+        if (
+          useFastOffCommand
+          && typeof lightController?.turnOff === 'function'
+          && this._shouldFallbackFromFastOff(error, options)
+        ) {
+          this._logEngineWarn(`Fast off did not confirm for ${this._formatInsteonAddress(address)}; retrying standard off`, {
+            stage: 'command',
+            direction: 'outbound',
+            operation: 'turn_off',
+            address,
+            details: {
+              error: error.message,
+              code: error.code || null
+            }
+          });
+
+          try {
+            commandExecution = await this._executeHubCommandWithRetries(
+              (callback) => lightController.turnOff(callback),
+              'Timeout turning off device',
+              {
+                ...options,
+                commandAttempts: 1,
+                commandPauseBetweenMs: 0,
+                priority: 'control',
+                kind: 'turn_off',
+                label: `turning off ${this._formatInsteonAddress(address)} (standard fallback)`,
+                requireDeviceResponse,
+                runtimeAckAddress: address,
+                runtimeAckExpectedStatus: false,
+                runtimeAckTimeoutMs: options?.runtimeAckTimeoutMs,
+                commandRetries: Number.isFinite(Number(options?.commandRetries))
+                  ? Math.max(0, Math.min(5, Math.round(Number(options.commandRetries))))
+                  : DEFAULT_INSTEON_CONTROL_COMMAND_RETRIES
+              }
+            );
+            commandExecution.fallbackCommandVariant = 'turn_off';
+          } catch (fallbackError) {
+            throw fallbackError;
+          }
+        } else if (this._shouldAttemptCommandStateRecovery(options)) {
           const recoveredState = await this._recoverCommandStateAfterTimeout(address, false);
           if (recoveredState) {
             const commandAttempts = Number.isFinite(Number(error?.commandAttempts))
@@ -12546,7 +12609,9 @@ class InsteonService {
             };
           }
         }
-        throw error;
+        if (!commandExecution?.hubStatus) {
+          throw error;
+        }
       }
 
       console.log(`InsteonService: Device ${address} turned off`);
