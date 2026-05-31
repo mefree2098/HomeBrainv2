@@ -55,3 +55,24 @@ test('directRadioEngineLogService normalizes unsupported protocol and level valu
   assert.equal(entry.level, 'info');
   assert.deepEqual(entry.details, { keep: true });
 });
+
+test('directRadioEngineLogService keeps a full diagnostic replay window', (t) => {
+  directRadioEngineLogService.reset();
+  t.after(() => {
+    directRadioEngineLogService.reset();
+  });
+
+  for (let index = 0; index < 10025; index += 1) {
+    directRadioEngineLogService.publish({
+      protocol: 'zigbee',
+      level: 'info',
+      message: `Direct radio entry ${index}`
+    });
+  }
+
+  const replay = directRadioEngineLogService.latest({ limit: 20000 });
+
+  assert.equal(replay.length, 10000);
+  assert.equal(replay[0].message, 'Direct radio entry 25');
+  assert.equal(replay.at(-1).message, 'Direct radio entry 10024');
+});
