@@ -114,6 +114,7 @@ struct DevicesView: View {
     @State private var editDeviceType = "switch"
     @State private var savingDeviceDetails = false
     @State private var contentWidth: CGFloat = 0
+    @State private var appliedPreviewLaunchActions = false
 
     private let availableTypes = ["all", "light", "lock", "thermostat", "garage", "sensor", "siren", "switch", "camera", "speaker"]
     private let addDeviceModes = ["zwave", "zigbee", "insteon", "matter", "manual"]
@@ -130,6 +131,8 @@ struct DevicesView: View {
     private var useTwoColumnLayout: Bool { useLandscapeCompactLayout || contentWidth >= 860 }
     private var usesStackedFilterLayout: Bool { contentWidth < 620 }
     private var isEmbeddedFocusMode: Bool { embeddedFocusDeviceID?.isEmpty == false }
+    private var addDeviceSheetPadding: CGFloat { useLandscapeCompactLayout ? 12 : (isCompact ? 16 : 22) }
+    private var addDeviceSheetSpacing: CGFloat { useLandscapeCompactLayout ? 12 : 16 }
     private var embeddedFocusedDevice: DeviceItem? {
         guard let embeddedFocusDeviceID else { return nil }
         return devices.first(where: { $0.id == embeddedFocusDeviceID })
@@ -216,6 +219,38 @@ struct DevicesView: View {
         }
 
         return nil
+    }
+
+    private static func previewAddDeviceModeFromLaunch() -> String? {
+        let processInfo = ProcessInfo.processInfo
+        let allowedModes = Set(["zwave", "zigbee", "insteon", "matter", "manual"])
+
+        if let index = processInfo.arguments.firstIndex(of: "-ui-preview-add-device-mode"),
+           processInfo.arguments.indices.contains(index + 1) {
+            let requestedMode = processInfo.arguments[index + 1].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return allowedModes.contains(requestedMode) ? requestedMode : nil
+        }
+
+        if let requestedMode = processInfo.environment["UI_PREVIEW_ADD_DEVICE_MODE"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+           allowedModes.contains(requestedMode) {
+            return requestedMode
+        }
+
+        return nil
+    }
+
+    private static func previewShouldOpenAddDeviceFromLaunch() -> Bool {
+        let processInfo = ProcessInfo.processInfo
+        if processInfo.arguments.contains("-ui-preview-open-add-device") {
+            return true
+        }
+        if processInfo.arguments.contains("-ui-preview-add-device-mode") {
+            return true
+        }
+        if let environmentValue = processInfo.environment["UI_PREVIEW_OPEN_ADD_DEVICE"] {
+            return ["1", "true", "yes"].contains(environmentValue.lowercased())
+        }
+        return false
     }
 
     var body: some View {
@@ -2340,125 +2375,73 @@ struct DevicesView: View {
                 HBPageBackground()
                     .ignoresSafeArea()
 
-                VStack(spacing: 16) {
-                    HStack {
-                        Button("Cancel") {
-                            showCreateSheet = false
-                        }
-                        .buttonStyle(HBSecondaryButtonStyle())
+                ScrollView {
+                    VStack(alignment: .leading, spacing: addDeviceSheetSpacing) {
+                        HBPanel {
+                            VStack(alignment: .leading, spacing: 16) {
+                                Text("Device Provisioning")
+                                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                                    .textCase(.uppercase)
+                                    .tracking(2.6)
+                                    .foregroundStyle(HBPalette.textMuted)
 
-                        Spacer()
-
-                        Button(addDevicePrimaryButtonTitle) {
-                            Task { await runAddDeviceAction() }
-                        }
-                        .buttonStyle(HBPrimaryButtonStyle())
-                        .disabled(addDevicePrimaryButtonDisabled)
-                    }
-
-                    HBPanel {
-                        VStack(alignment: .leading, spacing: 16) {
-                            Text("Device Provisioning")
-                                .font(.system(size: 11, weight: .bold, design: .rounded))
-                                .textCase(.uppercase)
-                                .tracking(2.6)
-                                .foregroundStyle(HBPalette.textMuted)
-
-                            Text("Add a native endpoint")
-                                .font(.system(size: 28, weight: .bold, design: .rounded))
-                                .foregroundStyle(
-                                    LinearGradient(
-                                        colors: [HBPalette.accentBlue, HBPalette.accentPurple],
-                                        startPoint: .leading,
-                                        endPoint: .trailing
+                                Text("Add a native endpoint")
+                                    .font(.system(size: isCompact ? 24 : 28, weight: .bold, design: .rounded))
+                                    .foregroundStyle(
+                                        LinearGradient(
+                                            colors: [HBPalette.accentBlue, HBPalette.accentPurple],
+                                            startPoint: .leading,
+                                            endPoint: .trailing
+                                        )
                                     )
-                                )
+                                    .fixedSize(horizontal: false, vertical: true)
 
-                            HStack {
-                                Text("Protocol")
-                                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(HBPalette.textSecondary)
-                                Spacer()
-                                Picker("Protocol", selection: $addDeviceMode) {
-                                    ForEach(addDeviceModes, id: \.self) { mode in
-                                        Text(addDeviceModeLabel(mode)).tag(mode)
-                                    }
+                                addDeviceModeSelector
+
+                                if addDeviceMode == "manual" {
+                                    manualCreateFields
+                                } else if addDeviceMode == "matter" {
+                                    matterAddFields
+                                } else {
+                                    nativeRadioAddFields
                                 }
-                                .pickerStyle(.menu)
-                                .tint(HBPalette.accentBlue)
-                            }
 
-                            if addDeviceMode == "manual" {
-                                manualCreateFields
-                            } else if addDeviceMode == "matter" {
-                                matterAddFields
-                            } else {
-                                nativeRadioAddFields
-                            }
+                                if addDeviceMode == "zwave" && !zwaveRepairCandidates.isEmpty {
+                                    zwaveRepairPanel
+                                }
 
-                            if addDeviceMode == "zwave" && !zwaveRepairCandidates.isEmpty {
-                                zwaveRepairPanel
-                            }
+                                if addDeviceBusy {
+                                    addDeviceProgressBanner
+                                }
 
-                            if addDeviceBusy {
-                                HStack(spacing: 8) {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                    Text("Waiting for HomeBrain hardware confirmation...")
+                                if addDeviceMode == "zwave" && !addDevicePendingDsk.isEmpty {
+                                    addDeviceDskPanel
+                                }
+
+                                if let addDeviceStatusMessage {
+                                    Text(addDeviceStatusMessage)
                                         .font(.system(size: 12, weight: .semibold, design: .rounded))
                                         .foregroundStyle(HBPalette.textSecondary)
-                                }
-                            }
-
-                            if addDeviceMode == "zwave" && !addDevicePendingDsk.isEmpty {
-                                VStack(alignment: .leading, spacing: 10) {
-                                    Text("S2 security needs the 5 digit DSK PIN.")
-                                        .font(.system(size: 12, weight: .bold, design: .rounded))
-                                        .foregroundStyle(HBPalette.accentOrange)
-                                    Text("Use the first 5 digits printed on the switch, QR label, box, or manual insert. This is not a displayed PIN; 00000 will fail unless that is literally printed.")
-                                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                        .foregroundStyle(HBPalette.textSecondary)
                                         .fixedSize(horizontal: false, vertical: true)
-                                    Text("DSK challenge: \(addDevicePendingDsk)")
-                                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                        .foregroundStyle(HBPalette.textSecondary)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                    HStack(spacing: 8) {
-                                        TextField("5 digit PIN", text: $addDeviceDskPin)
-                                            .keyboardType(.numberPad)
-                                            .hbPanelTextField()
-                                            .onChange(of: addDeviceDskPin) { _, newValue in
-                                                addDeviceDskPin = String(newValue.filter(\.isNumber).prefix(5))
-                                            }
-                                        Button("Submit PIN") {
-                                            Task { await submitAddDeviceDskPin() }
-                                        }
-                                        .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                                        .disabled(addDeviceDskPin.count != 5)
-                                    }
+                                        .padding(10)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(HBPalette.panelSoft.opacity(0.55), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                                 }
-                                .padding(12)
-                                .background(HBPalette.accentOrange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                        .stroke(HBPalette.accentOrange.opacity(0.35), lineWidth: 1)
-                                )
-                            }
-
-                            if let addDeviceStatusMessage {
-                                Text(addDeviceStatusMessage)
-                                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                    .foregroundStyle(HBPalette.textSecondary)
-                                    .fixedSize(horizontal: false, vertical: true)
                             }
                         }
                     }
-
-                    Spacer()
+                    .padding(.horizontal, addDeviceSheetPadding)
+                    .padding(.top, addDeviceSheetPadding)
+                    .padding(.bottom, 96)
                 }
-                .padding(18)
+                .scrollIndicators(.hidden)
+            }
+            .safeAreaInset(edge: .bottom) {
+                addDeviceBottomBar
             }
             .toolbar(.hidden, for: .navigationBar)
+            .presentationDragIndicator(.visible)
+            .presentationDetents([.large])
             .task(id: addDeviceMode) {
                 if addDeviceMode == "zwave" {
                     await loadZWaveRepairNodeIds()
@@ -2470,6 +2453,164 @@ struct DevicesView: View {
                 }
             }
         }
+    }
+
+    private var addDeviceModeSelector: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Protocol")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .textCase(.uppercase)
+                .tracking(2.0)
+                .foregroundStyle(HBPalette.textMuted)
+
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: isCompact ? 96 : 118), spacing: 8)],
+                alignment: .leading,
+                spacing: 8
+            ) {
+                ForEach(addDeviceModes, id: \.self) { mode in
+                    addDeviceModeButton(mode)
+                }
+            }
+        }
+    }
+
+    private func addDeviceModeButton(_ mode: String) -> some View {
+        let selected = addDeviceMode == mode
+        return Button {
+            addDeviceMode = mode
+        } label: {
+            Label(addDeviceModeLabel(mode), systemImage: addDeviceModeIcon(mode))
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 10)
+        .background(selected ? HBPalette.accentBlue.opacity(0.22) : HBPalette.panelSoft.opacity(0.68), in: Capsule())
+        .overlay(
+            Capsule()
+                .stroke(selected ? HBPalette.accentBlue.opacity(0.8) : HBPalette.panelStrokeStrong.opacity(0.55), lineWidth: 1)
+        )
+        .foregroundStyle(selected ? HBPalette.textPrimary : HBPalette.textSecondary)
+        .disabled(addDeviceBusy || matterIsCommissioning)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func addDeviceModeIcon(_ mode: String) -> String {
+        switch mode {
+        case "zwave": return "wave.3.right"
+        case "zigbee": return "dot.radiowaves.left.and.right"
+        case "insteon": return "link"
+        case "matter": return "aqi.medium"
+        default: return "plus"
+        }
+    }
+
+    private var addDeviceBottomBar: some View {
+        VStack(spacing: 0) {
+            Divider()
+                .overlay(HBPalette.panelStroke)
+
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    Button("Cancel") {
+                        showCreateSheet = false
+                    }
+                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
+
+                    Button(addDevicePrimaryButtonTitle) {
+                        Task { await runAddDeviceAction() }
+                    }
+                    .buttonStyle(HBPrimaryButtonStyle(compact: true))
+                    .disabled(addDevicePrimaryButtonDisabled)
+                }
+
+                VStack(spacing: 10) {
+                    Button(addDevicePrimaryButtonTitle) {
+                        Task { await runAddDeviceAction() }
+                    }
+                    .buttonStyle(HBPrimaryButtonStyle(compact: true))
+                    .frame(maxWidth: .infinity)
+                    .disabled(addDevicePrimaryButtonDisabled)
+
+                    Button("Cancel") {
+                        showCreateSheet = false
+                    }
+                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(.horizontal, addDeviceSheetPadding)
+            .padding(.vertical, 12)
+            .background(.ultraThinMaterial)
+        }
+    }
+
+    private var addDeviceProgressBanner: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Text("Waiting for HomeBrain hardware confirmation...")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(HBPalette.accentBlue.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var addDeviceDskPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("S2 security needs the 5 digit DSK PIN.")
+                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .foregroundStyle(HBPalette.accentOrange)
+            Text("Use the first 5 digits printed on the switch, QR label, box, or manual insert. This is not a displayed PIN; 00000 will fail unless that is literally printed.")
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("DSK challenge: \(addDevicePendingDsk)")
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(HBPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    addDeviceDskTextField
+                    addDeviceDskSubmitButton
+                }
+                VStack(spacing: 8) {
+                    addDeviceDskTextField
+                    addDeviceDskSubmitButton
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
+        .padding(12)
+        .background(HBPalette.accentOrange.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(HBPalette.accentOrange.opacity(0.35), lineWidth: 1)
+        )
+    }
+
+    private var addDeviceDskTextField: some View {
+        TextField("5 digit PIN", text: $addDeviceDskPin)
+            .keyboardType(.numberPad)
+            .hbPanelTextField()
+            .onChange(of: addDeviceDskPin) { _, newValue in
+                addDeviceDskPin = String(newValue.filter(\.isNumber).prefix(5))
+            }
+    }
+
+    private var addDeviceDskSubmitButton: some View {
+        Button("Submit PIN") {
+            Task { await submitAddDeviceDskPin() }
+        }
+        .buttonStyle(HBSecondaryButtonStyle(compact: true))
+        .disabled(addDeviceDskPin.count != 5)
     }
 
     private var manualCreateFields: some View {
@@ -2497,37 +2638,13 @@ struct DevicesView: View {
 
     private var nativeRadioAddFields: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Window")
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(HBPalette.textSecondary)
-                Spacer()
-                Picker("Window", selection: $addDeviceDurationSeconds) {
-                    Text("1 min").tag(60)
-                    Text("3 min").tag(180)
-                    Text("5 min").tag(300)
-                    Text("10 min").tag(600)
-                }
-                .pickerStyle(.menu)
-                .tint(HBPalette.accentBlue)
-                .disabled(addDeviceBusy)
+            addDevicePickerRow("Pairing window") {
+                addDeviceWindowPicker
             }
 
             if addDeviceMode == "zwave" {
-                HStack {
-                    Text("Security")
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        .foregroundStyle(HBPalette.textSecondary)
-                    Spacer()
-                    Picker("Security", selection: $addDeviceZWaveSecurityMode) {
-                        Text("Standard, no PIN").tag("insecure")
-                        Text("Legacy S0").tag("s0")
-                        Text("Auto secure").tag("default")
-                        Text("Secure S2").tag("s2")
-                    }
-                    .pickerStyle(.menu)
-                    .tint(HBPalette.accentBlue)
-                    .disabled(addDeviceBusy)
+                addDevicePickerRow("Security") {
+                    addDeviceSecurityPicker
                 }
             }
 
@@ -2536,6 +2653,54 @@ struct DevicesView: View {
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+
+    private func addDevicePickerRow<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        Group {
+            if isCompact {
+                VStack(alignment: .leading, spacing: 6) {
+                    addDeviceFieldLabel(title)
+                    content()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                HStack {
+                    addDeviceFieldLabel(title)
+                    Spacer()
+                    content()
+                }
+            }
+        }
+    }
+
+    private func addDeviceFieldLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 14, weight: .semibold, design: .rounded))
+            .foregroundStyle(HBPalette.textSecondary)
+    }
+
+    private var addDeviceWindowPicker: some View {
+        Picker("Window", selection: $addDeviceDurationSeconds) {
+            Text("1 min").tag(60)
+            Text("3 min").tag(180)
+            Text("5 min").tag(300)
+            Text("10 min").tag(600)
+        }
+        .pickerStyle(.menu)
+        .tint(HBPalette.accentBlue)
+        .disabled(addDeviceBusy)
+    }
+
+    private var addDeviceSecurityPicker: some View {
+        Picker("Security", selection: $addDeviceZWaveSecurityMode) {
+            Text("Standard").tag("insecure")
+            Text("Legacy S0").tag("s0")
+            Text("Auto secure").tag("default")
+            Text("Secure S2").tag("s2")
+        }
+        .pickerStyle(.menu)
+        .tint(HBPalette.accentBlue)
+        .disabled(addDeviceBusy)
     }
 
     private var zwaveRepairCandidates: [AddDeviceZWaveRepairCandidate] {
@@ -2609,76 +2774,33 @@ struct DevicesView: View {
                 }
             }
 
-            ForEach(zwaveRepairCandidates) { candidate in
-                HStack(spacing: 10) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(candidate.name)
-                            .font(.system(size: 13, weight: .bold, design: .rounded))
-                            .foregroundStyle(HBPalette.textPrimary)
-                            .lineLimit(1)
-                        Text(candidate.subtitle)
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            .foregroundStyle(HBPalette.textSecondary)
-                            .lineLimit(2)
-                    }
-
-                    Spacer(minLength: 8)
-
-                    VStack(alignment: .trailing, spacing: 8) {
-                        Button {
-                            Task { await repairZWaveNode(candidate) }
-                        } label: {
-                            if addDeviceRepairingZWaveNodeId == candidate.nodeId {
-                                ProgressView()
-                                    .controlSize(.small)
-                            } else {
-                                Label("Repair", systemImage: "wrench.and.screwdriver")
-                            }
-                        }
-                        .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                        .disabled(addDeviceBusy || addDeviceRepairingZWaveNodeId != nil || addDeviceReplacingZWaveNodeId != nil || addDeviceRemovingZWaveNodeId != nil)
-
-                        if candidate.canRemoveFailed {
-                            Button {
-                                Task { await replaceFailedZWaveNode(candidate) }
-                            } label: {
-                                if addDeviceReplacingZWaveNodeId == candidate.nodeId {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                } else {
-                                    Label(candidate.likelyLegacySiren ? "Replace S0" : "Replace", systemImage: "plus.circle")
-                                }
-                            }
-                            .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                            .disabled(addDeviceBusy || addDeviceRepairingZWaveNodeId != nil || addDeviceReplacingZWaveNodeId != nil || addDeviceRemovingZWaveNodeId != nil)
-
-                            Button {
-                                Task { await removeFailedZWaveNode(candidate) }
-                            } label: {
-                                if addDeviceRemovingZWaveNodeId == candidate.nodeId {
-                                    ProgressView()
-                                        .controlSize(.small)
-                                } else {
-                                    Label("Remove", systemImage: "trash")
-                                }
-                            }
-                            .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                            .disabled(addDeviceBusy || addDeviceRepairingZWaveNodeId != nil || addDeviceReplacingZWaveNodeId != nil || addDeviceRemovingZWaveNodeId != nil)
-                            .tint(.red)
-                        }
-                    }
-                }
-                .padding(10)
-                .background(HBGlassBackground(cornerRadius: 10, variant: .panelSoft))
-            }
-
             Button {
                 Task { await startZWaveCleanupExclusion() }
             } label: {
                 Label("Start Exclusion Cleanup", systemImage: "minus.circle")
+                    .frame(maxWidth: .infinity)
             }
             .buttonStyle(HBSecondaryButtonStyle(compact: true))
             .disabled(addDeviceBusy)
+
+            ForEach(zwaveRepairCandidates) { candidate in
+                VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(candidate.name)
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundStyle(HBPalette.textPrimary)
+                            .lineLimit(2)
+                        Text(candidate.subtitle)
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(HBPalette.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    zwaveRepairActionButtons(for: candidate)
+                }
+                .padding(10)
+                .background(HBGlassBackground(cornerRadius: 10, variant: .panelSoft))
+            }
         }
         .padding(12)
         .background(HBPalette.accentOrange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -2686,6 +2808,78 @@ struct DevicesView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(HBPalette.accentOrange.opacity(0.35), lineWidth: 1)
         )
+    }
+
+    private func zwaveRepairActionButtons(for candidate: AddDeviceZWaveRepairCandidate) -> some View {
+        let busy = addDeviceBusy
+            || addDeviceRepairingZWaveNodeId != nil
+            || addDeviceReplacingZWaveNodeId != nil
+            || addDeviceRemovingZWaveNodeId != nil
+
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 8) {
+                zwaveRepairButton(for: candidate)
+                if candidate.canRemoveFailed {
+                    zwaveReplaceButton(for: candidate)
+                    zwaveRemoveButton(for: candidate)
+                }
+            }
+            .disabled(busy)
+
+            VStack(spacing: 8) {
+                zwaveRepairButton(for: candidate)
+                    .frame(maxWidth: .infinity)
+                if candidate.canRemoveFailed {
+                    zwaveReplaceButton(for: candidate)
+                        .frame(maxWidth: .infinity)
+                    zwaveRemoveButton(for: candidate)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .disabled(busy)
+        }
+    }
+
+    private func zwaveRepairButton(for candidate: AddDeviceZWaveRepairCandidate) -> some View {
+        Button {
+            Task { await repairZWaveNode(candidate) }
+        } label: {
+            if addDeviceRepairingZWaveNodeId == candidate.nodeId {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Label("Repair", systemImage: "wrench.and.screwdriver")
+            }
+        }
+        .buttonStyle(HBSecondaryButtonStyle(compact: true))
+    }
+
+    private func zwaveReplaceButton(for candidate: AddDeviceZWaveRepairCandidate) -> some View {
+        Button {
+            Task { await replaceFailedZWaveNode(candidate) }
+        } label: {
+            if addDeviceReplacingZWaveNodeId == candidate.nodeId {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Label(candidate.likelyLegacySiren ? "Replace S0" : "Replace", systemImage: "plus.circle")
+            }
+        }
+        .buttonStyle(HBSecondaryButtonStyle(compact: true))
+    }
+
+    private func zwaveRemoveButton(for candidate: AddDeviceZWaveRepairCandidate) -> some View {
+        Button {
+            Task { await removeFailedZWaveNode(candidate) }
+        } label: {
+            if addDeviceRemovingZWaveNodeId == candidate.nodeId {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Label("Remove", systemImage: "trash")
+            }
+        }
+        .buttonStyle(HBDestructiveButtonStyle(compact: true))
     }
 
     private var matterAddFields: some View {
@@ -2823,6 +3017,15 @@ struct DevicesView: View {
             devices = UIPreviewData.devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             if let previewTypeFilter = Self.previewDeviceTypeFilterFromLaunch() {
                 typeFilter = previewTypeFilter
+            }
+            if !appliedPreviewLaunchActions {
+                if let previewAddDeviceMode = Self.previewAddDeviceModeFromLaunch() {
+                    addDeviceMode = previewAddDeviceMode
+                }
+                if Self.previewShouldOpenAddDeviceFromLaunch() {
+                    showCreateSheet = true
+                }
+                appliedPreviewLaunchActions = true
             }
             favoritesProfileId = UIPreviewData.favoriteProfileId
             favoriteDeviceIds = UIPreviewData.favoriteDeviceIds
@@ -4121,12 +4324,25 @@ struct DevicesView: View {
 
     private func loadZWaveRepairNodeIds() async {
         if previewMode {
-            addDeviceKnownZWaveNodeIds = Set(
-                UIPreviewData.devices
-                    .compactMap { zWaveNodeId(for: $0) }
-                    .filter { $0 != 1 }
-            )
-            addDeviceKnownZWaveNodes = []
+            addDeviceKnownZWaveNodes = UIPreviewData.devices.compactMap { device in
+                guard let nodeId = zWaveNodeId(for: device),
+                      nodeId != 1 else {
+                    return nil
+                }
+
+                let direct = JSON.object(device.properties["homebrainDirect"])
+                let catalog = JSON.object(direct["catalog"])
+                let nodeName = JSON.string(catalog, "label", fallback: device.name)
+                return AddDeviceZWaveNodeSummary(
+                    id: nodeId,
+                    name: nodeName,
+                    ready: JSON.bool(direct, "ready", fallback: device.isOnline),
+                    status: direct["status"] == nil ? nil : JSON.int(direct, "status"),
+                    incomplete: isIncompleteZWaveDirectDevice(device),
+                    featureCount: propertyStringSet(for: device, key: "directRadioFeatures").count
+                )
+            }
+            addDeviceKnownZWaveNodeIds = Set(addDeviceKnownZWaveNodes.map(\.id))
             return
         }
 
@@ -4143,12 +4359,12 @@ struct DevicesView: View {
     private func repairZWaveNode(_ candidate: AddDeviceZWaveRepairCandidate) async {
         let nodeId = candidate.nodeId
         if previewMode {
-            addDeviceStatusMessage = "HomeBrain would request a fresh Z-Wave interview for node \(nodeId)."
+            addDeviceStatusMessage = "HomeBrain would ping node \(nodeId) first and skip a fresh interview if it responds."
             return
         }
 
         addDeviceRepairingZWaveNodeId = nodeId
-        addDeviceStatusMessage = "Requesting a fresh Z-Wave interview for \(candidate.name)."
+        addDeviceStatusMessage = "Checking \(candidate.name) before requesting a fresh Z-Wave interview."
         errorMessage = nil
         defer { addDeviceRepairingZWaveNodeId = nil }
 
@@ -4158,14 +4374,18 @@ struct DevicesView: View {
                 body: [
                     "waitForWakeup": false,
                     "resetSecurityClasses": candidate.likelyLegacySiren,
-                    "pingFirst": true
+                    "pingFirst": true,
+                    "skipRefreshIfPingSucceeds": !candidate.likelyLegacySiren
                 ]
             )
             let root = JSON.object(response)
             updateKnownZWaveNodeIds(from: JSON.object(root["status"]))
             let result = JSON.object(root["result"])
             let ping = result["ping"] as? Bool
-            if ping == false && candidate.canRemoveFailed {
+            let skippedRefresh = JSON.bool(result, "skippedRefresh")
+            if skippedRefresh {
+                addDeviceStatusMessage = "Node \(nodeId) answered the Z-Wave ping, so HomeBrain skipped a fresh interview. Refresh devices to confirm the recovered state."
+            } else if ping == false && candidate.canRemoveFailed {
                 addDeviceStatusMessage = "Node \(nodeId) did not answer and is marked dead by the Zooz controller. Remove Failed will clean up this stuck controller entry and its HomeBrain record."
             } else if ping == false {
                 addDeviceStatusMessage = "HomeBrain requested a fresh interview for node \(nodeId), but it did not answer the first ping. Use the device include or wake action once and refresh devices."

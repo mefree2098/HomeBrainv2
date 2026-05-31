@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import UIKit
 
 @MainActor
 final class UIPreviewStore: ObservableObject {
@@ -26,6 +27,23 @@ final class UIPreviewStore: ObservableObject {
 
     var selectedSection: AppShellView.AppSection {
         AppShellView.AppSection(rawValue: selectedSectionRaw) ?? .dashboard
+    }
+
+    var requestedInterfaceOrientationMask: UIInterfaceOrientationMask? {
+        guard let orientation = Self.previewOrientationFromLaunch() else {
+            return nil
+        }
+
+        switch orientation {
+        case "landscape", "landscape-right":
+            return .landscapeRight
+        case "landscape-left":
+            return .landscapeLeft
+        case "portrait":
+            return .portrait
+        default:
+            return nil
+        }
     }
 
     func enter(section: AppShellView.AppSection) {
@@ -63,6 +81,17 @@ final class UIPreviewStore: ObservableObject {
         }
 
         return processInfo.environment["UI_PREVIEW_SECTION"]
+    }
+
+    private static func previewOrientationFromLaunch() -> String? {
+        let processInfo = ProcessInfo.processInfo
+
+        if let index = processInfo.arguments.firstIndex(of: "-ui-preview-orientation"),
+           processInfo.arguments.indices.contains(index + 1) {
+            return processInfo.arguments[index + 1].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+
+        return processInfo.environment["UI_PREVIEW_ORIENTATION"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }
 
@@ -227,9 +256,92 @@ enum UIPreviewData {
             targetTemperature: nil,
             properties: [
                 "supportsBrightness": true,
-                "directRadioFeatures": ["switch", "brightness"]
+                "directRadioFeatures": ["switch", "brightness"],
+                "homebrainDirect": [
+                    "protocol": "zwave",
+                    "nodeId": 4,
+                    "ready": true,
+                    "status": 4,
+                    "interviewStage": 6,
+                    "manufacturerId": 57,
+                    "productType": 12336,
+                    "productId": 17416,
+                    "catalog": [
+                        "label": "Honeywell ZW4008",
+                        "manufacturer": "Honeywell"
+                    ]
+                ],
+                "directRadioState": [
+                    "switch": true,
+                    "brightness": 42
+                ]
             ],
             lastSeen: "8m ago"
+        ),
+        DeviceItem(
+            id: "preview-zigbee-contact",
+            name: "Nursery Window Sensor",
+            type: "sensor",
+            room: "Nursery",
+            status: false,
+            isOnline: true,
+            brightness: 0,
+            color: "#ffffff",
+            temperature: nil,
+            targetTemperature: nil,
+            properties: [
+                "directRadioFeatures": ["contact", "battery"],
+                "homebrainDirect": [
+                    "protocol": "zigbee",
+                    "ieeeAddr": "0x00158d0009abc123",
+                    "ready": false,
+                    "interviewCompleted": false,
+                    "iasZone": [
+                        "enrolled": false
+                    ],
+                    "catalog": [
+                        "label": "Aqara Contact Sensor",
+                        "manufacturer": "Aqara"
+                    ]
+                ],
+                "directRadioState": [
+                    "contact": "closed",
+                    "batteryLevel": 88
+                ]
+            ],
+            lastSeen: "12m ago"
+        ),
+        DeviceItem(
+            id: "preview-zwave-partial-siren",
+            name: "Hall Siren Partial Add",
+            type: "siren",
+            room: "Upper Hall",
+            status: false,
+            isOnline: false,
+            brightness: 0,
+            color: "#ffffff",
+            temperature: nil,
+            targetTemperature: nil,
+            properties: [
+                "directRadioFeatures": ["siren"],
+                "supportsSirenVolume": true,
+                "homebrainDirect": [
+                    "protocol": "zwave",
+                    "nodeId": 7,
+                    "ready": false,
+                    "status": 3,
+                    "interviewStage": 1,
+                    "securityClasses": [],
+                    "catalog": [
+                        "label": "Aeotec ZW080 Siren",
+                        "manufacturer": "Aeotec"
+                    ]
+                ],
+                "directRadioState": [
+                    "siren": "off"
+                ]
+            ],
+            lastSeen: "Needs interview"
         )
     ]
 
