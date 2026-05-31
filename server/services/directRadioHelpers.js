@@ -872,6 +872,76 @@ function readSmartThingsTemperatureF(device) {
     : temperature;
 }
 
+function getSmartThingsAttributeValues(properties = {}) {
+  return properties.smartThingsAttributeValues && typeof properties.smartThingsAttributeValues === 'object'
+    ? properties.smartThingsAttributeValues
+    : {};
+}
+
+function readSmartThingsAttributeValue(properties = {}, capability, attribute) {
+  const values = getSmartThingsAttributeValues(properties);
+  const readFromBucket = (bucket) => {
+    if (!bucket || typeof bucket !== 'object') {
+      return undefined;
+    }
+    const capabilityBucket = bucket[capability];
+    if (capabilityBucket && typeof capabilityBucket === 'object') {
+      return capabilityBucket[attribute];
+    }
+    return undefined;
+  };
+
+  const topLevel = readFromBucket(values);
+  if (topLevel !== undefined) {
+    return topLevel;
+  }
+
+  const byComponent = values.byComponent && typeof values.byComponent === 'object'
+    ? values.byComponent
+    : {};
+  const main = readFromBucket(byComponent.main);
+  if (main !== undefined) {
+    return main;
+  }
+
+  for (const componentValues of Object.values(byComponent)) {
+    const component = readFromBucket(componentValues);
+    if (component !== undefined) {
+      return component;
+    }
+  }
+
+  return undefined;
+}
+
+function normalizeSmartThingsActiveAttribute(value) {
+  const active = normalizeZigbeeActiveState(value);
+  return active !== undefined ? active : normalizeZigbeeContactOpen(value);
+}
+
+function normalizeSmartThingsAxis(value) {
+  let entries = value;
+  if (typeof value === 'string') {
+    entries = value
+      .replace(/^\[|\]$/g, '')
+      .split(',')
+      .map((entry) => entry.trim());
+  } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+    entries = [
+      value.x ?? value.xAxis ?? value.X,
+      value.y ?? value.yAxis ?? value.Y,
+      value.z ?? value.zAxis ?? value.Z
+    ];
+  }
+
+  if (!Array.isArray(entries) || entries.length < 3) {
+    return undefined;
+  }
+
+  const axis = entries.slice(0, 3).map(toFiniteNumber);
+  return axis.every((entry) => entry !== null) ? axis : undefined;
+}
+
 function copySmartThingsHistoryProperties(sourceProperties = {}) {
   const history = {};
   Object.entries(sourceProperties).forEach(([key, value]) => {
@@ -916,8 +986,106 @@ function mergeSmartThingsTelemetryFallback(snapshot = {}, sourceDevice = null) {
     next.properties.batteryLevel ??= batteryLevel;
   }
 
+  const sourceProperties = getDeviceProperties(sourceDevice);
+  const contactOpen = normalizeZigbeeContactOpen(readSmartThingsAttributeValue(
+    sourceProperties,
+    'contactSensor',
+    'contact'
+  ));
+  if (contactOpen !== undefined) {
+    if (directState.contactOpen === undefined) {
+      directState.contactOpen = contactOpen;
+    }
+    if (directState.contact === undefined) {
+      directState.contact = contactOpen ? 'open' : 'closed';
+    }
+    if (!Object.prototype.hasOwnProperty.call(next, 'status') || next.status === undefined) {
+      next.status = contactOpen;
+    }
+  }
+
+  const accelerationActive = normalizeSmartThingsActiveAttribute(readSmartThingsAttributeValue(
+    sourceProperties,
+    'accelerationSensor',
+    'acceleration'
+  ));
+  if (accelerationActive !== undefined) {
+    if (directState.accelerationActive === undefined) {
+      directState.accelerationActive = accelerationActive;
+    }
+    if (directState.acceleration === undefined) {
+      directState.acceleration = accelerationActive ? 'active' : 'inactive';
+    }
+    if (directState.vibrationActive === undefined) {
+      directState.vibrationActive = accelerationActive;
+    }
+    if (directState.vibration === undefined) {
+      directState.vibration = accelerationActive ? 'active' : 'inactive';
+    }
+  }
+
+  const vibrationActive = normalizeSmartThingsActiveAttribute(readSmartThingsAttributeValue(
+    sourceProperties,
+    'vibrationSensor',
+    'vibration'
+  ));
+  if (vibrationActive !== undefined) {
+    if (directState.vibrationActive === undefined) {
+      directState.vibrationActive = vibrationActive;
+    }
+    if (directState.vibration === undefined) {
+      directState.vibration = vibrationActive ? 'active' : 'inactive';
+    }
+  }
+
+  const axis = normalizeSmartThingsAxis(readSmartThingsAttributeValue(
+    sourceProperties,
+    'threeAxis',
+    'threeAxis'
+  ));
+  if (axis !== undefined) {
+    if (directState.axis === undefined) {
+      directState.axis = axis;
+    }
+    if (directState.xAxis === undefined) {
+      directState.xAxis = axis[0];
+    }
+    if (directState.yAxis === undefined) {
+      directState.yAxis = axis[1];
+    }
+    if (directState.zAxis === undefined) {
+      directState.zAxis = axis[2];
+    }
+  }
+
+  const tamperActive = normalizeSmartThingsActiveAttribute(readSmartThingsAttributeValue(
+    sourceProperties,
+    'tamperAlert',
+    'tamper'
+  ));
+  if (tamperActive !== undefined) {
+    if (directState.tamperActive === undefined) {
+      directState.tamperActive = tamperActive;
+    }
+    if (directState.tamper === undefined) {
+      directState.tamper = tamperActive ? 'detected' : 'clear';
+    }
+  }
+
   if (Object.keys(directState).length > 0) {
     next.properties.directRadioState = directState;
+    const features = uniqueStrings([
+      ...(Array.isArray(next.properties.directRadioFeatures) ? next.properties.directRadioFeatures : []),
+      ...inferFeaturesFromDirectRadioState(directState)
+    ].map(normalizeFeature)).sort();
+    const protocol = normalizeSourceText(next.properties.homebrainDirect?.protocol)
+      || (normalizeSourceText(next.properties.source) === DIRECT_RADIO_SOURCES.zigbee ? 'zigbee' : '')
+      || (normalizeSourceText(next.properties.source) === DIRECT_RADIO_SOURCES.zwave ? 'zwave' : '')
+      || normalizeSourceText(getDeviceProperties(sourceDevice).homebrainDirect?.protocol)
+      || 'unknown';
+    next.properties.directRadioFeatures = features;
+    next.properties.directRadioCapabilities = buildNormalizedCapabilities(features, protocol);
+    Object.assign(next.properties, buildDirectFeatureProperties(features));
   }
 
   return next;

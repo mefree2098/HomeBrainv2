@@ -1480,6 +1480,102 @@ test('direct radio migration finalization persists passed validation for native 
   }
 });
 
+test('direct radio migration finalization repairs retained SmartThings sensor telemetry before validation', async () => {
+  const service = createService();
+  service.emitDeviceUpdate = () => {};
+
+  const originalFindById = Device.findById;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalDeleteDevice = smartThingsService.deleteDevice;
+  let device = {
+    _id: {
+      toString: () => DEVICE_ID
+    },
+    name: 'Front Door',
+    type: 'sensor',
+    room: 'Upstairs',
+    status: false,
+    temperature: 64.6,
+    isOnline: true,
+    properties: {
+      source: 'homebrain-zigbee',
+      smartThingsCapabilities: ['contactSensor', 'temperatureMeasurement', 'threeAxis', 'accelerationSensor', 'battery'],
+      smartThingsAttributeValues: {
+        contactSensor: {
+          contact: 'closed'
+        },
+        accelerationSensor: {
+          acceleration: 'inactive'
+        },
+        threeAxis: {
+          threeAxis: [17, 9, 1011]
+        },
+        battery: {
+          battery: 17
+        },
+        temperatureMeasurement: {
+          temperature: 64.6
+        }
+      },
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x000d6f00057c3ef1'
+      },
+      directRadioFeatures: ['battery', 'contact', 'temperature'],
+      smartThingsMigration: {
+        migratedAt: '2026-05-31T02:50:00.000Z',
+        previousSource: 'smartthings',
+        smartThingsDeviceId: 'smartthings-front-door',
+        migrationId: 'migration-front-door',
+        validation: {
+          status: 'needs_review'
+        }
+      }
+    }
+  };
+  const persistedUpdates = [];
+  const deletedSmartThingsDeviceIds = [];
+  Device.findById = async () => device;
+  Device.findByIdAndUpdate = async (_id, update) => {
+    persistedUpdates.push(update);
+    device = {
+      ...device,
+      ...update,
+      properties: update.properties
+    };
+    return device;
+  };
+  smartThingsService.deleteDevice = async (deviceId) => {
+    deletedSmartThingsDeviceIds.push(deviceId);
+    return {};
+  };
+
+  try {
+    const result = await service.finalizeDeviceMigration({
+      deviceId: DEVICE_ID,
+      reason: 'Native contact state verified'
+    });
+
+    const finalizeUpdate = persistedUpdates[0];
+    assert.equal(result.finalization.validation.status, 'passed');
+    assert.equal(finalizeUpdate.properties.directRadioState.contactOpen, false);
+    assert.equal(finalizeUpdate.properties.directRadioState.contact, 'closed');
+    assert.equal(finalizeUpdate.properties.directRadioState.vibrationActive, false);
+    assert.equal(finalizeUpdate.properties.directRadioState.vibration, 'inactive');
+    assert.equal(finalizeUpdate.properties.directRadioState.accelerationActive, false);
+    assert.deepEqual(finalizeUpdate.properties.directRadioState.axis, [17, 9, 1011]);
+    assert.ok(finalizeUpdate.properties.directRadioFeatures.includes('vibration'));
+    assert.ok(finalizeUpdate.properties.directRadioFeatures.includes('acceleration'));
+    assert.ok(finalizeUpdate.properties.directRadioFeatures.includes('axis'));
+    assert.equal(finalizeUpdate.properties.supportsVibrationSensor, true);
+    assert.deepEqual(deletedSmartThingsDeviceIds, ['smartthings-front-door']);
+  } finally {
+    Device.findById = originalFindById;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    smartThingsService.deleteDevice = originalDeleteDevice;
+  }
+});
+
 test('active direct radio migration deletes the old SmartThings device after native pairing completes', async () => {
   const service = createService();
   service.emitDeviceUpdate = () => {};
@@ -1978,6 +2074,66 @@ test('SmartThings telemetry fallback carries available temperature without repla
   assert.equal(snapshot.properties.directRadioState.temperatureF, 75.2);
   assert.equal(snapshot.properties.directRadioState.batteryLevel, 41);
   assert.equal(snapshot.properties.homeBrainBatteryLevel, 41);
+});
+
+test('SmartThings telemetry fallback restores contact vibration and axis state for migrated sensors', () => {
+  const snapshot = mergeSmartThingsTelemetryFallback({
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x000d6f00057c3ef1'
+      },
+      directRadioFeatures: ['battery', 'contact', 'temperature']
+    }
+  }, {
+    temperature: 64.6,
+    properties: {
+      source: 'smartthings',
+      smartThingsBatteryLevel: 17,
+      smartThingsAttributeValues: {
+        contactSensor: {
+          contact: 'closed'
+        },
+        accelerationSensor: {
+          acceleration: 'inactive'
+        },
+        threeAxis: {
+          threeAxis: [17, 9, 1011]
+        },
+        battery: {
+          battery: 17
+        },
+        temperatureMeasurement: {
+          temperature: 64.6
+        }
+      },
+      smartThingsAttributeMetadata: {
+        temperatureMeasurement: {
+          temperature: {
+            unit: 'F'
+          }
+        }
+      }
+    }
+  });
+
+  assert.equal(snapshot.status, false);
+  assert.equal(snapshot.temperature, 64.6);
+  assert.equal(snapshot.properties.directRadioState.contactOpen, false);
+  assert.equal(snapshot.properties.directRadioState.contact, 'closed');
+  assert.equal(snapshot.properties.directRadioState.accelerationActive, false);
+  assert.equal(snapshot.properties.directRadioState.acceleration, 'inactive');
+  assert.equal(snapshot.properties.directRadioState.vibrationActive, false);
+  assert.equal(snapshot.properties.directRadioState.vibration, 'inactive');
+  assert.deepEqual(snapshot.properties.directRadioState.axis, [17, 9, 1011]);
+  assert.equal(snapshot.properties.directRadioState.xAxis, 17);
+  assert.equal(snapshot.properties.directRadioState.yAxis, 9);
+  assert.equal(snapshot.properties.directRadioState.zAxis, 1011);
+  assert.ok(snapshot.properties.directRadioFeatures.includes('vibration'));
+  assert.ok(snapshot.properties.directRadioFeatures.includes('acceleration'));
+  assert.ok(snapshot.properties.directRadioFeatures.includes('axis'));
+  assert.equal(snapshot.properties.supportsVibrationSensor, true);
 });
 
 test('direct radio upsert prefers complete switch records over stale partial duplicates', () => {
