@@ -533,6 +533,14 @@ armPairingTimer(protocol, sessionId, seconds) {
           targetIdentity: session.targetIdentity || null,
           detectedIdentity: session.detectedIdentity || null
         });
+        if (typeof this.markActiveMigrationPairingExpired === 'function') {
+          void this.markActiveMigrationPairingExpired(protocol, session).catch((error) => {
+            this.log('warn', protocol, 'Failed to mark active migration pairing as expired', {
+              pairingId: session.id,
+              error: error.message
+            });
+          });
+        }
       }
       void this.stopPairing(protocol).catch((error) => {
         console.warn(`DirectRadioService: Failed to auto-stop ${protocol} pairing: ${error.message}`);

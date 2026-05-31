@@ -873,6 +873,9 @@ struct DevicesView: View {
             }
             return parts.joined(separator: " · ")
         }
+        if isSmartThingsAwaitingNativePairing(device) {
+            return "SmartThings removed; awaiting Zigbee pairing"
+        }
         if device.type == "sensor" {
             return sensorSummary(for: device)
         }
@@ -5258,6 +5261,12 @@ struct DevicesView: View {
         return boolValue(migration["retiredSource"]) || status == "finalized_source"
     }
 
+    private func isSmartThingsAwaitingNativePairing(_ device: DeviceItem) -> Bool {
+        let migration = smartThingsMigration(for: device)
+        let status = stringValue(migration["status"]).lowercased()
+        return status == "awaiting_native_pairing"
+    }
+
     private func needsMigrationFinalization(_ device: DeviceItem) -> Bool {
         return isDirectRadioBackedDevice(device)
             && !smartThingsMigration(for: device).isEmpty
@@ -5892,7 +5901,7 @@ private struct DirectRadioMigrationPlanRecord {
         if normalizedRecommendedProtocol == "zwave" {
             return "Z-Wave transition starts with exclusion from the SmartThings hub. HomeBrain waits for SmartThings removal before opening native inclusion on the Zooz stick."
         }
-        return "HomeBrain keeps the SmartThings-backed record until you verify the native HomeBrain replacement. Confirm battery, state, and controls before retiring SmartThings."
+        return "HomeBrain requests SmartThings removal before opening Zigbee pairing. Confirm native state, battery, and controls before finalizing migration."
     }
 
     var nativeFeatureCount: Int {
