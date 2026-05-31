@@ -2836,6 +2836,7 @@ test('Zigbee recovery reclaims an awaiting SmartThings source by stored native i
     }
   };
   const deletedDeviceIds = [];
+  const deleteOptions = [];
   Device.find = async (query = {}) => {
     if (Array.isArray(query.$and) && query.$and.some((clause) => clause['properties.smartThingsMigration.status'])) {
       return [sourceDevice];
@@ -2851,8 +2852,9 @@ test('Zigbee recovery reclaims an awaiting SmartThings source by stored native i
       properties: payload.properties
     };
   };
-  deviceService.deleteDevice = async (deviceId) => {
+  deviceService.deleteDevice = async (deviceId, options = {}) => {
     deletedDeviceIds.push(String(deviceId));
+    deleteOptions.push(options);
     return { _id: deviceId, name: 'Multi Sensor (2015 model)' };
   };
   service.emitDeviceUpdate = () => {};
@@ -2875,6 +2877,7 @@ test('Zigbee recovery reclaims an awaiting SmartThings source by stored native i
   assert.equal(result.properties.smartThingsMigration.status, 'native_joined_pending_interview');
   assert.equal(result.properties.smartThingsMigration.duplicateDeviceId, directDeviceId);
   assert.deepEqual(deletedDeviceIds, [directDeviceId]);
+  assert.equal(deleteOptions[0]?.skipDirectRadioCleanup, true);
 });
 
 test('Z-Wave controller nodes are not normalized as user devices', () => {

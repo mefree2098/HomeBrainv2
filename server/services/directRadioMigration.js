@@ -1010,7 +1010,10 @@ async reclaimAwaitingSmartThingsMigrationSourceIfMatched(device, identity) {
     if (directDeviceId) {
       try {
         const deviceService = require('./deviceService');
-        await deviceService.deleteDevice(directDeviceId);
+        await deviceService.deleteDevice(directDeviceId, {
+          skipDirectRadioCleanup: true,
+          skipDirectRadioCleanupReason: 'reclaimed_direct_radio_duplicate'
+        });
         duplicateDeleted = true;
       } catch (error) {
         const stillExists = await Device.exists({ _id: directDeviceId }).catch(() => true);

@@ -731,7 +731,10 @@ async upsertDirectDeviceRecord(identity, update, options = {}) {
       const deletionErrors = [];
       for (const duplicate of duplicateRecords) {
         try {
-          const deletedDevice = await deviceService.deleteDevice(duplicate._id);
+          const deletedDevice = await deviceService.deleteDevice(duplicate._id, {
+            skipDirectRadioCleanup: true,
+            skipDirectRadioCleanupReason: 'direct_radio_duplicate_record'
+          });
           deletedDeviceIds.push(deletedDevice?._id?.toString?.() || String(duplicate._id));
         } catch (error) {
           const stillExists = duplicate?._id ? await Device.exists({ _id: duplicate._id }) : true;

@@ -905,8 +905,9 @@ class DeviceService {
    * @param {string} deviceId - Device ID
    * @returns {Promise<Object>} Deleted device
    */
-  async deleteDevice(deviceId) {
+  async deleteDevice(deviceId, options = {}) {
     console.log('DeviceService: Deleting device:', deviceId);
+    const skipDirectRadioCleanup = options?.skipDirectRadioCleanup === true;
 
     let existingDevice;
     try {
@@ -926,24 +927,32 @@ class DeviceService {
     let deletionCleanup = createDeletionCleanupSummary();
     let directRadioCleanupAttempted = false;
 
-    try {
-      const directRadioCleanup = await this.cleanupDeletedDirectRadioDevice(deletedDeviceSnapshot);
-      if (directRadioCleanup) {
-        deletionCleanup.directRadio = directRadioCleanup;
-        directRadioCleanupAttempted = true;
+    if (skipDirectRadioCleanup) {
+      deletionCleanup.directRadio = {
+        skipped: true,
+        reason: options?.skipDirectRadioCleanupReason || 'skipped_by_caller'
+      };
+      directRadioCleanupAttempted = true;
+    } else {
+      try {
+        const directRadioCleanup = await this.cleanupDeletedDirectRadioDevice(deletedDeviceSnapshot);
+        if (directRadioCleanup) {
+          deletionCleanup.directRadio = directRadioCleanup;
+          directRadioCleanupAttempted = true;
+        }
+      } catch (cleanupError) {
+        recordDeletionCleanupError(deletionCleanup, 'cleanupDeletedDirectRadioDevice', cleanupError, {
+          deviceId: normalizeIdString(deletedDeviceSnapshot?._id),
+          ieeeAddr: normalizeIdString(deletedDeviceSnapshot?.properties?.homebrainDirect?.ieeeAddr) || undefined,
+          phase: 'before_database_delete'
+        });
+        const error = new Error(
+          `Failed to remove Zigbee device from coordinator before deleting database record: ${cleanupError.message}`
+        );
+        error.status = cleanupError.status || 502;
+        error.deletionCleanup = deletionCleanup;
+        throw error;
       }
-    } catch (cleanupError) {
-      recordDeletionCleanupError(deletionCleanup, 'cleanupDeletedDirectRadioDevice', cleanupError, {
-        deviceId: normalizeIdString(deletedDeviceSnapshot?._id),
-        ieeeAddr: normalizeIdString(deletedDeviceSnapshot?.properties?.homebrainDirect?.ieeeAddr) || undefined,
-        phase: 'before_database_delete'
-      });
-      const error = new Error(
-        `Failed to remove Zigbee device from coordinator before deleting database record: ${cleanupError.message}`
-      );
-      error.status = cleanupError.status || 502;
-      error.deletionCleanup = deletionCleanup;
-      throw error;
     }
 
     let deletedDevice;
