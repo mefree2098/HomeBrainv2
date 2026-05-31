@@ -403,6 +403,33 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
     delete merged.properties.homeBrainBatteryLevel;
     delete merged.properties.batteryLevel;
     delete merged.properties.batteryLow;
+    const migration = merged.properties.smartThingsMigration && typeof merged.properties.smartThingsMigration === 'object'
+      ? merged.properties.smartThingsMigration
+      : null;
+    const validation = migration?.validation && typeof migration.validation === 'object'
+      ? migration.validation
+      : null;
+    const hasStaleFinalization = Boolean(migration?.finalizedAt)
+      || Boolean(migration?.finalizedBy)
+      || validation?.finalized === true
+      || normalizeSourceText(validation?.status) === 'passed';
+    if (migration && hasStaleFinalization) {
+      const nextMigration = {
+        ...migration,
+        status: 'native_joined_pending_interview',
+        validation: {
+          ...(validation || {}),
+          status: 'failed',
+          finalized: false,
+          invalidatedAt: new Date().toISOString(),
+          invalidatedReason: 'incomplete_zigbee_interview_shell'
+        }
+      };
+      delete nextMigration.finalizedAt;
+      delete nextMigration.finalizedBy;
+      delete nextMigration.validation.finalizedAt;
+      merged.properties.smartThingsMigration = nextMigration;
+    }
   }
   let mergedFeatures = uniqueStrings([
     ...updateFeatures,
