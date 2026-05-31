@@ -43,7 +43,24 @@ export type DirectRadioControllerStatus = {
   lastStartResult?: unknown;
   pairedDeviceCount?: number;
   pairedNodeCount?: number;
+  devices?: DirectRadioZigbeeDevice[];
   nodes?: DirectRadioZWaveNode[];
+};
+
+export type DirectRadioZigbeeDevice = {
+  ieeeAddr: string | null;
+  networkAddress: number | string | null;
+  type: string | null;
+  modelID: string | null;
+  manufacturerName: string | null;
+  interviewCompleted: boolean;
+  endpoints: Array<{
+    id: number | string | null;
+    profileID: number | string | null;
+    deviceID: number | string | null;
+    inputClusters: Array<number | string>;
+    outputClusters: Array<number | string>;
+  }>;
 };
 
 export type DirectRadioZWaveNode = {
@@ -71,7 +88,7 @@ export type DirectRadioStatus = {
   diagnostics?: string[];
   controllers: {
     zigbee: DirectRadioControllerStatus;
-      zwave: DirectRadioControllerStatus;
+    zwave: DirectRadioControllerStatus;
   };
   pairings?: {
     zigbee?: DirectRadioPairingSession | null;
@@ -544,9 +561,15 @@ export const replaceFailedZWaveNode = async (
   }
 };
 
-export const stopDirectRadioPairing = async (protocol: DirectRadioProtocol | 'all' = 'all') => {
+export const stopDirectRadioPairing = async (
+  protocol: DirectRadioProtocol | 'all' = 'all',
+  options: { pairingId?: string | null } = {}
+) => {
   try {
-    const response = await api.post('/api/direct-radios/pairing/stop', { protocol });
+    const response = await api.post('/api/direct-radios/pairing/stop', {
+      protocol,
+      pairingId: options.pairingId || undefined
+    });
     return response.data as { success: boolean; status: DirectRadioStatus };
   } catch (error) {
     console.error('Error stopping direct radio pairing:', error);

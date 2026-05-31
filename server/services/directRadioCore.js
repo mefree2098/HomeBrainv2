@@ -961,6 +961,26 @@ async getStatus() {
       ? [...zwaveDiagnostics, `Z-Wave controller node cache is still starting: ${zwaveNodeCacheError}`]
       : zwaveDiagnostics;
 
+    const zigbeeDeviceSummaries = zigbeeDevices
+      .filter((device) => device?.type !== 'Coordinator')
+      .map((device) => ({
+        ieeeAddr: trimString(device?.ieeeAddr) || null,
+        networkAddress: device?.networkAddress ?? null,
+        type: device?.type || null,
+        modelID: device?.modelID || null,
+        manufacturerName: device?.manufacturerName || null,
+        interviewCompleted: device?.interviewCompleted === true,
+        endpoints: Array.isArray(device?.endpoints)
+          ? device.endpoints.map((endpoint) => ({
+            id: endpoint?.ID ?? endpoint?.id ?? null,
+            profileID: endpoint?.profileID ?? null,
+            deviceID: endpoint?.deviceID ?? null,
+            inputClusters: Array.isArray(endpoint?.inputClusters) ? endpoint.inputClusters.slice(0, 24) : [],
+            outputClusters: Array.isArray(endpoint?.outputClusters) ? endpoint.outputClusters.slice(0, 24) : []
+          }))
+          : []
+      }));
+
     return {
       enabled: parseEnabledFlag(process.env.HOMEBRAIN_DIRECT_RADIOS_ENABLED, true),
       dataDir: DATA_DIR,
@@ -978,7 +998,8 @@ async getStatus() {
           diagnostics: zigbeeDiagnostics,
           permitJoinUntil: this.zigbee.permitJoinUntil,
           lastStartResult: this.zigbee.lastStartResult,
-          pairedDeviceCount: zigbeeDevices.filter((device) => device?.type !== 'Coordinator').length
+          pairedDeviceCount: zigbeeDeviceSummaries.length,
+          devices: zigbeeDeviceSummaries
         },
         zwave: {
           expectedHardware: 'Zooz ZST39 LR / 800-series Z-Wave SerialAPI USB stick',

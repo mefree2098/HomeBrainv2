@@ -621,7 +621,9 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
     }
     setBusy(true)
     try {
-      await stopDirectRadioPairing(activeProtocol as DirectRadioProtocol)
+      await stopDirectRadioPairing(activeProtocol as DirectRadioProtocol, {
+        pairingId: currentPairing?.id || undefined
+      })
       setStatusMessage(`${activeLabel} pairing stopped.`)
       setActiveProtocol(null)
       setExpiresAt(null)
