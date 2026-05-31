@@ -474,11 +474,17 @@ async reinterviewZigbeeDevice(ieeeAddr) {
 
     // Sleepy battery sensors must be awake during the interview for IAS Zone
     // enrollment to complete; surface that guidance when it fails.
-    const isSleepy = device.type === 'EndDevice' || device.powerSource === 'Battery';
+    const hasInterviewIdentity = Boolean(trimString(device.modelID) || trimString(device.manufacturerName));
+    const hasEndpoints = Array.isArray(device.endpoints) && device.endpoints.length > 0;
+    const isSleepy = device.type === 'EndDevice'
+      || device.powerSource === 'Battery'
+      || (!hasInterviewIdentity && !hasEndpoints);
     this.log('info', 'zigbee', 'Zigbee device re-interview requested', {
       ieeeAddr: address,
       modelID: device.modelID || null,
-      isSleepy
+      isSleepy,
+      hasInterviewIdentity,
+      endpointCount: Array.isArray(device.endpoints) ? device.endpoints.length : null
     });
 
     try {
@@ -591,7 +597,6 @@ normalizeZigbeeDevice(zigbeeDevice, reason = 'sync', options = {}) {
       || trimString(zigbeeDevice.modelID)
       || trimString(zigbeeDevice.manufacturerName)
       || `Zigbee ${directId.slice(-6)}`;
-    const status = zigbeeDevice.interviewCompleted !== false;
 
     const runtimeState = readZigbeeRuntimeState(zigbeeDevice, {
       features: baseFeatures,
@@ -603,6 +608,15 @@ normalizeZigbeeDevice(zigbeeDevice, reason = 'sync', options = {}) {
       ...baseFeatures,
       ...inferFeaturesFromDirectRadioState(directRadioState)
     ].map(normalizeFeature)).sort();
+    const hasNativeIdentity = Boolean(
+      trimString(zigbeeDevice.modelID)
+        || trimString(zigbeeDevice.manufacturerName)
+        || catalogEntry
+        || definition
+    );
+    const hasRuntimeState = Boolean(directRadioState && Object.keys(directRadioState).length > 0);
+    const incompleteInterviewShell = !hasNativeIdentity && features.length === 0 && !hasRuntimeState;
+    const status = zigbeeDevice.interviewCompleted !== false && !incompleteInterviewShell;
 
     return {
       identity: {
@@ -633,7 +647,9 @@ normalizeZigbeeDevice(zigbeeDevice, reason = 'sync', options = {}) {
             networkAddress: zigbeeDevice.networkAddress,
             modelID: zigbeeDevice.modelID || null,
             manufacturerName: zigbeeDevice.manufacturerName || null,
-            interviewCompleted: zigbeeDevice.interviewCompleted !== false,
+            interviewCompleted: zigbeeDevice.interviewCompleted !== false && !incompleteInterviewShell,
+            incomplete: incompleteInterviewShell || undefined,
+            incompleteReason: incompleteInterviewShell ? 'missing_zigbee_interview_identity_and_state' : undefined,
             iasZone: this.readZigbeeIasEnrollment(zigbeeDevice),
             lastReason: reason,
             lastSeen: new Date().toISOString(),
