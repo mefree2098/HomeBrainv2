@@ -33,7 +33,7 @@ import {
 import { useToast } from "@/hooks/useToast"
 import { cn } from "@/lib/utils"
 
-const MAX_LOGS = 250
+const MAX_LOGS = 1000
 const PAIRING_SECONDS = 180
 
 const toErrorMessage = (error: unknown, fallback: string) => {

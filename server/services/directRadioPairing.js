@@ -537,7 +537,10 @@ completePairingSession(protocol, identity, device, reason) {
       timestamp
     });
     this.clearPairingTimer(protocol);
-    void this.stopPairing(protocol).catch((error) => {
+    void this.stopPairing(protocol, {
+      pairingId: session.id,
+      reason: 'pairing_completed'
+    }).catch((error) => {
       console.warn(`DirectRadioService: Failed to close ${protocol} pairing after completion: ${error.message}`);
     });
     return session;
@@ -613,7 +616,10 @@ armPairingTimer(protocol, sessionId, seconds) {
           });
         }
       }
-      void this.stopPairing(protocol).catch((error) => {
+      void this.stopPairing(protocol, {
+        pairingId: sessionId,
+        reason: 'pairing_timer_expired'
+      }).catch((error) => {
         console.warn(`DirectRadioService: Failed to auto-stop ${protocol} pairing: ${error.message}`);
       });
     }, seconds * 1000);
@@ -795,15 +801,24 @@ async startPairing(protocol, options = {}) {
     throw error;
   },
 
-async stopPairing(protocol = 'all') {
-    if (protocol === 'zigbee' || protocol === 'all') {
-      this.clearZigbeePermitJoinRenewalTimer();
-    }
+async stopPairing(protocol = 'all', options = {}) {
     if ((protocol === 'zigbee' || protocol === 'all') && this.zigbee.controller && this.zigbee.started) {
+      const requestedPairingId = trimString(options.pairingId || options.sessionId);
+      const session = this.activePairings.get('zigbee');
+      if (requestedPairingId && session?.id && session.id !== requestedPairingId) {
+        this.log('warn', 'zigbee', 'Ignored stale Zigbee pairing stop request', {
+          requestedPairingId,
+          activePairingId: session.id,
+          activeSessionStatus: session.status || null,
+          reason: options.reason || null,
+          source: options.source || null
+        });
+        return this.getStatus();
+      }
+      this.clearZigbeePermitJoinRenewalTimer();
       this.clearPairingTimer('zigbee');
       await this.zigbee.controller.permitJoin(0);
       this.zigbee.permitJoinUntil = null;
-      const session = this.activePairings.get('zigbee');
       if (session && !['completed', 'failed', 'expired'].includes(session.status)) {
         session.status = 'stopped';
         session.stoppedAt = new Date().toISOString();
@@ -811,9 +826,12 @@ async stopPairing(protocol = 'all') {
       }
       this.log('info', 'zigbee', 'Zigbee permit-join window closed', {
         pairingId: session?.id || null,
+        requestedPairingId: requestedPairingId || null,
         sessionStatus: session?.status || null,
         detectedIdentity: session?.detectedIdentity || null,
-        baselineIdentityCount: Array.isArray(session?.baselineIdentities) ? session.baselineIdentities.length : 0
+        baselineIdentityCount: Array.isArray(session?.baselineIdentities) ? session.baselineIdentities.length : 0,
+        reason: options.reason || null,
+        source: options.source || null
       });
     }
 

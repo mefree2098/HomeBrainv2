@@ -3093,6 +3093,49 @@ test('Zigbee pairing chunks long permit-join windows and renews them safely', as
   assert.equal(service.zigbeePermitJoinRenewalTimer, null);
 });
 
+test('stale Zigbee pairing stop requests do not close the active permit-join window', async () => {
+  const service = createService();
+  const permitJoinCalls = [];
+  service.start = async () => {};
+  service.detected.zigbee = { path: '/dev/zigbee-test' };
+  service.zigbee.started = true;
+  service.zigbee.permitJoinUntil = new Date(Date.now() + 180_000).toISOString();
+  service.zigbee.controller = {
+    getDevices: () => [],
+    permitJoin: async (seconds) => {
+      permitJoinCalls.push(seconds);
+    }
+  };
+  service.activePairings.set('zigbee', {
+    id: 'pairing-new',
+    protocol: 'zigbee',
+    mode: 'permit_join',
+    status: 'active',
+    startedAt: new Date().toISOString(),
+    expiresAt: Date.now() + 180_000,
+    baselineIdentities: [],
+    events: []
+  });
+
+  await service.stopPairing('zigbee', {
+    pairingId: 'pairing-old',
+    reason: 'stale_test'
+  });
+
+  assert.deepEqual(permitJoinCalls, []);
+  assert.equal(service.activePairings.get('zigbee').status, 'active');
+  assert.ok(service.zigbee.permitJoinUntil);
+
+  await service.stopPairing('zigbee', {
+    pairingId: 'pairing-new',
+    reason: 'matched_test'
+  });
+
+  assert.deepEqual(permitJoinCalls, [0]);
+  assert.equal(service.activePairings.get('zigbee').status, 'stopped');
+  assert.equal(service.zigbee.permitJoinUntil, null);
+});
+
 test('Z-Wave generic pairing defaults to standard inclusion without a DSK PIN prompt', async () => {
   const service = createService();
   const zwave = require('zwave-js');

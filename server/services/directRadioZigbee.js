@@ -14,7 +14,7 @@ const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const directRadioEngineLogService = require('./directRadioEngineLogService');
 const eventStreamService = require('./eventStreamService');
 
-const ZIGBEE_JOIN_TRACE_COMMANDS = new Set([
+const ZIGBEE_JOIN_RELATED_COMMANDS = new Set([
   'tcDeviceInd',
   'permitJoinInd',
   'endDeviceAnnceInd',
@@ -56,13 +56,14 @@ function attachZigbeeJoinTrace(service, controller) {
   znp.__homebrainJoinTraceAttached = true;
   znp.on('received', (object = {}) => {
     const commandName = object?.command?.name || null;
-    if (!ZIGBEE_JOIN_TRACE_COMMANDS.has(commandName)) {
-      return;
-    }
-    service.log('info', 'zigbee', 'Zigbee coordinator low-level join event', {
+    const joinRelated = ZIGBEE_JOIN_RELATED_COMMANDS.has(commandName);
+    service.log('info', 'zigbee', joinRelated
+      ? 'Zigbee coordinator low-level join event'
+      : 'Zigbee coordinator low-level frame', {
       command: commandName,
       type: object?.type ?? null,
       subsystem: object?.subsystem ?? null,
+      joinRelated,
       payload: summarizeZigbeeZnpPayload(object?.payload)
     });
   });
@@ -359,7 +360,13 @@ async startZigbee(serialPath) {
           disableLED: process.env.HOMEBRAIN_ZIGBEE_DISABLE_LED === 'true',
           transmitPower: Number(process.env.HOMEBRAIN_ZIGBEE_TRANSMIT_POWER || 20)
         },
-        acceptJoiningDeviceHandler: async () => true
+        acceptJoiningDeviceHandler: async (ieeeAddr) => {
+          this.log('info', 'zigbee', 'Zigbee coordinator join acceptance check', {
+            ieeeAddr: trimString(ieeeAddr) || null,
+            accepted: true
+          });
+          return true;
+        }
       });
 
       controller.on('permitJoinChanged', (payload = {}) => {
