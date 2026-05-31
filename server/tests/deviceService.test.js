@@ -18,6 +18,7 @@ const directRadioService = require('../services/directRadioService');
 const matterService = require('../services/matterService');
 
 test('deleteDevice removes stale references from dependent HomeBrain records', async (t) => {
+  const originalFindById = Device.findById;
   const originalFindByIdAndDelete = Device.findByIdAndDelete;
   const originalAlexaDeleteMany = AlexaExposure.deleteMany;
   const originalClaimDeleteMany = DeviceCommandClaim.deleteMany;
@@ -26,6 +27,7 @@ test('deleteDevice removes stale references from dependent HomeBrain records', a
   const originalProfileFind = UserProfile.find;
 
   t.after(() => {
+    Device.findById = originalFindById;
     Device.findByIdAndDelete = originalFindByIdAndDelete;
     AlexaExposure.deleteMany = originalAlexaDeleteMany;
     DeviceCommandClaim.deleteMany = originalClaimDeleteMany;
@@ -102,6 +104,10 @@ test('deleteDevice removes stale references from dependent HomeBrain records', a
     }
   };
 
+  Device.findById = async (receivedDeviceId) => {
+    assert.equal(receivedDeviceId, deviceId);
+    return deletedDevice;
+  };
   Device.findByIdAndDelete = async (receivedDeviceId) => {
     assert.equal(receivedDeviceId, deviceId);
     return deletedDevice;
@@ -148,6 +154,7 @@ test('deleteDevice removes stale references from dependent HomeBrain records', a
 });
 
 test('deleteDevice returns the deleted device when reference cleanup hits a legacy profile save error', async (t) => {
+  const originalFindById = Device.findById;
   const originalFindByIdAndDelete = Device.findByIdAndDelete;
   const originalAlexaDeleteMany = AlexaExposure.deleteMany;
   const originalClaimDeleteMany = DeviceCommandClaim.deleteMany;
@@ -156,6 +163,7 @@ test('deleteDevice returns the deleted device when reference cleanup hits a lega
   const originalProfileFind = UserProfile.find;
 
   t.after(() => {
+    Device.findById = originalFindById;
     Device.findByIdAndDelete = originalFindByIdAndDelete;
     AlexaExposure.deleteMany = originalAlexaDeleteMany;
     DeviceCommandClaim.deleteMany = originalClaimDeleteMany;
@@ -165,10 +173,12 @@ test('deleteDevice returns the deleted device when reference cleanup hits a lega
   });
 
   const deviceId = '507f1f77bcf86cd799439021';
-  Device.findByIdAndDelete = async () => ({
+  const deletedDevice = {
     _id: deviceId,
     name: 'Deleted Z-Wave Siren'
-  });
+  };
+  Device.findById = async () => deletedDevice;
+  Device.findByIdAndDelete = async () => deletedDevice;
   AlexaExposure.deleteMany = async () => ({ deletedCount: 0 });
   DeviceCommandClaim.deleteMany = async () => ({ deletedCount: 0 });
   DeviceEnergySample.deleteMany = async () => ({ deletedCount: 0 });
@@ -198,6 +208,7 @@ test('deleteDevice returns the deleted device when reference cleanup hits a lega
 });
 
 test('deleteDevice forgets native Zigbee devices from the coordinator', async (t) => {
+  const originalFindById = Device.findById;
   const originalFindByIdAndDelete = Device.findByIdAndDelete;
   const originalAlexaDeleteMany = AlexaExposure.deleteMany;
   const originalClaimDeleteMany = DeviceCommandClaim.deleteMany;
@@ -207,6 +218,7 @@ test('deleteDevice forgets native Zigbee devices from the coordinator', async (t
   const originalForgetZigbeeDevice = directRadioService.forgetZigbeeDevice;
 
   t.after(() => {
+    Device.findById = originalFindById;
     Device.findByIdAndDelete = originalFindByIdAndDelete;
     AlexaExposure.deleteMany = originalAlexaDeleteMany;
     DeviceCommandClaim.deleteMany = originalClaimDeleteMany;
@@ -217,7 +229,7 @@ test('deleteDevice forgets native Zigbee devices from the coordinator', async (t
   });
 
   const deviceId = '507f1f77bcf86cd799439031';
-  Device.findByIdAndDelete = async () => ({
+  const deletedDevice = {
     _id: deviceId,
     name: 'Front Door',
     properties: {
@@ -227,7 +239,13 @@ test('deleteDevice forgets native Zigbee devices from the coordinator', async (t
         ieeeAddr: '0x000d6f00057c3ef1'
       }
     }
-  });
+  };
+  const operations = [];
+  Device.findById = async () => deletedDevice;
+  Device.findByIdAndDelete = async () => {
+    operations.push('delete-database-row');
+    return deletedDevice;
+  };
   AlexaExposure.deleteMany = async () => ({ deletedCount: 0 });
   DeviceCommandClaim.deleteMany = async () => ({ deletedCount: 0 });
   DeviceEnergySample.deleteMany = async () => ({ deletedCount: 0 });
@@ -236,6 +254,7 @@ test('deleteDevice forgets native Zigbee devices from the coordinator', async (t
 
   let forgetCall = null;
   directRadioService.forgetZigbeeDevice = async (ieeeAddr, options) => {
+    operations.push('forget-coordinator');
     forgetCall = { ieeeAddr, options };
     return {
       ieeeAddr,
@@ -248,6 +267,7 @@ test('deleteDevice forgets native Zigbee devices from the coordinator', async (t
 
   const result = await deviceService.deleteDevice(deviceId);
 
+  assert.deepEqual(operations, ['forget-coordinator', 'delete-database-row']);
   assert.deepEqual(forgetCall, {
     ieeeAddr: '0x000d6f00057c3ef1',
     options: {
@@ -261,6 +281,48 @@ test('deleteDevice forgets native Zigbee devices from the coordinator', async (t
   assert.equal(result.deletionCleanup.directRadio.databaseRemoved, true);
   assert.equal(result.deletionCleanup.directRadio.forced, true);
   assert.deepEqual(result.deletionCleanup.cleanupErrors, []);
+});
+
+test('deleteDevice keeps a native Zigbee database row when coordinator cleanup fails first', async (t) => {
+  const originalFindById = Device.findById;
+  const originalFindByIdAndDelete = Device.findByIdAndDelete;
+  const originalForgetZigbeeDevice = directRadioService.forgetZigbeeDevice;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    Device.findByIdAndDelete = originalFindByIdAndDelete;
+    directRadioService.forgetZigbeeDevice = originalForgetZigbeeDevice;
+  });
+
+  const deviceId = '507f1f77bcf86cd799439041';
+  const deletedDevice = {
+    _id: deviceId,
+    name: 'Front Door',
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x000d6f00057c3ef1'
+      }
+    }
+  };
+  let deleteCalled = false;
+  Device.findById = async () => deletedDevice;
+  Device.findByIdAndDelete = async () => {
+    deleteCalled = true;
+    return deletedDevice;
+  };
+  directRadioService.forgetZigbeeDevice = async () => {
+    const error = new Error('Coordinator is offline');
+    error.status = 503;
+    throw error;
+  };
+
+  await assert.rejects(
+    () => deviceService.deleteDevice(deviceId),
+    /Failed to remove Zigbee device from coordinator before deleting database record/
+  );
+  assert.equal(deleteCalled, false);
 });
 
 test('controlDevice routes Insteon turn_on through insteon service and skips generic DB write path', async (t) => {

@@ -440,10 +440,11 @@ router.delete('/:id', admin, async (req, res) => {
       });
     }
 
-    const statusCode = 500;
+    const statusCode = error.status || 500;
     res.status(statusCode).json({
       success: false,
-      error: error.message || 'Failed to delete device'
+      error: error.message || 'Failed to delete device',
+      cleanup: error.deletionCleanup || null
     });
   }
 });
