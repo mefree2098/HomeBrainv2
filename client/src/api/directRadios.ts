@@ -439,6 +439,7 @@ export const refreshZWaveNodeInfo = async (
     waitForWakeup?: boolean;
     resetSecurityClasses?: boolean;
     pingFirst?: boolean;
+    skipRefreshIfPingSucceeds?: boolean;
   } = {}
 ) => {
   try {
@@ -450,6 +451,7 @@ export const refreshZWaveNodeInfo = async (
         before?: DirectRadioZWaveNode | null;
         ping?: boolean | null;
         pingError?: string | null;
+        skippedRefresh?: boolean;
         message?: string | null;
       };
       status?: DirectRadioStatus;

@@ -2062,6 +2062,48 @@ test('Z-Wave node refresh requests a fresh interview for an already-included nod
   assert.equal(result.ping, false);
 });
 
+test('Z-Wave node refresh skips re-interview when ping recovers the node', async () => {
+  const service = createService();
+  service.started = true;
+  let refreshCalled = false;
+  let changedReason = null;
+  const node = {
+    id: 4,
+    isControllerNode: false,
+    ready: true,
+    status: 4,
+    manufacturerId: 144,
+    productType: 1,
+    productId: 1,
+    valueDB: { hasValue: () => false },
+    ping: async () => true,
+    refreshInfo: async () => {
+      refreshCalled = true;
+    }
+  };
+  service.zwave.driver = {
+    controller: {
+      nodes: new Map([
+        [1, { id: 1, isControllerNode: true }],
+        [4, node]
+      ])
+    }
+  };
+  service.handleZWaveNodeChanged = async (_node, reason) => {
+    changedReason = reason;
+  };
+
+  const result = await service.refreshZWaveNodeInfo(4, {
+    pingFirst: true,
+    skipRefreshIfPingSucceeds: true
+  });
+
+  assert.equal(result.ping, true);
+  assert.equal(result.skippedRefresh, true);
+  assert.equal(refreshCalled, false);
+  assert.equal(changedReason, 'ping succeeded');
+});
+
 test('Z-Wave failed-node replacement opens a legacy S0 replacement session', async (t) => {
   const service = createService();
   const zwave = require('zwave-js');
