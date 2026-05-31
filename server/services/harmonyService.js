@@ -1887,17 +1887,16 @@ class HarmonyService {
     const timeoutMs = Number(options.timeoutMs || DEFAULT_DISCOVERY_TIMEOUT_MS);
     const [configuredHubAddresses, discoveredHubs, trackedDevices, onlineDevices] = await Promise.all([
       this.getConfiguredHubAddresses(),
-      this.discoverHubs({ timeoutMs, force: false }),
+      this.getHubs({ includeCommands: false, timeoutMs }),
       Device.countDocuments({ 'properties.source': 'harmony' }),
       Device.countDocuments({ 'properties.source': 'harmony', isOnline: true })
     ]);
-    const visibleDiscoveredHubs = pruneStaleRememberedHubAliases(discoveredHubs);
 
     return {
       configuredHubAddresses,
-      discoveredHubs: visibleDiscoveredHubs,
-      discoveredCount: visibleDiscoveredHubs.filter((hub) => hub.discovered).length,
-      knownHubCount: visibleDiscoveredHubs.length,
+      discoveredHubs,
+      discoveredCount: discoveredHubs.filter((hub) => hub.discovered || hub.success).length,
+      knownHubCount: discoveredHubs.length,
       trackedDevices,
       onlineDevices
     };

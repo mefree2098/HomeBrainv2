@@ -544,6 +544,32 @@ async refreshHardwareStatus(options = {}) {
     return this.getStatus();
   },
 
+getZWaveControllerNodes(options = {}) {
+    const controller = this.getZWaveController();
+    if (!controller) {
+      return null;
+    }
+
+    try {
+      const nodes = controller.nodes;
+      if (!nodes || (typeof nodes.values !== 'function' && typeof nodes.get !== 'function')) {
+        return null;
+      }
+      this.zwave.nodeCacheError = null;
+      return nodes;
+    } catch (error) {
+      const message = error?.message || String(error);
+      this.zwave.nodeCacheError = message;
+      if (options.log !== false) {
+        this.log('warn', 'zwave', 'Z-Wave controller nodes are not available yet', {
+          context: options.context || null,
+          error: message
+        });
+      }
+      return null;
+    }
+  },
+
 dispatchHandler(label, protocol, fn, context = {}) {
     const onError = (error) => {
       this.log('error', protocol, `Unhandled error in ${label} handler`, {
@@ -690,7 +716,8 @@ getDirectNodeForDevice(device) {
       if (!Number.isFinite(nodeId)) {
         return null;
       }
-      return this.getZWaveController()?.nodes?.get?.(nodeId) || this.zwave.driver?.getNode?.(nodeId) || null;
+      const nodes = this.getZWaveControllerNodes({ log: false, context: 'device lookup' });
+      return nodes?.get?.(nodeId) || this.zwave.driver?.getNode?.(nodeId) || null;
     }
 
     return null;
@@ -856,7 +883,7 @@ async getStatus() {
     });
 
     const zigbeeDevices = this.zigbee.controller?.getDevices?.() || [];
-    const zwaveNodes = this.getZWaveController()?.nodes;
+    const zwaveNodes = this.getZWaveControllerNodes({ log: false, context: 'status' });
     const activeMigrations = Array.from(this.activeMigrations.values())
       .filter((migration) => (
         ['awaiting_smartthings_exclusion', 'excluding', 'excluded', 'pairing', 'exclusion_failed', 'pairing_failed'].includes(migration.status)
@@ -866,12 +893,16 @@ async getStatus() {
     const zwavePortDetails = this.getDetectedPortDetails('zwave');
     const zigbeeDiagnostics = this.buildControllerDiagnostics('zigbee', zigbeePortDetails);
     const zwaveDiagnostics = this.buildControllerDiagnostics('zwave', zwavePortDetails);
+    const zwaveNodeCacheError = this.zwave.nodeCacheError || null;
+    const zwaveStatusDiagnostics = zwaveNodeCacheError && this.zwave.started
+      ? [...zwaveDiagnostics, `Z-Wave controller node cache is still starting: ${zwaveNodeCacheError}`]
+      : zwaveDiagnostics;
 
     return {
       enabled: parseEnabledFlag(process.env.HOMEBRAIN_DIRECT_RADIOS_ENABLED, true),
       dataDir: DATA_DIR,
       serialPorts: this.serialPorts,
-      diagnostics: [...zigbeeDiagnostics, ...zwaveDiagnostics],
+      diagnostics: [...zigbeeDiagnostics, ...zwaveStatusDiagnostics],
       controllers: {
         zigbee: {
           expectedHardware: 'SONOFF ZBDongle-P / TI CC2652P Z-Stack coordinator',
@@ -894,7 +925,8 @@ async getStatus() {
           configuredPort: trimString(process.env.HOMEBRAIN_ZWAVE_PORT) || null,
           started: this.zwave.started,
           error: this.zwave.error,
-          diagnostics: zwaveDiagnostics,
+          diagnostics: zwaveStatusDiagnostics,
+          nodeCacheError: zwaveNodeCacheError,
           inclusionUntil: this.zwave.inclusionUntil,
           exclusionUntil: this.zwave.exclusionUntil,
           inclusionState: this.getZWaveInclusionStateLabel(),

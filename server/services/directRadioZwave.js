@@ -730,9 +730,10 @@ async removeFailedZWaveNode(nodeId, options = {}) {
     }
 
     await controller.removeFailedNode(numericNodeId);
-    if (typeof controller.nodes?.delete === 'function') {
+    const nodes = this.getZWaveControllerNodes({ log: false, context: 'failed node removal' });
+    if (typeof nodes?.delete === 'function') {
       try {
-        controller.nodes.delete(numericNodeId);
+        nodes.delete(numericNodeId);
       } catch (error) {
         this.log('warn', 'zwave', 'Unable to evict removed Z-Wave node from the live node cache', {
           nodeId: numericNodeId,
@@ -882,13 +883,14 @@ getZWaveNode(nodeId, options = {}) {
     }
 
     const controller = this.getZWaveController();
-    if (!controller?.nodes || typeof controller.nodes.get !== 'function') {
+    const nodes = this.getZWaveControllerNodes({ context: 'node lookup' });
+    if (!controller || !nodes || typeof nodes.get !== 'function') {
       const error = new Error('Z-Wave controller nodes are not available yet');
       error.status = 503;
       throw error;
     }
 
-    const node = controller.nodes.get(numericNodeId);
+    const node = nodes.get(numericNodeId);
     if (!node) {
       const error = new Error(`Z-Wave node ${numericNodeId} is not present on the controller`);
       error.status = 404;
@@ -952,7 +954,7 @@ serializeZWaveNodeSummary(node) {
   },
 
 getZWaveNodeSummaries() {
-    const nodes = this.getZWaveController()?.nodes;
+    const nodes = this.getZWaveControllerNodes({ log: false, context: 'node summaries' });
     if (!nodes || typeof nodes.values !== 'function') {
       return [];
     }
@@ -1012,7 +1014,7 @@ attachZWaveNodeStatusListeners(node) {
   },
 
 async syncZWaveNodes() {
-    const nodes = this.getZWaveController()?.nodes;
+    const nodes = this.getZWaveControllerNodes({ context: 'node sync' });
     if (!nodes || typeof nodes.values !== 'function') {
       this.log('warn', 'zwave', 'Z-Wave node sync skipped because controller nodes are unavailable');
       return;

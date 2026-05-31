@@ -142,3 +142,29 @@ test('direct radio status explains when HomeBrain sees serial endpoints but no n
   assert.ok(status.controllers.zwave.diagnostics.some((entry) => /No Z-Wave USB adapter detected/i.test(entry)));
   assert.ok(status.diagnostics.some((entry) => entry.includes('/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AG0KWFQA-if00-port0')));
 });
+
+test('direct radio status tolerates Z-Wave node cache startup errors', async () => {
+  const service = new DirectRadioService();
+  service.zwave.started = true;
+  service.detected.zwave = {
+    path: '/dev/serial/by-id/usb-Zooz_800_Z-Wave_Stick_533D004242-if00'
+  };
+  service.zwave.driver = {
+    controller: {}
+  };
+  Object.defineProperty(service.zwave.driver.controller, 'nodes', {
+    get() {
+      const error = new Error('The controller is not yet ready! (ZW0103)');
+      error.code = 'ZW0103';
+      throw error;
+    }
+  });
+
+  const status = await service.getStatus();
+
+  assert.equal(status.controllers.zwave.started, true);
+  assert.equal(status.controllers.zwave.pairedNodeCount, 0);
+  assert.deepEqual(status.controllers.zwave.nodes, []);
+  assert.match(status.controllers.zwave.nodeCacheError, /not yet ready/i);
+  assert.ok(status.controllers.zwave.diagnostics.some((entry) => /node cache is still starting/i.test(entry)));
+});
