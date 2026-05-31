@@ -244,6 +244,10 @@ const SMARTTHINGS_REMOVAL_STARTED_STATUSES = new Set([
 ]);
 
 const SMARTTHINGS_AWAITING_NATIVE_PAIRING_STATUS = 'awaiting_native_pairing';
+const SMARTTHINGS_RECLAIMABLE_NATIVE_PAIRING_STATUSES = new Set([
+  SMARTTHINGS_AWAITING_NATIVE_PAIRING_STATUS,
+  'native_joined_pending_interview'
+]);
 
 const getRemovalRequestStatus = (removalRequest) => normalizeSourceText(removalRequest?.status);
 
@@ -545,6 +549,10 @@ recordZWaveExclusionFailed(message) {
       protocol: normalizeSourceText(migration.protocol) || normalizeSourceText(persistedMigration.protocol) || null,
       status: SMARTTHINGS_AWAITING_NATIVE_PAIRING_STATUS,
       nativePairingStatus,
+      directIdentity: (fields.directIdentity && typeof fields.directIdentity === 'object')
+        ? fields.directIdentity
+        : (persistedMigration.directIdentity || null),
+      nativeJoinedAt: fields.nativeJoinedAt || persistedMigration.nativeJoinedAt || null,
       pairingId: trimString(fields.pairingId || migration.pairingId || persistedMigration.pairingId) || null,
       pairingStartedAt: migration.pairingStartedAt || persistedMigration.pairingStartedAt || null,
       pairingExpiresAt,
@@ -651,11 +659,19 @@ recordZWaveExclusionFailed(message) {
     if (normalizedProtocol === 'zigbee' && this.hasSmartThingsRemovalAlreadyStarted(migration)) {
       const sourceDevice = await Device.findById(migration.sourceDeviceId).lean().catch(() => null);
       if (sourceDevice) {
+        const detectedIdentity = session?.detectedIdentity && typeof session.detectedIdentity === 'object'
+          ? session.detectedIdentity
+          : null;
+        const detectedIdentityId = trimString(detectedIdentity?.id);
         await this.markSmartThingsSourceAwaitingNativePairing(sourceDevice, migration, {
-          nativePairingStatus: 'expired',
+          nativePairingStatus: detectedIdentityId ? 'detected' : 'expired',
+          directIdentity: detectedIdentity,
+          nativeJoinedAt: detectedIdentityId ? (session?.detectedAt || timestamp) : null,
           pairingId: sessionId || migration.pairingId || null,
           timestamp,
-          message: 'SmartThings removal was already requested, but HomeBrain did not see the Zigbee device join.'
+          message: detectedIdentityId
+            ? 'HomeBrain saw the Zigbee device join, but the device interview did not finish before the pairing window closed.'
+            : 'SmartThings removal was already requested, but HomeBrain did not see the Zigbee device join.'
         });
       }
     }
@@ -700,6 +716,240 @@ recordZWaveExclusionFailed(message) {
       .sort((left, right) => right.score - left.score);
 
     return scored[0]?.candidate || null;
+  },
+
+async findAwaitingSmartThingsMigrationSourceForDirectJoin(directDevice, protocol) {
+    const directDeviceId = getDeviceIdString(directDevice);
+    if (!directDeviceId || !['zigbee', 'zwave'].includes(protocol)) {
+      return null;
+    }
+
+    const networkTypes = protocol === 'zigbee'
+      ? ['ZIGBEE', 'zigbee', 'Zigbee']
+      : ['ZWAVE', 'zwave', 'ZWave', 'ZW', 'zw'];
+    const candidates = await Device.find({
+      _id: { $ne: directDeviceId },
+      $and: [
+        { 'properties.smartThingsMigration.status': { $in: Array.from(SMARTTHINGS_RECLAIMABLE_NATIVE_PAIRING_STATUSES) } },
+        {
+          $or: [
+            { 'properties.source': 'smartthings' },
+            { 'properties.smartThingsDeviceId': { $exists: true, $ne: null } },
+            { 'properties.smartThingsMigration.smartThingsDeviceId': { $exists: true, $ne: null } }
+          ]
+        },
+        {
+          $or: [
+            { 'properties.smartThingsMigration.retiredSource': { $exists: false } },
+            { 'properties.smartThingsMigration.retiredSource': { $ne: true } }
+          ]
+        },
+        { 'properties.smartThingsDeviceNetworkType': { $in: networkTypes } }
+      ]
+    });
+
+    const eligible = (Array.isArray(candidates) ? candidates : [])
+      .filter((candidate) => {
+        const migration = getSmartThingsMigration(candidate) || {};
+        const migrationProtocol = normalizeSourceText(migration.protocol);
+        return (!migrationProtocol || migrationProtocol === protocol)
+          && SMARTTHINGS_RECLAIMABLE_NATIVE_PAIRING_STATUSES.has(normalizeSourceText(migration.status))
+          && this.hasSmartThingsRemovalAlreadyStarted(migration, candidate);
+      })
+      .sort((left, right) => {
+        const leftMigration = getSmartThingsMigration(left) || {};
+        const rightMigration = getSmartThingsMigration(right) || {};
+        const leftTime = new Date(
+          leftMigration.nativeJoinedAt
+          || leftMigration.pairingExpiredAt
+          || leftMigration.pairingStartedAt
+          || leftMigration.updatedAt
+          || left.updatedAt
+          || 0
+        ).getTime();
+        const rightTime = new Date(
+          rightMigration.nativeJoinedAt
+          || rightMigration.pairingExpiredAt
+          || rightMigration.pairingStartedAt
+          || rightMigration.updatedAt
+          || right.updatedAt
+          || 0
+        ).getTime();
+        return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0);
+      });
+
+    const strictMatches = eligible
+      .map((candidate) => ({
+        candidate,
+        score: scoreDetachedSmartThingsMigrationSource(directDevice, candidate, protocol)
+      }))
+      .filter((entry) => entry.score >= 55)
+      .sort((left, right) => right.score - left.score);
+    if (strictMatches.length > 0) {
+      return strictMatches[0].candidate;
+    }
+
+    const directLooksLikeIncompleteJoin = directFeatureCount(directDevice) === 0
+      || isGenericDirectRadioName(directDevice?.name);
+    if (protocol === 'zigbee' && directLooksLikeIncompleteJoin && eligible.length === 1) {
+      return eligible[0];
+    }
+
+    if (protocol === 'zigbee' && directLooksLikeIncompleteJoin && eligible.length > 1) {
+      this.log('warn', 'zigbee', 'Refusing to auto-reclaim incomplete Zigbee join because multiple SmartThings migrations are awaiting native pairing', {
+        directDeviceId,
+        candidateCount: eligible.length,
+        candidateDeviceIds: eligible.map((candidate) => getDeviceIdString(candidate)).filter(Boolean)
+      });
+    }
+
+    return null;
+  },
+
+async reclaimAwaitingSmartThingsMigrationSourceIfMatched(device, identity) {
+    const protocol = identity?.protocol;
+    if (!device || !['zigbee', 'zwave'].includes(protocol)) {
+      return device;
+    }
+
+    const sourceDevice = await this.findAwaitingSmartThingsMigrationSourceForDirectJoin(device, protocol);
+    const sourceDeviceId = getDeviceIdString(sourceDevice);
+    const directDeviceId = getDeviceIdString(device);
+    if (!sourceDevice || !sourceDeviceId || sourceDeviceId === directDeviceId) {
+      return device;
+    }
+
+    const timestamp = new Date().toISOString();
+    const sourceProperties = getDeviceProperties(sourceDevice);
+    const directSnapshot = toPlainDeviceSnapshot(device);
+    const directProperties = getDeviceProperties(directSnapshot);
+    const previousMigration = getSmartThingsMigration(sourceDevice) || {};
+    const directFeatures = uniqueStrings([
+      ...(Array.isArray(directProperties.directRadioFeatures) ? directProperties.directRadioFeatures : []),
+      ...inferFeaturesFromExistingDirectRecord(directSnapshot)
+    ].map(normalizeFeature)).sort();
+    const validationInput = {
+      ...directSnapshot,
+      properties: {
+        ...directProperties,
+        directRadioFeatures: directFeatures
+      }
+    };
+    const validation = this.buildMigrationValidation(sourceDevice, validationInput, directFeatures);
+    const nativePairingComplete = validation.status === 'passed' && directFeatures.length > 0;
+    const nextMigration = {
+      ...previousMigration,
+      migratedAt: previousMigration.migratedAt || timestamp,
+      recoveredAt: previousMigration.recoveredAt || timestamp,
+      previousSource: previousMigration.previousSource || sourceProperties.source || 'smartthings',
+      smartThingsDeviceId: previousMigration.smartThingsDeviceId || sourceProperties.smartThingsDeviceId || null,
+      smartThingsId: previousMigration.smartThingsId || sourceProperties.smartThingsId || null,
+      sourceDeviceId,
+      sourceDeviceName: sourceDevice.name || previousMigration.sourceDeviceName || null,
+      sourceRoom: sourceDevice.room || previousMigration.sourceRoom || null,
+      directDeviceId: sourceDeviceId,
+      duplicateDeviceId: directDeviceId,
+      migrationId: previousMigration.migrationId || `recovered-${sourceDeviceId}-${directDeviceId}`,
+      protocol,
+      status: nativePairingComplete ? 'native_joined' : 'native_joined_pending_interview',
+      nativePairingStatus: 'joined',
+      nativeJoinedAt: previousMigration.nativeJoinedAt || timestamp,
+      directIdentity: identity || previousMigration.directIdentity || null,
+      lastNativePairingMessage: nativePairingComplete
+        ? 'HomeBrain reclaimed the native Zigbee join for this SmartThings migration.'
+        : 'HomeBrain reclaimed the native Zigbee join for this SmartThings migration, but the device interview still needs to finish.',
+      validation,
+      updatedAt: timestamp
+    };
+    const nextDirect = {
+      ...(directProperties.homebrainDirect && typeof directProperties.homebrainDirect === 'object'
+        ? directProperties.homebrainDirect
+        : {}),
+      protocol,
+      reclaimedFromDeviceId: directDeviceId,
+      migratedFromSmartThingsSourceId: sourceDeviceId,
+      lastReason: directProperties.homebrainDirect?.lastReason || 'smartthings_migration_reclaim',
+      lastSeen: timestamp
+    };
+    const nextProperties = this.severMigratedSmartThingsIdentity({
+      ...sourceProperties,
+      ...directProperties,
+      source: protocolSource(protocol),
+      homebrainDirect: nextDirect,
+      directRadioFeatures: directFeatures,
+      directRadioCapabilities: buildNormalizedCapabilities(directFeatures, protocol),
+      ...buildDirectFeatureProperties(directFeatures),
+      smartThingsMigration: nextMigration
+    });
+    const reclaimedSnapshot = mergeSmartThingsTelemetryFallback({
+      name: sourceDevice.name || directSnapshot.name,
+      type: sourceDevice.type || directSnapshot.type,
+      room: sourceDevice.room || directSnapshot.room,
+      groups: Array.isArray(sourceDevice.groups) ? sourceDevice.groups : directSnapshot.groups,
+      status: Object.prototype.hasOwnProperty.call(directSnapshot, 'status') ? directSnapshot.status : sourceDevice.status,
+      brightness: directSnapshot.brightness,
+      color: directSnapshot.color,
+      colorTemperature: directSnapshot.colorTemperature,
+      temperature: directSnapshot.temperature,
+      targetTemperature: directSnapshot.targetTemperature,
+      isOnline: directSnapshot.isOnline !== false,
+      lastSeen: directSnapshot.lastSeen || new Date(),
+      brand: directSnapshot.brand || sourceDevice.brand,
+      model: directSnapshot.model || sourceDevice.model,
+      properties: nextProperties
+    }, sourceDevice);
+
+    const updated = await Device.findByIdAndUpdate(sourceDeviceId, {
+      name: reclaimedSnapshot.name,
+      type: reclaimedSnapshot.type,
+      room: reclaimedSnapshot.room,
+      groups: reclaimedSnapshot.groups,
+      status: reclaimedSnapshot.status,
+      brightness: reclaimedSnapshot.brightness,
+      color: reclaimedSnapshot.color,
+      colorTemperature: reclaimedSnapshot.colorTemperature,
+      temperature: reclaimedSnapshot.temperature,
+      targetTemperature: reclaimedSnapshot.targetTemperature,
+      isOnline: reclaimedSnapshot.isOnline !== false,
+      lastSeen: reclaimedSnapshot.lastSeen || new Date(),
+      brand: reclaimedSnapshot.brand,
+      model: reclaimedSnapshot.model,
+      properties: reclaimedSnapshot.properties,
+      updatedAt: new Date()
+    }, { returnDocument: 'after', runValidators: true });
+
+    let duplicateDeleted = false;
+    let duplicateDeleteError = null;
+    if (directDeviceId) {
+      try {
+        const deviceService = require('./deviceService');
+        await deviceService.deleteDevice(directDeviceId);
+        duplicateDeleted = true;
+      } catch (error) {
+        const stillExists = await Device.exists({ _id: directDeviceId }).catch(() => true);
+        if (stillExists) {
+          duplicateDeleteError = error;
+        } else {
+          duplicateDeleted = true;
+        }
+      }
+    }
+
+    this.log(duplicateDeleteError ? 'warn' : 'info', protocol, 'Reclaimed native Zigbee join for awaiting SmartThings migration source', {
+      sourceDeviceId,
+      directDeviceId,
+      identity: identity?.id || null,
+      duplicateDeleted,
+      duplicateDeleteError: duplicateDeleteError?.message || null,
+      featureCount: directFeatures.length,
+      validationStatus: validation.status
+    });
+    this.emitDeviceUpdate(updated);
+    const result = updated || device;
+    if (duplicateDeleted && result && typeof result === 'object') {
+      result.__homebrainReclaimedDuplicateDeviceId = directDeviceId;
+    }
+    return result;
   },
 
 buildRecoveredSmartThingsMigrationSnapshot(directDevice, sourceDevice, protocol, migrationId = null) {

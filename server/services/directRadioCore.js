@@ -676,6 +676,7 @@ async upsertDirectDeviceRecord(identity, update, options = {}) {
       ? await Device.findByIdAndUpdate(existing._id, payload, { returnDocument: 'after', runValidators: true })
       : await new Device(payload).save();
 
+    device = await this.reclaimAwaitingSmartThingsMigrationSourceIfMatched(device, identity);
     device = await this.attachRecoveredSmartThingsMigrationIfMatched(device, identity);
     device = await this.repairRecoveredSmartThingsMigrationIfMismatched(device, identity);
 
@@ -685,7 +686,9 @@ async upsertDirectDeviceRecord(identity, update, options = {}) {
       identity: identity.id
     });
 
+    const reclaimedDuplicateDeviceId = trimString(device?.__homebrainReclaimedDuplicateDeviceId);
     const duplicateRecords = (existingRecords || [])
+      .filter((record) => getDeviceIdString(record) !== reclaimedDuplicateDeviceId)
       .filter((record) => isDuplicateDirectRadioRecord(record, device, identity));
     if (duplicateRecords.length > 0 && directFeatureCount(device) > 0) {
       const deviceService = require('./deviceService');

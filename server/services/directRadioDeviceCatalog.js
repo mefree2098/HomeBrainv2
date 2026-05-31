@@ -1035,7 +1035,7 @@ function buildGuidedMigrationSteps(protocol, device) {
           protocol: 'zigbee',
           action: 'start_direct_migration',
           automatic: true,
-          durationSeconds: 180,
+          durationSeconds: features.has('battery') ? 600 : 300,
           instructions: [
             'HomeBrain will ask SmartThings to remove the old Zigbee device record, then open Zigbee permit-join on the SONOFF coordinator and prepare to preserve this HomeBrain device record.',
             'Factory reset or pair the device only after permit-join is open.'

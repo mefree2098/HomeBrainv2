@@ -2157,6 +2157,135 @@ test('direct radio upsert removes duplicate same-node records through device cle
   assert.deepEqual(deletedDeviceIds, [duplicate._id]);
 });
 
+test('Zigbee generic add reclaims the single SmartThings source awaiting native pairing', async (t) => {
+  const service = createService();
+  const deviceService = require('../services/deviceService');
+  const originalFind = Device.find;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalDeleteDevice = deviceService.deleteDevice;
+  const genericDeviceId = '507f1f77bcf86cd799439071';
+  const sourceDeviceId = '507f1f77bcf86cd799439072';
+  const ieeeAddr = '0x000d6f00057c3ef1';
+  const genericDevice = {
+    _id: genericDeviceId,
+    name: 'Zigbee 7c3ef1',
+    type: 'sensor',
+    room: 'Unassigned',
+    isOnline: true,
+    status: false,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr,
+        interviewCompleted: false,
+        lastReason: 'deviceJoined'
+      },
+      directRadioFeatures: []
+    }
+  };
+  const sourceDevice = {
+    _id: sourceDeviceId,
+    name: 'Front Door',
+    type: 'sensor',
+    room: 'Upstairs',
+    status: true,
+    isOnline: false,
+    temperature: 67,
+    properties: {
+      source: 'smartthings',
+      smartThingsDeviceId: 'front-door-smartthings-id',
+      smartThingsDeviceNetworkType: 'ZIGBEE',
+      smartThingsLabel: 'Front Door',
+      smartThingsDeviceName: 'SmartThings Multipurpose Sensor',
+      smartThingsCapabilities: [
+        'contactSensor',
+        'temperatureMeasurement',
+        'threeAxis',
+        'accelerationSensor',
+        'battery'
+      ],
+      smartThingsBatteryLevel: 33,
+      smartThingsMigration: {
+        status: 'awaiting_native_pairing',
+        protocol: 'zigbee',
+        nativePairingStatus: 'expired',
+        smartThingsDeviceId: 'front-door-smartthings-id',
+        sourceDeviceId,
+        sourceDeviceName: 'Front Door',
+        smartThingsRemovalStatus: 'already_missing',
+        smartThingsRemovalRequest: {
+          status: 'already_missing',
+          requestedAt: '2026-05-31T14:57:55.161Z'
+        },
+        updatedAt: '2026-05-31T15:00:55.654Z'
+      }
+    }
+  };
+  const deletedDeviceIds = [];
+  const updates = [];
+  Device.find = async (query = {}) => {
+    if (Array.isArray(query.$and) && query.$and.some((clause) => clause['properties.smartThingsMigration.status'])) {
+      return [sourceDevice];
+    }
+    return [genericDevice];
+  };
+  Device.findByIdAndUpdate = async (id, payload) => {
+    updates.push({ id: String(id), payload });
+    const base = String(id) === sourceDeviceId ? sourceDevice : genericDevice;
+    return {
+      ...base,
+      ...payload,
+      _id: String(id),
+      properties: payload.properties
+    };
+  };
+  deviceService.deleteDevice = async (deviceId) => {
+    deletedDeviceIds.push(String(deviceId));
+    return { _id: deviceId, name: 'Zigbee 7c3ef1' };
+  };
+  service.emitDeviceUpdate = () => {};
+  service.completePairingSession = () => {};
+  service.repairRecoveredSmartThingsMigrationIfMismatched = async (device) => device;
+  t.after(() => {
+    Device.find = originalFind;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    deviceService.deleteDevice = originalDeleteDevice;
+  });
+
+  const result = await service.upsertDirectDeviceRecord({ protocol: 'zigbee', id: ieeeAddr }, {
+    name: 'Zigbee 7c3ef1',
+    type: 'sensor',
+    room: 'Unassigned',
+    status: false,
+    isOnline: true,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr,
+        interviewCompleted: false,
+        lastReason: 'deviceJoined'
+      },
+      directRadioFeatures: []
+    }
+  });
+
+  const sourceUpdate = updates.find((entry) => entry.id === sourceDeviceId)?.payload;
+  assert.equal(result._id, sourceDeviceId);
+  assert.equal(result.name, 'Front Door');
+  assert.equal(result.room, 'Upstairs');
+  assert.equal(result.properties.source, 'homebrain-zigbee');
+  assert.equal(result.properties.homebrainDirect.ieeeAddr, ieeeAddr);
+  assert.equal(result.properties.smartThingsDeviceId, undefined);
+  assert.equal(result.properties.smartThingsMigration.status, 'native_joined_pending_interview');
+  assert.equal(result.properties.smartThingsMigration.nativePairingStatus, 'joined');
+  assert.equal(result.properties.smartThingsMigration.duplicateDeviceId, genericDeviceId);
+  assert.equal(result.properties.smartThingsMigration.validation.status, 'needs_review');
+  assert.equal(sourceUpdate.properties.smartThingsMigration.smartThingsDeviceId, 'front-door-smartthings-id');
+  assert.deepEqual(deletedDeviceIds, [genericDeviceId]);
+});
+
 test('Z-Wave controller nodes are not normalized as user devices', () => {
   const service = createService();
 
@@ -2499,6 +2628,32 @@ test('Z-Wave generic pairing waits for a submitted S2 DSK PIN instead of abortin
   assert.equal(submitResult.accepted, true);
   assert.equal(await pinPromise, '12345');
   assert.equal(service.zwave.pendingDsk, null);
+});
+
+test('Zigbee pairing chunks long permit-join windows and renews them safely', async () => {
+  const service = createService();
+  const permitJoinCalls = [];
+  service.start = async () => {};
+  service.detected.zigbee = { path: '/dev/zigbee-test' };
+  service.zigbee.started = true;
+  service.zigbee.controller = {
+    getDevices: () => [],
+    permitJoin: async (seconds) => {
+      permitJoinCalls.push(seconds);
+    }
+  };
+
+  const result = await service.startPairing('zigbee', { durationSeconds: 600 });
+
+  assert.deepEqual(permitJoinCalls, [240]);
+  assert.equal(result.expiresAt, result.pairing.expiresAt);
+  assert.equal(result.pairing.status, 'active');
+  assert.ok(service.zigbeePermitJoinRenewalTimer);
+
+  await service.stopPairing('zigbee');
+
+  assert.deepEqual(permitJoinCalls, [240, 0]);
+  assert.equal(service.zigbeePermitJoinRenewalTimer, null);
 });
 
 test('Z-Wave generic pairing defaults to standard inclusion without a DSK PIN prompt', async () => {
