@@ -176,7 +176,17 @@ test('direct radio refresh clears stale Zigbee state when the interview shell is
       homeBrainBatteryLevel: 17,
       batteryLevel: 17,
       supportsContactSensor: true,
-      supportsVibrationSensor: true
+      supportsVibrationSensor: true,
+      smartThingsMigration: {
+        status: 'native_joined_pending_interview',
+        finalizedAt: '2026-05-31T16:08:03.998Z',
+        finalizedBy: 'homebrain',
+        validation: {
+          status: 'passed',
+          finalized: true,
+          finalizedAt: '2026-05-31T16:08:03.998Z'
+        }
+      }
     }
   };
   const update = {
@@ -214,6 +224,16 @@ test('direct radio refresh clears stale Zigbee state when the interview shell is
   assert.equal(merged.properties.batteryLevel, undefined);
   assert.equal(merged.properties.supportsContactSensor, false);
   assert.equal(merged.properties.supportsVibrationSensor, false);
+  assert.equal(merged.properties.smartThingsMigration.finalizedAt, undefined);
+  assert.equal(merged.properties.smartThingsMigration.finalizedBy, undefined);
+  assert.equal(merged.properties.smartThingsMigration.status, 'native_joined_pending_interview');
+  assert.equal(merged.properties.smartThingsMigration.validation.status, 'failed');
+  assert.equal(merged.properties.smartThingsMigration.validation.finalized, false);
+  assert.equal(merged.properties.smartThingsMigration.validation.finalizedAt, undefined);
+  assert.equal(
+    merged.properties.smartThingsMigration.validation.invalidatedReason,
+    'incomplete_zigbee_interview_shell'
+  );
 });
 
 test('direct radio refresh does not rename cataloged devices to generic Z-Wave node names after failed interviews', () => {
