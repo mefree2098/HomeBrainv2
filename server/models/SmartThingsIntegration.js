@@ -5,6 +5,7 @@ const SMARTTHINGS_TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 
 const REQUIRED_SMARTTHINGS_SCOPES = [
   'r:devices:*',
+  'w:devices:*',
   'x:devices:*',
   'r:scenes:*',
   'x:scenes:*',
@@ -364,6 +365,11 @@ SmartThingsIntegrationSchema.statics.getIntegration = async function() {
   }
 
   return integration;
+};
+
+SmartThingsIntegrationSchema.statics.sanitizeScopes = sanitizeScopes;
+SmartThingsIntegrationSchema.statics.getRequiredScopes = function() {
+  return [...REQUIRED_SMARTTHINGS_SCOPES];
 };
 
 // Static method to create or update integration with OAuth configuration

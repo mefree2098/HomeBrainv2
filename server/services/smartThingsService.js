@@ -828,9 +828,15 @@ class SmartThingsService {
 
       const clientId = integration.clientId ? integration.clientId.trim() : '';
       const redirectUri = integration.redirectUri ? integration.redirectUri.trim() : '';
-      const scope = Array.isArray(integration.scope) && integration.scope.length > 0
+      const fallbackScope = typeof SmartThingsIntegration.getRequiredScopes === 'function'
+        ? SmartThingsIntegration.getRequiredScopes()
+        : ['r:devices:*', 'w:devices:*', 'x:devices:*', 'r:scenes:*', 'x:scenes:*', 'r:locations:*'];
+      const storedScope = Array.isArray(integration.scope) && integration.scope.length > 0
         ? integration.scope
-        : ['r:devices:*', 'x:devices:*', 'r:scenes:*', 'x:scenes:*', 'r:locations:*'];
+        : fallbackScope;
+      const scope = typeof SmartThingsIntegration.sanitizeScopes === 'function'
+        ? SmartThingsIntegration.sanitizeScopes(storedScope)
+        : Array.from(new Set([...storedScope, ...fallbackScope]));
 
       if (!clientId || !redirectUri) {
         throw new Error('SmartThings OAuth configuration incomplete. Please configure Client ID and Redirect URI.');

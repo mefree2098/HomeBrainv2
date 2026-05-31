@@ -218,6 +218,24 @@ const {
   serializeDoorLockLogRecord
 } = require('./directRadioHelpers');
 
+const buildSmartThingsRemovalFailureError = (migration, removalRequest = {}) => {
+  const statusCode = Number(removalRequest.statusCode) || null;
+  const authorizationHint = statusCode === 401 || statusCode === 403
+    ? ' SmartThings rejected the delete request; reauthorize SmartThings with the w:devices:* scope before retrying.'
+    : '';
+  const apiError = trimString(removalRequest.error);
+  const message = `SmartThings device removal failed before HomeBrain opened Zigbee pairing.${authorizationHint}${apiError ? ` ${apiError}` : ''}`.trim();
+  const error = new Error(message);
+  error.status = statusCode === 401 || statusCode === 403 ? 403 : 409;
+  error.code = 'SMARTTHINGS_DEVICE_REMOVAL_FAILED';
+  error.details = {
+    migrationId: trimString(migration?.id) || null,
+    smartThingsDeviceId: trimString(migration?.smartThingsDeviceId) || null,
+    removalRequest
+  };
+  return error;
+};
+
 module.exports = {
 attachZWaveMigrationRequestHandlers(driver, zwave) {
     if (!driver || driver.__homebrainMigrationRequestHandlersAttached || typeof driver.registerRequestHandler !== 'function') {
@@ -1262,6 +1280,9 @@ async startMigration({ deviceId, protocol, durationSeconds, dskPin, migrationId,
           smartThingsDeviceId: migration.smartThingsDeviceId,
           removalRequestStatus: removalRequest.status
         });
+        if (removalRequest.status === 'failed') {
+          throw buildSmartThingsRemovalFailureError(migration, removalRequest);
+        }
       }
       if (targetProtocol === 'zigbee') {
         await this.startPairing('zigbee', { durationSeconds: seconds });
@@ -1468,6 +1489,9 @@ async requestSmartThingsDeviceRemoval(migration, sourceDevice) {
         }
         migration.smartThingsRemovalRequest = {
           status: 'failed',
+          reason: Number(error?.status ?? error?.response?.status) === 401 || Number(error?.status ?? error?.response?.status) === 403
+            ? 'not_authorized'
+            : 'request_failed',
           requestedAt: new Date().toISOString(),
           error: error.message,
           statusCode: Number(error?.status ?? error?.response?.status) || null
@@ -1510,6 +1534,9 @@ async requestSmartThingsDeviceRemoval(migration, sourceDevice) {
       }
       migration.smartThingsRemovalRequest = {
         status: 'failed',
+        reason: Number(error?.status ?? error?.response?.status) === 401 || Number(error?.status ?? error?.response?.status) === 403
+          ? 'not_authorized'
+          : 'request_failed',
         requestedAt: new Date().toISOString(),
         error: error.message,
         statusCode: Number(error?.status ?? error?.response?.status) || null

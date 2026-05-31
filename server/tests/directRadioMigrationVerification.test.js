@@ -944,6 +944,87 @@ test('active Zigbee migration ignores existing baseline device chatter', async (
   assert.equal(upsertOptions.suppressPairingCompletion, true);
 });
 
+test('Zigbee migration aborts pairing when SmartThings delete is not authorized', async () => {
+  const service = createService();
+  const originalFindById = Device.findById;
+  const sourceDevice = {
+    _id: {
+      toString: () => DEVICE_ID
+    },
+    name: 'Front Door',
+    type: 'sensor',
+    room: 'Upstairs',
+    status: false,
+    isOnline: true,
+    brand: 'SmartThings',
+    model: 'Multipurpose Sensor',
+    properties: {
+      source: 'smartthings',
+      smartThingsDeviceId: 'smartthings-front-door',
+      smartThingsCapabilities: [
+        'contactSensor',
+        'temperatureMeasurement',
+        'threeAxis',
+        'accelerationSensor',
+        'battery',
+        'refresh'
+      ],
+      smartThingsCategories: ['MultiFunctionalSensor'],
+      smartThingsDeviceNetworkType: 'ZIGBEE'
+    }
+  };
+  const removedDeviceIds = [];
+  let startPairingCalled = false;
+
+  Device.findById = () => ({
+    lean: async () => sourceDevice
+  });
+  service.smartThingsService = {
+    getDevice: async () => ({
+      deviceId: 'smartthings-front-door',
+      type: 'ZIGBEE',
+      parentDeviceId: 'hub-1'
+    }),
+    deleteDevice: async (deviceId) => {
+      removedDeviceIds.push(deviceId);
+      const error = new Error('SmartThings API DELETE /devices/smartthings-front-door failed 403: Forbidden');
+      error.status = 403;
+      throw error;
+    }
+  };
+  service.startPairing = async () => {
+    startPairingCalled = true;
+  };
+
+  try {
+    await assert.rejects(
+      () => service.startMigration({
+        deviceId: DEVICE_ID,
+        protocol: 'zigbee',
+        durationSeconds: 60
+      }),
+      (error) => {
+        assert.equal(error.code, 'SMARTTHINGS_DEVICE_REMOVAL_FAILED');
+        assert.equal(error.status, 403);
+        assert.match(error.message, /w:devices:\*/);
+        return true;
+      }
+    );
+
+    assert.deepEqual(removedDeviceIds, ['smartthings-front-door']);
+    assert.equal(startPairingCalled, false);
+    const migration = Array.from(service.activeMigrations.values()).find((entry) => entry.sourceDeviceId === DEVICE_ID);
+    assert.ok(migration);
+    assert.equal(migration.status, 'pairing_failed');
+    assert.equal(migration.inclusionStatus, 'failed');
+    assert.equal(migration.smartThingsRemovalRequest.status, 'failed');
+    assert.equal(migration.smartThingsRemovalRequest.reason, 'not_authorized');
+    assert.equal(migration.smartThingsRemovalRequest.statusCode, 403);
+  } finally {
+    Device.findById = originalFindById;
+  }
+});
+
 test('active Zigbee migration waits for a new device interview before completing', async () => {
   const service = createService();
   const migration = {
