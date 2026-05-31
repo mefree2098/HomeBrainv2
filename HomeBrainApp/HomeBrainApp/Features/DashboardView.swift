@@ -1349,13 +1349,14 @@ struct DashboardView: View {
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             }
+                            }
+                            .frame(width: max(proxy.size.width - (dashboardOuterPadding * 2), 1), alignment: .topLeading)
+                            .padding(dashboardOuterPadding)
+                            .padding(.bottom, 8)
                         }
-                        .padding(dashboardOuterPadding)
-                        .padding(.bottom, 8)
-                    }
-                    .scrollIndicators(.hidden)
-                    .refreshable {
-                        await loadDashboard()
+                        .scrollIndicators(.hidden)
+                        .refreshable {
+                            await loadDashboard()
                     }
                 }
             }
@@ -1538,6 +1539,7 @@ struct DashboardView: View {
                         .frame(minHeight: minimumHeight(for: widget.size), alignment: .topLeading)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -2432,21 +2434,21 @@ struct DashboardView: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Alarm Sirens")
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
-                            .tracking(0.7)
-                            .textCase(.uppercase)
-                            .foregroundStyle(HBPalette.textSecondary)
-                        Text("Selected sirens sound when the alarm is triggered.")
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
-                            .foregroundStyle(HBPalette.textSecondary)
+                if usesPortraitCompactLayout {
+                    VStack(alignment: .leading, spacing: 8) {
+                        securitySirenOutputHeaderText()
+                        securitySirenOutputHeaderControls()
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                } else {
+                    HStack(alignment: .top, spacing: 12) {
+                        securitySirenOutputHeaderText()
+                            .frame(maxWidth: .infinity, alignment: .leading)
 
-                    Spacer(minLength: 8)
+                        Spacer(minLength: 8)
 
-                    securitySirenOutputHeaderControls()
+                        securitySirenOutputHeaderControls()
+                    }
                 }
 
                 if selectedSecuritySirenOutputs.isEmpty {
@@ -2500,6 +2502,7 @@ struct DashboardView: View {
             .padding(compact ? 12 : 14)
             .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func securityAlarmStateTile(compact: Bool) -> some View {
@@ -2560,7 +2563,9 @@ struct DashboardView: View {
                 .font(.system(size: compact ? 12 : 13, weight: .medium, design: .rounded))
                 .foregroundStyle(securityStateDetailColor)
                 .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func securitySensorHeaderText() -> some View {
@@ -2574,7 +2579,24 @@ struct DashboardView: View {
             Text("Tap a sensor to open its device page.")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(HBPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func securitySirenOutputHeaderText() -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Alarm Sirens")
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .tracking(0.7)
+                .textCase(.uppercase)
+                .foregroundStyle(HBPalette.textSecondary)
+            Text("Selected sirens sound when the alarm is triggered.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(HBPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func securityDoorLocksHeaderText() -> some View {
@@ -2588,7 +2610,9 @@ struct DashboardView: View {
             Text("Tap a lock tile to toggle locked or unlocked.")
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(HBPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -2761,7 +2785,7 @@ struct DashboardView: View {
                 securitySyncAction(compact: compact)
             }
 
-            VStack(alignment: .trailing, spacing: 6) {
+            VStack(alignment: .leading, spacing: 6) {
                 securityPrimaryActionSlot(compact: compact)
                 securitySyncAction(compact: compact)
             }
@@ -2869,7 +2893,10 @@ struct DashboardView: View {
     }
 
     private func securityPrimaryActionSlotWidth(compact: Bool) -> CGFloat {
-        compact ? 188 : 214
+        if usesPortraitCompactLayout {
+            return compact ? 178 : 200
+        }
+        return compact ? 188 : 214
     }
 
     private func securityArmStayAction(compact: Bool) -> some View {
@@ -3089,7 +3116,7 @@ struct DashboardView: View {
                 securitySirenOutputPickerButton()
             }
 
-            VStack(alignment: .trailing, spacing: 8) {
+            VStack(alignment: .leading, spacing: 8) {
                 securitySirenOutputHeaderBadge()
                 securitySirenOutputPickerButton()
             }
@@ -3555,6 +3582,7 @@ struct DashboardView: View {
             Text(subtitle)
                 .font(.system(size: 13, weight: .medium, design: .rounded))
                 .foregroundStyle(HBPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -6971,6 +6999,7 @@ struct DashboardView: View {
                     requiresAttention: true
                 )
             ]
+            securityVisibleSensorIDs = Self.previewSecuritySensorSelection() == "empty" ? [] : nil
             securityDoorLocks = [
                 DashboardSecurityDoorLockItem(
                     id: "preview-lock",
@@ -7019,7 +7048,7 @@ struct DashboardView: View {
             favoritesProfileId = UIPreviewData.favoriteProfileId
             dashboardProfileId = UIPreviewData.favoriteProfileId
             favoriteDeviceIds = UIPreviewData.favoriteDeviceIds
-            let previewViews = [DashboardSupport.defaultView(name: "Preview Dashboard")]
+            let previewViews = [previewDashboardView()]
             dashboardViews = previewViews
             selectedDashboardViewID = DashboardSupport.resolveSelectedViewID(
                 profileId: UIPreviewData.favoriteProfileId,
@@ -7082,6 +7111,39 @@ struct DashboardView: View {
         }
 
         isLoading = false
+    }
+
+    private func previewDashboardView() -> DashboardViewItem {
+        var view = DashboardSupport.defaultView(name: "Preview Dashboard")
+        guard Self.previewDashboardFocus() == "security" else {
+            return view
+        }
+
+        let securityWidgets = view.widgets.filter { $0.type == .security }
+        if !securityWidgets.isEmpty {
+            view.widgets = securityWidgets + view.widgets.filter { $0.type != .security }
+        }
+        return view
+    }
+
+    private static func previewDashboardFocus() -> String? {
+        let processInfo = ProcessInfo.processInfo
+        if let index = processInfo.arguments.firstIndex(of: "-ui-preview-dashboard-focus"),
+           processInfo.arguments.indices.contains(index + 1) {
+            return processInfo.arguments[index + 1].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+
+        return processInfo.environment["UI_PREVIEW_DASHBOARD_FOCUS"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func previewSecuritySensorSelection() -> String? {
+        let processInfo = ProcessInfo.processInfo
+        if let index = processInfo.arguments.firstIndex(of: "-ui-preview-security-sensors"),
+           processInfo.arguments.indices.contains(index + 1) {
+            return processInfo.arguments[index + 1].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+
+        return processInfo.environment["UI_PREVIEW_SECURITY_SENSORS"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     private func applySecurityStatusResponse(_ response: Any) {
