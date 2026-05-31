@@ -13,6 +13,9 @@ const EventStreamEvent = require('../models/EventStreamEvent');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const directRadioEngineLogService = require('./directRadioEngineLogService');
 const eventStreamService = require('./eventStreamService');
+
+const ZIGBEE_PERMIT_JOIN_MAX_CHUNK_SECONDS = 240;
+const ZIGBEE_PERMIT_JOIN_RENEW_BEFORE_SECONDS = 20;
 const {
   DIRECT_RADIO_SOURCES,
   buildDirectFeatureProperties,
@@ -225,6 +228,73 @@ clearPairingTimer(protocol) {
     }
   },
 
+clearZigbeePermitJoinRenewalTimer() {
+    if (this.zigbeePermitJoinRenewalTimer) {
+      clearTimeout(this.zigbeePermitJoinRenewalTimer);
+      this.zigbeePermitJoinRenewalTimer = null;
+    }
+  },
+
+scheduleZigbeePermitJoinRenewal(sessionId) {
+    this.clearZigbeePermitJoinRenewalTimer();
+    const session = this.activePairings.get('zigbee');
+    if (!session || session.id !== sessionId || isTerminalPairingStatus(session.status)) {
+      return;
+    }
+
+    const remainingSeconds = Math.ceil((Number(session.expiresAt || 0) - Date.now()) / 1000);
+    if (remainingSeconds <= ZIGBEE_PERMIT_JOIN_MAX_CHUNK_SECONDS) {
+      return;
+    }
+
+    const delayMs = Math.max(
+      1_000,
+      (ZIGBEE_PERMIT_JOIN_MAX_CHUNK_SECONDS - ZIGBEE_PERMIT_JOIN_RENEW_BEFORE_SECONDS) * 1000
+    );
+    const timer = setTimeout(async () => {
+      const activeSession = this.activePairings.get('zigbee');
+      if (!activeSession || activeSession.id !== sessionId || isTerminalPairingStatus(activeSession.status)) {
+        return;
+      }
+      if (!this.zigbee.controller || !this.zigbee.started) {
+        this.log('warn', 'zigbee', 'Cannot renew Zigbee permit-join because the coordinator is not ready', {
+          pairingId: sessionId,
+          error: this.zigbee.error || null
+        });
+        return;
+      }
+
+      const remaining = Math.ceil((Number(activeSession.expiresAt || 0) - Date.now()) / 1000);
+      if (remaining <= 0) {
+        return;
+      }
+      const permitSeconds = Math.min(ZIGBEE_PERMIT_JOIN_MAX_CHUNK_SECONDS, remaining);
+      try {
+        await this.zigbee.controller.permitJoin(permitSeconds);
+        this.log('info', 'zigbee', 'Renewed Zigbee permit-join window', {
+          pairingId: sessionId,
+          permitSeconds,
+          remainingSeconds: remaining,
+          expiresAt: activeSession.expiresAt ? new Date(activeSession.expiresAt).toISOString() : null
+        });
+      } catch (error) {
+        this.log('warn', 'zigbee', 'Failed to renew Zigbee permit-join window', {
+          pairingId: sessionId,
+          permitSeconds,
+          remainingSeconds: remaining,
+          error: error.message
+        });
+        return;
+      }
+
+      this.scheduleZigbeePermitJoinRenewal(sessionId);
+    }, delayMs);
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
+    this.zigbeePermitJoinRenewalTimer = timer;
+  },
+
 async closeZWavePairingWindow(options = {}) {
     const controller = this.getZWaveController();
     this.clearPairingTimer('zwave');
@@ -407,11 +477,12 @@ markPairingDetected(protocol, identity, device, reason) {
     const timestamp = new Date().toISOString();
     session.status = protocol === 'zwave' ? 'interviewing' : 'active';
     session.detectedIdentity = identity || null;
+    session.detectedAt = timestamp;
     session.directDeviceId = device?._id?.toString?.() || session.directDeviceId || null;
     session.directDeviceName = device?.name || session.directDeviceName || null;
     session.message = protocol === 'zwave'
       ? `Z-Wave node ${identityId} was detected. HomeBrain is waiting for the interview to finish before saving it as a usable device.`
-      : session.message;
+      : `Zigbee device ${identityId} joined HomeBrain. HomeBrain is waiting for the interview to finish before saving its capabilities.`;
     this.appendPairingEvent(protocol, {
       kind: 'detected',
       reason,
@@ -594,23 +665,28 @@ async startPairing(protocol, options = {}) {
         throw error;
       }
       this.clearPairingTimer('zigbee');
+      this.clearZigbeePermitJoinRenewalTimer();
       const session = this.createPairingSession('zigbee', seconds);
+      const permitSeconds = Math.min(seconds, ZIGBEE_PERMIT_JOIN_MAX_CHUNK_SECONDS);
       this.log('info', 'zigbee', 'Opening Zigbee permit-join window', {
         durationSeconds: seconds,
+        permitSeconds,
         serialPath: this.detected.zigbee?.path || null,
         pairingId: session.id,
         baselineIdentityCount: session.baselineIdentities.length,
         baselineIdentities: session.baselineIdentities
       });
-      await this.zigbee.controller.permitJoin(seconds);
-      this.zigbee.permitJoinUntil = new Date(Date.now() + seconds * 1000).toISOString();
+      await this.zigbee.controller.permitJoin(permitSeconds);
+      this.zigbee.permitJoinUntil = new Date(session.expiresAt).toISOString();
       session.status = 'active';
-      session.expiresAt = Date.now() + seconds * 1000;
       session.message = 'Zigbee permit-join is open. HomeBrain will finish as soon as a device joins or interviews.';
+      this.scheduleZigbeePermitJoinRenewal(session.id);
       this.armPairingTimer('zigbee', session.id, seconds);
       this.log('info', 'zigbee', 'Zigbee permit-join window is open', {
         expiresAt: this.zigbee.permitJoinUntil,
-        pairingId: session.id
+        pairingId: session.id,
+        permitSeconds,
+        renewalRequired: seconds > permitSeconds
       });
       return {
         protocol,
@@ -720,6 +796,9 @@ async startPairing(protocol, options = {}) {
   },
 
 async stopPairing(protocol = 'all') {
+    if (protocol === 'zigbee' || protocol === 'all') {
+      this.clearZigbeePermitJoinRenewalTimer();
+    }
     if ((protocol === 'zigbee' || protocol === 'all') && this.zigbee.controller && this.zigbee.started) {
       this.clearPairingTimer('zigbee');
       await this.zigbee.controller.permitJoin(0);

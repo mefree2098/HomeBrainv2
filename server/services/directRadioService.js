@@ -251,6 +251,7 @@ class DirectRadioService {
       zigbee: null,
       zwave: null
     };
+    this.zigbeePermitJoinRenewalTimer = null;
   }
 }
 

@@ -96,6 +96,10 @@ test('direct radio catalog maps SmartThings multipurpose sensors toward Zigbee',
   assert.equal(plan.targetSource, 'homebrain-zigbee');
   assert.deepEqual(plan.features, ['acceleration', 'axis', 'battery', 'contact', 'temperature']);
   assert.ok(plan.guidedSteps.some((step) => step.action === 'start_direct_migration'));
+  assert.equal(
+    plan.guidedSteps.find((step) => step.id === 'start-homebrain-zigbee-permit-join')?.durationSeconds,
+    600
+  );
   assert.ok(plan.guidedSteps.some((step) => step.instructions.some((instruction) => instruction.includes('Connect button'))));
   assert.ok(plan.manualSteps.some((step) => step.includes('Zigbee pairing') || step.includes('Connect button')));
 });

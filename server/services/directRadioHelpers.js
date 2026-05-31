@@ -491,7 +491,7 @@ function directRecordTimestamp(record) {
 }
 
 function isGenericDirectRadioName(value) {
-  return /^(?:z-wave node \d+|zigbee device\b|direct radio device\b)/i.test(trimString(value));
+  return /^(?:z-wave node \d+|zigbee(?:\s+[0-9a-f]{4,}|\s+device\b)|direct radio device\b)/i.test(trimString(value));
 }
 
 function isIncompleteDirectRadioDuplicate(record) {

@@ -13,6 +13,60 @@ const EventStreamEvent = require('../models/EventStreamEvent');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const directRadioEngineLogService = require('./directRadioEngineLogService');
 const eventStreamService = require('./eventStreamService');
+
+const ZIGBEE_JOIN_TRACE_COMMANDS = new Set([
+  'tcDeviceInd',
+  'permitJoinInd',
+  'endDeviceAnnceInd',
+  'leaveInd'
+]);
+
+function summarizeZigbeeZnpPayload(payload = {}) {
+  if (!payload || typeof payload !== 'object') {
+    return {};
+  }
+
+  return Object.entries(payload).reduce((summary, [key, value]) => {
+    if (value === undefined) {
+      return summary;
+    }
+    if (Buffer.isBuffer(value)) {
+      summary[key] = value.toString('hex');
+      return summary;
+    }
+    if (Array.isArray(value)) {
+      summary[key] = value.slice(0, 16);
+      return summary;
+    }
+    if (value && typeof value === 'object') {
+      summary[key] = summarizeZigbeeZnpPayload(value);
+      return summary;
+    }
+    summary[key] = value;
+    return summary;
+  }, {});
+}
+
+function attachZigbeeJoinTrace(service, controller) {
+  const znp = controller?.adapter?.znp;
+  if (!znp || typeof znp.on !== 'function' || znp.__homebrainJoinTraceAttached) {
+    return;
+  }
+
+  znp.__homebrainJoinTraceAttached = true;
+  znp.on('received', (object = {}) => {
+    const commandName = object?.command?.name || null;
+    if (!ZIGBEE_JOIN_TRACE_COMMANDS.has(commandName)) {
+      return;
+    }
+    service.log('info', 'zigbee', 'Zigbee coordinator low-level join event', {
+      command: commandName,
+      type: object?.type ?? null,
+      subsystem: object?.subsystem ?? null,
+      payload: summarizeZigbeeZnpPayload(object?.payload)
+    });
+  });
+}
 const {
   DIRECT_RADIO_SOURCES,
   buildDirectFeatureProperties,
@@ -308,6 +362,18 @@ async startZigbee(serialPath) {
         acceptJoiningDeviceHandler: async () => true
       });
 
+      controller.on('permitJoinChanged', (payload = {}) => {
+        const permitJoinEnd = typeof controller.getPermitJoinEnd === 'function'
+          ? controller.getPermitJoinEnd()
+          : null;
+        this.log('info', 'zigbee', 'Zigbee coordinator permit-join state changed', {
+          permitted: payload.permitted === true,
+          time: payload.time ?? null,
+          permitJoinEnd: permitJoinEnd ? new Date(permitJoinEnd).toISOString() : null
+        });
+      });
+      attachZigbeeJoinTrace(this, controller);
+
       controller.on('deviceJoined', (payload) => {
         this.log('info', 'zigbee', 'Zigbee device joined', {
           ieeeAddr: payload?.device?.ieeeAddr || null,
@@ -351,6 +417,7 @@ async startZigbee(serialPath) {
 
       this.zigbee.controller = controller;
       this.zigbee.lastStartResult = await controller.start();
+      attachZigbeeJoinTrace(this, controller);
       this.zigbee.started = true;
       this.zigbee.error = null;
       this.zigbee.networkReset = String(this.zigbee.lastStartResult || '').toLowerCase() === 'reset';
