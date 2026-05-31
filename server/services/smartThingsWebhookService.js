@@ -8,6 +8,7 @@ const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 
 const DEFAULT_PERMISSIONS = [
   'r:devices:*',
+  'w:devices:*',
   'x:devices:*',
   'r:scenes:*',
   'x:scenes:*',

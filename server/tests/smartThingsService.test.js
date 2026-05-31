@@ -8,6 +8,27 @@ const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const Settings = require('../models/Settings');
 const smartThingsService = require('../services/smartThingsService');
 
+test('getAuthorizationUrl requests SmartThings device delete scope', async (t) => {
+  const originalGetIntegration = SmartThingsIntegration.getIntegration;
+
+  SmartThingsIntegration.getIntegration = async () => ({
+    clientId: 'client-id',
+    redirectUri: 'https://example.com/smartthings/callback',
+    scope: ['r:devices:*', 'x:devices:*', 'r:locations:*']
+  });
+
+  t.after(() => {
+    SmartThingsIntegration.getIntegration = originalGetIntegration;
+  });
+
+  const authUrl = await smartThingsService.getAuthorizationUrl();
+  const requestedScopes = new URL(authUrl).searchParams.get('scope').split(' ');
+
+  assert.ok(requestedScopes.includes('w:devices:*'));
+  assert.ok(requestedScopes.includes('r:devices:*'));
+  assert.equal(new Set(requestedScopes).size, requestedScopes.length);
+});
+
 test('getValidAccessToken refreshes when access token is missing but a refresh token exists', async (t) => {
   const originalGetIntegration = SmartThingsIntegration.getIntegration;
   const originalGetSettings = Settings.getSettings;
