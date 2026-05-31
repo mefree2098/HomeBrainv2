@@ -607,6 +607,40 @@ getPairingBaselineIdentities(protocol) {
       .filter(Boolean));
   },
 
+isUsableZigbeeMigrationUpdate(update) {
+    const properties = update?.properties && typeof update.properties === 'object'
+      ? update.properties
+      : {};
+    const direct = properties.homebrainDirect && typeof properties.homebrainDirect === 'object'
+      ? properties.homebrainDirect
+      : {};
+    const directState = properties.directRadioState && typeof properties.directRadioState === 'object'
+      ? properties.directRadioState
+      : {};
+    const features = new Set((Array.isArray(properties.directRadioFeatures) ? properties.directRadioFeatures : [])
+      .map(normalizeFeature)
+      .filter(Boolean));
+    const hasIdentity = Boolean(
+      trimString(direct.modelID)
+        || trimString(direct.manufacturerName)
+        || trimString(direct.catalog?.model)
+        || trimString(update?.model)
+        || trimString(update?.brand)
+    );
+    const hasRuntimeState = Object.keys(directState).length > 0;
+    const hasContactState = (
+      Object.prototype.hasOwnProperty.call(directState, 'contactOpen')
+        && typeof directState.contactOpen === 'boolean'
+    ) || ['open', 'closed'].includes(trimString(directState.contact).toLowerCase());
+    const incompleteShell = direct.incomplete === true || (!hasIdentity && features.size === 0 && !hasRuntimeState);
+
+    if (incompleteShell || !hasIdentity || features.size === 0 || !hasRuntimeState) {
+      return false;
+    }
+
+    return !features.has('contact') || hasContactState;
+  },
+
 shouldCompleteActiveMigration(identity, update, migration) {
     if (!migration?.sourceDeviceId) {
       return false;
@@ -626,7 +660,8 @@ shouldCompleteActiveMigration(identity, update, migration) {
       return false;
     }
 
-    return this.getDirectUpdateReason(update) === 'deviceInterview';
+    const reason = this.getDirectUpdateReason(update);
+    return reason === 'deviceInterview' || this.isUsableZigbeeMigrationUpdate(update);
   },
 
 async upsertDirectDevice(identity, update, options = {}) {

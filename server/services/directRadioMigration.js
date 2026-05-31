@@ -276,6 +276,50 @@ const hasDirectContactState = (directState = {}) => {
   return contact === 'open' || contact === 'closed';
 };
 
+const getDirectJoinIdentityId = (directDevice, protocol) => {
+  const properties = getDeviceProperties(directDevice);
+  const direct = readObject(properties.homebrainDirect);
+  if (protocol === 'zigbee') {
+    return trimString(direct.ieeeAddr || direct.id || properties.directRadioIdentity).toLowerCase();
+  }
+  if (protocol === 'zwave') {
+    return trimString(direct.nodeId || direct.id || properties.directRadioIdentity);
+  }
+  return '';
+};
+
+const migrationDirectIdentityMatchesJoin = (migration, protocol, directIdentityId) => {
+  const safeIdentityId = trimString(directIdentityId);
+  if (!migration || !safeIdentityId) {
+    return false;
+  }
+  const directIdentity = readObject(migration.directIdentity);
+  const storedProtocol = normalizeSourceText(directIdentity.protocol || migration.protocol);
+  if (storedProtocol && storedProtocol !== protocol) {
+    return false;
+  }
+
+  const storedId = trimString(
+    directIdentity.id
+      || directIdentity.ieeeAddr
+      || directIdentity.nodeId
+      || migration.directIdentityId
+  );
+  if (!storedId) {
+    return false;
+  }
+
+  if (protocol === 'zigbee') {
+    return storedId.toLowerCase() === safeIdentityId.toLowerCase();
+  }
+  if (protocol === 'zwave') {
+    const left = Number(storedId);
+    const right = Number(safeIdentityId);
+    return Number.isFinite(left) && Number.isFinite(right) && left === right;
+  }
+  return storedId === safeIdentityId;
+};
+
 module.exports = {
 attachZWaveMigrationRequestHandlers(driver, zwave) {
     if (!driver || driver.__homebrainMigrationRequestHandlersAttached || typeof driver.registerRequestHandler !== 'function') {
@@ -802,6 +846,24 @@ async findAwaitingSmartThingsMigrationSourceForDirectJoin(directDevice, protocol
         ).getTime();
         return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0);
       });
+
+    const directIdentityId = getDirectJoinIdentityId(directDevice, protocol);
+    const exactIdentityMatches = eligible.filter((candidate) => migrationDirectIdentityMatchesJoin(
+      getSmartThingsMigration(candidate) || {},
+      protocol,
+      directIdentityId
+    ));
+    if (exactIdentityMatches.length === 1) {
+      return exactIdentityMatches[0];
+    }
+    if (exactIdentityMatches.length > 1) {
+      this.log('warn', protocol, 'Refusing to auto-reclaim direct join by stored migration identity because multiple SmartThings sources match', {
+        directDeviceId,
+        identity: directIdentityId || null,
+        candidateCount: exactIdentityMatches.length,
+        candidateDeviceIds: exactIdentityMatches.map((candidate) => getDeviceIdString(candidate)).filter(Boolean)
+      });
+    }
 
     const strictMatches = eligible
       .map((candidate) => ({
@@ -1363,6 +1425,7 @@ async completeMigration(migrationId, identity, update) {
       identity: identity.id,
       validation
     });
+    this.completePairingSession(identity.protocol, identity, updated || existing, 'smartthings_migration_completed');
     const smartThingsDeletion = await this.deleteSmartThingsDeviceAfterNativeMigration(
       updated || existing,
       previousProperties.smartThingsDeviceId,
