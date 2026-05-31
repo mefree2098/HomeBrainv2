@@ -1520,7 +1520,7 @@ struct AppShellView: View {
             }
         case .settings:
             if previewMode {
-                UIPreviewModuleView(section: section)
+                SettingsView(previewMode: true)
             } else {
                 SettingsView()
             }

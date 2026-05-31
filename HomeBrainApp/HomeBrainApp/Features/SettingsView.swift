@@ -196,7 +196,11 @@ private struct SecurityPinDraft: Identifiable, Equatable {
 }
 
 struct SettingsView: View {
+    let previewMode: Bool
+
     @EnvironmentObject private var session: SessionStore
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     @State private var isLoading = true
     @State private var errorMessage: String?
@@ -266,13 +270,68 @@ struct SettingsView: View {
     @State private var smartThingsToken = ""
 
     @State private var llmPriority = "local,codex,openai,anthropic"
+    @State private var contentWidth: CGFloat = 0
+    @State private var appliedPreviewLaunchActions = false
 
     private let llmProviders = ["openai", "codex", "anthropic", "local"]
     private let sttProviders = ["openai", "local"]
     private let securityExitDelayOptions = [0, 15, 30, 45, 60, 90, 120]
 
+    init(previewMode: Bool = false) {
+        self.previewMode = previewMode
+    }
+
+    private static func previewSettingsAreaFromLaunch() -> SettingsWebArea? {
+        let processInfo = ProcessInfo.processInfo
+        let rawArea: String?
+
+        if let index = processInfo.arguments.firstIndex(of: "-ui-preview-settings-area"),
+           processInfo.arguments.indices.contains(index + 1) {
+            rawArea = processInfo.arguments[index + 1]
+        } else {
+            rawArea = processInfo.environment["UI_PREVIEW_SETTINGS_AREA"]
+        }
+
+        guard let normalized = rawArea?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "-", with: "")
+            .replacingOccurrences(of: "_", with: "")
+            .lowercased(),
+              !normalized.isEmpty else {
+            return nil
+        }
+
+        return SettingsWebArea.allCases.first { area in
+            let rawValue = area.rawValue
+                .replacingOccurrences(of: "-", with: "")
+                .replacingOccurrences(of: "_", with: "")
+                .lowercased()
+            let title = area.title
+                .replacingOccurrences(of: " ", with: "")
+                .replacingOccurrences(of: "/", with: "")
+                .replacingOccurrences(of: "-", with: "")
+                .lowercased()
+            return rawValue == normalized || title == normalized
+        }
+    }
+
+    private static func previewShouldOpenSettingsAreaFromLaunch() -> Bool {
+        let processInfo = ProcessInfo.processInfo
+        if processInfo.arguments.contains("-ui-preview-open-settings-area") {
+            return true
+        }
+        if let environmentValue = processInfo.environment["UI_PREVIEW_OPEN_SETTINGS_AREA"] {
+            return ["1", "true", "yes"].contains(environmentValue.lowercased())
+        }
+        return false
+    }
+
     private var isAdmin: Bool {
-        session.currentUser?.role == "admin"
+        previewMode || session.currentUser?.role == "admin"
+    }
+
+    private var usesCompactSettingsAreaSelector: Bool {
+        horizontalSizeClass == .compact || contentWidth < 620
     }
 
     private var securityHomeBrainBinding: Binding<Bool> {
@@ -319,46 +378,54 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        VStack(spacing: 12) {
-            if isLoading {
-                LoadingView(title: "Loading settings...")
-            } else {
-                HBSectionHeader(
-                    title: "Settings",
-                    subtitle: "Platform configuration and integration keys"
-                )
+        GeometryReader { proxy in
+            VStack(spacing: 12) {
+                if isLoading {
+                    LoadingView(title: "Loading settings...")
+                } else {
+                    HBSectionHeader(
+                        title: "Settings",
+                        subtitle: "Platform configuration and integration keys"
+                    )
 
-                Form {
-                    if let errorMessage {
-                        Section {
-                            InlineErrorView(message: errorMessage) {
-                                Task { await loadSettings() }
+                    Form {
+                        if let errorMessage {
+                            Section {
+                                InlineErrorView(message: errorMessage) {
+                                    Task { await loadSettings() }
+                                }
                             }
                         }
-                    }
 
-                    if !infoMessage.isEmpty {
-                        Section {
-                            Text(infoMessage)
-                                .font(.subheadline)
-                                .foregroundStyle(HBPalette.textSecondary)
+                        if !infoMessage.isEmpty {
+                            Section {
+                                Text(infoMessage)
+                                    .font(.subheadline)
+                                    .foregroundStyle(HBPalette.textSecondary)
+                            }
                         }
+
+                        Section(usesCompactSettingsAreaSelector ? "Area" : "Settings Areas") {
+                            settingsAreaSelector
+                        }
+
+                        settingsInlineAreaContent(selectedSettingsArea)
+
                     }
-
-                    Section("Settings Areas") {
-                        settingsTabRail
+                    .hbFormStyle()
+                    .refreshable {
+                        await loadSettings()
                     }
-
-                    settingsInlineAreaContent(selectedSettingsArea)
-
-                }
-                .hbFormStyle()
-                .refreshable {
-                    await loadSettings()
                 }
             }
+            .padding(usesCompactSettingsAreaSelector ? 12 : 16)
+            .onAppear {
+                contentWidth = proxy.size.width
+            }
+            .onChange(of: proxy.size.width) { _, newWidth in
+                contentWidth = newWidth
+            }
         }
-        .padding()
         .task {
             await loadSettings()
         }
@@ -377,7 +444,7 @@ struct SettingsView: View {
             }
             .environmentObject(session)
         }
-        .sheet(item: $presentedWebSettingsArea) { area in
+        .fullScreenCover(item: $presentedWebSettingsArea) { area in
             NavigationStack {
                 settingsWebAreaView(area)
                     .navigationTitle(area.title)
@@ -416,6 +483,60 @@ struct SettingsView: View {
 
     private var availableSettingsAreas: [SettingsWebArea] {
         SettingsWebArea.allCases.filter { !$0.isAdminOnly || isAdmin }
+    }
+
+    @ViewBuilder
+    private var settingsAreaSelector: some View {
+        if usesCompactSettingsAreaSelector {
+            compactSettingsAreaSelector
+        } else {
+            settingsTabRail
+        }
+    }
+
+    private var compactSettingsAreaSelector: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Menu {
+                Picker("Settings Area", selection: $selectedSettingsArea) {
+                    ForEach(availableSettingsAreas) { area in
+                        Label(area.title, systemImage: area.icon)
+                            .tag(area)
+                    }
+                }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: selectedSettingsArea.icon)
+                        .foregroundStyle(HBPalette.accentBlue)
+                        .frame(width: 24)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(selectedSettingsArea.title)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(HBPalette.textPrimary)
+                        Text(selectedSettingsArea.subtitle)
+                            .font(.caption)
+                            .foregroundStyle(HBPalette.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(HBPalette.textMuted)
+                }
+                .padding(12)
+                .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
+            }
+            .buttonStyle(.plain)
+
+            if selectedSettingsArea.isAdminOnly {
+                Button {
+                    presentedWebSettingsArea = selectedSettingsArea
+                } label: {
+                    Label("Open \(selectedSettingsArea.title) Controls", systemImage: "arrow.up.forward.square")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(HBSecondaryButtonStyle(compact: true))
+            }
+        }
     }
 
     private var settingsTabRail: some View {
@@ -488,11 +609,10 @@ struct SettingsView: View {
             settingsSaveRefreshSection
 
         case .modules, .alexa, .codexSkill, .openClaw, .sense, .tempest, .goveeIndoorAir, .rainMachine, .ecobee, .resources, .maintenance:
-            settingsOpenFullAreaSection(area)
+            EmptyView()
 
         case .deviceIntegrations:
             settingsIntegrationBasicsSection
-            settingsOpenFullAreaSection(area)
             settingsSaveRefreshSection
 
         case .apiKeys:
@@ -929,6 +1049,7 @@ struct SettingsView: View {
 
         case .deviceIntegrations:
             SettingsDeviceIntegrationsPane(
+                previewMode: previewMode,
                 harmonyHubAddresses: $harmonyHubAddresses,
                 smartthingsUseOAuth: $smartthingsUseOAuth,
                 smartThingsToken: $smartThingsToken,
@@ -1449,6 +1570,38 @@ struct SettingsView: View {
     }
 
     private func loadSettings() async {
+        if previewMode {
+            var previewAreaToOpen: SettingsWebArea?
+            if !appliedPreviewLaunchActions {
+                if let previewSettingsArea = Self.previewSettingsAreaFromLaunch() {
+                    selectedSettingsArea = previewSettingsArea
+                    if Self.previewShouldOpenSettingsAreaFromLaunch() {
+                        previewAreaToOpen = previewSettingsArea
+                    }
+                }
+                appliedPreviewLaunchActions = true
+            }
+            serverURL = "https://homebrain.local"
+            location = "Home"
+            timezone = TimeZone.current.identifier
+            smartthingsUseOAuth = true
+            harmonyHubAddresses = "192.168.2.43"
+            hardwareOrbWifiSsid = "HomeBrain-IoT"
+            hardwareOrbWifiSavedSsid = hardwareOrbWifiSsid
+            hardwareOrbWifiPassword = ""
+            hardwareOrbWifiPasswordConfigured = true
+            securityPinDrafts = [
+                SecurityPinDraft(id: "preview-pin", name: "Family", pin: "", enabled: true, existing: true)
+            ]
+            infoMessage = ""
+            errorMessage = nil
+            isLoading = false
+            if let previewAreaToOpen {
+                presentedWebSettingsArea = previewAreaToOpen
+            }
+            return
+        }
+
         isLoading = true
         errorMessage = nil
 
@@ -2621,6 +2774,9 @@ private struct DeviceCatalogSummaryRecord {
 
 private struct SettingsDeviceIntegrationsPane: View {
     @EnvironmentObject private var session: SessionStore
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+
+    let previewMode: Bool
 
     @Binding var harmonyHubAddresses: String
     @Binding var smartthingsUseOAuth: Bool
@@ -2643,30 +2799,119 @@ private struct SettingsDeviceIntegrationsPane: View {
     @State private var deviceCatalogChecking = false
 
     var body: some View {
-        Form {
-            Section("SmartThings") {
-                Toggle("Use OAuth", isOn: $smartthingsUseOAuth)
-                SecureField("Legacy Token", text: $smartThingsToken)
-                Button("Save SmartThings Settings") { onSave() }
-                Button("Test SmartThings") { onTestSmartThings() }
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 14) {
+                HBSectionHeader(
+                    title: "Device Integrations",
+                    subtitle: "Radio, hub, catalog, and recovery controls for HomeBrain-managed devices."
+                )
+
+                smartThingsPanel
+                harmonyPanel
+                insteonPanel
+                deviceCatalogPanel
+                directRadioOperationsPanel
+                directRadioSerialPortsPanel
+                directRadioLogsPanel
+                integrationMessagePanel
+                integrationResultPanel
+            }
+            .padding(horizontalSizeClass == .compact ? 12 : 16)
+            .padding(.bottom, 20)
+        }
+        .scrollIndicators(.hidden)
+        .task {
+            if previewMode {
+                loadPreviewIntegrationState()
+            } else {
+                await loadDirectRadioStatusAndLogs()
+                await loadDeviceCatalogStatus()
+            }
+        }
+        .task(id: directRadioLiveLogs) {
+            guard directRadioLiveLogs, !previewMode else { return }
+            await pollDirectRadioLogs()
+        }
+    }
+
+    private var integrationActionColumns: [GridItem] {
+        if horizontalSizeClass == .compact {
+            return [GridItem(.flexible(), spacing: 8)]
+        }
+        return [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
+    }
+
+    private func integrationPanel<Content: View>(
+        _ title: String,
+        icon: String,
+        subtitle: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        HBPanel {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: icon)
+                        .foregroundStyle(HBPalette.accentBlue)
+                        .frame(width: 24)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title)
+                            .font(.headline)
+                            .foregroundStyle(HBPalette.textPrimary)
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(HBPalette.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                content()
+            }
+        }
+    }
+
+    private func actionGrid<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        LazyVGrid(columns: integrationActionColumns, alignment: .leading, spacing: 8) {
+            content()
+        }
+    }
+
+    private var smartThingsPanel: some View {
+        integrationPanel("SmartThings", icon: "house.and.flag", subtitle: "Cloud account settings and legacy token fallback.") {
+            Toggle("Use OAuth", isOn: $smartthingsUseOAuth)
+            SecureField("Legacy Token", text: $smartThingsToken)
+                .textInputAutocapitalization(.never)
+                .disableAutocorrection(true)
+
+            actionGrid {
+                plainIntegrationButton("Save Settings", systemImage: "square.and.arrow.down") { onSave() }
+                plainIntegrationButton("Test Connection", systemImage: "checkmark.circle") { onTestSmartThings() }
                 actionButton("Status", key: "smartthings-status", method: .get, path: "/api/smartthings/status")
                 actionButton("Get Auth URL", key: "smartthings-auth-url", method: .get, path: "/api/smartthings/auth/url")
                 actionButton("Refresh Devices", key: "smartthings-devices", method: .get, path: "/api/smartthings/devices")
                 actionButton("Disconnect", key: "smartthings-disconnect", method: .post, path: "/api/smartthings/disconnect")
             }
+        }
+    }
 
-            Section("Harmony") {
-                TextField("Hub IPs / Hosts", text: $harmonyHubAddresses)
-                    .textInputAutocapitalization(.never)
-                    .disableAutocorrection(true)
-                Button("Save Harmony Settings") { onSave() }
+    private var harmonyPanel: some View {
+        integrationPanel("Harmony", icon: "tv", subtitle: "Hub discovery, known addresses, device sync, and activity state.") {
+            TextField("Hub IPs / Hosts", text: $harmonyHubAddresses)
+                .textInputAutocapitalization(.never)
+                .disableAutocorrection(true)
+
+            actionGrid {
+                plainIntegrationButton("Save Settings", systemImage: "square.and.arrow.down") { onSave() }
                 actionButton("Harmony Status", key: "harmony-status", method: .get, path: "/api/harmony/status")
                 actionButton("Discover Hubs", key: "harmony-discover", method: .post, path: "/api/harmony/discover", body: ["timeoutMs": 5000])
                 actionButton("Sync Devices", key: "harmony-sync", method: .post, path: "/api/harmony/sync", body: ["timeoutMs": 6000])
                 actionButton("Sync Activity State", key: "harmony-sync-state", method: .post, path: "/api/harmony/sync-state")
             }
+        }
+    }
 
-            Section("INSTEON") {
+    private var insteonPanel: some View {
+        integrationPanel("INSTEON", icon: "link", subtitle: "PLM health, runtime polling, queue recovery, and relinking.") {
+            actionGrid {
                 actionButton("Runtime Status", key: "insteon-status", method: .get, path: "/api/insteon/status")
                 actionButton("Scan Serial Ports", key: "insteon-ports", method: .get, path: "/api/insteon/serial-ports")
                 actionButton("Test PLM", key: "insteon-test", method: .get, path: "/api/insteon/test")
@@ -2676,46 +2921,17 @@ private struct SettingsDeviceIntegrationsPane: View {
                 actionButton("Pause Runtime Monitoring", key: "insteon-pause", method: .post, path: "/api/insteon/maintenance/runtime-monitoring/stop")
                 actionButton("Resume Runtime Monitoring", key: "insteon-resume", method: .post, path: "/api/insteon/maintenance/runtime-monitoring/start", body: ["immediate": true])
                 actionButton("Re-link All Devices to PLM", key: "insteon-relink", method: .post, path: "/api/insteon/maintenance/relink/start")
-                Text("Rebuilds the PLM all-link database for every device (needed after the link table is lost). Runs for several minutes; open the web Settings → INSTEON panel to watch live progress.")
-                    .font(.caption)
-                    .foregroundStyle(HBPalette.textSecondary)
             }
 
-            deviceCatalogSection
-            directRadioOperationsSection
-            directRadioSerialPortsSection
-            directRadioLogsSection
-
-            if !message.isEmpty {
-                Section("Message") {
-                    Text(message)
-                        .font(.subheadline)
-                        .foregroundStyle(HBPalette.textSecondary)
-                }
-            }
-
-            if let resultPayload {
-                Section("Latest Result") {
-                    Text(JSON.prettyString(resultPayload))
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .foregroundStyle(HBPalette.textSecondary)
-                }
-            }
-        }
-        .hbFormStyle()
-        .task {
-            await loadDirectRadioStatusAndLogs()
-            await loadDeviceCatalogStatus()
-        }
-        .task(id: directRadioLiveLogs) {
-            guard directRadioLiveLogs else { return }
-            await pollDirectRadioLogs()
+            Text("Re-linking rebuilds the PLM all-link database for every tracked device and can run for several minutes.")
+                .font(.caption)
+                .foregroundStyle(HBPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
-    private var deviceCatalogSection: some View {
-        Section("Device Catalog Library") {
+    private var deviceCatalogPanel: some View {
+        integrationPanel("Device Catalog Library", icon: "books.vertical", subtitle: "Installed Zigbee/Z-Wave definitions and monthly catalog enrichment status.") {
             if deviceCatalogLoading && deviceCatalogSummary == nil {
                 ProgressView("Loading catalog status...")
             } else if let update = deviceCatalogUpdate {
@@ -2772,30 +2988,48 @@ private struct SettingsDeviceIntegrationsPane: View {
                 }
             }
 
-            HStack {
-                Button {
-                    Task { await loadDeviceCatalogStatus() }
-                } label: {
-                    if deviceCatalogLoading {
-                        ProgressView()
-                    } else {
-                        Label("Refresh Status", systemImage: "arrow.clockwise")
-                    }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    deviceCatalogRefreshButton
+                    deviceCatalogCheckNowButton
                 }
-                .disabled(deviceCatalogLoading || deviceCatalogChecking)
 
-                Button {
-                    Task { await checkDeviceCatalogNow() }
-                } label: {
-                    if deviceCatalogChecking || deviceCatalogUpdate?.running == true {
-                        ProgressView()
-                    } else {
-                        Label("Check Now", systemImage: "arrow.triangle.2.circlepath")
-                    }
+                VStack(spacing: 8) {
+                    deviceCatalogRefreshButton
+                        .frame(maxWidth: .infinity)
+                    deviceCatalogCheckNowButton
+                        .frame(maxWidth: .infinity)
                 }
-                .disabled(deviceCatalogLoading || deviceCatalogChecking || deviceCatalogUpdate?.running == true)
             }
         }
+    }
+
+    private var deviceCatalogRefreshButton: some View {
+        Button {
+            Task { await loadDeviceCatalogStatus() }
+        } label: {
+            if deviceCatalogLoading {
+                ProgressView()
+            } else {
+                Label("Refresh Status", systemImage: "arrow.clockwise")
+            }
+        }
+        .buttonStyle(HBSecondaryButtonStyle(compact: true))
+        .disabled(deviceCatalogLoading || deviceCatalogChecking)
+    }
+
+    private var deviceCatalogCheckNowButton: some View {
+        Button {
+            Task { await checkDeviceCatalogNow() }
+        } label: {
+            if deviceCatalogChecking || deviceCatalogUpdate?.running == true {
+                ProgressView()
+            } else {
+                Label("Check Now", systemImage: "arrow.triangle.2.circlepath")
+            }
+        }
+        .buttonStyle(HBSecondaryButtonStyle(compact: true))
+        .disabled(deviceCatalogLoading || deviceCatalogChecking || deviceCatalogUpdate?.running == true)
     }
 
     private func deviceCatalogMetricRow(
@@ -2879,8 +3113,8 @@ private struct SettingsDeviceIntegrationsPane: View {
         .padding(.vertical, 3)
     }
 
-    private var directRadioOperationsSection: some View {
-        Section("Zigbee / Z-Wave") {
+    private var directRadioOperationsPanel: some View {
+        integrationPanel("Zigbee / Z-Wave", icon: "antenna.radiowaves.left.and.right", subtitle: "Coordinator status, pairing windows, exclusion, and adapter discovery.") {
             if directRadioLoading {
                 ProgressView("Loading radio status...")
             } else if let status = directRadioStatus {
@@ -2904,19 +3138,21 @@ private struct SettingsDeviceIntegrationsPane: View {
                     .foregroundStyle(HBPalette.textSecondary)
             }
 
-            actionButton("Refresh Radio Status", key: "direct-radio-status", method: .get, path: "/api/direct-radios/status")
-            actionButton("Scan Zigbee/Z-Wave USB Ports", key: "direct-radio-ports", method: .get, path: "/api/direct-radios/serial-ports")
-            actionButton("Open Zigbee Pairing", key: "direct-radio-zigbee-pair", method: .post, path: "/api/direct-radios/pairing/start", body: ["protocol": "zigbee", "durationSeconds": 180])
-            actionButton("Start Z-Wave Inclusion", key: "direct-radio-zwave-pair", method: .post, path: "/api/direct-radios/pairing/start", body: ["protocol": "zwave", "durationSeconds": 180])
-            actionButton("Start Z-Wave Exclusion", key: "direct-radio-zwave-exclusion", method: .post, path: "/api/direct-radios/exclusion/start", body: ["durationSeconds": 120])
-            actionButton("Stop Pairing / Exclusion", key: "direct-radio-stop", method: .post, path: "/api/direct-radios/pairing/stop", body: ["protocol": "all"])
+            actionGrid {
+                actionButton("Refresh Radio Status", key: "direct-radio-status", method: .get, path: "/api/direct-radios/status")
+                actionButton("Scan USB Ports", key: "direct-radio-ports", method: .get, path: "/api/direct-radios/serial-ports")
+                actionButton("Open Zigbee Pairing", key: "direct-radio-zigbee-pair", method: .post, path: "/api/direct-radios/pairing/start", body: ["protocol": "zigbee", "durationSeconds": 180])
+                actionButton("Start Z-Wave Inclusion", key: "direct-radio-zwave-pair", method: .post, path: "/api/direct-radios/pairing/start", body: ["protocol": "zwave", "durationSeconds": 180])
+                actionButton("Start Z-Wave Exclusion", key: "direct-radio-zwave-exclusion", method: .post, path: "/api/direct-radios/exclusion/start", body: ["durationSeconds": 120])
+                actionButton("Stop Pairing / Exclusion", key: "direct-radio-stop", method: .post, path: "/api/direct-radios/pairing/stop", body: ["protocol": "all"])
+            }
         }
     }
 
     @ViewBuilder
-    private var directRadioSerialPortsSection: some View {
+    private var directRadioSerialPortsPanel: some View {
         if let status = directRadioStatus {
-            Section("Direct Radio USB Ports") {
+            integrationPanel("Direct Radio USB Ports", icon: "cable.connector", subtitle: "Detected serial adapters and HomeBrain protocol scoring.") {
                 if status.serialPorts.isEmpty {
                     Text("No serial ports found.")
                         .font(.footnote)
@@ -2930,28 +3166,22 @@ private struct SettingsDeviceIntegrationsPane: View {
         }
     }
 
-    private var directRadioLogsSection: some View {
-        Section("Direct Radio Logs") {
+    private var directRadioLogsPanel: some View {
+        integrationPanel("Direct Radio Logs", icon: "list.bullet.rectangle", subtitle: "Latest coordinator/runtime events for quick triage.") {
             Toggle("Live Updates", isOn: $directRadioLiveLogs)
 
-            HStack {
-                Button {
-                    Task { await loadDirectRadioLogs() }
-                } label: {
-                    if directRadioLogsLoading {
-                        ProgressView()
-                    } else {
-                        Label("Replay Latest", systemImage: "arrow.clockwise")
-                    }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    directRadioReplayLogsButton
+                    directRadioClearLogsButton
                 }
-                .disabled(directRadioLogsLoading)
 
-                Button(role: .destructive) {
-                    Task { await clearDirectRadioLogs() }
-                } label: {
-                    Label("Clear Logs", systemImage: "trash")
+                VStack(spacing: 8) {
+                    directRadioReplayLogsButton
+                        .frame(maxWidth: .infinity)
+                    directRadioClearLogsButton
+                        .frame(maxWidth: .infinity)
                 }
-                .disabled(!activeAction.isEmpty)
             }
 
             if directRadioLogs.isEmpty {
@@ -2959,11 +3189,35 @@ private struct SettingsDeviceIntegrationsPane: View {
                     .font(.footnote)
                     .foregroundStyle(HBPalette.textSecondary)
             } else {
-                ForEach(directRadioLogs.prefix(80)) { entry in
+                ForEach(directRadioLogs.prefix(40)) { entry in
                     directRadioLogRow(entry)
                 }
             }
         }
+    }
+
+    private var directRadioReplayLogsButton: some View {
+        Button {
+            Task { await loadDirectRadioLogs() }
+        } label: {
+            if directRadioLogsLoading {
+                ProgressView()
+            } else {
+                Label("Replay Latest", systemImage: "arrow.clockwise")
+            }
+        }
+        .buttonStyle(HBSecondaryButtonStyle(compact: true))
+        .disabled(directRadioLogsLoading)
+    }
+
+    private var directRadioClearLogsButton: some View {
+        Button(role: .destructive) {
+            Task { await clearDirectRadioLogs() }
+        } label: {
+            Label("Clear Logs", systemImage: "trash")
+        }
+        .buttonStyle(HBDestructiveButtonStyle(compact: true))
+        .disabled(!activeAction.isEmpty)
     }
 
     private func directRadioControllerRow(_ controller: DirectRadioControllerRecord) -> some View {
@@ -3079,6 +3333,33 @@ private struct SettingsDeviceIntegrationsPane: View {
         .padding(.vertical, 5)
     }
 
+    @ViewBuilder
+    private var integrationMessagePanel: some View {
+        if !message.isEmpty {
+            integrationPanel("Message", icon: "text.bubble", subtitle: "Latest action summary.") {
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundStyle(HBPalette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var integrationResultPanel: some View {
+        if let resultPayload {
+            integrationPanel("Latest Result", icon: "curlybraces", subtitle: "Raw response from the most recent action.") {
+                ScrollView(.horizontal, showsIndicators: true) {
+                    Text(JSON.prettyString(resultPayload))
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .foregroundStyle(HBPalette.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+    }
+
     private func actionButton(
         _ title: String,
         key: String,
@@ -3089,19 +3370,235 @@ private struct SettingsDeviceIntegrationsPane: View {
         Button {
             Task { await runAction(key: key, method: method, path: path, body: body) }
         } label: {
-            if activeAction == key {
-                ProgressView()
-            } else {
-                Label(title, systemImage: method == .get ? "arrow.clockwise" : "play.fill")
+            HStack(spacing: 8) {
+                if activeAction == key {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: method == .get ? "arrow.clockwise" : "play.fill")
+                        .frame(width: 18)
+                }
+                Text(title)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.82)
+                Spacer(minLength: 0)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .buttonStyle(HBSecondaryButtonStyle(compact: true))
         .disabled(!activeAction.isEmpty)
+    }
+
+    private func plainIntegrationButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .lineLimit(2)
+                .minimumScaleFactor(0.82)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .buttonStyle(HBSecondaryButtonStyle(compact: true))
+        .disabled(!activeAction.isEmpty)
+    }
+
+    private func loadPreviewIntegrationState() {
+        let zigbeePath = "/dev/serial/by-id/usb-ITead_Sonoff_Zigbee_3.0_USB_Dongle_Plus"
+        let zwavePath = "/dev/serial/by-id/usb-Zooz_800_Z-Wave_Stick"
+
+        directRadioStatus = DirectRadioStatusSnapshot.from([
+            "enabled": true,
+            "dataDir": "/mnt/nvme/apps/HomeBrainv2/data/direct-radios",
+            "diagnostics": [],
+            "serialPorts": [
+                [
+                    "path": zigbeePath,
+                    "manufacturer": "ITead",
+                    "vendorId": "10c4",
+                    "productId": "ea60",
+                    "serialNumber": "preview-zigbee",
+                    "preferredProtocol": "zigbee",
+                    "likelyZigbee": true,
+                    "likelyZWave": false,
+                    "scores": ["zigbee": 16, "zwave": -6]
+                ] as [String: Any],
+                [
+                    "path": zwavePath,
+                    "manufacturer": "Zooz",
+                    "vendorId": "1a86",
+                    "productId": "55d4",
+                    "serialNumber": "preview-zwave",
+                    "preferredProtocol": "zwave",
+                    "likelyZigbee": false,
+                    "likelyZWave": true,
+                    "scores": ["zigbee": -8, "zwave": 14]
+                ] as [String: Any]
+            ],
+            "controllers": [
+                "zigbee": [
+                    "expectedHardware": "SONOFF ZBDongle-P / TI CC2652P Z-Stack coordinator",
+                    "source": "auto-detected",
+                    "detectedPort": zigbeePath,
+                    "configuredPort": "",
+                    "started": true,
+                    "error": "",
+                    "diagnostics": [],
+                    "permitJoinUntil": "",
+                    "pairedDeviceCount": 5,
+                    "lastStartResult": "resumed"
+                ] as [String: Any],
+                "zwave": [
+                    "expectedHardware": "Zooz ZST39 LR / 800-series Z-Wave SerialAPI USB stick",
+                    "source": "auto-detected",
+                    "detectedPort": zwavePath,
+                    "configuredPort": "",
+                    "started": true,
+                    "error": "",
+                    "diagnostics": [],
+                    "inclusionUntil": "",
+                    "exclusionUntil": "",
+                    "pairedNodeCount": 8,
+                    "lastStartResult": "ready"
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        directRadioLogs = [
+            DirectRadioLogEntryRecord.from([
+                "id": "preview-log-1",
+                "timestamp": "2026-05-30T15:06:00Z",
+                "level": "info",
+                "protocol": "zigbee",
+                "stage": "interview",
+                "operation": "permit_join",
+                "target": "0x00158d0009abc123",
+                "message": "Zigbee device joined; interview waiting for IAS enrollment.",
+                "details": ["cluster": "ssIasZone"]
+            ]),
+            DirectRadioLogEntryRecord.from([
+                "id": "preview-log-2",
+                "timestamp": "2026-05-30T15:05:18Z",
+                "level": "warn",
+                "protocol": "zwave",
+                "stage": "interview",
+                "operation": "refresh_info",
+                "target": "node 7",
+                "message": "Node responded to ping; full interview skipped to avoid destabilizing a partially recovered node.",
+                "details": ["skipRefreshIfPingSucceeds": true]
+            ]),
+            DirectRadioLogEntryRecord.from([
+                "id": "preview-log-3",
+                "timestamp": "2026-05-30T15:04:11Z",
+                "level": "info",
+                "protocol": "system",
+                "stage": "serial",
+                "operation": "scan",
+                "target": "usb",
+                "message": "Detected Zigbee and Z-Wave radio adapters.",
+                "details": ["ports": 2]
+            ])
+        ]
+
+        let update = DeviceCatalogUpdateStatusRecord.from([
+            "update": [
+                "running": false,
+                "scheduled": true,
+                "catalogUpdate": [
+                    "lastRunAt": "2026-05-30T10:00:00Z",
+                    "lastSuccessAt": "2026-05-30T10:00:04Z",
+                    "nextDueAt": "2026-06-30T10:00:00Z",
+                    "due": false,
+                    "errors": [],
+                    "sources": [
+                        "matter": [
+                            "success": true,
+                            "sourceUrl": "https://csa-iot.org/csa-iot_products/",
+                            "existingCount": 240,
+                            "fetchedCount": 16,
+                            "addedCount": 3,
+                            "totalCount": 243,
+                            "error": ""
+                        ] as [String: Any],
+                        "thread": [
+                            "success": true,
+                            "sourceUrl": "https://www.threadgroup.org/What-is-Thread/Certified-Products",
+                            "existingCount": 89,
+                            "fetchedCount": 6,
+                            "addedCount": 1,
+                            "totalCount": 90,
+                            "error": ""
+                        ] as [String: Any],
+                        "insteon": [
+                            "success": true,
+                            "sourceUrl": "local-device-library",
+                            "existingCount": 64,
+                            "fetchedCount": 0,
+                            "addedCount": 0,
+                            "totalCount": 64,
+                            "error": ""
+                        ] as [String: Any]
+                    ] as [String: Any]
+                ] as [String: Any]
+            ] as [String: Any]
+        ])
+
+        deviceCatalogUpdate = update
+        deviceCatalogSummary = DeviceCatalogSummaryRecord.from([
+            "generatedAt": "2026-05-30T10:00:04Z",
+            "zigbee": [
+                "source": "zigbee-herdsman-converters",
+                "definitionCount": 4096,
+                "vendorCount": 423,
+                "exposesCount": 11872,
+                "errors": []
+            ] as [String: Any],
+            "zwave": [
+                "source": "zwave-js device config",
+                "deviceConfigCount": 1584,
+                "manufacturerCount": 322,
+                "errors": []
+            ] as [String: Any],
+            "matter": [
+                "source": "CSA certified product snapshot",
+                "certifiedProductCount": 243,
+                "standardDeviceTypeCount": 34,
+                "vendorProductCount": 179,
+                "errors": []
+            ] as [String: Any],
+            "thread": [
+                "source": "Thread certified product snapshot",
+                "certifiedProductCount": 90,
+                "snapshot": ["updatedAt": "2026-05-30T10:00:04Z"],
+                "errors": []
+            ] as [String: Any],
+            "insteon": [
+                "source": "HomeBrain local catalog",
+                "productEntryCount": 64,
+                "categoryCount": 17,
+                "entryCount": 64,
+                "errors": []
+            ] as [String: Any]
+        ], update: update)
+
+        directRadioLoading = false
+        directRadioLogsLoading = false
+        deviceCatalogLoading = false
+        deviceCatalogChecking = false
     }
 
     private func runAction(key: String, method: HTTPMethod, path: String, body: Any?) async {
         activeAction = key
         message = ""
         defer { activeAction = "" }
+
+        if previewMode {
+            resultPayload = [
+                "preview": true,
+                "method": method.rawValue,
+                "path": path,
+                "body": body ?? NSNull()
+            ]
+            message = "\(method.rawValue) \(path) is available on a signed-in HomeBrain instance."
+            return
+        }
 
         do {
             let response: Any

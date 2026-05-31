@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct RootView: View {
     @EnvironmentObject private var session: SessionStore
@@ -19,6 +20,10 @@ struct RootView: View {
         .tint(HBPalette.accentBlue)
         .task {
             await session.bootstrap()
+            applyPreviewOrientationIfNeeded()
+        }
+        .onAppear {
+            applyPreviewOrientationIfNeeded()
         }
         .onChange(of: session.backendRecoveryGeneration) { _, generation in
             guard generation > 0, !session.isAuthenticated else {
@@ -34,5 +39,15 @@ struct RootView: View {
                 uiPreview.exit()
             }
         }
+    }
+
+    private func applyPreviewOrientationIfNeeded() {
+        guard uiPreview.isForcedByLaunch,
+              let orientationMask = uiPreview.requestedInterfaceOrientationMask,
+              let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else {
+            return
+        }
+
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientationMask))
     }
 }
