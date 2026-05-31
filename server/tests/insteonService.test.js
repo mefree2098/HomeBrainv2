@@ -3485,6 +3485,112 @@ test('turnOff defaults to the fast off opcode when available', async (t) => {
   assert.equal(result.confirmed, true);
 });
 
+test('turnOff falls back to standard off when implicit fast off gets no response', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+  const originalConfirmState = insteonService._confirmExpectedDeviceStateByAddress;
+  const originalPersistState = insteonService._persistDeviceRuntimeState;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._confirmExpectedDeviceStateByAddress = originalConfirmState;
+    insteonService._persistDeviceRuntimeState = originalPersistState;
+    insteonService._clearPendingRuntimeCommandAcks();
+  });
+
+  let standardTurnOffCalls = 0;
+  let fastTurnOffCalls = 0;
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    light(_address) {
+      return {
+        turnOff(callback) {
+          standardTurnOffCalls += 1;
+          callback(null, { ack: true, success: true });
+        },
+        turnOffFast(callback) {
+          fastTurnOffCalls += 1;
+          callback(null, { ack: true, success: false });
+        }
+      };
+    }
+  };
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'Unknown',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 1, subcategory: 0 }
+  });
+  insteonService._persistDeviceRuntimeState = async (_device, patch) => patch;
+  insteonService._confirmExpectedDeviceStateByAddress = async () => ({
+    status: false,
+    brightness: 0,
+    level: 0,
+    confirmedReads: 1
+  });
+
+  const result = await insteonService.turnOff('mock-device', {
+    verificationMode: 'fast',
+    commandAttempts: 1,
+    runtimeAckTimeoutMs: 1
+  });
+
+  assert.equal(fastTurnOffCalls, 1);
+  assert.equal(standardTurnOffCalls, 1);
+  assert.equal(result.success, true);
+  assert.equal(result.confirmed, true);
+});
+
+test('turnOff does not fall back from explicitly requested fast off', async (t) => {
+  const originalHub = insteonService.hub;
+  const originalConnected = insteonService.isConnected;
+  const originalFindById = Device.findById;
+
+  t.after(() => {
+    insteonService.hub = originalHub;
+    insteonService.isConnected = originalConnected;
+    Device.findById = originalFindById;
+    insteonService._clearPendingRuntimeCommandAcks();
+  });
+
+  let standardTurnOffCalls = 0;
+  let fastTurnOffCalls = 0;
+  insteonService.isConnected = true;
+  insteonService.hub = {
+    light(_address) {
+      return {
+        turnOff(callback) {
+          standardTurnOffCalls += 1;
+          callback(null, { ack: true, success: true });
+        },
+        turnOffFast(callback) {
+          fastTurnOffCalls += 1;
+          callback(null, { ack: true, success: false });
+        }
+      };
+    }
+  };
+  Device.findById = async () => ({
+    _id: 'mock-device',
+    model: 'Unknown',
+    properties: { insteonAddress: '11.22.33', deviceCategory: 1, subcategory: 0 }
+  });
+
+  await assert.rejects(
+    insteonService.turnOff('mock-device', {
+      commandVariant: 'fast',
+      verificationMode: 'fast',
+      commandAttempts: 1,
+      runtimeAckTimeoutMs: 1
+    }),
+    /target device did not respond after PLM ACK/i
+  );
+  assert.equal(fastTurnOffCalls, 1);
+  assert.equal(standardTurnOffCalls, 0);
+});
+
 test('turnOff clears pending refresh state and extends runtime polling cooldown through the late ACK window', async (t) => {
   const originalHub = insteonService.hub;
   const originalConnected = insteonService.isConnected;
