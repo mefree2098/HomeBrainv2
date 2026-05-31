@@ -383,6 +383,22 @@ router.post('/zigbee/devices/:ieeeAddr/reinterview', async (req, res) => {
   }
 });
 
+router.post('/zigbee/devices/:ieeeAddr/forget', async (req, res) => {
+  try {
+    const result = await directRadioService.forgetZigbeeDevice(req.params.ieeeAddr, {
+      force: req.body?.force !== false,
+      source: 'api'
+    });
+    res.status(200).json({
+      success: true,
+      result,
+      status: await directRadioService.getStatus()
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to forget Zigbee device');
+  }
+});
+
 router.post('/zwave/nodes/:nodeId/replace-failed', async (req, res) => {
   try {
     const result = await directRadioService.replaceFailedZWaveNode(req.params.nodeId, {
