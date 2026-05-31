@@ -526,6 +526,7 @@ async refreshZWaveNodeInfo(nodeId, options = {}) {
     const waitForWakeup = parseOptionalBoolean(options.waitForWakeup, false);
     const resetSecurityClasses = parseOptionalBoolean(options.resetSecurityClasses, false);
     const pingFirst = parseOptionalBoolean(options.pingFirst, true);
+    const skipRefreshIfPingSucceeds = parseOptionalBoolean(options.skipRefreshIfPingSucceeds, false);
     const before = this.serializeZWaveNodeSummary(node);
     let ping = null;
     let pingError = null;
@@ -543,9 +544,30 @@ async refreshZWaveNodeInfo(nodeId, options = {}) {
       nodeId: numericNodeId,
       waitForWakeup,
       resetSecurityClasses,
+      skipRefreshIfPingSucceeds,
       ping,
       pingError
     });
+
+    if (ping === true && skipRefreshIfPingSucceeds && resetSecurityClasses !== true) {
+      await this.handleZWaveNodeChanged(node, 'ping succeeded').catch((error) => {
+        this.log('warn', 'zwave', 'Failed to save Z-Wave node after successful ping', {
+          nodeId: numericNodeId,
+          error: error.message
+        });
+      });
+
+      return {
+        node: this.serializeZWaveNodeSummary(node),
+        before,
+        ping,
+        pingError,
+        waitForWakeup,
+        resetSecurityClasses,
+        skippedRefresh: true,
+        message: `Node ${numericNodeId} answered the Z-Wave ping, so HomeBrain skipped the fresh interview.`
+      };
+    }
 
     await node.refreshInfo({
       resetSecurityClasses,
@@ -566,6 +588,7 @@ async refreshZWaveNodeInfo(nodeId, options = {}) {
       pingError,
       waitForWakeup,
       resetSecurityClasses,
+      skippedRefresh: false,
       message: `HomeBrain requested a fresh Z-Wave interview for node ${numericNodeId}.`
     };
   },

@@ -668,15 +668,19 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       const response = await refreshZWaveNodeInfo(nodeId, {
         waitForWakeup: false,
         resetSecurityClasses: candidate.likelyLegacySiren,
-        pingFirst: true
+        pingFirst: true,
+        skipRefreshIfPingSucceeds: !candidate.likelyLegacySiren
       })
       const ping = response.result?.ping
+      const skippedRefresh = response.result?.skippedRefresh
       const refreshedNode = response.result?.node
       if (response.status?.controllers?.zwave?.nodes) {
         updateZWaveControllerNodes(response.status.controllers.zwave.nodes)
       }
       let nextStatusMessage = `HomeBrain requested a fresh interview for node ${nodeId}. If it does not update, use the device include or wake action once and refresh devices.`
-      if (refreshedNode?.ready && refreshedNode?.incomplete === false) {
+      if (skippedRefresh) {
+        nextStatusMessage = `Node ${nodeId} answered the Z-Wave ping, so HomeBrain skipped a fresh interview. Refresh devices to confirm the recovered state.`
+      } else if (refreshedNode?.ready && refreshedNode?.incomplete === false) {
         nextStatusMessage = `HomeBrain finished the Z-Wave interview for node ${nodeId}.`
       } else if (ping === false) {
         nextStatusMessage = candidate.canRemoveFailed

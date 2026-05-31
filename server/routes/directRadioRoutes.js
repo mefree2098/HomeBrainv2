@@ -356,7 +356,8 @@ router.post('/zwave/nodes/:nodeId/refresh-info', async (req, res) => {
     const result = await directRadioService.refreshZWaveNodeInfo(req.params.nodeId, {
       waitForWakeup: req.body?.waitForWakeup,
       resetSecurityClasses: req.body?.resetSecurityClasses,
-      pingFirst: req.body?.pingFirst
+      pingFirst: req.body?.pingFirst,
+      skipRefreshIfPingSucceeds: req.body?.skipRefreshIfPingSucceeds
     });
     res.status(200).json({
       success: true,
