@@ -86,6 +86,8 @@ test('ensureBootstrapState seeds signing keys and the default Axiom client', asy
   const originalAudiobookPublicHost = process.env.AUDIOBOOK_PUBLIC_HOST;
   const originalAudiobookRedirectUri = process.env.OIDC_AUDIOBOOK_REDIRECT_URI;
   const originalAudiobookClientId = process.env.OIDC_AUDIOBOOK_CLIENT_ID;
+  const originalAgentOpsClientId = process.env.OIDC_AGENTOPS_CLIENT_ID;
+  const originalAgentOpsRedirectUris = process.env.OIDC_AGENTOPS_REDIRECT_URIS;
 
   t.after(() => {
     OIDCProviderSettings.getSettings = originalGetSettings;
@@ -98,6 +100,8 @@ test('ensureBootstrapState seeds signing keys and the default Axiom client', asy
     restoreEnv('AUDIOBOOK_PUBLIC_HOST', originalAudiobookPublicHost);
     restoreEnv('OIDC_AUDIOBOOK_REDIRECT_URI', originalAudiobookRedirectUri);
     restoreEnv('OIDC_AUDIOBOOK_CLIENT_ID', originalAudiobookClientId);
+    restoreEnv('OIDC_AGENTOPS_CLIENT_ID', originalAgentOpsClientId);
+    restoreEnv('OIDC_AGENTOPS_REDIRECT_URIS', originalAgentOpsRedirectUris);
   });
 
   process.env.HOMEBRAIN_PUBLIC_BASE_URL = 'https://example.com';
@@ -107,6 +111,8 @@ test('ensureBootstrapState seeds signing keys and the default Axiom client', asy
   delete process.env.AUDIOBOOK_PUBLIC_HOST;
   delete process.env.OIDC_AUDIOBOOK_REDIRECT_URI;
   delete process.env.OIDC_AUDIOBOOK_CLIENT_ID;
+  delete process.env.OIDC_AGENTOPS_CLIENT_ID;
+  delete process.env.OIDC_AGENTOPS_REDIRECT_URIS;
 
   let saved = false;
   OIDCProviderSettings.getSettings = async () => ({
@@ -122,21 +128,32 @@ test('ensureBootstrapState seeds signing keys and the default Axiom client', asy
 
   OIDCClient.findOne = async () => null;
 
-  let createdClient = null;
+  const createdClients = [];
   OIDCClient.create = async (payload) => {
-    createdClient = payload;
+    createdClients.push(payload);
     return payload;
   };
 
   const result = await oidcService.ensureBootstrapState({ actor: 'system:test-bootstrap' });
+  const axiomClient = createdClients.find((client) => client.clientId === 'homebrain-axiom');
+  const agentOpsClient = createdClients.find((client) => client.clientId === 'homebrain-agentops');
 
   assert.equal(saved, true);
   assert.deepEqual(result.settingsUpdated, ['signingKeys']);
-  assert.deepEqual(result.createdClients, ['homebrain-axiom']);
-  assert.equal(createdClient.clientId, 'homebrain-axiom');
-  assert.deepEqual(createdClient.redirectUris, ['https://mail.example.com/api/identity/homebrain/callback']);
-  assert.equal(createdClient.requirePkce, true);
-  assert.equal(createdClient.tokenEndpointAuthMethod, 'none');
+  assert.ok(result.createdClients.includes('homebrain-axiom'));
+  assert.ok(result.createdClients.includes('homebrain-agentops'));
+  assert.deepEqual(axiomClient.redirectUris, ['https://mail.example.com/api/identity/homebrain/callback']);
+  assert.equal(axiomClient.requirePkce, true);
+  assert.equal(axiomClient.tokenEndpointAuthMethod, 'none');
+  assert.equal(agentOpsClient.name, 'Perpetual AgentOps');
+  assert.equal(agentOpsClient.platform, 'homebrain');
+  assert.deepEqual(agentOpsClient.redirectUris, [
+    'http://127.0.0.1:4380/auth/callback',
+    'http://localhost:4380/auth/callback',
+    'http://192.168.1.42:4380/auth/callback'
+  ]);
+  assert.equal(agentOpsClient.requirePkce, true);
+  assert.equal(agentOpsClient.tokenEndpointAuthMethod, 'none');
 });
 
 test('ensureBootstrapState seeds Audiobook client when public URL is configured', async (t) => {
