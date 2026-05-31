@@ -297,11 +297,12 @@ private struct DashboardWeatherSnapshot {
         )
     }
 
-    static func preview(mode: DashboardWeatherLocationMode, query: String?) -> DashboardWeatherSnapshot {
+    static func preview(mode: DashboardWeatherLocationMode, query: String?, includeTempest: Bool = false) -> DashboardWeatherSnapshot {
         let trimmedQuery = query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let previewDate = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-2 * 60))
 
         return DashboardWeatherSnapshot(
-            fetchedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-5 * 60)),
+            fetchedAt: previewDate,
             locationName: mode == .custom ? (trimmedQuery.isEmpty ? "Denver, CO" : trimmedQuery) : (mode == .auto ? "Current location" : "Saved location"),
             source: mode,
             temperatureF: 67,
@@ -319,7 +320,29 @@ private struct DashboardWeatherSnapshot {
             todayCondition: "Overcast",
             sunrise: "2026-03-23T07:01:00-06:00",
             sunset: "2026-03-23T19:14:00-06:00",
-            tempest: nil,
+            tempest: includeTempest ? DashboardTempestStationSnapshot(
+                name: "Lehi",
+                room: "Outside",
+                observedAt: previewDate,
+                lastEventAt: previewDate,
+                temperatureF: 59,
+                feelsLikeF: 52,
+                dewPointF: 36,
+                humidityPct: 39,
+                uvIndex: 0,
+                windAvgMph: 0,
+                windGustMph: 1,
+                windDirectionDeg: 0,
+                pressureInHg: 25.16,
+                pressureTrend: "steady",
+                rainLastMinuteIn: 0,
+                rainTodayIn: 0.29,
+                rainRateInPerHr: 0,
+                lightningAvgDistanceMiles: nil,
+                lightningCount: 0,
+                batteryVolts: 2.78,
+                websocketConnected: true
+            ) : nil,
             moduleTelemetry: nil,
             indoorAir: DashboardIndoorAirSnapshot(
                 deviceName: "Govee Indoor Air",
@@ -2086,7 +2109,8 @@ struct DashboardView: View {
         if previewMode {
             weatherByWidgetID[widget.id] = DashboardWeatherSnapshot.preview(
                 mode: widget.settings.weatherLocationMode,
-                query: widget.settings.weatherLocationQuery
+                query: widget.settings.weatherLocationQuery,
+                includeTempest: Self.previewWeatherSource() == "tempest"
             )
             weatherErrorsByWidgetID[widget.id] = nil
             weatherRequestKeyByWidgetID[widget.id] = taskKey
@@ -3866,6 +3890,7 @@ struct DashboardView: View {
                                         .lineLimit(1)
                                         .minimumScaleFactor(0.82)
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
 
                                 Spacer(minLength: 10)
 
@@ -3882,7 +3907,7 @@ struct DashboardView: View {
                                     .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
                             }
 
-                            HStack(alignment: .top, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 10) {
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text(snapshot.condition)
                                         .font(.system(size: compactWeatherHeader ? 15 : 17, weight: .semibold, design: .rounded))
@@ -3893,14 +3918,13 @@ struct DashboardView: View {
                                         .foregroundStyle(HBPalette.textSecondary)
                                         .lineLimit(tabletCompactWeatherGrid ? 1 : 2)
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
 
-                                Spacer(minLength: 10)
-
-                                VStack(alignment: .trailing, spacing: 7) {
+                                VStack(alignment: .leading, spacing: 7) {
                                     weatherOutdoorClimateRow(
                                         snapshot: snapshot,
                                         widgetID: widget.id,
-                                        compact: compactWeatherHeader,
+                                        compact: true,
                                         includeIcon: false,
                                         weatherGlyphSize: weatherGlyphSize,
                                         weatherGlyphFrame: weatherGlyphFrame
@@ -3909,12 +3933,13 @@ struct DashboardView: View {
                                     weatherIndoorClimateRow(
                                         widgetID: widget.id,
                                         indoorAir: snapshot.indoorAir,
-                                        compact: compactWeatherHeader
+                                        compact: true
                                     )
                                 }
+                                .frame(maxWidth: .infinity, alignment: .leading)
                             }
 
-                            weatherStatusBadges(snapshot: snapshot, compact: tabletCompactWeatherGrid)
+                            weatherStatusBadges(snapshot: snapshot, compact: true)
                         }
                     } else {
                         HStack(alignment: .top, spacing: 12) {
@@ -3983,12 +4008,12 @@ struct DashboardView: View {
                         return Array(repeating: GridItem(.flexible(minimum: 0), spacing: metricGridSpacing, alignment: .top), count: 3)
                     }
                     if widget.size == .small {
-                        return [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
+                        return [GridItem(.flexible(minimum: 0), spacing: 10), GridItem(.flexible(minimum: 0), spacing: 10)]
                     }
                     if widget.size == .medium {
-                        return [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
+                        return [GridItem(.flexible(minimum: 0), spacing: 10), GridItem(.flexible(minimum: 0), spacing: 10)]
                     }
-                    return Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
+                    return Array(repeating: GridItem(.flexible(minimum: 0), spacing: 10), count: 4)
                 }()
 
                 if tabletCompactWeatherGrid {
@@ -4156,8 +4181,8 @@ struct DashboardView: View {
                 } else {
                     if let tempest = snapshot.tempest {
                         let tempestColumns: [GridItem] = condensed
-                            ? [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
-                            : Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
+                            ? [GridItem(.flexible(minimum: 0), spacing: 10), GridItem(.flexible(minimum: 0), spacing: 10)]
+                            : Array(repeating: GridItem(.flexible(minimum: 0), spacing: 10), count: 4)
 
                         LazyVGrid(columns: tempestColumns, spacing: 10) {
                             weatherInfoPopoverTrigger(
@@ -4366,7 +4391,10 @@ struct DashboardView: View {
     }
 
     private func weatherStatusBadges(snapshot: DashboardWeatherSnapshot, compact: Bool = false) -> some View {
-        VStack(alignment: .trailing, spacing: 6) {
+        let badgeAlignment: HorizontalAlignment = usesPortraitCompactLayout ? .leading : .trailing
+        let frameAlignment: Alignment = usesPortraitCompactLayout ? .leading : .trailing
+
+        return VStack(alignment: badgeAlignment, spacing: 6) {
             if compact {
                 if let tempest = snapshot.tempest {
                     HStack(spacing: 6) {
@@ -4407,7 +4435,7 @@ struct DashboardView: View {
 
             HBWeatherSyncCaption(value: snapshot.lastSyncedAt)
         }
-        .frame(maxWidth: .infinity, alignment: .trailing)
+        .frame(maxWidth: .infinity, alignment: frameAlignment)
     }
 
     private func weatherSourceBadge(text: String, compact: Bool = false) -> some View {
@@ -4801,7 +4829,7 @@ struct DashboardView: View {
                 )
             }
         }
-        .frame(maxWidth: .infinity, alignment: .trailing)
+        .frame(maxWidth: .infinity, alignment: usesPortraitCompactLayout ? .leading : .trailing)
     }
 
     @ViewBuilder
@@ -4821,7 +4849,7 @@ struct DashboardView: View {
                 weatherIndoorInline(snapshot: nil, compact: compact)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .trailing)
+        .frame(maxWidth: .infinity, alignment: usesPortraitCompactLayout ? .leading : .trailing)
     }
 
     private func weatherIndoorInline(snapshot: DashboardIndoorAirSnapshot?, compact: Bool) -> some View {
@@ -7141,13 +7169,32 @@ struct DashboardView: View {
 
     private func previewDashboardView() -> DashboardViewItem {
         var view = DashboardSupport.defaultView(name: "Preview Dashboard")
-        guard Self.previewDashboardFocus() == "security" else {
+        guard let focus = Self.previewDashboardFocus() else {
             return view
         }
 
-        let securityWidgets = view.widgets.filter { $0.type == .security }
-        if !securityWidgets.isEmpty {
-            view.widgets = securityWidgets + view.widgets.filter { $0.type != .security }
+        switch focus {
+        case "security":
+            let securityWidgets = view.widgets.filter { $0.type == .security }
+            if !securityWidgets.isEmpty {
+                view.widgets = securityWidgets + view.widgets.filter { $0.type != .security }
+            }
+        case "climate", "weather":
+            let weatherWidgets = view.widgets.filter { $0.type == .weather }
+            if weatherWidgets.isEmpty {
+                view.widgets = [
+                    DashboardSupport.makeWidget(
+                        type: .weather,
+                        title: "Climate",
+                        size: .medium,
+                        settings: DashboardWidgetSettings(weatherLocationMode: .auto)
+                    )
+                ] + view.widgets
+            } else {
+                view.widgets = weatherWidgets + view.widgets.filter { $0.type != .weather }
+            }
+        default:
+            break
         }
         return view
     }
@@ -7198,6 +7245,16 @@ struct DashboardView: View {
         default:
             return nil
         }
+    }
+
+    private static func previewWeatherSource() -> String? {
+        let processInfo = ProcessInfo.processInfo
+        if let index = processInfo.arguments.firstIndex(of: "-ui-preview-weather-source"),
+           processInfo.arguments.indices.contains(index + 1) {
+            return processInfo.arguments[index + 1].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+
+        return processInfo.environment["UI_PREVIEW_WEATHER_SOURCE"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     private func applySecurityStatusResponse(_ response: Any) {
