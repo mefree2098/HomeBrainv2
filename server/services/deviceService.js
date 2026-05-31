@@ -906,56 +906,122 @@ class DeviceService {
    * @returns {Promise<Object>} Deleted device
    */
   async deleteDevice(deviceId) {
+    console.log('DeviceService: Deleting device:', deviceId);
+
+    let existingDevice;
     try {
-      console.log('DeviceService: Deleting device:', deviceId);
-      
-      const deletedDevice = await Device.findByIdAndDelete(deviceId);
-      if (!deletedDevice) {
-        throw new Error('Device not found');
-      }
-      const deletedDeviceSnapshot = clonePlainObject(deletedDevice);
+      existingDevice = await Device.findById(deviceId);
+    } catch (error) {
+      console.error('DeviceService: Error finding device before delete:', error.message);
+      console.error(error.stack);
+      throw new Error('Failed to delete device');
+    }
 
-      let deletionCleanup;
-      try {
-        deletionCleanup = await this.cleanupDeletedDeviceReferences(deletedDeviceSnapshot);
-      } catch (cleanupError) {
-        deletionCleanup = createDeletionCleanupSummary();
-        recordDeletionCleanupError(deletionCleanup, 'cleanupDeletedDeviceReferences', cleanupError, {
-          deviceId: normalizeIdString(deletedDeviceSnapshot?._id)
-        });
-      }
+    if (!existingDevice) {
+      console.log('DeviceService: Device not found for delete:', deviceId);
+      throw new Error('Device not found');
+    }
 
+    let deletedDeviceSnapshot = clonePlainObject(existingDevice);
+    let deletionCleanup = createDeletionCleanupSummary();
+    let directRadioCleanupAttempted = false;
+
+    try {
+      const directRadioCleanup = await this.cleanupDeletedDirectRadioDevice(deletedDeviceSnapshot);
+      if (directRadioCleanup) {
+        deletionCleanup.directRadio = directRadioCleanup;
+        directRadioCleanupAttempted = true;
+      }
+    } catch (cleanupError) {
+      recordDeletionCleanupError(deletionCleanup, 'cleanupDeletedDirectRadioDevice', cleanupError, {
+        deviceId: normalizeIdString(deletedDeviceSnapshot?._id),
+        ieeeAddr: normalizeIdString(deletedDeviceSnapshot?.properties?.homebrainDirect?.ieeeAddr) || undefined,
+        phase: 'before_database_delete'
+      });
+      const error = new Error(
+        `Failed to remove Zigbee device from coordinator before deleting database record: ${cleanupError.message}`
+      );
+      error.status = cleanupError.status || 502;
+      error.deletionCleanup = deletionCleanup;
+      throw error;
+    }
+
+    let deletedDevice;
+    try {
+      deletedDevice = await Device.findByIdAndDelete(deviceId);
+    } catch (error) {
+      console.error('DeviceService: Error deleting device row:', error.message);
+      console.error(error.stack);
+      const wrapped = new Error('Failed to delete device');
+      wrapped.deletionCleanup = deletionCleanup;
+      throw wrapped;
+    }
+
+    if (!deletedDevice) {
+      console.log('DeviceService: Device disappeared during delete:', deviceId);
+      return {
+        ...deletedDeviceSnapshot,
+        deletionCleanup: {
+          ...deletionCleanup,
+          alreadyDeleted: true
+        }
+      };
+    }
+
+    try {
+      deletedDeviceSnapshot = clonePlainObject(deletedDevice);
+    } catch (snapshotError) {
+      recordDeletionCleanupError(deletionCleanup, 'deletedDeviceSnapshot', snapshotError, {
+        deviceId: normalizeIdString(deviceId)
+      });
+    }
+
+    try {
+      const referenceCleanup = await this.cleanupDeletedDeviceReferences(deletedDeviceSnapshot);
+      const preexistingCleanupErrors = Array.isArray(deletionCleanup.cleanupErrors)
+        ? deletionCleanup.cleanupErrors
+        : [];
+      deletionCleanup = {
+        ...deletionCleanup,
+        ...referenceCleanup,
+        directRadio: deletionCleanup.directRadio,
+        cleanupErrors: [
+          ...preexistingCleanupErrors,
+          ...(Array.isArray(referenceCleanup?.cleanupErrors) ? referenceCleanup.cleanupErrors : [])
+        ]
+      };
+    } catch (cleanupError) {
+      recordDeletionCleanupError(deletionCleanup, 'cleanupDeletedDeviceReferences', cleanupError, {
+        deviceId: normalizeIdString(deletedDeviceSnapshot?._id)
+      });
+    }
+
+    if (!directRadioCleanupAttempted) {
       try {
         deletionCleanup.directRadio = await this.cleanupDeletedDirectRadioDevice(deletedDeviceSnapshot);
       } catch (cleanupError) {
         recordDeletionCleanupError(deletionCleanup, 'cleanupDeletedDirectRadioDevice', cleanupError, {
           deviceId: normalizeIdString(deletedDeviceSnapshot?._id),
-          ieeeAddr: normalizeIdString(deletedDeviceSnapshot?.properties?.homebrainDirect?.ieeeAddr) || undefined
+          ieeeAddr: normalizeIdString(deletedDeviceSnapshot?.properties?.homebrainDirect?.ieeeAddr) || undefined,
+          phase: 'after_database_delete'
         });
       }
-
-      const deletedDeviceResult = {
-        ...deletedDeviceSnapshot,
-        deletionCleanup
-      };
-
-      const cleanupErrorCount = Array.isArray(deletedDeviceResult.deletionCleanup?.cleanupErrors)
-        ? deletedDeviceResult.deletionCleanup.cleanupErrors.length
-        : 0;
-      if (cleanupErrorCount > 0) {
-        console.warn('DeviceService: Deleted device with cleanup warnings:', deletedDeviceResult.name, deletedDeviceResult.deletionCleanup.cleanupErrors);
-      }
-      
-      console.log('DeviceService: Successfully deleted device:', deletedDeviceResult.name, deletedDeviceResult.deletionCleanup);
-      return deletedDeviceResult;
-    } catch (error) {
-      console.error('DeviceService: Error deleting device:', error.message);
-      console.error(error.stack);
-      if (error.message === 'Device not found') {
-        throw error;
-      }
-      throw new Error('Failed to delete device');
     }
+
+    const deletedDeviceResult = {
+      ...deletedDeviceSnapshot,
+      deletionCleanup
+    };
+
+    const cleanupErrorCount = Array.isArray(deletedDeviceResult.deletionCleanup?.cleanupErrors)
+      ? deletedDeviceResult.deletionCleanup.cleanupErrors.length
+      : 0;
+    if (cleanupErrorCount > 0) {
+      console.warn('DeviceService: Deleted device with cleanup warnings:', deletedDeviceResult.name, deletedDeviceResult.deletionCleanup.cleanupErrors);
+    }
+
+    console.log('DeviceService: Successfully deleted device:', deletedDeviceResult.name, deletedDeviceResult.deletionCleanup);
+    return deletedDeviceResult;
   }
 
   /**
