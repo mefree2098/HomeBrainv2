@@ -13,6 +13,7 @@ const EventStreamEvent = require('../models/EventStreamEvent');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const directRadioEngineLogService = require('./directRadioEngineLogService');
 const eventStreamService = require('./eventStreamService');
+const smartThingsService = require('./smartThingsService');
 const {
   DIRECT_RADIO_SOURCES,
   buildDirectFeatureProperties,
@@ -666,6 +667,86 @@ async repairMigratedSmartThingsIdentities() {
     return repaired;
   },
 
+async deleteSmartThingsDeviceAfterNativeMigration(directDevice, smartThingsDeviceId, context = {}) {
+    const directDeviceId = getDeviceIdString(directDevice);
+    const smartThingsMigration = getSmartThingsMigration(directDevice) || {};
+    const safeSmartThingsDeviceId = trimString(
+      smartThingsDeviceId
+      || smartThingsMigration.smartThingsDeviceId
+      || getDeviceProperties(directDevice).smartThingsDeviceId
+    );
+    if (!directDeviceId || !safeSmartThingsDeviceId) {
+      return { status: 'skipped', device: directDevice || null };
+    }
+
+    const updateMigrationState = async (fields = {}) => {
+      const baseProperties = getDeviceProperties(directDevice);
+      const nextProperties = {
+        ...baseProperties,
+        smartThingsMigration: {
+          ...(baseProperties.smartThingsMigration && typeof baseProperties.smartThingsMigration === 'object'
+            ? baseProperties.smartThingsMigration
+            : {}),
+          smartThingsDeviceId: safeSmartThingsDeviceId,
+          ...fields
+        }
+      };
+      const updated = await Device.findByIdAndUpdate(directDeviceId, {
+        properties: this.severMigratedSmartThingsIdentity(nextProperties),
+        updatedAt: new Date()
+      }, { returnDocument: 'after', runValidators: true });
+      return updated || directDevice;
+    };
+
+    const deletedAt = new Date().toISOString();
+    try {
+      await smartThingsService.deleteDevice(safeSmartThingsDeviceId);
+      const updated = await updateMigrationState({
+        smartThingsDeleteStatus: 'deleted',
+        smartThingsDeletedAt: deletedAt,
+        smartThingsDeleteReason: trimString(context.reason) || 'native_migration_finalized',
+        smartThingsDeleteError: null,
+        smartThingsDeleteFailedAt: null
+      });
+      this.log('info', 'smartthings', 'Deleted SmartThings device after native migration', {
+        smartThingsDeviceId: safeSmartThingsDeviceId,
+        directDeviceId,
+        migrationId: trimString(context.migrationId) || smartThingsMigration.migrationId || null
+      });
+      return { status: 'deleted', device: updated, deletedAt };
+    } catch (error) {
+      if (isSmartThingsDeviceGoneError(error)) {
+        const updated = await updateMigrationState({
+          smartThingsDeleteStatus: 'already_gone',
+          smartThingsDeletedAt: deletedAt,
+          smartThingsDeleteReason: trimString(context.reason) || 'native_migration_finalized',
+          smartThingsDeleteError: null,
+          smartThingsDeleteFailedAt: null
+        });
+        this.log('info', 'smartthings', 'SmartThings device was already gone after native migration', {
+          smartThingsDeviceId: safeSmartThingsDeviceId,
+          directDeviceId,
+          migrationId: trimString(context.migrationId) || smartThingsMigration.migrationId || null
+        });
+        return { status: 'already_gone', device: updated, deletedAt };
+      }
+
+      const failedAt = new Date().toISOString();
+      const updated = await updateMigrationState({
+        smartThingsDeleteStatus: 'failed',
+        smartThingsDeleteFailedAt: failedAt,
+        smartThingsDeleteError: error.message || 'Failed to delete SmartThings device'
+      });
+      this.log('warn', 'smartthings', 'Failed to delete SmartThings device after native migration', {
+        smartThingsDeviceId: safeSmartThingsDeviceId,
+        directDeviceId,
+        migrationId: trimString(context.migrationId) || smartThingsMigration.migrationId || null,
+        error: error.message
+      });
+      return { status: 'failed', device: updated, error };
+    }
+  },
+
 async completeMigration(migrationId, identity, update) {
     const migration = this.activeMigrations.get(migrationId);
     if (!migration?.sourceDeviceId) {
@@ -737,7 +818,7 @@ async completeMigration(migrationId, identity, update) {
       }
     };
 
-    const updated = await Device.findByIdAndUpdate(existing._id, {
+    let updated = await Device.findByIdAndUpdate(existing._id, {
       status: update.status,
       brightness: update.brightness,
       isOnline: update.isOnline !== false,
@@ -761,6 +842,15 @@ async completeMigration(migrationId, identity, update) {
       identity: identity.id,
       validation
     });
+    const smartThingsDeletion = await this.deleteSmartThingsDeviceAfterNativeMigration(
+      updated || existing,
+      previousProperties.smartThingsDeviceId,
+      {
+        migrationId,
+        reason: 'active_migration_completed'
+      }
+    );
+    updated = smartThingsDeletion.device || updated;
     this.emitDeviceUpdate(updated);
     return updated;
   },
@@ -1011,7 +1101,7 @@ async finalizeDeviceMigration({ deviceId, migrationId, reason } = {}) {
       }
     };
 
-    const updated = await Device.findByIdAndUpdate(device._id, {
+    let updated = await Device.findByIdAndUpdate(device._id, {
       temperature: device.temperature,
       properties: this.severMigratedSmartThingsIdentity(nextProperties),
       isOnline: device.isOnline !== false,
@@ -1024,6 +1114,15 @@ async finalizeDeviceMigration({ deviceId, migrationId, reason } = {}) {
         validation: nextProperties.smartThingsMigration.validation
       }, nextProperties.smartThingsMigration)
       : null;
+    const smartThingsDeletion = await this.deleteSmartThingsDeviceAfterNativeMigration(
+      updated || device,
+      nextProperties.smartThingsMigration.smartThingsDeviceId,
+      {
+        migrationId: nextProperties.smartThingsMigration.migrationId,
+        reason: 'native_migration_finalized'
+      }
+    );
+    updated = smartThingsDeletion.device || updated;
 
     this.log('info', protocol, 'SmartThings migration finalized on direct radio', {
       deviceId: updated?._id?.toString?.() || safeDeviceId,

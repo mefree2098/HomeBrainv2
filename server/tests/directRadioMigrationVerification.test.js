@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const directRadioService = require('../services/directRadioService');
 const Device = require('../models/Device');
+const smartThingsService = require('../services/smartThingsService');
 
 const DirectRadioService = directRadioService.DirectRadioService;
 const {
@@ -788,6 +789,7 @@ test('direct radio migration finalization persists passed validation for native 
 
   const originalFindById = Device.findById;
   const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalDeleteDevice = smartThingsService.deleteDevice;
   const device = {
     _id: {
       toString: () => DEVICE_ID
@@ -819,6 +821,7 @@ test('direct radio migration finalization persists passed validation for native 
     }
   };
   let persistedUpdate = null;
+  const deletedSmartThingsDeviceIds = [];
   Device.findById = async () => device;
   Device.findByIdAndUpdate = async (_id, update) => {
     persistedUpdate = update;
@@ -827,6 +830,10 @@ test('direct radio migration finalization persists passed validation for native 
       ...update,
       properties: update.properties
     };
+  };
+  smartThingsService.deleteDevice = async (deviceId) => {
+    deletedSmartThingsDeviceIds.push(deviceId);
+    return {};
   };
 
   try {
@@ -842,9 +849,97 @@ test('direct radio migration finalization persists passed validation for native 
     assert.equal(persistedUpdate.properties.smartThingsMigration.validation.status, 'passed');
     assert.equal(persistedUpdate.properties.smartThingsMigration.validation.finalized, true);
     assert.ok(persistedUpdate.properties.smartThingsMigration.finalizedAt);
+    assert.equal(persistedUpdate.properties.smartThingsMigration.smartThingsDeleteStatus, 'deleted');
+    assert.ok(persistedUpdate.properties.smartThingsMigration.smartThingsDeletedAt);
+    assert.deepEqual(deletedSmartThingsDeviceIds, ['smartthings-device-1']);
   } finally {
     Device.findById = originalFindById;
     Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    smartThingsService.deleteDevice = originalDeleteDevice;
+  }
+});
+
+test('active direct radio migration deletes the old SmartThings device after native pairing completes', async () => {
+  const service = createService();
+  service.emitDeviceUpdate = () => {};
+
+  const originalFindById = Device.findById;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalDeleteDevice = smartThingsService.deleteDevice;
+  const migration = {
+    id: 'migration-active-delete',
+    sourceDeviceId: DEVICE_ID,
+    protocol: 'zigbee',
+    status: 'pairing',
+    expiresAt: Date.now() + 60_000,
+    startedAt: new Date().toISOString()
+  };
+  const sourceDevice = {
+    _id: {
+      toString: () => DEVICE_ID
+    },
+    name: 'Vault Overhead Lights',
+    type: 'switch',
+    room: 'Vault',
+    status: true,
+    isOnline: true,
+    brand: 'SmartThingsCommunity',
+    model: 'SmartThings Switch',
+    properties: {
+      source: 'smartthings',
+      smartThingsDeviceId: 'smartthings-active-delete',
+      smartThingsCapabilities: ['switch', 'refresh'],
+      smartThingsDeviceNetworkType: 'ZIGBEE'
+    }
+  };
+  const persistedUpdates = [];
+  const deletedSmartThingsDeviceIds = [];
+  service.activeMigrations.set(migration.id, migration);
+  Device.findById = async () => sourceDevice;
+  Device.findByIdAndUpdate = async (_id, update) => {
+    persistedUpdates.push(update);
+    return {
+      ...sourceDevice,
+      ...update,
+      _id: DEVICE_ID,
+      properties: update.properties
+    };
+  };
+  smartThingsService.deleteDevice = async (deviceId) => {
+    deletedSmartThingsDeviceIds.push(deviceId);
+    return {};
+  };
+
+  try {
+    const updated = await service.completeMigration(migration.id, {
+      protocol: 'zigbee',
+      id: '0x5c0272fffeadf493'
+    }, {
+      status: true,
+      brightness: 100,
+      isOnline: true,
+      brand: 'Innr',
+      model: 'SP 224',
+      properties: {
+        source: 'homebrain-zigbee',
+        homebrainDirect: {
+          protocol: 'zigbee',
+          ieeeAddr: '0x5c0272fffeadf493'
+        },
+        directRadioFeatures: ['switch']
+      }
+    });
+
+    assert.equal(updated.properties.source, 'homebrain-zigbee');
+    assert.equal(updated.properties.smartThingsDeviceId, undefined);
+    assert.equal(updated.properties.smartThingsMigration.smartThingsDeleteStatus, 'deleted');
+    assert.deepEqual(deletedSmartThingsDeviceIds, ['smartthings-active-delete']);
+    assert.equal(migration.status, 'completed');
+    assert.equal(persistedUpdates.at(-1).properties.smartThingsMigration.smartThingsDeletedAt !== undefined, true);
+  } finally {
+    Device.findById = originalFindById;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    smartThingsService.deleteDevice = originalDeleteDevice;
   }
 });
 
@@ -855,6 +950,7 @@ test('direct radio migration finalization recovers detached SmartThings source a
   const originalFindById = Device.findById;
   const originalFind = Device.find;
   const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalDeleteDevice = smartThingsService.deleteDevice;
   const directDevice = {
     _id: DEVICE_ID,
     name: 'Vault Door Sensor',
@@ -917,6 +1013,7 @@ test('direct radio migration finalization recovers detached SmartThings source a
     }
   };
   const persistedUpdates = [];
+  const deletedSmartThingsDeviceIds = [];
   Device.findById = async (id) => (String(id) === DEVICE_ID ? directDevice : null);
   Device.find = async () => [sourceDevice];
   Device.findByIdAndUpdate = async (id, update) => {
@@ -928,6 +1025,10 @@ test('direct radio migration finalization recovers detached SmartThings source a
       _id: String(id),
       properties: update.properties
     };
+  };
+  smartThingsService.deleteDevice = async (deviceId) => {
+    deletedSmartThingsDeviceIds.push(deviceId);
+    return {};
   };
 
   try {
@@ -946,10 +1047,14 @@ test('direct radio migration finalization recovers detached SmartThings source a
     assert.equal(sourceUpdate.properties.smartThingsMigration.retiredSource, true);
     assert.equal(sourceUpdate.properties.smartThingsMigration.status, 'finalized_source');
     assert.equal(sourceUpdate.properties.smartThingsMigration.directDeviceId, DEVICE_ID);
+    const deleteUpdate = persistedUpdates.filter((entry) => entry.id === DEVICE_ID).at(-1)?.update;
+    assert.equal(deleteUpdate.properties.smartThingsMigration.smartThingsDeleteStatus, 'deleted');
+    assert.deepEqual(deletedSmartThingsDeviceIds, ['decc41de-30d6-4eac-96d9-82ff3b4e7f05']);
   } finally {
     Device.findById = originalFindById;
     Device.find = originalFind;
     Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    smartThingsService.deleteDevice = originalDeleteDevice;
   }
 });
 
