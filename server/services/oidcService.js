@@ -22,6 +22,12 @@ const {
 
 const DEFAULT_CLIENT_ID = 'homebrain-axiom';
 const DEFAULT_AUDIOBOOK_CLIENT_ID = 'homebrain-audiobook';
+const DEFAULT_AGENTOPS_CLIENT_ID = 'homebrain-agentops';
+const DEFAULT_AGENTOPS_REDIRECT_URIS = Object.freeze([
+  'http://127.0.0.1:4380/auth/callback',
+  'http://localhost:4380/auth/callback',
+  'http://192.168.1.42:4380/auth/callback'
+]);
 const CODE_TTL_MS = Math.max(60 * 1000, Number(process.env.OIDC_CODE_TTL_MS || 5 * 60 * 1000));
 const TOKEN_TTL_SECONDS = Math.max(300, Number(process.env.OIDC_TOKEN_TTL_SECONDS || 60 * 60));
 const SUPPORTED_SCOPES = Object.freeze(['openid', 'profile', 'email']);
@@ -84,12 +90,21 @@ function getAudiobookClientId() {
   return trimString(process.env.OIDC_AUDIOBOOK_CLIENT_ID) || DEFAULT_AUDIOBOOK_CLIENT_ID;
 }
 
+function getAgentOpsClientId() {
+  return trimString(process.env.OIDC_AGENTOPS_CLIENT_ID) || DEFAULT_AGENTOPS_CLIENT_ID;
+}
+
 function deriveAxiomRedirectUri() {
   return getAxiomCallbackUrl();
 }
 
 function deriveAudiobookRedirectUri() {
   return getAudiobookCallbackUrl();
+}
+
+function deriveAgentOpsRedirectUris() {
+  const configuredUris = uniqueStrings(String(process.env.OIDC_AGENTOPS_REDIRECT_URIS || '').split(','));
+  return configuredUris.length > 0 ? configuredUris : [...DEFAULT_AGENTOPS_REDIRECT_URIS];
 }
 
 function buildStandardClaims(user) {
@@ -149,8 +164,12 @@ async function getProviderSettings() {
   return OIDCProviderSettings.getSettings();
 }
 
-async function ensureManagedClient(summary, { clientId, redirectUri, name, platform, actor }) {
-  if (!clientId || !redirectUri) {
+async function ensureManagedClient(summary, { clientId, redirectUri, redirectUris, name, platform, actor }) {
+  const desiredRedirectUris = uniqueStrings([
+    ...(Array.isArray(redirectUris) ? redirectUris : []),
+    redirectUri
+  ]);
+  if (!clientId || desiredRedirectUris.length === 0) {
     return;
   }
 
@@ -161,7 +180,7 @@ async function ensureManagedClient(summary, { clientId, redirectUri, name, platf
       name,
       platform,
       enabled: true,
-      redirectUris: [redirectUri],
+      redirectUris: desiredRedirectUris,
       scopes: [...SUPPORTED_SCOPES],
       requirePkce: true,
       tokenEndpointAuthMethod: 'none',
@@ -172,9 +191,10 @@ async function ensureManagedClient(summary, { clientId, redirectUri, name, platf
   }
 
   let clientDirty = false;
-  const redirectUris = uniqueStrings(client.redirectUris || []);
-  if (!redirectUris.includes(redirectUri)) {
-    client.redirectUris = [...redirectUris, redirectUri];
+  const currentRedirectUris = uniqueStrings(client.redirectUris || []);
+  const missingRedirectUris = desiredRedirectUris.filter((uri) => !currentRedirectUris.includes(uri));
+  if (missingRedirectUris.length > 0) {
+    client.redirectUris = [...currentRedirectUris, ...missingRedirectUris];
     clientDirty = true;
     summary.updatedClients.push(`${clientId}:redirectUris`);
   }
@@ -269,6 +289,14 @@ async function ensureBootstrapState({ actor = 'system:oidc-bootstrap' } = {}) {
     redirectUri: deriveAudiobookRedirectUri(),
     name: 'Audiobook Studio',
     platform: 'audiobook',
+    actor
+  });
+
+  await ensureManagedClient(summary, {
+    clientId: getAgentOpsClientId(),
+    redirectUris: deriveAgentOpsRedirectUris(),
+    name: 'Perpetual AgentOps',
+    platform: 'homebrain',
     actor
   });
 
@@ -715,6 +743,7 @@ async function handleUserInfo(req, res) {
 module.exports = {
   DEFAULT_CLIENT_ID,
   DEFAULT_AUDIOBOOK_CLIENT_ID,
+  DEFAULT_AGENTOPS_CLIENT_ID,
   SUPPORTED_SCOPES,
   buildDiscoveryDocument,
   buildJwks,
