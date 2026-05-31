@@ -339,6 +339,10 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
     .map(normalizeFeature)
     .filter(Boolean);
   const inferredExistingDirectFeatures = inferFeaturesFromExistingDirectRecord(existing);
+  const updateSource = normalizeSourceText(updateProperties.source);
+  const updateProtocol = normalizeSourceText(updateProperties.homebrainDirect?.protocol);
+  const clearsIncompleteZigbeeRuntime = updateDirect.incomplete === true
+    && (updateSource === DIRECT_RADIO_SOURCES.zigbee || updateProtocol === 'zigbee');
 
   const generatedName = trimString(update.name);
   const generatedRoom = normalizeDirectRoom(update.room);
@@ -369,32 +373,43 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
     properties: {
       ...existingProperties,
       ...updateProperties,
-      directRadioState: {
-        ...(existingProperties.directRadioState && typeof existingProperties.directRadioState === 'object'
-          ? existingProperties.directRadioState
-          : {}),
-        ...(updateProperties.directRadioState && typeof updateProperties.directRadioState === 'object'
-          ? updateProperties.directRadioState
-          : {})
-      },
+      directRadioState: clearsIncompleteZigbeeRuntime
+        ? {
+            ...(updateProperties.directRadioState && typeof updateProperties.directRadioState === 'object'
+              ? updateProperties.directRadioState
+              : {})
+          }
+        : {
+            ...(existingProperties.directRadioState && typeof existingProperties.directRadioState === 'object'
+              ? existingProperties.directRadioState
+              : {}),
+            ...(updateProperties.directRadioState && typeof updateProperties.directRadioState === 'object'
+              ? updateProperties.directRadioState
+              : {})
+          },
       homebrainDirect: mergedDirect
     }
   };
-  if ((updateProperties.directRadioCatalog === null || updateProperties.directRadioCatalog === undefined)
+  if (!clearsIncompleteZigbeeRuntime
+    && (updateProperties.directRadioCatalog === null || updateProperties.directRadioCatalog === undefined)
     && existingProperties.directRadioCatalog) {
     merged.properties.directRadioCatalog = existingProperties.directRadioCatalog;
   }
   if (Object.keys(merged.properties.directRadioState).length === 0) {
     delete merged.properties.directRadioState;
   }
+  if (clearsIncompleteZigbeeRuntime) {
+    delete merged.properties.directRadioCatalog;
+    delete merged.properties.homeBrainBatteryLevel;
+    delete merged.properties.batteryLevel;
+    delete merged.properties.batteryLow;
+  }
   let mergedFeatures = uniqueStrings([
     ...updateFeatures,
-    ...existingFeatures,
-    ...inferredSmartThingsFeatures,
-    ...inferredExistingDirectFeatures
+    ...(clearsIncompleteZigbeeRuntime ? [] : existingFeatures),
+    ...(clearsIncompleteZigbeeRuntime ? [] : inferredSmartThingsFeatures),
+    ...(clearsIncompleteZigbeeRuntime ? [] : inferredExistingDirectFeatures)
   ]).sort();
-  const updateSource = normalizeSourceText(updateProperties.source);
-  const updateProtocol = normalizeSourceText(updateProperties.homebrainDirect?.protocol);
   const updateIsZWaveLock = (updateSource === DIRECT_RADIO_SOURCES.zwave || updateProtocol === 'zwave')
     && updateFeatures.includes('lock');
   if (updateIsZWaveLock && !updateFeatures.includes('lockCodes')) {
@@ -407,6 +422,13 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
       mergedDirect.protocol || updateProperties.source || existingProperties.source || 'unknown'
     );
     Object.assign(merged.properties, buildDirectFeatureProperties(mergedFeatures));
+  } else if (clearsIncompleteZigbeeRuntime) {
+    merged.properties.directRadioFeatures = [];
+    merged.properties.directRadioCapabilities = buildNormalizedCapabilities(
+      [],
+      mergedDirect.protocol || updateProperties.source || existingProperties.source || 'unknown'
+    );
+    Object.assign(merged.properties, buildDirectFeatureProperties([]));
   }
   if (updateIsZWaveLock && !updateFeatures.includes('lockCodes')) {
     merged.properties.supportsLockCodes = false;
