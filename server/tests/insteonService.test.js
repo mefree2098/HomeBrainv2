@@ -1820,6 +1820,87 @@ test('_selectRuntimePollBatch rotates across the tracked Insteon inventory inste
   );
 });
 
+test('_pollTrackedDeviceStates gives online devices the first runtime polling slots', async (t) => {
+  const originalDeviceFind = Device.find;
+  const originalQueryLevel = insteonService._queryDeviceLevelByAddress;
+  const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
+  const originalHasPendingHigherPriorityPlmOperation = insteonService._hasPendingHigherPriorityPlmOperation;
+  const originalBatchSize = insteonService._runtimeMonitoringBatchSize;
+  const originalIntervalMs = insteonService._runtimeMonitoringIntervalMs;
+  const originalPollTimeoutMs = insteonService._runtimeStatePollTimeoutMs;
+  const originalPollPauseMs = insteonService._runtimeStatePollPauseMs;
+  const originalCursor = insteonService._runtimeMonitoringCursor;
+  const originalPollMetadata = insteonService._runtimePollMetadata;
+
+  t.after(() => {
+    Device.find = originalDeviceFind;
+    insteonService._queryDeviceLevelByAddress = originalQueryLevel;
+    insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
+    insteonService._hasPendingHigherPriorityPlmOperation = originalHasPendingHigherPriorityPlmOperation;
+    insteonService._runtimeMonitoringBatchSize = originalBatchSize;
+    insteonService._runtimeMonitoringIntervalMs = originalIntervalMs;
+    insteonService._runtimeStatePollTimeoutMs = originalPollTimeoutMs;
+    insteonService._runtimeStatePollPauseMs = originalPollPauseMs;
+    insteonService._runtimeMonitoringCursor = originalCursor;
+    insteonService._runtimePollMetadata = originalPollMetadata;
+  });
+
+  Device.find = async () => [
+    {
+      _id: 'offline-1',
+      name: 'Offline Switch 1',
+      type: 'switch',
+      isOnline: false,
+      status: false,
+      properties: { source: 'insteon', insteonAddress: '11.11.11' }
+    },
+    {
+      _id: 'offline-2',
+      name: 'Offline Switch 2',
+      type: 'switch',
+      isOnline: false,
+      status: false,
+      properties: { source: 'insteon', insteonAddress: '22.22.22' }
+    },
+    {
+      _id: 'online-1',
+      name: 'Online Switch 1',
+      type: 'switch',
+      isOnline: true,
+      status: false,
+      properties: { source: 'insteon', insteonAddress: '33.33.33' }
+    },
+    {
+      _id: 'online-2',
+      name: 'Online Switch 2',
+      type: 'switch',
+      isOnline: true,
+      status: false,
+      properties: { source: 'insteon', insteonAddress: '44.44.44' }
+    }
+  ];
+
+  insteonService._runtimeMonitoringBatchSize = 2;
+  insteonService._runtimeMonitoringIntervalMs = 30000;
+  insteonService._runtimeStatePollTimeoutMs = 2500;
+  insteonService._runtimeStatePollPauseMs = 0;
+  insteonService._runtimeMonitoringCursor = 0;
+  insteonService._runtimePollMetadata = new Map();
+  insteonService._hasPendingHigherPriorityPlmOperation = () => false;
+  insteonService._persistDeviceRuntimeStateByAddress = async () => ({});
+
+  const queriedAddresses = [];
+  insteonService._queryDeviceLevelByAddress = async (address) => {
+    queriedAddresses.push(address);
+    return 0;
+  };
+
+  const summary = await insteonService._pollTrackedDeviceStates();
+
+  assert.equal(summary.scanned, 2);
+  assert.deepEqual(queriedAddresses, ['333333', '444444']);
+});
+
 test('_runRuntimeMonitoringPass also tracks address-only Insteon devices without source metadata', async (t) => {
   const originalFind = Device.find;
   const originalQueryLevelByAddress = insteonService._queryDeviceLevelByAddress;
@@ -2135,6 +2216,69 @@ test('_runRuntimeMonitoringPass defers polling when higher-priority PLM work is 
     reject: () => {}
   }];
   insteonService._activePlmOperation = null;
+
+  await insteonService._runRuntimeMonitoringPass('test');
+
+  assert.equal(queryCalls, 0);
+});
+
+test('_runRuntimeMonitoringPass defers polling while a control command is waiting for runtime acknowledgement', async (t) => {
+  const originalFind = Device.find;
+  const originalQueryLevelByAddress = insteonService._queryDeviceLevelByAddress;
+  const originalIsConnected = insteonService.isConnected;
+  const originalHub = insteonService.hub;
+  const originalMonitoringStarted = insteonService._runtimeMonitoringStarted;
+  const originalMonitoringInProgress = insteonService._runtimeMonitoringInProgress;
+  const originalPollMetadata = insteonService._runtimePollMetadata;
+  const originalStaleAfterMs = insteonService._runtimeMonitoringStaleAfterMs;
+  const originalOfflineStaleAfterMs = insteonService._runtimeMonitoringOfflineStaleAfterMs;
+  const originalBatchSize = insteonService._runtimeMonitoringBatchSize;
+  const originalScheduleRuntimeMonitoringPass = insteonService._scheduleRuntimeMonitoringPass;
+  const originalPendingRuntimeCommandAcks = insteonService._pendingRuntimeCommandAcks;
+
+  t.after(() => {
+    Device.find = originalFind;
+    insteonService._queryDeviceLevelByAddress = originalQueryLevelByAddress;
+    insteonService.isConnected = originalIsConnected;
+    insteonService.hub = originalHub;
+    insteonService._runtimeMonitoringStarted = originalMonitoringStarted;
+    insteonService._runtimeMonitoringInProgress = originalMonitoringInProgress;
+    insteonService._runtimePollMetadata = originalPollMetadata;
+    insteonService._runtimeMonitoringStaleAfterMs = originalStaleAfterMs;
+    insteonService._runtimeMonitoringOfflineStaleAfterMs = originalOfflineStaleAfterMs;
+    insteonService._runtimeMonitoringBatchSize = originalBatchSize;
+    insteonService._scheduleRuntimeMonitoringPass = originalScheduleRuntimeMonitoringPass;
+    insteonService._pendingRuntimeCommandAcks = originalPendingRuntimeCommandAcks;
+  });
+
+  let queryCalls = 0;
+  Device.find = async () => ([{
+    _id: 'device-ack-wait',
+    type: 'light',
+    status: true,
+    brightness: 100,
+    isOnline: true,
+    properties: {
+      source: 'insteon',
+      insteonAddress: '11.22.33'
+    }
+  }]);
+  insteonService._queryDeviceLevelByAddress = async () => {
+    queryCalls += 1;
+    return 100;
+  };
+  insteonService._scheduleRuntimeMonitoringPass = () => {};
+  insteonService.isConnected = true;
+  insteonService.hub = {};
+  insteonService._runtimeMonitoringStarted = true;
+  insteonService._runtimeMonitoringInProgress = false;
+  insteonService._runtimePollMetadata = new Map();
+  insteonService._runtimeMonitoringStaleAfterMs = 0;
+  insteonService._runtimeMonitoringOfflineStaleAfterMs = 0;
+  insteonService._runtimeMonitoringBatchSize = 10;
+  insteonService._pendingRuntimeCommandAcks = new Map([
+    ['112233:off', [{ resolve: () => {}, cancel: () => {} }]]
+  ]);
 
   await insteonService._runRuntimeMonitoringPass('test');
 
