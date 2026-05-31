@@ -943,6 +943,9 @@ struct DashboardView: View {
         }
         return useLandscapeCompactLayout ? 8 : 12
     }
+    private var dashboardWidgetPanelHorizontalPadding: CGFloat {
+        useLandscapeCompactLayout ? 14 : 18
+    }
     private var layoutWidth: CGFloat {
         max(contentWidth - (dashboardOuterPadding * 2), 0)
     }
@@ -1301,6 +1304,8 @@ struct DashboardView: View {
 
     var body: some View {
         GeometryReader { proxy in
+            let dashboardContentWidth = max(proxy.size.width - (dashboardOuterPadding * 2), 1)
+
             Group {
                 if isLoading {
                     LoadingView(title: "Loading dashboard...")
@@ -1331,7 +1336,7 @@ struct DashboardView: View {
                             } else if dashboardGridColumnCount == 1 {
                                 VStack(alignment: .leading, spacing: 12) {
                                     ForEach(Array(currentDashboardWidgets.enumerated()), id: \.element.id) { index, widget in
-                                        dashboardWidgetPanel(widget, index: index)
+                                        dashboardWidgetPanel(widget, index: index, availableWidth: dashboardContentWidth)
                                             .frame(maxWidth: .infinity, alignment: .topLeading)
                                     }
                                 }
@@ -1341,7 +1346,15 @@ struct DashboardView: View {
                                     ForEach(dashboardWidgetRows) { row in
                                         GridRow(alignment: .top) {
                                             ForEach(row.items) { item in
-                                                dashboardWidgetPanel(item.widget, index: item.index)
+                                                dashboardWidgetPanel(
+                                                    item.widget,
+                                                    index: item.index,
+                                                    availableWidth: dashboardGridItemWidth(
+                                                        totalWidth: dashboardContentWidth,
+                                                        span: item.span,
+                                                        columnCount: dashboardGridColumnCount
+                                                    )
+                                                )
                                                     .gridCellColumns(item.span)
                                             }
                                         }
@@ -1350,7 +1363,7 @@ struct DashboardView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             }
-                            .frame(width: max(proxy.size.width - (dashboardOuterPadding * 2), 1), alignment: .topLeading)
+                            .frame(width: dashboardContentWidth, alignment: .topLeading)
                             .padding(dashboardOuterPadding)
                             .padding(.bottom, 8)
                         }
@@ -1460,8 +1473,12 @@ struct DashboardView: View {
         return widget.title
     }
 
-    private func dashboardWidgetPanel(_ widget: DashboardWidgetItem, index: Int) -> some View {
-        HBPanel {
+    private func dashboardWidgetPanel(_ widget: DashboardWidgetItem, index: Int, availableWidth: CGFloat? = nil) -> some View {
+        let constrainedContentWidth = availableWidth.map {
+            max($0 - (dashboardWidgetPanelHorizontalPadding * 2), 1)
+        }
+
+        return HBPanel {
             VStack(alignment: .leading, spacing: 12) {
                 if usesCompactWidgetToolbar {
                     VStack(alignment: .leading, spacing: 10) {
@@ -1539,8 +1556,17 @@ struct DashboardView: View {
                         .frame(minHeight: minimumHeight(for: widget.size), alignment: .topLeading)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(width: constrainedContentWidth, alignment: .leading)
+            .frame(maxWidth: constrainedContentWidth == nil ? .infinity : nil, alignment: .leading)
         }
+    }
+
+    private func dashboardGridItemWidth(totalWidth: CGFloat, span: Int, columnCount: Int) -> CGFloat {
+        let safeColumnCount = max(columnCount, 1)
+        let safeSpan = min(max(span, 1), safeColumnCount)
+        let horizontalSpacing: CGFloat = 12
+        let columnWidth = max((totalWidth - (CGFloat(safeColumnCount - 1) * horizontalSpacing)) / CGFloat(safeColumnCount), 1)
+        return max((columnWidth * CGFloat(safeSpan)) + (CGFloat(safeSpan - 1) * horizontalSpacing), 1)
     }
 
     private func widgetSizeMenu(_ widget: DashboardWidgetItem) -> some View {
@@ -6933,7 +6959,7 @@ struct DashboardView: View {
             devices = UIPreviewData.devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             scenes = UIPreviewData.scenes.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             voiceDevices = UIPreviewData.voiceDevices
-            securityStatus = "Disarmed"
+            securityStatus = Self.previewSecurityAlarmState() ?? "Disarmed"
             securitySensors = [
                 DashboardSecuritySensorItem(
                     id: "preview-front-door-sensor",
@@ -7144,6 +7170,34 @@ struct DashboardView: View {
         }
 
         return processInfo.environment["UI_PREVIEW_SECURITY_SENSORS"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func previewSecurityAlarmState() -> String? {
+        let processInfo = ProcessInfo.processInfo
+        let rawValue: String?
+        if let index = processInfo.arguments.firstIndex(of: "-ui-preview-security-state"),
+           processInfo.arguments.indices.contains(index + 1) {
+            rawValue = processInfo.arguments[index + 1]
+        } else {
+            rawValue = processInfo.environment["UI_PREVIEW_SECURITY_STATE"]
+        }
+
+        switch rawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "stay", "armedstay", "armed-stay", "armed_home", "armedhome":
+            return "armedStay"
+        case "away", "armedaway", "armed-away":
+            return "armedAway"
+        case "triggered", "alarm", "alarming":
+            return "triggered"
+        case "arming":
+            return "arming"
+        case "disarming":
+            return "disarming"
+        case "disarmed":
+            return "Disarmed"
+        default:
+            return nil
+        }
     }
 
     private func applySecurityStatusResponse(_ response: Any) {
