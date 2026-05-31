@@ -148,6 +148,43 @@ test('pruneStaleRememberedHubAliases keeps configured or tracked remembered hubs
   assert.deepEqual(hubs.map((hub) => hub.ip), ['192.168.2.14', '192.168.2.15', '192.168.2.43']);
 });
 
+test('getStatus uses hydrated hubs so stale remembered aliases stay hidden', async (t) => {
+  const originalCountDocuments = Device.countDocuments;
+
+  t.after(() => {
+    Device.countDocuments = originalCountDocuments;
+  });
+
+  const service = new HarmonyService();
+  service.getConfiguredHubAddresses = async () => [];
+  service.getHubs = async (options) => {
+    assert.equal(options.includeCommands, false);
+    assert.equal(options.timeoutMs, 1);
+    return [
+      {
+        ip: '192.168.2.43',
+        friendlyName: 'Bedroom Hub',
+        source: 'remembered',
+        success: true,
+        discovered: false,
+        remoteId: '9173577',
+        trackedActivityDevices: 6
+      }
+    ];
+  };
+  Device.countDocuments = async (query) => (
+    query?.isOnline === true ? 12 : 12
+  );
+
+  const status = await service.getStatus({ timeoutMs: 1 });
+
+  assert.deepEqual(status.discoveredHubs.map((hub) => hub.ip), ['192.168.2.43']);
+  assert.equal(status.knownHubCount, 1);
+  assert.equal(status.discoveredCount, 1);
+  assert.equal(status.trackedDevices, 12);
+  assert.equal(status.onlineDevices, 12);
+});
+
 test('startBackgroundMonitoring polls Harmony activity state for known hubs', async (t) => {
   const service = new HarmonyService();
   const originalIntervalMs = service.backgroundMonitorIntervalMs;

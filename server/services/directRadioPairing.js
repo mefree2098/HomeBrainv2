@@ -310,7 +310,7 @@ getPairingBaseline(protocol) {
     }
 
     if (protocol === 'zwave') {
-      const nodes = this.getZWaveController()?.nodes;
+      const nodes = this.getZWaveControllerNodes({ log: false, context: 'pairing baseline' });
       if (!nodes || typeof nodes.values !== 'function') {
         return [];
       }
@@ -481,7 +481,7 @@ async reconcileActiveZWavePairingFromController() {
       return null;
     }
 
-    const nodes = this.getZWaveController()?.nodes;
+    const nodes = this.getZWaveControllerNodes({ log: false, context: 'pairing reconciliation' });
     if (!nodes || typeof nodes.values !== 'function') {
       return null;
     }
