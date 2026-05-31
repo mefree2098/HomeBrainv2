@@ -8,6 +8,7 @@ const { requireAdmin } = require('./middlewares/auth');
 
 const router = express.Router();
 const DIRECT_RADIO_LOG_HEARTBEAT_MS = 25_000;
+const DIRECT_RADIO_LOG_REPLAY_LIMIT = 10_000;
 const directRadioRateLimit = rateLimit({
   windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_DIRECT_RADIO_RATE_LIMIT_WINDOW_MS || 60_000)),
   limit: Math.max(20, Number(process.env.HOMEBRAIN_DIRECT_RADIO_RATE_LIMIT_MAX || 180)),
@@ -235,7 +236,7 @@ router.post('/catalog/update/run', async (req, res) => {
 
 router.get('/logs/latest', async (req, res) => {
   try {
-    const limit = parsePositiveInt(req.query.limit, 200);
+    const limit = parsePositiveInt(req.query.limit, 200, DIRECT_RADIO_LOG_REPLAY_LIMIT);
     const logs = directRadioEngineLogService.latest({ limit });
     res.status(200).json({
       success: true,
@@ -249,7 +250,7 @@ router.get('/logs/latest', async (req, res) => {
 
 router.post('/logs/clear', async (_req, res) => {
   try {
-    const cleared = directRadioEngineLogService.latest({ limit: 2000 }).length;
+    const cleared = directRadioEngineLogService.latest({ limit: DIRECT_RADIO_LOG_REPLAY_LIMIT }).length;
     directRadioEngineLogService.reset();
     res.status(200).json({
       success: true,
@@ -261,7 +262,7 @@ router.post('/logs/clear', async (_req, res) => {
 });
 
 router.get('/logs/stream', async (req, res) => {
-  const limit = parsePositiveInt(req.query.limit, 200);
+  const limit = parsePositiveInt(req.query.limit, 200, DIRECT_RADIO_LOG_REPLAY_LIMIT);
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');

@@ -523,6 +523,16 @@ armPairingTimer(protocol, sessionId, seconds) {
           kind: 'expired',
           message: session.message
         });
+        this.log('warn', protocol, `${operation} window expired before completed device was detected`, {
+          pairingId: session.id,
+          mode: session.mode || null,
+          startedAt: session.startedAt || null,
+          expiresAt: session.expiresAt ? new Date(session.expiresAt).toISOString() : null,
+          baselineIdentityCount: Array.isArray(session.baselineIdentities) ? session.baselineIdentities.length : 0,
+          baselineIdentities: Array.isArray(session.baselineIdentities) ? session.baselineIdentities : [],
+          targetIdentity: session.targetIdentity || null,
+          detectedIdentity: session.detectedIdentity || null
+        });
       }
       void this.stopPairing(protocol).catch((error) => {
         console.warn(`DirectRadioService: Failed to auto-stop ${protocol} pairing: ${error.message}`);
@@ -580,7 +590,9 @@ async startPairing(protocol, options = {}) {
       this.log('info', 'zigbee', 'Opening Zigbee permit-join window', {
         durationSeconds: seconds,
         serialPath: this.detected.zigbee?.path || null,
-        pairingId: session.id
+        pairingId: session.id,
+        baselineIdentityCount: session.baselineIdentities.length,
+        baselineIdentities: session.baselineIdentities
       });
       await this.zigbee.controller.permitJoin(seconds);
       this.zigbee.permitJoinUntil = new Date(Date.now() + seconds * 1000).toISOString();
@@ -710,7 +722,12 @@ async stopPairing(protocol = 'all') {
         session.stoppedAt = new Date().toISOString();
         session.message = session.message || 'Zigbee pairing was stopped.';
       }
-      this.log('info', 'zigbee', 'Zigbee permit-join window closed');
+      this.log('info', 'zigbee', 'Zigbee permit-join window closed', {
+        pairingId: session?.id || null,
+        sessionStatus: session?.status || null,
+        detectedIdentity: session?.detectedIdentity || null,
+        baselineIdentityCount: Array.isArray(session?.baselineIdentities) ? session.baselineIdentities.length : 0
+      });
     }
 
     if ((protocol === 'zwave' || protocol === 'all') && this.getZWaveController()) {
