@@ -507,6 +507,7 @@ class HarmonyService {
     this.syncPromise = null;
     this.stateSyncPromise = null;
     this.discoveryPromise = null;
+    this.knownHubMergePromise = Promise.resolve();
     this.backgroundMonitorTimer = null;
     this.backgroundMonitorInProgress = false;
     this.backgroundMonitoringStarted = false;
@@ -647,6 +648,7 @@ class HarmonyService {
       return [];
     }
 
+    const runMerge = async () => {
     const settings = await Settings.getSettings();
     const current = this.normalizeKnownHubRegistry(settings?.harmonyKnownHubs || []);
     const map = new Map(current.map((hub) => [hub.ip, { ...hub }]));
@@ -749,6 +751,13 @@ class HarmonyService {
     });
     await settings.save();
     return settings.harmonyKnownHubs;
+    };
+
+    const nextMerge = this.knownHubMergePromise
+      .catch(() => {})
+      .then(runMerge);
+    this.knownHubMergePromise = nextMerge.catch(() => {});
+    return nextMerge;
   }
 
   async getHubDeviceStatsMap(hubIps = []) {

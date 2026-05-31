@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('events');
 
 const Device = require('../models/Device');
+const Settings = require('../models/Settings');
 const harmonyServiceModule = require('../services/harmonyService');
 
 const { HarmonyService, pruneStaleRememberedHubAliases } = harmonyServiceModule;
@@ -183,6 +184,51 @@ test('getStatus uses hydrated hubs so stale remembered aliases stay hidden', asy
   assert.equal(status.discoveredCount, 1);
   assert.equal(status.trackedDevices, 12);
   assert.equal(status.onlineDevices, 12);
+});
+
+test('mergeKnownHubs serializes cached settings saves from concurrent readers', async (t) => {
+  const originalGetSettings = Settings.getSettings;
+  let saveInProgress = false;
+  let saveCount = 0;
+  const settingsDoc = {
+    harmonyKnownHubs: [],
+    async save() {
+      if (saveInProgress) {
+        throw new Error('parallel save');
+      }
+      saveInProgress = true;
+      saveCount += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      saveInProgress = false;
+      return this;
+    }
+  };
+
+  t.after(() => {
+    Settings.getSettings = originalGetSettings;
+  });
+
+  Settings.getSettings = async () => settingsDoc;
+
+  const service = new HarmonyService();
+  await Promise.all([
+    service.mergeKnownHubs([{
+      ip: '192.168.2.43',
+      friendlyName: 'Bedroom Hub',
+      discovered: true,
+      lastSeenAt: new Date('2026-05-31T00:00:00Z')
+    }]),
+    service.mergeKnownHubs([{
+      ip: '192.168.2.14',
+      friendlyName: 'Bedroom Hub'
+    }])
+  ]);
+
+  assert.equal(saveCount, 2);
+  assert.deepEqual(
+    settingsDoc.harmonyKnownHubs.map((hub) => hub.ip).sort(),
+    ['192.168.2.14', '192.168.2.43']
+  );
 });
 
 test('startBackgroundMonitoring polls Harmony activity state for known hubs', async (t) => {
