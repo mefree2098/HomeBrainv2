@@ -352,7 +352,7 @@ class WorkflowService {
     const payload = {
       name: desiredName,
       description: workflow.description || '',
-      trigger: workflow.trigger,
+      trigger: normalizeTrigger(workflow.trigger),
       actions: workflow.actions,
       enabled: workflow.enabled,
       priority: workflow.priority || 5,

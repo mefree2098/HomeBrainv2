@@ -8,6 +8,7 @@ const triggerSchema = new mongoose.Schema({
   },
   conditions: {
     type: mongoose.Schema.Types.Mixed,
+    default: () => ({}),
     required: true,
   },
 }, { _id: false });
