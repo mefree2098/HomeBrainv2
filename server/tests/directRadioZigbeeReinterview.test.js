@@ -86,6 +86,55 @@ test('reinterviewZigbeeDevice surfaces wake-the-sensor guidance on a sleepy-devi
   );
 });
 
+test('forgetZigbeeDevice force-removes a stale coordinator entry when leave fails', async (t) => {
+  let removeFromNetworkCalled = false;
+  let removeFromDatabaseCalled = false;
+  const fakeDevice = {
+    ieeeAddr: '0x00158d0001',
+    networkAddress: 1234,
+    modelID: null,
+    manufacturerName: null,
+    interviewCompleted: false,
+    endpoints: [],
+    removeFromNetwork: async () => {
+      removeFromNetworkCalled = true;
+      throw new Error('no response from sleepy device');
+    },
+    removeFromDatabase: () => {
+      removeFromDatabaseCalled = true;
+    }
+  };
+  stubZigbee(t, {
+    controller: { getDeviceByIeeeAddr: () => fakeDevice },
+    started: true
+  });
+
+  const result = await directRadioService.forgetZigbeeDevice('0x00158d0001', {
+    force: true,
+    source: 'test'
+  });
+
+  assert.strictEqual(removeFromNetworkCalled, true);
+  assert.strictEqual(removeFromDatabaseCalled, true);
+  assert.strictEqual(result.found, true);
+  assert.strictEqual(result.leaveSucceeded, false);
+  assert.strictEqual(result.databaseRemoved, true);
+  assert.strictEqual(result.forced, true);
+  assert.match(result.error, /no response/);
+});
+
+test('forgetZigbeeDevice reports an already-absent coordinator entry as success', async (t) => {
+  stubZigbee(t, {
+    controller: { getDeviceByIeeeAddr: () => null },
+    started: true
+  });
+
+  const result = await directRadioService.forgetZigbeeDevice('0x00158d0001');
+  assert.strictEqual(result.found, false);
+  assert.strictEqual(result.databaseRemoved, false);
+  assert.match(result.message, /No Zigbee device/);
+});
+
 test('readZigbeeIasEnrollment returns null on missing/invalid devices', () => {
   assert.strictEqual(directRadioService.readZigbeeIasEnrollment(null), null);
   assert.strictEqual(directRadioService.readZigbeeIasEnrollment({}), null);

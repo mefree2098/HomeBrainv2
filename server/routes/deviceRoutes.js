@@ -428,7 +428,19 @@ router.delete('/:id', admin, async (req, res) => {
     console.error('DELETE /api/devices/:id - Error:', error.message);
     console.error(error.stack);
     
-    const statusCode = error.message === 'Device not found' ? 404 : 500;
+    if (error.message === 'Device not found') {
+      return res.status(200).json({
+        success: true,
+        message: 'Device already deleted',
+        data: {
+          device: null,
+          cleanup: null,
+          alreadyDeleted: true
+        }
+      });
+    }
+
+    const statusCode = 500;
     res.status(statusCode).json({
       success: false,
       error: error.message || 'Failed to delete device'

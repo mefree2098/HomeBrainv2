@@ -520,6 +520,107 @@ async reinterviewZigbeeDevice(ieeeAddr) {
     };
   },
 
+async forgetZigbeeDevice(ieeeAddr, options = {}) {
+    const address = trimString(ieeeAddr).toLowerCase();
+    if (!address) {
+      const error = new Error('A Zigbee IEEE address is required to forget a device.');
+      error.status = 400;
+      throw error;
+    }
+
+    await this.start();
+    const controller = this.zigbee.controller;
+    if (!controller || !this.zigbee.started) {
+      const error = new Error('Zigbee coordinator is not ready.');
+      error.status = 503;
+      throw error;
+    }
+
+    const device = typeof controller.getDeviceByIeeeAddr === 'function'
+      ? controller.getDeviceByIeeeAddr(address)
+      : null;
+    if (!device) {
+      this.log('info', 'zigbee', 'Zigbee device already absent from coordinator', {
+        ieeeAddr: address,
+        source: options.source || null
+      });
+      return {
+        ieeeAddr: address,
+        found: false,
+        leaveSucceeded: false,
+        databaseRemoved: false,
+        forced: false,
+        message: `No Zigbee device is paired with IEEE address ${address}.`
+      };
+    }
+
+    const force = options.force !== false;
+    const source = options.source || 'manual';
+    const summary = {
+      ieeeAddr: address,
+      networkAddress: device.networkAddress ?? null,
+      modelID: device.modelID || null,
+      manufacturerName: device.manufacturerName || null,
+      interviewCompleted: device.interviewCompleted !== false,
+      endpointCount: Array.isArray(device.endpoints) ? device.endpoints.length : null,
+      source
+    };
+
+    let leaveSucceeded = false;
+    let databaseRemoved = false;
+    let forced = false;
+    let removalError = null;
+
+    if (typeof device.removeFromNetwork === 'function') {
+      try {
+        await withTimeout(
+          device.removeFromNetwork(),
+          12_000,
+          `Timed out waiting for Zigbee device ${address} to leave the network`
+        );
+        leaveSucceeded = true;
+        databaseRemoved = true;
+      } catch (error) {
+        removalError = error;
+        if (!force) {
+          this.log('warn', 'zigbee', 'Zigbee device leave request failed', {
+            ...summary,
+            error: error.message
+          });
+          const wrapped = new Error(`Failed to remove Zigbee device ${address} from the coordinator: ${error.message}`);
+          wrapped.status = 502;
+          throw wrapped;
+        }
+      }
+    }
+
+    if (!databaseRemoved && force && typeof device.removeFromDatabase === 'function') {
+      device.removeFromDatabase();
+      databaseRemoved = true;
+      forced = true;
+    }
+
+    this.log(removalError ? 'warn' : 'info', 'zigbee', 'Zigbee device forgotten from coordinator', {
+      ...summary,
+      leaveSucceeded,
+      databaseRemoved,
+      forced,
+      error: removalError?.message || null
+    });
+
+    return {
+      ...summary,
+      found: true,
+      leaveSucceeded,
+      databaseRemoved,
+      forced,
+      error: removalError?.message || null,
+      message: databaseRemoved
+        ? `Forgot Zigbee device ${address} from the coordinator.`
+        : `Zigbee device ${address} was not removed from the coordinator.`
+    };
+  },
+
 readZigbeeIasEnrollment(device) {
     try {
       const endpoints = Array.isArray(device?.endpoints) ? device.endpoints : [];

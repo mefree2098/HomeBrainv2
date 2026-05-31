@@ -197,6 +197,72 @@ test('deleteDevice returns the deleted device when reference cleanup hits a lega
   assert.equal(result.deletionCleanup.cleanupErrors[0].profileId, '507f1f77bcf86cd799439099');
 });
 
+test('deleteDevice forgets native Zigbee devices from the coordinator', async (t) => {
+  const originalFindByIdAndDelete = Device.findByIdAndDelete;
+  const originalAlexaDeleteMany = AlexaExposure.deleteMany;
+  const originalClaimDeleteMany = DeviceCommandClaim.deleteMany;
+  const originalEnergyDeleteMany = DeviceEnergySample.deleteMany;
+  const originalSecurityFind = SecurityAlarm.find;
+  const originalProfileFind = UserProfile.find;
+  const originalForgetZigbeeDevice = directRadioService.forgetZigbeeDevice;
+
+  t.after(() => {
+    Device.findByIdAndDelete = originalFindByIdAndDelete;
+    AlexaExposure.deleteMany = originalAlexaDeleteMany;
+    DeviceCommandClaim.deleteMany = originalClaimDeleteMany;
+    DeviceEnergySample.deleteMany = originalEnergyDeleteMany;
+    SecurityAlarm.find = originalSecurityFind;
+    UserProfile.find = originalProfileFind;
+    directRadioService.forgetZigbeeDevice = originalForgetZigbeeDevice;
+  });
+
+  const deviceId = '507f1f77bcf86cd799439031';
+  Device.findByIdAndDelete = async () => ({
+    _id: deviceId,
+    name: 'Front Door',
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x000d6f00057c3ef1'
+      }
+    }
+  });
+  AlexaExposure.deleteMany = async () => ({ deletedCount: 0 });
+  DeviceCommandClaim.deleteMany = async () => ({ deletedCount: 0 });
+  DeviceEnergySample.deleteMany = async () => ({ deletedCount: 0 });
+  SecurityAlarm.find = async () => [];
+  UserProfile.find = async () => [];
+
+  let forgetCall = null;
+  directRadioService.forgetZigbeeDevice = async (ieeeAddr, options) => {
+    forgetCall = { ieeeAddr, options };
+    return {
+      ieeeAddr,
+      found: true,
+      leaveSucceeded: false,
+      databaseRemoved: true,
+      forced: true
+    };
+  };
+
+  const result = await deviceService.deleteDevice(deviceId);
+
+  assert.deepEqual(forgetCall, {
+    ieeeAddr: '0x000d6f00057c3ef1',
+    options: {
+      force: true,
+      source: 'device_delete',
+      deviceId,
+      deviceName: 'Front Door'
+    }
+  });
+  assert.equal(result.name, 'Front Door');
+  assert.equal(result.deletionCleanup.directRadio.databaseRemoved, true);
+  assert.equal(result.deletionCleanup.directRadio.forced, true);
+  assert.deepEqual(result.deletionCleanup.cleanupErrors, []);
+});
+
 test('controlDevice routes Insteon turn_on through insteon service and skips generic DB write path', async (t) => {
   const originalFindById = Device.findById;
   const originalFindByIdAndUpdate = Device.findByIdAndUpdate;

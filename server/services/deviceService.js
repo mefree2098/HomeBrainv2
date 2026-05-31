@@ -64,6 +64,7 @@ function createDeletionCleanupSummary() {
     dashboardDeviceReferencesRemoved: 0,
     userProfilesUpdated: 0,
     securityAlarmsUpdated: 0,
+    directRadio: null,
     cleanupErrors: []
   };
 }
@@ -871,6 +872,34 @@ class DeviceService {
     return cleanup;
   }
 
+  async cleanupDeletedDirectRadioDevice(deletedDevice) {
+    const properties = deletedDevice?.properties && typeof deletedDevice.properties === 'object'
+      ? deletedDevice.properties
+      : {};
+    const source = canonicalizeDeviceSource(properties.source || '');
+    const protocol = canonicalizeDeviceSource(properties.homebrainDirect?.protocol || '');
+    const ieeeAddr = normalizeIdString(properties.homebrainDirect?.ieeeAddr).toLowerCase();
+    if ((source !== 'homebrain-zigbee' && protocol !== 'homebrain-zigbee') || !ieeeAddr) {
+      return null;
+    }
+
+    const directRadioService = require('./directRadioService');
+    if (typeof directRadioService.forgetZigbeeDevice !== 'function') {
+      return {
+        skipped: true,
+        reason: 'forgetZigbeeDevice unavailable',
+        ieeeAddr
+      };
+    }
+
+    return directRadioService.forgetZigbeeDevice(ieeeAddr, {
+      force: true,
+      source: 'device_delete',
+      deviceId: normalizeIdString(deletedDevice?._id),
+      deviceName: deletedDevice?.name || null
+    });
+  }
+
   /**
    * Delete a device
    * @param {string} deviceId - Device ID
@@ -884,25 +913,41 @@ class DeviceService {
       if (!deletedDevice) {
         throw new Error('Device not found');
       }
+      const deletedDeviceSnapshot = clonePlainObject(deletedDevice);
 
+      let deletionCleanup;
       try {
-        deletedDevice.deletionCleanup = await this.cleanupDeletedDeviceReferences(deletedDevice);
+        deletionCleanup = await this.cleanupDeletedDeviceReferences(deletedDeviceSnapshot);
       } catch (cleanupError) {
-        deletedDevice.deletionCleanup = createDeletionCleanupSummary();
-        recordDeletionCleanupError(deletedDevice.deletionCleanup, 'cleanupDeletedDeviceReferences', cleanupError, {
-          deviceId: normalizeIdString(deletedDevice?._id)
+        deletionCleanup = createDeletionCleanupSummary();
+        recordDeletionCleanupError(deletionCleanup, 'cleanupDeletedDeviceReferences', cleanupError, {
+          deviceId: normalizeIdString(deletedDeviceSnapshot?._id)
         });
       }
 
-      const cleanupErrorCount = Array.isArray(deletedDevice.deletionCleanup?.cleanupErrors)
-        ? deletedDevice.deletionCleanup.cleanupErrors.length
+      try {
+        deletionCleanup.directRadio = await this.cleanupDeletedDirectRadioDevice(deletedDeviceSnapshot);
+      } catch (cleanupError) {
+        recordDeletionCleanupError(deletionCleanup, 'cleanupDeletedDirectRadioDevice', cleanupError, {
+          deviceId: normalizeIdString(deletedDeviceSnapshot?._id),
+          ieeeAddr: normalizeIdString(deletedDeviceSnapshot?.properties?.homebrainDirect?.ieeeAddr) || undefined
+        });
+      }
+
+      const deletedDeviceResult = {
+        ...deletedDeviceSnapshot,
+        deletionCleanup
+      };
+
+      const cleanupErrorCount = Array.isArray(deletedDeviceResult.deletionCleanup?.cleanupErrors)
+        ? deletedDeviceResult.deletionCleanup.cleanupErrors.length
         : 0;
       if (cleanupErrorCount > 0) {
-        console.warn('DeviceService: Deleted device with cleanup warnings:', deletedDevice.name, deletedDevice.deletionCleanup.cleanupErrors);
+        console.warn('DeviceService: Deleted device with cleanup warnings:', deletedDeviceResult.name, deletedDeviceResult.deletionCleanup.cleanupErrors);
       }
       
-      console.log('DeviceService: Successfully deleted device:', deletedDevice.name, deletedDevice.deletionCleanup);
-      return deletedDevice;
+      console.log('DeviceService: Successfully deleted device:', deletedDeviceResult.name, deletedDeviceResult.deletionCleanup);
+      return deletedDeviceResult;
     } catch (error) {
       console.error('DeviceService: Error deleting device:', error.message);
       console.error(error.stack);
