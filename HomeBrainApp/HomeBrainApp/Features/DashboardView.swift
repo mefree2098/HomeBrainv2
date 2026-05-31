@@ -975,6 +975,11 @@ struct DashboardView: View {
     private var usesHeroSplitLayout: Bool { !usesPortraitCompactLayout && (useLandscapeCompactLayout || layoutWidth >= 860) }
     private var supportsTwoColumnCards: Bool { !usesPortraitCompactLayout && (useLandscapeCompactLayout || layoutWidth >= 820) }
     private var usesCompactWidgetToolbar: Bool { usesPortraitCompactLayout || layoutWidth < 440 }
+    private var usesPhonePortraitClimateSummaryColumns: Bool {
+        UIDevice.current.userInterfaceIdiom == .phone
+            && usesPortraitCompactLayout
+            && max(layoutWidth - (dashboardWidgetPanelHorizontalPadding * 2), 0) >= 330
+    }
     private var isPresentingWeatherInfoSheet: Binding<Bool> {
         Binding(
             get: { weatherInfoTopic != nil },
@@ -3870,73 +3875,140 @@ struct DashboardView: View {
                         }
                     } else if stackedHeroLayout {
                         VStack(alignment: .leading, spacing: 12) {
-                            HStack(alignment: .top, spacing: 12) {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Local Forecast")
-                                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                                        .textCase(.uppercase)
-                                        .tracking(2.6)
-                                        .foregroundStyle(HBPalette.textMuted)
+                            if usesPhonePortraitClimateSummaryColumns {
+                                HStack(alignment: .top, spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text("Local Forecast")
+                                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                                            .textCase(.uppercase)
+                                            .tracking(2.6)
+                                            .foregroundStyle(HBPalette.textMuted)
 
-                                    Text(formattedTemperature(snapshot.displayTemperatureF))
-                                        .font(.system(size: headlineFontSize, weight: .bold, design: .rounded))
-                                        .foregroundStyle(HBPalette.textPrimary)
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.78)
+                                        Text(formattedTemperature(snapshot.displayTemperatureF))
+                                            .font(.system(size: headlineFontSize, weight: .bold, design: .rounded))
+                                            .foregroundStyle(HBPalette.textPrimary)
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.78)
 
-                                    Text("Feels like \(formattedTemperature(snapshot.displayFeelsLikeF))")
-                                        .font(.system(size: 14, weight: .medium, design: .rounded))
-                                        .foregroundStyle(HBPalette.textSecondary)
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.82)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                                        Text("Feels like \(formattedTemperature(snapshot.displayFeelsLikeF))")
+                                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                                            .foregroundStyle(HBPalette.textSecondary)
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.82)
 
-                                Spacer(minLength: 10)
+                                        Text(snapshot.condition)
+                                            .font(.system(size: compactWeatherHeader ? 15 : 17, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(HBPalette.textPrimary)
+                                            .lineLimit(2)
+                                            .fixedSize(horizontal: false, vertical: true)
 
-                                Image(systemName: weatherIconName(icon: snapshot.icon, isDay: snapshot.isDay))
-                                    .font(.system(size: weatherGlyphSize, weight: .semibold))
-                                    .foregroundStyle(
-                                        LinearGradient(
-                                            colors: [HBPalette.accentBlue, HBPalette.accentPurple],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
+                                        Label(snapshot.locationName, systemImage: "mappin.and.ellipse")
+                                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                                            .foregroundStyle(HBPalette.textSecondary)
+                                            .lineLimit(2)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Image(systemName: weatherIconName(icon: snapshot.icon, isDay: snapshot.isDay))
+                                            .font(.system(size: weatherGlyphSize, weight: .semibold))
+                                            .foregroundStyle(
+                                                LinearGradient(
+                                                    colors: [HBPalette.accentBlue, HBPalette.accentPurple],
+                                                    startPoint: .topLeading,
+                                                    endPoint: .bottomTrailing
+                                                )
+                                            )
+                                            .frame(width: weatherGlyphFrame, height: weatherGlyphFrame)
+                                            .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
+
+                                        weatherOutdoorClimateRow(
+                                            snapshot: snapshot,
+                                            widgetID: widget.id,
+                                            compact: true,
+                                            includeIcon: false,
+                                            weatherGlyphSize: weatherGlyphSize,
+                                            weatherGlyphFrame: weatherGlyphFrame
                                         )
-                                    )
-                                    .frame(width: weatherGlyphFrame, height: weatherGlyphFrame)
-                                    .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
-                            }
-
-                            VStack(alignment: .leading, spacing: 10) {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(snapshot.condition)
-                                        .font(.system(size: compactWeatherHeader ? 15 : 17, weight: .semibold, design: .rounded))
-                                        .foregroundStyle(HBPalette.textPrimary)
-
-                                    Label(snapshot.locationName, systemImage: "mappin.and.ellipse")
-                                        .font(.system(size: 13, weight: .medium, design: .rounded))
-                                        .foregroundStyle(HBPalette.textSecondary)
-                                        .lineLimit(tabletCompactWeatherGrid ? 1 : 2)
+                                    }
+                                    .frame(minWidth: 168, maxWidth: .infinity, alignment: .leading)
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading)
 
-                                VStack(alignment: .leading, spacing: 7) {
-                                    weatherOutdoorClimateRow(
-                                        snapshot: snapshot,
-                                        widgetID: widget.id,
-                                        compact: true,
-                                        includeIcon: false,
-                                        weatherGlyphSize: weatherGlyphSize,
-                                        weatherGlyphFrame: weatherGlyphFrame
-                                    )
+                                weatherIndoorClimateRow(
+                                    widgetID: widget.id,
+                                    indoorAir: snapshot.indoorAir,
+                                    compact: true
+                                )
+                            } else {
+                                HStack(alignment: .top, spacing: 12) {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text("Local Forecast")
+                                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                                            .textCase(.uppercase)
+                                            .tracking(2.6)
+                                            .foregroundStyle(HBPalette.textMuted)
 
-                                    weatherIndoorClimateRow(
-                                        widgetID: widget.id,
-                                        indoorAir: snapshot.indoorAir,
-                                        compact: true
-                                    )
+                                        Text(formattedTemperature(snapshot.displayTemperatureF))
+                                            .font(.system(size: headlineFontSize, weight: .bold, design: .rounded))
+                                            .foregroundStyle(HBPalette.textPrimary)
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.78)
+
+                                        Text("Feels like \(formattedTemperature(snapshot.displayFeelsLikeF))")
+                                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                                            .foregroundStyle(HBPalette.textSecondary)
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.82)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                                    Spacer(minLength: 10)
+
+                                    Image(systemName: weatherIconName(icon: snapshot.icon, isDay: snapshot.isDay))
+                                        .font(.system(size: weatherGlyphSize, weight: .semibold))
+                                        .foregroundStyle(
+                                            LinearGradient(
+                                                colors: [HBPalette.accentBlue, HBPalette.accentPurple],
+                                                startPoint: .topLeading,
+                                                endPoint: .bottomTrailing
+                                            )
+                                        )
+                                        .frame(width: weatherGlyphFrame, height: weatherGlyphFrame)
+                                        .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading)
+
+                                VStack(alignment: .leading, spacing: 10) {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        Text(snapshot.condition)
+                                            .font(.system(size: compactWeatherHeader ? 15 : 17, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(HBPalette.textPrimary)
+
+                                        Label(snapshot.locationName, systemImage: "mappin.and.ellipse")
+                                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                                            .foregroundStyle(HBPalette.textSecondary)
+                                            .lineLimit(tabletCompactWeatherGrid ? 1 : 2)
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                                    VStack(alignment: .leading, spacing: 7) {
+                                        weatherOutdoorClimateRow(
+                                            snapshot: snapshot,
+                                            widgetID: widget.id,
+                                            compact: true,
+                                            includeIcon: false,
+                                            weatherGlyphSize: weatherGlyphSize,
+                                            weatherGlyphFrame: weatherGlyphFrame
+                                        )
+
+                                        weatherIndoorClimateRow(
+                                            widgetID: widget.id,
+                                            indoorAir: snapshot.indoorAir,
+                                            compact: true
+                                        )
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                }
                             }
 
                             weatherStatusBadges(snapshot: snapshot, compact: true)
