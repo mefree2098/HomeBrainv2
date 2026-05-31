@@ -2612,6 +2612,11 @@ function inferFeaturesFromZigbeeDefinition(definition, zigbeeDevice) {
   if (clusters.has('mstemperaturemeasurement')) features.add('temperature');
   if (clusters.has('msrelativehumidity')) features.add('humidity');
   if (clusters.has('ssiaszone')) features.add('contact');
+  if (clusters.has('64514') || /\b3321[\s-]*s\b/.test(deviceText)) {
+    features.add('vibration');
+    features.add('acceleration');
+    features.add('axis');
+  }
   if (/\b(?:plug|outlet|socket|relay|switch)\b/.test(deviceText) || /\bsp\s*224\b/.test(deviceText)) {
     features.add('switch');
   }
