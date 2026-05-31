@@ -6,6 +6,10 @@ const deviceEnergySampleService = require('./deviceEnergySampleService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const { mapSmartThingsDeviceType } = require('./deviceTypeClassification');
 
+function trimString(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 const SHOULD_LOG_SMARTTHINGS_SYNC = process.env.SMARTTHINGS_SYNC_LOGGING === 'true';
 const ACCESS_TOKEN_SOFT_EXPIRY_GRACE_MS = 5 * 60 * 1000;
 const TRANSIENT_SMARTTHINGS_ERROR_CODES = new Set([
