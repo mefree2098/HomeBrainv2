@@ -1299,6 +1299,35 @@ test('_recordRuntimePollBatchOutcome resets the timeout failure streak after a u
   }
 });
 
+test('_recordRuntimePollBatchOutcome increases global cooldown after repeated fully timed-out batches', () => {
+  const originalRuntimePollTimeoutFailureStreak = insteonService._runtimePollTimeoutFailureStreak;
+  const originalRuntimeMonitoringIntervalMs = insteonService._runtimeMonitoringIntervalMs;
+  const originalMarkRecentPlmControlActivity = insteonService._markRecentPlmControlActivity;
+
+  try {
+    const cooldowns = [];
+    insteonService._runtimePollTimeoutFailureStreak = 2;
+    insteonService._runtimeMonitoringIntervalMs = 30000;
+    insteonService._markRecentPlmControlActivity = (cooldownMs) => {
+      cooldowns.push(cooldownMs);
+    };
+
+    insteonService._recordRuntimePollBatchOutcome({
+      scanned: 4,
+      errors: 4,
+      levelTimeouts: 4,
+      updated: 0
+    });
+
+    assert.equal(insteonService._runtimePollTimeoutFailureStreak, 3);
+    assert.deepEqual(cooldowns, [480000]);
+  } finally {
+    insteonService._runtimePollTimeoutFailureStreak = originalRuntimePollTimeoutFailureStreak;
+    insteonService._runtimeMonitoringIntervalMs = originalRuntimeMonitoringIntervalMs;
+    insteonService._markRecentPlmControlActivity = originalMarkRecentPlmControlActivity;
+  }
+});
+
 test('_getRuntimeMonitoringEffectiveBatchSize respects the configured batch size for slow PLM polls', () => {
   const originalIntervalMs = insteonService._runtimeMonitoringIntervalMs;
   const originalBatchSize = insteonService._runtimeMonitoringBatchSize;

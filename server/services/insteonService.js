@@ -62,6 +62,7 @@ const DEFAULT_INSTEON_RUNTIME_STATE_REFRESH_TIMEOUT_MS = 1800;
 const DEFAULT_INSTEON_LATE_RUNTIME_ACK_TIMEOUT_MS = 30000;
 const DEFAULT_INSTEON_RUNTIME_SCENE_CACHE_TTL_MS = 300000;
 const DEFAULT_INSTEON_RUNTIME_POLL_TIMEOUT_BACKOFF_MS = 120000;
+const DEFAULT_INSTEON_RUNTIME_POLL_TIMEOUT_MAX_BACKOFF_MS = 15 * 60 * 1000;
 const DEFAULT_INSTEON_RUNTIME_POLL_TIMEOUT_BACKOFF_THRESHOLD = 1;
 const DEFAULT_INSTEON_RUNTIME_POLL_DEVICE_TIMEOUT_BACKOFF_MS = 15 * 60 * 1000;
 const DEFAULT_INSTEON_RUNTIME_POLL_DEVICE_TIMEOUT_MAX_BACKOFF_MS = 60 * 60 * 1000;
@@ -1975,11 +1976,20 @@ class InsteonService {
     });
   }
 
-  _getRuntimePollTimeoutBackoffMs() {
-    return Math.max(
+  _getRuntimePollTimeoutBackoffMs(failureStreak = this._runtimePollTimeoutFailureStreak) {
+    const normalizedFailureStreak = Number.isFinite(Number(failureStreak))
+      ? Math.max(1, Math.trunc(Number(failureStreak)))
+      : 1;
+    const effectiveFailureStreak = Math.max(
+      1,
+      normalizedFailureStreak - DEFAULT_INSTEON_RUNTIME_POLL_TIMEOUT_BACKOFF_THRESHOLD + 1
+    );
+    const baseBackoffMs = Math.max(
       DEFAULT_INSTEON_RUNTIME_POLL_TIMEOUT_BACKOFF_MS,
       Math.max(1000, Number(this._runtimeMonitoringIntervalMs) || DEFAULT_INSTEON_RUNTIME_MONITOR_INTERVAL_MS) * 4
     );
+    const multiplier = 2 ** Math.min(3, effectiveFailureStreak - 1);
+    return Math.min(DEFAULT_INSTEON_RUNTIME_POLL_TIMEOUT_MAX_BACKOFF_MS, baseBackoffMs * multiplier);
   }
 
   _recordRuntimePollBatchOutcome(summary = {}) {
@@ -2008,7 +2018,7 @@ class InsteonService {
       return;
     }
 
-    const cooldownMs = this._getRuntimePollTimeoutBackoffMs();
+    const cooldownMs = this._getRuntimePollTimeoutBackoffMs(this._runtimePollTimeoutFailureStreak);
     this._markRecentPlmControlActivity(cooldownMs);
     this._logEngineWarn('Suspending runtime polling after repeated PLM level-query timeouts', {
       stage: 'queue',
