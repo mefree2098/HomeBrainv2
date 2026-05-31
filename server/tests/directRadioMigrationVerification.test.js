@@ -297,6 +297,36 @@ test('Zigbee feature inference falls back to endpoint clusters for Innr SP 224 p
   assert.ok(features.includes('energy'));
 });
 
+test('Zigbee feature inference recognizes SmartThings multipurpose moving and axis exposes', () => {
+  const features = inferFeaturesFromZigbeeDefinition({
+    exposes: [
+      { name: 'temperature' },
+      { name: 'contact' },
+      { name: 'battery' },
+      { name: 'moving' },
+      { name: 'x_axis' },
+      { name: 'y_axis' },
+      { name: 'z_axis' }
+    ]
+  }, {
+    modelID: '3321-S',
+    manufacturerName: 'SmartThings',
+    endpoints: [
+      {
+        ID: 1,
+        inputClusters: [1, 1026, 1280, 64514]
+      }
+    ]
+  });
+
+  assert.ok(features.includes('contact'));
+  assert.ok(features.includes('temperature'));
+  assert.ok(features.includes('battery'));
+  assert.ok(features.includes('vibration'));
+  assert.ok(features.includes('acceleration'));
+  assert.ok(features.includes('axis'));
+});
+
 test('Zigbee normalization enriches devices from the installed converter catalog', () => {
   const service = createService();
   const normalized = service.normalizeZigbeeDevice({
@@ -317,6 +347,88 @@ test('Zigbee normalization enriches devices from the installed converter catalog
   assert.ok(normalized.update.properties.directRadioFeatures.includes('switch'));
   assert.equal(normalized.update.properties.homebrainDirect.catalog.model, 'SP 224');
   assert.ok(normalized.update.properties.directRadioCatalog.exposes.some((expose) => expose.type === 'switch'));
+});
+
+test('Zigbee normalization captures SmartThings multipurpose moving and axis state', () => {
+  const service = createService();
+  const normalized = service.normalizeZigbeeDevice({
+    ieeeAddr: '0x000d6ffffe000001',
+    modelID: '3321-S',
+    manufacturerName: 'SmartThings',
+    interviewCompleted: true,
+    state: {
+      contact: true,
+      moving: true,
+      x_axis: 21,
+      y_axis: 11,
+      z_axis: 1008
+    },
+    endpoints: [
+      {
+        ID: 1,
+        inputClusters: [1, 1026, 1280, 64514],
+        getClusterAttributeValue() {
+          return undefined;
+        }
+      }
+    ]
+  }, 'deviceInterview');
+
+  const state = normalized.update.properties.directRadioState;
+  assert.equal(normalized.update.model, '3321-S');
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('contact'));
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('temperature'));
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('battery'));
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('tamper'));
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('vibration'));
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('acceleration'));
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('axis'));
+  assert.equal(state.contactOpen, false);
+  assert.equal(state.accelerationActive, true);
+  assert.equal(state.acceleration, 'active');
+  assert.equal(state.vibrationActive, true);
+  assert.equal(state.vibration, 'active');
+  assert.deepEqual(state.axis, [21, 11, 1008]);
+});
+
+test('Zigbee normalization captures SmartThings multipurpose acceleration reports', () => {
+  const service = createService();
+  const normalized = service.normalizeZigbeeDevice({
+    ieeeAddr: '0x000d6ffffe000002',
+    modelID: '3321-S',
+    manufacturerName: 'SmartThings',
+    interviewCompleted: true,
+    endpoints: [
+      {
+        ID: 1,
+        inputClusters: [1, 1026, 1280, 64514],
+        getClusterAttributeValue() {
+          return undefined;
+        }
+      }
+    ]
+  }, 'message', {
+    message: {
+      cluster: 'manuSpecificSamsungAccelerometer',
+      data: {
+        acceleration: 1,
+        xAxis: -1007,
+        yAxis: 12,
+        zAxis: 18
+      }
+    }
+  });
+
+  const state = normalized.update.properties.directRadioState;
+  assert.equal(state.accelerationActive, true);
+  assert.equal(state.acceleration, 'active');
+  assert.equal(state.vibrationActive, true);
+  assert.equal(state.vibration, 'active');
+  assert.equal(state.xAxis, 18);
+  assert.equal(state.yAxis, 12);
+  assert.equal(state.zAxis, 1007);
+  assert.deepEqual(state.axis, [18, 12, 1007]);
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('axis'));
 });
 
 test('Zigbee normalization preserves state when no on/off attribute is observed', () => {
@@ -781,6 +893,125 @@ test('direct radio post-command refresh keeps command state when Zigbee has no s
   assert.equal(refreshed.status, true);
   assert.equal(refreshed.brightness, 75);
   assert.equal(refreshed.colorTemperature, 4000);
+});
+
+test('active Zigbee migration ignores existing baseline device chatter', async () => {
+  const service = createService();
+  const migration = {
+    id: 'migration-front-door',
+    sourceDeviceId: SOURCE_DEVICE_ID,
+    protocol: 'zigbee',
+    status: 'pairing',
+    expiresAt: Date.now() + 60_000
+  };
+  service.activeMigrations.set(migration.id, migration);
+  service.activePairings.set('zigbee', {
+    id: 'pairing-front-door',
+    protocol: 'zigbee',
+    status: 'active',
+    baselineIdentities: ['0x000d6f000b11f6e5'],
+    events: []
+  });
+
+  let completeCalled = false;
+  let upsertOptions = null;
+  service.completeMigration = async () => {
+    completeCalled = true;
+    throw new Error('Existing baseline device should not complete migration');
+  };
+  service.withDirectDeviceUpsertLock = async (_identity, fn) => fn();
+  service.upsertDirectDeviceRecord = async (_identity, _update, options) => {
+    upsertOptions = options;
+    return { _id: DEVICE_ID };
+  };
+
+  const result = await service.upsertDirectDevice({
+    protocol: 'zigbee',
+    id: '0x000d6f000b11f6e5'
+  }, {
+    properties: {
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x000d6f000b11f6e5',
+        lastReason: 'message'
+      }
+    }
+  });
+
+  assert.equal(completeCalled, false);
+  assert.equal(result._id, DEVICE_ID);
+  assert.equal(upsertOptions.skipActiveMigration, true);
+  assert.equal(upsertOptions.suppressPairingCompletion, true);
+});
+
+test('active Zigbee migration waits for a new device interview before completing', async () => {
+  const service = createService();
+  const migration = {
+    id: 'migration-front-door',
+    sourceDeviceId: SOURCE_DEVICE_ID,
+    protocol: 'zigbee',
+    status: 'pairing',
+    expiresAt: Date.now() + 60_000
+  };
+  service.activeMigrations.set(migration.id, migration);
+  service.activePairings.set('zigbee', {
+    id: 'pairing-front-door',
+    protocol: 'zigbee',
+    status: 'active',
+    baselineIdentities: ['0x000d6f000b11f6e5'],
+    events: []
+  });
+
+  let completeCalled = false;
+  let upsertCalled = false;
+  service.completeMigration = async () => {
+    completeCalled = true;
+    return null;
+  };
+  service.upsertDirectDeviceRecord = async () => {
+    upsertCalled = true;
+    return null;
+  };
+
+  const joinedResult = await service.upsertDirectDevice({
+    protocol: 'zigbee',
+    id: '0x000d6ffffe000003'
+  }, {
+    properties: {
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x000d6ffffe000003',
+        lastReason: 'deviceJoined'
+      }
+    }
+  });
+
+  assert.equal(joinedResult, null);
+  assert.equal(completeCalled, false);
+  assert.equal(upsertCalled, false);
+  assert.equal(service.activePairings.get('zigbee').detectedIdentity.id, '0x000d6ffffe000003');
+
+  service.completeMigration = async (migrationId, identity) => ({
+    migrationId,
+    identity
+  });
+
+  const interviewResult = await service.upsertDirectDevice({
+    protocol: 'zigbee',
+    id: '0x000d6ffffe000003'
+  }, {
+    properties: {
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x000d6ffffe000003',
+        lastReason: 'deviceInterview'
+      }
+    }
+  });
+
+  assert.equal(interviewResult.migrationId, 'migration-front-door');
+  assert.equal(interviewResult.identity.id, '0x000d6ffffe000003');
+  assert.equal(upsertCalled, false);
 });
 
 test('direct radio migration finalization persists passed validation for native route', async () => {

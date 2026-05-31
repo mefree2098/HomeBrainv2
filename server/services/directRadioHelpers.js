@@ -1722,6 +1722,27 @@ function extractZigbeeMessageState(message, features = []) {
     assignDefined(directState, 'temperatureF', celsiusToFahrenheit(temperatureC));
   }
 
+  if (cluster === 'manuspecificsamsungaccelerometer') {
+    const movingActive = normalizeZigbeeActiveState(data.acceleration ?? data.moving);
+    assignDefined(directState, 'accelerationActive', movingActive);
+    assignDefined(directState, 'vibrationActive', movingActive);
+    if (movingActive !== undefined) {
+      assignDefined(directState, 'acceleration', movingActive ? 'active' : 'inactive');
+      assignDefined(directState, 'vibration', movingActive ? 'active' : 'inactive');
+    }
+
+    const xAxis = normalizeNumber(data.zAxis ?? data.zaxis ?? data.x_axis ?? data.xAxis);
+    const yAxis = normalizeNumber(data.yAxis ?? data.yaxis ?? data.y_axis);
+    const rawZAxis = normalizeNumber(data.xAxis ?? data.xaxis ?? data.z_axis ?? data.zAxis);
+    const zAxis = rawZAxis === null ? null : -rawZAxis;
+    assignDefined(directState, 'xAxis', xAxis);
+    assignDefined(directState, 'yAxis', yAxis);
+    assignDefined(directState, 'zAxis', zAxis);
+    if (xAxis !== null && yAxis !== null && zAxis !== null) {
+      directState.axis = [xAxis, yAxis, zAxis];
+    }
+  }
+
   if (cluster === 'msrelativehumidity') {
     assignDefined(directState, 'humidity', normalizeZigbeeHumidityPercent(data.measuredValue ?? data.measuredvalue ?? data.humidity, 'centi'));
   }
@@ -1812,6 +1833,33 @@ function readZigbeeStateObject(zigbeeDevice, directState) {
   assignDefinedIfMissing(directState, 'accelerationActive', accelerationActive);
   if (accelerationActive !== undefined && directState.acceleration === undefined) {
     directState.acceleration = accelerationActive ? 'active' : 'inactive';
+  }
+
+  const movingActive = normalizeZigbeeActiveState(readZigbeeStateObjectValue(zigbeeDevice, ['moving']));
+  assignDefinedIfMissing(directState, 'accelerationActive', movingActive);
+  assignDefinedIfMissing(directState, 'vibrationActive', movingActive);
+  if (movingActive !== undefined) {
+    if (directState.acceleration === undefined) {
+      directState.acceleration = movingActive ? 'active' : 'inactive';
+    }
+    if (directState.vibration === undefined) {
+      directState.vibration = movingActive ? 'active' : 'inactive';
+    }
+  }
+
+  const xAxis = normalizeNumber(readZigbeeStateObjectValue(zigbeeDevice, ['x_axis', 'xAxis', 'acceleration_x']));
+  const yAxis = normalizeNumber(readZigbeeStateObjectValue(zigbeeDevice, ['y_axis', 'yAxis', 'acceleration_y']));
+  const zAxis = normalizeNumber(readZigbeeStateObjectValue(zigbeeDevice, ['z_axis', 'zAxis', 'acceleration_z']));
+  assignDefinedIfMissing(directState, 'xAxis', xAxis);
+  assignDefinedIfMissing(directState, 'yAxis', yAxis);
+  assignDefinedIfMissing(directState, 'zAxis', zAxis);
+  if (
+    directState.axis === undefined
+    && xAxis !== null
+    && yAxis !== null
+    && zAxis !== null
+  ) {
+    directState.axis = [xAxis, yAxis, zAxis];
   }
 
   const tamperActive = normalizeZigbeeActiveState(readZigbeeStateObjectValue(zigbeeDevice, ['tamper', 'tamper_alarm']));
@@ -1975,6 +2023,7 @@ function inferFeaturesFromDirectRadioState(directState = {}) {
   if (directState.motionActive !== undefined || directState.motion !== undefined) features.push('motion');
   if (directState.vibrationActive !== undefined || directState.vibration !== undefined) features.push('vibration');
   if (directState.accelerationActive !== undefined || directState.acceleration !== undefined) features.push('acceleration');
+  if (directState.axis !== undefined || directState.xAxis !== undefined || directState.yAxis !== undefined || directState.zAxis !== undefined) features.push('axis');
   if (directState.tamper !== undefined || directState.tamperActive !== undefined) features.push('tamper');
   if (directState.batteryLevel !== undefined || directState.batteryLow !== undefined || directState.batteryVoltage !== undefined) features.push('battery');
   if (directState.temperatureC !== undefined || directState.temperatureF !== undefined) features.push('temperature');
@@ -2312,8 +2361,9 @@ function inferFeaturesFromZigbeeDefinition(definition, zigbeeDevice) {
       [/\billuminance\b/, 'illuminance'],
       [/\bbattery\b|\bbattery_low\b/, 'battery'],
       [/\btamper\b/, 'tamper'],
-      [/\bvibration\b|\baccelerat/, 'vibration'],
-      [/\baccelerat/, 'acceleration'],
+      [/\bvibration\b|\baccelerat|\bmoving\b/, 'vibration'],
+      [/\baccelerat|\bmoving\b/, 'acceleration'],
+      [/\b(?:x_axis|y_axis|z_axis|axis)\b/, 'axis'],
       [/\baction\b|\bbutton\b/, 'button'],
       [/\bwater_leak\b|\bwater\b/, 'water'],
       [/\bpower\b/, 'power'],
