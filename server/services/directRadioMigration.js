@@ -251,6 +251,31 @@ const SMARTTHINGS_RECLAIMABLE_NATIVE_PAIRING_STATUSES = new Set([
 
 const getRemovalRequestStatus = (removalRequest) => normalizeSourceText(removalRequest?.status);
 
+const readObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
+
+const hasZigbeeNativeIdentity = (direct = {}) => Boolean(
+  trimString(direct.modelID)
+    || trimString(direct.manufacturerName)
+    || trimString(direct.catalog?.model)
+);
+
+const isZigbeeIasZoneReady = (direct = {}) => {
+  const iasZone = readObject(direct.iasZone);
+  if (Object.keys(iasZone).length === 0) {
+    return false;
+  }
+  return iasZone.enrolled === true && iasZone.cieMatchesCoordinator === true;
+};
+
+const hasDirectContactState = (directState = {}) => {
+  if (Object.prototype.hasOwnProperty.call(directState, 'contactOpen')
+    && typeof directState.contactOpen === 'boolean') {
+    return true;
+  }
+  const contact = trimString(directState.contact).toLowerCase();
+  return contact === 'open' || contact === 'closed';
+};
+
 module.exports = {
 attachZWaveMigrationRequestHandlers(driver, zwave) {
     if (!driver || driver.__homebrainMigrationRequestHandlersAttached || typeof driver.registerRequestHandler !== 'function') {
@@ -1423,6 +1448,9 @@ buildMigrationFinalizationValidation(device, protocol, reason) {
     const requiredPreviousFeatures = previousFeatures
       .map(normalizeFeature)
       .filter((feature) => feature && !optionalSmartThingsFeatures.has(feature));
+    const directState = readObject(properties.directRadioState);
+    const requiresZigbeeContactReporting = protocol === 'zigbee'
+      && requiredPreviousFeatures.includes('contact');
     const identity = protocol === 'zigbee'
       ? trimString(direct.ieeeAddr)
       : trimString(direct.nodeId);
@@ -1462,6 +1490,37 @@ buildMigrationFinalizationValidation(device, protocol, reason) {
         required: true
       }
     ];
+    if (requiresZigbeeContactReporting) {
+      checks.push(
+        {
+          key: 'zigbee_identity',
+          label: 'Native Zigbee interview identity',
+          previous: null,
+          homebrain: {
+            modelID: trimString(direct.modelID) || null,
+            manufacturerName: trimString(direct.manufacturerName) || null
+          },
+          matched: hasZigbeeNativeIdentity(direct),
+          required: true
+        },
+        {
+          key: 'zigbee_ias_zone',
+          label: 'IAS Zone enrollment',
+          previous: null,
+          homebrain: direct.iasZone || null,
+          matched: isZigbeeIasZoneReady(direct),
+          required: true
+        },
+        {
+          key: 'zigbee_contact_state',
+          label: 'Native contact state',
+          previous: null,
+          homebrain: directState.contact ?? directState.contactOpen ?? null,
+          matched: hasDirectContactState(directState),
+          required: true
+        }
+      );
+    }
 
     return {
       validatedAt: new Date().toISOString(),
@@ -1872,7 +1931,7 @@ buildMigrationVerificationResult(migration, result = {}) {
         completedAt: migration.completedAt || null,
         directIdentity: migration.directIdentity || null,
         directDeviceId: migration.directDeviceId || null,
-        validation: migration.validation || null,
+        validation: result.validation || migration.validation || null,
         zwaveEvents: Array.isArray(migration.zwaveEvents) ? migration.zwaveEvents.slice(-8) : [],
         smartThings: migration.smartThingsExclusionEvidence || null,
         expiresAt,
@@ -2341,21 +2400,35 @@ async verifyMigrationReadiness(migration) {
     const directRouteReady = normalizeSourceText(device?.properties?.source) === expectedSource
       && directProtocol === migration.protocol
       && device?.isOnline !== false;
+    const validation = directRouteReady
+      ? this.buildMigrationFinalizationValidation(device, migration.protocol, 'Native HomeBrain route and controls verified')
+      : null;
+    const validationPassed = validation?.status === 'passed';
+    const failedLabels = Array.isArray(validation?.checks)
+      ? validation.checks
+        .filter((check) => check?.required && !check.matched)
+        .map((check) => check.label)
+      : [];
 
-    return this.buildMigrationVerificationResult(migration, directRouteReady
+    return this.buildMigrationVerificationResult(migration, directRouteReady && validationPassed
       ? {
           phase: 'verification',
           status: 'verified',
-          message: 'HomeBrain verified the native route, online state, and migration metadata. Keep SmartThings available until you are satisfied the real control path behaves correctly.'
+          message: 'HomeBrain verified the native route, live radio readiness, online state, and migration metadata. Keep SmartThings available until you are satisfied the real control path behaves correctly.',
+          validation
         }
       : {
           phase: 'verification',
           status: 'failed',
-          message: 'HomeBrain found the migration session, but the native route is not ready on the device record yet.',
+          message: directRouteReady && failedLabels.length > 0
+            ? `HomeBrain found the native route, but ${failedLabels.join(', ')} is not ready yet.`
+            : 'HomeBrain found the migration session, but the native route is not ready on the device record yet.',
           guidance: [
             'Wait for the radio interview to finish and refresh the device details.',
+            'For Zigbee contact sensors, keep the sensor awake until HomeBrain captures IAS Zone enrollment and a native contact state.',
             'Do not retire the SmartThings route until HomeBrain shows the native route online.'
-          ]
+          ],
+          validation
         });
   },
 

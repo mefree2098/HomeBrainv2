@@ -349,6 +349,28 @@ test('Zigbee normalization enriches devices from the installed converter catalog
   assert.ok(normalized.update.properties.directRadioCatalog.exposes.some((expose) => expose.type === 'switch'));
 });
 
+test('Zigbee normalization marks empty interview shells incomplete and offline', () => {
+  const service = createService();
+  const normalized = service.normalizeZigbeeDevice({
+    ieeeAddr: '0x000d6f00057c3ef1',
+    networkAddress: 57452,
+    modelID: null,
+    manufacturerName: null,
+    interviewCompleted: true,
+    endpoints: []
+  }, 'sync');
+
+  assert.equal(normalized.update.isOnline, false);
+  assert.equal(normalized.update.properties.homebrainDirect.interviewCompleted, false);
+  assert.equal(normalized.update.properties.homebrainDirect.incomplete, true);
+  assert.equal(
+    normalized.update.properties.homebrainDirect.incompleteReason,
+    'missing_zigbee_interview_identity_and_state'
+  );
+  assert.deepEqual(normalized.update.properties.directRadioFeatures, []);
+  assert.equal(normalized.update.properties.directRadioState, undefined);
+});
+
 test('Zigbee normalization captures SmartThings multipurpose moving and axis state', () => {
   const service = createService();
   const normalized = service.normalizeZigbeeDevice({
@@ -1480,6 +1502,94 @@ test('direct radio migration finalization persists passed validation for native 
   }
 });
 
+test('direct radio migration finalization rejects incomplete Zigbee contact records', async () => {
+  const service = createService();
+  service.emitDeviceUpdate = () => {};
+
+  const originalFindById = Device.findById;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalDeleteDevice = smartThingsService.deleteDevice;
+  const device = {
+    _id: {
+      toString: () => DEVICE_ID
+    },
+    name: 'Front Door',
+    type: 'sensor',
+    room: 'Upstairs',
+    status: false,
+    isOnline: true,
+    properties: {
+      source: 'homebrain-zigbee',
+      smartThingsCapabilities: ['contactSensor', 'temperatureMeasurement', 'threeAxis', 'accelerationSensor', 'battery'],
+      smartThingsDeviceId: 'smartthings-front-door',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x000d6f00057c3ef1',
+        modelID: null,
+        manufacturerName: null,
+        iasZone: null
+      },
+      directRadioFeatures: ['acceleration', 'axis', 'battery', 'contact', 'temperature', 'vibration'],
+      directRadioState: {
+        contactOpen: false,
+        contact: 'closed',
+        batteryLevel: 17
+      },
+      smartThingsMigration: {
+        migratedAt: '2026-05-31T02:50:00.000Z',
+        previousSource: 'smartthings',
+        smartThingsDeviceId: 'smartthings-front-door',
+        migrationId: 'migration-front-door',
+        validation: {
+          status: 'needs_review'
+        }
+      }
+    }
+  };
+  const persistedUpdates = [];
+  const deletedSmartThingsDeviceIds = [];
+  Device.findById = async () => device;
+  Device.findByIdAndUpdate = async (_id, update) => {
+    persistedUpdates.push(update);
+    return {
+      ...device,
+      ...update,
+      properties: update.properties
+    };
+  };
+  smartThingsService.deleteDevice = async (deviceId) => {
+    deletedSmartThingsDeviceIds.push(deviceId);
+    return {};
+  };
+
+  try {
+    let rejection = null;
+    try {
+      await service.finalizeDeviceMigration({
+        deviceId: DEVICE_ID,
+        reason: 'Native contact state verified'
+      });
+    } catch (error) {
+      rejection = error;
+    }
+
+    assert.ok(rejection);
+    assert.equal(rejection.status, 409);
+    assert.equal(rejection.validation.status, 'needs_review');
+    const checks = new Map(rejection.validation.checks.map((check) => [check.key, check]));
+    assert.equal(checks.get('features').matched, true);
+    assert.equal(checks.get('zigbee_identity').matched, false);
+    assert.equal(checks.get('zigbee_ias_zone').matched, false);
+    assert.equal(checks.get('zigbee_contact_state').matched, true);
+    assert.deepEqual(persistedUpdates, []);
+    assert.deepEqual(deletedSmartThingsDeviceIds, []);
+  } finally {
+    Device.findById = originalFindById;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    smartThingsService.deleteDevice = originalDeleteDevice;
+  }
+});
+
 test('direct radio migration finalization repairs retained SmartThings sensor telemetry before validation', async () => {
   const service = createService();
   service.emitDeviceUpdate = () => {};
@@ -1519,7 +1629,16 @@ test('direct radio migration finalization repairs retained SmartThings sensor te
       },
       homebrainDirect: {
         protocol: 'zigbee',
-        ieeeAddr: '0x000d6f00057c3ef1'
+        ieeeAddr: '0x000d6f00057c3ef1',
+        manufacturerName: 'SmartThings',
+        modelID: 'multi',
+        iasZone: {
+          enrolled: true,
+          zoneState: 1,
+          cieAddr: '0x00124b003a12562a',
+          coordinatorIeee: '0x00124b003a12562a',
+          cieMatchesCoordinator: true
+        }
       },
       directRadioFeatures: ['battery', 'contact', 'temperature'],
       smartThingsMigration: {
@@ -1682,7 +1801,14 @@ test('direct radio migration finalization recovers detached SmartThings source a
         protocol: 'zigbee',
         ieeeAddr: '0x000d6f000b11f6e5',
         manufacturerName: 'Visonic',
-        modelID: 'MCT-340 E'
+        modelID: 'MCT-340 E',
+        iasZone: {
+          enrolled: true,
+          zoneState: 1,
+          cieAddr: '0x00124b003a12562a',
+          coordinatorIeee: '0x00124b003a12562a',
+          cieMatchesCoordinator: true
+        }
       },
       directRadioFeatures: ['battery', 'contact', 'tamper', 'temperature'],
       directRadioState: {
@@ -2750,6 +2876,68 @@ test('direct-radio migration inclusion does not advance until HomeBrain complete
   });
   assert.equal(result.verification.status, 'verified');
   assert.equal(result.verification.canAdvance, true);
+});
+
+test('Zigbee contact migration verification blocks incomplete native reporting', async () => {
+  const service = createService();
+  const originalFindById = Device.findById;
+  const migration = {
+    id: 'migration-zigbee-contact-verification',
+    sourceDeviceId: DEVICE_ID,
+    protocol: 'zigbee',
+    status: 'completed',
+    completedAt: new Date().toISOString(),
+    inclusionVerifiedAt: new Date().toISOString(),
+    directIdentity: {
+      protocol: 'zigbee',
+      id: '0x000d6f00057c3ef1'
+    }
+  };
+  const device = {
+    _id: DEVICE_ID,
+    name: 'Front Door',
+    type: 'sensor',
+    room: 'Upstairs',
+    status: false,
+    isOnline: true,
+    properties: {
+      source: 'homebrain-zigbee',
+      smartThingsCapabilities: ['contactSensor', 'temperatureMeasurement', 'threeAxis', 'accelerationSensor', 'battery'],
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x000d6f00057c3ef1',
+        modelID: null,
+        manufacturerName: null,
+        iasZone: null
+      },
+      directRadioFeatures: ['acceleration', 'axis', 'battery', 'contact', 'temperature', 'vibration'],
+      directRadioState: {
+        contactOpen: false,
+        contact: 'closed'
+      }
+    }
+  };
+  service.activeMigrations.set(migration.id, migration);
+  Device.findById = () => ({
+    lean: async () => device
+  });
+
+  try {
+    const result = await service.verifyMigrationStep({
+      migrationId: migration.id,
+      phase: 'verification'
+    });
+
+    assert.equal(result.verification.status, 'failed');
+    assert.equal(result.verification.canAdvance, false);
+    assert.match(result.verification.message, /IAS Zone enrollment/);
+    const checks = new Map(result.verification.evidence.validation.checks.map((check) => [check.key, check]));
+    assert.equal(checks.get('features').matched, true);
+    assert.equal(checks.get('zigbee_identity').matched, false);
+    assert.equal(checks.get('zigbee_ias_zone').matched, false);
+  } finally {
+    Device.findById = originalFindById;
+  }
 });
 
 test('Z-Wave generic pairing waits for a submitted S2 DSK PIN instead of aborting', async () => {
