@@ -430,6 +430,105 @@ test('device_control action passes Insteon retry parameters through to command e
   assert.equal(result.actionResults[0].details.commandRetryCount, 2);
 });
 
+test('device_control action does not double-retry definitive Insteon command failures by default', async (t) => {
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const originalFindById = Device.findById;
+  const originalTurnOff = insteonService.turnOff;
+  let attempts = 0;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    insteonService.turnOff = originalTurnOff;
+  });
+
+  Device.findById = () => ({
+    lean: async () => ({
+      _id: deviceId,
+      name: 'Laundry Fan',
+      type: 'light',
+      properties: {
+        source: 'insteon'
+      }
+    })
+  });
+
+  insteonService.turnOff = async () => {
+    attempts += 1;
+    const error = new Error('Timeout turning off device (target device did not respond after PLM ACK) after 3 attempts');
+    error.code = 'INSTEON_DEVICE_NO_RESPONSE';
+    error.details = {
+      commandAttempts: 3,
+      commandRetryCount: 2
+    };
+    throw error;
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'device_control',
+      target: deviceId,
+      parameters: {
+        action: 'turn_off'
+      }
+    }
+  ], { context: {} });
+
+  assert.equal(attempts, 1);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.actionResults.length, 1);
+  assert.equal(result.actionResults[0].success, false);
+  assert.equal(result.actionResults[0].details.workflowRetry.attempts, 1);
+  assert.equal(result.actionResults[0].details.workflowRetry.maxAttempts, 3);
+  assert.equal(result.actionResults[0].details.workflowRetry.failures[0].willRetry, false);
+});
+
+test('device_control action still honors explicit workflow retry for Insteon command failures', async (t) => {
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const originalFindById = Device.findById;
+  const originalTurnOff = insteonService.turnOff;
+  let attempts = 0;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    insteonService.turnOff = originalTurnOff;
+  });
+
+  Device.findById = () => ({
+    lean: async () => ({
+      _id: deviceId,
+      name: 'Laundry Fan',
+      type: 'light',
+      properties: {
+        source: 'insteon'
+      }
+    })
+  });
+
+  insteonService.turnOff = async () => {
+    attempts += 1;
+    const error = new Error('Timeout turning off device (target device did not respond after PLM ACK) after 3 attempts');
+    error.code = 'INSTEON_DEVICE_NO_RESPONSE';
+    throw error;
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'device_control',
+      target: deviceId,
+      parameters: {
+        action: 'turn_off',
+        actionRetryCount: 1,
+        actionRetryDelayMs: 1
+      }
+    }
+  ], { context: {} });
+
+  assert.equal(attempts, 2);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.actionResults[0].details.workflowRetry.attempts, 2);
+  assert.equal(result.actionResults[0].details.workflowRetry.failures[0].willRetry, true);
+});
+
 test('device_control action gives Harmony workflow verification an extended timeout', async (t) => {
   const deviceId = new mongoose.Types.ObjectId().toString();
   const originalFindById = Device.findById;

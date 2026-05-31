@@ -689,6 +689,7 @@ function resolveActionRetryPolicy(action) {
 
   return {
     enabled: retries > 0,
+    explicit: optedIn || explicitRetryCount !== null,
     retries,
     maxAttempts: retries + 1,
     initialDelayMs,
@@ -744,6 +745,11 @@ function isRetryableActionError(error, action, policy = {}) {
   }
 
   if (hasConfigurationFailureMessage(error?.message)) {
+    return false;
+  }
+
+  const code = String(error?.code || '').trim().toUpperCase();
+  if (code.startsWith('INSTEON_') && policy.explicit !== true) {
     return false;
   }
 
