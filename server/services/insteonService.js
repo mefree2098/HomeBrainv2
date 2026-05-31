@@ -63,6 +63,8 @@ const DEFAULT_INSTEON_LATE_RUNTIME_ACK_TIMEOUT_MS = 30000;
 const DEFAULT_INSTEON_RUNTIME_SCENE_CACHE_TTL_MS = 300000;
 const DEFAULT_INSTEON_RUNTIME_POLL_TIMEOUT_BACKOFF_MS = 120000;
 const DEFAULT_INSTEON_RUNTIME_POLL_TIMEOUT_BACKOFF_THRESHOLD = 1;
+const DEFAULT_INSTEON_RUNTIME_POLL_DEVICE_TIMEOUT_BACKOFF_MS = 15 * 60 * 1000;
+const DEFAULT_INSTEON_RUNTIME_POLL_DEVICE_TIMEOUT_MAX_BACKOFF_MS = 60 * 60 * 1000;
 const DEFAULT_INSTEON_RUNTIME_TRANSPORT_DIAGNOSTIC_DEDUP_MS = 1500;
 const INSTEON_FALLBACK_SERIAL_DEVICE_PATTERNS = Object.freeze([
   /^ttyUSB\d+$/i,
@@ -113,6 +115,7 @@ class InsteonService {
     this._pendingRuntimeStateRefreshes = new Map();
     this._pendingRuntimeCommandAcks = new Map();
     this._runtimePollMetadata = new Map();
+    this._runtimePollFailureMetadata = new Map();
     this._runtimeSceneResponderCache = new Map();
     this._runtimeMonitoringCursor = 0;
     this._runtimeMonitoringTimer = null;
@@ -856,6 +859,90 @@ class InsteonService {
     this._runtimePollMetadata.set(normalizedAddress, Date.now());
   }
 
+  _clearRuntimePollFailure(address) {
+    const normalizedAddress = this._normalizePossibleInsteonAddress(address);
+    if (!normalizedAddress) {
+      return;
+    }
+
+    this._runtimePollFailureMetadata.delete(normalizedAddress);
+  }
+
+  _getRuntimePollFailureMetadata(address) {
+    const normalizedAddress = this._normalizePossibleInsteonAddress(address);
+    if (!normalizedAddress) {
+      return null;
+    }
+
+    const current = this._runtimePollFailureMetadata.get(normalizedAddress);
+    if (current && typeof current === 'object') {
+      return current;
+    }
+
+    return {
+      timeoutFailures: 0,
+      lastFailureAt: 0,
+      backoffUntil: 0
+    };
+  }
+
+  _getRuntimePollDeviceTimeoutBackoffMs(timeoutFailures = 1) {
+    const failureCount = Number.isFinite(Number(timeoutFailures))
+      ? Math.max(1, Math.trunc(Number(timeoutFailures)))
+      : 1;
+    const baseBackoffMs = Math.max(
+      DEFAULT_INSTEON_RUNTIME_POLL_DEVICE_TIMEOUT_BACKOFF_MS,
+      this._getRuntimePollTimeoutBackoffMs() * 2
+    );
+    const multiplier = 2 ** Math.min(2, failureCount - 1);
+    return Math.min(
+      DEFAULT_INSTEON_RUNTIME_POLL_DEVICE_TIMEOUT_MAX_BACKOFF_MS,
+      baseBackoffMs * multiplier
+    );
+  }
+
+  _recordRuntimePollFailure(address, error) {
+    const normalizedAddress = this._normalizePossibleInsteonAddress(address);
+    if (!normalizedAddress) {
+      return null;
+    }
+
+    if (error?.code !== 'INSTEON_LEVEL_TIMEOUT') {
+      this._clearRuntimePollFailure(normalizedAddress);
+      return null;
+    }
+
+    const nowMs = Date.now();
+    const current = this._getRuntimePollFailureMetadata(normalizedAddress);
+    const timeoutFailures = (Number(current?.timeoutFailures) || 0) + 1;
+    const backoffMs = this._getRuntimePollDeviceTimeoutBackoffMs(timeoutFailures);
+    const next = {
+      timeoutFailures,
+      lastFailureAt: nowMs,
+      backoffUntil: nowMs + backoffMs
+    };
+    this._runtimePollFailureMetadata.set(normalizedAddress, next);
+    return {
+      ...next,
+      backoffMs
+    };
+  }
+
+  _isRuntimePollBackedOff(address, nowMs = Date.now()) {
+    const metadata = this._getRuntimePollFailureMetadata(address);
+    return Boolean(metadata && Number(metadata.backoffUntil) > nowMs);
+  }
+
+  _countActiveRuntimePollBackoffs(nowMs = Date.now()) {
+    let count = 0;
+    for (const metadata of this._runtimePollFailureMetadata.values()) {
+      if (metadata && Number(metadata.backoffUntil) > nowMs) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
   _markRecentPlmControlActivity(cooldownMs = this._runtimeMonitoringCooldownMs) {
     const durationMs = Number.isFinite(Number(cooldownMs))
       ? Math.max(0, Math.round(Number(cooldownMs)))
@@ -1218,6 +1305,7 @@ class InsteonService {
       this._clearPendingRuntimeStateRefreshes();
       this._clearPendingRuntimeCommandAcks();
       this._runtimePollMetadata.clear();
+      this._runtimePollFailureMetadata.clear();
       this._runtimeSceneResponderCache.clear();
       this._runtimeMonitoringCursor = 0;
       this._clearPlmOperationQueue(new Error('PLM connection closed while operations were pending'));
@@ -1943,6 +2031,7 @@ class InsteonService {
       updated: 0,
       offlineMarked: 0,
       skipped: 0,
+      backedOff: 0,
       deferred: 0,
       errors: 0,
       levelTimeouts: 0
@@ -1965,6 +2054,11 @@ class InsteonService {
 
       if (this._pendingRuntimeStateRefreshes.has(normalizedAddress)) {
         summary.skipped += 1;
+        continue;
+      }
+
+      if (this._isRuntimePollBackedOff(normalizedAddress, nowMs)) {
+        summary.backedOff += 1;
         continue;
       }
 
@@ -2003,6 +2097,7 @@ class InsteonService {
         operation: 'runtime_poll',
         details: {
           eligibleDevices: summary.eligible,
+          backedOffDevices: summary.backedOff,
           configuredBatchSize: this._runtimeMonitoringBatchSize,
           effectiveBatchSize,
           cursorStart,
@@ -2026,6 +2121,7 @@ class InsteonService {
           kind: 'runtime_poll'
         });
         this._markRuntimePollAttempt(normalizedAddress);
+        this._clearRuntimePollFailure(normalizedAddress);
         const nextState = this._stateFromInsteonLevel(level);
         if (this._runtimeStatePatchWouldChange(device, nextState)) {
           await this._persistDeviceRuntimeStateByAddress(normalizedAddress, nextState);
@@ -2033,6 +2129,7 @@ class InsteonService {
         }
       } catch (error) {
         this._markRuntimePollAttempt(normalizedAddress);
+        const failureMetadata = this._recordRuntimePollFailure(normalizedAddress, error);
         summary.errors += 1;
         if (error?.code === 'INSTEON_LEVEL_TIMEOUT') {
           summary.levelTimeouts += 1;
@@ -2043,7 +2140,11 @@ class InsteonService {
           operation: 'runtime_poll',
           address: normalizedAddress,
           details: {
-            error: error.message
+            error: error.message,
+            timeoutFailures: failureMetadata?.timeoutFailures || 0,
+            runtimePollBackoffUntil: failureMetadata?.backoffUntil
+              ? new Date(failureMetadata.backoffUntil).toISOString()
+              : null
           }
         });
         if (error?.code !== 'INSTEON_LEVEL_TIMEOUT' && device.isOnline !== false) {
@@ -2114,6 +2215,7 @@ class InsteonService {
     this._runtimeMonitoringInProgress = false;
     this._runtimeMonitoringCursor = 0;
     this._runtimePollTimeoutFailureStreak = 0;
+    this._runtimePollFailureMetadata.clear();
     this._clearRuntimeMonitoringTimer();
   }
 
@@ -2138,6 +2240,8 @@ class InsteonService {
 
     const pollMetadataEntriesCleared = this._runtimePollMetadata.size;
     this._runtimePollMetadata.clear();
+    const pollFailureEntriesCleared = this._runtimePollFailureMetadata.size;
+    this._runtimePollFailureMetadata.clear();
     this._recentRuntimeCommandSignatures.clear();
 
     const runtimeDeviceCacheEntriesCleared = this.devices.size;
@@ -2157,6 +2261,7 @@ class InsteonService {
         pendingCommandAcksCleared,
         sceneCacheEntriesCleared,
         pollMetadataEntriesCleared,
+        pollFailureEntriesCleared,
         runtimeDeviceCacheEntriesCleared,
         runtimeCursorReset,
         runtimeCooldownCleared
@@ -12932,6 +13037,7 @@ class InsteonService {
         coolingDown: this._isRuntimeMonitoringCoolingDown(),
         cooldownRemainingMs: this._getRuntimeMonitoringCooldownRemainingMs(),
         timeoutFailureStreak: this._runtimePollTimeoutFailureStreak,
+        pollBackoffCount: this._countActiveRuntimePollBackoffs(),
         pollTimeoutMs: this._runtimeStatePollTimeoutMs,
         pollPauseMs: this._runtimeStatePollPauseMs,
         pendingRefreshes: this._pendingRuntimeStateRefreshes.size

@@ -1153,6 +1153,7 @@ test('_pollTrackedDeviceStates does not mark dimmers offline when level queries 
   const originalSelectRuntimePollBatch = insteonService._selectRuntimePollBatch;
   const originalRuntimeMonitoringIntervalMs = insteonService._runtimeMonitoringIntervalMs;
   const originalRuntimePollTimeoutFailureStreak = insteonService._runtimePollTimeoutFailureStreak;
+  const originalRuntimePollFailureMetadata = insteonService._runtimePollFailureMetadata;
 
   t.after(() => {
     Device.find = originalDeviceFind;
@@ -1164,6 +1165,7 @@ test('_pollTrackedDeviceStates does not mark dimmers offline when level queries 
     insteonService._selectRuntimePollBatch = originalSelectRuntimePollBatch;
     insteonService._runtimeMonitoringIntervalMs = originalRuntimeMonitoringIntervalMs;
     insteonService._runtimePollTimeoutFailureStreak = originalRuntimePollTimeoutFailureStreak;
+    insteonService._runtimePollFailureMetadata = originalRuntimePollFailureMetadata;
   });
 
   const trackedDevice = {
@@ -1200,6 +1202,7 @@ test('_pollTrackedDeviceStates does not mark dimmers offline when level queries 
   });
   insteonService._runtimeMonitoringIntervalMs = 30000;
   insteonService._runtimePollTimeoutFailureStreak = 0;
+  insteonService._runtimePollFailureMetadata = new Map();
 
   const summary = await insteonService._pollTrackedDeviceStates();
 
@@ -1210,6 +1213,72 @@ test('_pollTrackedDeviceStates does not mark dimmers offline when level queries 
   assert.equal(persisted.length, 0);
   assert.equal(capturedCooldownMs, 120000);
   assert.equal(insteonService._runtimePollTimeoutFailureStreak, 1);
+  assert.equal(insteonService._runtimePollFailureMetadata.get('388A57').timeoutFailures, 1);
+  assert.equal(insteonService._isRuntimePollBackedOff('38.8A.57'), true);
+});
+
+test('_pollTrackedDeviceStates skips devices that are in runtime poll timeout backoff', async (t) => {
+  const originalDeviceFind = Device.find;
+  const originalQueryLevel = insteonService._queryDeviceLevelByAddress;
+  const originalPersistByAddress = insteonService._persistDeviceRuntimeStateByAddress;
+  const originalMarkRecentPlmControlActivity = insteonService._markRecentPlmControlActivity;
+  const originalHasPendingHigherPriorityPlmOperation = insteonService._hasPendingHigherPriorityPlmOperation;
+  const originalRuntimeMonitoringIntervalMs = insteonService._runtimeMonitoringIntervalMs;
+  const originalRuntimeMonitoringStaleAfterMs = insteonService._runtimeMonitoringStaleAfterMs;
+  const originalRuntimePollMetadata = insteonService._runtimePollMetadata;
+  const originalRuntimePollFailureMetadata = insteonService._runtimePollFailureMetadata;
+  const originalRuntimePollTimeoutFailureStreak = insteonService._runtimePollTimeoutFailureStreak;
+
+  t.after(() => {
+    Device.find = originalDeviceFind;
+    insteonService._queryDeviceLevelByAddress = originalQueryLevel;
+    insteonService._persistDeviceRuntimeStateByAddress = originalPersistByAddress;
+    insteonService._markRecentPlmControlActivity = originalMarkRecentPlmControlActivity;
+    insteonService._hasPendingHigherPriorityPlmOperation = originalHasPendingHigherPriorityPlmOperation;
+    insteonService._runtimeMonitoringIntervalMs = originalRuntimeMonitoringIntervalMs;
+    insteonService._runtimeMonitoringStaleAfterMs = originalRuntimeMonitoringStaleAfterMs;
+    insteonService._runtimePollMetadata = originalRuntimePollMetadata;
+    insteonService._runtimePollFailureMetadata = originalRuntimePollFailureMetadata;
+    insteonService._runtimePollTimeoutFailureStreak = originalRuntimePollTimeoutFailureStreak;
+  });
+
+  const trackedDevice = {
+    _id: 'device-backoff',
+    name: 'Backoff Dimmer',
+    type: 'light',
+    isOnline: true,
+    lastSeen: new Date('2026-04-02T12:00:00.000Z'),
+    properties: {
+      source: 'insteon',
+      insteonAddress: '38.8A.57'
+    }
+  };
+
+  let queryCount = 0;
+  Device.find = async () => [trackedDevice];
+  insteonService._queryDeviceLevelByAddress = async () => {
+    queryCount += 1;
+    const error = new Error('Timeout getting device status for 38.8A.57');
+    error.code = 'INSTEON_LEVEL_TIMEOUT';
+    throw error;
+  };
+  insteonService._persistDeviceRuntimeStateByAddress = async () => ({});
+  insteonService._markRecentPlmControlActivity = () => {};
+  insteonService._hasPendingHigherPriorityPlmOperation = () => false;
+  insteonService._runtimeMonitoringIntervalMs = 30000;
+  insteonService._runtimeMonitoringStaleAfterMs = 0;
+  insteonService._runtimePollMetadata = new Map();
+  insteonService._runtimePollFailureMetadata = new Map();
+  insteonService._runtimePollTimeoutFailureStreak = 0;
+
+  const firstSummary = await insteonService._pollTrackedDeviceStates();
+  const secondSummary = await insteonService._pollTrackedDeviceStates();
+
+  assert.equal(firstSummary.scanned, 1);
+  assert.equal(firstSummary.levelTimeouts, 1);
+  assert.equal(secondSummary.scanned, 0);
+  assert.equal(secondSummary.backedOff, 1);
+  assert.equal(queryCount, 1);
 });
 
 test('_recordRuntimePollBatchOutcome resets the timeout failure streak after a useful polling batch', () => {
