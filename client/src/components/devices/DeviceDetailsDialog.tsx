@@ -1382,6 +1382,8 @@ function DeviceTelemetryMetricCard({ metric, stats, points }: DeviceTelemetryMet
               axisLine={false}
               width={metric.binary ? 64 : 52}
               domain={metric.binary ? [0, 1] : ["auto", "auto"]}
+              ticks={metric.binary ? [0, 1] : undefined}
+              allowDecimals={!metric.binary}
               tickFormatter={(value) => metric.binary ? formatBinaryMetricValue(metric.key, Number(value)) : String(value)}
             />
             <ChartTooltip

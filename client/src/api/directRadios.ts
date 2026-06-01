@@ -43,6 +43,22 @@ export type DirectRadioControllerStatus = {
   lastStartResult?: unknown;
   pairedDeviceCount?: number;
   pairedNodeCount?: number;
+  nonControllerNodeCount?: number;
+  readyNodeCount?: number;
+  onlineNodeCount?: number;
+  incompleteNodeCount?: number;
+  offlineNodeCount?: number;
+  degraded?: boolean;
+  degradedNodeIds?: Array<number | string>;
+  nodeHealth?: {
+    nodeCount?: number;
+    readyNodeCount?: number;
+    onlineNodeCount?: number;
+    incompleteNodeCount?: number;
+    offlineNodeCount?: number;
+    degraded?: boolean;
+    degradedNodeIds?: Array<number | string>;
+  };
   devices?: DirectRadioZigbeeDevice[];
   nodes?: DirectRadioZWaveNode[];
 };

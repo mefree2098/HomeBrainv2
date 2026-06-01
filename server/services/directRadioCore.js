@@ -277,11 +277,13 @@ async _start(options = {}) {
 
     const status = await this.getStatus();
     this.ensureHardwareMonitor();
-    this.log('info', 'system', 'Direct radio startup check complete', {
+    const zwaveNodeHealth = status.controllers?.zwave?.nodeHealth || {};
+    this.log(zwaveNodeHealth.degraded ? 'warn' : 'info', 'system', 'Direct radio startup check complete', {
       zigbeeStarted: status.controllers?.zigbee?.started === true,
       zwaveStarted: status.controllers?.zwave?.started === true,
       zigbeePort: status.controllers?.zigbee?.detectedPort || null,
-      zwavePort: status.controllers?.zwave?.detectedPort || null
+      zwavePort: status.controllers?.zwave?.detectedPort || null,
+      zwaveNodeHealth
     });
     return status;
   },
@@ -544,7 +546,7 @@ async refreshHardwareStatus(options = {}) {
     return this.getStatus();
   },
 
-getZWaveControllerNodes(options = {}) {
+  getZWaveControllerNodes(options = {}) {
     const controller = this.getZWaveController();
     if (!controller) {
       return null;
@@ -568,6 +570,50 @@ getZWaveControllerNodes(options = {}) {
       }
       return null;
     }
+  },
+
+  summarizeZWaveNodeHealth(nodes = null) {
+    const summaries = Array.isArray(nodes) ? nodes : this.getZWaveNodeSummaries();
+    const deviceNodes = summaries.filter((node) => node && node.isControllerNode !== true);
+    const incompleteNodes = deviceNodes.filter((node) => node.incomplete === true);
+    const offlineNodes = deviceNodes.filter((node) => node.isOnline === false);
+    const readyNodes = deviceNodes.filter((node) => node.ready === true);
+    const onlineNodes = deviceNodes.filter((node) => node.isOnline !== false);
+    const degradedNodeIds = Array.from(new Set([
+      ...incompleteNodes.map((node) => node.id),
+      ...offlineNodes.map((node) => node.id)
+    ]))
+      .filter((nodeId) => nodeId !== null && nodeId !== undefined)
+      .sort((left, right) => Number(left) - Number(right));
+
+    return {
+      nodeCount: deviceNodes.length,
+      readyNodeCount: readyNodes.length,
+      onlineNodeCount: onlineNodes.length,
+      incompleteNodeCount: incompleteNodes.length,
+      offlineNodeCount: offlineNodes.length,
+      degraded: degradedNodeIds.length > 0,
+      degradedNodeIds
+    };
+  },
+
+  buildZWaveNodeHealthDiagnostics(nodeHealth = {}) {
+    if (!nodeHealth.degraded) {
+      return [];
+    }
+
+    const parts = [];
+    if (nodeHealth.incompleteNodeCount > 0) {
+      parts.push(`${nodeHealth.incompleteNodeCount} incomplete`);
+    }
+    if (nodeHealth.offlineNodeCount > 0) {
+      parts.push(`${nodeHealth.offlineNodeCount} offline`);
+    }
+    const nodeList = Array.isArray(nodeHealth.degradedNodeIds) && nodeHealth.degradedNodeIds.length > 0
+      ? `: nodes ${nodeHealth.degradedNodeIds.join(', ')}`
+      : '';
+
+    return [`Z-Wave controller is running but node health is degraded (${parts.join(', ')})${nodeList}.`];
   },
 
 dispatchHandler(label, protocol, fn, context = {}) {
@@ -996,9 +1042,12 @@ async getStatus() {
     const zigbeeDiagnostics = this.buildControllerDiagnostics('zigbee', zigbeePortDetails);
     const zwaveDiagnostics = this.buildControllerDiagnostics('zwave', zwavePortDetails);
     const zwaveNodeCacheError = this.zwave.nodeCacheError || null;
+    const zwaveNodeSummaries = this.getZWaveNodeSummaries();
+    const zwaveNodeHealth = this.summarizeZWaveNodeHealth(zwaveNodeSummaries);
+    const zwaveNodeHealthDiagnostics = this.buildZWaveNodeHealthDiagnostics(zwaveNodeHealth);
     const zwaveStatusDiagnostics = zwaveNodeCacheError && this.zwave.started
-      ? [...zwaveDiagnostics, `Z-Wave controller node cache is still starting: ${zwaveNodeCacheError}`]
-      : zwaveDiagnostics;
+      ? [...zwaveDiagnostics, `Z-Wave controller node cache is still starting: ${zwaveNodeCacheError}`, ...zwaveNodeHealthDiagnostics]
+      : [...zwaveDiagnostics, ...zwaveNodeHealthDiagnostics];
 
     const zigbeeDeviceSummaries = zigbeeDevices
       .filter((device) => device?.type !== 'Coordinator')
@@ -1055,7 +1104,15 @@ async getStatus() {
           inclusionState: this.getZWaveInclusionStateLabel(),
           pendingDsk: this.zwave.pendingDsk,
           pairedNodeCount: zwaveNodes && typeof zwaveNodes.size === 'number' ? zwaveNodes.size : 0,
-          nodes: this.getZWaveNodeSummaries()
+          nonControllerNodeCount: zwaveNodeHealth.nodeCount,
+          readyNodeCount: zwaveNodeHealth.readyNodeCount,
+          onlineNodeCount: zwaveNodeHealth.onlineNodeCount,
+          incompleteNodeCount: zwaveNodeHealth.incompleteNodeCount,
+          offlineNodeCount: zwaveNodeHealth.offlineNodeCount,
+          degraded: zwaveNodeHealth.degraded,
+          degradedNodeIds: zwaveNodeHealth.degradedNodeIds,
+          nodeHealth: zwaveNodeHealth,
+          nodes: zwaveNodeSummaries
         }
       },
       pairings: {

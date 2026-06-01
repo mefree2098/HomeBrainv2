@@ -168,3 +168,55 @@ test('direct radio status tolerates Z-Wave node cache startup errors', async () 
   assert.match(status.controllers.zwave.nodeCacheError, /not yet ready/i);
   assert.ok(status.controllers.zwave.diagnostics.some((entry) => /node cache is still starting/i.test(entry)));
 });
+
+test('direct radio status marks running Z-Wave controllers degraded when paired nodes are incomplete', async () => {
+  const service = new DirectRadioService();
+  service.zwave.started = true;
+  service.detected.zwave = {
+    path: '/dev/serial/by-id/usb-Zooz_800_Z-Wave_Stick_533D004242-if00'
+  };
+  service.zwave.driver = {
+    controller: {
+      nodes: new Map([
+        [1, {
+          id: 1,
+          isControllerNode: true,
+          ready: true,
+          status: 4
+        }],
+        [6, {
+          id: 6,
+          isControllerNode: false,
+          ready: true,
+          status: 4,
+          manufacturerId: 57,
+          productType: 18770,
+          productId: 12597,
+          valueDB: { hasValue: () => true }
+        }],
+        [14, {
+          id: 14,
+          isControllerNode: false,
+          ready: false,
+          status: 3,
+          interviewStage: 1,
+          isListening: true,
+          valueDB: { hasValue: () => false }
+        }]
+      ])
+    }
+  };
+
+  const status = await service.getStatus();
+  const zwave = status.controllers.zwave;
+
+  assert.equal(zwave.started, true);
+  assert.equal(zwave.degraded, true);
+  assert.equal(zwave.nonControllerNodeCount, 2);
+  assert.equal(zwave.onlineNodeCount, 1);
+  assert.equal(zwave.incompleteNodeCount, 1);
+  assert.equal(zwave.offlineNodeCount, 1);
+  assert.deepEqual(zwave.degradedNodeIds, [14]);
+  assert.deepEqual(zwave.nodeHealth.degradedNodeIds, [14]);
+  assert.ok(zwave.diagnostics.some((entry) => /node health is degraded/i.test(entry)));
+});
