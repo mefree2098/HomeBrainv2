@@ -7,6 +7,7 @@ const smartThingsService = require('../services/smartThingsService');
 
 const DirectRadioService = directRadioService.DirectRadioService;
 const {
+  inferFeaturesFromSmartThings,
   inferFeaturesFromZigbeeDefinition,
   isDuplicateDirectRadioRecord,
   mergeSmartThingsTelemetryFallback,
@@ -582,6 +583,85 @@ test('Zigbee feature inference falls back to endpoint clusters for Innr SP 224 p
   assert.ok(features.includes('switch'));
   assert.ok(features.includes('power'));
   assert.ok(features.includes('energy'));
+});
+
+test('SmartThings migration treats user-named Zigbee repeaters as route-only devices', () => {
+  const features = inferFeaturesFromSmartThings({
+    name: 'Garage Zigbee Repeater',
+    type: 'switch',
+    properties: {
+      source: 'smartthings',
+      smartThingsLabel: 'Garage Zigbee Repeater',
+      smartThingsDeviceName: 'Outlet',
+      smartThingsDeviceNetworkType: 'ZIGBEE',
+      smartThingsCapabilities: [
+        'switch',
+        'powerMeter',
+        'firmwareUpdate',
+        'refresh'
+      ],
+      smartThingsCategories: [
+        'smartplug'
+      ]
+    }
+  });
+
+  assert.ok(features.includes('repeater'));
+  assert.ok(features.includes('firmware'));
+  assert.equal(features.includes('switch'), false);
+  assert.equal(features.includes('power'), false);
+});
+
+test('Zigbee feature inference treats route-only routers as repeaters', () => {
+  const features = inferFeaturesFromZigbeeDefinition(null, {
+    type: 'Router',
+    modelID: 'Signal Repeater',
+    manufacturerName: 'Acme',
+    endpoints: []
+  });
+
+  assert.deepEqual(features, ['repeater']);
+});
+
+test('active Zigbee migration accepts route-only repeater updates without switch state', () => {
+  const service = createService();
+  const migration = {
+    id: 'migration-garage-repeater',
+    sourceDeviceId: SOURCE_DEVICE_ID,
+    protocol: 'zigbee',
+    status: 'pairing',
+    expiresAt: Date.now() + 60_000
+  };
+  service.activePairings.set('zigbee', {
+    id: 'pairing-garage-repeater',
+    protocol: 'zigbee',
+    status: 'active',
+    baselineIdentities: [],
+    events: []
+  });
+
+  const update = {
+    name: 'Signal Repeater',
+    type: 'sensor',
+    isOnline: true,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x00124b0000abcdef',
+        deviceType: 'Router',
+        modelID: 'Signal Repeater',
+        manufacturerName: 'Acme',
+        lastReason: 'message'
+      },
+      directRadioFeatures: ['repeater']
+    }
+  };
+
+  assert.equal(service.shouldCompleteActiveMigration({
+    protocol: 'zigbee',
+    id: '0x00124b0000abcdef'
+  }, update, migration), true);
 });
 
 test('Zigbee feature inference recognizes SmartThings multipurpose moving and axis exposes', () => {

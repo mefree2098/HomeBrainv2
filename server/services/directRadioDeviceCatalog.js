@@ -44,6 +44,7 @@ const FEATURE_LABELS = Object.freeze({
   weight: 'Weight',
   voltage: 'Voltage',
   current: 'Current',
+  repeater: 'Mesh repeater / router',
   firmware: 'Firmware status',
   health: 'Health / online state'
 });
@@ -109,7 +110,8 @@ const ZIGBEE_PREFERRED_FEATURES = new Set([
   'energy',
   'button',
   'presence',
-  'water'
+  'water',
+  'repeater'
 ]);
 
 const ZWAVE_PREFERRED_FEATURES = new Set([
@@ -255,11 +257,25 @@ function getDeviceDescriptor(device) {
     .join(' ');
 }
 
+function getUserFacingDeviceDescriptor(device) {
+  return [
+    device?.name,
+    device?.label,
+    device?.properties?.smartThingsLabel
+  ]
+    .map((entry) => normalizeToken(entry).toLowerCase())
+    .filter(Boolean)
+    .join(' ');
+}
+
 function inferFeaturesFromSmartThings(device) {
   const features = new Set();
   const capabilities = getSmartThingsCapabilities(device);
   const categories = getSmartThingsCategories(device);
   const descriptor = getDeviceDescriptor(device);
+  const userFacingDescriptor = getUserFacingDeviceDescriptor(device);
+  const userNamedRepeater = /\b(?:repeater|extender|range extender|signal)\b/.test(userFacingDescriptor);
+  const userNamedControllable = /\b(?:plug|outlet|socket|switch|relay|light|bulb|dimmer)\b/.test(userFacingDescriptor);
 
   capabilities.forEach((capability) => {
     (SMARTTHINGS_CAPABILITY_FEATURES[capability] || []).forEach((feature) => features.add(feature));
@@ -285,8 +301,11 @@ function inferFeaturesFromSmartThings(device) {
     features.add('switch');
     features.add('brightness');
   }
-  if (/\b(?:plug|outlet|switch|repeater|extender)\b/.test(descriptor)) {
+  if (/\b(?:plug|outlet|socket|switch|relay)\b/.test(descriptor)) {
     features.add('switch');
+  }
+  if (/\b(?:repeater|extender|range extender|signal repeater|signal booster)\b/.test(descriptor)) {
+    features.add('repeater');
   }
   if (/\b(?:deadbolt|lock)\b/.test(descriptor)) {
     features.add('lock');
@@ -298,6 +317,12 @@ function inferFeaturesFromSmartThings(device) {
   if (/\b(?:fob|button|keypad|scene controller)\b/.test(descriptor)) {
     features.add('button');
     features.add('battery');
+  }
+  if (userNamedRepeater && !userNamedControllable) {
+    features.add('repeater');
+    features.delete('switch');
+    features.delete('power');
+    features.delete('energy');
   }
 
   return Array.from(features).sort();
@@ -663,6 +688,12 @@ function buildNormalizedCapabilities(features, protocol = 'unknown') {
       writable: false,
       unit: 'A'
     },
+    repeater: {
+      type: 'mesh_repeater',
+      property: 'route',
+      readable,
+      writable: false
+    },
     firmware: {
       type: 'firmware',
       property: 'firmware',
@@ -916,7 +947,18 @@ function getZigbeePhysicalInstructions(device, features = new Set()) {
     };
   }
 
-  if (features.has('switch') || features.has('power') || /\b(?:plug|outlet|repeater)\b/.test(descriptor)) {
+  if (features.has('repeater') && !features.has('switch') && !features.has('power')) {
+    return {
+      profile: instructionProfile('zigbee-signal-repeater', 'Zigbee signal repeater', 'medium'),
+      pairing: [
+        `Plug in ${name} near the SONOFF coordinator for initial pairing.`,
+        'Hold the reset or pair button for 5 to 10 seconds until the LED starts blinking rapidly.',
+        'Leave it powered until HomeBrain confirms the Zigbee route/repeater interview.'
+      ]
+    };
+  }
+
+  if (features.has('switch') || features.has('power') || /\b(?:plug|outlet|socket)\b/.test(descriptor)) {
     return {
       profile: instructionProfile('zigbee-plug-outlet-repeater', 'Zigbee plug, outlet, or repeater', 'medium'),
       pairing: [
@@ -1177,6 +1219,7 @@ function buildDirectFeatureProperties(features) {
     supportsEnergyMeter: featureSet.has('energy'),
     supportsVoltage: featureSet.has('voltage'),
     supportsCurrent: featureSet.has('current'),
+    supportsRepeater: featureSet.has('repeater'),
     supportsThermostat: featureSet.has('thermostat'),
     supportsAlarm: featureSet.has('alarm'),
     supportsChime: featureSet.has('chime'),

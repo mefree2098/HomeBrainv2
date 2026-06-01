@@ -274,6 +274,7 @@ directRadioService._test = {
   addFallbackSerialPortCandidates,
   choosePortForProtocol,
   enrichSerialPortForDirectRadios,
+  inferFeaturesFromSmartThings,
   inferFeaturesFromZigbeeDefinition,
   getSirenVolumeConfigParameterFromCatalog,
   getSirenVolumeOptionsFromParameter,
