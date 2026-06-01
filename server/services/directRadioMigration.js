@@ -239,8 +239,16 @@ const buildSmartThingsRemovalFailureError = (migration, removalRequest = {}) => 
 const SMARTTHINGS_REMOVAL_STARTED_STATUSES = new Set([
   'requested',
   'already_missing',
+  'already_removed',
   'deleted',
   'already_gone'
+]);
+
+const SMARTTHINGS_DELETE_FINAL_STATUSES = new Set([
+  'already_gone',
+  'already_missing',
+  'already_removed',
+  'deleted'
 ]);
 
 const SMARTTHINGS_AWAITING_NATIVE_PAIRING_STATUS = 'awaiting_native_pairing';
@@ -1314,6 +1322,41 @@ async deleteSmartThingsDeviceAfterNativeMigration(directDevice, smartThingsDevic
     };
 
     const deletedAt = new Date().toISOString();
+    const removalRequest = this.getSmartThingsRemovalRequestForMigration(smartThingsMigration, directDevice);
+    const removalStatus = getRemovalRequestStatus(removalRequest)
+      || normalizeSourceText(smartThingsMigration.smartThingsRemovalStatus);
+    const deleteStatus = normalizeSourceText(smartThingsMigration.smartThingsDeleteStatus);
+    const removalAlreadyAccepted = smartThingsMigration.smartThingsRemovedFromSmartThings === true
+      || SMARTTHINGS_REMOVAL_STARTED_STATUSES.has(removalStatus)
+      || SMARTTHINGS_DELETE_FINAL_STATUSES.has(deleteStatus);
+    if (removalAlreadyAccepted) {
+      const normalizedStatus = SMARTTHINGS_DELETE_FINAL_STATUSES.has(deleteStatus)
+        ? deleteStatus
+        : 'already_removed';
+      const updated = await updateMigrationState({
+        smartThingsRemovalStatus: smartThingsMigration.smartThingsRemovalStatus || removalStatus || 'requested',
+        smartThingsRemovalRequestedAt: smartThingsMigration.smartThingsRemovalRequestedAt
+          || removalRequest?.requestedAt
+          || smartThingsMigration.updatedAt
+          || deletedAt,
+        smartThingsRemovalRequest: removalRequest || smartThingsMigration.smartThingsRemovalRequest || null,
+        smartThingsRemovedFromSmartThings: true,
+        smartThingsDeleteStatus: normalizedStatus,
+        smartThingsDeletedAt: smartThingsMigration.smartThingsDeletedAt || deletedAt,
+        smartThingsDeleteReason: trimString(context.reason) || 'native_migration_finalized',
+        smartThingsDeleteError: null,
+        smartThingsDeleteFailedAt: null
+      });
+      this.log('info', 'smartthings', 'Skipped SmartThings delete retry because removal was already requested before native migration finalization', {
+        smartThingsDeviceId: safeSmartThingsDeviceId,
+        directDeviceId,
+        migrationId: trimString(context.migrationId) || smartThingsMigration.migrationId || null,
+        removalStatus: removalStatus || null,
+        deleteStatus: normalizedStatus
+      });
+      return { status: normalizedStatus, device: updated, deletedAt };
+    }
+
     try {
       await smartThingsService.deleteDevice(safeSmartThingsDeviceId);
       const updated = await updateMigrationState({
@@ -1761,8 +1804,13 @@ async finalizeDeviceMigration({ deviceId, migrationId, reason } = {}) {
       smartThingsMigration: {
         ...migration,
         migrationId: trimString(migrationId) || migration.migrationId || null,
+        status: 'native_joined',
+        nativePairingStatus: 'verified',
+        lastNativePairingMessage: trimString(reason)
+          || 'HomeBrain finalized this SmartThings migration on the native direct-radio route.',
         finalizedAt,
         finalizedBy: 'homebrain',
+        updatedAt: finalizedAt,
         validation: {
           ...(migration.validation && typeof migration.validation === 'object' ? migration.validation : {}),
           ...validation,

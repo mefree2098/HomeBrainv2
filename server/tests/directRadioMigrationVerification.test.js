@@ -1699,9 +1699,111 @@ test('direct radio migration finalization persists passed validation for native 
     assert.equal(persistedUpdate.properties.smartThingsMigration.validation.status, 'passed');
     assert.equal(persistedUpdate.properties.smartThingsMigration.validation.finalized, true);
     assert.ok(persistedUpdate.properties.smartThingsMigration.finalizedAt);
+    assert.equal(persistedUpdate.properties.smartThingsMigration.status, 'native_joined');
+    assert.equal(persistedUpdate.properties.smartThingsMigration.nativePairingStatus, 'verified');
     assert.equal(persistedUpdate.properties.smartThingsMigration.smartThingsDeleteStatus, 'deleted');
     assert.ok(persistedUpdate.properties.smartThingsMigration.smartThingsDeletedAt);
     assert.deepEqual(deletedSmartThingsDeviceIds, ['smartthings-device-1']);
+  } finally {
+    Device.findById = originalFindById;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    smartThingsService.deleteDevice = originalDeleteDevice;
+  }
+});
+
+test('direct radio migration finalization does not retry SmartThings delete after accepted removal request', async () => {
+  const service = createService();
+  service.emitDeviceUpdate = () => {};
+
+  const originalFindById = Device.findById;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalDeleteDevice = smartThingsService.deleteDevice;
+  let device = {
+    _id: {
+      toString: () => DEVICE_ID
+    },
+    name: 'Back Door',
+    type: 'sensor',
+    room: 'Upstairs',
+    status: false,
+    isOnline: true,
+    properties: {
+      source: 'homebrain-zigbee',
+      smartThingsCapabilities: ['contactSensor', 'temperatureMeasurement', 'threeAxis', 'accelerationSensor', 'battery'],
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x000d6f00057c378b',
+        manufacturerName: 'CentraLite',
+        modelID: '3321-S',
+        iasZone: {
+          enrolled: true,
+          zoneState: 1,
+          cieAddr: '0x00124b003a12562a',
+          coordinatorIeee: '0x00124b003a12562a',
+          cieMatchesCoordinator: true
+        }
+      },
+      directRadioFeatures: ['acceleration', 'axis', 'battery', 'contact', 'temperature', 'vibration'],
+      directRadioState: {
+        contactOpen: false,
+        contact: 'closed',
+        batteryLevel: 33
+      },
+      smartThingsMigration: {
+        status: 'native_joined_pending_interview',
+        nativePairingStatus: 'joined',
+        migratedAt: '2026-05-31T23:34:26.447Z',
+        previousSource: 'smartthings',
+        smartThingsDeviceId: 'smartthings-back-door',
+        migrationId: 'migration-back-door',
+        smartThingsRemovalStatus: 'requested',
+        smartThingsRemovalRequestedAt: '2026-05-31T23:09:22.992Z',
+        smartThingsRemovalRequest: {
+          status: 'requested',
+          requestedAt: '2026-05-31T23:09:22.992Z'
+        },
+        smartThingsRemovedFromSmartThings: true,
+        smartThingsDeleteStatus: 'failed',
+        smartThingsDeleteError: 'SmartThings API DELETE failed 403',
+        smartThingsDeleteFailedAt: '2026-06-01T00:11:50.661Z',
+        validation: {
+          status: 'needs_review'
+        }
+      }
+    }
+  };
+  const persistedUpdates = [];
+  const deletedSmartThingsDeviceIds = [];
+  Device.findById = async () => device;
+  Device.findByIdAndUpdate = async (_id, update) => {
+    persistedUpdates.push(update);
+    device = {
+      ...device,
+      ...update,
+      properties: update.properties
+    };
+    return device;
+  };
+  smartThingsService.deleteDevice = async (deviceId) => {
+    deletedSmartThingsDeviceIds.push(deviceId);
+    throw new Error('delete should not be retried');
+  };
+
+  try {
+    const result = await service.finalizeDeviceMigration({
+      deviceId: DEVICE_ID,
+      reason: 'Native contact state verified'
+    });
+
+    const deleteUpdate = persistedUpdates.at(-1);
+    assert.equal(result.finalization.validation.status, 'passed');
+    assert.equal(deleteUpdate.properties.smartThingsMigration.status, 'native_joined');
+    assert.equal(deleteUpdate.properties.smartThingsMigration.nativePairingStatus, 'verified');
+    assert.equal(deleteUpdate.properties.smartThingsMigration.smartThingsDeleteStatus, 'already_removed');
+    assert.equal(deleteUpdate.properties.smartThingsMigration.smartThingsDeleteError, null);
+    assert.equal(deleteUpdate.properties.smartThingsMigration.smartThingsDeleteFailedAt, null);
+    assert.equal(deleteUpdate.properties.smartThingsMigration.smartThingsRemovedFromSmartThings, true);
+    assert.deepEqual(deletedSmartThingsDeviceIds, []);
   } finally {
     Device.findById = originalFindById;
     Device.findByIdAndUpdate = originalFindByIdAndUpdate;
