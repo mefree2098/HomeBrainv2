@@ -115,6 +115,241 @@ nonisolated struct DeviceItem: Identifiable {
 }
 
 extension DeviceItem {
+    private nonisolated static func normalizedString(_ value: Any?) -> String {
+        if let value = value as? String {
+            return value.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if let value {
+            return String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return ""
+    }
+
+    private nonisolated static func normalizedStringSet(_ value: Any?) -> Set<String> {
+        let values: [Any]
+        if let rawValues = value as? [Any] {
+            values = rawValues
+        } else if let rawValues = value as? [String] {
+            values = rawValues
+        } else {
+            values = []
+        }
+
+        return Set(
+            values
+                .map(normalizedString)
+                .map { $0.lowercased() }
+                .filter { !$0.isEmpty }
+        )
+    }
+
+    private nonisolated static func optionalBool(_ value: Any?) -> Bool? {
+        if let value = value as? Bool {
+            return value
+        }
+        if let value = value as? NSNumber {
+            return value.boolValue
+        }
+        if let value = value as? String {
+            switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "true", "1", "yes", "on", "open", "active", "detected", "wet", "locked":
+                return true
+            case "false", "0", "no", "off", "closed", "clear", "inactive", "dry", "unlocked":
+                return false
+            default:
+                return nil
+            }
+        }
+        return nil
+    }
+
+    nonisolated var directRadioState: [String: Any] {
+        JSON.object(properties["directRadioState"])
+    }
+
+    nonisolated var directRadioFeatureSet: Set<String> {
+        DeviceItem.normalizedStringSet(properties["directRadioFeatures"])
+    }
+
+    nonisolated var matterFeatureSet: Set<String> {
+        DeviceItem.normalizedStringSet(properties["matterFeatures"])
+    }
+
+    nonisolated var smartThingsCapabilitySet: Set<String> {
+        DeviceItem.normalizedStringSet(properties["smartThingsCapabilities"])
+            .union(DeviceItem.normalizedStringSet(properties["smartthingsCapabilities"]))
+    }
+
+    nonisolated var effectiveContactOpen: Bool? {
+        if directRadioState["contactOpen"] != nil {
+            return DeviceItem.optionalBool(directRadioState["contactOpen"])
+        }
+
+        let contact = DeviceItem.normalizedString(directRadioState["contact"]).lowercased()
+        if contact == "open" || contact == "opening" {
+            return true
+        }
+        if contact == "closed" || contact == "closing" {
+            return false
+        }
+
+        let smartThingsContact = DeviceItem.normalizedString(
+            JSON.object(JSON.object(properties["smartThingsAttributeValues"])["contactSensor"])["contact"]
+        ).lowercased()
+        if smartThingsContact == "open" {
+            return true
+        }
+        if smartThingsContact == "closed" {
+            return false
+        }
+
+        return nil
+    }
+
+    nonisolated var effectiveMotionActive: Bool? {
+        if directRadioState["motionActive"] != nil {
+            return DeviceItem.optionalBool(directRadioState["motionActive"])
+        }
+        if directRadioState["motion"] != nil {
+            return DeviceItem.optionalBool(directRadioState["motion"])
+        }
+        return nil
+    }
+
+    nonisolated var effectiveVibrationActive: Bool? {
+        if directRadioState["vibrationActive"] != nil {
+            return DeviceItem.optionalBool(directRadioState["vibrationActive"])
+        }
+        if directRadioState["accelerationActive"] != nil {
+            return DeviceItem.optionalBool(directRadioState["accelerationActive"])
+        }
+        if directRadioState["vibration"] != nil {
+            return DeviceItem.optionalBool(directRadioState["vibration"])
+        }
+        if directRadioState["acceleration"] != nil {
+            return DeviceItem.optionalBool(directRadioState["acceleration"])
+        }
+        return nil
+    }
+
+    nonisolated var effectiveTamperActive: Bool? {
+        if directRadioState["tamperActive"] != nil {
+            return DeviceItem.optionalBool(directRadioState["tamperActive"])
+        }
+        if directRadioState["tamper"] != nil {
+            return DeviceItem.optionalBool(directRadioState["tamper"])
+        }
+        return nil
+    }
+
+    nonisolated var effectiveWaterDetected: Bool? {
+        if directRadioState["waterDetected"] != nil {
+            return DeviceItem.optionalBool(directRadioState["waterDetected"])
+        }
+        if directRadioState["water"] != nil {
+            return DeviceItem.optionalBool(directRadioState["water"])
+        }
+        return nil
+    }
+
+    nonisolated var effectiveSecuritySensorType: String? {
+        let features = directRadioFeatureSet.union(matterFeatureSet).union(smartThingsCapabilitySet)
+        if features.contains("contact") || features.contains("contactsensor") || effectiveContactOpen != nil {
+            return "doorWindow"
+        }
+        if features.contains("motion") || features.contains("motionsensor") || features.contains("occupancy") || effectiveMotionActive != nil {
+            return "motion"
+        }
+        if features.contains("water") || features.contains("watersensor") || effectiveWaterDetected != nil {
+            return "flood"
+        }
+        if features.contains("tamper")
+            || features.contains("tamperalert")
+            || features.contains("acceleration")
+            || features.contains("accelerationsensor")
+            || features.contains("shock")
+            || features.contains("shocksensor")
+            || effectiveVibrationActive != nil
+            || effectiveTamperActive != nil {
+            return "glass"
+        }
+        if features.contains("alarm") {
+            return "panic"
+        }
+        return nil
+    }
+
+    nonisolated var effectiveSecurityActive: Bool? {
+        if let contact = effectiveContactOpen {
+            return contact
+        }
+        if let motion = effectiveMotionActive {
+            return motion
+        }
+        if let water = effectiveWaterDetected {
+            return water
+        }
+        if let vibration = effectiveVibrationActive {
+            return vibration
+        }
+        if let tamper = effectiveTamperActive {
+            return tamper
+        }
+        return nil
+    }
+
+    nonisolated var effectiveSensorStateLabel: String? {
+        if let contact = effectiveContactOpen {
+            return contact ? "Open" : "Closed"
+        }
+        if let motion = effectiveMotionActive {
+            return motion ? "Motion" : "Clear"
+        }
+        if let water = effectiveWaterDetected {
+            return water ? "Wet" : "Dry"
+        }
+        if let vibration = effectiveVibrationActive {
+            return vibration ? "Vibration" : "Clear"
+        }
+        if let tamper = effectiveTamperActive {
+            return tamper ? "Tamper" : "Clear"
+        }
+        return nil
+    }
+
+    nonisolated var affectsSecuritySummary: Bool {
+        if type == "lock" || type == "garage" {
+            return true
+        }
+        if effectiveSecuritySensorType != nil || effectiveSecurityActive != nil {
+            return true
+        }
+
+        let features = directRadioFeatureSet.union(matterFeatureSet).union(smartThingsCapabilitySet)
+        return !features.intersection([
+            "contact",
+            "contactsensor",
+            "motion",
+            "motionsensor",
+            "water",
+            "watersensor",
+            "smoke",
+            "smokedetector",
+            "carbonmonoxide",
+            "carbonmonoxidedetector",
+            "tamper",
+            "tamperalert",
+            "acceleration",
+            "accelerationsensor",
+            "shock",
+            "shocksensor",
+            "alarm",
+            "doorstate",
+            "doorcontrol",
+            "occupancy"
+        ]).isEmpty
+    }
+
     nonisolated struct SelectionSourceOption: Identifiable {
         let value: String
         let label: String

@@ -263,6 +263,15 @@ struct DevicesView: View {
         ].joined(separator: "||")
     }
 
+    private var deviceFallbackRefreshTaskKey: String {
+        [
+            String(describing: scenePhase),
+            session.serverURLString,
+            session.accessToken ?? "none",
+            isEmbeddedFocusMode ? "focused" : "list"
+        ].joined(separator: "||")
+    }
+
     var body: some View {
         GeometryReader { proxy in
             ScrollViewReader { scrollProxy in
@@ -406,6 +415,15 @@ struct DevicesView: View {
         .task(id: deviceStreamTaskKey) {
             guard !previewMode, scenePhase == .active, session.accessToken != nil else { return }
             await listenForDeviceUpdates()
+        }
+        .task(id: deviceFallbackRefreshTaskKey) {
+            guard !previewMode, scenePhase == .active, session.accessToken != nil else { return }
+
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(12))
+                guard !Task.isCancelled else { break }
+                await refreshDeviceStatesFromAPI()
+            }
         }
     }
 
@@ -3080,6 +3098,22 @@ struct DevicesView: View {
         isLoading = false
     }
 
+    private func refreshDeviceStatesFromAPI() async {
+        guard !previewMode else {
+            return
+        }
+
+        do {
+            let response = try await session.apiClient.get("/api/devices")
+            let object = JSON.object(response)
+            let data = JSON.object(object["data"])
+            let list = JSON.array(data["devices"]).map(DeviceItem.from)
+            devices = list.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        } catch {
+            // The live stream remains the primary path; avoid surfacing transient fallback misses.
+        }
+    }
+
     private func listenForDeviceUpdates() async {
         var reconnectAttempt = 0
 
@@ -4883,7 +4917,7 @@ struct DevicesView: View {
     }
 
     private func directRadioState(for device: DeviceItem) -> [String: Any] {
-        JSON.object(device.properties["directRadioState"])
+        device.directRadioState
     }
 
     private func percentValue(_ value: Any?) -> Int? {
@@ -5042,6 +5076,10 @@ struct DevicesView: View {
     }
 
     private func sensorStateLabel(for device: DeviceItem) -> String? {
+        if let label = device.effectiveSensorStateLabel {
+            return label
+        }
+
         let state = directRadioState(for: device)
         if state["contactOpen"] != nil {
             return boolValue(state["contactOpen"]) ? "Open" : "Closed"

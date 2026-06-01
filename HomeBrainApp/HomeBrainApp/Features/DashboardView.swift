@@ -1309,6 +1309,16 @@ struct DashboardView: View {
         ].joined(separator: "||")
     }
 
+    private var dashboardDeviceFallbackRefreshTaskKey: String {
+        [
+            String(describing: scenePhase),
+            session.serverURLString,
+            session.accessToken ?? "none",
+            selectedDashboardViewID,
+            visibleDevicesWidgetDeviceIDs.joined(separator: "|")
+        ].joined(separator: "||")
+    }
+
     private var dashboardSecurityRefreshTaskKey: String {
         [
             String(describing: scenePhase),
@@ -1430,6 +1440,15 @@ struct DashboardView: View {
             guard !previewMode, scenePhase == .active, session.accessToken != nil else { return }
             await refreshSecurityStatus()
             await listenForDashboardDeviceUpdates()
+        }
+        .task(id: dashboardDeviceFallbackRefreshTaskKey) {
+            guard !previewMode, scenePhase == .active, session.accessToken != nil else { return }
+
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(12))
+                guard !Task.isCancelled else { break }
+                await refreshDashboardDevicesFromAPI()
+            }
         }
         .task(id: dashboardSecurityRefreshTaskKey) {
             guard !previewMode, scenePhase == .active, session.accessToken != nil else { return }
@@ -3511,6 +3530,27 @@ struct DashboardView: View {
             return isActive ? "Alert" : "Clear"
         default:
             return isActive ? "Alert" : "Normal"
+        }
+    }
+
+    private func securitySensorTypeLabel(for sensorType: String) -> String {
+        switch sensorType {
+        case "doorWindow":
+            return "Door / Window"
+        case "motion":
+            return "Motion"
+        case "flood":
+            return "Flood"
+        case "glass":
+            return "Glass"
+        case "smoke":
+            return "Smoke"
+        case "co":
+            return "CO"
+        case "panic":
+            return "Panic"
+        default:
+            return "Security"
         }
     }
 
@@ -7456,6 +7496,23 @@ struct DashboardView: View {
         }
     }
 
+    private func refreshDashboardDevicesFromAPI() async {
+        guard !previewMode else {
+            return
+        }
+
+        do {
+            let response = try await session.apiClient.get("/api/devices")
+            let object = JSON.object(response)
+            let data = JSON.object(object["data"])
+            let list = JSON.array(data["devices"]).map(DeviceItem.from)
+            devices = list.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            list.forEach(syncSecuritySummaries)
+        } catch {
+            // The device stream is still the fast path; this fallback should stay quiet on transient misses.
+        }
+    }
+
     private func listenForDashboardDeviceUpdates() async {
         var reconnectAttempt = 0
 
@@ -7748,24 +7805,7 @@ struct DashboardView: View {
     }
 
     private func deviceAffectsSecuritySummary(_ device: DeviceItem) -> Bool {
-        if device.type == "lock" {
-            return true
-        }
-
-        let capabilities = Set(deviceSmartThingsCapabilities(device))
-        if capabilities.contains("contactSensor")
-            || capabilities.contains("motionSensor")
-            || capabilities.contains("waterSensor")
-            || capabilities.contains("smokeDetector")
-            || capabilities.contains("carbonMonoxideDetector")
-            || capabilities.contains("tamperAlert")
-            || capabilities.contains("accelerationSensor")
-            || capabilities.contains("shockSensor")
-            || capabilities.contains("alarm") {
-            return true
-        }
-
-        return false
+        device.affectsSecuritySummary
     }
 
     private func deviceSmartThingsCapabilities(_ device: DeviceItem) -> [String] {
@@ -7819,18 +7859,23 @@ struct DashboardView: View {
                 )
             )
         }) {
+            let sensorType = device.effectiveSecuritySensorType ?? securitySensors[sensorIndex].sensorType
+            let isActive = device.effectiveSecurityActive ?? device.status
+
             securitySensors[sensorIndex].name = device.name
             securitySensors[sensorIndex].room = device.room
             securitySensors[sensorIndex].smartThingsDeviceId = smartThingsDeviceID ?? securitySensors[sensorIndex].smartThingsDeviceId
             if !source.isEmpty {
                 securitySensors[sensorIndex].source = source
             }
+            securitySensors[sensorIndex].sensorType = sensorType
+            securitySensors[sensorIndex].sensorTypeLabel = securitySensorTypeLabel(for: sensorType)
             securitySensors[sensorIndex].isAvailable = true
             securitySensors[sensorIndex].isOnline = device.isOnline
-            securitySensors[sensorIndex].isActive = device.status
-            securitySensors[sensorIndex].stateLabel = securityStateLabel(
-                sensorType: securitySensors[sensorIndex].sensorType,
-                isActive: device.status,
+            securitySensors[sensorIndex].isActive = isActive
+            securitySensors[sensorIndex].stateLabel = device.effectiveSensorStateLabel ?? securityStateLabel(
+                sensorType: sensorType,
+                isActive: isActive,
                 isAvailable: true
             )
             securitySensors[sensorIndex].lastSeen = device.lastSeen
@@ -8091,6 +8136,9 @@ struct DashboardView: View {
             let current = device.temperature.map { "\(Int($0.rounded()))°F" } ?? "--"
             let target = "\(thermostatTargetTemperature(for: device))°F"
             return "\(mode) • \(current) now • \(target) target"
+        }
+        if device.type == "sensor" {
+            return device.effectiveSensorStateLabel
         }
 
         return nil
