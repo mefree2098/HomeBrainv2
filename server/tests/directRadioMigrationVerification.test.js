@@ -3830,6 +3830,42 @@ test('generic pairing baseline ignores already-known Z-Wave nodes', () => {
   assert.equal(completed.detectedIdentity.id, '4');
 });
 
+test('generic Zigbee pairing ignores already-known devices even when they announce during permit-join', () => {
+  const service = createService();
+  service.activePairings.set('zigbee', {
+    id: 'pairing-zigbee-baseline',
+    protocol: 'zigbee',
+    mode: 'permit_join',
+    status: 'active',
+    startedAt: new Date().toISOString(),
+    expiresAt: Date.now() + 60_000,
+    baselineIdentities: ['0x000d6f00057c378b'],
+    events: []
+  });
+
+  const unchanged = service.completePairingSession(
+    'zigbee',
+    { protocol: 'zigbee', id: '0x000d6f00057c378b', source: 'homebrain-zigbee' },
+    { _id: { toString: () => 'device-back-door' }, name: 'Back Door' },
+    'deviceJoined'
+  );
+  assert.equal(unchanged.status, 'active');
+  assert.equal(unchanged.directDeviceId ?? null, null);
+  assert.equal(unchanged.detectedIdentity ?? null, null);
+
+  const completed = service.completePairingSession(
+    'zigbee',
+    { protocol: 'zigbee', id: '0x000d6f00057c3ef1', source: 'homebrain-zigbee' },
+    { _id: { toString: () => 'device-front-door' }, name: 'Front Door' },
+    'deviceInterview'
+  );
+
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.directDeviceId, 'device-front-door');
+  assert.equal(completed.directDeviceName, 'Front Door');
+  assert.equal(completed.detectedIdentity.id, '0x000d6f00057c3ef1');
+});
+
 test('Z-Wave generic pairing waits for interview completion after a new node is detected', () => {
   const service = createService();
   let stopPairingCalls = 0;

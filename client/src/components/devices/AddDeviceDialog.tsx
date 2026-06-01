@@ -120,18 +120,9 @@ const getDirectIdentity = (device: DeviceRecord, protocol: AddDeviceProtocol) =>
     return nodeId === undefined || nodeId === null ? "" : String(nodeId)
   }
   if (protocol === "zigbee") {
-    return typeof direct?.ieeeAddr === "string" ? direct.ieeeAddr : ""
+    return typeof direct?.ieeeAddr === "string" ? direct.ieeeAddr.trim().toLowerCase() : ""
   }
   return ""
-}
-
-const getDirectLastSeenTime = (device: DeviceRecord) => {
-  const value = device.properties?.homebrainDirect?.lastSeen || device.lastSeen
-  if (!value || value === "Just now") {
-    return value === "Just now" ? Date.now() : 0
-  }
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? 0 : date.getTime()
 }
 
 const isZWaveControllerNode = (device: DeviceRecord) => (
@@ -261,7 +252,6 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
   const [activeProtocol, setActiveProtocol] = useState<AddDeviceProtocol | null>(null)
   const [baselineIds, setBaselineIds] = useState<Set<string>>(new Set())
   const [baselineDirectIdentities, setBaselineDirectIdentities] = useState<Set<string>>(new Set())
-  const [pairingStartedAt, setPairingStartedAt] = useState<number>(0)
   const [currentPairing, setCurrentPairing] = useState<DirectRadioPairingSession | null>(null)
   const [foundDevice, setFoundDevice] = useState<DeviceRecord | null>(null)
   const [expiresAt, setExpiresAt] = useState<string | null>(null)
@@ -303,7 +293,6 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       setStatusMessage(null)
       setErrorMessage(null)
       setCurrentPairing(null)
-      setPairingStartedAt(0)
       setZwaveDskPin("")
       setSubmittingDsk(false)
       setRepairingZWaveNodeId(null)
@@ -425,8 +414,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       const directIdentity = getDirectIdentity(device, activeProtocol)
       const identityIsNew = directIdentity ? !baselineDirectIdentities.has(directIdentity) : false
       const rowIsNew = !baselineIds.has(device._id)
-      const refreshedDuringPairing = pairingStartedAt > 0 && getDirectLastSeenTime(device) >= pairingStartedAt - 2_000
-      return rowIsNew || identityIsNew || refreshedDuringPairing
+      return rowIsNew || identityIsNew
     })
 
     if (discovered) {
@@ -435,7 +423,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       setCurrentPairing(null)
       setStatusMessage(`${discovered.name} was added to HomeBrain.`)
     }
-  }, [activeProtocol, baselineDirectIdentities, baselineIds, devices, foundDevice, pairingStartedAt])
+  }, [activeProtocol, baselineDirectIdentities, baselineIds, devices, foundDevice])
 
   useEffect(() => {
     if (!open || !activeProtocol || foundDevice || !onRefresh) {
@@ -516,7 +504,6 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       .map((device) => getDirectIdentity(device, targetProtocol))
       .filter(Boolean)
     ))
-    setPairingStartedAt(Date.now())
     setCurrentPairing(null)
     setFoundDevice(null)
     setErrorMessage(null)
