@@ -78,6 +78,8 @@ const ZWAVE_NODE_STATUS = Object.freeze({
   ALIVE: 4
 });
 
+const ZWAVE_REACHABILITY_PROBE_TTL_MS = 2 * 60 * 1000;
+
 function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -118,20 +120,83 @@ function isZWaveNodeOnline(node) {
   if (!node) {
     return false;
   }
-  if (node.ready !== true) {
+  const effective = getEffectiveZWaveNodeRuntime(node);
+  if (effective.ready !== true) {
     return false;
   }
-  return !isZWaveStatusUnavailable(node.status);
+  return !isZWaveStatusUnavailable(effective.status);
 }
 
 function isZWaveNodeCommandReady(node) {
   if (!node) {
     return false;
   }
-  if (node.ready === false || isZWaveStatusUnavailable(node.status)) {
+  const effective = getEffectiveZWaveNodeRuntime(node);
+  if (effective.ready === false || isZWaveStatusUnavailable(effective.status)) {
     return false;
   }
   return true;
+}
+
+function getZWaveNodeReachabilityProbe(node) {
+  const probe = node?.__homebrainReachabilityProbe;
+  if (!probe || typeof probe !== 'object' || probe.ok !== true) {
+    return null;
+  }
+  const at = Number(probe.at || 0);
+  if (!Number.isFinite(at) || at <= 0 || Date.now() - at > ZWAVE_REACHABILITY_PROBE_TTL_MS) {
+    return null;
+  }
+  return probe;
+}
+
+function isZWaveNodeCommandProbeCandidate(node) {
+  if (!node || node.isControllerNode === true) {
+    return false;
+  }
+  const interviewStage = node.interviewStage === undefined || node.interviewStage === null
+    ? ''
+    : String(node.interviewStage).trim().toLowerCase();
+  const interviewComplete = interviewStage === '5'
+    || interviewStage === 'complete'
+    || interviewStage === 'completed'
+    || node.ready === true;
+  if (!interviewComplete) {
+    return false;
+  }
+  const listening = node.isListening === true
+    || node.isFrequentListening === true
+    || (typeof node.isFrequentListening === 'string' && trimString(node.isFrequentListening));
+  if (!listening) {
+    return false;
+  }
+  return [
+    node.manufacturerId,
+    node.productType,
+    node.productId,
+    node.manufacturer,
+    node.productLabel,
+    node.deviceConfig?.manufacturer,
+    node.deviceConfig?.label
+  ].some(hasUsableDirectValue);
+}
+
+function getEffectiveZWaveNodeRuntime(node) {
+  const ready = node?.ready === undefined ? null : node.ready === true;
+  const status = node?.status === undefined ? null : node.status;
+  const probe = getZWaveNodeReachabilityProbe(node);
+  if (probe && isZWaveNodeCommandProbeCandidate(node)) {
+    return {
+      ready: true,
+      status: isZWaveStatusUnavailable(status) ? ZWAVE_NODE_STATUS.ALIVE : status,
+      reachabilityProbe: probe
+    };
+  }
+  return {
+    ready,
+    status,
+    reachabilityProbe: null
+  };
 }
 
 function isTerminalPairingStatus(status) {
@@ -3296,6 +3361,8 @@ module.exports = {
   isZWaveStatusUnavailable,
   isZWaveNodeOnline,
   isZWaveNodeCommandReady,
+  isZWaveNodeCommandProbeCandidate,
+  getEffectiveZWaveNodeRuntime,
   isTerminalPairingStatus,
   isZWavePairingCompletionReason,
   buildDirectDeviceQuery,

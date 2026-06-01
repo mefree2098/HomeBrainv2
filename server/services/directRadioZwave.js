@@ -67,6 +67,8 @@ const {
   isZWaveStatusUnavailable,
   isZWaveNodeOnline,
   isZWaveNodeCommandReady,
+  isZWaveNodeCommandProbeCandidate,
+  getEffectiveZWaveNodeRuntime,
   isTerminalPairingStatus,
   isZWavePairingCompletionReason,
   buildDirectDeviceQuery,
@@ -518,6 +520,109 @@ submitZWaveDskPin(pin) {
     };
   },
 
+markZWaveNodeReachability(node, result = {}) {
+    if (!node) {
+      return null;
+    }
+    const probe = {
+      ok: result.ok === true,
+      at: Date.now(),
+      reason: trimString(result.reason) || null,
+      source: trimString(result.source) || null,
+      error: trimString(result.error) || null
+    };
+    node.__homebrainReachabilityProbe = probe;
+    return probe;
+  },
+
+async probeZWaveNodeCommandReadiness(node, context = {}) {
+    if (isZWaveNodeCommandReady(node)) {
+      return {
+        ready: true,
+        skipped: true,
+        reason: 'already_ready'
+      };
+    }
+    if (!isZWaveNodeCommandProbeCandidate(node)) {
+      return {
+        ready: false,
+        skipped: true,
+        reason: 'not_probe_candidate'
+      };
+    }
+
+    const nodeId = Number(node.id);
+    const reason = trimString(context.reason) || 'command readiness probe';
+    const timeoutMs = Math.max(1000, Math.min(10000, Number(context.timeoutMs) || 5000));
+    let ping = null;
+    let pingError = null;
+
+    this.log('info', 'zwave', 'Probing interviewed listening Z-Wave node before declaring it not ready', {
+      nodeId: Number.isFinite(nodeId) ? nodeId : null,
+      reason,
+      action: trimString(context.action) || null,
+      ready: node.ready === undefined ? null : Boolean(node.ready),
+      status: node.status === undefined ? null : node.status,
+      interviewStage: node.interviewStage === undefined ? null : String(node.interviewStage)
+    });
+
+    if (typeof node.ping === 'function') {
+      try {
+        ping = await Promise.race([
+          node.ping(true),
+          delay(timeoutMs).then(() => {
+            throw new Error(`Z-Wave ping timed out after ${timeoutMs}ms`);
+          })
+        ]);
+      } catch (error) {
+        ping = false;
+        pingError = error?.message || String(error);
+      }
+    } else {
+      ping = false;
+      pingError = 'Node does not expose ping()';
+    }
+
+    if (ping === true) {
+      const probe = this.markZWaveNodeReachability(node, {
+        ok: true,
+        reason,
+        source: 'ping'
+      });
+      this.log('info', 'zwave', 'Z-Wave readiness probe succeeded', {
+        nodeId: Number.isFinite(nodeId) ? nodeId : null,
+        reason,
+        action: trimString(context.action) || null
+      });
+      return {
+        ready: true,
+        recovered: true,
+        ping,
+        probe
+      };
+    }
+
+    const probe = this.markZWaveNodeReachability(node, {
+      ok: false,
+      reason,
+      source: 'ping',
+      error: pingError
+    });
+    this.log('warn', 'zwave', 'Z-Wave readiness probe failed', {
+      nodeId: Number.isFinite(nodeId) ? nodeId : null,
+      reason,
+      action: trimString(context.action) || null,
+      error: pingError
+    });
+    return {
+      ready: false,
+      recovered: false,
+      ping,
+      error: pingError,
+      probe
+    };
+  },
+
 async refreshZWaveNodeInfo(nodeId, options = {}) {
     await this.start();
     const { node } = this.getZWaveNode(nodeId);
@@ -957,13 +1062,16 @@ serializeZWaveNodeSummary(node) {
     const interviewStage = node.interviewStage === undefined || node.interviewStage === null
       ? null
       : String(node.interviewStage);
+    const effectiveRuntime = getEffectiveZWaveNodeRuntime(node);
 
     return {
       id: nodeId,
       name: trimString(node.name) || productLabel || (nodeId ? `Z-Wave Node ${nodeId}` : 'Z-Wave Node'),
       isControllerNode: node.isControllerNode === true,
-      ready: node.ready === true,
-      status: node.status === undefined ? null : node.status,
+      ready: effectiveRuntime.ready === true,
+      status: effectiveRuntime.status,
+      controllerReady: node.ready === undefined ? null : Boolean(node.ready),
+      controllerStatus: node.status === undefined ? null : node.status,
       isOnline: isZWaveNodeOnline(node),
       interviewStage,
       isListening: node.isListening === undefined ? null : node.isListening,
@@ -975,7 +1083,7 @@ serializeZWaveNodeSummary(node) {
       productLabel: productLabel || null,
       features,
       incomplete: node.isControllerNode !== true && (
-        node.ready !== true
+        effectiveRuntime.ready !== true
         || features.length === 0
         || (!node.manufacturerId && !node.productType && !node.productId && !manufacturer && !productLabel)
       )
@@ -1057,6 +1165,13 @@ async syncZWaveNodes() {
         continue;
       }
       this.attachZWaveNodeStatusListeners(node);
+      if (!isZWaveNodeCommandReady(node) && isZWaveNodeCommandProbeCandidate(node)) {
+        // eslint-disable-next-line no-await-in-loop
+        await this.probeZWaveNodeCommandReadiness(node, {
+          reason: 'sync',
+          action: 'startup_sync'
+        });
+      }
       // eslint-disable-next-line no-await-in-loop
       await this.handleZWaveNodeChanged(node, 'sync');
     }
@@ -1165,6 +1280,8 @@ normalizeZWaveNode(node, reason = 'sync') {
       || trimString(node.productLabel)
       || trimString(catalogEntry?.label || catalogEntry?.model)
       || `Z-Wave Node ${nodeId}`;
+    const effectiveRuntime = getEffectiveZWaveNodeRuntime(node);
+    const reachabilityProbe = effectiveRuntime.reachabilityProbe;
 
     const directFeatures = Array.from(features).sort();
     return {
@@ -1197,12 +1314,19 @@ normalizeZWaveNode(node, reason = 'sync') {
             productType: node.productType || null,
             productId: node.productId || null,
             interviewStage: String(node.interviewStage || ''),
-            ready: node.ready === undefined ? null : Boolean(node.ready),
-            status: node.status,
+            ready: effectiveRuntime.ready,
+            status: effectiveRuntime.status,
+            controllerReady: node.ready === undefined ? null : Boolean(node.ready),
+            controllerStatus: node.status,
             isListening: node.isListening,
             isFrequentListening: node.isFrequentListening,
             lastReason: reason,
             lastSeen: new Date().toISOString(),
+            ...(reachabilityProbe ? {
+              lastReachabilityProbeAt: new Date(reachabilityProbe.at).toISOString(),
+              lastReachabilityProbeReason: reachabilityProbe.reason || null,
+              lastReachabilityProbeSource: reachabilityProbe.source || null
+            } : {}),
             catalog: directRadioProtocolCatalogService.buildCatalogReference(catalogEntry)
           },
           homeBrainBatteryLevel: batteryReport.level,
@@ -1453,7 +1577,15 @@ async controlZWaveSiren(node, on) {
 async controlZWaveDevice(device, normalizedAction, commandValue, updateData = {}) {
     const node = this.getDirectNodeForDevice(device);
     if (!isZWaveNodeCommandReady(node)) {
-      throw new Error('Z-Wave node is not ready');
+      const probe = await this.probeZWaveNodeCommandReadiness(node, {
+        reason: 'command',
+        action: normalizedAction
+      });
+      if (probe.ready !== true || !isZWaveNodeCommandReady(node)) {
+        throw new Error(probe.error
+          ? `Z-Wave node is not ready (${probe.error})`
+          : 'Z-Wave node is not ready');
+      }
     }
     let effectiveAction = normalizedAction;
     if (device?.type === 'lock') {
@@ -1540,6 +1672,38 @@ async controlZWaveDevice(device, normalizedAction, commandValue, updateData = {}
         throw new Error('This Z-Wave device does not support the requested action yet');
     }
 
+    const commandTimestamp = new Date().toISOString();
+    const reachabilityProbe = this.markZWaveNodeReachability(node, {
+      ok: true,
+      reason: 'command accepted',
+      source: 'command'
+    });
+    const direct = device?.properties?.homebrainDirect && typeof device.properties.homebrainDirect === 'object'
+      ? device.properties.homebrainDirect
+      : {};
+    const updateProperties = updateData.properties && typeof updateData.properties === 'object'
+      ? updateData.properties
+      : {};
+    updateData.properties = {
+      ...(device?.properties && typeof device.properties === 'object' ? device.properties : {}),
+      ...updateProperties,
+      homebrainDirect: {
+        ...direct,
+        ...(updateProperties.homebrainDirect && typeof updateProperties.homebrainDirect === 'object'
+          ? updateProperties.homebrainDirect
+          : {}),
+        ready: true,
+        status: ZWAVE_NODE_STATUS.ALIVE,
+        controllerReady: node.ready === undefined ? null : Boolean(node.ready),
+        controllerStatus: node.status === undefined ? null : node.status,
+        lastReason: 'command accepted',
+        lastSeen: commandTimestamp,
+        lastCommandAcceptedAt: commandTimestamp,
+        lastReachabilityProbeAt: new Date(reachabilityProbe.at).toISOString(),
+        lastReachabilityProbeReason: reachabilityProbe.reason || null,
+        lastReachabilityProbeSource: reachabilityProbe.source || null
+      }
+    };
     updateData.isOnline = true;
     updateData.lastSeen = new Date();
     this.log('info', 'zwave', 'Z-Wave device command accepted', {
