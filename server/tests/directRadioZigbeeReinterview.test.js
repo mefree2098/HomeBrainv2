@@ -211,6 +211,38 @@ test('forgetZigbeeDevice reports an already-absent coordinator entry as success'
   assert.match(result.message, /No Zigbee device/);
 });
 
+test('forgetZigbeeDevice clears stale Z-Stack association entries even when herdsman has no device', async (t) => {
+  let assocRemoveRequest = null;
+  stubZigbee(t, {
+    controller: {
+      getDeviceByIeeeAddr: () => null,
+      adapter: {
+        supportsAssocRemove: () => true,
+        znp: {
+          request: async (subsystem, command, payload) => {
+            assocRemoveRequest = { subsystem, command, payload };
+            return { payload: { status: 0 } };
+          }
+        }
+      }
+    },
+    started: true
+  });
+
+  const result = await directRadioService.forgetZigbeeDevice('0x00158d0001', {
+    source: 'test'
+  });
+
+  assert.deepStrictEqual(assocRemoveRequest, {
+    subsystem: 7,
+    command: 'assocRemove',
+    payload: { ieeeadr: '0x00158d0001' }
+  });
+  assert.strictEqual(result.found, false);
+  assert.strictEqual(result.associationCleanup.attempted, true);
+  assert.strictEqual(result.associationCleanup.removed, true);
+});
+
 test('readZigbeeIasEnrollment returns null on missing/invalid devices', () => {
   assert.strictEqual(directRadioService.readZigbeeIasEnrollment(null), null);
   assert.strictEqual(directRadioService.readZigbeeIasEnrollment({}), null);
