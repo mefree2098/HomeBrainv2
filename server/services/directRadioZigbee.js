@@ -271,6 +271,119 @@ const {
   serializeDoorLockLogRecord
 } = require('./directRadioHelpers');
 
+const DEFAULT_ZIGBEE_IAS_REPAIR_TIMEOUT_MS = 5_000;
+const ZIGBEE_IAS_REPAIR_THROTTLE_MS = 30_000;
+const UNENROLLED_IAS_CIE_ADDRESSES = new Set([
+  '0xffffffffffffffff',
+  'ffffffffffffffff'
+]);
+
+function normalizeIeeeAddress(value) {
+  const text = trimString(value).toLowerCase();
+  if (!text) {
+    return '';
+  }
+  return text.startsWith('0x') ? text : `0x${text}`;
+}
+
+function isZigbeeIasClusterMessage(message) {
+  return normalizeZigbeeClusterToken(message?.cluster ?? message?.clusterID ?? message?.clusterId) === 'ssiaszone';
+}
+
+function getZigbeeCoordinatorDevice(controller) {
+  try {
+    return controller?.getDevicesByType?.('Coordinator')?.[0] || null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function getZigbeeCoordinatorIeee(controller) {
+  return normalizeIeeeAddress(getZigbeeCoordinatorDevice(controller)?.ieeeAddr);
+}
+
+function getZigbeeIasEndpoints(zigbeeDevice) {
+  return getZigbeeEndpoints(zigbeeDevice)
+    .filter((endpoint) => {
+      if (typeof endpoint?.supportsInputCluster === 'function') {
+        try {
+          return endpoint.supportsInputCluster('ssIasZone') || endpoint.supportsInputCluster(1280);
+        } catch (_error) {
+          // Fall back to cached cluster inspection below.
+        }
+      }
+      return endpointHasZigbeeCluster(endpoint, ['ssIasZone', 'ssiaszone', 1280]);
+    });
+}
+
+function readCachedZigbeeIasState(endpoint) {
+  const readCached = (attribute) => {
+    if (typeof endpoint?.getClusterAttributeValue !== 'function') {
+      return undefined;
+    }
+    try {
+      return endpoint.getClusterAttributeValue('ssIasZone', attribute);
+    } catch (_error) {
+      return undefined;
+    }
+  };
+  return {
+    iasCieAddr: readCached('iasCieAddr'),
+    zoneState: readCached('zoneState'),
+    zoneId: readCached('zoneId')
+  };
+}
+
+function mergeZigbeeIasState(...states) {
+  return states.reduce((merged, state) => {
+    const cieAddr = readZigbeeAttributeFromResponse(state, ['iasCieAddr', 'iascieaddr']);
+    const zoneState = readZigbeeAttributeFromResponse(state, ['zoneState', 'zonestate']);
+    const zoneId = readZigbeeAttributeFromResponse(state, ['zoneId', 'zoneID', 'zoneid']);
+    if (cieAddr !== undefined && cieAddr !== null) {
+      merged.iasCieAddr = cieAddr;
+    }
+    if (zoneState !== undefined && zoneState !== null) {
+      merged.zoneState = zoneState;
+    }
+    if (zoneId !== undefined && zoneId !== null) {
+      merged.zoneId = zoneId;
+    }
+    return merged;
+  }, {});
+}
+
+function saveCachedZigbeeIasState(endpoint, state = {}) {
+  if (typeof endpoint?.saveClusterAttributeKeyValue !== 'function') {
+    return;
+  }
+  const attributes = {};
+  if (state.iasCieAddr !== undefined && state.iasCieAddr !== null) {
+    attributes.iasCieAddr = state.iasCieAddr;
+  }
+  if (state.zoneState !== undefined && state.zoneState !== null) {
+    attributes.zoneState = state.zoneState;
+  }
+  if (state.zoneId !== undefined && state.zoneId !== null) {
+    attributes.zoneId = state.zoneId;
+  }
+  if (Object.keys(attributes).length > 0) {
+    endpoint.saveClusterAttributeKeyValue('ssIasZone', attributes);
+  }
+}
+
+function zigbeeIasStateMatchesCoordinator(state = {}, coordinatorIeee) {
+  const cieAddr = normalizeIeeeAddress(state.iasCieAddr);
+  if (!coordinatorIeee || !cieAddr || UNENROLLED_IAS_CIE_ADDRESSES.has(cieAddr)) {
+    return false;
+  }
+  return Number(state.zoneState) === 1 && cieAddr === coordinatorIeee;
+}
+
+function getZigbeeIasZoneId(state = {}) {
+  const zoneId = Number(state.zoneId ?? state.zoneID ?? state.zoneid);
+  return Number.isFinite(zoneId) && zoneId >= 0 ? zoneId : 23;
+}
+
 module.exports = {
 isCompleteZigbeeNetwork(zigbee) {
     return Boolean(
@@ -451,6 +564,155 @@ async startZigbee(serialPath) {
     }
   },
 
+async repairZigbeeIasEnrollment(zigbeeDevice, options = {}) {
+    const address = trimString(zigbeeDevice?.ieeeAddr);
+    const coordinatorIeee = getZigbeeCoordinatorIeee(this.zigbee.controller);
+    const endpoints = getZigbeeIasEndpoints(zigbeeDevice);
+    const timeoutMs = Number(options.timeoutMs || process.env.HOMEBRAIN_ZIGBEE_IAS_REPAIR_TIMEOUT_MS || DEFAULT_ZIGBEE_IAS_REPAIR_TIMEOUT_MS);
+    const summary = {
+      attempted: false,
+      ready: false,
+      ieeeAddr: address || null,
+      coordinatorIeee: coordinatorIeee || null,
+      reason: options.reason || null,
+      trigger: options.trigger || null,
+      endpointCount: endpoints.length,
+      endpoints: []
+    };
+
+    if (!address || !coordinatorIeee || endpoints.length === 0) {
+      return summary;
+    }
+
+    summary.attempted = true;
+    for (const endpoint of endpoints) {
+      const endpointId = getZigbeeEndpointId(endpoint);
+      const result = {
+        endpointId,
+        before: readCachedZigbeeIasState(endpoint),
+        after: null,
+        readyBefore: false,
+        readyAfter: false,
+        wroteCieAddress: false,
+        sentEnrollResponse: false,
+        errors: []
+      };
+
+      if (typeof endpoint?.read === 'function') {
+        try {
+          const readBefore = await withTimeout(
+            endpoint.read('ssIasZone', ['iasCieAddr', 'zoneState', 'zoneId'], { sendPolicy: 'immediate' }),
+            timeoutMs,
+            'Timed out reading Zigbee IAS enrollment state'
+          );
+          result.before = mergeZigbeeIasState(result.before, readBefore);
+          saveCachedZigbeeIasState(endpoint, result.before);
+        } catch (error) {
+          result.errors.push(`read_before: ${error.message}`);
+        }
+      }
+
+      result.readyBefore = zigbeeIasStateMatchesCoordinator(result.before, coordinatorIeee);
+      if (!result.readyBefore) {
+        if (typeof endpoint?.write === 'function') {
+          try {
+            await withTimeout(
+              endpoint.write('ssIasZone', { iasCieAddr: coordinatorIeee }, { sendPolicy: 'immediate' }),
+              timeoutMs,
+              'Timed out writing Zigbee IAS CIE address'
+            );
+            result.wroteCieAddress = true;
+            saveCachedZigbeeIasState(endpoint, {
+              ...result.before,
+              iasCieAddr: coordinatorIeee
+            });
+          } catch (error) {
+            result.errors.push(`write_cie: ${error.message}`);
+          }
+        } else {
+          result.errors.push('write_cie: endpoint does not support attribute writes');
+        }
+
+        if (result.wroteCieAddress) {
+          await delay(500);
+        }
+
+        if (typeof endpoint?.command === 'function') {
+          try {
+            await withTimeout(
+              endpoint.command(
+                'ssIasZone',
+                'enrollRsp',
+                { enrollrspcode: 0, zoneid: getZigbeeIasZoneId(result.before) },
+                { disableDefaultResponse: true, sendPolicy: 'immediate' }
+              ),
+              timeoutMs,
+              'Timed out sending Zigbee IAS enroll response'
+            );
+            result.sentEnrollResponse = true;
+          } catch (error) {
+            result.errors.push(`enroll_response: ${error.message}`);
+          }
+        } else {
+          result.errors.push('enroll_response: endpoint does not support commands');
+        }
+      }
+
+      result.after = readCachedZigbeeIasState(endpoint);
+      if (typeof endpoint?.read === 'function') {
+        try {
+          const readAfter = await withTimeout(
+            endpoint.read('ssIasZone', ['iasCieAddr', 'zoneState', 'zoneId'], { sendPolicy: 'immediate' }),
+            timeoutMs,
+            'Timed out confirming Zigbee IAS enrollment state'
+          );
+          result.after = mergeZigbeeIasState(result.after, readAfter);
+          saveCachedZigbeeIasState(endpoint, result.after);
+        } catch (error) {
+          result.errors.push(`read_after: ${error.message}`);
+        }
+      }
+
+      result.readyAfter = zigbeeIasStateMatchesCoordinator(result.after, coordinatorIeee);
+      summary.ready = summary.ready || result.readyBefore || result.readyAfter;
+      summary.endpoints.push(result);
+    }
+
+    const errorCount = summary.endpoints.reduce((count, endpoint) => count + endpoint.errors.length, 0);
+    this.log(summary.ready ? 'info' : (errorCount > 0 ? 'warn' : 'info'), 'zigbee', summary.ready
+      ? 'Zigbee IAS enrollment repair verified'
+      : 'Zigbee IAS enrollment repair attempted', summary);
+    return summary;
+  },
+
+async repairZigbeeIasEnrollmentIfNeeded(zigbeeDevice, reason, message) {
+    if (!isZigbeeIasClusterMessage(message)) {
+      return null;
+    }
+    const current = this.readZigbeeIasEnrollment(zigbeeDevice);
+    if (current?.enrolled === true && current?.cieMatchesCoordinator === true) {
+      return null;
+    }
+
+    const address = trimString(zigbeeDevice?.ieeeAddr).toLowerCase();
+    if (!address) {
+      return null;
+    }
+    if (!this.zigbee.iasRepairAttempts || !(this.zigbee.iasRepairAttempts instanceof Map)) {
+      this.zigbee.iasRepairAttempts = new Map();
+    }
+    const now = Date.now();
+    const lastAttemptAt = Number(this.zigbee.iasRepairAttempts.get(address) || 0);
+    if (now - lastAttemptAt < ZIGBEE_IAS_REPAIR_THROTTLE_MS) {
+      return null;
+    }
+    this.zigbee.iasRepairAttempts.set(address, now);
+    return this.repairZigbeeIasEnrollment(zigbeeDevice, {
+      reason,
+      trigger: 'ias_message'
+    });
+  },
+
 async reinterviewZigbeeDevice(ieeeAddr) {
     const address = trimString(ieeeAddr);
     if (!address) {
@@ -473,11 +735,6 @@ async reinterviewZigbeeDevice(ieeeAddr) {
       error.status = 404;
       throw error;
     }
-    if (typeof device.interview !== 'function') {
-      const error = new Error('This Zigbee device does not support a HomeBrain re-interview request.');
-      error.status = 501;
-      throw error;
-    }
 
     // Sleepy battery sensors must be awake during the interview for IAS Zone
     // enrollment to complete; surface that guidance when it fails.
@@ -494,10 +751,52 @@ async reinterviewZigbeeDevice(ieeeAddr) {
       endpointCount: Array.isArray(device.endpoints) ? device.endpoints.length : null
     });
 
+    const hasIasEndpoints = getZigbeeIasEndpoints(device).length > 0;
+    if (isSleepy && hasInterviewIdentity && hasEndpoints && hasIasEndpoints) {
+      const iasRepair = await this.repairZigbeeIasEnrollment(device, {
+        reason: 'reinterview',
+        trigger: 'manual_reinterview'
+      });
+      await this.handleZigbeeDeviceChanged(device, 'reinterview').catch((error) => {
+        this.log('warn', 'zigbee', 'Failed to save Zigbee device after IAS enrollment repair', {
+          ieeeAddr: address,
+          error: error.message
+        });
+      });
+      return {
+        ieeeAddr: address,
+        modelID: device.modelID || null,
+        interviewCompleted: device.interviewCompleted !== false,
+        iasZone: this.readZigbeeIasEnrollment(device),
+        isSleepy,
+        iasRepair,
+        message: iasRepair.ready
+          ? `HomeBrain repaired IAS Zone enrollment for ${address}.`
+          : `HomeBrain attempted IAS Zone enrollment repair for ${address}; wake the sensor and retry if the CIE address still has not stuck.`
+      };
+    }
+
+    if (typeof device.interview !== 'function') {
+      const error = new Error('This Zigbee device does not support a HomeBrain re-interview request.');
+      error.status = 501;
+      throw error;
+    }
+
     try {
       // ignoreCache=true forces a full re-interview, re-running IAS Zone
       // enrollment for contact/motion sensors.
       await device.interview(true);
+      if (hasIasEndpoints) {
+        await this.repairZigbeeIasEnrollment(device, {
+          reason: 'reinterview',
+          trigger: 'post_full_interview'
+        }).catch((error) => {
+          this.log('warn', 'zigbee', 'Zigbee IAS enrollment repair failed after re-interview', {
+            ieeeAddr: address,
+            error: error.message
+          });
+        });
+      }
     } catch (error) {
       this.log('warn', 'zigbee', 'Zigbee device re-interview failed', {
         ieeeAddr: address,
@@ -775,6 +1074,13 @@ normalizeZigbeeDevice(zigbeeDevice, reason = 'sync', options = {}) {
   },
 
 async handleZigbeeDeviceChanged(zigbeeDevice, reason, options = {}) {
+    await this.repairZigbeeIasEnrollmentIfNeeded(zigbeeDevice, reason, options.message).catch((error) => {
+      this.log('warn', 'zigbee', 'Zigbee IAS enrollment repair failed during live message handling', {
+        reason,
+        ieeeAddr: trimString(zigbeeDevice?.ieeeAddr) || null,
+        error: error?.message || String(error || 'Unknown Zigbee IAS repair error')
+      });
+    });
     const shouldReadLiveSensorState = ['message', 'deviceAnnounce', 'deviceInterview', 'refresh'].includes(reason);
     const liveSensorState = shouldReadLiveSensorState
       ? await readZigbeeLiveSensorState(zigbeeDevice).catch((error) => {

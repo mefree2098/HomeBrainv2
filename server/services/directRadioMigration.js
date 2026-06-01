@@ -1147,6 +1147,45 @@ async repairRecoveredSmartThingsMigrationIfMismatched(device, identity) {
     return updated || device;
   },
 
+async finalizePendingSmartThingsMigrationIfReady(device, identity) {
+    const protocol = normalizeSourceText(identity?.protocol);
+    const migration = getSmartThingsMigration(device);
+    if (
+      !device
+      || !['zigbee', 'zwave'].includes(protocol)
+      || !migration
+      || migration.finalizedAt
+      || migration.status !== 'native_joined_pending_interview'
+    ) {
+      return device;
+    }
+
+    const validation = this.buildMigrationFinalizationValidation(
+      device,
+      protocol,
+      'Native direct-radio update verified'
+    );
+    if (validation.status !== 'passed') {
+      return device;
+    }
+
+    try {
+      const result = await this.finalizeDeviceMigration({
+        deviceId: getDeviceIdString(device),
+        migrationId: migration.migrationId,
+        reason: 'Native direct-radio update verified'
+      });
+      return result?.device || device;
+    } catch (error) {
+      this.log('warn', protocol, 'Native migration became ready but automatic finalization failed', {
+        deviceId: getDeviceIdString(device),
+        migrationId: migration.migrationId || null,
+        error: error?.message || String(error || 'Unknown migration finalization error')
+      });
+      return device;
+    }
+  },
+
 severMigratedSmartThingsIdentity(properties = {}) {
     const props = (properties && typeof properties === 'object' && !Array.isArray(properties))
       ? { ...properties }

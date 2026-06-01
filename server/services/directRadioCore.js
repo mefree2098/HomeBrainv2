@@ -714,6 +714,7 @@ async upsertDirectDeviceRecord(identity, update, options = {}) {
     device = await this.reclaimAwaitingSmartThingsMigrationSourceIfMatched(device, identity);
     device = await this.attachRecoveredSmartThingsMigrationIfMatched(device, identity);
     device = await this.repairRecoveredSmartThingsMigrationIfMismatched(device, identity);
+    device = await this.finalizePendingSmartThingsMigrationIfReady(device, identity);
 
     this.log('info', identity.protocol, existing ? 'Direct radio device updated' : 'Direct radio device created', {
       deviceId: device?._id?.toString?.() || null,
