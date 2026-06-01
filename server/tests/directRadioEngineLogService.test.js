@@ -62,7 +62,7 @@ test('directRadioEngineLogService keeps a full diagnostic replay window', (t) =>
     directRadioEngineLogService.reset();
   });
 
-  for (let index = 0; index < 10025; index += 1) {
+  for (let index = 0; index < 50025; index += 1) {
     directRadioEngineLogService.publish({
       protocol: 'zigbee',
       level: 'info',
@@ -70,9 +70,9 @@ test('directRadioEngineLogService keeps a full diagnostic replay window', (t) =>
     });
   }
 
-  const replay = directRadioEngineLogService.latest({ limit: 20000 });
+  const replay = directRadioEngineLogService.latest({ limit: 60000 });
 
-  assert.equal(replay.length, 10000);
+  assert.equal(replay.length, 50000);
   assert.equal(replay[0].message, 'Direct radio entry 25');
-  assert.equal(replay.at(-1).message, 'Direct radio entry 10024');
+  assert.equal(replay.at(-1).message, 'Direct radio entry 50024');
 });
