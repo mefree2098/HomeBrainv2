@@ -678,9 +678,15 @@ isUsableZigbeeMigrationUpdate(update) {
       Object.prototype.hasOwnProperty.call(directState, 'contactOpen')
         && typeof directState.contactOpen === 'boolean'
     ) || ['open', 'closed'].includes(trimString(directState.contact).toLowerCase());
+    const routeOnlyRepeater = features.has('repeater')
+      && hasIdentity
+      && normalizeSourceText(direct.deviceType) === 'router'
+      && !features.has('switch')
+      && !features.has('power')
+      && !features.has('energy');
     const incompleteShell = direct.incomplete === true || (!hasIdentity && features.size === 0 && !hasRuntimeState);
 
-    if (incompleteShell || !hasIdentity || features.size === 0 || !hasRuntimeState) {
+    if (incompleteShell || !hasIdentity || features.size === 0 || (!hasRuntimeState && !routeOnlyRepeater)) {
       return false;
     }
 

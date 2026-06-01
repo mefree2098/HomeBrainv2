@@ -1136,6 +1136,7 @@ normalizeZigbeeDevice(zigbeeDevice, reason = 'sync', options = {}) {
             protocol: 'zigbee',
             ieeeAddr: directId,
             networkAddress: zigbeeDevice.networkAddress,
+            deviceType: zigbeeDevice.type || null,
             modelID: zigbeeDevice.modelID || null,
             manufacturerName: zigbeeDevice.manufacturerName || null,
             interviewCompleted: zigbeeDevice.interviewCompleted !== false && !incompleteInterviewShell,

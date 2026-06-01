@@ -259,7 +259,8 @@ function inferFeaturesFromExistingDirectRecord(record) {
     supportsPowerMeter: 'power',
     supportsEnergyMeter: 'energy',
     supportsVoltage: 'voltage',
-    supportsCurrent: 'current'
+    supportsCurrent: 'current',
+    supportsRepeater: 'repeater'
   };
   Object.entries(supportFlags).forEach(([flag, feature]) => {
     if (properties[flag] === true) {
@@ -308,6 +309,9 @@ function inferFeaturesFromExistingDirectRecord(record) {
   if (/\b(?:illuminance|lux|light level)\b/.test(text)) {
     add('illuminance');
     add('battery');
+  }
+  if (/\b(?:repeater|extender|router|route)\b/.test(text)) {
+    add('repeater');
   }
   if (isSensor && features.length === 0) {
     add('battery');
@@ -986,6 +990,7 @@ const DISTINCTIVE_SMARTTHINGS_MIGRATION_FEATURES = Object.freeze([
   'lock',
   'motion',
   'power',
+  'repeater',
   'vibration',
   'water'
 ]);
@@ -2710,7 +2715,8 @@ function inferFeaturesFromZigbeeDefinition(definition, zigbeeDevice) {
     definition?.vendor,
     definition?.description,
     zigbeeDevice?.modelID,
-    zigbeeDevice?.manufacturerName
+    zigbeeDevice?.manufacturerName,
+    zigbeeDevice?.type
   ].filter(Boolean).join(' ').toLowerCase();
 
   const visitExpose = (expose) => {
@@ -2775,6 +2781,10 @@ function inferFeaturesFromZigbeeDefinition(definition, zigbeeDevice) {
   if (isDirectLightContext(deviceText)) {
     features.add('light');
     features.add('switch');
+  }
+  const hasUserFacingFeature = Array.from(features).some((feature) => feature !== 'repeater');
+  if (/\b(?:repeater|extender)\b/.test(deviceText) || (/\brouter\b/.test(deviceText) && !hasUserFacingFeature)) {
+    features.add('repeater');
   }
 
   return Array.from(features).sort();
