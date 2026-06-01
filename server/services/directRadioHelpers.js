@@ -316,6 +316,62 @@ function inferFeaturesFromExistingDirectRecord(record) {
   return uniqueStrings(features).sort();
 }
 
+function hasUsableDirectValue(value) {
+  if (value === null || value === undefined) {
+    return false;
+  }
+  if (typeof value === 'string') {
+    return value.trim().length > 0;
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0;
+  }
+  if (typeof value === 'object') {
+    return Object.keys(value).length > 0;
+  }
+  return true;
+}
+
+function hasNonEmptyObject(value) {
+  return Boolean(value)
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && Object.keys(value).length > 0;
+}
+
+function hasStableDirectIdentity(direct = {}, properties = {}) {
+  return [
+    direct.manufacturerId,
+    direct.productType,
+    direct.productId,
+    direct.modelID,
+    direct.manufacturerName,
+    direct.catalog,
+    properties.directRadioCatalog
+  ].some(hasUsableDirectValue);
+}
+
+function isIncompleteDirectUpdateShell({
+  updateDirect,
+  updateFeatures,
+  updateProperties,
+  updateSource,
+  updateProtocol
+}) {
+  if (updateDirect.incomplete === true) {
+    return true;
+  }
+  const isDirectRadioUpdate = updateSource === DIRECT_RADIO_SOURCES.zigbee
+    || updateSource === DIRECT_RADIO_SOURCES.zwave
+    || updateProtocol === 'zigbee'
+    || updateProtocol === 'zwave';
+  if (!isDirectRadioUpdate || updateFeatures.length > 0) {
+    return false;
+  }
+  return !hasStableDirectIdentity(updateDirect, updateProperties)
+    && !hasNonEmptyObject(updateProperties.directRadioState);
+}
+
 function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
   const existingProperties = existing?.properties && typeof existing.properties === 'object'
     ? existing.properties
@@ -341,8 +397,30 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
   const inferredExistingDirectFeatures = inferFeaturesFromExistingDirectRecord(existing);
   const updateSource = normalizeSourceText(updateProperties.source);
   const updateProtocol = normalizeSourceText(updateProperties.homebrainDirect?.protocol);
+  const incomingIncompleteShell = isIncompleteDirectUpdateShell({
+    updateDirect,
+    updateFeatures,
+    updateProperties,
+    updateSource,
+    updateProtocol
+  });
+  const existingHasInferableNonGenericFeatures = inferredExistingDirectFeatures.length > 0
+    && trimString(existing?.name)
+    && !isGenericDirectRadioName(existing?.name);
+  const existingHasKnownGoodDirectRecord = existingDirect.incomplete !== true
+    && (existingFeatures.length > 0
+      || existingHasInferableNonGenericFeatures
+      || hasStableDirectIdentity(existingDirect, existingProperties)
+      || hasNonEmptyObject(existingProperties.directRadioState));
+  const incomingZWaveStatus = updateProtocol === 'zwave' || updateSource === DIRECT_RADIO_SOURCES.zwave
+    ? normalizeZWaveStatus(updateDirect.status)
+    : null;
+  const incomingIsConfirmedDeadZWave = incomingZWaveStatus === ZWAVE_NODE_STATUS.DEAD;
+  const preservesKnownGoodDirectRecord = incomingIncompleteShell && existingHasKnownGoodDirectRecord;
+  const preservesKnownGoodRuntimeValues = preservesKnownGoodDirectRecord && !incomingIsConfirmedDeadZWave;
   const clearsIncompleteZigbeeRuntime = updateDirect.incomplete === true
-    && (updateSource === DIRECT_RADIO_SOURCES.zigbee || updateProtocol === 'zigbee');
+    && (updateSource === DIRECT_RADIO_SOURCES.zigbee || updateProtocol === 'zigbee')
+    && !preservesKnownGoodDirectRecord;
 
   const generatedName = trimString(update.name);
   const generatedRoom = normalizeDirectRoom(update.room);
@@ -360,6 +438,46 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
       mergedDirect[key] = existingValue;
     }
   });
+  if (preservesKnownGoodDirectRecord) {
+    [
+      'manufacturerId',
+      'productType',
+      'productId',
+      'catalog',
+      'modelID',
+      'manufacturerName',
+      'iasZone'
+    ].forEach((key) => {
+      if (!hasUsableDirectValue(updateDirect[key]) && hasUsableDirectValue(existingDirect[key])) {
+        mergedDirect[key] = existingDirect[key];
+      }
+    });
+    if (preservesKnownGoodRuntimeValues) {
+      [
+        'ready',
+        'status',
+        'interviewStage',
+        'isListening',
+        'isFrequentListening',
+        'interviewCompleted'
+      ].forEach((key) => {
+        if (hasUsableDirectValue(existingDirect[key])) {
+          mergedDirect[key] = existingDirect[key];
+        }
+      });
+    }
+    if (existingDirect.incomplete !== true) {
+      delete mergedDirect.incomplete;
+      delete mergedDirect.incompleteReason;
+    }
+    const partialReason = trimString(updateDirect.incompleteReason || updateDirect.lastReason);
+    if (partialReason) {
+      mergedDirect.lastPartialReason = partialReason;
+    }
+    if (hasUsableDirectValue(updateDirect.lastSeen)) {
+      mergedDirect.lastPartialAt = updateDirect.lastSeen;
+    }
+  }
 
   if (generatedName) {
     mergedDirect.generatedName = generatedName;
@@ -477,6 +595,28 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
   }
 
   if (existing) {
+    if (preservesKnownGoodRuntimeValues) {
+      if (Object.prototype.hasOwnProperty.call(update, 'isOnline')
+        && update.isOnline === false
+        && existing.isOnline === true) {
+        merged.isOnline = existing.isOnline;
+      }
+      [
+        'status',
+        'brightness',
+        'color',
+        'colorTemperature',
+        'temperature'
+      ].forEach((key) => {
+        if (Object.prototype.hasOwnProperty.call(update, key)
+          && update[key] !== undefined
+          && existing[key] !== undefined
+          && !hasNonEmptyObject(updateProperties.directRadioState)) {
+          merged[key] = existing[key];
+        }
+      });
+    }
+
     if (!Object.prototype.hasOwnProperty.call(update, 'status') || update.status === undefined) {
       merged.status = existing.status;
     }
@@ -520,6 +660,13 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
 
     if (trimString(existing.type) && merged.type === 'sensor' && existing.type !== 'sensor') {
       merged.type = existing.type;
+    }
+
+    if (!trimString(merged.brand) && trimString(existing.brand)) {
+      merged.brand = existing.brand;
+    }
+    if (!trimString(merged.model) && trimString(existing.model)) {
+      merged.model = existing.model;
     }
   }
 

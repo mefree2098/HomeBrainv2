@@ -143,7 +143,127 @@ test('direct radio refresh preserves known Z-Wave catalog identity during incomp
   assert.deepEqual(merged.properties.directRadioFeatures, ['alarm', 'button', 'switch']);
 });
 
-test('direct radio refresh clears stale Zigbee state when the interview shell is incomplete', () => {
+test('direct radio refresh preserves known-good Z-Wave runtime during unknown partial shells', () => {
+  const existing = {
+    name: 'Cold Storage Switch',
+    type: 'switch',
+    room: 'Cold Storage',
+    status: true,
+    isOnline: true,
+    brand: 'Jasco',
+    model: 'ZW4008',
+    properties: {
+      source: 'homebrain-zwave',
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: 6,
+        manufacturerId: 99,
+        productType: 1,
+        productId: 2,
+        ready: true,
+        status: 4
+      },
+      directRadioFeatures: ['switch'],
+      directRadioState: {
+        switch: true
+      }
+    }
+  };
+  const update = {
+    name: 'Z-Wave Node 6',
+    type: 'sensor',
+    room: 'Unassigned',
+    status: false,
+    isOnline: false,
+    properties: {
+      source: 'homebrain-zwave',
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: 6,
+        manufacturerId: null,
+        productType: null,
+        productId: null,
+        ready: false,
+        status: 0,
+        lastReason: 'refresh-info requested'
+      },
+      directRadioFeatures: []
+    }
+  };
+
+  const merged = mergeDirectDeviceUpdateForExisting(existing, update);
+
+  assert.equal(merged.name, 'Cold Storage Switch');
+  assert.equal(merged.type, 'switch');
+  assert.equal(merged.status, true);
+  assert.equal(merged.isOnline, true);
+  assert.equal(merged.brand, 'Jasco');
+  assert.equal(merged.model, 'ZW4008');
+  assert.equal(merged.properties.homebrainDirect.ready, true);
+  assert.equal(merged.properties.homebrainDirect.status, 4);
+  assert.equal(merged.properties.homebrainDirect.lastPartialReason, 'refresh-info requested');
+  assert.deepEqual(merged.properties.directRadioFeatures, ['switch']);
+  assert.equal(merged.properties.directRadioState.switch, true);
+});
+
+test('direct radio refresh keeps Z-Wave command surface while accepting confirmed dead health', () => {
+  const existing = {
+    name: 'Cold Storage Switch',
+    type: 'switch',
+    room: 'Cold Storage',
+    status: true,
+    isOnline: true,
+    properties: {
+      source: 'homebrain-zwave',
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: 6,
+        manufacturerId: 99,
+        productType: 1,
+        productId: 2,
+        ready: true,
+        status: 4
+      },
+      directRadioFeatures: ['switch'],
+      directRadioState: {
+        switch: true
+      }
+    }
+  };
+  const update = {
+    name: 'Z-Wave Node 6',
+    type: 'sensor',
+    room: 'Unassigned',
+    status: false,
+    isOnline: false,
+    properties: {
+      source: 'homebrain-zwave',
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: 6,
+        manufacturerId: null,
+        productType: null,
+        productId: null,
+        ready: false,
+        status: 3,
+        lastReason: 'interview failed'
+      },
+      directRadioFeatures: []
+    }
+  };
+
+  const merged = mergeDirectDeviceUpdateForExisting(existing, update);
+
+  assert.equal(merged.name, 'Cold Storage Switch');
+  assert.equal(merged.type, 'switch');
+  assert.equal(merged.status, false);
+  assert.equal(merged.isOnline, false);
+  assert.equal(merged.properties.homebrainDirect.status, 3);
+  assert.deepEqual(merged.properties.directRadioFeatures, ['switch']);
+  assert.equal(merged.properties.directRadioState.switch, true);
+});
+
+test('direct radio refresh quarantines transient incomplete Zigbee shells without degrading known-good state', () => {
   const existing = {
     name: 'Front Door',
     type: 'sensor',
@@ -214,14 +334,88 @@ test('direct radio refresh clears stale Zigbee state when the interview shell is
 
   const merged = mergeDirectDeviceUpdateForExisting(existing, update);
 
+  assert.equal(merged.isOnline, true);
+  assert.equal(merged.status, false);
+  assert.equal(merged.temperature, 64.6);
+  assert.equal(merged.properties.homebrainDirect.interviewCompleted, true);
+  assert.equal(merged.properties.homebrainDirect.incomplete, undefined);
+  assert.equal(merged.properties.homebrainDirect.incompleteReason, undefined);
+  assert.equal(
+    merged.properties.homebrainDirect.lastPartialReason,
+    'missing_zigbee_interview_identity_and_state'
+  );
+  assert.ok(merged.properties.directRadioFeatures.includes('contact'));
+  assert.ok(merged.properties.directRadioFeatures.includes('vibration'));
+  assert.ok(merged.properties.directRadioFeatures.includes('acceleration'));
+  assert.ok(merged.properties.directRadioFeatures.includes('axis'));
+  assert.equal(merged.properties.directRadioState.contact, 'closed');
+  assert.equal(merged.properties.directRadioState.batteryLevel, 17);
+  assert.equal(merged.properties.directRadioCatalog.label, '3321-S');
+  assert.equal(merged.properties.homeBrainBatteryLevel, 17);
+  assert.equal(merged.properties.batteryLevel, 17);
+  assert.equal(merged.properties.supportsContactSensor, true);
+  assert.equal(merged.properties.supportsVibrationSensor, true);
+  assert.equal(merged.properties.smartThingsMigration.finalizedAt, '2026-05-31T16:08:03.998Z');
+  assert.equal(merged.properties.smartThingsMigration.finalizedBy, 'homebrain');
+  assert.equal(merged.properties.smartThingsMigration.validation.status, 'passed');
+  assert.equal(merged.properties.smartThingsMigration.validation.finalized, true);
+});
+
+test('direct radio refresh still invalidates finalized migration when an incomplete Zigbee shell has no known-good native state', () => {
+  const existing = {
+    name: 'Zigbee 7c3ef1',
+    type: 'sensor',
+    room: 'Unassigned',
+    isOnline: true,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x000d6f00057c3ef1',
+        interviewCompleted: true
+      },
+      directRadioFeatures: [],
+      smartThingsMigration: {
+        status: 'native_joined_pending_interview',
+        finalizedAt: '2026-05-31T16:08:03.998Z',
+        finalizedBy: 'homebrain',
+        validation: {
+          status: 'passed',
+          finalized: true,
+          finalizedAt: '2026-05-31T16:08:03.998Z'
+        }
+      }
+    }
+  };
+  const update = {
+    name: 'Zigbee 7c3ef1',
+    type: 'sensor',
+    room: 'Unassigned',
+    isOnline: false,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x000d6f00057c3ef1',
+        modelID: null,
+        manufacturerName: null,
+        interviewCompleted: false,
+        incomplete: true,
+        incompleteReason: 'missing_zigbee_interview_identity_and_state'
+      },
+      directRadioFeatures: [],
+      directRadioCapabilities: [],
+      supportsContactSensor: false,
+      supportsVibrationSensor: false
+    }
+  };
+
+  const merged = mergeDirectDeviceUpdateForExisting(existing, update);
+
   assert.equal(merged.isOnline, false);
   assert.equal(merged.properties.homebrainDirect.incomplete, true);
   assert.deepEqual(merged.properties.directRadioFeatures, []);
   assert.deepEqual(merged.properties.directRadioCapabilities, []);
-  assert.equal(merged.properties.directRadioState, undefined);
-  assert.equal(merged.properties.directRadioCatalog, undefined);
-  assert.equal(merged.properties.homeBrainBatteryLevel, undefined);
-  assert.equal(merged.properties.batteryLevel, undefined);
   assert.equal(merged.properties.supportsContactSensor, false);
   assert.equal(merged.properties.supportsVibrationSensor, false);
   assert.equal(merged.properties.smartThingsMigration.finalizedAt, undefined);
