@@ -680,6 +680,42 @@ test('Zigbee normalization captures contact, temperature, tamper, and battery st
   assert.equal(normalized.update.properties.supportsContactSensor, true);
 });
 
+test('Zigbee normalization treats IAS Zone as contact on 3321-S multipurpose sensors', () => {
+  const service = createService();
+  const normalized = service.normalizeZigbeeDevice({
+    ieeeAddr: '0x000d6f00057c378b',
+    modelID: '3321-S',
+    manufacturerName: 'CentraLite',
+    interviewCompleted: true,
+    endpoints: [
+      {
+        ID: 1,
+        inputClusters: [1, 1026, 1280, 64514],
+        getClusterAttributeValue(cluster, attribute) {
+          if (cluster === 'ssIasZone' && attribute === 'zoneStatus') {
+            return 0x0001;
+          }
+          return undefined;
+        }
+      }
+    ]
+  }, 'message', {
+    message: {
+      cluster: 'ssIasZone',
+      data: { zonestatus: 0x0001 }
+    }
+  });
+
+  const state = normalized.update.properties.directRadioState;
+  assert.equal(normalized.update.status, true);
+  assert.equal(state.contactOpen, true);
+  assert.equal(state.contact, 'open');
+  assert.equal(state.vibrationActive, undefined);
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('contact'));
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('vibration'));
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('acceleration'));
+});
+
 test('Zigbee message handling reads live IAS zone status during sleepy contact check-in', async () => {
   const service = createService();
   let capturedUpdate = null;
@@ -2878,6 +2914,69 @@ test('Zigbee recovery reclaims an awaiting SmartThings source by stored native i
   assert.equal(result.properties.smartThingsMigration.duplicateDeviceId, directDeviceId);
   assert.deepEqual(deletedDeviceIds, [directDeviceId]);
   assert.equal(deleteOptions[0]?.skipDirectRadioCleanup, true);
+});
+
+test('pending recovered Zigbee contact migrations finalize when native IAS and contact state become ready', async () => {
+  const service = createService();
+  const pendingDevice = {
+    _id: DEVICE_ID,
+    name: 'Back Door',
+    type: 'sensor',
+    room: 'Upstairs',
+    status: false,
+    isOnline: true,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x000d6f00057c378b',
+        modelID: '3321-S',
+        manufacturerName: 'CentraLite',
+        iasZone: {
+          enrolled: true,
+          cieMatchesCoordinator: true,
+          cieAddr: '0x00124b003a12562a',
+          coordinatorIeee: '0x00124b003a12562a'
+        }
+      },
+      directRadioFeatures: ['battery', 'contact', 'temperature', 'vibration'],
+      directRadioState: {
+        contactOpen: false,
+        contact: 'closed',
+        batteryLevel: 33
+      },
+      smartThingsMigration: {
+        status: 'native_joined_pending_interview',
+        migrationId: 'migration-back-door',
+        recoveredAt: '2026-05-31T23:34:26.447Z'
+      }
+    }
+  };
+  let finalizationArgs = null;
+  service.finalizeDeviceMigration = async (args) => {
+    finalizationArgs = args;
+    return {
+      device: {
+        ...pendingDevice,
+        properties: {
+          ...pendingDevice.properties,
+          smartThingsMigration: {
+            ...pendingDevice.properties.smartThingsMigration,
+            finalizedAt: '2026-05-31T23:59:00.000Z'
+          }
+        }
+      }
+    };
+  };
+
+  const result = await service.finalizePendingSmartThingsMigrationIfReady(pendingDevice, {
+    protocol: 'zigbee',
+    id: '0x000d6f00057c378b'
+  });
+
+  assert.equal(finalizationArgs.deviceId, DEVICE_ID);
+  assert.equal(finalizationArgs.migrationId, 'migration-back-door');
+  assert.equal(result.properties.smartThingsMigration.finalizedAt, '2026-05-31T23:59:00.000Z');
 });
 
 test('Z-Wave controller nodes are not normalized as user devices', () => {

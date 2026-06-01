@@ -14,16 +14,19 @@ function stubZigbee(t, { controller = null, started = false } = {}) {
   const originalHandle = directRadioService.handleZigbeeDeviceChanged;
   const originalController = directRadioService.zigbee.controller;
   const originalStarted = directRadioService.zigbee.started;
+  const originalIasRepairAttempts = directRadioService.zigbee.iasRepairAttempts;
   t.after(() => {
     directRadioService.start = originalStart;
     directRadioService.handleZigbeeDeviceChanged = originalHandle;
     directRadioService.zigbee.controller = originalController;
     directRadioService.zigbee.started = originalStarted;
+    directRadioService.zigbee.iasRepairAttempts = originalIasRepairAttempts;
   });
   directRadioService.start = async () => {};
   directRadioService.handleZigbeeDeviceChanged = async () => {};
   directRadioService.zigbee.controller = controller;
   directRadioService.zigbee.started = started;
+  directRadioService.zigbee.iasRepairAttempts = new Map();
 }
 
 test('reinterviewZigbeeDevice rejects an empty IEEE address', async () => {
@@ -84,6 +87,79 @@ test('reinterviewZigbeeDevice surfaces wake-the-sensor guidance on a sleepy-devi
     () => directRadioService.reinterviewZigbeeDevice('0x00158d0001'),
     (err) => err.status === 502 && /Wake the sensor/.test(err.message)
   );
+});
+
+test('reinterviewZigbeeDevice repairs IAS enrollment directly for sleepy sensors with known endpoints', async (t) => {
+  let interviewCalled = false;
+  let handleReason = null;
+  const coordinatorIeee = '0x00124b003a12562a';
+  const iasAttributes = {
+    iasCieAddr: '0xffffffffffffffff',
+    zoneState: 0,
+    zoneId: 23
+  };
+  const endpoint = {
+    ID: 1,
+    inputClusters: [1280],
+    supportsInputCluster(cluster) {
+      return cluster === 'ssIasZone' || cluster === 1280;
+    },
+    getClusterAttributeValue(cluster, attribute) {
+      if (cluster === 'ssIasZone') {
+        return iasAttributes[attribute];
+      }
+      return undefined;
+    },
+    saveClusterAttributeKeyValue(cluster, attributes) {
+      assert.equal(cluster, 'ssIasZone');
+      Object.assign(iasAttributes, attributes);
+    },
+    async read(cluster, attributes) {
+      assert.equal(cluster, 'ssIasZone');
+      assert.ok(attributes.includes('iasCieAddr'));
+      return { ...iasAttributes };
+    },
+    async write(cluster, attributes) {
+      assert.equal(cluster, 'ssIasZone');
+      iasAttributes.iasCieAddr = attributes.iasCieAddr;
+    },
+    async command(cluster, command, payload) {
+      assert.equal(cluster, 'ssIasZone');
+      assert.equal(command, 'enrollRsp');
+      assert.equal(payload.enrollrspcode, 0);
+      iasAttributes.zoneState = 1;
+    }
+  };
+  const fakeDevice = {
+    ieeeAddr: '0x000d6f00057c378b',
+    modelID: '3321-S',
+    manufacturerName: 'CentraLite',
+    type: 'EndDevice',
+    powerSource: 'Battery',
+    interviewCompleted: true,
+    endpoints: [endpoint],
+    interview: async () => { interviewCalled = true; }
+  };
+  stubZigbee(t, {
+    controller: {
+      getDeviceByIeeeAddr: () => fakeDevice,
+      getDevicesByType: () => [{ ieeeAddr: coordinatorIeee, endpoints: [{ ID: 1 }] }]
+    },
+    started: true
+  });
+  directRadioService.handleZigbeeDeviceChanged = async (_device, reason) => {
+    handleReason = reason;
+  };
+
+  const result = await directRadioService.reinterviewZigbeeDevice('0x000d6f00057c378b');
+
+  assert.equal(interviewCalled, false, 'known sleepy IAS devices use targeted repair instead of full interview');
+  assert.equal(handleReason, 'reinterview');
+  assert.equal(result.iasRepair.ready, true);
+  assert.equal(result.iasZone.enrolled, true);
+  assert.equal(result.iasZone.cieMatchesCoordinator, true);
+  assert.equal(iasAttributes.iasCieAddr, coordinatorIeee);
+  assert.match(result.message, /repaired IAS Zone enrollment/);
 });
 
 test('forgetZigbeeDevice force-removes a stale coordinator entry when leave fails', async (t) => {

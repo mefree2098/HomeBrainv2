@@ -1899,6 +1899,11 @@ function applyZoneStatusToDirectState(directState, zoneStatus, features = []) {
     assignDefined(directState, 'motion', alarmActive ? 'active' : 'inactive');
     return;
   }
+  if (hasDirectFeature(features, 'contact')) {
+    assignDefined(directState, 'contactOpen', alarmActive);
+    assignDefined(directState, 'contact', alarmActive ? 'open' : 'closed');
+    return;
+  }
   if (hasDirectFeature(features, 'vibration') || hasDirectFeature(features, 'acceleration')) {
     assignDefined(directState, 'vibrationActive', alarmActive);
     assignDefined(directState, 'vibration', alarmActive ? 'active' : 'inactive');
