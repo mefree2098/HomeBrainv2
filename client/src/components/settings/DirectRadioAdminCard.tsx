@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   Activity,
   AlertCircle,
+  AlertTriangle,
   CheckCircle,
   Loader2,
   Play,
@@ -67,6 +68,9 @@ const formatPortLabel = (port?: DirectRadioSerialPort | null) => (
 )
 
 const statusBadge = (controller: DirectRadioControllerStatus) => {
+  if (controller.started && controller.degraded) {
+    return { label: "Degraded", variant: "secondary" as const, icon: AlertTriangle, className: "border-amber-500/40 bg-amber-500/15 text-amber-800 hover:bg-amber-500/15 dark:text-amber-200" }
+  }
   if (controller.started) {
     return { label: "Online", variant: "default" as const, icon: CheckCircle, className: "bg-emerald-600 text-white hover:bg-emerald-600" }
   }
@@ -148,6 +152,15 @@ function ControllerPanel({
           <span className="font-medium text-foreground">Paired: </span>
           {pairedCount}
         </div>
+        {protocol === "zwave" ? (
+          <div>
+            <span className="font-medium text-foreground">Usable: </span>
+            {controller.onlineNodeCount ?? 0}/{controller.nonControllerNodeCount ?? controller.pairedNodeCount ?? 0}
+            {(controller.incompleteNodeCount ?? 0) > 0 || (controller.offlineNodeCount ?? 0) > 0
+              ? ` · ${controller.incompleteNodeCount ?? 0} incomplete · ${controller.offlineNodeCount ?? 0} offline`
+              : ""}
+          </div>
+        ) : null}
         <div>
           <span className="font-medium text-foreground">{activeWindow ? activeWindowLabel : "Pairing"}: </span>
           {activeWindow ? `until ${formatTimestamp(activeWindow)}` : "closed"}

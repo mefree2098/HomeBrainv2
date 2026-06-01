@@ -273,8 +273,14 @@ async startZWave(serialPath) {
         this.dispatchHandler('zwave:syncNodes', 'zwave', () => this.syncZWaveNodes());
       });
       driver.on('all nodes ready', () => {
-        this.log('info', 'zwave', 'All Z-Wave nodes ready', {
-          nodeCount: driver.controller?.nodes?.size ?? null
+        const nodeHealth = typeof this.summarizeZWaveNodeHealth === 'function'
+          ? this.summarizeZWaveNodeHealth()
+          : {};
+        this.log(nodeHealth.degraded ? 'warn' : 'info', 'zwave', nodeHealth.degraded
+          ? 'Z-Wave driver reported all nodes ready with degraded nodes'
+          : 'Z-Wave driver reported all nodes ready', {
+          nodeCount: driver.controller?.nodes?.size ?? null,
+          nodeHealth
         });
         this.dispatchHandler('zwave:syncNodes', 'zwave', () => this.syncZWaveNodes());
       });
