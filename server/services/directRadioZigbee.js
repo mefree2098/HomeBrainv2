@@ -273,6 +273,7 @@ const {
 
 const DEFAULT_ZIGBEE_IAS_REPAIR_TIMEOUT_MS = 5_000;
 const ZIGBEE_IAS_REPAIR_THROTTLE_MS = 30_000;
+const ZSTACK_UTIL_SUBSYSTEM = 7;
 const UNENROLLED_IAS_CIE_ADDRESSES = new Set([
   '0xffffffffffffffff',
   'ffffffffffffffff'
@@ -846,9 +847,14 @@ async forgetZigbeeDevice(ieeeAddr, options = {}) {
       ? controller.getDeviceByIeeeAddr(address)
       : null;
     if (!device) {
+      const associationCleanup = await this.cleanupZigbeeAssociationEntry(address, {
+        source: options.source || null,
+        reason: 'device_absent'
+      });
       this.log('info', 'zigbee', 'Zigbee device already absent from coordinator', {
         ieeeAddr: address,
-        source: options.source || null
+        source: options.source || null,
+        associationCleanup
       });
       return {
         ieeeAddr: address,
@@ -856,6 +862,7 @@ async forgetZigbeeDevice(ieeeAddr, options = {}) {
         leaveSucceeded: false,
         databaseRemoved: false,
         forced: false,
+        associationCleanup,
         message: `No Zigbee device is paired with IEEE address ${address}.`
       };
     }
@@ -906,11 +913,17 @@ async forgetZigbeeDevice(ieeeAddr, options = {}) {
       forced = true;
     }
 
+    const associationCleanup = await this.cleanupZigbeeAssociationEntry(address, {
+      source,
+      reason: removalError ? 'leave_failed' : 'device_forget'
+    });
+
     this.log(removalError ? 'warn' : 'info', 'zigbee', 'Zigbee device forgotten from coordinator', {
       ...summary,
       leaveSucceeded,
       databaseRemoved,
       forced,
+      associationCleanup,
       error: removalError?.message || null
     });
 
@@ -920,11 +933,82 @@ async forgetZigbeeDevice(ieeeAddr, options = {}) {
       leaveSucceeded,
       databaseRemoved,
       forced,
+      associationCleanup,
       error: removalError?.message || null,
       message: databaseRemoved
         ? `Forgot Zigbee device ${address} from the coordinator.`
         : `Zigbee device ${address} was not removed from the coordinator.`
     };
+  },
+
+async cleanupZigbeeAssociationEntry(ieeeAddr, options = {}) {
+    const address = normalizeIeeeAddress(ieeeAddr);
+    const source = options.source || null;
+    const reason = options.reason || null;
+    const adapter = this.zigbee?.controller?.adapter || null;
+    const znp = adapter?.znp || null;
+    const result = {
+      ieeeAddr: address,
+      attempted: false,
+      supported: false,
+      status: null,
+      removed: false,
+      source,
+      reason,
+      error: null
+    };
+
+    if (!address || !znp || typeof znp.request !== 'function') {
+      return {
+        ...result,
+        skipped: true,
+        skipReason: 'zstack_znp_unavailable'
+      };
+    }
+
+    if (typeof adapter.supportsAssocRemove === 'function') {
+      try {
+        if (!adapter.supportsAssocRemove()) {
+          return {
+            ...result,
+            skipped: true,
+            skipReason: 'assoc_remove_unsupported'
+          };
+        }
+      } catch (error) {
+        return {
+          ...result,
+          skipped: true,
+          skipReason: 'assoc_remove_support_check_failed',
+          error: error.message
+        };
+      }
+    }
+
+    result.attempted = true;
+    result.supported = true;
+
+    try {
+      const response = await withTimeout(
+        znp.request(
+          ZSTACK_UTIL_SUBSYSTEM,
+          'assocRemove',
+          { ieeeadr: address },
+          undefined,
+          5_000
+        ),
+        7_000,
+        `Timed out clearing Zigbee association entry for ${address}`
+      );
+      result.status = response?.payload?.status ?? null;
+      result.removed = result.status === 0;
+      this.log('info', 'zigbee', 'Zigbee low-level association cleanup completed', result);
+      return result;
+    } catch (error) {
+      result.error = error.message;
+      this.log('warn', 'zigbee', 'Zigbee low-level association cleanup failed', result);
+      return result;
+    }
   },
 
 readZigbeeIasEnrollment(device) {
