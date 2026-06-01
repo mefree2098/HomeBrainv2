@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import UIKit
 
@@ -39,6 +40,7 @@ struct DevicesView: View {
     @EnvironmentObject private var deviceFocusState: DeviceFocusState
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var devices: [DeviceItem] = []
     @State private var isLoading = true
@@ -253,6 +255,14 @@ struct DevicesView: View {
         return false
     }
 
+    private var deviceStreamTaskKey: String {
+        [
+            String(describing: scenePhase),
+            session.serverURLString,
+            session.accessToken ?? "none"
+        ].joined(separator: "||")
+    }
+
     var body: some View {
         GeometryReader { proxy in
             ScrollViewReader { scrollProxy in
@@ -388,10 +398,14 @@ struct DevicesView: View {
                 pendingDeleteDevice = nil
             }
         } message: { device in
-            Text("This removes the HomeBrain device record and clears security, dashboard, favorites, Alexa, and telemetry references. It does not exclude a live radio device.")
+            Text("This removes the HomeBrain device record and clears security, dashboard, favorites, Alexa, and telemetry references. Native Zigbee and Z-Wave records are also removed from the radio controller when possible.")
         }
         .task {
             await loadDevices(showLoading: true)
+        }
+        .task(id: deviceStreamTaskKey) {
+            guard !previewMode, scenePhase == .active, session.accessToken != nil else { return }
+            await listenForDeviceUpdates()
         }
     }
 
@@ -3064,6 +3078,163 @@ struct DevicesView: View {
         }
 
         isLoading = false
+    }
+
+    private func listenForDeviceUpdates() async {
+        var reconnectAttempt = 0
+
+        while !Task.isCancelled {
+            guard let streamURL = session.apiClient.streamURL("/api/devices/stream") else {
+                return
+            }
+
+            var streamOpenedAt: Date?
+
+            do {
+                let accessToken = try await session.validAccessToken()
+                var request = URLRequest(url: streamURL)
+                request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+                request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+
+                let (bytes, response) = try await URLSession.shared.bytes(for: request)
+
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw APIError.invalidResponse
+                }
+
+                if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                    try await session.refreshTokens()
+                    continue
+                }
+
+                guard (200..<300).contains(httpResponse.statusCode) else {
+                    throw APIError.server(statusCode: httpResponse.statusCode, message: "Failed to open device update stream.")
+                }
+
+                session.reportBackendRequestSucceeded()
+                streamOpenedAt = Date()
+
+                var eventName = "message"
+                var dataLines: [String] = []
+
+                for try await line in bytes.lines {
+                    if Task.isCancelled {
+                        return
+                    }
+
+                    if line.hasPrefix(":") {
+                        continue
+                    }
+
+                    if line.isEmpty {
+                        await handleDeviceStreamEvent(name: eventName, dataLines: dataLines)
+                        eventName = "message"
+                        dataLines.removeAll(keepingCapacity: true)
+                        continue
+                    }
+
+                    if line.hasPrefix("event:") {
+                        eventName = String(line.dropFirst("event:".count)).trimmingCharacters(in: .whitespaces)
+                        continue
+                    }
+
+                    if line.hasPrefix("data:") {
+                        dataLines.append(String(line.dropFirst("data:".count)).trimmingCharacters(in: .whitespaces))
+                    }
+                }
+
+                await handleDeviceStreamEvent(name: eventName, dataLines: dataLines)
+
+                guard !Task.isCancelled else {
+                    return
+                }
+
+                session.reportTransientBackendFailure(
+                    APIError.transientBackendUnavailable(message: "Live device updates are reconnecting."),
+                    path: "/api/devices/stream"
+                )
+                let delayAttempt = deviceStreamReconnectDelayAttempt(
+                    current: reconnectAttempt,
+                    streamOpenedAt: streamOpenedAt
+                )
+                reconnectAttempt = nextDeviceStreamReconnectAttempt(
+                    current: reconnectAttempt,
+                    streamOpenedAt: streamOpenedAt
+                )
+                await sleepBeforeDeviceStreamReconnect(attempt: delayAttempt)
+            } catch {
+                if Task.isCancelled {
+                    return
+                }
+
+                if case APIError.unauthorized = error {
+                    return
+                }
+
+                session.reportTransientBackendFailure(error, path: "/api/devices/stream")
+                let delayAttempt = deviceStreamReconnectDelayAttempt(
+                    current: reconnectAttempt,
+                    streamOpenedAt: streamOpenedAt
+                )
+                reconnectAttempt = nextDeviceStreamReconnectAttempt(
+                    current: reconnectAttempt,
+                    streamOpenedAt: streamOpenedAt
+                )
+                await sleepBeforeDeviceStreamReconnect(attempt: delayAttempt)
+            }
+        }
+    }
+
+    private func deviceStreamReconnectDelayAttempt(current: Int, streamOpenedAt: Date?) -> Int {
+        if let streamOpenedAt, Date().timeIntervalSince(streamOpenedAt) >= 30 {
+            return 0
+        }
+
+        return current
+    }
+
+    private func nextDeviceStreamReconnectAttempt(current: Int, streamOpenedAt: Date?) -> Int {
+        if let streamOpenedAt, Date().timeIntervalSince(streamOpenedAt) >= 30 {
+            return 0
+        }
+
+        return min(current + 1, 4)
+    }
+
+    private func sleepBeforeDeviceStreamReconnect(attempt: Int) async {
+        let delays: [TimeInterval] = [2, 5, 10, 20, 30]
+        let delay = delays[min(attempt, delays.count - 1)]
+        do {
+            try await Task.sleep(for: .seconds(delay))
+        } catch {
+            // The enclosing SwiftUI task owns cancellation.
+        }
+    }
+
+    private func handleDeviceStreamEvent(name: String, dataLines: [String]) async {
+        guard name != "ready", !dataLines.isEmpty else {
+            return
+        }
+
+        let rawPayload = dataLines.joined(separator: "\n")
+        guard let data = rawPayload.data(using: .utf8) else {
+            return
+        }
+
+        guard let json = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else {
+            return
+        }
+
+        let payloadObject = JSON.object(json)
+        let deviceObjects = JSON.array(payloadObject["devices"])
+        guard !deviceObjects.isEmpty else {
+            return
+        }
+
+        deviceObjects
+            .map { DeviceItem.from(JSON.object($0)) }
+            .forEach(upsertDevice)
     }
 
     private func loadMatterStatus() async {

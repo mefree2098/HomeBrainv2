@@ -509,6 +509,9 @@ completePairingSession(protocol, identity, device, reason) {
       && session.mode === 'replace_failed'
       && identityId
       && identityId === trimString(session.targetIdentity ?? session.replaceNodeId);
+    if (protocol === 'zigbee' && !isNewIdentity) {
+      return session;
+    }
     if (protocol === 'zwave' && !strongReason) {
       if (isNewIdentity || isExpectedReplacement) {
         return this.markPairingDetected(protocol, identity, device, reason);
