@@ -91,14 +91,79 @@ function makeAccessControl(overrides = {}) {
   return accessControl;
 }
 
-function installLockContext(t, { device = nativeLockDevice(), accessControl = makeAccessControl(), nodeOverrides = {} } = {}) {
+function valueKey(valueId) {
+  return JSON.stringify(valueId);
+}
+
+function makeZWaveValueDB(entries = []) {
+  const values = new Map(entries.map(([valueId, value]) => [valueKey(valueId), { valueId, value }]));
+  return {
+    hasValue: (valueId) => values.has(valueKey(valueId)),
+    getValue: (valueId) => values.get(valueKey(valueId))?.value,
+    findValues: (predicate) => Array.from(values.values())
+      .filter((entry) => predicate(entry.valueId))
+      .map((entry) => ({ ...entry.valueId, value: entry.value })),
+    getMetadata: () => null
+  };
+}
+
+function makeUserCodeApi(overrides = {}) {
+  const calls = {
+    getUsersCount: [],
+    get: [],
+    set: [],
+    clear: []
+  };
+  const users = new Map(Object.entries(overrides.users || {
+    4: {
+      userIdStatus: zwave.UserIDStatus.Enabled,
+      userCode: '1234'
+    }
+  }).map(([slot, user]) => [Number(slot), user]));
+
+  const userCodeApi = {
+    getUsersCount: async () => {
+      calls.getUsersCount.push([]);
+      return 30;
+    },
+    get: async (userId) => {
+      calls.get.push([userId]);
+      return users.get(Number(userId)) || {
+        userIdStatus: zwave.UserIDStatus.Available
+      };
+    },
+    set: async (userId, userIdStatus, userCode) => {
+      calls.set.push([userId, userIdStatus, userCode]);
+      users.set(Number(userId), { userIdStatus, userCode });
+      return undefined;
+    },
+    clear: async (userId) => {
+      calls.clear.push([userId]);
+      users.delete(Number(userId));
+      return undefined;
+    },
+    ...overrides
+  };
+  userCodeApi.calls = calls;
+  userCodeApi.users = users;
+  return userCodeApi;
+}
+
+function installLockContext(t, { device = nativeLockDevice(), accessControl = makeAccessControl(), userCodeApi = null, nodeOverrides = {} } = {}) {
   const service = new DirectRadioService();
   const updateCalls = [];
   const published = [];
+  const userCodeValueDB = userCodeApi
+    ? makeZWaveValueDB([
+      [zwave.UserCodeCCValues.supportedUsers.id, 30],
+      [zwave.UserCodeCCValues.userIdStatus(4).id, zwave.UserIDStatus.Enabled]
+    ])
+    : null;
   const node = {
     id: 9,
     accessControl,
-    commandClasses: {},
+    commandClasses: userCodeApi ? { 'User Code': userCodeApi } : {},
+    ...(userCodeValueDB ? { valueDB: userCodeValueDB } : {}),
     ...nodeOverrides
   };
 
@@ -233,6 +298,33 @@ test('native Z-Wave lock normalization maps Z-Wave low-battery sentinel to alert
   assert.equal(normalized.update.properties.directRadioState.batteryLow, true);
 });
 
+test('native Z-Wave lock normalization exposes legacy S0 User Code support', () => {
+  const service = new DirectRadioService();
+  const valueDB = makeZWaveValueDB([
+    [zwave.DoorLockCCValues.currentMode.id, zwave.DoorLockMode.Secured],
+    [zwave.UserCodeCCValues.supportedUsers.id, 30]
+  ]);
+  const node = {
+    id: 9,
+    name: 'Kwikset 916',
+    status: 4,
+    manufacturerId: 144,
+    productType: 1,
+    productId: 1,
+    productLabel: 'SmartCode 916',
+    commandClasses: {
+      'User Code': makeUserCodeApi()
+    },
+    valueDB
+  };
+
+  const normalized = service.normalizeZWaveNode(node, 'test');
+
+  assert.equal(normalized.update.type, 'lock');
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('lockCodes'));
+  assert.equal(normalized.update.properties.supportsLockCodes, true);
+});
+
 test('direct Z-Wave lock merge drops stale SmartThings lock-code support and battery state', () => {
   const merged = directRadioService._test.mergeDirectDeviceUpdateForExisting(
     nativeLockDevice({
@@ -319,6 +411,26 @@ test('native Z-Wave lock PIN state uses endpoint access-control APIs when node a
   assert.equal(state.slots[0].slot, 4);
 });
 
+test('native Z-Wave lock PIN state uses legacy S0 User Code when access-control APIs are absent', async (t) => {
+  const userCodeApi = makeUserCodeApi();
+  const { service } = installLockContext(t, {
+    accessControl: null,
+    userCodeApi
+  });
+
+  const state = await service.getLockCodeState('native-lock-1');
+
+  assert.equal(state.native, true);
+  assert.equal(state.capabilities.backend, 'userCode');
+  assert.equal(state.capabilities.maxSlots, 30);
+  assert.equal(state.capabilities.minPinLength, 4);
+  assert.equal(state.capabilities.maxPinLength, 10);
+  assert.equal(state.slots.length, 1);
+  assert.equal(state.slots[0].slot, 4);
+  assert.equal(Object.prototype.hasOwnProperty.call(state.slots[0], 'pin'), false);
+  assert.ok(userCodeApi.calls.get.length > 0);
+});
+
 test('native Z-Wave lock PIN set writes credential slot and records assignment metadata', async (t) => {
   const accessControl = makeAccessControl({
     getUsersCached: () => [],
@@ -350,6 +462,34 @@ test('native Z-Wave lock PIN set writes credential slot and records assignment m
   assert.equal(published[0].userId, 7);
 });
 
+test('native Z-Wave lock PIN set writes legacy S0 User Code slots', async (t) => {
+  const userCodeApi = makeUserCodeApi({
+    users: {}
+  });
+  const { service, updateCalls, published } = installLockContext(t, {
+    accessControl: null,
+    userCodeApi
+  });
+
+  await service.setLockCode('native-lock-1', {
+    slot: 7,
+    name: 'Cleaner',
+    pin: '5824',
+    enabled: true
+  }, {
+    actor: 'admin@example.com'
+  });
+
+  assert.deepEqual(userCodeApi.calls.set[0], [
+    7,
+    zwave.UserIDStatus.Enabled,
+    '5824'
+  ]);
+  assert.equal(updateCalls[0].update.$set['properties.lockCodes.assignments.7'].name, 'Cleaner');
+  assert.equal(published[0].type, 'lock_code.set');
+  assert.equal(published[0].userId, 7);
+});
+
 test('native Z-Wave lock PIN set rejects invalid PIN values before touching the lock', async (t) => {
   const accessControl = makeAccessControl();
   const { service } = installLockContext(t, { accessControl });
@@ -375,6 +515,23 @@ test('native Z-Wave lock PIN delete clears the user slot and assignment metadata
   assert.deepEqual(accessControl.calls.deleteUser[0], [4]);
   assert.equal(updateCalls[0].update.$unset['properties.lockCodes.assignments.4'], '');
   assert.equal(updateCalls[0].update.$set['properties.lockCodes.lastManagedBy'], 'admin@example.com');
+  assert.equal(published[0].type, 'lock_code.deleted');
+  assert.equal(published[0].userId, 4);
+});
+
+test('native Z-Wave lock PIN delete clears legacy S0 User Code slots', async (t) => {
+  const userCodeApi = makeUserCodeApi();
+  const { service, updateCalls, published } = installLockContext(t, {
+    accessControl: null,
+    userCodeApi
+  });
+
+  await service.deleteLockCode('native-lock-1', 4, {
+    actor: 'admin@example.com'
+  });
+
+  assert.deepEqual(userCodeApi.calls.clear[0], [4]);
+  assert.equal(updateCalls[0].update.$unset['properties.lockCodes.assignments.4'], '');
   assert.equal(published[0].type, 'lock_code.deleted');
   assert.equal(published[0].userId, 4);
 });

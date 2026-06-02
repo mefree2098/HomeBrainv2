@@ -208,6 +208,8 @@ const {
   getLockCodeAssignments,
   getAssignmentForSlot,
   getZWaveAccessControl,
+  getZWaveUserCodeApi,
+  getZWaveUserCodeSupportedUsers,
   getZWaveLockCodeCapabilities,
   codeNameForSlot,
   lockEventActionFromLabel,
@@ -361,17 +363,62 @@ async getNativeZWaveLockContext(deviceId) {
     }
 
     const accessControl = getZWaveAccessControl(node);
-    if (!accessControl) {
-      const error = new Error('This Z-Wave lock is paired without secure User Code/User Credential support. Exclude it from Z-Wave and add it again with secure Z-Wave/S2 access-control inclusion so HomeBrain can manage PIN slots.');
+    const userCodeApi = accessControl ? null : getZWaveUserCodeApi(node);
+    if (!accessControl && !userCodeApi) {
+      const error = new Error('This Z-Wave lock is paired without secure User Code/User Credential support. Exclude it from Z-Wave and add it again with Legacy S0 for older Kwikset/Schlage locks, or S2 Access Control for newer locks, so HomeBrain can manage PIN slots.');
       error.code = 'ZWAVE_LOCK_ACCESS_CONTROL_UNAVAILABLE';
       error.status = 400;
       throw error;
     }
 
-    return { device, node, accessControl };
+    return {
+      device,
+      node,
+      accessControl,
+      userCodeApi,
+      lockCodeBackend: accessControl ? 'accessControl' : 'userCode'
+    };
   },
 
 async readZWaveLockUsers(device, accessControl, options = {}) {
+    const userCodeApi = options.userCodeApi || null;
+    const node = options.node || null;
+    if (!accessControl && userCodeApi) {
+      const zwave = require('zwave-js');
+      let maxUsers = getZWaveUserCodeSupportedUsers(node);
+      if ((options.refresh === true || maxUsers <= 0) && typeof userCodeApi.getUsersCount === 'function') {
+        maxUsers = Number(await userCodeApi.getUsersCount()) || maxUsers;
+      }
+      maxUsers = Math.max(0, Math.min(250, Number(maxUsers) || 0));
+      const users = [];
+      for (let userId = 1; userId <= maxUsers; userId += 1) {
+        let userIdStatus = getZWaveValue(node, zwave.UserCodeCCValues.userIdStatus(userId));
+        if ((options.refresh === true || userIdStatus === undefined) && typeof userCodeApi.get === 'function') {
+          // eslint-disable-next-line no-await-in-loop
+          const result = await userCodeApi.get(userId);
+          if (result?.userIdStatus !== undefined) {
+            userIdStatus = result.userIdStatus;
+          }
+        }
+        if (
+          userIdStatus === undefined
+          || userIdStatus === zwave.UserIDStatus.Available
+          || userIdStatus === zwave.UserIDStatus.StatusNotAvailable
+        ) {
+          continue;
+        }
+        users.push({
+          userId,
+          active: userIdStatus !== zwave.UserIDStatus.Disabled,
+          userType: zwave.UserCredentialUserType.General
+        });
+      }
+      return users
+        .map((user) => serializeLockCodeSlot(device, user))
+        .filter(Boolean)
+        .sort((left, right) => left.slot - right.slot);
+    }
+
     const refresh = options.refresh === true;
     let users = [];
     if (!refresh && typeof accessControl.getUsersCached === 'function') {
@@ -470,12 +517,17 @@ async readHomeBrainLockAudit(device, node, options = {}) {
   },
 
 async getLockCodeState(deviceId, options = {}) {
-    const { device, node, accessControl } = await this.getNativeZWaveLockContext(deviceId);
-    const capabilities = getZWaveLockCodeCapabilities(node, accessControl);
+    const { device, node, accessControl, userCodeApi, lockCodeBackend } = await this.getNativeZWaveLockContext(deviceId);
+    const capabilities = getZWaveLockCodeCapabilities(node, accessControl, userCodeApi);
     const slots = await this.readZWaveLockUsers(device, accessControl, {
-      refresh: options.refresh === true
+      refresh: options.refresh === true,
+      userCodeApi,
+      node
     });
-    const maxSlots = capabilities.maxSlots || Math.max(0, ...slots.map((slot) => slot.slot));
+    let maxSlots = capabilities.maxSlots || Math.max(0, ...slots.map((slot) => slot.slot));
+    if (maxSlots <= 0 && userCodeApi && typeof userCodeApi.getUsersCount === 'function') {
+      maxSlots = Number(await userCodeApi.getUsersCount()) || maxSlots;
+    }
     const occupied = new Set(slots.map((slot) => slot.slot));
 
     return {
@@ -485,6 +537,7 @@ async getLockCodeState(deviceId, options = {}) {
       native: true,
       capabilities: {
         ...capabilities,
+        backend: lockCodeBackend,
         maxSlots
       },
       slots,
@@ -494,8 +547,8 @@ async getLockCodeState(deviceId, options = {}) {
   },
 
 async setLockCode(deviceId, payload = {}, options = {}) {
-    const { device, node, accessControl } = await this.getNativeZWaveLockContext(deviceId);
-    const capabilities = getZWaveLockCodeCapabilities(node, accessControl);
+    const { device, node, accessControl, userCodeApi } = await this.getNativeZWaveLockContext(deviceId);
+    const capabilities = getZWaveLockCodeCapabilities(node, accessControl, userCodeApi);
     const zwave = require('zwave-js');
     const slot = normalizeLockCodeSlot(payload.slot || payload.userId);
     if (!slot || (capabilities.maxSlots > 0 && slot > capabilities.maxSlots)) {
@@ -506,7 +559,7 @@ async setLockCode(deviceId, payload = {}, options = {}) {
     const enabled = payload.enabled !== false;
     const pinProvided = trimString(payload.pin).length > 0;
 
-    if (pinProvided) {
+    if (accessControl && pinProvided) {
       const pin = normalizeLockPin(payload.pin, capabilities);
       if (capabilities.supportsNames) {
         await accessControl.setUser(slot, { active: true, userName: name });
@@ -522,13 +575,41 @@ async setLockCode(deviceId, payload = {}, options = {}) {
       }
     }
 
-    if (typeof accessControl.setUser === 'function' && (pinProvided || Object.prototype.hasOwnProperty.call(payload, 'enabled') || capabilities.supportsNames)) {
+    if (accessControl && typeof accessControl.setUser === 'function' && (pinProvided || Object.prototype.hasOwnProperty.call(payload, 'enabled') || capabilities.supportsNames)) {
       const userResult = await accessControl.setUser(slot, {
         active: enabled,
         ...(capabilities.supportsNames ? { userName: name } : {})
       });
       if (!operationSucceeded(userResult, zwave.SetUserResult.OK)) {
         throw new Error(`Lock rejected user update: ${enumLabel(zwave.SetUserResult, userResult, 'unknown')}`);
+      }
+    }
+
+    if (!accessControl && userCodeApi) {
+      if (pinProvided) {
+        const pin = normalizeLockPin(payload.pin, capabilities);
+        const userCodeResult = await userCodeApi.set(
+          slot,
+          enabled ? zwave.UserIDStatus.Enabled : zwave.UserIDStatus.Disabled,
+          pin
+        );
+        if (!operationSucceeded(userCodeResult)) {
+          throw new Error('Lock rejected legacy User Code PIN update');
+        }
+      } else if (Object.prototype.hasOwnProperty.call(payload, 'enabled')) {
+        const existing = typeof userCodeApi.get === 'function' ? await userCodeApi.get(slot) : null;
+        const existingCode = existing?.userCode ?? getZWaveValue(node, zwave.UserCodeCCValues.userCode(slot));
+        if (!existingCode) {
+          throw new Error('Enter the PIN when enabling or disabling this legacy User Code slot so HomeBrain can preserve the credential.');
+        }
+        const userCodeResult = await userCodeApi.set(
+          slot,
+          enabled ? zwave.UserIDStatus.Enabled : zwave.UserIDStatus.Disabled,
+          existingCode
+        );
+        if (!operationSucceeded(userCodeResult)) {
+          throw new Error('Lock rejected legacy User Code status update');
+        }
       }
     }
 
@@ -564,16 +645,23 @@ async setLockCode(deviceId, payload = {}, options = {}) {
   },
 
 async deleteLockCode(deviceId, slotValue, options = {}) {
-    const { device, node, accessControl } = await this.getNativeZWaveLockContext(deviceId);
+    const { device, node, accessControl, userCodeApi } = await this.getNativeZWaveLockContext(deviceId);
     const slot = normalizeLockCodeSlot(slotValue);
     if (!slot) {
       throw new Error('Lock code slot is required');
     }
 
     const zwave = require('zwave-js');
-    const result = await accessControl.deleteUser(slot);
-    if (!operationSucceeded(result, zwave.SetUserResult.OK)) {
-      throw new Error(`Lock rejected PIN deletion: ${enumLabel(zwave.SetUserResult, result, 'unknown')}`);
+    if (accessControl) {
+      const result = await accessControl.deleteUser(slot);
+      if (!operationSucceeded(result, zwave.SetUserResult.OK)) {
+        throw new Error(`Lock rejected PIN deletion: ${enumLabel(zwave.SetUserResult, result, 'unknown')}`);
+      }
+    } else {
+      const result = await userCodeApi.clear(slot);
+      if (!operationSucceeded(result)) {
+        throw new Error('Lock rejected legacy User Code PIN deletion');
+      }
     }
 
     const now = new Date().toISOString();

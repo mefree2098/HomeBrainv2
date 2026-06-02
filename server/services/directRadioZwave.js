@@ -210,6 +210,7 @@ const {
   getLockCodeAssignments,
   getAssignmentForSlot,
   getZWaveAccessControl,
+  hasZWaveUserCodeSupport,
   getZWaveLockCodeCapabilities,
   codeNameForSlot,
   lockEventActionFromLabel,
@@ -847,7 +848,7 @@ async replaceFailedZWaveNode(nodeId, options = {}) {
     session.status = 'active';
     session.expiresAt = Date.now() + seconds * 1000;
     session.message = zwaveSecurityMode === 's0'
-      ? `Z-Wave legacy S0 replacement is open for node ${numericNodeId}. Press the siren include/action button while this window is live.`
+      ? `Z-Wave legacy S0 replacement is open for node ${numericNodeId}. Perform the device include action while this window is live.`
       : `Z-Wave replacement is open for node ${numericNodeId}. Perform the device include action while this window is live.`;
     this.armPairingTimer('zwave', session.id, seconds);
     this.log('info', 'zwave', 'Z-Wave failed-node replacement window is open', {
@@ -1270,7 +1271,7 @@ normalizeZWaveNode(node, reason = 'sync') {
       features.add('battery');
     }
     const accessControl = getZWaveAccessControl(node);
-    if (accessControl) {
+    if (accessControl || hasZWaveUserCodeSupport(node)) {
       features.add('lockCodes');
     }
     if (hasValue(zwave.BatteryCCValues.level)) features.add('battery');

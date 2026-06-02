@@ -3245,8 +3245,106 @@ function getZWaveAccessControl(node) {
   return null;
 }
 
-function getZWaveLockCodeCapabilities(node, accessControl) {
+function getZWaveUserCodeApi(node) {
+  const candidates = [
+    node,
+    (() => {
+      try {
+        return node?.getEndpoint?.(0);
+      } catch (_error) {
+        return null;
+      }
+    })(),
+    (() => {
+      try {
+        return node?.getEndpoint?.(1);
+      } catch (_error) {
+        return null;
+      }
+    })()
+  ];
+
+  for (const candidate of candidates) {
+    const commandClasses = candidate?.commandClasses;
+    if (!commandClasses) {
+      continue;
+    }
+    if (typeof candidate.supportsCC === 'function') {
+      try {
+        if (candidate.supportsCC(99) !== true) {
+          continue;
+        }
+      } catch (_error) {
+        continue;
+      }
+    }
+
+    const mapGetter = typeof commandClasses.get === 'function'
+      ? commandClasses.get.bind(commandClasses)
+      : null;
+    const api = commandClasses['User Code']
+      || commandClasses.UserCode
+      || commandClasses[99]
+      || mapGetter?.('User Code')
+      || mapGetter?.(99);
+    if (api && (
+      typeof api.getUsersCount === 'function'
+      || typeof api.get === 'function'
+      || typeof api.set === 'function'
+      || typeof api.clear === 'function'
+    )) {
+      return api;
+    }
+  }
+
+  return null;
+}
+
+function getZWaveUserCodeSupportedUsers(node) {
   const zwave = require('zwave-js');
+  const cached = Number(getZWaveValue(node, zwave.UserCodeCCValues.supportedUsers));
+  return Number.isFinite(cached) && cached > 0 ? cached : 0;
+}
+
+function hasZWaveUserCodeSupport(node) {
+  if (getZWaveUserCodeSupportedUsers(node) > 0 || getZWaveUserCodeApi(node)) {
+    return true;
+  }
+
+  const zwave = require('zwave-js');
+  try {
+    if (typeof node?.valueDB?.findValues !== 'function') {
+      return false;
+    }
+    return (node.valueDB.findValues((valueId) => (
+      zwave.UserCodeCCValues.userIdStatus.is(valueId)
+      || zwave.UserCodeCCValues.userCode.is(valueId)
+    )) || []).length > 0;
+  } catch (_error) {
+    return false;
+  }
+}
+
+function getZWaveLockCodeCapabilities(node, accessControl, userCodeApi = null) {
+  const zwave = require('zwave-js');
+  if (!accessControl && (userCodeApi || hasZWaveUserCodeSupport(node))) {
+    const maxSlots = getZWaveUserCodeSupportedUsers(node);
+    const supportsAdminCode = getZWaveValue(node, zwave.UserCodeCCValues.supportsAdminCode) === true;
+    const supportsAdminCodeDeactivation = getZWaveValue(node, zwave.UserCodeCCValues.supportsAdminCodeDeactivation) === true;
+    return {
+      supported: true,
+      backend: 'userCode',
+      maxSlots,
+      minPinLength: 4,
+      maxPinLength: 10,
+      supportsNames: false,
+      maxNameLength: null,
+      supportsAdminCode,
+      supportsAdminCodeDeactivation,
+      supportsLockAudit: Boolean(node?.commandClasses?.['Door Lock Logging']?.getRecord)
+    };
+  }
+
   const userCapabilities = accessControl?.getUserCapabilitiesCached?.() || {};
   const credentialCapabilities = accessControl?.getCredentialCapabilitiesCached?.() || {};
   const pinCapabilities = credentialCapabilities?.supportedCredentialTypes?.get?.(zwave.UserCredentialType.PINCode)
@@ -3258,6 +3356,7 @@ function getZWaveLockCodeCapabilities(node, accessControl) {
 
   return {
     supported: Boolean(accessControl),
+    backend: 'accessControl',
     maxSlots: Number.isFinite(maxSlots) && maxSlots > 0 ? maxSlots : 0,
     minPinLength: Number.isFinite(minPinLength) && minPinLength > 0 ? minPinLength : 4,
     maxPinLength: Number.isFinite(maxPinLength) && maxPinLength > 0 ? maxPinLength : 10,
@@ -3519,6 +3618,9 @@ module.exports = {
   getLockCodeAssignments,
   getAssignmentForSlot,
   getZWaveAccessControl,
+  getZWaveUserCodeApi,
+  getZWaveUserCodeSupportedUsers,
+  hasZWaveUserCodeSupport,
   getZWaveLockCodeCapabilities,
   codeNameForSlot,
   lockEventActionFromLabel,
