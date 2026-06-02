@@ -1131,30 +1131,48 @@ async getStatus() {
 
 async shutdown() {
     const startedAt = Date.now();
+    const pairingTimeoutMs = Math.max(1000, Number(process.env.HOMEBRAIN_DIRECT_RADIO_PAIRING_SHUTDOWN_TIMEOUT_MS || 5000));
+    const zwaveTimeoutMs = Math.max(5000, Number(process.env.HOMEBRAIN_ZWAVE_DESTROY_TIMEOUT_MS || 45000));
+    const zigbeeTimeoutMs = Math.max(1000, Number(process.env.HOMEBRAIN_ZIGBEE_STOP_TIMEOUT_MS || 15000));
     console.log('DirectRadioService: Shutdown started');
     if (this.hardwareMonitorTimer) {
       clearInterval(this.hardwareMonitorTimer);
       this.hardwareMonitorTimer = null;
     }
-    await this.stopPairing('all').catch(() => {});
-    if (this.zigbee.controller) {
-      try {
-        await this.zigbee.controller.stop();
-        console.log('DirectRadioService: Zigbee controller stopped');
-      } catch (error) {
-        console.warn(`DirectRadioService: Failed to stop Zigbee controller: ${error.message}`);
-      }
-      this.zigbee.controller = null;
-    }
+    await withTimeout(
+      this.stopPairing('all'),
+      pairingTimeoutMs,
+      `Direct radio pairing stop did not finish within ${pairingTimeoutMs}ms`
+    ).catch((error) => {
+      console.warn(`DirectRadioService: Failed to stop pairing sessions: ${error.message}`);
+    });
     if (this.zwave.driver) {
       try {
         const zwaveStartedAt = Date.now();
-        await this.zwave.driver.destroy();
+        await withTimeout(
+          this.zwave.driver.destroy(),
+          zwaveTimeoutMs,
+          `Z-Wave driver destroy did not finish within ${zwaveTimeoutMs}ms`
+        );
         console.log(`DirectRadioService: Z-Wave driver destroyed in ${Date.now() - zwaveStartedAt}ms`);
       } catch (error) {
         console.warn(`DirectRadioService: Failed to destroy Z-Wave driver: ${error.message}`);
       }
       this.zwave.driver = null;
+    }
+    if (this.zigbee.controller) {
+      try {
+        const zigbeeStartedAt = Date.now();
+        await withTimeout(
+          this.zigbee.controller.stop(),
+          zigbeeTimeoutMs,
+          `Zigbee controller stop did not finish within ${zigbeeTimeoutMs}ms`
+        );
+        console.log(`DirectRadioService: Zigbee controller stopped in ${Date.now() - zigbeeStartedAt}ms`);
+      } catch (error) {
+        console.warn(`DirectRadioService: Failed to stop Zigbee controller: ${error.message}`);
+      }
+      this.zigbee.controller = null;
     }
     this.zigbee.started = false;
     this.zwave.started = false;

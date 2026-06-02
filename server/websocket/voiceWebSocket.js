@@ -1307,7 +1307,22 @@ class VoiceWebSocketServer {
     }
 
     if (this.wss) {
+      this.wss.clients.forEach((socket) => {
+        try {
+          socket.close(1001, 'HomeBrain is shutting down');
+        } catch (_error) {
+          socket.terminate();
+        }
+        setTimeout(() => {
+          if (socket.readyState !== WebSocket.CLOSED) {
+            socket.terminate();
+          }
+        }, 1000).unref?.();
+      });
       this.wss.close();
+      this.wss = null;
+      this.deviceConnections.clear();
+      this.audioSessions.clear();
       console.log('Voice WebSocket Server stopped');
     }
   }
