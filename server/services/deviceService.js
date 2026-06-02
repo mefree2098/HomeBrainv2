@@ -32,7 +32,14 @@ function normalizeIdString(value) {
     return '';
   }
 
+  if (typeof value === 'object' && typeof value.toHexString === 'function') {
+    return value.toHexString().trim();
+  }
+
   if (typeof value === 'object' && value._id !== undefined && value._id !== null) {
+    if (value._id === value) {
+      return String(value).trim();
+    }
     return normalizeIdString(value._id);
   }
 
