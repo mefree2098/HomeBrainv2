@@ -91,6 +91,8 @@ import {
 import {
   getEcobeeStatus,
   configureEcobeeOAuth,
+  loginEcobeeWithPassword,
+  submitEcobeeMfa,
   getEcobeeAuthUrl,
   testEcobeeConnection,
   disconnectEcobee,
@@ -513,6 +515,12 @@ export function Settings() {
   const [ecobeeConfig, setEcobeeConfig] = useState({
     clientId: "",
     redirectUri: ""
+  })
+  const [ecobeeAuthMode, setEcobeeAuthMode] = useState<"web" | "appKey">("web")
+  const [ecobeeWebCredentials, setEcobeeWebCredentials] = useState({
+    username: "",
+    password: "",
+    mfaCode: ""
   })
   const [harmonyStatus, setHarmonyStatus] = useState<any>(null)
   const [harmonyHubs, setHarmonyHubs] = useState<any[]>([])
@@ -1492,6 +1500,13 @@ export function Settings() {
           clientId: integration.clientId || "",
           redirectUri: integration.redirectUri || ""
         })
+        setEcobeeAuthMode(integration.authMode === "appKey" ? "appKey" : "web")
+        setEcobeeWebCredentials((prev) => ({
+          ...prev,
+          username: integration.username || prev.username || "",
+          password: "",
+          mfaCode: integration.pendingMfaRequired ? prev.mfaCode : ""
+        }))
 
         if (integration.isConnected) {
           fetchEcobeeDevices({
@@ -3701,6 +3716,92 @@ export function Settings() {
     }
   }
 
+  const handleLoginEcobeeWithPassword = async () => {
+    const username = ecobeeWebCredentials.username?.trim()
+    const password = ecobeeWebCredentials.password
+
+    if (!username || !password) {
+      toast({
+        title: "Error",
+        description: "Ecobee email and password are required.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setConfiguringEcobee(true)
+    try {
+      const response = await loginEcobeeWithPassword({ username, password })
+
+      if (response.requiresMfa) {
+        toast({
+          title: "MFA Required",
+          description: `Enter the ${response.mfaType === "sms" ? "SMS" : "one-time"} code from Ecobee to finish connecting.`
+        })
+      } else if (response.success) {
+        toast({
+          title: "Ecobee Connected",
+          description: "Ecobee account login has been saved and devices are syncing."
+        })
+        setEcobeeWebCredentials((prev) => ({ ...prev, password: "", mfaCode: "" }))
+        await Promise.all([
+          loadEcobeeStatus(),
+          fetchEcobeeDevices({ showToast: false, forceRefresh: true })
+        ])
+      }
+
+      loadEcobeeStatus()
+    } catch (error: any) {
+      console.error('Ecobee account login failed:', error)
+      toast({
+        title: "Connection Failed",
+        description: error?.message || "Failed to connect Ecobee account",
+        variant: "destructive"
+      })
+    } finally {
+      setConfiguringEcobee(false)
+    }
+  }
+
+  const handleSubmitEcobeeMfa = async () => {
+    const code = ecobeeWebCredentials.mfaCode?.trim()
+
+    if (!code) {
+      toast({
+        title: "Error",
+        description: "Ecobee MFA code is required.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setConfiguringEcobee(true)
+    try {
+      const response = await submitEcobeeMfa({ code })
+
+      if (response.success) {
+        toast({
+          title: "Ecobee Connected",
+          description: "Ecobee account login is complete and devices are syncing."
+        })
+        setEcobeeWebCredentials((prev) => ({ ...prev, password: "", mfaCode: "" }))
+        await Promise.all([
+          loadEcobeeStatus(),
+          fetchEcobeeDevices({ showToast: false, forceRefresh: true })
+        ])
+      }
+    } catch (error: any) {
+      console.error('Ecobee MFA completion failed:', error)
+      toast({
+        title: "MFA Failed",
+        description: error?.message || "Failed to complete Ecobee MFA",
+        variant: "destructive"
+      })
+    } finally {
+      setConfiguringEcobee(false)
+    }
+  }
+
   const handleConnectEcobee = async () => {
     try {
       const response = await getEcobeeAuthUrl()
@@ -3938,7 +4039,11 @@ export function Settings() {
     if (!ecobeeStatus) return "Loading..."
 
     if (ecobeeStatus.isConnected) {
-      return "Connected and authenticated"
+      return ecobeeStatus.authMode === "web"
+        ? "Connected with Ecobee account login"
+        : "Connected with App Key OAuth"
+    } else if (ecobeeStatus.pendingMfaRequired) {
+      return "Waiting for Ecobee MFA code"
     } else if (ecobeeStatus.isConfigured) {
       return "Configured but not connected"
     }
@@ -7391,140 +7496,253 @@ export function Settings() {
                 </div>
 
                 <div className="grid gap-4">
-                  <div>
-                    <label className="text-sm font-medium">Ecobee App Key</label>
-                    <Input
-                      value={ecobeeConfig.clientId}
-                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                        setEcobeeConfig((prev) => ({ ...prev, clientId: event.target.value }))
-                      }
-                      placeholder="Enter Ecobee App Key"
-                      className="mt-1"
-                    />
-                    <p className="text-xs text-muted-foreground mt-1">
-                      App Key from your Ecobee developer application.
-                    </p>
-                  </div>
-
-                  <div>
-                    <label className="text-sm font-medium">Redirect URI (Optional)</label>
-                    <Input
-                      value={ecobeeConfig.redirectUri}
-                      onChange={(event: ChangeEvent<HTMLInputElement>) =>
-                        setEcobeeConfig((prev) => ({ ...prev, redirectUri: event.target.value }))
-                      }
-                      placeholder="https://yourdomain.com/api/ecobee/callback"
-                      className="mt-1"
-                    />
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Custom redirect URI (defaults to current domain + /api/ecobee/callback).
-                    </p>
-                  </div>
-
-                  <div className="flex gap-2 flex-wrap">
+                  <div className="inline-flex w-fit rounded-md border bg-muted/30 p-1">
                     <Button
                       type="button"
-                      variant="outline"
+                      variant={ecobeeAuthMode === "web" ? "default" : "ghost"}
                       size="sm"
-                      onClick={handleConfigureEcobee}
-                      disabled={configuringEcobee || !ecobeeConfig.clientId.trim()}
+                      onClick={() => setEcobeeAuthMode("web")}
                     >
-                      {configuringEcobee ? (
-                        <>
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
-                          Configuring...
-                        </>
-                      ) : (
-                        <>
-                          <Save className="h-4 w-4 mr-2" />
-                          Configure OAuth
-                        </>
-                      )}
+                      Account Login
                     </Button>
+                    <Button
+                      type="button"
+                      variant={ecobeeAuthMode === "appKey" ? "default" : "ghost"}
+                      size="sm"
+                      onClick={() => setEcobeeAuthMode("appKey")}
+                    >
+                      App Key
+                    </Button>
+                  </div>
 
-                    {ecobeeStatus?.isConfigured && !ecobeeStatus?.isConnected && (
-                      <Button
-                        type="button"
-                        variant="default"
-                        size="sm"
-                        onClick={handleConnectEcobee}
-                        className="bg-green-600 hover:bg-green-700"
-                      >
-                        <ExternalLink className="h-4 w-4 mr-2" />
-                        Connect Ecobee
-                      </Button>
-                    )}
+                  {ecobeeAuthMode === "web" ? (
+                    <div className="grid gap-4">
+                      <div>
+                        <label className="text-sm font-medium">Ecobee Email</label>
+                        <Input
+                          type="email"
+                          value={ecobeeWebCredentials.username}
+                          onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                            setEcobeeWebCredentials((prev) => ({ ...prev, username: event.target.value }))
+                          }
+                          placeholder="name@example.com"
+                          className="mt-1"
+                        />
+                      </div>
 
-                    {ecobeeStatus?.isConnected && (
-                      <>
+                      <div>
+                        <label className="text-sm font-medium">Ecobee Password</label>
+                        <Input
+                          type="password"
+                          value={ecobeeWebCredentials.password}
+                          onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                            setEcobeeWebCredentials((prev) => ({ ...prev, password: event.target.value }))
+                          }
+                          placeholder={ecobeeStatus?.authMode === "web" ? "Enter password to reconnect" : "Enter Ecobee password"}
+                          className="mt-1"
+                        />
+                      </div>
+
+                      {ecobeeStatus?.pendingMfaRequired && (
+                        <div>
+                          <label className="text-sm font-medium">
+                            Ecobee MFA Code
+                          </label>
+                          <Input
+                            value={ecobeeWebCredentials.mfaCode}
+                            onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                              setEcobeeWebCredentials((prev) => ({ ...prev, mfaCode: event.target.value }))
+                            }
+                            placeholder={ecobeeStatus?.pendingMfa?.mfaType === "sms" ? "SMS code" : "One-time code"}
+                            className="mt-1"
+                          />
+                        </div>
+                      )}
+
+                      <div className="flex gap-2 flex-wrap">
                         <Button
                           type="button"
-                          variant="outline"
+                          variant="default"
                           size="sm"
-                          onClick={handleTestEcobee}
-                          disabled={testingEcobee}
+                          onClick={handleLoginEcobeeWithPassword}
+                          disabled={
+                            configuringEcobee ||
+                            !ecobeeWebCredentials.username.trim() ||
+                            !ecobeeWebCredentials.password
+                          }
+                          className="bg-green-600 hover:bg-green-700"
                         >
-                          {testingEcobee ? (
-                            <>
-                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
-                              Testing...
-                            </>
-                          ) : (
-                            <>
-                              <TestTube className="h-4 w-4 mr-2" />
-                              Test Connection
-                            </>
-                          )}
-                        </Button>
-
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={handleRefreshEcobeeDevices}
-                          disabled={loadingEcobeeDevices}
-                        >
-                          {loadingEcobeeDevices ? (
-                            <>
-                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
-                              Refreshing...
-                            </>
-                          ) : (
-                            <>
-                              <RefreshCw className="h-4 w-4 mr-2" />
-                              Refresh Devices
-                            </>
-                          )}
-                        </Button>
-
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          size="sm"
-                          onClick={handleDisconnectEcobee}
-                          disabled={disconnectingEcobee}
-                        >
-                          {disconnectingEcobee ? (
+                          {configuringEcobee ? (
                             <>
                               <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
-                              Disconnecting...
+                              Connecting...
                             </>
                           ) : (
                             <>
-                              <XCircle className="h-4 w-4 mr-2" />
-                              Disconnect
+                              <Key className="h-4 w-4 mr-2" />
+                              Connect Account
                             </>
                           )}
                         </Button>
-                      </>
-                    )}
-                  </div>
 
-                  <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800">
-                    <p className="text-sm text-yellow-800 dark:text-yellow-200">
-                      <strong>OAuth Setup Required:</strong> Create an Ecobee developer application, enter the App Key above, configure the redirect URI to this server callback, then connect your account.
-                    </p>
-                  </div>
+                        {ecobeeStatus?.pendingMfaRequired && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={handleSubmitEcobeeMfa}
+                            disabled={configuringEcobee || !ecobeeWebCredentials.mfaCode.trim()}
+                          >
+                            <CheckCircle className="h-4 w-4 mr-2" />
+                            Complete MFA
+                          </Button>
+                        )}
+                      </div>
+
+                      <div className="p-3 bg-blue-50 dark:bg-blue-950/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                        <p className="text-sm text-blue-800 dark:text-blue-200">
+                          <strong>No App Key Required:</strong> Connect with your Ecobee account email and password. If Ecobee requires MFA, enter the code after the first login step.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid gap-4">
+                      <div>
+                        <label className="text-sm font-medium">Ecobee App Key</label>
+                        <Input
+                          value={ecobeeConfig.clientId}
+                          onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                            setEcobeeConfig((prev) => ({ ...prev, clientId: event.target.value }))
+                          }
+                          placeholder="Enter Ecobee App Key"
+                          className="mt-1"
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Existing Ecobee developer App Key.
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="text-sm font-medium">Redirect URI (Optional)</label>
+                        <Input
+                          value={ecobeeConfig.redirectUri}
+                          onChange={(event: ChangeEvent<HTMLInputElement>) =>
+                            setEcobeeConfig((prev) => ({ ...prev, redirectUri: event.target.value }))
+                          }
+                          placeholder="https://yourdomain.com/api/ecobee/callback"
+                          className="mt-1"
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Custom redirect URI (defaults to current domain + /api/ecobee/callback).
+                        </p>
+                      </div>
+
+                      <div className="flex gap-2 flex-wrap">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={handleConfigureEcobee}
+                          disabled={configuringEcobee || !ecobeeConfig.clientId.trim()}
+                        >
+                          {configuringEcobee ? (
+                            <>
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                              Configuring...
+                            </>
+                          ) : (
+                            <>
+                              <Save className="h-4 w-4 mr-2" />
+                              Configure OAuth
+                            </>
+                          )}
+                        </Button>
+
+                        {ecobeeStatus?.authMode === "appKey" && ecobeeStatus?.isConfigured && !ecobeeStatus?.isConnected && (
+                          <Button
+                            type="button"
+                            variant="default"
+                            size="sm"
+                            onClick={handleConnectEcobee}
+                            className="bg-green-600 hover:bg-green-700"
+                          >
+                            <ExternalLink className="h-4 w-4 mr-2" />
+                            Connect Ecobee
+                          </Button>
+                        )}
+                      </div>
+
+                      <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-800">
+                        <p className="text-sm text-yellow-800 dark:text-yellow-200">
+                          <strong>Legacy OAuth:</strong> Use this only if you already have an Ecobee developer App Key.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {ecobeeStatus?.isConnected && (
+                    <div className="flex gap-2 flex-wrap">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleTestEcobee}
+                        disabled={testingEcobee}
+                      >
+                        {testingEcobee ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                            Testing...
+                          </>
+                        ) : (
+                          <>
+                            <TestTube className="h-4 w-4 mr-2" />
+                            Test Connection
+                          </>
+                        )}
+                      </Button>
+
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleRefreshEcobeeDevices}
+                        disabled={loadingEcobeeDevices}
+                      >
+                        {loadingEcobeeDevices ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                            Refreshing...
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw className="h-4 w-4 mr-2" />
+                            Refresh Devices
+                          </>
+                        )}
+                      </Button>
+
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        onClick={handleDisconnectEcobee}
+                        disabled={disconnectingEcobee}
+                      >
+                        {disconnectingEcobee ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
+                            Disconnecting...
+                          </>
+                        ) : (
+                          <>
+                            <XCircle className="h-4 w-4 mr-2" />
+                            Disconnect
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>

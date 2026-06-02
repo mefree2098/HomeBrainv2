@@ -1,10 +1,39 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const { requireAdmin } = require('./middlewares/auth');
 const ecobeeService = require('../services/ecobeeService');
 const EcobeeIntegration = require('../models/EcobeeIntegration');
 
 const auth = requireAdmin();
+const { ipKeyGenerator } = rateLimit;
+
+function trimString(value, fallback = '') {
+  return typeof value === 'string' ? value.trim() : fallback;
+}
+
+function rateLimitIpKey(req) {
+  return typeof ipKeyGenerator === 'function'
+    ? ipKeyGenerator(req.ip)
+    : (req.ip || req.socket?.remoteAddress || 'unknown');
+}
+
+function buildEcobeeCredentialRateLimitKey(req = {}) {
+  const username = trimString(req.body?.username).toLowerCase();
+  return `${rateLimitIpKey(req)}:${username || 'unknown-ecobee-account'}`;
+}
+
+const ecobeeCredentialRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_ECOBEE_LOGIN_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000)),
+  limit: Math.max(5, Number(process.env.HOMEBRAIN_ECOBEE_LOGIN_RATE_LIMIT_MAX || 25)),
+  keyGenerator: buildEcobeeCredentialRateLimitKey,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many Ecobee login attempts. Please retry shortly.'
+  }
+});
 
 router.get('/status', auth, async (req, res) => {
   try {
@@ -52,6 +81,65 @@ router.post('/configure', auth, async (req, res) => {
     return res.status(500).json({
       success: false,
       message: error.message || 'Failed to configure Ecobee OAuth'
+    });
+  }
+});
+
+router.post('/login', ecobeeCredentialRateLimit, auth, async (req, res) => {
+  try {
+    const { username, password } = req.body || {};
+
+    if (!username || typeof username !== 'string' || !username.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ecobee email is required'
+      });
+    }
+
+    if (!password || typeof password !== 'string') {
+      return res.status(400).json({
+        success: false,
+        message: 'Ecobee password is required'
+      });
+    }
+
+    const result = await ecobeeService.loginWithWebCredentials({
+      username,
+      password,
+      reason: 'settings-web-login'
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('EcobeeRoutes: Web login failed:', error.message);
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to connect Ecobee account'
+    });
+  }
+});
+
+router.post('/mfa', ecobeeCredentialRateLimit, auth, async (req, res) => {
+  try {
+    const { code } = req.body || {};
+
+    if (!code || typeof code !== 'string' || !code.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Ecobee MFA code is required'
+      });
+    }
+
+    const result = await ecobeeService.completeWebMfa(code, {
+      reason: 'settings-web-mfa'
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('EcobeeRoutes: MFA completion failed:', error.message);
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to complete Ecobee MFA'
     });
   }
 });

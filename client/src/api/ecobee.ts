@@ -24,6 +24,29 @@ export const configureEcobeeOAuth = async (config: {
   }
 };
 
+export const loginEcobeeWithPassword = async (credentials: {
+  username: string;
+  password: string;
+}) => {
+  try {
+    const response = await api.post('/api/ecobee/login', credentials);
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
+export const submitEcobeeMfa = async (payload: { code: string }) => {
+  try {
+    const response = await api.post('/api/ecobee/mfa', payload);
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error.message);
+  }
+};
+
 export const getEcobeeAuthUrl = async () => {
   try {
     const response = await api.get('/api/ecobee/auth/url');
