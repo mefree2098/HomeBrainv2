@@ -77,8 +77,12 @@ scan_panel_defaults() {
 scan_history() {
   local findings=""
   local rev
+  local revs
+
+  revs="$(history_revisions)"
 
   while IFS= read -r rev; do
+    [[ -n "${rev}" ]] || continue
     local rev_matches
     rev_matches="$(
       { git grep -nI -E "${COMMON_SECRET_PATTERN}" "${rev}" -- . \
@@ -108,12 +112,30 @@ scan_history() {
     if [[ -n "${rev_paths}" ]]; then
       findings+="${rev}: tracked unsafe path(s):"$'\n'"${rev_paths}"$'\n'
     fi
-  done < <(git rev-list --all)
+  done <<< "${revs}"
 
   if [[ -n "${findings}" ]]; then
     print_failure "${findings}"
     return 1
   fi
+}
+
+history_revisions() {
+  local base_ref="${GITHUB_BASE_REF:-}"
+  local event_name="${GITHUB_EVENT_NAME:-}"
+  local remote_ref
+
+  if [[ "${event_name}" == "pull_request" && -n "${base_ref}" ]]; then
+    remote_ref="refs/remotes/origin/${base_ref}"
+    git fetch --no-tags origin "${base_ref}:${remote_ref}" >/dev/null 2>&1 || true
+
+    if git rev-parse --verify --quiet "${remote_ref}" >/dev/null; then
+      git rev-list "${remote_ref}..HEAD"
+      return
+    fi
+  fi
+
+  git rev-list --all
 }
 
 scan_current_tree
