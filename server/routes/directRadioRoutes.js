@@ -384,6 +384,37 @@ router.post('/zwave/nodes/:nodeId/refresh-info', async (req, res) => {
   }
 });
 
+router.get('/zwave/nodes/:nodeId/diagnostics', async (req, res) => {
+  try {
+    const result = await directRadioService.getZWaveNodeDiagnostics(req.params.nodeId, {
+      valueLimit: req.query.valueLimit || req.query.limit,
+      logLimit: req.query.logLimit
+    });
+    res.status(200).json({
+      success: true,
+      result,
+      status: await directRadioService.getStatus()
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to get Z-Wave node diagnostics');
+  }
+});
+
+router.get('/zwave/logs/latest', async (req, res) => {
+  try {
+    const result = await directRadioService.getZWaveJsLogTail({
+      limit: req.query.limit,
+      nodeId: req.query.nodeId
+    });
+    res.status(200).json({
+      success: true,
+      result
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to get zwave-js logs');
+  }
+});
+
 router.post('/zwave/nodes/:nodeId/recover-routes', async (req, res) => {
   try {
     const result = await directRadioService.recoverZWaveNodeRoutes(req.params.nodeId, {

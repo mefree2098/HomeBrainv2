@@ -56,6 +56,7 @@ const {
 const ZWAVE_NODE_ROUTE_RECOVERY_COOLDOWN_MS = 2 * 60 * 1000;
 const ZWAVE_NODE_ROUTE_RECOVERY_TIMEOUT_MS = 45 * 1000;
 const ZWAVE_NODE_ROUTE_RECOVERY_PING_TIMEOUT_MS = 10 * 1000;
+const ZWAVE_JS_LOG_TAIL_MAX_BYTES = 4 * 1024 * 1024;
 
 function normalizeOptionalMilliseconds(value, fallback, min, max) {
   const numeric = Number(value);
@@ -78,6 +79,159 @@ function isZWaveCommandDeliveryError(error) {
     || text.includes('no ack')
     || text.includes('no_ack')
     || text.includes('transmission failed');
+}
+
+function normalizeZWaveJsLogLevel(value, fallback = 'debug') {
+  const normalized = trimString(value).toLowerCase();
+  return ['debug', 'info', 'warn', 'error'].includes(normalized) ? normalized : fallback;
+}
+
+function parseBoundedInteger(value, fallback, min, max) {
+  const numeric = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, numeric));
+}
+
+function serializeMaybeKnown(value, enumObject = null) {
+  if (value && typeof value === 'object' && value.error) {
+    return {
+      known: false,
+      value: null,
+      label: 'error',
+      error: value.error
+    };
+  }
+  if (value === undefined) {
+    return {
+      known: false,
+      value: null,
+      label: 'unknown'
+    };
+  }
+  return {
+    known: true,
+    value,
+    label: enumObject ? enumMemberName(enumObject, value) : String(value)
+  };
+}
+
+function getZWaveCore() {
+  try {
+    return require('@zwave-js/core');
+  } catch (_error) {
+    return {};
+  }
+}
+
+function getZWaveSecurityClassEntries(core = getZWaveCore()) {
+  const securityClass = core.SecurityClass || {};
+  return [
+    ['S2_AccessControl', securityClass.S2_AccessControl],
+    ['S2_Authenticated', securityClass.S2_Authenticated],
+    ['S2_Unauthenticated', securityClass.S2_Unauthenticated],
+    ['S0_Legacy', securityClass.S0_Legacy]
+  ].filter(([, value]) => value !== undefined);
+}
+
+function serializeZWaveJsLogConfig(config = null) {
+  if (!config || typeof config !== 'object') {
+    return null;
+  }
+  return {
+    enabled: config.enabled === true,
+    level: trimString(config.level) || null,
+    logToFile: config.logToFile === true,
+    filename: trimString(config.filename) || null,
+    maxFiles: Number.isFinite(Number(config.maxFiles)) ? Number(config.maxFiles) : null,
+    raw: config.raw === true,
+    forceConsole: config.forceConsole === true,
+    nodeFilter: Array.isArray(config.nodeFilter) ? config.nodeFilter.slice(0, 200) : null
+  };
+}
+
+function readZWaveSecurityClass(source, securityClass, nodeId = null) {
+  try {
+    if (typeof source?.hasSecurityClass === 'function') {
+      if (nodeId !== null && nodeId !== undefined) {
+        return source.hasSecurityClass(nodeId, securityClass);
+      }
+      return source.hasSecurityClass(securityClass);
+    }
+  } catch (error) {
+    return {
+      error: error.message || String(error)
+    };
+  }
+  return undefined;
+}
+
+function readZWaveHighestSecurityClass(source, nodeId = null) {
+  try {
+    if (nodeId !== null && nodeId !== undefined && typeof source?.getHighestSecurityClass === 'function') {
+      return source.getHighestSecurityClass(nodeId);
+    }
+    if (typeof source?.getHighestSecurityClass === 'function') {
+      return source.getHighestSecurityClass();
+    }
+  } catch (error) {
+    return {
+      error: error.message || String(error)
+    };
+  }
+  return undefined;
+}
+
+async function readTextTail(filePath, maxBytes = ZWAVE_JS_LOG_TAIL_MAX_BYTES) {
+  const stats = await fsp.stat(filePath);
+  const start = Math.max(0, stats.size - maxBytes);
+  const length = Math.max(0, stats.size - start);
+  const handle = await fsp.open(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, start);
+    return buffer.toString('utf8');
+  } finally {
+    await handle.close();
+  }
+}
+
+async function resolveZWaveJsLogFile() {
+  const candidates = [];
+  try {
+    const stats = await fsp.stat(ZWAVE_JS_LOG_CURRENT_FILENAME);
+    if (stats.isFile() || stats.isSymbolicLink?.()) {
+      candidates.push({
+        file: ZWAVE_JS_LOG_CURRENT_FILENAME,
+        mtimeMs: stats.mtimeMs || 0
+      });
+    }
+  } catch (_error) {
+    // Fall through to dated log discovery.
+  }
+
+  try {
+    const entries = await fsp.readdir(ZWAVE_JS_LOG_DIR, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !/^zwavejs_.*\.log$/.test(entry.name)) {
+        continue;
+      }
+      const file = path.join(ZWAVE_JS_LOG_DIR, entry.name);
+      try {
+        const stats = await fsp.stat(file);
+        candidates.push({ file, mtimeMs: stats.mtimeMs || 0 });
+      } catch (_error) {
+        // Ignore files that disappeared between readdir and stat.
+      }
+    }
+  } catch (_error) {
+    // Missing log directory means logging has not been initialized yet.
+  }
+
+  return candidates
+    .sort((left, right) => right.mtimeMs - left.mtimeMs)
+    .map((entry) => entry.file)[0] || null;
 }
 const {
   DATA_DIR,
@@ -246,7 +400,58 @@ const {
   serializeDoorLockLogRecord
 } = require('./directRadioHelpers');
 
+const ZWAVE_JS_LOG_DIR = path.join(ZWAVE_DIR, 'logs');
+const ZWAVE_JS_LOG_FILENAME = path.join(ZWAVE_JS_LOG_DIR, 'zwavejs_%DATE%.log');
+const ZWAVE_JS_LOG_CURRENT_FILENAME = path.join(ZWAVE_JS_LOG_DIR, 'zwavejs_current.log');
+
 module.exports = {
+buildZWaveJsLogConfig() {
+    ensureDirSync(ZWAVE_JS_LOG_DIR);
+    const enabled = parseEnabledFlag(process.env.HOMEBRAIN_ZWAVE_JS_LOG_ENABLED, true);
+    const logToFile = parseEnabledFlag(process.env.HOMEBRAIN_ZWAVE_JS_LOG_TO_FILE, true);
+    const raw = parseEnabledFlag(process.env.HOMEBRAIN_ZWAVE_JS_LOG_RAW, false);
+    const maxFiles = parseBoundedInteger(process.env.HOMEBRAIN_ZWAVE_JS_LOG_MAX_FILES, 14, 1, 365);
+    return {
+      enabled,
+      logToFile,
+      filename: trimString(process.env.HOMEBRAIN_ZWAVE_JS_LOG_FILE) || ZWAVE_JS_LOG_FILENAME,
+      level: normalizeZWaveJsLogLevel(process.env.HOMEBRAIN_ZWAVE_JS_LOG_LEVEL, 'debug'),
+      maxFiles,
+      raw,
+      forceConsole: parseEnabledFlag(process.env.HOMEBRAIN_ZWAVE_JS_LOG_FORCE_CONSOLE, false)
+    };
+  },
+
+async getZWaveJsLogTail(options = {}) {
+    const limit = parseBoundedInteger(options.limit, 400, 1, 5000);
+    const nodeId = getNumericNodeId(options.nodeId);
+    const file = await resolveZWaveJsLogFile();
+    if (!file) {
+      return {
+        file: null,
+        lines: [],
+        count: 0,
+        message: 'No zwave-js log file is available yet.'
+      };
+    }
+
+    const text = await readTextTail(file, ZWAVE_JS_LOG_TAIL_MAX_BYTES);
+    const nodePattern = Number.isInteger(nodeId)
+      ? new RegExp(`(?:\\[Node\\s*0*${nodeId}\\]|\\bnode\\s+0*${nodeId}\\b|\\bNode\\s+0*${nodeId}\\b)`)
+      : null;
+    const lines = text
+      .split(/\r?\n/)
+      .filter((line) => line.trim().length > 0)
+      .filter((line) => !nodePattern || nodePattern.test(line))
+      .slice(-limit);
+    return {
+      file,
+      nodeId: Number.isInteger(nodeId) ? nodeId : null,
+      lines,
+      count: lines.length
+    };
+  },
+
 getZWaveInclusionStateLabel(zwave = null) {
     const controller = this.getZWaveController();
     const state = controller?.inclusionState;
@@ -274,6 +479,7 @@ async startZWave(serialPath) {
       const config = await this.ensureControllerConfig();
       const keyBuffer = (hex) => Buffer.from(hex, 'hex');
       const cacheThrottle = process.env.HOMEBRAIN_ZWAVE_CACHE_THROTTLE || 'fast';
+      const logConfig = this.buildZWaveJsLogConfig();
       const driver = new zwave.Driver(serialPath, {
         storage: {
           cacheDir: path.join(ZWAVE_DIR, 'cache'),
@@ -290,6 +496,7 @@ async startZWave(serialPath) {
           S2_AccessControl: keyBuffer(config.zwave.securityKeysLongRange.S2_AccessControl),
           S2_Authenticated: keyBuffer(config.zwave.securityKeysLongRange.S2_Authenticated)
         },
+        logConfig,
         inclusionUserCallbacks: this.buildZWaveInclusionCallbacks(zwave)
       });
 
@@ -301,7 +508,14 @@ async startZWave(serialPath) {
         this.log('info', 'zwave', 'Z-Wave driver ready', {
           serialPath,
           homeId: driver.controller?.homeId || null,
-          cacheThrottle
+          cacheThrottle,
+          zwaveJsLog: {
+            enabled: logConfig.enabled === true,
+            logToFile: logConfig.logToFile === true,
+            filename: logConfig.filename,
+            level: logConfig.level,
+            raw: logConfig.raw === true
+          }
         });
         this.dispatchHandler('zwave:syncNodes', 'zwave', () => this.syncZWaveNodes());
       });
@@ -374,16 +588,13 @@ async startZWave(serialPath) {
   },
 
 buildZWaveInclusionCallbacks(zwave) {
+    const core = getZWaveCore();
+    const fallbackSecurityClasses = getZWaveSecurityClassEntries(core).map(([, value]) => value);
     return {
       grantSecurityClasses: async (requested) => ({
         securityClasses: Array.isArray(requested?.securityClasses)
           ? requested.securityClasses
-          : [
-              zwave.SecurityClass.S2_AccessControl,
-              zwave.SecurityClass.S2_Authenticated,
-              zwave.SecurityClass.S2_Unauthenticated,
-              zwave.SecurityClass.S0_Legacy
-            ].filter((entry) => entry !== undefined),
+          : fallbackSecurityClasses,
         clientSideAuth: false
       }),
       validateDSKAndEnterPIN: async (dsk) => {
@@ -1427,6 +1638,103 @@ serializeZWaveNodeSummary(node) {
     };
   },
 
+getZWaveNodeSecurityDiagnostics(node) {
+    const core = getZWaveCore();
+    const securityClassEnum = core.SecurityClass || {};
+    const nodeId = getNumericNodeId(node);
+    const controller = this.getZWaveController();
+    const nodeHighest = readZWaveHighestSecurityClass(node);
+    const driverHighest = readZWaveHighestSecurityClass(this.zwave?.driver, nodeId);
+    const classes = getZWaveSecurityClassEntries(core).map(([name, value]) => ({
+      name,
+      value,
+      node: serializeMaybeKnown(readZWaveSecurityClass(node, value)),
+      driver: serializeMaybeKnown(readZWaveSecurityClass(this.zwave?.driver, value, nodeId))
+    }));
+    let isSecure = undefined;
+    try {
+      isSecure = node?.isSecure;
+    } catch (error) {
+      isSecure = { error: error.message || String(error) };
+    }
+
+    return {
+      isSecure: serializeMaybeKnown(isSecure),
+      nodeHighestSecurityClass: nodeHighest && typeof nodeHighest === 'object' && nodeHighest.error
+        ? nodeHighest
+        : serializeMaybeKnown(nodeHighest, securityClassEnum),
+      driverHighestSecurityClass: driverHighest && typeof driverHighest === 'object' && driverHighest.error
+        ? driverHighest
+        : serializeMaybeKnown(driverHighest, securityClassEnum),
+      classes,
+      controllerHomeId: controller?.homeId ?? null,
+      controllerOwnNodeId: controller?.ownNodeId ?? null
+    };
+  },
+
+getZWaveNodeValueDiagnostics(node, options = {}) {
+    const core = getZWaveCore();
+    const commandClasses = core.CommandClasses || {};
+    const limit = parseBoundedInteger(options.limit, 120, 1, 500);
+    let definedValueIds = [];
+    try {
+      definedValueIds = typeof node?.getDefinedValueIDs === 'function' ? (node.getDefinedValueIDs() || []) : [];
+    } catch (error) {
+      return {
+        error: error.message || String(error),
+        count: 0,
+        values: []
+      };
+    }
+
+    return {
+      count: definedValueIds.length,
+      limited: definedValueIds.length > limit,
+      values: definedValueIds.slice(0, limit).map((valueId) => {
+        let metadata = null;
+        try {
+          metadata = node?.valueDB?.getMetadata?.(valueId) || null;
+        } catch (_error) {
+          metadata = null;
+        }
+        return {
+          commandClass: valueId?.commandClass ?? null,
+          commandClassName: enumMemberName(commandClasses, valueId?.commandClass),
+          endpoint: valueId?.endpoint ?? 0,
+          property: valueId?.property ?? null,
+          propertyName: valueId?.propertyName ?? null,
+          propertyKey: valueId?.propertyKey ?? null,
+          propertyKeyName: valueId?.propertyKeyName ?? null,
+          label: valueMetadataLabel({ metadata, ...valueId }) || null,
+          readable: metadata?.readable ?? null,
+          writeable: metadata?.writeable ?? null
+        };
+      })
+    };
+  },
+
+async getZWaveNodeDiagnostics(nodeId, options = {}) {
+    await this.start();
+    const { node } = this.getZWaveNode(nodeId);
+    this.attachZWaveNodeStatusListeners(node);
+    return {
+      node: this.serializeZWaveNodeSummary(node),
+      security: this.getZWaveNodeSecurityDiagnostics(node),
+      values: this.getZWaveNodeValueDiagnostics(node, {
+        limit: options.valueLimit ?? options.limit
+      }),
+      zwaveJsLog: {
+        config: serializeZWaveJsLogConfig(typeof this.zwave?.driver?.getLogConfig === 'function'
+          ? this.zwave.driver.getLogConfig()
+          : null),
+        latest: await this.getZWaveJsLogTail({
+          nodeId: getNumericNodeId(node),
+          limit: options.logLimit || 80
+        })
+      }
+    };
+  },
+
 getZWaveNodeSummaries() {
     const nodes = this.getZWaveControllerNodes({ log: false, context: 'node summaries' });
     if (!nodes || typeof nodes.values !== 'function') {
@@ -1942,20 +2250,10 @@ async controlZWaveDevice(device, normalizedAction, commandValue, updateData = {}
         action: normalizedAction,
         device
       });
-      const allowKnownDeviceCommandAttempt = probe.ready !== true
-        && probe.probe?.knownDeviceIdentity === true
-        && this.hasStableZWaveDeviceProbeIdentity(device);
-      if (!allowKnownDeviceCommandAttempt && (probe.ready !== true || !isZWaveNodeCommandReady(node))) {
+      if (probe.ready !== true || !isZWaveNodeCommandReady(node)) {
         throw new Error(probe.error
           ? `Z-Wave node is not ready (${probe.error})`
           : 'Z-Wave node is not ready');
-      }
-      if (allowKnownDeviceCommandAttempt) {
-        this.log('warn', 'zwave', 'Proceeding with Z-Wave command for known device after readiness probe failed', {
-          nodeId: node?.id || null,
-          action: normalizedAction,
-          error: probe.error || null
-        });
       }
     }
     let effectiveAction = normalizedAction;
@@ -2098,13 +2396,8 @@ async controlZWaveDevice(device, normalizedAction, commandValue, updateData = {}
     }
 
     const commandTimestamp = new Date().toISOString();
-    const knownDeviceIdentity = this.isZWaveKnownDeviceProbeCandidate(node, device);
-    const reachabilityProbe = this.markZWaveNodeReachability(node, {
-      ok: true,
-      reason: 'command accepted',
-      source: 'command',
-      knownDeviceIdentity
-    });
+    const effectiveRuntime = getEffectiveZWaveNodeRuntime(node);
+    const reachabilityProbe = effectiveRuntime.reachabilityProbe;
     const direct = device?.properties?.homebrainDirect && typeof device.properties.homebrainDirect === 'object'
       ? device.properties.homebrainDirect
       : {};
@@ -2119,19 +2412,21 @@ async controlZWaveDevice(device, normalizedAction, commandValue, updateData = {}
         ...(updateProperties.homebrainDirect && typeof updateProperties.homebrainDirect === 'object'
           ? updateProperties.homebrainDirect
           : {}),
-        ready: true,
-        status: ZWAVE_NODE_STATUS.ALIVE,
+        ready: effectiveRuntime.ready,
+        status: effectiveRuntime.status,
         controllerReady: node.ready === undefined ? null : Boolean(node.ready),
         controllerStatus: node.status === undefined ? null : node.status,
         lastReason: 'command accepted',
         lastSeen: commandTimestamp,
         lastCommandAcceptedAt: commandTimestamp,
-        lastReachabilityProbeAt: new Date(reachabilityProbe.at).toISOString(),
-        lastReachabilityProbeReason: reachabilityProbe.reason || null,
-        lastReachabilityProbeSource: reachabilityProbe.source || null
+        ...(reachabilityProbe ? {
+          lastReachabilityProbeAt: new Date(reachabilityProbe.at).toISOString(),
+          lastReachabilityProbeReason: reachabilityProbe.reason || null,
+          lastReachabilityProbeSource: reachabilityProbe.source || null
+        } : {})
       }
     };
-    updateData.isOnline = true;
+    updateData.isOnline = isZWaveNodeOnline(node);
     updateData.lastSeen = new Date();
     this.log('info', 'zwave', 'Z-Wave device command accepted', {
       deviceId: device?._id?.toString?.() || null,
