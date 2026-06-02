@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 
 const DEFAULT_ECOBEE_SCOPES = ['smartWrite'];
+const ECOBEE_AUTH_MODES = ['appKey', 'web'];
 
 const trimString = (value) => (typeof value === 'string' ? value.trim() : value ?? '');
 
@@ -29,9 +30,31 @@ const sanitizeScopes = (scopes) => {
   return Array.from(new Set(normalized));
 };
 
+const sanitizeAuthMode = (value, fallback = 'appKey') => {
+  const normalized = trimString(value);
+  if (ECOBEE_AUTH_MODES.includes(normalized)) {
+    return normalized;
+  }
+  return fallback;
+};
+
+const maskSecret = (value) => {
+  const secret = trimString(value);
+  if (!secret) {
+    return '';
+  }
+  if (secret.length <= 4) {
+    return '*'.repeat(secret.length);
+  }
+  return secret.replace(/.(?=.{4})/g, '*');
+};
+
 const buildMockIntegration = () => ({
+  authMode: trimString(process.env.ECOBEE_CLIENT_ID || '') ? 'appKey' : 'web',
   clientId: trimString(process.env.ECOBEE_CLIENT_ID || ''),
   redirectUri: trimString(process.env.ECOBEE_REDIRECT_URI || 'http://localhost:3000/api/ecobee/callback'),
+  username: '',
+  password: '',
   accessToken: '',
   refreshToken: '',
   tokenType: 'Bearer',
@@ -41,6 +64,7 @@ const buildMockIntegration = () => ({
   isConnected: false,
   lastSync: null,
   lastError: '',
+  pendingMfa: null,
   connectedDevices: [],
   createdAt: new Date(),
   updatedAt: new Date(),
@@ -53,26 +77,40 @@ const buildMockIntegration = () => ({
   },
   toSanitized: function toSanitized() {
     const sanitized = { ...this };
-    if (sanitized.accessToken) {
-      sanitized.accessToken = sanitized.accessToken.replace(/.(?=.{4})/g, '*');
-    }
-    if (sanitized.refreshToken) {
-      sanitized.refreshToken = sanitized.refreshToken.replace(/.(?=.{4})/g, '*');
-    }
+    sanitized.accessToken = maskSecret(sanitized.accessToken);
+    sanitized.refreshToken = maskSecret(sanitized.refreshToken);
+    sanitized.password = maskSecret(sanitized.password);
+    sanitized.pendingMfa = null;
+    sanitized.pendingMfaRequired = false;
     return sanitized;
   }
 });
 
 const EcobeeIntegrationSchema = new mongoose.Schema({
+  authMode: {
+    type: String,
+    enum: ECOBEE_AUTH_MODES,
+    default: 'appKey',
+    set: (value) => sanitizeAuthMode(value)
+  },
   clientId: {
     type: String,
-    required: true,
+    default: '',
     set: (value) => (typeof value === 'string' ? value.trim() : value)
   },
   redirectUri: {
     type: String,
-    required: true,
+    default: '',
     set: (value) => (typeof value === 'string' ? value.trim() : value)
+  },
+  username: {
+    type: String,
+    default: '',
+    set: (value) => (typeof value === 'string' ? value.trim() : value)
+  },
+  password: {
+    type: String,
+    default: ''
   },
 
   accessToken: {
@@ -112,6 +150,16 @@ const EcobeeIntegrationSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  pendingMfa: {
+    challengeUrl: String,
+    state: String,
+    mfaType: String,
+    cookies: mongoose.Schema.Types.Mixed,
+    codeVerifier: String,
+    username: String,
+    password: String,
+    createdAt: Date
+  },
 
   connectedDevices: [{
     thermostatIdentifier: String,
@@ -149,6 +197,13 @@ EcobeeIntegrationSchema.statics.getIntegration = async function getIntegration()
 
   const trimmedClientId = trimString(integration.clientId);
   const trimmedRedirectUri = trimString(integration.redirectUri);
+  const inferredFallback = trimmedClientId ? 'appKey' : 'web';
+  const normalizedAuthMode = sanitizeAuthMode(integration.authMode, inferredFallback);
+
+  if (integration.authMode !== normalizedAuthMode) {
+    integration.authMode = normalizedAuthMode;
+    changed = true;
+  }
 
   if (integration.clientId !== trimmedClientId) {
     integration.clientId = trimmedClientId;
@@ -186,18 +241,68 @@ EcobeeIntegrationSchema.statics.configureIntegration = async function configureI
 
   if (!integration) {
     integration = new this({
+      authMode: 'appKey',
       clientId,
       redirectUri,
       scope,
       isConfigured: true
     });
   } else {
+    const switchedAuthMode = integration.authMode !== 'appKey';
+    const changedClientId = trimString(integration.clientId) !== clientId;
+    integration.authMode = 'appKey';
     integration.clientId = clientId;
     integration.redirectUri = redirectUri;
+    integration.username = '';
+    integration.password = '';
     integration.scope = scope;
     integration.isConfigured = true;
+    integration.pendingMfa = undefined;
+    if (switchedAuthMode || changedClientId) {
+      integration.accessToken = '';
+      integration.refreshToken = '';
+      integration.expiresAt = null;
+      integration.isConnected = false;
+    }
   }
 
+  await integration.save();
+  return integration;
+};
+
+EcobeeIntegrationSchema.statics.configureWebIntegration = async function configureWebIntegration(config) {
+  const username = trimString(config.username);
+  const password = typeof config.password === 'string' ? config.password : '';
+
+  let integration = await this.findOne();
+
+  if (!integration) {
+    integration = new this({
+      authMode: 'web',
+      clientId: '',
+      redirectUri: '',
+      username,
+      password,
+      scope: [...DEFAULT_ECOBEE_SCOPES],
+      isConfigured: true,
+      isConnected: false
+    });
+  } else {
+    integration.authMode = 'web';
+    integration.clientId = '';
+    integration.redirectUri = '';
+    integration.username = username;
+    integration.password = password;
+    integration.scope = sanitizeScopes(integration.scope || DEFAULT_ECOBEE_SCOPES);
+    integration.isConfigured = true;
+    integration.accessToken = '';
+    integration.refreshToken = '';
+    integration.expiresAt = null;
+    integration.isConnected = false;
+  }
+
+  integration.pendingMfa = undefined;
+  integration.lastError = '';
   await integration.save();
   return integration;
 };
@@ -211,7 +316,11 @@ EcobeeIntegrationSchema.methods.isTokenValid = function isTokenValid() {
   return this.expiresAt > expiryBuffer;
 };
 
-EcobeeIntegrationSchema.methods.updateTokens = async function updateTokens(tokenData) {
+EcobeeIntegrationSchema.methods.updateTokens = async function updateTokens(tokenData, options = {}) {
+  if (options.authMode) {
+    this.authMode = sanitizeAuthMode(options.authMode, this.authMode || 'appKey');
+  }
+
   this.accessToken = tokenData.access_token || '';
   this.tokenType = tokenData.token_type || 'Bearer';
 
@@ -231,6 +340,7 @@ EcobeeIntegrationSchema.methods.updateTokens = async function updateTokens(token
 
   this.isConnected = true;
   this.lastError = '';
+  this.pendingMfa = undefined;
 
   await this.save();
 };
@@ -241,7 +351,30 @@ EcobeeIntegrationSchema.methods.clearTokens = async function clearTokens(errorMe
   this.expiresAt = null;
   this.isConnected = false;
   this.lastError = errorMessage;
+  this.pendingMfa = undefined;
 
+  await this.save();
+};
+
+EcobeeIntegrationSchema.methods.setPendingMfa = async function setPendingMfa(challenge) {
+  this.pendingMfa = {
+    challengeUrl: trimString(challenge.challengeUrl),
+    state: trimString(challenge.state),
+    mfaType: trimString(challenge.mfaType || 'otp'),
+    cookies: challenge.cookies || {},
+    codeVerifier: trimString(challenge.codeVerifier),
+    username: trimString(challenge.username || this.username),
+    password: typeof challenge.password === 'string' ? challenge.password : this.password,
+    createdAt: new Date()
+  };
+  this.isConnected = false;
+  this.lastError = 'Ecobee MFA code required';
+
+  await this.save();
+};
+
+EcobeeIntegrationSchema.methods.clearPendingMfa = async function clearPendingMfa() {
+  this.pendingMfa = undefined;
   await this.save();
 };
 
@@ -264,13 +397,19 @@ EcobeeIntegrationSchema.methods.updateDevices = async function updateDevices(the
 EcobeeIntegrationSchema.methods.toSanitized = function toSanitized() {
   const sanitized = this.toObject();
 
-  if (sanitized.accessToken) {
-    sanitized.accessToken = sanitized.accessToken.replace(/.(?=.{4})/g, '*');
-  }
+  sanitized.accessToken = maskSecret(sanitized.accessToken);
+  sanitized.refreshToken = maskSecret(sanitized.refreshToken);
+  sanitized.password = maskSecret(sanitized.password);
 
-  if (sanitized.refreshToken) {
-    sanitized.refreshToken = sanitized.refreshToken.replace(/.(?=.{4})/g, '*');
-  }
+  const pendingMfa = sanitized.pendingMfa;
+  sanitized.pendingMfaRequired = !!pendingMfa;
+  sanitized.pendingMfa = pendingMfa
+    ? {
+        mfaType: pendingMfa.mfaType || 'otp',
+        username: pendingMfa.username || sanitized.username || '',
+        createdAt: pendingMfa.createdAt || null
+      }
+    : null;
 
   return sanitized;
 };
