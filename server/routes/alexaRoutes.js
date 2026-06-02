@@ -1,12 +1,17 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const rateLimit = require('express-rate-limit');
+const { ZipFile } = require('yazl');
 const alexaBridgeService = require('../services/alexaBridgeService');
 const alexaBrokerService = require('../services/alexaBrokerService');
 const alexaCustomSkillService = require('../services/alexaCustomSkillService');
+const { AlexaSessionCaptureService } = require('../services/alexaSessionCaptureService');
 const { requireAdmin } = require('./middlewares/auth');
 
 const router = express.Router();
 const admin = requireAdmin();
+const alexaSessionCaptureService = new AlexaSessionCaptureService();
 const { ipKeyGenerator } = rateLimit;
 const brokerReadRateLimit = rateLimit({
   windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_ALEXA_BROKER_RATE_LIMIT_WINDOW_MS || 60 * 1000)),
@@ -38,6 +43,98 @@ const alexaDeviceRateLimit = rateLimit({
     error: 'Too many Alexa device requests. Please retry shortly.'
   }
 });
+const alexaSessionCaptureRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_ALEXA_SESSION_CAPTURE_RATE_LIMIT_WINDOW_MS || 60 * 1000)),
+  limit: Math.max(5, Number(process.env.HOMEBRAIN_ALEXA_SESSION_CAPTURE_RATE_LIMIT_MAX || 30)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator(req) {
+    return typeof ipKeyGenerator === 'function'
+      ? ipKeyGenerator(req.ip)
+      : (req.ip || req.socket?.remoteAddress || 'unknown');
+  },
+  message: {
+    success: false,
+    error: 'Too many Alexa session capture requests. Please retry shortly.'
+  }
+});
+
+function getHelperExtensionDir() {
+  return path.join(__dirname, '..', 'assets', 'alexa-session-helper');
+}
+
+function getRequestOrigin(req) {
+  const proto = String(req?.headers?.['x-forwarded-proto'] || req?.protocol || 'http')
+    .split(',')[0]
+    .trim() || 'http';
+  const host = String(req?.headers?.['x-forwarded-host'] || req?.headers?.host || '')
+    .split(',')[0]
+    .trim();
+  return host ? `${proto}://${host}` : '';
+}
+
+function buildHomeBrainExtensionPatterns(req) {
+  const patterns = new Set([
+    'http://localhost/*',
+    'http://127.0.0.1/*'
+  ]);
+  const origin = getRequestOrigin(req);
+  if (origin) {
+    try {
+      const parsed = new URL(origin);
+      patterns.add(`${parsed.protocol}//${parsed.hostname}/*`);
+    } catch (_error) {
+      // Keep the localhost fallbacks.
+    }
+  }
+  return Array.from(patterns);
+}
+
+function buildHelperManifest(req) {
+  const extensionDir = getHelperExtensionDir();
+  const manifestPath = path.join(extensionDir, 'manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  const homeBrainPatterns = buildHomeBrainExtensionPatterns(req);
+
+  manifest.host_permissions = Array.from(new Set([
+    ...homeBrainPatterns,
+    ...(Array.isArray(manifest.host_permissions) ? manifest.host_permissions : [])
+  ]));
+  manifest.content_scripts = (Array.isArray(manifest.content_scripts) ? manifest.content_scripts : [])
+    .map((entry) => ({
+      ...entry,
+      matches: homeBrainPatterns
+    }));
+
+  return JSON.stringify(manifest, null, 2);
+}
+
+async function streamHelperExtensionZip(req, res) {
+  const extensionDir = getHelperExtensionDir();
+  const files = fs.readdirSync(extensionDir)
+    .filter((file) => !file.startsWith('.'))
+    .sort();
+  const zipfile = new ZipFile();
+
+  files.forEach((file) => {
+    const zipPath = `homebrain-alexa-session-helper/${file}`;
+    if (file === 'manifest.json') {
+      zipfile.addBuffer(Buffer.from(`${buildHelperManifest(req)}\n`, 'utf8'), zipPath);
+      return;
+    }
+    zipfile.addFile(path.join(extensionDir, file), zipPath);
+  });
+
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', 'attachment; filename="homebrain-alexa-session-helper.zip"');
+
+  await new Promise((resolve, reject) => {
+    zipfile.outputStream.on('error', reject);
+    zipfile.outputStream.on('end', resolve);
+    zipfile.outputStream.pipe(res);
+    zipfile.end();
+  });
+}
 
 async function brokerAuth(req, res, next) {
   try {
@@ -109,6 +206,106 @@ router.post('/service/deploy', admin, async (req, res) => {
     return res.status(500).json({
       success: false,
       error: error.message || 'Failed to deploy Alexa broker service'
+    });
+  }
+});
+
+router.get('/session-capture/helper-extension.zip', alexaSessionCaptureRateLimit, admin, async (_req, res) => {
+  try {
+    await streamHelperExtensionZip(_req, res);
+  } catch (error) {
+    console.error('GET /api/alexa/session-capture/helper-extension.zip - Error:', error.message);
+    if (!res.headersSent) {
+      return res.status(500).json({
+        success: false,
+        error: error.message || 'Failed to download Alexa session helper extension'
+      });
+    }
+    res.end();
+  }
+});
+
+router.post('/session-capture/start', alexaSessionCaptureRateLimit, admin, async (req, res) => {
+  try {
+    const result = alexaSessionCaptureService.startCapture({
+      actor: req.user?.email || req.user?._id || 'admin',
+      amazonPage: req.body?.amazonPage,
+      serviceHost: req.body?.serviceHost,
+      req
+    });
+    return res.status(201).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    console.error('POST /api/alexa/session-capture/start - Error:', error.message);
+    return res.status(error.status || 500).json({
+      success: false,
+      error: error.message || 'Failed to start Alexa session capture'
+    });
+  }
+});
+
+router.get('/session-capture/:captureId/status', alexaSessionCaptureRateLimit, admin, async (req, res) => {
+  try {
+    const status = alexaSessionCaptureService.getStatus(req.params.captureId);
+    return res.status(200).json({
+      success: true,
+      capture: status
+    });
+  } catch (error) {
+    return res.status(error.status || 404).json({
+      success: false,
+      error: error.message || 'Failed to fetch Alexa session capture status'
+    });
+  }
+});
+
+router.post('/session-capture/:captureId/complete', alexaSessionCaptureRateLimit, async (req, res) => {
+  let capture = null;
+  try {
+    capture = alexaSessionCaptureService.completeCapture(req.params.captureId, req.body || {});
+    const actor = `alexa-session-capture:${capture.captureId}`;
+    const configResult = await alexaBrokerService.updateConfig({
+      alexaCommandProvider: 'homebrain',
+      alexaCommandAmazonPage: capture.amazonPage,
+      alexaCommandServiceHost: capture.serviceHost,
+      alexaCommandSessionCookie: capture.cookie
+    });
+
+    let restartResult = null;
+    let restartWarning = '';
+    try {
+      restartResult = await alexaBrokerService.restartService({
+        actor,
+        source: 'alexa_session_capture',
+        reason: 'fresh Alexa session captured'
+      });
+    } catch (restartError) {
+      restartWarning = restartError.message || 'Alexa session was saved, but the broker runtime could not be restarted automatically.';
+    }
+
+    const activated = alexaSessionCaptureService.markActivated(req.params.captureId, {
+      message: restartWarning
+        ? 'Alexa session was saved, but the broker restart needs attention.'
+        : 'Alexa session was saved and broker runtime was refreshed.'
+    });
+
+    return res.status(200).json({
+      success: true,
+      capture: activated,
+      status: restartResult?.status || configResult?.status || await alexaBrokerService.getStatus(),
+      restartWarning: restartWarning || null
+    });
+  } catch (error) {
+    alexaSessionCaptureService.markFailed(req.params.captureId, error);
+    console.error('POST /api/alexa/session-capture/:captureId/complete - Error:', {
+      captureId: req.params.captureId,
+      message: error.message
+    });
+    return res.status(error.status || 500).json({
+      success: false,
+      error: error.message || 'Failed to activate captured Alexa session'
     });
   }
 });
