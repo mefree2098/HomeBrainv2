@@ -131,6 +131,38 @@ export type AlexaDevicesResponse = {
   updatedAt?: string | null;
 };
 
+export type AlexaSessionCaptureSummary = {
+  captureId: string;
+  status: 'pending' | 'captured' | 'activated' | 'failed' | 'expired';
+  message?: string;
+  startedAt?: string;
+  expiresAt?: string;
+  completedAt?: string | null;
+  activatedAt?: string | null;
+  failedAt?: string | null;
+  amazonPage?: string;
+  serviceHost?: string;
+  cookieNames?: string[];
+  warnings?: string[];
+};
+
+export type AlexaSessionCaptureStartResponse = {
+  success: boolean;
+  captureId: string;
+  token: string;
+  status: string;
+  message?: string;
+  startedAt?: string;
+  expiresAt?: string;
+  amazonPage?: string;
+  serviceHost?: string;
+  loginUrl: string;
+  receiverUrl: string;
+  statusUrl: string;
+  capturePageUrl: string;
+  helperExtensionUrl?: string;
+};
+
 export const getAlexaSummary = async () => {
   try {
     const response = await api.get('/api/alexa');
@@ -283,6 +315,28 @@ export const speakAlexaDevice = async (
     throw new Error(getApiErrorMessage(error));
   }
 };
+
+export const startAlexaSessionCapture = async (payload: { amazonPage?: string; serviceHost?: string } = {}) => {
+  try {
+    const response = await api.post('/api/alexa/session-capture/start', payload);
+    return response.data as AlexaSessionCaptureStartResponse;
+  } catch (error) {
+    console.error(error);
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const getAlexaSessionCaptureStatus = async (captureId: string) => {
+  try {
+    const response = await api.get(`/api/alexa/session-capture/${encodeURIComponent(captureId)}/status`);
+    return response.data as { success: boolean; capture: AlexaSessionCaptureSummary };
+  } catch (error) {
+    console.error(error);
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const getAlexaSessionHelperExtensionUrl = () => '/api/alexa/session-capture/helper-extension.zip';
 
 export const getAlexaBrokerServiceStatus = async () => {
   try {

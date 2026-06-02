@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HomeBrain Alexa Session Capture</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #09111f;
+        color: #e5eefc;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background:
+          radial-gradient(circle at 30% 20%, rgba(20, 184, 166, 0.22), transparent 32rem),
+          linear-gradient(135deg, #08111f, #162033 62%, #07111f);
+      }
+      main {
+        width: min(760px, calc(100vw - 32px));
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        border-radius: 8px;
+        background: rgba(15, 23, 42, 0.86);
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.32);
+        padding: 28px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 28px;
+        letter-spacing: 0;
+      }
+      p {
+        color: #b6c4d8;
+        line-height: 1.55;
+      }
+      .status {
+        margin-top: 20px;
+        border: 1px solid rgba(148, 163, 184, 0.24);
+        border-radius: 8px;
+        padding: 16px;
+        background: rgba(15, 23, 42, 0.72);
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+        margin-top: 18px;
+      }
+      button,
+      a.button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 40px;
+        border: 1px solid rgba(20, 184, 166, 0.56);
+        border-radius: 6px;
+        background: #14b8a6;
+        color: #06111f;
+        cursor: pointer;
+        font-weight: 700;
+        padding: 0 14px;
+        text-decoration: none;
+      }
+      button.secondary,
+      a.secondary {
+        background: transparent;
+        color: #e5eefc;
+        border-color: rgba(148, 163, 184, 0.44);
+      }
+      code {
+        color: #99f6e4;
+        word-break: break-all;
+      }
+      .hidden {
+        display: none;
+      }
+      .good {
+        color: #86efac;
+      }
+      .bad {
+        color: #fca5a5;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Alexa Session Capture</h1>
+      <p>
+        HomeBrain opened this capture session from the Alexa Broker page. The helper extension will open Amazon login,
+        watch for the Alexa web session after you sign in, then send the session directly back to HomeBrain.
+      </p>
+
+      <div class="status">
+        <strong id="status-title">Checking helper extension...</strong>
+        <p id="status-copy">If this sits here, install or enable the HomeBrain Alexa Session Helper extension.</p>
+        <p><code id="details"></code></p>
+      </div>
+
+      <div class="row">
+        <button id="open-login" type="button">Open Alexa Login</button>
+        <a class="button secondary" href="/api/alexa/session-capture/helper-extension.zip">Download Helper Extension</a>
+        <button class="secondary" id="close-window" type="button">Close</button>
+      </div>
+
+      <p id="install-help" class="hidden">
+        Install once: unzip the helper, open <code>chrome://extensions</code> or <code>edge://extensions</code>,
+        enable Developer mode, choose Load unpacked, and select the unzipped helper folder.
+      </p>
+    </main>
+
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const captureId = params.get('captureId') || '';
+      const token = params.get('token') || '';
+      const receiverUrl = params.get('receiver') || '';
+      const statusUrl = params.get('status') || '';
+      const loginUrl = params.get('login') || 'https://alexa.amazon.com/spa/index.html';
+      const serviceHost = params.get('serviceHost') || 'pitangui.amazon.com';
+      const amazonPage = params.get('amazonPage') || 'amazon.com';
+      const statusTitle = document.getElementById('status-title');
+      const statusCopy = document.getElementById('status-copy');
+      const details = document.getElementById('details');
+      const installHelp = document.getElementById('install-help');
+      const openLoginButton = document.getElementById('open-login');
+      const closeButton = document.getElementById('close-window');
+      let helperAvailable = false;
+      let started = false;
+
+      function setStatus(title, copy, detail, tone) {
+        statusTitle.textContent = title;
+        statusTitle.className = tone || '';
+        statusCopy.textContent = copy || '';
+        details.textContent = detail || '';
+      }
+
+      function startCapture() {
+        if (!captureId || !token || !receiverUrl) {
+          setStatus('Capture link is incomplete', 'Go back to HomeBrain and start a new Alexa session capture.', '', 'bad');
+          return;
+        }
+        started = true;
+        const requestId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        window.postMessage({
+          type: 'homebrain-alexa-session-capture:start',
+          requestId,
+          payload: {
+            captureId,
+            token,
+            receiverUrl,
+            statusUrl,
+            loginUrl,
+            serviceHost,
+            amazonPage
+          }
+        }, window.location.origin);
+        setStatus('Alexa login is opening...', 'Sign in to Amazon in the new window. HomeBrain will activate the session when Alexa accepts it.', serviceHost, '');
+      }
+
+      async function pollStatus() {
+        if (!statusUrl) {
+          return;
+        }
+        try {
+          const response = await fetch(statusUrl, { credentials: 'include' });
+          const payload = await response.json();
+          const capture = payload.capture || {};
+          if (capture.status === 'activated') {
+            setStatus('Alexa session activated', capture.message || 'HomeBrain saved the session and refreshed the broker.', '', 'good');
+            return;
+          }
+          if (capture.status === 'failed' || capture.status === 'expired') {
+            setStatus('Alexa session capture failed', capture.message || 'Start a new capture from HomeBrain.', '', 'bad');
+            return;
+          }
+          if (capture.status) {
+            setStatus('Waiting for Alexa login...', capture.message || 'Finish signing in to Amazon.', capture.status, '');
+          }
+        } catch (_error) {
+          // The parent UI also polls. Keep this page quiet during transient restarts.
+        }
+        setTimeout(pollStatus, 2000);
+      }
+
+      window.addEventListener('message', (event) => {
+        if (event.source !== window || event.origin !== window.location.origin) {
+          return;
+        }
+        const message = event.data || {};
+        if (message.type === 'homebrain-alexa-session-capture:helper-available') {
+          helperAvailable = true;
+          installHelp.classList.add('hidden');
+          setStatus('Helper extension is ready', 'Opening Amazon login now.', `Helper ${message.version || ''}`, 'good');
+          if (!started) {
+            startCapture();
+          }
+        }
+        if (message.type === 'homebrain-alexa-session-capture:response') {
+          const response = message.response || {};
+          if (response.success === false) {
+            setStatus('Helper could not start', response.error || 'Check that the helper extension is installed and enabled.', '', 'bad');
+          } else {
+            setStatus('Alexa login window opened', response.message || 'Finish signing in to Amazon.', serviceHost, '');
+          }
+        }
+      });
+
+      openLoginButton.addEventListener('click', startCapture);
+      closeButton.addEventListener('click', () => window.close());
+
+      setTimeout(() => {
+        if (!helperAvailable) {
+          installHelp.classList.remove('hidden');
+          setStatus('Helper extension was not detected', 'Install or enable the helper, then click Open Alexa Login.', '', 'bad');
+        }
+      }, 1400);
+
+      pollStatus();
+    </script>
+  </body>
+</html>

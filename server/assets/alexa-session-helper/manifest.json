@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "HomeBrain Alexa Session Helper",
+  "version": "1.0.0",
+  "description": "Captures a fresh Alexa web session for HomeBrain after an explicit admin login.",
+  "permissions": [
+    "cookies",
+    "tabs",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "https://*.amazon.com/*",
+    "https://*.amazon.co.uk/*",
+    "https://*.amazon.co.jp/*",
+    "https://*.amazon.ca/*",
+    "https://*.amazon.de/*",
+    "https://*.amazon.fr/*",
+    "https://*.amazon.it/*",
+    "https://*.amazon.es/*",
+    "https://*.amazon.com.au/*",
+    "https://*.amazon.com.br/*",
+    "https://*.amazon.in/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

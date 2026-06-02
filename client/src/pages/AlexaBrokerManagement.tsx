@@ -14,12 +14,15 @@ import {
   generateAlexaLinkCode,
   getAlexaBrokerServiceStatus,
   getAlexaDevices,
+  getAlexaSessionCaptureStatus,
+  getAlexaSessionHelperExtensionUrl,
   getAlexaSummary,
   installAlexaBrokerService,
   pairAlexaBroker,
   restartAlexaBrokerService,
   revokeAlexaHousehold,
   speakAlexaDevice,
+  startAlexaSessionCapture,
   startAlexaBrokerService,
   stopAlexaBrokerService,
   syncAlexaDiscovery,
@@ -27,14 +30,18 @@ import {
   updateAlexaBrokerServiceConfig,
   type AlexaDeviceSummary,
   type AlexaDevicesResponse,
-  type AlexaBrokerServiceStatus
+  type AlexaBrokerServiceStatus,
+  type AlexaSessionCaptureSummary
 } from '@/api/alexa';
 import {
   Activity,
   AlertCircle,
   CheckCircle,
+  Download,
+  ExternalLink,
   Globe,
   HardDrive,
+  KeyRound,
   Link2,
   Play,
   RefreshCw,
@@ -227,6 +234,8 @@ export default function AlexaBrokerManagement() {
   const [testAnnouncementDeviceId, setTestAnnouncementDeviceId] = useState('');
   const [testAnnouncementText, setTestAnnouncementText] = useState(DEFAULT_TEST_ANNOUNCEMENT);
   const [testAnnouncementResult, setTestAnnouncementResult] = useState<any>(null);
+  const [startingSessionCapture, setStartingSessionCapture] = useState(false);
+  const [sessionCapture, setSessionCapture] = useState<AlexaSessionCaptureSummary | null>(null);
 
   const hydrateLocalDraft = useCallback((status: AlexaBrokerServiceStatus | null) => {
     setDraft(hydrateDraftFromStatus(status));
@@ -297,6 +306,50 @@ export default function AlexaBrokerManagement() {
 
     return () => clearInterval(interval);
   }, [loadData]);
+
+  useEffect(() => {
+    if (!sessionCapture?.captureId || ['activated', 'failed', 'expired'].includes(sessionCapture.status)) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const response = await getAlexaSessionCaptureStatus(sessionCapture.captureId);
+        if (cancelled) {
+          return;
+        }
+        const nextCapture = response.capture || null;
+        setSessionCapture(nextCapture);
+        if (nextCapture?.status === 'activated') {
+          await loadData();
+          toast({
+            title: 'Alexa session activated',
+            description: nextCapture.message || 'HomeBrain saved the session and refreshed the broker.'
+          });
+        }
+        if (nextCapture?.status === 'failed' || nextCapture?.status === 'expired') {
+          toast({
+            variant: 'destructive',
+            title: 'Alexa session capture failed',
+            description: nextCapture.message || 'Start a new Alexa session capture from the broker page.'
+          });
+        }
+      } catch (_error) {
+        // The broker may be restarting right after activation. The next poll will refresh the status.
+      }
+    };
+
+    const interval = setInterval(() => {
+      void poll();
+    }, 2500);
+    void poll();
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [loadData, sessionCapture?.captureId, sessionCapture?.status, toast]);
 
   const pairedToManagedUrl = useMemo(() => {
     if (!serviceStatus?.localBaseUrl || !alexaSummary?.brokerBaseUrl) {
@@ -448,6 +501,54 @@ export default function AlexaBrokerManagement() {
       });
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  const handleStartSessionCapture = async () => {
+    setStartingSessionCapture(true);
+    try {
+      const response = await startAlexaSessionCapture({
+        amazonPage: draft.alexaCommandAmazonPage,
+        serviceHost: draft.alexaCommandServiceHost
+      });
+      setSessionCapture({
+        captureId: response.captureId,
+        status: 'pending',
+        message: response.message || 'Waiting for Alexa login helper to capture a fresh session.',
+        startedAt: response.startedAt,
+        expiresAt: response.expiresAt,
+        amazonPage: response.amazonPage,
+        serviceHost: response.serviceHost,
+        cookieNames: [],
+        warnings: []
+      });
+      updateDraft('alexaCommandProvider', 'homebrain');
+      const popup = window.open(
+        response.capturePageUrl,
+        'homebrain-alexa-session-capture',
+        'popup=yes,width=980,height=820'
+      );
+      if (!popup) {
+        toast({
+          variant: 'destructive',
+          title: 'Popup blocked',
+          description: 'Allow popups for HomeBrain, then click Capture Alexa Session again.'
+        });
+      } else {
+        popup.focus();
+        toast({
+          title: 'Alexa login capture started',
+          description: 'Sign in to Amazon in the new window. HomeBrain will activate the session automatically.'
+        });
+      }
+    } catch (error: any) {
+      toast({
+        variant: 'destructive',
+        title: 'Session capture failed',
+        description: error?.message || 'Unable to start Alexa session capture.'
+      });
+    } finally {
+      setStartingSessionCapture(false);
     }
   };
 
@@ -1102,6 +1203,55 @@ export default function AlexaBrokerManagement() {
                 {serviceStatus?.alexaCommandSessionConfigured
                   ? 'An Alexa session is stored in HomeBrain. Leave this blank to keep it unchanged.'
                   : 'Stored in the HomeBrain database and injected into the managed broker runtime.'}
+              </p>
+            </div>
+            <div className="space-y-3 rounded-lg border border-border/60 bg-background/50 p-4 md:col-span-2">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <p className="text-sm font-medium">Alexa Login Capture</p>
+                  <p className="text-xs text-muted-foreground">Use the HomeBrain helper to refresh the Alexa session without DevTools or manual cookie paste.</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button onClick={handleStartSessionCapture} disabled={startingSessionCapture}>
+                    {startingSessionCapture ? (
+                      <>
+                        <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
+                        Starting…
+                      </>
+                    ) : (
+                      <>
+                        <KeyRound className="mr-2 h-4 w-4" />
+                        Capture Alexa Session
+                      </>
+                    )}
+                  </Button>
+                  <Button asChild variant="outline">
+                    <a href={getAlexaSessionHelperExtensionUrl()}>
+                      <Download className="mr-2 h-4 w-4" />
+                      Download Helper
+                    </a>
+                  </Button>
+                </div>
+              </div>
+              {sessionCapture ? (
+                <Alert variant={sessionCapture.status === 'failed' || sessionCapture.status === 'expired' ? 'destructive' : 'default'}>
+                  {sessionCapture.status === 'activated' ? (
+                    <CheckCircle className="h-4 w-4" />
+                  ) : sessionCapture.status === 'failed' || sessionCapture.status === 'expired' ? (
+                    <AlertCircle className="h-4 w-4" />
+                  ) : (
+                    <ExternalLink className="h-4 w-4" />
+                  )}
+                  <AlertDescription>
+                    {sessionCapture.message || 'Waiting for Alexa login capture.'}
+                    {sessionCapture.expiresAt && sessionCapture.status === 'pending'
+                      ? ` Expires ${new Date(sessionCapture.expiresAt).toLocaleTimeString()}.`
+                      : ''}
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              <p className="text-xs text-muted-foreground">
+                Install the helper once in Chrome or Edge. The capture link is short-lived, and HomeBrain stores the returned session in the broker database.
               </p>
             </div>
             <div className="space-y-2 md:col-span-2">
