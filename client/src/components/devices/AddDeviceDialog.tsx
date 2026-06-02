@@ -57,7 +57,7 @@ type ZWaveRepairCandidate = {
   controllerOnly: boolean
   canRemoveFailed: boolean
   forceRemoveFailed: boolean
-  likelyLegacySiren: boolean
+  likelyLegacyS0: boolean
 }
 
 type AddDeviceDialogProps = {
@@ -140,7 +140,7 @@ const getDirectFeatures = (device: DeviceRecord) => {
   return Array.isArray(features) ? features.map(String).filter(Boolean) : []
 }
 
-const isLikelyLegacyZWaveSirenDevice = (device: DeviceRecord) => {
+const isLikelyLegacyS0ZWaveDevice = (device: DeviceRecord) => {
   const features = getDirectFeatures(device).map((feature) => feature.toLowerCase())
   const catalog = device.properties?.directRadioCatalog && typeof device.properties.directRadioCatalog === "object"
     ? device.properties.directRadioCatalog as Record<string, unknown>
@@ -159,7 +159,11 @@ const isLikelyLegacyZWaveSirenDevice = (device: DeviceRecord) => {
     directCatalog.manufacturer,
     ...features
   ].map((value) => String(value || "").toLowerCase()).join(" ")
-  return device.type === "siren" || features.includes("alarm") || /\b(?:zw080|siren|alarm|aeotec|aeon)\b/.test(text)
+  return device.type === "siren"
+    || device.type === "lock"
+    || features.includes("alarm")
+    || features.includes("lock")
+    || /\b(?:zw080|siren|alarm|aeotec|aeon|kwikset|smartcode|schlage|deadbolt|lock)\b/.test(text)
 }
 
 const isIncompleteZWaveDevice = (device: DeviceRecord) => {
@@ -226,9 +230,9 @@ const getZWaveSecurityMessage = (mode: ZWaveSecurityMode | string) => {
     case "default":
       return "HomeBrain will use S2 when available and force legacy S0 for older secure devices."
     case "s0":
-      return "Legacy S0 is for older sirens and secure accessories that do not use a DSK PIN."
+      return "Legacy S0 is for older locks, sirens, and secure accessories that do not use a DSK PIN."
     case "s2":
-      return "Use Secure S2 for locks and access-control devices with the printed DSK PIN."
+      return "Use Secure S2 for newer locks and access-control devices with the printed DSK PIN."
     case "insecure":
     default:
       return "Standard inclusion is for ordinary switches, dimmers, outlets, and sensors without secure pairing."
@@ -236,7 +240,7 @@ const getZWaveSecurityMessage = (mode: ZWaveSecurityMode | string) => {
 }
 
 const getZWaveReplacementSecurityMode = (candidate: ZWaveRepairCandidate, selectedMode: ZWaveSecurityMode): ZWaveSecurityMode => {
-  if (candidate.likelyLegacySiren) {
+  if (candidate.likelyLegacyS0) {
     return "s0"
   }
   if (selectedMode === "default") {
@@ -258,7 +262,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [zwaveDskPin, setZwaveDskPin] = useState("")
-  const [zwaveSecurityMode, setZwaveSecurityMode] = useState<ZWaveSecurityMode>("insecure")
+  const [zwaveSecurityMode, setZwaveSecurityMode] = useState<ZWaveSecurityMode>("default")
   const [submittingDsk, setSubmittingDsk] = useState(false)
   const [repairingZWaveNodeId, setRepairingZWaveNodeId] = useState<number | null>(null)
   const [replacingZWaveNodeId, setReplacingZWaveNodeId] = useState<number | null>(null)
@@ -371,7 +375,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
           controllerOnly: false,
           canRemoveFailed: dead,
           forceRemoveFailed: dead,
-          likelyLegacySiren: isLikelyLegacyZWaveSirenDevice(device)
+          likelyLegacyS0: isLikelyLegacyS0ZWaveDevice(device)
         }
       })
 
@@ -390,7 +394,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
         controllerOnly: true,
         canRemoveFailed: true,
         forceRemoveFailed: !node.ready || isDeadZWaveStatus(node.status),
-        likelyLegacySiren: /\b(?:zw080|siren|alarm|aeotec|aeon)\b/i.test(node.name || "")
+        likelyLegacyS0: /\b(?:zw080|siren|alarm|aeotec|aeon|kwikset|smartcode|schlage|deadbolt|lock)\b/i.test(node.name || "")
       })
     })
 
@@ -656,9 +660,9 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
     try {
       const response = await refreshZWaveNodeInfo(nodeId, {
         waitForWakeup: false,
-        resetSecurityClasses: candidate.likelyLegacySiren,
+        resetSecurityClasses: candidate.likelyLegacyS0,
         pingFirst: true,
-        skipRefreshIfPingSucceeds: !candidate.likelyLegacySiren
+        skipRefreshIfPingSucceeds: !candidate.likelyLegacyS0
       })
       const ping = response.result?.ping
       const skippedRefresh = response.result?.skippedRefresh
@@ -832,7 +836,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
               setDurationSeconds={setDurationSeconds}
               disabled={busy}
               title="Start inclusion, then perform the device include action."
-              detail="Use Standard for ordinary switches, Legacy S0 for older sirens, and S2 for locks with a printed DSK."
+              detail="Use Auto secure for locks, Legacy S0 for older Kwikset/Schlage locks or sirens, and Standard only for ordinary non-secure devices."
             />
             <Field label="Security">
               <Select value={zwaveSecurityMode} onValueChange={(value) => setZwaveSecurityMode(value as ZWaveSecurityMode)} disabled={busy}>
@@ -888,7 +892,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
                             disabled={busy || nodeBusy}
                           >
                             {replacingZWaveNodeId === nodeId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PlusCircle className="mr-2 h-4 w-4" />}
-                            {candidate.likelyLegacySiren ? "Replace S0" : "Replace Pairing"}
+                            {candidate.likelyLegacyS0 ? "Replace S0" : "Replace Pairing"}
                           </Button>
                         ) : null}
                         {candidate.canRemoveFailed ? (
