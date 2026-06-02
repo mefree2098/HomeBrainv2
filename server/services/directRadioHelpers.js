@@ -185,7 +185,7 @@ function getEffectiveZWaveNodeRuntime(node) {
   const ready = node?.ready === undefined ? null : node.ready === true;
   const status = node?.status === undefined ? null : node.status;
   const probe = getZWaveNodeReachabilityProbe(node);
-  if (probe && isZWaveNodeCommandProbeCandidate(node)) {
+  if (probe && (isZWaveNodeCommandProbeCandidate(node) || probe.knownDeviceIdentity === true)) {
     return {
       ready: true,
       status: isZWaveStatusUnavailable(status) ? ZWAVE_NODE_STATUS.ALIVE : status,
