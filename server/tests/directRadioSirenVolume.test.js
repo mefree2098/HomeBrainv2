@@ -76,6 +76,26 @@ test('Z-Wave driver uses fast persistent cache writes by default', async (t) => 
   assert.equal(capturedOptions.storage.throttle, 'fast');
   assert.match(capturedOptions.storage.cacheDir, /zwave[\\/]cache$/);
   assert.match(capturedOptions.storage.lockDir, /zwave[\\/]locks$/);
+  assert.equal(capturedOptions.logConfig.enabled, true);
+  assert.equal(capturedOptions.logConfig.logToFile, true);
+  assert.equal(capturedOptions.logConfig.level, 'debug');
+  assert.match(capturedOptions.logConfig.filename, /zwave[\\/]logs[\\/]zwavejs_%DATE%\.log$/);
+});
+
+test('Z-Wave inclusion callbacks use zwave-js core security classes', async () => {
+  const service = new DirectRadioService();
+  const core = require('@zwave-js/core');
+
+  const callbacks = service.buildZWaveInclusionCallbacks({});
+  const grant = await callbacks.grantSecurityClasses({});
+
+  assert.deepEqual(grant.securityClasses, [
+    core.SecurityClass.S2_AccessControl,
+    core.SecurityClass.S2_Authenticated,
+    core.SecurityClass.S2_Unauthenticated,
+    core.SecurityClass.S0_Legacy
+  ]);
+  assert.equal(grant.clientSideAuth, false);
 });
 
 test('direct radio shutdown closes Z-Wave driver before Zigbee controller', async () => {
@@ -290,7 +310,7 @@ test('Z-Wave siren sound command probes stale interviewed listening nodes before
   assert.equal(updateData.properties.sirenSound, 2);
 });
 
-test('Z-Wave siren sound command attempts known devices when readiness ping fails', async () => {
+test('Z-Wave siren sound command rejects known devices when readiness ping fails', async () => {
   const service = new DirectRadioService();
   const setCalls = [];
   let pingCount = 0;
@@ -321,17 +341,14 @@ test('Z-Wave siren sound command attempts known devices when readiness ping fail
   service.getDirectNodeForDevice = () => node;
 
   const updateData = {};
-  await service.controlDevice(nativeSirenDevice(), 'setsirensound', 'Sound 4', updateData);
+  await assert.rejects(
+    () => service.controlDevice(nativeSirenDevice(), 'setsirensound', 'Sound 4', updateData),
+    /Z-Wave node is not ready/
+  );
 
   assert.equal(pingCount, 1);
-  assert.equal(setCalls.length, 1);
-  assert.equal(updateData.isOnline, true);
-  assert.equal(updateData.properties.homebrainDirect.ready, true);
-  assert.equal(updateData.properties.homebrainDirect.status, 4);
-  assert.equal(updateData.properties.homebrainDirect.controllerReady, false);
-  assert.equal(updateData.properties.homebrainDirect.controllerStatus, 3);
-  assert.equal(updateData.properties.homebrainDirect.lastCommandAcceptedAt.length > 0, true);
-  assert.equal(updateData.properties.sirenSound, 4);
+  assert.equal(setCalls.length, 0);
+  assert.deepEqual(updateData, {});
 });
 
 test('Z-Wave siren sound command probes generic controller shells when the HomeBrain device identity is preserved', async () => {
@@ -491,7 +508,7 @@ test('Z-Wave command retries once after no-ack route recovery succeeds', async (
     on: () => {},
     ping: async () => {
       pingCount += 1;
-      return pingCount >= 3;
+      return pingCount === 1 || pingCount >= 3;
     },
     getDefinedValueIDs: () => [
       { commandClass: zwave.BinarySwitchCCValues.targetValue.id.commandClass }
@@ -499,6 +516,9 @@ test('Z-Wave command retries once after no-ack route recovery succeeds', async (
     setValue: async (valueId, value) => {
       setCalls.push({ valueId, value });
       if (setCalls.length === 1) {
+        delete node.__homebrainReachabilityProbe;
+        node.ready = false;
+        node.status = 3;
         throw new Error('The node did not acknowledge the command (ZW0204)');
       }
       return { status: zwave.SetValueStatus.Success };
