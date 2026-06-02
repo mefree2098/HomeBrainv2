@@ -48,7 +48,7 @@
     "zigbee-herdsman": "^10.0.7",
     "zigbee-herdsman-converters": "^26.45.0",
     "zod": "^4.3.6",
-    "zwave-js": "^15.23.5"
+    "zwave-js": "^15.24.2"
   },
   "overrides": {
     "minimatch": "10.2.3",
