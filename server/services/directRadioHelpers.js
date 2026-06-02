@@ -484,8 +484,14 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
   const incomingZWaveStatus = updateProtocol === 'zwave' || updateSource === DIRECT_RADIO_SOURCES.zwave
     ? normalizeZWaveStatus(updateDirect.status)
     : null;
-  const incomingIsConfirmedDeadZWave = incomingZWaveStatus === ZWAVE_NODE_STATUS.DEAD;
   const preservesKnownGoodDirectRecord = incomingIncompleteShell && existingHasKnownGoodDirectRecord;
+  const incomingDeadZWaveShellIsUnconfirmed = incomingZWaveStatus === ZWAVE_NODE_STATUS.DEAD
+    && preservesKnownGoodDirectRecord
+    && !hasStableDirectIdentity(updateDirect, updateProperties)
+    && updateFeatures.length === 0
+    && !hasNonEmptyObject(updateProperties.directRadioState);
+  const incomingIsConfirmedDeadZWave = incomingZWaveStatus === ZWAVE_NODE_STATUS.DEAD
+    && !incomingDeadZWaveShellIsUnconfirmed;
   const preservesKnownGoodRuntimeValues = preservesKnownGoodDirectRecord && !incomingIsConfirmedDeadZWave;
   const clearsIncompleteZigbeeRuntime = updateDirect.incomplete === true
     && (updateSource === DIRECT_RADIO_SOURCES.zigbee || updateProtocol === 'zigbee')
