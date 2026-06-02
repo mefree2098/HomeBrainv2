@@ -19,7 +19,6 @@ const {
   buildNormalizedCapabilities,
   buildMigrationPlan,
   inferFeaturesFromSmartThings,
-  isDirectRadioDevice,
   normalizeFeature
 } = require('./directRadioDeviceCatalog');
 const directRadioProtocolCatalogService = require('./directRadioProtocolCatalogService');
@@ -94,6 +93,7 @@ const {
   shouldUseSecureZWaveMigration,
   uniqueStrings,
   normalizeSourceText,
+  resolveDirectProtocol,
   getDeviceIdString,
   getDeviceProperties,
   toPlainDeviceSnapshot,
@@ -854,11 +854,10 @@ emitDeviceUpdate(device) {
   },
 
 getDirectNodeForDevice(device) {
-    if (!isDirectRadioDevice(device)) {
+    const protocol = resolveDirectProtocol(device);
+    if (!protocol) {
       return null;
     }
-    const protocol = normalizeSourceText(device?.properties?.homebrainDirect?.protocol)
-      || (normalizeSourceText(device?.properties?.source) === DIRECT_RADIO_SOURCES.zigbee ? 'zigbee' : 'zwave');
 
     if (protocol === 'zigbee') {
       const ieeeAddr = trimString(device?.properties?.homebrainDirect?.ieeeAddr);
@@ -879,8 +878,7 @@ getDirectNodeForDevice(device) {
 
 async controlDevice(device, normalizedAction, commandValue, updateData = {}) {
     await this.start();
-    const protocol = normalizeSourceText(device?.properties?.homebrainDirect?.protocol)
-      || (normalizeSourceText(device?.properties?.source) === DIRECT_RADIO_SOURCES.zigbee ? 'zigbee' : 'zwave');
+    const protocol = resolveDirectProtocol(device);
 
     if (protocol === 'zigbee') {
       await this.controlZigbeeDevice(device, normalizedAction, commandValue, updateData);
@@ -896,7 +894,8 @@ async controlDevice(device, normalizedAction, commandValue, updateData = {}) {
   },
 
 async refreshDirectDeviceState(device, options = {}) {
-    if (!isDirectRadioDevice(device)) {
+    const protocol = resolveDirectProtocol(device);
+    if (!protocol) {
       return null;
     }
 
@@ -905,7 +904,6 @@ async refreshDirectDeviceState(device, options = {}) {
       return null;
     }
 
-    const protocol = normalizeSourceText(device?.properties?.homebrainDirect?.protocol);
     const normalized = protocol === 'zigbee'
       ? this.normalizeZigbeeDevice(node, 'refresh')
       : this.normalizeZWaveNode(node, 'refresh');

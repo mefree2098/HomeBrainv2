@@ -948,6 +948,17 @@ function normalizeSourceText(value) {
   return trimString(value).toLowerCase();
 }
 
+function normalizeDirectRadioProtocol(value) {
+  const normalized = normalizeSourceText(value).replace(/[\s_-]+/g, '');
+  if (normalized === 'zigbee' || normalized === 'homebrainzigbee') {
+    return 'zigbee';
+  }
+  if (normalized === 'zwave' || normalized === 'zw' || normalized === 'homebrainzwave') {
+    return 'zwave';
+  }
+  return '';
+}
+
 function getDeviceIdString(device) {
   return trimString(device?._id?.toString?.() || device?._id || device?.id);
 }
@@ -956,6 +967,18 @@ function getDeviceProperties(device) {
   return device?.properties && typeof device.properties === 'object'
     ? device.properties
     : {};
+}
+
+function resolveDirectProtocol(device) {
+  const properties = getDeviceProperties(device);
+  const direct = properties.homebrainDirect && typeof properties.homebrainDirect === 'object'
+    ? properties.homebrainDirect
+    : {};
+
+  return normalizeDirectRadioProtocol(direct.protocol)
+    || normalizeDirectRadioProtocol(device?.source)
+    || normalizeDirectRadioProtocol(properties.source)
+    || null;
 }
 
 function toPlainDeviceSnapshot(device) {
@@ -3533,8 +3556,10 @@ module.exports = {
   shouldUseSecureZWaveMigration,
   uniqueStrings,
   normalizeSourceText,
+  normalizeDirectRadioProtocol,
   getDeviceIdString,
   getDeviceProperties,
+  resolveDirectProtocol,
   toPlainDeviceSnapshot,
   getSmartThingsMigration,
   isRetiredSmartThingsMigrationSource,

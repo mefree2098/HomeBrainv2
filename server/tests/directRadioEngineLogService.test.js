@@ -76,3 +76,29 @@ test('directRadioEngineLogService keeps a full diagnostic replay window', (t) =>
   assert.equal(replay[0].message, 'Direct radio entry 25');
   assert.equal(replay.at(-1).message, 'Direct radio entry 50024');
 });
+
+test('directRadioEngineLogService replays and clears entries by protocol', (t) => {
+  directRadioEngineLogService.reset();
+  t.after(() => {
+    directRadioEngineLogService.reset();
+  });
+
+  directRadioEngineLogService.publish({ protocol: 'zigbee', message: 'zigbee joined' });
+  directRadioEngineLogService.publish({ protocol: 'zwave', message: 'zwave included' });
+  directRadioEngineLogService.publish({ protocol: 'system', message: 'scan complete' });
+
+  assert.deepEqual(
+    directRadioEngineLogService.latest({ limit: 10, protocol: 'zigbee' }).map((entry) => entry.message),
+    ['zigbee joined']
+  );
+  assert.deepEqual(
+    directRadioEngineLogService.latest({ limit: 10, protocol: 'zwave' }).map((entry) => entry.message),
+    ['zwave included']
+  );
+
+  assert.equal(directRadioEngineLogService.reset({ protocol: 'zigbee' }), 1);
+  assert.deepEqual(
+    directRadioEngineLogService.latest({ limit: 10 }).map((entry) => entry.message),
+    ['zwave included', 'scan complete']
+  );
+});

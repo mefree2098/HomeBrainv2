@@ -33,6 +33,105 @@ function createService() {
   return service;
 }
 
+test('direct radio refresh resolves Zigbee from source when protocol metadata is missing', async () => {
+  const service = createService();
+  const zigbeeNode = { ieeeAddr: '0x00124b0025aa55cc' };
+  let zigbeeRefreshCount = 0;
+
+  service.zigbee.controller = {
+    getDeviceByIeeeAddr: (ieeeAddr) => {
+      assert.equal(ieeeAddr, '0x00124b0025aa55cc');
+      return zigbeeNode;
+    }
+  };
+  service.normalizeZigbeeDevice = (node) => {
+    assert.equal(node, zigbeeNode);
+    zigbeeRefreshCount += 1;
+    return {
+      update: {
+        name: 'Front Door',
+        type: 'sensor',
+        room: 'Entry',
+        isOnline: true,
+        properties: {
+          source: 'homebrain-zigbee',
+          homebrainDirect: {
+            protocol: 'zigbee',
+            ieeeAddr: '0x00124b0025aa55cc'
+          },
+          directRadioFeatures: ['contact']
+        }
+      }
+    };
+  };
+  service.normalizeZWaveNode = () => {
+    throw new Error('Z-Wave normalizer should not run for a Zigbee source');
+  };
+
+  const refreshed = await service.refreshDirectDeviceState({
+    name: 'Front Door',
+    type: 'sensor',
+    room: 'Entry',
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        ieeeAddr: '0x00124b0025aa55cc'
+      },
+      directRadioFeatures: ['contact']
+    }
+  });
+
+  assert.equal(zigbeeRefreshCount, 1);
+  assert.equal(refreshed.properties.homebrainDirect.protocol, 'zigbee');
+});
+
+test('direct radio control does not default unresolved records to Z-Wave', async () => {
+  const service = createService();
+  service.start = async () => ({});
+  service.controlZWaveDevice = async () => {
+    throw new Error('Z-Wave command path should not run without protocol metadata');
+  };
+
+  await assert.rejects(
+    () => service.controlDevice({
+      name: 'Malformed Native Radio Device',
+      properties: {
+        source: 'homebrain-direct',
+        homebrainDirect: {
+          nodeId: 12
+        }
+      }
+    }, 'turnon', true, {}),
+    /Direct radio protocol is not configured/i
+  );
+});
+
+test('direct radio control still routes source-only Z-Wave records to Z-Wave', async () => {
+  const service = createService();
+  let zwaveCalled = false;
+  service.start = async () => ({});
+  service.controlZigbeeDevice = async () => {
+    throw new Error('Zigbee command path should not run for a Z-Wave source');
+  };
+  service.controlZWaveDevice = async (_device, action, value) => {
+    zwaveCalled = true;
+    assert.equal(action, 'turnon');
+    assert.equal(value, true);
+  };
+
+  await service.controlDevice({
+    name: 'Node 12',
+    properties: {
+      source: 'homebrain-zwave',
+      homebrainDirect: {
+        nodeId: 12
+      }
+    }
+  }, 'turnon', true, {});
+
+  assert.equal(zwaveCalled, true);
+});
+
 test('direct radio refresh preserves user-edited name and room while updating live state', () => {
   const existing = {
     name: 'Cold Storage Switch',
