@@ -520,6 +520,41 @@ submitZWaveDskPin(pin) {
     };
   },
 
+hasStableZWaveDeviceProbeIdentity(device) {
+    const direct = device?.properties?.homebrainDirect && typeof device.properties.homebrainDirect === 'object'
+      ? device.properties.homebrainDirect
+      : {};
+    const features = Array.isArray(device?.properties?.directRadioFeatures)
+      ? device.properties.directRadioFeatures.map(normalizeFeature).filter(Boolean)
+      : [];
+    return Boolean(
+      direct.manufacturerId
+      || direct.productType
+      || direct.productId
+      || direct.catalog
+      || device?.properties?.directRadioCatalog
+      || features.length > 0
+    );
+  },
+
+isZWaveKnownDeviceProbeCandidate(node, device) {
+    if (!node || node.isControllerNode === true || !device) {
+      return false;
+    }
+    const nodeId = Number(node.id);
+    const deviceNodeId = Number(device?.properties?.homebrainDirect?.nodeId);
+    if (!Number.isFinite(nodeId) || !Number.isFinite(deviceNodeId) || nodeId !== deviceNodeId) {
+      return false;
+    }
+    const listening = node.isListening === true
+      || node.isFrequentListening === true
+      || (typeof node.isFrequentListening === 'string' && trimString(node.isFrequentListening));
+    if (!listening) {
+      return false;
+    }
+    return this.hasStableZWaveDeviceProbeIdentity(device);
+  },
+
 markZWaveNodeReachability(node, result = {}) {
     if (!node) {
       return null;
@@ -529,7 +564,8 @@ markZWaveNodeReachability(node, result = {}) {
       at: Date.now(),
       reason: trimString(result.reason) || null,
       source: trimString(result.source) || null,
-      error: trimString(result.error) || null
+      error: trimString(result.error) || null,
+      knownDeviceIdentity: result.knownDeviceIdentity === true
     };
     node.__homebrainReachabilityProbe = probe;
     return probe;
@@ -543,7 +579,8 @@ async probeZWaveNodeCommandReadiness(node, context = {}) {
         reason: 'already_ready'
       };
     }
-    if (!isZWaveNodeCommandProbeCandidate(node)) {
+    const knownDeviceIdentity = this.isZWaveKnownDeviceProbeCandidate(node, context.device);
+    if (!isZWaveNodeCommandProbeCandidate(node) && !knownDeviceIdentity) {
       return {
         ready: false,
         skipped: true,
@@ -561,6 +598,7 @@ async probeZWaveNodeCommandReadiness(node, context = {}) {
       nodeId: Number.isFinite(nodeId) ? nodeId : null,
       reason,
       action: trimString(context.action) || null,
+      knownDeviceIdentity,
       ready: node.ready === undefined ? null : Boolean(node.ready),
       status: node.status === undefined ? null : node.status,
       interviewStage: node.interviewStage === undefined ? null : String(node.interviewStage)
@@ -587,12 +625,14 @@ async probeZWaveNodeCommandReadiness(node, context = {}) {
       const probe = this.markZWaveNodeReachability(node, {
         ok: true,
         reason,
-        source: 'ping'
+        source: 'ping',
+        knownDeviceIdentity
       });
       this.log('info', 'zwave', 'Z-Wave readiness probe succeeded', {
         nodeId: Number.isFinite(nodeId) ? nodeId : null,
         reason,
-        action: trimString(context.action) || null
+        action: trimString(context.action) || null,
+        knownDeviceIdentity
       });
       return {
         ready: true,
@@ -606,12 +646,14 @@ async probeZWaveNodeCommandReadiness(node, context = {}) {
       ok: false,
       reason,
       source: 'ping',
-      error: pingError
+      error: pingError,
+      knownDeviceIdentity
     });
     this.log('warn', 'zwave', 'Z-Wave readiness probe failed', {
       nodeId: Number.isFinite(nodeId) ? nodeId : null,
       reason,
       action: trimString(context.action) || null,
+      knownDeviceIdentity,
       error: pingError
     });
     return {
@@ -1165,11 +1207,27 @@ async syncZWaveNodes() {
         continue;
       }
       this.attachZWaveNodeStatusListeners(node);
-      if (!isZWaveNodeCommandReady(node) && isZWaveNodeCommandProbeCandidate(node)) {
+      let existingDevice = null;
+      let shouldProbe = !isZWaveNodeCommandReady(node) && isZWaveNodeCommandProbeCandidate(node);
+      if (!shouldProbe && !isZWaveNodeCommandReady(node)) {
+        // zwave-js can temporarily reduce a failed re-interview to a generic shell.
+        // If HomeBrain still has stable identity for the matching device, probe before persisting dead state.
+        // eslint-disable-next-line no-await-in-loop
+        existingDevice = await this.findDeviceForZWaveNode(node).catch((error) => {
+          this.log('warn', 'zwave', 'Failed to load Z-Wave device record for startup readiness probe', {
+            nodeId: node.id || null,
+            error: error.message
+          });
+          return null;
+        });
+        shouldProbe = this.isZWaveKnownDeviceProbeCandidate(node, existingDevice);
+      }
+      if (shouldProbe) {
         // eslint-disable-next-line no-await-in-loop
         await this.probeZWaveNodeCommandReadiness(node, {
           reason: 'sync',
-          action: 'startup_sync'
+          action: 'startup_sync',
+          device: existingDevice
         });
       }
       // eslint-disable-next-line no-await-in-loop
@@ -1579,7 +1637,8 @@ async controlZWaveDevice(device, normalizedAction, commandValue, updateData = {}
     if (!isZWaveNodeCommandReady(node)) {
       const probe = await this.probeZWaveNodeCommandReadiness(node, {
         reason: 'command',
-        action: normalizedAction
+        action: normalizedAction,
+        device
       });
       if (probe.ready !== true || !isZWaveNodeCommandReady(node)) {
         throw new Error(probe.error
@@ -1673,10 +1732,12 @@ async controlZWaveDevice(device, normalizedAction, commandValue, updateData = {}
     }
 
     const commandTimestamp = new Date().toISOString();
+    const knownDeviceIdentity = this.isZWaveKnownDeviceProbeCandidate(node, device);
     const reachabilityProbe = this.markZWaveNodeReachability(node, {
       ok: true,
       reason: 'command accepted',
-      source: 'command'
+      source: 'command',
+      knownDeviceIdentity
     });
     const direct = device?.properties?.homebrainDirect && typeof device.properties.homebrainDirect === 'object'
       ? device.properties.homebrainDirect

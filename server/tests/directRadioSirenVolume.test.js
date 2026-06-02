@@ -192,6 +192,88 @@ test('Z-Wave siren sound command probes stale interviewed listening nodes before
   assert.equal(updateData.properties.sirenSound, 2);
 });
 
+test('Z-Wave siren sound command probes generic controller shells when the HomeBrain device identity is preserved', async () => {
+  const service = new DirectRadioService();
+  const setCalls = [];
+  let pingCount = 0;
+  const node = {
+    ...zwaveNode({
+      ready: false,
+      status: 3,
+      interviewStage: 1,
+      isListening: true,
+      manufacturerId: null,
+      productType: null,
+      productId: null,
+      manufacturer: null,
+      productLabel: null,
+      deviceConfig: null
+    }),
+    ping: async () => {
+      pingCount += 1;
+      return true;
+    },
+    setValue: async (valueId, value) => {
+      setCalls.push({ valueId, value });
+      return { status: zwave.SetValueStatus.Success };
+    }
+  };
+  service.start = async () => {};
+  service.getDirectNodeForDevice = () => node;
+
+  assert.equal(isZWaveNodeCommandProbeCandidate(node), false);
+  assert.equal(isZWaveNodeCommandReady(node), false);
+
+  const updateData = {};
+  await service.controlDevice(nativeSirenDevice(), 'setsirensound', 'Sound 3', updateData);
+
+  assert.equal(pingCount, 1);
+  assert.equal(setCalls.length, 1);
+  assert.equal(isZWaveNodeCommandReady(node), true);
+  assert.equal(node.__homebrainReachabilityProbe.knownDeviceIdentity, true);
+  assert.equal(updateData.isOnline, true);
+  assert.equal(updateData.properties.homebrainDirect.ready, true);
+  assert.equal(updateData.properties.homebrainDirect.status, 4);
+  assert.equal(updateData.properties.homebrainDirect.controllerReady, false);
+  assert.equal(updateData.properties.homebrainDirect.controllerStatus, 3);
+  assert.equal(updateData.properties.homebrainDirect.lastCommandAcceptedAt.length > 0, true);
+  assert.equal(updateData.properties.sirenSound, 3);
+});
+
+test('Z-Wave startup sync probes generic controller shells using preserved HomeBrain device identity', async () => {
+  const service = new DirectRadioService();
+  let pingCount = 0;
+  let changedReason = null;
+  const node = zwaveNode({
+    ready: false,
+    status: 3,
+    interviewStage: 1,
+    isListening: true,
+    manufacturerId: null,
+    productType: null,
+    productId: null,
+    manufacturer: null,
+    productLabel: null,
+    deviceConfig: null,
+    ping: async () => {
+      pingCount += 1;
+      return true;
+    }
+  });
+  service.getZWaveControllerNodes = () => new Map([[node.id, node]]);
+  service.findDeviceForZWaveNode = async () => nativeSirenDevice();
+  service.handleZWaveNodeChanged = async (_node, reason) => {
+    changedReason = reason;
+  };
+
+  await service.syncZWaveNodes();
+
+  assert.equal(pingCount, 1);
+  assert.equal(changedReason, 'sync');
+  assert.equal(isZWaveNodeCommandReady(node), true);
+  assert.equal(node.__homebrainReachabilityProbe.knownDeviceIdentity, true);
+});
+
 test('Z-Wave siren volume command writes the catalog configuration parameter', async () => {
   const service = new DirectRadioService();
   const setCalls = [];
