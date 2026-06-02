@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const Module = require('node:module');
 const zwave = require('zwave-js');
 
 const directRadioService = require('../services/directRadioService');
@@ -10,6 +11,71 @@ const {
   isZWaveNodeCommandProbeCandidate,
   isZWaveNodeOnline
 } = directRadioService._test;
+
+test('Z-Wave driver uses fast persistent cache writes by default', async (t) => {
+  const originalLoad = Module._load;
+  const originalThrottle = process.env.HOMEBRAIN_ZWAVE_CACHE_THROTTLE;
+  let capturedOptions = null;
+
+  delete process.env.HOMEBRAIN_ZWAVE_CACHE_THROTTLE;
+
+  class FakeDriver {
+    constructor(_serialPath, options) {
+      capturedOptions = options;
+      this.controller = { homeId: 1234 };
+    }
+
+    on() {}
+
+    async start() {}
+  }
+
+  Module._load = function patchedLoad(request, parent, isMain) {
+    if (request === 'zwave-js') {
+      return {
+        Driver: FakeDriver,
+        SecurityClass: {
+          S2_AccessControl: 1,
+          S2_Authenticated: 2,
+          S2_Unauthenticated: 3,
+          S0_Legacy: 4
+        }
+      };
+    }
+    return originalLoad.call(this, request, parent, isMain);
+  };
+
+  t.after(() => {
+    Module._load = originalLoad;
+    if (originalThrottle === undefined) {
+      delete process.env.HOMEBRAIN_ZWAVE_CACHE_THROTTLE;
+    } else {
+      process.env.HOMEBRAIN_ZWAVE_CACHE_THROTTLE = originalThrottle;
+    }
+  });
+
+  const service = new DirectRadioService();
+  service.ensureControllerConfig = async () => ({
+    zwave: {
+      securityKeys: {
+        S2_AccessControl: '11111111111111111111111111111111',
+        S2_Authenticated: '22222222222222222222222222222222',
+        S2_Unauthenticated: '33333333333333333333333333333333',
+        S0_Legacy: '44444444444444444444444444444444'
+      },
+      securityKeysLongRange: {
+        S2_AccessControl: '55555555555555555555555555555555',
+        S2_Authenticated: '66666666666666666666666666666666'
+      }
+    }
+  });
+
+  await service.startZWave('/dev/ttyUSB-test');
+
+  assert.equal(capturedOptions.storage.throttle, 'fast');
+  assert.match(capturedOptions.storage.cacheDir, /zwave[\\/]cache$/);
+  assert.match(capturedOptions.storage.lockDir, /zwave[\\/]locks$/);
+});
 
 function sirenVolumeCatalogParameter(overrides = {}) {
   return {
@@ -284,7 +350,7 @@ test('Z-Wave siren sound command probes generic controller shells when the HomeB
   assert.equal(updateData.properties.sirenSound, 3);
 });
 
-test('Z-Wave startup sync probes generic controller shells using preserved HomeBrain device identity', async () => {
+test('Z-Wave startup sync does not probe generic controller shells', async () => {
   const service = new DirectRadioService();
   let pingCount = 0;
   let changedReason = null;
@@ -312,10 +378,10 @@ test('Z-Wave startup sync probes generic controller shells using preserved HomeB
 
   await service.syncZWaveNodes();
 
-  assert.equal(pingCount, 1);
+  assert.equal(pingCount, 0);
   assert.equal(changedReason, 'sync');
-  assert.equal(isZWaveNodeCommandReady(node), true);
-  assert.equal(node.__homebrainReachabilityProbe.knownDeviceIdentity, true);
+  assert.equal(isZWaveNodeCommandReady(node), false);
+  assert.equal(node.__homebrainReachabilityProbe, undefined);
 });
 
 test('Z-Wave siren volume command writes the catalog configuration parameter', async () => {

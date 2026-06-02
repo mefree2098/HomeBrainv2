@@ -245,10 +245,12 @@ async startZWave(serialPath) {
       const zwave = require('zwave-js');
       const config = await this.ensureControllerConfig();
       const keyBuffer = (hex) => Buffer.from(hex, 'hex');
+      const cacheThrottle = process.env.HOMEBRAIN_ZWAVE_CACHE_THROTTLE || 'fast';
       const driver = new zwave.Driver(serialPath, {
         storage: {
           cacheDir: path.join(ZWAVE_DIR, 'cache'),
-          throttle: process.env.HOMEBRAIN_ZWAVE_CACHE_THROTTLE || 'normal'
+          lockDir: path.join(ZWAVE_DIR, 'locks'),
+          throttle: cacheThrottle
         },
         securityKeys: {
           S2_AccessControl: keyBuffer(config.zwave.securityKeys.S2_AccessControl),
@@ -270,7 +272,8 @@ async startZWave(serialPath) {
         this.attachZWaveControllerMigrationListeners(driver.controller);
         this.log('info', 'zwave', 'Z-Wave driver ready', {
           serialPath,
-          homeId: driver.controller?.homeId || null
+          homeId: driver.controller?.homeId || null,
+          cacheThrottle
         });
         this.dispatchHandler('zwave:syncNodes', 'zwave', () => this.syncZWaveNodes());
       });
@@ -1207,30 +1210,12 @@ async syncZWaveNodes() {
         continue;
       }
       this.attachZWaveNodeStatusListeners(node);
-      let existingDevice = null;
-      let shouldProbe = false;
       if (!isZWaveNodeCommandReady(node)) {
-        shouldProbe = isZWaveNodeCommandProbeCandidate(node);
-        // zwave-js can temporarily reduce a failed re-interview to a generic shell,
-        // or report an identified listening node dead before it accepts commands.
-        // Load the matching HomeBrain record so the probe and merge layer know
-        // whether this is a stable device identity rather than a fresh unknown node.
-        // eslint-disable-next-line no-await-in-loop
-        existingDevice = await this.findDeviceForZWaveNode(node).catch((error) => {
-          this.log('warn', 'zwave', 'Failed to load Z-Wave device record for startup readiness probe', {
-            nodeId: node.id || null,
-            error: error.message
-          });
-          return null;
-        });
-        shouldProbe = shouldProbe || this.isZWaveKnownDeviceProbeCandidate(node, existingDevice);
-      }
-      if (shouldProbe) {
-        // eslint-disable-next-line no-await-in-loop
-        await this.probeZWaveNodeCommandReadiness(node, {
-          reason: 'sync',
-          action: 'startup_sync',
-          device: existingDevice
+        this.log('debug', 'zwave', 'Z-Wave startup sync observed node that is not command-ready', {
+          nodeId: node.id || null,
+          ready: node.ready === undefined ? null : Boolean(node.ready),
+          status: node.status ?? null,
+          interviewStage: node.interviewStage ?? null
         });
       }
       // eslint-disable-next-line no-await-in-loop
