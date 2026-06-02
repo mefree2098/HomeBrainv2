@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   type LucideIcon,
   Activity,
@@ -1449,6 +1449,7 @@ export function DeviceDetailsDialog({
   const [deviceNameDraft, setDeviceNameDraft] = useState("")
   const [deviceRoomDraft, setDeviceRoomDraft] = useState("")
   const [deviceTypeDraft, setDeviceTypeDraft] = useState<string>("switch")
+  const [deviceDetailsDraftDirty, setDeviceDetailsDraftDirty] = useState(false)
   const [savingDeviceDetails, setSavingDeviceDetails] = useState(false)
   const [groupInput, setGroupInput] = useState("")
   const [savingGroups, setSavingGroups] = useState(false)
@@ -1486,6 +1487,7 @@ export function DeviceDetailsDialog({
   const [lockCodeDraftEnabled, setLockCodeDraftEnabled] = useState(true)
   const [deletingDevice, setDeletingDevice] = useState(false)
   const [activeTab, setActiveTab] = useState<"overview" | "controls" | "alexa" | "history">("overview")
+  const deviceDetailsSyncKeyRef = useRef<string | null>(null)
   const { toast } = useToast()
   const { isAdmin } = useAuth()
 
@@ -1536,11 +1538,17 @@ export function DeviceDetailsDialog({
     return normalizeGroupList(availableGroups).filter((group) => !activeKeys.has(group.toLowerCase()))
   }, [availableGroups, draftGroups])
   const groupsChanged = !sameStringList(currentGroups, draftGroups)
+  const currentGroupsInputValue = currentGroups.join(", ")
+  const canonicalDeviceName = device?.name || ""
+  const canonicalDeviceRoom = device?.room || "Unassigned"
+  const canonicalDeviceType = EDITABLE_DEVICE_TYPES.includes((device?.type || "") as (typeof EDITABLE_DEVICE_TYPES)[number])
+    ? device?.type || "switch"
+    : "switch"
   const normalizedDeviceNameDraft = deviceNameDraft.trim()
   const normalizedDeviceRoomDraft = deviceRoomDraft.trim() || "Unassigned"
   const normalizedDeviceTypeDraft = EDITABLE_DEVICE_TYPES.includes(deviceTypeDraft as (typeof EDITABLE_DEVICE_TYPES)[number])
     ? deviceTypeDraft
-    : device?.type || "switch"
+    : canonicalDeviceType
   const deviceDetailsChanged = Boolean(device) && (
     normalizedDeviceNameDraft !== device.name
     || normalizedDeviceRoomDraft !== (device.room || "Unassigned")
@@ -1571,16 +1579,43 @@ export function DeviceDetailsDialog({
 
   useEffect(() => {
     if (!open) {
+      deviceDetailsSyncKeyRef.current = null
+      setDeviceDetailsDraftDirty(false)
       return
     }
 
-    setDeviceNameDraft(device?.name || "")
-    setDeviceRoomDraft(device?.room || "Unassigned")
-    setDeviceTypeDraft(EDITABLE_DEVICE_TYPES.includes((device?.type || "") as (typeof EDITABLE_DEVICE_TYPES)[number])
-      ? device?.type || "switch"
-      : "switch")
-    setGroupInput(currentGroups.join(", "))
-  }, [currentGroups, open, device?._id])
+    const deviceKey = device?._id || null
+    if (deviceDetailsSyncKeyRef.current !== deviceKey) {
+      deviceDetailsSyncKeyRef.current = deviceKey
+      setDeviceNameDraft(canonicalDeviceName)
+      setDeviceRoomDraft(canonicalDeviceRoom)
+      setDeviceTypeDraft(canonicalDeviceType)
+      setDeviceDetailsDraftDirty(false)
+      return
+    }
+
+    if (!deviceDetailsDraftDirty && !savingDeviceDetails) {
+      setDeviceNameDraft(canonicalDeviceName)
+      setDeviceRoomDraft(canonicalDeviceRoom)
+      setDeviceTypeDraft(canonicalDeviceType)
+    }
+  }, [
+    canonicalDeviceName,
+    canonicalDeviceRoom,
+    canonicalDeviceType,
+    device?._id,
+    deviceDetailsDraftDirty,
+    open,
+    savingDeviceDetails
+  ])
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+
+    setGroupInput(currentGroupsInputValue)
+  }, [currentGroupsInputValue, open, device?._id])
 
   useEffect(() => {
     if (!open) {
@@ -2107,6 +2142,7 @@ export function DeviceDetailsDialog({
       setDeviceNameDraft(updatedDevice?.name || normalizedDeviceNameDraft)
       setDeviceRoomDraft(updatedDevice?.room || normalizedDeviceRoomDraft)
       setDeviceTypeDraft(updatedDevice?.type || normalizedDeviceTypeDraft)
+      setDeviceDetailsDraftDirty(false)
       toast({
         title: "Device details updated",
         description: `${updatedDevice?.name || normalizedDeviceNameDraft} is ready in ${updatedDevice?.room || normalizedDeviceRoomDraft}.`
@@ -3664,7 +3700,10 @@ export function DeviceDetailsDialog({
                               id="device-name-input"
                               className="bg-black/20"
                               value={deviceNameDraft}
-                              onChange={(event) => setDeviceNameDraft(event.target.value)}
+                              onChange={(event) => {
+                                setDeviceDetailsDraftDirty(true)
+                                setDeviceNameDraft(event.target.value)
+                              }}
                               disabled={savingDeviceDetails}
                             />
                           </div>
@@ -3672,7 +3711,10 @@ export function DeviceDetailsDialog({
                             <Label htmlFor="device-room-input">Room</Label>
                             <Select
                               value={normalizedDeviceRoomDraft}
-                              onValueChange={setDeviceRoomDraft}
+                              onValueChange={(value) => {
+                                setDeviceDetailsDraftDirty(true)
+                                setDeviceRoomDraft(value)
+                              }}
                               disabled={savingDeviceDetails}
                             >
                               <SelectTrigger id="device-room-input" className="bg-black/20">
@@ -3691,7 +3733,10 @@ export function DeviceDetailsDialog({
                             <Label>Type</Label>
                             <Select
                               value={normalizedDeviceTypeDraft}
-                              onValueChange={setDeviceTypeDraft}
+                              onValueChange={(value) => {
+                                setDeviceDetailsDraftDirty(true)
+                                setDeviceTypeDraft(value)
+                              }}
                               disabled={savingDeviceDetails}
                             >
                               <SelectTrigger className="bg-black/20">
