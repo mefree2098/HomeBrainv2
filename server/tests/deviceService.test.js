@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const mongoose = require('mongoose');
 
 const Device = require('../models/Device');
 const DeviceGroup = require('../models/DeviceGroup');
@@ -229,8 +230,9 @@ test('deleteDevice forgets native Zigbee devices from the coordinator', async (t
   });
 
   const deviceId = '507f1f77bcf86cd799439031';
+  const objectDeviceId = new mongoose.Types.ObjectId(deviceId);
   const deletedDevice = {
-    _id: deviceId,
+    _id: objectDeviceId,
     name: 'Front Door',
     properties: {
       source: 'homebrain-zigbee',
