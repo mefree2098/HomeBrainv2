@@ -342,22 +342,29 @@ export const runDeviceCatalogUpdate = async ({ force = true }: { force?: boolean
   }
 };
 
-export const getDirectRadioEngineLogs = async (limit = 200) => {
+export const getDirectRadioEngineLogs = async (
+  options: number | { limit?: number; protocol?: DirectRadioLogProtocol | 'all' } = 200
+) => {
   try {
+    const limit = typeof options === 'number' ? options : options.limit ?? 200;
+    const protocol = typeof options === 'number' ? undefined : options.protocol;
     const response = await api.get('/api/direct-radios/logs/latest', {
-      params: { limit }
+      params: {
+        limit,
+        ...(protocol && protocol !== 'all' ? { protocol } : {})
+      }
     });
-    return response.data as { success: boolean; logs: DirectRadioLogEntry[]; count: number };
+    return response.data as { success: boolean; logs: DirectRadioLogEntry[]; count: number; protocol?: DirectRadioLogProtocol | null };
   } catch (error) {
     console.error('Error fetching direct radio logs:', error);
     throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };
 
-export const clearDirectRadioEngineLogs = async () => {
+export const clearDirectRadioEngineLogs = async (protocol?: DirectRadioLogProtocol | 'all') => {
   try {
-    const response = await api.post('/api/direct-radios/logs/clear');
-    return response.data as { success: boolean; cleared: number };
+    const response = await api.post('/api/direct-radios/logs/clear', protocol && protocol !== 'all' ? { protocol } : {});
+    return response.data as { success: boolean; cleared: number; protocol?: DirectRadioLogProtocol | null };
   } catch (error) {
     console.error('Error clearing direct radio logs:', error);
     throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
@@ -365,7 +372,7 @@ export const clearDirectRadioEngineLogs = async () => {
 };
 
 export const openDirectRadioEngineLogStream = (
-  options: { limit?: number } = {},
+  options: { limit?: number; protocol?: DirectRadioLogProtocol | 'all' } = {},
   handlers: {
     onLog: (entry: DirectRadioLogEntry) => void;
     onReady?: () => void;
@@ -375,6 +382,9 @@ export const openDirectRadioEngineLogStream = (
   const params = new URLSearchParams();
   if (typeof options.limit === 'number' && options.limit > 0) {
     params.set('limit', String(options.limit));
+  }
+  if (options.protocol && options.protocol !== 'all') {
+    params.set('protocol', options.protocol);
   }
 
   const url = params.toString()
@@ -606,7 +616,16 @@ export const startZWaveExclusion = async (
       migrationId: options.migrationId,
       useNativeExclusion: options.useNativeExclusion === true
     });
-    return response.data;
+    return response.data as {
+      success: boolean;
+      result?: {
+        protocol?: DirectRadioProtocol;
+        mode?: 'exclusion' | string;
+        expiresAt?: string | null;
+        migration?: unknown;
+      };
+      status?: DirectRadioStatus;
+    };
   } catch (error) {
     console.error('Error starting Z-Wave exclusion:', error);
     throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);

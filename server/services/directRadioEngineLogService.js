@@ -32,6 +32,11 @@ function normalizeProtocol(value) {
   return ['zigbee', 'zwave', 'system'].includes(normalized) ? normalized : 'system';
 }
 
+function normalizeProtocolFilter(value) {
+  const normalized = trimString(value, null)?.toLowerCase();
+  return ['zigbee', 'zwave', 'system'].includes(normalized) ? normalized : null;
+}
+
 function normalizeDetails(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return {};
@@ -79,11 +84,23 @@ class DirectRadioEngineLogService extends EventEmitter {
     const limit = typeof options === 'number'
       ? parsePositiveInt(options, Math.min(200, this._limit), this._limit)
       : parsePositiveInt(options.limit, Math.min(200, this._limit), this._limit);
-    return this._entries.slice(-limit);
+    const protocol = typeof options === 'number' ? null : normalizeProtocolFilter(options.protocol);
+    const entries = protocol
+      ? this._entries.filter((entry) => entry.protocol === protocol)
+      : this._entries;
+    return entries.slice(-limit);
   }
 
-  reset() {
+  reset(options = {}) {
+    const protocol = normalizeProtocolFilter(options.protocol);
+    if (protocol) {
+      const previousCount = this._entries.length;
+      this._entries = this._entries.filter((entry) => entry.protocol !== protocol);
+      return previousCount - this._entries.length;
+    }
+    const cleared = this._entries.length;
     this._entries = [];
+    return cleared;
   }
 }
 

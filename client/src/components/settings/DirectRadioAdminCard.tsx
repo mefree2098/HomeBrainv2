@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react"
 import {
   Activity,
   AlertCircle,
@@ -36,6 +36,40 @@ import { cn } from "@/lib/utils"
 
 const MAX_LOGS = 1000
 const PAIRING_SECONDS = 180
+const DIRECT_RADIO_PROTOCOLS: DirectRadioProtocol[] = ["zigbee", "zwave"]
+
+type ProtocolAction = "pairing" | "exclusion" | "stop"
+type ProtocolLogMap = Record<DirectRadioProtocol, DirectRadioLogEntry[]>
+type ProtocolBooleanMap = Record<DirectRadioProtocol, boolean>
+type ZWaveExclusionSessionState = {
+  active: boolean
+  startedAt: number | null
+  expiresAt: string | null
+  excludedCount: number
+  excludedEventKeys: string[]
+}
+
+const emptyProtocolLogs = (): ProtocolLogMap => ({
+  zigbee: [],
+  zwave: []
+})
+
+const emptyProtocolBooleans = (): ProtocolBooleanMap => ({
+  zigbee: false,
+  zwave: false
+})
+
+const protocolLabel = (protocol: DirectRadioProtocol) => (
+  protocol === "zigbee" ? "Zigbee" : "Z-Wave"
+)
+
+const emptyZWaveExclusionSession = (): ZWaveExclusionSessionState => ({
+  active: false,
+  startedAt: null,
+  expiresAt: null,
+  excludedCount: 0,
+  excludedEventKeys: []
+})
 
 const toErrorMessage = (error: unknown, fallback: string) => {
   if (error instanceof Error && error.message) {
@@ -63,9 +97,33 @@ const formatTimestamp = (value?: string | null) => {
   return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })
 }
 
+const isFutureTimestamp = (value?: string | null) => {
+  if (!value) return false
+  const timestamp = new Date(value).getTime()
+  return Number.isFinite(timestamp) && timestamp > Date.now()
+}
+
 const formatPortLabel = (port?: DirectRadioSerialPort | null) => (
   port?.stablePath || port?.path || port?.rawPath || port?.realPath || "Not detected"
 )
+
+const getExclusionLogEventKey = (entry: DirectRadioLogEntry) => {
+  if (entry.protocol !== "zwave") {
+    return null
+  }
+  if (
+    entry.message !== "Z-Wave node removed"
+    && entry.message !== "Z-Wave exclusion verified by controller status"
+  ) {
+    return null
+  }
+
+  const nodeId = entry.details?.nodeId
+  const nodeKey = nodeId === undefined || nodeId === null || nodeId === ""
+    ? null
+    : `node:${String(nodeId)}`
+  return nodeKey || `event:${entry.id}`
+}
 
 const statusBadge = (controller: DirectRadioControllerStatus) => {
   if (controller.started && controller.degraded) {
@@ -78,12 +136,6 @@ const statusBadge = (controller: DirectRadioControllerStatus) => {
     return { label: "Detected", variant: "secondary" as const, icon: AlertCircle, className: "" }
   }
   return { label: "Offline", variant: "destructive" as const, icon: XCircle, className: "" }
-}
-
-const protocolTone = (protocol: DirectRadioLogEntry["protocol"]) => {
-  if (protocol === "zigbee") return "border-emerald-500/40 text-emerald-700 dark:text-emerald-200"
-  if (protocol === "zwave") return "border-sky-500/40 text-sky-700 dark:text-sky-200"
-  return "border-slate-400/40 text-slate-600 dark:text-slate-300"
 }
 
 const levelTone = (level: DirectRadioLogEntry["level"]) => {
@@ -212,16 +264,230 @@ function SerialPortRow({ port }: { port: DirectRadioSerialPort }) {
   )
 }
 
+function ProtocolSerialEndpoints({
+  protocol,
+  serialPorts
+}: {
+  protocol: DirectRadioProtocol
+  serialPorts: DirectRadioSerialPort[]
+}) {
+  const candidates = serialPorts.filter((port) => (
+    protocol === "zigbee"
+      ? port.likelyZigbee || port.preferredProtocol === "zigbee"
+      : port.likelyZWave || port.preferredProtocol === "zwave"
+  ))
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <h4 className="text-sm font-semibold">{protocolLabel(protocol)} Serial Endpoints</h4>
+        <Badge variant="outline">{candidates.length}</Badge>
+      </div>
+      {candidates.length > 0 ? (
+        <div className="max-h-48 space-y-2 overflow-auto pr-1">
+          {candidates.map((port, index) => (
+            <SerialPortRow key={`${protocol}-${port.path || port.rawPath || "port"}-${index}`} port={port} />
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-border/60 bg-background/45 px-4 py-5 text-sm text-muted-foreground">
+          No {protocolLabel(protocol)} serial endpoints are visible to HomeBrain right now.
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ProtocolLogPanel({
+  protocol,
+  logs,
+  loading,
+  streamConnected,
+  viewportRef,
+  runningAction,
+  onReplay,
+  onClear
+}: {
+  protocol: DirectRadioProtocol
+  logs: DirectRadioLogEntry[]
+  loading: boolean
+  streamConnected: boolean
+  viewportRef: RefObject<HTMLDivElement | null>
+  runningAction: string | null
+  onReplay: (protocol: DirectRadioProtocol) => void
+  onClear: (protocol: DirectRadioProtocol) => void
+}) {
+  const label = protocolLabel(protocol)
+  const lastLog = logs.length > 0 ? logs[logs.length - 1] : null
+  const clearKey = `${protocol}:clear`
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2">
+            <h4 className="text-sm font-semibold">{label} Log</h4>
+            <Badge variant={streamConnected ? "secondary" : "outline"} className="gap-1">
+              <Activity className={cn("h-3 w-3", streamConnected ? "text-emerald-500" : "text-muted-foreground")} />
+              {streamConnected ? "Live" : "Reconnecting"}
+            </Badge>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {lastLog ? `Last event ${formatTimestamp(lastLog.timestamp)}` : `Waiting for ${label} events`}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={() => onReplay(protocol)} disabled={loading}>
+            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+            Replay
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => onClear(protocol)} disabled={Boolean(runningAction)}>
+            {runningAction === clearKey ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
+            Clear
+          </Button>
+        </div>
+      </div>
+      <div ref={viewportRef} className="h-[300px] overflow-auto rounded-xl border border-slate-800 bg-slate-950 p-3 font-mono text-[11px] text-slate-100">
+        {logs.length > 0 ? (
+          <div className="space-y-2">
+            {logs.map((entry) => {
+              const details = renderDetails(entry.details)
+              return (
+                <div key={entry.id} className="border-b border-white/10 pb-2 last:border-b-0 last:pb-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-slate-400">{formatTimestamp(entry.timestamp)}</span>
+                    <span className={cn("uppercase", levelTone(entry.level))}>{entry.level}</span>
+                    {entry.operation ? <span className="text-slate-400">{entry.operation}</span> : null}
+                  </div>
+                  <p className={cn("mt-1 whitespace-pre-wrap", levelTone(entry.level))}>{entry.message}</p>
+                  {details ? <p className="mt-1 break-all text-slate-400">{details}</p> : null}
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <div className="flex h-full items-center justify-center text-center text-slate-400">
+            {label} logs will appear here.
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ZWaveExclusionSessionCounter({
+  controller,
+  session
+}: {
+  controller: DirectRadioControllerStatus
+  session: ZWaveExclusionSessionState
+}) {
+  const active = session.active || isFutureTimestamp(controller.exclusionUntil)
+
+  if (!active) {
+    return null
+  }
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2">
+      <div className="flex items-center gap-2 text-sm font-medium text-sky-900 dark:text-sky-100">
+        <XCircle className="h-4 w-4" />
+        Z-Wave exclusion open
+      </div>
+      <Badge className="bg-sky-600 text-white hover:bg-sky-600">
+        Excluded this session: {session.excludedCount}
+      </Badge>
+    </div>
+  )
+}
+
+function ProtocolRadioSection({
+  protocol,
+  controller,
+  serialPorts,
+  logs,
+  loadingLogs,
+  streamConnected,
+  zwaveExclusionSession,
+  viewportRef,
+  runningAction,
+  onRunAction,
+  onReplay,
+  onClear
+}: {
+  protocol: DirectRadioProtocol
+  controller: DirectRadioControllerStatus
+  serialPorts: DirectRadioSerialPort[]
+  logs: DirectRadioLogEntry[]
+  loadingLogs: boolean
+  streamConnected: boolean
+  zwaveExclusionSession?: ZWaveExclusionSessionState
+  viewportRef: RefObject<HTMLDivElement | null>
+  runningAction: string | null
+  onRunAction: (protocol: DirectRadioProtocol, action: ProtocolAction) => void
+  onReplay: (protocol: DirectRadioProtocol) => void
+  onClear: (protocol: DirectRadioProtocol) => void
+}) {
+  const label = protocolLabel(protocol)
+  const pairingKey = `${protocol}:pairing`
+  const exclusionKey = `${protocol}:exclusion`
+  const stopKey = `${protocol}:stop`
+
+  return (
+    <div className={cn(
+      "space-y-4 rounded-xl border p-4",
+      protocol === "zigbee"
+        ? "border-emerald-500/25 bg-emerald-500/[0.03]"
+        : "border-sky-500/25 bg-sky-500/[0.03]"
+    )}>
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" variant="outline" size="sm" onClick={() => onRunAction(protocol, "pairing")} disabled={Boolean(runningAction)}>
+          {runningAction === pairingKey ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : protocol === "zigbee" ? <Wifi className="mr-2 h-4 w-4" /> : <Play className="mr-2 h-4 w-4" />}
+          {protocol === "zigbee" ? "Open Permit Join" : "Open Inclusion"}
+        </Button>
+        {protocol === "zwave" ? (
+          <Button type="button" variant="outline" size="sm" onClick={() => onRunAction(protocol, "exclusion")} disabled={Boolean(runningAction)}>
+            {runningAction === exclusionKey ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <XCircle className="mr-2 h-4 w-4" />}
+            Open Exclusion
+          </Button>
+        ) : null}
+        <Button type="button" variant="outline" size="sm" onClick={() => onRunAction(protocol, "stop")} disabled={Boolean(runningAction)}>
+          {runningAction === stopKey ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <StopCircle className="mr-2 h-4 w-4" />}
+          Stop {label}
+        </Button>
+      </div>
+
+      {protocol === "zwave" && zwaveExclusionSession ? (
+        <ZWaveExclusionSessionCounter controller={controller} session={zwaveExclusionSession} />
+      ) : null}
+      <ControllerPanel protocol={protocol} controller={controller} />
+      <ProtocolSerialEndpoints protocol={protocol} serialPorts={serialPorts} />
+      <ProtocolLogPanel
+        protocol={protocol}
+        logs={logs}
+        loading={loadingLogs}
+        streamConnected={streamConnected}
+        viewportRef={viewportRef}
+        runningAction={runningAction}
+        onReplay={onReplay}
+        onClear={onClear}
+      />
+    </div>
+  )
+}
+
 export function DirectRadioAdminCard() {
   const { toast } = useToast()
   const [status, setStatus] = useState<DirectRadioStatus | null>(null)
-  const [logs, setLogs] = useState<DirectRadioLogEntry[]>([])
+  const [logsByProtocol, setLogsByProtocol] = useState<ProtocolLogMap>(() => emptyProtocolLogs())
   const [loadingStatus, setLoadingStatus] = useState(false)
-  const [loadingLogs, setLoadingLogs] = useState(false)
-  const [streamConnected, setStreamConnected] = useState(false)
-  const [runningAction, setRunningAction] = useState<"zigbee" | "zwave" | "exclusion" | "stop" | "clear" | null>(null)
+  const [loadingLogs, setLoadingLogs] = useState<ProtocolBooleanMap>(() => emptyProtocolBooleans())
+  const [streamConnected, setStreamConnected] = useState<ProtocolBooleanMap>(() => emptyProtocolBooleans())
+  const [runningAction, setRunningAction] = useState<string | null>(null)
   const [statusError, setStatusError] = useState<string | null>(null)
-  const logViewportRef = useRef<HTMLDivElement | null>(null)
+  const [zwaveExclusionSession, setZWaveExclusionSession] = useState<ZWaveExclusionSessionState>(() => emptyZWaveExclusionSession())
+  const zigbeeLogViewportRef = useRef<HTMLDivElement | null>(null)
+  const zwaveLogViewportRef = useRef<HTMLDivElement | null>(null)
 
   const loadStatus = useCallback(async ({ quiet = false }: { quiet?: boolean } = {}) => {
     if (!quiet) {
@@ -248,25 +514,28 @@ export function DirectRadioAdminCard() {
     }
   }, [toast])
 
-  const loadLogs = useCallback(async () => {
-    setLoadingLogs(true)
+  const loadLogs = useCallback(async (protocol: DirectRadioProtocol) => {
+    setLoadingLogs((current) => ({ ...current, [protocol]: true }))
     try {
-      const response = await getDirectRadioEngineLogs(MAX_LOGS)
-      setLogs(response.logs || [])
+      const response = await getDirectRadioEngineLogs({ limit: MAX_LOGS, protocol })
+      setLogsByProtocol((current) => ({ ...current, [protocol]: response.logs || [] }))
     } catch (error) {
+      const label = protocolLabel(protocol)
       toast({
-        title: "Radio logs unavailable",
-        description: toErrorMessage(error, "Unable to load Zigbee/Z-Wave logs."),
+        title: `${label} logs unavailable`,
+        description: toErrorMessage(error, `Unable to load ${label} logs.`),
         variant: "destructive"
       })
     } finally {
-      setLoadingLogs(false)
+      setLoadingLogs((current) => ({ ...current, [protocol]: false }))
     }
   }, [toast])
 
   useEffect(() => {
     void loadStatus()
-    void loadLogs()
+    DIRECT_RADIO_PROTOCOLS.forEach((protocol) => {
+      void loadLogs(protocol)
+    })
   }, [loadLogs, loadStatus])
 
   useEffect(() => {
@@ -277,56 +546,113 @@ export function DirectRadioAdminCard() {
   }, [loadStatus])
 
   useEffect(() => {
-    const closeStream = openDirectRadioEngineLogStream(
-      { limit: MAX_LOGS },
-      {
-        onLog: (entry) => {
-          setLogs((current) => mergeLogs(current, [entry]))
-        },
-        onReady: () => setStreamConnected(true),
-        onError: () => setStreamConnected(false)
-      }
-    )
+    const closeStreams = DIRECT_RADIO_PROTOCOLS.map((protocol) => (
+      openDirectRadioEngineLogStream(
+        { limit: MAX_LOGS, protocol },
+        {
+          onLog: (entry) => {
+            setLogsByProtocol((current) => ({
+              ...current,
+              [protocol]: mergeLogs(current[protocol], [entry])
+            }))
+            if (protocol === "zwave") {
+              const eventKey = getExclusionLogEventKey(entry)
+              if (eventKey) {
+                const timestamp = new Date(entry.timestamp).getTime()
+                setZWaveExclusionSession((current) => {
+                  if (!current.active || !current.startedAt || timestamp < current.startedAt) {
+                    return current
+                  }
+                  if (current.excludedEventKeys.includes(eventKey)) {
+                    return current
+                  }
+                  return {
+                    ...current,
+                    excludedCount: current.excludedCount + 1,
+                    excludedEventKeys: [...current.excludedEventKeys, eventKey].slice(-50)
+                  }
+                })
+              }
+            }
+          },
+          onReady: () => setStreamConnected((current) => ({ ...current, [protocol]: true })),
+          onError: () => setStreamConnected((current) => ({ ...current, [protocol]: false }))
+        }
+      )
+    ))
 
-    return () => closeStream()
+    return () => closeStreams.forEach((closeStream) => closeStream())
   }, [])
 
   useEffect(() => {
-    const viewport = logViewportRef.current
-    if (!viewport) return
-    const distanceFromBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
-    if (distanceFromBottom < 160 || viewport.scrollTop === 0) {
-      viewport.scrollTop = viewport.scrollHeight
+    const scrollViewport = (viewport: HTMLDivElement | null) => {
+      if (!viewport) return
+      const distanceFromBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
+      if (distanceFromBottom < 160 || viewport.scrollTop === 0) {
+        viewport.scrollTop = viewport.scrollHeight
+      }
     }
-  }, [logs])
+    scrollViewport(zigbeeLogViewportRef.current)
+    scrollViewport(zwaveLogViewportRef.current)
+  }, [logsByProtocol])
 
-  const runRadioAction = useCallback(async (action: "zigbee" | "zwave" | "exclusion" | "stop") => {
-    setRunningAction(action)
+  useEffect(() => {
+    const exclusionUntil = status?.controllers?.zwave?.exclusionUntil || null
+    setZWaveExclusionSession((current) => {
+      if (isFutureTimestamp(exclusionUntil)) {
+        if (current.active) {
+          return current.expiresAt === exclusionUntil ? current : { ...current, expiresAt: exclusionUntil }
+        }
+        return {
+          active: true,
+          startedAt: Date.now(),
+          expiresAt: exclusionUntil,
+          excludedCount: 0,
+          excludedEventKeys: []
+        }
+      }
+      return current.active ? emptyZWaveExclusionSession() : current
+    })
+  }, [status?.controllers?.zwave?.exclusionUntil])
+
+  const runRadioAction = useCallback(async (protocol: DirectRadioProtocol, action: ProtocolAction) => {
+    const actionKey = `${protocol}:${action}`
+    const label = protocolLabel(protocol)
+    setRunningAction(actionKey)
     try {
-      if (action === "zigbee") {
-        await startDirectRadioPairing({ protocol: "zigbee", durationSeconds: PAIRING_SECONDS })
-      } else if (action === "zwave") {
-        await startDirectRadioPairing({ protocol: "zwave", durationSeconds: PAIRING_SECONDS })
+      if (action === "pairing") {
+        await startDirectRadioPairing({ protocol, durationSeconds: PAIRING_SECONDS })
       } else if (action === "exclusion") {
-        await startZWaveExclusion(PAIRING_SECONDS)
+        const response = await startZWaveExclusion(PAIRING_SECONDS)
+        setZWaveExclusionSession({
+          active: true,
+          startedAt: Date.now(),
+          expiresAt: response.result?.expiresAt ?? null,
+          excludedCount: 0,
+          excludedEventKeys: []
+        })
       } else {
-        await stopDirectRadioPairing("all")
+        await stopDirectRadioPairing(protocol)
+        if (protocol === "zwave") {
+          setZWaveExclusionSession(emptyZWaveExclusionSession())
+        }
+      }
+      if (protocol === "zwave" && action === "pairing") {
+        setZWaveExclusionSession(emptyZWaveExclusionSession())
       }
       await loadStatus({ quiet: true })
       toast({
-        title: action === "stop" ? "Pairing windows closed" : "Radio window opened",
-        description: action === "zigbee"
-          ? "Zigbee permit-join is open."
-          : action === "zwave"
-            ? "Z-Wave inclusion is open."
-            : action === "exclusion"
-              ? "Z-Wave exclusion is open."
-              : "Zigbee and Z-Wave pairing windows were closed."
+        title: action === "stop" ? `${label} window closed` : `${label} window opened`,
+        description: action === "pairing"
+          ? (protocol === "zigbee" ? "Zigbee permit-join is open." : "Z-Wave inclusion is open.")
+          : action === "exclusion"
+            ? "Z-Wave exclusion is open."
+            : `${label} pairing window was closed.`
       })
     } catch (error) {
       toast({
-        title: "Radio action failed",
-        description: toErrorMessage(error, "Unable to complete the direct-radio action."),
+        title: `${label} action failed`,
+        description: toErrorMessage(error, `Unable to complete the ${label} action.`),
         variant: "destructive"
       })
     } finally {
@@ -334,19 +660,21 @@ export function DirectRadioAdminCard() {
     }
   }, [loadStatus, toast])
 
-  const clearLogs = useCallback(async () => {
-    setRunningAction("clear")
+  const clearLogs = useCallback(async (protocol: DirectRadioProtocol) => {
+    const actionKey = `${protocol}:clear`
+    const label = protocolLabel(protocol)
+    setRunningAction(actionKey)
     try {
-      const response = await clearDirectRadioEngineLogs()
-      setLogs([])
+      const response = await clearDirectRadioEngineLogs(protocol)
+      setLogsByProtocol((current) => ({ ...current, [protocol]: [] }))
       toast({
-        title: "Radio logs cleared",
-        description: `Cleared ${response.cleared ?? 0} buffered direct-radio log entr${response.cleared === 1 ? "y" : "ies"}.`
+        title: `${label} logs cleared`,
+        description: `Cleared ${response.cleared ?? 0} buffered ${label} log entr${response.cleared === 1 ? "y" : "ies"}.`
       })
     } catch (error) {
       toast({
-        title: "Clear failed",
-        description: toErrorMessage(error, "Unable to clear direct-radio logs."),
+        title: `${label} clear failed`,
+        description: toErrorMessage(error, `Unable to clear ${label} logs.`),
         variant: "destructive"
       })
     } finally {
@@ -354,7 +682,6 @@ export function DirectRadioAdminCard() {
     }
   }, [toast])
 
-  const lastLog = logs.length > 0 ? logs[logs.length - 1] : null
   const serialPorts = status?.serialPorts || []
   const likelyPorts = useMemo(() => (
     serialPorts.filter((port) => port.likelyZigbee || port.likelyZWave)
@@ -367,17 +694,19 @@ export function DirectRadioAdminCard() {
           <div>
             <CardTitle className="flex items-center gap-2">
               <Usb className="h-5 w-5 text-cyan-600" />
-              Zigbee and Z-Wave Radios
+              Native Radio Controllers
             </CardTitle>
             <p className="mt-2 text-sm text-muted-foreground">
-              Native USB controller health, pairing windows, detected serial adapters, and live engine logging.
+              Zigbee and Z-Wave controller health, pairing windows, detected serial adapters, and protocol-specific logging.
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Badge variant={streamConnected ? "secondary" : "outline"} className="gap-1">
-              <Activity className={cn("h-3 w-3", streamConnected ? "text-emerald-500" : "text-muted-foreground")} />
-              {streamConnected ? "Logs live" : "Logs reconnecting"}
-            </Badge>
+            {DIRECT_RADIO_PROTOCOLS.map((protocol) => (
+              <Badge key={protocol} variant={streamConnected[protocol] ? "secondary" : "outline"} className="gap-1">
+                <Activity className={cn("h-3 w-3", streamConnected[protocol] ? "text-emerald-500" : "text-muted-foreground")} />
+                {protocolLabel(protocol)} {streamConnected[protocol] ? "live" : "reconnecting"}
+              </Badge>
+            ))}
             <Badge variant={status?.enabled === false ? "destructive" : "secondary"}>
               {status?.enabled === false ? "Disabled" : `${likelyPorts.length}/${serialPorts.length} likely radios`}
             </Badge>
@@ -388,26 +717,6 @@ export function DirectRadioAdminCard() {
           <Button type="button" variant="outline" size="sm" onClick={() => void loadStatus()} disabled={loadingStatus}>
             {loadingStatus ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
             Refresh Radios
-          </Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => void runRadioAction("zigbee")} disabled={Boolean(runningAction)}>
-            {runningAction === "zigbee" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wifi className="mr-2 h-4 w-4" />}
-            Zigbee Pairing
-          </Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => void runRadioAction("zwave")} disabled={Boolean(runningAction)}>
-            {runningAction === "zwave" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
-            Z-Wave Inclusion
-          </Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => void runRadioAction("exclusion")} disabled={Boolean(runningAction)}>
-            {runningAction === "exclusion" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <XCircle className="mr-2 h-4 w-4" />}
-            Z-Wave Exclusion
-          </Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => void runRadioAction("stop")} disabled={Boolean(runningAction)}>
-            {runningAction === "stop" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <StopCircle className="mr-2 h-4 w-4" />}
-            Stop Pairing
-          </Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => void clearLogs()} disabled={Boolean(runningAction)}>
-            {runningAction === "clear" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
-            Clear Logs
           </Button>
         </div>
       </CardHeader>
@@ -421,70 +730,35 @@ export function DirectRadioAdminCard() {
 
         {status ? (
           <div className="grid gap-4 xl:grid-cols-2">
-            <ControllerPanel protocol="zigbee" controller={status.controllers.zigbee} />
-            <ControllerPanel protocol="zwave" controller={status.controllers.zwave} />
+            <ProtocolRadioSection
+              protocol="zigbee"
+              controller={status.controllers.zigbee}
+              serialPorts={serialPorts}
+              logs={logsByProtocol.zigbee}
+              loadingLogs={loadingLogs.zigbee}
+              streamConnected={streamConnected.zigbee}
+              viewportRef={zigbeeLogViewportRef}
+              runningAction={runningAction}
+              onRunAction={runRadioAction}
+              onReplay={(protocol) => void loadLogs(protocol)}
+              onClear={(protocol) => void clearLogs(protocol)}
+            />
+            <ProtocolRadioSection
+              protocol="zwave"
+              controller={status.controllers.zwave}
+              serialPorts={serialPorts}
+              logs={logsByProtocol.zwave}
+              loadingLogs={loadingLogs.zwave}
+              streamConnected={streamConnected.zwave}
+              zwaveExclusionSession={zwaveExclusionSession}
+              viewportRef={zwaveLogViewportRef}
+              runningAction={runningAction}
+              onRunAction={runRadioAction}
+              onReplay={(protocol) => void loadLogs(protocol)}
+              onClear={(protocol) => void clearLogs(protocol)}
+            />
           </div>
         ) : null}
-
-        <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
-          <div className="space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <h4 className="text-sm font-semibold">Detected Serial Endpoints</h4>
-              <Badge variant="outline">{serialPorts.length}</Badge>
-            </div>
-            {serialPorts.length > 0 ? (
-              <div className="max-h-[340px] space-y-2 overflow-auto pr-1">
-                {serialPorts.map((port, index) => (
-                  <SerialPortRow key={`${port.path || port.rawPath || "port"}-${index}`} port={port} />
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-xl border border-border/60 bg-background/45 px-4 py-5 text-sm text-muted-foreground">
-                No serial endpoints are visible to HomeBrain right now.
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h4 className="text-sm font-semibold">Live Radio Log</h4>
-                <p className="text-xs text-muted-foreground">
-                  {lastLog ? `Last event ${formatTimestamp(lastLog.timestamp)}` : "Waiting for direct-radio events"}
-                </p>
-              </div>
-              <Button type="button" variant="outline" size="sm" onClick={() => void loadLogs()} disabled={loadingLogs}>
-                {loadingLogs ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-                Replay
-              </Button>
-            </div>
-            <div ref={logViewportRef} className="h-[340px] overflow-auto rounded-xl border border-slate-800 bg-slate-950 p-3 font-mono text-[11px] text-slate-100">
-              {logs.length > 0 ? (
-                <div className="space-y-2">
-                  {logs.map((entry) => {
-                    const details = renderDetails(entry.details)
-                    return (
-                      <div key={entry.id} className="border-b border-white/10 pb-2 last:border-b-0 last:pb-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-slate-400">{formatTimestamp(entry.timestamp)}</span>
-                          <span className={cn("rounded-full border px-2 py-0.5 uppercase", protocolTone(entry.protocol))}>{entry.protocol}</span>
-                          <span className={cn("uppercase", levelTone(entry.level))}>{entry.level}</span>
-                          {entry.operation ? <span className="text-slate-400">{entry.operation}</span> : null}
-                        </div>
-                        <p className={cn("mt-1 whitespace-pre-wrap", levelTone(entry.level))}>{entry.message}</p>
-                        {details ? <p className="mt-1 break-all text-slate-400">{details}</p> : null}
-                      </div>
-                    )
-                  })}
-                </div>
-              ) : (
-                <div className="flex h-full items-center justify-center text-center text-slate-400">
-                  Direct-radio logs will appear here as HomeBrain scans adapters, opens pairing windows, receives device events, or sends commands.
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
       </CardContent>
     </Card>
   )

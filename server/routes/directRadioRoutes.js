@@ -40,6 +40,11 @@ function parsePositiveInt(value, fallback, maximum = 1000) {
   return Math.min(maximum, numeric);
 }
 
+function normalizeLogProtocol(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return ['zigbee', 'zwave', 'system'].includes(normalized) ? normalized : null;
+}
+
 function catalogOptions(req) {
   return {
     q: req.query.q || req.query.query,
@@ -237,24 +242,27 @@ router.post('/catalog/update/run', async (req, res) => {
 router.get('/logs/latest', async (req, res) => {
   try {
     const limit = parsePositiveInt(req.query.limit, 200, DIRECT_RADIO_LOG_REPLAY_LIMIT);
-    const logs = directRadioEngineLogService.latest({ limit });
+    const protocol = normalizeLogProtocol(req.query.protocol);
+    const logs = directRadioEngineLogService.latest({ limit, protocol });
     res.status(200).json({
       success: true,
       logs,
-      count: logs.length
+      count: logs.length,
+      protocol
     });
   } catch (error) {
     sendError(res, error, 'Failed to get direct radio logs');
   }
 });
 
-router.post('/logs/clear', async (_req, res) => {
+router.post('/logs/clear', async (req, res) => {
   try {
-    const cleared = directRadioEngineLogService.latest({ limit: DIRECT_RADIO_LOG_REPLAY_LIMIT }).length;
-    directRadioEngineLogService.reset();
+    const protocol = normalizeLogProtocol(req.body?.protocol || req.query.protocol);
+    const cleared = directRadioEngineLogService.reset({ protocol });
     res.status(200).json({
       success: true,
-      cleared
+      cleared,
+      protocol
     });
   } catch (error) {
     sendError(res, error, 'Failed to clear direct radio logs');
@@ -263,6 +271,7 @@ router.post('/logs/clear', async (_req, res) => {
 
 router.get('/logs/stream', async (req, res) => {
   const limit = parsePositiveInt(req.query.limit, 200, DIRECT_RADIO_LOG_REPLAY_LIMIT);
+  const protocol = normalizeLogProtocol(req.query.protocol);
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -281,13 +290,13 @@ router.get('/logs/stream', async (req, res) => {
   };
 
   try {
-    directRadioEngineLogService.latest({ limit }).forEach(writeLog);
+    directRadioEngineLogService.latest({ limit, protocol }).forEach(writeLog);
   } catch (error) {
     console.error('GET /api/direct-radios/logs/stream - Failed initial replay:', error.message);
   }
 
   res.write('event: ready\n');
-  res.write(`data: ${JSON.stringify({ connectedAt: new Date().toISOString() })}\n\n`);
+  res.write(`data: ${JSON.stringify({ connectedAt: new Date().toISOString(), protocol })}\n\n`);
 
   const heartbeat = setInterval(() => {
     try {
@@ -297,7 +306,11 @@ router.get('/logs/stream', async (req, res) => {
     }
   }, DIRECT_RADIO_LOG_HEARTBEAT_MS);
 
-  const listener = (entry) => writeLog(entry);
+  const listener = (entry) => {
+    if (!protocol || entry.protocol === protocol) {
+      writeLog(entry);
+    }
+  };
   directRadioEngineLogService.on('log', listener);
 
   let closed = false;
