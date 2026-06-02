@@ -1130,6 +1130,8 @@ async getStatus() {
   },
 
 async shutdown() {
+    const startedAt = Date.now();
+    console.log('DirectRadioService: Shutdown started');
     if (this.hardwareMonitorTimer) {
       clearInterval(this.hardwareMonitorTimer);
       this.hardwareMonitorTimer = null;
@@ -1138,18 +1140,24 @@ async shutdown() {
     if (this.zigbee.controller) {
       try {
         await this.zigbee.controller.stop();
+        console.log('DirectRadioService: Zigbee controller stopped');
       } catch (error) {
         console.warn(`DirectRadioService: Failed to stop Zigbee controller: ${error.message}`);
       }
+      this.zigbee.controller = null;
     }
     if (this.zwave.driver) {
       try {
+        const zwaveStartedAt = Date.now();
         await this.zwave.driver.destroy();
+        console.log(`DirectRadioService: Z-Wave driver destroyed in ${Date.now() - zwaveStartedAt}ms`);
       } catch (error) {
         console.warn(`DirectRadioService: Failed to destroy Z-Wave driver: ${error.message}`);
       }
+      this.zwave.driver = null;
     }
     this.zigbee.started = false;
     this.zwave.started = false;
+    console.log(`DirectRadioService: Shutdown finished in ${Date.now() - startedAt}ms`);
   }
 };

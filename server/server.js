@@ -778,6 +778,12 @@ async function gracefulShutdown(signal) {
   }
 
   try {
+    await directRadioService.shutdown();
+  } catch (error) {
+    console.error('Error stopping direct radio service:', error.message);
+  }
+
+  try {
     discoveryService.stop();
   } catch (error) {
     console.error('Error stopping discovery service:', error.message);
@@ -805,12 +811,6 @@ async function gracefulShutdown(signal) {
     await platformUpdateMonitorService.stop({ disconnectInsteon: true });
   } catch (error) {
     console.error('Error stopping platform update monitor service:', error.message);
-  }
-
-  try {
-    await directRadioService.shutdown();
-  } catch (error) {
-    console.error('Error stopping direct radio service:', error.message);
   }
 
   try {

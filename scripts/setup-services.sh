@@ -284,7 +284,7 @@ get_homebrain_service_state() {
 
 stop_homebrain_service() {
   local reason="${1:-Stopping HomeBrain...}"
-  local wait_seconds="${2:-15}"
+  local wait_seconds="${2:-90}"
   local elapsed=0
   local state=""
 
@@ -530,7 +530,7 @@ Environment=HOMEBRAIN_PORT=${HOMEBRAIN_PORT}
 ExecStart=${HOMEBRAIN_DIR}/scripts/run-homebrain-server-with-modern-node.sh
 Restart=always
 RestartSec=10
-TimeoutStopSec=15s
+TimeoutStopSec=90s
 # HomeBrain may own long-lived child services, such as managed Ollama.
 # Restart only the Node process so those children survive deploy restarts.
 KillMode=process
@@ -572,7 +572,7 @@ Environment="HOMEBRAIN_SERVICE_NAME=${SERVICE_NAME}"
 Environment="HOMEBRAIN_DIR=${HOMEBRAIN_DIR}"
 ExecStart=${RESTART_HELPER_INSTALL_PATH}
 KillMode=process
-TimeoutStartSec=45s
+TimeoutStartSec=120s
 
 [Install]
 WantedBy=multi-user.target

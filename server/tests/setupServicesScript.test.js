@@ -57,6 +57,16 @@ test('restart helper stops legacy standalone discovery before starting HomeBrain
   assert.match(script, /stop_legacy_discovery_service\s*\nstop_homebrain_service/);
 });
 
+test('service helpers allow Z-Wave cache shutdown to finish before forced restart', () => {
+  const setupScript = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
+  const restartHelper = fs.readFileSync(path.join(repoRoot, 'scripts', 'restart-homebrain-service.sh'), 'utf8');
+
+  assert.match(setupScript, /local wait_seconds="\$\{2:-90\}"/);
+  assert.match(setupScript, /TimeoutStopSec=90s/);
+  assert.match(setupScript, /TimeoutStartSec=120s/);
+  assert.match(restartHelper, /WAIT_SECONDS="\$\{HOMEBRAIN_RESTART_WAIT_SECONDS:-90\}"/);
+});
+
 test('setup-services installs smbclient for SMB disaster recovery backups', () => {
   const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
 
