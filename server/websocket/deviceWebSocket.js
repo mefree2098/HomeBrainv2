@@ -155,6 +155,42 @@ class DeviceWebSocket {
       }
     });
   }
+
+  stop() {
+    this.stopHeartbeat();
+
+    if (this.upgradeHandlers.length > 0) {
+      this.upgradeHandlers.forEach(({ server, upgradeHandler }) => {
+        if (typeof server.off === 'function') {
+          server.off('upgrade', upgradeHandler);
+        } else {
+          server.removeListener('upgrade', upgradeHandler);
+        }
+      });
+      this.upgradeHandlers = [];
+    }
+
+    if (!this.wss) {
+      return;
+    }
+
+    this.wss.clients.forEach((socket) => {
+      try {
+        socket.close(1001, 'HomeBrain is shutting down');
+      } catch (_error) {
+        socket.terminate();
+      }
+      setTimeout(() => {
+        if (socket.readyState !== WebSocket.CLOSED) {
+          socket.terminate();
+        }
+      }, 1000).unref?.();
+    });
+
+    this.wss.close();
+    this.wss = null;
+    console.log('DeviceWebSocket: server stopped');
+  }
 }
 
 module.exports = new DeviceWebSocket();

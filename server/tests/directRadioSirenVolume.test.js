@@ -77,6 +77,37 @@ test('Z-Wave driver uses fast persistent cache writes by default', async (t) => 
   assert.match(capturedOptions.storage.lockDir, /zwave[\\/]locks$/);
 });
 
+test('direct radio shutdown closes Z-Wave driver before Zigbee controller', async () => {
+  const service = new DirectRadioService();
+  const calls = [];
+
+  service.stopPairing = async () => {
+    calls.push('pairing');
+  };
+
+  service.zwave.driver = {
+    destroy: async () => {
+      calls.push('zwave');
+    }
+  };
+  service.zwave.started = true;
+
+  service.zigbee.controller = {
+    stop: async () => {
+      calls.push('zigbee');
+    }
+  };
+  service.zigbee.started = true;
+
+  await service.shutdown();
+
+  assert.deepEqual(calls, ['pairing', 'zwave', 'zigbee']);
+  assert.equal(service.zwave.driver, null);
+  assert.equal(service.zigbee.controller, null);
+  assert.equal(service.zwave.started, false);
+  assert.equal(service.zigbee.started, false);
+});
+
 function sirenVolumeCatalogParameter(overrides = {}) {
   return {
     parameter: 37,

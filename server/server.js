@@ -109,6 +109,10 @@ const fs = require("fs");
 const path = require("path");
 const SMARTTHINGS_STARTUP_BOOTSTRAP_DELAY_MS = Math.max(0, Number(process.env.SMARTTHINGS_STARTUP_BOOTSTRAP_DELAY_MS || 5000));
 const AXIOM_STARTUP_SYNC_DELAY_MS = Math.max(0, Number(process.env.AXIOM_STARTUP_SYNC_DELAY_MS || 7000));
+const SHUTDOWN_STEP_TIMEOUT_MS = Math.max(1000, Number(process.env.HOMEBRAIN_SHUTDOWN_STEP_TIMEOUT_MS || 15000));
+const DIRECT_RADIO_SHUTDOWN_TIMEOUT_MS = Math.max(5000, Number(process.env.HOMEBRAIN_DIRECT_RADIO_SHUTDOWN_TIMEOUT_MS || 70000));
+const HTTP_CLOSE_GRACE_MS = Math.max(250, Number(process.env.HOMEBRAIN_HTTP_CLOSE_GRACE_MS || 3000));
+const HTTP_CLOSE_TIMEOUT_MS = Math.max(1000, Number(process.env.HOMEBRAIN_HTTP_CLOSE_TIMEOUT_MS || 8000));
 let isShuttingDown = false;
 
 function envFlagEnabled(value, fallback = true) {
@@ -240,19 +244,76 @@ function getContentSecurityPolicy(req = null) {
   ].join('; ');
 }
 
+async function runShutdownStep(name, task, timeoutMs = SHUTDOWN_STEP_TIMEOUT_MS) {
+  const startedAt = Date.now();
+  let timeoutHandle = null;
+  console.log(`Shutdown step started: ${name}`);
+  try {
+    await Promise.race([
+      Promise.resolve().then(task),
+      new Promise((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(`${name} did not finish within ${timeoutMs}ms`));
+        }, timeoutMs);
+        if (typeof timeoutHandle.unref === 'function') {
+          timeoutHandle.unref();
+        }
+      })
+    ]);
+    console.log(`Shutdown step finished: ${name} (${Date.now() - startedAt}ms)`);
+  } catch (error) {
+    console.error(`Shutdown step failed: ${name}: ${error.message}`);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
+
 function closeServer(server, name) {
   return new Promise((resolve) => {
     if (!server || typeof server.close !== 'function' || !server.listening) {
       return resolve();
     }
 
-    server.close((error) => {
+    let settled = false;
+    const finish = (error = null) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(forceTimer);
+      clearTimeout(timeoutTimer);
       if (error) {
         console.error(`Error stopping ${name}: ${error.message}`);
       } else {
         console.log(`${name} stopped`);
       }
       resolve();
+    };
+
+    const forceTimer = setTimeout(() => {
+      if (typeof server.closeIdleConnections === 'function') {
+        server.closeIdleConnections();
+      }
+      if (typeof server.closeAllConnections === 'function') {
+        console.warn(`${name} still has open connections after ${HTTP_CLOSE_GRACE_MS}ms; closing remaining HTTP connections`);
+        server.closeAllConnections();
+      }
+    }, HTTP_CLOSE_GRACE_MS);
+    if (typeof forceTimer.unref === 'function') {
+      forceTimer.unref();
+    }
+
+    const timeoutTimer = setTimeout(() => {
+      finish(new Error(`Timed out waiting ${HTTP_CLOSE_TIMEOUT_MS}ms for ${name} to stop`));
+    }, HTTP_CLOSE_TIMEOUT_MS);
+    if (typeof timeoutTimer.unref === 'function') {
+      timeoutTimer.unref();
+    }
+
+    server.close((error) => {
+      finish(error || null);
     });
   });
 }
@@ -771,133 +832,44 @@ async function gracefulShutdown(signal) {
 
   console.log(`Received ${signal}, shutting down gracefully`);
 
-  try {
-    voiceWsServer.stop();
-  } catch (error) {
-    console.error('Error stopping voice WebSocket server:', error.message);
-  }
-
-  try {
-    await directRadioService.shutdown();
-  } catch (error) {
-    console.error('Error stopping direct radio service:', error.message);
-  }
-
-  try {
-    discoveryService.stop();
-  } catch (error) {
-    console.error('Error stopping discovery service:', error.message);
-  }
-
-  try {
-    automationSchedulerService.stop();
-  } catch (error) {
-    console.error('Error stopping automation scheduler service:', error.message);
-  }
-
-  try {
-    deviceRestartService.stop();
-  } catch (error) {
-    console.error('Error stopping device restart scheduler:', error.message);
-  }
-
-  try {
-    smbBackupSchedulerService.stop();
-  } catch (error) {
-    console.error('Error stopping SMB backup scheduler:', error.message);
-  }
-
-  try {
-    await platformUpdateMonitorService.stop({ disconnectInsteon: true });
-  } catch (error) {
-    console.error('Error stopping platform update monitor service:', error.message);
-  }
-
-  try {
-    await matterService.shutdown();
-  } catch (error) {
-    console.error('Error stopping Matter service:', error.message);
-  }
-
-  try {
-    deviceLibraryUpdateService.stop();
-  } catch (error) {
-    console.error('Error stopping device library update service:', error.message);
-  }
+  await runShutdownStep('voice websocket server', () => voiceWsServer.stop());
+  await runShutdownStep('device websocket server', () => deviceWebSocket.stop());
+  await runShutdownStep('direct radio service', () => directRadioService.shutdown(), DIRECT_RADIO_SHUTDOWN_TIMEOUT_MS);
+  await runShutdownStep('discovery service', () => discoveryService.stop());
+  await runShutdownStep('automation scheduler service', () => automationSchedulerService.stop());
+  await runShutdownStep('device restart scheduler', () => deviceRestartService.stop());
+  await runShutdownStep('SMB backup scheduler', () => smbBackupSchedulerService.stop());
+  await runShutdownStep('platform update monitor service', () => platformUpdateMonitorService.stop({ disconnectInsteon: true }));
+  await runShutdownStep('Matter service', () => matterService.shutdown());
+  await runShutdownStep('device library update service', () => deviceLibraryUpdateService.stop());
 
   console.log('Preserving running automation executions for resume after restart');
 
-  try {
-    await whisperService.stopService();
-    } catch (error) {
-      console.error('Error stopping Whisper service:', error.message);
+  await runShutdownStep('Whisper service', () => whisperService.stopService());
+  await runShutdownStep('Alexa broker service', () => alexaBrokerService.stopService({
+    preserveResumeAfterHostRestart: true,
+    manual: false,
+    actor: 'system:shutdown',
+    source: 'server_shutdown',
+    reason: 'HomeBrain is shutting down'
+  }));
+  await runShutdownStep('SmartThings subscription task', () => {
+    if (typeof smartThingsService.stopSubscriptionRenewalTask === 'function') {
+      smartThingsService.stopSubscriptionRenewalTask();
     }
-
-    try {
-      await alexaBrokerService.stopService({
-        preserveResumeAfterHostRestart: true,
-        manual: false,
-        actor: 'system:shutdown',
-        source: 'server_shutdown',
-        reason: 'HomeBrain is shutting down'
-      });
-    } catch (error) {
-      console.error('Error stopping Alexa broker service:', error.message);
+  });
+  await runShutdownStep('Ecobee status sync task', () => {
+    if (typeof ecobeeService.stopDeviceStatusSync === 'function') {
+      ecobeeService.stopDeviceStatusSync();
     }
-
-    try {
-      if (typeof smartThingsService.stopSubscriptionRenewalTask === 'function') {
-        smartThingsService.stopSubscriptionRenewalTask();
-      }
-    } catch (error) {
-      console.error('Error stopping SmartThings subscription task:', error.message);
-    }
-
-    try {
-      if (typeof ecobeeService.stopDeviceStatusSync === 'function') {
-        ecobeeService.stopDeviceStatusSync();
-      }
-    } catch (error) {
-      console.error('Error stopping Ecobee status sync task:', error.message);
-    }
-
-    try {
-      await tempestService.shutdown();
-    } catch (error) {
-      console.error('Error stopping Tempest service:', error.message);
-    }
-
-    try {
-      await goveeAirQualityService.shutdown();
-    } catch (error) {
-      console.error('Error stopping Govee Indoor Air service:', error.message);
-    }
-
-    try {
-      await rainMachineService.shutdown();
-    } catch (error) {
-      console.error('Error stopping RainMachine service:', error.message);
-    }
-
-    try {
-      await senseService.shutdown();
-    } catch (error) {
-      console.error('Error stopping Sense service:', error.message);
-    }
-
-    try {
-      telemetryService.shutdown();
-    } catch (error) {
-      console.error('Error stopping telemetry listeners:', error.message);
-    }
-
-    try {
-      await shutdownCodexCliService();
-    } catch (error) {
-      console.error('Error stopping Codex CLI sessions:', error.message);
-    }
-
-  await closeServer(httpServer, 'HTTP server');
+  });
+  await runShutdownStep('Tempest service', () => tempestService.shutdown());
+  await runShutdownStep('Govee Indoor Air service', () => goveeAirQualityService.shutdown());
+  await runShutdownStep('RainMachine service', () => rainMachineService.shutdown());
+  await runShutdownStep('Sense service', () => senseService.shutdown());
+  await runShutdownStep('telemetry listeners', () => telemetryService.shutdown());
+  await runShutdownStep('Codex CLI sessions', () => shutdownCodexCliService());
+  await runShutdownStep('HTTP server', () => closeServer(httpServer, 'HTTP server'), HTTP_CLOSE_TIMEOUT_MS + 1000);
 
   process.exit(0);
 }
