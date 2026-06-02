@@ -284,6 +284,96 @@ test('direct radio refresh preserves known-good Z-Wave siren runtime during gene
   assert.equal(merged.properties.supportsSirenSound, true);
 });
 
+test('direct radio refresh preserves known-good Z-Wave siren runtime during startup dead sync', () => {
+  const existing = {
+    name: 'Kitchen Siren',
+    type: 'siren',
+    room: 'Upstairs',
+    status: false,
+    isOnline: true,
+    brand: 'AEON Labs',
+    model: 'ZW080',
+    properties: {
+      source: 'homebrain-zwave',
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: 14,
+        manufacturerId: 134,
+        productType: 260,
+        productId: 80,
+        ready: true,
+        status: 4,
+        interviewStage: '5',
+        isListening: true,
+        catalog: {
+          manufacturer: 'AEON Labs',
+          label: 'ZW080'
+        }
+      },
+      directRadioFeatures: ['alarm', 'button', 'switch'],
+      directRadioCatalog: {
+        manufacturer: 'AEON Labs',
+        label: 'ZW080'
+      },
+      supportsAlarm: true,
+      supportsSirenVolume: true,
+      supportsSirenSound: true
+    }
+  };
+  const update = {
+    name: 'ZW080',
+    type: 'siren',
+    room: 'Unassigned',
+    status: false,
+    isOnline: false,
+    brand: 'AEON Labs',
+    model: 'ZW080',
+    properties: {
+      source: 'homebrain-zwave',
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: 14,
+        manufacturerId: 134,
+        productType: 260,
+        productId: 80,
+        ready: false,
+        status: 3,
+        interviewStage: '5',
+        isListening: true,
+        lastReason: 'sync',
+        lastSeen: '2026-06-02T00:47:00.000Z',
+        catalog: {
+          manufacturer: 'AEON Labs',
+          label: 'ZW080'
+        }
+      },
+      directRadioFeatures: ['alarm', 'button', 'switch'],
+      directRadioCatalog: {
+        manufacturer: 'AEON Labs',
+        label: 'ZW080'
+      },
+      supportsAlarm: true,
+      supportsSirenVolume: true,
+      supportsSirenSound: true
+    }
+  };
+
+  const merged = mergeDirectDeviceUpdateForExisting(existing, update);
+
+  assert.equal(merged.name, 'Kitchen Siren');
+  assert.equal(merged.type, 'siren');
+  assert.equal(merged.isOnline, true);
+  assert.equal(merged.properties.homebrainDirect.ready, true);
+  assert.equal(merged.properties.homebrainDirect.status, 4);
+  assert.equal(merged.properties.homebrainDirect.interviewStage, '5');
+  assert.equal(merged.properties.homebrainDirect.lastPartialReason, 'sync');
+  assert.equal(merged.properties.homebrainDirect.lastPartialAt, '2026-06-02T00:47:00.000Z');
+  assert.deepEqual(merged.properties.directRadioFeatures, ['alarm', 'button', 'switch']);
+  assert.equal(merged.properties.supportsAlarm, true);
+  assert.equal(merged.properties.supportsSirenVolume, true);
+  assert.equal(merged.properties.supportsSirenSound, true);
+});
+
 test('direct radio refresh keeps Z-Wave command surface while accepting confirmed dead health', () => {
   const existing = {
     name: 'Cold Storage Switch',

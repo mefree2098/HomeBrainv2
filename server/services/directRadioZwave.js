@@ -1208,10 +1208,13 @@ async syncZWaveNodes() {
       }
       this.attachZWaveNodeStatusListeners(node);
       let existingDevice = null;
-      let shouldProbe = !isZWaveNodeCommandReady(node) && isZWaveNodeCommandProbeCandidate(node);
-      if (!shouldProbe && !isZWaveNodeCommandReady(node)) {
-        // zwave-js can temporarily reduce a failed re-interview to a generic shell.
-        // If HomeBrain still has stable identity for the matching device, probe before persisting dead state.
+      let shouldProbe = false;
+      if (!isZWaveNodeCommandReady(node)) {
+        shouldProbe = isZWaveNodeCommandProbeCandidate(node);
+        // zwave-js can temporarily reduce a failed re-interview to a generic shell,
+        // or report an identified listening node dead before it accepts commands.
+        // Load the matching HomeBrain record so the probe and merge layer know
+        // whether this is a stable device identity rather than a fresh unknown node.
         // eslint-disable-next-line no-await-in-loop
         existingDevice = await this.findDeviceForZWaveNode(node).catch((error) => {
           this.log('warn', 'zwave', 'Failed to load Z-Wave device record for startup readiness probe', {
@@ -1220,7 +1223,7 @@ async syncZWaveNodes() {
           });
           return null;
         });
-        shouldProbe = this.isZWaveKnownDeviceProbeCandidate(node, existingDevice);
+        shouldProbe = shouldProbe || this.isZWaveKnownDeviceProbeCandidate(node, existingDevice);
       }
       if (shouldProbe) {
         // eslint-disable-next-line no-await-in-loop
@@ -1640,10 +1643,20 @@ async controlZWaveDevice(device, normalizedAction, commandValue, updateData = {}
         action: normalizedAction,
         device
       });
-      if (probe.ready !== true || !isZWaveNodeCommandReady(node)) {
+      const allowKnownDeviceCommandAttempt = probe.ready !== true
+        && probe.probe?.knownDeviceIdentity === true
+        && this.hasStableZWaveDeviceProbeIdentity(device);
+      if (!allowKnownDeviceCommandAttempt && (probe.ready !== true || !isZWaveNodeCommandReady(node))) {
         throw new Error(probe.error
           ? `Z-Wave node is not ready (${probe.error})`
           : 'Z-Wave node is not ready');
+      }
+      if (allowKnownDeviceCommandAttempt) {
+        this.log('warn', 'zwave', 'Proceeding with Z-Wave command for known device after readiness probe failed', {
+          nodeId: node?.id || null,
+          action: normalizedAction,
+          error: probe.error || null
+        });
       }
     }
     let effectiveAction = normalizedAction;
