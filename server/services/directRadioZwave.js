@@ -52,6 +52,33 @@ const {
   roundTo,
   celsiusToFahrenheit
 } = require('./directRadio/conversions');
+
+const ZWAVE_NODE_ROUTE_RECOVERY_COOLDOWN_MS = 2 * 60 * 1000;
+const ZWAVE_NODE_ROUTE_RECOVERY_TIMEOUT_MS = 45 * 1000;
+const ZWAVE_NODE_ROUTE_RECOVERY_PING_TIMEOUT_MS = 10 * 1000;
+
+function normalizeOptionalMilliseconds(value, fallback, min, max) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  return Math.max(min, Math.min(max, Math.round(numeric)));
+}
+
+function isZWaveCommandDeliveryError(error) {
+  const text = [
+    error?.code,
+    error?.name,
+    error?.message,
+    error?.stack
+  ].filter(Boolean).join(' ').toLowerCase();
+  return text.includes('zw0204')
+    || text.includes('did not acknowledge')
+    || text.includes('not acknowledged')
+    || text.includes('no ack')
+    || text.includes('no_ack')
+    || text.includes('transmission failed');
+}
 const {
   DATA_DIR,
   ZIGBEE_DIR,
@@ -573,6 +600,263 @@ markZWaveNodeReachability(node, result = {}) {
     };
     node.__homebrainReachabilityProbe = probe;
     return probe;
+  },
+
+getZWaveNodeRouteRecoveryMap() {
+    if (!this.zwave || typeof this.zwave !== 'object') {
+      this.zwave = {};
+    }
+    if (!(this.zwave.nodeRouteRecoveries instanceof Map)) {
+      this.zwave.nodeRouteRecoveries = new Map();
+    }
+    return this.zwave.nodeRouteRecoveries;
+  },
+
+isZWaveAutoRouteRecoveryCandidate(node) {
+    return isZWaveNodeCommandProbeCandidate(node);
+  },
+
+async persistZWaveNodeRecoveryResult(node, reason, logMessage) {
+    try {
+      await this.handleZWaveNodeChanged(node, reason);
+    } catch (error) {
+      this.log('warn', 'zwave', logMessage || 'Failed to save Z-Wave node after route recovery', {
+        nodeId: node?.id || null,
+        reason,
+        error: error.message
+      });
+    }
+  },
+
+async runZWaveNodeRouteRecovery({ controller, node, nodeId, device, reason, force, pingTimeoutMs, routeRebuildTimeoutMs }) {
+    const before = this.serializeZWaveNodeSummary(node);
+    const knownDeviceIdentity = this.isZWaveKnownDeviceProbeCandidate(node, device);
+    const controllerCandidate = this.isZWaveAutoRouteRecoveryCandidate(node);
+    if (!force && !knownDeviceIdentity && !controllerCandidate) {
+      const error = new Error(`Z-Wave node ${nodeId} is not a safe route-recovery candidate`);
+      error.status = 409;
+      error.code = 'ZWAVE_ROUTE_RECOVERY_NOT_CANDIDATE';
+      throw error;
+    }
+
+    if (isZWaveNodeCommandReady(node)) {
+      await this.persistZWaveNodeRecoveryResult(node, 'route recovery skipped: already ready');
+      return {
+        nodeId,
+        recovered: true,
+        skipped: true,
+        reason: 'already_ready',
+        before,
+        node: this.serializeZWaveNodeSummary(node),
+        message: `Z-Wave node ${nodeId} is already command-ready.`
+      };
+    }
+
+    this.log('warn', 'zwave', 'Starting bounded Z-Wave node route recovery', {
+      nodeId,
+      reason,
+      force,
+      knownDeviceIdentity,
+      controllerCandidate,
+      ready: node.ready === undefined ? null : Boolean(node.ready),
+      status: node.status === undefined ? null : node.status,
+      interviewStage: node.interviewStage === undefined ? null : String(node.interviewStage)
+    });
+
+    const pingBefore = await this.probeZWaveNodeCommandReadiness(node, {
+      reason: `${reason}: ping before route rebuild`,
+      device,
+      timeoutMs: pingTimeoutMs
+    });
+    if (pingBefore.ready === true && isZWaveNodeCommandReady(node)) {
+      await this.persistZWaveNodeRecoveryResult(node, 'route recovery ping recovered');
+      return {
+        nodeId,
+        recovered: true,
+        routeRebuilt: false,
+        pingBefore,
+        before,
+        node: this.serializeZWaveNodeSummary(node),
+        message: `Z-Wave node ${nodeId} answered a recovery ping.`
+      };
+    }
+
+    if (typeof controller?.rebuildNodeRoutes !== 'function') {
+      const error = new Error('This Z-Wave controller does not support node route rebuilding');
+      error.status = 501;
+      throw error;
+    }
+
+    let routeRebuilt = false;
+    let routeRebuildError = null;
+    try {
+      routeRebuilt = await withTimeout(
+        controller.rebuildNodeRoutes(nodeId),
+        routeRebuildTimeoutMs,
+        `Z-Wave node ${nodeId} route rebuild timed out after ${routeRebuildTimeoutMs}ms`
+      );
+    } catch (error) {
+      routeRebuilt = false;
+      routeRebuildError = error.message || String(error);
+    }
+
+    this.log(routeRebuilt ? 'info' : 'warn', 'zwave', 'Z-Wave node route rebuild finished', {
+      nodeId,
+      reason,
+      routeRebuilt,
+      routeRebuildError
+    });
+
+    const pingAfter = await this.probeZWaveNodeCommandReadiness(node, {
+      reason: `${reason}: ping after route rebuild`,
+      device,
+      timeoutMs: pingTimeoutMs
+    });
+    const recovered = pingAfter.ready === true && isZWaveNodeCommandReady(node);
+    await this.persistZWaveNodeRecoveryResult(
+      node,
+      recovered ? 'route recovery ping recovered' : 'route recovery failed',
+      recovered
+        ? 'Failed to save Z-Wave node after route recovery'
+        : 'Failed to save Z-Wave node after failed route recovery'
+    );
+
+    return {
+      nodeId,
+      recovered,
+      routeRebuilt,
+      routeRebuildError,
+      pingBefore,
+      pingAfter,
+      before,
+      node: this.serializeZWaveNodeSummary(node),
+      message: recovered
+        ? `Z-Wave node ${nodeId} answered after route recovery.`
+        : `Z-Wave node ${nodeId} still did not answer after route recovery.`
+    };
+  },
+
+async recoverZWaveNodeRoutes(nodeId, options = {}) {
+    await this.start();
+    const { controller, node } = this.getZWaveNode(nodeId);
+    this.attachZWaveNodeStatusListeners(node);
+    const numericNodeId = Number(node.id);
+    const reason = trimString(options.reason) || 'route recovery requested';
+    const force = parseOptionalBoolean(options.force, false);
+    const automatic = parseOptionalBoolean(options.automatic ?? options.auto, false);
+    const pingTimeoutMs = normalizeOptionalMilliseconds(
+      options.pingTimeoutMs,
+      ZWAVE_NODE_ROUTE_RECOVERY_PING_TIMEOUT_MS,
+      1000,
+      15000
+    );
+    const routeRebuildTimeoutMs = normalizeOptionalMilliseconds(
+      options.routeRebuildTimeoutMs,
+      ZWAVE_NODE_ROUTE_RECOVERY_TIMEOUT_MS,
+      5000,
+      90000
+    );
+    const cooldownMs = normalizeOptionalMilliseconds(
+      options.cooldownMs,
+      automatic ? ZWAVE_NODE_ROUTE_RECOVERY_COOLDOWN_MS : 0,
+      0,
+      10 * 60 * 1000
+    );
+    const recoveryMap = this.getZWaveNodeRouteRecoveryMap();
+    const existing = recoveryMap.get(numericNodeId);
+    if (existing?.promise) {
+      const result = await existing.promise;
+      return {
+        ...result,
+        coalesced: true
+      };
+    }
+    if (automatic && cooldownMs > 0 && existing?.finishedAt && Date.now() - existing.finishedAt < cooldownMs) {
+      return {
+        nodeId: numericNodeId,
+        recovered: existing.lastResult?.recovered === true,
+        skipped: true,
+        reason: 'cooldown',
+        lastResult: existing.lastResult || null,
+        node: this.serializeZWaveNodeSummary(node),
+        message: `Z-Wave node ${numericNodeId} route recovery was recently attempted.`
+      };
+    }
+
+    const device = options.device || await this.findDeviceForZWaveNode(node).catch((error) => {
+      this.log('warn', 'zwave', 'Unable to load HomeBrain device before Z-Wave route recovery', {
+        nodeId: numericNodeId,
+        error: error.message
+      });
+      return null;
+    });
+    const promise = this.runZWaveNodeRouteRecovery({
+      controller,
+      node,
+      nodeId: numericNodeId,
+      device,
+      reason,
+      force,
+      pingTimeoutMs,
+      routeRebuildTimeoutMs
+    });
+
+    recoveryMap.set(numericNodeId, {
+      startedAt: Date.now(),
+      promise
+    });
+    try {
+      const result = await promise;
+      recoveryMap.set(numericNodeId, {
+        finishedAt: Date.now(),
+        lastResult: result
+      });
+      return result;
+    } catch (error) {
+      recoveryMap.set(numericNodeId, {
+        finishedAt: Date.now(),
+        lastError: error.message || String(error)
+      });
+      throw error;
+    }
+  },
+
+scheduleZWaveNodeRouteRecovery(node, reason, options = {}) {
+    const nodeId = getNumericNodeId(node);
+    if (!Number.isInteger(nodeId) || nodeId <= 0 || node?.isControllerNode === true) {
+      return false;
+    }
+    if (!this.isZWaveAutoRouteRecoveryCandidate(node)) {
+      return false;
+    }
+    const recoveryMap = this.getZWaveNodeRouteRecoveryMap();
+    const existing = recoveryMap.get(nodeId);
+    if (existing?.promise || existing?.scheduledAt) {
+      return false;
+    }
+    recoveryMap.set(nodeId, {
+      scheduledAt: Date.now()
+    });
+    const delayMs = normalizeOptionalMilliseconds(options.delayMs, 1000, 0, 30000);
+    void (async () => {
+      if (delayMs > 0) {
+        await delay(delayMs);
+      }
+      try {
+        await this.recoverZWaveNodeRoutes(nodeId, {
+          reason,
+          automatic: true,
+          cooldownMs: options.cooldownMs
+        });
+      } catch (error) {
+        this.log('warn', 'zwave', 'Automatic Z-Wave node route recovery failed', {
+          nodeId,
+          reason,
+          error: error.message
+        });
+      }
+    })();
+    return true;
   },
 
 async probeZWaveNodeCommandReadiness(node, context = {}) {
@@ -1174,7 +1458,8 @@ attachZWaveNodeStatusListeners(node) {
       this.log('info', 'zwave', `Z-Wave node ${reason}`, {
         nodeId: node.id || null,
         interviewStage: node.interviewStage === undefined ? null : String(node.interviewStage),
-        ready: node.ready === undefined ? null : Boolean(node.ready)
+        ready: node.ready === undefined ? null : Boolean(node.ready),
+        status: node.status === undefined ? null : node.status
       });
       void this.handleZWaveNodeChanged(node, reason).catch((error) => {
         this.log('warn', 'zwave', 'Failed to update Z-Wave node after status event', {
@@ -1183,8 +1468,18 @@ attachZWaveNodeStatusListeners(node) {
           error: error.message
         });
       });
+      if (trimString(reason).toLowerCase() === 'dead') {
+        const scheduled = this.scheduleZWaveNodeRouteRecovery(node, 'dead event');
+        if (scheduled) {
+          this.log('warn', 'zwave', 'Scheduled bounded Z-Wave route recovery after dead event', {
+            nodeId: node.id || null
+          });
+        }
+      }
     };
 
+    node.on('dead', () => updateFromNode('dead'));
+    node.on('alive', () => updateFromNode('alive'));
     node.on('interview completed', () => updateFromNode('interview completed'));
     node.on('interview failed', () => updateFromNode('interview failed'));
     node.on('ready', () => updateFromNode('ready'));
@@ -1221,6 +1516,17 @@ async syncZWaveNodes() {
       }
       // eslint-disable-next-line no-await-in-loop
       await this.handleZWaveNodeChanged(node, 'sync');
+      if (!isZWaveNodeCommandReady(node)) {
+        const scheduled = this.scheduleZWaveNodeRouteRecovery(node, 'startup sync');
+        if (scheduled) {
+          this.log('warn', 'zwave', 'Scheduled bounded Z-Wave route recovery during startup sync', {
+            nodeId: node.id || null,
+            ready: node.ready === undefined ? null : Boolean(node.ready),
+            status: node.status ?? null,
+            interviewStage: node.interviewStage ?? null
+          });
+        }
+      }
     }
   },
 
@@ -1665,69 +1971,123 @@ async controlZWaveDevice(device, normalizedAction, commandValue, updateData = {}
       value: commandValue ?? null
     });
 
-    switch (effectiveAction) {
-      case 'toggle':
-      case 'turnon':
-      case 'turnoff': {
-        const target = normalizedAction === 'toggle' ? Boolean(commandValue) : normalizedAction === 'turnon';
-        if (device?.type === 'siren') {
-          await this.controlZWaveSiren(node, target);
-        } else if (device?.properties?.supportsBrightness || device?.brightness > 0) {
-          await this.setZWaveValue(node, zwave.MultilevelSwitchCCValues.targetValue, target ? Math.max(1, Number(device?.brightness) || 99) : 0);
-        } else {
-          await this.setZWaveValue(node, zwave.BinarySwitchCCValues.targetValue, target);
+    const executeZWaveCommand = async () => {
+      switch (effectiveAction) {
+        case 'toggle':
+        case 'turnon':
+        case 'turnoff': {
+          const target = normalizedAction === 'toggle' ? Boolean(commandValue) : normalizedAction === 'turnon';
+          if (device?.type === 'siren') {
+            await this.controlZWaveSiren(node, target);
+          } else if (device?.properties?.supportsBrightness || device?.brightness > 0) {
+            await this.setZWaveValue(node, zwave.MultilevelSwitchCCValues.targetValue, target ? Math.max(1, Number(device?.brightness) || 99) : 0);
+          } else {
+            await this.setZWaveValue(node, zwave.BinarySwitchCCValues.targetValue, target);
+          }
+          break;
         }
-        break;
-      }
-      case 'setbrightness':
-        await this.setZWaveValue(node, zwave.MultilevelSwitchCCValues.targetValue, Math.max(0, Math.min(99, Math.round(Number(commandValue)))));
-        break;
-      case 'setcolor':
-        await this.setZWaveValue(node, zwave.ColorSwitchCCValues.hexColor, trimString(commandValue).replace(/^#/, ''));
-        break;
-      case 'settemperature': {
-        const mode = normalizeSourceText(device?.properties?.hvacMode || device?.properties?.zwaveThermostatMode || '');
-        const setpointType = mode === 'cool' ? 2 : 1;
-        await this.setZWaveValue(node, zwave.ThermostatSetpointCCValues.setpoint(setpointType), Number(commandValue));
-        break;
-      }
-      case 'setmode': {
-        const modeMap = {
-          off: zwave.ThermostatMode.Off,
-          heat: zwave.ThermostatMode.Heat,
-          cool: zwave.ThermostatMode.Cool,
-          auto: zwave.ThermostatMode.Auto
-        };
-        const mode = modeMap[normalizeSourceText(commandValue)];
-        if (mode === undefined) {
-          throw new Error('Unsupported thermostat mode');
+        case 'setbrightness':
+          await this.setZWaveValue(node, zwave.MultilevelSwitchCCValues.targetValue, Math.max(0, Math.min(99, Math.round(Number(commandValue)))));
+          break;
+        case 'setcolor':
+          await this.setZWaveValue(node, zwave.ColorSwitchCCValues.hexColor, trimString(commandValue).replace(/^#/, ''));
+          break;
+        case 'settemperature': {
+          const mode = normalizeSourceText(device?.properties?.hvacMode || device?.properties?.zwaveThermostatMode || '');
+          const setpointType = mode === 'cool' ? 2 : 1;
+          await this.setZWaveValue(node, zwave.ThermostatSetpointCCValues.setpoint(setpointType), Number(commandValue));
+          break;
         }
-        await this.setZWaveValue(node, zwave.ThermostatModeCCValues.thermostatMode, mode);
-        break;
-      }
-      case 'lock':
-        await this.setZWaveValue(node, zwave.DoorLockCCValues.targetMode, zwave.DoorLockMode.Secured);
-        break;
-      case 'unlock':
-        await this.setZWaveValue(node, zwave.DoorLockCCValues.targetMode, zwave.DoorLockMode.Unsecured);
-        break;
-      case 'setsirenvolume':
-        await this.setZWaveSirenVolume(device, node, commandValue, updateData);
-        break;
-      case 'setsirensound':
-        await this.setZWaveSirenSound(device, node, commandValue, updateData);
-        break;
-      case 'alarmoff':
-      case 'turnoffalarm':
-      case 'silencealarm':
-        if (device?.properties?.supportsAlarm) {
-          await this.setZWaveValue(node, zwave.BinarySwitchCCValues.targetValue, false).catch(async () => {
-            await this.setZWaveValue(node, zwave.SoundSwitchCCValues.volume, 0);
-          });
+        case 'setmode': {
+          const modeMap = {
+            off: zwave.ThermostatMode.Off,
+            heat: zwave.ThermostatMode.Heat,
+            cool: zwave.ThermostatMode.Cool,
+            auto: zwave.ThermostatMode.Auto
+          };
+          const mode = modeMap[normalizeSourceText(commandValue)];
+          if (mode === undefined) {
+            throw new Error('Unsupported thermostat mode');
+          }
+          await this.setZWaveValue(node, zwave.ThermostatModeCCValues.thermostatMode, mode);
+          break;
         }
-        break;
-      default:
-        throw new Error('This Z-Wave device does not support the requested action yet');
+        case 'lock':
+          await this.setZWaveValue(node, zwave.DoorLockCCValues.targetMode, zwave.DoorLockMode.Secured);
+          break;
+        case 'unlock':
+          await this.setZWaveValue(node, zwave.DoorLockCCValues.targetMode, zwave.DoorLockMode.Unsecured);
+          break;
+        case 'setsirenvolume':
+          await this.setZWaveSirenVolume(device, node, commandValue, updateData);
+          break;
+        case 'setsirensound':
+          await this.setZWaveSirenSound(device, node, commandValue, updateData);
+          break;
+        case 'alarmoff':
+        case 'turnoffalarm':
+        case 'silencealarm':
+          if (device?.properties?.supportsAlarm) {
+            await this.setZWaveValue(node, zwave.BinarySwitchCCValues.targetValue, false).catch(async () => {
+              await this.setZWaveValue(node, zwave.SoundSwitchCCValues.volume, 0);
+            });
+          }
+          break;
+        default:
+          throw new Error('This Z-Wave device does not support the requested action yet');
+      }
+    };
+
+    try {
+      await executeZWaveCommand();
+    } catch (error) {
+      if (!isZWaveCommandDeliveryError(error)) {
+        throw error;
+      }
+      this.log('warn', 'zwave', 'Z-Wave command delivery failed; attempting bounded route recovery before one retry', {
+        deviceId: device?._id?.toString?.() || null,
+        name: device?.name || null,
+        nodeId: node?.id || device?.properties?.homebrainDirect?.nodeId || null,
+        action: effectiveAction,
+        error: error.message
+      });
+      let recovery = null;
+      try {
+        recovery = await this.recoverZWaveNodeRoutes(node?.id || device?.properties?.homebrainDirect?.nodeId, {
+          reason: `command delivery failure: ${effectiveAction}`,
+          device,
+          pingTimeoutMs: ZWAVE_NODE_ROUTE_RECOVERY_PING_TIMEOUT_MS,
+          routeRebuildTimeoutMs: ZWAVE_NODE_ROUTE_RECOVERY_TIMEOUT_MS
+        });
+      } catch (recoveryError) {
+        this.log('warn', 'zwave', 'Z-Wave command route recovery failed before retry', {
+          deviceId: device?._id?.toString?.() || null,
+          name: device?.name || null,
+          nodeId: node?.id || device?.properties?.homebrainDirect?.nodeId || null,
+          action: effectiveAction,
+          commandError: error.message,
+          recoveryError: recoveryError.message
+        });
+        throw error;
+      }
+      if (recovery?.recovered !== true) {
+        this.log('warn', 'zwave', 'Z-Wave command route recovery did not restore reachability', {
+          deviceId: device?._id?.toString?.() || null,
+          name: device?.name || null,
+          nodeId: node?.id || device?.properties?.homebrainDirect?.nodeId || null,
+          action: effectiveAction,
+          commandError: error.message,
+          recovery
+        });
+        throw error;
+      }
+      this.log('info', 'zwave', 'Retrying Z-Wave command after route recovery', {
+        deviceId: device?._id?.toString?.() || null,
+        name: device?.name || null,
+        nodeId: node?.id || device?.properties?.homebrainDirect?.nodeId || null,
+        action: effectiveAction
+      });
+      await executeZWaveCommand();
     }
 
     const commandTimestamp = new Date().toISOString();

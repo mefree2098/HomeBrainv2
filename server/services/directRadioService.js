@@ -244,7 +244,8 @@ class DirectRadioService {
       pendingDsk: null,
       pendingDskRequest: null,
       addNodeStatusEnum: null,
-      removeNodeStatusEnum: null
+      removeNodeStatusEnum: null,
+      nodeRouteRecoveries: new Map()
     };
     this.activeMigrations = new Map();
     this.activePairings = new Map();

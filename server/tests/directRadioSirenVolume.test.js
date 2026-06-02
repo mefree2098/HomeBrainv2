@@ -415,6 +415,119 @@ test('Z-Wave startup sync does not probe generic controller shells', async () =>
   assert.equal(node.__homebrainReachabilityProbe, undefined);
 });
 
+test('Z-Wave route recovery rebuilds routes for interviewed listening nodes', async () => {
+  const service = new DirectRadioService();
+  const rebuildCalls = [];
+  const changedReasons = [];
+  let pingCount = 0;
+  const node = {
+    ...zwaveNode({
+      ready: false,
+      status: 3,
+      interviewStage: 5,
+      isListening: true,
+      manufacturerId: 134,
+      productType: 260,
+      productId: 80,
+      deviceConfig: {
+        manufacturer: 'AEON Labs',
+        label: 'ZW080'
+      }
+    }),
+    on: () => {},
+    ping: async () => {
+      pingCount += 1;
+      return pingCount >= 2;
+    }
+  };
+  const controller = {
+    rebuildNodeRoutes: async (nodeId) => {
+      rebuildCalls.push(nodeId);
+      return true;
+    }
+  };
+  service.start = async () => {};
+  service.getZWaveController = () => controller;
+  service.getZWaveControllerNodes = () => new Map([[node.id, node]]);
+  service.findDeviceForZWaveNode = async () => nativeSirenDevice();
+  service.handleZWaveNodeChanged = async (_node, reason) => {
+    changedReasons.push(reason);
+  };
+
+  const result = await service.recoverZWaveNodeRoutes(node.id, {
+    reason: 'test recovery',
+    pingTimeoutMs: 1000,
+    routeRebuildTimeoutMs: 1000
+  });
+
+  assert.equal(pingCount, 2);
+  assert.deepEqual(rebuildCalls, [node.id]);
+  assert.equal(result.recovered, true);
+  assert.equal(result.routeRebuilt, true);
+  assert.equal(isZWaveNodeCommandReady(node), true);
+  assert.equal(changedReasons.includes('route recovery ping recovered'), true);
+});
+
+test('Z-Wave command retries once after no-ack route recovery succeeds', async () => {
+  const service = new DirectRadioService();
+  const setCalls = [];
+  const rebuildCalls = [];
+  let pingCount = 0;
+  const node = {
+    ...zwaveNode({
+      ready: false,
+      status: 3,
+      interviewStage: 5,
+      isListening: true,
+      manufacturerId: 134,
+      productType: 260,
+      productId: 80,
+      deviceConfig: {
+        manufacturer: 'AEON Labs',
+        label: 'ZW080'
+      }
+    }),
+    on: () => {},
+    ping: async () => {
+      pingCount += 1;
+      return pingCount >= 3;
+    },
+    getDefinedValueIDs: () => [
+      { commandClass: zwave.BinarySwitchCCValues.targetValue.id.commandClass }
+    ],
+    setValue: async (valueId, value) => {
+      setCalls.push({ valueId, value });
+      if (setCalls.length === 1) {
+        throw new Error('The node did not acknowledge the command (ZW0204)');
+      }
+      return { status: zwave.SetValueStatus.Success };
+    }
+  };
+  const controller = {
+    rebuildNodeRoutes: async (nodeId) => {
+      rebuildCalls.push(nodeId);
+      return true;
+    }
+  };
+  service.start = async () => {};
+  service.getZWaveController = () => controller;
+  service.getZWaveControllerNodes = () => new Map([[node.id, node]]);
+  service.getDirectNodeForDevice = () => node;
+  service.findDeviceForZWaveNode = async () => nativeSirenDevice();
+  service.handleZWaveNodeChanged = async () => {};
+
+  const updateData = {};
+  await service.controlDevice(nativeSirenDevice(), 'turnon', null, updateData);
+
+  assert.equal(pingCount, 3);
+  assert.deepEqual(rebuildCalls, [node.id]);
+  assert.equal(setCalls.length, 2);
+  assert.equal(updateData.isOnline, true);
+  assert.equal(updateData.properties.homebrainDirect.ready, true);
+  assert.equal(updateData.properties.homebrainDirect.status, 4);
+  assert.equal(updateData.properties.homebrainDirect.lastCommandAcceptedAt.length > 0, true);
+});
+
 test('Z-Wave siren volume command writes the catalog configuration parameter', async () => {
   const service = new DirectRadioService();
   const setCalls = [];

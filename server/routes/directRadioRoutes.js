@@ -370,6 +370,25 @@ router.post('/zwave/nodes/:nodeId/refresh-info', async (req, res) => {
   }
 });
 
+router.post('/zwave/nodes/:nodeId/recover-routes', async (req, res) => {
+  try {
+    const result = await directRadioService.recoverZWaveNodeRoutes(req.params.nodeId, {
+      reason: req.body?.reason || 'api recovery requested',
+      force: req.body?.force,
+      pingTimeoutMs: req.body?.pingTimeoutMs,
+      routeRebuildTimeoutMs: req.body?.routeRebuildTimeoutMs,
+      cooldownMs: req.body?.cooldownMs
+    });
+    res.status(200).json({
+      success: true,
+      result,
+      status: await directRadioService.getStatus()
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to recover Z-Wave node routes');
+  }
+});
+
 router.post('/zigbee/devices/:ieeeAddr/reinterview', async (req, res) => {
   try {
     const result = await directRadioService.reinterviewZigbeeDevice(req.params.ieeeAddr);
