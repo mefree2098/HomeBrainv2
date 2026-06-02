@@ -485,14 +485,20 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
     ? normalizeZWaveStatus(updateDirect.status)
     : null;
   const preservesKnownGoodDirectRecord = incomingIncompleteShell && existingHasKnownGoodDirectRecord;
-  const incomingDeadZWaveShellIsUnconfirmed = incomingZWaveStatus === ZWAVE_NODE_STATUS.DEAD
-    && preservesKnownGoodDirectRecord
-    && !hasStableDirectIdentity(updateDirect, updateProperties)
-    && updateFeatures.length === 0
-    && !hasNonEmptyObject(updateProperties.directRadioState);
+  const incomingDeadZWaveReason = trimString(updateDirect.lastReason).toLowerCase();
+  const incomingDeadZWaveHealthIsUnconfirmed = incomingZWaveStatus === ZWAVE_NODE_STATUS.DEAD
+    && existingHasKnownGoodDirectRecord
+    && (
+      (preservesKnownGoodDirectRecord
+        && !hasStableDirectIdentity(updateDirect, updateProperties)
+        && updateFeatures.length === 0
+        && !hasNonEmptyObject(updateProperties.directRadioState))
+      || incomingDeadZWaveReason === 'sync'
+    );
   const incomingIsConfirmedDeadZWave = incomingZWaveStatus === ZWAVE_NODE_STATUS.DEAD
-    && !incomingDeadZWaveShellIsUnconfirmed;
-  const preservesKnownGoodRuntimeValues = preservesKnownGoodDirectRecord && !incomingIsConfirmedDeadZWave;
+    && !incomingDeadZWaveHealthIsUnconfirmed;
+  const preservesKnownGoodRuntimeValues = (preservesKnownGoodDirectRecord || incomingDeadZWaveHealthIsUnconfirmed)
+    && !incomingIsConfirmedDeadZWave;
   const clearsIncompleteZigbeeRuntime = updateDirect.incomplete === true
     && (updateSource === DIRECT_RADIO_SOURCES.zigbee || updateProtocol === 'zigbee')
     && !preservesKnownGoodDirectRecord;
@@ -527,24 +533,26 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
         mergedDirect[key] = existingDirect[key];
       }
     });
-    if (preservesKnownGoodRuntimeValues) {
-      [
-        'ready',
-        'status',
-        'interviewStage',
-        'isListening',
-        'isFrequentListening',
-        'interviewCompleted'
-      ].forEach((key) => {
-        if (hasUsableDirectValue(existingDirect[key])) {
-          mergedDirect[key] = existingDirect[key];
-        }
-      });
-    }
     if (existingDirect.incomplete !== true) {
       delete mergedDirect.incomplete;
       delete mergedDirect.incompleteReason;
     }
+  }
+  if (preservesKnownGoodRuntimeValues) {
+    [
+      'ready',
+      'status',
+      'interviewStage',
+      'isListening',
+      'isFrequentListening',
+      'interviewCompleted'
+    ].forEach((key) => {
+      if (hasUsableDirectValue(existingDirect[key])) {
+        mergedDirect[key] = existingDirect[key];
+      }
+    });
+  }
+  if (preservesKnownGoodDirectRecord || incomingDeadZWaveHealthIsUnconfirmed) {
     const partialReason = trimString(updateDirect.incompleteReason || updateDirect.lastReason);
     if (partialReason) {
       mergedDirect.lastPartialReason = partialReason;

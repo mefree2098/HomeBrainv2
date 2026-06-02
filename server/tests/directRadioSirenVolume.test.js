@@ -192,6 +192,50 @@ test('Z-Wave siren sound command probes stale interviewed listening nodes before
   assert.equal(updateData.properties.sirenSound, 2);
 });
 
+test('Z-Wave siren sound command attempts known devices when readiness ping fails', async () => {
+  const service = new DirectRadioService();
+  const setCalls = [];
+  let pingCount = 0;
+  const node = {
+    ...zwaveNode({
+      ready: false,
+      status: 3,
+      interviewStage: 5,
+      isListening: true,
+      manufacturerId: 134,
+      productType: 260,
+      productId: 80,
+      deviceConfig: {
+        manufacturer: 'AEON Labs',
+        label: 'ZW080'
+      }
+    }),
+    ping: async () => {
+      pingCount += 1;
+      return false;
+    },
+    setValue: async (valueId, value) => {
+      setCalls.push({ valueId, value });
+      return { status: zwave.SetValueStatus.Success };
+    }
+  };
+  service.start = async () => {};
+  service.getDirectNodeForDevice = () => node;
+
+  const updateData = {};
+  await service.controlDevice(nativeSirenDevice(), 'setsirensound', 'Sound 4', updateData);
+
+  assert.equal(pingCount, 1);
+  assert.equal(setCalls.length, 1);
+  assert.equal(updateData.isOnline, true);
+  assert.equal(updateData.properties.homebrainDirect.ready, true);
+  assert.equal(updateData.properties.homebrainDirect.status, 4);
+  assert.equal(updateData.properties.homebrainDirect.controllerReady, false);
+  assert.equal(updateData.properties.homebrainDirect.controllerStatus, 3);
+  assert.equal(updateData.properties.homebrainDirect.lastCommandAcceptedAt.length > 0, true);
+  assert.equal(updateData.properties.sirenSound, 4);
+});
+
 test('Z-Wave siren sound command probes generic controller shells when the HomeBrain device identity is preserved', async () => {
   const service = new DirectRadioService();
   const setCalls = [];
