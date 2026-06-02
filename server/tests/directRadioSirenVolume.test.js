@@ -4,6 +4,7 @@ const Module = require('node:module');
 const zwave = require('zwave-js');
 
 const directRadioService = require('../services/directRadioService');
+const directRadioProtocolCatalogService = require('../services/directRadioProtocolCatalogService');
 
 const DirectRadioService = directRadioService.DirectRadioService;
 const {
@@ -638,4 +639,41 @@ test('Z-Wave siren sound command validates catalog options', () => {
     () => service.normalizeSirenSoundCommand(device, 6),
     /Siren sound must be at most 5/
   );
+});
+
+test('Zooz ZSE50 exposes practical siren tone and volume controls from the Z-Wave catalog', async () => {
+  const service = new DirectRadioService();
+  const entry = await directRadioProtocolCatalogService.lookupZWaveCatalogEntry({
+    manufacturerId: '0x027a',
+    productType: '0x0004',
+    productId: '0x0369'
+  });
+  const directRadioCatalog = directRadioProtocolCatalogService.compactCatalogForDevice(entry);
+  const device = nativeSirenDevice({
+    name: 'Zooz ZSE50 Siren',
+    brand: 'Zooz',
+    model: 'ZSE50',
+    properties: {
+      ...nativeSirenDevice().properties,
+      directRadioCatalog
+    }
+  });
+
+  const soundCommand = service.normalizeSirenSoundCommand(device, 'Tone 50');
+  assert.equal(soundCommand.parameter.parameter, 4);
+  assert.equal(soundCommand.value, 50);
+  assert.equal(soundCommand.options.length, 50);
+  assert.deepEqual(soundCommand.options[0], { label: 'Tone 1', value: 1 });
+  assert.deepEqual(soundCommand.options[49], { label: 'Tone 50', value: 50 });
+
+  const volumeCommand = service.normalizeSirenVolumeCommand(device, '75%');
+  assert.equal(volumeCommand.parameter.parameter, 5);
+  assert.equal(volumeCommand.value, 75);
+  assert.deepEqual(volumeCommand.options, [
+    { label: 'Mute', value: 0 },
+    { label: '25%', value: 25 },
+    { label: '50%', value: 50 },
+    { label: '75%', value: 75 },
+    { label: '100%', value: 100 }
+  ]);
 });

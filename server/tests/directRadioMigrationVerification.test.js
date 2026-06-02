@@ -1228,6 +1228,39 @@ test('Zigbee normalization estimates battery level from voltage-only sensor repo
   assert.ok(normalized.update.properties.directRadioFeatures.includes('battery'));
 });
 
+test('Zigbee normalization keeps SONOFF battery millivolts out of generic voltage telemetry', () => {
+  const service = createService();
+  const normalized = service.normalizeZigbeeDevice({
+    ieeeAddr: '0x00124b0034567890',
+    modelID: 'SNZB-04PR2',
+    manufacturerName: 'SONOFF',
+    interviewCompleted: true,
+    state: {
+      contact: true,
+      tamper: false,
+      battery: 100,
+      voltage: 3000
+    },
+    endpoints: [
+      {
+        ID: 1,
+        inputClusters: [1, 1280, 0xfc11]
+      }
+    ]
+  }, 'sync');
+
+  const state = normalized.update.properties.directRadioState;
+  assert.equal(state.contactOpen, false);
+  assert.equal(state.tamperActive, false);
+  assert.equal(state.batteryLevel, 100);
+  assert.equal(state.batteryVoltage, 3);
+  assert.equal(state.voltageV, undefined);
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('contact'));
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('battery'));
+  assert.ok(normalized.update.properties.directRadioFeatures.includes('tamper'));
+  assert.equal(normalized.update.properties.directRadioFeatures.includes('voltage'), false);
+});
+
 test('Zigbee normalization captures direct electrical measurement telemetry', () => {
   const service = createService();
   const normalized = service.normalizeZigbeeDevice({

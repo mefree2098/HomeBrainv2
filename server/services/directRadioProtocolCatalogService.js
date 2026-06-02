@@ -464,7 +464,18 @@ function inferZigbeeFeaturesFromExposes(exposes = [], definition = {}) {
     if (/\b(?:chime|melody|tone|sound)\b/.test(text)) addFeature(features, 'chime');
     if (/\bpower\b|\bwatt\b/.test(text)) addFeature(features, 'power');
     if (/\benergy\b|\bkwh\b/.test(text)) addFeature(features, 'energy');
-    if (/\bvoltage\b/.test(text)) addFeature(features, 'voltage');
+    if (/\bvoltage\b/.test(text)) {
+      const unit = trimString(expose.unit).toLowerCase();
+      const property = trimString(expose.property || expose.name).toLowerCase();
+      const batteryVoltageExpose = /\bbattery\b/.test(text)
+        || unit === 'mv'
+        || (property === 'voltage' && /\bcontact sensor\b|\bdoor\b|\bwindow\b/.test([
+          definition?.description,
+          definition?.model,
+          definition?.vendor
+        ].map((entry) => trimString(entry).toLowerCase()).filter(Boolean).join(' ')));
+      addFeature(features, batteryVoltageExpose ? 'battery' : 'voltage');
+    }
     if (/\block\b/.test(text)) addFeature(features, 'lock');
     if (/\bcover\b|\bshade\b|\bblind\b|\bcurtain\b|\bposition\b/.test(text)) addFeature(features, 'cover');
     if (/\bthermostat\b|\bheating\b|\bcooling\b|\bsetpoint\b/.test(text)) addFeature(features, 'thermostat');
