@@ -80,6 +80,54 @@ test('Z-Wave protocol catalog infers siren alarm capabilities from config text',
   assert.ok(features.includes('chime'));
 });
 
+test('Z-Wave catalog includes Zooz ZSE50 siren and chime metadata', async () => {
+  const entry = await directRadioProtocolCatalogService.lookupZWaveCatalogEntry({
+    manufacturerId: '0x027a',
+    productType: '0x0004',
+    productId: '0x0369'
+  });
+
+  assert.ok(entry);
+  assert.equal(entry.manufacturer, 'Zooz');
+  assert.equal(entry.label, 'ZSE50');
+  assert.equal(entry.description, 'Siren & Chime');
+  assert.ok(entry.homebrainFeatures.includes('alarm'));
+  assert.ok(entry.homebrainFeatures.includes('chime'));
+  assert.ok(entry.configParameters.some((parameter) => (
+    parameter.parameter === 4
+    && parameter.label === 'Default Siren Playback Tone File Number'
+    && parameter.minValue === 1
+    && parameter.maxValue === 50
+  )));
+  assert.ok(entry.configParameters.some((parameter) => (
+    parameter.parameter === 5
+    && parameter.label === 'Siren Playback Volume'
+    && parameter.minValue === 0
+    && parameter.maxValue === 100
+  )));
+});
+
+test('Zigbee catalog treats SONOFF SNZB-04PR2 voltage as battery telemetry', () => {
+  const catalog = directRadioProtocolCatalogService.searchZigbeeCatalog({
+    model: 'SNZB-04PR2',
+    includeExposes: true,
+    limit: 5
+  });
+  const entry = catalog.entries.find((candidate) => candidate.model === 'SNZB-04PR2');
+
+  assert.ok(entry);
+  assert.equal(entry.vendor, 'SONOFF');
+  assert.deepEqual(entry.zigbeeModels, ['SNZB-04PR2']);
+  assert.ok(entry.homebrainFeatures.includes('contact'));
+  assert.ok(entry.homebrainFeatures.includes('battery'));
+  assert.ok(entry.homebrainFeatures.includes('tamper'));
+  assert.equal(entry.homebrainFeatures.includes('voltage'), false);
+  assert.ok(entry.exposes.some((expose) => (
+    expose.property === 'voltage'
+    && expose.unit === 'mV'
+  )));
+});
+
 test('Matter catalog matches runtime descriptors to standard device types and HomeBrain capabilities', async () => {
   const entry = await directRadioProtocolCatalogService.lookupMatterCatalogEntry({
     deviceTypeNames: ['DimmableLight'],

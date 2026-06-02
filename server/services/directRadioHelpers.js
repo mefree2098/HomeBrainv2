@@ -2353,8 +2353,14 @@ function readZigbeeStateObject(zigbeeDevice, directState) {
     readZigbeeStateObjectValue(zigbeeDevice, ['energy_kwh', 'energyKwh', 'energy', 'currentSummDelivered', 'current_summ_delivered'])
   ));
   assignDefinedIfMissing(directState, 'voltageV', normalizeZigbeeVoltageVolts(
-    readZigbeeStateObjectValue(zigbeeDevice, ['voltage_v', 'voltageV', 'rmsVoltage', 'rms_voltage', 'mainsVoltage', 'mains_voltage', 'voltage'])
+    readZigbeeStateObjectValue(zigbeeDevice, ['voltage_v', 'voltageV', 'rmsVoltage', 'rms_voltage', 'mainsVoltage', 'mains_voltage'])
   ));
+  if (directState.voltageV === undefined) {
+    const genericVoltage = readZigbeeStateObjectValue(zigbeeDevice, ['voltage']);
+    if (!looksLikeBatteryVoltage(genericVoltage)) {
+      assignDefinedIfMissing(directState, 'voltageV', normalizeZigbeeVoltageVolts(genericVoltage));
+    }
+  }
   assignDefinedIfMissing(directState, 'currentA', normalizeZigbeeCurrentAmps(
     readZigbeeStateObjectValue(zigbeeDevice, ['current_a', 'currentA', 'rmsCurrent', 'rms_current', 'current'])
   ));
@@ -3015,8 +3021,27 @@ function getSirenVolumeOptionsFromParameter(parameter) {
 
   const min = normalizeInteger(parameter?.minValue);
   const max = normalizeInteger(parameter?.maxValue);
-  if (min === null || max === null || max < min || max - min > 8) {
+  if (min === null || max === null || max < min) {
     return [];
+  }
+  if (max - min > 8) {
+    const label = [
+      parameter?.label,
+      parameter?.unit,
+      parameter?.description
+    ].map((entry) => trimString(entry).toLowerCase()).filter(Boolean).join(' ');
+    if (!/\bvolume\b/.test(label) || !/%|percent/.test(label) || max < 25) {
+      return [];
+    }
+    return uniqueStrings([min, 25, 50, 75, max]
+      .filter((value) => value >= min && value <= max)
+      .map(String))
+      .map((value) => Number.parseInt(value, 10))
+      .filter((value) => Number.isFinite(value))
+      .map((value) => ({
+        label: value === 0 ? 'Mute' : `${value}%`,
+        value
+      }));
   }
 
   return Array.from({ length: max - min + 1 }, (_entry, index) => {
@@ -3033,13 +3058,18 @@ function getSirenSoundOptionsFromParameter(parameter) {
 
   const min = normalizeInteger(parameter?.minValue);
   const max = normalizeInteger(parameter?.maxValue);
-  if (min === null || max === null || max < min || max - min > 32) {
+  if (min === null || max === null || max < min || max - min > 64) {
     return [];
   }
 
+  const label = [
+    parameter?.label,
+    parameter?.description
+  ].map((entry) => trimString(entry).toLowerCase()).filter(Boolean).join(' ');
+  const labelPrefix = /\btone\b/.test(label) ? 'Tone ' : '';
   return Array.from({ length: max - min + 1 }, (_entry, index) => {
     const value = min + index;
-    return { label: String(value), value };
+    return { label: `${labelPrefix}${value}`, value };
   });
 }
 
