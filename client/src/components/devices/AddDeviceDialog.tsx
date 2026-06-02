@@ -660,9 +660,9 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
     try {
       const response = await refreshZWaveNodeInfo(nodeId, {
         waitForWakeup: false,
-        resetSecurityClasses: candidate.likelyLegacyS0,
+        resetSecurityClasses: false,
         pingFirst: true,
-        skipRefreshIfPingSucceeds: !candidate.likelyLegacyS0
+        skipRefreshIfPingSucceeds: true
       })
       const ping = response.result?.ping
       const skippedRefresh = response.result?.skippedRefresh

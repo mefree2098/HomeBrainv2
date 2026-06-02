@@ -965,7 +965,14 @@ async refreshZWaveNodeInfo(nodeId, options = {}) {
     this.attachZWaveNodeStatusListeners(node);
     const numericNodeId = Number(node.id);
     const waitForWakeup = parseOptionalBoolean(options.waitForWakeup, false);
-    const resetSecurityClasses = parseOptionalBoolean(options.resetSecurityClasses, false);
+    const requestedResetSecurityClasses = parseOptionalBoolean(options.resetSecurityClasses, false);
+    const confirmSecurityReset = parseOptionalBoolean(options.confirmSecurityReset ?? options.allowSecurityReset, false);
+    const resetSecurityClasses = requestedResetSecurityClasses && confirmSecurityReset;
+    if (requestedResetSecurityClasses && !confirmSecurityReset) {
+      this.log('warn', 'zwave', 'Ignored Z-Wave security-class reset without explicit confirmation', {
+        nodeId: numericNodeId
+      });
+    }
     const pingFirst = parseOptionalBoolean(options.pingFirst, true);
     const skipRefreshIfPingSucceeds = parseOptionalBoolean(options.skipRefreshIfPingSucceeds, false);
     const before = this.serializeZWaveNodeSummary(node);

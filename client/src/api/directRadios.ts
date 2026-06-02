@@ -471,6 +471,7 @@ export const refreshZWaveNodeInfo = async (
   options: {
     waitForWakeup?: boolean;
     resetSecurityClasses?: boolean;
+    confirmSecurityReset?: boolean;
     pingFirst?: boolean;
     skipRefreshIfPingSucceeds?: boolean;
   } = {}

@@ -4459,6 +4459,81 @@ test('Z-Wave node refresh skips re-interview when ping recovers the node', async
   assert.equal(changedReason, 'ping succeeded');
 });
 
+test('Z-Wave node refresh does not reset security classes without explicit confirmation', async () => {
+  const service = createService();
+  service.started = true;
+  let refreshOptions = null;
+  const node = {
+    id: 14,
+    isControllerNode: false,
+    ready: false,
+    status: 3,
+    valueDB: { hasValue: () => false },
+    ping: async () => false,
+    refreshInfo: async (options) => {
+      refreshOptions = options;
+    }
+  };
+  service.zwave.driver = {
+    controller: {
+      nodes: new Map([
+        [1, { id: 1, isControllerNode: true }],
+        [14, node]
+      ])
+    }
+  };
+  service.handleZWaveNodeChanged = async () => {};
+
+  await service.refreshZWaveNodeInfo(14, {
+    waitForWakeup: false,
+    resetSecurityClasses: true,
+    pingFirst: false
+  });
+
+  assert.deepEqual(refreshOptions, {
+    resetSecurityClasses: false,
+    waitForWakeup: false
+  });
+});
+
+test('Z-Wave node refresh allows security reset only with explicit confirmation', async () => {
+  const service = createService();
+  service.started = true;
+  let refreshOptions = null;
+  const node = {
+    id: 14,
+    isControllerNode: false,
+    ready: false,
+    status: 3,
+    valueDB: { hasValue: () => false },
+    ping: async () => false,
+    refreshInfo: async (options) => {
+      refreshOptions = options;
+    }
+  };
+  service.zwave.driver = {
+    controller: {
+      nodes: new Map([
+        [1, { id: 1, isControllerNode: true }],
+        [14, node]
+      ])
+    }
+  };
+  service.handleZWaveNodeChanged = async () => {};
+
+  await service.refreshZWaveNodeInfo(14, {
+    waitForWakeup: false,
+    resetSecurityClasses: true,
+    confirmSecurityReset: true,
+    pingFirst: false
+  });
+
+  assert.deepEqual(refreshOptions, {
+    resetSecurityClasses: true,
+    waitForWakeup: false
+  });
+});
+
 test('Z-Wave failed-node replacement opens a legacy S0 replacement session', async (t) => {
   const service = createService();
   const zwave = require('zwave-js');
