@@ -202,7 +202,7 @@ test('requestWebTokens submits Ecobee Auth0 form fields', async (t) => {
       assert.deepEqual(options.data, {
         state: 'identifier-state',
         username: 'user@example.com',
-        'js-available': 'false',
+        'js-available': 'true',
         'webauthn-available': 'false',
         'is-brave': 'false',
         'webauthn-platform-available': 'false',
