@@ -119,6 +119,38 @@ router.post('/login', ecobeeCredentialRateLimit, auth, async (req, res) => {
   }
 });
 
+router.post('/browser-login/start', ecobeeCredentialRateLimit, auth, async (req, res) => {
+  try {
+    const result = await ecobeeService.startBrowserWebLogin({
+      username: req.body?.username
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('EcobeeRoutes: Browser login start failed:', error.message);
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to start Ecobee browser login'
+    });
+  }
+});
+
+router.post('/browser-login/complete', ecobeeCredentialRateLimit, auth, async (req, res) => {
+  try {
+    const result = await ecobeeService.completeBrowserWebLogin(req.body || {}, {
+      reason: 'settings-browser-login'
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('EcobeeRoutes: Browser login completion failed:', error.message);
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to complete Ecobee browser login'
+    });
+  }
+});
+
 router.post('/mfa', ecobeeCredentialRateLimit, auth, async (req, res) => {
   try {
     const { code } = req.body || {};
