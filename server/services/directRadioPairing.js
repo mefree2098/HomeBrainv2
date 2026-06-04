@@ -219,6 +219,36 @@ const {
   serializeDoorLockLogRecord
 } = require('./directRadioHelpers');
 
+function isZigbeeDirectUpdateInterviewComplete(update = {}, reason = '') {
+  const properties = update?.properties && typeof update.properties === 'object'
+    ? update.properties
+    : {};
+  const direct = properties.homebrainDirect && typeof properties.homebrainDirect === 'object'
+    ? properties.homebrainDirect
+    : {};
+  const normalizedReason = trimString(reason || direct.lastReason).toLowerCase();
+  if (normalizedReason === 'devicejoined' || direct.incomplete === true) {
+    return false;
+  }
+
+  const features = Array.isArray(properties.directRadioFeatures)
+    ? properties.directRadioFeatures.map(normalizeFeature).filter(Boolean)
+    : [];
+  const state = properties.directRadioState && typeof properties.directRadioState === 'object'
+    ? properties.directRadioState
+    : {};
+  const hasStableIdentity = Boolean(
+    trimString(direct.modelID)
+      || trimString(direct.manufacturerName)
+      || direct.catalog
+      || properties.directRadioCatalog
+      || trimString(update.brand)
+      || trimString(update.model)
+  );
+
+  return features.length > 0 || Object.keys(state).length > 0 || hasStableIdentity;
+}
+
 module.exports = {
 clearPairingTimer(protocol) {
     const timer = this.pairingTimers?.[protocol];
@@ -475,7 +505,7 @@ markPairingDetected(protocol, identity, device, reason) {
     }
 
     const timestamp = new Date().toISOString();
-    session.status = protocol === 'zwave' ? 'interviewing' : 'active';
+    session.status = 'interviewing';
     session.detectedIdentity = identity || null;
     session.detectedAt = timestamp;
     session.directDeviceId = device?._id?.toString?.() || session.directDeviceId || null;
@@ -503,14 +533,19 @@ completePairingSession(protocol, identity, device, reason) {
     const identityId = trimString(identity?.id);
     const strongReason = protocol === 'zwave'
       ? isZWaveDirectUpdateInterviewComplete(device, reason)
-      : ['deviceJoined', 'deviceInterview'].includes(reason);
+      : isZigbeeDirectUpdateInterviewComplete(device, reason);
     const isNewIdentity = identityId && !session.baselineIdentities.includes(identityId);
     const isExpectedReplacement = protocol === 'zwave'
       && session.mode === 'replace_failed'
       && identityId
       && identityId === trimString(session.targetIdentity ?? session.replaceNodeId);
-    if (protocol === 'zigbee' && !isNewIdentity) {
-      return session;
+    if (protocol === 'zigbee') {
+      if (!isNewIdentity) {
+        return session;
+      }
+      if (!strongReason) {
+        return this.markPairingDetected(protocol, identity, device, reason);
+      }
     }
     if (protocol === 'zwave' && !strongReason) {
       if (isNewIdentity || isExpectedReplacement) {
