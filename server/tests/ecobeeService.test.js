@@ -391,3 +391,52 @@ test('EcobeeIntegration status sanitizes web auth secrets and pending MFA state'
   assert.deepEqual(Object.keys(sanitized.pendingMfa).sort(), ['createdAt', 'mfaType', 'username']);
   assert.equal(sanitized.pendingMfa.mfaType, 'otp');
 });
+
+test('getThermostats uses Ecobee GET json selection request', async (t) => {
+  const originalMakeAuthenticatedRequest = ecobeeService.makeAuthenticatedRequest;
+  const originalGetIntegration = EcobeeIntegration.getIntegration;
+
+  const thermostat = {
+    identifier: 'thermostat-1',
+    name: 'Hall Thermostat'
+  };
+  let updatedDevices = null;
+
+  ecobeeService.makeAuthenticatedRequest = async (endpoint, options) => {
+    assert.equal(endpoint, '/1/thermostat');
+    assert.equal(options.method, 'get');
+    assert.equal(options.data, undefined);
+    assert.equal(typeof options.params?.json, 'string');
+    assert.deepEqual(JSON.parse(options.params.json), {
+      selection: {
+        selectionType: 'registered',
+        selectionMatch: '',
+        includeRuntime: true,
+        includeSensors: true,
+        includeSettings: true,
+        includeEquipmentStatus: true
+      }
+    });
+
+    return {
+      status: { code: 0, message: '' },
+      thermostatList: [thermostat]
+    };
+  };
+
+  EcobeeIntegration.getIntegration = async () => ({
+    updateDevices: async (devices) => {
+      updatedDevices = devices;
+    }
+  });
+
+  t.after(() => {
+    ecobeeService.makeAuthenticatedRequest = originalMakeAuthenticatedRequest;
+    EcobeeIntegration.getIntegration = originalGetIntegration;
+  });
+
+  const thermostats = await ecobeeService.getThermostats();
+
+  assert.deepEqual(thermostats, [thermostat]);
+  assert.deepEqual(updatedDevices, [thermostat]);
+});

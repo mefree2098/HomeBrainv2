@@ -782,6 +782,7 @@ class EcobeeService {
     const {
       method = 'post',
       data,
+      params,
       headers = {},
       timeout = 10000
     } = options;
@@ -792,6 +793,7 @@ class EcobeeService {
         url: `${this.baseUrl}${endpoint}`,
         method,
         data,
+        params,
         timeout,
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -869,9 +871,9 @@ class EcobeeService {
     const selection = this.buildThermostatSelection(options);
 
     const payload = await this.makeAuthenticatedRequest('/1/thermostat', {
-      method: 'post',
-      data: {
-        selection
+      method: 'get',
+      params: {
+        json: JSON.stringify({ selection })
       }
     });
 
