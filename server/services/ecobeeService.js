@@ -18,6 +18,7 @@ const ECOBEE_WEB_AUDIENCE = process.env.ECOBEE_WEB_AUDIENCE || 'https://prod.eco
 const ECOBEE_WEB_SCOPE = process.env.ECOBEE_WEB_SCOPE || 'openid offline_access smartWrite piiWrite piiRead smartRead deleteGrants';
 const ECOBEE_MFA_OTP_CHALLENGE_PATH = '/u/mfa-otp-challenge';
 const ECOBEE_MFA_SMS_CHALLENGE_PATH = '/u/mfa-sms-challenge';
+const ECOBEE_ACCOUNT_BLOCKED_MESSAGE = 'Ecobee has temporarily blocked this account after multiple consecutive login attempts. Sign in at ecobee.com or wait for Ecobee to clear the block, then try Connect Account again.';
 
 const toNumber = (value) => {
   const numeric = Number(value);
@@ -164,6 +165,15 @@ const formatCookieHeader = (jar, url) => {
   return jar.getCookieStringSync(url);
 };
 
+const normalizeAuth0ResponseText = (data) => String(data || '').replace(/\s+/g, ' ');
+
+const isEcobeeAccountBlockedMessage = (message) => /account has been blocked|temporarily blocked this account/i.test(String(message || ''));
+
+const isEcobeeAccountBlockedResponse = (response) => (
+  Number(response?.status) === 400
+  && isEcobeeAccountBlockedMessage(normalizeAuth0ResponseText(response?.data))
+);
+
 class EcobeeAuthMfaRequiredError extends Error {
   constructor(challenge) {
     super('Ecobee MFA code required');
@@ -176,6 +186,13 @@ class EcobeeAuthFailedError extends Error {
   constructor(message = 'Ecobee rejected the supplied credentials') {
     super(message);
     this.code = 'ECOBEE_AUTH_FAILED';
+  }
+}
+
+class EcobeeAuthBlockedError extends EcobeeAuthFailedError {
+  constructor(message = ECOBEE_ACCOUNT_BLOCKED_MESSAGE) {
+    super(message);
+    this.code = 'ECOBEE_AUTH_BLOCKED';
   }
 }
 
@@ -312,7 +329,11 @@ class EcobeeService {
     throw new EcobeeAuthUnknownError('Ecobee Auth0 redirect chain exceeded 10 hops');
   }
 
-  handleWebLoginLanding(landedUrl, codeVerifier, jar) {
+  handleWebLoginLanding(landedUrl, codeVerifier, jar, response = null) {
+    if (isEcobeeAccountBlockedResponse(response)) {
+      throw new EcobeeAuthBlockedError();
+    }
+
     if (landedUrl.includes(ECOBEE_MFA_OTP_CHALLENGE_PATH)) {
       throw new EcobeeAuthMfaRequiredError({
         challengeUrl: landedUrl,
@@ -421,7 +442,7 @@ class EcobeeService {
     });
 
     const landedUrl = passwordResponse.landedUrl || passwordResponse.finalUrl;
-    const code = this.handleWebLoginLanding(landedUrl, verifier, jar);
+    const code = this.handleWebLoginLanding(landedUrl, verifier, jar, passwordResponse);
     return this.exchangeWebCodeForTokens(code, verifier);
   }
 
@@ -505,6 +526,10 @@ class EcobeeService {
       jar,
       stopBeforeLeavingAuth: true
     });
+
+    if (isEcobeeAccountBlockedResponse(response)) {
+      throw new EcobeeAuthBlockedError();
+    }
 
     if (response.status === 400) {
       throw new EcobeeAuthFailedError('Ecobee rejected the MFA code');
@@ -667,6 +692,10 @@ class EcobeeService {
       }
 
       if (integration.username && integration.password) {
+        if (isEcobeeAccountBlockedMessage(integration.lastError)) {
+          throw new Error(integration.lastError);
+        }
+
         const result = await this.loginWithWebCredentials({
           username: integration.username,
           password: integration.password,
