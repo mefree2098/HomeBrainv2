@@ -234,10 +234,6 @@ class EcobeeService {
     for (let hop = 0; hop < 10; hop += 1) {
       const cookieHeader = formatCookieHeader(jar);
       const requestHeaders = {
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Cache-Control': 'max-age=0',
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
         ...headers
       };
 
@@ -247,8 +243,6 @@ class EcobeeService {
 
       if (currentData != null) {
         requestHeaders['Content-Type'] = 'application/x-www-form-urlencoded';
-        requestHeaders.Origin = this.webAuthBaseUrl;
-        requestHeaders.Referer = currentUrl;
       }
 
       const response = await axios({
@@ -373,12 +367,7 @@ class EcobeeService {
     const identifierResponse = await this.authRequest('post', identifierUrl, {
       data: {
         state: extractUrlParam(identifierUrl, 'state'),
-        username,
-        'js-available': 'true',
-        'webauthn-available': 'false',
-        'is-brave': 'false',
-        'webauthn-platform-available': 'false',
-        action: 'default'
+        username
       },
       jar
     });
@@ -395,8 +384,7 @@ class EcobeeService {
       data: {
         state: extractUrlParam(passwordUrl, 'state'),
         username,
-        password,
-        action: 'default'
+        password
       },
       jar,
       stopBeforeLeavingAuth: true
@@ -405,117 +393,6 @@ class EcobeeService {
     const landedUrl = passwordResponse.landedUrl || passwordResponse.finalUrl;
     const code = this.handleWebLoginLanding(landedUrl, verifier, jar);
     return this.exchangeWebCodeForTokens(code, verifier);
-  }
-
-  async startBrowserWebLogin(options = {}) {
-    const { verifier, challenge } = generatePkcePair();
-    const oauthState = crypto.randomBytes(24).toString('base64url');
-    const username = normalizeString(options.username);
-    const params = new URLSearchParams({
-      response_type: 'code',
-      client_id: ECOBEE_WEB_CLIENT_ID,
-      redirect_uri: ECOBEE_WEB_REDIRECT_URI,
-      audience: ECOBEE_WEB_AUDIENCE,
-      scope: ECOBEE_WEB_SCOPE,
-      code_challenge: challenge,
-      code_challenge_method: 'S256',
-      state: oauthState
-    });
-
-    let integration = await EcobeeIntegration.findOne();
-    if (!integration) {
-      integration = new EcobeeIntegration({
-        authMode: 'web',
-        username,
-        isConfigured: true,
-        isConnected: false
-      });
-    }
-
-    integration.authMode = 'web';
-    integration.clientId = '';
-    integration.redirectUri = '';
-    if (username) {
-      integration.username = username;
-    }
-    integration.isConfigured = true;
-    integration.isConnected = false;
-    integration.pendingMfa = {
-      challengeUrl: `${this.webAuthBaseUrl}/authorize?${params.toString()}`,
-      state: oauthState,
-      mfaType: 'browser',
-      cookies: {},
-      codeVerifier: verifier,
-      username: username || integration.username,
-      createdAt: new Date()
-    };
-    integration.lastError = 'Ecobee browser login pending';
-    await integration.save();
-
-    return {
-      success: true,
-      authUrl: integration.pendingMfa.challengeUrl,
-      message: 'Open this Ecobee login URL, sign in, then paste the final callback URL back into HomeBrain.'
-    };
-  }
-
-  async completeBrowserWebLogin(input, options = {}) {
-    const rawInput = normalizeString(input?.callbackUrl || input?.url || input?.code || input);
-    if (!rawInput) {
-      throw new Error('Ecobee callback URL or authorization code is required');
-    }
-
-    const integration = await EcobeeIntegration.getIntegration();
-    const pending = integration?.pendingMfa;
-    if (pending?.mfaType !== 'browser' || !pending?.codeVerifier) {
-      throw new Error('No pending Ecobee browser login is available');
-    }
-
-    const challengeCreatedAt = pending.createdAt ? new Date(pending.createdAt).getTime() : 0;
-    if (challengeCreatedAt && Date.now() - challengeCreatedAt > 15 * 60 * 1000) {
-      await integration.clearPendingMfa();
-      throw new Error('Ecobee browser login expired. Start a new Ecobee browser login.');
-    }
-
-    let authCode = rawInput;
-    let returnedState = normalizeString(input?.state);
-    if (/^https?:\/\//i.test(rawInput)) {
-      const callbackUrl = new URL(rawInput);
-      authCode = callbackUrl.searchParams.get('code') || '';
-      returnedState = callbackUrl.searchParams.get('state') || returnedState;
-    }
-
-    if (!authCode) {
-      throw new Error('Ecobee callback URL did not include an authorization code');
-    }
-    if (pending.state && returnedState && returnedState !== pending.state) {
-      throw new Error('Ecobee callback state did not match the pending browser login');
-    }
-
-    const tokenData = await this.exchangeWebCodeForTokens(authCode, pending.codeVerifier);
-    integration.authMode = 'web';
-    integration.clientId = '';
-    integration.redirectUri = '';
-    integration.username = normalizeString(pending.username || integration.username);
-    integration.password = '';
-    await integration.updateTokens(tokenData, { authMode: 'web' });
-    integration.pendingMfa = undefined;
-    await integration.save();
-
-    const syncResult = await this.syncDevices({ reason: options.reason || 'web-browser-login', fullSync: true });
-    await this.persistConnectionStatus({
-      isConnected: true,
-      lastError: '',
-      reason: options.reason || 'web-browser-login'
-    });
-
-    return {
-      success: true,
-      requiresMfa: false,
-      message: 'Ecobee account connected',
-      thermostatCount: syncResult?.thermostatCount,
-      sensorCount: syncResult?.sensorCount
-    };
   }
 
   async loginWithWebCredentials(options = {}) {

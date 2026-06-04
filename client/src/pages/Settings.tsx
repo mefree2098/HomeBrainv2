@@ -92,8 +92,6 @@ import {
   getEcobeeStatus,
   configureEcobeeOAuth,
   loginEcobeeWithPassword,
-  startEcobeeBrowserLogin,
-  completeEcobeeBrowserLogin,
   submitEcobeeMfa,
   getEcobeeAuthUrl,
   testEcobeeConnection,
@@ -522,8 +520,7 @@ export function Settings() {
   const [ecobeeWebCredentials, setEcobeeWebCredentials] = useState({
     username: "",
     password: "",
-    mfaCode: "",
-    callbackUrl: ""
+    mfaCode: ""
   })
   const [harmonyStatus, setHarmonyStatus] = useState<any>(null)
   const [harmonyHubs, setHarmonyHubs] = useState<any[]>([])
@@ -3764,81 +3761,6 @@ export function Settings() {
     } finally {
       setConfiguringEcobee(false)
     }
-  }
-
-  const handleStartEcobeeBrowserLogin = async () => {
-    const username = ecobeeWebCredentials.username?.trim()
-
-    setConfiguringEcobee(true)
-    try {
-      const response = await startEcobeeBrowserLogin({ username })
-
-      if (response.success && response.authUrl) {
-        window.open(response.authUrl, "_blank", "noopener,noreferrer")
-        toast({
-          title: "Ecobee Login Opened",
-          description: "Sign in to Ecobee, then paste the final Ecobee callback URL here."
-        })
-      } else {
-        toast({
-          title: "Browser Login Failed",
-          description: response.message || "Unable to start Ecobee browser login.",
-          variant: "destructive"
-        })
-      }
-    } catch (error: any) {
-      toast({
-        title: "Browser Login Failed",
-        description: error.message || "Unable to start Ecobee browser login.",
-        variant: "destructive"
-      })
-    }
-    setConfiguringEcobee(false)
-  }
-
-  const handleCompleteEcobeeBrowserLogin = async () => {
-    const callbackUrl = ecobeeWebCredentials.callbackUrl?.trim()
-    if (!callbackUrl) {
-      toast({
-        title: "Error",
-        description: "Paste the Ecobee callback URL first.",
-        variant: "destructive"
-      })
-      return
-    }
-
-    setConfiguringEcobee(true)
-    try {
-      const response = await completeEcobeeBrowserLogin({ callbackUrl })
-
-      if (response.success) {
-        toast({
-          title: "Ecobee Connected",
-          description: response.message || "Ecobee browser login completed."
-        })
-        setEcobeeWebCredentials((prev) => ({
-          ...prev,
-          password: "",
-          mfaCode: "",
-          callbackUrl: ""
-        }))
-        await loadEcobeeStatus()
-        await fetchEcobeeDevices({ showToast: false, forceRefresh: true })
-      } else {
-        toast({
-          title: "Browser Login Failed",
-          description: response.message || "Ecobee browser login did not complete.",
-          variant: "destructive"
-        })
-      }
-    } catch (error: any) {
-      toast({
-        title: "Browser Login Failed",
-        description: error.message || "Ecobee browser login did not complete.",
-        variant: "destructive"
-      })
-    }
-    setConfiguringEcobee(false)
   }
 
   const handleSubmitEcobeeMfa = async () => {
@@ -7679,35 +7601,6 @@ export function Settings() {
 
                       <div className="p-3 bg-blue-50 dark:bg-blue-950/20 rounded-lg border border-blue-200 dark:border-blue-800">
                         <p className="text-sm text-blue-800 dark:text-blue-200">
-                          <div className="space-y-2">
-                            <div className="flex gap-2 flex-wrap">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={handleStartEcobeeBrowserLogin}
-                                disabled={configuringEcobee}
-                              >
-                                <ExternalLink className="h-4 w-4 mr-2" />
-                                Browser Login
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={handleCompleteEcobeeBrowserLogin}
-                                disabled={configuringEcobee || !ecobeeWebCredentials.callbackUrl.trim()}
-                              >
-                                <CheckCircle className="h-4 w-4 mr-2" />
-                                Complete Browser Login
-                              </Button>
-                            </div>
-                            <Input
-                              value={ecobeeWebCredentials.callbackUrl}
-                              onChange={(e) => setEcobeeWebCredentials((prev) => ({ ...prev, callbackUrl: e.target.value }))}
-                              placeholder="Paste Ecobee callback URL"
-                            />
-                          </div>
                           <strong>No App Key Required:</strong> Connect with your Ecobee account email and password. If Ecobee requires MFA, enter the code after the first login step.
                         </p>
                       </div>

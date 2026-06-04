@@ -88,17 +88,3 @@ export const getEcobeeDevices = async (options: { refresh?: boolean } = {}) => {
     throw new Error(error?.response?.data?.message || error.message);
   }
 };
-
-export const startEcobeeBrowserLogin = async (payload: {
-  username?: string;
-}) => {
-  const response = await api.post('/api/ecobee/browser-login/start', payload);
-  return response.data;
-};
-
-export const completeEcobeeBrowserLogin = async (payload: {
-  callbackUrl: string;
-}) => {
-  const response = await api.post('/api/ecobee/browser-login/complete', payload);
-  return response.data;
-};
