@@ -24,7 +24,7 @@
     "@harmonyhub/client-ws": "file:vendor/harmony-client-ws",
     "@harmonyhub/discover": "^1.0.9",
     "@matter/main": "^0.16.11",
-    "@matter/nodejs": "^0.16.11",
+    "@matter/nodejs": "^0.17.1",
     "@matter/nodejs-ble": "^0.16.11",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openai/codex": "^0.117.0",
