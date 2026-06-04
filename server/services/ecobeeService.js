@@ -234,10 +234,6 @@ class EcobeeService {
     for (let hop = 0; hop < 10; hop += 1) {
       const cookieHeader = formatCookieHeader(jar);
       const requestHeaders = {
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Cache-Control': 'max-age=0',
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36',
         ...headers
       };
 
@@ -247,8 +243,6 @@ class EcobeeService {
 
       if (currentData != null) {
         requestHeaders['Content-Type'] = 'application/x-www-form-urlencoded';
-        requestHeaders.Origin = this.webAuthBaseUrl;
-        requestHeaders.Referer = currentUrl;
       }
 
       const response = await axios({
@@ -373,12 +367,7 @@ class EcobeeService {
     const identifierResponse = await this.authRequest('post', identifierUrl, {
       data: {
         state: extractUrlParam(identifierUrl, 'state'),
-        username,
-        'js-available': 'true',
-        'webauthn-available': 'false',
-        'is-brave': 'false',
-        'webauthn-platform-available': 'false',
-        action: 'default'
+        username
       },
       jar
     });
@@ -395,8 +384,7 @@ class EcobeeService {
       data: {
         state: extractUrlParam(passwordUrl, 'state'),
         username,
-        password,
-        action: 'default'
+        password
       },
       jar,
       stopBeforeLeavingAuth: true

@@ -175,7 +175,7 @@ test('refreshAccessToken preserves legacy App Key refresh endpoint', async (t) =
   assert.equal(integration.accessToken, 'legacy-access-token');
 });
 
-test('requestWebTokens submits Ecobee Auth0 form fields', async (t) => {
+test('requestWebTokens follows Ecobee Auth0 PKCE form sequence', async (t) => {
   const originalAuthRequest = ecobeeService.authRequest;
   const originalExchangeWebCodeForTokens = ecobeeService.exchangeWebCodeForTokens;
   const calls = [];
@@ -201,12 +201,7 @@ test('requestWebTokens submits Ecobee Auth0 form fields', async (t) => {
       assert.equal(url, 'https://auth.ecobee.com/u/login/identifier?state=identifier-state');
       assert.deepEqual(options.data, {
         state: 'identifier-state',
-        username: 'user@example.com',
-        'js-available': 'true',
-        'webauthn-available': 'false',
-        'is-brave': 'false',
-        'webauthn-platform-available': 'false',
-        action: 'default'
+        username: 'user@example.com'
       });
       assert.ok(options.jar);
       return {
@@ -221,8 +216,7 @@ test('requestWebTokens submits Ecobee Auth0 form fields', async (t) => {
       assert.deepEqual(options.data, {
         state: 'password-state',
         username: 'user@example.com',
-        password: 'correct-password',
-        action: 'default'
+        password: 'correct-password'
       });
       assert.equal(options.stopBeforeLeavingAuth, true);
       assert.ok(options.jar);
