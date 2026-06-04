@@ -4426,17 +4426,101 @@ test('generic Zigbee pairing ignores already-known devices even when they announ
   assert.equal(unchanged.directDeviceId ?? null, null);
   assert.equal(unchanged.detectedIdentity ?? null, null);
 
+  const pending = service.completePairingSession(
+    'zigbee',
+    { protocol: 'zigbee', id: '0xa4c13811e99effff', source: 'homebrain-zigbee' },
+    {
+      _id: { toString: () => 'device-zigbee-shell' },
+      name: 'Zigbee 9effff',
+      properties: {
+        homebrainDirect: {
+          protocol: 'zigbee',
+          ieeeAddr: '0xa4c13811e99effff',
+          incomplete: true,
+          incompleteReason: 'missing_zigbee_interview_identity_and_state',
+          lastReason: 'deviceJoined'
+        },
+        directRadioFeatures: []
+      }
+    },
+    'deviceJoined'
+  );
+
+  assert.equal(pending.status, 'interviewing');
+  assert.equal(pending.directDeviceId, 'device-zigbee-shell');
+  assert.equal(pending.detectedIdentity.id, '0xa4c13811e99effff');
+
   const completed = service.completePairingSession(
     'zigbee',
-    { protocol: 'zigbee', id: '0x000d6f00057c3ef1', source: 'homebrain-zigbee' },
-    { _id: { toString: () => 'device-front-door' }, name: 'Front Door' },
+    { protocol: 'zigbee', id: '0xa4c13811e99effff', source: 'homebrain-zigbee' },
+    {
+      _id: { toString: () => 'device-front-door' },
+      name: 'Front Door',
+      brand: 'SONOFF',
+      model: 'SNZB-04P',
+      properties: {
+        homebrainDirect: {
+          protocol: 'zigbee',
+          ieeeAddr: '0xa4c13811e99effff',
+          modelID: 'SNZB-04P',
+          manufacturerName: 'SONOFF',
+          interviewCompleted: true,
+          lastReason: 'deviceInterview'
+        },
+        directRadioFeatures: ['battery', 'contact'],
+        directRadioState: {
+          contact: 'closed',
+          contactOpen: false
+        }
+      }
+    },
     'deviceInterview'
   );
 
   assert.equal(completed.status, 'completed');
   assert.equal(completed.directDeviceId, 'device-front-door');
   assert.equal(completed.directDeviceName, 'Front Door');
-  assert.equal(completed.detectedIdentity.id, '0x000d6f00057c3ef1');
+  assert.equal(completed.detectedIdentity.id, '0xa4c13811e99effff');
+});
+
+test('Zigbee deviceJoined incomplete shells are detected without creating direct device records', async () => {
+  const service = createService();
+  service.activePairings.set('zigbee', {
+    id: 'pairing-zigbee-new-shell',
+    protocol: 'zigbee',
+    mode: 'permit_join',
+    status: 'active',
+    startedAt: new Date().toISOString(),
+    expiresAt: Date.now() + 60_000,
+    baselineIdentities: [],
+    events: []
+  });
+
+  let upsertCall = null;
+  service.upsertDirectDevice = async (identity, update, options = {}) => {
+    upsertCall = { identity, update, options };
+    return null;
+  };
+
+  const result = await service.handleZigbeeDeviceChanged({
+    ieeeAddr: '0xa4c13811e99effff',
+    networkAddress: 5896,
+    type: 'Unknown',
+    modelID: null,
+    manufacturerName: null,
+    interviewCompleted: false,
+    endpoints: []
+  }, 'deviceJoined');
+
+  assert.equal(result, null);
+  assert.equal(upsertCall.identity.id, '0xa4c13811e99effff');
+  assert.equal(upsertCall.update.properties.homebrainDirect.incomplete, true);
+  assert.equal(upsertCall.options.allowCreate, false);
+
+  const pairing = service.serializePairingSession(service.activePairings.get('zigbee'));
+  assert.equal(pairing.status, 'interviewing');
+  assert.equal(pairing.detectedIdentity.id, '0xa4c13811e99effff');
+  assert.equal(pairing.directDeviceId, null);
 });
 
 test('Z-Wave generic pairing waits for interview completion after a new node is detected', () => {

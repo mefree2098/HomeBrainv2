@@ -1202,6 +1202,20 @@ async handleZigbeeDeviceChanged(zigbeeDevice, reason, options = {}) {
         ? Object.keys(normalized.update.properties.directRadioState)
         : []
     });
+    const incompleteInterviewShell = normalized.update?.properties?.homebrainDirect?.incomplete === true;
+    if (incompleteInterviewShell) {
+      const session = this.activePairings?.get?.('zigbee');
+      const identityId = trimString(normalized.identity?.id).toLowerCase();
+      const isNewPairingIdentity = session
+        && !isTerminalPairingStatus(session.status)
+        && identityId
+        && !session.baselineIdentities.includes(identityId);
+      if (isNewPairingIdentity) {
+        this.markPairingDetected(normalized.identity.protocol, normalized.identity, null, reason);
+      }
+      return this.upsertDirectDevice(normalized.identity, normalized.update, { allowCreate: false });
+    }
+
     return this.upsertDirectDevice(normalized.identity, normalized.update);
   },
 
