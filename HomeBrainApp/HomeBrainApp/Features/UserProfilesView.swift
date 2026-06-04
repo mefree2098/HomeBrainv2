@@ -82,13 +82,13 @@ struct UserProfilesView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(profile.name)
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 20, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                     Text("Wake words: \(profile.wakeWords.joined(separator: ", "))")
-                        .font(.caption)
+                        .font(HBTypography.body(.caption))
                         .foregroundStyle(HBPalette.textSecondary)
                     Text("Voice: \(profile.voiceName)")
-                        .font(.caption2)
+                        .font(HBTypography.body(.caption2))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
 

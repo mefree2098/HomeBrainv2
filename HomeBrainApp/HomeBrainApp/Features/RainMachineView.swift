@@ -783,7 +783,7 @@ struct RainMachineView: View {
                 if !infoMessage.isEmpty {
                     HBPanel {
                         Text(infoMessage)
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 13, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -909,7 +909,7 @@ struct RainMachineView: View {
 
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Controller Host")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 11, weight: .bold))
                         .textCase(.uppercase)
                         .tracking(2)
                         .foregroundStyle(HBPalette.textMuted)
@@ -921,7 +921,7 @@ struct RainMachineView: View {
                         .hbPanelTextField()
 
                     Text("Use the LAN IP or hostname for the RainMachine controller on your local network.")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.textMuted)
                 }
 
@@ -972,17 +972,17 @@ struct RainMachineView: View {
                         Toggle(isOn: $form.enabled) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Enable Integration")
-                                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                    .font(HBTypography.body(size: 14, weight: .semibold))
                                     .foregroundStyle(HBPalette.textPrimary)
                                 Text("HomeBrain will poll the controller, surface irrigation controls, and retain report history in the data platform.")
-                                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                                    .font(HBTypography.body(size: 12, weight: .medium))
                                     .foregroundStyle(HBPalette.textSecondary)
                             }
                         }
                         .tint(HBPalette.accentBlue)
 
                         Text("Current target: \(form.protocolValue)://\(form.host.isEmpty ? "controller-host" : form.host):\(form.port)")
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 12, weight: .medium))
                             .foregroundStyle(HBPalette.textMuted)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -992,23 +992,23 @@ struct RainMachineView: View {
                     HBCardRow {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Last Verified Controller")
-                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .font(HBTypography.display(size: 11, weight: .bold))
                                 .textCase(.uppercase)
                                 .tracking(2)
                                 .foregroundStyle(HBPalette.textMuted)
 
                             Text(lastTestResult.controllerName)
-                                .font(.system(size: 17, weight: .bold, design: .rounded))
+                                .font(HBTypography.body(size: 17, weight: .bold))
                                 .foregroundStyle(HBPalette.textPrimary)
 
                             Text("\(lastTestResult.endpointProtocol)://\(lastTestResult.endpointHost):\(lastTestResult.endpointPort) • API \(lastTestResult.apiVersion)")
-                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 12, weight: .medium))
                                 .foregroundStyle(HBPalette.textSecondary)
                                 .fixedSize(horizontal: false, vertical: true)
 
                             if !lastTestResult.ipAddress.isEmpty || !lastTestResult.ssid.isEmpty {
                                 Text([lastTestResult.ipAddress, lastTestResult.ssid].filter { !$0.isEmpty }.joined(separator: " • "))
-                                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                                    .font(HBTypography.body(size: 12, weight: .medium))
                                     .foregroundStyle(HBPalette.textMuted)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
@@ -1019,7 +1019,7 @@ struct RainMachineView: View {
                 if !discoveredControllers.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Discovered Controllers")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 11, weight: .bold))
                             .textCase(.uppercase)
                             .tracking(2)
                             .foregroundStyle(HBPalette.textMuted)
@@ -1036,7 +1036,7 @@ struct RainMachineView: View {
                                         VStack(alignment: .leading, spacing: 8) {
                                             HStack {
                                                 Text(controller.name)
-                                                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                                                    .font(HBTypography.body(size: 14, weight: .bold))
                                                     .foregroundStyle(HBPalette.textPrimary)
                                                 Spacer(minLength: 0)
                                                 HBBadge(
@@ -1048,13 +1048,13 @@ struct RainMachineView: View {
                                             }
 
                                             Text("\(controller.host):\(controller.port)")
-                                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                                .font(HBTypography.body(size: 12, weight: .medium))
                                                 .foregroundStyle(HBPalette.textSecondary)
                                                 .fixedSize(horizontal: false, vertical: true)
 
                                             if !controller.macAddress.isEmpty || !controller.address.isEmpty {
                                                 Text([controller.macAddress, controller.address].filter { !$0.isEmpty }.joined(separator: " • "))
-                                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                                    .font(HBTypography.body(size: 11, weight: .medium))
                                                     .foregroundStyle(HBPalette.textMuted)
                                                     .fixedSize(horizontal: false, vertical: true)
                                             }
@@ -1137,7 +1137,7 @@ struct RainMachineView: View {
                                 .padding(.top, 2)
 
                             Text(health.lastError)
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 13, weight: .medium))
                                 .foregroundStyle(HBPalette.textSecondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -1153,17 +1153,17 @@ struct RainMachineView: View {
                 HBPanel {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(item.label)
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 11, weight: .bold))
                             .textCase(.uppercase)
                             .tracking(2)
                             .foregroundStyle(HBPalette.textMuted)
 
                         Text(item.value)
-                            .font(.system(size: 22, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 22, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
 
                         Text(item.detail)
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 12, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -1176,7 +1176,7 @@ struct RainMachineView: View {
         HBPanel {
             VStack(alignment: .leading, spacing: 10) {
                 Text("RainMachine is not configured yet.")
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 20, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
 
                 Text(
@@ -1184,13 +1184,13 @@ struct RainMachineView: View {
                         ? "Complete the controller setup above, then come back here for zone controls, reports, and telemetry-backed watering history."
                         : "An administrator needs to finish the RainMachine setup before the live irrigation controls and reports become available here."
                 )
-                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 13, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
                 if !dashboard.integration.lastError.isEmpty {
                     Text(dashboard.integration.lastError)
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.accentOrange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1226,11 +1226,11 @@ struct RainMachineView: View {
                     HStack(alignment: .top, spacing: 12) {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Runtime Queue")
-                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                                .font(HBTypography.display(size: 20, weight: .bold))
                                 .foregroundStyle(HBPalette.textPrimary)
 
                             Text("Current queue depth, active zones, and controller-side irrigation runtime.")
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 13, weight: .medium))
                                 .foregroundStyle(HBPalette.textMuted)
                         }
 
@@ -1242,11 +1242,11 @@ struct RainMachineView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Runtime Queue")
-                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                                .font(HBTypography.display(size: 20, weight: .bold))
                                 .foregroundStyle(HBPalette.textPrimary)
 
                             Text("Current queue depth, active zones, and controller-side irrigation runtime.")
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 13, weight: .medium))
                                 .foregroundStyle(HBPalette.textMuted)
                         }
 
@@ -1280,7 +1280,7 @@ struct RainMachineView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
                         Text("Queue Details")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 11, weight: .bold))
                             .textCase(.uppercase)
                             .tracking(2)
                             .foregroundStyle(HBPalette.textMuted)
@@ -1290,7 +1290,7 @@ struct RainMachineView: View {
 
                     if (dashboard?.runtime?.queue ?? []).isEmpty {
                         Text("No queued watering right now.")
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 13, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                     } else {
                         VStack(spacing: 10) {
@@ -1299,11 +1299,11 @@ struct RainMachineView: View {
                                     HStack(alignment: .top, spacing: 12) {
                                         VStack(alignment: .leading, spacing: 6) {
                                             Text(entry.name)
-                                                .font(.system(size: 15, weight: .bold, design: .rounded))
+                                                .font(HBTypography.body(size: 15, weight: .bold))
                                                 .foregroundStyle(HBPalette.textPrimary)
 
                                             Text("\(entry.stateLabel.capitalized) • remaining \(rainMachineFormatDuration(liveRemainingSeconds(entry.remainingSeconds)))")
-                                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                                .font(HBTypography.body(size: 12, weight: .medium))
                                                 .foregroundStyle(HBPalette.textSecondary)
                                         }
 
@@ -1323,27 +1323,27 @@ struct RainMachineView: View {
         HBPanel {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Restrictions")
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 20, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
 
                 Text("Rain delay controls and any active watering restrictions reported by the controller.")
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 13, weight: .medium))
                     .foregroundStyle(HBPalette.textMuted)
 
                 HBCardRow {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Rain Delay")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 11, weight: .bold))
                             .textCase(.uppercase)
                             .tracking(2)
                             .foregroundStyle(HBPalette.textMuted)
 
                         Text(rainMachineFormatHours(dashboard?.restrictions?.rainDelayHours))
-                            .font(.system(size: 22, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 22, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
 
                         Text((dashboard?.restrictions?.currentlyFlags["rainDelay"] ?? false) ? "Rain delay is currently blocking watering." : "No rain delay is active.")
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 12, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                     }
                 }
@@ -1357,14 +1357,14 @@ struct RainMachineView: View {
                 HBCardRow {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Active Restrictions")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 11, weight: .bold))
                             .textCase(.uppercase)
                             .tracking(2)
                             .foregroundStyle(HBPalette.textMuted)
 
                         if (dashboard?.restrictions?.activeCount ?? 0) == 0 {
                             Text("No active restrictions.")
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 13, weight: .medium))
                                 .foregroundStyle(HBPalette.textSecondary)
                         } else {
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], spacing: 8) {
@@ -1386,11 +1386,11 @@ struct RainMachineView: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Programs")
-                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                                .font(HBTypography.display(size: 20, weight: .bold))
                                 .foregroundStyle(HBPalette.textPrimary)
 
                             Text("Start or stop RainMachine programs without leaving the iOS app.")
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 13, weight: .medium))
                                 .foregroundStyle(HBPalette.textMuted)
                         }
 
@@ -1401,11 +1401,11 @@ struct RainMachineView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         VStack(alignment: .leading, spacing: 6) {
                             Text("Programs")
-                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                                .font(HBTypography.display(size: 20, weight: .bold))
                                 .foregroundStyle(HBPalette.textPrimary)
 
                             Text("Start or stop RainMachine programs without leaving the iOS app.")
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 13, weight: .medium))
                                 .foregroundStyle(HBPalette.textMuted)
                         }
 
@@ -1415,7 +1415,7 @@ struct RainMachineView: View {
 
                 if (dashboard?.programs ?? []).isEmpty {
                     Text("No programs were returned by the controller.")
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 13, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                 } else {
                         VStack(spacing: 10) {
@@ -1449,11 +1449,11 @@ struct RainMachineView: View {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Zones")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 20, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
 
                     Text("Live zone state with manual start and stop controls.")
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 13, weight: .medium))
                         .foregroundStyle(HBPalette.textMuted)
                 }
 
@@ -1475,12 +1475,12 @@ struct RainMachineView: View {
 
                 if (dashboard?.zones ?? []).isEmpty {
                     Text("No zones were returned by the controller.")
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 13, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                 } else if visibleZones.isEmpty {
                     HBCardRow {
                         Text("All \(hiddenZoneCount) inactive zone\(hiddenZoneCount == 1 ? "" : "s") are currently hidden. Turn off Hide Inactive to review them.")
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 13, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -1494,7 +1494,7 @@ struct RainMachineView: View {
 
                 if hideInactiveZones && hiddenZoneCount > 0 {
                     Text("\(hiddenZoneCount) inactive zone\(hiddenZoneCount == 1 ? "" : "s") hidden by default.")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.textMuted)
                 }
             }
@@ -1505,11 +1505,11 @@ struct RainMachineView: View {
         HBPanel {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Daily Stats")
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 20, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
 
                 Text("Recent controller-side daily irrigation calculations stored in the data platform.")
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 13, weight: .medium))
                     .foregroundStyle(HBPalette.textMuted)
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
@@ -1534,7 +1534,7 @@ struct RainMachineView: View {
 
                 if (dashboard?.dailyStats ?? []).isEmpty {
                     Text("Daily stats will appear here after the next report sync.")
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 13, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                 } else {
                     VStack(spacing: 10) {
@@ -1543,7 +1543,7 @@ struct RainMachineView: View {
                                 VStack(alignment: .leading, spacing: 10) {
                                     HStack {
                                         Text(rainMachineFormatDay(stat.dayDate))
-                                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                                            .font(HBTypography.body(size: 15, weight: .bold))
                                             .foregroundStyle(HBPalette.textPrimary)
                                         Spacer(minLength: 0)
                                         HBBadge(text: "\(Int(stat.metrics["program_count"] ?? 0)) programs")
@@ -1567,11 +1567,11 @@ struct RainMachineView: View {
         HBPanel {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Watering History")
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 20, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
 
                 Text("Recent watering outcomes persisted from the RainMachine watering log.")
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 13, weight: .medium))
                     .foregroundStyle(HBPalette.textMuted)
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 12)], spacing: 12) {
@@ -1589,7 +1589,7 @@ struct RainMachineView: View {
 
                 if recentWatering.isEmpty {
                     Text("Watering history will appear here after report ingestion completes.")
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 13, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                 } else {
                     VStack(spacing: 10) {
@@ -1601,11 +1601,11 @@ struct RainMachineView: View {
                                     HStack(alignment: .top, spacing: 10) {
                                         VStack(alignment: .leading, spacing: 4) {
                                             Text(rainMachineFormatDay(day.dayDate))
-                                                .font(.system(size: 15, weight: .bold, design: .rounded))
+                                                .font(HBTypography.body(size: 15, weight: .bold))
                                                 .foregroundStyle(HBPalette.textPrimary)
 
                                             Text("\(day.programCount) programs • \(Int(day.summary["zone_count"] ?? 0)) zones • \(Int(day.summary["cycle_count"] ?? 0)) cycles")
-                                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                                .font(HBTypography.body(size: 12, weight: .medium))
                                                 .foregroundStyle(HBPalette.textSecondary)
                                         }
 
@@ -1633,7 +1633,7 @@ struct RainMachineView: View {
                 if dashboard?.telemetrySources != nil {
                     HBCardRow {
                         Text("The RainMachine daily stats and watering log are also queryable in the shared data platform telemetry fabric. Open Data Platform from the sidebar to chart them alongside the rest of HomeBrain.")
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 12, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -1665,17 +1665,17 @@ struct RainMachineView: View {
     private var rainMachineHeroSummary: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Irrigation Control")
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 11, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(2.4)
                 .foregroundStyle(HBPalette.textMuted)
 
             Text("RainMachine")
-                .font(.system(size: 30, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 30, weight: .bold))
                 .foregroundStyle(HBPalette.textPrimary)
 
             Text("Live zone status, program controls, recent watering history, and controller-side reporting now travel together in the iOS app.")
-                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 14, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -1724,11 +1724,11 @@ struct RainMachineView: View {
     private var rainMachineSetupHeader: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Controller Setup")
-                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 20, weight: .bold))
                 .foregroundStyle(HBPalette.textPrimary)
 
             Text("Discover the controller on your LAN, verify the password-authenticated local API, and save the polling configuration used by HomeBrain.")
-                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 13, weight: .medium))
                 .foregroundStyle(HBPalette.textMuted)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1795,14 +1795,14 @@ struct RainMachineView: View {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) {
                     Text(program.name)
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .font(HBTypography.body(size: 15, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                     HBBadge(text: program.statusLabel.capitalized)
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text(program.name)
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .font(HBTypography.body(size: 15, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
                     HBBadge(text: program.statusLabel.capitalized)
@@ -1810,7 +1810,7 @@ struct RainMachineView: View {
             }
 
             Text("Next run \(program.nextRun == nil ? "not scheduled" : rainMachineFormatDay(program.nextRun)) • \(program.zoneIds.count) zones • configured \(rainMachineFormatDuration(program.totalConfiguredDurationSeconds))")
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1855,7 +1855,7 @@ struct RainMachineView: View {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) {
                     Text(zone.name)
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .font(HBTypography.body(size: 15, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
 
                     ForEach(Array(badges.enumerated()), id: \.offset) { badge in
@@ -1865,7 +1865,7 @@ struct RainMachineView: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text(zone.name)
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .font(HBTypography.body(size: 15, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
 
@@ -1876,7 +1876,7 @@ struct RainMachineView: View {
             }
 
             Text("\(zone.stateLabel.capitalized) • remaining \(rainMachineFormatDuration(liveRemainingSeconds(zone.remainingSeconds))) • next run \(zone.nextRun == nil ? "not scheduled" : "\(rainMachineFormatDay(zone.nextRun)) via \(zone.nextRunProgramName.isEmpty ? "program" : zone.nextRunProgramName)")")
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1931,13 +1931,13 @@ struct RainMachineView: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("Manual Run")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 10, weight: .bold))
                     .textCase(.uppercase)
                     .tracking(1.8)
                     .foregroundStyle(HBPalette.textMuted)
 
                 Text("\(selectedManualDurationMinutes) min")
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 20, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
             }
         }
@@ -1988,12 +1988,12 @@ struct RainMachineView: View {
     private func rainMachineHeroFact(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 10, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(1.8)
                 .foregroundStyle(HBPalette.textMuted)
             Text(value)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 13, weight: .semibold))
                 .foregroundStyle(HBPalette.textPrimary)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
@@ -2008,18 +2008,18 @@ struct RainMachineView: View {
         HBCardRow {
             VStack(alignment: .leading, spacing: 6) {
                 Text(title)
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 11, weight: .bold))
                     .textCase(.uppercase)
                     .tracking(2)
                     .foregroundStyle(HBPalette.textMuted)
 
                 Text(value)
-                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .font(HBTypography.body(size: 17, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
                     .lineLimit(2)
 
                 Text(detail)
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 12, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -2029,7 +2029,7 @@ struct RainMachineView: View {
     private func rainMachineFieldGroup<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 11, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(2)
                 .foregroundStyle(HBPalette.textMuted)
@@ -2041,18 +2041,18 @@ struct RainMachineView: View {
         HBCardRow {
             VStack(alignment: .leading, spacing: 6) {
                 Text(title)
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 11, weight: .bold))
                     .textCase(.uppercase)
                     .tracking(2)
                     .foregroundStyle(HBPalette.textMuted)
 
                 Text(value)
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 20, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
                     .lineLimit(2)
 
                 Text(detail)
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 12, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -2062,12 +2062,12 @@ struct RainMachineView: View {
     private func rainMachineStatPill(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 10, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(1.8)
                 .foregroundStyle(HBPalette.textMuted)
             Text(value)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 13, weight: .semibold))
                 .foregroundStyle(HBPalette.textPrimary)
                 .lineLimit(1)
         }
@@ -2282,7 +2282,7 @@ struct RainMachineView: View {
     private var rainMachineHideInactiveControl: some View {
         HStack(spacing: 10) {
             Text("Hide Inactive")
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 14, weight: .semibold))
                 .foregroundStyle(HBPalette.textPrimary)
 
             Toggle("", isOn: $hideInactiveZones)

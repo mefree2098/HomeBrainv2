@@ -400,7 +400,7 @@ struct SettingsView: View {
                         if !infoMessage.isEmpty {
                             Section {
                                 Text(infoMessage)
-                                    .font(.subheadline)
+                                    .font(HBTypography.body(.subheadline))
                                     .foregroundStyle(HBPalette.textSecondary)
                             }
                         }
@@ -510,16 +510,16 @@ struct SettingsView: View {
                         .frame(width: 24)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(selectedSettingsArea.title)
-                            .font(.subheadline.weight(.semibold))
+                            .font(HBTypography.body(.subheadline, weight: .semibold))
                             .foregroundStyle(HBPalette.textPrimary)
                         Text(selectedSettingsArea.subtitle)
-                            .font(.caption)
+                            .font(HBTypography.body(.caption))
                             .foregroundStyle(HBPalette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 8)
                     Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption.weight(.bold))
+                        .font(HBTypography.body(.caption, weight: .bold))
                         .foregroundStyle(HBPalette.textMuted)
                 }
                 .padding(12)
@@ -548,7 +548,7 @@ struct SettingsView: View {
                             selectedSettingsArea = area
                         } label: {
                             Label(area.title, systemImage: area.icon)
-                                .font(.caption.weight(.semibold))
+                                .font(HBTypography.body(.caption, weight: .semibold))
                                 .lineLimit(1)
                                 .padding(.horizontal, 11)
                                 .padding(.vertical, 8)
@@ -573,9 +573,9 @@ struct SettingsView: View {
                     .frame(width: 22)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(selectedSettingsArea.title)
-                        .font(.subheadline.weight(.semibold))
+                        .font(HBTypography.body(.subheadline, weight: .semibold))
                     Text(selectedSettingsArea.subtitle)
-                        .font(.caption)
+                        .font(HBTypography.body(.caption))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
                 Spacer()
@@ -736,7 +736,7 @@ struct SettingsView: View {
                 .textInputAutocapitalization(.never)
                 .disableAutocorrection(true)
             Text("Comma-separated fallback order, for example local,codex,openai,anthropic.")
-                .font(.footnote)
+                .font(HBTypography.body(.footnote))
                 .foregroundStyle(HBPalette.textSecondary)
         }
     }
@@ -769,7 +769,7 @@ struct SettingsView: View {
                         Label(area.title, systemImage: area.icon)
                         Spacer()
                         Image(systemName: "chevron.right")
-                            .font(.caption.weight(.bold))
+                            .font(HBTypography.body(.caption, weight: .bold))
                             .foregroundStyle(HBPalette.textMuted)
                     }
                 }
@@ -821,7 +821,7 @@ struct SettingsView: View {
 
             if securityPinDrafts.isEmpty {
                 Text("No security PINs configured.")
-                    .font(.footnote)
+                    .font(HBTypography.body(.footnote))
                     .foregroundStyle(HBPalette.textSecondary)
             } else {
                 ForEach($securityPinDrafts) { $pin in
@@ -859,7 +859,7 @@ struct SettingsView: View {
             }
 
             Text("iOS refresh sessions remain configurable up to 365 days and beyond; browser defaults are handled separately by the backend.")
-                .font(.footnote)
+                .font(HBTypography.body(.footnote))
                 .foregroundStyle(HBPalette.textSecondary)
         }
     }
@@ -867,7 +867,7 @@ struct SettingsView: View {
     private func settingsOpenFullAreaSection(_ area: SettingsWebArea) -> some View {
         Section(area.title) {
             Text(area.subtitle)
-                .font(.footnote)
+                .font(HBTypography.body(.footnote))
                 .foregroundStyle(HBPalette.textSecondary)
 
             Button {
@@ -1127,7 +1127,7 @@ struct SettingsView: View {
                         .textInputAutocapitalization(.never)
                         .disableAutocorrection(true)
                     Text("Comma-separated fallback order, for example local,codex,openai,anthropic.")
-                        .font(.footnote)
+                        .font(HBTypography.body(.footnote))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
 
@@ -1199,27 +1199,27 @@ struct SettingsView: View {
         Section("Sessions") {
             if authSessions.isEmpty {
                 Text("No active sessions found for this account.")
-                    .font(.subheadline)
+                    .font(HBTypography.body(.subheadline))
                     .foregroundStyle(HBPalette.textSecondary)
             } else {
                 ForEach(authSessions) { authSession in
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Text(authSession.clientName)
-                                .font(.headline)
+                                .font(HBTypography.display(.headline, weight: .semibold))
                             Spacer()
                             if authSession.isCurrent {
                                 Text("This device")
-                                    .font(.caption.weight(.semibold))
+                                    .font(HBTypography.body(.caption, weight: .semibold))
                                     .foregroundStyle(HBPalette.accentBlue)
                             }
                         }
 
                         Text("Last used: \(settingsFormatDateTime(authSession.lastUsedAt))")
-                            .font(.caption)
+                            .font(HBTypography.body(.caption))
                             .foregroundStyle(HBPalette.textSecondary)
                         Text("Expires: \(settingsFormatDateTime(authSession.expiresAt))")
-                            .font(.caption)
+                            .font(HBTypography.body(.caption))
                             .foregroundStyle(HBPalette.textSecondary)
 
                         if !authSession.isCurrent {
@@ -1241,7 +1241,7 @@ struct SettingsView: View {
     private var settingsHardwareOrbsSection: some View {
         Section("Hardware Orbs") {
             Text("Manage the orb fleet from iOS: firmware pushes, OTA status, setup tokens, Wi-Fi credentials, USB provisioning, and mount alignment.")
-                .font(.footnote)
+                .font(HBTypography.body(.footnote))
                 .foregroundStyle(HBPalette.textSecondary)
 
             Picker("Hardware Orb Settings", selection: $selectedHardwareOrbTab) {
@@ -1253,7 +1253,7 @@ struct SettingsView: View {
 
             if let hardwareOrbLoadError {
                 Text(hardwareOrbLoadError)
-                    .font(.footnote)
+                    .font(HBTypography.body(.footnote))
                     .foregroundStyle(HBPalette.accentRed)
             }
 
@@ -1299,7 +1299,7 @@ struct SettingsView: View {
 
             if hardwareOrbs.isEmpty {
                 Text("No hardware orbs registered yet. Use Provisioning to create a setup token or start a USB flash.")
-                    .font(.subheadline)
+                    .font(HBTypography.body(.subheadline))
                     .foregroundStyle(HBPalette.textSecondary)
             } else {
                 ForEach(hardwareOrbs) { hardwareOrb in
@@ -1326,13 +1326,13 @@ struct SettingsView: View {
                 if hardwareOrb.hasOtaActivity {
                     ProgressView(value: Double(hardwareOrb.ota.progress), total: 100)
                     Text(hardwareOrb.ota.detailText)
-                        .font(.caption)
+                        .font(HBTypography.body(.caption))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
 
                 if !hardwareOrb.ota.lastError.isEmpty {
                     Text(hardwareOrb.ota.lastError)
-                        .font(.caption)
+                        .font(HBTypography.body(.caption))
                         .foregroundStyle(HBPalette.accentRed)
                 }
 
@@ -1353,16 +1353,16 @@ struct SettingsView: View {
 
                 if !hardwareOrbWifiConfigured {
                     Text("Save Hardware Orb Wi-Fi in Provisioning before building USB or OTA firmware images.")
-                        .font(.caption)
+                        .font(HBTypography.body(.caption))
                         .foregroundStyle(HBPalette.textSecondary)
                 } else if !hardwareOrb.isRegistered {
                     Text("This orb must complete its first activation before Wi-Fi OTA firmware pushes are available.")
-                        .font(.caption)
+                        .font(HBTypography.body(.caption))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
             } else {
                 Text("No hardware orb is selected.")
-                    .font(.subheadline)
+                    .font(HBTypography.body(.subheadline))
                     .foregroundStyle(HBPalette.textSecondary)
             }
         }
@@ -1390,7 +1390,7 @@ struct SettingsView: View {
             Divider()
 
             Text("New Orb")
-                .font(.headline)
+                .font(HBTypography.display(.headline, weight: .semibold))
             TextField("Orb name", text: $newHardwareOrbName)
             TextField("Room", text: $newHardwareOrbRoom)
             Picker("Hardware Profile", selection: $newHardwareOrbHardwareProfile) {
@@ -1424,7 +1424,7 @@ struct SettingsView: View {
             Divider()
 
             Text("Selected Orb Setup")
-                .font(.headline)
+                .font(HBTypography.display(.headline, weight: .semibold))
             hardwareOrbPicker
 
             if let hardwareOrb = selectedHardwareOrb {
@@ -1463,7 +1463,7 @@ struct SettingsView: View {
     private var hardwareOrbCategoriesContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Turn orb categories on or off and choose the swipe order. The first enabled category is the default surface.")
-                .font(.footnote)
+                .font(HBTypography.body(.footnote))
                 .foregroundStyle(HBPalette.textSecondary)
 
             hardwareOrbPicker
@@ -1509,7 +1509,7 @@ struct SettingsView: View {
                 }
             } else {
                 Text("No hardware orb is selected.")
-                    .font(.subheadline)
+                    .font(HBTypography.body(.subheadline))
                     .foregroundStyle(HBPalette.textSecondary)
             }
         }
@@ -1519,12 +1519,12 @@ struct SettingsView: View {
     private var hardwareOrbAlignmentContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Rotate each orb UI in 0.5° steps to compensate for wall mounting. Changes save per device and sync through HomeBrain.")
-                .font(.footnote)
+                .font(HBTypography.body(.footnote))
                 .foregroundStyle(HBPalette.textSecondary)
 
             if hardwareOrbs.isEmpty {
                 Text("No hardware orbs registered yet.")
-                    .font(.subheadline)
+                    .font(HBTypography.body(.subheadline))
                     .foregroundStyle(HBPalette.textSecondary)
             } else {
                 ForEach(hardwareOrbs) { hardwareOrb in
@@ -2855,10 +2855,10 @@ private struct SettingsDeviceIntegrationsPane: View {
                         .frame(width: 24)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(title)
-                            .font(.headline)
+                            .font(HBTypography.display(.headline, weight: .semibold))
                             .foregroundStyle(HBPalette.textPrimary)
                         Text(subtitle)
-                            .font(.caption)
+                            .font(HBTypography.body(.caption))
                             .foregroundStyle(HBPalette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -2924,7 +2924,7 @@ private struct SettingsDeviceIntegrationsPane: View {
             }
 
             Text("Re-linking rebuilds the PLM all-link database for every tracked device and can run for several minutes.")
-                .font(.caption)
+                .font(HBTypography.body(.caption))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -2965,7 +2965,7 @@ private struct SettingsDeviceIntegrationsPane: View {
                 )
             } else {
                 Text("Catalog status has not loaded yet.")
-                    .font(.footnote)
+                    .font(HBTypography.body(.footnote))
                     .foregroundStyle(HBPalette.textSecondary)
             }
 
@@ -2975,7 +2975,7 @@ private struct SettingsDeviceIntegrationsPane: View {
                 }
                 if !summary.generatedAt.isEmpty {
                     Text("Generated \(settingsFormatDateTime(summary.generatedAt))")
-                        .font(.caption)
+                        .font(HBTypography.body(.caption))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
             }
@@ -3045,12 +3045,12 @@ private struct SettingsDeviceIntegrationsPane: View {
                 .frame(width: 22)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.caption.weight(.semibold))
+                    .font(HBTypography.body(.caption, weight: .semibold))
                     .foregroundStyle(HBPalette.textSecondary)
                 Text(value)
-                    .font(.subheadline.weight(.semibold))
+                    .font(HBTypography.body(.subheadline, weight: .semibold))
                 Text(detail)
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(HBPalette.textSecondary)
             }
         }
@@ -3061,13 +3061,13 @@ private struct SettingsDeviceIntegrationsPane: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
                 Text(catalog.title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(HBTypography.body(.subheadline, weight: .semibold))
                 Spacer()
                 Text("\(catalog.primaryCount)")
                     .font(.subheadline.monospacedDigit().weight(.bold))
             }
             Text(catalog.secondary)
-                .font(.caption)
+                .font(HBTypography.body(.caption))
                 .foregroundStyle(HBPalette.textSecondary)
             HStack(spacing: 10) {
                 Text(catalog.id == "zigbee" || catalog.id == "zwave"
@@ -3078,7 +3078,7 @@ private struct SettingsDeviceIntegrationsPane: View {
                         .foregroundStyle(HBPalette.accentRed)
                 }
             }
-            .font(.caption2.weight(.semibold))
+            .font(HBTypography.body(.caption2, weight: .semibold))
             .foregroundStyle(HBPalette.textMuted)
         }
         .padding(.vertical, 4)
@@ -3088,14 +3088,14 @@ private struct SettingsDeviceIntegrationsPane: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
                 Text(key.uppercased())
-                    .font(.caption.weight(.bold))
+                    .font(HBTypography.body(.caption, weight: .bold))
                 Spacer()
                 Text(source.success && source.error.isEmpty ? "Successful" : "Failed")
-                    .font(.caption.weight(.semibold))
+                    .font(HBTypography.body(.caption, weight: .semibold))
                     .foregroundStyle(source.success && source.error.isEmpty ? HBPalette.accentGreen : HBPalette.accentRed)
             }
             Text("Added \(source.addedCount) of \(source.fetchedCount) fetched; total \(source.totalCount).")
-                .font(.caption)
+                .font(HBTypography.body(.caption))
                 .foregroundStyle(HBPalette.textSecondary)
             if !source.sourceUrl.isEmpty {
                 Text(source.sourceUrl)
@@ -3106,7 +3106,7 @@ private struct SettingsDeviceIntegrationsPane: View {
             }
             if !source.error.isEmpty {
                 Text(source.error)
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(HBPalette.accentRed)
             }
         }
@@ -3124,17 +3124,17 @@ private struct SettingsDeviceIntegrationsPane: View {
                 if !status.diagnostics.isEmpty {
                     ForEach(status.diagnostics, id: \.self) { diagnostic in
                         Label(diagnostic, systemImage: "exclamationmark.triangle")
-                            .font(.footnote)
+                            .font(HBTypography.body(.footnote))
                             .foregroundStyle(HBPalette.accentOrange)
                     }
                 }
 
                 Text(status.enabled ? "Direct radio runtime is enabled." : "Direct radio runtime is disabled.")
-                    .font(.footnote)
+                    .font(HBTypography.body(.footnote))
                     .foregroundStyle(HBPalette.textSecondary)
             } else {
                 Text("Radio status has not loaded yet.")
-                    .font(.footnote)
+                    .font(HBTypography.body(.footnote))
                     .foregroundStyle(HBPalette.textSecondary)
             }
 
@@ -3155,7 +3155,7 @@ private struct SettingsDeviceIntegrationsPane: View {
             integrationPanel("Direct Radio USB Ports", icon: "cable.connector", subtitle: "Detected serial adapters and HomeBrain protocol scoring.") {
                 if status.serialPorts.isEmpty {
                     Text("No serial ports found.")
-                        .font(.footnote)
+                        .font(HBTypography.body(.footnote))
                         .foregroundStyle(HBPalette.textSecondary)
                 } else {
                     ForEach(status.serialPorts) { port in
@@ -3186,7 +3186,7 @@ private struct SettingsDeviceIntegrationsPane: View {
 
             if directRadioLogs.isEmpty {
                 Text("No direct radio logs yet.")
-                    .font(.footnote)
+                    .font(HBTypography.body(.footnote))
                     .foregroundStyle(HBPalette.textSecondary)
             } else {
                 ForEach(directRadioLogs.prefix(40)) { entry in
@@ -3224,15 +3224,15 @@ private struct SettingsDeviceIntegrationsPane: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Label(controller.protocolName == "zigbee" ? "Zigbee" : "Z-Wave", systemImage: controller.protocolName == "zigbee" ? "dot.radiowaves.left.and.right" : "wave.3.right")
-                    .font(.headline)
+                    .font(HBTypography.display(.headline, weight: .semibold))
                 Spacer()
                 Text(controller.isReady ? "Online" : controller.started ? "Starting" : "Offline")
-                    .font(.caption.weight(.semibold))
+                    .font(HBTypography.body(.caption, weight: .semibold))
                     .foregroundStyle(controller.isReady ? HBPalette.accentGreen : HBPalette.accentOrange)
             }
 
             Text(controller.expectedHardware)
-                .font(.caption)
+                .font(HBTypography.body(.caption))
                 .foregroundStyle(HBPalette.textSecondary)
 
             if !controller.detectedPort.isEmpty {
@@ -3242,7 +3242,7 @@ private struct SettingsDeviceIntegrationsPane: View {
                     .textSelection(.enabled)
             } else {
                 Text("No matching USB adapter detected.")
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(HBPalette.accentOrange)
             }
 
@@ -3255,12 +3255,12 @@ private struct SettingsDeviceIntegrationsPane: View {
                     Text(controller.lastStartResult)
                 }
             }
-            .font(.caption)
+            .font(HBTypography.body(.caption))
             .foregroundStyle(HBPalette.textSecondary)
 
             if !controller.error.isEmpty {
                 Text(controller.error)
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(HBPalette.accentRed)
             }
         }
@@ -3271,11 +3271,11 @@ private struct SettingsDeviceIntegrationsPane: View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
                 Text(port.preferredProtocol.isEmpty ? "Serial Port" : port.preferredProtocol.uppercased())
-                    .font(.caption.weight(.bold))
+                    .font(HBTypography.body(.caption, weight: .bold))
                     .foregroundStyle(port.preferredProtocol == "zigbee" ? HBPalette.accentGreen : port.preferredProtocol == "zwave" ? HBPalette.accentBlue : HBPalette.textSecondary)
                 Spacer()
                 Text("ZB \(port.scores.zigbee) / ZW \(port.scores.zwave)")
-                    .font(.caption2.weight(.semibold))
+                    .font(HBTypography.body(.caption2, weight: .semibold))
                     .foregroundStyle(HBPalette.textMuted)
             }
 
@@ -3289,7 +3289,7 @@ private struct SettingsDeviceIntegrationsPane: View {
                 .joined(separator: " · ")
             if !descriptor.isEmpty {
                 Text(descriptor)
-                    .font(.caption2)
+                    .font(HBTypography.body(.caption2))
                     .foregroundStyle(HBPalette.textMuted)
             }
         }
@@ -3300,26 +3300,26 @@ private struct SettingsDeviceIntegrationsPane: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(entry.protocolName.uppercased())
-                    .font(.caption2.weight(.bold))
+                    .font(HBTypography.body(.caption2, weight: .bold))
                     .foregroundStyle(entry.protocolName == "zigbee" ? HBPalette.accentGreen : entry.protocolName == "zwave" ? HBPalette.accentBlue : HBPalette.textMuted)
                 Text(entry.level.uppercased())
-                    .font(.caption2.weight(.bold))
+                    .font(HBTypography.body(.caption2, weight: .bold))
                     .foregroundStyle(entry.level == "error" ? HBPalette.accentRed : entry.level == "warn" ? HBPalette.accentOrange : HBPalette.textMuted)
                 Spacer()
                 Text(entry.displayTime)
-                    .font(.caption2)
+                    .font(HBTypography.body(.caption2))
                     .foregroundStyle(HBPalette.textMuted)
             }
 
             Text(entry.message)
-                .font(.subheadline.weight(.semibold))
+                .font(HBTypography.body(.subheadline, weight: .semibold))
 
             let metadata = [entry.stage, entry.operation, entry.target]
                 .filter { !$0.isEmpty }
                 .joined(separator: " · ")
             if !metadata.isEmpty {
                 Text(metadata)
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(HBPalette.textSecondary)
             }
 
@@ -3338,7 +3338,7 @@ private struct SettingsDeviceIntegrationsPane: View {
         if !message.isEmpty {
             integrationPanel("Message", icon: "text.bubble", subtitle: "Latest action summary.") {
                 Text(message)
-                    .font(.subheadline)
+                    .font(HBTypography.body(.subheadline))
                     .foregroundStyle(HBPalette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -3758,7 +3758,7 @@ private struct SettingsMaintenancePane: View {
             if !message.isEmpty {
                 Section("Message") {
                     Text(message)
-                        .font(.subheadline)
+                        .font(HBTypography.body(.subheadline))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
             }
@@ -4191,12 +4191,12 @@ private struct HardwareOrbMetricView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title.uppercased())
-                .font(.caption2)
+                .font(HBTypography.body(.caption2))
                 .foregroundStyle(HBPalette.textSecondary)
             Text(value)
                 .font(.headline.monospacedDigit())
             Text(subtitle)
-                .font(.caption2)
+                .font(HBTypography.body(.caption2))
                 .foregroundStyle(HBPalette.textSecondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -4212,9 +4212,9 @@ private struct HardwareOrbFleetRow: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(hardwareOrb.name)
-                        .font(.headline)
+                        .font(HBTypography.display(.headline, weight: .semibold))
                     Text("\(hardwareOrb.room) · \(hardwareOrb.statusLabel) · \(hardwareOrb.hardwareProfileLabel)")
-                        .font(.caption)
+                        .font(HBTypography.body(.caption))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
                 Spacer()
@@ -4227,17 +4227,17 @@ private struct HardwareOrbFleetRow: View {
                 Spacer()
                 Text("Firmware \(hardwareOrb.firmwareVersionDisplay)")
             }
-            .font(.caption)
+            .font(HBTypography.body(.caption))
             .foregroundStyle(HBPalette.textSecondary)
 
             Text("Default \(hardwareOrb.defaultModeCategoryLabel) · \(hardwareOrb.modeCategorySummary)")
-                .font(.caption)
+                .font(HBTypography.body(.caption))
                 .foregroundStyle(HBPalette.textSecondary)
                 .lineLimit(2)
 
             if hardwareOrb.requiresFirmwareUpdate || hardwareOrb.isOtaBusy {
                 Text(hardwareOrb.isOtaBusy ? "OTA: \(hardwareOrb.ota.statusLabel)" : "Newer firmware available")
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(hardwareOrb.isOtaBusy ? HBPalette.accentBlue : HBPalette.accentRed)
             }
         }
@@ -4257,7 +4257,7 @@ private struct HardwareOrbWifiStatusView: View {
             .foregroundStyle(isConfigured ? HBPalette.accentGreen : HBPalette.accentRed)
             Spacer()
         }
-        .font(.subheadline)
+        .font(HBTypography.body(.subheadline))
     }
 }
 
@@ -4278,7 +4278,7 @@ private struct HardwareOrbFirmwareStatusView: View {
 
             if hardwareOrb.requiresFirmwareUpdate {
                 Label("Newer firmware available on this HomeBrain host", systemImage: "arrow.up.circle.fill")
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(HBPalette.accentRed)
             }
         }
@@ -4292,11 +4292,11 @@ private struct HardwareOrbValueRow: View {
     var body: some View {
         HStack(alignment: .top) {
             Text(title)
-                .font(.caption)
+                .font(HBTypography.body(.caption))
                 .foregroundStyle(HBPalette.textSecondary)
             Spacer(minLength: 16)
             Text(value)
-                .font(.caption)
+                .font(HBTypography.body(.caption))
                 .multilineTextAlignment(.trailing)
         }
     }
@@ -4344,10 +4344,10 @@ private struct HardwareOrbCategoryRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(category.label)
-                        .font(.subheadline.weight(.semibold))
+                        .font(HBTypography.body(.subheadline, weight: .semibold))
                     if isDefault {
                         Text("Default")
-                            .font(.caption2.weight(.semibold))
+                            .font(HBTypography.body(.caption2, weight: .semibold))
                             .foregroundStyle(HBPalette.accentBlue)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 3)
@@ -4355,7 +4355,7 @@ private struct HardwareOrbCategoryRow: View {
                     }
                 }
                 Text(category.details)
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(HBPalette.textSecondary)
             }
 
@@ -4399,7 +4399,7 @@ private struct HardwareOrbProvisioningPacketView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Setup Packet")
-                .font(.headline)
+                .font(HBTypography.display(.headline, weight: .semibold))
             HardwareOrbValueRow(title: "Orb", value: "\(packet.panelName) · \(packet.panelRoom)")
             HardwareOrbValueRow(title: "Hub URL", value: packet.hubURL.isEmpty ? packet.headerHubURL : packet.hubURL)
             HardwareOrbValueRow(title: "Panel ID", value: packet.panelID)
@@ -4426,9 +4426,9 @@ private struct HardwareOrbAlignmentRow: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(hardwareOrb.name)
-                        .font(.headline)
+                        .font(HBTypography.display(.headline, weight: .semibold))
                     Text("\(hardwareOrb.room) · \(hardwareOrb.statusLabel)")
-                        .font(.caption)
+                        .font(HBTypography.body(.caption))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
                 Spacer()

@@ -482,11 +482,11 @@ struct WorkflowsView: View {
                     } label: {
                         VStack(alignment: .leading, spacing: 8) {
                             Text(template.name)
-                                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                                .font(HBTypography.body(size: 15, weight: .semibold))
                                 .foregroundStyle(HBPalette.textPrimary)
 
                             Text(template.description)
-                                .font(.caption)
+                                .font(HBTypography.body(.caption))
                                 .foregroundStyle(HBPalette.textSecondary)
                                 .multilineTextAlignment(.leading)
                         }
@@ -505,7 +505,7 @@ struct WorkflowsView: View {
         GroupBox("Create with AI") {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Describe a new workflow in plain English and HomeBrain will draft it for you.")
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(HBPalette.textSecondary)
 
                 TextField(
@@ -531,7 +531,7 @@ struct WorkflowsView: View {
     private var adminCapabilitiesNote: some View {
         GroupBox("Workflow Permissions") {
             Text("Standard users can run workflows and use command chat, while admins can create, revise, and reconfigure workflow templates.")
-                .font(.caption)
+                .font(HBTypography.body(.caption))
                 .foregroundStyle(HBPalette.textSecondary)
                 .padding(.top, 4)
         }
@@ -541,7 +541,7 @@ struct WorkflowsView: View {
         GroupBox("Chat / Voice Command") {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Use the same command parser as remote voice devices to create, revise, or run workflows from text.")
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(HBPalette.textSecondary)
 
                 TextField(
@@ -564,7 +564,7 @@ struct WorkflowsView: View {
 
                 if !lastChatResult.isEmpty {
                     Text(lastChatResult)
-                        .font(.caption)
+                        .font(HBTypography.body(.caption))
                         .foregroundStyle(HBPalette.textSecondary)
                         .padding(12)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -581,11 +581,11 @@ struct WorkflowsView: View {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Automation Runtime")
-                            .font(.system(size: 18, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 18, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
 
                         Text("Live execution state, recent trigger evaluations, and detailed runtime logs for workflow-backed automations.")
-                            .font(.caption)
+                            .font(HBTypography.body(.caption))
                             .foregroundStyle(HBPalette.textSecondary)
                     }
 
@@ -602,7 +602,7 @@ struct WorkflowsView: View {
 
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Runtime Dashboard")
-                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .font(HBTypography.body(size: 16, weight: .semibold))
                         .foregroundStyle(HBPalette.textPrimary)
 
                     LazyVGrid(
@@ -662,11 +662,11 @@ struct WorkflowsView: View {
                         HStack(alignment: .top) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Recent Executions")
-                                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                                    .font(HBTypography.body(size: 16, weight: .semibold))
                                     .foregroundStyle(HBPalette.textPrimary)
 
                                 Text("Filter persisted runtime records by time period and how many logs appear per page.")
-                                    .font(.caption2)
+                                    .font(HBTypography.body(.caption2))
                                     .foregroundStyle(HBPalette.textSecondary)
                             }
 
@@ -700,7 +700,7 @@ struct WorkflowsView: View {
 
                     HStack {
                         Text(runtimePageSummary)
-                            .font(.caption)
+                            .font(HBTypography.body(.caption))
                             .foregroundStyle(HBPalette.textSecondary)
 
                         Spacer()
@@ -712,7 +712,7 @@ struct WorkflowsView: View {
                         .disabled(!runtimePagination.hasPreviousPage || runtimeRefreshing)
 
                         Text("Page \(runtimePagination.page) of \(runtimePagination.totalPages)")
-                            .font(.caption2)
+                            .font(HBTypography.body(.caption2))
                             .foregroundStyle(HBPalette.textSecondary)
 
                         Button("Next") {
@@ -912,11 +912,11 @@ struct WorkflowsView: View {
                 if let workflowToRevise {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(workflowToRevise.name)
-                            .font(.system(size: 18, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 18, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
 
                         Text(workflowToRevise.details.isEmpty ? "No description provided." : workflowToRevise.details)
-                            .font(.caption)
+                            .font(HBTypography.body(.caption))
                             .foregroundStyle(HBPalette.textSecondary)
                     }
                     .padding(14)
@@ -993,18 +993,18 @@ struct WorkflowsView: View {
                     GroupBox("Execution Summary") {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Trigger: \(execution.triggerType.replacingOccurrences(of: "_", with: " ")) via \(execution.triggerSource.replacingOccurrences(of: "_", with: " "))")
-                                .font(.caption)
+                                .font(HBTypography.body(.caption))
                                 .foregroundStyle(HBPalette.textSecondary)
 
                             if let lastEvent = execution.lastEvent?.message, !lastEvent.isEmpty {
                                 Text("Latest update: \(lastEvent)")
-                                    .font(.caption)
+                                    .font(HBTypography.body(.caption))
                                     .foregroundStyle(HBPalette.textSecondary)
                             }
 
                             if let currentAction = execution.currentAction {
                                 Text("Current step: \(currentAction.message)")
-                                    .font(.caption)
+                                    .font(HBTypography.body(.caption))
                                     .foregroundStyle(HBPalette.textSecondary)
                             }
                         }
@@ -1065,7 +1065,7 @@ struct WorkflowsView: View {
     private func sectionHeading(_ title: String, count: Int) -> some View {
         HStack {
             Text(title)
-                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 16, weight: .semibold))
                 .foregroundStyle(HBPalette.textPrimary)
 
             Spacer()
@@ -1083,7 +1083,7 @@ struct WorkflowsView: View {
         Group {
             VStack(alignment: .leading, spacing: 6) {
                 Text("How Many Logs")
-                    .font(.caption2)
+                    .font(HBTypography.body(.caption2))
                     .foregroundStyle(HBPalette.textSecondary)
                     .textCase(.uppercase)
                     .tracking(1.1)
@@ -1098,7 +1098,7 @@ struct WorkflowsView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text("Time Period")
-                    .font(.caption2)
+                    .font(HBTypography.body(.caption2))
                     .foregroundStyle(HBPalette.textSecondary)
                     .textCase(.uppercase)
                     .tracking(1.1)
@@ -1120,11 +1120,11 @@ struct WorkflowsView: View {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(execution.displayName)
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 20, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
 
                     Text("Trigger: \(execution.triggerType.replacingOccurrences(of: "_", with: " ")) via \(execution.triggerSource.replacingOccurrences(of: "_", with: " "))")
-                        .font(.caption)
+                        .font(HBTypography.body(.caption))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
 
@@ -1156,7 +1156,7 @@ struct WorkflowsView: View {
 
             if let lastEvent = execution.lastEvent?.message, !lastEvent.isEmpty {
                 Text("Latest update: \(lastEvent)")
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(HBPalette.textSecondary)
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1165,7 +1165,7 @@ struct WorkflowsView: View {
 
             HStack {
                 Text("Progress: \(execution.successfulActions)/\(execution.totalActions) steps finished")
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(HBPalette.textSecondary)
 
                 Spacer()
@@ -1191,11 +1191,11 @@ struct WorkflowsView: View {
             HStack(alignment: .top, spacing: 10) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(activitySummary(for: event))
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .font(HBTypography.body(size: 15, weight: .semibold))
                         .foregroundStyle(HBPalette.textPrimary)
 
                     Text("\(event.source) · #\(event.sequence) · \(event.createdAt)")
-                        .font(.caption2)
+                        .font(HBTypography.body(.caption2))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
 
@@ -1206,7 +1206,7 @@ struct WorkflowsView: View {
 
             if let payloadMessage = event.payloadMessage, !payloadMessage.isEmpty {
                 Text(payloadMessage)
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(HBPalette.textSecondary)
             }
         }
@@ -1219,11 +1219,11 @@ struct WorkflowsView: View {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(execution.displayName)
-                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 18, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
 
                     Text(execution.automationName)
-                        .font(.caption)
+                        .font(HBTypography.body(.caption))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
 
@@ -1329,11 +1329,11 @@ struct WorkflowsView: View {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(workflow.name)
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 20, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
 
                     Text(workflow.details.isEmpty ? "No description provided." : workflow.details)
-                        .font(.caption)
+                        .font(HBTypography.body(.caption))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
 
@@ -1374,18 +1374,18 @@ struct WorkflowsView: View {
             }
 
             Text(workflowTriggerSummary(workflow))
-                .font(.caption)
+                .font(HBTypography.body(.caption))
                 .foregroundStyle(HBPalette.textSecondary)
 
             if let actionSummary = workflowActionSummary(workflow), !actionSummary.isEmpty {
                 Text(actionSummary)
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(HBPalette.textSecondary)
             }
 
             if workflow.voiceAliases.isEmpty {
                 Text("No voice alias set yet.")
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(HBPalette.textSecondary)
             } else {
                 LazyVGrid(
@@ -1406,7 +1406,7 @@ struct WorkflowsView: View {
 
             if let lastErrorMessage = workflow.lastErrorMessage, !lastErrorMessage.isEmpty {
                 Text("Last error: \(lastErrorMessage)")
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(HBPalette.accentRed)
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1449,18 +1449,18 @@ struct WorkflowsView: View {
     private func runtimeMetricCard(title: String, value: String, subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.caption2)
+                .font(HBTypography.body(.caption2))
                 .foregroundStyle(HBPalette.textSecondary)
                 .textCase(.uppercase)
                 .tracking(1.2)
 
             Text(value)
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 14, weight: .semibold))
                 .foregroundStyle(HBPalette.textPrimary)
 
             if !subtitle.isEmpty {
                 Text(subtitle)
-                    .font(.caption2)
+                    .font(HBTypography.body(.caption2))
                     .foregroundStyle(HBPalette.textSecondary)
             }
         }

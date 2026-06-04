@@ -50,12 +50,12 @@ struct OperationsView: View {
                                             eventHeader(for: event)
 
                                             Text("\(event.source) · #\(event.sequence) · \(event.createdAt)")
-                                                .font(.caption2)
+                                                .font(HBTypography.body(.caption2))
                                                 .foregroundStyle(HBPalette.textSecondary)
 
                                             if !event.payloadSummary.isEmpty {
                                                 Text(event.payloadSummary)
-                                                    .font(.caption)
+                                                    .font(HBTypography.body(.caption))
                                                     .foregroundStyle(HBPalette.textSecondary)
                                                     .fixedSize(horizontal: false, vertical: true)
                                             }
@@ -138,7 +138,7 @@ struct OperationsView: View {
         if usesCompactLayout {
             VStack(alignment: .leading, spacing: 8) {
                 Text(event.type)
-                    .font(.headline)
+                    .font(HBTypography.display(.headline, weight: .semibold))
                     .foregroundStyle(HBPalette.textPrimary)
 
                 severityBadge(for: event.severity)
@@ -146,7 +146,7 @@ struct OperationsView: View {
         } else {
             HStack {
                 Text(event.type)
-                    .font(.headline)
+                    .font(HBTypography.display(.headline, weight: .semibold))
                     .foregroundStyle(HBPalette.textPrimary)
                 Spacer()
                 severityBadge(for: event.severity)
@@ -156,7 +156,7 @@ struct OperationsView: View {
 
     private func severityBadge(for severity: String) -> some View {
         Text(severity.uppercased())
-            .font(.caption2)
+            .font(HBTypography.body(.caption2))
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(severityColor(severity).opacity(0.2))

@@ -38,7 +38,7 @@ struct OllamaView: View {
                     if !infoMessage.isEmpty {
                         HBPanel {
                             Text(infoMessage)
-                                .font(.subheadline)
+                                .font(HBTypography.body(.subheadline))
                                 .foregroundStyle(HBPalette.textSecondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -78,7 +78,7 @@ struct OllamaView: View {
                 Text("Active Model: \(JSON.string(status, "activeModel", fallback: "None"))")
                 Text("Update Available: \(JSON.bool(status, "updateAvailable") ? "Yes" : "No")")
             }
-            .font(.subheadline)
+            .font(HBTypography.body(.subheadline))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 4)
         }
@@ -130,10 +130,10 @@ struct OllamaView: View {
                 }
 
                 Text("Installed")
-                    .font(.headline)
+                    .font(HBTypography.display(.headline, weight: .semibold))
                 if installedModels.isEmpty {
                     Text("No installed models")
-                        .font(.caption)
+                        .font(HBTypography.body(.caption))
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(Array(installedModels.enumerated()), id: \.offset) { _, model in
@@ -152,10 +152,10 @@ struct OllamaView: View {
                 }
 
                 Text("Available")
-                    .font(.headline)
+                    .font(HBTypography.display(.headline, weight: .semibold))
                 ForEach(Array(availableModels.prefix(12).enumerated()), id: \.offset) { _, model in
                     Text(JSON.string(model, "name", fallback: "unknown"))
-                        .font(.caption)
+                        .font(HBTypography.body(.caption))
                 }
             }
             .padding(.top, 4)
@@ -176,7 +176,7 @@ struct OllamaView: View {
 
                 if !chatOutput.isEmpty {
                     Text(chatOutput)
-                        .font(.subheadline)
+                        .font(HBTypography.body(.subheadline))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -188,7 +188,7 @@ struct OllamaView: View {
         GroupBox("Recent Logs") {
             if logs.isEmpty {
                 Text("No logs available")
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(.secondary)
             } else {
                 TextEditor(text: .constant(logs.joined(separator: "\n")))

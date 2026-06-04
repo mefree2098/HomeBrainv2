@@ -490,18 +490,18 @@ private struct TelemetryMetricPanel: View {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(metric.label)
-                            .font(.system(size: 18, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 18, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
 
                         Text(metric.binary ? "State telemetry" : "Long-range metric history")
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 12, weight: .medium))
                             .foregroundStyle(HBPalette.textMuted)
                     }
 
                     Spacer(minLength: 0)
 
                     Text(telemetryFormatMetricValue(metric, value: stats?.latest))
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .font(HBTypography.body(size: 13, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
@@ -519,7 +519,7 @@ private struct TelemetryMetricPanel: View {
                         .fill(HBPalette.panelSoft.opacity(0.7))
                         .overlay(
                             Text("No samples in this window yet.")
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 13, weight: .medium))
                                 .foregroundStyle(HBPalette.textMuted)
                         )
                         .frame(height: 210)
@@ -555,7 +555,7 @@ private struct TelemetryMetricPanel: View {
                             AxisValueLabel {
                                 if let date = value.as(Date.self) {
                                     Text(telemetryFormatChartDate(date))
-                                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                                        .font(HBTypography.body(size: 10, weight: .medium))
                                         .foregroundStyle(HBPalette.textMuted)
                                 }
                             }
@@ -569,11 +569,11 @@ private struct TelemetryMetricPanel: View {
                                 if let number = value.as(Double.self) {
                                     if metric.binary {
                                         Text(telemetryBinaryLabel(for: metric.key, value: number))
-                                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                                            .font(HBTypography.body(size: 10, weight: .medium))
                                             .foregroundStyle(HBPalette.textMuted)
                                     } else {
                                         Text(number.formatted(.number.precision(.fractionLength(0...1))))
-                                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                                            .font(HBTypography.body(size: 10, weight: .medium))
                                             .foregroundStyle(HBPalette.textMuted)
                                     }
                                 }
@@ -588,12 +588,12 @@ private struct TelemetryMetricPanel: View {
     private func telemetryStatPill(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 10, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(1.8)
                 .foregroundStyle(HBPalette.textMuted)
             Text(value)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 13, weight: .semibold))
                 .foregroundStyle(HBPalette.textPrimary)
                 .lineLimit(1)
         }
@@ -729,17 +729,17 @@ struct DataPlatformView: View {
                 HStack(alignment: .top, spacing: 14) {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Residence Telemetry Fabric")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 11, weight: .bold))
                             .textCase(.uppercase)
                             .tracking(2.2)
                             .foregroundStyle(HBPalette.textMuted)
 
                         Text("Data Platform")
-                            .font(.system(size: 30, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 30, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
 
                         Text("HomeBrain now tracks one year of chart-ready device, Sense, Tempest, and RainMachine history so trends, comparisons, reports, and future automations can all draw from the same telemetry surface.")
-                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 14, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -751,7 +751,7 @@ struct DataPlatformView: View {
                             Task { await loadOverview(showLoading: false) }
                         } label: {
                             Label(isRefreshing ? "Refreshing..." : "Refresh", systemImage: "arrow.clockwise")
-                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                .font(HBTypography.body(size: 13, weight: .semibold))
                         }
                         .buttonStyle(.borderedProminent)
                         .tint(HBPalette.accentBlue)
@@ -761,7 +761,7 @@ struct DataPlatformView: View {
                                 showClearAllConfirmation = true
                             } label: {
                                 Label("Clear All", systemImage: "trash")
-                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                    .font(HBTypography.body(size: 13, weight: .semibold))
                             }
                             .buttonStyle(.bordered)
                             .disabled(isClearing || (overview?.totalSamples ?? 0) == 0)
@@ -791,7 +791,7 @@ struct DataPlatformView: View {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Storage Footprint")
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 20, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
 
                     Text(
@@ -799,7 +799,7 @@ struct DataPlatformView: View {
                             ? "HomeBrain telemetry currently uses \(telemetryFormatBytes(overview?.storage.footprintBytes ?? 0)) on disk, with \(telemetryFormatBytes(overview?.disk.freeBytes ?? 0)) free out of \(telemetryFormatBytes(overview?.disk.totalBytes ?? 0)) on \(telemetryDiskLocation(overview?.disk))."
                             : "HomeBrain telemetry currently uses \(telemetryFormatBytes(overview?.storage.footprintBytes ?? 0)) on disk. Drive capacity telemetry is currently unavailable."
                     )
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 13, weight: .medium))
                         .foregroundStyle(HBPalette.textMuted)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -826,11 +826,11 @@ struct DataPlatformView: View {
                     ForEach(storageCollections) { collection in
                         VStack(alignment: .leading, spacing: 8) {
                             Text(collection.label)
-                                .font(.system(size: 14, weight: .bold, design: .rounded))
+                                .font(HBTypography.body(size: 14, weight: .bold))
                                 .foregroundStyle(HBPalette.textPrimary)
 
                             Text(telemetryFormatBytes(collection.footprintBytes))
-                                .font(.system(size: 18, weight: .bold, design: .rounded))
+                                .font(HBTypography.display(size: 18, weight: .bold))
                                 .foregroundStyle(HBPalette.textPrimary)
 
                             VStack(alignment: .leading, spacing: 4) {
@@ -838,7 +838,7 @@ struct DataPlatformView: View {
                                 Text("\(telemetryFormatBytes(collection.storageSizeBytes)) collection")
                                 Text("\(telemetryFormatBytes(collection.indexSizeBytes)) indexes")
                             }
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 12, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -856,11 +856,11 @@ struct DataPlatformView: View {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Source Explorer")
-                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 20, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
 
                         Text("Choose a tracked source to inspect long-range device, energy, weather, or irrigation history.")
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 13, weight: .medium))
                             .foregroundStyle(HBPalette.textMuted)
                     }
 
@@ -871,7 +871,7 @@ struct DataPlatformView: View {
                             showClearSourceConfirmation = true
                         } label: {
                             Label("Clear Source", systemImage: "trash")
-                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .font(HBTypography.body(size: 12, weight: .semibold))
                         }
                         .buttonStyle(.bordered)
                         .disabled(isClearing)
@@ -904,7 +904,7 @@ struct DataPlatformView: View {
                                     selectedRange = option
                                 } label: {
                                     Text(option.title)
-                                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                                        .font(HBTypography.body(size: 12, weight: .bold))
                                         .frame(minWidth: 48)
                                 }
                                 .buttonStyle(.borderedProminent)
@@ -918,7 +918,7 @@ struct DataPlatformView: View {
                                     toggleMetric(metric.key)
                                 } label: {
                                     Text(metric.label)
-                                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                        .font(HBTypography.body(size: 12, weight: .semibold))
                                         .foregroundStyle(selectedMetricKeys.contains(metric.key) ? HBPalette.textPrimary : HBPalette.textSecondary)
                                         .frame(maxWidth: .infinity)
                                         .padding(.horizontal, 12)
@@ -990,13 +990,13 @@ struct DataPlatformView: View {
         } label: {
             VStack(alignment: .leading, spacing: 10) {
                 Text(telemetrySourceKindLabel(source))
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 10, weight: .bold))
                     .textCase(.uppercase)
                     .tracking(1.8)
                     .foregroundStyle(active ? Color.white.opacity(0.76) : HBPalette.textMuted)
 
                 Text(source.name)
-                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .font(HBTypography.body(size: 17, weight: .bold))
                     .foregroundStyle(active ? Color.white : HBPalette.textPrimary)
                     .multilineTextAlignment(.leading)
 
@@ -1005,7 +1005,7 @@ struct DataPlatformView: View {
                     Text("\(telemetryFormatCompactCount(source.sampleCount)) samples")
                     Text(telemetryFormatDateTime(source.lastSampleAt))
                 }
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .medium))
                 .foregroundStyle(active ? Color.white.opacity(0.82) : HBPalette.textSecondary)
             }
             .frame(width: 220, alignment: .leading)
@@ -1033,18 +1033,18 @@ struct DataPlatformView: View {
     private func telemetryOverviewTile(title: String, value: String, subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 10, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(1.8)
                 .foregroundStyle(HBPalette.textMuted)
 
             Text(value)
-                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 20, weight: .bold))
                 .foregroundStyle(HBPalette.textPrimary)
                 .lineLimit(2)
 
             Text(subtitle)
-                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 11, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1065,11 +1065,11 @@ struct DataPlatformView: View {
                     )
 
                 Text(title)
-                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 18, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
 
                 Text(subtitle)
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 13, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

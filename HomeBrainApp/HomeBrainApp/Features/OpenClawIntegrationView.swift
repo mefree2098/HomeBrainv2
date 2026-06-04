@@ -66,7 +66,7 @@ struct OpenClawIntegrationView: View {
                         if !infoMessage.isEmpty {
                             HBPanel {
                                 Text(infoMessage)
-                                    .font(.subheadline)
+                                    .font(HBTypography.body(.subheadline))
                                     .foregroundStyle(HBPalette.textSecondary)
                             }
                         }
@@ -74,7 +74,7 @@ struct OpenClawIntegrationView: View {
                         HBPanel {
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("Status")
-                                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                                    .font(HBTypography.display(size: 12, weight: .bold))
                                     .textCase(.uppercase)
                                     .tracking(2.4)
                                     .foregroundStyle(HBPalette.textMuted)
@@ -93,7 +93,7 @@ struct OpenClawIntegrationView: View {
                         HBPanel {
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("Identity")
-                                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                                    .font(HBTypography.display(size: 12, weight: .bold))
                                     .textCase(.uppercase)
                                     .tracking(2.4)
                                     .foregroundStyle(HBPalette.textMuted)
@@ -132,7 +132,7 @@ struct OpenClawIntegrationView: View {
                         HBPanel {
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("Token")
-                                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                                    .font(HBTypography.display(size: 12, weight: .bold))
                                     .textCase(.uppercase)
                                     .tracking(2.4)
                                     .foregroundStyle(HBPalette.textMuted)
@@ -159,13 +159,13 @@ struct OpenClawIntegrationView: View {
                                 }
 
                                 Text("Fresh Token")
-                                    .font(.subheadline.weight(.semibold))
+                                    .font(HBTypography.body(.subheadline, weight: .semibold))
                                     .foregroundStyle(HBPalette.textSecondary)
 
                                 MonospaceBlock(text: freshToken.isEmpty ? "Rotate the token to reveal a new value once." : freshToken)
 
                                 Text("Rotate a token immediately before deployment. The fresh token powers the inline JSON, CLI command, and downloaded Jetson bundle.")
-                                    .font(.footnote)
+                                    .font(HBTypography.body(.footnote))
                                     .foregroundStyle(HBPalette.textMuted)
 
                                 Button("Copy Fresh Token") {
@@ -179,7 +179,7 @@ struct OpenClawIntegrationView: View {
                         HBPanel {
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("Endpoint")
-                                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                                    .font(HBTypography.display(size: 12, weight: .bold))
                                     .textCase(.uppercase)
                                     .tracking(2.4)
                                     .foregroundStyle(HBPalette.textMuted)
@@ -203,7 +203,7 @@ struct OpenClawIntegrationView: View {
                         HBPanel {
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("MCP Server Definition")
-                                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                                    .font(HBTypography.display(size: 12, weight: .bold))
                                     .textCase(.uppercase)
                                     .tracking(2.4)
                                     .foregroundStyle(HBPalette.textMuted)
@@ -220,7 +220,7 @@ struct OpenClawIntegrationView: View {
                         HBPanel {
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("Jetson Guide")
-                                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                                    .font(HBTypography.display(size: 12, weight: .bold))
                                     .textCase(.uppercase)
                                     .tracking(2.4)
                                     .foregroundStyle(HBPalette.textMuted)
@@ -237,7 +237,7 @@ struct OpenClawIntegrationView: View {
                         HBPanel {
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("Shipped Skill")
-                                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                                    .font(HBTypography.display(size: 12, weight: .bold))
                                     .textCase(.uppercase)
                                     .tracking(2.4)
                                     .foregroundStyle(HBPalette.textMuted)
@@ -267,7 +267,7 @@ struct OpenClawIntegrationView: View {
     private func statusRow(label: String, value: String) -> some View {
         HStack(alignment: .top) {
             Text(label)
-                .font(.subheadline.weight(.semibold))
+                .font(HBTypography.body(.subheadline, weight: .semibold))
                 .foregroundStyle(HBPalette.textSecondary)
             Spacer()
             Text(value)

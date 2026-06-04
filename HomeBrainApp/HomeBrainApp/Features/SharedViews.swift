@@ -369,7 +369,7 @@ struct HBPrimaryButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: compact ? 14 : 15, weight: .semibold, design: .rounded))
+            .font(HBTypography.body(size: compact ? 14 : 15, weight: .semibold))
             .foregroundStyle(Color.white)
             .padding(.horizontal, compact ? 14 : 16)
             .padding(.vertical, compact ? 10 : 12)
@@ -393,7 +393,7 @@ struct HBDestructiveButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: compact ? 14 : 15, weight: .semibold, design: .rounded))
+            .font(HBTypography.body(size: compact ? 14 : 15, weight: .semibold))
             .foregroundStyle(Color.white)
             .padding(.horizontal, compact ? 14 : 16)
             .padding(.vertical, compact ? 10 : 12)
@@ -421,7 +421,7 @@ struct HBSecondaryButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: compact ? 14 : 15, weight: .semibold, design: .rounded))
+            .font(HBTypography.body(size: compact ? 14 : 15, weight: .semibold))
             .foregroundStyle(HBPalette.textPrimary)
             .padding(.horizontal, compact ? 14 : 16)
             .padding(.vertical, compact ? 10 : 12)
@@ -441,7 +441,7 @@ struct HBGhostButtonStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: compact ? 14 : 15, weight: .semibold, design: .rounded))
+            .font(HBTypography.body(size: compact ? 14 : 15, weight: .semibold))
             .foregroundStyle(HBPalette.textSecondary)
             .padding(.horizontal, compact ? 12 : 14)
             .padding(.vertical, compact ? 9 : 10)
@@ -464,7 +464,7 @@ struct HBBadge: View {
 
     var body: some View {
         Text(text)
-            .font(.system(size: 11, weight: .bold, design: .rounded))
+            .font(HBTypography.display(size: 11, weight: .bold))
             .textCase(.uppercase)
             .tracking(1.2)
             .foregroundStyle(foreground)
@@ -568,7 +568,7 @@ struct HBTempestBatteryBadge: View {
                 .foregroundStyle(foreground)
 
             Text(label)
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 11, weight: .bold))
                 .tracking(0.6)
                 .monospacedDigit()
                 .foregroundStyle(foreground)
@@ -646,7 +646,7 @@ struct HBBatteryIndicator: View {
                 .foregroundStyle(hbBatteryTint(for: percent))
 
             Text(displayText)
-                .font(.system(size: compact ? 10 : 11, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: compact ? 10 : 11, weight: .bold))
                 .monospacedDigit()
                 .tracking(0.5)
                 .foregroundStyle(hbBatteryTint(for: percent))
@@ -747,7 +747,7 @@ struct HBWeatherSyncCaption: View {
                     .foregroundStyle(HBPalette.textMuted)
             }
         }
-        .font(.system(size: 11, weight: .medium, design: .rounded))
+        .font(HBTypography.body(size: 11, weight: .medium))
         .monospacedDigit()
         .lineLimit(1)
         .minimumScaleFactor(0.82)
@@ -796,7 +796,7 @@ struct HBSectionHeader: View {
     private var titleBlock: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(eyebrow ?? title)
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 11, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(3.0)
                 .foregroundStyle(HBPalette.textMuted)
@@ -812,7 +812,7 @@ struct HBSectionHeader: View {
                 }
 
                 Text(title)
-                    .font(.system(size: stackedLayout ? 30 : (compactLandscape ? 26 : 38), weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: stackedLayout ? 30 : (compactLandscape ? 26 : 38), weight: .bold))
                     .foregroundStyle(
                         LinearGradient(
                             colors: [HBPalette.accentBlue, HBPalette.accentPurple],
@@ -827,7 +827,7 @@ struct HBSectionHeader: View {
 
             if !subtitle.isEmpty {
                 Text(subtitle)
-                    .font(.system(size: compactLandscape ? 14 : (stackedLayout ? 15 : 17), weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: compactLandscape ? 14 : (stackedLayout ? 15 : 17), weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -913,7 +913,7 @@ struct HBPanelGroupBoxStyle: GroupBoxStyle {
         HBPanel {
             VStack(alignment: .leading, spacing: 12) {
                 configuration.label
-                    .font(.system(size: 12, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 12, weight: .bold))
                     .textCase(.uppercase)
                     .tracking(2.4)
                     .foregroundStyle(HBPalette.textMuted)
@@ -968,12 +968,12 @@ struct LoadingView: View {
                     .tint(HBPalette.accentBlue)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Initializing")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 11, weight: .bold))
                         .textCase(.uppercase)
                         .tracking(2.4)
                         .foregroundStyle(HBPalette.textMuted)
                     Text(title)
-                        .font(.subheadline.weight(.semibold))
+                        .font(HBTypography.body(.subheadline, weight: .semibold))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
             }
@@ -989,11 +989,11 @@ struct InlineErrorView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Attention Required", systemImage: "exclamationmark.triangle.fill")
-                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 13, weight: .bold))
                 .foregroundStyle(HBPalette.accentRed)
 
             Text(message)
-                .font(.subheadline)
+                .font(HBTypography.body(.subheadline))
                 .foregroundStyle(HBPalette.textPrimary)
 
             if let retry {
@@ -1023,7 +1023,7 @@ struct MetricCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 11, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(2.2)
                 .foregroundStyle(HBPalette.textMuted)
@@ -1031,13 +1031,13 @@ struct MetricCard: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             Text(value)
-                .font(.title2.weight(.bold))
+                .font(HBTypography.display(.title2, weight: .bold))
                 .foregroundStyle(HBPalette.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
 
             Text(subtitle)
-                .font(.caption)
+                .font(HBTypography.body(.caption))
                 .foregroundStyle(HBPalette.textSecondary)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1069,11 +1069,11 @@ struct EmptyStateView: View {
                 .foregroundStyle(HBPalette.textMuted)
 
             Text(title)
-                .font(.headline)
+                .font(HBTypography.display(.headline, weight: .semibold))
                 .foregroundStyle(HBPalette.textPrimary)
 
             Text(subtitle)
-                .font(.subheadline)
+                .font(HBTypography.body(.subheadline))
                 .foregroundStyle(HBPalette.textSecondary)
                 .multilineTextAlignment(.center)
         }

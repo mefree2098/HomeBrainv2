@@ -181,7 +181,7 @@ struct DashboardViewsView: View {
 
                 if view.widgets.isEmpty {
                     Text("This dashboard is empty. Open the Dashboard section and add the widgets you want.")
-                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 14, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                 } else {
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -259,11 +259,11 @@ struct DashboardViewsView: View {
     private func dashboardViewIdentity(_ view: DashboardViewItem) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(view.name)
-                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 22, weight: .bold))
                 .foregroundStyle(HBPalette.textPrimary)
 
             Text("\(view.widgets.count) widgets")
-                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 13, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
         }
     }

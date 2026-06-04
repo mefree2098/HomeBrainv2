@@ -7,6 +7,10 @@ struct HomeBrainAppApp: App {
     @StateObject private var uiPreviewStore = UIPreviewStore()
     @StateObject private var watchSyncManager = WatchSyncManager()
 
+    init() {
+        HBTypography.registerFonts()
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()

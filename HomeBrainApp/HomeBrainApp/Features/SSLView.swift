@@ -50,7 +50,7 @@ struct SSLView: View {
                     if !infoMessage.isEmpty {
                         HBPanel {
                             Text(infoMessage)
-                                .font(.subheadline)
+                                .font(HBTypography.body(.subheadline))
                                 .foregroundStyle(HBPalette.textSecondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -89,7 +89,7 @@ struct SSLView: View {
                 Text("Certificates: \(JSON.int(status, "certificates", fallback: certificates.count))")
                 Text("Expiring Soon: \(JSON.int(status, "expiringSoon"))")
             }
-            .font(.subheadline)
+            .font(HBTypography.body(.subheadline))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 4)
         }
@@ -104,10 +104,10 @@ struct SSLView: View {
                     ForEach(certificates) { certificate in
                         VStack(alignment: .leading, spacing: 8) {
                             Text(certificate.domain)
-                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                                .font(HBTypography.display(size: 20, weight: .bold))
                                 .foregroundStyle(HBPalette.textPrimary)
                             Text("\(certificate.provider) · \(certificate.status) · expires \(certificate.expiryDate)")
-                                .font(.caption)
+                                .font(HBTypography.body(.caption))
                                 .foregroundStyle(HBPalette.textSecondary)
 
                             LazyVGrid(

@@ -34,7 +34,7 @@ struct WhisperView: View {
                     if !infoMessage.isEmpty {
                         HBPanel {
                             Text(infoMessage)
-                                .font(.subheadline)
+                                .font(HBTypography.body(.subheadline))
                                 .foregroundStyle(HBPalette.textSecondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -71,7 +71,7 @@ struct WhisperView: View {
                 Text("Service Status: \(JSON.string(status, "serviceStatus", fallback: "unknown"))")
                 Text("Active Model: \(JSON.string(status, "activeModel", fallback: "none"))")
             }
-            .font(.subheadline)
+            .font(HBTypography.body(.subheadline))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 4)
         }
@@ -103,7 +103,7 @@ struct WhisperView: View {
                 let installed = JSON.array(status["installedModels"])
                 if !installed.isEmpty {
                     Text("Installed Models: \(installed.compactMap { JSON.optionalString($0, "name") }.joined(separator: ", "))")
-                        .font(.caption)
+                        .font(HBTypography.body(.caption))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
             }
@@ -115,7 +115,7 @@ struct WhisperView: View {
         GroupBox("Whisper Logs") {
             if logs.isEmpty {
                 Text("No logs available")
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(.secondary)
             } else {
                 TextEditor(text: .constant(logs.joined(separator: "\n")))

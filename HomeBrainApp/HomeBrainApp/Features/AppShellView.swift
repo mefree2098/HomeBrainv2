@@ -676,7 +676,7 @@ struct AppShellView: View {
                     .frame(width: chromeButtonSide, height: chromeButtonSide)
             } else {
                 Label(isCompactSidebarVisible ? "Close" : "Menu", systemImage: isCompactSidebarVisible ? "xmark" : "sidebar.left")
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .font(HBTypography.body(size: 14, weight: .semibold))
                     .foregroundStyle(HBPalette.textPrimary)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
@@ -865,13 +865,13 @@ struct AppShellView: View {
             VStack(alignment: .leading, spacing: compact ? 1 : 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text("HomeBrain")
-                        .font(.system(size: ultraCompact ? 13 : (compact ? 14 : 17), weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: ultraCompact ? 13 : (compact ? 14 : 17), weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
 
                     Text("OS")
-                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 8, weight: .bold))
                         .textCase(.uppercase)
                         .tracking(2.0)
                         .baselineOffset(compact ? 3 : 4)
@@ -879,7 +879,7 @@ struct AppShellView: View {
                 }
 
                 Text(subtitle)
-                    .font(.system(size: ultraCompact ? 11 : (compact ? 12 : 14), weight: .semibold, design: .rounded))
+                    .font(HBTypography.body(size: ultraCompact ? 11 : (compact ? 12 : 14), weight: .semibold))
                     .foregroundStyle(HBPalette.textSecondary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
@@ -908,15 +908,15 @@ struct AppShellView: View {
             }
         } label: {
             HStack(spacing: compact ? 6 : 8) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(dashboardChrome.currentViewName)
-                        .font(.system(size: ultraCompact ? 12 : (compact ? 13 : 14), weight: .semibold, design: .rounded))
-                        .foregroundStyle(HBPalette.textPrimary)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(dashboardChrome.currentViewName)
+                            .font(HBTypography.body(size: ultraCompact ? 12 : (compact ? 13 : 14), weight: .semibold))
+                            .foregroundStyle(HBPalette.textPrimary)
                         .lineLimit(1)
 
-                    Text(dashboardChromeStatusText)
-                        .font(.system(size: ultraCompact ? 9 : (compact ? 10 : 11), weight: .bold, design: .rounded))
-                        .foregroundStyle(dashboardChrome.isDirty ? HBPalette.accentOrange : HBPalette.textMuted)
+                        Text(dashboardChromeStatusText)
+                            .font(HBTypography.display(size: ultraCompact ? 9 : (compact ? 10 : 11), weight: .bold))
+                            .foregroundStyle(dashboardChrome.isDirty ? HBPalette.accentOrange : HBPalette.textMuted)
                         .textCase(.uppercase)
                         .tracking(1.2)
                         .lineLimit(1)
@@ -985,14 +985,14 @@ struct AppShellView: View {
             VStack(alignment: .leading, spacing: compact ? 1 : 3) {
                 if !compact {
                     Text(currentSection.chromeKicker)
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 10, weight: .bold))
                         .textCase(.uppercase)
                         .tracking(2.8)
                         .foregroundStyle(HBPalette.textMuted)
                 }
 
                 Text(compact ? currentSection.title : currentSection.chromeLabel)
-                    .font(.system(size: compact ? 14 : 17, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: compact ? 14 : 17, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
@@ -1016,7 +1016,7 @@ struct AppShellView: View {
                     systemImage: voiceEnabled ? "mic.fill" : "mic.slash"
                 )
                 .labelStyle(.iconOnly)
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 14, weight: .semibold))
             } else {
                 Label(
                     voiceEnabled
@@ -1025,7 +1025,7 @@ struct AppShellView: View {
                     systemImage: voiceEnabled ? "mic.fill" : "mic.slash"
                 )
                 .labelStyle(.titleAndIcon)
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 15, weight: .semibold))
             }
         }
         .buttonStyle(HBSecondaryButtonStyle(compact: compact))
@@ -1082,7 +1082,7 @@ struct AppShellView: View {
                     .frame(width: compact ? 5 : 6, height: compact ? 5 : 6)
                 if !compact {
                     Text("Live")
-                        .font(.system(size: 10, weight: .semibold, design: .rounded))
+                        .font(HBTypography.body(size: 10, weight: .semibold))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
             }
@@ -1097,7 +1097,7 @@ struct AppShellView: View {
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 2) {
                 Text(metric.shortLabel)
-                    .font(.system(size: compact ? 8 : 9, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: compact ? 8 : 9, weight: .bold))
                     .foregroundStyle(HBPalette.textSecondary)
 
                 Spacer(minLength: 2)
@@ -1130,7 +1130,7 @@ struct AppShellView: View {
             HStack {
                 Spacer(minLength: 0)
                 Text(percentLabel)
-                    .font(.system(size: compact ? 9 : 10, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: compact ? 9 : 10, weight: .bold))
                     .foregroundStyle(metric.telemetryAvailable ? resourceValueColor(for: metric.percent) : HBPalette.textSecondary)
             }
         }
@@ -1209,15 +1209,15 @@ struct AppShellView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 if !isSidebarCollapsed {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Nav Core")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
-                            .foregroundStyle(HBPalette.textMuted)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Nav Core")
+                                .font(HBTypography.display(size: 11, weight: .bold))
+                                .foregroundStyle(HBPalette.textMuted)
                             .textCase(.uppercase)
                             .tracking(2.8)
-                        Text("Residence Systems")
-                            .font(.system(size: 18, weight: .bold, design: .rounded))
-                            .foregroundStyle(HBPalette.textPrimary)
+                            Text("Residence Systems")
+                                .font(HBTypography.display(size: 18, weight: .bold))
+                                .foregroundStyle(HBPalette.textPrimary)
                     }
                 }
 
@@ -1272,18 +1272,18 @@ struct AppShellView: View {
                                     .frame(width: 12, height: 12)
 
                                 Text("Wake Mesh")
-                                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                                    .font(HBTypography.display(size: 11, weight: .bold))
                                     .textCase(.uppercase)
                                     .tracking(2.6)
                                     .foregroundStyle(HBPalette.textMuted)
                             }
 
                             Text(shellVoiceTitle)
-                                .font(.system(size: 18, weight: .bold, design: .rounded))
+                                .font(HBTypography.display(size: 18, weight: .bold))
                                 .foregroundStyle(HBPalette.textPrimary)
 
                             Text(shellVoiceDescription)
-                                .font(.system(size: 14, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 14, weight: .medium))
                                 .foregroundStyle(previewMode || voiceAssistant.errorMessage == nil ? HBPalette.textSecondary : HBPalette.accentRed)
                                 .lineLimit(3)
 
@@ -1296,14 +1296,14 @@ struct AppShellView: View {
                                 )
                             } else {
                                 Text(shellVoiceSupplementaryText)
-                                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                                    .font(HBTypography.body(size: 12, weight: .medium))
                                     .foregroundStyle(HBPalette.textSecondary)
                                     .lineLimit(2)
                             }
 
                             if let response = voiceAssistant.lastResponse, !response.isEmpty {
                                 Text(response)
-                                    .font(.system(size: 12, weight: .regular, design: .rounded))
+                                    .font(HBTypography.body(size: 12, weight: .regular))
                                     .foregroundStyle(HBPalette.textSecondary)
                                     .lineLimit(2)
                             }
@@ -1332,11 +1332,11 @@ struct AppShellView: View {
                 if !isSidebarCollapsed {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(section.title)
-                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                            .font(HBTypography.body(size: 15, weight: .semibold))
                             .foregroundStyle(HBPalette.textPrimary)
                             .lineLimit(1)
                         Text(section.chromeKicker)
-                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 10, weight: .bold))
                             .foregroundStyle(isSelected ? HBPalette.accentBlue : HBPalette.textMuted)
                             .textCase(.uppercase)
                             .tracking(1.6)
@@ -1738,12 +1738,12 @@ private struct BackendRecoveryBanner: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .font(HBTypography.body(size: 14, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
                     .lineLimit(1)
 
                 Text(statusMessage)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .font(HBTypography.body(size: 12, weight: .semibold))
                     .foregroundStyle(HBPalette.textSecondary)
                     .lineLimit(2)
             }
@@ -1752,7 +1752,7 @@ private struct BackendRecoveryBanner: View {
 
             Button(action: onRetry) {
                 Label("Retry", systemImage: "arrow.clockwise")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .font(HBTypography.body(size: 13, weight: .bold))
             }
             .buttonStyle(HBSecondaryButtonStyle(compact: true))
         }

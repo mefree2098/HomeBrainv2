@@ -41,7 +41,7 @@ struct PlatformDeployView: View {
                     if !infoMessage.isEmpty {
                         HBPanel {
                             Text(infoMessage)
-                                .font(.subheadline)
+                                .font(HBTypography.body(.subheadline))
                                 .foregroundStyle(HBPalette.textSecondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -80,7 +80,7 @@ struct PlatformDeployView: View {
                 Text("Ahead: \(JSON.int(repo, "ahead")) · Behind: \(JSON.int(repo, "behind"))")
                 Text("Running: \(JSON.bool(deployStatus, "running") ? "Yes" : "No")")
             }
-            .font(.subheadline)
+            .font(HBTypography.body(.subheadline))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 4)
         }
@@ -136,13 +136,13 @@ struct PlatformDeployView: View {
         return GroupBox("Post-Deploy Health") {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Overall: \(overall)")
-                    .font(.headline)
+                    .font(HBTypography.display(.headline, weight: .semibold))
                 Text("API: \(JSON.string(JSON.object(checks["api"]), "status", fallback: "unknown"))")
                 Text("WebSocket: \(JSON.string(JSON.object(checks["websocket"]), "status", fallback: "unknown"))")
                 Text("Database: \(JSON.string(JSON.object(checks["database"]), "status", fallback: "unknown"))")
                 Text("Wake Word Worker: \(JSON.string(JSON.object(checks["wakeWordWorker"]), "status", fallback: "unknown"))")
             }
-            .font(.subheadline)
+            .font(HBTypography.body(.subheadline))
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 4)
         }
@@ -172,7 +172,7 @@ struct PlatformDeployView: View {
                                 Text(JSON.string(step, "name", fallback: "step"))
                                 Spacer()
                                 Text(JSON.string(step, "status", fallback: "unknown"))
-                                    .font(.caption)
+                                    .font(HBTypography.body(.caption))
                                     .foregroundStyle(.secondary)
                             }
                         }
@@ -185,7 +185,7 @@ struct PlatformDeployView: View {
                             .font(.caption.monospaced())
                     }
                 }
-                .font(.subheadline)
+                .font(HBTypography.body(.subheadline))
                 .padding(.top, 4)
             }
         }

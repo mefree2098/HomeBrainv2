@@ -147,10 +147,10 @@ struct WatchAppView: View {
 
                     VStack(alignment: .leading, spacing: 5) {
                         Text(watchStatusText)
-                            .font(.system(size: 17, weight: .bold, design: .rounded))
+                            .font(HBTypography.body(size: 17, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
                         Text(syncDetailText)
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 13, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                     }
 
@@ -181,13 +181,13 @@ struct WatchAppView: View {
 
                 if let statusMessage {
                     Text(statusMessage)
-                        .font(.footnote.weight(.semibold))
+                        .font(HBTypography.body(.footnote, weight: .semibold))
                         .foregroundStyle(HBPalette.accentGreen)
                 }
 
                 if let errorMessage = errorMessage ?? watchSync.lastErrorMessage {
                     Text(errorMessage)
-                        .font(.footnote.weight(.semibold))
+                        .font(HBTypography.body(.footnote, weight: .semibold))
                         .foregroundStyle(HBPalette.accentRed)
                 }
             }
@@ -217,7 +217,7 @@ struct WatchAppView: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Default room")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 12, weight: .bold))
                         .textCase(.uppercase)
                         .tracking(2.0)
                         .foregroundStyle(HBPalette.textMuted)
@@ -239,13 +239,13 @@ struct WatchAppView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("Default brightness")
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 12, weight: .bold))
                             .textCase(.uppercase)
                             .tracking(2.0)
                             .foregroundStyle(HBPalette.textMuted)
                         Spacer()
                         Text("\(Int(defaultBrightness.rounded()))%")
-                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                            .font(HBTypography.body(size: 15, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
                     }
                     Slider(value: $defaultBrightness, in: 1...100, step: 1)
@@ -260,7 +260,7 @@ struct WatchAppView: View {
     private var controlledDevicesSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Watch device per room")
-                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 12, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(2.0)
                 .foregroundStyle(HBPalette.textMuted)
@@ -271,7 +271,7 @@ struct WatchAppView: View {
                         Image(systemName: "lightbulb.slash")
                             .foregroundStyle(HBPalette.accentOrange)
                         Text("No compatible light devices found.")
-                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .font(HBTypography.body(size: 14, weight: .semibold))
                             .foregroundStyle(HBPalette.textSecondary)
                     }
                 }
@@ -302,11 +302,11 @@ struct WatchAppView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(room)
-                        .font(.system(size: 15, weight: .bold, design: .rounded))
+                        .font(HBTypography.body(size: 15, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                     Spacer()
                     Text("\(devices.count)")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .bold))
                         .foregroundStyle(HBPalette.textMuted)
                 }
 
@@ -324,7 +324,7 @@ struct WatchAppView: View {
                         Image(systemName: device.isOn ? "lightbulb.fill" : "lightbulb")
                             .foregroundStyle(device.isOn ? HBPalette.accentYellow : HBPalette.textMuted)
                         Text(deviceStatusText(device))
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 12, weight: .medium))
                             .foregroundStyle(device.isOnline ? HBPalette.textSecondary : HBPalette.accentOrange)
                             .lineLimit(1)
                             .minimumScaleFactor(0.75)
@@ -334,7 +334,7 @@ struct WatchAppView: View {
                         Image(systemName: "square.grid.2x2")
                             .foregroundStyle(HBPalette.textMuted)
                         Text("All room lights")
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 12, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                     }
                 }
@@ -382,10 +382,10 @@ struct WatchAppView: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(section.title)
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                        .font(HBTypography.body(size: 16, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                     Text(section.subtitle)
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -404,7 +404,7 @@ struct WatchAppView: View {
                 .font(.system(size: 16, weight: .bold))
                 .foregroundStyle(tint)
             Text(title)
-                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 18, weight: .bold))
                 .foregroundStyle(HBPalette.textPrimary)
         }
     }
