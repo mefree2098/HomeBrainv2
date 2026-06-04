@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const axios = require('axios');
+const { CookieJar } = require('tough-cookie');
 const Device = require('../models/Device');
 const EcobeeIntegration = require('../models/EcobeeIntegration');
 const {
@@ -109,30 +110,59 @@ const generatePkcePair = () => {
   return { verifier, challenge };
 };
 
-const mergeCookies = (jar, setCookieHeader) => {
+const createAuthCookieJar = (snapshot = null) => {
+  if (snapshot?.version && Array.isArray(snapshot.cookies)) {
+    try {
+      return CookieJar.deserializeSync(snapshot);
+    } catch (error) {
+      console.warn(`EcobeeService: Ignoring unreadable serialized Auth0 cookie jar: ${error.message}`);
+    }
+  }
+
+  const jar = new CookieJar();
+  if (snapshot && typeof snapshot === 'object') {
+    Object.entries(snapshot).forEach(([name, value]) => {
+      if (!name || value == null || ['version', 'cookies'].includes(name)) {
+        return;
+      }
+      try {
+        jar.setCookieSync(`${name}=${value}; Domain=auth.ecobee.com; Path=/`, 'https://auth.ecobee.com/');
+      } catch (error) {
+        console.warn(`EcobeeService: Ignoring invalid legacy Auth0 cookie ${name}: ${error.message}`);
+      }
+    });
+  }
+
+  return jar;
+};
+
+const serializeAuthCookieJar = (jar) => {
+  if (!jar || typeof jar.serializeSync !== 'function') {
+    return null;
+  }
+  return jar.serializeSync();
+};
+
+const mergeCookies = (jar, setCookieHeader, url) => {
   const headers = Array.isArray(setCookieHeader)
     ? setCookieHeader
     : (setCookieHeader ? [setCookieHeader] : []);
 
   headers.forEach((header) => {
-    const pair = String(header).split(';')[0];
-    const separatorIndex = pair.indexOf('=');
-    if (separatorIndex <= 0) {
-      return;
-    }
-
-    const name = pair.slice(0, separatorIndex).trim();
-    const value = pair.slice(separatorIndex + 1).trim();
-    if (name) {
-      jar[name] = value;
+    try {
+      jar.setCookieSync(String(header), url);
+    } catch (error) {
+      console.warn(`EcobeeService: Ignoring invalid Auth0 cookie: ${error.message}`);
     }
   });
 };
 
-const formatCookieHeader = (jar = {}) => Object.entries(jar)
-  .filter(([name, value]) => name && value != null)
-  .map(([name, value]) => `${name}=${value}`)
-  .join('; ');
+const formatCookieHeader = (jar, url) => {
+  if (!jar || typeof jar.getCookieStringSync !== 'function') {
+    return '';
+  }
+  return jar.getCookieStringSync(url);
+};
 
 class EcobeeAuthMfaRequiredError extends Error {
   constructor(challenge) {
@@ -232,7 +262,7 @@ class EcobeeService {
     let currentData = data;
 
     for (let hop = 0; hop < 10; hop += 1) {
-      const cookieHeader = formatCookieHeader(jar);
+      const cookieHeader = formatCookieHeader(jar, currentUrl);
       const requestHeaders = {
         ...headers
       };
@@ -256,7 +286,7 @@ class EcobeeService {
         validateStatus: () => true
       });
 
-      mergeCookies(jar, response.headers?.['set-cookie']);
+      mergeCookies(jar, response.headers?.['set-cookie'], currentUrl);
 
       const isRedirect = response.status >= 300 && response.status < 400 && response.headers?.location;
       response.finalUrl = currentUrl;
@@ -288,7 +318,7 @@ class EcobeeService {
         challengeUrl: landedUrl,
         state: extractUrlParam(landedUrl, 'state'),
         mfaType: 'otp',
-        cookies: { ...jar },
+        cookies: serializeAuthCookieJar(jar),
         codeVerifier
       });
     }
@@ -298,7 +328,7 @@ class EcobeeService {
         challengeUrl: landedUrl,
         state: extractUrlParam(landedUrl, 'state'),
         mfaType: 'sms',
-        cookies: { ...jar },
+        cookies: serializeAuthCookieJar(jar),
         codeVerifier
       });
     }
@@ -344,7 +374,7 @@ class EcobeeService {
 
   async requestWebTokens(username, password) {
     const { verifier, challenge } = generatePkcePair();
-    const jar = {};
+    const jar = createAuthCookieJar();
 
     const startResponse = await this.authRequest('get', `${this.webAuthBaseUrl}/authorize`, {
       params: {
@@ -466,7 +496,7 @@ class EcobeeService {
       throw new Error('Ecobee MFA challenge expired. Please start login again.');
     }
 
-    const jar = { ...(pendingMfa.cookies || {}) };
+    const jar = createAuthCookieJar(pendingMfa.cookies);
     const response = await this.authRequest('post', pendingMfa.challengeUrl, {
       data: {
         state: pendingMfa.state,
