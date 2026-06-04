@@ -369,7 +369,12 @@ class EcobeeService {
     const identifierResponse = await this.authRequest('post', identifierUrl, {
       data: {
         state: extractUrlParam(identifierUrl, 'state'),
-        username
+        username,
+        'js-available': 'false',
+        'webauthn-available': 'false',
+        'is-brave': 'false',
+        'webauthn-platform-available': 'false',
+        action: 'default'
       },
       jar
     });
@@ -386,7 +391,8 @@ class EcobeeService {
       data: {
         state: extractUrlParam(passwordUrl, 'state'),
         username,
-        password
+        password,
+        action: 'default'
       },
       jar,
       stopBeforeLeavingAuth: true
