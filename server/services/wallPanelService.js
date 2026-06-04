@@ -11,6 +11,7 @@ const Scene = require('../models/Scene');
 const Settings = require('../models/Settings');
 const WallPanel = require('../models/WallPanel');
 const deviceService = require('./deviceService');
+const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const sceneService = require('./sceneService');
 const securityAlarmService = require('./securityAlarmService');
 const harmonyService = require('./harmonyService');
@@ -3309,11 +3310,15 @@ class WallPanelService {
       })),
       weatherService.fetchDashboardWeather().catch(() => null)
     ]);
+    const liveRoomDevices = deviceUpdateEmitter.mergeLatestDevices(roomDevices);
+    const liveAllDevices = needsAllDevices
+      ? deviceUpdateEmitter.mergeLatestDevices(allDevices)
+      : allDevices;
 
     const [thermostatDevice, sensorDevice, room, media, quiet] = await Promise.all([
-      resolveThermostatDevice(panel.settings, roomDevices).catch(() => null),
-      resolveSensorDevice(panel.settings, roomDevices).catch(() => null),
-      buildRoomMode(panel, roomDevices, allDevices),
+      resolveThermostatDevice(panel.settings, liveRoomDevices).catch(() => null),
+      resolveSensorDevice(panel.settings, liveRoomDevices).catch(() => null),
+      buildRoomMode(panel, liveRoomDevices, liveAllDevices),
       buildMediaMode(panel),
       buildQuietMode(panel)
     ]);
