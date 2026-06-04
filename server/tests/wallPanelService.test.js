@@ -11,6 +11,7 @@ const Device = require('../models/Device');
 const Scene = require('../models/Scene');
 const Settings = require('../models/Settings');
 const deviceService = require('../services/deviceService');
+const deviceUpdateEmitter = require('../services/deviceUpdateEmitter');
 const eventStreamService = require('../services/eventStreamService');
 const sceneService = require('../services/sceneService');
 const securityAlarmService = require('../services/securityAlarmService');
@@ -483,6 +484,76 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
   assert.equal(result.modes.quiet.quickActions[0].label, 'Bedtime');
   assert.equal(result.ota.available, false);
   assert.equal(result.ota.downloadUrl, '');
+});
+
+test('getPanelState overlays recent realtime device updates for orb brightness', async (t) => {
+  const originalFindById = WallPanel.findById;
+  const originalDeviceFind = Device.find;
+  const originalGetAlarmStatus = securityAlarmService.getAlarmStatus;
+  const originalFetchDashboardWeather = weatherService.fetchDashboardWeather;
+
+  const staleLight = {
+    _id: 'light-1',
+    id: 'light-1',
+    name: 'Bedroom Lamp',
+    room: 'Bedroom',
+    type: 'light',
+    status: true,
+    brightness: 35,
+    properties: {
+      brightness: 35
+    }
+  };
+  const panelDoc = {
+    _id: 'panel-realtime-state',
+    name: 'Bedroom Orb',
+    room: 'Bedroom',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'online',
+    firmwareVersion: '0.1.0',
+    settings: {
+      registrationCode: 'HBWP-ABCD-EF12-3456',
+      modeOrder: ['room'],
+      roomControl: {
+        lightDeviceId: 'light-1'
+      }
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+    Device.find = originalDeviceFind;
+    securityAlarmService.getAlarmStatus = originalGetAlarmStatus;
+    weatherService.fetchDashboardWeather = originalFetchDashboardWeather;
+    deviceUpdateEmitter.clearLatestDevices();
+  });
+
+  WallPanel.findById = async () => panelDoc;
+  Device.find = () => ({
+    sort: async () => [staleLight]
+  });
+  securityAlarmService.getAlarmStatus = async () => ({
+    alarmState: 'disarmed',
+    isArmed: false,
+    isTriggered: false
+  });
+  weatherService.fetchDashboardWeather = async () => null;
+  deviceUpdateEmitter.clearLatestDevices();
+  deviceUpdateEmitter.emit('devices:update', [{
+    ...staleLight,
+    brightness: 72,
+    properties: {
+      brightness: 72
+    }
+  }]);
+
+  const result = await wallPanelService.getPanelState('panel-realtime-state', {
+    registrationCode: 'HBWP-ABCD-EF12-3456'
+  });
+
+  assert.equal(result.modes.room.centerValue, '72%');
+  assert.equal(result.modes.room.knob.value, 72);
+  assert.equal(result.modes.room.knob.pressAction.value, 0);
 });
 
 test('updatePanel clamps persisted mount alignment offsets to the supported range', async (t) => {
