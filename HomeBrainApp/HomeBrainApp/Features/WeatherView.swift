@@ -1121,19 +1121,19 @@ private struct WeatherTelemetryTile: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 11, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(2.2)
                 .foregroundStyle(HBPalette.textMuted)
 
             Text(value)
-                .font(.system(size: 28, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 28, weight: .bold))
                 .foregroundStyle(HBPalette.textPrimary)
                 .minimumScaleFactor(0.7)
                 .lineLimit(1)
 
             Text(detail)
-                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 13, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .lineLimit(2)
 
@@ -1457,7 +1457,7 @@ struct WeatherView: View {
                     if !infoMessage.isEmpty {
                         HBPanel {
                             Text(infoMessage)
-                                .font(.system(size: 14, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 14, weight: .medium))
                                 .foregroundStyle(HBPalette.textSecondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -1533,12 +1533,12 @@ struct WeatherView: View {
                 HStack(alignment: .center) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Targeting")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 11, weight: .bold))
                             .textCase(.uppercase)
                             .tracking(2.4)
                             .foregroundStyle(HBPalette.textMuted)
                         Text("Choose where the deck points the forecast engine.")
-                            .font(.system(size: 15, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 15, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                     }
 
@@ -1632,19 +1632,19 @@ struct WeatherView: View {
                         HStack(alignment: .top, spacing: 14) {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Weather Command Deck")
-                                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                                    .font(HBTypography.display(size: 11, weight: .bold))
                                     .textCase(.uppercase)
                                     .tracking(3.0)
                                     .foregroundStyle(HBPalette.textMuted)
 
                                 Text(formatTemperature(headlineTemperature))
-                                    .font(.system(size: 52, weight: .bold, design: .rounded))
+                                    .font(HBTypography.display(size: 52, weight: .bold))
                                     .foregroundStyle(HBPalette.textPrimary)
                                     .lineLimit(1)
                                     .minimumScaleFactor(0.72)
 
                                 Text("Feels like \(formatTemperature(headlineFeelsLike))")
-                                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                                    .font(HBTypography.body(size: 16, weight: .semibold))
                                     .foregroundStyle(HBPalette.textSecondary)
                             }
 
@@ -1666,7 +1666,7 @@ struct WeatherView: View {
                         Text(stationLive
                              ? "Live station telemetry is driving the now-cast layer while Open-Meteo supplies the broader forecast envelope."
                              : "Forecast mode is active. Connect a Tempest station to unlock local telemetry, historical charts, and event feeds.")
-                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 14, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
 
@@ -1689,12 +1689,12 @@ struct WeatherView: View {
                             HStack(alignment: .top, spacing: 12) {
                                 VStack(alignment: .leading, spacing: 6) {
                                     Label(forecast.locationName, systemImage: "mappin.and.ellipse")
-                                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                                        .font(HBTypography.body(size: 13, weight: .medium))
                                         .foregroundStyle(HBPalette.textSecondary)
                                         .lineLimit(2)
 
                                     Text(forecast.condition)
-                                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                        .font(HBTypography.body(size: 13, weight: .semibold))
                                         .foregroundStyle(HBPalette.textPrimary)
                                 }
 
@@ -1726,14 +1726,14 @@ struct WeatherView: View {
                         HStack(alignment: .top, spacing: 16) {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Weather Command Deck")
-                                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                                    .font(HBTypography.display(size: 11, weight: .bold))
                                     .textCase(.uppercase)
                                     .tracking(3.0)
                                     .foregroundStyle(HBPalette.textMuted)
 
                                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                                     Text(formatTemperature(headlineTemperature))
-                                        .font(.system(size: 58, weight: .bold, design: .rounded))
+                                        .font(HBTypography.display(size: 58, weight: .bold))
                                         .foregroundStyle(HBPalette.textPrimary)
 
                                     VStack(alignment: .leading, spacing: 6) {
@@ -1752,7 +1752,7 @@ struct WeatherView: View {
                                             )
                                         }
                                         Text("Feels like \(formatTemperature(headlineFeelsLike))")
-                                            .font(.system(size: 15, weight: .semibold, design: .rounded))
+                                            .font(HBTypography.body(size: 15, weight: .semibold))
                                             .foregroundStyle(HBPalette.textSecondary)
                                     }
                                 }
@@ -1760,17 +1760,17 @@ struct WeatherView: View {
                                 Text(stationLive
                                      ? "Live station telemetry is driving the now-cast layer while Open-Meteo supplies the broader forecast envelope."
                                      : "Forecast mode is active. Connect a Tempest station to unlock local telemetry, historical charts, and event feeds.")
-                                    .font(.system(size: 15, weight: .medium, design: .rounded))
+                                    .font(HBTypography.body(size: 15, weight: .medium))
                                     .foregroundStyle(HBPalette.textSecondary)
                                     .fixedSize(horizontal: false, vertical: true)
 
                                 HStack(spacing: 12) {
                                     Label(forecast.locationName, systemImage: "mappin.and.ellipse")
-                                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                                        .font(HBTypography.body(size: 13, weight: .medium))
                                         .foregroundStyle(HBPalette.textSecondary)
                                         .lineLimit(2)
                                     Text(forecast.condition)
-                                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                        .font(HBTypography.body(size: 13, weight: .semibold))
                                         .foregroundStyle(HBPalette.textPrimary)
                                 }
                             }
@@ -2010,7 +2010,7 @@ struct WeatherView: View {
                     if station == nil && isAdmin {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Tempest is optional. Forecast mode already works for everyone, but admins can connect a station here to unlock local telemetry, historical charts, and event feeds.")
-                                .font(.system(size: 14, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 14, weight: .medium))
                                 .foregroundStyle(HBPalette.textSecondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -2301,16 +2301,16 @@ struct WeatherView: View {
 
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(event.eventType == "lightning_strike" ? "Lightning strike" : "Rain started")
-                                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                                        .font(HBTypography.body(size: 15, weight: .semibold))
                                         .foregroundStyle(HBPalette.textPrimary)
 
                                     if event.eventType == "lightning_strike" {
                                         Text("Distance \(event.payloadDouble("distanceMiles").map { String(format: "%.1f mi", $0) } ?? "--") • Energy \(event.payloadDouble("energy").map { String(Int($0.rounded())) } ?? "--")")
-                                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                                            .font(HBTypography.body(size: 13, weight: .medium))
                                             .foregroundStyle(HBPalette.textSecondary)
                                     } else {
                                         Text("Precipitation onset captured by the station event stream.")
-                                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                                            .font(HBTypography.body(size: 13, weight: .medium))
                                             .foregroundStyle(HBPalette.textSecondary)
                                     }
                                 }
@@ -2318,7 +2318,7 @@ struct WeatherView: View {
                                 Spacer()
 
                                 Text(formatTimestamp(event.eventAt))
-                                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                                    .font(HBTypography.body(size: 12, weight: .medium))
                                     .foregroundStyle(HBPalette.textMuted)
                                     .multilineTextAlignment(.trailing)
                             }
@@ -2337,10 +2337,10 @@ struct WeatherView: View {
                 HStack(alignment: .top, spacing: 14) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Tempest Weather Station")
-                            .font(.system(size: 22, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 22, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
                         Text("Personal Access Token setup, discovery, live feed health, and calibration.")
-                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 14, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                     }
 
@@ -2361,7 +2361,7 @@ struct WeatherView: View {
                     if !adminInfoMessage.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text(adminInfoMessage)
-                                .font(.system(size: 14, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 14, weight: .medium))
                                 .foregroundStyle(HBPalette.textSecondary)
                         }
                         .padding(14)
@@ -2380,7 +2380,7 @@ struct WeatherView: View {
                                 Text(tempestStatus?.integration.tokenSource == "environment"
                                     ? "A Tempest token is active from runtime environment settings. Enter a new value and save if you want HomeBrain to persist it in the database."
                                     : "A Tempest token is already configured. Enter a new value only if you want to replace it.")
-                                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                                    .font(HBTypography.body(size: 12, weight: .medium))
                                     .foregroundStyle(HBPalette.textSecondary)
                             }
 
@@ -2428,7 +2428,7 @@ struct WeatherView: View {
 
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text("Listener Port")
-                                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                                        .font(HBTypography.display(size: 11, weight: .bold))
                                         .textCase(.uppercase)
                                         .tracking(2)
                                         .foregroundStyle(HBPalette.textMuted)
@@ -2473,12 +2473,12 @@ struct WeatherView: View {
                             if let lastError = tempestStatus?.health.lastError, !lastError.isEmpty {
                                 VStack(alignment: .leading, spacing: 8) {
                                     Text("Last Error")
-                                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                                        .font(HBTypography.display(size: 11, weight: .bold))
                                         .textCase(.uppercase)
                                         .tracking(2)
                                         .foregroundStyle(HBPalette.accentOrange)
                                     Text(lastError)
-                                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                                        .font(HBTypography.body(size: 13, weight: .medium))
                                         .foregroundStyle(HBPalette.textSecondary)
                                 }
                                 .padding(14)
@@ -2551,7 +2551,7 @@ struct WeatherView: View {
                     }
 
                     Text("Forecast mode remains available for everyone. Tempest adds local truth, history, and event telemetry without replacing the existing weather experience.")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.textMuted)
                 }
             }
@@ -2564,10 +2564,10 @@ struct WeatherView: View {
                 HStack(alignment: .top, spacing: 14) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Govee Indoor Air")
-                            .font(.system(size: 22, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 22, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
                         Text("API key setup, H5106 discovery, indoor comfort readings, and retained telemetry.")
-                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 14, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                     }
 
@@ -2590,7 +2590,7 @@ struct WeatherView: View {
                                 Text(goveeStatus?.integration.apiKeySource == "environment"
                                      ? "A Govee key is active from runtime environment settings. Enter a new value and save if you want HomeBrain to persist it in the database."
                                      : "A Govee key is already configured. Enter a new value only if you want to replace it.")
-                                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                                    .font(HBTypography.body(size: 12, weight: .medium))
                                     .foregroundStyle(HBPalette.textSecondary)
                             }
 
@@ -2678,7 +2678,7 @@ struct WeatherView: View {
 
                             if let localError = goveeStatus?.lastLocalError, !localError.isEmpty {
                                 Text(localError)
-                                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                                    .font(HBTypography.body(size: 13, weight: .medium))
                                     .foregroundStyle(HBPalette.accentOrange)
                                     .fixedSize(horizontal: false, vertical: true)
                                     .padding(14)
@@ -2688,7 +2688,7 @@ struct WeatherView: View {
 
                             if let lastError = goveeStatus?.lastError, !lastError.isEmpty {
                                 Text(lastError)
-                                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                                    .font(HBTypography.body(size: 13, weight: .medium))
                                     .foregroundStyle(HBPalette.accentOrange)
                                     .fixedSize(horizontal: false, vertical: true)
                                     .padding(14)
@@ -2767,10 +2767,10 @@ struct WeatherView: View {
     private func chartHeader(title: String, subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 20, weight: .bold))
                 .foregroundStyle(HBPalette.textPrimary)
             Text(subtitle)
-                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 14, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
         }
     }
@@ -2780,13 +2780,13 @@ struct WeatherView: View {
             HStack(alignment: .top, spacing: 10) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(title)
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 11, weight: .bold))
                         .textCase(.uppercase)
                         .tracking(2)
                         .foregroundStyle(HBPalette.textMuted)
 
                     Text(subtitle)
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .font(HBTypography.body(size: 14, weight: .semibold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
@@ -2807,7 +2807,7 @@ struct WeatherView: View {
     private func calibrationField(title: String, text: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 11, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(2)
                 .foregroundStyle(HBPalette.textMuted)

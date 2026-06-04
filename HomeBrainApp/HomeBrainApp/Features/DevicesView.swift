@@ -444,17 +444,17 @@ struct DevicesView: View {
             HStack(alignment: .top, spacing: 14) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Security Device")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 11, weight: .bold))
                         .textCase(.uppercase)
                         .tracking(2.2)
                         .foregroundStyle(HBPalette.textMuted)
 
                     Text(embeddedFocusedDevice?.name ?? "Device unavailable")
-                        .font(.system(size: useLandscapeCompactLayout ? 20 : 22, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: useLandscapeCompactLayout ? 20 : 22, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
 
                     Text(embeddedFocusedDevice?.displayRoom ?? "Close this panel to return to the Security Center exactly where you left it.")
-                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 14, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
 
@@ -543,12 +543,12 @@ struct DevicesView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Filter Matrix")
-                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .font(HBTypography.display(size: 11, weight: .bold))
                                 .textCase(.uppercase)
                                 .tracking(2.2)
                                 .foregroundStyle(HBPalette.textMuted)
                             Text("Type")
-                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .font(HBTypography.body(size: 14, weight: .semibold))
                                 .foregroundStyle(HBPalette.textSecondary)
                         }
 
@@ -562,7 +562,7 @@ struct DevicesView: View {
 
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Source")
-                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .font(HBTypography.body(size: 14, weight: .semibold))
                                 .foregroundStyle(HBPalette.textSecondary)
                             Picker("Source", selection: $sourceFilter) {
                                 ForEach(DeviceItem.selectionSourceOptions(for: devices)) { option in
@@ -577,12 +577,12 @@ struct DevicesView: View {
                     HStack(spacing: 14) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Filter Matrix")
-                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .font(HBTypography.display(size: 11, weight: .bold))
                                 .textCase(.uppercase)
                                 .tracking(2.2)
                                 .foregroundStyle(HBPalette.textMuted)
                             Text("Type")
-                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .font(HBTypography.body(size: 14, weight: .semibold))
                                 .foregroundStyle(HBPalette.textSecondary)
                         }
                         Spacer(minLength: 12)
@@ -596,7 +596,7 @@ struct DevicesView: View {
 
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Source")
-                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                .font(HBTypography.body(size: 14, weight: .semibold))
                                 .foregroundStyle(HBPalette.textSecondary)
                             Picker("Source", selection: $sourceFilter) {
                                 ForEach(DeviceItem.selectionSourceOptions(for: devices)) { option in
@@ -633,28 +633,28 @@ struct DevicesView: View {
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text(device.name)
-                            .font(.system(size: useLandscapeCompactLayout ? 18 : 20, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: useLandscapeCompactLayout ? 18 : 20, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
                             .lineLimit(2)
                         Text(device.displayRoom)
-                            .font(.system(size: useLandscapeCompactLayout ? 13 : 14, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: useLandscapeCompactLayout ? 13 : 14, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                         HStack(spacing: 6) {
                             Circle()
                                 .fill(device.isOnline ? HBPalette.accentGreen : HBPalette.accentOrange)
                                 .frame(width: 7, height: 7)
                             Text(device.isOnline ? "Online" : "Offline")
-                                .font(.system(size: useLandscapeCompactLayout ? 11 : 12, weight: .semibold, design: .rounded))
+                                .font(HBTypography.body(size: useLandscapeCompactLayout ? 11 : 12, weight: .semibold))
                                 .foregroundStyle(device.isOnline ? HBPalette.accentGreen : HBPalette.accentOrange)
                             if deviceSupportsBattery(device) {
                                 Text("·")
-                                    .font(.system(size: useLandscapeCompactLayout ? 11 : 12, weight: .semibold, design: .rounded))
+                                    .font(HBTypography.body(size: useLandscapeCompactLayout ? 11 : 12, weight: .semibold))
                                     .foregroundStyle(HBPalette.textSecondary)
                                 batteryIndicator(for: device, compact: true)
                             }
                             if sensorTemperatureF(for: device) != nil {
                                 Text("·")
-                                    .font(.system(size: useLandscapeCompactLayout ? 11 : 12, weight: .semibold, design: .rounded))
+                                    .font(HBTypography.body(size: useLandscapeCompactLayout ? 11 : 12, weight: .semibold))
                                     .foregroundStyle(HBPalette.textSecondary)
                                 temperatureIndicator(for: device)
                             }
@@ -670,10 +670,10 @@ struct DevicesView: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text(deviceControlSummary(for: device))
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .font(HBTypography.body(size: 14, weight: .semibold))
                         .foregroundStyle(HBPalette.textPrimary)
                     Text("Direct control, grouping, voice, history, and migration context.")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -934,7 +934,7 @@ struct DevicesView: View {
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(HBPalette.accentBlue)
                 Text("Migrate to HomeBrain")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .font(HBTypography.body(size: 13, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
                 Spacer(minLength: 0)
                 if isPending {
@@ -944,7 +944,7 @@ struct DevicesView: View {
             }
 
             Text("HomeBrain opens the native radio operation at the right time, then waits for the physical exclude, reset, or pairing action. Retire SmartThings only after native state and controls are verified.")
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -953,12 +953,12 @@ struct DevicesView: View {
                     ProgressView()
                         .controlSize(.small)
                     Text("Loading migration plan...")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .semibold))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
             } else if let planError {
                 Text(planError)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .font(HBTypography.body(size: 12, weight: .semibold))
                     .foregroundStyle(HBPalette.accentRed)
                     .fixedSize(horizontal: false, vertical: true)
             } else if let plan {
@@ -969,7 +969,7 @@ struct DevicesView: View {
                 directRadioMigrationWorkflowCard(workflow, device: device, isPending: isPending)
             } else if plan?.supported == false {
                 Text("No radio workflow is available for this device. Keep it on its current integration, or replace it with a known Zigbee, Z-Wave, or Matter device before onboarding natively.")
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .font(HBTypography.body(size: 12, weight: .semibold))
                     .foregroundStyle(HBPalette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(10)
@@ -989,7 +989,7 @@ struct DevicesView: View {
 
             if let feedback {
                 Text(feedback)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .font(HBTypography.body(size: 12, weight: .semibold))
                     .foregroundStyle(HBPalette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1045,17 +1045,17 @@ struct DevicesView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Recommended radio")
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 10, weight: .bold))
                         .textCase(.uppercase)
                         .tracking(1.6)
                         .foregroundStyle(HBPalette.textMuted)
                     Text(plan.recommendedProtocolLabel)
-                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .font(HBTypography.body(size: 14, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                 }
                 Spacer()
                 Text(plan.supported ? "\(plan.nativeFeatureCount)/\(max(plan.featureSupport.count, 1)) native" : "Do not migrate")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .font(HBTypography.body(size: 11, weight: .bold))
                     .foregroundStyle(plan.supported ? HBPalette.accentGreen : HBPalette.accentRed)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
@@ -1066,7 +1066,7 @@ struct DevicesView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(plan.warnings.prefix(3).enumerated()), id: \.offset) { _, warning in
                         Text(warning)
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 11, weight: .medium))
                             .foregroundStyle(HBPalette.accentOrange)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -1074,19 +1074,19 @@ struct DevicesView: View {
             }
 
             Text(plan.migrationSafetyNote)
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 11, weight: .semibold))
                 .foregroundStyle(HBPalette.accentBlue)
                 .fixedSize(horizontal: false, vertical: true)
 
             if let profile = plan.instructionProfile {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Instruction profile")
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 10, weight: .bold))
                         .textCase(.uppercase)
                         .tracking(1.6)
                         .foregroundStyle(HBPalette.textMuted)
                     Text("\(profile.label) • \(profile.confidence)")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .font(HBTypography.body(size: 11, weight: .semibold))
                         .foregroundStyle(HBPalette.accentBlue)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1095,13 +1095,13 @@ struct DevicesView: View {
             if !plan.guidedSteps.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Guided workflow")
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 10, weight: .bold))
                         .textCase(.uppercase)
                         .tracking(1.6)
                         .foregroundStyle(HBPalette.textMuted)
                     ForEach(Array(plan.guidedSteps.prefix(5).enumerated()), id: \.offset) { index, step in
                         Text("\(index + 1). \(step.automatic ? "HomeBrain: " : "")\(step.title)")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 11, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -1124,18 +1124,18 @@ struct DevicesView: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Step \(min(workflow.stepIndex + 1, max(steps.count, 1)))/\(max(steps.count, 1))")
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 10, weight: .bold))
                         .textCase(.uppercase)
                         .tracking(1.6)
                         .foregroundStyle(HBPalette.textMuted)
                     Text(currentStep?.title ?? "Migration workflow")
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .font(HBTypography.body(size: 13, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
                 Text(workflow.protocolLabel)
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .font(HBTypography.body(size: 10, weight: .bold))
                     .foregroundStyle(HBPalette.accentGreen)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
@@ -1143,7 +1143,7 @@ struct DevicesView: View {
             }
 
             Text(workflow.statusMessage)
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 11, weight: .semibold))
                 .foregroundStyle(HBPalette.accentBlue)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -1151,7 +1151,7 @@ struct DevicesView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(workflow.verificationGuidance.enumerated()), id: \.offset) { _, guidance in
                         Text(guidance)
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .font(HBTypography.body(size: 11, weight: .semibold))
                             .foregroundStyle(HBPalette.textPrimary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -1164,7 +1164,7 @@ struct DevicesView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(currentStep.instructions.enumerated()), id: \.offset) { index, instruction in
                         Text("\(index + 1). \(instruction)")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 11, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -1182,12 +1182,12 @@ struct DevicesView: View {
                 if workflow.protocolName == "zwave" && !workflow.complete {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Stuck on exclusion?")
-                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 10, weight: .bold))
                             .textCase(.uppercase)
                             .tracking(1.4)
                             .foregroundStyle(HBPalette.textMuted)
                         Text("SmartThings can't reliably exclude over its cloud API. Exclude with HomeBrain's own radio, or confirm you already excluded the device to jump to pairing.")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 11, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                         Button {
@@ -1229,7 +1229,7 @@ struct DevicesView: View {
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(HBPalette.accentGreen)
                 Text("Finalize migration")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .font(HBTypography.body(size: 13, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
                 Spacer(minLength: 0)
                 if isPending {
@@ -1239,7 +1239,7 @@ struct DevicesView: View {
             }
 
             Text("After native state and controls work, HomeBrain can mark this device as fully moved off the SmartThings route.")
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -1254,7 +1254,7 @@ struct DevicesView: View {
 
             if let feedback {
                 Text(feedback)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .font(HBTypography.body(size: 12, weight: .semibold))
                     .foregroundStyle(HBPalette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1274,7 +1274,7 @@ struct DevicesView: View {
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(HBPalette.accentBlue)
                 Text("Matter & Thread")
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .font(HBTypography.body(size: 15, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
                 Spacer(minLength: 0)
                 Button {
@@ -1354,12 +1354,12 @@ struct DevicesView: View {
 
             if let matterStatusMessage {
                 Text(matterStatusMessage)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .font(HBTypography.body(size: 12, weight: .semibold))
                     .foregroundStyle(HBPalette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else if let matterLatestSessionStatus {
                 Text("Latest Matter session: \(matterLatestSessionStatus)")
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .font(HBTypography.body(size: 12, weight: .semibold))
                     .foregroundStyle(HBPalette.textSecondary)
             }
         }
@@ -1374,12 +1374,12 @@ struct DevicesView: View {
     private func matterStatusBadge(title: String, value: String, good: Bool) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
-                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 10, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(1.4)
                 .foregroundStyle(HBPalette.textMuted)
             Text(value)
-                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .bold))
                 .foregroundStyle(good ? HBPalette.accentGreen : HBPalette.textSecondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.75)
@@ -1499,11 +1499,11 @@ struct DevicesView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("SETPOINT")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .font(HBTypography.display(size: 12, weight: .semibold))
                         .tracking(1.2)
                         .foregroundStyle(HBPalette.textSecondary)
                     Text("\(targetTemp)°F")
-                        .font(.system(size: useLandscapeCompactLayout ? 40 : 48, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: useLandscapeCompactLayout ? 40 : 48, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
@@ -1513,11 +1513,11 @@ struct DevicesView: View {
 
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("CURRENT")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .font(HBTypography.display(size: 12, weight: .semibold))
                         .tracking(1.2)
                         .foregroundStyle(HBPalette.textSecondary)
                     Text(currentTemp.map { "\($0)°F" } ?? "--")
-                        .font(.system(size: useLandscapeCompactLayout ? 30 : 36, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: useLandscapeCompactLayout ? 30 : 36, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
@@ -1567,7 +1567,7 @@ struct DevicesView: View {
             Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: mode) }
         }
         .buttonStyle(.plain)
-        .font(.system(size: 14, weight: .bold, design: .rounded))
+        .font(HBTypography.display(size: 14, weight: .bold))
         .foregroundStyle(active ? Color.white : HBPalette.textPrimary)
         .frame(maxWidth: .infinity)
         .padding(.vertical, useLandscapeCompactLayout ? 9 : 11)
@@ -1603,11 +1603,11 @@ struct DevicesView: View {
         return VStack(spacing: 10) {
             HStack {
                 Text("Fade")
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 14, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
                 Spacer()
                 Text("\(Int(brightness.rounded()))%")
-                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                    .font(HBTypography.body(size: 15, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
             }
 
@@ -1649,7 +1649,7 @@ struct DevicesView: View {
                 VStack(spacing: 8) {
                     HStack {
                         Text("Color")
-                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 14, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                         Spacer()
                         Text(colorHex.uppercased())
@@ -1678,11 +1678,11 @@ struct DevicesView: View {
                 VStack(spacing: 8) {
                     HStack {
                         Text("White")
-                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 14, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                         Spacer()
                         Text("\(Int(colorTemperature.rounded()))K")
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .font(HBTypography.body(size: 12, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
                     }
 
@@ -1765,11 +1765,11 @@ struct DevicesView: View {
                 VStack(spacing: 10) {
                     HStack {
                         Text("Sound")
-                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 14, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                         Spacer()
                         Text(currentSoundLabel)
-                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                            .font(HBTypography.body(size: 15, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
                     }
 
@@ -1801,11 +1801,11 @@ struct DevicesView: View {
                 VStack(spacing: 10) {
                     HStack {
                         Text("Volume")
-                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 14, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                         Spacer()
                         Text(currentLabel)
-                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                            .font(HBTypography.body(size: 15, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
                     }
 
@@ -1845,15 +1845,15 @@ struct DevicesView: View {
                     .controlSize(.small)
                 Text("Sending command...")
             }
-            .font(.system(size: 12, weight: .medium, design: .rounded))
+            .font(HBTypography.body(size: 12, weight: .medium))
             .foregroundStyle(HBPalette.accentBlue)
         } else if controlFeedback[device.id] == .success {
             Label("Command sent", systemImage: "checkmark.circle.fill")
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .medium))
                 .foregroundStyle(HBPalette.accentGreen)
         } else if controlFeedback[device.id] == .failure {
             Label("Command failed", systemImage: "exclamationmark.triangle.fill")
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .medium))
                 .foregroundStyle(Color.red.opacity(0.9))
         }
     }
@@ -1866,15 +1866,15 @@ struct DevicesView: View {
         return HBPanel {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Zigbee Maintenance")
-                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .font(HBTypography.body(size: 17, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
                 Text("If this sensor stopped reporting, re-run its Zigbee interview to repair IAS Zone enrollment. Wake the device first (open/close it or press its button).")
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 13, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if hasIas {
                     Text(enrolled ? "Enrolled — reporting open/closed." : "Not enrolled — won't report until re-interviewed.")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .semibold))
                         .foregroundStyle(enrolled ? HBPalette.accentGreen : HBPalette.accentOrange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1911,7 +1911,7 @@ struct DevicesView: View {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .center) {
                     Label("Lock PINs", systemImage: "key.fill")
-                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .font(HBTypography.body(size: 17, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                     Spacer()
                     if native {
@@ -1927,7 +1927,7 @@ struct DevicesView: View {
 
                 if !native {
                     Text("Migrate this lock to HomeBrain Z-Wave before writing PIN slots.")
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 13, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(12)
@@ -1941,14 +1941,14 @@ struct DevicesView: View {
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Assigned Slots")
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .font(HBTypography.body(size: 12, weight: .bold))
                             .foregroundStyle(HBPalette.textSecondary)
                         if isLoading && state == nil {
                             HStack(spacing: 8) {
                                 ProgressView()
                                     .controlSize(.small)
                                 Text("Loading slots...")
-                                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                                    .font(HBTypography.body(size: 13, weight: .medium))
                             }
                             .foregroundStyle(HBPalette.textSecondary)
                             .padding(12)
@@ -1967,11 +1967,11 @@ struct DevicesView: View {
                                     } label: {
                                         VStack(alignment: .leading, spacing: 3) {
                                             Text(slot.name)
-                                                .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                                .font(HBTypography.body(size: 14, weight: .semibold))
                                                 .foregroundStyle(HBPalette.textPrimary)
                                                 .lineLimit(1)
                                             Text("Slot \(slot.slot) · \(slot.enabled ? "Enabled" : "Disabled")")
-                                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                                .font(HBTypography.body(size: 12, weight: .medium))
                                                 .foregroundStyle(HBPalette.textSecondary)
                                         }
                                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1996,7 +1996,7 @@ struct DevicesView: View {
                             }
                         } else {
                             Text("No assigned PIN slots are reported by the lock.")
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 13, weight: .medium))
                                 .foregroundStyle(HBPalette.textSecondary)
                                 .padding(12)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -2052,7 +2052,7 @@ struct DevicesView: View {
                                 updateLockCodeDraft(for: device) { $0.enabled = value }
                             }
                         ))
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .font(HBTypography.body(size: 14, weight: .semibold))
                         .foregroundStyle(HBPalette.textPrimary)
 
                         Button {
@@ -2073,11 +2073,11 @@ struct DevicesView: View {
 
                     VStack(alignment: .leading, spacing: 8) {
                         Text("PIN Activity")
-                            .font(.system(size: 12, weight: .bold, design: .rounded))
+                            .font(HBTypography.body(size: 12, weight: .bold))
                             .foregroundStyle(HBPalette.textSecondary)
                         if events.isEmpty {
                             Text("No PIN activity has been recorded yet.")
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 13, weight: .medium))
                                 .foregroundStyle(HBPalette.textSecondary)
                                 .padding(12)
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -2087,13 +2087,13 @@ struct DevicesView: View {
                                 VStack(alignment: .leading, spacing: 3) {
                                     HStack {
                                         Text(event.codeName ?? event.slot.map { "Slot \($0)" } ?? event.actionLabel)
-                                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                            .font(HBTypography.body(size: 13, weight: .semibold))
                                             .foregroundStyle(HBPalette.textPrimary)
                                         Spacer()
                                         HBBadge(text: event.source == "lock" ? "Lock" : "HomeBrain")
                                     }
                                     Text("\(event.actionLabel) · \(event.slot.map { "Slot \($0)" } ?? "No slot") · \(event.displayDate)")
-                                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                                        .font(HBTypography.body(size: 12, weight: .medium))
                                         .foregroundStyle(HBPalette.textSecondary)
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
@@ -2144,11 +2144,11 @@ struct DevicesView: View {
 
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text(device.name)
-                                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                                        .font(HBTypography.display(size: 26, weight: .bold))
                                         .foregroundStyle(HBPalette.textPrimary)
                                         .fixedSize(horizontal: false, vertical: true)
                                     Text("\(device.displayRoom) · \(deviceTypeDisplayLabel(device.type)) · \(device.selectionSourceLabel)")
-                                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                                        .font(HBTypography.body(size: 14, weight: .medium))
                                         .foregroundStyle(HBPalette.textSecondary)
                                         .fixedSize(horizontal: false, vertical: true)
                                     HStack(spacing: 8) {
@@ -2165,7 +2165,7 @@ struct DevicesView: View {
                         HBPanel {
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("Primary Controls")
-                                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                                    .font(HBTypography.body(size: 17, weight: .bold))
                                     .foregroundStyle(HBPalette.textPrimary)
 
                                 if device.type == "thermostat" {
@@ -2178,7 +2178,7 @@ struct DevicesView: View {
                                     defaultPowerControl(for: device)
                                 } else {
                                     Text("This device does not expose a simple manual control. Use groups, workflows, telemetry, or migration guidance instead.")
-                                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                                        .font(HBTypography.body(size: 13, weight: .medium))
                                         .foregroundStyle(HBPalette.textSecondary)
                                         .fixedSize(horizontal: false, vertical: true)
                                         .padding(12)
@@ -2210,10 +2210,10 @@ struct DevicesView: View {
                         HBPanel {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Voice")
-                                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                                    .font(HBTypography.body(size: 17, weight: .bold))
                                     .foregroundStyle(HBPalette.textPrimary)
                                 Text(voiceHint(for: device))
-                                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                                    .font(HBTypography.body(size: 13, weight: .medium))
                                     .foregroundStyle(HBPalette.textSecondary)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
@@ -2222,10 +2222,10 @@ struct DevicesView: View {
                         HBPanel {
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("Device Record")
-                                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                                    .font(HBTypography.body(size: 17, weight: .bold))
                                     .foregroundStyle(HBPalette.textPrimary)
                                 Text("Remove stale HomeBrain records after exclusion, replacement, or controller cleanup.")
-                                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                                    .font(HBTypography.body(size: 13, weight: .medium))
                                     .foregroundStyle(HBPalette.textSecondary)
                                     .fixedSize(horizontal: false, vertical: true)
                                 Button(role: .destructive) {
@@ -2309,7 +2309,7 @@ struct DevicesView: View {
         return HBPanel {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Device Details")
-                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .font(HBTypography.body(size: 17, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
 
                 VStack(alignment: .leading, spacing: 10) {
@@ -2319,7 +2319,7 @@ struct DevicesView: View {
 
                     HStack {
                         Text("Room")
-                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .font(HBTypography.body(size: 14, weight: .semibold))
                             .foregroundStyle(HBPalette.textSecondary)
                         Spacer()
                         Picker("Room", selection: $editDeviceRoom) {
@@ -2334,7 +2334,7 @@ struct DevicesView: View {
 
                     HStack {
                         Text("Type")
-                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .font(HBTypography.body(size: 14, weight: .semibold))
                             .foregroundStyle(HBPalette.textSecondary)
                         Spacer()
                         Picker("Type", selection: $editDeviceType) {
@@ -2376,21 +2376,21 @@ struct DevicesView: View {
             HBPanel {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Telemetry")
-                        .font(.system(size: 17, weight: .bold, design: .rounded))
+                        .font(HBTypography.body(size: 17, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
 
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                             HStack(alignment: .firstTextBaseline, spacing: 12) {
                                 Text(row.label)
-                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                    .font(HBTypography.body(size: 13, weight: .semibold))
                                     .foregroundStyle(HBPalette.textSecondary)
                                 Spacer(minLength: 12)
                                 if row.label == "Battery" {
                                     batteryIndicator(for: device, compact: false)
                                 } else {
                                     Text(row.value)
-                                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                                        .font(HBTypography.body(size: 13, weight: .bold))
                                         .foregroundStyle(HBPalette.textPrimary)
                                         .multilineTextAlignment(.trailing)
                                 }
@@ -2415,13 +2415,13 @@ struct DevicesView: View {
                         HBPanel {
                             VStack(alignment: .leading, spacing: 16) {
                                 Text("Device Provisioning")
-                                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                                    .font(HBTypography.display(size: 11, weight: .bold))
                                     .textCase(.uppercase)
                                     .tracking(2.6)
                                     .foregroundStyle(HBPalette.textMuted)
 
                                 Text("Add a native endpoint")
-                                    .font(.system(size: isCompact ? 24 : 28, weight: .bold, design: .rounded))
+                                    .font(HBTypography.display(size: isCompact ? 24 : 28, weight: .bold))
                                     .foregroundStyle(
                                         LinearGradient(
                                             colors: [HBPalette.accentBlue, HBPalette.accentPurple],
@@ -2455,7 +2455,7 @@ struct DevicesView: View {
 
                                 if let addDeviceStatusMessage {
                                     Text(addDeviceStatusMessage)
-                                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                        .font(HBTypography.body(size: 12, weight: .semibold))
                                         .foregroundStyle(HBPalette.textSecondary)
                                         .fixedSize(horizontal: false, vertical: true)
                                         .padding(10)
@@ -2493,7 +2493,7 @@ struct DevicesView: View {
     private var addDeviceModeSelector: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Protocol")
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 11, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(2.0)
                 .foregroundStyle(HBPalette.textMuted)
@@ -2516,7 +2516,7 @@ struct DevicesView: View {
             addDeviceMode = mode
         } label: {
             Label(addDeviceModeLabel(mode), systemImage: addDeviceModeIcon(mode))
-                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .font(HBTypography.body(size: 13, weight: .bold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.82)
                 .frame(maxWidth: .infinity)
@@ -2589,7 +2589,7 @@ struct DevicesView: View {
             ProgressView()
                 .controlSize(.small)
             Text("Waiting for HomeBrain hardware confirmation...")
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .semibold))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -2601,10 +2601,10 @@ struct DevicesView: View {
     private var addDeviceDskPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("S2 security needs the 5 digit DSK PIN.")
-                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .bold))
                 .foregroundStyle(HBPalette.accentOrange)
             Text("Use the first 5 digits printed on the switch, QR label, box, or manual insert. This is not a displayed PIN; 00000 will fail unless that is literally printed.")
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 11, weight: .semibold))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
             Text("DSK challenge: \(addDevicePendingDsk)")
@@ -2657,7 +2657,7 @@ struct DevicesView: View {
 
             HStack {
                 Text("Type")
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .font(HBTypography.body(size: 14, weight: .semibold))
                     .foregroundStyle(HBPalette.textSecondary)
                 Spacer()
                 Picker("Type", selection: $newType) {
@@ -2684,7 +2684,7 @@ struct DevicesView: View {
             }
 
             Text(nativeAddGuidance)
-                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 13, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -2710,7 +2710,7 @@ struct DevicesView: View {
 
     private func addDeviceFieldLabel(_ title: String) -> some View {
         Text(title)
-            .font(.system(size: 14, weight: .semibold, design: .rounded))
+            .font(HBTypography.body(size: 14, weight: .semibold))
             .foregroundStyle(HBPalette.textSecondary)
     }
 
@@ -2800,10 +2800,10 @@ struct DevicesView: View {
                     .foregroundStyle(HBPalette.accentOrange)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Incomplete Z-Wave nodes are already on the Zooz network.")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .bold))
                         .foregroundStyle(HBPalette.accentOrange)
                     Text("Repair retries interview. Replace keeps the node id and opens a fresh include window; Remove deletes dead controller entries and matching HomeBrain records.")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .font(HBTypography.body(size: 11, weight: .semibold))
                         .foregroundStyle(HBPalette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -2822,11 +2822,11 @@ struct DevicesView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(candidate.name)
-                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .font(HBTypography.body(size: 13, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
                             .lineLimit(2)
                         Text(candidate.subtitle)
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .font(HBTypography.body(size: 11, weight: .semibold))
                             .foregroundStyle(HBPalette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -5068,7 +5068,7 @@ struct DevicesView: View {
                 Image(systemName: "thermometer.medium")
                     .font(.system(size: 11, weight: .bold))
                 Text("\(formatNumber(temperature))°")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .font(HBTypography.body(size: 11, weight: .bold))
             }
             .foregroundStyle(HBPalette.accentBlue)
             .accessibilityLabel("Temperature \(formatNumber(temperature)) degrees")

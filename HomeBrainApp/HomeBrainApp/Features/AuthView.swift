@@ -77,13 +77,13 @@ struct AuthView: View {
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Identity Layer")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 11, weight: .bold))
                             .textCase(.uppercase)
                             .tracking(2.8)
                             .foregroundStyle(HBPalette.textMuted)
 
                         Text("HomeBrain iOS Command Deck")
-                            .font(.system(size: 32, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 32, weight: .bold))
                             .foregroundStyle(
                                 LinearGradient(
                                     colors: [HBPalette.accentBlue, HBPalette.accentPurple],
@@ -93,7 +93,7 @@ struct AuthView: View {
                             )
 
                         Text("Authenticate to the residence control mesh, sync with your hub, and bring the native app into the same cinematic command layer as the web deck.")
-                            .font(.system(size: 16, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 16, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                     }
                 }
@@ -110,7 +110,7 @@ struct AuthView: View {
         HBPanel {
             VStack(alignment: .leading, spacing: 18) {
                 Text("Secure Access")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 11, weight: .bold))
                     .textCase(.uppercase)
                     .tracking(2.8)
                     .foregroundStyle(HBPalette.textMuted)
@@ -124,7 +124,7 @@ struct AuthView: View {
 
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Hub Endpoint")
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .font(HBTypography.body(size: 13, weight: .semibold))
                         .foregroundStyle(HBPalette.textSecondary)
 
                     HStack(spacing: 10) {
@@ -148,7 +148,7 @@ struct AuthView: View {
 
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Credentials")
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .font(HBTypography.body(size: 13, weight: .semibold))
                         .foregroundStyle(HBPalette.textSecondary)
 
                     TextField("Email", text: $email)
@@ -195,7 +195,7 @@ struct AuthView: View {
                 }
 
                 Text(mode == .login ? "Enter your HomeBrain credentials to rejoin the command deck." : "Create an operator account to personalize favorites, voice routines, and access control.")
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 14, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
             }
         }
@@ -205,13 +205,13 @@ struct AuthView: View {
         HBPanel {
             VStack(alignment: .leading, spacing: 16) {
                 Text("UI Preview")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 11, weight: .bold))
                     .textCase(.uppercase)
                     .tracking(2.8)
                     .foregroundStyle(HBPalette.textMuted)
 
                 Text("Jump directly into the app shell without authentication to inspect layouts, theme behavior, and spacing on each module.")
-                    .font(.system(size: 15, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 15, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 10)], spacing: 10) {
@@ -228,11 +228,11 @@ struct AuthView: View {
 
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(section.title)
-                                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                                        .font(HBTypography.body(size: 15, weight: .semibold))
                                         .foregroundStyle(HBPalette.textPrimary)
                                         .lineLimit(1)
                                     Text(section.chromeKicker)
-                                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                                        .font(HBTypography.display(size: 10, weight: .bold))
                                         .textCase(.uppercase)
                                         .tracking(1.6)
                                         .foregroundStyle(HBPalette.textMuted)

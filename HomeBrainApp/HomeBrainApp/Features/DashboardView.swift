@@ -1527,12 +1527,12 @@ struct DashboardView: View {
 
         return HBPanel {
             VStack(alignment: .leading, spacing: 12) {
-                if usesCompactWidgetToolbar {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Label(dashboardWidgetDisplayTitle(widget), systemImage: widgetSystemImage(widget.type))
-                            .font(.system(size: 17, weight: .bold, design: .rounded))
-                            .foregroundStyle(HBPalette.textPrimary)
-                            .fixedSize(horizontal: false, vertical: true)
+            if usesCompactWidgetToolbar {
+                VStack(alignment: .leading, spacing: 10) {
+                    Label(dashboardWidgetDisplayTitle(widget), systemImage: widgetSystemImage(widget.type))
+                        .font(HBTypography.display(size: 17, weight: .bold))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
 
                         HStack(spacing: 8) {
                             HBBadge(
@@ -1549,11 +1549,11 @@ struct DashboardView: View {
                             }
                         }
                     }
-                } else {
-                    HStack(alignment: .top, spacing: 12) {
-                        Label(dashboardWidgetDisplayTitle(widget), systemImage: widgetSystemImage(widget.type))
-                            .font(.system(size: 18, weight: .bold, design: .rounded))
-                            .foregroundStyle(HBPalette.textPrimary)
+            } else {
+                HStack(alignment: .top, spacing: 12) {
+                    Label(dashboardWidgetDisplayTitle(widget), systemImage: widgetSystemImage(widget.type))
+                        .font(HBTypography.display(size: 18, weight: .bold))
+                        .foregroundStyle(HBPalette.textPrimary)
 
                         Spacer(minLength: 8)
 
@@ -1594,7 +1594,7 @@ struct DashboardView: View {
 
                 if widget.minimized {
                     Text("This widget is minimized. Turn on layout editing to expand it again.")
-                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 14, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                         .padding(.vertical, 10)
                 } else {
@@ -1779,7 +1779,7 @@ struct DashboardView: View {
                     .pickerStyle(.navigationLink)
 
                     Text(pendingWidgetType.details)
-                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 13, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
 
@@ -1814,7 +1814,7 @@ struct DashboardView: View {
 
                         if filteredPendingDevices.isEmpty {
                             Text("No devices match your search.")
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 13, weight: .medium))
                                 .foregroundStyle(HBPalette.textSecondary)
                         }
                     }
@@ -1833,12 +1833,12 @@ struct DashboardView: View {
                         }
 
                         Text("\(pendingWidgetDeviceIDs.count) selected")
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 13, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
 
                         if filteredPendingDevices.isEmpty {
                             Text("No devices match your search.")
-                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 13, weight: .medium))
                                 .foregroundStyle(HBPalette.textSecondary)
                         } else {
                             ForEach(filteredPendingDevices) { device in
@@ -1856,10 +1856,10 @@ struct DashboardView: View {
                                             Text(device.name)
                                                 .foregroundStyle(HBPalette.textPrimary)
                                             Text("\(device.displayRoom) • \(device.type)")
-                                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                                .font(HBTypography.body(size: 12, weight: .medium))
                                                 .foregroundStyle(HBPalette.textSecondary)
                                             Text(device.selectionSourceLabel)
-                                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                                .font(HBTypography.body(size: 11, weight: .semibold))
                                                 .foregroundStyle(HBPalette.textMuted)
                                         }
                                         Spacer()
@@ -2288,19 +2288,13 @@ struct DashboardView: View {
     private func dashboardHeroCopy(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: compact ? 10 : 14) {
             Text("Residence Control Nexus")
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 11, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(3.0)
                 .foregroundStyle(HBPalette.textMuted)
 
-            Text("Welcome home. Every room, routine, and wake-word path is online.")
-                .font(
-                    .system(
-                        size: compact ? 26 : (useLandscapeCompactLayout ? 28 : (layoutWidth < 520 ? 30 : (layoutWidth < 760 ? 34 : (layoutWidth < 960 ? 38 : 42)))),
-                        weight: .bold,
-                        design: .rounded
-                    )
-                )
+                        Text("Welcome home. Every room, routine, and wake-word path is online.")
+                            .font(HBTypography.display(size: compact ? 26 : (useLandscapeCompactLayout ? 28 : (layoutWidth < 520 ? 30 : (layoutWidth < 760 ? 34 : (layoutWidth < 960 ? 38 : 42)))), weight: .bold))
                 .foregroundStyle(
                     LinearGradient(
                         colors: [HBPalette.accentBlue, HBPalette.accentPurple, HBPalette.textPrimary],
@@ -2314,7 +2308,7 @@ struct DashboardView: View {
                 ? "Keep the controls you use, shrink the rest, and tune this deck per room."
                 : "Control the home as one responsive system with cinematic visibility across devices, scenes, voice hubs, and workflows."
             )
-                .font(.system(size: compact ? 14 : (useLandscapeCompactLayout ? 14 : 17), weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: compact ? 14 : (useLandscapeCompactLayout ? 14 : 17), weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -2338,26 +2332,26 @@ struct DashboardView: View {
     private func dashboardHeroCommandSurface(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: compact ? 10 : 12) {
             Text("Natural Language Interface")
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 11, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(2.6)
                 .foregroundStyle(HBPalette.textMuted)
 
             Text(compact ? "Voice console" : "Speak the next move")
-                .font(.system(size: compact ? 20 : (useLandscapeCompactLayout ? 22 : (contentWidth < 760 ? 24 : 28)), weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: compact ? 20 : (useLandscapeCompactLayout ? 22 : (contentWidth < 760 ? 24 : 28)), weight: .bold))
                 .foregroundStyle(HBPalette.textPrimary)
 
             Text(compact
                 ? "Launch scenes, lights, and routines from a tighter command dock."
                 : "Trigger a scene, dim a room, or compose a workflow from a single command surface."
             )
-                .font(.system(size: compact ? 14 : 15, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: compact ? 14 : 15, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
 
             LazyVGrid(columns: compact ? [GridItem(.flexible(), spacing: 8)] : commandSuggestionColumns, spacing: 8) {
                 ForEach(commandSuggestions, id: \.self) { suggestion in
                     Text(suggestion)
-                        .font(.system(size: compact ? 12 : 13, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: compact ? 12 : 13, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 12)
@@ -2395,13 +2389,13 @@ struct DashboardView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(title)
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 11, weight: .bold))
                         .textCase(.uppercase)
                         .tracking(2.2)
                         .foregroundStyle(HBPalette.textMuted)
 
                     Text(value)
-                        .font(.system(size: compact ? 28 : (useLandscapeCompactLayout ? 28 : 34), weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: compact ? 28 : (useLandscapeCompactLayout ? 28 : 34), weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.65)
@@ -2417,7 +2411,7 @@ struct DashboardView: View {
             }
 
             Text(subtitle)
-                .font(.system(size: compact ? 13 : (useLandscapeCompactLayout ? 13 : 15), weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: compact ? 13 : (useLandscapeCompactLayout ? 13 : 15), weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
 
             Capsule()
@@ -2485,7 +2479,9 @@ struct DashboardView: View {
                         } else if securitySensors.isEmpty {
                             securityEmptyStateRow(
                                 title: "No security sensors found yet",
-                                subtitle: "Add security sensors or sync SmartThings devices to populate this panel."
+                    subtitle: securitySmartThingsPlatformEnabled
+                        ? "Add security sensors or sync SmartThings devices to populate this panel."
+                        : "Add security sensors to populate this panel."
                             )
                         } else {
                             LazyVGrid(columns: securitySensorColumns(), spacing: 8) {
@@ -2499,7 +2495,7 @@ struct DashboardView: View {
                 .frame(maxHeight: securityListHeight(for: widget.size))
 
                 Text(sensorFooterParts.joined(separator: " • "))
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 12, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
@@ -2560,7 +2556,9 @@ struct DashboardView: View {
                 if securityDoorLocks.isEmpty {
                     securityEmptyStateRow(
                         title: "No door locks found yet",
-                        subtitle: "Add lock devices or sync SmartThings to populate this section."
+                        subtitle: securitySmartThingsPlatformEnabled
+                            ? "Add lock devices or sync SmartThings to populate this section."
+                            : "Add lock devices to populate this section."
                     )
                 } else {
                     ScrollView(.vertical, showsIndicators: false) {
@@ -2622,19 +2620,19 @@ struct DashboardView: View {
     private func securityAlarmStateLabels(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: compact ? 0 : 1) {
             Text("Alarm State")
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 11, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(2.0)
                 .foregroundStyle(securityStateTitleColor)
 
             Text(securityStatusLabel)
-                .font(.system(size: compact ? 24 : 28, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: compact ? 24 : 28, weight: .bold))
                 .foregroundStyle(securityStateValueColor)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
 
             Text("\(securityStatusDetail) • \(securitySystemStatusText)")
-                .font(.system(size: compact ? 12 : 13, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: compact ? 12 : 13, weight: .medium))
                 .foregroundStyle(securityStateDetailColor)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
@@ -2645,13 +2643,13 @@ struct DashboardView: View {
     private func securitySensorHeaderText() -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Security Sensors")
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 11, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(2.4)
                 .foregroundStyle(HBPalette.textMuted)
 
             Text("Tap a sensor to open its device page.")
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -2661,12 +2659,12 @@ struct DashboardView: View {
     private func securitySirenOutputHeaderText() -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Alarm Sirens")
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .font(HBTypography.display(size: 11, weight: .semibold))
                 .tracking(0.7)
                 .textCase(.uppercase)
                 .foregroundStyle(HBPalette.textSecondary)
             Text("Selected sirens sound when the alarm is triggered.")
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -2676,13 +2674,13 @@ struct DashboardView: View {
     private func securityDoorLocksHeaderText() -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Door Locks")
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 11, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(2.4)
                 .foregroundStyle(HBPalette.textMuted)
 
             Text("Tap a lock tile to toggle locked or unlocked.")
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -2856,12 +2854,16 @@ struct DashboardView: View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 6) {
                 securityPrimaryActionSlot(compact: compact)
-                securitySyncAction(compact: compact)
+                if securitySmartThingsPlatformEnabled {
+                    securitySyncAction(compact: compact)
+                }
             }
 
             VStack(alignment: .leading, spacing: 6) {
                 securityPrimaryActionSlot(compact: compact)
-                securitySyncAction(compact: compact)
+                if securitySmartThingsPlatformEnabled {
+                    securitySyncAction(compact: compact)
+                }
             }
         }
     }
@@ -2870,17 +2872,17 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(securityPinPromptTitle)
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 20, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
                 Text(securityPinPromptMessage)
-                    .font(.subheadline)
+                    .font(HBTypography.body(.subheadline))
                     .foregroundStyle(HBPalette.textSecondary)
             }
 
             SecureField("PIN", text: $securityPinEntry)
                 .keyboardType(.numberPad)
                 .textContentType(.oneTimeCode)
-                .font(.system(size: 24, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 24, weight: .bold))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 16)
                 .frame(height: 54)
@@ -3071,7 +3073,7 @@ struct DashboardView: View {
                     .frame(width: compact ? 12 : 13, height: compact ? 12 : 13, alignment: .center)
 
                 Text(title)
-                    .font(.system(size: compact ? 11 : 12, weight: .semibold, design: .rounded))
+                    .font(HBTypography.body(size: compact ? 11 : 12, weight: .semibold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
             }
@@ -3232,13 +3234,13 @@ struct DashboardView: View {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Alarm Sirens")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 12, weight: .bold))
                         .textCase(.uppercase)
                         .tracking(2.0)
                         .foregroundStyle(HBPalette.textMuted)
 
                     Text("Selected sirens sound when the alarm is triggered.")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
 
@@ -3247,14 +3249,14 @@ struct DashboardView: View {
                 Button("Done") {
                     isPresentingSecuritySirenPicker = false
                 }
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .semibold))
                 .foregroundStyle(HBPalette.accentBlue)
                 .buttonStyle(.plain)
             }
 
             if securitySirenOutputs.isEmpty {
                 Text("No alarm sirens available for this security platform.")
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 13, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 12)
@@ -3361,13 +3363,13 @@ struct DashboardView: View {
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Visible Sensors")
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 12, weight: .bold))
                         .textCase(.uppercase)
                         .tracking(2.0)
                         .foregroundStyle(HBPalette.textMuted)
 
                     Text("Toggle sensors without closing the picker.")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
 
@@ -3376,7 +3378,7 @@ struct DashboardView: View {
                 Button("Done") {
                     isPresentingSecuritySensorPicker = false
                 }
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .semibold))
                 .foregroundStyle(HBPalette.accentBlue)
                 .buttonStyle(.plain)
             }
@@ -3385,7 +3387,7 @@ struct DashboardView: View {
                 resetVisibleSecuritySensors()
             } label: {
                 Text("Show all security sensors")
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .font(HBTypography.body(size: 13, weight: .semibold))
                     .foregroundStyle(HBPalette.textPrimary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 12)
@@ -3400,7 +3402,7 @@ struct DashboardView: View {
 
             if securitySensors.isEmpty {
                 Text("No security sensors available.")
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 13, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 12)
@@ -3596,7 +3598,7 @@ struct DashboardView: View {
         return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 8) {
                 Text(siren.name)
-                    .font(.system(size: compact ? 11 : 12, weight: .semibold, design: .rounded))
+                    .font(HBTypography.body(size: compact ? 11 : 12, weight: .semibold))
                     .foregroundStyle(HBPalette.textPrimary)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
@@ -3609,7 +3611,7 @@ struct DashboardView: View {
             }
 
             Text(siren.isOnline ? siren.stateLabel : "Offline")
-                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 10, weight: .semibold))
                 .foregroundStyle(tint)
                 .lineLimit(1)
         }
@@ -3639,12 +3641,12 @@ struct DashboardView: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(siren.name)
-                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .font(HBTypography.body(size: 13, weight: .semibold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .lineLimit(1)
 
                     Text([siren.room, siren.source].compactMap { $0 }.joined(separator: " • "))
-                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 11, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                         .lineLimit(1)
                 }
@@ -3652,7 +3654,7 @@ struct DashboardView: View {
                 Spacer(minLength: 8)
 
                 Text(statusText)
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .font(HBTypography.body(size: 11, weight: .semibold))
                     .foregroundStyle(statusTint)
                     .lineLimit(1)
             }
@@ -3672,10 +3674,10 @@ struct DashboardView: View {
     private func securityEmptyStateRow(title: String, subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 15, weight: .semibold))
                 .foregroundStyle(HBPalette.textPrimary)
             Text(subtitle)
-                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 13, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -3698,14 +3700,14 @@ struct DashboardView: View {
                     .foregroundStyle(isVisible ? HBPalette.accentBlue : HBPalette.textMuted)
 
                 Text(sensor.name)
-                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .font(HBTypography.body(size: 13, weight: .semibold))
                     .foregroundStyle(HBPalette.textPrimary)
                     .lineLimit(1)
 
                 Spacer(minLength: 8)
 
                 Text(compactSecurityStatusText(for: sensor))
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .font(HBTypography.body(size: 11, weight: .semibold))
                     .foregroundStyle(HBPalette.textSecondary)
                     .lineLimit(1)
             }
@@ -3731,7 +3733,7 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .top, spacing: 6) {
                     Text(sensor.name)
-                        .font(.system(size: compact ? 11 : 12, weight: .semibold, design: .rounded))
+                        .font(HBTypography.body(size: compact ? 11 : 12, weight: .semibold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
@@ -3744,7 +3746,7 @@ struct DashboardView: View {
                 }
 
                 Text(compactSecurityStatusText(for: sensor))
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .font(HBTypography.body(size: 10, weight: .semibold))
                     .foregroundStyle(compactSecurityStatusTint(for: sensor))
                     .lineLimit(1)
             }
@@ -3781,7 +3783,7 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .top, spacing: 8) {
                     Text(doorLock.name)
-                        .font(.system(size: compact ? 11 : 12, weight: .semibold, design: .rounded))
+                        .font(HBTypography.body(size: compact ? 11 : 12, weight: .semibold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
@@ -3799,7 +3801,7 @@ struct DashboardView: View {
                 }
 
                 Text(!doorLock.isOnline ? "Offline" : doorLock.stateLabel)
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .font(HBTypography.body(size: 10, weight: .semibold))
                     .foregroundStyle(badgeColors.foreground)
                     .lineLimit(1)
             }
@@ -3837,20 +3839,20 @@ struct DashboardView: View {
                             HStack(alignment: .top, spacing: 12) {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("Local Forecast")
-                                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                                        .font(HBTypography.display(size: 11, weight: .bold))
                                         .textCase(.uppercase)
                                         .tracking(2.6)
                                         .foregroundStyle(HBPalette.textMuted)
 
                                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                                         Text(formattedTemperature(snapshot.displayTemperatureF))
-                                            .font(.system(size: headlineFontSize, weight: .bold, design: .rounded))
+                                            .font(HBTypography.body(size: headlineFontSize, weight: .bold))
                                             .foregroundStyle(HBPalette.textPrimary)
                                             .lineLimit(1)
                                             .minimumScaleFactor(0.78)
 
                                         Text("Feels like \(formattedTemperature(snapshot.displayFeelsLikeF))")
-                                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                                            .font(HBTypography.body(size: 14, weight: .medium))
                                             .foregroundStyle(HBPalette.textSecondary)
                                             .lineLimit(1)
                                             .minimumScaleFactor(0.82)
@@ -3880,11 +3882,11 @@ struct DashboardView: View {
                             HStack(alignment: .top, spacing: 12) {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(snapshot.condition)
-                                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                                        .font(HBTypography.body(size: 15, weight: .semibold))
                                         .foregroundStyle(HBPalette.textPrimary)
 
                                     Label(snapshot.locationName, systemImage: "mappin.and.ellipse")
-                                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                                        .font(HBTypography.body(size: 13, weight: .medium))
                                         .foregroundStyle(HBPalette.textSecondary)
                                         .lineLimit(1)
 
@@ -3919,31 +3921,31 @@ struct DashboardView: View {
                                 HStack(alignment: .top, spacing: 12) {
                                     VStack(alignment: .leading, spacing: 6) {
                                         Text("Local Forecast")
-                                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                                            .font(HBTypography.display(size: 11, weight: .bold))
                                             .textCase(.uppercase)
                                             .tracking(2.6)
                                             .foregroundStyle(HBPalette.textMuted)
 
                                         Text(formattedTemperature(snapshot.displayTemperatureF))
-                                            .font(.system(size: headlineFontSize, weight: .bold, design: .rounded))
+                                            .font(HBTypography.body(size: headlineFontSize, weight: .bold))
                                             .foregroundStyle(HBPalette.textPrimary)
                                             .lineLimit(1)
                                             .minimumScaleFactor(0.78)
 
                                         Text("Feels like \(formattedTemperature(snapshot.displayFeelsLikeF))")
-                                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                                            .font(HBTypography.body(size: 14, weight: .medium))
                                             .foregroundStyle(HBPalette.textSecondary)
                                             .lineLimit(1)
                                             .minimumScaleFactor(0.82)
 
                                         Text(snapshot.condition)
-                                            .font(.system(size: compactWeatherHeader ? 15 : 17, weight: .semibold, design: .rounded))
+                                            .font(HBTypography.body(size: compactWeatherHeader ? 15 : 17, weight: .semibold))
                                             .foregroundStyle(HBPalette.textPrimary)
                                             .lineLimit(2)
                                             .fixedSize(horizontal: false, vertical: true)
 
                                         Label(snapshot.locationName, systemImage: "mappin.and.ellipse")
-                                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                                            .font(HBTypography.body(size: 13, weight: .medium))
                                             .foregroundStyle(HBPalette.textSecondary)
                                             .lineLimit(2)
                                             .fixedSize(horizontal: false, vertical: true)
@@ -3984,19 +3986,19 @@ struct DashboardView: View {
                                 HStack(alignment: .top, spacing: 12) {
                                     VStack(alignment: .leading, spacing: 6) {
                                         Text("Local Forecast")
-                                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                                            .font(HBTypography.display(size: 11, weight: .bold))
                                             .textCase(.uppercase)
                                             .tracking(2.6)
                                             .foregroundStyle(HBPalette.textMuted)
 
                                         Text(formattedTemperature(snapshot.displayTemperatureF))
-                                            .font(.system(size: headlineFontSize, weight: .bold, design: .rounded))
+                                            .font(HBTypography.body(size: headlineFontSize, weight: .bold))
                                             .foregroundStyle(HBPalette.textPrimary)
                                             .lineLimit(1)
                                             .minimumScaleFactor(0.78)
 
                                         Text("Feels like \(formattedTemperature(snapshot.displayFeelsLikeF))")
-                                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                                            .font(HBTypography.body(size: 14, weight: .medium))
                                             .foregroundStyle(HBPalette.textSecondary)
                                             .lineLimit(1)
                                             .minimumScaleFactor(0.82)
@@ -4021,11 +4023,11 @@ struct DashboardView: View {
                                 VStack(alignment: .leading, spacing: 10) {
                                     VStack(alignment: .leading, spacing: 6) {
                                         Text(snapshot.condition)
-                                            .font(.system(size: compactWeatherHeader ? 15 : 17, weight: .semibold, design: .rounded))
+                                            .font(HBTypography.body(size: compactWeatherHeader ? 15 : 17, weight: .semibold))
                                             .foregroundStyle(HBPalette.textPrimary)
 
                                         Label(snapshot.locationName, systemImage: "mappin.and.ellipse")
-                                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                                            .font(HBTypography.body(size: 13, weight: .medium))
                                             .foregroundStyle(HBPalette.textSecondary)
                                             .lineLimit(tabletCompactWeatherGrid ? 1 : 2)
                                     }
@@ -4057,35 +4059,35 @@ struct DashboardView: View {
                         HStack(alignment: .top, spacing: 12) {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("Local Forecast")
-                                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                                    .font(HBTypography.display(size: 11, weight: .bold))
                                     .textCase(.uppercase)
                                     .tracking(2.6)
                                     .foregroundStyle(HBPalette.textMuted)
 
                                 HStack(alignment: .firstTextBaseline, spacing: 10) {
                                     Text(formattedTemperature(snapshot.displayTemperatureF))
-                                        .font(.system(size: headlineFontSize, weight: .bold, design: .rounded))
+                                        .font(HBTypography.body(size: headlineFontSize, weight: .bold))
                                         .foregroundStyle(HBPalette.textPrimary)
 
                                     if !compact {
                                         Text("Feels like \(formattedTemperature(snapshot.displayFeelsLikeF))")
-                                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                                            .font(HBTypography.body(size: 14, weight: .medium))
                                             .foregroundStyle(HBPalette.textSecondary)
                                     }
                                 }
 
                                 if compact {
                                     Text("Feels like \(formattedTemperature(snapshot.displayFeelsLikeF))")
-                                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                                        .font(HBTypography.body(size: 13, weight: .medium))
                                         .foregroundStyle(HBPalette.textSecondary)
                                 }
 
                                 Text(snapshot.condition)
-                                    .font(.system(size: compactWeatherHeader ? 15 : 17, weight: .semibold, design: .rounded))
+                                    .font(HBTypography.body(size: compactWeatherHeader ? 15 : 17, weight: .semibold))
                                     .foregroundStyle(HBPalette.textPrimary)
 
                                 Label(snapshot.locationName, systemImage: "mappin.and.ellipse")
-                                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                                    .font(HBTypography.body(size: 13, weight: .medium))
                                     .foregroundStyle(HBPalette.textSecondary)
                                     .lineLimit(condensed ? 1 : 2)
                             }
@@ -4493,7 +4495,7 @@ struct DashboardView: View {
 
             if let error, !error.isEmpty, snapshot != nil {
                 Text(error)
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 12, weight: .medium))
                     .foregroundStyle(HBPalette.accentOrange)
             }
         }
@@ -4552,7 +4554,7 @@ struct DashboardView: View {
 
     private func weatherSourceBadge(text: String, compact: Bool = false) -> some View {
         Text(text)
-            .font(.system(size: compact ? 10 : 11, weight: .bold, design: .rounded))
+            .font(HBTypography.display(size: compact ? 10 : 11, weight: .bold))
             .textCase(.uppercase)
             .tracking(0.8)
             .foregroundStyle(HBPalette.textPrimary)
@@ -4568,19 +4570,19 @@ struct DashboardView: View {
     private func weatherMetricTile(title: String, value: String, detail: String, accent: Color) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 11, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(2.0)
                 .foregroundStyle(HBPalette.textMuted)
 
             Text(value)
-                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 20, weight: .bold))
                 .foregroundStyle(HBPalette.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
 
             Text(detail)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .lineLimit(2)
 
@@ -4601,7 +4603,7 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top) {
                 Text("Sun Cycle")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 11, weight: .bold))
                     .textCase(.uppercase)
                     .tracking(2.0)
                     .foregroundStyle(HBPalette.textMuted)
@@ -4637,13 +4639,13 @@ struct DashboardView: View {
     private func weatherSunCycleRow(label: String, value: String) -> some View {
         HStack(spacing: 8) {
             Text(label)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
 
             Spacer()
 
             Text(value)
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 15, weight: .semibold))
                 .foregroundStyle(HBPalette.textPrimary)
         }
     }
@@ -4661,7 +4663,7 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top) {
                 Text(title)
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 11, weight: .bold))
                     .textCase(.uppercase)
                     .tracking(2.0)
                     .foregroundStyle(HBPalette.textMuted)
@@ -4674,13 +4676,13 @@ struct DashboardView: View {
             }
 
             Text(value)
-                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 20, weight: .bold))
                 .foregroundStyle(HBPalette.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
 
             Text(detail)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .lineLimit(2)
         }
@@ -4712,7 +4714,7 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .top, spacing: 4) {
                 Text(title)
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 10, weight: .bold))
                     .textCase(.uppercase)
                     .tracking(1.4)
                     .foregroundStyle(HBPalette.textMuted)
@@ -4729,13 +4731,13 @@ struct DashboardView: View {
             }
 
             Text(value)
-                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 18, weight: .bold))
                 .foregroundStyle(HBPalette.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
 
             Text(detail)
-                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 11, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
@@ -4762,7 +4764,7 @@ struct DashboardView: View {
     private func weatherCompactSunCycleTile(sunrise: String?, sunset: String?, accent: Color) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Text("Sun")
-                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 10, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(1.4)
                 .foregroundStyle(HBPalette.textMuted)
@@ -4774,7 +4776,7 @@ struct DashboardView: View {
                     .foregroundStyle(HBPalette.accentYellow)
 
                 Text(formattedWeatherTime(sunrise))
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .font(HBTypography.body(size: 13, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
@@ -4786,7 +4788,7 @@ struct DashboardView: View {
                     .foregroundStyle(HBPalette.accentOrange)
 
                 Text(formattedWeatherTime(sunset))
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .font(HBTypography.body(size: 13, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
@@ -4814,7 +4816,7 @@ struct DashboardView: View {
                 .foregroundStyle(tone)
 
             Text(compactWeatherSummary(snapshot: snapshot))
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 11, weight: .semibold))
                 .foregroundStyle(HBPalette.textSecondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.82)
@@ -4876,7 +4878,7 @@ struct DashboardView: View {
 
     private func weatherClimateScopeLabel(_ text: String, compact: Bool) -> some View {
         Text(text)
-            .font(.system(size: compact ? 9 : 10, weight: .bold, design: .rounded))
+            .font(HBTypography.display(size: compact ? 9 : 10, weight: .bold))
             .textCase(.uppercase)
             .tracking(compact ? 1.3 : 1.6)
             .foregroundStyle(HBPalette.textMuted)
@@ -4970,20 +4972,20 @@ struct DashboardView: View {
 
         return HStack(alignment: .center, spacing: compact ? 5 : 6) {
             Text("AQI")
-                .font(.system(size: compact ? 9 : 10, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: compact ? 9 : 10, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(1.2)
                 .foregroundStyle(HBPalette.textMuted)
                 .lineLimit(1)
 
             Text(formattedAQI(snapshot?.usAqi))
-                .font(.system(size: compact ? 13 : 15, weight: .bold, design: .rounded))
+                .font(HBTypography.body(size: compact ? 13 : 15, weight: .bold))
                 .foregroundStyle(tone)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
 
             Text(qualityLabel)
-                .font(.system(size: compact ? 10 : 11, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: compact ? 10 : 11, weight: .semibold))
                 .foregroundStyle(HBPalette.textSecondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
@@ -4994,12 +4996,12 @@ struct DashboardView: View {
                 .frame(width: 1, height: compact ? 14 : 16)
 
             Text(formattedTemperature(snapshot?.temperatureF))
-                .font(.system(size: compact ? 12 : 13, weight: .bold, design: .rounded))
+                .font(HBTypography.body(size: compact ? 12 : 13, weight: .bold))
                 .foregroundStyle(HBPalette.textPrimary)
                 .lineLimit(1)
 
             Text(formattedPercent(snapshot?.humidityPct))
-                .font(.system(size: compact ? 12 : 13, weight: .bold, design: .rounded))
+                .font(HBTypography.body(size: compact ? 12 : 13, weight: .bold))
                 .foregroundStyle(HBPalette.textSecondary)
                 .lineLimit(1)
         }
@@ -5024,14 +5026,14 @@ struct DashboardView: View {
 
         return VStack(alignment: .trailing, spacing: 2) {
             Text("UV")
-                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 10, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(1.8)
                 .foregroundStyle(HBPalette.textMuted)
                 .lineLimit(1)
 
             Text(formattedUV(value))
-                .font(.system(size: compact ? 16 : 18, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: compact ? 16 : 18, weight: .bold))
                 .foregroundStyle(tone)
                 .lineLimit(1)
         }
@@ -5056,14 +5058,14 @@ struct DashboardView: View {
 
         return VStack(alignment: .trailing, spacing: 2) {
             Text("AQI")
-                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 10, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(1.8)
                 .foregroundStyle(HBPalette.textMuted)
                 .lineLimit(1)
 
             Text(formattedAQI(value))
-                .font(.system(size: compact ? 16 : 18, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: compact ? 16 : 18, weight: .bold))
                 .foregroundStyle(tone)
                 .lineLimit(1)
         }
@@ -5190,7 +5192,7 @@ struct DashboardView: View {
     private func weatherInfoSheetHeader(for topic: DashboardWeatherInfoTopic) -> some View {
         ZStack {
             Text(weatherInfoSheetTitle(for: topic))
-                .font(.system(size: 21, weight: .semibold, design: .rounded))
+                .font(HBTypography.display(size: 21, weight: .semibold))
                 .foregroundStyle(HBPalette.textPrimary)
 
             HStack {
@@ -5199,7 +5201,7 @@ struct DashboardView: View {
                 Button("Done") {
                     weatherInfoTopic = nil
                 }
-                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 16, weight: .semibold))
                 .foregroundStyle(HBPalette.accentBlue)
             }
         }
@@ -5336,19 +5338,19 @@ struct DashboardView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             Text(window.label)
-                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .font(HBTypography.body(size: 13, weight: .bold))
                                 .foregroundStyle(HBPalette.textPrimary)
 
                             Spacer(minLength: 8)
 
                             Text(copy.primary)
-                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                .font(HBTypography.body(size: 13, weight: .semibold))
                                 .foregroundStyle(HBPalette.accentBlue)
                                 .multilineTextAlignment(.trailing)
                         }
 
                         Text(copy.detail)
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 12, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -5363,7 +5365,7 @@ struct DashboardView: View {
             }
 
             Text(footer)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -5381,7 +5383,7 @@ struct DashboardView: View {
                 weatherInfoRangeRow(range: "51-100", label: "Moderate", color: HBPalette.accentYellow)
                 weatherInfoRangeRow(range: "101+", label: "Unhealthy", color: HBPalette.accentRed)
                 Text("AQI shows how current air pollution may affect breathing comfort outdoors.")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 12, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
             case let .uv(widgetID, value):
                 if let telemetry = weatherModuleTelemetry(for: widgetID) {
@@ -5401,7 +5403,7 @@ struct DashboardView: View {
                     weatherInfoRangeRow(range: "3-5", label: "Moderate", color: HBPalette.accentYellow)
                     weatherInfoRangeRow(range: "6+", label: "High", color: HBPalette.accentRed)
                     Text("Higher UV means faster sun exposure risk and stronger need for shade or sunscreen.")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
             case let .liveWind(widgetID, speed, gust, direction):
@@ -5422,7 +5424,7 @@ struct DashboardView: View {
                     weatherInfoValueRow(label: "Direction", value: compassDirection(direction), color: HBPalette.textPrimary)
                     weatherInfoValueRow(label: "Gust", value: formattedWind(gust), color: HBPalette.accentBlue)
                     Text("Direction shows where the wind is coming from, and gust shows the strongest recent burst measured by the Tempest station.")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
             case let .rainfall(widgetID, total, rate):
@@ -5443,7 +5445,7 @@ struct DashboardView: View {
                     weatherInfoValueRow(label: "Current Rate", value: "\(formattedRain(rate))/hr", color: HBPalette.accentBlue)
                     weatherInfoValueRow(label: "Meaning", value: formattedRainIntensityMeaning(rate), color: HBPalette.textPrimary)
                     Text("Today's rainfall is total accumulation. Rate shows how quickly rain is falling right now.")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
             case let .pressure(widgetID, value, trend):
@@ -5464,7 +5466,7 @@ struct DashboardView: View {
                     weatherInfoRangeRow(range: "29.8-30.2 inHg", label: "Typical band", color: HBPalette.accentYellow)
                     weatherInfoRangeRow(range: "Below 29.8 inHg", label: "Often unsettled", color: HBPalette.accentRed)
                     Text("Current band: \(formattedPressureBand(value)). Trend labels: Rising = clearing trend, Steady = stable air, Falling = unsettled trend.")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
             case let .station(widgetID, name, room, websocketConnected):
@@ -5485,7 +5487,7 @@ struct DashboardView: View {
                     weatherInfoValueRow(label: "Station", value: name, color: HBPalette.textPrimary)
                     weatherInfoValueRow(label: "Room", value: room, color: HBPalette.textPrimary)
                     Text("Live means the Tempest station is actively streaming updates. Snapshot means the last successful reading is being shown.")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
             case let .today(_, high, low, condition):
@@ -5497,7 +5499,7 @@ struct DashboardView: View {
                 weatherInfoValueRow(label: "Low", value: formattedTemperature(low), color: HBPalette.accentPurple)
                 weatherInfoValueRow(label: "Condition", value: condition, color: HBPalette.textPrimary)
                 Text("This card shows today's forecast high and low from the weather service, along with the expected overall condition.")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 12, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
             case let .indoorAir(_, snapshot):
                 weatherInfoSectionTitle(
@@ -5512,7 +5514,7 @@ struct DashboardView: View {
                     weatherInfoValueRow(label: "CO2", value: formattedPartsPerMillion(snapshot.co2Ppm), color: HBPalette.textPrimary)
                 }
                 Text(snapshot.qualityAdvice)
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 12, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
             case let .humidity(widgetID, value):
                 if let telemetry = weatherModuleTelemetry(for: widgetID) {
@@ -5532,7 +5534,7 @@ struct DashboardView: View {
                     weatherInfoRangeRow(range: "30-60%", label: "Comfort band", color: HBPalette.accentGreen)
                     weatherInfoRangeRow(range: "60%+", label: "Humid", color: HBPalette.accentBlue)
                     Text("Humidity affects skin comfort, indoor dryness, and how heavy the air feels. Mid-range humidity is usually the most comfortable.")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
             case let .dewPoint(widgetID, value):
@@ -5553,7 +5555,7 @@ struct DashboardView: View {
                     weatherInfoRangeRow(range: "30-55°", label: "Comfortable", color: HBPalette.accentGreen)
                     weatherInfoRangeRow(range: "56°+", label: "Muggy", color: HBPalette.accentBlue)
                     Text("Dew point reflects how much moisture is actually in the air. Lower values feel crisper and drier, while higher values feel stickier.")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
             case let .lightning(widgetID, count, averageDistanceMiles):
@@ -5574,7 +5576,7 @@ struct DashboardView: View {
                     weatherInfoValueRow(label: "Avg Distance", value: formattedLightningDistance(averageDistanceMiles), color: HBPalette.textPrimary)
                     weatherInfoValueRow(label: "Status", value: formattedLightningMeaning(count), color: count.map { $0 > 0 ? HBPalette.accentPurple : HBPalette.accentGreen } ?? HBPalette.textPrimary)
                     Text("Tempest reports recent lightning strike count and the average distance of those strikes, which helps show whether storms are staying far away or moving closer.")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
             case let .sunCycle(_, sunrise, sunset):
@@ -5586,7 +5588,7 @@ struct DashboardView: View {
                 weatherInfoValueRow(label: "Sunset", value: formattedWeatherTime(sunset), color: HBPalette.accentOrange)
                 weatherInfoValueRow(label: "Daylight", value: formattedDaylightDuration(sunrise: sunrise, sunset: sunset), color: HBPalette.textPrimary)
                 Text("Sun cycle helps with planning outdoor light, routines, and automations tied to sunrise or sunset.")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 12, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
             case let .rainChance(_, chance, precipitationNow):
                 weatherInfoSectionTitle(
@@ -5597,7 +5599,7 @@ struct DashboardView: View {
                 weatherInfoRangeRow(range: "21-50%", label: "Watch clouds", color: HBPalette.accentYellow)
                 weatherInfoRangeRow(range: "51%+", label: "More likely rain", color: HBPalette.accentRed)
                 Text("Rain chance is forecast probability. Live precipitation now: \(formattedLivePrecipitation(precipitationNow)).")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 12, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
             }
         }
@@ -5609,13 +5611,13 @@ struct DashboardView: View {
     private func weatherInfoSectionTitle(title: String, summary: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 11, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(2.2)
                 .foregroundStyle(HBPalette.textMuted)
 
             Text(summary)
-                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 15, weight: .semibold))
                 .foregroundStyle(HBPalette.textPrimary)
         }
     }
@@ -5623,13 +5625,13 @@ struct DashboardView: View {
     private func weatherInfoRangeRow(range: String, label: String, color: Color) -> some View {
         HStack(spacing: 10) {
             Text(range)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 13, weight: .semibold))
                 .foregroundStyle(HBPalette.textPrimary)
 
             Spacer()
 
             Text(label)
-                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .font(HBTypography.body(size: 13, weight: .bold))
                 .foregroundStyle(color)
         }
         .padding(.horizontal, 12)
@@ -5640,13 +5642,13 @@ struct DashboardView: View {
     private func weatherInfoValueRow(label: String, value: String, color: Color) -> some View {
         HStack(spacing: 10) {
             Text(label)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 13, weight: .semibold))
                 .foregroundStyle(HBPalette.textPrimary)
 
             Spacer()
 
             Text(value)
-                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .font(HBTypography.body(size: 13, weight: .bold))
                 .foregroundStyle(color)
                 .multilineTextAlignment(.trailing)
         }
@@ -5659,12 +5661,12 @@ struct DashboardView: View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 11, weight: .bold))
                     .textCase(.uppercase)
                     .tracking(2.0)
                     .foregroundStyle(HBPalette.textMuted)
                 Text(value)
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .font(HBTypography.body(size: 16, weight: .semibold))
                     .foregroundStyle(HBPalette.textPrimary)
             }
 
@@ -5993,13 +5995,13 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Scene Launchpad")
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 11, weight: .bold))
                         .textCase(.uppercase)
                         .tracking(2.6)
                         .foregroundStyle(HBPalette.textMuted)
 
                     Label("Quick Scene Actions", systemImage: "play")
-                        .font(.system(size: useLandscapeCompactLayout ? 18 : 22, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: useLandscapeCompactLayout ? 18 : 22, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                 }
 
@@ -6014,10 +6016,10 @@ struct DashboardView: View {
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(scene.name)
-                                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                                        .font(HBTypography.display(size: 18, weight: .semibold))
                                         .foregroundStyle(HBPalette.textPrimary)
                                     Text(scene.details)
-                                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                                        .font(HBTypography.body(size: 14, weight: .medium))
                                         .foregroundStyle(HBPalette.textSecondary)
                                         .lineLimit(1)
                                 }
@@ -6034,7 +6036,7 @@ struct DashboardView: View {
                 }
 
                 Text("Say: \"Hey Anna, activate [scene name]\" to control with voice")
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 14, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
                     .frame(maxWidth: .infinity)
                     .padding(.top, 2)
@@ -6071,12 +6073,12 @@ struct DashboardView: View {
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text(device.name)
-                            .font(.system(size: compact ? 17 : (useLandscapeCompactLayout ? 20 : 22), weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: compact ? 17 : (useLandscapeCompactLayout ? 20 : 22), weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
                             .lineLimit(2)
                         if !device.displayRoom.isEmpty {
                             Text(device.displayRoom)
-                                .font(.system(size: compact ? 12 : (useLandscapeCompactLayout ? 13 : 15), weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: compact ? 12 : (useLandscapeCompactLayout ? 13 : 15), weight: .medium))
                                 .foregroundStyle(HBPalette.textSecondary)
                         }
                     }
@@ -6125,7 +6127,7 @@ struct DashboardView: View {
 
                     if !compact {
                         Text("Say: \"Hey Anna, \(device.status ? "turn off" : "turn on") \(device.name)\"")
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 13, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                             .lineLimit(2)
                     }
@@ -6201,7 +6203,7 @@ struct DashboardView: View {
 
             if !compact {
                 Text("Say: \"Hey Anna, set \(device.name) to \(targetTemp) degrees\"")
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 13, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
                     .lineLimit(2)
             }
@@ -6224,11 +6226,11 @@ struct DashboardView: View {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("SETPOINT")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .font(HBTypography.display(size: 12, weight: .semibold))
                         .tracking(1.2)
                         .foregroundStyle(HBPalette.textSecondary)
                     Text("\(targetTemp)°F")
-                        .font(.system(size: compact ? 34 : (useLandscapeCompactLayout ? 40 : 48), weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: compact ? 34 : (useLandscapeCompactLayout ? 40 : 48), weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
@@ -6238,11 +6240,11 @@ struct DashboardView: View {
 
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("CURRENT")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .font(HBTypography.display(size: 12, weight: .semibold))
                         .tracking(1.2)
                         .foregroundStyle(HBPalette.textSecondary)
                     Text(currentTemp.map { "\($0)°F" } ?? "--")
-                        .font(.system(size: compact ? 24 : (useLandscapeCompactLayout ? 30 : 36), weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: compact ? 24 : (useLandscapeCompactLayout ? 30 : 36), weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
@@ -6294,7 +6296,7 @@ struct DashboardView: View {
             Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: mode) }
         }
         .buttonStyle(.plain)
-        .font(.system(size: compact ? 12 : 14, weight: .bold, design: .rounded))
+        .font(HBTypography.display(size: compact ? 12 : 14, weight: .bold))
         .foregroundStyle(active ? Color.white : HBPalette.textPrimary)
         .frame(maxWidth: .infinity)
         .padding(.vertical, compact ? 8 : (useLandscapeCompactLayout ? 9 : 11))
@@ -6325,18 +6327,18 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Voice Command Surface")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 11, weight: .bold))
                     .textCase(.uppercase)
                     .tracking(2.6)
                     .foregroundStyle(HBPalette.textMuted)
 
                 Text("Launch a natural-language control pass")
-                    .font(.system(size: useLandscapeCompactLayout ? 20 : 24, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: useLandscapeCompactLayout ? 20 : 24, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
             }
 
             Text("Type or speak a request and HomeBrain interprets the intent, confidence, and execution path.")
-                .font(.system(size: 15, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 15, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
 
             TextField("Type a natural language command", text: $commandText)
@@ -6369,7 +6371,7 @@ struct DashboardView: View {
 
             if !commandResponse.isEmpty {
                 Text(commandResponse)
-                    .font(.system(size: 15, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 15, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 12)
@@ -6397,13 +6399,13 @@ struct DashboardView: View {
         return VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Scene Launchpad")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 11, weight: .bold))
                     .textCase(.uppercase)
                     .tracking(2.6)
                     .foregroundStyle(HBPalette.textMuted)
 
                 Label("Quick Scene Actions", systemImage: "play")
-                    .font(.system(size: useLandscapeCompactLayout ? 18 : 22, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: useLandscapeCompactLayout ? 18 : 22, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
             }
 
@@ -6418,10 +6420,10 @@ struct DashboardView: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(scene.name)
-                                    .font(.system(size: 18, weight: .semibold, design: .rounded))
+                                    .font(HBTypography.display(size: 18, weight: .semibold))
                                     .foregroundStyle(HBPalette.textPrimary)
                                 Text(scene.details)
-                                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                                    .font(HBTypography.body(size: 14, weight: .medium))
                                     .foregroundStyle(HBPalette.textSecondary)
                                     .lineLimit(widget.size == .small ? 1 : 2)
                             }
@@ -6455,13 +6457,13 @@ struct DashboardView: View {
         return VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Priority Controls")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 11, weight: .bold))
                     .textCase(.uppercase)
                     .tracking(2.6)
                     .foregroundStyle(HBPalette.textMuted)
 
                 Text("Favorite Devices")
-                    .font(.system(size: useLandscapeCompactLayout ? 20 : 24, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: useLandscapeCompactLayout ? 20 : 24, weight: .bold))
                     .foregroundStyle(
                         LinearGradient(
                             colors: [HBPalette.accentBlue, HBPalette.accentPurple],
@@ -6475,7 +6477,7 @@ struct DashboardView: View {
                     ? "Activate a user profile to pin favorite controls."
                     : "Profile-tuned shortcuts for your most-used devices."
                 )
-                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 14, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
             }
 
@@ -6509,13 +6511,13 @@ struct DashboardView: View {
         return VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Dense Controls")
-                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 11, weight: .bold))
                     .textCase(.uppercase)
                     .tracking(2.6)
                     .foregroundStyle(HBPalette.textMuted)
 
                 Text("Devices")
-                    .font(.system(size: useLandscapeCompactLayout ? 20 : 24, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: useLandscapeCompactLayout ? 20 : 24, weight: .bold))
                     .foregroundStyle(
                         LinearGradient(
                             colors: [HBPalette.accentBlue, HBPalette.accentGreen],
@@ -6525,7 +6527,7 @@ struct DashboardView: View {
                     )
 
                 Text("Compact controls sized to fit a lot more devices on one dashboard row.")
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 14, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
             }
 
@@ -6558,13 +6560,13 @@ struct DashboardView: View {
                 HStack(alignment: .top, spacing: 8) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(device.name)
-                            .font(.system(size: denseDeviceTitleFontSize(for: device.name), weight: .bold, design: .rounded))
+                            .font(HBTypography.body(size: denseDeviceTitleFontSize(for: device.name), weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
                             .lineLimit(2)
                             .minimumScaleFactor(0.68)
                             .frame(maxWidth: .infinity, minHeight: 38, alignment: .topLeading)
                         Text(device.displayRoom)
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 11, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
@@ -6585,7 +6587,7 @@ struct DashboardView: View {
 
                 if let statusText {
                     Text(statusText)
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                         .lineLimit(2)
                 }
@@ -6595,11 +6597,11 @@ struct DashboardView: View {
                         HStack(alignment: .top) {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("CURRENT DRAW")
-                                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                                    .font(HBTypography.display(size: 10, weight: .bold))
                                     .tracking(1.4)
                                     .foregroundStyle(HBPalette.textMuted)
                                 Text(currentPowerText)
-                                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                                    .font(HBTypography.body(size: 14, weight: .bold))
                                     .foregroundStyle(HBPalette.textPrimary)
                             }
 
@@ -6612,7 +6614,7 @@ struct DashboardView: View {
 
                         if let energyTotalText {
                             Text("Energy total \(energyTotalText)")
-                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 11, weight: .medium))
                                 .foregroundStyle(HBPalette.textSecondary)
                         }
 
@@ -6621,13 +6623,13 @@ struct DashboardView: View {
                                 ProgressView()
                                     .controlSize(.small)
                                 Text("Loading history…")
-                                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .font(HBTypography.body(size: 11, weight: .medium))
                                     .foregroundStyle(HBPalette.textSecondary)
                             }
                             .frame(maxWidth: .infinity, minHeight: 56, alignment: .center)
                         } else if energyPoints.isEmpty {
                             Text("No recent power samples yet.")
-                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 11, weight: .medium))
                                 .foregroundStyle(HBPalette.textSecondary)
                                 .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
                                 .padding(.horizontal, 10)
@@ -6657,11 +6659,11 @@ struct DashboardView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             Text("Fade")
-                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .font(HBTypography.body(size: 11, weight: .semibold))
                                 .foregroundStyle(HBPalette.textSecondary)
                             Spacer()
                             Text("\(Int(currentDashboardLightBrightness(for: device).rounded()))%")
-                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .font(HBTypography.body(size: 11, weight: .semibold))
                                 .foregroundStyle(HBPalette.textPrimary)
                         }
 
@@ -6730,7 +6732,7 @@ struct DashboardView: View {
 
         return HStack(spacing: 8) {
             Text(device.name)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .semibold))
                 .foregroundStyle(HBPalette.textPrimary)
                 .lineLimit(1)
 
@@ -6743,7 +6745,7 @@ struct DashboardView: View {
                     setFavoriteDeviceCardSize(widgetID: widget.id, deviceID: device.id, size: size)
                 } label: {
                     Text(String(size.title.prefix(1)))
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .font(HBTypography.body(size: 11, weight: .bold))
                         .foregroundStyle(isActive ? Color.white : HBPalette.textSecondary)
                         .frame(width: 26, height: 26)
                         .background(

@@ -54,7 +54,7 @@ struct VoiceDevicesView: View {
                     if !infoMessage.isEmpty {
                         HBPanel {
                             Text(infoMessage)
-                                .font(.subheadline)
+                                .font(HBTypography.body(.subheadline))
                                 .foregroundStyle(HBPalette.textSecondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -121,7 +121,7 @@ struct VoiceDevicesView: View {
 
                 if !commandResponse.isEmpty {
                     Text(commandResponse)
-                        .font(.subheadline)
+                        .font(HBTypography.body(.subheadline))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -133,13 +133,13 @@ struct VoiceDevicesView: View {
         GroupBox("Remote Fleet Updates") {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Current package: \(JSON.string(packageInfo, "version", fallback: "N/A"))")
-                    .font(.subheadline)
+                    .font(HBTypography.body(.subheadline))
                     .foregroundStyle(HBPalette.textPrimary)
                 Text("Up-to-date: \(JSON.int(updateStats, "upToDate")) · Outdated: \(JSON.int(updateStats, "outdated"))")
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(HBPalette.textSecondary)
                 Text("Fleet latest: \(JSON.string(fleetSummary, "latestVersion", fallback: "Unknown"))")
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(HBPalette.textSecondary)
 
                 LazyVGrid(
@@ -219,13 +219,13 @@ struct VoiceDevicesView: View {
     private func deviceIdentity(_ device: VoiceDeviceItem) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(device.name)
-                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 20, weight: .bold))
                 .foregroundStyle(HBPalette.textPrimary)
             Text("\(device.room) · \(device.deviceType)")
-                .font(.caption)
+                .font(HBTypography.body(.caption))
                 .foregroundStyle(HBPalette.textSecondary)
             Text("Firmware: \(device.firmwareVersion)")
-                .font(.caption2)
+                .font(HBTypography.body(.caption2))
                 .foregroundStyle(HBPalette.textSecondary)
         }
     }
@@ -239,7 +239,7 @@ struct VoiceDevicesView: View {
             }
         } label: {
             Text(device.status.capitalized)
-                .font(.caption)
+                .font(HBTypography.body(.caption))
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
                 .background(Color.secondary.opacity(0.15))

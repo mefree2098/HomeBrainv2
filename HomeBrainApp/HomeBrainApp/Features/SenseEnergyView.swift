@@ -863,7 +863,7 @@ struct SenseEnergyView: View {
                 if !infoMessage.isEmpty {
                     HBPanel {
                         Text(infoMessage)
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 13, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -937,17 +937,17 @@ struct SenseEnergyView: View {
     private var heroIntroContent: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Power Intelligence")
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 11, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(2.4)
                 .foregroundStyle(HBPalette.textMuted)
 
             Text("Sense Energy")
-                .font(.system(size: 30, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 30, weight: .bold))
                 .foregroundStyle(HBPalette.textPrimary)
 
             Text("Whole-home draw, per-device load bars, live utilization overlays, and report-grade energy windows now live together in the native iOS app.")
-                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 14, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -1017,7 +1017,7 @@ struct SenseEnergyView: View {
             }
         } label: {
             Text(option.title)
-                .font(.system(size: 12, weight: .bold, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .bold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .frame(minWidth: 44)
@@ -1059,11 +1059,11 @@ struct SenseEnergyView: View {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Sense Account Setup")
-                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 20, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
 
                         Text("Authenticate the Sense account, choose the monitor, and tune how HomeBrain keeps the realtime feed and report windows in sync.")
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 13, weight: .medium))
                             .foregroundStyle(HBPalette.textMuted)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -1128,7 +1128,7 @@ struct SenseEnergyView: View {
                         Text(activeIntegration?.passwordConfigured == true
                              ? "A password is already stored. Enter a new value only if you want to replace it."
                              : "HomeBrain uses the password to establish or recover the Sense session.")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 11, weight: .medium))
                             .foregroundStyle(HBPalette.textMuted)
                     }
 
@@ -1187,7 +1187,7 @@ struct SenseEnergyView: View {
                             .keyboardType(.decimalPad)
                             .hbPanelTextField()
                         Text("Used for live burn-rate math plus month-to-date and projected monthly cost estimates. Defaults to 11 cents per kWh.")
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 11, weight: .medium))
                             .foregroundStyle(HBPalette.textMuted)
                     }
                 }
@@ -1197,10 +1197,10 @@ struct SenseEnergyView: View {
                         Toggle(isOn: $form.enabled) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Enable Sense Integration")
-                                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                    .font(HBTypography.body(size: 14, weight: .semibold))
                                     .foregroundStyle(HBPalette.textPrimary)
                                 Text("Persist monitor snapshots, trend windows, and device telemetry.")
-                                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                                    .font(HBTypography.body(size: 12, weight: .medium))
                                     .foregroundStyle(HBPalette.textSecondary)
                             }
                         }
@@ -1211,10 +1211,10 @@ struct SenseEnergyView: View {
                         Toggle(isOn: $form.realtimeEnabled) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("Realtime Websocket Feed")
-                                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                    .font(HBTypography.body(size: 14, weight: .semibold))
                                     .foregroundStyle(HBPalette.textPrimary)
                                 Text("Keep a live session open for near-real-time dashboard updates.")
-                                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                                    .font(HBTypography.body(size: 12, weight: .medium))
                                     .foregroundStyle(HBPalette.textSecondary)
                             }
                         }
@@ -1262,7 +1262,7 @@ struct SenseEnergyView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 Text("Verified Monitor")
-                                    .font(.system(size: 15, weight: .bold, design: .rounded))
+                                    .font(HBTypography.body(size: 15, weight: .bold))
                                     .foregroundStyle(HBPalette.textPrimary)
                                 Spacer(minLength: 0)
                                 HBBadge(
@@ -1274,11 +1274,11 @@ struct SenseEnergyView: View {
                             }
 
                             Text(lastTestResult.monitorName)
-                                .font(.system(size: 18, weight: .bold, design: .rounded))
+                                .font(HBTypography.display(size: 18, weight: .bold))
                                 .foregroundStyle(HBPalette.textPrimary)
 
                             Text("\(lastTestResult.model) • \(lastTestResult.timezone.isEmpty ? "Timezone unavailable" : lastTestResult.timezone)")
-                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 12, weight: .medium))
                                 .foregroundStyle(HBPalette.textSecondary)
                         }
                     }
@@ -1293,7 +1293,7 @@ struct SenseEnergyView: View {
                             Text(status?.health.isConnected == true
                                  ? "Sense is feeding HomeBrain live energy data."
                                  : "Sense is configured but not currently streaming data.")
-                                .font(.system(size: 15, weight: .bold, design: .rounded))
+                                .font(HBTypography.body(size: 15, weight: .bold))
                                 .foregroundStyle(HBPalette.textPrimary)
                         }
 
@@ -1303,12 +1303,12 @@ struct SenseEnergyView: View {
                             Text("Last trend sync: \(senseFormatDateTime(status?.health.lastTrendSyncAt))")
                             Text("Reconnect count: \((status?.health.websocketReconnectCount ?? 0).formatted())")
                         }
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
 
                         if let error = status?.health.lastError, !error.isEmpty {
                             Text(error)
-                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                .font(HBTypography.body(size: 12, weight: .medium))
                                 .foregroundStyle(HBPalette.accentOrange)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -1351,11 +1351,11 @@ struct SenseEnergyView: View {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Utilization Timeline")
-                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 20, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
 
                         Text("Whole-home draw with solar, baseline load, residual usage, and the heaviest active Sense devices on one chart.")
-                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 13, weight: .medium))
                             .foregroundStyle(HBPalette.textMuted)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -1442,7 +1442,7 @@ struct SenseEnergyView: View {
                                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 4]))
                                 .annotation(position: .top, alignment: .leading) {
                                     Text("Peak \(senseFormatPower(peakSnapshot.powerW))")
-                                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                                        .font(HBTypography.body(size: 10, weight: .bold))
                                         .foregroundStyle(HBPalette.textPrimary)
                                         .padding(.horizontal, 8)
                                         .padding(.vertical, 4)
@@ -1458,7 +1458,7 @@ struct SenseEnergyView: View {
                             AxisValueLabel {
                                 if let date = value.as(Date.self) {
                                     Text(senseFormatChartTime(date))
-                                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                                        .font(HBTypography.body(size: 10, weight: .medium))
                                         .foregroundStyle(HBPalette.textMuted)
                                 }
                             }
@@ -1471,7 +1471,7 @@ struct SenseEnergyView: View {
                             AxisValueLabel {
                                 if let watts = value.as(Double.self) {
                                     Text(sensePowerAxisLabel(watts))
-                                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                                        .font(HBTypography.body(size: 10, weight: .medium))
                                         .foregroundStyle(HBPalette.textMuted)
                                 }
                             }
@@ -1501,11 +1501,11 @@ struct SenseEnergyView: View {
         HBPanel {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Realtime Device Load")
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 20, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
 
                 Text("Horizontal load bars shift from green toward red as a device becomes a larger current share of the household draw.")
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 13, weight: .medium))
                     .foregroundStyle(HBPalette.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -1522,16 +1522,16 @@ struct SenseEnergyView: View {
                                     HStack(alignment: .top, spacing: 10) {
                                         VStack(alignment: .leading, spacing: 4) {
                                             Text(device.name)
-                                                .font(.system(size: 15, weight: .bold, design: .rounded))
+                                                .font(HBTypography.body(size: 15, weight: .bold))
                                                 .foregroundStyle(HBPalette.textPrimary)
                                                 .lineLimit(1)
 
                                             Text("\(device.synthetic ? "Residual bucket" : "Sense-detected device") • \(senseFormatPercent(device.sharePct, digits: 0)) of live load")
-                                                .font(.system(size: 12, weight: .medium, design: .rounded))
+                                                .font(HBTypography.body(size: 12, weight: .medium))
                                                 .foregroundStyle(HBPalette.textSecondary)
 
                                             Text("Now \(senseFormatCurrencyRate(device.currentCostUsdPerHour)) • Month \(senseFormatCurrency(device.monthToDateCostUsd)) • Est \(senseFormatCurrency(device.projectedMonthCostUsd))")
-                                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                                .font(HBTypography.body(size: 11, weight: .medium))
                                                 .foregroundStyle(HBPalette.textMuted)
                                         }
 
@@ -1539,11 +1539,11 @@ struct SenseEnergyView: View {
 
                                         VStack(alignment: .trailing, spacing: 4) {
                                             Text(senseFormatPower(device.powerW))
-                                                .font(.system(size: 16, weight: .bold, design: .rounded))
+                                                .font(HBTypography.body(size: 16, weight: .bold))
                                                 .foregroundStyle(HBPalette.textPrimary)
 
                                             Text(device.synthetic ? "Residual" : "Active")
-                                                .font(.system(size: 10, weight: .bold, design: .rounded))
+                                                .font(HBTypography.display(size: 10, weight: .bold))
                                                 .textCase(.uppercase)
                                                 .tracking(1.6)
                                                 .foregroundStyle(HBPalette.textMuted)
@@ -1576,7 +1576,7 @@ struct SenseEnergyView: View {
 
                     if activeDevices.count > 12 {
                         Text("Showing the top 12 of \(activeDevices.count.formatted()) active loads.")
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 12, weight: .medium))
                             .foregroundStyle(HBPalette.textMuted)
                     }
                 }
@@ -1616,11 +1616,11 @@ struct SenseEnergyView: View {
         HBPanel {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Energy Windows")
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 20, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
 
                 Text("Consumption and solar totals persisted by HomeBrain for reporting, charting, and long-range analysis.")
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 13, weight: .medium))
                     .foregroundStyle(HBPalette.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -1643,11 +1643,11 @@ struct SenseEnergyView: View {
         HBPanel {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Device Energy Ledger")
-                    .font(.system(size: 20, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 20, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
 
                 Text("Live device draw, long-range energy windows, and cost projections derived from the configured retail electricity rate.")
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 13, weight: .medium))
                     .foregroundStyle(HBPalette.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -1687,12 +1687,12 @@ struct SenseEnergyView: View {
                                 HStack(spacing: 4) {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(device.name)
-                                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                                            .font(HBTypography.body(size: 13, weight: .bold))
                                             .foregroundStyle(HBPalette.textPrimary)
                                             .lineLimit(2)
 
                                         Text(device.room.isEmpty ? "Whole home energy deck" : device.room)
-                                            .font(.system(size: 10, weight: .medium, design: .rounded))
+                                            .font(HBTypography.body(size: 10, weight: .medium))
                                             .foregroundStyle(HBPalette.textSecondary)
                                             .lineLimit(2)
                                     }
@@ -1716,7 +1716,7 @@ struct SenseEnergyView: View {
 
                     if (dashboard?.deviceUsage.count ?? 0) > ledgerDevices.count {
                         Text("Showing the top \(ledgerDevices.count.formatted()) devices out of \((dashboard?.deviceUsage.count ?? 0).formatted()) tracked Sense loads.")
-                            .font(.system(size: 12, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 12, weight: .medium))
                             .foregroundStyle(HBPalette.textMuted)
                     }
                 }
@@ -1728,19 +1728,19 @@ struct SenseEnergyView: View {
         HBPanel {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Sense Energy is ready once the account is connected.")
-                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                    .font(HBTypography.display(size: 18, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
 
                 Text(isAdmin
                      ? "Use the Sense Account Setup panel above to authenticate the account, choose the monitor, and enable realtime ingestion. Once connected, the live energy deck and report windows will appear here."
                      : "An administrator needs to finish the Sense setup before live power telemetry, device-level load bars, and historical energy reporting become available in the iOS app.")
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .font(HBTypography.body(size: 13, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 if !dashboard.health.lastError.isEmpty {
                     Text(dashboard.health.lastError)
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.accentOrange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1751,13 +1751,13 @@ struct SenseEnergyView: View {
     private func senseHeroFact(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 10, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(1.8)
                 .foregroundStyle(HBPalette.textMuted)
 
             Text(value)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 13, weight: .semibold))
                 .foregroundStyle(HBPalette.textPrimary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.78)
@@ -1771,19 +1771,19 @@ struct SenseEnergyView: View {
     private func senseRuntimeTile(title: String, value: String, detail: String, accent: Color) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 11, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(2)
                 .foregroundStyle(HBPalette.textMuted)
 
             Text(value)
-                .font(.system(size: 22, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 22, weight: .bold))
                 .foregroundStyle(HBPalette.textPrimary)
                 .lineLimit(2)
                 .minimumScaleFactor(0.7)
 
             Text(detail)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(HBTypography.body(size: 12, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
 
@@ -1805,7 +1805,7 @@ struct SenseEnergyView: View {
     private func senseFieldGroup<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 11, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(2)
                 .foregroundStyle(HBPalette.textMuted)
@@ -1821,7 +1821,7 @@ struct SenseEnergyView: View {
                 .frame(width: 8, height: 8)
 
             Text(label)
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 11, weight: .semibold))
                 .foregroundStyle(HBPalette.textSecondary)
                 .lineLimit(1)
         }
@@ -1832,7 +1832,7 @@ struct SenseEnergyView: View {
 
     private func senseLedgerHeader(_ text: String, width: CGFloat, alignment: Alignment = .center) -> some View {
         Text(text)
-            .font(.system(size: 10, weight: .bold, design: .rounded))
+            .font(HBTypography.display(size: 10, weight: .bold))
             .textCase(.uppercase)
             .tracking(1.8)
             .foregroundStyle(HBPalette.textMuted)
@@ -1843,7 +1843,7 @@ struct SenseEnergyView: View {
 
     private func senseLedgerValue(_ value: String, width: CGFloat) -> some View {
         Text(value)
-            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .font(HBTypography.body(size: 12, weight: .semibold))
             .foregroundStyle(HBPalette.textPrimary)
             .frame(width: width)
             .lineLimit(2)
@@ -1857,12 +1857,12 @@ struct SenseEnergyView: View {
                 HStack(alignment: .top, spacing: 10) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(device.name)
-                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                            .font(HBTypography.body(size: 15, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
                             .lineLimit(2)
 
                         Text(device.room.isEmpty ? "Whole home energy deck" : device.room)
-                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 11, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                             .lineLimit(2)
                     }
@@ -1871,12 +1871,12 @@ struct SenseEnergyView: View {
 
                     VStack(alignment: .trailing, spacing: 4) {
                         Text(senseFormatPower(device.currentPowerW))
-                            .font(.system(size: 16, weight: .bold, design: .rounded))
+                            .font(HBTypography.body(size: 16, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
                             .multilineTextAlignment(.trailing)
 
                         Text(senseFormatCurrencyRate(device.currentCostUsdPerHour))
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .font(HBTypography.body(size: 11, weight: .semibold))
                             .foregroundStyle(HBPalette.textMuted)
                     }
                 }
@@ -1898,13 +1898,13 @@ struct SenseEnergyView: View {
     private func senseLedgerMetricCell(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title)
-                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .font(HBTypography.display(size: 10, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(1.6)
                 .foregroundStyle(HBPalette.textMuted)
 
             Text(value)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                .font(HBTypography.body(size: 13, weight: .semibold))
                 .foregroundStyle(HBPalette.textPrimary)
                 .lineLimit(2)
                 .minimumScaleFactor(0.78)

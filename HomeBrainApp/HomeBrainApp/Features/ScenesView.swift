@@ -50,7 +50,7 @@ struct ScenesView: View {
 
                 if favoritesProfileId == nil {
                     Text("Create or activate a user profile to favorite scenes.")
-                        .font(.caption)
+                        .font(HBTypography.body(.caption))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
 
@@ -62,7 +62,7 @@ struct ScenesView: View {
 
                 if let infoMessage, !infoMessage.isEmpty {
                     Text(infoMessage)
-                        .font(.caption)
+                        .font(HBTypography.body(.caption))
                         .foregroundStyle(HBPalette.textSecondary)
                         .padding(.horizontal, 2)
                 }
@@ -109,16 +109,16 @@ struct ScenesView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(scene.name)
-                        .font(.system(size: 20, weight: .bold, design: .rounded))
+                        .font(HBTypography.display(size: 20, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                     if isFavorite {
                         Image(systemName: "star.fill")
-                            .font(.caption)
+                            .font(HBTypography.body(.caption))
                             .foregroundStyle(Color.yellow)
                     }
                     if scene.active {
                         Text("ACTIVE")
-                            .font(.caption2)
+                            .font(HBTypography.body(.caption2))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(Color.green.opacity(0.2))
@@ -127,12 +127,12 @@ struct ScenesView: View {
                 }
 
                 Text(scene.details)
-                    .font(.caption)
+                    .font(HBTypography.body(.caption))
                     .foregroundStyle(HBPalette.textSecondary)
                     .lineLimit(1)
 
                 Text("\(scene.category.capitalized) · activated \(scene.activationCount)x")
-                    .font(.caption2)
+                    .font(HBTypography.body(.caption2))
                     .foregroundStyle(HBPalette.textSecondary)
             }
 

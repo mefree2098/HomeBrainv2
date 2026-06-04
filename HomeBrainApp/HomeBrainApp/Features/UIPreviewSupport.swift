@@ -387,7 +387,7 @@ struct UIPreviewModuleView: View {
                         }
 
                         Text("This module is currently shown with preview scaffolding so you can inspect spacing, color, hierarchy, and responsive behavior before connecting to live services.")
-                            .font(.system(size: 15, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 15, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
 
                         if section == .settings {
@@ -407,13 +407,13 @@ struct UIPreviewModuleView: View {
                 HBPanel {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Inspection Notes")
-                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .font(HBTypography.display(size: 11, weight: .bold))
                             .textCase(.uppercase)
                             .tracking(2.4)
                             .foregroundStyle(HBPalette.textMuted)
 
                         Text("Use the sidebar to jump between modules, or exit preview mode from the shell chrome to return to authentication.")
-                            .font(.system(size: 15, weight: .medium, design: .rounded))
+                            .font(HBTypography.body(size: 15, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                     }
                 }

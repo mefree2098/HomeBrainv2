@@ -16,6 +16,7 @@ struct RootView: View {
                 AuthView()
             }
         }
+        .font(HBTypography.body())
         .preferredColorScheme((HBThemeMode(rawValue: themeModeRaw) ?? .system).colorScheme)
         .tint(HBPalette.accentBlue)
         .task {
