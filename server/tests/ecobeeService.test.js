@@ -175,6 +175,130 @@ test('refreshAccessToken preserves legacy App Key refresh endpoint', async (t) =
   assert.equal(integration.accessToken, 'legacy-access-token');
 });
 
+test('requestWebTokens submits Ecobee Auth0 form fields', async (t) => {
+  const originalAuthRequest = ecobeeService.authRequest;
+  const originalExchangeWebCodeForTokens = ecobeeService.exchangeWebCodeForTokens;
+  const calls = [];
+
+  ecobeeService.authRequest = async (method, url, options = {}) => {
+    calls.push({ method, url, options });
+
+    if (calls.length === 1) {
+      assert.equal(method, 'get');
+      assert.equal(url, 'https://auth.ecobee.com/authorize');
+      assert.equal(options.params.response_type, 'code');
+      assert.equal(options.params.code_challenge_method, 'S256');
+      assert.equal(typeof options.params.code_challenge, 'string');
+      assert.ok(options.jar);
+      return {
+        status: 200,
+        finalUrl: 'https://auth.ecobee.com/u/login/identifier?state=identifier-state'
+      };
+    }
+
+    if (calls.length === 2) {
+      assert.equal(method, 'post');
+      assert.equal(url, 'https://auth.ecobee.com/u/login/identifier?state=identifier-state');
+      assert.deepEqual(options.data, {
+        state: 'identifier-state',
+        username: 'user@example.com',
+        'js-available': 'false',
+        'webauthn-available': 'false',
+        'is-brave': 'false',
+        'webauthn-platform-available': 'false',
+        action: 'default'
+      });
+      assert.ok(options.jar);
+      return {
+        status: 200,
+        finalUrl: 'https://auth.ecobee.com/u/login/password?state=password-state'
+      };
+    }
+
+    if (calls.length === 3) {
+      assert.equal(method, 'post');
+      assert.equal(url, 'https://auth.ecobee.com/u/login/password?state=password-state');
+      assert.deepEqual(options.data, {
+        state: 'password-state',
+        username: 'user@example.com',
+        password: 'correct-password',
+        action: 'default'
+      });
+      assert.equal(options.stopBeforeLeavingAuth, true);
+      assert.ok(options.jar);
+      return {
+        status: 302,
+        finalUrl: 'https://www.ecobee.com/home/authCallback?code=auth-code',
+        landedUrl: 'https://www.ecobee.com/home/authCallback?code=auth-code'
+      };
+    }
+
+    throw new Error(`unexpected auth request ${calls.length}`);
+  };
+
+  ecobeeService.exchangeWebCodeForTokens = async (code, codeVerifier) => {
+    assert.equal(code, 'auth-code');
+    assert.equal(typeof codeVerifier, 'string');
+    assert.ok(codeVerifier.length > 0);
+    return {
+      access_token: 'web-access-token',
+      refresh_token: 'web-refresh-token'
+    };
+  };
+
+  t.after(() => {
+    ecobeeService.authRequest = originalAuthRequest;
+    ecobeeService.exchangeWebCodeForTokens = originalExchangeWebCodeForTokens;
+  });
+
+  const result = await ecobeeService.requestWebTokens('user@example.com', 'correct-password');
+
+  assert.deepEqual(result, {
+    access_token: 'web-access-token',
+    refresh_token: 'web-refresh-token'
+  });
+  assert.equal(calls.length, 3);
+});
+
+test('requestWebTokens reports auth failure when password prompt returns', async (t) => {
+  const originalAuthRequest = ecobeeService.authRequest;
+
+  ecobeeService.authRequest = async (method, url) => {
+    if (method === 'get') {
+      return {
+        status: 200,
+        finalUrl: 'https://auth.ecobee.com/u/login/identifier?state=identifier-state'
+      };
+    }
+
+    if (url.includes('/u/login/identifier')) {
+      return {
+        status: 200,
+        finalUrl: 'https://auth.ecobee.com/u/login/password?state=password-state'
+      };
+    }
+
+    return {
+      status: 200,
+      finalUrl: 'https://auth.ecobee.com/u/login/password?state=password-state',
+      landedUrl: 'https://auth.ecobee.com/u/login/password?state=password-state'
+    };
+  };
+
+  t.after(() => {
+    ecobeeService.authRequest = originalAuthRequest;
+  });
+
+  await assert.rejects(
+    () => ecobeeService.requestWebTokens('user@example.com', 'bad-password'),
+    (error) => {
+      assert.equal(error.code, 'ECOBEE_AUTH_FAILED');
+      assert.equal(error.message, 'Ecobee rejected the supplied password');
+      return true;
+    }
+  );
+});
+
 test('EcobeeIntegration status sanitizes web auth secrets and pending MFA state', () => {
   const integration = new EcobeeIntegration({
     authMode: 'web',
