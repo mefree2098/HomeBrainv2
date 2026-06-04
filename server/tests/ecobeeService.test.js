@@ -293,6 +293,72 @@ test('requestWebTokens reports auth failure when password prompt returns', async
   );
 });
 
+test('requestWebTokens reports Auth0 account block distinctly', async (t) => {
+  const originalAuthRequest = ecobeeService.authRequest;
+
+  ecobeeService.authRequest = async (method, url) => {
+    if (method === 'get') {
+      return {
+        status: 200,
+        finalUrl: 'https://auth.ecobee.com/u/login/identifier?state=identifier-state'
+      };
+    }
+
+    if (url.includes('/u/login/identifier')) {
+      return {
+        status: 200,
+        finalUrl: 'https://auth.ecobee.com/u/login/password?state=password-state'
+      };
+    }
+
+    return {
+      status: 400,
+      finalUrl: 'https://auth.ecobee.com/u/login/password?state=password-state',
+      landedUrl: 'https://auth.ecobee.com/u/login/password?state=password-state',
+      data: '<html>Your account has been blocked after multiple consecutive login attempts</html>'
+    };
+  };
+
+  t.after(() => {
+    ecobeeService.authRequest = originalAuthRequest;
+  });
+
+  await assert.rejects(
+    () => ecobeeService.requestWebTokens('user@example.com', 'correct-password'),
+    (error) => {
+      assert.equal(error.code, 'ECOBEE_AUTH_BLOCKED');
+      assert.match(error.message, /temporarily blocked/i);
+      return true;
+    }
+  );
+});
+
+test('refreshAccessToken does not retry stored web credentials while Ecobee account is blocked', async (t) => {
+  const originalGetIntegration = EcobeeIntegration.getIntegration;
+  const originalLoginWithWebCredentials = ecobeeService.loginWithWebCredentials;
+
+  EcobeeIntegration.getIntegration = async () => ({
+    authMode: 'web',
+    refreshToken: '',
+    username: 'user@example.com',
+    password: 'secret',
+    lastError: 'Ecobee has temporarily blocked this account after multiple consecutive login attempts.',
+  });
+  ecobeeService.loginWithWebCredentials = async () => {
+    throw new Error('stored credential login should not be retried while blocked');
+  };
+
+  t.after(() => {
+    EcobeeIntegration.getIntegration = originalGetIntegration;
+    ecobeeService.loginWithWebCredentials = originalLoginWithWebCredentials;
+  });
+
+  await assert.rejects(
+    () => ecobeeService.refreshAccessToken(),
+    /temporarily blocked/
+  );
+});
+
 test('EcobeeIntegration status sanitizes web auth secrets and pending MFA state', () => {
   const integration = new EcobeeIntegration({
     authMode: 'web',
