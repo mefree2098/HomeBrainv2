@@ -45,7 +45,7 @@
     "lucide-react": "^0.460.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "react-hook-form": "^7.62.0",
+    "react-hook-form": "^7.77.0",
     "react-router-dom": "^7.14.2",
     "recharts": "^2.15.4",
     "tailwind-merge": "^2.5.4",
