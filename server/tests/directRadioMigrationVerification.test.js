@@ -4173,6 +4173,53 @@ test('Z-Wave generic pairing waits for a submitted S2 DSK PIN instead of abortin
   assert.equal(service.zwave.pendingDsk, null);
 });
 
+test('Z-Wave DSK credential normalization accepts PIN and full DSK input', async () => {
+  const service = createService();
+
+  const pinCredential = await service.normalizeZWaveDskCredential('12345');
+  assert.equal(pinCredential.pin, '12345');
+  assert.equal(pinCredential.dsk, '');
+  assert.equal(pinCredential.source, 'pin');
+
+  const dskCredential = await service.normalizeZWaveDskCredential('12345-12345-12345-12345-12345-12345-12345-12345');
+  assert.equal(dskCredential.pin, '12345');
+  assert.equal(dskCredential.dsk, '12345-12345-12345-12345-12345-12345-12345-12345');
+  assert.equal(dskCredential.source, 'dsk');
+
+  const unformattedDskCredential = await service.normalizeZWaveDskCredential('1234512345123451234512345123451234512345');
+  assert.equal(unformattedDskCredential.pin, '12345');
+  assert.equal(unformattedDskCredential.dsk, '12345-12345-12345-12345-12345-12345-12345-12345');
+});
+
+test('Z-Wave S2 callback uses a preloaded matching DSK before prompting', async () => {
+  const service = createService();
+  service.activePairings.set('zwave', {
+    id: 'pairing-zwave-preloaded-dsk',
+    protocol: 'zwave',
+    mode: 'inclusion',
+    status: 'active',
+    startedAt: new Date().toISOString(),
+    expiresAt: Date.now() + 60_000,
+    baselineIdentities: [],
+    events: []
+  });
+  service.zwave.s2Dsk = '12345-12345-12345-12345-12345-12345-12345-12345';
+
+  const callbacks = service.buildZWaveInclusionCallbacks({
+    SecurityClass: {
+      S2_AccessControl: 1,
+      S2_Authenticated: 2,
+      S2_Unauthenticated: 3,
+      S0_Legacy: 4
+    }
+  });
+
+  const pin = await callbacks.validateDSKAndEnterPIN('-12345-12345-12345-12345-12345-12345-12345');
+  assert.equal(pin, '12345');
+  assert.equal(service.zwave.pendingDsk, null);
+  assert.equal(service.activePairings.get('zwave').status, 'active');
+});
+
 test('Zigbee pairing chunks long permit-join windows and renews them safely', async () => {
   const service = createService();
   const permitJoinCalls = [];

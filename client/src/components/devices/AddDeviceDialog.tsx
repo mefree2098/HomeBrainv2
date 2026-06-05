@@ -261,6 +261,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
   const [expiresAt, setExpiresAt] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [zwaveDskInput, setZwaveDskInput] = useState("")
   const [zwaveDskPin, setZwaveDskPin] = useState("")
   const [zwaveSecurityMode, setZwaveSecurityMode] = useState<ZWaveSecurityMode>("default")
   const [submittingDsk, setSubmittingDsk] = useState(false)
@@ -515,6 +516,12 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
   }
 
   const startDirectRadioAdd = async (targetProtocol: DirectRadioProtocol) => {
+    const preloadedDsk = zwaveDskInput.trim()
+    if (targetProtocol === "zwave" && zwaveSecurityMode === "s2" && !preloadedDsk) {
+      setErrorMessage("Enter the 5 digit DSK PIN or scan/paste the Z-Wave QR code before starting Secure S2 inclusion.")
+      return
+    }
+
     captureBaseline(targetProtocol)
     setBusy(true)
     setActiveProtocol(targetProtocol)
@@ -523,6 +530,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       const response = await startDirectRadioPairing({
         protocol: targetProtocol,
         durationSeconds: seconds,
+        dskPin: targetProtocol === "zwave" && preloadedDsk ? preloadedDsk : undefined,
         zwaveSecurityMode: targetProtocol === "zwave" ? zwaveSecurityMode : undefined
       })
       const nextExpiresAt = response?.result?.expiresAt || null
@@ -854,6 +862,19 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
                 {getZWaveSecurityMessage(zwaveSecurityMode)}
               </p>
             </Field>
+            {zwaveSecurityMode === "s2" || zwaveSecurityMode === "default" ? (
+              <Field label={zwaveSecurityMode === "s2" ? "DSK PIN or QR code" : "DSK PIN or QR code (optional)"}>
+                <Input
+                  value={zwaveDskInput}
+                  onChange={(event) => setZwaveDskInput(event.target.value.trim())}
+                  placeholder="5 digit PIN or Z-Wave QR payload"
+                  disabled={busy}
+                />
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Secure S2 needs this before the device joins. Use the 5 digit PIN printed on the label, or paste the raw Z-Wave QR payload.
+                </p>
+              </Field>
+            ) : null}
             {zwaveRepairCandidates.length > 0 ? (
               <div className="space-y-3 rounded-lg border border-amber-500/35 bg-amber-500/10 p-4">
                 <div className="flex items-start gap-3 text-sm text-amber-800 dark:text-amber-100">

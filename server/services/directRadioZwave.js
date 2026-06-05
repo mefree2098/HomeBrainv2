@@ -135,6 +135,93 @@ function getZWaveSecurityClassEntries(core = getZWaveCore()) {
   ].filter(([, value]) => value !== undefined);
 }
 
+function extractZWavePinFromDsk(dsk) {
+  const safeDsk = trimString(dsk);
+  const match = safeDsk.match(/^(\d{5})(?:-\d{5}){7}$/);
+  return match ? match[1] : '';
+}
+
+function zWaveDskMatchesChallenge(fullDsk, challengeDsk) {
+  const fullDigits = trimString(fullDsk).replace(/\D/g, '');
+  const challengeDigits = trimString(challengeDsk).replace(/\D/g, '');
+  if (fullDigits.length !== 40 || challengeDigits.length < 35) {
+    return false;
+  }
+  return fullDigits.endsWith(challengeDigits);
+}
+
+async function normalizeZWaveDskCredential(value) {
+  const raw = trimString(value);
+  if (!raw) {
+    return {
+      pin: '',
+      dsk: '',
+      source: null,
+      parsedQr: null
+    };
+  }
+
+  const core = getZWaveCore();
+  const digitsOnly = raw.replace(/\D/g, '');
+  if (/^\d{5}$/.test(digitsOnly) && digitsOnly.length === 5) {
+    return {
+      pin: digitsOnly,
+      dsk: '',
+      source: 'pin',
+      parsedQr: null
+    };
+  }
+
+  const unformattedDsk = digitsOnly.length === 40
+    ? digitsOnly.match(/.{1,5}/g).join('-')
+    : '';
+  const tryParseDsk = typeof core.tryParseDSKFromQRCodeString === 'function'
+    ? trimString(core.tryParseDSKFromQRCodeString(raw))
+    : '';
+  const directDsk = unformattedDsk
+    || tryParseDsk
+    || (typeof core.isValidDSK === 'function' && core.isValidDSK(raw) ? raw : '');
+  if (directDsk) {
+    return {
+      pin: extractZWavePinFromDsk(directDsk),
+      dsk: directDsk,
+      source: 'dsk',
+      parsedQr: null
+    };
+  }
+
+  if (typeof core.parseQRCodeString === 'function') {
+    try {
+      const parsedQr = await core.parseQRCodeString(raw);
+      const qrDsk = trimString(parsedQr?.dsk);
+      if (qrDsk) {
+        return {
+          pin: extractZWavePinFromDsk(qrDsk),
+          dsk: qrDsk,
+          source: 'qr',
+          parsedQr: {
+            manufacturerId: parsedQr.manufacturerId ?? null,
+            productType: parsedQr.productType ?? null,
+            productId: parsedQr.productId ?? null,
+            supportedProtocols: Array.isArray(parsedQr.supportedProtocols)
+              ? parsedQr.supportedProtocols.slice()
+              : null,
+            requestedSecurityClasses: Array.isArray(parsedQr.requestedSecurityClasses)
+              ? parsedQr.requestedSecurityClasses.slice()
+              : null
+          }
+        };
+      }
+    } catch (error) {
+      // Fall through to the validation error below.
+    }
+  }
+
+  const error = new Error('Enter the 5 digit DSK PIN, a full Z-Wave DSK, or the raw Z-Wave QR code payload.');
+  error.status = 400;
+  throw error;
+}
+
 function serializeZWaveJsLogConfig(config = null) {
   if (!config || typeof config !== 'object') {
     return null;
@@ -405,7 +492,11 @@ const ZWAVE_JS_LOG_FILENAME = path.join(ZWAVE_JS_LOG_DIR, 'zwavejs_%DATE%.log');
 const ZWAVE_JS_LOG_CURRENT_FILENAME = path.join(ZWAVE_JS_LOG_DIR, 'zwavejs_current.log');
 
 module.exports = {
-buildZWaveJsLogConfig() {
+  async normalizeZWaveDskCredential(value) {
+    return normalizeZWaveDskCredential(value);
+  },
+
+  buildZWaveJsLogConfig() {
     ensureDirSync(ZWAVE_JS_LOG_DIR);
     const enabled = parseEnabledFlag(process.env.HOMEBRAIN_ZWAVE_JS_LOG_ENABLED, true);
     const logToFile = parseEnabledFlag(process.env.HOMEBRAIN_ZWAVE_JS_LOG_TO_FILE, true);
@@ -599,16 +690,29 @@ buildZWaveInclusionCallbacks(zwave) {
       }),
       validateDSKAndEnterPIN: async (dsk) => {
         this.zwave.pendingDsk = dsk;
-        const configuredPin = trimString(this.zwave.s2DskPin || process.env.HOMEBRAIN_ZWAVE_S2_DSK_PIN);
+        let configuredCredential = { pin: '', dsk: '', source: null, parsedQr: null };
+        const configuredInput = this.zwave.s2Dsk || this.zwave.s2DskPin || process.env.HOMEBRAIN_ZWAVE_S2_DSK_PIN;
+        try {
+          configuredCredential = await normalizeZWaveDskCredential(configuredInput);
+        } catch (error) {
+          this.log('warn', 'zwave', 'Ignoring invalid preloaded Z-Wave S2 DSK credential', {
+            error: error.message
+          });
+        }
+        const configuredPin = configuredCredential.dsk
+          ? (zWaveDskMatchesChallenge(configuredCredential.dsk, dsk) ? configuredCredential.pin : '')
+          : configuredCredential.pin;
         if (/^\d{5}$/.test(configuredPin)) {
           this.zwave.pendingDsk = null;
-          this.log('info', 'zwave', 'Z-Wave S2 DSK PIN supplied from configuration', {
-            dsk
+          this.log('info', 'zwave', 'Z-Wave S2 DSK PIN supplied before bootstrap', {
+            credentialSource: configuredCredential.source || 'unknown',
+            hasFullDsk: Boolean(configuredCredential.dsk),
+            challengeMatched: configuredCredential.dsk ? zWaveDskMatchesChallenge(configuredCredential.dsk, dsk) : null
           });
           return configuredPin;
         }
         this.log('warn', 'zwave', 'Z-Wave S2 DSK PIN required', {
-          dsk
+          hasDskChallenge: Boolean(dsk)
         });
         this.markZWaveDskRequired(dsk);
         console.warn(`DirectRadioService: Z-Wave S2 DSK PIN required for ${dsk}`);
@@ -746,6 +850,7 @@ submitZWaveDskPin(pin) {
 
     const hadPendingRequest = this.resolvePendingZWaveDsk(safePin);
     this.zwave.s2DskPin = safePin;
+    this.zwave.s2Dsk = '';
     this.zwave.pendingDsk = null;
     this.markPairingActive('zwave', hadPendingRequest
       ? 'Z-Wave S2 PIN submitted. Keep the switch powered while HomeBrain finishes the interview.'
@@ -1299,6 +1404,9 @@ async replaceFailedZWaveNode(nodeId, options = {}) {
       zwave,
       options.zwaveSecurityMode ?? options.securityMode
     );
+    const dskCredential = zwaveSecurityMode === 'insecure'
+      ? { pin: '', dsk: '', source: null, parsedQr: null }
+      : await this.normalizeZWaveDskCredential(options.dskPin);
     const session = this.createPairingSession('zwave', seconds, {
       mode: 'replace_failed',
       targetIdentity: String(numericNodeId),
@@ -1308,7 +1416,10 @@ async replaceFailedZWaveNode(nodeId, options = {}) {
     });
     session.zwaveSecurityMode = zwaveSecurityMode;
     session.replaceNodeId = numericNodeId;
-    this.zwave.s2DskPin = trimString(options.dskPin);
+    session.zwaveDskCredentialSource = dskCredential.source || null;
+    session.zwaveDskPreloaded = Boolean(dskCredential.pin);
+    this.zwave.s2DskPin = dskCredential.pin;
+    this.zwave.s2Dsk = dskCredential.dsk;
     this.zwave.pendingDsk = null;
 
     this.log('info', 'zwave', 'Opening Z-Wave failed-node replacement window', {

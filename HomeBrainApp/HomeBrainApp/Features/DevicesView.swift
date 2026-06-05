@@ -1,4 +1,5 @@
 import Foundation
+import AVFoundation
 import SwiftUI
 import UIKit
 
@@ -94,11 +95,13 @@ struct DevicesView: View {
     @State private var matterThreadDataset = ""
 
     @State private var showCreateSheet = false
+    @State private var showAddDeviceDskScanner = false
     @State private var addDeviceMode = "zwave"
     @State private var addDeviceBusy = false
     @State private var addDeviceStatusMessage: String?
     @State private var addDeviceDurationSeconds = 180
     @State private var addDevicePendingDsk = ""
+    @State private var addDeviceDskInput = ""
     @State private var addDeviceDskPin = ""
     @State private var addDeviceZWaveSecurityMode = "insecure"
     @State private var addDeviceRepairingZWaveNodeId: Int?
@@ -373,6 +376,11 @@ struct DevicesView: View {
         }
         .sheet(isPresented: $showCreateSheet) {
             createDeviceSheet
+        }
+        .sheet(isPresented: $showAddDeviceDskScanner) {
+            AddDeviceQRCodeScannerSheet { code in
+                addDeviceDskInput = code
+            }
         }
         .sheet(
             isPresented: Binding(
@@ -2726,6 +2734,45 @@ struct DevicesView: View {
                 addDevicePickerRow("Security") {
                     addDeviceSecurityPicker
                 }
+                if addDeviceZWaveSecurityMode == "s2" || addDeviceZWaveSecurityMode == "default" {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(addDeviceZWaveSecurityMode == "s2" ? "DSK PIN or QR code" : "DSK PIN or QR code (optional)")
+                            .font(HBTypography.body(size: 12, weight: .bold))
+                            .foregroundStyle(HBPalette.textSecondary)
+                        HStack(spacing: 8) {
+                            TextField("5 digit PIN or Z-Wave QR payload", text: $addDeviceDskInput)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                                .disabled(addDeviceBusy)
+                                .padding(12)
+                                .background(HBPalette.panelSoft.opacity(0.65), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .stroke(HBPalette.panelStrokeStrong.opacity(0.55), lineWidth: 1)
+                                )
+                            Button {
+                                showAddDeviceDskScanner = true
+                            } label: {
+                                Image(systemName: "qrcode.viewfinder")
+                                    .font(HBTypography.body(size: 18, weight: .bold))
+                                    .frame(width: 46, height: 46)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(HBPalette.textPrimary)
+                            .background(HBPalette.accentBlue.opacity(0.2), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(HBPalette.accentBlue.opacity(0.55), lineWidth: 1)
+                            )
+                            .disabled(addDeviceBusy)
+                            .accessibilityLabel("Scan QR code")
+                        }
+                        Text("Secure S2 needs this before the device joins. Use the 5 digit PIN printed on the label, or paste the raw Z-Wave QR payload.")
+                            .font(HBTypography.body(size: 11, weight: .semibold))
+                            .foregroundStyle(HBPalette.textMuted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
 
             Text(nativeAddGuidance)
@@ -3066,7 +3113,7 @@ struct DevicesView: View {
         case "s0":
             return "Legacy S0 is for older sirens and secure accessories that do not use a DSK PIN."
         case "s2":
-            return "Use Secure S2 for locks and access-control devices with the first 5 digits from the DSK label."
+            return "Use Secure S2 only after entering the 5 digit DSK PIN or QR payload above."
         default:
             return "Standard inclusion is for ordinary switches, dimmers, outlets, and sensors without secure pairing."
         }
@@ -4448,6 +4495,12 @@ struct DevicesView: View {
             return
         }
 
+        let preloadedDsk = addDeviceDskInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if protocolName == "zwave", addDeviceZWaveSecurityMode == "s2", preloadedDsk.isEmpty {
+            addDeviceStatusMessage = "Enter the 5 digit DSK PIN or scan/paste the Z-Wave QR code before starting Secure S2 inclusion."
+            return
+        }
+
         addDeviceBusy = true
         addDevicePendingDsk = ""
         addDeviceDskPin = ""
@@ -4458,9 +4511,12 @@ struct DevicesView: View {
                 "protocol": protocolName,
                 "durationSeconds": addDeviceDurationSeconds
             ]
-            if protocolName == "zwave" {
-                body["zwaveSecurityMode"] = addDeviceZWaveSecurityMode
+        if protocolName == "zwave" {
+            body["zwaveSecurityMode"] = addDeviceZWaveSecurityMode
+            if !preloadedDsk.isEmpty {
+                body["dskPin"] = preloadedDsk
             }
+        }
             let response = try await session.apiClient.post(
                 "/api/direct-radios/pairing/start",
                 body: body
@@ -6264,6 +6320,173 @@ private struct DirectRadioMigrationPlanRecord {
             warnings: [],
             targetSource: ""
         )
+    }
+}
+
+private struct AddDeviceQRCodeScannerSheet: View {
+    let onCode: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var scannerError: String?
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                HBPageBackground()
+                AddDeviceQRCodeScannerView(
+                    onCode: { code in
+                        onCode(code)
+                        dismiss()
+                    },
+                    onError: { error in
+                        scannerError = error
+                    }
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .padding()
+            }
+            .navigationTitle("Scan QR Code")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
+            .alert("Camera unavailable", isPresented: Binding(
+                get: { scannerError != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        scannerError = nil
+                    }
+                }
+            )) {
+                Button("OK", role: .cancel) {
+                    scannerError = nil
+                }
+            } message: {
+                Text(scannerError ?? "")
+            }
+        }
+    }
+}
+
+private struct AddDeviceQRCodeScannerView: UIViewControllerRepresentable {
+    let onCode: (String) -> Void
+    let onError: (String) -> Void
+
+    func makeUIViewController(context: Context) -> AddDeviceQRCodeScannerViewController {
+        AddDeviceQRCodeScannerViewController(onCode: onCode, onError: onError)
+    }
+
+    func updateUIViewController(_ uiViewController: AddDeviceQRCodeScannerViewController, context: Context) {}
+}
+
+private final class AddDeviceQRCodeScannerViewController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
+    private let onCode: (String) -> Void
+    private let onError: (String) -> Void
+    private let captureSession = AVCaptureSession()
+    private var previewLayer: AVCaptureVideoPreviewLayer?
+    private var didCaptureCode = false
+
+    init(onCode: @escaping (String) -> Void, onError: @escaping (String) -> Void) {
+        self.onCode = onCode
+        self.onError = onError
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        prepareCamera()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        previewLayer?.frame = view.bounds
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        if captureSession.isRunning {
+            captureSession.stopRunning()
+        }
+    }
+
+    private func prepareCamera() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            configureSession()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                DispatchQueue.main.async {
+                    granted
+                        ? self?.configureSession()
+                        : self?.onError("Camera access is required to scan the Z-Wave QR code.")
+                }
+            }
+        default:
+            onError("Camera access is required to scan the Z-Wave QR code.")
+        }
+    }
+
+    private func configureSession() {
+        guard let captureDevice = AVCaptureDevice.default(for: .video) else {
+            onError("This device does not have an available camera.")
+            return
+        }
+
+        do {
+            let input = try AVCaptureDeviceInput(device: captureDevice)
+            guard captureSession.canAddInput(input) else {
+                onError("HomeBrain could not start the camera input.")
+                return
+            }
+            captureSession.addInput(input)
+
+            let metadataOutput = AVCaptureMetadataOutput()
+            guard captureSession.canAddOutput(metadataOutput) else {
+                onError("HomeBrain could not read QR codes from the camera.")
+                return
+            }
+            captureSession.addOutput(metadataOutput)
+            metadataOutput.setMetadataObjectsDelegate(self, queue: DispatchQueue.main)
+            metadataOutput.metadataObjectTypes = [.qr]
+
+            let layer = AVCaptureVideoPreviewLayer(session: captureSession)
+            layer.videoGravity = .resizeAspectFill
+            view.layer.addSublayer(layer)
+            previewLayer = layer
+            previewLayer?.frame = view.bounds
+
+            DispatchQueue.global(qos: .userInitiated).async { [captureSession] in
+                captureSession.startRunning()
+            }
+        } catch {
+            onError("HomeBrain could not start the camera.")
+        }
+    }
+
+    func metadataOutput(
+        _ output: AVCaptureMetadataOutput,
+        didOutput metadataObjects: [AVMetadataObject],
+        from connection: AVCaptureConnection
+    ) {
+        guard !didCaptureCode,
+              let object = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
+              object.type == .qr,
+              let code = object.stringValue,
+              !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+
+        didCaptureCode = true
+        captureSession.stopRunning()
+        onCode(code.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 }
 
