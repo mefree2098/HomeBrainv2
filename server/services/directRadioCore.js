@@ -758,6 +758,7 @@ async upsertDirectDeviceRecord(identity, update, options = {}) {
     if (!existing && options.allowCreate === false) {
       return null;
     }
+    const previousDevice = existing?.toObject ? existing.toObject() : existing;
     const directUpdate = applyContactOpenDebounce(existing, update);
     const payload = mergeDirectDeviceUpdateForExisting(existing, directUpdate);
 
@@ -769,6 +770,7 @@ async upsertDirectDeviceRecord(identity, update, options = {}) {
     device = await this.attachRecoveredSmartThingsMigrationIfMatched(device, identity);
     device = await this.repairRecoveredSmartThingsMigrationIfMismatched(device, identity);
     device = await this.finalizePendingSmartThingsMigrationIfReady(device, identity);
+    await this.evaluateSecurityAlarmForDirectDeviceUpdate(device, previousDevice, identity, directUpdate);
 
     this.log('info', identity.protocol, existing ? 'Direct radio device updated' : 'Direct radio device created', {
       deviceId: device?._id?.toString?.() || null,
@@ -816,6 +818,37 @@ async upsertDirectDeviceRecord(identity, update, options = {}) {
       this.completePairingSession(identity.protocol, identity, device, directUpdate?.properties?.homebrainDirect?.lastReason || 'direct device update');
     }
     return device;
+  },
+
+async evaluateSecurityAlarmForDirectDeviceUpdate(device, previousDevice, identity, update) {
+    try {
+      const securityAlarmService = require('./securityAlarmService');
+      const result = await securityAlarmService.evaluateNativeSecuritySensorUpdate(device, {
+        previousDevice,
+        source: 'direct_radio',
+        protocol: identity?.protocol || update?.properties?.homebrainDirect?.protocol || null,
+        reason: this.getDirectUpdateReason(update)
+      });
+
+      if (result?.triggered) {
+        this.log('warn', 'security', 'Triggered security alarm from direct radio sensor update', {
+          deviceId: getDeviceIdString(device),
+          protocol: identity?.protocol || update?.properties?.homebrainDirect?.protocol || null,
+          zoneName: result.zoneName || null,
+          sensorType: result.sensorType || null,
+          alarmState: result.alarmState || null
+        });
+      }
+
+      return result;
+    } catch (error) {
+      this.log('warn', 'security', 'Failed to evaluate security alarm for direct radio update', {
+        deviceId: getDeviceIdString(device),
+        protocol: identity?.protocol || update?.properties?.homebrainDirect?.protocol || null,
+        error: error?.message || String(error || 'Unknown security alarm evaluation error')
+      });
+      return null;
+    }
   },
 
 async remapSecurityZonesForMigratedDevice(sourceDevice, directDevice) {

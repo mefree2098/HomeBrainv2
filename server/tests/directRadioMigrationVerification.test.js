@@ -3563,6 +3563,91 @@ test('Zigbee generic add reclaims the single SmartThings source awaiting native 
   assert.deepEqual(deletedDeviceIds, [genericDeviceId]);
 });
 
+test('direct radio upsert evaluates security alarm when contact sensor becomes active', async (t) => {
+  const service = createService();
+  const originalFind = Device.find;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const existing = {
+    _id: 'direct-contact-1',
+    name: 'Back Door',
+    type: 'sensor',
+    status: false,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0xa4c13812d1d4ffff',
+        state: { contactOpen: false },
+        features: ['contact'],
+        lastReason: 'message'
+      },
+      directRadioState: { contactOpen: false }
+    },
+    toObject() {
+      return {
+        _id: this._id,
+        name: this.name,
+        type: this.type,
+        status: this.status,
+        properties: JSON.parse(JSON.stringify(this.properties))
+      };
+    }
+  };
+  const update = {
+    name: 'Back Door',
+    type: 'sensor',
+    status: true,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0xa4c13812d1d4ffff',
+        state: { contactOpen: true },
+        features: ['contact'],
+        lastReason: 'message'
+      },
+      directRadioState: { contactOpen: true }
+    }
+  };
+  const evaluations = [];
+
+  t.after(() => {
+    Device.find = originalFind;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+  });
+
+  Device.find = async () => [existing];
+  Device.findByIdAndUpdate = async (_id, payload) => ({
+    ...existing,
+    ...payload,
+    _id,
+    properties: payload.properties
+  });
+  service.reclaimAwaitingSmartThingsMigrationSourceIfMatched = async (device) => device;
+  service.attachRecoveredSmartThingsMigrationIfMatched = async (device) => device;
+  service.repairRecoveredSmartThingsMigrationIfMismatched = (device) => device;
+  service.finalizePendingSmartThingsMigrationIfReady = (device) => device;
+  service.emitDeviceUpdate = () => {};
+  service.evaluateSecurityAlarmForDirectDeviceUpdate = async (device, previousDevice, identity, directUpdate) => {
+    evaluations.push({ device, previousDevice, identity, directUpdate });
+    return { triggered: true, zoneName: 'Back Door' };
+  };
+
+  const device = await service.upsertDirectDeviceRecord({
+    protocol: 'zigbee',
+    id: '0xa4c13812d1d4ffff'
+  }, update, {
+    suppressPairingCompletion: true
+  });
+
+  assert.equal(device.status, true);
+  assert.equal(evaluations.length, 1);
+  assert.equal(evaluations[0].device.status, true);
+  assert.equal(evaluations[0].previousDevice.status, false);
+  assert.equal(evaluations[0].identity.protocol, 'zigbee');
+  assert.equal(evaluations[0].directUpdate.properties.homebrainDirect.state.contactOpen, true);
+});
+
 test('Zigbee recovery reclaims an awaiting SmartThings source by stored native identity', async (t) => {
   const service = createService();
   const deviceService = require('../services/deviceService');

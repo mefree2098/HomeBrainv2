@@ -1471,3 +1471,93 @@ test('triggerAlarm sounds selected HomeBrain siren outputs only', async (t) => {
   assert.equal(result.lastSirenTriggerResult.homebrain.soundedOutputs[0].deviceId, 'selected-siren');
   assert.equal(result.lastSirenTriggerResult.failedOutputs.length, 0);
 });
+
+test('evaluateNativeSecuritySensorUpdate triggers monitored contact sensor while armed stay', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+  const originalTriggerAlarm = securityAlarmService.triggerAlarm;
+  const alarm = {
+    alarmState: 'armedStay',
+    zones: [{
+      name: 'Back Door',
+      deviceId: 'back-door-sensor',
+      deviceType: 'doorWindow',
+      enabled: true,
+      bypassed: false
+    }]
+  };
+  const capturedTriggers = [];
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+    securityAlarmService.triggerAlarm = originalTriggerAlarm;
+  });
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+  securityAlarmService.triggerAlarm = async (zone, options = {}) => {
+    capturedTriggers.push({ zone, options });
+    return { alarmState: 'triggered' };
+  };
+
+  const result = await securityAlarmService.evaluateNativeSecuritySensorUpdate({
+    _id: 'back-door-sensor',
+    name: 'Back Door',
+    type: 'sensor',
+    status: true,
+    isOnline: true,
+    properties: { source: 'homebrain-zigbee' }
+  }, {
+    previousDevice: {
+      _id: 'back-door-sensor',
+      name: 'Back Door',
+      type: 'sensor',
+      status: false,
+      isOnline: true,
+      properties: { source: 'homebrain-zigbee' }
+    }
+  });
+
+  assert.equal(result.triggered, true);
+  assert.equal(result.zoneName, 'Back Door');
+  assert.equal(result.sensorType, 'doorWindow');
+  assert.equal(capturedTriggers.length, 1);
+  assert.equal(capturedTriggers[0].zone.name, 'Back Door');
+  assert.equal(capturedTriggers[0].options.triggeredZoneName, 'Back Door');
+});
+
+test('silenceHomeBrainAlarmOutputDevice falls back to mute after off actions fail', async (t) => {
+  const originalControlDevice = deviceService.controlDevice;
+  const capturedControls = [];
+
+  t.after(() => {
+    deviceService.controlDevice = originalControlDevice;
+  });
+
+  deviceService.controlDevice = async (deviceId, action, value, options = {}) => {
+    capturedControls.push({
+      deviceId,
+      action,
+      value,
+      fallbackFrom: options.command?.fallbackFrom
+    });
+
+    if (action !== 'mute') {
+      throw new Error(`${action} unsupported`);
+    }
+
+    return { _id: deviceId };
+  };
+
+  const result = await securityAlarmService.silenceHomeBrainAlarmOutputDevice({
+    _id: 'zse50-siren',
+    name: 'Siren',
+    type: 'siren'
+  });
+
+  assert.equal(result.deviceId, 'zse50-siren');
+  assert.equal(result.via, 'homebrain.mute');
+  assert.deepEqual(capturedControls, [
+    { deviceId: 'zse50-siren', action: 'alarm_off', value: null, fallbackFrom: undefined },
+    { deviceId: 'zse50-siren', action: 'turn_off', value: false, fallbackFrom: 'alarm_off' },
+    { deviceId: 'zse50-siren', action: 'mute', value: true, fallbackFrom: 'turn_off' }
+  ]);
+});
