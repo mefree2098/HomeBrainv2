@@ -3923,14 +3923,15 @@ export function DeviceDetailsDialog({
                             Remove stale HomeBrain records after exclusion, replacement, or controller cleanup.
                           </CardDescription>
                         </CardHeader>
-                        <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                          <div className="text-sm leading-relaxed text-muted-foreground">
+                        <CardContent className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                          <div className="min-w-0 text-sm leading-relaxed text-muted-foreground">
                             Deletes this HomeBrain device and clears related dashboard, security, favorite, Alexa, and telemetry references.
                           </div>
                           <Button
                             type="button"
                             variant="destructive"
                             size="sm"
+                            className="w-full justify-center sm:w-auto sm:shrink-0"
                             onClick={handleDeleteDevice}
                             disabled={deletingDevice}
                           >
