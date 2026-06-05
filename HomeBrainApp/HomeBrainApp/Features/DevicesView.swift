@@ -103,7 +103,7 @@ struct DevicesView: View {
     @State private var addDevicePendingDsk = ""
     @State private var addDeviceDskInput = ""
     @State private var addDeviceDskPin = ""
-    @State private var addDeviceZWaveSecurityMode = "insecure"
+    @State private var addDeviceZWaveSecurityMode = "default"
     @State private var addDeviceRepairingZWaveNodeId: Int?
     @State private var addDeviceReplacingZWaveNodeId: Int?
     @State private var addDeviceRemovingZWaveNodeId: Int?
@@ -2734,44 +2734,42 @@ struct DevicesView: View {
                 addDevicePickerRow("Security") {
                     addDeviceSecurityPicker
                 }
-                if addDeviceZWaveSecurityMode == "s2" || addDeviceZWaveSecurityMode == "default" {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(addDeviceZWaveSecurityMode == "s2" ? "DSK PIN or QR code" : "DSK PIN or QR code (optional)")
-                            .font(HBTypography.body(size: 12, weight: .bold))
-                            .foregroundStyle(HBPalette.textSecondary)
-                        HStack(spacing: 8) {
-                            TextField("5 digit PIN or Z-Wave QR payload", text: $addDeviceDskInput)
-                                .textInputAutocapitalization(.never)
-                                .autocorrectionDisabled()
-                                .disabled(addDeviceBusy)
-                                .padding(12)
-                                .background(HBPalette.panelSoft.opacity(0.65), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .stroke(HBPalette.panelStrokeStrong.opacity(0.55), lineWidth: 1)
-                                )
-                            Button {
-                                showAddDeviceDskScanner = true
-                            } label: {
-                                Image(systemName: "qrcode.viewfinder")
-                                    .font(HBTypography.body(size: 18, weight: .bold))
-                                    .frame(width: 46, height: 46)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(HBPalette.textPrimary)
-                            .background(HBPalette.accentBlue.opacity(0.2), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(addDeviceZWaveSecurityMode == "s2" ? "DSK PIN or QR code (required)" : "DSK PIN or QR code")
+                        .font(HBTypography.body(size: 12, weight: .bold))
+                        .foregroundStyle(HBPalette.textSecondary)
+                    HStack(spacing: 8) {
+                        TextField("5 digit PIN or Z-Wave QR payload", text: $addDeviceDskInput)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .disabled(addDeviceBusy)
+                            .padding(12)
+                            .background(HBPalette.panelSoft.opacity(0.65), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(HBPalette.accentBlue.opacity(0.55), lineWidth: 1)
+                                    .stroke(HBPalette.panelStrokeStrong.opacity(0.55), lineWidth: 1)
                             )
-                            .disabled(addDeviceBusy)
-                            .accessibilityLabel("Scan QR code")
+                        Button {
+                            showAddDeviceDskScanner = true
+                        } label: {
+                            Image(systemName: "qrcode.viewfinder")
+                                .font(HBTypography.body(size: 18, weight: .bold))
+                                .frame(width: 46, height: 46)
                         }
-                        Text("Secure S2 needs this before the device joins. Use the 5 digit PIN printed on the label, or paste the raw Z-Wave QR payload.")
-                            .font(HBTypography.body(size: 11, weight: .semibold))
-                            .foregroundStyle(HBPalette.textMuted)
-                            .fixedSize(horizontal: false, vertical: true)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .background(HBPalette.accentBlue.opacity(0.2), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(HBPalette.accentBlue.opacity(0.55), lineWidth: 1)
+                        )
+                        .disabled(addDeviceBusy)
+                        .accessibilityLabel("Scan QR code")
                     }
+                    Text("Required for Secure S2. Auto secure will use it when present; Standard and Legacy S0 do not need it.")
+                        .font(HBTypography.body(size: 11, weight: .semibold))
+                        .foregroundStyle(HBPalette.textMuted)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -4535,6 +4533,12 @@ struct DevicesView: View {
         }
     }
 
+    private func addDevicePairingHasDetectedDevice(_ pairing: [String: Any]) -> Bool {
+        let detectedIdentity = JSON.string(pairing, "detectedIdentity").trimmingCharacters(in: .whitespacesAndNewlines)
+        let directDeviceId = JSON.string(pairing, "directDeviceId").trimmingCharacters(in: .whitespacesAndNewlines)
+        return !detectedIdentity.isEmpty || !directDeviceId.isEmpty
+    }
+
     private func monitorDirectRadioAdd(protocolName: String, durationSeconds: Int) async {
         let deadline = Date().addingTimeInterval(TimeInterval(durationSeconds + 30))
 
@@ -4569,12 +4573,20 @@ struct DevicesView: View {
                     return
                 }
 
-                if pairingStatus == "failed" || pairingStatus == "expired" {
-                    addDeviceStatusMessage = message.isEmpty ? "\(addDeviceModeLabel(protocolName)) pairing did not complete." : message
-                    errorMessage = addDeviceStatusMessage
+            if pairingStatus == "failed" || pairingStatus == "expired" {
+                if protocolName == "zwave", addDevicePairingHasDetectedDevice(pairing) {
+                    addDeviceStatusMessage = "Z-Wave node joined. Finishing the secure interview and adding it to HomeBrain..."
+                    errorMessage = nil
                     await loadDevices(showLoading: false)
-                    return
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    continue
                 }
+
+                addDeviceStatusMessage = message.isEmpty ? "\(addDeviceModeLabel(protocolName)) pairing did not complete." : message
+                errorMessage = addDeviceStatusMessage
+                await loadDevices(showLoading: false)
+                return
+            }
 
                 await loadDevices(showLoading: false)
             } catch {
