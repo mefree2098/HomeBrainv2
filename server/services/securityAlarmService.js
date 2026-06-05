@@ -665,6 +665,25 @@ class SecurityAlarmService {
     return this.getConfiguredSirenOutputs(alarm);
   }
 
+  getSanitizedSecurityZones(alarm) {
+    return (Array.isArray(alarm?.zones) ? alarm.zones : [])
+      .map((zone) => {
+        const deviceType = normalizeString(zone?.deviceType) || 'security';
+        const modes = this.getZoneMonitoringModes(zone, deviceType);
+        return {
+          name: normalizeString(zone?.name) || 'Security zone',
+          deviceId: normalizeString(zone?.deviceId),
+          deviceType,
+          enabled: modes.armedStayEnabled || modes.armedAwayEnabled,
+          armedStayEnabled: modes.armedStayEnabled,
+          armedAwayEnabled: modes.armedAwayEnabled,
+          bypassable: zone?.bypassable !== false,
+          bypassed: Boolean(zone?.bypassed)
+        };
+      })
+      .filter((zone) => Boolean(zone.deviceId));
+  }
+
   getSecuritySettingsFromAlarm(alarm) {
     const enabledPlatforms = this.getEnabledPlatforms(alarm);
 
@@ -674,6 +693,7 @@ class SecurityAlarmService {
       entryDelaySeconds: this.normalizeExitDelaySeconds(alarm?.entryDelay, 30),
       pinSettings: this.getPinSettings(alarm),
       pins: this.getSanitizedPins(alarm),
+      zones: this.getSanitizedSecurityZones(alarm),
       sirenOutputs: this.getSanitizedSirenOutputs(alarm)
     };
   }
@@ -950,6 +970,98 @@ class SecurityAlarmService {
     }
   }
 
+  getZoneMonitoringModes(zone, sensorType = 'security') {
+    if (!zone) {
+      return {
+        armedStayEnabled: false,
+        armedAwayEnabled: false
+      };
+    }
+
+    const legacyEnabled = zone.enabled !== false;
+    const hasExplicitStay = typeof zone.armedStayEnabled === 'boolean';
+    const hasExplicitAway = typeof zone.armedAwayEnabled === 'boolean';
+
+    return {
+      armedStayEnabled: hasExplicitStay ? zone.armedStayEnabled === true : legacyEnabled && sensorType !== 'motion',
+      armedAwayEnabled: hasExplicitAway ? zone.armedAwayEnabled === true : legacyEnabled
+    };
+  }
+
+  getZoneMonitoredModes(zone, sensorType = 'security') {
+    const modes = this.getZoneMonitoringModes(zone, sensorType);
+    return [
+      modes.armedStayEnabled ? 'armedStay' : null,
+      modes.armedAwayEnabled ? 'armedAway' : null
+    ].filter(Boolean);
+  }
+
+  normalizeSecurityZoneRecord(zoneData = {}, existingZone = null) {
+    const deviceId = normalizeString(zoneData.deviceId ?? existingZone?.deviceId);
+    if (!deviceId) {
+      return null;
+    }
+
+    const deviceType = normalizeString(zoneData.deviceType ?? existingZone?.deviceType) || 'security';
+    const legacyEnabled = typeof zoneData.enabled === 'boolean'
+      ? zoneData.enabled
+      : existingZone?.enabled !== false;
+    const armedStayEnabled = typeof zoneData.armedStayEnabled === 'boolean'
+      ? zoneData.armedStayEnabled
+      : typeof existingZone?.armedStayEnabled === 'boolean'
+        ? existingZone.armedStayEnabled
+        : legacyEnabled && deviceType !== 'motion';
+    const armedAwayEnabled = typeof zoneData.armedAwayEnabled === 'boolean'
+      ? zoneData.armedAwayEnabled
+      : typeof existingZone?.armedAwayEnabled === 'boolean'
+        ? existingZone.armedAwayEnabled
+        : legacyEnabled;
+
+    return {
+      name: normalizeString(zoneData.name ?? existingZone?.name) || 'Security zone',
+      deviceId,
+      deviceType,
+      enabled: armedStayEnabled || armedAwayEnabled,
+      armedStayEnabled,
+      armedAwayEnabled,
+      bypassable: typeof zoneData.bypassable === 'boolean'
+        ? zoneData.bypassable
+        : existingZone?.bypassable !== false,
+      bypassed: typeof zoneData.bypassed === 'boolean'
+        ? zoneData.bypassed
+        : Boolean(existingZone?.bypassed)
+    };
+  }
+
+  normalizeSecurityZoneRecords(zones = [], existingZones = []) {
+    if (!Array.isArray(zones)) {
+      throw buildSecurityAlarmError('Security zones must be an array', 400);
+    }
+
+    const existingByDeviceId = new Map(
+      (Array.isArray(existingZones) ? existingZones : [])
+        .map((zone) => [normalizeString(zone?.deviceId), zone])
+        .filter(([deviceId]) => Boolean(deviceId))
+    );
+    const normalizedByDeviceId = new Map();
+
+    zones.forEach((zoneData) => {
+      const deviceId = normalizeString(zoneData?.deviceId);
+      if (!deviceId) {
+        return;
+      }
+
+      const normalized = this.normalizeSecurityZoneRecord(zoneData, existingByDeviceId.get(deviceId));
+      if (!normalized) {
+        return;
+      }
+
+      normalizedByDeviceId.set(deviceId, normalized);
+    });
+
+    return Array.from(normalizedByDeviceId.values());
+  }
+
   buildSecuritySensorSummary({ device, zone }) {
     const localDeviceId = normalizeString(device?._id?.toString?.() || device?._id || device?.id);
     const resolvedDeviceId = localDeviceId || normalizeString(zone?.deviceId);
@@ -960,7 +1072,9 @@ class SecurityAlarmService {
     const batteryState = getBatteryState(batteryLevel);
     const isAvailable = Boolean(device);
     const isOnline = isAvailable ? isSecurityDeviceOnline(device) : false;
-    const isMonitored = Boolean(zone?.enabled);
+    const monitoringModes = this.getZoneMonitoringModes(zone, sensorType);
+    const monitoredModes = this.getZoneMonitoredModes(zone, sensorType);
+    const isMonitored = monitoredModes.length > 0;
     const isBypassed = Boolean(zone?.bypassed);
     const isActive = isAvailable ? Boolean(device?.status) : false;
     const requiresAttention = !isAvailable || !isOnline || batteryState === 'low' || batteryState === 'critical';
@@ -968,10 +1082,14 @@ class SecurityAlarmService {
     let monitorState = 'Available';
     if (!isAvailable && zone) {
       monitorState = 'Missing';
-    } else if (zone?.enabled && zone?.bypassed) {
+    } else if (isMonitored && zone?.bypassed) {
       monitorState = 'Bypassed';
-    } else if (zone?.enabled) {
-      monitorState = 'Monitored';
+    } else if (isMonitored && monitoredModes.length === 2) {
+      monitorState = 'Stay + Away';
+    } else if (monitoringModes.armedStayEnabled) {
+      monitorState = 'Stay';
+    } else if (monitoringModes.armedAwayEnabled) {
+      monitorState = 'Away';
     } else if (zone) {
       monitorState = 'Disabled';
     }
@@ -1005,6 +1123,9 @@ class SecurityAlarmService {
       isAvailable,
       isOnline,
       isMonitored,
+      armedStayEnabled: monitoringModes.armedStayEnabled,
+      armedAwayEnabled: monitoringModes.armedAwayEnabled,
+      monitoredModes,
       isBypassed,
       monitorState,
       batteryLevel,
@@ -1234,13 +1355,15 @@ class SecurityAlarmService {
     }) || null;
   }
 
-  shouldMonitorSensorTypeForAlarmState(alarmState, sensorType) {
+  shouldMonitorSensorTypeForAlarmState(alarmState, sensorType, zone = null) {
+    const modes = this.getZoneMonitoringModes(zone, sensorType);
+
     if (alarmState === 'armedAway') {
-      return true;
+      return modes.armedAwayEnabled;
     }
 
     if (alarmState === 'armedStay') {
-      return sensorType !== 'motion';
+      return modes.armedStayEnabled;
     }
 
     return false;
@@ -1276,7 +1399,7 @@ class SecurityAlarmService {
       return { triggered: false, reason: 'sensor_unavailable', alarmState, zoneName: sensor.name };
     }
 
-    if (!this.shouldMonitorSensorTypeForAlarmState(alarmState, sensor.sensorType)) {
+    if (!this.shouldMonitorSensorTypeForAlarmState(alarmState, sensor.sensorType, zone)) {
       return {
         triggered: false,
         reason: 'sensor_type_not_monitored_for_mode',
@@ -2203,7 +2326,8 @@ class SecurityAlarmService {
       console.log(`SecurityAlarmService: Adding zone: ${zoneData.name}`);
       
       const alarm = await SecurityAlarm.getMainAlarm();
-      await alarm.addZone(zoneData);
+      const normalizedZone = this.normalizeSecurityZoneRecord(zoneData);
+      await alarm.addZone(normalizedZone);
       
       console.log('SecurityAlarmService: Successfully added zone');
       return alarm;
@@ -2254,6 +2378,8 @@ class SecurityAlarmService {
         remappedZoneCount += 1;
         if (targetZone && targetZone !== zone) {
           targetZone.enabled = targetZone.enabled !== false || zone.enabled !== false;
+          targetZone.armedStayEnabled = targetZone.armedStayEnabled === true || zone.armedStayEnabled === true;
+          targetZone.armedAwayEnabled = targetZone.armedAwayEnabled === true || zone.armedAwayEnabled === true;
           targetZone.bypassed = Boolean(targetZone.bypassed || zone.bypassed);
           targetZone.bypassable = targetZone.bypassable !== false || zone.bypassable !== false;
           if (!normalizeString(targetZone.name)) {
@@ -2529,6 +2655,13 @@ class SecurityAlarmService {
         alarm.sirenOutputs = this.normalizeSirenOutputRecords(settings.sirenOutputs ?? settings.alarmOutputs);
       }
 
+      if (
+        Object.prototype.hasOwnProperty.call(settings, 'zones')
+        || Object.prototype.hasOwnProperty.call(settings, 'sensorZones')
+      ) {
+        alarm.zones = this.normalizeSecurityZoneRecords(settings.zones ?? settings.sensorZones, alarm.zones);
+      }
+
       const nextPinSettings = this.getPinSettings(alarm);
       if ((nextPinSettings.requireForArm || nextPinSettings.requireForDisarm) && !this.hasEnabledPin(alarm)) {
         throw buildSecurityAlarmError('At least one enabled security PIN is required before PIN enforcement can be enabled', 400);
@@ -2544,6 +2677,7 @@ class SecurityAlarmService {
         previousSettings.pinSettings.requireForArm !== updatedSettings.pinSettings.requireForArm ||
         previousSettings.pinSettings.requireForDisarm !== updatedSettings.pinSettings.requireForDisarm ||
         JSON.stringify(previousSettings.pins) !== JSON.stringify(updatedSettings.pins) ||
+        JSON.stringify(previousSettings.zones) !== JSON.stringify(updatedSettings.zones) ||
         JSON.stringify(previousSettings.sirenOutputs) !== JSON.stringify(updatedSettings.sirenOutputs)
       ) {
         requestSecurityAlarmAutomationEvaluation('security settings updated');

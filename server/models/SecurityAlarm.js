@@ -94,6 +94,12 @@ const SecurityAlarmSchema = new mongoose.Schema({
       type: Boolean,
       default: true
     },
+    armedStayEnabled: {
+      type: Boolean
+    },
+    armedAwayEnabled: {
+      type: Boolean
+    },
     bypassable: {
       type: Boolean,
       default: true
