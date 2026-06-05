@@ -1694,16 +1694,42 @@ class SecurityAlarmService {
         const localDeviceId = getLocalDeviceId(device);
         const deviceName = normalizeString(device?.name) || localDeviceId || 'Unnamed HomeBrain alarm output';
 
-        await deviceService.controlDevice(localDeviceId, 'turn_on', true, {
-          skipIntegrationRefresh: true,
-          skipPostActionVerification: true,
-          command: {
-            source: 'security_alarm',
-            reason: 'trigger_alarm',
-            priority: 'critical'
-          }
+      const attempts = [];
+      if (device?.properties?.supportsSirenSound === true) {
+        attempts.push({
+          action: 'setsirensound',
+          value: device?.properties?.sirenSound ?? null,
+          via: 'homebrain.setsirensound'
         });
-        return { deviceId: localDeviceId, name: deviceName, via: 'homebrain.turn_on' };
+      }
+      attempts.push({ action: 'turn_on', value: true, via: 'homebrain.turn_on' });
+
+      let previousError = null;
+      for (const attempt of attempts) {
+        try {
+          await deviceService.controlDevice(localDeviceId, attempt.action, attempt.value, {
+            skipIntegrationRefresh: true,
+            skipPostActionVerification: true,
+            command: {
+              source: 'security_alarm',
+              reason: 'trigger_alarm',
+              priority: 'critical',
+              ...(previousError ? {
+                fallbackFrom: previousError.action,
+                fallbackError: previousError.message
+              } : {})
+            }
+          });
+          return { deviceId: localDeviceId, name: deviceName, via: attempt.via };
+        } catch (error) {
+          previousError = {
+            action: attempt.action,
+            message: error?.message || String(error || 'Unknown HomeBrain alarm output error')
+          };
+        }
+      }
+
+      throw new Error(previousError?.message || 'Unknown HomeBrain alarm output error');
       }));
 
       const sounded = [];

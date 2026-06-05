@@ -1441,7 +1441,9 @@ test('triggerAlarm sounds selected HomeBrain siren outputs only', async (t) => {
         properties: {
           source: 'homebrain-zwave',
           homebrainDirect: { protocol: 'zwave', nodeId: 8 },
-          supportsAlarm: true
+          supportsAlarm: true,
+          supportsSirenSound: true,
+          sirenSound: 9
         }
       },
       {
@@ -1468,12 +1470,90 @@ test('triggerAlarm sounds selected HomeBrain siren outputs only', async (t) => {
   assert.equal(result.saveCount, 1);
   assert.deepEqual(capturedControls, [{
     deviceId: 'selected-siren',
-    action: 'turn_on',
-    value: true,
+    action: 'setsirensound',
+    value: 9,
     reason: 'trigger_alarm'
   }]);
   assert.equal(result.lastSirenTriggerResult.homebrain.soundedOutputs.length, 1);
   assert.equal(result.lastSirenTriggerResult.homebrain.soundedOutputs[0].deviceId, 'selected-siren');
+  assert.equal(result.lastSirenTriggerResult.failedOutputs.length, 0);
+});
+
+test('triggerAlarm falls back to turn_on when siren sound command fails', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+  const originalDeviceFind = Device.find;
+  const originalControlDevice = deviceService.controlDevice;
+  const alarm = {
+    alarmState: 'armedStay',
+    enabledPlatforms: { homebrain: true, smartthings: false },
+    sirenOutputs: [{ deviceId: 'fallback-siren', enabled: true }],
+    saveCount: 0,
+    trigger: function trigger(triggeredZone) {
+      this.alarmState = 'triggered';
+      this.lastTriggered = new Date('2026-05-07T14:00:00.000Z');
+      this.triggeredZone = triggeredZone;
+    },
+    save: async function save() {
+      this.saveCount += 1;
+    }
+  };
+  const capturedControls = [];
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+    Device.find = originalDeviceFind;
+    deviceService.controlDevice = originalControlDevice;
+  });
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+  Device.find = () => ({
+    lean: async () => [{
+      _id: 'fallback-siren',
+      name: 'Fallback HomeBrain Siren',
+      type: 'siren',
+      properties: {
+        source: 'homebrain-zwave',
+        homebrainDirect: { protocol: 'zwave', nodeId: 8 },
+        supportsAlarm: true,
+        supportsSirenSound: true,
+        sirenSound: 9
+      }
+    }]
+  });
+  deviceService.controlDevice = async (deviceId, action, value, options = {}) => {
+    capturedControls.push({
+      deviceId,
+      action,
+      value,
+      reason: options.command?.reason,
+      fallbackFrom: options.command?.fallbackFrom
+    });
+    if (action === 'setsirensound') {
+      throw new Error('Siren sound command unavailable');
+    }
+    return { _id: deviceId };
+  };
+
+  const result = await securityAlarmService.triggerAlarm(null, { triggeredZoneName: 'Front Door' });
+
+  assert.deepEqual(capturedControls, [
+    {
+      deviceId: 'fallback-siren',
+      action: 'setsirensound',
+      value: 9,
+      reason: 'trigger_alarm',
+      fallbackFrom: undefined
+    },
+    {
+      deviceId: 'fallback-siren',
+      action: 'turn_on',
+      value: true,
+      reason: 'trigger_alarm',
+      fallbackFrom: 'setsirensound'
+    }
+  ]);
+  assert.equal(result.lastSirenTriggerResult.homebrain.soundedOutputs.length, 1);
+  assert.equal(result.lastSirenTriggerResult.homebrain.soundedOutputs[0].via, 'homebrain.turn_on');
   assert.equal(result.lastSirenTriggerResult.failedOutputs.length, 0);
 });
 
