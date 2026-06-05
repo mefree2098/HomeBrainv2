@@ -2246,7 +2246,7 @@ supportsSirenSoundControl(device) {
     );
   },
 
-async setZWaveSirenVolume(device, node, rawValue, updateData = {}) {
+  async setZWaveSirenVolume(device, node, rawValue, updateData = {}) {
     const zwave = require('zwave-js');
     const command = this.normalizeSirenVolumeCommand(device, rawValue);
 
@@ -2274,7 +2274,45 @@ async setZWaveSirenVolume(device, node, rawValue, updateData = {}) {
     };
   },
 
-async setZWaveSirenSound(device, node, rawValue, updateData = {}) {
+  async ensureAudibleZWaveSirenVolume(device, node, updateData = {}) {
+    const currentVolume = normalizeInteger(device?.properties?.sirenVolume);
+    if (currentVolume === null || currentVolume > 0 || !this.supportsSirenVolumeControl(device)) {
+      return;
+    }
+
+    const parameter = getSirenVolumeConfigParameterFromCatalog(device?.properties?.directRadioCatalog);
+    const range = getSirenVolumeRangeFromParameter(parameter);
+    const optionValues = getSirenVolumeOptionsFromParameter(parameter)
+      .map((option) => normalizeInteger(option?.value))
+      .filter((value) => value !== null && value > 0);
+    const defaultVolume = normalizeInteger(parameter?.defaultValue);
+    const maxVolume = normalizeInteger(range?.max) ?? normalizeInteger(parameter?.maxValue) ?? 100;
+    const targetVolume = optionValues.length > 0
+      ? Math.max(...optionValues)
+      : Math.max(1, Math.min(maxVolume, defaultVolume && defaultVolume > 0 ? defaultVolume : maxVolume));
+
+    try {
+      await this.setZWaveSirenVolume(device, node, targetVolume, updateData);
+      this.log('info', 'zwave', 'Raised muted siren volume before sounding alarm', {
+        deviceId: device?._id?.toString?.() || null,
+        name: device?.name || null,
+        nodeId: node?.id || device?.properties?.homebrainDirect?.nodeId || null,
+        previousVolume: currentVolume,
+        targetVolume
+      });
+    } catch (error) {
+      this.log('warn', 'zwave', 'Unable to raise muted siren volume before sounding alarm', {
+        deviceId: device?._id?.toString?.() || null,
+        name: device?.name || null,
+        nodeId: node?.id || device?.properties?.homebrainDirect?.nodeId || null,
+        previousVolume: currentVolume,
+        targetVolume,
+        error: error.message
+      });
+    }
+  },
+
+  async setZWaveSirenSound(device, node, rawValue, updateData = {}) {
     const zwave = require('zwave-js');
     const command = this.normalizeSirenSoundCommand(device, rawValue);
 
@@ -2401,6 +2439,9 @@ async controlZWaveDevice(device, normalizedAction, commandValue, updateData = {}
         case 'turnoff': {
           const target = normalizedAction === 'toggle' ? Boolean(commandValue) : normalizedAction === 'turnon';
           if (device?.type === 'siren') {
+            if (target) {
+              await this.ensureAudibleZWaveSirenVolume(device, node, updateData);
+            }
             await this.controlZWaveSiren(node, target);
           } else if (device?.properties?.supportsBrightness || device?.brightness > 0) {
             await this.setZWaveValue(node, zwave.MultilevelSwitchCCValues.targetValue, target ? Math.max(1, Number(device?.brightness) || 99) : 0);
@@ -2451,6 +2492,7 @@ async controlZWaveDevice(device, normalizedAction, commandValue, updateData = {}
         case 'turnonalarm':
         case 'soundalarm':
           if (device?.properties?.supportsAlarm || device?.type === 'siren') {
+            await this.ensureAudibleZWaveSirenVolume(device, node, updateData);
             await this.controlZWaveSiren(node, true);
           } else {
             throw new Error('Alarm sound control is not available for this Z-Wave device');

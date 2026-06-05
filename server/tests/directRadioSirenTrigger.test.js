@@ -23,6 +23,7 @@ const BINARY_CC = zwave.BinarySwitchCCValues.targetValue.id.commandClass;
 const SOUND_CC = zwave.SoundSwitchCCValues.toneId.id.commandClass;
 const MULTILEVEL_CC = zwave.MultilevelSwitchCCValues.targetValue.id.commandClass;
 const BASIC_CC = zwave.BasicCCValues.targetValue.id.commandClass;
+const CONFIGURATION_CC = zwave.ConfigurationCCValues.paramInformation(5).id.commandClass;
 
 function sirenDevice() {
   return {
@@ -158,6 +159,37 @@ test('alarmon sounds a Z-Wave siren through the trigger path', async () => {
   assert.equal(setCalls[0].valueId.commandClass, SOUND_CC);
   assert.equal(setCalls[0].valueId.property, 'toneId');
   assert.equal(setCalls[0].value, 255);
+});
+
+test('alarmon raises a muted siren volume before sounding', async () => {
+  const service = new DirectRadioService();
+  const setCalls = [];
+  const device = sirenDevice();
+  device.properties.supportsSirenVolume = true;
+  device.properties.sirenVolume = 0;
+  device.properties.directRadioCatalog = {
+    configParameters: [
+      {
+        parameter: 5,
+        label: 'Siren Playback Volume',
+        minValue: 0,
+        maxValue: 100,
+        defaultValue: 100
+      }
+    ]
+  };
+  const updateData = {};
+  service.getDirectNodeForDevice = () => nodeWithCommandClasses([CONFIGURATION_CC, SOUND_CC], setCalls);
+
+  await service.controlZWaveDevice(device, 'alarmon', null, updateData);
+
+  assert.equal(setCalls.length, 2);
+  assert.equal(setCalls[0].valueId.commandClass, CONFIGURATION_CC);
+  assert.equal(setCalls[0].value, 100);
+  assert.equal(setCalls[1].valueId.commandClass, SOUND_CC);
+  assert.equal(setCalls[1].valueId.property, 'toneId');
+  assert.equal(setCalls[1].value, 255);
+  assert.equal(updateData.properties.sirenVolume, 100);
 });
 
 test('Multilevel-only siren falls back to Multilevel Switch', async () => {
