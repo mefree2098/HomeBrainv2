@@ -1218,6 +1218,94 @@ class SecurityAlarmService {
     return securitySensors;
   }
 
+  getSecurityZoneForDevice(alarm, device) {
+    const lookupKeys = new Set(getDeviceLookupKeys(device));
+    if (lookupKeys.size === 0 || !Array.isArray(alarm?.zones)) {
+      return null;
+    }
+
+    return alarm.zones.find((zone) => {
+      const zoneKeys = uniqueStrings([
+        normalizeString(zone?.deviceId),
+        normalizeString(zone?.localDeviceId),
+        normalizeString(zone?.smartThingsDeviceId)
+      ]);
+      return zoneKeys.some((key) => lookupKeys.has(key));
+    }) || null;
+  }
+
+  shouldMonitorSensorTypeForAlarmState(alarmState, sensorType) {
+    if (alarmState === 'armedAway') {
+      return true;
+    }
+
+    if (alarmState === 'armedStay') {
+      return sensorType !== 'motion';
+    }
+
+    return false;
+  }
+
+  async evaluateNativeSecuritySensorUpdate(device, options = {}) {
+    const alarm = options.alarm || await SecurityAlarm.getMainAlarm();
+    const alarmState = normalizeString(alarm?.alarmState);
+
+    if (!['armedStay', 'armedAway'].includes(alarmState)) {
+      return { triggered: false, reason: 'alarm_not_armed', alarmState };
+    }
+
+    const zone = this.getSecurityZoneForDevice(alarm, device);
+    if (!zone) {
+      return { triggered: false, reason: 'device_not_security_zone', alarmState };
+    }
+
+    const sensor = this.buildSecuritySensorSummary({ device, zone });
+    const previousSensor = options.previousDevice
+      ? this.buildSecuritySensorSummary({ device: options.previousDevice, zone })
+      : null;
+
+    if (!previousSensor) {
+      return { triggered: false, reason: 'missing_previous_sensor_state', alarmState, zoneName: sensor.name };
+    }
+
+    if (!sensor.isMonitored || sensor.isBypassed) {
+      return { triggered: false, reason: 'zone_not_monitored', alarmState, zoneName: sensor.name };
+    }
+
+    if (!sensor.isAvailable || !sensor.isOnline) {
+      return { triggered: false, reason: 'sensor_unavailable', alarmState, zoneName: sensor.name };
+    }
+
+    if (!this.shouldMonitorSensorTypeForAlarmState(alarmState, sensor.sensorType)) {
+      return {
+        triggered: false,
+        reason: 'sensor_type_not_monitored_for_mode',
+        alarmState,
+        zoneName: sensor.name,
+        sensorType: sensor.sensorType
+      };
+    }
+
+    if (!sensor.isActive) {
+      return { triggered: false, reason: 'sensor_inactive', alarmState, zoneName: sensor.name };
+    }
+
+    if (previousSensor?.isActive === true) {
+      return { triggered: false, reason: 'sensor_already_active', alarmState, zoneName: sensor.name };
+    }
+
+    const triggeredAlarm = await this.triggerAlarm(zone, {
+      triggeredZoneName: sensor.name || zone.name || normalizeString(device?.name)
+    });
+
+    return {
+      triggered: true,
+      alarmState: triggeredAlarm.alarmState,
+      zoneName: sensor.name,
+      sensorType: sensor.sensorType
+    };
+  }
+
   getDoorLocks(devices = [], options = {}) {
     const enabledPlatforms = options.enabledPlatforms || null;
     const doorLocks = devices
@@ -1535,6 +1623,43 @@ class SecurityAlarmService {
     }
   }
 
+  async silenceHomeBrainAlarmOutputDevice(device) {
+    const localDeviceId = getLocalDeviceId(device);
+    const deviceName = normalizeString(device?.name) || localDeviceId || 'Unnamed HomeBrain alarm output';
+    const attempts = [
+      { action: 'alarm_off', value: null, via: 'homebrain.alarm_off' },
+      { action: 'turn_off', value: false, via: 'homebrain.turn_off' },
+      { action: 'mute', value: true, via: 'homebrain.mute' }
+    ];
+    let previousError = null;
+
+    for (const attempt of attempts) {
+      try {
+        await deviceService.controlDevice(localDeviceId, attempt.action, attempt.value, {
+          skipIntegrationRefresh: true,
+          skipPostActionVerification: true,
+          command: {
+            source: 'security_alarm',
+            reason: 'dismiss_triggered_alarm',
+            priority: 'critical',
+            ...(previousError ? {
+              fallbackFrom: previousError.action,
+              fallbackError: previousError.message
+            } : {})
+          }
+        });
+        return { deviceId: localDeviceId, name: deviceName, via: attempt.via };
+      } catch (error) {
+        previousError = {
+          action: attempt.action,
+          message: error?.message || String(error || 'Unknown HomeBrain alarm output error')
+        };
+      }
+    }
+
+    throw new Error(previousError?.message || 'Unknown HomeBrain alarm output error');
+  }
+
   async silenceHomeBrainAlarmOutputs(alarm = null) {
     try {
       const homeBrainDevices = await Device.find(
@@ -1556,36 +1681,9 @@ class SecurityAlarmService {
         return { silenced: [], failed: [] };
       }
 
-      const results = await Promise.allSettled(alarmOutputs.map(async (device) => {
-        const localDeviceId = getLocalDeviceId(device);
-        const deviceName = normalizeString(device?.name) || localDeviceId || 'Unnamed HomeBrain alarm output';
-
-        try {
-          await deviceService.controlDevice(localDeviceId, 'alarm_off', null, {
-            skipIntegrationRefresh: true,
-            skipPostActionVerification: true,
-            command: {
-              source: 'security_alarm',
-              reason: 'dismiss_triggered_alarm',
-              priority: 'critical'
-            }
-          });
-          return { deviceId: localDeviceId, name: deviceName, via: 'homebrain.alarm_off' };
-        } catch (alarmOffError) {
-          await deviceService.controlDevice(localDeviceId, 'turn_off', false, {
-            skipIntegrationRefresh: true,
-            skipPostActionVerification: true,
-            command: {
-              source: 'security_alarm',
-              reason: 'dismiss_triggered_alarm',
-              priority: 'critical',
-              fallbackFrom: 'alarm_off',
-              fallbackError: alarmOffError.message
-            }
-          });
-          return { deviceId: localDeviceId, name: deviceName, via: 'homebrain.turn_off' };
-        }
-      }));
+      const results = await Promise.allSettled(
+        alarmOutputs.map((device) => this.silenceHomeBrainAlarmOutputDevice(device))
+      );
 
       const silenced = [];
       const failed = [];
