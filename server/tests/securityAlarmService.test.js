@@ -143,7 +143,10 @@ test('getAlarmStatus returns security sensors and door lock summaries', async (t
   assert.ok(frontDoor);
   assert.equal(frontDoor.sensorType, 'doorWindow');
   assert.equal(frontDoor.stateLabel, 'Open');
-  assert.equal(frontDoor.monitorState, 'Monitored');
+  assert.equal(frontDoor.monitorState, 'Stay + Away');
+  assert.equal(frontDoor.armedStayEnabled, true);
+  assert.equal(frontDoor.armedAwayEnabled, true);
+  assert.deepEqual(frontDoor.monitoredModes, ['armedStay', 'armedAway']);
   assert.equal(frontDoor.batteryState, 'low');
 
   const hallMotion = status.sensors.find((sensor) => sensor.deviceId === 'device-2');
@@ -395,7 +398,9 @@ test('getAlarmStatus resolves retired SmartThings security zones to native HomeB
   assert.equal(status.sensors[0].deviceId, 'native-garage-contact');
   assert.equal(status.sensors[0].zoneDeviceId, 'smartthings-garage-source');
   assert.equal(status.sensors[0].sourceLabel, 'HomeBrain Zigbee');
-  assert.equal(status.sensors[0].monitorState, 'Monitored');
+  assert.equal(status.sensors[0].monitorState, 'Stay + Away');
+  assert.equal(status.sensors[0].armedStayEnabled, true);
+  assert.equal(status.sensors[0].armedAwayEnabled, true);
   assert.equal(status.sensors[0].stateLabel, 'Open');
 });
 
@@ -1522,6 +1527,92 @@ test('evaluateNativeSecuritySensorUpdate triggers monitored contact sensor while
   assert.equal(capturedTriggers.length, 1);
   assert.equal(capturedTriggers[0].zone.name, 'Back Door');
   assert.equal(capturedTriggers[0].options.triggeredZoneName, 'Back Door');
+});
+
+test('evaluateNativeSecuritySensorUpdate respects per-mode monitored zone flags', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+  const originalTriggerAlarm = securityAlarmService.triggerAlarm;
+  const alarm = {
+    alarmState: 'armedStay',
+    zones: [{
+      name: 'Back Door',
+      deviceId: 'back-door-sensor',
+      deviceType: 'doorWindow',
+      enabled: true,
+      armedStayEnabled: false,
+      armedAwayEnabled: true,
+      bypassed: false
+    }]
+  };
+  const capturedTriggers = [];
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+    securityAlarmService.triggerAlarm = originalTriggerAlarm;
+  });
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+  securityAlarmService.triggerAlarm = async (zone, options) => {
+    capturedTriggers.push({ zone, options });
+    return { alarmState: 'triggered' };
+  };
+
+  const activeDoor = {
+    _id: 'back-door-sensor',
+    name: 'Back Door',
+    type: 'sensor',
+    status: true,
+    isOnline: true,
+    properties: { source: 'homebrain-zigbee' }
+  };
+  const previousDoor = {
+    ...activeDoor,
+    status: false
+  };
+
+  const stayResult = await securityAlarmService.evaluateNativeSecuritySensorUpdate(activeDoor, {
+    previousDevice: previousDoor
+  });
+
+  assert.equal(stayResult.triggered, false);
+  assert.equal(stayResult.reason, 'sensor_type_not_monitored_for_mode');
+  assert.equal(capturedTriggers.length, 0);
+
+  alarm.alarmState = 'armedAway';
+  const awayResult = await securityAlarmService.evaluateNativeSecuritySensorUpdate(activeDoor, {
+    previousDevice: previousDoor
+  });
+
+  assert.equal(awayResult.triggered, true);
+  assert.equal(awayResult.zoneName, 'Back Door');
+  assert.equal(capturedTriggers.length, 1);
+});
+
+test('shouldMonitorSensorTypeForAlarmState preserves legacy motion fallback and explicit mode flags', () => {
+  assert.equal(
+    securityAlarmService.shouldMonitorSensorTypeForAlarmState('armedStay', 'motion', { enabled: true }),
+    false
+  );
+  assert.equal(
+    securityAlarmService.shouldMonitorSensorTypeForAlarmState('armedAway', 'motion', { enabled: true }),
+    true
+  );
+  assert.equal(
+    securityAlarmService.shouldMonitorSensorTypeForAlarmState('armedStay', 'motion', {
+      enabled: true,
+      armedStayEnabled: true,
+      armedAwayEnabled: false
+    }),
+    true
+  );
+  assert.equal(
+    securityAlarmService.shouldMonitorSensorTypeForAlarmState('armedAway', 'motion', {
+      enabled: true,
+      armedStayEnabled: true,
+      armedAwayEnabled: false
+    }),
+    false
+  );
 });
 
 test('silenceHomeBrainAlarmOutputDevice falls back to mute after off actions fail', async (t) => {

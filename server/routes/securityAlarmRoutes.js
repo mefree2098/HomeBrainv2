@@ -301,6 +301,8 @@ router.put('/settings', securityAlarmActionRateLimit, auth, async (req, res) => 
       entryDelay: req.body?.entryDelay,
       pinSettings: req.body?.pinSettings,
       pins: req.body?.pins,
+      zones: req.body?.zones,
+      sensorZones: req.body?.sensorZones,
       sirenOutputs: req.body?.sirenOutputs,
       alarmOutputs: req.body?.alarmOutputs
     });

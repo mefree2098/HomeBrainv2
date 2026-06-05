@@ -195,6 +195,87 @@ private struct SecurityPinDraft: Identifiable, Equatable {
     }
 }
 
+private struct SecurityMonitoringSensorDraft: Identifiable, Equatable {
+    var id: String
+    var deviceId: String
+    var localDeviceId: String?
+    var smartThingsDeviceId: String?
+    var zoneDeviceId: String?
+    var name: String
+    var room: String?
+    var source: String?
+    var sourceLabel: String?
+    var sensorType: String
+    var sensorTypeLabel: String?
+    var stateLabel: String?
+    var isOnline: Bool
+    var isBypassed: Bool
+    var bypassable: Bool
+    var armedStayEnabled: Bool
+    var armedAwayEnabled: Bool
+
+    static func from(_ object: [String: Any]) -> SecurityMonitoringSensorDraft? {
+        let resolvedID = [
+            JSON.string(object, "zoneDeviceId"),
+            JSON.string(object, "localDeviceId"),
+            JSON.string(object, "deviceId"),
+            JSON.string(object, "smartThingsDeviceId")
+        ].first { !$0.isEmpty } ?? ""
+
+        guard !resolvedID.isEmpty else {
+            return nil
+        }
+
+        let monitoredModes = JSON.stringArray(object["monitoredModes"])
+        let resolvedSensorType = JSON.string(object, "sensorType", fallback: "security")
+
+        return SecurityMonitoringSensorDraft(
+            id: resolvedID,
+            deviceId: JSON.string(object, "deviceId", fallback: resolvedID),
+            localDeviceId: JSON.optionalString(object, "localDeviceId"),
+            smartThingsDeviceId: JSON.optionalString(object, "smartThingsDeviceId"),
+            zoneDeviceId: JSON.optionalString(object, "zoneDeviceId"),
+            name: JSON.string(object, "name", fallback: "Unnamed security sensor"),
+            room: JSON.optionalString(object, "room"),
+            source: JSON.optionalString(object, "source"),
+            sourceLabel: JSON.optionalString(object, "sourceLabel"),
+            sensorType: resolvedSensorType.isEmpty ? "security" : resolvedSensorType,
+            sensorTypeLabel: JSON.optionalString(object, "sensorTypeLabel"),
+            stateLabel: JSON.optionalString(object, "stateLabel"),
+            isOnline: JSON.bool(object, "isOnline", fallback: true),
+            isBypassed: JSON.bool(object, "isBypassed"),
+            bypassable: JSON.bool(object, "bypassable", fallback: true),
+            armedStayEnabled: JSON.bool(object, "armedStayEnabled") || monitoredModes.contains("armedStay"),
+            armedAwayEnabled: JSON.bool(object, "armedAwayEnabled") || monitoredModes.contains("armedAway")
+        )
+    }
+
+    var detailText: String {
+        [
+            room,
+            sensorTypeLabel,
+            sourceLabel ?? source,
+            isOnline ? stateLabel : "Offline"
+        ]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty }
+            .joined(separator: " / ")
+    }
+
+    var payload: [String: Any] {
+        [
+            "name": name.isEmpty ? "Security zone" : name,
+            "deviceId": zoneDeviceId ?? localDeviceId ?? deviceId,
+            "deviceType": sensorType.isEmpty ? "security" : sensorType,
+            "enabled": armedStayEnabled || armedAwayEnabled,
+            "armedStayEnabled": armedStayEnabled,
+            "armedAwayEnabled": armedAwayEnabled,
+            "bypassable": bypassable,
+            "bypassed": isBypassed
+        ]
+    }
+}
+
 struct SettingsView: View {
     let previewMode: Bool
 
@@ -248,6 +329,7 @@ struct SettingsView: View {
     @State private var securityRequirePinForArm = false
     @State private var securityRequirePinForDisarm = false
     @State private var securityPinDrafts: [SecurityPinDraft] = []
+    @State private var securityMonitoringSensors: [SecurityMonitoringSensorDraft] = []
     @State private var autoDiscoveryEnabled = false
 
     @State private var llmProvider = "openai"
@@ -815,6 +897,35 @@ struct SettingsView: View {
                 }
             }
             .pickerStyle(.menu)
+
+            Text("Alarm Monitoring")
+                .font(HBTypography.body(.headline))
+
+            if securityMonitoringSensors.isEmpty {
+                Text("No security sensors available.")
+                    .font(HBTypography.body(.footnote))
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(securityMonitoringSensors.indices, id: \.self) { index in
+                    let sensor = securityMonitoringSensors[index]
+                    VStack(alignment: .leading, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(sensor.name)
+                                .font(HBTypography.body(.subheadline))
+                                .fontWeight(.semibold)
+                            Text(sensor.detailText.isEmpty ? "Security sensor" : sensor.detailText)
+                                .font(HBTypography.body(.caption))
+                                .foregroundStyle(.secondary)
+                        }
+
+                        HStack {
+                            Toggle("Stay", isOn: $securityMonitoringSensors[index].armedStayEnabled)
+                            Toggle("Away", isOn: $securityMonitoringSensors[index].armedAwayEnabled)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
 
             Toggle("Require PIN to Arm", isOn: $securityRequirePinForArm)
             Toggle("Require PIN to Disarm", isOn: $securityRequirePinForDisarm)
@@ -1675,6 +1786,10 @@ struct SettingsView: View {
             securityRequirePinForArm = JSON.bool(pinSettings, "requireForArm")
             securityRequirePinForDisarm = JSON.bool(pinSettings, "requireForDisarm")
             securityPinDrafts = JSON.array(settings["pins"]).map(SecurityPinDraft.from)
+            let statusResponse = try await session.apiClient.get("/api/security-alarm/status")
+            let statusObject = JSON.object(statusResponse)
+            let status = JSON.object(statusObject["status"])
+            securityMonitoringSensors = JSON.array(status["sensors"]).compactMap(SecurityMonitoringSensorDraft.from)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1745,6 +1860,7 @@ struct SettingsView: View {
                 userInfo: [NSLocalizedDescriptionKey: "Add at least one enabled security PIN before requiring PIN entry."]
             )
         }
+        let zonesPayload = securityMonitoringSensors.map(\.payload)
 
         let payload: [String: Any] = [
             "enabledPlatforms": [
@@ -1756,7 +1872,8 @@ struct SettingsView: View {
                 "requireForArm": securityRequirePinForArm,
                 "requireForDisarm": securityRequirePinForDisarm
             ],
-            "pins": pinsPayload
+            "pins": pinsPayload,
+            "zones": zonesPayload
         ]
         let response = try await session.apiClient.put("/api/security-alarm/settings", body: payload)
         let object = JSON.object(response)
@@ -1772,6 +1889,10 @@ struct SettingsView: View {
         securityRequirePinForArm = JSON.bool(pinSettings, "requireForArm", fallback: securityRequirePinForArm)
         securityRequirePinForDisarm = JSON.bool(pinSettings, "requireForDisarm", fallback: securityRequirePinForDisarm)
         securityPinDrafts = JSON.array(settings["pins"]).map(SecurityPinDraft.from)
+        let statusResponse = try await session.apiClient.get("/api/security-alarm/status")
+        let statusObject = JSON.object(statusResponse)
+        let status = JSON.object(statusObject["status"])
+        securityMonitoringSensors = JSON.array(status["sensors"]).compactMap(SecurityMonitoringSensorDraft.from)
     }
 
     private func securityPinsPayload() throws -> [[String: Any]] {

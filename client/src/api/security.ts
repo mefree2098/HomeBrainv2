@@ -21,6 +21,17 @@ export type SecuritySirenOutputDraft = {
   enabled?: boolean;
 };
 
+export type SecurityZoneDraft = {
+  name: string;
+  deviceId: string;
+  deviceType: string;
+  enabled?: boolean;
+  armedStayEnabled?: boolean;
+  armedAwayEnabled?: boolean;
+  bypassable?: boolean;
+  bypassed?: boolean;
+};
+
 // Description: Get security alarm system information
 // Endpoint: GET /api/security-alarm
 // Request: {}
@@ -153,6 +164,7 @@ export const updateSecuritySettings = async (settings: {
   entryDelaySeconds?: number;
   pinSettings?: SecurityPinSettings;
   pins?: SecurityPinDraft[];
+  zones?: SecurityZoneDraft[];
   sirenOutputs?: SecuritySirenOutputDraft[];
 }) => {
   try {
@@ -173,6 +185,8 @@ export const addSecurityZone = async (zoneData: {
   deviceId: string;
   deviceType: string;
   enabled?: boolean;
+  armedStayEnabled?: boolean;
+  armedAwayEnabled?: boolean;
   bypassable?: boolean;
 }) => {
   try {

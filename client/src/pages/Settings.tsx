@@ -285,6 +285,26 @@ type SecuritySirenCandidate = {
   stateLabel?: string
 }
 
+type SecurityMonitoringSensor = {
+  deviceId: string
+  localDeviceId?: string | null
+  smartThingsDeviceId?: string | null
+  zoneDeviceId?: string | null
+  name: string
+  room?: string | null
+  source?: string | null
+  sourceLabel?: string | null
+  sensorType?: string | null
+  sensorTypeLabel?: string | null
+  stateLabel?: string | null
+  isAvailable?: boolean
+  isOnline?: boolean
+  isBypassed?: boolean
+  armedStayEnabled: boolean
+  armedAwayEnabled: boolean
+  bypassable?: boolean
+}
+
 const normalizeSecurityPinEntries = (pins: any): SecurityPinFormEntry[] => {
   if (!Array.isArray(pins)) {
     return []
@@ -362,6 +382,59 @@ const normalizeSecuritySirenOutputEntries = (outputs: any): string[] => {
 
 const getSecuritySirenSelectionKey = (candidate: SecuritySirenCandidate): string => (
   candidate.localDeviceId || candidate.deviceId || candidate.smartThingsDeviceId || ""
+)
+
+const getSecurityMonitoringSensorKey = (sensor: SecurityMonitoringSensor): string => (
+  sensor.zoneDeviceId || sensor.localDeviceId || sensor.deviceId || sensor.smartThingsDeviceId || ""
+)
+
+const normalizeSecurityMonitoringSensors = (sensors: any): SecurityMonitoringSensor[] => {
+  if (!Array.isArray(sensors)) {
+    return []
+  }
+
+  return sensors
+    .map((sensor) => {
+      const deviceId = sensor?.deviceId || sensor?.localDeviceId || sensor?.zoneDeviceId || sensor?.smartThingsDeviceId
+      const monitoredModes = Array.isArray(sensor?.monitoredModes) ? sensor.monitoredModes : []
+      return {
+        deviceId: typeof deviceId === "string" ? deviceId : "",
+        localDeviceId: sensor?.localDeviceId || null,
+        smartThingsDeviceId: sensor?.smartThingsDeviceId || null,
+        zoneDeviceId: sensor?.zoneDeviceId || null,
+        name: sensor?.name || "Unnamed security sensor",
+        room: sensor?.room || null,
+        source: sensor?.source || null,
+        sourceLabel: sensor?.sourceLabel || null,
+        sensorType: sensor?.sensorType || null,
+        sensorTypeLabel: sensor?.sensorTypeLabel || null,
+        stateLabel: sensor?.stateLabel || null,
+        isAvailable: sensor?.isAvailable !== false,
+        isOnline: sensor?.isOnline !== false,
+        isBypassed: sensor?.isBypassed === true,
+        bypassable: sensor?.bypassable !== false,
+        armedStayEnabled: sensor?.armedStayEnabled === true || monitoredModes.includes("armedStay"),
+        armedAwayEnabled: sensor?.armedAwayEnabled === true || monitoredModes.includes("armedAway")
+      }
+    })
+    .filter((sensor) => Boolean(getSecurityMonitoringSensorKey(sensor)))
+}
+
+const normalizeSecurityMonitoringZonesForSave = (sensors: SecurityMonitoringSensor[]) => (
+  sensors.map((sensor) => {
+    const armedStayEnabled = sensor.armedStayEnabled === true
+    const armedAwayEnabled = sensor.armedAwayEnabled === true
+    return {
+      name: sensor.name || "Security zone",
+      deviceId: getSecurityMonitoringSensorKey(sensor),
+      deviceType: sensor.sensorType || "security",
+      enabled: armedStayEnabled || armedAwayEnabled,
+      armedStayEnabled,
+      armedAwayEnabled,
+      bypassable: sensor.bypassable !== false,
+      bypassed: sensor.isBypassed === true
+    }
+  }).filter((zone) => Boolean(zone.deviceId))
 )
 
 const formatInsteonConnectionTarget = (target: {
@@ -652,6 +725,8 @@ export function Settings() {
   const [codexAuthSummary, setCodexAuthSummary] = useState("")
   const [securitySirenCandidates, setSecuritySirenCandidates] = useState<SecuritySirenCandidate[]>([])
   const [loadingSecuritySirens, setLoadingSecuritySirens] = useState(false)
+  const [securityMonitoringSensors, setSecurityMonitoringSensors] = useState<SecurityMonitoringSensor[]>([])
+  const [loadingSecuritySensors, setLoadingSecuritySensors] = useState(false)
   const { register, handleSubmit, setValue, watch, reset, getValues } = useForm({
     defaultValues: {
       location: "New York, NY",
@@ -993,20 +1068,26 @@ export function Settings() {
   const selectedVisibleSecuritySirenCount = visibleSecuritySirenCandidates.filter((candidate) => (
     selectedSecuritySirenIdSet.has(getSecuritySirenSelectionKey(candidate))
   )).length
+  const monitoredSecuritySensorCount = securityMonitoringSensors.filter((sensor) => (
+    sensor.armedStayEnabled || sensor.armedAwayEnabled
+  )).length
 
   const loadSecuritySirenCandidates = async (options: { showToast?: boolean } = {}) => {
     const { showToast = false } = options
     setLoadingSecuritySirens(true)
+    setLoadingSecuritySensors(true)
     try {
       const response = await getSecurityStatus()
       const outputs = Array.isArray(response?.status?.sirenOutputs)
         ? response.status.sirenOutputs
         : []
+      const sensors = normalizeSecurityMonitoringSensors(response?.status?.sensors)
       setSecuritySirenCandidates(outputs)
+      setSecurityMonitoringSensors(sensors)
       if (showToast) {
         toast({
           title: "Security sirens refreshed",
-          description: `Loaded ${outputs.length} available alarm siren${outputs.length === 1 ? "" : "s"}.`
+          description: `Loaded ${outputs.length} alarm siren${outputs.length === 1 ? "" : "s"} and ${sensors.length} security sensor${sensors.length === 1 ? "" : "s"}.`
         })
       }
     } catch (error: any) {
@@ -1020,6 +1101,7 @@ export function Settings() {
       }
     } finally {
       setLoadingSecuritySirens(false)
+      setLoadingSecuritySensors(false)
     }
   }
 
@@ -1043,6 +1125,19 @@ export function Settings() {
     }
 
     setSecuritySirenOutputs([...securitySirenOutputDeviceIds, deviceId])
+  }
+
+  const updateSecurityMonitoringSensor = (
+    sensorKey: string,
+    changes: Partial<Pick<SecurityMonitoringSensor, "armedStayEnabled" | "armedAwayEnabled">>
+  ) => {
+    setSecurityMonitoringSensors((currentSensors) => (
+      currentSensors.map((sensor) => (
+        getSecurityMonitoringSensorKey(sensor) === sensorKey
+          ? { ...sensor, ...changes }
+          : sensor
+      ))
+    ))
   }
 
   const addSecurityPin = () => {
@@ -1820,6 +1915,7 @@ export function Settings() {
       const securitySirenOutputsToSave = normalizeSecuritySirenOutputEntries(settingsToSave.securitySirenOutputDeviceIds)
         .filter((deviceId) => !shouldFilterSecuritySirens || visibleSecuritySirenIds.has(deviceId))
         .map((deviceId) => ({ deviceId, enabled: true }))
+      const securityMonitoringZonesToSave = normalizeSecurityMonitoringZonesForSave(securityMonitoringSensors)
       if (
         (settingsToSave.securityPinRequireForArm === true || settingsToSave.securityPinRequireForDisarm === true) &&
         !securityPinsToSave.some((pin) => pin.enabled !== false)
@@ -1841,6 +1937,7 @@ export function Settings() {
           requireForDisarm: settingsToSave.securityPinRequireForDisarm === true
         },
         pins: securityPinsToSave,
+        zones: securityMonitoringZonesToSave,
         sirenOutputs: securitySirenOutputsToSave
       }
       delete settingsToSave.securityHomeBrainEnabled
@@ -8341,6 +8438,89 @@ export function Settings() {
                     </Select>
                   </div>
                 </div>
+
+                <div className="rounded-lg border border-border/60 bg-slate-50/80 p-3 dark:bg-slate-950/40">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="flex items-center gap-2 font-medium">
+                        <Shield className="h-4 w-4 text-red-600" />
+                        Alarm Monitoring
+                      </p>
+                      <p className="text-sm text-muted-foreground">
+                        Select which security sensors can trigger the alarm in each armed mode.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline">
+                        {monitoredSecuritySensorCount}/{securityMonitoringSensors.length} monitored
+                      </Badge>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => loadSecuritySirenCandidates({ showToast: true })}
+                        disabled={loadingSecuritySensors}
+                        className="gap-2"
+                      >
+                        <RefreshCw className={`h-4 w-4 ${loadingSecuritySensors ? "animate-spin" : ""}`} />
+                        Refresh
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 overflow-hidden rounded-md border border-border/60">
+                    <div className="grid grid-cols-[minmax(0,1fr)_72px_72px] items-center gap-3 bg-slate-100 px-3 py-2 text-xs font-semibold uppercase tracking-normal text-muted-foreground dark:bg-slate-900">
+                      <span>Sensor</span>
+                      <span className="text-center">Stay</span>
+                      <span className="text-center">Away</span>
+                    </div>
+
+                    {securityMonitoringSensors.length > 0 ? (
+                      securityMonitoringSensors.map((sensor) => {
+                        const sensorKey = getSecurityMonitoringSensorKey(sensor)
+                        const sensorMeta = [
+                          sensor.room,
+                          sensor.sensorTypeLabel,
+                          sensor.sourceLabel || sensor.source,
+                          sensor.isOnline === false ? "Offline" : sensor.stateLabel
+                        ].filter(Boolean).join(" / ")
+
+                        return (
+                          <div
+                            key={sensorKey}
+                            className="grid min-h-[4.25rem] grid-cols-[minmax(0,1fr)_72px_72px] items-center gap-3 border-t border-border/60 px-3 py-2"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate font-medium">{sensor.name}</p>
+                              <p className="truncate text-xs text-muted-foreground">
+                                {sensorMeta || "Security sensor"}
+                              </p>
+                            </div>
+                            <div className="flex justify-center">
+                              <Switch
+                                checked={sensor.armedStayEnabled}
+                                onCheckedChange={(checked) => updateSecurityMonitoringSensor(sensorKey, { armedStayEnabled: checked })}
+                                aria-label={`Monitor ${sensor.name} in armed stay`}
+                              />
+                            </div>
+                            <div className="flex justify-center">
+                              <Switch
+                                checked={sensor.armedAwayEnabled}
+                                onCheckedChange={(checked) => updateSecurityMonitoringSensor(sensorKey, { armedAwayEnabled: checked })}
+                                aria-label={`Monitor ${sensor.name} in armed away`}
+                              />
+                            </div>
+                          </div>
+                        )
+                      })
+                    ) : (
+                      <div className="border-t border-border/60 px-3 py-4 text-sm text-muted-foreground">
+                        {loadingSecuritySensors ? "Loading security sensors..." : "No security sensors are available for selected security platforms."}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 <div className="rounded-lg border border-border/60 bg-slate-50/80 p-3 dark:bg-slate-950/40">
                   <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <div>
