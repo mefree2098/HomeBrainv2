@@ -1423,6 +1423,16 @@ async controlZigbeeDevice(device, normalizedAction, commandValue, updateData = {
           'Zigbee unlock command timed out before the device acknowledged it'
         );
         break;
+      case 'alarmon':
+      case 'turnonalarm':
+      case 'soundalarm':
+        await withTimeout(
+          endpoint.command('genOnOff', 'on', {}),
+          10_000,
+          'Zigbee alarm on command timed out before the device acknowledged it'
+        );
+        updateData.status = true;
+        break;
       case 'alarmoff':
       case 'turnoffalarm':
       case 'silencealarm': {

@@ -147,6 +147,19 @@ test('siren trigger falls back when preferred command class is rejected', async 
   assert.equal(setCalls[0].value, 255);
 });
 
+test('alarmon sounds a Z-Wave siren through the trigger path', async () => {
+  const service = new DirectRadioService();
+  const setCalls = [];
+  service.getDirectNodeForDevice = () => nodeWithCommandClasses([SOUND_CC], setCalls);
+
+  await service.controlZWaveDevice(sirenDevice(), 'alarmon', null, {});
+
+  assert.equal(setCalls.length, 1);
+  assert.equal(setCalls[0].valueId.commandClass, SOUND_CC);
+  assert.equal(setCalls[0].valueId.property, 'toneId');
+  assert.equal(setCalls[0].value, 255);
+});
+
 test('Multilevel-only siren falls back to Multilevel Switch', async () => {
   const service = new DirectRadioService();
   const setCalls = [];
