@@ -47,6 +47,7 @@ function sirenDevice() {
 function nodeWithCommandClasses(presentCommandClasses, setCalls, options = {}) {
   const { exposeDefinedIds = true } = options;
   const present = new Set(presentCommandClasses);
+  const rejected = new Set(options.rejectCommandClasses || []);
   const definedIds = [...present].map((cc) => ({ commandClass: cc, property: 'targetValue', endpoint: 0 }));
   return {
     id: 8,
@@ -59,6 +60,9 @@ function nodeWithCommandClasses(presentCommandClasses, setCalls, options = {}) {
     setValue: async (valueId, value) => {
       if (!present.has(valueId?.commandClass)) {
         return { status: zwave.SetValueStatus.NoDeviceSupport, message: 'Device does not support this command class' };
+      }
+      if (rejected.has(valueId?.commandClass)) {
+        return { status: zwave.SetValueStatus.Fail, message: 'Command rejected by device' };
       }
       setCalls.push({ valueId, value });
       return { status: zwave.SetValueStatus.Success };
@@ -126,6 +130,21 @@ test('Binary Switch is preferred over Sound Switch when both exist', async () =>
 
   await service.controlZWaveDevice(sirenDevice(), 'turnon', null, {});
   assert.equal(setCalls[0].valueId.commandClass, BINARY_CC);
+});
+
+test('siren trigger falls back when preferred command class is rejected', async () => {
+  const service = new DirectRadioService();
+  const setCalls = [];
+  service.getDirectNodeForDevice = () => nodeWithCommandClasses([BINARY_CC, SOUND_CC], setCalls, {
+    rejectCommandClasses: [BINARY_CC]
+  });
+
+  await service.controlZWaveDevice(sirenDevice(), 'turnon', null, {});
+
+  assert.equal(setCalls.length, 1, 'fallback found an accepted command class');
+  assert.equal(setCalls[0].valueId.commandClass, SOUND_CC);
+  assert.equal(setCalls[0].valueId.property, 'toneId');
+  assert.equal(setCalls[0].value, 255);
 });
 
 test('Multilevel-only siren falls back to Multilevel Switch', async () => {

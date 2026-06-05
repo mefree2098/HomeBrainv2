@@ -2331,21 +2331,28 @@ async controlZWaveSiren(node, on) {
       return definedIds.some((valueId) => valueId && valueId.commandClass === cc);
     };
 
-    const preferred = candidates.find(supportsCandidate);
-    if (preferred) {
-      await this.setZWaveValue(node, preferred.def, preferred.value);
-      return preferred.label;
-    }
+    const supportedCandidates = candidates.filter(supportsCandidate);
+    const orderedCandidates = supportedCandidates.length > 0
+      ? [
+          ...supportedCandidates,
+          ...candidates.filter((candidate) => !supportedCandidates.includes(candidate))
+        ]
+      : candidates;
 
-    // Fallback (e.g. the interview has not fully populated value IDs yet): try each
-    // trigger and use the first the controller accepts. setZWaveValue throws on
+    // Try each trigger and use the first the controller accepts. Some sirens expose
+    // an interviewed value ID for one CC but reject its command, so keep falling
+    // through alternate siren trigger methods before reporting failure.
+    // setZWaveValue throws on
     // NoDeviceSupport, so an unsupported CC is skipped without sending a command.
     let lastError = null;
-    for (const candidate of candidates) {
+    for (const candidate of orderedCandidates) {
       try {
         await this.setZWaveValue(node, candidate.def, candidate.value);
         return candidate.label;
       } catch (error) {
+        if (isZWaveCommandDeliveryError(error)) {
+          throw error;
+        }
         lastError = error;
       }
     }
