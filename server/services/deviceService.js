@@ -1230,6 +1230,24 @@ class DeviceService {
           commandValue = updateData.status;
           break;
 
+        case 'alarmon':
+        case 'turnonalarm':
+        case 'soundalarm': {
+          const supportsAlarmControl = isDirectRadio
+            && (
+              device.properties?.supportsAlarm === true
+              || device.properties?.supportsSirenSound === true
+              || device.type === 'siren'
+              || /\b(siren|alarm|sounder|chime)\b/i.test(`${device.name || ''} ${device.model || ''} ${device.brand || ''}`)
+            );
+          if (!supportsAlarmControl) {
+            throw new Error('Alarm sound control is only available for alarm-capable HomeBrain-native devices');
+          }
+          updateData.status = true;
+          commandValue = true;
+          break;
+        }
+
         case 'alarmoff':
         case 'turnoffalarm':
         case 'silencealarm': {
@@ -1581,6 +1599,16 @@ class DeviceService {
         const payload = deviceUpdateEmitter.normalizeDevices([updatedDevice]);
         if (payload.length > 0) {
           deviceUpdateEmitter.emit('devices:update', payload);
+        }
+      }
+
+      if (options?.releaseCommandClaimOnSuccess && coordinatorAdmission?.accepted && !coordinatorAdmission.disabled) {
+        try {
+          await deviceCommandCoordinatorService.releaseCommand(coordinatorAdmission.command?.commandId, {
+            reason: 'Device command completed'
+          });
+        } catch (releaseError) {
+          console.warn(`DeviceService: Failed to release command coordinator claim after success: ${releaseError.message}`);
         }
       }
 

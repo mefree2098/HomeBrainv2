@@ -1459,7 +1459,13 @@ test('triggerAlarm sounds selected HomeBrain siren outputs only', async (t) => {
     ])
   });
   deviceService.controlDevice = async (deviceId, action, value, options = {}) => {
-    capturedControls.push({ deviceId, action, value, reason: options.command?.reason });
+    capturedControls.push({
+      deviceId,
+      action,
+      value,
+      reason: options.command?.reason,
+      releaseCommandClaimOnSuccess: options.releaseCommandClaimOnSuccess
+    });
     return { _id: deviceId };
   };
 
@@ -1470,16 +1476,17 @@ test('triggerAlarm sounds selected HomeBrain siren outputs only', async (t) => {
   assert.equal(result.saveCount, 1);
   assert.deepEqual(capturedControls, [{
     deviceId: 'selected-siren',
-    action: 'setsirensound',
-    value: 9,
-    reason: 'trigger_alarm'
+    action: 'alarm_on',
+    value: null,
+    reason: 'trigger_alarm',
+    releaseCommandClaimOnSuccess: true
   }]);
   assert.equal(result.lastSirenTriggerResult.homebrain.soundedOutputs.length, 1);
   assert.equal(result.lastSirenTriggerResult.homebrain.soundedOutputs[0].deviceId, 'selected-siren');
   assert.equal(result.lastSirenTriggerResult.failedOutputs.length, 0);
 });
 
-test('triggerAlarm falls back to turn_on when siren sound command fails', async (t) => {
+test('triggerAlarm falls back to turn_on when alarm_on command fails', async (t) => {
   const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
   const originalDeviceFind = Device.find;
   const originalControlDevice = deviceService.controlDevice;
@@ -1528,8 +1535,8 @@ test('triggerAlarm falls back to turn_on when siren sound command fails', async 
       reason: options.command?.reason,
       fallbackFrom: options.command?.fallbackFrom
     });
-    if (action === 'setsirensound') {
-      throw new Error('Siren sound command unavailable');
+    if (action === 'alarm_on') {
+      throw new Error('Siren alarm-on command unavailable');
     }
     return { _id: deviceId };
   };
@@ -1539,8 +1546,8 @@ test('triggerAlarm falls back to turn_on when siren sound command fails', async 
   assert.deepEqual(capturedControls, [
     {
       deviceId: 'fallback-siren',
-      action: 'setsirensound',
-      value: 9,
+      action: 'alarm_on',
+      value: null,
       reason: 'trigger_alarm',
       fallbackFrom: undefined
     },
@@ -1549,7 +1556,7 @@ test('triggerAlarm falls back to turn_on when siren sound command fails', async 
       action: 'turn_on',
       value: true,
       reason: 'trigger_alarm',
-      fallbackFrom: 'setsirensound'
+      fallbackFrom: 'alarm_on'
     }
   ]);
   assert.equal(result.lastSirenTriggerResult.homebrain.soundedOutputs.length, 1);

@@ -1695,11 +1695,11 @@ class SecurityAlarmService {
         const deviceName = normalizeString(device?.name) || localDeviceId || 'Unnamed HomeBrain alarm output';
 
       const attempts = [];
-      if (device?.properties?.supportsSirenSound === true) {
+      if (device?.properties?.supportsAlarm === true) {
         attempts.push({
-          action: 'setsirensound',
-          value: device?.properties?.sirenSound ?? null,
-          via: 'homebrain.setsirensound'
+          action: 'alarm_on',
+          value: null,
+          via: 'homebrain.alarm_on'
         });
       }
       attempts.push({ action: 'turn_on', value: true, via: 'homebrain.turn_on' });
@@ -1710,10 +1710,12 @@ class SecurityAlarmService {
           await deviceService.controlDevice(localDeviceId, attempt.action, attempt.value, {
             skipIntegrationRefresh: true,
             skipPostActionVerification: true,
+            releaseCommandClaimOnSuccess: true,
             command: {
               source: 'security_alarm',
               reason: 'trigger_alarm',
               priority: 'critical',
+              ttlSeconds: 30,
               ...(previousError ? {
                 fallbackFrom: previousError.action,
                 fallbackError: previousError.message
@@ -1784,13 +1786,15 @@ class SecurityAlarmService {
 
     for (const attempt of attempts) {
       try {
-        await deviceService.controlDevice(localDeviceId, attempt.action, attempt.value, {
-          skipIntegrationRefresh: true,
-          skipPostActionVerification: true,
-          command: {
+          await deviceService.controlDevice(localDeviceId, attempt.action, attempt.value, {
+            skipIntegrationRefresh: true,
+            skipPostActionVerification: true,
+            releaseCommandClaimOnSuccess: true,
+            command: {
             source: 'security_alarm',
             reason: 'dismiss_triggered_alarm',
-            priority: 'critical',
+              priority: 'critical',
+              ttlSeconds: 30,
             ...(previousError ? {
               fallbackFrom: previousError.action,
               fallbackError: previousError.message

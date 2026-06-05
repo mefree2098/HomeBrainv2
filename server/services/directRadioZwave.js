@@ -2447,6 +2447,15 @@ async controlZWaveDevice(device, normalizedAction, commandValue, updateData = {}
         case 'setsirensound':
           await this.setZWaveSirenSound(device, node, commandValue, updateData);
           break;
+        case 'alarmon':
+        case 'turnonalarm':
+        case 'soundalarm':
+          if (device?.properties?.supportsAlarm || device?.type === 'siren') {
+            await this.controlZWaveSiren(node, true);
+          } else {
+            throw new Error('Alarm sound control is not available for this Z-Wave device');
+          }
+          break;
         case 'alarmoff':
         case 'turnoffalarm':
         case 'silencealarm':
