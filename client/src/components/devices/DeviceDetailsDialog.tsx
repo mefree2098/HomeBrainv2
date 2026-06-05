@@ -161,6 +161,10 @@ const SMARTTHINGS_PHYSICAL_SWITCH_ROOM_LABEL = "Physical Switches"
 
 const HISTORY_HOURS = 24
 const HISTORY_LIMIT = 720
+const CONTACT_OPEN_DEBOUNCE_DEFAULT_SECONDS = 1.5
+const CONTACT_OPEN_DEBOUNCE_MIN_SECONDS = 0.25
+const CONTACT_OPEN_DEBOUNCE_MAX_SECONDS = 10
+const CONTACT_OPEN_DEBOUNCE_STEP_SECONDS = 0.25
 const TELEMETRY_RANGE_OPTIONS = [
   { label: "24H", hours: 24 },
   { label: "7D", hours: 24 * 7 },
@@ -371,6 +375,43 @@ function isDirectRadioBackedDevice(device: DeviceLike | null): boolean {
     || source === "homebrain-zwave"
     || protocol === "zigbee"
     || protocol === "zwave"
+}
+
+function getRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function normalizeContactOpenDebounceSeconds(value: unknown): number {
+  const parsed = Number(value)
+  if (!Number.isFinite(parsed)) return CONTACT_OPEN_DEBOUNCE_DEFAULT_SECONDS
+  const stepped = Math.round(parsed / CONTACT_OPEN_DEBOUNCE_STEP_SECONDS) * CONTACT_OPEN_DEBOUNCE_STEP_SECONDS
+  const clamped = Math.max(
+    CONTACT_OPEN_DEBOUNCE_MIN_SECONDS,
+    Math.min(CONTACT_OPEN_DEBOUNCE_MAX_SECONDS, stepped)
+  )
+  return Number(clamped.toFixed(2))
+}
+
+function getContactOpenDebounce(properties: Record<string, unknown> | undefined) {
+  const config = getRecord(properties?.contactOpenDebounce)
+  return {
+    enabled: config.enabled === true,
+    seconds: normalizeContactOpenDebounceSeconds(config.seconds)
+  }
+}
+
+function supportsContactOpenDebounce(device: DeviceLike | null): boolean {
+  if (!device || device.type !== "sensor") return false
+  const properties = getRecord(device.properties)
+  const directState = getRecord(properties.directRadioState)
+  const features = Array.isArray(properties.directRadioFeatures)
+    ? properties.directRadioFeatures.map((feature) => String(feature).toLowerCase())
+    : []
+  return properties.supportsContactSensor === true
+    || features.includes("contact")
+    || Object.prototype.hasOwnProperty.call(directState, "contactOpen")
+    || String(directState.contact || "").toLowerCase() === "open"
+    || String(directState.contact || "").toLowerCase() === "closed"
 }
 
 function isNativeZWaveLock(device: DeviceLike | null): boolean {
@@ -1449,6 +1490,8 @@ export function DeviceDetailsDialog({
   const [deviceNameDraft, setDeviceNameDraft] = useState("")
   const [deviceRoomDraft, setDeviceRoomDraft] = useState("")
   const [deviceTypeDraft, setDeviceTypeDraft] = useState<string>("switch")
+  const [contactOpenDebounceEnabled, setContactOpenDebounceEnabled] = useState(false)
+  const [contactOpenDebounceSeconds, setContactOpenDebounceSeconds] = useState(CONTACT_OPEN_DEBOUNCE_DEFAULT_SECONDS)
   const [deviceDetailsDraftDirty, setDeviceDetailsDraftDirty] = useState(false)
   const [savingDeviceDetails, setSavingDeviceDetails] = useState(false)
   const [groupInput, setGroupInput] = useState("")
@@ -1549,10 +1592,18 @@ export function DeviceDetailsDialog({
   const normalizedDeviceTypeDraft = EDITABLE_DEVICE_TYPES.includes(deviceTypeDraft as (typeof EDITABLE_DEVICE_TYPES)[number])
     ? deviceTypeDraft
     : canonicalDeviceType
+  const currentContactOpenDebounce = getContactOpenDebounce(device?.properties as Record<string, unknown> | undefined)
+  const contactOpenDebounceSupported = supportsContactOpenDebounce(device)
+  const normalizedContactOpenDebounceSeconds = normalizeContactOpenDebounceSeconds(contactOpenDebounceSeconds)
+  const contactOpenDebounceChanged = contactOpenDebounceSupported && (
+    contactOpenDebounceEnabled !== currentContactOpenDebounce.enabled
+    || normalizedContactOpenDebounceSeconds !== currentContactOpenDebounce.seconds
+  )
   const deviceDetailsChanged = Boolean(device) && (
     normalizedDeviceNameDraft !== device.name
     || normalizedDeviceRoomDraft !== (device.room || "Unassigned")
     || normalizedDeviceTypeDraft !== device.type
+    || contactOpenDebounceChanged
   )
   const harmonyOptionsChanged = harmonyCommandDevice && (
     harmonyRepeatPowerCommands !== harmonyRepeatPowerCommandsSaved
@@ -1590,6 +1641,8 @@ export function DeviceDetailsDialog({
       setDeviceNameDraft(canonicalDeviceName)
       setDeviceRoomDraft(canonicalDeviceRoom)
       setDeviceTypeDraft(canonicalDeviceType)
+      setContactOpenDebounceEnabled(currentContactOpenDebounce.enabled)
+      setContactOpenDebounceSeconds(currentContactOpenDebounce.seconds)
       setDeviceDetailsDraftDirty(false)
       return
     }
@@ -1598,11 +1651,15 @@ export function DeviceDetailsDialog({
       setDeviceNameDraft(canonicalDeviceName)
       setDeviceRoomDraft(canonicalDeviceRoom)
       setDeviceTypeDraft(canonicalDeviceType)
+      setContactOpenDebounceEnabled(currentContactOpenDebounce.enabled)
+      setContactOpenDebounceSeconds(currentContactOpenDebounce.seconds)
     }
   }, [
     canonicalDeviceName,
     canonicalDeviceRoom,
     canonicalDeviceType,
+    currentContactOpenDebounce.enabled,
+    currentContactOpenDebounce.seconds,
     device?._id,
     deviceDetailsDraftDirty,
     open,
@@ -2132,16 +2189,31 @@ export function DeviceDetailsDialog({
 
     setSavingDeviceDetails(true)
     try {
-      const response = await updateDevice(device._id, {
+      const nextProperties = contactOpenDebounceSupported
+        ? {
+            ...getRecord(device.properties),
+            contactOpenDebounce: {
+              ...getRecord((device.properties as Record<string, unknown> | undefined)?.contactOpenDebounce),
+              enabled: contactOpenDebounceEnabled,
+              seconds: normalizedContactOpenDebounceSeconds
+            }
+          }
+        : undefined
+      const updatePayload: Record<string, unknown> = {
         name: normalizedDeviceNameDraft,
         room: normalizedDeviceRoomDraft,
         type: normalizedDeviceTypeDraft
-      })
+      }
+      if (nextProperties) updatePayload.properties = nextProperties
+      const response = await updateDevice(device._id, updatePayload)
       const updatedDevice = (response?.device || response) as DeviceLike
       onDeviceUpdated?.(updatedDevice)
       setDeviceNameDraft(updatedDevice?.name || normalizedDeviceNameDraft)
       setDeviceRoomDraft(updatedDevice?.room || normalizedDeviceRoomDraft)
       setDeviceTypeDraft(updatedDevice?.type || normalizedDeviceTypeDraft)
+      const savedContactOpenDebounce = getContactOpenDebounce(updatedDevice?.properties as Record<string, unknown> | undefined)
+      setContactOpenDebounceEnabled(savedContactOpenDebounce.enabled)
+      setContactOpenDebounceSeconds(savedContactOpenDebounce.seconds)
       setDeviceDetailsDraftDirty(false)
       toast({
         title: "Device details updated",
@@ -3751,9 +3823,73 @@ export function DeviceDetailsDialog({
                               </SelectContent>
                             </Select>
                           </div>
-                        </div>
+                      </div>
 
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      {contactOpenDebounceSupported ? (
+                        <div className="space-y-3 border-t border-white/10 pt-4">
+                          <div className="flex items-center justify-between gap-4">
+                            <div className="space-y-1">
+                              <Label htmlFor="contact-open-debounce-toggle">Contact debounce</Label>
+                              <p className="text-xs text-muted-foreground">Closed-to-open window</p>
+                            </div>
+                            <Switch
+                              id="contact-open-debounce-toggle"
+                              checked={contactOpenDebounceEnabled}
+                              onCheckedChange={(checked) => {
+                                setDeviceDetailsDraftDirty(true)
+                                setContactOpenDebounceEnabled(Boolean(checked))
+                                if (!contactOpenDebounceSeconds) {
+                                  setContactOpenDebounceSeconds(CONTACT_OPEN_DEBOUNCE_DEFAULT_SECONDS)
+                                }
+                              }}
+                              disabled={savingDeviceDetails}
+                            />
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              onClick={() => {
+                                setDeviceDetailsDraftDirty(true)
+                                setContactOpenDebounceSeconds((current) => normalizeContactOpenDebounceSeconds(current - CONTACT_OPEN_DEBOUNCE_STEP_SECONDS))
+                              }}
+                              disabled={savingDeviceDetails || !contactOpenDebounceEnabled || normalizedContactOpenDebounceSeconds <= CONTACT_OPEN_DEBOUNCE_MIN_SECONDS}
+                            >
+                              <Minus className="h-4 w-4" />
+                            </Button>
+                            <div className="min-w-[5.5rem] text-center">
+                              <p className="font-mono text-sm text-white">{normalizedContactOpenDebounceSeconds.toFixed(2)}s</p>
+                            </div>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              onClick={() => {
+                                setDeviceDetailsDraftDirty(true)
+                                setContactOpenDebounceSeconds((current) => normalizeContactOpenDebounceSeconds(current + CONTACT_OPEN_DEBOUNCE_STEP_SECONDS))
+                              }}
+                              disabled={savingDeviceDetails || !contactOpenDebounceEnabled || normalizedContactOpenDebounceSeconds >= CONTACT_OPEN_DEBOUNCE_MAX_SECONDS}
+                            >
+                              <Plus className="h-4 w-4" />
+                            </Button>
+                            <Slider
+                              className="min-w-0 flex-1"
+                              value={[normalizedContactOpenDebounceSeconds]}
+                              min={CONTACT_OPEN_DEBOUNCE_MIN_SECONDS}
+                              max={CONTACT_OPEN_DEBOUNCE_MAX_SECONDS}
+                              step={CONTACT_OPEN_DEBOUNCE_STEP_SECONDS}
+                              onValueChange={(values) => {
+                                setDeviceDetailsDraftDirty(true)
+                                setContactOpenDebounceSeconds(normalizeContactOpenDebounceSeconds(values?.[0]))
+                              }}
+                              disabled={savingDeviceDetails || !contactOpenDebounceEnabled}
+                            />
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                           <p className="text-xs text-muted-foreground">
                             {deviceDetailsChanged ? "Device details have unsaved changes." : "No unsaved device detail changes."}
                           </p>

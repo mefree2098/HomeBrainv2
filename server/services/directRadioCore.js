@@ -74,6 +74,7 @@ const {
   shouldReplaceGeneratedDirectName,
   shouldReplaceGeneratedDirectRoom,
   inferFeaturesFromExistingDirectRecord,
+  applyContactOpenDebounce,
   mergeDirectDeviceUpdateForExisting,
   directFeatureCount,
   directRecordTimestamp,
@@ -757,7 +758,8 @@ async upsertDirectDeviceRecord(identity, update, options = {}) {
     if (!existing && options.allowCreate === false) {
       return null;
     }
-    const payload = mergeDirectDeviceUpdateForExisting(existing, update);
+    const directUpdate = applyContactOpenDebounce(existing, update);
+    const payload = mergeDirectDeviceUpdateForExisting(existing, directUpdate);
 
     let device = existing
       ? await Device.findByIdAndUpdate(existing._id, payload, { returnDocument: 'after', runValidators: true })
@@ -811,7 +813,7 @@ async upsertDirectDeviceRecord(identity, update, options = {}) {
     }
     this.emitDeviceUpdate(device);
     if (!options.suppressPairingCompletion) {
-      this.completePairingSession(identity.protocol, identity, device, update?.properties?.homebrainDirect?.lastReason || 'direct device update');
+      this.completePairingSession(identity.protocol, identity, device, directUpdate?.properties?.homebrainDirect?.lastReason || 'direct device update');
     }
     return device;
   },
@@ -911,24 +913,25 @@ async refreshDirectDeviceState(device, options = {}) {
       return null;
     }
 
-    const merged = mergeDirectDeviceUpdateForExisting(device, normalized.update);
+    const directUpdate = applyContactOpenDebounce(device, normalized.update);
+    const merged = mergeDirectDeviceUpdateForExisting(device, directUpdate);
     const commandState = options?.preserveCommandState && typeof options.preserveCommandState === 'object'
       ? options.preserveCommandState
       : null;
     if (commandState) {
-      if (!Object.prototype.hasOwnProperty.call(normalized.update, 'status')
+      if (!Object.prototype.hasOwnProperty.call(directUpdate, 'status')
         && Object.prototype.hasOwnProperty.call(commandState, 'status')) {
         merged.status = commandState.status;
       }
-      if (!Object.prototype.hasOwnProperty.call(normalized.update, 'brightness')
+      if (!Object.prototype.hasOwnProperty.call(directUpdate, 'brightness')
         && Object.prototype.hasOwnProperty.call(commandState, 'brightness')) {
         merged.brightness = commandState.brightness;
       }
-      if (!Object.prototype.hasOwnProperty.call(normalized.update, 'color')
+      if (!Object.prototype.hasOwnProperty.call(directUpdate, 'color')
         && Object.prototype.hasOwnProperty.call(commandState, 'color')) {
         merged.color = commandState.color;
       }
-      if (!Object.prototype.hasOwnProperty.call(normalized.update, 'colorTemperature')
+      if (!Object.prototype.hasOwnProperty.call(directUpdate, 'colorTemperature')
         && Object.prototype.hasOwnProperty.call(commandState, 'colorTemperature')) {
         merged.colorTemperature = commandState.colorTemperature;
       }

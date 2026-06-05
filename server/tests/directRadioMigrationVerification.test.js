@@ -9,6 +9,8 @@ const DirectRadioService = directRadioService.DirectRadioService;
 const {
   inferFeaturesFromSmartThings,
   inferFeaturesFromZigbeeDefinition,
+  applyContactOpenDebounce,
+  normalizeContactOpenDebounceSeconds,
   isDuplicateDirectRadioRecord,
   mergeSmartThingsTelemetryFallback,
   mergeDirectDeviceUpdateForExisting,
@@ -32,6 +34,117 @@ function createService() {
   };
   return service;
 }
+
+test('contact sensor open debounce is disabled by default', () => {
+  const existing = {
+    status: false,
+    lastSeen: '2026-06-04T23:55:54.025Z',
+    properties: {
+      directRadioState: {
+        contactOpen: false,
+        contact: 'closed'
+      },
+      homebrainDirect: {
+        lastSeen: '2026-06-04T23:55:54.025Z'
+      }
+    }
+  };
+  const update = {
+    status: true,
+    properties: {
+      directRadioState: {
+        contactOpen: true,
+        contact: 'open',
+        batteryLevel: 88
+      },
+      homebrainDirect: {
+        lastSeen: '2026-06-04T23:55:55.225Z'
+      }
+    }
+  };
+
+  assert.equal(applyContactOpenDebounce(existing, update), update);
+});
+
+test('contact sensor open debounce suppresses an immediate open after a closed report', () => {
+  const existing = {
+    status: false,
+    lastSeen: '2026-06-04T23:55:54.025Z',
+    properties: {
+      contactOpenDebounce: {
+        enabled: true,
+        seconds: 1.5,
+        lastClosedAt: '2026-06-04T23:55:54.025Z'
+      },
+      directRadioState: {
+        contactOpen: false,
+        contact: 'closed'
+      },
+      homebrainDirect: {
+        lastSeen: '2026-06-04T23:55:54.025Z'
+      }
+    }
+  };
+  const update = {
+    status: true,
+    properties: {
+      directRadioState: {
+        contactOpen: true,
+        contact: 'open',
+        batteryLevel: 88
+      },
+      homebrainDirect: {
+        lastSeen: '2026-06-04T23:55:55.225Z'
+      }
+    }
+  };
+
+  const filtered = applyContactOpenDebounce(existing, update);
+
+  assert.equal(filtered.status, false);
+  assert.equal(filtered.properties.directRadioState.contactOpen, false);
+  assert.equal(filtered.properties.directRadioState.contact, 'closed');
+  assert.equal(filtered.properties.directRadioState.batteryLevel, 88);
+  assert.equal(filtered.properties.contactOpenDebounce.enabled, true);
+  assert.equal(filtered.properties.contactOpenDebounce.seconds, 1.5);
+  assert.equal(filtered.properties.contactOpenDebounce.lastIgnoredOpenDeltaSeconds, 1.2);
+});
+
+test('contact sensor open debounce accepts open reports outside the threshold', () => {
+  const existing = {
+    status: false,
+    properties: {
+      contactOpenDebounce: {
+        enabled: true,
+        seconds: 1.5,
+        lastClosedAt: '2026-06-04T23:55:54.025Z'
+      },
+      directRadioState: {
+        contactOpen: false,
+        contact: 'closed'
+      },
+      homebrainDirect: {
+        lastSeen: '2026-06-04T23:55:54.025Z'
+      }
+    }
+  };
+  const update = {
+    status: true,
+    properties: {
+      directRadioState: {
+        contactOpen: true,
+        contact: 'open'
+      },
+      homebrainDirect: {
+        lastSeen: '2026-06-04T23:55:56.026Z'
+      }
+    }
+  };
+
+  assert.equal(applyContactOpenDebounce(existing, update), update);
+  assert.equal(normalizeContactOpenDebounceSeconds(1.62), 1.5);
+  assert.equal(normalizeContactOpenDebounceSeconds(1.63), 1.75);
+});
 
 test('direct radio refresh resolves Zigbee from source when protocol metadata is missing', async () => {
   const service = createService();

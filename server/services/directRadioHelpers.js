@@ -79,6 +79,10 @@ const ZWAVE_NODE_STATUS = Object.freeze({
 });
 
 const ZWAVE_REACHABILITY_PROBE_TTL_MS = 2 * 60 * 1000;
+const CONTACT_OPEN_DEBOUNCE_DEFAULT_SECONDS = 1.5;
+const CONTACT_OPEN_DEBOUNCE_MIN_SECONDS = 0.25;
+const CONTACT_OPEN_DEBOUNCE_MAX_SECONDS = 10;
+const CONTACT_OPEN_DEBOUNCE_STEP_SECONDS = 0.25;
 
 function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -439,6 +443,147 @@ function isIncompleteDirectUpdateShell({
   }
   return !hasStableDirectIdentity(updateDirect, updateProperties)
     && !hasNonEmptyObject(updateProperties.directRadioState);
+}
+
+function getPlainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function parseBooleanSetting(value, fallback = false) {
+  if (typeof value === 'boolean') return value;
+  const normalized = trimString(value).toLowerCase();
+  if (!normalized) return fallback;
+  if (['0', 'false', 'no', 'off', 'disabled'].includes(normalized)) return false;
+  if (['1', 'true', 'yes', 'on', 'enabled'].includes(normalized)) return true;
+  return fallback;
+}
+
+function normalizeContactOpenDebounceSeconds(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return CONTACT_OPEN_DEBOUNCE_DEFAULT_SECONDS;
+  const stepped = Math.round(parsed / CONTACT_OPEN_DEBOUNCE_STEP_SECONDS) * CONTACT_OPEN_DEBOUNCE_STEP_SECONDS;
+  const clamped = Math.max(
+    CONTACT_OPEN_DEBOUNCE_MIN_SECONDS,
+    Math.min(CONTACT_OPEN_DEBOUNCE_MAX_SECONDS, stepped)
+  );
+  return Number(clamped.toFixed(2));
+}
+
+function normalizeContactOpenDebounceConfig(properties = {}) {
+  const raw = getPlainObject(properties.contactOpenDebounce);
+  return {
+    raw,
+    enabled: parseBooleanSetting(raw.enabled, false),
+    seconds: normalizeContactOpenDebounceSeconds(raw.seconds)
+  };
+}
+
+function readContactOpenValue(properties = {}) {
+  const directState = getPlainObject(properties.directRadioState);
+  if (typeof directState.contactOpen === 'boolean') return directState.contactOpen;
+  const contact = trimString(directState.contact).toLowerCase();
+  if (contact === 'open' || contact === 'opened') return true;
+  if (contact === 'closed' || contact === 'close') return false;
+  return undefined;
+}
+
+function timestampMillis(value) {
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return Number.isFinite(time) ? time : null;
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function directUpdateTimestampMillis(update = {}, properties = {}, now = Date.now()) {
+  return timestampMillis(properties.homebrainDirect?.lastSeen)
+    ?? timestampMillis(update.lastSeen)
+    ?? timestampMillis(now)
+    ?? Date.now();
+}
+
+function isoTimestampFromMillis(value) {
+  const millis = timestampMillis(value);
+  return new Date(millis ?? Date.now()).toISOString();
+}
+
+function withContactOpenDebounceMetadata(update = {}, existingProperties = {}, patch = {}) {
+  const updateProperties = getPlainObject(update.properties);
+  const existingDebounce = getPlainObject(existingProperties.contactOpenDebounce);
+  const updateDebounce = getPlainObject(updateProperties.contactOpenDebounce);
+  const existingConfig = normalizeContactOpenDebounceConfig(existingProperties);
+  const updateConfig = normalizeContactOpenDebounceConfig({ contactOpenDebounce: updateDebounce });
+  const nextConfig = {
+    ...existingDebounce,
+    ...updateDebounce,
+    enabled: Object.prototype.hasOwnProperty.call(updateDebounce, 'enabled') ? updateConfig.enabled : existingConfig.enabled,
+    seconds: Object.prototype.hasOwnProperty.call(updateDebounce, 'seconds') ? updateConfig.seconds : existingConfig.seconds,
+    ...patch
+  };
+
+  return {
+    ...update,
+    properties: {
+      ...updateProperties,
+      contactOpenDebounce: nextConfig
+    }
+  };
+}
+
+function applyContactOpenDebounce(existing, update = {}, now = Date.now()) {
+  const existingProperties = getPlainObject(existing?.properties);
+  const updateProperties = getPlainObject(update.properties);
+  const incomingContactOpen = readContactOpenValue(updateProperties);
+
+  if (incomingContactOpen === undefined) return update;
+
+  const config = normalizeContactOpenDebounceConfig(existingProperties);
+  const incomingAt = directUpdateTimestampMillis(update, updateProperties, now);
+
+  if (incomingContactOpen === false) {
+    if (!config.enabled && Object.keys(config.raw).length === 0) return update;
+    return withContactOpenDebounceMetadata(update, existingProperties, {
+      lastClosedAt: isoTimestampFromMillis(incomingAt)
+    });
+  }
+
+  if (!config.enabled) return update;
+
+  const existingContactOpen = readContactOpenValue(existingProperties);
+  if (existingContactOpen !== false) return update;
+
+  const closedAt = timestampMillis(config.raw.lastClosedAt)
+    ?? timestampMillis(existingProperties.homebrainDirect?.lastSeen)
+    ?? timestampMillis(existing?.lastSeen);
+
+  if (!Number.isFinite(closedAt)) return update;
+
+  const deltaSeconds = (incomingAt - closedAt) / 1000;
+  if (deltaSeconds < 0 || deltaSeconds > config.seconds) return update;
+
+  const directState = {
+    ...getPlainObject(updateProperties.directRadioState),
+    contactOpen: false,
+    contact: 'closed'
+  };
+
+  return withContactOpenDebounceMetadata({
+    ...update,
+    status: false,
+    properties: {
+      ...updateProperties,
+      directRadioState: directState
+    }
+  }, existingProperties, {
+    lastClosedAt: config.raw.lastClosedAt || isoTimestampFromMillis(closedAt),
+    lastIgnoredOpenAt: isoTimestampFromMillis(incomingAt),
+    lastIgnoredOpenDeltaSeconds: Number(deltaSeconds.toFixed(3)),
+    lastIgnoredOpenThresholdSeconds: config.seconds
+  });
 }
 
 function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
@@ -3520,6 +3665,10 @@ module.exports = {
   DEFAULT_PAIRING_SECONDS,
   MAX_PAIRING_SECONDS,
   DEFAULT_HARDWARE_SCAN_INTERVAL_MS,
+  CONTACT_OPEN_DEBOUNCE_DEFAULT_SECONDS,
+  CONTACT_OPEN_DEBOUNCE_MIN_SECONDS,
+  CONTACT_OPEN_DEBOUNCE_MAX_SECONDS,
+  CONTACT_OPEN_DEBOUNCE_STEP_SECONDS,
   DIRECT_DEVICE_PROJECTION,
   ZWAVE_NODE_STATUS,
   trimString,
@@ -3537,6 +3686,8 @@ module.exports = {
   shouldReplaceGeneratedDirectName,
   shouldReplaceGeneratedDirectRoom,
   inferFeaturesFromExistingDirectRecord,
+  applyContactOpenDebounce,
+  normalizeContactOpenDebounceSeconds,
   mergeDirectDeviceUpdateForExisting,
   directFeatureCount,
   directRecordTimestamp,
