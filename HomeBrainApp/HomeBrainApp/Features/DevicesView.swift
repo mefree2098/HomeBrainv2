@@ -114,11 +114,17 @@ struct DevicesView: View {
     @State private var editDeviceName = ""
     @State private var editDeviceRoom = ""
     @State private var editDeviceType = "switch"
+    @State private var editContactOpenDebounceEnabled = false
+    @State private var editContactOpenDebounceSeconds = 1.5
     @State private var savingDeviceDetails = false
     @State private var contentWidth: CGFloat = 0
     @State private var appliedPreviewLaunchActions = false
 
     private let availableTypes = ["all", "light", "lock", "thermostat", "garage", "sensor", "siren", "switch", "camera", "speaker"]
+    private let contactOpenDebounceDefaultSeconds = 1.5
+    private let contactOpenDebounceMinSeconds = 0.25
+    private let contactOpenDebounceMaxSeconds = 10.0
+    private let contactOpenDebounceStepSeconds = 0.25
     private let addDeviceModes = ["zwave", "zigbee", "insteon", "matter", "manual"]
     private let thermostatModes = ["auto", "cool", "heat", "off"]
 
@@ -2269,6 +2275,9 @@ struct DevicesView: View {
         editDeviceName = device.name
         editDeviceRoom = device.room.isEmpty ? "Unassigned" : device.room
         editDeviceType = availableTypes.contains(device.type) && device.type != "all" ? device.type : "switch"
+        let debounce = contactOpenDebounceConfig(for: device)
+        editContactOpenDebounceEnabled = debounce.enabled
+        editContactOpenDebounceSeconds = debounce.seconds
     }
 
     private func deviceDetailsChanged(for device: DeviceItem) -> Bool {
@@ -2277,10 +2286,15 @@ struct DevicesView: View {
             ? "Unassigned"
             : editDeviceRoom.trimmingCharacters(in: .whitespacesAndNewlines)
         let type = availableTypes.contains(editDeviceType) && editDeviceType != "all" ? editDeviceType : device.type
+        let debounce = contactOpenDebounceConfig(for: device)
+        let debounceChanged = supportsContactOpenDebounce(device)
+            && (editContactOpenDebounceEnabled != debounce.enabled
+                || normalizedContactOpenDebounceSeconds(editContactOpenDebounceSeconds) != debounce.seconds)
 
         return name != device.name
             || room != (device.room.isEmpty ? "Unassigned" : device.room)
             || type != device.type
+            || debounceChanged
     }
 
     private func roomOptions(selectedRoom: String) -> [String] {
@@ -2345,12 +2359,43 @@ struct DevicesView: View {
                         .pickerStyle(.menu)
                         .tint(HBPalette.accentBlue)
                         .disabled(savingDeviceDetails)
-                    }
                 }
+            }
 
-                Button {
-                    Task { await saveDeviceDetails(for: device) }
-                } label: {
+            if supportsContactOpenDebounce(device) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Contact debounce", isOn: $editContactOpenDebounceEnabled)
+                        .font(HBTypography.body(size: 14, weight: .semibold))
+                        .foregroundStyle(HBPalette.textSecondary)
+                        .disabled(savingDeviceDetails)
+
+                    Stepper(
+                        value: Binding(
+                            get: { normalizedContactOpenDebounceSeconds(editContactOpenDebounceSeconds) },
+                            set: { editContactOpenDebounceSeconds = normalizedContactOpenDebounceSeconds($0) }
+                        ),
+                        in: contactOpenDebounceMinSeconds...contactOpenDebounceMaxSeconds,
+                        step: contactOpenDebounceStepSeconds
+                    ) {
+                        HStack {
+                            Text("Closed-to-open window")
+                                .font(HBTypography.body(size: 14, weight: .semibold))
+                                .foregroundStyle(HBPalette.textSecondary)
+                            Spacer()
+                            Text(String(format: "%.2fs", normalizedContactOpenDebounceSeconds(editContactOpenDebounceSeconds)))
+                                .font(HBTypography.body(size: 12, weight: .semibold))
+                                .foregroundStyle(HBPalette.textPrimary)
+                                .monospacedDigit()
+                        }
+                    }
+                    .disabled(savingDeviceDetails || !editContactOpenDebounceEnabled)
+                }
+                .padding(.top, 4)
+            }
+
+            Button {
+                Task { await saveDeviceDetails(for: device) }
+            } label: {
                     if savingDeviceDetails {
                         HStack(spacing: 8) {
                             ProgressView()
@@ -4286,6 +4331,13 @@ struct DevicesView: View {
         let roomDraft = editDeviceRoom.trimmingCharacters(in: .whitespacesAndNewlines)
         let room = roomDraft.isEmpty ? "Unassigned" : roomDraft
         let type = availableTypes.contains(editDeviceType) && editDeviceType != "all" ? editDeviceType : device.type
+        var nextProperties = device.properties
+        if supportsContactOpenDebounce(device) {
+            var debounce = JSON.object(nextProperties["contactOpenDebounce"])
+            debounce["enabled"] = editContactOpenDebounceEnabled
+            debounce["seconds"] = normalizedContactOpenDebounceSeconds(editContactOpenDebounceSeconds)
+            nextProperties["contactOpenDebounce"] = debounce
+        }
 
         savingDeviceDetails = true
         defer { savingDeviceDetails = false }
@@ -4295,6 +4347,7 @@ struct DevicesView: View {
             updated.name = name
             updated.room = room
             updated.type = type
+            updated.properties = nextProperties
             upsertDevice(updated)
             editDeviceID = nil
             prepareDeviceEditor(for: updated)
@@ -4305,7 +4358,8 @@ struct DevicesView: View {
             let response = try await session.apiClient.put("/api/devices/\(device.id)", body: [
                 "name": name,
                 "room": room,
-                "type": type
+                "type": type,
+                "properties": nextProperties
             ])
             let object = JSON.object(response)
             let data = JSON.object(object["data"])
@@ -5416,6 +5470,32 @@ struct DevicesView: View {
             || levelValue is String
             || !levelObject.isEmpty
             || !levelMetadata.isEmpty
+    }
+
+    private func normalizedContactOpenDebounceSeconds(_ value: Any?) -> Double {
+        let parsed = numberValue(from: value) ?? contactOpenDebounceDefaultSeconds
+        let stepped = (parsed / contactOpenDebounceStepSeconds).rounded() * contactOpenDebounceStepSeconds
+        return min(contactOpenDebounceMaxSeconds, max(contactOpenDebounceMinSeconds, stepped))
+    }
+
+    private func contactOpenDebounceConfig(for device: DeviceItem) -> (enabled: Bool, seconds: Double) {
+        let config = JSON.object(device.properties["contactOpenDebounce"])
+        return (
+            enabled: boolValue(config["enabled"]),
+            seconds: normalizedContactOpenDebounceSeconds(config["seconds"])
+        )
+    }
+
+    private func supportsContactOpenDebounce(_ device: DeviceItem) -> Bool {
+        guard device.type == "sensor" else { return false }
+        let state = directRadioState(for: device)
+        let features = propertyStringSet(for: device, key: "directRadioFeatures")
+        let contact = stringValue(state["contact"]).lowercased()
+        return boolValue(device.properties["supportsContactSensor"])
+            || features.contains("contact")
+            || state.keys.contains("contactOpen")
+            || contact == "open"
+            || contact == "closed"
     }
 
     private func isDirectRadioBackedDevice(_ device: DeviceItem) -> Bool {
