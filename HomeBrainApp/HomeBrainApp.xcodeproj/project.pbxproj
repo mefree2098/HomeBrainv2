@@ -357,6 +357,7 @@
 				INFOPLIST_KEY_NSAppTransportSecurity = "{NSAllowsArbitraryLoads = YES; NSAllowsLocalNetworking = YES;}";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "HomeBrainApp connects to your HomeBrain hub on your local network.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "HomeBrain uses your location to show local weather on dashboard widgets.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "HomeBrain scans Z-Wave QR codes for secure pairing.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "HomeBrain uses your microphone to capture voice commands.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "HomeBrain uses speech recognition to interpret your voice commands.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -395,6 +396,7 @@
 				INFOPLIST_KEY_NSAppTransportSecurity = "{NSAllowsArbitraryLoads = YES; NSAllowsLocalNetworking = YES;}";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "HomeBrainApp connects to your HomeBrain hub on your local network.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "HomeBrain uses your location to show local weather on dashboard widgets.";
+				INFOPLIST_KEY_NSCameraUsageDescription = "HomeBrain scans Z-Wave QR codes for secure pairing.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "HomeBrain uses your microphone to capture voice commands.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "HomeBrain uses speech recognition to interpret your voice commands.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

@@ -243,6 +243,7 @@ class DirectRadioService {
       inclusionUntil: null,
       exclusionUntil: null,
       s2DskPin: '',
+      s2Dsk: '',
       pendingDsk: null,
       pendingDskRequest: null,
       addNodeStatusEnum: null,

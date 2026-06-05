@@ -762,13 +762,21 @@ async startPairing(protocol, options = {}) {
         zwave,
         options.zwaveSecurityMode ?? options.securityMode
       );
+      const dskCredential = zwaveSecurityMode === 'insecure'
+        ? { pin: '', dsk: '', source: null, parsedQr: null }
+        : await this.normalizeZWaveDskCredential(options.dskPin);
       const session = this.createPairingSession('zwave', seconds, {
         message: zwaveSecurityMode === 'insecure'
           ? 'Z-Wave standard inclusion is opening without S2 security, so no DSK PIN is required.'
-          : 'Z-Wave secure inclusion is opening. HomeBrain may ask for the first 5 digits from the device DSK label.'
+          : dskCredential.pin
+            ? 'Z-Wave secure inclusion is opening with the DSK PIN ready before the device joins.'
+            : 'Z-Wave secure inclusion is opening. HomeBrain may ask for the first 5 digits from the device DSK label.'
       });
       session.zwaveSecurityMode = zwaveSecurityMode;
-      this.zwave.s2DskPin = trimString(options.dskPin);
+      session.zwaveDskCredentialSource = dskCredential.source || null;
+      session.zwaveDskPreloaded = Boolean(dskCredential.pin);
+      this.zwave.s2DskPin = dskCredential.pin;
+      this.zwave.s2Dsk = dskCredential.dsk;
       this.zwave.pendingDsk = null;
       this.log('info', 'zwave', 'Opening Z-Wave inclusion window', {
         durationSeconds: seconds,
