@@ -249,6 +249,9 @@ const getZWaveReplacementSecurityMode = (candidate: ZWaveRepairCandidate, select
   return selectedMode
 }
 
+const pairingHasDetectedDevice = (pairing: DirectRadioPairingSession | null | undefined) =>
+  Boolean(String(pairing?.directDeviceId || pairing?.detectedIdentity || "").trim())
+
 export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddDeviceDialogProps) {
   const [protocol, setProtocol] = useState<AddDeviceProtocol>("zwave")
   const [durationSeconds, setDurationSeconds] = useState("180")
@@ -480,6 +483,13 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
         }
 
         if (pairing?.status === "failed" || pairing?.status === "expired") {
+          if (activeProtocol === "zwave" && pairingHasDetectedDevice(pairing)) {
+            setStatusMessage("Z-Wave node joined. Finishing the secure interview and adding it to HomeBrain...")
+            setErrorMessage(null)
+            await onRefresh?.()
+            return
+          }
+
           setBusy(false)
           setActiveProtocol(null)
           setErrorMessage(pairing.message || `${activeLabel} pairing did not complete.`)
@@ -862,19 +872,17 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
                 {getZWaveSecurityMessage(zwaveSecurityMode)}
               </p>
             </Field>
-            {zwaveSecurityMode === "s2" || zwaveSecurityMode === "default" ? (
-              <Field label={zwaveSecurityMode === "s2" ? "DSK PIN or QR code" : "DSK PIN or QR code (optional)"}>
-                <Input
-                  value={zwaveDskInput}
-                  onChange={(event) => setZwaveDskInput(event.target.value.trim())}
-                  placeholder="5 digit PIN or Z-Wave QR payload"
-                  disabled={busy}
-                />
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Secure S2 needs this before the device joins. Use the 5 digit PIN printed on the label, or paste the raw Z-Wave QR payload.
-                </p>
-              </Field>
-            ) : null}
+            <Field label={zwaveSecurityMode === "s2" ? "DSK PIN or QR code (required)" : "DSK PIN or QR code"}>
+              <Input
+                value={zwaveDskInput}
+                onChange={(event) => setZwaveDskInput(event.target.value.trim())}
+                placeholder="5 digit PIN or Z-Wave QR payload"
+                disabled={busy}
+              />
+              <p className="mt-2 text-xs text-muted-foreground">
+                Required for Secure S2. Auto secure will use it when present; Standard and Legacy S0 do not need it.
+              </p>
+            </Field>
             {zwaveRepairCandidates.length > 0 ? (
               <div className="space-y-3 rounded-lg border border-amber-500/35 bg-amber-500/10 p-4">
                 <div className="flex items-start gap-3 text-sm text-amber-800 dark:text-amber-100">
