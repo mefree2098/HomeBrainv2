@@ -299,8 +299,6 @@ struct DevicesView: View {
                                     }
                                 }
 
-                                matterControllerPanel
-
                                 if let embeddedFocusedDevice {
                                     focusedDeviceCard(embeddedFocusedDevice)
                                         .frame(maxWidth: .infinity, alignment: .leading)
