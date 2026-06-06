@@ -7,6 +7,7 @@ const deviceService = require('../services/deviceService');
 const deviceUpdateEmitter = require('../services/deviceUpdateEmitter');
 const securityAlarmService = require('../services/securityAlarmService');
 const smartThingsService = require('../services/smartThingsService');
+const automationSchedulerService = require('../services/automationSchedulerService');
 
 test('getAlarmStatus returns security sensors and door lock summaries', async (t) => {
   const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
@@ -1473,7 +1474,7 @@ test('triggerAlarm sounds selected HomeBrain siren outputs only', async (t) => {
 
   assert.equal(result.alarmState, 'triggered');
   assert.equal(result.triggeredZone, 'Front Door');
-  assert.equal(result.saveCount, 1);
+  assert.equal(result.saveCount, 2);
   assert.deepEqual(capturedControls, [{
     deviceId: 'selected-siren',
     action: 'alarm_on',
@@ -1484,6 +1485,95 @@ test('triggerAlarm sounds selected HomeBrain siren outputs only', async (t) => {
   assert.equal(result.lastSirenTriggerResult.homebrain.soundedOutputs.length, 1);
   assert.equal(result.lastSirenTriggerResult.homebrain.soundedOutputs[0].deviceId, 'selected-siren');
   assert.equal(result.lastSirenTriggerResult.failedOutputs.length, 0);
+});
+
+test('triggerAlarm publishes triggered state before delayed siren output completes', async (t) => {
+  const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
+  const originalDeviceFind = Device.find;
+  const originalControlDevice = deviceService.controlDevice;
+  const originalTick = automationSchedulerService.tick;
+  const events = [];
+  let resolveControlStarted;
+  let finishControl;
+  const controlStarted = new Promise((resolve) => {
+    resolveControlStarted = resolve;
+  });
+  const controlCanFinish = new Promise((resolve) => {
+    finishControl = resolve;
+  });
+
+  const alarm = {
+    alarmState: 'armedStay',
+    enabledPlatforms: { homebrain: true, smartthings: false },
+    sirenOutputs: [{ deviceId: 'slow-siren', enabled: true }],
+    zones: [],
+    lastSirenTriggerResult: null,
+    saveCount: 0,
+    trigger: async function trigger(triggeredZone) {
+      this.alarmState = 'triggered';
+      this.triggeredZone = triggeredZone;
+    },
+    save: async function save() {
+      this.saveCount += 1;
+      events.push(this.lastSirenTriggerResult ? 'save:with-siren-result' : 'save:triggered-state');
+      return this;
+    }
+  };
+
+  t.after(() => {
+    SecurityAlarm.getMainAlarm = originalGetMainAlarm;
+    Device.find = originalDeviceFind;
+    deviceService.controlDevice = originalControlDevice;
+    automationSchedulerService.tick = originalTick;
+  });
+
+  SecurityAlarm.getMainAlarm = async () => alarm;
+  Device.find = () => ({
+    lean: async () => ([{
+      _id: 'slow-siren',
+      name: 'Slow HomeBrain Siren',
+      type: 'siren',
+      properties: {
+        source: 'homebrain-zwave',
+        homebrainDirect: { protocol: 'zwave', nodeId: 8 },
+        supportsAlarm: true
+      }
+    }])
+  });
+  deviceService.controlDevice = async (deviceId, action) => {
+    events.push(`control:${deviceId}:${action}:start`);
+    resolveControlStarted();
+    await controlCanFinish;
+    events.push(`control:${deviceId}:${action}:finish`);
+    return { _id: deviceId };
+  };
+  automationSchedulerService.tick = (context = {}) => {
+    events.push(`automation:${context.reason || ''}`);
+    return Promise.resolve();
+  };
+
+  const triggerPromise = securityAlarmService.triggerAlarm(null, { triggeredZoneName: 'Front Door' });
+  await controlStarted;
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(alarm.saveCount, 1);
+  assert.equal(alarm.lastSirenTriggerResult, null);
+  assert.ok(events.includes('save:triggered-state'));
+  assert.ok(events.includes('automation:triggered by Front Door'));
+  assert.ok(events.includes('control:slow-siren:alarm_on:start'));
+  assert.equal(events.includes('control:slow-siren:alarm_on:finish'), false);
+  assert.ok(
+    events.indexOf('automation:triggered by Front Door') < events.indexOf('control:slow-siren:alarm_on:finish')
+      || !events.includes('control:slow-siren:alarm_on:finish')
+  );
+
+  finishControl();
+  const result = await triggerPromise;
+
+  assert.equal(result.saveCount, 2);
+  assert.equal(result.lastSirenTriggerResult.homebrain.soundedOutputs[0].deviceId, 'slow-siren');
+  assert.ok(events.indexOf('automation:triggered by Front Door') < events.indexOf('control:slow-siren:alarm_on:finish'));
+  assert.ok(events.includes('save:with-siren-result'));
 });
 
 test('triggerAlarm falls back to turn_on when alarm_on command fails', async (t) => {

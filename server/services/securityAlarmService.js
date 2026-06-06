@@ -1998,8 +1998,7 @@ class SecurityAlarmService {
         options.triggeredZoneName || options.zoneName || triggeredZone?.name || triggeredZone
       ) || 'manual';
       await alarm.trigger(triggeredZoneName);
-      const sirenTriggerResult = await this.soundTriggeredAlarmOutputs(alarm);
-      alarm.lastSirenTriggerResult = sirenTriggerResult;
+      const sirenTriggerPromise = this.soundTriggeredAlarmOutputs(alarm);
       alarm.audioPrompts = this.getAudioPrompts(alarm);
       if (typeof alarm.save === 'function') {
         await alarm.save();
@@ -2007,6 +2006,12 @@ class SecurityAlarmService {
 
       if (alarm.alarmState !== previousState) {
         requestSecurityAlarmAutomationEvaluation(`triggered by ${triggeredZoneName}`);
+      }
+
+      const sirenTriggerResult = await sirenTriggerPromise;
+      alarm.lastSirenTriggerResult = sirenTriggerResult;
+      if (typeof alarm.save === 'function') {
+        await alarm.save();
       }
 
       console.log('SecurityAlarmService: Successfully triggered alarm');
