@@ -928,8 +928,9 @@ getZWaveNodeRouteRecoveryMap() {
     return this.zwave.nodeRouteRecoveries;
   },
 
-isZWaveAutoRouteRecoveryCandidate(node) {
-    return isZWaveNodeCommandProbeCandidate(node);
+  isZWaveAutoRouteRecoveryCandidate(node, device = null) {
+    return isZWaveNodeCommandProbeCandidate(node)
+      || this.isZWaveKnownDeviceProbeCandidate(node, device);
   },
 
 async persistZWaveNodeRecoveryResult(node, reason, logMessage) {
@@ -1156,7 +1157,8 @@ scheduleZWaveNodeRouteRecovery(node, reason, options = {}) {
     if (!Number.isInteger(nodeId) || nodeId <= 0 || node?.isControllerNode === true) {
       return false;
     }
-    if (!this.isZWaveAutoRouteRecoveryCandidate(node)) {
+    const device = options.device || null;
+    if (!this.isZWaveAutoRouteRecoveryCandidate(node, device)) {
       return false;
     }
     const recoveryMap = this.getZWaveNodeRouteRecoveryMap();
@@ -1177,7 +1179,8 @@ scheduleZWaveNodeRouteRecovery(node, reason, options = {}) {
           reason,
           automatic: true,
           cooldownMs: options.cooldownMs,
-          persistFailure: options.persistFailure
+          persistFailure: options.persistFailure,
+          device
         });
       } catch (error) {
         this.log('warn', 'zwave', 'Automatic Z-Wave node route recovery failed', {
@@ -1955,7 +1958,15 @@ async syncZWaveNodes() {
           interviewStage: node.interviewStage ?? null
         });
 
+        const device = await this.findDeviceForZWaveNode(node).catch((error) => {
+          this.log('debug', 'zwave', 'Unable to resolve known Z-Wave device before startup recovery scheduling', {
+            nodeId: node.id || null,
+            error: error.message || String(error)
+          });
+          return null;
+        });
         const scheduled = this.scheduleZWaveNodeRouteRecovery(node, 'startup sync', {
+          device,
           persistFailure: false
         });
         if (scheduled) {

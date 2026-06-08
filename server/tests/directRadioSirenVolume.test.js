@@ -420,7 +420,7 @@ test('Z-Wave startup sync does not probe generic controller shells', async () =>
     }
   });
   service.getZWaveControllerNodes = () => new Map([[node.id, node]]);
-  service.findDeviceForZWaveNode = async () => nativeSirenDevice();
+  service.findDeviceForZWaveNode = async () => null;
   service.handleZWaveNodeChanged = async (_node, reason) => {
     changedReason = reason;
   };
@@ -431,6 +431,53 @@ test('Z-Wave startup sync does not probe generic controller shells', async () =>
   assert.equal(changedReason, 'sync');
   assert.equal(isZWaveNodeCommandReady(node), false);
   assert.equal(node.__homebrainReachabilityProbe, undefined);
+});
+
+test('Z-Wave startup sync schedules recovery for known incomplete sirens without persisting offline', async () => {
+  const service = new DirectRadioService();
+  const node = zwaveNode({
+    ready: false,
+    status: 3,
+    interviewStage: 1,
+    isListening: true,
+    manufacturerId: null,
+    productType: null,
+    productId: null,
+    deviceConfig: null
+  });
+  const changedReasons = [];
+  let scheduledRecovery = null;
+
+  service.getZWaveControllerNodes = () => new Map([[node.id, node]]);
+  service.findDeviceForZWaveNode = async () => nativeSirenDevice({
+    properties: {
+      source: 'homebrain-zwave',
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: String(node.id),
+        manufacturerId: 634,
+        productType: 4,
+        productId: 873
+      },
+      directRadioFeatures: ['alarm', 'switch'],
+      supportsAlarm: true
+    }
+  });
+  service.handleZWaveNodeChanged = async (_node, reason) => {
+    changedReasons.push(reason);
+  };
+  service.scheduleZWaveNodeRouteRecovery = (scheduledNode, reason, options = {}) => {
+    scheduledRecovery = { node: scheduledNode, reason, options };
+    return true;
+  };
+
+  await service.syncZWaveNodes();
+
+  assert.deepEqual(changedReasons, []);
+  assert.equal(scheduledRecovery.node, node);
+  assert.equal(scheduledRecovery.reason, 'startup sync');
+  assert.equal(scheduledRecovery.options.persistFailure, false);
+  assert.equal(scheduledRecovery.options.device.properties.homebrainDirect.nodeId, String(node.id));
 });
 
 test('Z-Wave startup sync does not persist known sirens before startup recovery proves reachability', async () => {
