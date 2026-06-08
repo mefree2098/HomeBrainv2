@@ -1157,7 +1157,7 @@ scheduleZWaveNodeRouteRecovery(node, reason, options = {}) {
     if (!Number.isInteger(nodeId) || nodeId <= 0 || node?.isControllerNode === true) {
       return false;
     }
-    const device = options.device || null;
+    const device = options.device || node.__homebrainKnownRecoveryDevice || null;
     if (!this.isZWaveAutoRouteRecoveryCandidate(node, device)) {
       return false;
     }
@@ -1890,7 +1890,38 @@ async findDeviceForZWaveNode(node) {
     });
   },
 
-attachZWaveNodeStatusListeners(node) {
+  shouldDeferZWaveFailurePersistence(node, reason) {
+    const normalizedReason = trimString(reason).toLowerCase();
+    if (!['dead', 'interview failed'].includes(normalizedReason)) {
+      return false;
+    }
+    if (isZWaveNodeCommandReady(node)) {
+      return false;
+    }
+
+    const nodeId = getNumericNodeId(node);
+    if (!Number.isInteger(nodeId) || nodeId <= 0) {
+      return false;
+    }
+
+    const recovery = this.getZWaveNodeRouteRecoveryMap().get(nodeId);
+    if (recovery?.promise || recovery?.scheduledAt) {
+      return true;
+    }
+
+    const scheduled = this.scheduleZWaveNodeRouteRecovery(node, `${normalizedReason} event`, {
+      persistFailure: false
+    });
+    if (scheduled) {
+      this.log('warn', 'zwave', 'Scheduled bounded Z-Wave route recovery before persisting node failure', {
+        nodeId,
+        reason: normalizedReason
+      });
+    }
+    return scheduled;
+  },
+
+  attachZWaveNodeStatusListeners(node) {
     if (!node || node.__homebrainStatusListenersAttached || typeof node.on !== 'function') {
       return;
     }
@@ -1905,6 +1936,13 @@ attachZWaveNodeStatusListeners(node) {
         ready: node.ready === undefined ? null : Boolean(node.ready),
         status: node.status === undefined ? null : node.status
       });
+      if (this.shouldDeferZWaveFailurePersistence(node, reason)) {
+        this.log('warn', 'zwave', 'Deferred Z-Wave node failure persistence while route recovery is pending', {
+          nodeId: node.id || null,
+          reason
+        });
+        return;
+      }
       void this.handleZWaveNodeChanged(node, reason).catch((error) => {
         this.log('warn', 'zwave', 'Failed to update Z-Wave node after status event', {
           nodeId: node.id || null,
@@ -1965,6 +2003,9 @@ async syncZWaveNodes() {
           });
           return null;
         });
+        if (device) {
+          node.__homebrainKnownRecoveryDevice = device;
+        }
         const scheduled = this.scheduleZWaveNodeRouteRecovery(node, 'startup sync', {
           device,
           persistFailure: false
