@@ -21,6 +21,7 @@ const Scenes = lazy(() => import("./pages/Scenes").then((module) => ({ default: 
 const Workflows = lazy(() => import("./pages/Workflows").then((module) => ({ default: module.Workflows })))
 const VoiceDevices = lazy(() => import("./pages/VoiceDevices").then((module) => ({ default: module.VoiceDevices })))
 const WatchApp = lazy(() => import("./pages/WatchApp").then((module) => ({ default: module.WatchApp })))
+const Notifications = lazy(() => import("./pages/Notifications").then((module) => ({ default: module.Notifications })))
 const UserProfiles = lazy(() => import("./pages/UserProfiles").then((module) => ({ default: module.UserProfiles })))
 const Users = lazy(() => import("./pages/Users").then((module) => ({ default: module.Users })))
 const Settings = lazy(() => import("./pages/Settings").then((module) => ({ default: module.Settings })))
@@ -75,6 +76,7 @@ function App() {
             <Route path="/automations" element={<Navigate to="/workflows" replace />} />
             <Route path="/voice-devices" element={withLayout(<VoiceDevices />, { adminOnly: true })} />
             <Route path="/watch-app" element={withLayout(<WatchApp />)} />
+            <Route path="/notifications" element={withLayout(<Notifications />)} />
             <Route path="/voice-profiles" element={withLayout(<UserProfiles />)} />
             <Route path="/profiles" element={withLayout(<UserProfiles />)} />
             <Route path="/users" element={withLayout(<Users />, { adminOnly: true })} />

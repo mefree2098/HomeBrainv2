@@ -1,4 +1,4 @@
-import { Bug, Copy, LayoutGrid, Loader2, Menu, Mic, MicOff, PencilLine, Plus, Save, Settings, LogOut, Trash2, X } from "lucide-react"
+import { Bell, Bug, Copy, LayoutGrid, Loader2, Menu, Mic, MicOff, PencilLine, Plus, Save, Settings, ShieldAlert, LogOut, Trash2, X } from "lucide-react"
 import { Button } from "./ui/button"
 import { ThemeToggle } from "./ui/theme-toggle"
 import { Badge } from "./ui/badge"
@@ -9,6 +9,8 @@ import {
   SelectTrigger,
   SelectValue
 } from "./ui/select"
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover"
+import { ScrollArea } from "./ui/scroll-area"
 import {
   Dialog,
   DialogContent,
@@ -21,6 +23,7 @@ import { useLocation, useNavigate } from "react-router-dom"
 import { useState, useEffect, useRef } from "react"
 import { useToast } from "@/hooks/useToast"
 import { getDeviceStats } from "@/api/devices"
+import { getNotifications, type HomeBrainNotification, type NotificationCounts } from "@/api/notifications"
 import { browserVoiceAssistant, type BrowserVoiceStatus } from "@/services/browserVoiceAssistant"
 import { useDashboardChromeState } from "@/components/dashboard/DashboardChromeContext"
 import { HeaderResourceUtilizationStrip } from "@/components/system/SystemResourceUtilization"
@@ -41,6 +44,7 @@ const ROUTE_META: Record<string, { label: string; detail: string }> = {
   "/workflows": { label: "Workflow Studio", detail: "Behavioral automation" },
   "/automations": { label: "Workflow Studio", detail: "Behavioral automation" },
   "/watch-app": { label: "Watch App", detail: "Wrist controls and glance order" },
+  "/notifications": { label: "Notifications", detail: "Alert ledger" },
   "/voice-devices": { label: "Voice Nexus", detail: "Wake and response mesh" },
   "/voice-profiles": { label: "Voice Profiles", detail: "Assistant identity tuning" },
   "/profiles": { label: "Voice Profiles", detail: "Assistant identity tuning" },
@@ -72,6 +76,14 @@ export function Header({
     total: 0,
     loaded: false
   })
+  const [notificationCounts, setNotificationCounts] = useState<NotificationCounts>({
+    normal: 0,
+    securityCritical: 0,
+    total: 0
+  })
+  const [notificationItems, setNotificationItems] = useState<HomeBrainNotification[]>([])
+  const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [notificationsLoading, setNotificationsLoading] = useState(false)
   const [isVoiceDiagnosticsOpen, setIsVoiceDiagnosticsOpen] = useState(false)
   
   const subscriptionId = useRef(`header-browser-voice-${Date.now()}-${Math.random()}`).current
@@ -129,6 +141,34 @@ export function Header({
     fetchDeviceStats()
     const interval = setInterval(fetchDeviceStats, 60000)
 
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const fetchNotifications = async () => {
+      setNotificationsLoading(true)
+      try {
+        const response = await getNotifications({ limit: 6 })
+        if (cancelled) return
+        setNotificationCounts(response.counts || { normal: 0, securityCritical: 0, total: 0 })
+        setNotificationItems(response.notifications || [])
+      } catch (error) {
+        if (!cancelled) {
+          setNotificationCounts({ normal: 0, securityCritical: 0, total: 0 })
+          setNotificationItems([])
+        }
+      } finally {
+        if (!cancelled) setNotificationsLoading(false)
+      }
+    }
+
+    fetchNotifications()
+    const interval = setInterval(fetchNotifications, 30000)
     return () => {
       cancelled = true
       clearInterval(interval)
@@ -226,6 +266,92 @@ export function Header({
   const deviceLabel = homeDeviceStats.loaded
     ? `${homeDeviceStats.active}/${homeDeviceStats.total} devices active`
     : "Syncing device telemetry"
+  const notificationBell = (
+    <Popover open={notificationsOpen} onOpenChange={setNotificationsOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          title="Notifications"
+          className="relative shrink-0"
+          onClick={() => {
+            getNotifications({ limit: 6 })
+              .then((response) => {
+                setNotificationCounts(response.counts || { normal: 0, securityCritical: 0, total: 0 })
+                setNotificationItems(response.notifications || [])
+              })
+              .catch(() => {})
+          }}
+        >
+          <Bell className="h-5 w-5" />
+          {notificationCounts.securityCritical > 0 ? (
+            <span className="absolute -right-1 -top-1 min-w-5 rounded-full border border-red-400/40 bg-background px-1 text-center text-[10px] font-bold leading-4 text-red-500">
+              {notificationCounts.securityCritical > 99 ? "99+" : notificationCounts.securityCritical}
+            </span>
+          ) : null}
+          {notificationCounts.normal > 0 ? (
+            <span className="absolute -bottom-1 -right-1 min-w-5 rounded-full border border-amber-300/40 bg-background px-1 text-center text-[10px] font-bold leading-4 text-amber-400">
+              {notificationCounts.normal > 99 ? "99+" : notificationCounts.normal}
+            </span>
+          ) : null}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-[22rem] rounded-[1.25rem] border-white/10 bg-background/95 p-3 backdrop-blur-xl">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-foreground">Notifications</p>
+            <p className="text-xs text-muted-foreground">
+              {notificationCounts.total > 0 ? `${notificationCounts.total} unread` : "No unread notifications"}
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setNotificationsOpen(false)
+              navigate("/notifications")
+            }}
+          >
+            Open
+          </Button>
+        </div>
+        <ScrollArea className="max-h-80 pr-2">
+          {notificationItems.length === 0 ? (
+            <div className="rounded-[1rem] border border-white/10 bg-white/5 p-4 text-sm text-muted-foreground">
+              {notificationsLoading ? "Loading notifications..." : "No unread notifications"}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {notificationItems.map((notification) => {
+                const critical = notification.channel === "securityCritical"
+                return (
+                  <button
+                    key={notification.id}
+                    type="button"
+                    className="flex w-full items-start gap-3 rounded-[1rem] border border-white/10 bg-white/5 p-3 text-left transition-colors hover:bg-white/10"
+                    onClick={() => {
+                      setNotificationsOpen(false)
+                      navigate("/notifications")
+                    }}
+                  >
+                    {critical ? (
+                      <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+                    ) : (
+                      <Bell className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                    )}
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-semibold text-foreground">{notification.title}</span>
+                      <span className="mt-1 block line-clamp-2 text-xs text-muted-foreground">{notification.message}</span>
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </ScrollArea>
+      </PopoverContent>
+    </Popover>
+  )
 
   return (
     <header
@@ -288,6 +414,7 @@ export function Header({
 
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
           <HeaderResourceUtilizationStrip />
+          {notificationBell}
 
           {showsDashboardChrome ? (
             <>

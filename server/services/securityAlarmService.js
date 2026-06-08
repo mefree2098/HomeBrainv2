@@ -4,6 +4,7 @@ const bcrypt = require('bcrypt');
 const smartThingsService = require('./smartThingsService');
 const deviceService = require('./deviceService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
+const notificationService = require('./notificationService');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const Settings = require('../models/Settings');
 const {
@@ -2008,6 +2009,13 @@ class SecurityAlarmService {
         requestSecurityAlarmAutomationEvaluation(`triggered by ${triggeredZoneName}`);
       }
 
+      notificationService.recordSecurityAlarmTriggered(alarm, {
+        triggeredZoneName,
+        triggeredBy: options.triggeredBy || options.actor || options.userId
+      }).catch((error) => {
+        console.warn('SecurityAlarmService: Failed to record alarm-triggered notification:', error.message);
+      });
+
       const sirenTriggerResult = await sirenTriggerPromise;
       alarm.lastSirenTriggerResult = sirenTriggerResult;
       if (typeof alarm.save === 'function') {
@@ -2342,8 +2350,11 @@ class SecurityAlarmService {
         batteryLevel: alarm.batteryLevel,
         signalStrength: alarm.signalStrength
       };
-      
+
       console.log('SecurityAlarmService: Successfully retrieved alarm status');
+      notificationService.recordSensorBatteryNotifications(securitySensors).catch((error) => {
+        console.warn('SecurityAlarmService: Failed to record sensor battery notifications:', error.message);
+      });
       return status;
     } catch (error) {
       console.error('SecurityAlarmService: Error getting alarm status:', error.message);

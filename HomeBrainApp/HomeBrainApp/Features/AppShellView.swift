@@ -126,6 +126,7 @@ struct AppShellView: View {
         case workflows
         case voiceDevices
         case userProfiles
+        case notifications
         case ollama
         case whisper
         case platformDeploy
@@ -149,6 +150,7 @@ struct AppShellView: View {
             case .workflows: return "Workflows"
             case .voiceDevices: return "Voice Devices"
             case .userProfiles: return "User Profiles"
+            case .notifications: return "Notifications"
             case .settings: return "Settings"
             case .operations: return "Operations"
             case .platformDeploy: return "Platform Deploy"
@@ -172,6 +174,7 @@ struct AppShellView: View {
             case .workflows: return "Workflow Studio"
             case .voiceDevices: return "Voice Nexus"
             case .userProfiles: return "Identity Profiles"
+            case .notifications: return "Signal Center"
             case .settings: return "System Configuration"
             case .operations: return "Operations Center"
             case .platformDeploy: return "Deployment Bay"
@@ -195,6 +198,7 @@ struct AppShellView: View {
             case .workflows: return "Behavior Programming"
             case .voiceDevices: return "Wake Mesh"
             case .userProfiles: return "Identity Layer"
+            case .notifications: return "Alert Ledger"
             case .settings: return "Control Core"
             case .operations: return "Telemetry"
             case .platformDeploy: return "Rollout Status"
@@ -218,6 +222,7 @@ struct AppShellView: View {
             case .workflows: return "point.3.connected.trianglepath.dotted"
             case .voiceDevices: return "mic"
             case .userProfiles: return "person.2"
+            case .notifications: return "bell.badge"
             case .settings: return "gearshape"
             case .operations: return "waveform.path.ecg"
             case .platformDeploy: return "arrow.up.forward.app"
@@ -257,6 +262,8 @@ struct AppShellView: View {
     @State private var containerWidth: CGFloat = 0
     @StateObject private var dashboardChrome = DashboardChromeState()
     @StateObject private var deviceFocusState = DeviceFocusState()
+    @StateObject private var notificationTray = NotificationTrayStore()
+    @State private var isNotificationTrayOpen = false
     @State private var presentedDashboardDeviceID: String?
     @State private var detailRefreshGeneration = 0
     @AppStorage("homebrain.ios.theme-mode") private var themeModeRaw = HBThemeMode.system.rawValue
@@ -399,6 +406,7 @@ struct AppShellView: View {
                 isRegularSidebarCollapsed = false
             } else {
                 voiceAssistant.bind(sessionStore: session)
+                notificationTray.bind(sessionStore: session)
             }
             isCompactSidebarVisible = false
         }
@@ -422,11 +430,13 @@ struct AppShellView: View {
         }
         .onChange(of: session.isAuthenticated) { _, isAuthenticated in
             if !previewMode {
-                if !isAuthenticated {
-                    voiceAssistant.stop()
-                } else {
-                    voiceAssistant.bind(sessionStore: session)
-                }
+            if !isAuthenticated {
+                voiceAssistant.stop()
+                notificationTray.clear()
+            } else {
+                voiceAssistant.bind(sessionStore: session)
+                notificationTray.bind(sessionStore: session)
+            }
             }
         }
         .onChange(of: session.backendRecoveryGeneration) { _, generation in
@@ -464,6 +474,14 @@ struct AppShellView: View {
                 resourceStripLoading = false
                 resourceStripRefreshing = false
             }
+        }
+        .task(id: "\(session.currentUser?.id ?? "guest")-\(session.isAuthenticated)") {
+            guard !previewMode, session.isAuthenticated else {
+                notificationTray.clear()
+                return
+            }
+            notificationTray.bind(sessionStore: session)
+            await runNotificationTrayLoop()
         }
         .sheet(isPresented: Binding(
             get: { presentedDashboardDeviceID != nil },
@@ -553,12 +571,13 @@ struct AppShellView: View {
                         if showsTopBarResourceStrip {
                             resourceUtilizationStrip
                         }
-                        dashboardTopBarControls(compact: true)
-                        voiceToggleButton(compact: true)
-                        HBThemeToggleMenu()
-                        chromeIconButton(systemImage: "gearshape") {
-                            selection = .settings
-                        }
+                dashboardTopBarControls(compact: true)
+                voiceToggleButton(compact: true)
+                HBThemeToggleMenu()
+                notificationBellButton
+                chromeIconButton(systemImage: "gearshape") {
+                    selection = .settings
+                }
                         chromeIconButton(systemImage: "rectangle.portrait.and.arrow.right") {
                             exitShell()
                         }
@@ -585,12 +604,13 @@ struct AppShellView: View {
                 if showsTopBarResourceStrip {
                     resourceUtilizationStrip
                 }
-                dashboardTopBarControls(compact: useCondensedChromeControls)
-                voiceToggleButton(compact: useCondensedChromeControls)
-                HBThemeToggleMenu()
-                chromeIconButton(systemImage: "gearshape") {
-                    selection = .settings
-                }
+            dashboardTopBarControls(compact: useCondensedChromeControls)
+            voiceToggleButton(compact: useCondensedChromeControls)
+            HBThemeToggleMenu()
+            notificationBellButton
+            chromeIconButton(systemImage: "gearshape") {
+                selection = .settings
+            }
                 chromeIconButton(systemImage: "rectangle.portrait.and.arrow.right") {
                     exitShell()
                 }
@@ -612,7 +632,8 @@ struct AppShellView: View {
                     resourceUtilizationStrip
                 }
                 dashboardTopBarControls(compact: true)
-                chromeOverflowMenu
+                notificationBellButton
+                    chromeOverflowMenu
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -636,6 +657,7 @@ struct AppShellView: View {
                         dashboardChrome.send(.toggleEditing)
                     }
                 }
+                notificationBellButton
                 chromeOverflowMenu
             }
             .padding(.horizontal, 12)
@@ -657,6 +679,7 @@ struct AppShellView: View {
                     dashboardChrome.send(.toggleEditing)
                 }
             }
+            notificationBellButton
             chromeOverflowMenu
         }
         .padding(.horizontal, 12)
@@ -1176,6 +1199,129 @@ struct AppShellView: View {
         .disabled(isDisabled)
     }
 
+    private var notificationBellButton: some View {
+        Button {
+            isNotificationTrayOpen.toggle()
+            Task {
+                await notificationTray.refresh()
+            }
+        } label: {
+            ZStack {
+                Image(systemName: notificationTray.counts.total > 0 ? "bell.badge.fill" : "bell")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(HBPalette.textPrimary)
+                    .frame(width: chromeButtonSide, height: chromeButtonSide)
+                    .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
+
+                notificationCountBadges
+            }
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $isNotificationTrayOpen, attachmentAnchor: .point(.bottom), arrowEdge: .top) {
+            notificationTrayPopover
+                .frame(width: 340)
+                .padding(16)
+        }
+        .accessibilityLabel("Notifications")
+    }
+
+    @ViewBuilder
+    private var notificationCountBadges: some View {
+        if notificationTray.counts.securityCritical > 0 {
+            notificationBadge(
+                value: notificationTray.counts.securityCritical,
+                color: HBPalette.accentRed,
+                alignment: .topTrailing
+            )
+        }
+
+        if notificationTray.counts.normal > 0 {
+            notificationBadge(
+                value: notificationTray.counts.normal,
+                color: HBPalette.accentOrange,
+                alignment: .bottomTrailing
+            )
+        }
+    }
+
+    private func notificationBadge(value: Int, color: Color, alignment: Alignment) -> some View {
+        Text(value > 99 ? "99+" : "\(value)")
+            .font(HBTypography.body(size: 10, weight: .bold))
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(
+                Capsule()
+                    .fill(HBPalette.chrome.opacity(0.96))
+                    .overlay(Capsule().stroke(color.opacity(0.48), lineWidth: 1))
+            )
+            .frame(width: chromeButtonSide + 16, height: chromeButtonSide + 12, alignment: alignment)
+    }
+
+    private var notificationTrayPopover: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Notifications")
+                    .font(HBTypography.body(size: 17, weight: .semibold))
+                    .foregroundStyle(HBPalette.textPrimary)
+                Spacer()
+                Button {
+                    isNotificationTrayOpen = false
+                    selection = .notifications
+                } label: {
+                    Text("Open")
+                        .font(HBTypography.body(size: 13, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+            }
+
+            if let error = notificationTray.errorMessage, !error.isEmpty {
+                Text(error)
+                    .font(HBTypography.body(size: 13))
+                    .foregroundStyle(HBPalette.accentRed)
+            } else if notificationTray.recentItems.isEmpty {
+                Text("No unread notifications")
+                    .font(HBTypography.body(size: 13))
+                    .foregroundStyle(HBPalette.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 16)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(notificationTray.recentItems) { item in
+                        Button {
+                            isNotificationTrayOpen = false
+                            selection = .notifications
+                        } label: {
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: item.isSecurityCritical ? "shield.lefthalf.filled" : "bell")
+                                    .font(.system(size: 15, weight: .semibold))
+                                    .foregroundStyle(item.isSecurityCritical ? HBPalette.accentRed : HBPalette.accentOrange)
+                                    .frame(width: 20)
+
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(item.title)
+                                        .font(HBTypography.body(size: 13, weight: .semibold))
+                                        .foregroundStyle(HBPalette.textPrimary)
+                                        .lineLimit(1)
+                                    Text(item.message)
+                                        .font(HBTypography.body(size: 12))
+                                        .foregroundStyle(HBPalette.textSecondary)
+                                        .lineLimit(2)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .padding(10)
+                            .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+    }
+
     private var compactMenuButton: some View {
         Button {
             withAnimation(.easeInOut(duration: 0.25)) {
@@ -1518,6 +1664,8 @@ struct AppShellView: View {
             } else {
                 UserProfilesView()
             }
+        case .notifications:
+            NotificationsView()
         case .settings:
             if previewMode {
                 SettingsView(previewMode: true)
@@ -1592,6 +1740,16 @@ struct AppShellView: View {
                 break
             }
             await refreshResourceStrip(initialLoad: false)
+        }
+    }
+
+    private func runNotificationTrayLoop() async {
+        await notificationTray.refresh()
+
+        while !Task.isCancelled && session.isAuthenticated {
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            guard session.isAuthenticated else { return }
+            await notificationTray.refresh()
         }
     }
 
