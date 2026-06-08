@@ -22,7 +22,8 @@ import {
   Database,
   Link2,
   Zap,
-  Smartphone
+  Smartphone,
+  Bell
 } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { cn } from "@/lib/utils"
@@ -40,6 +41,7 @@ const navigation = [
   { name: 'Scenes', href: '/scenes', icon: Palette },
   { name: 'Workflows', href: '/workflows', icon: Workflow },
   { name: 'Watch App', href: '/watch-app', icon: Smartphone },
+  { name: 'Notifications', href: '/notifications', icon: Bell },
   { name: 'Voice Profiles', href: '/voice-profiles', icon: Volume2 },
   { name: 'Voice Devices', href: '/voice-devices', icon: Mic, adminOnly: true },
   { name: 'Alexa Broker', href: '/alexa-broker', icon: Link2, adminOnly: true },
