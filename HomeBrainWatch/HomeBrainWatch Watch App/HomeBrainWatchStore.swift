@@ -159,6 +159,18 @@ final class HomeBrainWatchStore: ObservableObject {
         commandInFlight = nil
     }
 
+    func registerPushDevice(_ registration: PushDeviceRegistrationRequest) async throws {
+        try await withValidAccessToken { client, token in
+            try await client.registerPushDevice(registration, accessToken: token)
+        }
+    }
+
+    func unregisterPushDevice(installationId: String) async throws {
+        try await withValidAccessToken { client, token in
+            try await client.unregisterPushDevice(installationId: installationId, accessToken: token)
+        }
+    }
+
     private func makeClient() throws -> HomeBrainAPIClient {
         try HomeBrainAPIClient(baseURLString: serverURL, deviceID: deviceID)
     }

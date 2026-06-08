@@ -9,6 +9,7 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var store = HomeBrainWatchStore()
+    @EnvironmentObject private var pushNotificationManager: WatchPushNotificationManager
 
     var body: some View {
         NavigationStack {
@@ -32,6 +33,19 @@ struct ContentView: View {
             }
         }
         .tint(.cyan)
+        .task {
+            pushNotificationManager.bind(store: store)
+            await pushNotificationManager.configureForAuthenticationState()
+        }
+        .onChange(of: store.isAuthenticated) { _, isAuthenticated in
+            Task {
+                if isAuthenticated {
+                    await pushNotificationManager.configureForAuthenticationState()
+                } else {
+                    pushNotificationManager.handleSignOut()
+                }
+            }
+        }
     }
 }
 

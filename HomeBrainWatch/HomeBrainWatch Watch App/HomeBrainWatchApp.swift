@@ -7,12 +7,16 @@
 
 import SwiftUI
 import AppIntents
+import WatchKit
 
 @main
 struct HomeBrainWatch_Watch_AppApp: App {
+    @WKApplicationDelegateAdaptor(WatchPushNotificationManager.self) private var pushNotificationManager
+
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(pushNotificationManager)
         }
     }
 }
