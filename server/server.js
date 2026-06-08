@@ -496,6 +496,7 @@ app.use(basicRoutes);
 app.use('/api/auth', authRoutes);
 // User Management Routes
 app.use('/api/users', userRoutes);
+app.use('/api/notifications', notificationRoutes);
 // Device Routes
 app.use('/api/devices', deviceRoutes);
 app.use('/api/direct-radios', directRadioRoutes);
