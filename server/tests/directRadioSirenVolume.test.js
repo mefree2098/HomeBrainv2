@@ -666,6 +666,60 @@ test('automatic Z-Wave startup route recovery does not persist failed siren reac
   assert.equal(isZWaveNodeCommandReady(node), false);
 });
 
+test('automatic Z-Wave route recoveries run one at a time', async () => {
+  const service = new DirectRadioService();
+  const firstNode = zwaveNode({ id: 22, ready: false, status: 3, interviewStage: 5, isListening: true });
+  const secondNode = zwaveNode({ id: 23, ready: false, status: 3, interviewStage: 5, isListening: true });
+  const events = [];
+  service.isZWaveAutoRouteRecoveryCandidate = () => true;
+
+  let releaseFirst;
+  const firstStarted = new Promise((resolve) => {
+    service.recoverZWaveNodeRoutes = async (nodeId) => {
+      events.push(`start:${nodeId}`);
+      if (nodeId === firstNode.id) {
+        resolve();
+        await new Promise((release) => {
+          releaseFirst = release;
+        });
+      }
+      events.push(`finish:${nodeId}`);
+      return { nodeId, recovered: true };
+    };
+  });
+  let secondStartedResolve;
+  const secondStarted = new Promise((resolve) => {
+    secondStartedResolve = resolve;
+  });
+  const recoverZWaveNodeRoutes = service.recoverZWaveNodeRoutes;
+  service.recoverZWaveNodeRoutes = async (nodeId, options) => {
+    if (nodeId === secondNode.id) {
+      secondStartedResolve();
+    }
+    return recoverZWaveNodeRoutes(nodeId, options);
+  };
+
+  assert.equal(service.scheduleZWaveNodeRouteRecovery(firstNode, 'test recovery', {
+    delayMs: 0,
+    queueSpacingMs: 0,
+    persistFailure: false
+  }), true);
+  assert.equal(service.scheduleZWaveNodeRouteRecovery(secondNode, 'test recovery', {
+    delayMs: 0,
+    queueSpacingMs: 0,
+    persistFailure: false
+  }), true);
+
+  await firstStarted;
+  await Promise.resolve();
+  assert.deepEqual(events, ['start:22']);
+
+  releaseFirst();
+  await secondStarted;
+  await Promise.resolve();
+  assert.deepEqual(events, ['start:22', 'finish:22', 'start:23', 'finish:23']);
+});
+
 test('Z-Wave command retries once after no-ack route recovery succeeds', async () => {
   const service = new DirectRadioService();
   const setCalls = [];
