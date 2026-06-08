@@ -8,6 +8,7 @@ const eventStreamService = require('./eventStreamService');
 
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
+const OFFLINE_DEVICE_EVENT_TYPES = ['device.offline', 'security.device.offline'];
 
 function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -77,6 +78,8 @@ function toPublicNotification(doc) {
     metadata: source.metadata || {},
     occurredAt: source.occurredAt,
     clearedAt: source.clearedAt || null,
+    resolvedAt: source.resolvedAt || null,
+    resolvedReason: source.resolvedReason || '',
     createdAt: source.createdAt,
     updatedAt: source.updatedAt,
     pushDelivery: source.pushDelivery || null
@@ -165,7 +168,7 @@ async function upsertNotificationForUser(userId, input) {
   const metadata = input.metadata && typeof input.metadata === 'object' ? input.metadata : {};
 
   const filter = eventKey
-    ? { userId, eventKey }
+    ? { userId, eventKey, clearedAt: null, resolvedAt: null }
     : { _id: undefined };
 
   if (!eventKey) {
@@ -208,6 +211,8 @@ async function upsertNotificationForUser(userId, input) {
         zoneDeviceId: normalizeString(input.zoneDeviceId),
         occurredAt,
         clearedAt: null,
+        resolvedAt: null,
+        resolvedReason: '',
         pushDelivery: {
           status: channel === 'securityCritical' ? 'skipped' : 'not_applicable',
           skippedReason: channel === 'securityCritical' ? 'push_delivery_pending' : ''
@@ -371,6 +376,43 @@ async function createSystemNotification(input = {}) {
   return notifications;
 }
 
+async function resolveStaleOfflineDeviceNotifications(offlineDeviceIds) {
+  const now = new Date();
+  const activeOfflineDeviceIds = Array.from(offlineDeviceIds || [])
+    .map(normalizeString)
+    .filter(Boolean);
+
+  const result = await HomeBrainNotification.updateMany(
+    {
+      eventType: { $in: OFFLINE_DEVICE_EVENT_TYPES },
+      clearedAt: null,
+      resolvedAt: null,
+      deviceId: { $nin: activeOfflineDeviceIds }
+    },
+    {
+      $set: {
+        resolvedAt: now,
+        resolvedReason: 'device_online',
+        'metadata.resolvedBy': 'device-health',
+        'metadata.resolvedAt': now.toISOString()
+      }
+    }
+  );
+
+  const resolvedCount = result.modifiedCount || 0;
+  if (resolvedCount > 0) {
+    publishEvent('notifications.resolved', null, {
+      reason: 'device_online',
+      resolvedCount
+    });
+  }
+
+  return {
+    resolvedCount,
+    resolvedAt: now
+  };
+}
+
 async function recordOfflineDeviceNotifications() {
   const [alarm, offlineDevices] = await Promise.all([
     SecurityAlarm.getMainAlarm().catch(() => null),
@@ -379,14 +421,19 @@ async function recordOfflineDeviceNotifications() {
       .lean()
   ]);
 
-  if (!Array.isArray(offlineDevices) || offlineDevices.length === 0) {
-    return [];
-  }
+  const safeOfflineDevices = Array.isArray(offlineDevices) ? offlineDevices : [];
+  const offlineDeviceIds = new Set(
+    safeOfflineDevices
+      .map((device) => normalizeString(device?._id?.toString?.() || device?._id || device?.id))
+      .filter(Boolean)
+  );
+
+  await resolveStaleOfflineDeviceNotifications(offlineDeviceIds);
 
   const securityDeviceIds = collectSecurityDeviceIds(alarm);
   const results = [];
 
-  for (const device of offlineDevices) {
+  for (const device of safeOfflineDevices) {
     const deviceId = normalizeString(device?._id?.toString?.() || device?._id || device?.id);
     if (!deviceId) continue;
 
@@ -430,12 +477,16 @@ async function listNotifications(userId, options = {}) {
   const limit = normalizeLimit(options.limit);
   const channel = normalizeString(options.channel);
   const includeCleared = normalizeBool(options.includeCleared, false);
+  const includeResolved = normalizeBool(options.includeResolved, includeCleared);
   const query = { userId };
   if (channel && channel !== 'all') {
     query.channel = normalizeChannel(channel);
   }
   if (!includeCleared) {
     query.clearedAt = null;
+  }
+  if (!includeResolved) {
+    query.resolvedAt = null;
   }
 
   const notifications = await HomeBrainNotification.find(query)
@@ -452,8 +503,8 @@ async function getUnreadCounts(userId) {
   });
 
   const [normal, securityCritical] = await Promise.all([
-    HomeBrainNotification.countDocuments({ userId, channel: 'normal', clearedAt: null }),
-    HomeBrainNotification.countDocuments({ userId, channel: 'securityCritical', clearedAt: null })
+    HomeBrainNotification.countDocuments({ userId, channel: 'normal', clearedAt: null, resolvedAt: null }),
+    HomeBrainNotification.countDocuments({ userId, channel: 'securityCritical', clearedAt: null, resolvedAt: null })
   ]);
   return {
     normal,
@@ -464,7 +515,7 @@ async function getUnreadCounts(userId) {
 
 async function clearNotification(userId, notificationId) {
   const updated = await HomeBrainNotification.findOneAndUpdate(
-    { _id: notificationId, userId, clearedAt: null },
+    { _id: notificationId, userId, clearedAt: null, resolvedAt: null },
     { $set: { clearedAt: new Date(), clearedBy: userId } },
     { new: true }
   );
@@ -477,7 +528,7 @@ async function clearNotification(userId, notificationId) {
 
 async function clearNotifications(userId, options = {}) {
   const channel = normalizeString(options.channel);
-  const query = { userId, clearedAt: null };
+  const query = { userId, clearedAt: null, resolvedAt: null };
   if (channel && channel !== 'all') {
     query.channel = normalizeChannel(channel);
   }

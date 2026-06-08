@@ -229,6 +229,7 @@ test('recordSensorBatteryNotifications separates monitored security battery deat
   const originalUserFind = User.find;
   const originalFindOneAndUpdate = HomeBrainNotification.findOneAndUpdate;
   const originalFindByIdAndUpdate = HomeBrainNotification.findByIdAndUpdate;
+  const originalUpdateMany = HomeBrainNotification.updateMany;
   const originalPushFind = PushSubscription.find;
   const originalPublishSafe = eventStreamService.publishSafe;
 
@@ -249,6 +250,7 @@ test('recordSensorBatteryNotifications separates monitored security battery deat
     ...created.find((entry) => entry._id === id),
     pushDelivery: update.$set.pushDelivery
   });
+  HomeBrainNotification.updateMany = async () => ({ modifiedCount: 0 });
   PushSubscription.find = () => makeQueryResult([]);
   eventStreamService.publishSafe = () => {};
 
@@ -256,6 +258,7 @@ test('recordSensorBatteryNotifications separates monitored security battery deat
     User.find = originalUserFind;
     HomeBrainNotification.findOneAndUpdate = originalFindOneAndUpdate;
     HomeBrainNotification.findByIdAndUpdate = originalFindByIdAndUpdate;
+    HomeBrainNotification.updateMany = originalUpdateMany;
     PushSubscription.find = originalPushFind;
     eventStreamService.publishSafe = originalPublishSafe;
   });
@@ -299,6 +302,7 @@ test('recordOfflineDeviceNotifications marks configured security devices as secu
   const originalDeviceFind = Device.find;
   const originalFindOneAndUpdate = HomeBrainNotification.findOneAndUpdate;
   const originalFindByIdAndUpdate = HomeBrainNotification.findByIdAndUpdate;
+  const originalUpdateMany = HomeBrainNotification.updateMany;
   const originalPushFind = PushSubscription.find;
   const originalPublishSafe = eventStreamService.publishSafe;
 
@@ -354,6 +358,7 @@ test('recordOfflineDeviceNotifications marks configured security devices as secu
     ...created.find((entry) => entry._id === id),
     pushDelivery: update.$set.pushDelivery
   });
+  HomeBrainNotification.updateMany = async () => ({ modifiedCount: 0 });
   PushSubscription.find = () => makeQueryResult([]);
   eventStreamService.publishSafe = () => {};
 
@@ -363,6 +368,7 @@ test('recordOfflineDeviceNotifications marks configured security devices as secu
     Device.find = originalDeviceFind;
     HomeBrainNotification.findOneAndUpdate = originalFindOneAndUpdate;
     HomeBrainNotification.findByIdAndUpdate = originalFindByIdAndUpdate;
+    HomeBrainNotification.updateMany = originalUpdateMany;
     PushSubscription.find = originalPushFind;
     eventStreamService.publishSafe = originalPublishSafe;
   });
@@ -376,4 +382,86 @@ test('recordOfflineDeviceNotifications marks configured security devices as secu
     'security.device.offline',
     'device.offline'
   ]);
+});
+
+test('recordOfflineDeviceNotifications resolves stale offline notifications when devices come online', async (t) => {
+  const originalUserFind = User.find;
+  const originalAlarmGetMainAlarm = SecurityAlarm.getMainAlarm;
+  const originalDeviceFind = Device.find;
+  const originalFindOneAndUpdate = HomeBrainNotification.findOneAndUpdate;
+  const originalFindByIdAndUpdate = HomeBrainNotification.findByIdAndUpdate;
+  const originalUpdateMany = HomeBrainNotification.updateMany;
+  const originalPushFind = PushSubscription.find;
+  const originalPublishSafe = eventStreamService.publishSafe;
+
+  const created = [];
+  const updateManyCalls = [];
+  const publishedEvents = [];
+
+  User.find = () => makeQueryResult([{ _id: '507f1f77bcf86cd799439011' }]);
+  SecurityAlarm.getMainAlarm = async () => ({ zones: [], sirenOutputs: [] });
+  Device.find = () => ({
+    select() {
+      return this;
+    },
+    lean: async () => ([
+      {
+        _id: 'front-door',
+        name: 'Front Door',
+        type: 'lock',
+        room: 'Entry',
+        isOnline: false,
+        properties: {}
+      }
+    ])
+  });
+  HomeBrainNotification.updateMany = async (filter, update) => {
+    updateManyCalls.push({ filter, update });
+    return { modifiedCount: 2 };
+  };
+  HomeBrainNotification.findOneAndUpdate = async (_filter, update) => {
+    const doc = {
+      _id: `notification-${created.length + 1}`,
+      ...update.$setOnInsert,
+      metadata: update.$set.metadata,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    created.push(doc);
+    return { value: doc, lastErrorObject: { updatedExisting: false } };
+  };
+  HomeBrainNotification.findByIdAndUpdate = async (id, update) => ({
+    ...created.find((entry) => entry._id === id),
+    pushDelivery: update.$set.pushDelivery
+  });
+  PushSubscription.find = () => makeQueryResult([]);
+  eventStreamService.publishSafe = (event) => {
+    publishedEvents.push(event);
+  };
+
+  t.after(() => {
+    User.find = originalUserFind;
+    SecurityAlarm.getMainAlarm = originalAlarmGetMainAlarm;
+    Device.find = originalDeviceFind;
+    HomeBrainNotification.findOneAndUpdate = originalFindOneAndUpdate;
+    HomeBrainNotification.findByIdAndUpdate = originalFindByIdAndUpdate;
+    HomeBrainNotification.updateMany = originalUpdateMany;
+    PushSubscription.find = originalPushFind;
+    eventStreamService.publishSafe = originalPublishSafe;
+  });
+
+  await notificationService.recordOfflineDeviceNotifications();
+
+  assert.equal(updateManyCalls.length, 1);
+  assert.deepEqual(updateManyCalls[0].filter.eventType.$in, ['device.offline', 'security.device.offline']);
+  assert.equal(updateManyCalls[0].filter.clearedAt, null);
+  assert.equal(updateManyCalls[0].filter.resolvedAt, null);
+  assert.deepEqual(updateManyCalls[0].filter.deviceId.$nin, ['front-door']);
+  assert.equal(updateManyCalls[0].update.$set.resolvedReason, 'device_online');
+  assert.equal(created.length, 1);
+  assert.equal(created[0].deviceId, 'front-door');
+
+  const resolvedEvent = publishedEvents.find((event) => event.type === 'notifications.resolved');
+  assert.equal(resolvedEvent.payload.resolvedCount, 2);
+  assert.equal(resolvedEvent.payload.reason, 'device_online');
 });

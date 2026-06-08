@@ -26,14 +26,19 @@ const formatDate = (value?: string) => {
 export function Notifications() {
   const { toast } = useToast();
   const [filter, setFilter] = useState<ChannelFilter>('all');
-  const [includeCleared, setIncludeCleared] = useState(false);
+  const [includeHistory, setIncludeHistory] = useState(false);
   const [notifications, setNotifications] = useState<HomeBrainNotification[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   const loadNotifications = useCallback(async () => {
     setIsLoading(true);
     try {
-      const response = await getNotifications({ channel: filter, includeCleared, limit: 150 });
+      const response = await getNotifications({
+        channel: filter,
+        includeCleared: includeHistory,
+        includeResolved: includeHistory,
+        limit: 150
+      });
       setNotifications(response.notifications || []);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to load notifications.';
@@ -41,13 +46,16 @@ export function Notifications() {
     } finally {
       setIsLoading(false);
     }
-  }, [filter, includeCleared, toast]);
+  }, [filter, includeHistory, toast]);
 
   useEffect(() => {
     loadNotifications();
   }, [loadNotifications]);
 
-  const activeCount = useMemo(() => notifications.filter((item) => !item.clearedAt).length, [notifications]);
+  const activeCount = useMemo(
+    () => notifications.filter((item) => !item.clearedAt && !item.resolvedAt).length,
+    [notifications]
+  );
 
   const handleClearAll = async () => {
     try {
@@ -107,11 +115,11 @@ export function Notifications() {
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
           <input
             type="checkbox"
-            checked={includeCleared}
-            onChange={(event) => setIncludeCleared(event.target.checked)}
+            checked={includeHistory}
+            onChange={(event) => setIncludeHistory(event.target.checked)}
             className="h-4 w-4 rounded border-border"
           />
-          Show cleared
+          Show history
         </label>
       </div>
 
@@ -135,12 +143,13 @@ export function Notifications() {
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="text-base font-semibold text-foreground">{notification.title}</h2>
                       {critical ? <Badge variant="destructive">Critical</Badge> : <Badge variant="secondary">Normal</Badge>}
+                      {notification.resolvedAt ? <Badge variant="outline">Resolved</Badge> : null}
                       {notification.clearedAt ? <Badge variant="outline">Cleared</Badge> : null}
                     </div>
                     <p className="mt-1 text-sm text-muted-foreground">{notification.message}</p>
                     <p className="mt-2 text-xs text-muted-foreground">{formatDate(notification.occurredAt)}</p>
                   </div>
-                  {!notification.clearedAt ? (
+                  {!notification.clearedAt && !notification.resolvedAt ? (
                     <Button variant="ghost" size="icon" onClick={() => handleClearOne(notification.id)} title="Clear notification">
                       <XCircle className="h-4 w-4" />
                     </Button>

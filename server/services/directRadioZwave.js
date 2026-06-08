@@ -944,7 +944,7 @@ async persistZWaveNodeRecoveryResult(node, reason, logMessage) {
     }
   },
 
-async runZWaveNodeRouteRecovery({ controller, node, nodeId, device, reason, force, pingTimeoutMs, routeRebuildTimeoutMs }) {
+  async runZWaveNodeRouteRecovery({ controller, node, nodeId, device, reason, force, pingTimeoutMs, routeRebuildTimeoutMs, persistFailure = true }) {
     const before = this.serializeZWaveNodeSummary(node);
     const knownDeviceIdentity = this.isZWaveKnownDeviceProbeCandidate(node, device);
     const controllerCandidate = this.isZWaveAutoRouteRecoveryCandidate(node);
@@ -1029,17 +1029,29 @@ async runZWaveNodeRouteRecovery({ controller, node, nodeId, device, reason, forc
       timeoutMs: pingTimeoutMs
     });
     const recovered = pingAfter.ready === true && isZWaveNodeCommandReady(node);
-    await this.persistZWaveNodeRecoveryResult(
-      node,
-      recovered ? 'route recovery ping recovered' : 'route recovery failed',
-      recovered
-        ? 'Failed to save Z-Wave node after route recovery'
-        : 'Failed to save Z-Wave node after failed route recovery'
-    );
+    const persisted = recovered || persistFailure;
+    if (persisted) {
+      await this.persistZWaveNodeRecoveryResult(
+        node,
+        recovered ? 'route recovery ping recovered' : 'route recovery failed',
+        recovered
+          ? 'Failed to save Z-Wave node after route recovery'
+          : 'Failed to save Z-Wave node after failed route recovery'
+      );
+    } else {
+      this.log('warn', 'zwave', 'Skipped persisting failed automatic Z-Wave route recovery result', {
+        nodeId,
+        reason,
+        routeRebuilt,
+        routeRebuildError,
+        pingAfter
+      });
+    }
 
     return {
       nodeId,
       recovered,
+      persisted,
       routeRebuilt,
       routeRebuildError,
       pingBefore,
@@ -1060,6 +1072,7 @@ async recoverZWaveNodeRoutes(nodeId, options = {}) {
     const reason = trimString(options.reason) || 'route recovery requested';
     const force = parseOptionalBoolean(options.force, false);
     const automatic = parseOptionalBoolean(options.automatic ?? options.auto, false);
+    const persistFailure = parseOptionalBoolean(options.persistFailure, true);
     const pingTimeoutMs = normalizeOptionalMilliseconds(
       options.pingTimeoutMs,
       ZWAVE_NODE_ROUTE_RECOVERY_PING_TIMEOUT_MS,
@@ -1114,7 +1127,8 @@ async recoverZWaveNodeRoutes(nodeId, options = {}) {
       reason,
       force,
       pingTimeoutMs,
-      routeRebuildTimeoutMs
+      routeRebuildTimeoutMs,
+      persistFailure
     });
 
     recoveryMap.set(numericNodeId, {
@@ -1162,7 +1176,8 @@ scheduleZWaveNodeRouteRecovery(node, reason, options = {}) {
         await this.recoverZWaveNodeRoutes(nodeId, {
           reason,
           automatic: true,
-          cooldownMs: options.cooldownMs
+          cooldownMs: options.cooldownMs,
+          persistFailure: options.persistFailure
         });
       } catch (error) {
         this.log('warn', 'zwave', 'Automatic Z-Wave node route recovery failed', {
@@ -1939,11 +1954,10 @@ async syncZWaveNodes() {
           status: node.status ?? null,
           interviewStage: node.interviewStage ?? null
         });
-      }
-      // eslint-disable-next-line no-await-in-loop
-      await this.handleZWaveNodeChanged(node, 'sync');
-      if (!isZWaveNodeCommandReady(node)) {
-        const scheduled = this.scheduleZWaveNodeRouteRecovery(node, 'startup sync');
+
+        const scheduled = this.scheduleZWaveNodeRouteRecovery(node, 'startup sync', {
+          persistFailure: false
+        });
         if (scheduled) {
           this.log('warn', 'zwave', 'Scheduled bounded Z-Wave route recovery during startup sync', {
             nodeId: node.id || null,
@@ -1951,8 +1965,11 @@ async syncZWaveNodes() {
             status: node.status ?? null,
             interviewStage: node.interviewStage ?? null
           });
+          continue;
         }
       }
+      // eslint-disable-next-line no-await-in-loop
+      await this.handleZWaveNodeChanged(node, 'sync');
     }
   },
 

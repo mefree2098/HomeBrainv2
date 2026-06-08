@@ -84,6 +84,16 @@ const HomeBrainNotificationSchema = new mongoose.Schema({
     ref: 'User',
     default: null
   },
+  resolvedAt: {
+    type: Date,
+    default: null,
+    index: true
+  },
+  resolvedReason: {
+    type: String,
+    default: '',
+    trim: true
+  },
   pushDelivery: {
     attemptedAt: { type: Date, default: null },
     status: {
@@ -105,13 +115,15 @@ HomeBrainNotificationSchema.index({
   userId: 1,
   channel: 1,
   clearedAt: 1,
+  resolvedAt: 1,
   occurredAt: -1
 });
 
 HomeBrainNotificationSchema.index({
   userId: 1,
   eventKey: 1,
-  clearedAt: 1
+  clearedAt: 1,
+  resolvedAt: 1
 });
 
 module.exports = mongoose.model('HomeBrainNotification', HomeBrainNotificationSchema);

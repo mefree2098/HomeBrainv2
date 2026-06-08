@@ -25,6 +25,8 @@ private struct HomeBrainNotificationItem: Identifiable, Equatable {
     let message: String
     let occurredAt: Date?
     let clearedAt: Date?
+    let resolvedAt: Date?
+    let resolvedReason: String
 
     var isSecurityCritical: Bool {
         channel == "securityCritical"
@@ -32,6 +34,14 @@ private struct HomeBrainNotificationItem: Identifiable, Equatable {
 
     var isCleared: Bool {
         clearedAt != nil
+    }
+
+    var isResolved: Bool {
+        resolvedAt != nil
+    }
+
+    var isActive: Bool {
+        !isCleared && !isResolved
     }
 
     static func from(_ object: [String: Any]) -> HomeBrainNotificationItem {
@@ -43,7 +53,9 @@ private struct HomeBrainNotificationItem: Identifiable, Equatable {
             title: JSON.string(object, "title", fallback: "HomeBrain notification"),
             message: JSON.string(object, "message"),
             occurredAt: JSON.date(from: object["occurredAt"]),
-            clearedAt: JSON.date(from: object["clearedAt"])
+            clearedAt: JSON.date(from: object["clearedAt"]),
+            resolvedAt: JSON.date(from: object["resolvedAt"]),
+            resolvedReason: JSON.string(object, "resolvedReason")
         )
     }
 }
@@ -72,7 +84,7 @@ struct NotificationsView: View {
             }
             .pickerStyle(.segmented)
 
-            Toggle("Show cleared", isOn: $includeCleared)
+            Toggle("Show history", isOn: $includeCleared)
                 .toggleStyle(.switch)
 
             if let errorMessage {
@@ -122,7 +134,7 @@ struct NotificationsView: View {
                     Label(clearButtonTitle, systemImage: "checkmark.circle")
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(notifications.filter { !$0.isCleared }.isEmpty || isLoading)
+                .disabled(notifications.filter(\.isActive).isEmpty || isLoading)
             }
         }
     }
@@ -221,6 +233,14 @@ struct NotificationsView: View {
                             .background(Color.red.opacity(0.15), in: Capsule())
                             .foregroundStyle(.red)
                     }
+                    if notification.isResolved {
+                        Text("Resolved")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.green.opacity(0.14), in: Capsule())
+                            .foregroundStyle(.green)
+                    }
                     if notification.isCleared {
                         Text("Cleared")
                             .font(.caption.bold())
@@ -242,7 +262,7 @@ struct NotificationsView: View {
 
             Spacer()
 
-            if !notification.isCleared {
+            if notification.isActive {
                 Button {
                     Task { await clearNotification(notification) }
                 } label: {
@@ -264,7 +284,8 @@ struct NotificationsView: View {
         do {
             var query = [
                 URLQueryItem(name: "limit", value: "100"),
-                URLQueryItem(name: "includeCleared", value: includeCleared ? "true" : "false")
+                URLQueryItem(name: "includeCleared", value: includeCleared ? "true" : "false"),
+                URLQueryItem(name: "includeResolved", value: includeCleared ? "true" : "false")
             ]
             if selectedChannel != .all {
                 query.append(URLQueryItem(name: "channel", value: selectedChannel.rawValue))
