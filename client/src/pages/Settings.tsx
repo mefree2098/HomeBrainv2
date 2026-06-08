@@ -172,6 +172,7 @@ import { GoveeIndoorAirIntegrationCard } from "@/components/weather/GoveeIndoorA
 import { RainMachineIntegrationCard } from "@/components/rainmachine/RainMachineIntegrationCard"
 import { HardwareOrbsTab } from "@/components/settings/HardwareOrbsTab"
 import { DeviceCommandCoordinatorTab } from "@/components/settings/DeviceCommandCoordinatorTab"
+import { RemoteHomeBrainNotificationsCard } from "@/components/settings/RemoteHomeBrainNotificationsCard"
 import { DirectRadioAdminCard } from "@/components/settings/DirectRadioAdminCard"
 import { DeviceCatalogUpdateCard } from "@/components/settings/DeviceCatalogUpdateCard"
 import { MatterThreadIntegrationCard } from "@/components/settings/MatterThreadIntegrationCard"
@@ -8371,6 +8372,8 @@ export function Settings() {
           </TabsContent>
 
           <TabsContent value="security" className="space-y-6">
+            <RemoteHomeBrainNotificationsCard />
+
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
