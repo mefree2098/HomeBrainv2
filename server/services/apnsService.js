@@ -1,9 +1,12 @@
 const fs = require('fs');
 const http2 = require('http2');
 const jwt = require('jsonwebtoken');
+const path = require('path');
 const { randomUUID } = require('crypto');
 
 const DEFAULT_BUNDLE_ID = 'NTechR.HomeBrainApp';
+const DEFAULT_WATCH_BUNDLE_ID = 'NTechR.HomeBrainApp.watchkitapp';
+const DEFAULT_KEY_PATH = path.resolve(__dirname, '../../HomeBrainApp/certs/AuthKey_X5B6XP8P7U.p8');
 const TOKEN_REFRESH_MS = 45 * 60 * 1000;
 
 let cachedJwt = null;
@@ -39,19 +42,24 @@ function getPrivateKey() {
     return inlineKey.replace(/\\n/g, '\n');
   }
 
-  const keyPath = normalizeString(process.env.HOMEBRAIN_APNS_PRIVATE_KEY_PATH || process.env.APNS_PRIVATE_KEY_PATH);
+  const keyPath = normalizeString(process.env.HOMEBRAIN_APNS_PRIVATE_KEY_PATH || process.env.APNS_PRIVATE_KEY_PATH) || DEFAULT_KEY_PATH;
   if (!keyPath) return '';
   return fs.readFileSync(keyPath, 'utf8');
 }
 
 function getConfig() {
-  const teamId = normalizeString(process.env.HOMEBRAIN_APNS_TEAM_ID || process.env.APNS_TEAM_ID);
-  const keyId = normalizeString(process.env.HOMEBRAIN_APNS_KEY_ID || process.env.APNS_KEY_ID);
+  const teamId = normalizeString(process.env.HOMEBRAIN_APNS_TEAM_ID || process.env.APNS_TEAM_ID) || '3P6SLH7MFX';
+  const keyId = normalizeString(process.env.HOMEBRAIN_APNS_KEY_ID || process.env.APNS_KEY_ID) || 'X5B6XP8P7U';
   const bundleId = normalizeString(
     process.env.HOMEBRAIN_APNS_BUNDLE_ID
-      || process.env.APNS_TOPIC
-      || process.env.IOS_BUNDLE_ID
+    || process.env.APNS_TOPIC
+    || process.env.IOS_BUNDLE_ID
   ) || DEFAULT_BUNDLE_ID;
+  const watchBundleId = normalizeString(
+    process.env.HOMEBRAIN_APNS_WATCH_BUNDLE_ID
+    || process.env.WATCH_APNS_TOPIC
+    || process.env.WATCH_BUNDLE_ID
+  ) || DEFAULT_WATCH_BUNDLE_ID;
   const environment = getEnvironment();
   const privateKey = getPrivateKey();
   const criticalAlertsEnabled = envFlag(
@@ -64,6 +72,7 @@ function getConfig() {
     teamId,
     keyId,
     bundleId,
+    watchBundleId,
     environment,
     privateKey,
     host: getApnsHost(environment),
@@ -133,6 +142,25 @@ function buildApsPayload(input, config) {
   return payload;
 }
 
+function resolveBundleId(input = {}, config) {
+  const explicitBundleId = normalizeString(input.bundleId || input.apnsTopic || input.topic);
+  if (explicitBundleId) return explicitBundleId;
+
+  const deviceFamily = normalizeString(input.deviceFamily).toLowerCase();
+  if (deviceFamily === 'watch' || deviceFamily === 'applewatch' || deviceFamily === 'watchos') {
+    return config.watchBundleId || DEFAULT_WATCH_BUNDLE_ID;
+  }
+
+  return config.bundleId || DEFAULT_BUNDLE_ID;
+}
+
+function resolveEnvironment(input = {}, config) {
+  const environment = normalizeString(input.environment).toLowerCase();
+  if (environment === 'production' || environment === 'prod') return 'production';
+  if (environment === 'development' || environment === 'sandbox' || environment === 'dev') return 'development';
+  return config.environment || getEnvironment();
+}
+
 function sendAlertToToken(deviceToken, input = {}) {
   let config;
   try {
@@ -180,10 +208,13 @@ function sendAlertToToken(deviceToken, input = {}) {
     : Math.floor(Date.now() / 1000) + ttlSeconds;
   const apnsId = normalizeString(input.apnsId) || randomUUID();
   const collapseId = sanitizeCollapseId(input.collapseId || input.eventKey);
+  const bundleId = resolveBundleId(input, config);
+  const environment = resolveEnvironment(input, config);
+  const host = getApnsHost(environment);
   const payload = JSON.stringify(buildApsPayload(input, config));
 
   return new Promise((resolve) => {
-    const client = http2.connect(config.host);
+    const client = http2.connect(host);
     let responseBody = '';
     let resolved = false;
 
@@ -211,7 +242,7 @@ function sendAlertToToken(deviceToken, input = {}) {
       ':path': `/3/device/${token}`,
       authorization: `bearer ${providerToken}`,
       'content-type': 'application/json',
-      'apns-topic': config.bundleId,
+      'apns-topic': bundleId,
       'apns-push-type': 'alert',
       'apns-priority': '10',
       'apns-expiration': String(expiration),
@@ -272,9 +303,14 @@ function getStatus() {
       environment: getEnvironment(),
       bundleId: normalizeString(
         process.env.HOMEBRAIN_APNS_BUNDLE_ID
-          || process.env.APNS_TOPIC
-          || process.env.IOS_BUNDLE_ID
+        || process.env.APNS_TOPIC
+        || process.env.IOS_BUNDLE_ID
       ) || DEFAULT_BUNDLE_ID,
+      watchBundleId: normalizeString(
+        process.env.HOMEBRAIN_APNS_WATCH_BUNDLE_ID
+        || process.env.WATCH_APNS_TOPIC
+        || process.env.WATCH_BUNDLE_ID
+      ) || DEFAULT_WATCH_BUNDLE_ID,
       criticalAlertsEnabled: false,
       host: getApnsHost(getEnvironment()),
       missing: ['HOMEBRAIN_APNS_PRIVATE_KEY or HOMEBRAIN_APNS_PRIVATE_KEY_PATH'],
@@ -286,6 +322,7 @@ function getStatus() {
     configured: config.configured,
     environment: config.environment,
     bundleId: config.bundleId,
+    watchBundleId: config.watchBundleId,
     criticalAlertsEnabled: config.criticalAlertsEnabled,
     host: config.host,
     missing: [

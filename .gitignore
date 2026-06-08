@@ -19,6 +19,7 @@ client/.env.local
 *.pem
 *.key
 *.p12
+*.p8
 *.crt
 *.csr
 

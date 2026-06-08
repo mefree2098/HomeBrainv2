@@ -27,7 +27,7 @@ const PushSubscriptionSchema = new mongoose.Schema({
   },
   deviceFamily: {
     type: String,
-    enum: ['iPhone', 'iPad', 'iPod', 'mac', 'unknown'],
+    enum: ['iPhone', 'iPad', 'iPod', 'Watch', 'mac', 'unknown'],
     default: 'unknown',
     index: true
   },

@@ -57,11 +57,20 @@ test('registerPushDevice enables security critical push by default only for iPho
     deviceToken: 'def456',
     deviceFamily: 'iPad'
   });
+  const watch = await notificationService.registerPushDevice('507f1f77bcf86cd799439011', {
+    installationId: 'watch-install',
+    deviceToken: 'ghi789',
+    deviceFamily: 'watchOS'
+  });
 
   assert.equal(phone.securityCriticalPushEnabled, true);
   assert.equal(tablet.securityCriticalPushEnabled, false);
+  assert.equal(watch.deviceFamily, 'Watch');
+  assert.equal(watch.securityCriticalPushEnabled, false);
   assert.equal(updates[0].update.$set.securityCriticalPushEnabled, true);
   assert.equal(updates[1].update.$set.securityCriticalPushEnabled, false);
+  assert.equal(updates[2].update.$set.deviceFamily, 'Watch');
+  assert.equal(updates[2].update.$set.securityCriticalPushEnabled, false);
 });
 
 test('createSystemNotification sends APNs only for security critical notifications', async (t) => {
@@ -98,6 +107,16 @@ test('createSystemNotification sends APNs only for security critical notificatio
       _id: 'sub-phone',
       deviceToken: 'phone-token',
       deviceFamily: 'iPhone',
+      bundleId: 'NTechR.HomeBrainApp',
+      environment: 'production',
+      securityCriticalPushEnabled: true
+    },
+    {
+      _id: 'sub-watch',
+      deviceToken: 'watch-token',
+      deviceFamily: 'Watch',
+      bundleId: 'NTechR.HomeBrainApp.watchkitapp',
+      environment: 'development',
       securityCriticalPushEnabled: true
     }
   ]);
@@ -140,8 +159,14 @@ test('createSystemNotification sends APNs only for security critical notificatio
   });
 
   assert.equal(created.length, 2);
-  assert.equal(sent.length, 1);
+  assert.equal(sent.length, 2);
   assert.equal(sent[0].token, 'phone-token');
+  assert.equal(sent[0].payload.bundleId, 'NTechR.HomeBrainApp');
+  assert.equal(sent[0].payload.environment, 'production');
+  assert.equal(sent[1].token, 'watch-token');
+  assert.equal(sent[1].payload.deviceFamily, 'Watch');
+  assert.equal(sent[1].payload.bundleId, 'NTechR.HomeBrainApp.watchkitapp');
+  assert.equal(sent[1].payload.environment, 'development');
   assert.equal(sent[0].payload.eventType, 'security.alarm.triggered');
   assert.equal(sent[0].payload.channel, 'securityCritical');
 });

@@ -39,6 +39,25 @@ struct LightCommandRequest: Encodable {
     let brightness: Int?
 }
 
+struct PushDeviceRegistrationRequest: Encodable {
+    let installationId: String
+    let deviceToken: String
+    let deviceFamily: String
+    let deviceName: String
+    let systemVersion: String
+    let appVersion: String?
+    let buildNumber: String?
+    let bundleId: String
+    let environment: String
+    let pushEnabled: Bool
+    let securityCriticalPushEnabled: Bool
+    let authorizationStatus: String
+}
+
+struct PushDeviceResponse: Decodable {
+    let success: Bool
+}
+
 final class HomeBrainAPIClient {
     private let baseURL: URL
     private let deviceID: String
@@ -115,6 +134,26 @@ final class HomeBrainAPIClient {
         )
 
         return response.lights
+    }
+
+    func registerPushDevice(_ registration: PushDeviceRegistrationRequest, accessToken: String) async throws {
+        _ = try await send(
+            path: "/api/notifications/push/devices",
+            method: "POST",
+            token: accessToken,
+            body: registration,
+            responseType: PushDeviceResponse.self
+        )
+    }
+
+    func unregisterPushDevice(installationId: String, accessToken: String) async throws {
+        let encodedInstallationId = installationId.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? installationId
+        _ = try await send(
+            path: "/api/notifications/push/devices/\(encodedInstallationId)",
+            method: "DELETE",
+            token: accessToken,
+            responseType: PushDeviceResponse.self
+        )
     }
 
     private func send<Response: Decodable>(

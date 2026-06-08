@@ -52,6 +52,7 @@ function normalizeDeviceFamily(value) {
   if (normalized === 'iphone' || normalized === 'phone') return 'iPhone';
   if (normalized === 'ipad' || normalized === 'tablet') return 'iPad';
   if (normalized === 'ipod') return 'iPod';
+  if (normalized === 'watch' || normalized === 'applewatch' || normalized === 'watchos') return 'Watch';
   if (normalized === 'mac' || normalized === 'macos') return 'mac';
   return 'unknown';
 }
@@ -280,6 +281,9 @@ async function deliverSecurityCriticalPushes(notification, input = {}) {
       eventType: publicNotification.eventType,
       eventKey: publicNotification.eventKey,
       deviceId: publicNotification.deviceId,
+      deviceFamily: subscription.deviceFamily,
+      bundleId: subscription.bundleId,
+      environment: subscription.environment,
       collapseId: input.collapseId,
       ttlSeconds: input.ttlSeconds ?? 10 * 60
     });
