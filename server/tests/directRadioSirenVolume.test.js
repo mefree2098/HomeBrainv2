@@ -433,6 +433,41 @@ test('Z-Wave startup sync does not probe generic controller shells', async () =>
   assert.equal(node.__homebrainReachabilityProbe, undefined);
 });
 
+test('Z-Wave startup sync does not persist known sirens before startup recovery proves reachability', async () => {
+  const service = new DirectRadioService();
+  const node = zwaveNode({
+    ready: false,
+    status: 3,
+    interviewStage: 5,
+    isListening: true,
+    manufacturerId: 634,
+    productType: 4,
+    productId: 873,
+    deviceConfig: {
+      manufacturer: 'Zooz',
+      label: 'ZSE50'
+    }
+  });
+  const changedReasons = [];
+  let scheduledRecovery = null;
+
+  service.getZWaveControllerNodes = () => new Map([[node.id, node]]);
+  service.handleZWaveNodeChanged = async (_node, reason) => {
+    changedReasons.push(reason);
+  };
+  service.scheduleZWaveNodeRouteRecovery = (scheduledNode, reason, options = {}) => {
+    scheduledRecovery = { node: scheduledNode, reason, options };
+    return true;
+  };
+
+  await service.syncZWaveNodes();
+
+  assert.deepEqual(changedReasons, []);
+  assert.equal(scheduledRecovery.node, node);
+  assert.equal(scheduledRecovery.reason, 'startup sync');
+  assert.equal(scheduledRecovery.options.persistFailure, false);
+});
+
 test('Z-Wave route recovery rebuilds routes for interviewed listening nodes', async () => {
   const service = new DirectRadioService();
   const rebuildCalls = [];
@@ -484,6 +519,66 @@ test('Z-Wave route recovery rebuilds routes for interviewed listening nodes', as
   assert.equal(result.routeRebuilt, true);
   assert.equal(isZWaveNodeCommandReady(node), true);
   assert.equal(changedReasons.includes('route recovery ping recovered'), true);
+});
+
+test('automatic Z-Wave startup route recovery does not persist failed siren reachability', async () => {
+  const service = new DirectRadioService();
+  const node = zwaveNode({
+    ready: false,
+    status: 3,
+    interviewStage: 5,
+    isListening: true,
+    manufacturerId: 634,
+    productType: 4,
+    productId: 873,
+    deviceConfig: {
+      manufacturer: 'Zooz',
+      label: 'ZSE50'
+    }
+  });
+  const rebuildCalls = [];
+  const probeReasons = [];
+  const changedReasons = [];
+  const controller = {
+    rebuildNodeRoutes: async (nodeId) => {
+      rebuildCalls.push(nodeId);
+      return false;
+    }
+  };
+
+  service.handleZWaveNodeChanged = async (_node, reason) => {
+    changedReasons.push(reason);
+  };
+  service.probeZWaveNodeCommandReadiness = async (_node, context = {}) => {
+    probeReasons.push(context.reason);
+    return {
+      ready: false,
+      skipped: false,
+      reason: context.reason || 'test probe failed'
+    };
+  };
+
+  const result = await service.runZWaveNodeRouteRecovery({
+    controller,
+    node,
+    nodeId: node.id,
+    device: nativeSirenDevice(),
+    reason: 'startup sync',
+    force: false,
+    persistFailure: false,
+    pingTimeoutMs: 1000,
+    routeRebuildTimeoutMs: 1000
+  });
+
+  assert.deepEqual(probeReasons, [
+    'startup sync: ping before route rebuild',
+    'startup sync: ping after route rebuild'
+  ]);
+  assert.deepEqual(rebuildCalls, [node.id]);
+  assert.equal(result.recovered, false);
+  assert.equal(result.persisted, false);
+  assert.deepEqual(changedReasons, []);
+  assert.equal(isZWaveNodeCommandReady(node), false);
 });
 
 test('Z-Wave command retries once after no-ack route recovery succeeds', async () => {

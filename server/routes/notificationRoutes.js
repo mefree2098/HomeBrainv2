@@ -47,6 +47,7 @@ router.get('/', async (req, res) => {
     const notifications = await notificationService.listNotifications(getUserId(req), {
       channel: req.query.channel,
       includeCleared: req.query.includeCleared,
+      includeResolved: req.query.includeResolved,
       limit: req.query.limit
     });
     const counts = await notificationService.getUnreadCounts(getUserId(req));

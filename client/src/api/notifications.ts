@@ -13,6 +13,8 @@ export interface HomeBrainNotification {
   deviceId?: string;
   occurredAt?: string;
   clearedAt?: string | null;
+  resolvedAt?: string | null;
+  resolvedReason?: string;
 }
 
 export interface NotificationCounts {
@@ -30,6 +32,7 @@ export interface NotificationListResponse {
 export interface NotificationListOptions {
   channel?: NotificationChannel | 'all';
   includeCleared?: boolean;
+  includeResolved?: boolean;
   limit?: number;
 }
 
@@ -37,6 +40,7 @@ const buildQuery = (options: NotificationListOptions = {}) => {
   const params = new URLSearchParams();
   if (options.channel && options.channel !== 'all') params.set('channel', options.channel);
   if (options.includeCleared) params.set('includeCleared', 'true');
+  if (options.includeResolved) params.set('includeResolved', 'true');
   if (options.limit) params.set('limit', String(options.limit));
   const query = params.toString();
   return query ? `?${query}` : '';
