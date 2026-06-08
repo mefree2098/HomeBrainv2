@@ -1063,28 +1063,39 @@ struct AppShellView: View {
     }
 
     private var resourceUtilizationStrip: some View {
-        let noGPU = resourceStripMetrics.filter { $0.key != .gpu }
-        let minimal = resourceStripMetrics.filter { $0.key == .cpu || $0.key == .ram }
+        let metrics = resourceStripMetricsForChrome
 
-        return Group {
-            if isCompact && !isCompactHeight {
-                resourceUtilizationStripContent(metrics: minimal, compact: true)
-                    .frame(maxWidth: 150)
-            } else if isCompactHeight {
-                resourceUtilizationStripContent(metrics: resourceStripMetrics, compact: true)
-                    .fixedSize(horizontal: true, vertical: false)
-            } else if !usesSidebarDrawer {
-                resourceUtilizationStripContent(metrics: resourceStripMetrics, compact: true)
-                    .fixedSize(horizontal: true, vertical: false)
-            } else {
-                ViewThatFits(in: .horizontal) {
-                    resourceUtilizationStripContent(metrics: resourceStripMetrics, compact: useCondensedChromeControls)
-                    resourceUtilizationStripContent(metrics: noGPU, compact: useCondensedChromeControls)
-                    resourceUtilizationStripContent(metrics: minimal, compact: true)
-                }
-                .frame(maxWidth: useCondensedChromeControls ? resourceStripCondensedMaxWidth : 310, alignment: .leading)
-            }
+        return resourceUtilizationStripContent(metrics: metrics, compact: true)
+            .frame(maxWidth: resourceStripMaxWidth(for: metrics), alignment: .leading)
+            .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var resourceStripMetricsForChrome: [ResourceStripMetric] {
+        if isCompact && !isCompactHeight {
+            return resourceStripMetrics.filter { $0.key == .cpu || $0.key == .ram }
         }
+
+        if isCompactHeight {
+            return resourceStripMetrics
+        }
+
+        if usesSidebarDrawer || useCondensedChromeControls {
+            return resourceStripMetrics.filter { $0.key != .gpu }
+        }
+
+        return resourceStripMetrics
+    }
+
+    private func resourceStripMaxWidth(for metrics: [ResourceStripMetric]) -> CGFloat {
+        if metrics.count <= 2 {
+            return 150
+        }
+
+        if metrics.count == 3 {
+            return resourceStripCondensedMaxWidth
+        }
+
+        return 310
     }
 
     private func resourceUtilizationStripContent(metrics: [ResourceStripMetric], compact: Bool = false) -> some View {
@@ -1116,6 +1127,8 @@ struct AppShellView: View {
     private func resourceMetricChip(_ metric: ResourceStripMetric, compact: Bool = false) -> some View {
         let barColors = resourceBarGradient(for: metric.percent)
         let percentLabel = metric.telemetryAvailable ? "\(Int(metric.percent.rounded()))%" : (metric.detected ? "DET" : "N/A")
+        let barWidth: CGFloat = compact ? 30 : 36
+        let fillRatio = CGFloat(metric.telemetryAvailable ? min(max(metric.percent, 0), 100) / 100 : 0)
 
         return VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 2) {
@@ -1130,25 +1143,21 @@ struct AppShellView: View {
                     .foregroundStyle(HBPalette.textSecondary)
             }
 
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(HBPalette.panelStroke.opacity(0.55))
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(HBPalette.panelStroke.opacity(0.55))
 
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: barColors,
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: barColors,
+                            startPoint: .leading,
+                            endPoint: .trailing
                         )
-                        .frame(
-                            width: geometry.size.width * CGFloat(metric.telemetryAvailable ? metric.percent / 100 : 0)
-                        )
-                }
+                    )
+                    .frame(width: barWidth * fillRatio)
             }
-            .frame(height: 5)
+            .frame(width: barWidth, height: 5)
 
             HStack {
                 Spacer(minLength: 0)

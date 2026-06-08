@@ -273,7 +273,7 @@ export function Header({
           variant="ghost"
           size="icon"
           title="Notifications"
-          className="relative shrink-0"
+          className="relative h-11 w-14 shrink-0 overflow-visible rounded-full"
           onClick={() => {
             getNotifications({ limit: 6 })
               .then((response) => {
@@ -283,14 +283,14 @@ export function Header({
               .catch(() => {})
           }}
         >
-          <Bell className="h-5 w-5" />
+          <Bell className="h-5 w-5 -translate-x-1.5" />
           {notificationCounts.securityCritical > 0 ? (
-            <span className="absolute -right-1 -top-1 min-w-5 rounded-full border border-red-400/40 bg-background px-1 text-center text-[10px] font-bold leading-4 text-red-500">
+            <span className="absolute right-1 top-1 min-w-[1.25rem] rounded-full border border-red-400/50 bg-background px-1 text-center text-[10px] font-bold leading-4 text-red-500 shadow-sm">
               {notificationCounts.securityCritical > 99 ? "99+" : notificationCounts.securityCritical}
             </span>
           ) : null}
           {notificationCounts.normal > 0 ? (
-            <span className="absolute -bottom-1 -right-1 min-w-5 rounded-full border border-amber-300/40 bg-background px-1 text-center text-[10px] font-bold leading-4 text-amber-400">
+            <span className="absolute bottom-1 right-1 min-w-[1.25rem] rounded-full border border-amber-300/50 bg-background px-1 text-center text-[10px] font-bold leading-4 text-amber-400 shadow-sm">
               {notificationCounts.normal > 99 ? "99+" : notificationCounts.normal}
             </span>
           ) : null}
