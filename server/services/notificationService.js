@@ -361,6 +361,7 @@ async function createSystemNotification(input = {}) {
     : await findHomeBrainUsers();
 
   const notifications = [];
+  let remoteForwardNotification = null;
   for (const user of users) {
     const { notification, created } = await upsertNotificationForUser(user._id, input);
     let publicNotification = toPublicNotification(notification);
@@ -369,12 +370,24 @@ async function createSystemNotification(input = {}) {
       const delivery = await deliverSecurityCriticalPushes(notification, input);
       const updated = await updatePushDelivery(notification._id, delivery);
       publicNotification = toPublicNotification(updated || notification);
+      if (!remoteForwardNotification) {
+        remoteForwardNotification = publicNotification;
+      }
     }
 
     if (created) {
       publishEvent('notification.created', publicNotification);
     }
     notifications.push(publicNotification);
+  }
+
+  if (remoteForwardNotification) {
+    const remoteHomeBrainNotificationService = require('./remoteHomeBrainNotificationService');
+    remoteHomeBrainNotificationService
+      .forwardSecurityCriticalNotification(remoteForwardNotification, input)
+      .catch((error) => {
+        console.warn('NotificationService: failed to forward security-critical notification:', error.message);
+      });
   }
 
   return notifications;
