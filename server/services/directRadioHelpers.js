@@ -241,6 +241,11 @@ function isZWaveDirectUpdateInterviewComplete(update = {}, reason = '') {
     return false;
   }
 
+  const interviewStage = trimString(direct.interviewStage).toLowerCase();
+  if (interviewStage && !['5', 'complete', 'completed'].includes(interviewStage)) {
+    return false;
+  }
+
   const features = Array.isArray(properties.directRadioFeatures)
     ? properties.directRadioFeatures.map(normalizeFeature).filter(Boolean)
     : [];
