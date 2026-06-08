@@ -8,6 +8,7 @@ const directRadioProtocolCatalogService = require('../services/directRadioProtoc
 
 const DirectRadioService = directRadioService.DirectRadioService;
 const {
+  isZWaveDirectUpdateInterviewComplete,
   isZWaveNodeCommandReady,
   isZWaveNodeCommandProbeCandidate,
   isZWaveNodeOnline
@@ -229,6 +230,33 @@ test('Z-Wave readiness treats dead or incomplete nodes as offline', () => {
   assert.equal(isZWaveNodeCommandReady(aliveNode), true);
   assert.equal(aliveUpdate.isOnline, true);
   assert.equal(aliveUpdate.properties.homebrainDirect.ready, true);
+});
+
+test('Z-Wave pairing completion rejects catalog-backed ProtocolInfo shells', () => {
+  const update = {
+    brand: 'Zooz',
+    model: 'ZSE50',
+    properties: {
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: 22,
+        ready: true,
+        status: 4,
+        interviewStage: 'ProtocolInfo',
+        catalog: {
+          manufacturerId: 634,
+          productType: 4,
+          productId: 873
+        }
+      },
+      directRadioFeatures: ['alarm', 'chime']
+    }
+  };
+
+  assert.equal(isZWaveDirectUpdateInterviewComplete(update, 'ready'), false);
+
+  update.properties.homebrainDirect.interviewStage = 'Complete';
+  assert.equal(isZWaveDirectUpdateInterviewComplete(update, 'ready'), true);
 });
 
 test('Z-Wave readiness accepts a fresh probe for interviewed listening nodes', () => {

@@ -285,6 +285,7 @@ directRadioService._test = {
   getSirenVolumeConfigParameterFromCatalog,
   getSirenVolumeOptionsFromParameter,
   isDuplicateDirectRadioRecord,
+  isZWaveDirectUpdateInterviewComplete,
   isZWaveNodeCommandReady,
   isZWaveNodeCommandProbeCandidate,
   isZWaveNodeOnline,
