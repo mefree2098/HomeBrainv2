@@ -56,6 +56,9 @@ const {
 const ZWAVE_NODE_ROUTE_RECOVERY_COOLDOWN_MS = 2 * 60 * 1000;
 const ZWAVE_NODE_ROUTE_RECOVERY_TIMEOUT_MS = 45 * 1000;
 const ZWAVE_NODE_ROUTE_RECOVERY_PING_TIMEOUT_MS = 10 * 1000;
+const ZWAVE_NODE_ROUTE_RECOVERY_DELAY_MS = 5 * 1000;
+const ZWAVE_NODE_ROUTE_RECOVERY_STARTUP_DELAY_MS = 30 * 1000;
+const ZWAVE_NODE_ROUTE_RECOVERY_SPACING_MS = 4 * 1000;
 const ZWAVE_JS_LOG_TAIL_MAX_BYTES = 4 * 1024 * 1024;
 
 function normalizeOptionalMilliseconds(value, fallback, min, max) {
@@ -1169,19 +1172,37 @@ scheduleZWaveNodeRouteRecovery(node, reason, options = {}) {
     recoveryMap.set(nodeId, {
       scheduledAt: Date.now()
     });
-    const delayMs = normalizeOptionalMilliseconds(options.delayMs, 1000, 0, 30000);
+    const delayMs = normalizeOptionalMilliseconds(options.delayMs, ZWAVE_NODE_ROUTE_RECOVERY_DELAY_MS, 0, 120000);
+    const queueSpacingMs = normalizeOptionalMilliseconds(
+      options.queueSpacingMs,
+      ZWAVE_NODE_ROUTE_RECOVERY_SPACING_MS,
+      0,
+      30000
+    );
     void (async () => {
       if (delayMs > 0) {
         await delay(delayMs);
       }
       try {
-        await this.recoverZWaveNodeRoutes(nodeId, {
+        const previousQueue = this.zwave.nodeRouteRecoveryQueue || Promise.resolve();
+        const queuedRecovery = previousQueue.catch(() => {}).then(async () => {
+          const lastStartedAt = Number(this.zwave.lastNodeRouteRecoveryStartedAt) || 0;
+          const elapsedSinceLastStart = Date.now() - lastStartedAt;
+          const spacingDelayMs = Math.max(0, queueSpacingMs - elapsedSinceLastStart);
+          if (spacingDelayMs > 0) {
+            await delay(spacingDelayMs);
+          }
+          this.zwave.lastNodeRouteRecoveryStartedAt = Date.now();
+          return this.recoverZWaveNodeRoutes(nodeId, {
           reason,
           automatic: true,
           cooldownMs: options.cooldownMs,
           persistFailure: options.persistFailure,
           device
+          });
         });
+        this.zwave.nodeRouteRecoveryQueue = queuedRecovery.catch(() => {});
+        await queuedRecovery;
       } catch (error) {
         this.log('warn', 'zwave', 'Automatic Z-Wave node route recovery failed', {
           nodeId,
@@ -1993,7 +2014,9 @@ async syncZWaveNodes() {
           nodeId: node.id || null,
           ready: node.ready === undefined ? null : Boolean(node.ready),
           status: node.status ?? null,
-          interviewStage: node.interviewStage ?? null
+          interviewStage: node.interviewStage ?? null,
+          delayMs: ZWAVE_NODE_ROUTE_RECOVERY_STARTUP_DELAY_MS,
+          queueSpacingMs: ZWAVE_NODE_ROUTE_RECOVERY_SPACING_MS
         });
 
         const device = await this.findDeviceForZWaveNode(node).catch((error) => {
@@ -2008,6 +2031,8 @@ async syncZWaveNodes() {
         }
         const scheduled = this.scheduleZWaveNodeRouteRecovery(node, 'startup sync', {
           device,
+          delayMs: ZWAVE_NODE_ROUTE_RECOVERY_STARTUP_DELAY_MS,
+          queueSpacingMs: ZWAVE_NODE_ROUTE_RECOVERY_SPACING_MS,
           persistFailure: false
         });
         if (scheduled) {
