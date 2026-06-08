@@ -480,6 +480,44 @@ test('Z-Wave startup sync schedules recovery for known incomplete sirens without
   assert.equal(scheduledRecovery.options.device.properties.homebrainDirect.nodeId, String(node.id));
 });
 
+test('Z-Wave interview failure defers persistence while known siren recovery is pending', async () => {
+  const service = new DirectRadioService();
+  const node = zwaveNode({
+    ready: false,
+    status: 3,
+    interviewStage: 1,
+    isListening: true,
+    manufacturerId: null,
+    productType: null,
+    productId: null,
+    deviceConfig: null
+  });
+
+  node.__homebrainKnownRecoveryDevice = nativeSirenDevice({
+    properties: {
+      source: 'homebrain-zwave',
+      homebrainDirect: {
+        protocol: 'zwave',
+        nodeId: String(node.id),
+        manufacturerId: 634,
+        productType: 4,
+        productId: 873
+      },
+      directRadioFeatures: ['alarm', 'switch'],
+      supportsAlarm: true
+    }
+  });
+
+  const recoveryMap = service.getZWaveNodeRouteRecoveryMap();
+  recoveryMap.set(node.id, {
+    scheduledAt: Date.now()
+  });
+
+  const deferred = service.shouldDeferZWaveFailurePersistence(node, 'interview failed');
+
+  assert.equal(deferred, true);
+});
+
 test('Z-Wave startup sync does not persist known sirens before startup recovery proves reachability', async () => {
   const service = new DirectRadioService();
   const node = zwaveNode({
