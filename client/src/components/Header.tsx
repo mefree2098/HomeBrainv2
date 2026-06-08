@@ -10,7 +10,6 @@ import {
   SelectValue
 } from "./ui/select"
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover"
-import { ScrollArea } from "./ui/scroll-area"
 import {
   Dialog,
   DialogContent,
@@ -153,7 +152,7 @@ export function Header({
     const fetchNotifications = async () => {
       setNotificationsLoading(true)
       try {
-        const response = await getNotifications({ limit: 6 })
+        const response = await getNotifications({ limit: 30 })
         if (cancelled) return
         setNotificationCounts(response.counts || { normal: 0, securityCritical: 0, total: 0 })
         setNotificationItems(response.notifications || [])
@@ -275,7 +274,7 @@ export function Header({
           title="Notifications"
           className="relative h-11 w-14 shrink-0 overflow-visible rounded-full"
           onClick={() => {
-            getNotifications({ limit: 6 })
+            getNotifications({ limit: 30 })
               .then((response) => {
                 setNotificationCounts(response.counts || { normal: 0, securityCritical: 0, total: 0 })
                 setNotificationItems(response.notifications || [])
@@ -315,7 +314,7 @@ export function Header({
             Open
           </Button>
         </div>
-        <ScrollArea className="max-h-80 pr-2">
+        <div className="max-h-[min(24rem,calc(100vh-10rem))] overflow-y-auto overscroll-contain pr-2">
           {notificationItems.length === 0 ? (
             <div className="rounded-[1rem] border border-white/10 bg-white/5 p-4 text-sm text-muted-foreground">
               {notificationsLoading ? "Loading notifications..." : "No unread notifications"}
@@ -348,7 +347,7 @@ export function Header({
               })}
             </div>
           )}
-        </ScrollArea>
+        </div>
       </PopoverContent>
     </Popover>
   )

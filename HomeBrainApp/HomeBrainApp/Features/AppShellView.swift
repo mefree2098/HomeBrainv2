@@ -1297,7 +1297,8 @@ struct AppShellView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 16)
             } else {
-                VStack(spacing: 8) {
+                ScrollView(.vertical, showsIndicators: true) {
+                    VStack(spacing: 8) {
                     ForEach(notificationTray.recentItems) { item in
                         Button {
                             isNotificationTrayOpen = false
@@ -1325,8 +1326,10 @@ struct AppShellView: View {
                             .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
                         }
                         .buttonStyle(.plain)
+                        }
                     }
                 }
+                .frame(maxHeight: 320)
             }
         }
     }

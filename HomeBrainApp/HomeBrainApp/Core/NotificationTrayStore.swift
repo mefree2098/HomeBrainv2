@@ -48,7 +48,7 @@ final class NotificationTrayStore: ObservableObject {
         errorMessage = nil
     }
 
-    func refresh(limit: Int = 6) async {
+    func refresh(limit: Int = 30) async {
         guard let sessionStore, sessionStore.isAuthenticated else {
             clear()
             return
