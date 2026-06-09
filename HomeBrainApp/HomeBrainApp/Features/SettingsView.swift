@@ -276,6 +276,24 @@ private struct SecurityMonitoringSensorDraft: Identifiable, Equatable {
     }
 }
 
+private struct DynamicDnsReverseProxyRoute: Identifiable, Hashable {
+    let id: String
+    let hostname: String
+    var enabled: Bool
+    var dynamicDnsEnabled: Bool
+
+    static func from(_ object: [String: Any]) -> DynamicDnsReverseProxyRoute? {
+        let id = JSON.string(object, "_id")
+        guard !id.isEmpty else { return nil }
+        return DynamicDnsReverseProxyRoute(
+            id: id,
+            hostname: JSON.string(object, "hostname", fallback: "unknown"),
+            enabled: JSON.bool(object, "enabled", fallback: false),
+            dynamicDnsEnabled: JSON.bool(object, "dynamicDnsEnabled", fallback: false)
+        )
+    }
+}
+
 struct SettingsView: View {
     let previewMode: Bool
 
@@ -331,6 +349,26 @@ struct SettingsView: View {
     @State private var securityPinDrafts: [SecurityPinDraft] = []
     @State private var securityMonitoringSensors: [SecurityMonitoringSensorDraft] = []
     @State private var autoDiscoveryEnabled = false
+    @State private var dynamicDnsEnabled = false
+    @State private var dynamicDnsCheckIntervalSeconds = 60
+    @State private var dynamicDnsPublicIpUrl = "https://api.ipify.org?format=json"
+    @State private var dynamicDnsPrimaryHostname = ""
+    @State private var dynamicDnsAzureTenantId = ""
+    @State private var dynamicDnsAzureClientId = ""
+    @State private var dynamicDnsAzureClientSecret = ""
+    @State private var dynamicDnsAzureClientSecretConfigured = false
+    @State private var dynamicDnsAzureSubscriptionId = ""
+    @State private var dynamicDnsAzureResourceGroup = ""
+    @State private var dynamicDnsAzureZoneName = ""
+    @State private var dynamicDnsAzureTtlSeconds = 60
+    @State private var dynamicDnsLastPublicIp = ""
+    @State private var dynamicDnsLastCheckedAt = ""
+    @State private var dynamicDnsLastUpdatedAt = ""
+    @State private var dynamicDnsLastStatus = "never"
+    @State private var dynamicDnsLastError = ""
+    @State private var dynamicDnsRoutes: [DynamicDnsReverseProxyRoute] = []
+    @State private var loadingDynamicDnsRoutes = false
+    @State private var pushingDynamicDns = false
 
     @State private var llmProvider = "openai"
     @State private var openaiModel = "gpt-5.2-codex"
@@ -678,6 +716,7 @@ struct SettingsView: View {
         case .general:
             settingsConnectionSection
             settingsGeneralSection
+            settingsDynamicDnsSection
             settingsSaveRefreshSection
 
         case .voice:
@@ -748,6 +787,86 @@ struct SettingsView: View {
             Toggle("Enable Notifications", isOn: $enableNotifications)
             Toggle("Enable Security Mode", isOn: $enableSecurityMode)
             Toggle("Enable Auto Discovery", isOn: $autoDiscoveryEnabled)
+        }
+    }
+
+    @ViewBuilder
+    private var settingsDynamicDnsSection: some View {
+        Section("Dynamic DNS") {
+            Toggle("Enable Dynamic DNS", isOn: $dynamicDnsEnabled)
+            TextField("Primary Hostname", text: $dynamicDnsPrimaryHostname)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            TextField("Public IP URL", text: $dynamicDnsPublicIpUrl)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            Stepper("Check every \(dynamicDnsCheckIntervalSeconds)s", value: $dynamicDnsCheckIntervalSeconds, in: 60...3600, step: 60)
+            Stepper("Azure TTL \(dynamicDnsAzureTtlSeconds)s", value: $dynamicDnsAzureTtlSeconds, in: 30...86400, step: 30)
+            TextField("Azure Tenant ID", text: $dynamicDnsAzureTenantId)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            TextField("Azure Client ID", text: $dynamicDnsAzureClientId)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            SecureField(dynamicDnsAzureClientSecretConfigured ? "Azure Client Secret Configured" : "Azure Client Secret", text: $dynamicDnsAzureClientSecret)
+            TextField("Azure Subscription ID", text: $dynamicDnsAzureSubscriptionId)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            TextField("Azure Resource Group", text: $dynamicDnsAzureResourceGroup)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+            TextField("Azure DNS Zone", text: $dynamicDnsAzureZoneName)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+
+            Button {
+                Task { await pushDynamicDnsUpdatesNow() }
+            } label: {
+                if pushingDynamicDns {
+                    ProgressView()
+                } else {
+                    Label("Push DNS updates now", systemImage: "arrow.clockwise")
+                }
+            }
+            .disabled(pushingDynamicDns)
+
+            LabeledContent("Status", value: dynamicDnsLastStatus)
+            LabeledContent("Current IP", value: dynamicDnsLastPublicIp.isEmpty ? "Unknown" : dynamicDnsLastPublicIp)
+            LabeledContent("Last checked", value: settingsFormatDateTime(dynamicDnsLastCheckedAt))
+            LabeledContent("Last pushed", value: settingsFormatDateTime(dynamicDnsLastUpdatedAt))
+            if !dynamicDnsLastError.isEmpty {
+                Text(dynamicDnsLastError)
+                    .font(HBTypography.body(.caption))
+                    .foregroundStyle(.red)
+            }
+        }
+
+        Section("Reverse Proxy Dynamic DNS") {
+            if loadingDynamicDnsRoutes {
+                ProgressView()
+            } else if dynamicDnsRoutes.isEmpty {
+                Text("No reverse proxy routes found.")
+                    .foregroundStyle(HBPalette.textSecondary)
+            } else {
+                ForEach(dynamicDnsRoutes) { route in
+                    Toggle(isOn: Binding(
+                        get: { route.dynamicDnsEnabled },
+                        set: { enabled in
+                            Task { await setDynamicDnsRoute(route, enabled: enabled) }
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(route.hostname)
+                            Text(route.enabled ? "Enabled" : "Disabled")
+                                .font(HBTypography.body(.caption))
+                                .foregroundStyle(HBPalette.textSecondary)
+                        }
+                    }
+                }
+            }
+            Button("Refresh Reverse Proxy Routes") {
+                Task { await loadDynamicDnsRoutes() }
+            }
         }
     }
 
@@ -1731,6 +1850,23 @@ struct SettingsView: View {
             enableNotifications = JSON.bool(settings, "enableNotifications", fallback: enableNotifications)
             enableSecurityMode = JSON.bool(settings, "enableSecurityMode", fallback: enableSecurityMode)
             autoDiscoveryEnabled = JSON.bool(settings, "autoDiscoveryEnabled", fallback: autoDiscoveryEnabled)
+            dynamicDnsEnabled = JSON.bool(settings, "dynamicDnsEnabled", fallback: dynamicDnsEnabled)
+            dynamicDnsCheckIntervalSeconds = max(60, min(3600, JSON.int(settings, "dynamicDnsCheckIntervalSeconds", fallback: dynamicDnsCheckIntervalSeconds)))
+            dynamicDnsPublicIpUrl = JSON.string(settings, "dynamicDnsPublicIpUrl", fallback: dynamicDnsPublicIpUrl)
+            dynamicDnsPrimaryHostname = JSON.string(settings, "dynamicDnsPrimaryHostname")
+            dynamicDnsAzureTenantId = JSON.string(settings, "dynamicDnsAzureTenantId")
+            dynamicDnsAzureClientId = JSON.string(settings, "dynamicDnsAzureClientId")
+            dynamicDnsAzureClientSecret = ""
+            dynamicDnsAzureClientSecretConfigured = JSON.bool(settings, "dynamicDnsAzureClientSecretConfigured", fallback: dynamicDnsAzureClientSecretConfigured)
+            dynamicDnsAzureSubscriptionId = JSON.string(settings, "dynamicDnsAzureSubscriptionId")
+            dynamicDnsAzureResourceGroup = JSON.string(settings, "dynamicDnsAzureResourceGroup")
+            dynamicDnsAzureZoneName = JSON.string(settings, "dynamicDnsAzureZoneName")
+            dynamicDnsAzureTtlSeconds = max(30, min(86400, JSON.int(settings, "dynamicDnsAzureTtlSeconds", fallback: dynamicDnsAzureTtlSeconds)))
+            dynamicDnsLastPublicIp = JSON.string(settings, "dynamicDnsLastPublicIp")
+            dynamicDnsLastCheckedAt = JSON.string(settings, "dynamicDnsLastCheckedAt")
+            dynamicDnsLastUpdatedAt = JSON.string(settings, "dynamicDnsLastUpdatedAt")
+            dynamicDnsLastStatus = JSON.string(settings, "dynamicDnsLastStatus", fallback: dynamicDnsLastStatus)
+            dynamicDnsLastError = JSON.string(settings, "dynamicDnsLastError")
 
             llmProvider = JSON.string(settings, "llmProvider", fallback: llmProvider)
             openaiModel = JSON.string(settings, "openaiModel", fallback: openaiModel)
@@ -1742,6 +1878,7 @@ struct SettingsView: View {
             sttProvider = JSON.string(settings, "sttProvider", fallback: sttProvider)
             sttModel = JSON.string(settings, "sttModel", fallback: sttModel)
             sttLanguage = JSON.string(settings, "sttLanguage", fallback: sttLanguage)
+            await loadDynamicDnsRoutes()
 
             smartthingsUseOAuth = JSON.bool(settings, "smartthingsUseOAuth", fallback: smartthingsUseOAuth)
             harmonyHubAddresses = JSON.string(settings, "harmonyHubAddresses", fallback: harmonyHubAddresses)
@@ -1813,6 +1950,18 @@ struct SettingsView: View {
                 "enableNotifications": enableNotifications,
                 "enableSecurityMode": enableSecurityMode,
                 "autoDiscoveryEnabled": autoDiscoveryEnabled,
+                "dynamicDnsEnabled": dynamicDnsEnabled,
+                "dynamicDnsProvider": "azure",
+                "dynamicDnsCheckIntervalSeconds": dynamicDnsCheckIntervalSeconds,
+                "dynamicDnsPublicIpUrl": dynamicDnsPublicIpUrl,
+                "dynamicDnsPrimaryHostname": dynamicDnsPrimaryHostname,
+                "dynamicDnsAzureTenantId": dynamicDnsAzureTenantId,
+                "dynamicDnsAzureClientId": dynamicDnsAzureClientId,
+                "dynamicDnsAzureClientSecret": dynamicDnsAzureClientSecret,
+                "dynamicDnsAzureSubscriptionId": dynamicDnsAzureSubscriptionId,
+                "dynamicDnsAzureResourceGroup": dynamicDnsAzureResourceGroup,
+                "dynamicDnsAzureZoneName": dynamicDnsAzureZoneName,
+                "dynamicDnsAzureTtlSeconds": dynamicDnsAzureTtlSeconds,
                 "llmProvider": llmProvider,
                 "openaiModel": openaiModel,
                 "codexModel": codexModel,
@@ -1834,6 +1983,14 @@ struct SettingsView: View {
             let response = try await session.apiClient.put("/api/settings", body: payload)
             let object = JSON.object(response)
             infoMessage = JSON.string(object, "message", fallback: "Settings saved.")
+            let settings = JSON.object(object["settings"])
+            dynamicDnsAzureClientSecret = ""
+            dynamicDnsAzureClientSecretConfigured = JSON.bool(settings, "dynamicDnsAzureClientSecretConfigured", fallback: dynamicDnsAzureClientSecretConfigured)
+            dynamicDnsLastPublicIp = JSON.string(settings, "dynamicDnsLastPublicIp", fallback: dynamicDnsLastPublicIp)
+            dynamicDnsLastCheckedAt = JSON.string(settings, "dynamicDnsLastCheckedAt", fallback: dynamicDnsLastCheckedAt)
+            dynamicDnsLastUpdatedAt = JSON.string(settings, "dynamicDnsLastUpdatedAt", fallback: dynamicDnsLastUpdatedAt)
+            dynamicDnsLastStatus = JSON.string(settings, "dynamicDnsLastStatus", fallback: dynamicDnsLastStatus)
+            dynamicDnsLastError = JSON.string(settings, "dynamicDnsLastError", fallback: dynamicDnsLastError)
             errorMessage = nil
             try await saveSecurityAlarmSettings()
 
@@ -1953,6 +2110,60 @@ struct SettingsView: View {
         }
 
         return payload
+    }
+
+    private func pushDynamicDnsUpdatesNow() async {
+        pushingDynamicDns = true
+        defer { pushingDynamicDns = false }
+        do {
+            let response = try await session.apiClient.post("/api/settings/dynamic-dns/push", body: [:])
+            let object = JSON.object(response)
+            infoMessage = JSON.string(object, "message", fallback: "Dynamic DNS push complete.")
+            errorMessage = nil
+            await loadSettings()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func loadDynamicDnsRoutes() async {
+        loadingDynamicDnsRoutes = true
+        defer { loadingDynamicDnsRoutes = false }
+        do {
+            let response = try await session.apiClient.get("/api/admin/reverse-proxy/routes")
+            let object = JSON.object(response)
+            dynamicDnsRoutes = JSON.array(object["routes"]).compactMap {
+                DynamicDnsReverseProxyRoute.from(JSON.object($0))
+            }
+        } catch {
+            dynamicDnsRoutes = []
+        }
+    }
+
+    private func setDynamicDnsRoute(_ route: DynamicDnsReverseProxyRoute, enabled: Bool) async {
+        do {
+            let response = try await session.apiClient.put(
+                "/api/admin/reverse-proxy/routes/\(route.id)",
+                body: ["dynamicDnsEnabled": enabled]
+            )
+            let object = JSON.object(response)
+            if let updated = DynamicDnsReverseProxyRoute.from(JSON.object(object["route"])) {
+                dynamicDnsRoutes = dynamicDnsRoutes.map { $0.id == route.id ? updated : $0 }
+            } else {
+                dynamicDnsRoutes = dynamicDnsRoutes.map {
+                    var copy = $0
+                    if copy.id == route.id {
+                        copy.dynamicDnsEnabled = enabled
+                    }
+                    return copy
+                }
+            }
+            infoMessage = "\(route.hostname) Dynamic DNS \(enabled ? "enabled" : "disabled")."
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+            await loadDynamicDnsRoutes()
+        }
     }
 
     private func testOpenAI() async {

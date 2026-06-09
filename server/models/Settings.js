@@ -383,6 +383,90 @@ const SettingsSchema = new mongoose.Schema({
     max: 30,
     default: 3
   },
+  dynamicDnsEnabled: {
+    type: Boolean,
+    default: false
+  },
+  dynamicDnsProvider: {
+    type: String,
+    enum: ['azure'],
+    default: 'azure'
+  },
+  dynamicDnsCheckIntervalSeconds: {
+    type: Number,
+    min: 60,
+    max: 3600,
+    default: 60
+  },
+  dynamicDnsPublicIpUrl: {
+    type: String,
+    trim: true,
+    default: 'https://api.ipify.org?format=json'
+  },
+  dynamicDnsPrimaryHostname: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    default: ''
+  },
+  dynamicDnsAzureTenantId: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  dynamicDnsAzureClientId: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  dynamicDnsAzureClientSecret: {
+    type: String,
+    default: ''
+  },
+  dynamicDnsAzureSubscriptionId: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  dynamicDnsAzureResourceGroup: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  dynamicDnsAzureZoneName: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    default: ''
+  },
+  dynamicDnsAzureTtlSeconds: {
+    type: Number,
+    min: 30,
+    max: 86400,
+    default: 60
+  },
+  dynamicDnsLastPublicIp: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  dynamicDnsLastCheckedAt: {
+    type: Date,
+    default: null
+  },
+  dynamicDnsLastUpdatedAt: {
+    type: Date,
+    default: null
+  },
+  dynamicDnsLastStatus: {
+    type: String,
+    enum: ['never', 'unchanged', 'updated', 'failed'],
+    default: 'never'
+  },
+  dynamicDnsLastError: {
+    type: String,
+    default: ''
+  },
   smbBackupScheduleNextRunAt: {
     type: Date,
     default: null
@@ -562,6 +646,10 @@ SettingsSchema.methods.toSanitized = function() {
   sanitized.smbBackupPasswordConfigured = Boolean(sanitized.smbBackupPassword);
   if (sanitized.smbBackupPassword) {
     sanitized.smbBackupPassword = '********';
+  }
+  sanitized.dynamicDnsAzureClientSecretConfigured = Boolean(sanitized.dynamicDnsAzureClientSecret);
+  if (sanitized.dynamicDnsAzureClientSecret) {
+    sanitized.dynamicDnsAzureClientSecret = '********';
   }
   delete sanitized.harmonyKnownHubs;
   delete sanitized.voiceRegion;

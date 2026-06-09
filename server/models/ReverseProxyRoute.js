@@ -158,6 +158,10 @@ const reverseProxyRouteSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  dynamicDnsEnabled: {
+    type: Boolean,
+    default: false
+  },
   stripPrefix: {
     type: String,
     trim: true,
@@ -202,6 +206,7 @@ const reverseProxyRouteSchema = new mongoose.Schema({
 });
 
 reverseProxyRouteSchema.index({ platformKey: 1, enabled: 1 });
+reverseProxyRouteSchema.index({ dynamicDnsEnabled: 1, enabled: 1 });
 reverseProxyRouteSchema.index({ lastApplyStatus: 1, validationStatus: 1 });
 
 module.exports = mongoose.model('ReverseProxyRoute', reverseProxyRouteSchema);

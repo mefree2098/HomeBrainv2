@@ -1,8 +1,10 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const settingsService = require('../services/settingsService');
 const deviceRestartService = require('../services/deviceRestartService');
 const smbBackupSchedulerService = require('../services/smbBackupSchedulerService');
+const dynamicDnsService = require('../services/dynamicDnsService');
 const { testOpenAIModelCompatibility } = require('../services/llmService');
 const {
   completeCodexLogin,
@@ -13,6 +15,16 @@ const { requireAdmin } = require('./middlewares/auth');
 
 // Create auth middleware instance
 const auth = requireAdmin();
+const dynamicDnsPushRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_DYNAMIC_DNS_PUSH_RATE_LIMIT_WINDOW_MS || 10 * 60 * 1000)),
+  limit: Math.max(1, Number(process.env.HOMEBRAIN_DYNAMIC_DNS_PUSH_RATE_LIMIT_MAX || 10)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many Dynamic DNS push requests. Try again later.'
+  }
+});
 
 function buildCodexOverrides(source = {}) {
   return {
@@ -93,6 +105,7 @@ router.put('/', auth, async (req, res) => {
     const settings = await settingsService.updateSettings(req.body);
     await deviceRestartService.configureFromSettings(settings);
     await smbBackupSchedulerService.configureFromSettings(settings);
+    dynamicDnsService.configureFromSettings(settings);
     const sanitizedSettings = settings.toSanitized();
     
     console.log('Successfully updated application settings');
@@ -108,6 +121,28 @@ router.put('/', auth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to update application settings',
+      error: error.message
+    });
+  }
+});
+
+router.post('/dynamic-dns/push', dynamicDnsPushRateLimit, auth, async (req, res) => {
+  try {
+    const actor = getCodexOwnerId(req);
+    const result = await dynamicDnsService.pushNow(actor);
+
+    res.status(200).json({
+      success: true,
+      message: result.updated
+        ? `Dynamic DNS pushed ${result.records.length} record(s) to ${result.publicIp}.`
+        : `Dynamic DNS already matched ${result.publicIp}.`,
+      result
+    });
+  } catch (error) {
+    console.error('POST /api/settings/dynamic-dns/push Error:', error.message);
+    res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Failed to push Dynamic DNS updates',
       error: error.message
     });
   }

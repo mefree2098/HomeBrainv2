@@ -43,6 +43,7 @@ import {
   Tv,
   Power,
   CalendarClock,
+  Globe2,
   Plus
 } from "lucide-react"
 import { useToast } from "@/hooks/useToast"
@@ -50,6 +51,7 @@ import { useForm } from "react-hook-form"
 import {
   getSettings,
   updateSettings,
+  pushDynamicDnsUpdatesNow,
   testElevenLabsApiKey,
   testOpenAIApiKey,
   testAnthropicApiKey,
@@ -708,6 +710,8 @@ export function Settings() {
   const [latestRestoreJob, setLatestRestoreJob] = useState<DisasterRecoveryRestoreJob | null>(null)
   const [smbBackupConfirm, setSmbBackupConfirm] = useState("")
   const [smbBackupPasswordConfigured, setSmbBackupPasswordConfigured] = useState(false)
+  const [dynamicDnsAzureClientSecretConfigured, setDynamicDnsAzureClientSecretConfigured] = useState(false)
+  const [pushingDynamicDns, setPushingDynamicDns] = useState(false)
   const [smbBackupScheduleStatus, setSmbBackupScheduleStatus] = useState<SmbBackupScheduleStatusResponse | null>(null)
   const [deviceRestartStatus, setDeviceRestartStatus] = useState<DeviceRestartStatusResponse | null>(null)
   const [rebootingDevice, setRebootingDevice] = useState(false)
@@ -788,6 +792,23 @@ export function Settings() {
       smbBackupScheduleEnabled: false,
       smbBackupScheduleTime: "02:30",
       smbBackupRetentionCount: 3,
+      dynamicDnsEnabled: false,
+      dynamicDnsProvider: "azure",
+      dynamicDnsCheckIntervalSeconds: 60,
+      dynamicDnsPublicIpUrl: "https://api.ipify.org?format=json",
+      dynamicDnsPrimaryHostname: "",
+      dynamicDnsAzureTenantId: "",
+      dynamicDnsAzureClientId: "",
+      dynamicDnsAzureClientSecret: "",
+      dynamicDnsAzureSubscriptionId: "",
+      dynamicDnsAzureResourceGroup: "",
+      dynamicDnsAzureZoneName: "",
+      dynamicDnsAzureTtlSeconds: 60,
+      dynamicDnsLastPublicIp: "",
+      dynamicDnsLastCheckedAt: "",
+      dynamicDnsLastUpdatedAt: "",
+      dynamicDnsLastStatus: "never",
+      dynamicDnsLastError: "",
       smbBackupScheduleNextRunAt: "",
       smbBackupScheduleLastTriggeredAt: "",
       smbBackupScheduleLastCompletedAt: "",
@@ -1028,6 +1049,19 @@ export function Settings() {
     smbBackupScheduleStatus?.schedule?.lastError || watch("smbBackupScheduleLastError")
   const smbBackupTimeZone =
     smbBackupScheduleStatus?.schedule?.timeZone || (watch("timezone") || "America/New_York").toString()
+  const dynamicDnsEnabled = watch("dynamicDnsEnabled") === true
+  const dynamicDnsCheckIntervalSeconds = Math.max(
+    60,
+    Math.min(3600, Number(watch("dynamicDnsCheckIntervalSeconds") || 60))
+  )
+  const dynamicDnsAzureTtlSeconds = Math.max(
+    30,
+    Math.min(86400, Number(watch("dynamicDnsAzureTtlSeconds") || 60))
+  )
+  const dynamicDnsLastCheckedAt = watch("dynamicDnsLastCheckedAt")
+  const dynamicDnsLastUpdatedAt = watch("dynamicDnsLastUpdatedAt")
+  const dynamicDnsLastStatus = String(watch("dynamicDnsLastStatus") || "never")
+  const dynamicDnsLastError = String(watch("dynamicDnsLastError") || "")
   const securityHomeBrainEnabled = watch("securityHomeBrainEnabled") !== false
   const securitySmartThingsEnabled = watch("securitySmartThingsEnabled") !== false
   const securityArmAwayExitDelaySeconds = Math.max(
@@ -1167,10 +1201,11 @@ export function Settings() {
         
         if (response.success && response.settings) {
           console.log('Loaded settings:', response.settings);
-          setIsyPasswordConfigured(Boolean(
-            response.settings.isyPassword && String(response.settings.isyPassword).trim()
-          ))
-          setSmbBackupPasswordConfigured(Boolean(response.settings.smbBackupPasswordConfigured))
+        setIsyPasswordConfigured(Boolean(
+          response.settings.isyPassword && String(response.settings.isyPassword).trim()
+        ))
+        setSmbBackupPasswordConfigured(Boolean(response.settings.smbBackupPasswordConfigured))
+        setDynamicDnsAzureClientSecretConfigured(Boolean(response.settings.dynamicDnsAzureClientSecretConfigured))
 
           const resolvedHomeBrainModel =
             response.settings.homebrainLocalLlmModel ||
@@ -1186,10 +1221,14 @@ export function Settings() {
                 setValue('isyPassword', '')
                 return
               }
-              if (key === 'smbBackupPassword') {
-                setValue('smbBackupPassword', '')
-                return
-              }
+            if (key === 'smbBackupPassword') {
+              setValue('smbBackupPassword', '')
+              return
+            }
+            if (key === 'dynamicDnsAzureClientSecret') {
+              setValue('dynamicDnsAzureClientSecret', '')
+              return
+            }
               // For masked sensitive fields, show a placeholder indicating key is configured
               if ((key === 'elevenlabsApiKey' || key === 'smartthingsToken' || key === 'smartthingsClientSecret' || key === 'openaiApiKey' || key === 'anthropicApiKey') &&
                   isMaskedSecretPlaceholder(value)) {
@@ -1955,6 +1994,11 @@ export function Settings() {
       delete settingsToSave.smbBackupScheduleLastCompletedAt
       delete settingsToSave.smbBackupScheduleLastStatus
       delete settingsToSave.smbBackupScheduleLastError
+      delete settingsToSave.dynamicDnsLastPublicIp
+      delete settingsToSave.dynamicDnsLastCheckedAt
+      delete settingsToSave.dynamicDnsLastUpdatedAt
+      delete settingsToSave.dynamicDnsLastStatus
+      delete settingsToSave.dynamicDnsLastError
       settingsToSave.spamFilterLocalLlmModel = settingsToSave.homebrainLocalLlmModel
 
       const normalizedCodexHome = (settingsToSave.codexHome || "").toString().trim()
@@ -1982,6 +2026,14 @@ export function Settings() {
       } else {
         settingsToSave.smbBackupPassword = trimmedSmbPassword
       }
+      const trimmedDynamicDnsSecret = typeof settingsToSave.dynamicDnsAzureClientSecret === "string"
+        ? settingsToSave.dynamicDnsAzureClientSecret
+        : ""
+      if (!trimmedDynamicDnsSecret || isMaskedSecretPlaceholder(trimmedDynamicDnsSecret)) {
+        delete settingsToSave.dynamicDnsAzureClientSecret
+      } else {
+        settingsToSave.dynamicDnsAzureClientSecret = trimmedDynamicDnsSecret
+      }
       settingsToSave.smbBackupShareUrl = (settingsToSave.smbBackupShareUrl || "").toString().trim()
       settingsToSave.smbBackupRemoteDirectory = (settingsToSave.smbBackupRemoteDirectory || "").toString().trim()
       settingsToSave.smbBackupUsername = (settingsToSave.smbBackupUsername || "").toString().trim()
@@ -1990,7 +2042,23 @@ export function Settings() {
         1,
         Math.min(30, Number(settingsToSave.smbBackupRetentionCount ?? 3) || 3)
       )
-      
+      settingsToSave.dynamicDnsCheckIntervalSeconds = Math.max(
+        60,
+        Math.min(3600, Number(settingsToSave.dynamicDnsCheckIntervalSeconds ?? 60) || 60)
+      )
+      settingsToSave.dynamicDnsAzureTtlSeconds = Math.max(
+        30,
+        Math.min(86400, Number(settingsToSave.dynamicDnsAzureTtlSeconds ?? 60) || 60)
+      )
+      settingsToSave.dynamicDnsProvider = "azure"
+      settingsToSave.dynamicDnsPublicIpUrl = (settingsToSave.dynamicDnsPublicIpUrl || "").toString().trim()
+      settingsToSave.dynamicDnsPrimaryHostname = (settingsToSave.dynamicDnsPrimaryHostname || "").toString().trim()
+      settingsToSave.dynamicDnsAzureTenantId = (settingsToSave.dynamicDnsAzureTenantId || "").toString().trim()
+      settingsToSave.dynamicDnsAzureClientId = (settingsToSave.dynamicDnsAzureClientId || "").toString().trim()
+      settingsToSave.dynamicDnsAzureSubscriptionId = (settingsToSave.dynamicDnsAzureSubscriptionId || "").toString().trim()
+      settingsToSave.dynamicDnsAzureResourceGroup = (settingsToSave.dynamicDnsAzureResourceGroup || "").toString().trim()
+      settingsToSave.dynamicDnsAzureZoneName = (settingsToSave.dynamicDnsAzureZoneName || "").toString().trim()
+
       const response = await updateSettings(settingsToSave);
       
       if (response.success) {
@@ -2018,6 +2086,8 @@ export function Settings() {
         setValue("isyPassword", "")
         setSmbBackupPasswordConfigured(Boolean(response.settings?.smbBackupPasswordConfigured))
         setValue("smbBackupPassword", "")
+        setDynamicDnsAzureClientSecretConfigured(Boolean(response.settings?.dynamicDnsAzureClientSecretConfigured))
+        setValue("dynamicDnsAzureClientSecret", "")
         try {
           const restartStatus = await getDeviceRestartStatus()
           setDeviceRestartStatus(restartStatus)
@@ -4632,6 +4702,26 @@ export function Settings() {
       })
     } finally {
       setCreatingFullBackup(false)
+    }
+  }
+
+  const handlePushDynamicDnsUpdates = async () => {
+    setPushingDynamicDns(true)
+    try {
+      const response = await pushDynamicDnsUpdatesNow()
+      toast({
+        title: "Dynamic DNS pushed",
+        description: response.message || `Updated ${response.result?.records?.length || 0} DNS record(s).`,
+      })
+      await loadSettings()
+    } catch (error: any) {
+      toast({
+        title: "Dynamic DNS push failed",
+        description: error?.message || "Unable to push Dynamic DNS updates.",
+        variant: "destructive",
+      })
+    } finally {
+      setPushingDynamicDns(false)
     }
   }
 
@@ -9269,6 +9359,148 @@ export function Settings() {
                     </div>
                   )}
                 </div>
+              </CardContent>
+            </Card>
+
+            {/* Dynamic DNS */}
+
+            <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Globe2 className="h-5 w-5 text-sky-600" />
+                  Dynamic DNS
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-background/70 p-3 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <h4 className="font-medium">Enable Dynamic DNS</h4>
+                    <p className="text-sm text-muted-foreground">
+                      Current status: {dynamicDnsLastStatus}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={dynamicDnsEnabled}
+                    onCheckedChange={(checked) => setValue("dynamicDnsEnabled", checked)}
+                  />
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div>
+                    <label className="text-sm font-medium">Provider</label>
+                    <Input value="Azure DNS" disabled className="mt-1" />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Check interval seconds</label>
+                    <Input
+                      type="number"
+                      min={60}
+                      max={3600}
+                      {...register("dynamicDnsCheckIntervalSeconds", { valueAsNumber: true })}
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Azure TTL seconds</label>
+                    <Input
+                      type="number"
+                      min={30}
+                      max={86400}
+                      {...register("dynamicDnsAzureTtlSeconds", { valueAsNumber: true })}
+                      className="mt-1"
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="text-sm font-medium">Primary hostname</label>
+                    <Input {...register("dynamicDnsPrimaryHostname")} placeholder="home.example.com" className="mt-1" />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Public IP URL</label>
+                    <Input {...register("dynamicDnsPublicIpUrl")} className="mt-1" />
+                  </div>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="text-sm font-medium">Azure tenant ID</label>
+                    <Input {...register("dynamicDnsAzureTenantId")} className="mt-1" />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Azure client ID</label>
+                    <Input {...register("dynamicDnsAzureClientId")} className="mt-1" />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Azure client secret</label>
+                    <Input
+                      {...register("dynamicDnsAzureClientSecret")}
+                      placeholder={dynamicDnsAzureClientSecretConfigured ? "Secret configured" : ""}
+                      type="password"
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Azure subscription ID</label>
+                    <Input {...register("dynamicDnsAzureSubscriptionId")} className="mt-1" />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Azure resource group</label>
+                    <Input {...register("dynamicDnsAzureResourceGroup")} className="mt-1" />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Azure DNS zone</label>
+                    <Input {...register("dynamicDnsAzureZoneName")} placeholder="example.com" className="mt-1" />
+                  </div>
+                </div>
+
+                <div className="grid gap-3 md:grid-cols-4">
+                  <div className="rounded-lg border border-border/60 bg-background/80 px-3 py-2">
+                    <p className="text-xs font-medium uppercase text-muted-foreground">Current IP</p>
+                    <p className="mt-1 text-sm font-medium">{watch("dynamicDnsLastPublicIp") || "Unknown"}</p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-background/80 px-3 py-2">
+                    <p className="text-xs font-medium uppercase text-muted-foreground">Last checked</p>
+                    <p className="mt-1 text-sm font-medium">
+                      {dynamicDnsLastCheckedAt ? new Date(String(dynamicDnsLastCheckedAt)).toLocaleString() : "Never"}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-background/80 px-3 py-2">
+                    <p className="text-xs font-medium uppercase text-muted-foreground">Last pushed</p>
+                    <p className="mt-1 text-sm font-medium">
+                      {dynamicDnsLastUpdatedAt ? new Date(String(dynamicDnsLastUpdatedAt)).toLocaleString() : "Never"}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-background/80 px-3 py-2">
+                    <p className="text-xs font-medium uppercase text-muted-foreground">Polling</p>
+                    <p className="mt-1 text-sm font-medium">{dynamicDnsCheckIntervalSeconds}s / TTL {dynamicDnsAzureTtlSeconds}s</p>
+                  </div>
+                </div>
+
+                {dynamicDnsLastError ? (
+                  <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-200">
+                    {dynamicDnsLastError}
+                  </div>
+                ) : null}
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handlePushDynamicDnsUpdates}
+                  disabled={pushingDynamicDns}
+                  className="w-full"
+                >
+                  {pushingDynamicDns ? (
+                    <>
+                      <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                      Pushing...
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="h-4 w-4 mr-2" />
+                      Push DNS updates now
+                    </>
+                  )}
+                </Button>
               </CardContent>
             </Card>
 

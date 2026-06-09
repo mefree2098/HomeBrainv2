@@ -87,6 +87,7 @@ const senseService = require("./services/senseService");
 const platformDeployService = require("./services/platformDeployService");
 const deviceRestartService = require("./services/deviceRestartService");
 const smbBackupSchedulerService = require("./services/smbBackupSchedulerService");
+const dynamicDnsService = require("./services/dynamicDnsService");
 const smartThingsService = require("./services/smartThingsService");
 const ecobeeService = require("./services/ecobeeService");
 const axiomIngressSyncService = require("./services/axiomIngressSyncService");
@@ -420,6 +421,13 @@ void dbReady
       console.log('SMB backup scheduler initialized successfully');
     } catch (error) {
       console.warn(`SMB backup scheduler startup failed: ${error.message}`);
+    }
+
+    try {
+      await dynamicDnsService.initialize();
+      console.log('Dynamic DNS scheduler initialized successfully');
+    } catch (error) {
+      console.warn(`Dynamic DNS scheduler startup failed: ${error.message}`);
     }
   })
   .catch((error) => {
@@ -842,6 +850,7 @@ async function gracefulShutdown(signal) {
   await runShutdownStep('automation scheduler service', () => automationSchedulerService.stop());
   await runShutdownStep('device restart scheduler', () => deviceRestartService.stop());
   await runShutdownStep('SMB backup scheduler', () => smbBackupSchedulerService.stop());
+  await runShutdownStep('Dynamic DNS scheduler', () => dynamicDnsService.stop());
   await runShutdownStep('platform update monitor service', () => platformUpdateMonitorService.stop({ disconnectInsteon: true }));
   await runShutdownStep('Matter service', () => matterService.shutdown());
   await runShutdownStep('device library update service', () => deviceLibraryUpdateService.stop());
