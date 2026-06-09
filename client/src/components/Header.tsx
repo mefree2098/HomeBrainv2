@@ -359,7 +359,7 @@ export function Header({
         isMobile ? "left-0 px-3 sm:px-5" : isSidebarCollapsed ? "left-[6.75rem] px-4 lg:px-6" : "left-[18.25rem] px-4 lg:px-6"
       )}
     >
-      <div className="glass-panel glass-panel-strong mx-auto flex h-[4.5rem] max-w-[1700px] items-center justify-between rounded-[1.75rem] px-3 sm:px-4 lg:px-5">
+      <div className="glass-panel system-bar-glass mx-auto flex h-[4.5rem] max-w-[1700px] items-center justify-between rounded-[1.75rem] px-3 sm:px-4 lg:px-5">
         <div className="flex min-w-0 items-center gap-3">
           {isMobile && onToggleMobileMenu ? (
             <Button
@@ -378,17 +378,15 @@ export function Header({
             className="group flex min-w-0 items-center gap-3 rounded-[1.4rem] px-2 py-2 transition-transform duration-300 hover:-translate-y-0.5"
             onClick={() => navigate("/")}
           >
-            <div className="relative flex h-11 w-11 items-center justify-center rounded-[1.05rem] bg-gradient-to-br from-cyan-300/70 via-sky-300/55 to-blue-500/70 shadow-lg shadow-sky-400/20">
-              <div className="absolute inset-[1px] rounded-[calc(1.05rem-1px)] bg-white/70 dark:bg-slate-950/35" />
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center">
               <img
                 src="/homebrain-brand-64.png"
                 alt="Home Brain"
-                className="relative h-7 w-7 rounded object-cover"
+                className="h-11 w-11 object-contain"
               />
             </div>
-            <div className="hidden min-w-0 sm:block">
-              <p className="section-kicker">HomeBrain OS</p>
-              <div className="truncate text-base font-semibold text-foreground">Cinematic Command Deck</div>
+            <div className="hidden h-11 min-w-0 items-center sm:flex">
+              <p className="section-kicker whitespace-nowrap text-sm leading-none">HomeBrain OS</p>
             </div>
           </button>
 
