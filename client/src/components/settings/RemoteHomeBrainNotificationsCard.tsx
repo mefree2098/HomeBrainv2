@@ -39,7 +39,7 @@ const statusTone = (status?: string) => {
 }
 
 export function RemoteHomeBrainNotificationsCard() {
-  const toast = useToast()
+  const { toast } = useToast()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState<string | null>(null)
   const [inboundRemotes, setInboundRemotes] = useState<RemoteHomeBrainPeer[]>([])
