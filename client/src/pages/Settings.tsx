@@ -4950,6 +4950,7 @@ export function Settings() {
             <TabsTrigger value="command-coordinator">Command Control</TabsTrigger>
             <TabsTrigger value="security">Security</TabsTrigger>
             <TabsTrigger value="resources">System Resources</TabsTrigger>
+            <TabsTrigger value="dynamic-dns">Dynamic DNS</TabsTrigger>
             <TabsTrigger value="maintenance">Maintenance</TabsTrigger>
           </TabsList>
 
@@ -9362,6 +9363,9 @@ export function Settings() {
               </CardContent>
             </Card>
 
+          </TabsContent>
+
+          <TabsContent value="dynamic-dns" className="space-y-6">
             {/* Dynamic DNS */}
 
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
@@ -9504,6 +9508,9 @@ export function Settings() {
               </CardContent>
             </Card>
 
+          </TabsContent>
+
+          <TabsContent value="maintenance" className="space-y-6">
             {/* System Maintenance */}
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
