@@ -73,6 +73,18 @@ export const updateSettings = async (settings: {
   smbBackupScheduleEnabled?: boolean;
   smbBackupScheduleTime?: string;
   smbBackupRetentionCount?: number;
+  dynamicDnsEnabled?: boolean;
+  dynamicDnsProvider?: 'azure';
+  dynamicDnsCheckIntervalSeconds?: number;
+  dynamicDnsPublicIpUrl?: string;
+  dynamicDnsPrimaryHostname?: string;
+  dynamicDnsAzureTenantId?: string;
+  dynamicDnsAzureClientId?: string;
+  dynamicDnsAzureClientSecret?: string;
+  dynamicDnsAzureSubscriptionId?: string;
+  dynamicDnsAzureResourceGroup?: string;
+  dynamicDnsAzureZoneName?: string;
+  dynamicDnsAzureTtlSeconds?: number;
 }) => {
   try {
     const response = await api.put('/api/settings', settings);
@@ -84,6 +96,30 @@ export const updateSettings = async (settings: {
 };
 
 // Description: Get specific setting value
+export interface DynamicDnsPushResult {
+  success: boolean;
+  message?: string;
+  result?: {
+    success: boolean;
+    updated?: boolean;
+    publicIp?: string;
+    previousIp?: string;
+    records?: Array<{ hostname: string; source: string; routeId?: string | null }>;
+    updates?: Array<{ hostname: string; provider: string; recordName: string; zoneName: string; publicIp: string }>;
+    reason?: string;
+  };
+}
+
+export const pushDynamicDnsUpdatesNow = async () => {
+  try {
+    const response = await api.post('/api/settings/dynamic-dns/push');
+    return response.data as DynamicDnsPushResult;
+  } catch (error: any) {
+    console.error(error);
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
 // Endpoint: GET /api/settings/:key
 // Request: {}
 // Response: { success: boolean, key: string, value: any }

@@ -18,6 +18,7 @@ export interface ReverseProxyRoute {
   allowPublicUpstream?: boolean;
   healthCheckPath: string;
   websocketSupport: boolean;
+  dynamicDnsEnabled?: boolean;
   stripPrefix?: string;
   notes?: string;
   createdBy?: string;

@@ -51,6 +51,7 @@ type RouteFormState = {
   enabled: boolean;
   tlsMode: "automatic" | "internal" | "manual" | "on_demand";
   allowOnDemandTls: boolean;
+  dynamicDnsEnabled: boolean;
   healthCheckPath: string;
   websocketSupport: boolean;
   stripPrefix: string;
@@ -102,6 +103,7 @@ const EMPTY_FORM: RouteFormState = {
   enabled: false,
   tlsMode: "automatic",
   allowOnDemandTls: false,
+  dynamicDnsEnabled: false,
   healthCheckPath: "/",
   websocketSupport: true,
   stripPrefix: "",
@@ -300,6 +302,10 @@ function RouteEditor({
               <Switch checked={form.allowOnDemandTls} onCheckedChange={(checked) => onChange({ allowOnDemandTls: checked })} />
             </label>
             <label className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+              Update with Dynamic DNS
+              <Switch checked={form.dynamicDnsEnabled} onCheckedChange={(checked) => onChange({ dynamicDnsEnabled: checked })} />
+            </label>
+            <label className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
               Ownership Verified
               <Switch checked={form.ownershipVerified} onCheckedChange={(checked) => onChange({ ownershipVerified: checked })} />
             </label>
@@ -412,6 +418,7 @@ export function ReverseProxyManagement() {
       enabled: route.enabled,
       tlsMode: route.tlsMode,
       allowOnDemandTls: Boolean(route.allowOnDemandTls),
+      dynamicDnsEnabled: Boolean(route.dynamicDnsEnabled),
       healthCheckPath: route.healthCheckPath || "/",
       websocketSupport: Boolean(route.websocketSupport),
       stripPrefix: route.stripPrefix || "",
@@ -777,9 +784,10 @@ export function ReverseProxyManagement() {
               <TableRow>
                 <TableHead>Hostname</TableHead>
                 <TableHead>Platform</TableHead>
-                <TableHead>Upstream</TableHead>
-                <TableHead>TLS</TableHead>
-                <TableHead>Certificate</TableHead>
+                    <TableHead>Upstream</TableHead>
+                    <TableHead>TLS</TableHead>
+                    <TableHead>Dynamic DNS</TableHead>
+                    <TableHead>Certificate</TableHead>
                 <TableHead>Validation</TableHead>
                 <TableHead>Last Apply</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -788,7 +796,7 @@ export function ReverseProxyManagement() {
             <TableBody>
               {routes.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground">
+                  <TableCell colSpan={9} className="text-center text-muted-foreground">
                     No managed routes yet.
                   </TableCell>
                 </TableRow>
@@ -807,6 +815,11 @@ export function ReverseProxyManagement() {
                   </TableCell>
                   <TableCell>
                     <Badge variant="outline">{route.tlsMode}</Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={route.dynamicDnsEnabled ? "secondary" : "outline"}>
+                      {route.dynamicDnsEnabled ? "on" : "off"}
+                    </Badge>
                   </TableCell>
                   <TableCell>
                     <Badge variant={getStatusBadgeVariant(route.certificateStatus?.status || "unknown")}>

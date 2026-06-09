@@ -626,6 +626,7 @@ function sanitizeRoutePayload(input = {}) {
     allowPublicUpstream: normalizeBoolean(input.allowPublicUpstream, false),
     healthCheckPath: normalizePath(defaults.healthCheckPath || '/', '/'),
     websocketSupport: normalizeBoolean(defaults.websocketSupport, true),
+    dynamicDnsEnabled: normalizeBoolean(input.dynamicDnsEnabled, false),
     stripPrefix: normalizeOptionalPath(input.stripPrefix),
     notes: trimString(input.notes),
     ownershipVerified: normalizeBoolean(input.ownershipVerified, false),
@@ -832,6 +833,7 @@ class ReverseProxyService {
       upstreamPort: payload.upstreamPort ?? before.upstreamPort,
       healthCheckPath: payload.healthCheckPath ?? before.healthCheckPath,
       websocketSupport: payload.websocketSupport ?? before.websocketSupport,
+      dynamicDnsEnabled: payload.dynamicDnsEnabled ?? before.dynamicDnsEnabled,
       tlsMode: payload.tlsMode ?? before.tlsMode,
       ownershipVerified: payload.ownershipVerified ?? before.certificateStatus?.ownershipVerified,
       adminApproved: payload.adminApproved ?? before.certificateStatus?.adminApproved

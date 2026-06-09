@@ -8,7 +8,8 @@ const SENSITIVE_SETTING_FIELDS = new Set([
   'anthropicApiKey',
   'isyPassword',
   'hardwareOrbWifiPassword',
-  'smbBackupPassword'
+  'smbBackupPassword',
+  'dynamicDnsAzureClientSecret'
 ]);
 
 function maskSecretValue(value) {
@@ -101,7 +102,12 @@ class SettingsService {
         // SMB disaster recovery backup
         'smbBackupShareUrl', 'smbBackupRemoteDirectory', 'smbBackupUsername',
         'smbBackupPassword', 'smbBackupDomain', 'smbBackupScheduleEnabled',
-        'smbBackupScheduleTime', 'smbBackupRetentionCount'
+        'smbBackupScheduleTime', 'smbBackupRetentionCount',
+        'dynamicDnsEnabled', 'dynamicDnsProvider', 'dynamicDnsCheckIntervalSeconds',
+        'dynamicDnsPublicIpUrl', 'dynamicDnsPrimaryHostname',
+        'dynamicDnsAzureTenantId', 'dynamicDnsAzureClientId', 'dynamicDnsAzureClientSecret',
+        'dynamicDnsAzureSubscriptionId', 'dynamicDnsAzureResourceGroup',
+        'dynamicDnsAzureZoneName', 'dynamicDnsAzureTtlSeconds'
       ];
       const sanitizedUpdates = {};
       Object.keys(updates).forEach(key => {
@@ -144,7 +150,19 @@ class SettingsService {
         sanitizedUpdates.hardwareOrbWifiSsid = sanitizedUpdates.hardwareOrbWifiSsid.trim();
       }
 
-      ['smbBackupShareUrl', 'smbBackupRemoteDirectory', 'smbBackupUsername', 'smbBackupDomain']
+      [
+        'smbBackupShareUrl',
+        'smbBackupRemoteDirectory',
+        'smbBackupUsername',
+        'smbBackupDomain',
+        'dynamicDnsPublicIpUrl',
+        'dynamicDnsPrimaryHostname',
+        'dynamicDnsAzureTenantId',
+        'dynamicDnsAzureClientId',
+        'dynamicDnsAzureSubscriptionId',
+        'dynamicDnsAzureResourceGroup',
+        'dynamicDnsAzureZoneName'
+      ]
         .forEach((key) => {
           if (typeof sanitizedUpdates[key] === 'string') {
             sanitizedUpdates[key] = sanitizedUpdates[key].trim();
@@ -156,6 +174,29 @@ class SettingsService {
         sanitizedUpdates.smbBackupRetentionCount = Number.isFinite(retentionCount)
           ? Math.min(30, Math.max(1, Math.trunc(retentionCount)))
           : 3;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(sanitizedUpdates, 'dynamicDnsCheckIntervalSeconds')) {
+        const intervalSeconds = Number(sanitizedUpdates.dynamicDnsCheckIntervalSeconds);
+        sanitizedUpdates.dynamicDnsCheckIntervalSeconds = Number.isFinite(intervalSeconds)
+          ? Math.min(3600, Math.max(60, Math.trunc(intervalSeconds)))
+          : 60;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(sanitizedUpdates, 'dynamicDnsAzureTtlSeconds')) {
+        const ttlSeconds = Number(sanitizedUpdates.dynamicDnsAzureTtlSeconds);
+        sanitizedUpdates.dynamicDnsAzureTtlSeconds = Number.isFinite(ttlSeconds)
+          ? Math.min(86400, Math.max(30, Math.trunc(ttlSeconds)))
+          : 60;
+      }
+
+      if (typeof sanitizedUpdates.dynamicDnsProvider === 'string') {
+        const normalizedProvider = sanitizedUpdates.dynamicDnsProvider.trim().toLowerCase();
+        if (normalizedProvider === 'azure') {
+          sanitizedUpdates.dynamicDnsProvider = normalizedProvider;
+        } else {
+          delete sanitizedUpdates.dynamicDnsProvider;
+        }
       }
 
       if (typeof sanitizedUpdates.codexHomeProfile === 'string') {
