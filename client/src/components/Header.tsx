@@ -377,7 +377,7 @@ export function Header({
             type="button"
             className={cn(
               "group flex min-w-0 shrink-0 items-center gap-2 overflow-hidden rounded-[1.4rem] px-2 py-2 transition-transform duration-300 hover:-translate-y-0.5",
-              showsDashboardChrome ? "sm:w-16" : "sm:w-[12.25rem] lg:w-[13rem]"
+              "sm:w-[12.25rem] lg:w-[13rem]"
             )}
             onClick={() => navigate("/")}
           >
@@ -388,13 +388,11 @@ export function Header({
                 className="h-11 w-11 object-contain"
               />
             </div>
-            {!showsDashboardChrome ? (
-              <div className="hidden h-11 min-w-0 flex-1 items-center overflow-hidden sm:flex">
-                <p className="block max-w-full truncate font-display text-[0.68rem] font-semibold uppercase leading-none tracking-[0.24em] text-muted-foreground">
-                  HomeBrain OS
-                </p>
-              </div>
-            ) : null}
+            <div className="hidden h-11 min-w-0 flex-1 items-center overflow-hidden sm:flex">
+              <p className="block max-w-full truncate text-sm font-semibold leading-none tracking-normal text-foreground/85">
+                HomeBrain OS
+              </p>
+            </div>
           </button>
 
           {!showsDashboardChrome ? (
