@@ -253,6 +253,20 @@
     box-shadow: var(--glass-shadow-strong);
   }
 
+  .system-bar-glass {
+    border-color: rgba(112, 174, 255, 0.32);
+    background: rgba(255, 255, 255, 0.5);
+    box-shadow: 0 24px 90px rgba(13, 37, 78, 0.2);
+    backdrop-filter: blur(32px) saturate(1.35);
+    -webkit-backdrop-filter: blur(32px) saturate(1.35);
+  }
+
+  .dark .system-bar-glass {
+    border-color: rgba(74, 164, 255, 0.32);
+    background: rgba(10, 22, 43, 0.5);
+    box-shadow: 0 28px 110px rgba(1, 8, 19, 0.5);
+  }
+
   .glass-panel-soft {
     background: var(--surface-soft);
   }
