@@ -15,6 +15,13 @@ DEFAULT_REPO_URL="$(git -C "${PROJECT_ROOT}" config --get remote.origin.url 2>/d
 REPO_URL="${HOMEBRAIN_REPO_URL:-$DEFAULT_REPO_URL}"
 HOMEBRAIN_DIR="${HOMEBRAIN_DIR:-$PROJECT_ROOT}"
 NODE_MAJOR="${NODE_MAJOR:-22}"
+if [[ -z "${NODE_MIN_VERSION:-}" ]]; then
+  if [[ "${NODE_MAJOR}" == "20" ]]; then
+    NODE_MIN_VERSION="20.19.0"
+  else
+    NODE_MIN_VERSION="22.12.0"
+  fi
+fi
 MONGODB_VERSION="${MONGODB_VERSION:-6.0}"
 INSTALL_WAKEWORD_DEPS="${INSTALL_WAKEWORD_DEPS:-1}"
 ENABLE_FIREWALL="${ENABLE_FIREWALL:-0}"
@@ -160,20 +167,30 @@ install_base_packages() {
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
     curl wget git gnupg ca-certificates lsb-release \
     build-essential python3 python3-pip python3-venv \
-    pkg-config libcap2-bin
+    pkg-config libcap2-bin libudev-dev usbutils udev \
+    avahi-daemon avahi-utils smbclient
   print_success "Base packages installed."
 }
 
+version_ge() {
+  local current="$1"
+  local required="$2"
+
+  [[ "$(printf '%s\n%s\n' "${required}" "${current}" | sort -V | head -n 1)" == "${required}" ]]
+}
+
 install_node() {
-  print_status "Ensuring Node.js ${NODE_MAJOR}.x or newer..."
+  print_status "Ensuring Node.js ${NODE_MAJOR}.x or newer, minimum ${NODE_MIN_VERSION}..."
 
   if command -v node >/dev/null 2>&1; then
-    local major
-    major="$(node -p 'process.versions.node.split(".")[0]')"
-    if [[ "$major" =~ ^[0-9]+$ ]] && (( major >= NODE_MAJOR )); then
-      print_success "Node.js $(node -v) already satisfies the requirement."
+    local major current_version
+    current_version="$(node -p 'process.versions.node')"
+    major="${current_version%%.*}"
+    if [[ "$major" =~ ^[0-9]+$ ]] && (( major >= NODE_MAJOR )) && version_ge "${current_version}" "${NODE_MIN_VERSION}"; then
+      print_success "Node.js v${current_version} already satisfies the requirement."
       return
     fi
+    print_warning "Node.js v${current_version} is installed, but HomeBrain now requires ${NODE_MIN_VERSION}+ for the selected ${NODE_MAJOR}.x track."
   fi
 
   curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | sudo -E bash -
@@ -185,7 +202,14 @@ install_node() {
     node_bin="$(command -v node)"
   fi
 
-  print_success "Installed Node.js $("${node_bin}" -v) at ${node_bin}."
+  local installed_version
+  installed_version="$("${node_bin}" -p 'process.versions.node')"
+  if ! version_ge "${installed_version}" "${NODE_MIN_VERSION}"; then
+    print_error "Installed Node.js v${installed_version}, but HomeBrain requires ${NODE_MIN_VERSION}+."
+    exit 1
+  fi
+
+  print_success "Installed Node.js v${installed_version} at ${node_bin}."
 }
 
 install_mongodb() {
@@ -407,12 +431,12 @@ bootstrap_wakeword() {
 
 install_service() {
   print_status "Installing the HomeBrain systemd service..."
-  HOMEBRAIN_DIR="${HOMEBRAIN_DIR}" HOMEBRAIN_USER="${USER}" bash "${HOMEBRAIN_DIR}/scripts/setup-services.sh" install-service
+  env HOMEBRAIN_DIR="${HOMEBRAIN_DIR}" HOMEBRAIN_USER="${USER}" bash "${HOMEBRAIN_DIR}/scripts/setup-services.sh" install-service
 }
 
 configure_deploy_sudoers() {
-  print_status "Allowing the HomeBrain UI to manage its own service and Ollama updates..."
-  HOMEBRAIN_DIR="${HOMEBRAIN_DIR}" HOMEBRAIN_USER="${USER}" bash "${HOMEBRAIN_DIR}/scripts/setup-services.sh" refresh-privileges
+  print_status "Refreshing HomeBrain privileged helpers, deploy rights, Ollama controls, and backup tools..."
+  env HOMEBRAIN_DIR="${HOMEBRAIN_DIR}" HOMEBRAIN_USER="${USER}" bash "${HOMEBRAIN_DIR}/scripts/setup-services.sh" refresh-privileges
 }
 
 configure_firewall() {
