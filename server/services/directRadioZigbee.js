@@ -295,6 +295,11 @@ const {
 
 const DEFAULT_ZIGBEE_IAS_REPAIR_TIMEOUT_MS = 5_000;
 const ZIGBEE_IAS_REPAIR_THROTTLE_MS = 30_000;
+const ZIGBEE_WAKE_RECOVERY_THROTTLE_MS = 120_000;
+const ZIGBEE_WAKE_RECOVERY_INTERVIEW_TIMEOUT_MS = 90_000;
+// Any of these means the device's radio is awake right now — the only moment
+// a sleepy battery sensor can be interviewed or IAS-enrolled.
+const ZIGBEE_WAKE_RECOVERY_REASONS = new Set(['devicejoined', 'deviceannounce', 'message']);
 const ZSTACK_UTIL_SUBSYSTEM = 7;
 const UNENROLLED_IAS_CIE_ADDRESSES = new Set([
   '0xffffffffffffffff',
@@ -764,6 +769,105 @@ async repairZigbeeIasEnrollmentIfNeeded(zigbeeDevice, reason, message) {
       reason,
       trigger: 'ias_message'
     });
+  },
+
+async recoverZigbeeSleepyDeviceOnWake(zigbeeDevice, reason) {
+    const normalizedReason = trimString(reason).toLowerCase();
+    if (!ZIGBEE_WAKE_RECOVERY_REASONS.has(normalizedReason)) {
+      return null;
+    }
+    const address = trimString(zigbeeDevice?.ieeeAddr).toLowerCase();
+    if (!address) {
+      return null;
+    }
+
+    // While herdsman's own interview is running (it starts one at join), a
+    // concurrent attempt would only fight it — wait for the next wake window.
+    const interviewState = getZigbeeInterviewState(zigbeeDevice);
+    if (interviewState === 'IN_PROGRESS') {
+      return null;
+    }
+
+    const interviewNeeded = ['FAILED', 'PENDING'].includes(interviewState)
+      && typeof zigbeeDevice.interview === 'function';
+    const iasState = this.readZigbeeIasEnrollment(zigbeeDevice);
+    const enrollmentNeeded = Boolean(iasState)
+      && !(iasState.enrolled === true && iasState.cieMatchesCoordinator === true);
+    if (!interviewNeeded && !enrollmentNeeded) {
+      return null;
+    }
+
+    if (!(this.zigbee.wakeRecoveryAttempts instanceof Map)) {
+      this.zigbee.wakeRecoveryAttempts = new Map();
+    }
+    const now = Date.now();
+    if (now - Number(this.zigbee.wakeRecoveryAttempts.get(address) || 0) < ZIGBEE_WAKE_RECOVERY_THROTTLE_MS) {
+      return null;
+    }
+    this.zigbee.wakeRecoveryAttempts.set(address, now);
+
+    this.log('info', 'zigbee', 'Zigbee sleepy device is awake; attempting interview/enrollment recovery', {
+      ieeeAddr: address,
+      reason: normalizedReason,
+      interviewState,
+      interviewNeeded,
+      enrollmentNeeded
+    });
+
+    let interviewRecovered = false;
+    if (interviewNeeded) {
+      try {
+        await withTimeout(
+          zigbeeDevice.interview(true),
+          ZIGBEE_WAKE_RECOVERY_INTERVIEW_TIMEOUT_MS,
+          'Wake-window Zigbee interview timed out'
+        );
+        interviewRecovered = true;
+        this.log('info', 'zigbee', 'Zigbee wake-window interview completed', {
+          ieeeAddr: address,
+          modelID: zigbeeDevice.modelID || null
+        });
+      } catch (error) {
+        this.log('warn', 'zigbee', 'Zigbee wake-window interview failed; keep the sensor awake (press its tamper/pairing button every few seconds) so the next wake can finish it', {
+          ieeeAddr: address,
+          error: error.message
+        });
+      }
+    }
+
+    let enrollment = null;
+    const iasAfterInterview = this.readZigbeeIasEnrollment(zigbeeDevice);
+    if (iasAfterInterview && !(iasAfterInterview.enrolled === true && iasAfterInterview.cieMatchesCoordinator === true)) {
+      enrollment = await this.repairZigbeeIasEnrollment(zigbeeDevice, {
+        reason: 'wake_window_recovery',
+        trigger: normalizedReason
+      }).catch((error) => {
+        this.log('warn', 'zigbee', 'Zigbee wake-window IAS enrollment repair failed', {
+          ieeeAddr: address,
+          error: error.message
+        });
+        return null;
+      });
+    }
+
+    const recovered = interviewRecovered || enrollment?.liveVerified === true;
+    if (recovered) {
+      await this.handleZigbeeDeviceChanged(zigbeeDevice, 'reinterview').catch((error) => {
+        this.log('warn', 'zigbee', 'Failed to persist Zigbee device after wake-window recovery', {
+          ieeeAddr: address,
+          error: error.message
+        });
+      });
+    }
+
+    return {
+      ieeeAddr: address,
+      reason: normalizedReason,
+      interviewNeeded,
+      interviewRecovered,
+      enrollmentNeeded,
+      enrollmentVerified: enrollment?.liveVerified === true
+    };
   },
 
 async reinterviewZigbeeDevice(ieeeAddr) {
@@ -1469,6 +1573,15 @@ normalizeZigbeeDevice(zigbeeDevice, reason = 'sync', options = {}) {
   },
 
 async handleZigbeeDeviceChanged(zigbeeDevice, reason, options = {}) {
+    // Fire-and-forget: wake-window recovery can take tens of seconds (full
+    // interview) and must not delay normal message/state processing.
+    void this.recoverZigbeeSleepyDeviceOnWake(zigbeeDevice, reason).catch((error) => {
+      this.log('warn', 'zigbee', 'Zigbee wake-window recovery failed', {
+        reason,
+        ieeeAddr: trimString(zigbeeDevice?.ieeeAddr) || null,
+        error: error?.message || String(error || 'Unknown wake recovery error')
+      });
+    });
     await this.repairZigbeeIasEnrollmentIfNeeded(zigbeeDevice, reason, options.message).catch((error) => {
       this.log('warn', 'zigbee', 'Zigbee IAS enrollment repair failed during live message handling', {
         reason,
