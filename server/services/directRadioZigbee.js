@@ -884,6 +884,81 @@ async reinterviewZigbeeDevice(ieeeAddr) {
     };
   },
 
+async advanceZigbeeFrameCounter(options = {}) {
+    const requested = Number(options.amount);
+    const amount = Math.min(100_000_000, Math.max(2500, Number.isFinite(requested) ? Math.round(requested) : 1_000_000));
+    await this.start();
+    const controller = this.zigbee.controller;
+    if (!controller || !this.zigbee.started) {
+      const error = new Error('Zigbee coordinator is not ready.');
+      error.status = 503;
+      throw error;
+    }
+
+    const manager = controller.adapter?.adapterManager;
+    const backupMan = manager?.backup;
+    const nv = manager?.nv;
+    if (typeof backupMan?.getNetworkSecurityMaterialTable !== 'function'
+      || typeof backupMan?.getAdapterVersion !== 'function'
+      || typeof nv?.writeTable !== 'function') {
+      const error = new Error('This Zigbee adapter does not expose the Z-Stack security material table.');
+      error.status = 501;
+      throw error;
+    }
+
+    // If the coordinator's NWK security frame counter ever regresses (NVRAM
+    // glitch, chip brownout), every device on the network silently drops its
+    // frames as replays: TX succeeds but nothing ever answers. Jumping the
+    // stored counter far ahead recovers the whole network at once. Mirrors
+    // zigbee-herdsman's own backup-restore counter handling.
+    const { NvItemsIds, NvSystemIds } = require('zigbee-herdsman/dist/adapter/z-stack/constants/common');
+    const { ZnpVersion } = require('zigbee-herdsman/dist/adapter/z-stack/adapter/tstype');
+
+    const version = await backupMan.getAdapterVersion();
+    const table = await backupMan.getNetworkSecurityMaterialTable(version);
+    const entries = Array.isArray(table?.entries) ? table.entries : [];
+    const summary = [];
+    for (const entry of entries) {
+      const epidHex = Buffer.isBuffer(entry?.extendedPanID) ? entry.extendedPanID.toString('hex') : null;
+      const frameCounter = Number(entry?.FrameCounter) || 0;
+      const used = frameCounter > 0 || (epidHex && epidHex !== '0000000000000000' && epidHex !== 'ffffffffffffffff');
+      const isGeneric = epidHex === 'ffffffffffffffff';
+      if (used || isGeneric) {
+        entry.FrameCounter = frameCounter + amount;
+        summary.push({
+          extendedPanID: epidHex,
+          before: frameCounter,
+          after: frameCounter + amount
+        });
+      }
+    }
+
+    if (summary.length === 0) {
+      const error = new Error('No usable entries found in the Z-Stack network security material table; refusing to write.');
+      error.status = 409;
+      error.diagnostics = { entryCount: entries.length };
+      throw error;
+    }
+
+    if (version === ZnpVersion.ZStack3x0) {
+      await nv.writeTable('extended', NvSystemIds.ZSTACK, NvItemsIds.EX_NWK_SEC_MATERIAL_TABLE, table);
+    } else {
+      await nv.writeTable('legacy', NvItemsIds.LEGACY_NWK_SEC_MATERIAL_TABLE_START, table);
+    }
+
+    this.log('warn', 'zigbee', 'Advanced Zigbee NWK security frame counter in coordinator NV memory', {
+      amount,
+      znpVersion: version,
+      entries: summary
+    });
+
+    return {
+      amount,
+      znpVersion: version,
+      entries: summary
+    };
+  },
+
 async touchlinkScanZigbee() {
     await this.start();
     const controller = this.zigbee.controller;
