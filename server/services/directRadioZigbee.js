@@ -959,6 +959,59 @@ async advanceZigbeeFrameCounter(options = {}) {
     };
   },
 
+async changeZigbeeChannel(options = {}) {
+    const channel = Number(options.channel);
+    if (!Number.isInteger(channel) || channel < 11 || channel > 26) {
+      const error = new Error('A Zigbee channel between 11 and 26 is required.');
+      error.status = 400;
+      throw error;
+    }
+
+    const config = await this.ensureControllerConfig();
+    if (!this.isCompleteZigbeeNetwork(config?.zigbee)) {
+      const error = new Error('Zigbee network credentials are incomplete; refusing to change channels.');
+      error.status = 409;
+      throw error;
+    }
+
+    const previousChannelList = [...config.zigbee.channelList];
+    if (previousChannelList.length === 1 && previousChannelList[0] === channel) {
+      return {
+        channel,
+        previousChannelList,
+        changed: false,
+        message: `Zigbee network is already configured for channel ${channel}.`
+      };
+    }
+
+    config.zigbee.channelList = [channel];
+    await writeJsonFile(CONFIG_PATH, config);
+    this.log('warn', 'zigbee', 'Zigbee channel change requested; restarting runtime so zigbee-herdsman migrates the network', {
+      fromChannelList: previousChannelList,
+      toChannel: channel
+    });
+
+    // zigbee-herdsman handles the actual migration on start: when the resumed
+    // adapter channel differs from the configured channel it broadcasts a
+    // Mgmt_NWK_Update to the whole network (including sleepy devices) and
+    // retunes the coordinator. Routers follow immediately; sleepy end devices
+    // that miss the broadcast re-find the network via orphan channel scan.
+    const status = await this.restartRuntime({
+      reason: `zigbee_channel_change_${previousChannelList.join('_')}_to_${channel}`
+    });
+
+    const network = status?.controllers?.zigbee?.network || null;
+    return {
+      channel,
+      previousChannelList,
+      changed: true,
+      network,
+      message: network?.channel === channel
+        ? `Zigbee network migrated to channel ${channel}.`
+        : `Channel ${channel} configured; coordinator reports ${network?.channel ?? 'unknown'} — sleepy devices may take a few minutes to follow.`
+    };
+  },
+
 async scanZigbeeChannelEnergy(options = {}) {
     await this.start();
     const controller = this.zigbee.controller;

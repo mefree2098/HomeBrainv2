@@ -472,6 +472,20 @@ router.post('/zigbee/frame-counter/advance', async (req, res) => {
   }
 });
 
+router.post('/zigbee/channel', async (req, res) => {
+  try {
+    const result = await directRadioService.changeZigbeeChannel({
+      channel: req.body?.channel
+    });
+    res.status(200).json({
+      success: true,
+      result
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to change the Zigbee network channel');
+  }
+});
+
 router.post('/zigbee/energy-scan', async (req, res) => {
   try {
     const result = await directRadioService.scanZigbeeChannelEnergy({
