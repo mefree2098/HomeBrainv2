@@ -138,6 +138,8 @@ const {
   endpointHasZigbeeCluster,
   readZigbeeAttributeFromResponse,
   readZigbeeLiveSensorState,
+  getZigbeeInterviewState,
+  isZigbeeInterviewSuccessful,
   normalizeZigbeeSwitchState,
   normalizeZigbeePercent,
   normalizeZigbeeActiveState,
@@ -661,14 +663,21 @@ hasLiveZigbeeSecuritySensorEvidence(update = {}) {
     const messageCluster = trimString(direct.lastMessageCluster).toLowerCase();
     const hasLiveZoneStatus = direct.lastLiveZoneStatus !== undefined && direct.lastLiveZoneStatus !== null;
 
+    // A live zone status (from an IAS report or a successful live endpoint
+    // read) is direct radio evidence regardless of why the update happened —
+    // including refresh, deviceInterview, and reinterview paths.
+    if (hasLiveZoneStatus) {
+      return true;
+    }
+
     if (reason === 'message') {
       // Older normalized updates did not stamp the message cluster. Treat them
       // as live so existing event paths keep working, while newer metadata lets
       // us reject cached state attached to unrelated Zigbee messages.
-      return !messageCluster || messageCluster === 'ssiaszone' || hasLiveZoneStatus;
+      return !messageCluster || messageCluster === 'ssiaszone';
     }
 
-    return reason === 'deviceannounce' && hasLiveZoneStatus;
+    return false;
   },
 
 shouldEvaluateSecurityAlarmForDirectDeviceUpdate(identity, update = {}) {
@@ -1150,7 +1159,8 @@ async getStatus() {
           type: device?.type || null,
           modelID: device?.modelID || null,
           manufacturerName: device?.manufacturerName || null,
-          interviewCompleted: device?.interviewCompleted === true,
+          interviewCompleted: isZigbeeInterviewSuccessful(device),
+          interviewState: getZigbeeInterviewState(device) || null,
           lastSeen: Number.isFinite(lastSeenTime) ? new Date(lastSeenTime).toISOString() : null,
           linkquality: Number.isFinite(linkquality) ? linkquality : null,
           endpoints: Array.isArray(device?.endpoints)

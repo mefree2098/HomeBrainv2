@@ -211,6 +211,9 @@ const {
   endpointHasZigbeeCluster,
   readZigbeeAttributeFromResponse,
   readZigbeeLiveSensorState,
+  getZigbeeInterviewState,
+  isZigbeeInterviewSuccessful,
+  isZigbeeInterviewUsable,
   normalizeZigbeeSwitchState,
   normalizeZigbeePercent,
   normalizeZigbeeActiveState,
@@ -816,7 +819,8 @@ async reinterviewZigbeeDevice(ieeeAddr) {
       return {
         ieeeAddr: address,
         modelID: device.modelID || null,
-        interviewCompleted: device.interviewCompleted !== false,
+        interviewCompleted: isZigbeeInterviewSuccessful(device),
+        interviewState: getZigbeeInterviewState(device) || null,
         iasZone: this.readZigbeeIasEnrollment(device),
         isSleepy,
         iasRepair,
@@ -872,7 +876,8 @@ async reinterviewZigbeeDevice(ieeeAddr) {
     return {
       ieeeAddr: address,
       modelID: device.modelID || null,
-      interviewCompleted: device.interviewCompleted !== false,
+      interviewCompleted: isZigbeeInterviewSuccessful(device),
+      interviewState: getZigbeeInterviewState(device) || null,
       iasZone: this.readZigbeeIasEnrollment(device),
       isSleepy,
       message: `HomeBrain re-ran the Zigbee interview for ${address}.`
@@ -926,7 +931,8 @@ async forgetZigbeeDevice(ieeeAddr, options = {}) {
       networkAddress: device.networkAddress ?? null,
       modelID: device.modelID || null,
       manufacturerName: device.manufacturerName || null,
-      interviewCompleted: device.interviewCompleted !== false,
+      interviewCompleted: isZigbeeInterviewSuccessful(device),
+      interviewState: getZigbeeInterviewState(device) || null,
       endpointCount: Array.isArray(device.endpoints) ? device.endpoints.length : null,
       source
     };
@@ -1173,7 +1179,7 @@ normalizeZigbeeDevice(zigbeeDevice, reason = 'sync', options = {}) {
     );
     const hasRuntimeState = Boolean(directRadioState && Object.keys(directRadioState).length > 0);
     const incompleteInterviewShell = !hasNativeIdentity && features.length === 0 && !hasRuntimeState;
-    const status = zigbeeDevice.interviewCompleted !== false && !incompleteInterviewShell;
+    const status = isZigbeeInterviewUsable(zigbeeDevice) && !incompleteInterviewShell;
 
     return {
       identity: {
@@ -1205,7 +1211,8 @@ normalizeZigbeeDevice(zigbeeDevice, reason = 'sync', options = {}) {
             deviceType: zigbeeDevice.type || null,
             modelID: zigbeeDevice.modelID || null,
             manufacturerName: zigbeeDevice.manufacturerName || null,
-            interviewCompleted: zigbeeDevice.interviewCompleted !== false && !incompleteInterviewShell,
+            interviewCompleted: isZigbeeInterviewUsable(zigbeeDevice) && !incompleteInterviewShell,
+            interviewState: getZigbeeInterviewState(zigbeeDevice) || null,
             incomplete: incompleteInterviewShell || undefined,
             incompleteReason: incompleteInterviewShell ? 'missing_zigbee_interview_identity_and_state' : undefined,
             iasZone: this.readZigbeeIasEnrollment(zigbeeDevice),
