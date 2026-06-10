@@ -21,6 +21,19 @@ const ZIGBEE_JOIN_RELATED_COMMANDS = new Set([
   'leaveInd'
 ]);
 
+const ZIGBEE_ZSTACK_STATUS_LABELS = new Map([
+  [0, 'SUCCESS'],
+  [183, 'APS_NO_ACK'],
+  [204, 'NWK_NO_ACK'],
+  [225, 'MAC_CHANNEL_ACCESS_FAILURE'],
+  [233, 'MAC_NO_ACK']
+]);
+
+function labelZigbeeZnpStatus(value) {
+  const code = Number(value);
+  return Number.isFinite(code) ? ZIGBEE_ZSTACK_STATUS_LABELS.get(code) || null : null;
+}
+
 function summarizeZigbeeZnpPayload(payload = {}) {
   if (!payload || typeof payload !== 'object') {
     return {};
@@ -43,6 +56,12 @@ function summarizeZigbeeZnpPayload(payload = {}) {
       return summary;
     }
     summary[key] = value;
+    if (key === 'status') {
+      const label = labelZigbeeZnpStatus(value);
+      if (label) {
+        summary.statusLabel = label;
+      }
+    }
     return summary;
   }, {});
 }
@@ -526,6 +545,18 @@ async startZigbee(serialPath) {
           networkAddress: payload?.device?.networkAddress || null
         });
         this.dispatchHandler('zigbee:deviceAnnounce', 'zigbee', () => this.handleZigbeeDeviceChanged(payload?.device, 'deviceAnnounce'), { ieeeAddr: payload?.device?.ieeeAddr || null });
+      });
+      controller.on('lastSeenChanged', (payload) => {
+        const device = payload?.device || null;
+        const lastSeenTime = Number(device?.lastSeen);
+        this.log('info', 'zigbee', 'Zigbee device last-seen changed', {
+          reason: payload?.reason || null,
+          ieeeAddr: device?.ieeeAddr || null,
+          networkAddress: device?.networkAddress ?? null,
+          modelID: device?.modelID || null,
+          lastSeen: Number.isFinite(lastSeenTime) ? new Date(lastSeenTime).toISOString() : null,
+          linkquality: device?.linkquality ?? null
+        });
       });
       controller.on('message', (payload) => {
         this.log('info', 'zigbee', 'Zigbee message received', {

@@ -169,6 +169,45 @@ test('direct radio status tolerates Z-Wave node cache startup errors', async () 
   assert.ok(status.controllers.zwave.diagnostics.some((entry) => /node cache is still starting/i.test(entry)));
 });
 
+test('direct radio status reports Zigbee device last-seen and link quality', async () => {
+  const service = new DirectRadioService();
+  service.zigbee.controller = {
+    getDevices: () => [
+      {
+        type: 'Coordinator',
+        ieeeAddr: '0x00124b003a12562a'
+      },
+      {
+        ieeeAddr: '0xa4c13812d1d4ffff',
+        networkAddress: 48253,
+        type: 'EndDevice',
+        modelID: 'SNZB-04PR2',
+        manufacturerName: 'SONOFF',
+        interviewCompleted: false,
+        lastSeen: Date.parse('2026-06-10T14:22:00.000Z'),
+        linkquality: 91,
+        endpoints: [
+          {
+            ID: 1,
+            profileID: 260,
+            deviceID: 1026,
+            inputClusters: [0, 1, 1280],
+            outputClusters: [3, 25]
+          }
+        ]
+      }
+    ]
+  };
+
+  const status = await service.getStatus();
+  const device = status.controllers.zigbee.devices.find((entry) => entry.ieeeAddr === '0xa4c13812d1d4ffff');
+
+  assert.ok(device);
+  assert.equal(device.lastSeen, '2026-06-10T14:22:00.000Z');
+  assert.equal(device.linkquality, 91);
+  assert.equal(device.endpoints[0].inputClusters.includes(1280), true);
+});
+
 test('direct radio status marks running Z-Wave controllers degraded when paired nodes are incomplete', async () => {
   const service = new DirectRadioService();
   service.zwave.started = true;
