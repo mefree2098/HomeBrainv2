@@ -1249,12 +1249,48 @@ async getStatus() {
 
 async restartRuntime(options = {}) {
     const reason = trimString(options.reason) || 'manual_restart';
-    this.log('warn', 'system', 'Restarting direct radio runtime on request', { reason });
+    const hardResetZigbee = options.hardResetZigbee === true;
+    this.log('warn', 'system', 'Restarting direct radio runtime on request', { reason, hardResetZigbee });
+
+    if (hardResetZigbee && typeof this.zigbee.controller?.reset === 'function') {
+      // A watchdog (hard) reset reboots the whole CC2652 including the RF
+      // core, which a soft reset leaves untouched. Recovers coordinators whose
+      // receiver wedged (e.g. after sustained near-field interference).
+      try {
+        await withTimeout(
+          this.zigbee.controller.reset('hard'),
+          15_000,
+          'Zigbee coordinator hardware reset timed out'
+        );
+        this.log('warn', 'zigbee', 'Issued Zigbee coordinator hardware (watchdog) reset', { reason });
+      } catch (error) {
+        this.log('warn', 'zigbee', 'Zigbee coordinator hardware reset failed', {
+          reason,
+          error: error.message
+        });
+      }
+    }
+
     await this.shutdown();
     this.started = false;
-    const status = await this.start({ force: true });
+    let status = null;
+    try {
+      status = await this.start({ force: true });
+    } catch (error) {
+      // Z-Wave value queries can race driver readiness right after a restart;
+      // the controllers themselves may still have started fine.
+      this.log('warn', 'system', 'Direct radio restart status readback failed; retrying status', {
+        reason,
+        error: error.message
+      });
+    }
+    if (!status) {
+      await delay(3_000);
+      status = await this.getStatus();
+    }
     this.log('info', 'system', 'Direct radio runtime restart finished', {
       reason,
+      hardResetZigbee,
       zigbeeStarted: status?.controllers?.zigbee?.started === true,
       zwaveStarted: status?.controllers?.zwave?.started === true
     });
