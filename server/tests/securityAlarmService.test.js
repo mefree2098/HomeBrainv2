@@ -173,6 +173,72 @@ test('getAlarmStatus returns security sensors and door lock summaries', async (t
   assert.equal(garageLock.smartThingsDeviceId, 'smartthings-lock-2');
 });
 
+test('buildSecuritySensorSummary marks cached Zigbee sync contact state as unverified', () => {
+  const zone = {
+    name: 'Back Door',
+    deviceId: 'back-door',
+    deviceType: 'doorWindow',
+    enabled: true,
+    bypassed: false
+  };
+  const cachedSyncDevice = {
+    _id: 'back-door',
+    name: 'Back Door',
+    type: 'sensor',
+    room: 'Upstairs',
+    status: true,
+    isOnline: true,
+    lastSeen: '2026-06-10T06:29:15.091Z',
+    properties: {
+      source: 'homebrain-zigbee',
+      directRadioFeatures: ['battery', 'contact', 'tamper'],
+      directRadioState: {
+        contactOpen: true,
+        contact: 'open'
+      },
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0xa4c13812d1d4ffff',
+        lastReason: 'sync',
+        lastMessageCluster: null,
+        lastLiveZoneStatus: null,
+        lastLiveSensorReadAt: null
+      }
+    }
+  };
+  const liveIasDevice = {
+    ...cachedSyncDevice,
+    properties: {
+      ...cachedSyncDevice.properties,
+      homebrainDirect: {
+        ...cachedSyncDevice.properties.homebrainDirect,
+        lastReason: 'message',
+        lastMessageCluster: 'ssiaszone',
+        lastLiveZoneStatus: 1,
+        lastLiveSensorReadAt: '2026-06-10T06:30:00.000Z'
+      }
+    }
+  };
+
+  const cachedSummary = securityAlarmService.buildSecuritySensorSummary({
+    device: cachedSyncDevice,
+    zone
+  });
+  assert.equal(cachedSummary.stateLabel, 'Unverified');
+  assert.equal(cachedSummary.isActive, false);
+  assert.equal(cachedSummary.isStateUnverified, true);
+  assert.equal(cachedSummary.requiresAttention, true);
+  assert.equal(cachedSummary.attentionFlags.includes('state_unverified'), true);
+
+  const liveSummary = securityAlarmService.buildSecuritySensorSummary({
+    device: liveIasDevice,
+    zone
+  });
+  assert.equal(liveSummary.stateLabel, 'Open');
+  assert.equal(liveSummary.isActive, true);
+  assert.equal(liveSummary.isStateUnverified, false);
+});
+
 test('getAlarmStatus scopes sensors and locks to the enabled HomeBrain security platform', async (t) => {
   const originalGetMainAlarm = SecurityAlarm.getMainAlarm;
   const originalDeviceFind = Device.find;

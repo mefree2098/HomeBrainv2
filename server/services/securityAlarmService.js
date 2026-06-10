@@ -430,6 +430,39 @@ const inferStateLabel = (sensorType, isActive, isAvailable) => {
   }
 };
 
+const isUnverifiedDirectZigbeeSensorState = (device, sensorType) => {
+  const direct = device?.properties?.homebrainDirect && typeof device.properties.homebrainDirect === 'object'
+    ? device.properties.homebrainDirect
+    : {};
+  const source = normalizeString(device?.properties?.source).toLowerCase();
+  const protocol = normalizeString(direct.protocol).toLowerCase();
+
+  if (source !== 'homebrain-zigbee' && protocol !== 'zigbee') {
+    return false;
+  }
+
+  if (!['doorWindow', 'motion', 'flood', 'glass', 'security'].includes(sensorType)) {
+    return false;
+  }
+
+  if (direct.lastLiveZoneStatus !== undefined && direct.lastLiveZoneStatus !== null) {
+    return false;
+  }
+
+  if (normalizeString(direct.lastLiveSensorReadAt)) {
+    return false;
+  }
+
+  const reason = normalizeString(direct.lastReason).toLowerCase();
+  const messageCluster = normalizeString(direct.lastMessageCluster).toLowerCase();
+
+  if (reason === 'sync' || reason === 'refresh' || reason === 'devicejoined' || reason === 'deviceinterview') {
+    return true;
+  }
+
+  return reason === 'message' && messageCluster && messageCluster !== 'ssiaszone';
+};
+
 const requestSecurityAlarmAutomationEvaluation = (reason) => {
   try {
     const automationSchedulerService = require('./automationSchedulerService');
@@ -1077,8 +1110,9 @@ class SecurityAlarmService {
     const monitoredModes = this.getZoneMonitoredModes(zone, sensorType);
     const isMonitored = monitoredModes.length > 0;
     const isBypassed = Boolean(zone?.bypassed);
-    const isActive = isAvailable ? Boolean(device?.status) : false;
-    const requiresAttention = !isAvailable || !isOnline || batteryState === 'low' || batteryState === 'critical';
+    const isStateUnverified = isAvailable && isUnverifiedDirectZigbeeSensorState(device, sensorType);
+    const isActive = isAvailable && !isStateUnverified ? Boolean(device?.status) : false;
+    const requiresAttention = !isAvailable || !isOnline || isStateUnverified || batteryState === 'low' || batteryState === 'critical';
 
     let monitorState = 'Available';
     if (!isAvailable && zone) {
@@ -1107,6 +1141,9 @@ class SecurityAlarmService {
     } else if (batteryState === 'low') {
       attentionFlags.push('battery_low');
     }
+    if (isStateUnverified) {
+      attentionFlags.push('state_unverified');
+    }
 
     return {
       deviceId: resolvedDeviceId,
@@ -1119,8 +1156,9 @@ class SecurityAlarmService {
       room: normalizeString(device?.room) || null,
       sensorType,
       sensorTypeLabel: SENSOR_TYPE_LABELS[sensorType] || SENSOR_TYPE_LABELS.security,
-      stateLabel: inferStateLabel(sensorType, isActive, isAvailable),
+      stateLabel: isStateUnverified ? 'Unverified' : inferStateLabel(sensorType, isActive, isAvailable),
       isActive,
+      isStateUnverified,
       isAvailable,
       isOnline,
       isMonitored,

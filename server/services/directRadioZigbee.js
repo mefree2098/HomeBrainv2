@@ -1089,6 +1089,11 @@ normalizeZigbeeDevice(zigbeeDevice, reason = 'sync', options = {}) {
       || trimString(zigbeeDevice.manufacturerName)
       || `Zigbee ${directId.slice(-6)}`;
 
+    const messageCluster = normalizeZigbeeClusterToken(
+      options.message?.cluster ?? options.message?.clusterID ?? options.message?.clusterId
+    );
+    const liveZoneStatus = options.liveSensorState?.zoneStatus;
+    const hasLiveZoneStatus = liveZoneStatus !== undefined && liveZoneStatus !== null;
     const runtimeState = readZigbeeRuntimeState(zigbeeDevice, {
       features: baseFeatures,
       message: options.message,
@@ -1144,6 +1149,9 @@ normalizeZigbeeDevice(zigbeeDevice, reason = 'sync', options = {}) {
             incompleteReason: incompleteInterviewShell ? 'missing_zigbee_interview_identity_and_state' : undefined,
             iasZone: this.readZigbeeIasEnrollment(zigbeeDevice),
             lastReason: reason,
+            lastMessageCluster: messageCluster || undefined,
+            lastLiveSensorReadAt: hasLiveZoneStatus ? new Date().toISOString() : undefined,
+            lastLiveZoneStatus: hasLiveZoneStatus ? liveZoneStatus : undefined,
             lastSeen: new Date().toISOString(),
             catalog: directRadioProtocolCatalogService.buildCatalogReference(catalogEntry)
           },
