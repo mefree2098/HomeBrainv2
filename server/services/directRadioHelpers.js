@@ -2327,6 +2327,11 @@ function applyZoneStatusToDirectState(directState, zoneStatus, features = []) {
   }
 
   const alarmActive = Boolean(numeric & 0x0001 || numeric & 0x0002);
+  // Contact sensors signal open/closed on alarm1 only (zigbee2mqtt maps
+  // SNZB-04PR2 and MCT-340 E contact to alarm_1). alarm2 is reserved for
+  // other purposes on some firmwares, so treating it as "open" risks false
+  // security alarms. Motion/water keep the generic alarm1|alarm2 handling.
+  const contactOpen = Boolean(numeric & 0x0001);
   assignDefined(directState, 'tamper', Boolean(numeric & 0x0004));
   assignDefined(directState, 'tamperActive', Boolean(numeric & 0x0004));
   assignDefined(directState, 'batteryLow', Boolean(numeric & 0x0008));
@@ -2341,8 +2346,8 @@ function applyZoneStatusToDirectState(directState, zoneStatus, features = []) {
     return;
   }
   if (hasDirectFeature(features, 'contact')) {
-    assignDefined(directState, 'contactOpen', alarmActive);
-    assignDefined(directState, 'contact', alarmActive ? 'open' : 'closed');
+    assignDefined(directState, 'contactOpen', contactOpen);
+    assignDefined(directState, 'contact', contactOpen ? 'open' : 'closed');
     return;
   }
   if (hasDirectFeature(features, 'vibration') || hasDirectFeature(features, 'acceleration')) {
@@ -2353,8 +2358,20 @@ function applyZoneStatusToDirectState(directState, zoneStatus, features = []) {
     return;
   }
 
-  assignDefined(directState, 'contactOpen', alarmActive);
-  assignDefined(directState, 'contact', alarmActive ? 'open' : 'closed');
+  assignDefined(directState, 'contactOpen', contactOpen);
+  assignDefined(directState, 'contact', contactOpen ? 'open' : 'closed');
+}
+
+// SONOFF SNZB-04PR2 (SenseGuard DW Gen2) reports tamper through the private
+// eWeLink cluster 0xFC11 attribute 0x2000, not the IAS zoneStatus tamper bit.
+function extractSonoffPrivateClusterState(directState, data = {}) {
+  const tamper = data['8192'] ?? data[8192] ?? data.tamper;
+  if (tamper === undefined || tamper === null) {
+    return;
+  }
+  const active = Number(tamper) === 1 || tamper === true;
+  assignDefined(directState, 'tamper', active);
+  assignDefined(directState, 'tamperActive', active);
 }
 
 function extractZigbeeMessageState(message, features = []) {
@@ -2364,6 +2381,10 @@ function extractZigbeeMessageState(message, features = []) {
 
   if (cluster === 'ssiaszone') {
     applyZoneStatusToDirectState(directState, data.zoneStatus ?? data.zonestatus, features);
+  }
+
+  if (cluster === '64529' || cluster === 'manuspecificsonoff' || cluster === 'customclusterewelink') {
+    extractSonoffPrivateClusterState(directState, data);
   }
 
   if (cluster === 'genpowercfg') {
