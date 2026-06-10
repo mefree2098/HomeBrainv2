@@ -669,6 +669,14 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
       mergedDirect[key] = existingValue;
     }
   });
+  [
+    'lastLiveSensorReadAt',
+    'lastLiveZoneStatus'
+  ].forEach((key) => {
+    if (!hasUsableDirectValue(updateDirect[key]) && hasUsableDirectValue(existingDirect[key])) {
+      mergedDirect[key] = existingDirect[key];
+    }
+  });
   if (preservesKnownGoodDirectRecord) {
     [
       'manufacturerId',

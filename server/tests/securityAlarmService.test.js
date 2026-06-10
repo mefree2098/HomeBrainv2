@@ -219,6 +219,25 @@ test('buildSecuritySensorSummary marks cached Zigbee sync contact state as unver
       }
     }
   };
+  const laterBatteryDevice = {
+    ...cachedSyncDevice,
+    status: false,
+    properties: {
+      ...cachedSyncDevice.properties,
+      directRadioState: {
+        contactOpen: false,
+        contact: 'closed',
+        batteryLevel: 88
+      },
+      homebrainDirect: {
+        ...cachedSyncDevice.properties.homebrainDirect,
+        lastReason: 'message',
+        lastMessageCluster: 'genpowercfg',
+        lastLiveZoneStatus: 0,
+        lastLiveSensorReadAt: '2026-06-10T06:31:00.000Z'
+      }
+    }
+  };
 
   const cachedSummary = securityAlarmService.buildSecuritySensorSummary({
     device: cachedSyncDevice,
@@ -237,6 +256,15 @@ test('buildSecuritySensorSummary marks cached Zigbee sync contact state as unver
   assert.equal(liveSummary.stateLabel, 'Open');
   assert.equal(liveSummary.isActive, true);
   assert.equal(liveSummary.isStateUnverified, false);
+
+  const laterBatterySummary = securityAlarmService.buildSecuritySensorSummary({
+    device: laterBatteryDevice,
+    zone
+  });
+  assert.equal(laterBatterySummary.stateLabel, 'Closed');
+  assert.equal(laterBatterySummary.isActive, false);
+  assert.equal(laterBatterySummary.isStateUnverified, false);
+  assert.equal(laterBatterySummary.attentionFlags.includes('state_unverified'), false);
 });
 
 test('getAlarmStatus scopes sensors and locks to the enabled HomeBrain security platform', async (t) => {

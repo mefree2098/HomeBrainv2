@@ -1365,9 +1365,62 @@ test('Zigbee normalization treats IAS Zone as contact on 3321-S multipurpose sen
   assert.equal(state.contact, 'open');
   assert.equal(state.vibrationActive, undefined);
   assert.equal(normalized.update.properties.homebrainDirect.lastMessageCluster, 'ssiaszone');
+  assert.equal(normalized.update.properties.homebrainDirect.lastLiveZoneStatus, 0x0001);
+  assert.ok(normalized.update.properties.homebrainDirect.lastLiveSensorReadAt);
   assert.ok(normalized.update.properties.directRadioFeatures.includes('contact'));
   assert.ok(normalized.update.properties.directRadioFeatures.includes('vibration'));
   assert.ok(normalized.update.properties.directRadioFeatures.includes('acceleration'));
+});
+
+test('Zigbee IAS message payload stamps live zone status without endpoint read', async () => {
+  const service = createService();
+  let capturedUpdate = null;
+  service.readZigbeeIasEnrollment = () => ({
+    enrolled: true,
+    cieMatchesCoordinator: true
+  });
+  service.upsertDirectDevice = async (_identity, update) => {
+    capturedUpdate = update;
+    return { _id: DEVICE_ID, ...update };
+  };
+
+  const endpoint = {
+    ID: 1,
+    inputClusters: [1, 1280],
+    getClusterAttributeValue() {
+      return undefined;
+    },
+    async read() {
+      assert.fail('IAS message payload should avoid a follow-up endpoint read');
+    }
+  };
+
+  await service.handleZigbeeDeviceChanged({
+    ieeeAddr: '0xa4c13811e99effff',
+    modelID: 'SNZB-04',
+    manufacturerName: 'SONOFF',
+    interviewCompleted: true,
+    endpoints: [endpoint]
+  }, 'message', {
+    message: {
+      cluster: 'ssIasZone',
+      type: 'commandStatusChangeNotification',
+      data: {
+        zonestatus: 0,
+        extendedstatus: 0,
+        zoneID: 23,
+        delay: 0
+      }
+    }
+  });
+
+  assert.ok(capturedUpdate);
+  assert.equal(capturedUpdate.status, false);
+  assert.equal(capturedUpdate.properties.directRadioState.contactOpen, false);
+  assert.equal(capturedUpdate.properties.directRadioState.contact, 'closed');
+  assert.equal(capturedUpdate.properties.homebrainDirect.lastMessageCluster, 'ssiaszone');
+  assert.equal(capturedUpdate.properties.homebrainDirect.lastLiveZoneStatus, 0);
+  assert.ok(capturedUpdate.properties.homebrainDirect.lastLiveSensorReadAt);
 });
 
 test('Zigbee message handling reads live IAS zone status during sleepy contact check-in', async () => {
@@ -1712,6 +1765,60 @@ test('direct radio merge keeps existing state when Zigbee refresh has no state p
 
   assert.equal(merged.status, true);
   assert.equal(merged.brightness, 75);
+});
+
+test('direct radio merge preserves live Zigbee IAS proof across non-IAS check-in', () => {
+  const merged = mergeDirectDeviceUpdateForExisting({
+    name: 'Garage Entry',
+    type: 'sensor',
+    room: 'Downstairs',
+    status: false,
+    isOnline: true,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0xa4c13811e99effff',
+        lastReason: 'message',
+        lastMessageCluster: 'ssiaszone',
+        lastLiveZoneStatus: 0,
+        lastLiveSensorReadAt: '2026-06-10T06:50:58.704Z'
+      },
+      directRadioState: {
+        contactOpen: false,
+        contact: 'closed'
+      },
+      directRadioFeatures: ['battery', 'contact']
+    }
+  }, {
+    name: 'SNZB-04',
+    type: 'sensor',
+    room: 'Unassigned',
+    isOnline: true,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0xa4c13811e99effff',
+        lastReason: 'message',
+        lastMessageCluster: 'genpowercfg',
+        lastLiveZoneStatus: undefined,
+        lastLiveSensorReadAt: undefined,
+        lastSeen: '2026-06-10T06:51:08.176Z'
+      },
+      directRadioState: {
+        batteryLevel: 88
+      },
+      directRadioFeatures: ['battery']
+    }
+  });
+
+  assert.equal(merged.properties.homebrainDirect.lastMessageCluster, 'genpowercfg');
+  assert.equal(merged.properties.homebrainDirect.lastLiveZoneStatus, 0);
+  assert.equal(merged.properties.homebrainDirect.lastLiveSensorReadAt, '2026-06-10T06:50:58.704Z');
+  assert.equal(merged.properties.directRadioState.contactOpen, false);
+  assert.equal(merged.properties.directRadioState.contact, 'closed');
+  assert.equal(merged.properties.directRadioState.batteryLevel, 88);
 });
 
 test('direct radio post-command refresh keeps command state when Zigbee has no state payload', async () => {
