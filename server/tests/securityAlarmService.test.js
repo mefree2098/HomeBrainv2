@@ -173,7 +173,7 @@ test('getAlarmStatus returns security sensors and door lock summaries', async (t
   assert.equal(garageLock.smartThingsDeviceId, 'smartthings-lock-2');
 });
 
-test('buildSecuritySensorSummary marks cached Zigbee sync contact state as unverified', () => {
+test('buildSecuritySensorSummary trusts stored Zigbee contact state as last-known live state', () => {
   const zone = {
     name: 'Back Door',
     deviceId: 'back-door',
@@ -254,15 +254,18 @@ test('buildSecuritySensorSummary marks cached Zigbee sync contact state as unver
     }
   };
 
+  // Stored device state can only come from live radio evidence now (the
+  // direct-radio layer never persists cached IAS zoneStatus), so the security
+  // summary trusts it directly — even right after a restart sync — instead of
+  // flagging working sensors as "Unverified".
   const cachedSummary = securityAlarmService.buildSecuritySensorSummary({
     device: cachedSyncDevice,
     zone
   });
-  assert.equal(cachedSummary.stateLabel, 'Unverified');
-  assert.equal(cachedSummary.isActive, false);
-  assert.equal(cachedSummary.isStateUnverified, true);
-  assert.equal(cachedSummary.requiresAttention, true);
-  assert.equal(cachedSummary.attentionFlags.includes('state_unverified'), true);
+  assert.equal(cachedSummary.stateLabel, 'Open');
+  assert.equal(cachedSummary.isActive, true);
+  assert.equal(cachedSummary.requiresAttention, false);
+  assert.deepEqual(cachedSummary.attentionFlags, []);
 
   const liveSummary = securityAlarmService.buildSecuritySensorSummary({
     device: liveIasDevice,
@@ -270,7 +273,6 @@ test('buildSecuritySensorSummary marks cached Zigbee sync contact state as unver
   });
   assert.equal(liveSummary.stateLabel, 'Open');
   assert.equal(liveSummary.isActive, true);
-  assert.equal(liveSummary.isStateUnverified, false);
 
   const laterBatterySummary = securityAlarmService.buildSecuritySensorSummary({
     device: laterBatteryDevice,
@@ -278,18 +280,16 @@ test('buildSecuritySensorSummary marks cached Zigbee sync contact state as unver
   });
   assert.equal(laterBatterySummary.stateLabel, 'Closed');
   assert.equal(laterBatterySummary.isActive, false);
-  assert.equal(laterBatterySummary.isStateUnverified, false);
-  assert.equal(laterBatterySummary.attentionFlags.includes('state_unverified'), false);
+  assert.deepEqual(laterBatterySummary.attentionFlags, []);
 
   const reinterviewSummary = securityAlarmService.buildSecuritySensorSummary({
     device: reinterviewDevice,
     zone
   });
-  assert.equal(reinterviewSummary.stateLabel, 'Unverified');
+  assert.equal(reinterviewSummary.stateLabel, 'Closed');
   assert.equal(reinterviewSummary.isActive, false);
-  assert.equal(reinterviewSummary.isStateUnverified, true);
-  assert.equal(reinterviewSummary.requiresAttention, true);
-  assert.equal(reinterviewSummary.attentionFlags.includes('state_unverified'), true);
+  assert.equal(reinterviewSummary.requiresAttention, false);
+  assert.deepEqual(reinterviewSummary.attentionFlags, []);
 });
 
 test('getAlarmStatus scopes sensors and locks to the enabled HomeBrain security platform', async (t) => {

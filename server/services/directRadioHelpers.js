@@ -1978,6 +1978,35 @@ async function readZigbeeLiveSensorState(zigbeeDevice, options = {}) {
   return {};
 }
 
+// zigbee-herdsman v10 replaced Device.interviewCompleted with
+// Device.interviewState ('PENDING' | 'IN_PROGRESS' | 'SUCCESSFUL' | 'FAILED').
+// These helpers support both APIs so device health is reported correctly.
+function getZigbeeInterviewState(zigbeeDevice) {
+  const state = trimString(zigbeeDevice?.interviewState).toUpperCase();
+  if (state) {
+    return state;
+  }
+  if (zigbeeDevice?.interviewCompleted === true) {
+    return 'SUCCESSFUL';
+  }
+  if (zigbeeDevice?.interviewCompleted === false) {
+    return 'FAILED';
+  }
+  return '';
+}
+
+function isZigbeeInterviewSuccessful(zigbeeDevice) {
+  return getZigbeeInterviewState(zigbeeDevice) === 'SUCCESSFUL';
+}
+
+// Mirrors the legacy `interviewCompleted !== false` intent: only a known-bad
+// interview should degrade a device that is otherwise reporting. Sleepy
+// sensors frequently sit at PENDING while working perfectly, so PENDING and
+// unknown states stay usable.
+function isZigbeeInterviewUsable(zigbeeDevice) {
+  return getZigbeeInterviewState(zigbeeDevice) !== 'FAILED';
+}
+
 function normalizeZigbeeSwitchState(value) {
   if (value === undefined || value === null) {
     return undefined;
@@ -2547,16 +2576,14 @@ function readZigbeeStateObject(zigbeeDevice, directState) {
   ));
 }
 
-function readZigbeeEndpointSensorAttributes(zigbeeDevice, directState, features = []) {
+function readZigbeeEndpointSensorAttributes(zigbeeDevice, directState, _features = []) {
+  // IMPORTANT: never derive IAS alarm state (contact/motion/water/tamper) from
+  // the endpoint attribute cache here. zigbee-herdsman persists the last
+  // zoneStatus snapshot in database.db, so a stale "open"/"alarm" bit survives
+  // restarts and would be replayed on every sync/reinterview/unrelated message,
+  // producing false security alarms. Zone status may only come from a live IAS
+  // message or a live endpoint read (options.liveSensorState).
   for (const endpoint of getZigbeeEndpoints(zigbeeDevice)) {
-    if (directState.contactOpen === undefined && directState.motionActive === undefined && directState.waterDetected === undefined) {
-      applyZoneStatusToDirectState(
-        directState,
-        readZigbeeEndpointAttribute(endpoint, ['ssIasZone', 'ssiaszone', 1280], ['zoneStatus', 'zonestatus']),
-        features
-      );
-    }
-
     if (directState.batteryLevel === undefined) {
       assignDefined(directState, 'batteryLevel', normalizeZigbeeBatteryPercent(
         readZigbeeEndpointAttribute(endpoint, ['genPowerCfg', 'genpowercfg', 1], ['batteryPercentageRemaining', 'batterypercentageremaining']),
@@ -3766,6 +3793,9 @@ module.exports = {
   endpointHasZigbeeCluster,
   readZigbeeAttributeFromResponse,
   readZigbeeLiveSensorState,
+  getZigbeeInterviewState,
+  isZigbeeInterviewSuccessful,
+  isZigbeeInterviewUsable,
   normalizeZigbeeSwitchState,
   normalizeZigbeePercent,
   normalizeZigbeeActiveState,

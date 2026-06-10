@@ -1289,9 +1289,9 @@ test('Zigbee normalization captures color temperature from RGBW endpoint attribu
   assert.equal(normalized.update.properties.supportsColorTemperature, true);
 });
 
-test('Zigbee normalization captures contact, temperature, tamper, and battery state from sensor reports', () => {
+test('Zigbee normalization never derives contact state from the cached IAS zoneStatus attribute', () => {
   const service = createService();
-  const normalized = service.normalizeZigbeeDevice({
+  const zigbeeDevice = {
     ieeeAddr: '0x000d6f000b11f6e5',
     modelID: 'MCT-340 E',
     manufacturerName: 'Visonic',
@@ -1301,6 +1301,7 @@ test('Zigbee normalization captures contact, temperature, tamper, and battery st
         ID: 1,
         inputClusters: [1, 1026, 1280],
         getClusterAttributeValue(cluster, attribute) {
+          // Stale persisted snapshot: alarm1 + tamper + battery-low bits set.
           if (cluster === 'ssIasZone' && attribute === 'zoneStatus') {
             return 0x000d;
           }
@@ -1314,23 +1315,39 @@ test('Zigbee normalization captures contact, temperature, tamper, and battery st
         }
       }
     ]
-  }, 'message');
+  };
 
-  const state = normalized.update.properties.directRadioState;
-  assert.equal(normalized.update.status, true);
-  assert.equal(normalized.update.temperature, 70.7);
-  assert.equal(state.contactOpen, true);
-  assert.equal(state.contact, 'open');
-  assert.equal(state.tamperActive, true);
-  assert.equal(state.batteryLow, true);
-  assert.equal(state.batteryLevel, 87);
-  assert.equal(state.temperatureC, 21.5);
-  assert.equal(state.temperatureF, 70.7);
-  assert.ok(normalized.update.properties.directRadioFeatures.includes('contact'));
-  assert.ok(normalized.update.properties.directRadioFeatures.includes('battery'));
-  assert.ok(normalized.update.properties.directRadioFeatures.includes('tamper'));
-  assert.ok(normalized.update.properties.directRadioFeatures.includes('temperature'));
-  assert.equal(normalized.update.properties.supportsContactSensor, true);
+  const cachedOnly = service.normalizeZigbeeDevice(zigbeeDevice, 'message');
+  const cachedState = cachedOnly.update.properties.directRadioState;
+  // Cached zoneStatus must never produce alarm state (false security alarms),
+  // while cached environment/battery telemetry is still captured.
+  assert.equal(cachedOnly.update.status, undefined);
+  assert.equal(cachedState.contactOpen, undefined);
+  assert.equal(cachedState.contact, undefined);
+  assert.equal(cachedState.tamperActive, undefined);
+  assert.equal(cachedState.batteryLow, undefined);
+  assert.equal(cachedState.batteryLevel, 87);
+  assert.equal(cachedState.temperatureC, 21.5);
+  assert.equal(cachedState.temperatureF, 70.7);
+  assert.equal(cachedOnly.update.temperature, 70.7);
+  assert.ok(cachedOnly.update.properties.directRadioFeatures.includes('battery'));
+  assert.ok(cachedOnly.update.properties.directRadioFeatures.includes('temperature'));
+
+  const liveReport = service.normalizeZigbeeDevice(zigbeeDevice, 'message', {
+    message: {
+      cluster: 'ssIasZone',
+      data: { zonestatus: 0x000d }
+    }
+  });
+  const liveState = liveReport.update.properties.directRadioState;
+  assert.equal(liveReport.update.status, true);
+  assert.equal(liveState.contactOpen, true);
+  assert.equal(liveState.contact, 'open');
+  assert.equal(liveState.tamperActive, true);
+  assert.equal(liveState.batteryLow, true);
+  assert.ok(liveReport.update.properties.directRadioFeatures.includes('contact'));
+  assert.equal(liveReport.update.properties.supportsContactSensor, true);
+  assert.equal(liveReport.update.properties.homebrainDirect.lastLiveZoneStatus, 0x000d);
 });
 
 test('Zigbee normalization treats IAS Zone as contact on 3321-S multipurpose sensors', () => {
