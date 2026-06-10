@@ -34,6 +34,7 @@ const DEFAULT_OTBR_REST_URL = process.env.HOMEBRAIN_OTBR_REST_URL || 'http://127
 const DEFAULT_COMMISSIONING_TIMEOUT_SECONDS = Math.max(20, Number(process.env.HOMEBRAIN_MATTER_COMMISSIONING_TIMEOUT_SECONDS || 90));
 const THREAD_FLASH_CONFIRMATION = 'FLASH OPENTHREAD RCP';
 const THREAD_OTBR_CONFIRMATION = 'START THREAD BORDER ROUTER';
+const THREAD_OTBR_STOP_CONFIRMATION = 'STOP THREAD BORDER ROUTER';
 const THREAD_KERNEL_CONFIRMATION = 'REBUILD JETSON KERNEL FOR FULL THREAD';
 const THREAD_KERNEL_REBOOT_CONFIRMATION = 'REBOOT JETSON AFTER KERNEL INSTALL';
 const THREAD_FLASH_MAX_FIRMWARE_BYTES = Math.max(
@@ -2469,6 +2470,65 @@ class MatterService {
     });
 
     return this.serializeThreadOtbrJob(job);
+  }
+
+  async stopThreadBorderRouter(payload = {}) {
+    const confirmation = normalizeString(payload.confirmOtbr || payload.confirm || payload.confirmStop).toUpperCase();
+    if (confirmation !== THREAD_OTBR_STOP_CONFIRMATION) {
+      const error = new Error(`Type ${THREAD_OTBR_STOP_CONFIRMATION} to stop HomeBrain-managed OTBR.`);
+      error.status = 400;
+      throw error;
+    }
+
+    const reason = normalizeString(payload.reason) || null;
+    const output = await new Promise((resolve, reject) => {
+      const child = spawn('sudo', ['-n', THREAD_OTBR_HELPER_PATH, 'stop'], {
+        cwd: path.dirname(THREAD_OTBR_HELPER_PATH),
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+      let stdout = '';
+      let stderr = '';
+      const timer = setTimeout(() => {
+        child.kill('SIGTERM');
+        reject(new Error('OTBR helper stop timed out after 60 seconds'));
+      }, 60_000);
+      child.stdout.on('data', (chunk) => { stdout += String(chunk); });
+      child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+      child.on('error', (error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.on('close', (code, signal) => {
+        clearTimeout(timer);
+        if (code === 0) {
+          resolve({ stdout, stderr });
+          return;
+        }
+        // Older installed helpers do not support "stop"; fall back to direct
+        // systemctl (allowed by the HomeBrain deploy sudoers grant).
+        const fallback = spawn('sudo', ['-n', 'systemctl', 'stop', 'otbr-agent'], { stdio: ['ignore', 'pipe', 'pipe'] });
+        let fbErr = '';
+        fallback.stderr.on('data', (chunk) => { fbErr += String(chunk); });
+        fallback.on('error', (error) => reject(error));
+        fallback.on('close', (fbCode) => {
+          if (fbCode === 0) {
+            const disable = spawn('sudo', ['-n', 'systemctl', 'disable', 'otbr-agent'], { stdio: 'ignore' });
+            disable.on('error', () => {});
+            disable.on('close', () => resolve({ stdout, stderr: `${stderr}${fbErr}`, usedFallback: true }));
+            return;
+          }
+          reject(new Error(`OTBR stop failed: helper exited with ${signal || `code ${code}`}; systemctl fallback exited with code ${fbCode}: ${fbErr || stderr}`));
+        });
+      });
+    });
+
+    this.lastThreadStatus = null;
+    console.log(`MatterService: Thread border router stopped${reason ? ` (${reason})` : ''}${output.usedFallback ? ' via systemctl fallback' : ''}`);
+    return {
+      stopped: true,
+      reason,
+      usedFallback: output.usedFallback === true
+    };
   }
 
   async runThreadBorderRouterJob(job) {

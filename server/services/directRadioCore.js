@@ -1130,6 +1130,23 @@ async getStatus() {
     });
 
     const zigbeeDevices = this.zigbee.controller?.getDevices?.() || [];
+    let zigbeeNetwork = null;
+    if (this.zigbee.started && typeof this.zigbee.controller?.getNetworkParameters === 'function') {
+      try {
+        const params = await withTimeout(
+          this.zigbee.controller.getNetworkParameters(),
+          5_000,
+          'Timed out reading Zigbee network parameters'
+        );
+        zigbeeNetwork = {
+          panID: params?.panID ?? null,
+          extendedPanID: params?.extendedPanID ?? null,
+          channel: params?.channel ?? null
+        };
+      } catch (error) {
+        zigbeeNetwork = { error: error.message };
+      }
+    }
     const zwaveNodes = this.getZWaveControllerNodes({ log: false, context: 'status' });
     const activeMigrations = Array.from(this.activeMigrations.values())
       .filter((migration) => (
@@ -1192,6 +1209,7 @@ async getStatus() {
           diagnostics: zigbeeDiagnostics,
           permitJoinUntil: this.zigbee.permitJoinUntil,
           lastStartResult: this.zigbee.lastStartResult,
+          network: zigbeeNetwork,
           pairedDeviceCount: zigbeeDeviceSummaries.length,
           devices: zigbeeDeviceSummaries
         },
@@ -1227,6 +1245,20 @@ async getStatus() {
       },
       migrations: activeMigrations
     };
+  },
+
+async restartRuntime(options = {}) {
+    const reason = trimString(options.reason) || 'manual_restart';
+    this.log('warn', 'system', 'Restarting direct radio runtime on request', { reason });
+    await this.shutdown();
+    this.started = false;
+    const status = await this.start({ force: true });
+    this.log('info', 'system', 'Direct radio runtime restart finished', {
+      reason,
+      zigbeeStarted: status?.controllers?.zigbee?.started === true,
+      zwaveStarted: status?.controllers?.zwave?.started === true
+    });
+    return status;
   },
 
 async shutdown() {

@@ -106,6 +106,39 @@ evaluation — defense-in-depth on top of Finding 1's fix.
 
 ---
 
+## Finding 5 (follow-up, June 10 afternoon): Zigbee RF reception dead — OTBR/Thread radio brought up next to the coordinator
+
+After the Finding 1–4 fixes deployed, physically opening the Back Door, Front Door, and Garage
+Entry produced **no events at all**. Investigation showed:
+
+- The coordinator process/serial link is healthy (ZNP handshake works, `lastStartResult: "resumed"`),
+  but **zero radio frames were received from any device after 06:51 UTC** — including from
+  always-powered routers. Live ZDO probes (re-interview) of the range extender, the smart plug,
+  and a smart light all timed out ("can not get active endpoints"). The radio went deaf, not the
+  devices.
+- Timeline: `otbr-agent` (OpenThread Border Router) was installed/enabled during the morning's
+  platform work and became **active at 06:06 UTC** as Thread **leader** on the SONOFF MG24 stick —
+  plugged in next to the Zigbee coordinator. The last Zigbee reception was 06:51 UTC, ~45 minutes
+  later, during a window with **no deploys or restarts** (06:47→14:04). A continuously
+  transmitting 802.15.4 radio centimeters from the CC2652P coordinator (Thread MLE advertisements,
+  multi-channel announces; Thread dataset shows channel 23) desensitizes or wedges the
+  coordinator's receiver.
+- This is the *real* "Zigbee network not working" condition — it post-dates the false-open bug
+  and was introduced by the OTBR rollout, not by anything on the Zigbee mesh itself.
+
+**Fixes shipped for diagnosis/remediation:**
+
+- `GET /api/direct-radios/status` now reports the live Zigbee network parameters
+  (channel / panID / extendedPanID) so channel overlap with Thread is visible.
+- `POST /api/matter/thread/otbr/stop` (confirmation phrase `STOP THREAD BORDER ROUTER`) stops and
+  disables `otbr-agent`; the privileged helper gained a matching `stop` action.
+- `POST /api/direct-radios/restart` restarts the direct-radio runtime in place (Zigbee controller
+  stop → chip reset → start) without redeploying.
+
+**Operational guidance:** keep `otbr-agent` stopped until the Thread stick is physically separated
+from the Zigbee coordinator (USB extension cable, different hub) and the Thread channel is planned
+away from the Zigbee channel; then re-enable via the OTBR start flow.
+
 ## Z-Wave, Thread/Matter, INSTEON review
 
 - **Z-Wave** (`directRadioZwave.js`): no equivalent flaw. State comes from the zwave-js `valueDB`,
