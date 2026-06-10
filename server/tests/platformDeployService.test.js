@@ -371,6 +371,57 @@ test('getLatestJob fails an abandoned non-restart step after the backend restart
   );
 });
 
+test('executeJob refuses stale deploys when dirty allowDirty skips pull after fetch', { concurrency: false }, async (t) => {
+  const service = await createTempService(t);
+  const jobId = 'job-dirty-behind';
+  const repoBeforeFetch = {
+    ...createRepoStatus('abcdef0123456789', 'abcdef0'),
+    dirty: true,
+    dirtyEntries: ['?? server/data/system-backup/'],
+    rawDirtyEntries: ['?? server/data/system-backup/']
+  };
+  const repoAfterFetch = {
+    ...repoBeforeFetch,
+    behind: 5
+  };
+  const runCalls = [];
+  let statusCalls = 0;
+
+  await service.writeJob({
+    ...createRunningJob(jobId, repoBeforeFetch),
+    steps: [],
+    currentStep: 'queued',
+    options: {
+      preset: 'safe',
+      allowDirty: true,
+      autoRecoverDirtyRepo: true,
+      installDependencies: false,
+      runServerTests: false,
+      runClientLint: false,
+      restartServices: false
+    }
+  });
+
+  service.ensureWritableClientDist = async () => {};
+  service.cleanupClientDistArtifacts = async () => {};
+  service.runLoggedCommand = async (_jobId, stepName, command, args) => {
+    runCalls.push({ stepName, command, args });
+  };
+  service.getRepoStatus = async () => {
+    statusCalls += 1;
+    return statusCalls === 1 ? repoBeforeFetch : repoAfterFetch;
+  };
+
+  await service.executeJob(jobId);
+
+  const updatedJob = await service.readJob(jobId);
+  assert.equal(updatedJob.status, 'failed');
+  assert.equal(updatedJob.steps.find((step) => step.name === 'Fetch latest refs')?.status, 'completed');
+  assert.equal(updatedJob.steps.find((step) => step.name === 'Pull latest changes')?.status, 'failed');
+  assert.match(updatedJob.error, /Refusing to deploy a stale checkout/i);
+  assert.equal(runCalls.some((call) => call.stepName === 'Build client'), false);
+});
+
 test('ensureWritableDependencyArtifacts repairs existing node_modules trees before npm install', { concurrency: false }, async (t) => {
   const service = await createTempService(t);
   await fsp.mkdir(path.join(service.projectRoot, 'node_modules', '.bin'), { recursive: true });

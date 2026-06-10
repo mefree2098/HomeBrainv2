@@ -1786,16 +1786,30 @@ class PlatformDeployService {
 
       if (skipPullForDirtyRepo) {
         await runCustomStep('Pull latest changes', async () => {
-          const behindCount = Number(prePullRepoStatus?.behind || 0);
-          const dirtyCount = Array.isArray(prePullRepoStatus?.dirtyEntries)
-            ? prePullRepoStatus.dirtyEntries.length
+          const postFetchRepoStatus = await this.getRepoStatus().catch(() => null);
+          const behindCount = Number(postFetchRepoStatus?.behind ?? prePullRepoStatus?.behind ?? 0);
+          const dirtyEntries = Array.isArray(postFetchRepoStatus?.dirtyEntries)
+            ? postFetchRepoStatus.dirtyEntries
+            : (Array.isArray(prePullRepoStatus?.dirtyEntries) ? prePullRepoStatus.dirtyEntries : []);
+          const dirtyCount = dirtyEntries.length;
+          if (behindCount > 0) {
+            const upstream = postFetchRepoStatus?.upstream || prePullRepoStatus?.upstream || 'upstream';
+            const plural = behindCount === 1 ? 'commit' : 'commits';
+            const dirtyPlural = dirtyCount === 1 ? 'entry' : 'entries';
+            const error = new Error(
+              `Repository is ${behindCount} ${plural} behind ${upstream} after fetching, but git pull was skipped because allowDirty=true and the repository has local changes (${dirtyCount} dirty ${dirtyPlural}). Refusing to deploy a stale checkout. Clear or stash local changes, or rerun without allowDirty so auto-recovery can stash them before pulling.`
+            );
+            error.code = 'REPO_BEHIND_AFTER_FETCH_DIRTY';
+            error.repoStatus = postFetchRepoStatus || prePullRepoStatus || null;
+            throw error;
+          }
+          const dirtyCountLabel = Number.isFinite(dirtyCount)
+            ? dirtyCount
             : 0;
           const note = [
             'Skipping git pull because allowDirty=true and repository has local changes.',
-            `Dirty entries: ${dirtyCount}.`,
-            behindCount > 0
-              ? `Remote is ahead by ${behindCount}; deploying current local checkout without pulling.`
-              : 'Remote is not ahead; deploying current local checkout.'
+            `Dirty entries: ${dirtyCountLabel}.`,
+            'Remote is not ahead; deploying current local checkout.'
           ].join(' ');
           await this.appendJobLog(jobId, `[${new Date().toISOString()}] [Pull latest changes] ${note}\n`);
         });
