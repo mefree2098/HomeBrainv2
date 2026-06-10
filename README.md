@@ -2,43 +2,93 @@
 
 # HomeBrain
 
-HomeBrain is a local-first home automation and voice-assistant platform. It combines a Node/Express backend, a React web app, optional local AI services, remote room listeners, and an optional iOS companion app into one self-hosted system.
+HomeBrain is a local-first home automation and voice-assistant platform for a
+self-hosted home hub. It combines a Node/Express backend, React dashboard,
+local AI services, native iPhone and Apple Watch apps, remote room listeners,
+direct-radio device control, and hardware wall-panel APIs.
 
-## What HomeBrain Includes
+The production target is a Linux or Jetson hub that serves the UI/API on port
+`3000`, keeps Caddy on `80/443` for public HTTPS, and manages most operational
+work from inside the HomeBrain admin UI.
 
-- A web dashboard for devices, scenes, workflows, voice devices, profiles, settings, reverse proxy/domains, operations, SSL inventory, Whisper, Ollama, and platform deploy
-- Smart home integrations for SmartThings, Ecobee, INSTEON/ISY, and Logitech Harmony Hub
-- Remote listener onboarding and fleet updates for room devices
-- Dedicated ESP32 wall panel APIs and firmware for rotary touchscreen room controllers
-- Wake-word training and distribution using OpenWakeWord plus Piper-generated training data
-- Optional local speech-to-text with Whisper
-- Optional local LLM support with Ollama
-- An optional iOS app in [`HomeBrainApp`](HomeBrainApp) with workflow runtime controls, richer workflow editing, settings, and platform administration surfaces
+## Latest Additions
 
-## Supported Hardware
+The README was last refreshed before a large run of platform work. Current
+HomeBrain now includes:
 
-HomeBrain is no longer Jetson-only.
+- Apple Watch companion app embedded in the iOS project, with iPhone session
+  sync, configurable Security/Lights/Power/Weather sections, quick arm/disarm,
+  room light control, and watchOS APNs registration for critical alerts.
+- HomeBrain notifications across the web app, iOS, and watchOS: notification
+  history, unread counts, normal/critical filters, clear/resolve flows,
+  scrollable trays, badge fixes, and APNs push delivery for security-critical
+  events.
+- HomeBrain-to-HomeBrain notification forwarding for remote homes, including
+  inbound receivers, outbound targets, token rotation, connection tests, and
+  security-critical alert relay between trusted HomeBrain instances.
+- Dynamic DNS management in Settings, currently backed by Azure DNS A-record
+  updates with public-IP polling, configurable hostname, interval and TTL,
+  manual "push now", last-check/last-push status, and visible error reporting.
+- Expanded Security Center and alarm handling: per-mode sensor monitoring,
+  native security actions, native siren selection, iOS siren picker, siren
+  sound/volume controls, contact debounce, alarm trigger ordering, mute/audible
+  recovery, and stronger Z-Wave siren fallback paths.
+- Direct radio growth for Z-Wave, Zigbee, Matter, and Thread: native device
+  onboarding, guided SmartThings migration, protocol-specific settings,
+  device-catalog support, S2/DSK and legacy S0 pairing, failed-node cleanup,
+  route recovery, interview repair, stronger shutdown durability, and updated
+  `zwave-js`.
+- Alexa improvements: managed device-provider configuration, a native HomeBrain
+  command bridge, workflow announcement actions, command testing, session
+  capture helper flow, CSP hardening, and route rate limiting.
+- Integration and telemetry improvements for Ecobee account login, Govee indoor
+  air sensors, RainMachine controls, Sense energy data, Tempest/weather data,
+  SmartThings migration/category handling, and shared telemetry charting.
+- iOS and dashboard polish: native typography parity with the web app, launch
+  settings stability, iPhone dashboard sizing fixes, device-management polish,
+  notification tray fixes, and restored compact HomeBrain header branding.
+- Hub operations improvements: Platform Deploy, managed Caddy reverse
+  proxy/domain controls, SSL inventory, Dynamic DNS, nightly SMB backups,
+  managed Ollama repair flows, service singleton/restart hardening, Thread/OTBR
+  preflight and flash status, and safer deployment/test isolation.
+- Hardware and voice improvements: realtime hardware Orb state, OTA cancellation
+  fixes, ELECROW rotary wall-panel APIs, remote voice listener provisioning,
+  wake-word asset delivery, Whisper speech-to-text, Piper training audio, and
+  Ollama-backed local LLM flows.
 
-- Best-tested hub: Jetson Orin Nano
-- Also supported as a hub: other always-on Ubuntu/Debian `amd64` or `arm64` machines
-- Best-tested listener: Raspberry Pi 4/5
-- Also supported as a listener: other Debian/Ubuntu-based Linux mini PCs or SBCs with a microphone and speaker
-- Best-tested wall panel: ELECROW CrowPanel `2.1"` ESP32-S3 rotary display
-- Same panel family, smaller sibling: ELECROW `1.28"` round rotary display using the same HomeBrain backend flow but requiring its own board profile
+## Core Capabilities
 
-What changes by hardware:
+- Web dashboard for devices, scenes, profiles, workflows, security, climate,
+  telemetry, voice devices, notifications, deploys, domains, SSL, Ollama, and
+  platform settings.
+- Local-first automation with device/sensor triggers, workflow countdowns,
+  manual triggers, profile-aware dashboard layouts, and native security actions.
+- Direct device control through native Zigbee, Z-Wave, Matter/Thread, INSTEON,
+  ISY, SmartThings, Ecobee, Harmony, RainMachine, Govee, Sense, and weather
+  integrations.
+- Local AI and voice stack with OpenWakeWord, Whisper, Piper, ElevenLabs voice
+  options, Ollama model management, browser voice commands, and remote listener
+  room devices.
+- Native iPhone and Apple Watch companions for dashboard access, security,
+  lights, weather/power summaries, push notifications, and long-lived mobile
+  sessions.
+- Hardware surfaces for ELECROW rotary wall panels and hardware Orbs through
+  `/api/panels` plus firmware in
+  [`embedded/elecrow-wall-panel`](embedded/elecrow-wall-panel).
 
-- Core web app, workflow runtime, integrations, and remote listeners work on generic Linux hardware.
-- Jetson is still the best target for local GPU workloads such as Whisper and Ollama.
-- Non-Jetson hosts can still run HomeBrain; local AI workloads may simply run slower or fall back to CPU.
-- Remote voice listeners are still Linux-based room devices.
-- ESP32 wall panels connect over `Wi-Fi` to the HomeBrain `/api/panels` endpoints and use the firmware in [`embedded/elecrow-wall-panel`](embedded/elecrow-wall-panel).
+## Supported Surfaces
+
+- React web app for desktop, tablet, and mobile browsers.
+- iOS app in [`HomeBrainApp`](HomeBrainApp).
+- Apple Watch app source in [`HomeBrainWatch`](HomeBrainWatch), built as the
+  embedded watch target inside the iOS app project.
+- Remote voice listeners in [`remote-device`](remote-device).
+- ELECROW wall-panel firmware in
+  [`embedded/elecrow-wall-panel`](embedded/elecrow-wall-panel).
+- Alexa broker and session-capture helper assets under the server assets and
+  Alexa admin flows.
 
 ## Fastest Install
-
-1. Clone your public repo to the hub machine.
-2. Run one installer script.
-3. Open HomeBrain in a browser on port `3000`.
 
 Jetson hub:
 
@@ -56,73 +106,59 @@ cd HomeBrain
 bash scripts/install-linux.sh
 ```
 
-After the installer finishes:
+Then open `http://<hub-ip>:3000`, create the first admin account, and continue
+with [`docs/configuration.md`](docs/configuration.md).
 
-- Open `http://<hub-ip>:3000`
-- Create your first account
-- Continue with [`docs/configuration.md`](docs/configuration.md)
+## Runtime Notes
 
-Important:
+- Production HomeBrain serves UI/API on internal port `3000`.
+- Caddy is the intended public edge on `80/443`.
+- Port `5173` is only for the Vite frontend development server.
+- Browser sessions use `HttpOnly` cookies; tokens are not stored in browser
+  `localStorage`.
+- iOS and watchOS use bearer-token client sessions with a 365-day default
+  refresh-session lifetime.
+- Stateful workflow countdowns auto-cancel when the device or sensor trigger
+  condition stops.
+- Public HTTPS routing, SSL inventory, Dynamic DNS, and deploy actions are
+  managed from the HomeBrain UI.
 
-- Production HomeBrain serves the UI/API on internal port `3000`
-- Caddy is now the intended public edge on `80/443`
-- Port `5173` is only used by the Vite dev server during local frontend development
-- The installer uses committed npm lockfiles for deterministic clean deployments
-- Browser sessions use `HttpOnly` cookies; tokens are not stored in browser `localStorage`
-- The native iOS app remains a bearer-token client with a 365-day refresh-session lifetime
-- Stateful workflow countdowns auto-cancel when their device or sensor trigger stops matching before the workflow finishes
+## Admin Flows
 
-## Documentation
+### Remote Listener Flow
 
-- Beginner Jetson guide: [`docs/jetson-setup.md`](docs/jetson-setup.md)
-- Full deployment guide: [`DEPLOYMENT.md`](DEPLOYMENT.md)
-- Post-install configuration: [`docs/configuration.md`](docs/configuration.md)
-- ELECROW wall panel guide: [`docs/elecrow-wall-panel.md`](docs/elecrow-wall-panel.md)
-- Ollama management: [`docs/ollama-management.md`](docs/ollama-management.md)
-- Alexa setup guide: [`docs/alexa-admin-setup.md`](docs/alexa-admin-setup.md)
-- Alexa integration overview: [`docs/alexa-integration.md`](docs/alexa-integration.md)
-- Admin workflow: [`docs/admin-guide.md`](docs/admin-guide.md)
-- End-user voice usage: [`docs/user-guide.md`](docs/user-guide.md)
-- Troubleshooting: [`docs/troubleshooting.md`](docs/troubleshooting.md)
-- Security checklist: [`docs/security.md`](docs/security.md)
-- Wake-word setup: [`docs/wake-word-setup.md`](docs/wake-word-setup.md)
-- Remote listener guide: [`remote-device/README.md`](remote-device/README.md)
-- Docs index: [`docs/README.md`](docs/README.md)
+1. Open `Voice Devices`.
+2. Click `Add Remote Device`.
+3. Enter room/device details.
+4. Copy the generated one-command installer.
+5. Run it on the Raspberry Pi or Linux listener host.
 
-## Remote Listener Flow
+Listeners use generated device tokens for config, heartbeat, wake-word assets,
+and TTS requests.
 
-From the HomeBrain UI:
+### Wall Panel Flow
 
-1. Open `Voice Devices`
-2. Click `Add Remote Device`
-3. Enter the room/device details
-4. Copy the generated one-command installer
-5. Run that command on the listener device
+1. Install the hub and create the first admin account.
+2. Open `Settings -> Hardware Orbs`.
+3. Flash [`embedded/elecrow-wall-panel`](embedded/elecrow-wall-panel).
+4. Return to `Settings -> Hardware Orbs` to bind thermostats, searchable room
+   devices, scenes, and actions.
 
-Raspberry Pi cloud-init onboarding is also available from the same dialog.
-After activation, listeners use a generated device token for config, heartbeat, wake-word asset, and TTS requests.
+See [`docs/elecrow-wall-panel.md`](docs/elecrow-wall-panel.md).
 
-## Wall Panel Flow
+### Apple Watch Flow
 
-The new wall panel path is separate from Linux listeners:
+1. Build and install the iOS app from `HomeBrainApp`.
+2. Keep the watch app as the embedded watch target in the iOS project.
+3. Sign in on iPhone, then use the watch app to sync the HomeBrain session.
+4. Configure watch sections and light devices from the web app Watch settings.
 
-1. Install the hub and create the first admin account
-2. Open `Settings -> Hardware Orbs` and create the orb
-3. Flash [`embedded/elecrow-wall-panel`](embedded/elecrow-wall-panel)
-4. Return to `Settings -> Hardware Orbs` and bind thermostat, searchable room-surface devices/scenes, media, and quiet actions
-
-Full guide:
-
-- [`docs/elecrow-wall-panel.md`](docs/elecrow-wall-panel.md)
+See [`HomeBrainWatch/README.md`](HomeBrainWatch/README.md).
 
 ## Production Service Management
 
-The installer writes and enables:
-
-- `homebrain`
-- `caddy-api`
-
-Useful commands:
+The installer creates managed services for HomeBrain and its public edge. Use
+the setup helper for day-to-day operations:
 
 ```bash
 bash scripts/setup-services.sh status
@@ -132,19 +168,38 @@ bash scripts/setup-services.sh update
 bash scripts/setup-services.sh refresh-privileges
 ```
 
-Public HTTPS routing is managed from `Reverse Proxy / Domains` in the HomeBrain UI. The built-in `Platform Deploy` flow still deploys HomeBrain in place and keeps working behind Caddy because Caddy stays up while only the `homebrain` app service restarts.
+Public HTTPS routing is managed from `Reverse Proxy / Domains` in the HomeBrain
+UI. The built-in `Platform Deploy` flow deploys HomeBrain while keeping Caddy
+up, so public routing can survive an app service restart.
 
 ## Ollama Runtime Ownership
 
-On Linux and Jetson hosts, HomeBrain manages the Ollama runtime itself and uses a narrow privileged helper for install, update, and forced-stop operations. If an older host needs its Ollama helper or sudoers entry repaired, run:
+On Linux and Jetson hosts, HomeBrain manages the Ollama runtime and uses a
+narrow privileged helper for install, update, and forced-stop operations. If an
+older host needs its Ollama helper or sudoers entry repaired, run:
 
 ```bash
 bash scripts/setup-services.sh refresh-privileges
 ```
 
-Details:
+Details: [`docs/ollama-management.md`](docs/ollama-management.md).
 
-- [`docs/ollama-management.md`](docs/ollama-management.md)
+## Documentation
+
+- Beginner Jetson setup: [`docs/jetson-setup.md`](docs/jetson-setup.md)
+- Full deployment: [`DEPLOYMENT.md`](DEPLOYMENT.md)
+- Configuration: [`docs/configuration.md`](docs/configuration.md)
+- Admin workflow: [`docs/admin-guide.md`](docs/admin-guide.md)
+- End-user voice: [`docs/user-guide.md`](docs/user-guide.md)
+- Alexa setup: [`docs/alexa-admin-setup.md`](docs/alexa-admin-setup.md)
+- Alexa integration: [`docs/alexa-integration.md`](docs/alexa-integration.md)
+- Direct Zigbee/Z-Wave migration:
+  [`docs/direct-zigbee-zwave-migration.md`](docs/direct-zigbee-zwave-migration.md)
+- ELECROW wall panel: [`docs/elecrow-wall-panel.md`](docs/elecrow-wall-panel.md)
+- Ollama: [`docs/ollama-management.md`](docs/ollama-management.md)
+- Wake word setup: [`docs/wake-word-setup.md`](docs/wake-word-setup.md)
+- Troubleshooting: [`docs/troubleshooting.md`](docs/troubleshooting.md)
+- Security checklist: [`docs/security.md`](docs/security.md)
 
 ## Development
 
@@ -171,25 +226,32 @@ Development ports:
 - API/backend: `http://localhost:3000`
 - Vite frontend dev server: `http://localhost:5173`
 
-## Public Repo Notes
-
-This repository is set up so secrets should stay local:
-
-- real runtime secrets belong in `server/.env`
-- `server/.env` is gitignored
-- build output and generated download packages are gitignored
-- local Codex/tool state, SQLite databases, certificates, and private keys are gitignored
-- firmware defaults in `embedded/elecrow-wall-panel/include/HomeBrainPanelConfig.h` must remain placeholders in git
-
 Before publishing or opening a pull request, run:
 
 ```bash
 bash scripts/check-secrets.sh --history
 ```
 
-GitHub Actions also runs the same check against the full checked-out history, plus dependency review, npm audit, and CodeQL. Enable GitHub secret scanning, push protection, Dependabot alerts/security updates, and code scanning in the repository settings before opening the repo.
+## Public Repo Notes
 
-If old commits contain unsafe local state such as `.codex-home`, clean it with the coordinated history rewrite in [`docs/security.md`](docs/security.md) before publishing. One thing git itself can still expose is commit author metadata; hiding older author email addresses also requires a separate git history rewrite.
+- Real runtime secrets belong in `server/.env`.
+- `server/.env` is gitignored.
+- Build output and generated download packages are gitignored.
+- Local Codex/tool state, SQLite databases, certificates, and private keys are
+  gitignored.
+- Firmware defaults in
+  `embedded/elecrow-wall-panel/include/HomeBrainPanelConfig.h` must remain
+  placeholders in git.
+
+GitHub Actions runs the same secret-history check against full checked-out
+history, plus dependency review, npm audit, and CodeQL. Enable GitHub secret
+scanning, push protection, Dependabot alerts/security updates, and code scanning
+in repository settings before opening the repo.
+
+If old commits contain unsafe local state such as `.codex-home`, clean it with a
+coordinated history rewrite in [`docs/security.md`](docs/security.md) before
+publishing. Git commit author metadata can also expose email addresses; hiding
+older author email addresses requires a separate git history rewrite.
 
 ## License
 
