@@ -612,6 +612,7 @@ async repairZigbeeIasEnrollment(zigbeeDevice, options = {}) {
     const summary = {
       attempted: false,
       ready: false,
+      liveVerified: false,
       ieeeAddr: address || null,
       coordinatorIeee: coordinatorIeee || null,
       reason: options.reason || null,
@@ -633,6 +634,8 @@ async repairZigbeeIasEnrollment(zigbeeDevice, options = {}) {
         after: null,
         readyBefore: false,
         readyAfter: false,
+        liveReadBefore: false,
+        liveReadAfter: false,
         wroteCieAddress: false,
         sentEnrollResponse: false,
         errors: []
@@ -645,6 +648,7 @@ async repairZigbeeIasEnrollment(zigbeeDevice, options = {}) {
             timeoutMs,
             'Timed out reading Zigbee IAS enrollment state'
           );
+          result.liveReadBefore = true;
           result.before = mergeZigbeeIasState(result.before, readBefore);
           saveCachedZigbeeIasState(endpoint, result.before);
         } catch (error) {
@@ -706,6 +710,7 @@ async repairZigbeeIasEnrollment(zigbeeDevice, options = {}) {
             timeoutMs,
             'Timed out confirming Zigbee IAS enrollment state'
           );
+          result.liveReadAfter = true;
           result.after = mergeZigbeeIasState(result.after, readAfter);
           saveCachedZigbeeIasState(endpoint, result.after);
         } catch (error) {
@@ -715,13 +720,18 @@ async repairZigbeeIasEnrollment(zigbeeDevice, options = {}) {
 
       result.readyAfter = zigbeeIasStateMatchesCoordinator(result.after, coordinatorIeee);
       summary.ready = summary.ready || result.readyBefore || result.readyAfter;
+      summary.liveVerified = summary.liveVerified
+        || (result.liveReadBefore && result.readyBefore)
+        || (result.liveReadAfter && result.readyAfter);
       summary.endpoints.push(result);
     }
 
     const errorCount = summary.endpoints.reduce((count, endpoint) => count + endpoint.errors.length, 0);
-    this.log(summary.ready ? 'info' : (errorCount > 0 ? 'warn' : 'info'), 'zigbee', summary.ready
+    this.log(summary.liveVerified ? 'info' : (errorCount > 0 ? 'warn' : 'info'), 'zigbee', summary.liveVerified
       ? 'Zigbee IAS enrollment repair verified'
-      : 'Zigbee IAS enrollment repair attempted', summary);
+      : (summary.ready
+        ? 'Zigbee IAS enrollment matches cache but live verification failed'
+        : 'Zigbee IAS enrollment repair attempted'), summary);
     return summary;
   },
 
@@ -810,9 +820,12 @@ async reinterviewZigbeeDevice(ieeeAddr) {
         iasZone: this.readZigbeeIasEnrollment(device),
         isSleepy,
         iasRepair,
-        message: iasRepair.ready
-          ? `HomeBrain repaired IAS Zone enrollment for ${address}.`
-          : `HomeBrain attempted IAS Zone enrollment repair for ${address}; wake the sensor and retry if the CIE address still has not stuck.`
+        message: iasRepair.liveVerified
+          ? `HomeBrain live-verified IAS Zone enrollment for ${address}.`
+          : (iasRepair.ready
+            ? `HomeBrain found cached IAS Zone enrollment for ${address}, but live verification timed out; wake the sensor and retry.`
+            : `HomeBrain attempted IAS Zone enrollment repair for ${address}; wake the sensor and retry if the CIE address still has not stuck.`
+          )
       };
     }
 
