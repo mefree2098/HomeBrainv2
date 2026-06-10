@@ -645,6 +645,47 @@ getDirectUpdateReason(update = {}) {
     return trimString(update?.properties?.homebrainDirect?.lastReason);
   },
 
+getDirectUpdateProtocol(identity, update = {}) {
+    return trimString(
+      identity?.protocol
+      || update?.properties?.homebrainDirect?.protocol
+      || update?.properties?.source
+    ).toLowerCase();
+  },
+
+hasLiveZigbeeSecuritySensorEvidence(update = {}) {
+    const direct = update?.properties?.homebrainDirect && typeof update.properties.homebrainDirect === 'object'
+      ? update.properties.homebrainDirect
+      : {};
+    const reason = this.getDirectUpdateReason(update).toLowerCase();
+    const messageCluster = trimString(direct.lastMessageCluster).toLowerCase();
+    const hasLiveZoneStatus = direct.lastLiveZoneStatus !== undefined && direct.lastLiveZoneStatus !== null;
+
+    if (reason === 'message') {
+      // Older normalized updates did not stamp the message cluster. Treat them
+      // as live so existing event paths keep working, while newer metadata lets
+      // us reject cached state attached to unrelated Zigbee messages.
+      return !messageCluster || messageCluster === 'ssiaszone' || hasLiveZoneStatus;
+    }
+
+    return reason === 'deviceannounce' && hasLiveZoneStatus;
+  },
+
+shouldEvaluateSecurityAlarmForDirectDeviceUpdate(identity, update = {}) {
+    const protocol = this.getDirectUpdateProtocol(identity, update);
+    const reason = this.getDirectUpdateReason(update).toLowerCase();
+
+    if (protocol === 'zigbee') {
+      return this.hasLiveZigbeeSecuritySensorEvidence(update);
+    }
+
+    if (protocol === 'zwave') {
+      return reason === 'node value updated';
+    }
+
+    return false;
+  },
+
 getPairingBaselineIdentities(protocol) {
     const normalizedProtocol = trimString(protocol, '').toLowerCase();
     const session = this.activePairings?.get?.(normalizedProtocol);
@@ -821,6 +862,15 @@ async upsertDirectDeviceRecord(identity, update, options = {}) {
   },
 
 async evaluateSecurityAlarmForDirectDeviceUpdate(device, previousDevice, identity, update) {
+    if (!this.shouldEvaluateSecurityAlarmForDirectDeviceUpdate(identity, update)) {
+      return {
+        triggered: false,
+        reason: 'not_live_security_sensor_event',
+        protocol: this.getDirectUpdateProtocol(identity, update) || null,
+        updateReason: this.getDirectUpdateReason(update) || null
+      };
+    }
+
     try {
       const securityAlarmService = require('./securityAlarmService');
       const result = await securityAlarmService.evaluateNativeSecuritySensorUpdate(device, {

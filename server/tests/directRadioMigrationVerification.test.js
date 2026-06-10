@@ -1364,6 +1364,7 @@ test('Zigbee normalization treats IAS Zone as contact on 3321-S multipurpose sen
   assert.equal(state.contactOpen, true);
   assert.equal(state.contact, 'open');
   assert.equal(state.vibrationActive, undefined);
+  assert.equal(normalized.update.properties.homebrainDirect.lastMessageCluster, 'ssiaszone');
   assert.ok(normalized.update.properties.directRadioFeatures.includes('contact'));
   assert.ok(normalized.update.properties.directRadioFeatures.includes('vibration'));
   assert.ok(normalized.update.properties.directRadioFeatures.includes('acceleration'));
@@ -1407,6 +1408,8 @@ test('Zigbee message handling reads live IAS zone status during sleepy contact c
   assert.equal(capturedUpdate.status, true);
   assert.equal(capturedUpdate.properties.directRadioState.contactOpen, true);
   assert.equal(capturedUpdate.properties.directRadioState.contact, 'open');
+  assert.equal(capturedUpdate.properties.homebrainDirect.lastMessageCluster, 'genpollctrl');
+  assert.equal(capturedUpdate.properties.homebrainDirect.lastLiveZoneStatus, 0x0001);
   assert.ok(capturedUpdate.properties.directRadioFeatures.includes('contact'));
 });
 
@@ -3646,6 +3649,174 @@ test('direct radio upsert evaluates security alarm when contact sensor becomes a
   assert.equal(evaluations[0].previousDevice.status, false);
   assert.equal(evaluations[0].identity.protocol, 'zigbee');
   assert.equal(evaluations[0].directUpdate.properties.homebrainDirect.state.contactOpen, true);
+});
+
+test('direct radio upsert skips security alarm evaluation for cached Zigbee sync contact state', async (t) => {
+  const service = createService();
+  const originalFind = Device.find;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const existing = {
+    _id: 'direct-contact-sync',
+    name: 'Back Door',
+    type: 'sensor',
+    status: false,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0xa4c13812d1d4aaaa',
+        lastReason: 'message'
+      },
+      directRadioState: { contactOpen: false }
+    },
+    toObject() {
+      return {
+        _id: this._id,
+        name: this.name,
+        type: this.type,
+        status: this.status,
+        properties: JSON.parse(JSON.stringify(this.properties))
+      };
+    }
+  };
+  const update = {
+    name: 'Back Door',
+    type: 'sensor',
+    status: true,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0xa4c13812d1d4aaaa',
+        lastReason: 'sync'
+      },
+      directRadioState: { contactOpen: true }
+    }
+  };
+  let evaluations = 0;
+
+  t.after(() => {
+    Device.find = originalFind;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+  });
+
+  Device.find = async () => [existing];
+  Device.findByIdAndUpdate = async (_id, payload) => ({
+    ...existing,
+    ...payload,
+    _id,
+    properties: payload.properties
+  });
+  service.reclaimAwaitingSmartThingsMigrationSourceIfMatched = async (device) => device;
+  service.attachRecoveredSmartThingsMigrationIfMatched = async (device) => device;
+  service.repairRecoveredSmartThingsMigrationIfMismatched = (device) => device;
+  service.finalizePendingSmartThingsMigrationIfReady = (device) => device;
+  service.emitDeviceUpdate = () => {};
+  service.evaluateSecurityAlarmForDirectDeviceUpdate = DirectRadioService.prototype.evaluateSecurityAlarmForDirectDeviceUpdate.bind(service);
+
+  const originalEvaluateNative = require('../services/securityAlarmService').evaluateNativeSecuritySensorUpdate;
+  require('../services/securityAlarmService').evaluateNativeSecuritySensorUpdate = async () => {
+    evaluations += 1;
+    return { triggered: true, zoneName: 'Back Door' };
+  };
+  t.after(() => {
+    require('../services/securityAlarmService').evaluateNativeSecuritySensorUpdate = originalEvaluateNative;
+  });
+
+  const device = await service.upsertDirectDeviceRecord({
+    protocol: 'zigbee',
+    id: '0xa4c13812d1d4aaaa'
+  }, update, {
+    suppressPairingCompletion: true
+  });
+
+  assert.equal(device.status, true);
+  assert.equal(evaluations, 0);
+});
+
+test('direct radio upsert skips security alarm evaluation for non-IAS Zigbee messages without live sensor reads', async (t) => {
+  const service = createService();
+  const originalFind = Device.find;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const existing = {
+    _id: 'direct-contact-battery',
+    name: 'Back Door',
+    type: 'sensor',
+    status: false,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0xa4c13812d1d4bbbb',
+        lastReason: 'message'
+      },
+      directRadioState: { contactOpen: false }
+    },
+    toObject() {
+      return {
+        _id: this._id,
+        name: this.name,
+        type: this.type,
+        status: this.status,
+        properties: JSON.parse(JSON.stringify(this.properties))
+      };
+    }
+  };
+  const update = {
+    name: 'Back Door',
+    type: 'sensor',
+    status: true,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0xa4c13812d1d4bbbb',
+        lastReason: 'message',
+        lastMessageCluster: 'genpowercfg'
+      },
+      directRadioState: { contactOpen: true }
+    }
+  };
+  let evaluations = 0;
+
+  t.after(() => {
+    Device.find = originalFind;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+  });
+
+  Device.find = async () => [existing];
+  Device.findByIdAndUpdate = async (_id, payload) => ({
+    ...existing,
+    ...payload,
+    _id,
+    properties: payload.properties
+  });
+  service.reclaimAwaitingSmartThingsMigrationSourceIfMatched = async (device) => device;
+  service.attachRecoveredSmartThingsMigrationIfMatched = async (device) => device;
+  service.repairRecoveredSmartThingsMigrationIfMismatched = (device) => device;
+  service.finalizePendingSmartThingsMigrationIfReady = (device) => device;
+  service.emitDeviceUpdate = () => {};
+  service.evaluateSecurityAlarmForDirectDeviceUpdate = DirectRadioService.prototype.evaluateSecurityAlarmForDirectDeviceUpdate.bind(service);
+
+  const securityAlarmService = require('../services/securityAlarmService');
+  const originalEvaluateNative = securityAlarmService.evaluateNativeSecuritySensorUpdate;
+  securityAlarmService.evaluateNativeSecuritySensorUpdate = async () => {
+    evaluations += 1;
+    return { triggered: true, zoneName: 'Back Door' };
+  };
+  t.after(() => {
+    securityAlarmService.evaluateNativeSecuritySensorUpdate = originalEvaluateNative;
+  });
+
+  const device = await service.upsertDirectDeviceRecord({
+    protocol: 'zigbee',
+    id: '0xa4c13812d1d4bbbb'
+  }, update, {
+    suppressPairingCompletion: true
+  });
+
+  assert.equal(device.status, true);
+  assert.equal(evaluations, 0);
 });
 
 test('Zigbee recovery reclaims an awaiting SmartThings source by stored native identity', async (t) => {
