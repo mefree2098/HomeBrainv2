@@ -17,9 +17,10 @@ final class HomeBrainWatchStore: ObservableObject {
     @Published var errorMessage: String?
     @Published var companionStatusMessage: String?
 
-    private let accessTokenAccount = "accessToken"
-    private let refreshTokenAccount = "refreshToken"
-    private var companionSync: WatchCompanionSync?
+  private let accessTokenAccount = "accessToken"
+  private let refreshTokenAccount = "refreshToken"
+  private let isPreviewMode: Bool
+  private var companionSync: WatchCompanionSync?
 
     var deviceID: String {
         if storedDeviceID.isEmpty {
@@ -28,8 +29,16 @@ final class HomeBrainWatchStore: ObservableObject {
         return storedDeviceID
     }
 
-    init() {
-        isAuthenticated = KeychainStore.read(account: accessTokenAccount)?.isEmpty == false
+  init() {
+    isPreviewMode = Self.previewEnabledFromLaunch()
+    if isPreviewMode {
+      isAuthenticated = true
+      dashboard = Self.previewDashboard()
+      companionStatusMessage = "Preview mode"
+      return
+    }
+
+    isAuthenticated = KeychainStore.read(account: accessTokenAccount)?.isEmpty == false
         let companionSync = WatchCompanionSync(store: self)
         self.companionSync = companionSync
         companionSync.activate()
@@ -108,9 +117,15 @@ final class HomeBrainWatchStore: ObservableObject {
         }
     }
 
-    func refreshDashboard() async {
-        guard isAuthenticated else { return }
-        isLoading = true
+  func refreshDashboard() async {
+    guard isAuthenticated else { return }
+    if isPreviewMode {
+      dashboard = Self.previewDashboard()
+      isLoading = false
+      return
+    }
+
+    isLoading = true
         errorMessage = nil
 
         do {
@@ -127,8 +142,9 @@ final class HomeBrainWatchStore: ObservableObject {
         isLoading = false
     }
 
-    func controlSecurity(_ action: String) async {
-        commandInFlight = action
+  func controlSecurity(_ action: String) async {
+    if isPreviewMode { return }
+    commandInFlight = action
         errorMessage = nil
 
         do {
@@ -143,8 +159,9 @@ final class HomeBrainWatchStore: ObservableObject {
         commandInFlight = nil
     }
 
-    func controlLights(room: String? = nil, action: String, brightness: Int? = nil) async {
-        commandInFlight = "lights-\(action)"
+  func controlLights(room: String? = nil, action: String, brightness: Int? = nil) async {
+    if isPreviewMode { return }
+    commandInFlight = "lights-\(action)"
         errorMessage = nil
 
         do {
@@ -171,11 +188,167 @@ final class HomeBrainWatchStore: ObservableObject {
         }
     }
 
-    private func makeClient() throws -> HomeBrainAPIClient {
-        try HomeBrainAPIClient(baseURLString: serverURL, deviceID: deviceID)
-    }
+  private func makeClient() throws -> HomeBrainAPIClient {
+    try HomeBrainAPIClient(baseURLString: serverURL, deviceID: deviceID)
+  }
 
-    private func withValidAccessToken<T>(
+  private static func previewEnabledFromLaunch() -> Bool {
+    let processInfo = ProcessInfo.processInfo
+    if processInfo.arguments.contains("-ui-preview") {
+      return true
+    }
+    if let environmentValue = processInfo.environment["UI_PREVIEW_ENABLED"] {
+      return ["1", "true", "yes"].contains(environmentValue.lowercased())
+    }
+    return false
+  }
+
+  private static func previewDashboard() -> WatchDashboard {
+    return WatchDashboard(
+      generatedAt: "2026-06-09T18:00:00.000Z",
+      user: WatchUser(
+        id: "preview-user",
+        name: "HomeBrain",
+        email: "review@example.com"
+      ),
+      config: WatchConfig(
+        sections: [.security, .lights, .power, .weather],
+        primaryRoom: "Living Room",
+        lightDeviceIds: [],
+        defaultLightBrightness: 70
+      ),
+      availableRooms: [
+        WatchRoomSummary(
+          name: "Living Room",
+          lightCount: 3,
+          onlineCount: 3,
+          onCount: 2,
+          dimmableCount: 3
+        ),
+        WatchRoomSummary(
+          name: "Kitchen",
+          lightCount: 2,
+          onlineCount: 2,
+          onCount: 1,
+          dimmableCount: 2
+        )
+      ],
+      sections: WatchSections(
+        security: WatchSecuritySection(
+          available: true,
+          alarmState: "disarmed",
+          stateLabel: "Disarmed",
+          isArmed: false,
+          isTriggered: false,
+          isOnline: true,
+          sensorCount: 6,
+          activeSensorCount: 0,
+          attentionSensorCount: 1,
+          offlineSensorCount: 0,
+          lowBatterySensorCount: 1,
+          doorLockCount: 2,
+          unlockedDoorCount: 0,
+          error: nil
+        ),
+        lights: WatchLightsSection(
+          available: true,
+          room: "Living Room",
+          totalCount: 3,
+          onCount: 2,
+          onlineCount: 3,
+          dimmableCount: 3,
+          averageBrightness: 68,
+          defaultLightBrightness: 70,
+          devices: [
+            WatchLightDevice(
+              id: "preview-living-room",
+              name: "Living Room Lamp",
+              room: "Living Room",
+              type: "light",
+              isOn: true,
+              isOnline: true,
+              brightness: 68,
+              dimmable: true
+            ),
+            WatchLightDevice(
+              id: "preview-patio",
+              name: "Patio Lights",
+              room: "Patio",
+              type: "light",
+              isOn: true,
+              isOnline: true,
+              brightness: 45,
+              dimmable: true
+            )
+          ],
+          rooms: [
+            WatchLightRoom(
+              available: true,
+              name: "Living Room",
+              room: "Living Room",
+              totalCount: 3,
+              onCount: 2,
+              onlineCount: 3,
+              dimmableCount: 3,
+              averageBrightness: 68,
+              defaultLightBrightness: 70,
+              devices: nil,
+              error: nil
+            ),
+            WatchLightRoom(
+              available: true,
+              name: "Kitchen",
+              room: "Kitchen",
+              totalCount: 2,
+              onCount: 1,
+              onlineCount: 2,
+              dimmableCount: 2,
+              averageBrightness: 52,
+              defaultLightBrightness: 70,
+              devices: nil,
+              error: nil
+            )
+          ],
+          error: nil
+        ),
+        power: WatchPowerSection(
+          available: true,
+          monitorName: "Sense Energy",
+          observedAt: "6:00 PM",
+          powerW: 642,
+          solarW: 0,
+          netW: 642,
+          alwaysOnW: 126,
+          activeDeviceCount: 5,
+          currentCostUsdPerHour: 0.09,
+          dayKwh: 18.4,
+          projectedMonthUsd: 118.75,
+          activeDevices: [
+            WatchPowerDevice(name: "Climate", powerW: 310, sharePct: 48),
+            WatchPowerDevice(name: "Lighting", powerW: 84, sharePct: 13)
+          ],
+          error: nil
+        ),
+        weather: WatchWeatherSection(
+          available: true,
+          fetchedAt: "6:00 PM",
+          locationName: "Home",
+          temperatureF: 67,
+          apparentTemperatureF: 65,
+          condition: "Partly Cloudy",
+          icon: "cloud.sun.fill",
+          humidity: 44,
+          windSpeedMph: 7,
+          highF: 74,
+          lowF: 49,
+          precipitationChance: 20,
+          error: nil
+        )
+      )
+    )
+  }
+
+  private func withValidAccessToken<T>(
         operation: (HomeBrainAPIClient, String) async throws -> T
     ) async throws -> T {
         let client = try makeClient()

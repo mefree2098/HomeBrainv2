@@ -24,6 +24,7 @@ import {
 
 import { getDevices, type DeviceRecord } from "@/api/devices"
 import { getHarmonyHubs } from "@/api/harmony"
+import { getRooms } from "@/api/rooms"
 import { getSettings, updateSettings } from "@/api/settings"
 import {
   cancelWallPanelFirmwareUpdate,
@@ -396,6 +397,7 @@ export function HardwareOrbsTab() {
   const { toast } = useToast()
   const [panels, setPanels] = useState<WallPanelRecord[]>([])
   const [devices, setDevices] = useState<DeviceRecord[]>([])
+  const [roomRegistryNames, setRoomRegistryNames] = useState<string[]>([])
   const [scenes, setScenes] = useState<SceneRecord[]>([])
   const [harmonyHubs, setHarmonyHubs] = useState<HarmonyHubSnapshot[]>([])
   const [selectedPanelId, setSelectedPanelId] = useState("")
@@ -444,9 +446,10 @@ export function HardwareOrbsTab() {
     }
 
     try {
-      const [panelsResponse, devicesResponse, scenesResponse, harmonyResponse, settingsResponse] = await Promise.all([
+      const [panelsResponse, devicesResponse, roomsResponse, scenesResponse, harmonyResponse, settingsResponse] = await Promise.all([
         getWallPanels(),
         getDevices(),
+        getRooms(),
         getScenes(),
         getHarmonyHubs({ includeCommands: true, timeoutMs: 5000 }).catch((error) => {
           console.warn("Failed to load Harmony hubs for orb settings:", error)
@@ -457,6 +460,9 @@ export function HardwareOrbsTab() {
 
       const nextPanels = sortPanels(Array.isArray(panelsResponse?.panels) ? panelsResponse.panels : [])
       const nextDevices = Array.isArray(devicesResponse?.devices) ? [...devicesResponse.devices] : []
+      const nextRoomNames = Array.isArray(roomsResponse?.rooms)
+        ? roomsResponse.rooms.map((room) => normalizeString(room.name)).filter(Boolean)
+        : []
       const nextScenes = Array.isArray(scenesResponse?.scenes) ? [...scenesResponse.scenes] : []
       const nextHarmonyHubs = Array.isArray(harmonyResponse?.hubs)
         ? harmonyResponse.hubs.filter((hub: HarmonyHubSnapshot) => hub?.success !== false)
@@ -470,6 +476,7 @@ export function HardwareOrbsTab() {
 
       setPanels(nextPanels)
       setDevices(nextDevices)
+      setRoomRegistryNames(nextRoomNames)
       setScenes(nextScenes)
       setHarmonyHubs(nextHarmonyHubs)
       const settings = settingsResponse?.settings || {}
@@ -557,8 +564,13 @@ export function HardwareOrbsTab() {
         values.add(normalizeString(device.room))
       }
     })
+    roomRegistryNames.forEach((room) => {
+      if (normalizeString(room)) {
+        values.add(normalizeString(room))
+      }
+    })
     return Array.from(values).sort((left, right) => left.localeCompare(right))
-  }, [devices, panels])
+  }, [devices, panels, roomRegistryNames])
 
   const draftRoom = normalizeString(draft?.room)
   const selectedHub = useMemo(

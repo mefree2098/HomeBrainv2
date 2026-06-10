@@ -35,6 +35,7 @@ import {
   SlidersHorizontal
 } from "lucide-react"
 import { getDeviceGroups, getDevices, controlDevice, type DeviceGroupSummary } from "@/api/devices"
+import { getRooms } from "@/api/rooms"
 import { AddDeviceDialog } from "@/components/devices/AddDeviceDialog"
 import { DeviceDetailsDialog } from "@/components/devices/DeviceDetailsDialog"
 import { useAlexaExposureRegistry } from "@/hooks/useAlexaExposureRegistry"
@@ -1228,6 +1229,7 @@ export function Devices({
   const { isAdmin } = useAuth()
   const [devices, setDevices] = useState([])
   const [deviceGroups, setDeviceGroups] = useState<DeviceGroupSummary[]>([])
+  const [roomRegistryNames, setRoomRegistryNames] = useState<string[]>([])
   const [roomDevices, setRoomDevices] = useState([])
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState("")
@@ -1388,15 +1390,20 @@ export function Devices({
     const fetchDevices = async () => {
       try {
         console.log('Fetching devices data')
-        const [allDevices, groupsResponse] = await Promise.all([
+        const [allDevices, groupsResponse, roomsResponse] = await Promise.all([
           getDevices(),
-          getDeviceGroups()
+          getDeviceGroups(),
+          getRooms()
         ])
         const deviceList = Array.isArray(allDevices?.devices) ? allDevices.devices : []
+        const roomNames = Array.isArray(roomsResponse?.rooms)
+          ? roomsResponse.rooms.map((room) => String(room.name || "").trim()).filter(Boolean)
+          : []
         
         setDevices(deviceList)
         setRoomDevices(buildRoomsFromDevices(deviceList))
         setDeviceGroups(Array.isArray(groupsResponse?.groups) ? groupsResponse.groups : [])
+        setRoomRegistryNames(roomNames)
       } catch (error) {
         console.error('Failed to fetch devices:', error)
         toast({
@@ -1415,14 +1422,19 @@ export function Devices({
   useDeviceRealtime(applyIncomingDevices)
 
   const refreshDevicesSnapshot = useCallback(async () => {
-    const [allDevices, groupsResponse] = await Promise.all([
+    const [allDevices, groupsResponse, roomsResponse] = await Promise.all([
       getDevices(),
-      getDeviceGroups()
+      getDeviceGroups(),
+      getRooms()
     ])
     const deviceList = Array.isArray(allDevices?.devices) ? allDevices.devices : []
+    const roomNames = Array.isArray(roomsResponse?.rooms)
+      ? roomsResponse.rooms.map((room) => String(room.name || "").trim()).filter(Boolean)
+      : []
     setDevices(deviceList)
     setRoomDevices(buildRoomsFromDevices(deviceList))
     setDeviceGroups(Array.isArray(groupsResponse?.groups) ? groupsResponse.groups : [])
+    setRoomRegistryNames(roomNames)
   }, [buildRoomsFromDevices])
 
   useEffect(() => {
@@ -2236,6 +2248,17 @@ export function Devices({
     const rooms = new Map<string, string>()
     rooms.set('unassigned', 'Unassigned')
 
+    roomRegistryNames.forEach((entry) => {
+      const room = String(entry || '').trim()
+      if (!room) {
+        return
+      }
+      const key = room.toLowerCase()
+      if (!rooms.has(key)) {
+        rooms.set(key, room)
+      }
+    })
+
     devices.forEach((device: any) => {
       const room = String(device?.room || '').trim()
       if (!room) {
@@ -2252,7 +2275,7 @@ export function Devices({
       if (right.toLowerCase() === 'unassigned') return 1
       return left.localeCompare(right)
     })
-  }, [devices])
+  }, [devices, roomRegistryNames])
 
   useEffect(() => {
     if (!focusDeviceId || !Array.isArray(devices) || devices.length === 0) {

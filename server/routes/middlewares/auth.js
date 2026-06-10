@@ -7,6 +7,8 @@ const oidcService = require('../../services/oidcService');
 const { USER_PLATFORMS, hasPlatformAccess } = require('../../utils/userPlatforms');
 const { ACCESS_TOKEN_COOKIE_NAME, getCookieValue } = require('../../utils/authCookies');
 
+const READ_ONLY_SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
 function extractToken(req) {
   const authorizationHeader = req.headers.authorization;
   const [scheme, headerToken] = authorizationHeader?.split(/\s+/, 2) || [];
@@ -26,6 +28,21 @@ function formatPlatformName(platform) {
   }
 
   return String(platform || 'this platform');
+}
+
+function allowsReadOnlyMutation(req, options = {}) {
+  const allow = options.allowReadOnlyMutation;
+  if (allow === true) return true;
+  if (typeof allow === 'function') return allow(req);
+  return false;
+}
+
+function shouldBlockReadOnlyMutation(req, user, options = {}) {
+  return Boolean(
+    user?.isReadOnly
+    && !READ_ONLY_SAFE_METHODS.has(String(req.method || '').toUpperCase())
+    && !allowsReadOnlyMutation(req, options)
+  );
 }
 
 async function resolveUserFromSubject(subject, allowedRoles = ALL_ROLES, options = {}) {
@@ -131,6 +148,12 @@ const requireUser = (allowedRoles = ALL_ROLES, options = {}) => {
     try {
       const user = await verifyAccessToken(token, allowedRoles, req, options);
       req.user = user;
+      if (shouldBlockReadOnlyMutation(req, user, options)) {
+        return res.status(403).json({
+          success: false,
+          error: 'Read-only accounts cannot modify HomeBrain data.'
+        });
+      }
       next();
     } catch (error) {
       return res.status(error.status || 403).json({ error: error.message });
