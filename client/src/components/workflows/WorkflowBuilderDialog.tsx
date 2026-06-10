@@ -692,6 +692,102 @@ function getPreferredTriggerPropertyOption(device: DeviceLite | undefined) {
   return options.find((option) => option.key === "status") || options[0]
 }
 
+const SENSOR_TRIGGER_FEATURES = [
+  "contact",
+  "motion",
+  "vibration",
+  "acceleration",
+  "water",
+  "tamper",
+  "temperature",
+  "humidity",
+  "illuminance"
+];
+
+const SENSOR_SMARTTHINGS_CAPABILITIES = [
+  "contactSensor",
+  "motionSensor",
+  "waterSensor",
+  "presenceSensor",
+  "accelerationSensor",
+  "tamperAlert",
+  "temperatureMeasurement",
+  "relativeHumidityMeasurement",
+  "illuminanceMeasurement"
+];
+
+function isSensorTriggerDevice(device: DeviceLite | null | undefined) {
+  if (!device) {
+    return false;
+  }
+  if (String(device.type || "").trim().toLowerCase() === "sensor") {
+    return true;
+  }
+  if (SENSOR_TRIGGER_FEATURES.some((feature) => directFeatureSupported(device, feature, [
+    `supports${feature.charAt(0).toUpperCase()}${feature.slice(1)}Sensor`
+  ]))) {
+    return true;
+  }
+  const attributes = (device.properties as Record<string, unknown> | undefined)?.smartThingsAttributeValues;
+  if (attributes && typeof attributes === "object" && !Array.isArray(attributes)) {
+    return SENSOR_SMARTTHINGS_CAPABILITIES.some((capability) => capability in (attributes as Record<string, unknown>));
+  }
+  return false;
+}
+
+const SENSOR_PROPERTY_KEY_PATTERN = /^(status|isOnline|temperature|directRadioState\.(contactOpen|motionActive|vibrationActive|accelerationActive|tamperActive|waterDetected|temperatureF|humidity|illuminance|batteryLevel|batteryLow|batteryVoltage)|homeBrainBatteryLevel|directBatteryLevel|batteryLevel|matterBatteryLevel|smartThingsBatteryLevel|smartThingsAttributeValues\.(contactSensor|motionSensor|waterSensor|presenceSensor|accelerationSensor|tamperAlert|temperatureMeasurement|relativeHumidityMeasurement|illuminanceMeasurement|battery)\..+)$/;
+
+function filterSensorTriggerPropertyOptions(options: TriggerPropertyOption[]) {
+  return options.filter((option) => SENSOR_PROPERTY_KEY_PATTERN.test(option.key));
+}
+
+// Friendly event phrasing for boolean sensor readings ("Opens" reads better
+// than "equals true" when building a door-open trigger).
+const SENSOR_BOOLEAN_EVENT_LABELS: Record<string, { whenTrue: string; whenFalse: string }> = {
+  "directRadioState.contactOpen": { whenTrue: "Opens", whenFalse: "Closes" },
+  "directRadioState.motionActive": { whenTrue: "Motion starts", whenFalse: "Motion stops" },
+  "directRadioState.vibrationActive": { whenTrue: "Vibration starts", whenFalse: "Vibration stops" },
+  "directRadioState.accelerationActive": { whenTrue: "Movement starts", whenFalse: "Movement stops" },
+  "directRadioState.tamperActive": { whenTrue: "Tamper triggered", whenFalse: "Tamper cleared" },
+  "directRadioState.waterDetected": { whenTrue: "Water detected", whenFalse: "Water cleared" },
+  "directRadioState.batteryLow": { whenTrue: "Battery goes low", whenFalse: "Battery recovers" },
+  status: { whenTrue: "Becomes active (open / detected)", whenFalse: "Becomes inactive (closed / clear)" },
+  isOnline: { whenTrue: "Comes online", whenFalse: "Goes offline" }
+};
+
+function getSensorBooleanEventLabels(propertyKey: string) {
+  return SENSOR_BOOLEAN_EVENT_LABELS[propertyKey] || { whenTrue: "Becomes true", whenFalse: "Becomes false" };
+}
+
+// Known SmartThings sensor attribute string values, so the value field can be
+// a friendly two-option select instead of free text.
+const SENSOR_STRING_EVENT_VALUES: Record<string, [string, string]> = {
+  contact: ["open", "closed"],
+  motion: ["active", "inactive"],
+  water: ["wet", "dry"],
+  presence: ["present", "not present"],
+  acceleration: ["active", "inactive"],
+  tamper: ["detected", "clear"]
+};
+
+function getSensorStringEventValues(propertyKey: string): [string, string] | null {
+  const attribute = propertyKey.split(".").pop() || "";
+  return SENSOR_STRING_EVENT_VALUES[attribute] || null;
+}
+
+function getPreferredSensorTriggerPropertyOption(device: DeviceLite | undefined) {
+  const options = filterSensorTriggerPropertyOptions(getTriggerPropertyOptions(device));
+  return options.find((option) => option.key === "directRadioState.contactOpen")
+    || options.find((option) => option.key === "directRadioState.motionActive")
+    || options.find((option) => option.kind === "boolean" && option.key !== "isOnline")
+    || options.find((option) => option.key !== "isOnline")
+    || options[0];
+}
+
+function isDeviceTriggerType(type: WorkflowTriggerType) {
+  return type === "device_state" || type === "sensor";
+}
+
 function normalizeTriggerOperator(value: unknown, kind: TriggerPropertyKind) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
   const allowed = kind === "number" ? NUMERIC_TRIGGER_OPERATORS : kind === "string" ? TEXT_TRIGGER_OPERATORS : ["eq", "neq"];
@@ -915,6 +1011,9 @@ function getDefaultDeviceTarget(triggerType: WorkflowTriggerType, devices: Devic
   if (triggerType === "device_state") {
     return buildTriggeringDeviceTarget();
   }
+  if (triggerType === "sensor") {
+    return devices[0]?._id || null;
+  }
 
   return devices[0]?._id || null;
 }
@@ -955,7 +1054,7 @@ function getDefaultTriggerConditions(type: WorkflowTriggerType) {
     return { deviceId: "", state: "on", property: "status", operator: "eq", value: true };
   }
   if (type === "sensor") {
-    return { sensorType: "motion", condition: "detected" };
+    return { deviceId: "", property: "", operator: "eq", value: true, forSeconds: 0 };
   }
   if (type === "security_alarm_status") {
     return { states: ["armedStay", "armedAway"] };
@@ -963,8 +1062,8 @@ function getDefaultTriggerConditions(type: WorkflowTriggerType) {
   return {};
 }
 
-function buildDeviceStateTriggerConditions(device: DeviceLite | undefined, previousForSeconds: unknown = 0) {
-  const preferredOption = getPreferredTriggerPropertyOption(device) || {
+function buildDeviceStateTriggerConditions(device: DeviceLite | undefined, previousForSeconds: unknown = 0, preferSensorReading = false) {
+  const preferredOption = (preferSensorReading ? getPreferredSensorTriggerPropertyOption(device) : getPreferredTriggerPropertyOption(device)) || {
     key: "status",
     label: "Status",
     kind: "boolean" as TriggerPropertyKind
@@ -1365,8 +1464,29 @@ function describeTrigger(
       }
       return `${deviceName} reaches ${conditionText}.`;
     }
-    case "sensor":
-      return `Runs when ${String(triggerConditions.sensorType || "sensor")} is ${String(triggerConditions.condition || "triggered")}.`;
+    case "sensor": {
+      if (typeof triggerConditions.deviceId === "string" && triggerConditions.deviceId) {
+        const sensorName = getDeviceLabel(devices, triggerConditions.deviceId);
+        const property = typeof triggerConditions.property === "string" && triggerConditions.property.trim()
+          ? triggerConditions.property
+          : "status";
+        const value = Object.prototype.hasOwnProperty.call(triggerConditions, "value")
+          ? triggerConditions.value
+          : true;
+        const forSeconds = Math.max(0, Number(triggerConditions.forSeconds) || 0);
+        const holdSuffix = forSeconds > 0 ? ` and stays that way for ${formatDuration(forSeconds)}` : "";
+        if (typeof value === "boolean") {
+          const labels = getSensorBooleanEventLabels(property);
+          return `${sensorName}: ${(value ? labels.whenTrue : labels.whenFalse).toLowerCase()}${holdSuffix}.`;
+        }
+        const operator = typeof triggerConditions.operator === "string" && triggerConditions.operator.trim()
+          ? triggerConditions.operator
+          : "eq";
+        const operatorLabel = (TRIGGER_OPERATOR_LABELS[normalizeTriggerOperator(operator, inferTriggerPropertyKind(value))] || operator).toLowerCase();
+        return `${sensorName}: ${formatTriggerPropertyLabel(property).toLowerCase()} ${operatorLabel} ${String(value)}${holdSuffix}.`;
+      }
+      return `Runs when ${String(triggerConditions.sensorType || "a sensor")} is ${String(triggerConditions.condition || "triggered")}.`;
+    }
     case "security_alarm_status": {
       const states = Array.isArray(triggerConditions.states)
         ? triggerConditions.states.filter(Boolean).join(", ")
@@ -1578,14 +1698,26 @@ export function WorkflowBuilderDialog({
     [devices, triggerDeviceId]
   );
   const triggerDeviceSupportsControl = !isWorkflowEnergyMonitorDevice(triggerDevice)
+  const sensorTriggerDevices = useMemo(
+    () => devices.filter((device) => isSensorTriggerDevice(device)),
+    [devices]
+  );
   const triggerPropertyOptions = useMemo(
     () => getTriggerPropertyOptions(triggerDevice),
     [triggerDevice]
   );
+  const effectiveTriggerDevices = triggerType === "sensor" && sensorTriggerDevices.length > 0
+    ? sensorTriggerDevices
+    : devices;
+  const effectiveTriggerPropertyOptions = useMemo(
+    () => (triggerType === "sensor" ? filterSensorTriggerPropertyOptions(triggerPropertyOptions) : triggerPropertyOptions),
+    [triggerType, triggerPropertyOptions]
+  );
   const selectedTriggerProperty = typeof triggerConditions.property === "string" && triggerConditions.property.trim()
     ? triggerConditions.property
     : "status";
-  const selectedTriggerPropertyOption = triggerPropertyOptions.find((option) => option.key === selectedTriggerProperty)
+  const selectedTriggerPropertyOption = effectiveTriggerPropertyOptions.find((option) => option.key === selectedTriggerProperty)
+    || triggerPropertyOptions.find((option) => option.key === selectedTriggerProperty)
     || {
       key: selectedTriggerProperty,
       label: formatTriggerPropertyLabel(selectedTriggerProperty),
@@ -1609,7 +1741,7 @@ export function WorkflowBuilderDialog({
   );
 
   const addAction = () => {
-    if (triggerType === "device_state" && !triggerDeviceSupportsControl) {
+    if (isDeviceTriggerType(triggerType) && !triggerDeviceSupportsControl) {
       const fallbackDevice = actionableDevices[0] || null
       setActions((prev) => [...prev, {
         type: "device_control",
@@ -2006,21 +2138,28 @@ export function WorkflowBuilderDialog({
                     </div>
                   )}
 
-                  {triggerType === "device_state" && (
+                  {isDeviceTriggerType(triggerType) && (
                     <div className="space-y-4">
+                      {triggerType === "sensor" && (
+                        <p className="text-xs text-muted-foreground">
+                          Pick the sensor, the reading to watch, and the change that should fire this workflow.
+                          Sensor triggers are evaluated the moment the sensor reports, so a door opening or motion
+                          starting fires immediately. Use the optional hold time to require the state to persist.
+                        </p>
+                      )}
                       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
                         <div className="space-y-2">
-                          <Label>Device</Label>
+                          <Label>{triggerType === "sensor" ? "Sensor" : "Device"}</Label>
                           <DevicePicker
-                            devices={devices}
+                            devices={effectiveTriggerDevices}
                             value={String(triggerConditions.deviceId || "")}
-                            placeholder="Select device"
-                            searchPlaceholder="Search devices..."
-                            emptyLabel="No matching devices."
+                            placeholder={triggerType === "sensor" ? "Select sensor" : "Select device"}
+                            searchPlaceholder={triggerType === "sensor" ? "Search sensors..." : "Search devices..."}
+                            emptyLabel={triggerType === "sensor" ? "No sensors found." : "No matching devices."}
                             selectedLabel={getDeviceLabel(devices, triggerDeviceId)}
                             onValueChange={(value) => {
                               const selectedDevice = devices.find((device) => device._id === value)
-                              setTriggerConditions((prev) => buildDeviceStateTriggerConditions(selectedDevice, prev.forSeconds))
+                              setTriggerConditions((prev) => buildDeviceStateTriggerConditions(selectedDevice, prev.forSeconds, triggerType === "sensor"))
 
                               if (isWorkflowEnergyMonitorDevice(selectedDevice)) {
                                 setActions((prev) => prev.map((action) => {
@@ -2047,7 +2186,7 @@ export function WorkflowBuilderDialog({
                         </div>
 
                         <div className="space-y-2">
-                          <Label>Property</Label>
+                          <Label>{triggerType === "sensor" ? "Sensor reading" : "Property"}</Label>
                           <Select
                             value={selectedTriggerProperty}
                             onValueChange={(value) => {
@@ -2076,12 +2215,12 @@ export function WorkflowBuilderDialog({
                               <SelectValue placeholder="Select property" />
                             </SelectTrigger>
                             <SelectContent>
-                              {!triggerPropertyOptions.some((option) => option.key === selectedTriggerProperty) && (
+                              {!effectiveTriggerPropertyOptions.some((option) => option.key === selectedTriggerProperty) && selectedTriggerProperty && (
                                 <SelectItem value={selectedTriggerProperty}>
                                   {selectedTriggerProperty}
                                 </SelectItem>
                               )}
-                              {triggerPropertyOptions.map((option) => (
+                              {effectiveTriggerPropertyOptions.map((option) => (
                                 <SelectItem key={option.key} value={option.key}>
                                   {option.label}
                                 </SelectItem>
@@ -2131,8 +2270,17 @@ export function WorkflowBuilderDialog({
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
-                                <SelectItem value="true">{selectedTriggerProperty === "status" ? "On" : "True"}</SelectItem>
-                                <SelectItem value="false">{selectedTriggerProperty === "status" ? "Off" : "False"}</SelectItem>
+                                {triggerType === "sensor" ? (
+                                  <>
+                                    <SelectItem value="true">{getSensorBooleanEventLabels(selectedTriggerProperty).whenTrue}</SelectItem>
+                                    <SelectItem value="false">{getSensorBooleanEventLabels(selectedTriggerProperty).whenFalse}</SelectItem>
+                                  </>
+                                ) : (
+                                  <>
+                                    <SelectItem value="true">{selectedTriggerProperty === "status" ? "On" : "True"}</SelectItem>
+                                    <SelectItem value="false">{selectedTriggerProperty === "status" ? "Off" : "False"}</SelectItem>
+                                  </>
+                                )}
                               </SelectContent>
                             </Select>
                           ) : selectedTriggerPropertyOption.kind === "number" ? (
@@ -2145,6 +2293,25 @@ export function WorkflowBuilderDialog({
                               }))}
                               placeholder="25"
                             />
+                          ) : triggerType === "sensor" && getSensorStringEventValues(selectedTriggerProperty) ? (
+                            <Select
+                              value={String(triggerConditions.value ?? getSensorStringEventValues(selectedTriggerProperty)![0])}
+                              onValueChange={(value) => setTriggerConditions((prev) => ({
+                                ...prev,
+                                value
+                              }))}
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {getSensorStringEventValues(selectedTriggerProperty)!.map((option) => (
+                                  <SelectItem key={option} value={option}>
+                                    {option}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                           ) : (
                             <Input
                               value={String(triggerConditions.value ?? "")}
