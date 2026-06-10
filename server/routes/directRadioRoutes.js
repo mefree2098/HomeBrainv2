@@ -334,6 +334,21 @@ router.get('/logs/stream', async (req, res) => {
   res.on('error', cleanup);
 });
 
+router.post('/restart', async (req, res) => {
+  try {
+    const status = await directRadioService.restartRuntime({
+      reason: req.body?.reason || 'api_request'
+    });
+    res.status(200).json({
+      success: true,
+      message: 'Direct radio runtime restarted.',
+      status
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to restart the direct radio runtime');
+  }
+});
+
 router.post('/pairing/start', async (req, res) => {
   try {
     const protocol = String(req.body?.protocol || '').trim().toLowerCase();

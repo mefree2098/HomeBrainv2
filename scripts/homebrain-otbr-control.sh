@@ -552,6 +552,13 @@ case "${ACTION}" in
     start_thread_network
     print_status_json
     ;;
+  stop)
+    require_root
+    log "Stopping ${SERVICE_NAME} and disabling it so it stays off across reboots."
+    systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
+    systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
+    print_status_json
+    ;;
   *)
     die "Unknown action: ${ACTION}"
     ;;

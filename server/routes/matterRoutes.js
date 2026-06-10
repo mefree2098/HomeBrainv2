@@ -105,6 +105,19 @@ router.post('/thread/otbr/start', async (req, res) => {
   }
 });
 
+router.post('/thread/otbr/stop', async (req, res) => {
+  try {
+    const result = await matterService.stopThreadBorderRouter(req.body || {});
+    res.status(200).json({
+      success: true,
+      result,
+      status: await matterService.getThreadOtbrHostStatus()
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to stop OpenThread Border Router');
+  }
+});
+
 router.get('/thread/kernel/status', async (_req, res) => {
   try {
     const status = await matterService.getThreadKernelStatus();
