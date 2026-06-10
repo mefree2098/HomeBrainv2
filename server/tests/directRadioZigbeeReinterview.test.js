@@ -304,3 +304,93 @@ test('readZigbeeIasEnrollment returns null on missing/invalid devices', () => {
   assert.strictEqual(directRadioService.readZigbeeIasEnrollment({}), null);
   assert.strictEqual(directRadioService.readZigbeeIasEnrollment({ endpoints: [] }), null);
 });
+
+test('wake-window recovery retries failed interviews and IAS enrollment while the sensor is awake', async (t) => {
+  const originalAttempts = directRadioService.zigbee.wakeRecoveryAttempts;
+  const originalIasAttempts = directRadioService.zigbee.iasRepairAttempts;
+  const originalRepair = directRadioService.repairZigbeeIasEnrollment;
+  const originalHandle = directRadioService.handleZigbeeDeviceChanged;
+  const originalController = directRadioService.zigbee.controller;
+  t.after(() => {
+    directRadioService.zigbee.wakeRecoveryAttempts = originalAttempts;
+    directRadioService.zigbee.iasRepairAttempts = originalIasAttempts;
+    directRadioService.repairZigbeeIasEnrollment = originalRepair;
+    directRadioService.handleZigbeeDeviceChanged = originalHandle;
+    directRadioService.zigbee.controller = originalController;
+  });
+
+  directRadioService.zigbee.wakeRecoveryAttempts = new Map();
+  directRadioService.zigbee.controller = {
+    getDevicesByType: () => [{ ieeeAddr: '0x00124b003a12562a' }]
+  };
+
+  let interviewCalls = 0;
+  let repairCalls = 0;
+  let persisted = null;
+  directRadioService.repairZigbeeIasEnrollment = async (_device, options) => {
+    repairCalls += 1;
+    return { attempted: true, ready: true, liveVerified: true, trigger: options?.trigger || null };
+  };
+  directRadioService.handleZigbeeDeviceChanged = async (_device, reason) => {
+    persisted = reason;
+    return null;
+  };
+
+  const sleepyDevice = {
+    ieeeAddr: '0x000d6f000b11f6e5',
+    modelID: 'MCT-340 E',
+    interviewState: 'FAILED',
+    interview: async () => {
+      interviewCalls += 1;
+    },
+    endpoints: [
+      {
+        ID: 1,
+        inputClusters: [1, 1280],
+        getClusterAttributeValue: () => undefined
+      }
+    ]
+  };
+
+  const result = await directRadioService.recoverZigbeeSleepyDeviceOnWake(sleepyDevice, 'deviceAnnounce');
+  assert.ok(result);
+  assert.strictEqual(result.interviewNeeded, true);
+  assert.strictEqual(result.interviewRecovered, true);
+  assert.strictEqual(result.enrollmentVerified, true);
+  assert.strictEqual(interviewCalls, 1);
+  assert.strictEqual(repairCalls, 1);
+  assert.strictEqual(persisted, 'reinterview');
+
+  // Throttled: an immediate second wake event must not re-run the recovery.
+  const throttled = await directRadioService.recoverZigbeeSleepyDeviceOnWake(sleepyDevice, 'message');
+  assert.strictEqual(throttled, null);
+  assert.strictEqual(interviewCalls, 1);
+
+  // Non-wake reasons (sync/reinterview) never trigger recovery.
+  directRadioService.zigbee.wakeRecoveryAttempts = new Map();
+  assert.strictEqual(await directRadioService.recoverZigbeeSleepyDeviceOnWake(sleepyDevice, 'sync'), null);
+
+  // Healthy devices are left alone.
+  directRadioService.zigbee.wakeRecoveryAttempts = new Map();
+  const healthyDevice = {
+    ...sleepyDevice,
+    interviewState: 'SUCCESSFUL',
+    endpoints: [
+      {
+        ID: 1,
+        inputClusters: [1, 1280],
+        getClusterAttributeValue: (cluster, attribute) => {
+          if (cluster === 'ssIasZone' && attribute === 'iasCieAddr') return '0x00124b003a12562a';
+          if (cluster === 'ssIasZone' && attribute === 'zoneState') return 1;
+          return undefined;
+        }
+      }
+    ]
+  };
+  assert.strictEqual(await directRadioService.recoverZigbeeSleepyDeviceOnWake(healthyDevice, 'deviceAnnounce'), null);
+
+  // In-progress interviews are not interrupted.
+  directRadioService.zigbee.wakeRecoveryAttempts = new Map();
+  const busyDevice = { ...sleepyDevice, interviewState: 'IN_PROGRESS' };
+  assert.strictEqual(await directRadioService.recoverZigbeeSleepyDeviceOnWake(busyDevice, 'deviceAnnounce'), null);
+});
