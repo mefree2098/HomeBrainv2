@@ -884,6 +884,51 @@ async reinterviewZigbeeDevice(ieeeAddr) {
     };
   },
 
+async touchlinkScanZigbee() {
+    await this.start();
+    const controller = this.zigbee.controller;
+    if (!controller || !this.zigbee.started) {
+      const error = new Error('Zigbee coordinator is not ready.');
+      error.status = 503;
+      throw error;
+    }
+    if (!controller.touchlink || typeof controller.touchlink.scan !== 'function') {
+      const error = new Error('This Zigbee adapter does not support touchlink scans.');
+      error.status = 501;
+      throw error;
+    }
+
+    this.log('info', 'zigbee', 'Starting Zigbee touchlink inter-PAN scan', {});
+    const startedAt = Date.now();
+    try {
+      const found = await withTimeout(
+        controller.touchlink.scan(),
+        120_000,
+        'Zigbee touchlink scan timed out'
+      );
+      const results = (Array.isArray(found) ? found : []).map((entry) => ({
+        ieeeAddr: trimString(entry?.ieeeAddr) || null,
+        channel: Number.isFinite(Number(entry?.channel)) ? Number(entry.channel) : null
+      }));
+      this.log('info', 'zigbee', 'Zigbee touchlink scan finished', {
+        durationMs: Date.now() - startedAt,
+        foundCount: results.length,
+        results
+      });
+      return {
+        durationMs: Date.now() - startedAt,
+        foundCount: results.length,
+        results
+      };
+    } catch (error) {
+      this.log('warn', 'zigbee', 'Zigbee touchlink scan failed', {
+        durationMs: Date.now() - startedAt,
+        error: error.message
+      });
+      throw error;
+    }
+  },
+
 async forgetZigbeeDevice(ieeeAddr, options = {}) {
     const address = trimString(ieeeAddr).toLowerCase();
     if (!address) {
