@@ -156,10 +156,66 @@ test('reinterviewZigbeeDevice repairs IAS enrollment directly for sleepy sensors
   assert.equal(interviewCalled, false, 'known sleepy IAS devices use targeted repair instead of full interview');
   assert.equal(handleReason, 'reinterview');
   assert.equal(result.iasRepair.ready, true);
+  assert.equal(result.iasRepair.liveVerified, true);
   assert.equal(result.iasZone.enrolled, true);
   assert.equal(result.iasZone.cieMatchesCoordinator, true);
   assert.equal(iasAttributes.iasCieAddr, coordinatorIeee);
-  assert.match(result.message, /repaired IAS Zone enrollment/);
+  assert.match(result.message, /live-verified IAS Zone enrollment/);
+});
+
+test('reinterviewZigbeeDevice distinguishes cached IAS enrollment from live verification', async (t) => {
+  const coordinatorIeee = '0x00124b003a12562a';
+  const endpoint = {
+    ID: 1,
+    inputClusters: [1280],
+    supportsInputCluster(cluster) {
+      return cluster === 'ssIasZone' || cluster === 1280;
+    },
+    getClusterAttributeValue(cluster, attribute) {
+      if (cluster !== 'ssIasZone') {
+        return undefined;
+      }
+      return {
+        iasCieAddr: coordinatorIeee,
+        zoneState: 1,
+        zoneId: 23
+      }[attribute];
+    },
+    async read() {
+      throw new Error('Timed out reading Zigbee IAS enrollment state');
+    },
+    async write() {
+      assert.fail('cached-ready enrollment should not write without live evidence that it is wrong');
+    },
+    async command() {
+      assert.fail('cached-ready enrollment should not send enroll response without live evidence that it is wrong');
+    }
+  };
+  const fakeDevice = {
+    ieeeAddr: '0xa4c13812d1d4ffff',
+    modelID: 'SNZB-04PR2',
+    manufacturerName: 'SONOFF',
+    type: 'EndDevice',
+    powerSource: 'Battery',
+    interviewCompleted: false,
+    endpoints: [endpoint]
+  };
+  stubZigbee(t, {
+    controller: {
+      getDeviceByIeeeAddr: () => fakeDevice,
+      getDevicesByType: () => [{ ieeeAddr: coordinatorIeee, endpoints: [{ ID: 1 }] }]
+    },
+    started: true
+  });
+
+  const result = await directRadioService.reinterviewZigbeeDevice('0xa4c13812d1d4ffff');
+
+  assert.equal(result.iasRepair.ready, true);
+  assert.equal(result.iasRepair.liveVerified, false);
+  assert.equal(result.iasRepair.endpoints[0].liveReadBefore, false);
+  assert.equal(result.iasRepair.endpoints[0].liveReadAfter, false);
+  assert.match(result.message, /cached IAS Zone enrollment/);
+  assert.doesNotMatch(result.message, /repaired IAS Zone enrollment/);
 });
 
 test('forgetZigbeeDevice force-removes a stale coordinator entry when leave fails', async (t) => {
