@@ -1220,6 +1220,11 @@ async getStatus() {
           detectedPortDetails: zwavePortDetails,
           configuredPort: trimString(process.env.HOMEBRAIN_ZWAVE_PORT) || null,
           started: this.zwave.started,
+          // Surface stick firmware so known-bad 800-series SDK builds (e.g.
+          // the 7.21.x/7.22.0 controller lockups fixed in Zooz fw 1.50) are
+          // visible without opening the case.
+          controllerFirmwareVersion: this.zwave.driver?.controller?.firmwareVersion ?? null,
+          controllerSdkVersion: this.zwave.driver?.controller?.sdkVersion ?? null,
           error: this.zwave.error,
           diagnostics: zwaveStatusDiagnostics,
           nodeCacheError: zwaveNodeCacheError,

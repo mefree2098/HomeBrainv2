@@ -1389,6 +1389,50 @@ test('Zigbee normalization treats IAS Zone as contact on 3321-S multipurpose sen
   assert.ok(normalized.update.properties.directRadioFeatures.includes('acceleration'));
 });
 
+test('Zigbee contact sensors only treat IAS alarm1 as open (alarm2 is not contact)', () => {
+  const service = createService();
+  const zigbeeDevice = {
+    ieeeAddr: '0xa4c13812d1d4ffff',
+    modelID: 'SNZB-04PR2',
+    manufacturerName: 'SONOFF',
+    interviewCompleted: true,
+    endpoints: [{ ID: 1, inputClusters: [1, 1280, 0xfc11] }]
+  };
+
+  // alarm2-only zone status must NOT report the door open.
+  const alarm2Only = service.normalizeZigbeeDevice(zigbeeDevice, 'message', {
+    message: { cluster: 'ssIasZone', data: { zonestatus: 0x0002 } }
+  });
+  assert.equal(alarm2Only.update.properties.directRadioState.contactOpen, false);
+  assert.equal(alarm2Only.update.properties.directRadioState.contact, 'closed');
+  assert.equal(alarm2Only.update.status, false);
+
+  const alarm1 = service.normalizeZigbeeDevice(zigbeeDevice, 'message', {
+    message: { cluster: 'ssIasZone', data: { zonestatus: 0x0001 } }
+  });
+  assert.equal(alarm1.update.properties.directRadioState.contactOpen, true);
+  assert.equal(alarm1.update.status, true);
+});
+
+test('SNZB-04PR2 private cluster reports map to tamper state', () => {
+  const service = createService();
+  const normalized = service.normalizeZigbeeDevice({
+    ieeeAddr: '0xa4c13812d1d4ffff',
+    modelID: 'SNZB-04PR2',
+    manufacturerName: 'SONOFF',
+    interviewCompleted: true,
+    endpoints: [{ ID: 1, inputClusters: [1, 1280, 0xfc11] }]
+  }, 'message', {
+    message: { cluster: 64529, data: { 8192: 1 } }
+  });
+
+  const state = normalized.update.properties.directRadioState;
+  assert.equal(state.tamper, true);
+  assert.equal(state.tamperActive, true);
+  // Tamper alone must not fabricate contact state.
+  assert.equal(state.contactOpen, undefined);
+});
+
 test('Zigbee IAS message payload stamps live zone status without endpoint read', async () => {
   const service = createService();
   let capturedUpdate = null;

@@ -174,6 +174,54 @@ it because USB power is never removed).
 Until the replug, Zigbee door/window sensors are blind: the security alarm cannot see those zones
 open. (Z-Wave and INSTEON devices are unaffected.)
 
+## Hardware audit — exact radios vs. Jetson Orin Nano vs. HomeBrain (June 10, 2026)
+
+Audit of the exact purchased hardware against the NVIDIA Jetson Orin Nano (L4T/JetPack
+Ubuntu) host and HomeBrain's code.
+
+### The radios
+
+| Device (ASIN) | Identity on the box | Linux driver | HomeBrain support |
+| --- | --- | --- | --- |
+| **SONOFF ZBDongle-P** Zigbee 3.0 USB Dongle Plus ([B09KXTCMSC](https://www.amazon.com/dp/B09KXTCMSC)) — TI CC2652P + CP2102N | `10c4:ea60`, `/dev/ttyUSB1`, stable by-id path | `cp210x` (present & working) | ✅ Correct: `zstack` adapter @115200, expected-hardware string and port scoring match. Note: this stick's Z-Stack build does not answer inter-PAN (`AF interPanCtl`), so touchlink scans are unsupported. |
+| **Zooz ZST39 LR** 800-series Z-Wave Long Range stick ([B0BW171KP3](https://www.amazon.com/dp/B0BW171KP3)) | `1a86:55d4`, `/dev/ttyACM0` | `cdc-acm` (stock kernel) | ✅ Correct: zwave-js ^15.24 with S2 + **Long Range** key sets configured. Status API now reports `controllerFirmwareVersion`/`controllerSdkVersion`. ⚠️ Known vendor issue: 800-series firmware on SDK 7.21.x/7.22.0 can brick-loop or lock up ("controller jammed"); fixed in Zooz firmware **v1.50 (SDK 7.22.1)** — check the reported version and OTW-update through the Zooz portal only ([change log](https://www.support.getzooz.com/kb/article/1352-zst39-800-long-range-z-wave-stick-change-log/), [zwave-js #6874](https://github.com/zwave-js/zwave-js/discussions/6874), [#6512](https://github.com/zwave-js/zwave-js/discussions/6512)). Z-Wave runs at 908 MHz — immune to the 2.4 GHz issues below. |
+| **SONOFF MG24 Dongle Plus** Zigbee/Thread ([B0FMJD288B](https://www.amazon.com/dp/B0FMJD288B)) — EFR32MG24 + CP2102N, OpenThread RCP firmware | `10c4:ea60`, `/dev/ttyUSB2` | `cp210x` | ✅ Correct: `matterService` references this exact ASIN, runs OTBR via `spinel+hdlc+uart` @460800; the Jetson kernel helper manages the IPv6 multicast-routing kernel configs OTBR needs. ⚠️ Operationally this radio is what deafened the Zigbee coordinator (Finding 5) — keep it physically separated and leave `otbr-agent` disabled until placement is finalized. Thread dataset uses channel 23; Zigbee now lives on 25 — acceptable, but re-plan if interference reappears. |
+
+### The Zigbee devices
+
+| Device (ASIN) | Model | Support |
+| --- | --- | --- |
+| **Aeotec Range Extender Zi** ([B0BXFBH6JR](https://www.amazon.com/dp/B0BXFBH6JR)) | `WG001-Z01` | ✅ In zigbee-herdsman-converters (`WG001`). **Correct pairing procedure** (per [Aeotec's guide](https://aeotec.freshdesk.com/support/solutions/articles/6000248296-aeotec-range-extender-zi-user-guide-)): if the LED is solid, hold the action button **10 s** to factory-reset; once the LED fades in/out, open HomeBrain Zigbee pairing and **tap the button once** — rapid blink while joining, then steady when joined. (Our earlier hold-only attempts skipped the single-tap join step.) |
+| **SONOFF SNZB-04PR2** SenseGuard DW Gen2 door/window, 4-pack ([B0GKFB66JZ](https://www.amazon.com/dp/B0GKFB66JZ)) | `SNZB-04PR2` | ✅ In zigbee-herdsman-converters. Contact maps to IAS **alarm_1 only** — HomeBrain now matches that exactly (alarm2 no longer counts as "open" for contact sensors; one less false-alarm vector). Tamper on this model is reported via the private eWeLink cluster **0xFC11 attr 0x2000**, not the IAS tamper bit — HomeBrain now parses it. AAA-powered; check-ins are sparse (hours), state changes are immediate. |
+
+### Jetson Orin Nano specifics
+
+1. **USB serial drivers**: all three sticks enumerate with stable `/dev/serial/by-id` paths on
+   this box — `cp210x` and `cdc-acm` are present and bound. Caveat for the future: some
+   L4T/JetPack kernels have shipped **without `cp210x`**, which surfaces as "lsusb sees the stick
+   but no /dev/ttyUSB appears" ([NVIDIA forum](https://forums.developer.nvidia.com/t/installing-cp210x-usb-to-uart-driver-on-jetson-nano/78886),
+   [JetsonHacks](https://jetsonhacks.com/2018/02/09/install-usb-serial-converter-kernel-modules-l4t-28-1/)).
+   If the Jetson is ever reflashed, verify `cp210x` before debugging anything else; the repo's
+   `scripts/homebrain-jetson-kernel-control.sh` already contains the kernel build machinery.
+2. **USB 3.x RF interference — the big one.** The Orin Nano devkit's USB-A ports are all
+   USB 3.2, and USB 3 signaling radiates broadband noise across 2.4 GHz (≈ +20 dB noise floor,
+   the classic Intel-documented effect; see
+   [zigbee2mqtt discussion](https://github.com/Koenkk/zigbee2mqtt/discussions/11159) and
+   [USB3/2.4 GHz interference guide](https://www.rshtech.com/blog/how-to-avoid-the-usb30-and-24-ghz-devices-interference-2)).
+   This matches today's measured spectrum exactly (energy 177–204/255 on channels 15–20 at the
+   coordinator, quiet at 24–26). **Recommendations:** put the 2.4 GHz sticks (ZBDongle-P, MG24)
+   on a **USB 2.0 hub** hanging off the Jetson, on shielded extension cables, with the stick ends
+   ≥1 m from the Jetson and from each other; ferrite chokes help. The Zigbee network now runs on
+   **channel 25** (top of the band, clear in the scan); the energy-scan endpoint
+   (`POST /api/direct-radios/zigbee/energy-scan`) makes the noise floor measurable any time.
+
+### Audit code changes
+
+- Contact sensors: IAS `alarm_1` only ⇒ open (matches zigbee2mqtt semantics for SNZB-04PR2 and
+  MCT-340 E); motion/water keep generic alarm1|alarm2.
+- SNZB-04PR2 private-cluster tamper (0xFC11/0x2000) parsed into tamper state.
+- Z-Wave status now reports the ZST39's `controllerFirmwareVersion` / `controllerSdkVersion`.
+
 ## Z-Wave, Thread/Matter, INSTEON review
 
 - **Z-Wave** (`directRadioZwave.js`): no equivalent flaw. State comes from the zwave-js `valueDB`,
