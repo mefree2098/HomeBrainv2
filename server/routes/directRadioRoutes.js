@@ -337,7 +337,8 @@ router.get('/logs/stream', async (req, res) => {
 router.post('/restart', async (req, res) => {
   try {
     const status = await directRadioService.restartRuntime({
-      reason: req.body?.reason || 'api_request'
+      reason: req.body?.reason || 'api_request',
+      hardResetZigbee: req.body?.hardResetZigbee === true
     });
     res.status(200).json({
       success: true,
