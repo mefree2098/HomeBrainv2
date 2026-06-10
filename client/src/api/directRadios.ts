@@ -41,6 +41,14 @@ export type DirectRadioControllerStatus = {
   inclusionState?: string | null;
   pendingDsk?: string | null;
   lastStartResult?: unknown;
+  network?: {
+    panID?: number | null;
+    extendedPanID?: string | null;
+    channel?: number | null;
+    error?: string | null;
+  } | null;
+  controllerFirmwareVersion?: string | null;
+  controllerSdkVersion?: string | null;
   pairedDeviceCount?: number;
   pairedNodeCount?: number;
   nonControllerNodeCount?: number;
@@ -70,6 +78,9 @@ export type DirectRadioZigbeeDevice = {
   modelID: string | null;
   manufacturerName: string | null;
   interviewCompleted: boolean;
+  interviewState?: string | null;
+  lastSeen?: string | null;
+  linkquality?: number | null;
   endpoints: Array<{
     id: number | string | null;
     profileID: number | string | null;
@@ -529,6 +540,83 @@ export const reinterviewZigbeeDevice = async (ieeeAddr: string) => {
     };
   } catch (error) {
     console.error('Error re-interviewing Zigbee device:', error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export type ZigbeeChannelEnergy = {
+  channel: number | null;
+  energy: number | null;
+};
+
+export const runZigbeeEnergyScan = async (duration?: number) => {
+  try {
+    const response = await api.post('/api/direct-radios/zigbee/energy-scan', { duration });
+    return response.data as {
+      success: boolean;
+      result?: {
+        zdoStatus?: number | null;
+        currentChannel?: number | null;
+        totalTransmissions?: number | null;
+        totalFailures?: number | null;
+        channelEnergy?: ZigbeeChannelEnergy[];
+      };
+    };
+  } catch (error) {
+    console.error('Error running Zigbee energy scan:', error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const changeZigbeeChannel = async (channel: number) => {
+  try {
+    const response = await api.post('/api/direct-radios/zigbee/channel', { channel });
+    return response.data as {
+      success: boolean;
+      result?: {
+        channel?: number;
+        previousChannelList?: number[];
+        changed?: boolean;
+        message?: string | null;
+        network?: { channel?: number | null } | null;
+      };
+    };
+  } catch (error) {
+    console.error('Error changing Zigbee channel:', error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const restartDirectRadioRuntime = async (options?: { hardResetZigbee?: boolean; reason?: string }) => {
+  try {
+    const response = await api.post('/api/direct-radios/restart', {
+      reason: options?.reason || 'web_ui',
+      hardResetZigbee: options?.hardResetZigbee === true
+    });
+    return response.data as {
+      success: boolean;
+      message?: string;
+      status?: DirectRadioStatus;
+    };
+  } catch (error) {
+    console.error('Error restarting direct radio runtime:', error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+export const advanceZigbeeFrameCounter = async (amount?: number) => {
+  try {
+    const response = await api.post('/api/direct-radios/zigbee/frame-counter/advance', { amount });
+    return response.data as {
+      success: boolean;
+      result?: {
+        amount?: number;
+        entries?: Array<{ extendedPanID?: string | null; before?: number; after?: number }>;
+      };
+      status?: DirectRadioStatus;
+    };
+  } catch (error) {
+    console.error('Error advancing Zigbee frame counter:', error);
     throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
   }
 };

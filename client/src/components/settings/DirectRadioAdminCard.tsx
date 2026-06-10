@@ -4,24 +4,51 @@ import {
   AlertCircle,
   AlertTriangle,
   CheckCircle,
+  Gauge,
+  Info,
   Loader2,
   Play,
   Radio,
   RefreshCw,
+  RotateCcw,
+  ShieldAlert,
   StopCircle,
   Trash2,
   Usb,
   Wifi,
   XCircle
 } from "lucide-react"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from "@/components/ui/select"
+import {
+  advanceZigbeeFrameCounter,
+  changeZigbeeChannel,
   clearDirectRadioEngineLogs,
   getDirectRadioEngineLogs,
   getDirectRadioStatus,
   openDirectRadioEngineLogStream,
+  restartDirectRadioRuntime,
+  runZigbeeEnergyScan,
   startDirectRadioPairing,
   startZWaveExclusion,
   stopDirectRadioPairing,
@@ -29,7 +56,8 @@ import {
   type DirectRadioLogEntry,
   type DirectRadioProtocol,
   type DirectRadioSerialPort,
-  type DirectRadioStatus
+  type DirectRadioStatus,
+  type ZigbeeChannelEnergy
 } from "@/api/directRadios"
 import { useToast } from "@/hooks/useToast"
 import { cn } from "@/lib/utils"
@@ -217,7 +245,29 @@ function ControllerPanel({
           <span className="font-medium text-foreground">{activeWindow ? activeWindowLabel : "Pairing"}: </span>
           {activeWindow ? `until ${formatTimestamp(activeWindow)}` : "closed"}
         </div>
+        {protocol === "zigbee" && controller.network && !controller.network.error ? (
+          <div>
+            <span className="font-medium text-foreground">Network: </span>
+            channel {controller.network.channel ?? "?"}
+            {controller.network.panID != null ? ` · PAN 0x${Number(controller.network.panID).toString(16)}` : ""}
+          </div>
+        ) : null}
+        {protocol === "zwave" && controller.controllerFirmwareVersion ? (
+          <div>
+            <span className="font-medium text-foreground">Stick firmware: </span>
+            {controller.controllerFirmwareVersion}
+            {controller.controllerSdkVersion ? ` (SDK ${controller.controllerSdkVersion})` : ""}
+          </div>
+        ) : null}
       </div>
+
+      {protocol === "zwave" && isKnownBadZWaveSdk(controller.controllerSdkVersion) ? (
+        <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+          This Z-Wave stick firmware (SDK {controller.controllerSdkVersion}) has known controller-lockup bugs.
+          Update the Zooz ZST39 to firmware 1.50 or newer through the Zooz support portal (OTW update) — do not
+          use firmware images from other sources.
+        </p>
+      ) : null}
 
       {controller.error ? (
         <p className="mt-3 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-200">
@@ -401,6 +451,253 @@ function ZWaveExclusionSessionCounter({
   )
 }
 
+const ZIGBEE_CHANNELS = Array.from({ length: 16 }, (_, index) => 11 + index)
+
+// Zooz ZST39 / 800-series SDK builds with documented controller lockups,
+// fixed by Zooz firmware 1.50 (SDK 7.22.1) and newer.
+function isKnownBadZWaveSdk(sdkVersion?: string | null) {
+  const version = String(sdkVersion || "").trim()
+  return /^7\.21\./.test(version) || /^7\.22\.0(\.|$)/.test(version)
+}
+
+function energyTone(energy: number | null) {
+  const value = Number(energy ?? 0)
+  if (value >= 160) return "bg-red-500"
+  if (value >= 110) return "bg-amber-500"
+  return "bg-emerald-500"
+}
+
+function ZigbeeRadioToolsPanel({
+  controller,
+  busy,
+  onBusyChange,
+  onAfterAction
+}: {
+  controller: DirectRadioControllerStatus
+  busy: boolean
+  onBusyChange: (next: string | null) => void
+  onAfterAction: () => void
+}) {
+  const { toast } = useToast()
+  const [scanResult, setScanResult] = useState<{ currentChannel: number | null; channels: ZigbeeChannelEnergy[] } | null>(null)
+  const [runningTool, setRunningTool] = useState<string | null>(null)
+  const [targetChannel, setTargetChannel] = useState<string>("")
+  const [hardReset, setHardReset] = useState(false)
+  const currentChannel = controller.network && !controller.network.error ? controller.network.channel ?? null : null
+
+  const runTool = async (key: string, work: () => Promise<void>) => {
+    setRunningTool(key)
+    onBusyChange(key)
+    try {
+      await work()
+    } catch (error) {
+      toast({
+        title: "Radio tool failed",
+        description: error instanceof Error ? error.message : String(error),
+        variant: "destructive"
+      })
+    } finally {
+      setRunningTool(null)
+      onBusyChange(null)
+      onAfterAction()
+    }
+  }
+
+  const handleEnergyScan = () => runTool("energy-scan", async () => {
+    const response = await runZigbeeEnergyScan()
+    const channels = response.result?.channelEnergy || []
+    setScanResult({
+      currentChannel: response.result?.currentChannel ?? currentChannel,
+      channels
+    })
+    const quietest = [...channels].filter((entry) => entry.channel != null).sort((a, b) => Number(a.energy ?? 0) - Number(b.energy ?? 0))[0]
+    toast({
+      title: "Energy scan complete",
+      description: quietest
+        ? `Quietest channel right now: ${quietest.channel} (energy ${quietest.energy}/255).`
+        : "Scan finished but returned no channel data."
+    })
+  })
+
+  const handleChannelChange = () => {
+    const channel = Number(targetChannel)
+    if (!Number.isInteger(channel)) return
+    void runTool("channel-change", async () => {
+      const response = await changeZigbeeChannel(channel)
+      toast({
+        title: response.result?.changed ? "Zigbee network migrating" : "Channel unchanged",
+        description: response.result?.message || `Channel ${channel} configured.`
+      })
+    })
+  }
+
+  const handleRestart = () => runTool("restart", async () => {
+    const response = await restartDirectRadioRuntime({ hardResetZigbee: hardReset, reason: "web_ui_restart" })
+    toast({
+      title: "Radio runtime restarted",
+      description: hardReset
+        ? "Both radios restarted; the Zigbee chip was hardware-reset."
+        : response.message || "Both radios restarted."
+    })
+  })
+
+  const handleFrameCounter = () => runTool("frame-counter", async () => {
+    const response = await advanceZigbeeFrameCounter()
+    const entry = response.result?.entries?.[0]
+    toast({
+      title: "Frame counter advanced",
+      description: entry
+        ? `Counter jumped ${entry.before} → ${entry.after}; the radio was hardware-reset to load it.`
+        : "Frame counter advanced and radio reset."
+    })
+  })
+
+  const disabled = busy || Boolean(runningTool)
+
+  return (
+    <div className="rounded-xl border border-border/60 bg-background/55 p-4">
+      <div className="flex items-center gap-2">
+        <Gauge className="h-4 w-4 text-emerald-500" />
+        <h4 className="text-sm font-semibold">Zigbee Radio Tools</h4>
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Diagnostics and recovery for the SONOFF ZBDongle-P coordinator. Run an energy scan first when sensors act up —
+        USB&nbsp;3 ports and 2.4&nbsp;GHz Wi-Fi can jam Zigbee channels.
+      </p>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Button type="button" variant="outline" size="sm" onClick={() => void handleEnergyScan()} disabled={disabled}>
+          {runningTool === "energy-scan" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Activity className="mr-2 h-4 w-4" />}
+          Energy Scan
+        </Button>
+
+        <div className="flex items-center gap-2">
+          <Select value={targetChannel} onValueChange={setTargetChannel}>
+            <SelectTrigger className="h-8 w-[130px] text-xs">
+              <SelectValue placeholder="New channel" />
+            </SelectTrigger>
+            <SelectContent>
+              {ZIGBEE_CHANNELS.map((channel) => (
+                <SelectItem key={channel} value={String(channel)} disabled={channel === currentChannel}>
+                  Channel {channel}{channel === currentChannel ? " (current)" : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button type="button" variant="outline" size="sm" disabled={disabled || !targetChannel}>
+                {runningTool === "channel-change" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wifi className="mr-2 h-4 w-4" />}
+                Migrate Channel
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Migrate the Zigbee network to channel {targetChannel || "?"}?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  The coordinator broadcasts the move and retunes (about a minute). Mains-powered devices follow
+                  automatically; battery sensors usually re-find the network on their own, but a sensor that stays
+                  silent can be nudged with a short press of its button, or re-joined with a ~5 second hold while a
+                  pairing window is open (it keeps its name and settings). Run an Energy Scan first and pick a quiet
+                  channel — 24–26 avoid most Wi-Fi and USB-3 noise.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={() => void handleChannelChange()}>Migrate Network</AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button type="button" variant="outline" size="sm" disabled={disabled}>
+              {runningTool === "restart" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
+              Restart Radios
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Restart the radio runtime?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Restarts both the Zigbee coordinator and the Z-Wave controller in place (devices stay paired).
+                Radios are unavailable for roughly 30–60 seconds. Enable the hardware reset when the Zigbee radio
+                seems deaf — it reboots the chip&apos;s radio core, which a normal restart does not.
+              </AlertDialogDescription>
+              <label className="mt-2 flex items-center gap-2 text-sm">
+                <Checkbox checked={hardReset} onCheckedChange={(value) => setHardReset(value === true)} />
+                Also hardware-reset the Zigbee chip (watchdog reset)
+              </label>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={() => void handleRestart()}>Restart</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        <AlertDialog>
+          <AlertDialogTrigger asChild>
+            <Button type="button" variant="outline" size="sm" disabled={disabled}>
+              {runningTool === "frame-counter" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldAlert className="mr-2 h-4 w-4" />}
+              Replay-Drop Recovery
+            </Button>
+          </AlertDialogTrigger>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Advance the network security frame counter?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Recovery tool for a rare failure: if the coordinator&apos;s security counter ever rolls backwards
+                (power glitch), every device silently ignores it — transmissions succeed but nothing answers. This
+                jumps the stored counter far ahead and hardware-resets the chip. Safe to run; only needed when the
+                whole network has gone unresponsive and a restart did not help.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction onClick={() => void handleFrameCounter()}>Advance Counter</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </div>
+
+      {scanResult ? (
+        <div className="mt-4 space-y-1.5">
+          <p className="text-xs font-medium text-foreground">
+            Channel energy (0 quiet – 255 saturated){scanResult.currentChannel != null ? ` · network is on channel ${scanResult.currentChannel}` : ""}
+          </p>
+          {scanResult.channels.map((entry) => (
+            <div key={`energy-${entry.channel}`} className="flex items-center gap-2 text-[11px] text-muted-foreground">
+              <span className={cn("w-12 font-mono", entry.channel === scanResult.currentChannel ? "font-semibold text-foreground" : "")}>
+                ch {entry.channel}
+              </span>
+              <div className="h-2 flex-1 overflow-hidden rounded bg-muted">
+                <div
+                  className={cn("h-full rounded", energyTone(entry.energy))}
+                  style={{ width: `${Math.min(100, Math.round((Number(entry.energy ?? 0) / 255) * 100))}%` }}
+                />
+              </div>
+              <span className="w-8 text-right font-mono">{entry.energy ?? "?"}</span>
+              {entry.channel === scanResult.currentChannel ? <Badge variant="outline" className="h-4 px-1 text-[10px]">current</Badge> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="mt-4 rounded-lg border border-border/50 bg-muted/40 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+        <p className="flex items-center gap-1 font-medium text-foreground"><Info className="h-3 w-3" /> Pairing & placement tips</p>
+        <ul className="mt-1 list-disc space-y-0.5 pl-4">
+          <li>SONOFF SNZB-04PR2 door sensor: hold its button ~5s until the LED flashes to (re)join while a pairing window is open. Sensors keep their name, room, and security zone when they rejoin.</li>
+          <li>Aeotec Range Extender Zi: hold the button 10s to factory-reset (LED fades in/out), then a single tap joins it during a pairing window.</li>
+          <li>Keep the Zigbee and Thread USB sticks on USB 2.0 ports or a USB 2.0 hub with shielded extension cables, at least 1 m from the computer and from each other — USB 3 ports radiate strong 2.4 GHz noise.</li>
+          <li>A device that joins but never finishes (repeating join attempts) is usually too far from the coordinator: pair it close by, then move it back.</li>
+        </ul>
+      </div>
+    </div>
+  )
+}
+
 function ProtocolRadioSection({
   protocol,
   controller,
@@ -413,7 +710,9 @@ function ProtocolRadioSection({
   runningAction,
   onRunAction,
   onReplay,
-  onClear
+  onClear,
+  onToolBusyChange,
+  onAfterTool
 }: {
   protocol: DirectRadioProtocol
   controller: DirectRadioControllerStatus
@@ -427,6 +726,8 @@ function ProtocolRadioSection({
   onRunAction: (protocol: DirectRadioProtocol, action: ProtocolAction) => void
   onReplay: (protocol: DirectRadioProtocol) => void
   onClear: (protocol: DirectRadioProtocol) => void
+  onToolBusyChange?: (key: string | null) => void
+  onAfterTool?: () => void
 }) {
   const label = protocolLabel(protocol)
   const pairingKey = `${protocol}:pairing`
@@ -461,6 +762,14 @@ function ProtocolRadioSection({
         <ZWaveExclusionSessionCounter controller={controller} session={zwaveExclusionSession} />
       ) : null}
       <ControllerPanel protocol={protocol} controller={controller} />
+      {protocol === "zigbee" ? (
+        <ZigbeeRadioToolsPanel
+          controller={controller}
+          busy={Boolean(runningAction)}
+          onBusyChange={(key) => onToolBusyChange?.(key ? `zigbee:tool:${key}` : null)}
+          onAfterAction={() => onAfterTool?.()}
+        />
+      ) : null}
       <ProtocolSerialEndpoints protocol={protocol} serialPorts={serialPorts} />
       <ProtocolLogPanel
         protocol={protocol}
@@ -742,6 +1051,8 @@ export function DirectRadioAdminCard() {
               onRunAction={runRadioAction}
               onReplay={(protocol) => void loadLogs(protocol)}
               onClear={(protocol) => void clearLogs(protocol)}
+              onToolBusyChange={setRunningAction}
+              onAfterTool={() => void loadStatus({ quiet: true })}
             />
             <ProtocolRadioSection
               protocol="zwave"
