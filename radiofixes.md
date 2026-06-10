@@ -139,6 +139,41 @@ Entry produced **no events at all**. Investigation showed:
 from the Zigbee coordinator (USB extension cable, different hub) and the Thread channel is planned
 away from the Zigbee channel; then re-enable via the OTBR start flow.
 
+### Remote remediation attempted (June 10, ~15:30–16:45 UTC) — final state
+
+Everything that can be done without touching the hardware was done, in order:
+
+1. **Stopped and disabled `otbr-agent`** (the Thread transmitter next to the coordinator). No
+   change — routers still unreachable.
+2. **In-place radio runtime restart** (`POST /api/direct-radios/restart`). No change.
+3. **Hardware watchdog reset of the CC2652P** (`{"hardResetZigbee": true}`) — full chip reboot
+   including the RF core. No change.
+4. **MAC-level TX probe**: AF commands reach the air (dataConfirm `205 NWK_NO_ROUTE`, *not*
+   `MAC_CHANNEL_ACCESS_FAILURE`) — so the channel is clear (no jammer) and the radio transmits,
+   but **no device anywhere replies** and zero frames have been received since 06:51 UTC.
+5. **Touchlink inter-PAN sweep** was added as a diagnostic, but this stick's Z-Stack build does
+   not answer `AF interPanCtl` (touchlink unsupported) — inconclusive.
+
+Network parameters are stable and correct across every restart (`resumed`, channel 15,
+panID 7512, extendedPanID 0x18986e62a171075d), and reception died **mid-run** at 06:51 UTC with
+no software event at that moment — which rules out configuration/key/frame-counter regressions.
+
+**Conclusion: the coordinator's RF receive path is dead at the hardware level** (a known
+ZBDongle-P failure mode after sustained near-field RF exposure; a watchdog reset does not clear
+it because USB power is never removed).
+
+**Required physical fix (takes ~30 seconds):**
+
+1. Unplug the **SONOFF Zigbee 3.0 USB Dongle Plus (ITead, on /dev/ttyUSB1)**, wait ~10 seconds,
+   plug it back in. HomeBrain's hardware monitor auto-detects the stick and restarts the
+   coordinator automatically — no further action needed.
+2. While there, move the **SONOFF MG24 Thread stick** onto a USB extension cable (or a different
+   hub) away from the Zigbee dongle. `otbr-agent` stays stopped/disabled until then.
+3. Verify by opening any monitored door — the event should appear within a second or two.
+
+Until the replug, Zigbee door/window sensors are blind: the security alarm cannot see those zones
+open. (Z-Wave and INSTEON devices are unaffected.)
+
 ## Z-Wave, Thread/Matter, INSTEON review
 
 - **Z-Wave** (`directRadioZwave.js`): no equivalent flaw. State comes from the zwave-js `valueDB`,
