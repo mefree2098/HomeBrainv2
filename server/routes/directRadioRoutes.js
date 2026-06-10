@@ -450,6 +450,28 @@ router.post('/zwave/nodes/:nodeId/recover-routes', async (req, res) => {
   }
 });
 
+router.post('/zigbee/frame-counter/advance', async (req, res) => {
+  try {
+    const result = await directRadioService.advanceZigbeeFrameCounter({
+      amount: req.body?.amount
+    });
+    let status = null;
+    if (req.body?.restart !== false) {
+      status = await directRadioService.restartRuntime({
+        reason: 'frame_counter_advance',
+        hardResetZigbee: true
+      });
+    }
+    res.status(200).json({
+      success: true,
+      result,
+      status
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to advance the Zigbee network frame counter');
+  }
+});
+
 router.post('/zigbee/touchlink/scan', async (_req, res) => {
   try {
     const result = await directRadioService.touchlinkScanZigbee();
