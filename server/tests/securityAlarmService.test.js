@@ -238,6 +238,21 @@ test('buildSecuritySensorSummary marks cached Zigbee sync contact state as unver
       }
     }
   };
+  const reinterviewDevice = {
+    ...cachedSyncDevice,
+    status: false,
+    properties: {
+      ...cachedSyncDevice.properties,
+      directRadioState: {
+        contactOpen: false,
+        contact: 'closed'
+      },
+      homebrainDirect: {
+        ...cachedSyncDevice.properties.homebrainDirect,
+        lastReason: 'reinterview'
+      }
+    }
+  };
 
   const cachedSummary = securityAlarmService.buildSecuritySensorSummary({
     device: cachedSyncDevice,
@@ -265,6 +280,16 @@ test('buildSecuritySensorSummary marks cached Zigbee sync contact state as unver
   assert.equal(laterBatterySummary.isActive, false);
   assert.equal(laterBatterySummary.isStateUnverified, false);
   assert.equal(laterBatterySummary.attentionFlags.includes('state_unverified'), false);
+
+  const reinterviewSummary = securityAlarmService.buildSecuritySensorSummary({
+    device: reinterviewDevice,
+    zone
+  });
+  assert.equal(reinterviewSummary.stateLabel, 'Unverified');
+  assert.equal(reinterviewSummary.isActive, false);
+  assert.equal(reinterviewSummary.isStateUnverified, true);
+  assert.equal(reinterviewSummary.requiresAttention, true);
+  assert.equal(reinterviewSummary.attentionFlags.includes('state_unverified'), true);
 });
 
 test('getAlarmStatus scopes sensors and locks to the enabled HomeBrain security platform', async (t) => {

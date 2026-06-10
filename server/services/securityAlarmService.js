@@ -456,7 +456,17 @@ const isUnverifiedDirectZigbeeSensorState = (device, sensorType) => {
   const reason = normalizeString(direct.lastReason).toLowerCase();
   const messageCluster = normalizeString(direct.lastMessageCluster).toLowerCase();
 
-  if (reason === 'sync' || reason === 'refresh' || reason === 'devicejoined' || reason === 'deviceinterview') {
+  const unverifiedReasons = new Set([
+    'sync',
+    'refresh',
+    'devicejoined',
+    'deviceinterview',
+    'deviceannounce',
+    'messagenonemitted',
+    'reinterview'
+  ]);
+
+  if (unverifiedReasons.has(reason)) {
     return true;
   }
 

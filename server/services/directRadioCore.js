@@ -1141,23 +1141,29 @@ async getStatus() {
 
     const zigbeeDeviceSummaries = zigbeeDevices
       .filter((device) => device?.type !== 'Coordinator')
-      .map((device) => ({
-        ieeeAddr: trimString(device?.ieeeAddr) || null,
-        networkAddress: device?.networkAddress ?? null,
-        type: device?.type || null,
-        modelID: device?.modelID || null,
-        manufacturerName: device?.manufacturerName || null,
-        interviewCompleted: device?.interviewCompleted === true,
-        endpoints: Array.isArray(device?.endpoints)
-          ? device.endpoints.map((endpoint) => ({
-            id: endpoint?.ID ?? endpoint?.id ?? null,
-            profileID: endpoint?.profileID ?? null,
-            deviceID: endpoint?.deviceID ?? null,
-            inputClusters: Array.isArray(endpoint?.inputClusters) ? endpoint.inputClusters.slice(0, 24) : [],
-            outputClusters: Array.isArray(endpoint?.outputClusters) ? endpoint.outputClusters.slice(0, 24) : []
-          }))
-          : []
-      }));
+      .map((device) => {
+        const lastSeenTime = Number(device?.lastSeen);
+        const linkquality = Number(device?.linkquality);
+        return {
+          ieeeAddr: trimString(device?.ieeeAddr) || null,
+          networkAddress: device?.networkAddress ?? null,
+          type: device?.type || null,
+          modelID: device?.modelID || null,
+          manufacturerName: device?.manufacturerName || null,
+          interviewCompleted: device?.interviewCompleted === true,
+          lastSeen: Number.isFinite(lastSeenTime) ? new Date(lastSeenTime).toISOString() : null,
+          linkquality: Number.isFinite(linkquality) ? linkquality : null,
+          endpoints: Array.isArray(device?.endpoints)
+            ? device.endpoints.map((endpoint) => ({
+              id: endpoint?.ID ?? endpoint?.id ?? null,
+              profileID: endpoint?.profileID ?? null,
+              deviceID: endpoint?.deviceID ?? null,
+              inputClusters: Array.isArray(endpoint?.inputClusters) ? endpoint.inputClusters.slice(0, 24) : [],
+              outputClusters: Array.isArray(endpoint?.outputClusters) ? endpoint.outputClusters.slice(0, 24) : []
+            }))
+            : []
+        };
+      });
 
     return {
       enabled: parseEnabledFlag(process.env.HOMEBRAIN_DIRECT_RADIOS_ENABLED, true),
