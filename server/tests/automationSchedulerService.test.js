@@ -856,3 +856,48 @@ test('tick launches matching automations without waiting for long-running execut
   assert.equal(resumeCalls[0].reason, 'scheduler_watchdog');
   assert.deepEqual(launched, ['automation-1', 'automation-2']);
 });
+
+test('device updates schedule an immediate trigger evaluation for watched sensors', async (t) => {
+  const originalSet = automationSchedulerService.deviceTriggerDeviceIds;
+  const originalTimer = automationSchedulerService.deviceUpdateTickTimer;
+  const originalTick = automationSchedulerService.tick;
+  const originalDebounce = automationSchedulerService.deviceUpdateDebounceMs;
+  t.after(() => {
+    automationSchedulerService.deviceTriggerDeviceIds = originalSet;
+    if (automationSchedulerService.deviceUpdateTickTimer) {
+      clearTimeout(automationSchedulerService.deviceUpdateTickTimer);
+    }
+    automationSchedulerService.deviceUpdateTickTimer = originalTimer;
+    automationSchedulerService.tick = originalTick;
+    automationSchedulerService.deviceUpdateDebounceMs = originalDebounce;
+  });
+
+  const ticks = [];
+  automationSchedulerService.tick = async (context) => {
+    ticks.push(context);
+  };
+  automationSchedulerService.deviceUpdateDebounceMs = 100;
+  automationSchedulerService.deviceUpdateTickTimer = null;
+
+  // Updates for devices with no sensor/device_state trigger are ignored.
+  automationSchedulerService.deviceTriggerDeviceIds = new Set(['watched-device']);
+  automationSchedulerService.handleDeviceUpdateForTriggers([{ _id: 'unrelated-device' }]);
+  assert.equal(automationSchedulerService.deviceUpdateTickTimer, null);
+
+  // Updates for a watched sensor schedule a debounced evaluation tick.
+  automationSchedulerService.handleDeviceUpdateForTriggers([{ _id: 'watched-device' }]);
+  assert.notEqual(automationSchedulerService.deviceUpdateTickTimer, null);
+
+  // Bursts coalesce into a single pending tick.
+  automationSchedulerService.handleDeviceUpdateForTriggers([{ _id: 'watched-device' }]);
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.equal(ticks.length, 1);
+  assert.equal(ticks[0].source, 'device_update');
+
+  // Before the first interval tick populates the cache, any update evaluates.
+  automationSchedulerService.deviceTriggerDeviceIds = null;
+  automationSchedulerService.handleDeviceUpdateForTriggers([{ _id: 'anything' }]);
+  assert.notEqual(automationSchedulerService.deviceUpdateTickTimer, null);
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  assert.equal(ticks.length, 2);
+});

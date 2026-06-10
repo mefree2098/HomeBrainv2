@@ -5,6 +5,7 @@ const SecurityAlarm = require('../models/SecurityAlarm');
 const automationService = require('./automationService');
 const automationRuntimeService = require('./automationRuntimeService');
 const deviceService = require('./deviceService');
+const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const weatherService = require('./weatherService');
 const { applyFlattenedUpdates, resolveDeviceProperty } = require('../utils/devicePropertyResolver');
 const { setWorkflowStopRequest } = require('./workflowExecutionService');
@@ -257,6 +258,10 @@ class AutomationSchedulerService {
     this.running = false;
     this.recentRuns = new Map();
     this.triggerStateCache = new Map();
+    this.deviceTriggerDeviceIds = null;
+    this.deviceUpdateTickTimer = null;
+    this.deviceUpdateListener = null;
+    this.deviceUpdateDebounceMs = Math.max(100, Number(process.env.AUTOMATION_DEVICE_EVENT_DEBOUNCE_MS || 400));
     this.pendingTriggerContexts = new Map();
     this.solarContextCache = {
       key: null,
@@ -402,8 +407,50 @@ class AutomationSchedulerService {
     this.timer = setInterval(() => {
       void this.tick({ source: 'scheduler_interval' });
     }, this.intervalMs);
-    console.log(`AutomationSchedulerService: started (interval ${this.intervalMs}ms)`);
+
+    // Sensor/device triggers must react to radio events immediately — a door
+    // that opens and closes between interval ticks would otherwise be missed
+    // entirely. Each device update schedules a debounced evaluation pass.
+    if (!this.deviceUpdateListener) {
+      this.deviceUpdateListener = (devices) => this.handleDeviceUpdateForTriggers(devices);
+      deviceUpdateEmitter.on('devices:update', this.deviceUpdateListener);
+    }
+
+    console.log(`AutomationSchedulerService: started (interval ${this.intervalMs}ms, device-event evaluation enabled)`);
     void this.tick({ source: 'scheduler_startup' });
+  }
+
+  handleDeviceUpdateForTriggers(devices) {
+    try {
+      const updates = Array.isArray(devices) ? devices : [devices];
+      const updatedIds = updates
+        .map((device) => String(device?._id || device?.id || ''))
+        .filter(Boolean);
+      if (updatedIds.length === 0) {
+        return;
+      }
+
+      // Until the first tick has populated the cache, evaluate on any update
+      // so a fresh boot never misses an event.
+      const relevant = !(this.deviceTriggerDeviceIds instanceof Set)
+        || updatedIds.some((id) => this.deviceTriggerDeviceIds.has(id));
+      if (!relevant) {
+        return;
+      }
+
+      if (this.deviceUpdateTickTimer) {
+        return;
+      }
+      this.deviceUpdateTickTimer = setTimeout(() => {
+        this.deviceUpdateTickTimer = null;
+        void this.tick({ source: 'device_update', reason: 'device_state_change' });
+      }, this.deviceUpdateDebounceMs);
+      if (typeof this.deviceUpdateTickTimer.unref === 'function') {
+        this.deviceUpdateTickTimer.unref();
+      }
+    } catch (error) {
+      console.warn(`AutomationSchedulerService: device update trigger handling failed: ${error.message}`);
+    }
   }
 
   stop() {
@@ -411,6 +458,14 @@ class AutomationSchedulerService {
       clearInterval(this.timer);
       this.timer = null;
       console.log('AutomationSchedulerService: stopped');
+    }
+    if (this.deviceUpdateListener) {
+      deviceUpdateEmitter.off('devices:update', this.deviceUpdateListener);
+      this.deviceUpdateListener = null;
+    }
+    if (this.deviceUpdateTickTimer) {
+      clearTimeout(this.deviceUpdateTickTimer);
+      this.deviceUpdateTickTimer = null;
     }
   }
 
@@ -1032,6 +1087,13 @@ class AutomationSchedulerService {
         enabled: true,
         'trigger.type': { $in: ['time', 'schedule', 'device_state', 'sensor', 'security_alarm_status'] }
       }).lean();
+
+      this.deviceTriggerDeviceIds = new Set(
+        automations
+          .filter((automation) => ['device_state', 'sensor'].includes(automation?.trigger?.type))
+          .map((automation) => String(automation?.trigger?.conditions?.deviceId || ''))
+          .filter(Boolean)
+      );
 
       for (const automation of automations) {
         if (!await this.shouldRunAutomation(automation, now, executionContext)) {
