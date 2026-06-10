@@ -472,6 +472,20 @@ router.post('/zigbee/frame-counter/advance', async (req, res) => {
   }
 });
 
+router.post('/zigbee/energy-scan', async (req, res) => {
+  try {
+    const result = await directRadioService.scanZigbeeChannelEnergy({
+      duration: req.body?.duration
+    });
+    res.status(200).json({
+      success: true,
+      result
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to run Zigbee channel energy scan');
+  }
+});
+
 router.post('/zigbee/touchlink/scan', async (_req, res) => {
   try {
     const result = await directRadioService.touchlinkScanZigbee();

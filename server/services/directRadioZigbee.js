@@ -959,6 +959,67 @@ async advanceZigbeeFrameCounter(options = {}) {
     };
   },
 
+async scanZigbeeChannelEnergy(options = {}) {
+    await this.start();
+    const controller = this.zigbee.controller;
+    if (!controller || !this.zigbee.started) {
+      const error = new Error('Zigbee coordinator is not ready.');
+      error.status = 503;
+      throw error;
+    }
+    const adapter = controller.adapter;
+    if (typeof adapter?.sendZdo !== 'function') {
+      const error = new Error('This Zigbee adapter does not support ZDO energy scans.');
+      error.status = 501;
+      throw error;
+    }
+
+    // Energy scan on the coordinator itself (ZDO Mgmt_NWK_Update to nwk 0x0000)
+    // is a pure receive/measure operation, so it works even when outbound
+    // CSMA is failing — exactly the situation it exists to diagnose.
+    const Zspec = require('zigbee-herdsman/dist/zspec');
+    const Zdo = require('zigbee-herdsman/dist/zspec/zdo');
+    const channels = [];
+    for (let channel = 11; channel <= 26; channel += 1) {
+      channels.push(channel);
+    }
+    const duration = Math.min(5, Math.max(0, Number(options.duration ?? 3)));
+    const clusterId = Zdo.ClusterId.NWK_UPDATE_REQUEST;
+    const payload = Zdo.Buffalo.buildRequest(
+      adapter.hasZdoMessageOverhead === true,
+      clusterId,
+      channels,
+      duration,
+      1,
+      undefined,
+      undefined
+    );
+    this.log('info', 'zigbee', 'Starting Zigbee channel energy scan', { duration });
+    const response = await withTimeout(
+      adapter.sendZdo(Zspec.BLANK_EUI64, 0x0000, clusterId, payload, false),
+      60_000,
+      'Zigbee channel energy scan timed out'
+    );
+    const [zdoStatus, result] = Array.isArray(response) ? response : [null, response];
+    const entryList = Array.isArray(result?.entryList) ? result.entryList : [];
+    const network = typeof controller.getNetworkParameters === 'function'
+      ? await controller.getNetworkParameters().catch(() => null)
+      : null;
+    const summary = {
+      zdoStatus: zdoStatus ?? null,
+      currentChannel: network?.channel ?? null,
+      totalTransmissions: result?.totalTransmissions ?? null,
+      totalFailures: result?.totalFailures ?? null,
+      // 0x00 quietest .. 0xff saturated/unusable
+      channelEnergy: entryList.map((energy, index) => ({
+        channel: channels[index] ?? null,
+        energy
+      }))
+    };
+    this.log('info', 'zigbee', 'Zigbee channel energy scan finished', summary);
+    return summary;
+  },
+
 async touchlinkScanZigbee() {
     await this.start();
     const controller = this.zigbee.controller;
