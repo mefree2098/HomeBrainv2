@@ -2831,6 +2831,20 @@ private struct DirectRadioSerialPortRecord: Identifiable {
     }
 }
 
+private struct DirectRadioChannelEnergyRecord: Identifiable {
+    let channel: Int
+    let energy: Int
+
+    var id: Int { channel }
+
+    nonisolated static func from(_ object: [String: Any]) -> DirectRadioChannelEnergyRecord {
+        DirectRadioChannelEnergyRecord(
+            channel: JSON.int(object, "channel"),
+            energy: JSON.int(object, "energy")
+        )
+    }
+}
+
 private struct DirectRadioControllerRecord {
     let protocolName: String
     let expectedHardware: String
@@ -2845,9 +2859,19 @@ private struct DirectRadioControllerRecord {
     let exclusionUntil: String
     let pairedCount: Int
     let lastStartResult: String
+    let networkChannel: Int
+    let networkPanID: Int
+    let firmwareVersion: String
+    let sdkVersion: String
 
     var isReady: Bool {
         started && !detectedPort.isEmpty && error.isEmpty
+    }
+
+    // Zooz ZST39 / 800-series SDK builds with documented controller lockups,
+    // fixed by Zooz firmware 1.50 (SDK 7.22.1) and newer.
+    var hasKnownBadZWaveFirmware: Bool {
+        sdkVersion.hasPrefix("7.21.") || sdkVersion == "7.22.0" || sdkVersion.hasPrefix("7.22.0.")
     }
 
     var activeWindow: String {
@@ -2873,7 +2897,11 @@ private struct DirectRadioControllerRecord {
             pairedCount: protocolName == "zigbee"
                 ? JSON.int(object, "pairedDeviceCount")
                 : JSON.int(object, "pairedNodeCount"),
-            lastStartResult: JSON.string(object, "lastStartResult")
+            lastStartResult: JSON.string(object, "lastStartResult"),
+            networkChannel: JSON.int(JSON.object(object["network"]), "channel"),
+            networkPanID: JSON.int(JSON.object(object["network"]), "panID"),
+            firmwareVersion: JSON.string(object, "controllerFirmwareVersion"),
+            sdkVersion: JSON.string(object, "controllerSdkVersion")
         )
     }
 }
@@ -3129,6 +3157,13 @@ private struct SettingsDeviceIntegrationsPane: View {
     @State private var deviceCatalogUpdate: DeviceCatalogUpdateStatusRecord?
     @State private var deviceCatalogLoading = false
     @State private var deviceCatalogChecking = false
+    @State private var zigbeeEnergyResults: [DirectRadioChannelEnergyRecord] = []
+    @State private var zigbeeEnergyCurrentChannel = 0
+    @State private var zigbeeTargetChannel = 0
+    @State private var zigbeeHardReset = false
+    @State private var showZigbeeChannelConfirm = false
+    @State private var showRadioRestartConfirm = false
+    @State private var showFrameCounterConfirm = false
 
     var body: some View {
         ScrollView {
@@ -3143,6 +3178,7 @@ private struct SettingsDeviceIntegrationsPane: View {
                 insteonPanel
                 deviceCatalogPanel
                 directRadioOperationsPanel
+                zigbeeRadioToolsPanel
                 directRadioSerialPortsPanel
                 directRadioLogsPanel
                 integrationMessagePanel
@@ -3481,6 +3517,141 @@ private struct SettingsDeviceIntegrationsPane: View {
         }
     }
 
+    private var zigbeeRadioToolsPanel: some View {
+        integrationPanel("Zigbee Radio Tools", icon: "gauge.with.dots.needle.50percent", subtitle: "Channel quality, network migration, and recovery for the Zigbee coordinator.") {
+            Text("Run an energy scan first when sensors act up — USB 3 ports and 2.4 GHz Wi-Fi can jam Zigbee channels. 0 is quiet, 255 is saturated; channels 24–26 usually avoid Wi-Fi and USB-3 noise.")
+                .font(HBTypography.body(.footnote))
+                .foregroundStyle(HBPalette.textSecondary)
+
+            if !zigbeeEnergyResults.isEmpty {
+                ForEach(zigbeeEnergyResults) { entry in
+                    HStack(spacing: 8) {
+                        Text("ch \(entry.channel)")
+                            .font(.system(.caption, design: .monospaced))
+                            .frame(width: 44, alignment: .leading)
+                        GeometryReader { proxy in
+                            ZStack(alignment: .leading) {
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(HBPalette.textSecondary.opacity(0.15))
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(entry.energy >= 160 ? HBPalette.accentRed : entry.energy >= 110 ? HBPalette.accentOrange : HBPalette.accentGreen)
+                                    .frame(width: max(3, proxy.size.width * CGFloat(min(255, entry.energy)) / 255))
+                            }
+                        }
+                        .frame(height: 6)
+                        Text("\(entry.energy)")
+                            .font(.system(.caption2, design: .monospaced))
+                            .frame(width: 30, alignment: .trailing)
+                        if entry.channel == zigbeeEnergyCurrentChannel {
+                            Text("current")
+                                .font(HBTypography.body(.caption2, weight: .semibold))
+                                .foregroundStyle(HBPalette.accentBlue)
+                        }
+                    }
+                    .foregroundStyle(HBPalette.textSecondary)
+                }
+            }
+
+            Picker("Migrate network to channel", selection: $zigbeeTargetChannel) {
+                Text("Choose channel").tag(0)
+                ForEach(11...26, id: \.self) { channel in
+                    Text("Channel \(channel)").tag(channel)
+                }
+            }
+            .pickerStyle(.menu)
+
+            Toggle("Hardware-reset the Zigbee chip during restarts", isOn: $zigbeeHardReset)
+                .font(HBTypography.body(.footnote))
+
+            actionGrid {
+                actionButton("Run Energy Scan", key: "zigbee-energy-scan", method: .post, path: "/api/direct-radios/zigbee/energy-scan")
+                plainIntegrationButton("Migrate Channel", systemImage: "dot.radiowaves.right") {
+                    showZigbeeChannelConfirm = true
+                }
+                plainIntegrationButton("Restart Radios", systemImage: "arrow.clockwise.circle") {
+                    showRadioRestartConfirm = true
+                }
+                plainIntegrationButton("Replay-Drop Recovery", systemImage: "shield.lefthalf.filled") {
+                    showFrameCounterConfirm = true
+                }
+            }
+
+            Text("Pairing tips: SNZB-04PR2 door sensor — hold the button ~5s until the LED flashes while a pairing window is open (it keeps its name, room, and security zone). Aeotec Range Extender Zi — hold 10s to factory-reset until the LED fades, then a single tap joins. A device that keeps retrying its join is usually too far away: pair it next to the coordinator, then move it back.")
+                .font(HBTypography.body(.caption2))
+                .foregroundStyle(HBPalette.textSecondary)
+        }
+        .confirmationDialog(
+            "Migrate the Zigbee network to channel \(zigbeeTargetChannel)?",
+            isPresented: $showZigbeeChannelConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Migrate Network", role: .destructive) {
+                Task { await migrateZigbeeChannel() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Mains-powered devices follow automatically; battery sensors usually re-find the network on their own, or with a short button press. Takes about a minute.")
+        }
+        .confirmationDialog(
+            zigbeeHardReset ? "Restart radios with a Zigbee hardware reset?" : "Restart the radio runtime?",
+            isPresented: $showRadioRestartConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Restart", role: .destructive) {
+                Task { await restartDirectRadios() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Restarts the Zigbee and Z-Wave controllers in place; devices stay paired. Radios are unavailable for 30–60 seconds.")
+        }
+        .confirmationDialog(
+            "Advance the Zigbee security frame counter?",
+            isPresented: $showFrameCounterConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Advance Counter", role: .destructive) {
+                Task { await advanceZigbeeFrameCounter() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Recovery for a rare failure where the whole network silently ignores the coordinator (counter rollback after a power glitch). Safe to run; includes a hardware reset.")
+        }
+    }
+
+    private func migrateZigbeeChannel() async {
+        guard zigbeeTargetChannel >= 11 && zigbeeTargetChannel <= 26 else {
+            message = "Pick a Zigbee channel between 11 and 26 first."
+            return
+        }
+        await runAction(
+            key: "zigbee-channel-migrate",
+            method: .post,
+            path: "/api/direct-radios/zigbee/channel",
+            body: ["channel": zigbeeTargetChannel]
+        )
+        await loadDirectRadioStatusAndLogs()
+    }
+
+    private func restartDirectRadios() async {
+        await runAction(
+            key: "direct-radio-restart",
+            method: .post,
+            path: "/api/direct-radios/restart",
+            body: ["reason": "ios_app", "hardResetZigbee": zigbeeHardReset]
+        )
+        await loadDirectRadioStatusAndLogs()
+    }
+
+    private func advanceZigbeeFrameCounter() async {
+        await runAction(
+            key: "zigbee-frame-counter",
+            method: .post,
+            path: "/api/direct-radios/zigbee/frame-counter/advance",
+            body: [String: Any]()
+        )
+        await loadDirectRadioStatusAndLogs()
+    }
+
     @ViewBuilder
     private var directRadioSerialPortsPanel: some View {
         if let status = directRadioStatus {
@@ -3580,6 +3751,12 @@ private struct SettingsDeviceIntegrationsPane: View {
 
             HStack(spacing: 12) {
                 Text("\(controller.pairedCount) paired")
+                if controller.protocolName == "zigbee" && controller.networkChannel > 0 {
+                    Text("Channel \(controller.networkChannel)")
+                }
+                if controller.protocolName == "zwave" && !controller.firmwareVersion.isEmpty {
+                    Text("FW \(controller.firmwareVersion)\(controller.sdkVersion.isEmpty ? "" : " (SDK \(controller.sdkVersion))")")
+                }
                 if !controller.activeWindow.isEmpty {
                     Text("Window open until \(JSON.displayDate(from: controller.activeWindow))")
                 }
@@ -3589,6 +3766,12 @@ private struct SettingsDeviceIntegrationsPane: View {
             }
             .font(HBTypography.body(.caption))
             .foregroundStyle(HBPalette.textSecondary)
+
+            if controller.protocolName == "zwave" && controller.hasKnownBadZWaveFirmware {
+                Text("This Z-Wave stick firmware (SDK \(controller.sdkVersion)) has known lockup bugs — update the Zooz ZST39 to firmware 1.50+ via the Zooz support portal.")
+                    .font(HBTypography.body(.caption))
+                    .foregroundStyle(HBPalette.accentOrange)
+            }
 
             if !controller.error.isEmpty {
                 Text(controller.error)
@@ -3957,6 +4140,16 @@ private struct SettingsDeviceIntegrationsPane: View {
     }
 
     private func refreshAfterAction(path: String) async {
+        if path.contains("/api/direct-radios/zigbee/energy-scan") {
+            let root = JSON.object(resultPayload ?? [:])
+            let result = JSON.object(root["result"])
+            zigbeeEnergyCurrentChannel = JSON.int(result, "currentChannel")
+            zigbeeEnergyResults = JSON.array(result["channelEnergy"]).map(DirectRadioChannelEnergyRecord.from)
+            let quietest = zigbeeEnergyResults.min(by: { $0.energy < $1.energy })
+            if let quietest {
+                message = "Energy scan complete. Quietest channel right now: \(quietest.channel) (energy \(quietest.energy)/255)."
+            }
+        }
         if path.contains("/api/direct-radios") {
             await loadDirectRadioStatusAndLogs()
         }
