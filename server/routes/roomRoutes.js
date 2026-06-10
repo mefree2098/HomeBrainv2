@@ -1,10 +1,21 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const roomService = require('../services/roomService');
 const { requireUser, requireAdmin } = require('./middlewares/auth');
 
 const router = express.Router();
+const roomRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_ROOMS_RATE_LIMIT_WINDOW_MS || 60_000)),
+  limit: Math.max(20, Number(process.env.HOMEBRAIN_ROOMS_RATE_LIMIT_MAX || 240)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many room requests. Please retry shortly.'
+  }
+});
 
-router.use(requireUser());
+router.use(roomRateLimit, requireUser());
 
 function statusForRoomError(error) {
   if (error?.status) {
