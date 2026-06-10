@@ -450,6 +450,18 @@ router.post('/zwave/nodes/:nodeId/recover-routes', async (req, res) => {
   }
 });
 
+router.post('/zigbee/touchlink/scan', async (_req, res) => {
+  try {
+    const result = await directRadioService.touchlinkScanZigbee();
+    res.status(200).json({
+      success: true,
+      result
+    });
+  } catch (error) {
+    sendError(res, error, 'Failed to run Zigbee touchlink scan');
+  }
+});
+
 router.post('/zigbee/devices/:ieeeAddr/reinterview', async (req, res) => {
   try {
     const result = await directRadioService.reinterviewZigbeeDevice(req.params.ieeeAddr);
