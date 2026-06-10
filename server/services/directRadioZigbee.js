@@ -291,6 +291,14 @@ function isZigbeeIasClusterMessage(message) {
   return normalizeZigbeeClusterToken(message?.cluster ?? message?.clusterID ?? message?.clusterId) === 'ssiaszone';
 }
 
+function readZigbeeIasMessageZoneStatus(message) {
+  if (!isZigbeeIasClusterMessage(message)) {
+    return undefined;
+  }
+
+  return readZigbeeAttributeFromResponse(readZigbeeMessageData(message), ['zoneStatus', 'zonestatus']);
+}
+
 function getZigbeeCoordinatorDevice(controller) {
   try {
     return controller?.getDevicesByType?.('Coordinator')?.[0] || null;
@@ -1092,12 +1100,21 @@ normalizeZigbeeDevice(zigbeeDevice, reason = 'sync', options = {}) {
     const messageCluster = normalizeZigbeeClusterToken(
       options.message?.cluster ?? options.message?.clusterID ?? options.message?.clusterId
     );
-    const liveZoneStatus = options.liveSensorState?.zoneStatus;
+    const messageZoneStatus = readZigbeeIasMessageZoneStatus(options.message);
+    const liveZoneStatus = options.liveSensorState?.zoneStatus ?? messageZoneStatus;
     const hasLiveZoneStatus = liveZoneStatus !== undefined && liveZoneStatus !== null;
+    const liveSensorState = hasLiveZoneStatus
+      ? {
+          ...(options.liveSensorState && typeof options.liveSensorState === 'object'
+            ? options.liveSensorState
+            : {}),
+          zoneStatus: liveZoneStatus
+        }
+      : options.liveSensorState;
     const runtimeState = readZigbeeRuntimeState(zigbeeDevice, {
       features: baseFeatures,
       message: options.message,
-      liveSensorState: options.liveSensorState
+      liveSensorState
     });
     const { directRadioState, ...runtimeUpdate } = runtimeState;
     const features = uniqueStrings([
@@ -1174,8 +1191,21 @@ async handleZigbeeDeviceChanged(zigbeeDevice, reason, options = {}) {
         error: error?.message || String(error || 'Unknown Zigbee IAS repair error')
       });
     });
-    const shouldReadLiveSensorState = ['message', 'deviceAnnounce', 'deviceInterview', 'refresh'].includes(reason);
-    const liveSensorState = shouldReadLiveSensorState
+    const messageZoneStatus = readZigbeeIasMessageZoneStatus(options.message);
+    const providedZoneStatus = options.liveSensorState?.zoneStatus;
+    const hasMessageZoneStatus = messageZoneStatus !== undefined && messageZoneStatus !== null;
+    const hasProvidedZoneStatus = providedZoneStatus !== undefined && providedZoneStatus !== null;
+    const shouldReadLiveSensorState = !hasMessageZoneStatus
+      && !hasProvidedZoneStatus
+      && ['message', 'deviceAnnounce', 'deviceInterview', 'refresh'].includes(reason);
+    const liveSensorState = hasMessageZoneStatus || hasProvidedZoneStatus
+      ? {
+          ...(options.liveSensorState && typeof options.liveSensorState === 'object'
+            ? options.liveSensorState
+            : {}),
+          zoneStatus: hasProvidedZoneStatus ? providedZoneStatus : messageZoneStatus
+        }
+      : shouldReadLiveSensorState
       ? await readZigbeeLiveSensorState(zigbeeDevice).catch((error) => {
         this.log('debug', 'zigbee', 'Unable to read live Zigbee IAS zone status', {
           reason,
