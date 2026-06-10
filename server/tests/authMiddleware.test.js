@@ -37,6 +37,102 @@ test('extractToken prefers Authorization bearer tokens over cookies', () => {
   assert.equal(authMiddleware.extractToken(req), 'header-token');
 });
 
+test('requireUser blocks mutating requests for read-only users', async (t) => {
+  const originalUserGet = UserService.get;
+  const originalJwtSecret = process.env.JWT_SECRET;
+
+  t.after(() => {
+    UserService.get = originalUserGet;
+    process.env.JWT_SECRET = originalJwtSecret;
+  });
+
+  process.env.JWT_SECRET = 'read-only-test-secret';
+  const user = {
+    _id: '507f1f77bcf86cd799439012',
+    email: 'review@example.com',
+    role: 'user',
+    isActive: true,
+    isReadOnly: true,
+    platforms: { homebrain: true, axiom: false }
+  };
+  UserService.get = async () => user;
+  const accessToken = jwt.sign({ sub: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+  const middleware = authMiddleware.requireUser();
+  const req = {
+    method: 'POST',
+    headers: { authorization: `Bearer ${accessToken}` },
+    get() { return undefined; },
+    protocol: 'https',
+    secure: true
+  };
+  const res = {
+    statusCode: 200,
+    body: null,
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    json(payload) {
+      this.body = payload;
+      return this;
+    }
+  };
+  let nextCalled = false;
+
+  await middleware(req, res, () => {
+    nextCalled = true;
+  });
+
+  assert.equal(nextCalled, false);
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.body.error, 'Read-only accounts cannot modify HomeBrain data.');
+});
+
+test('requireUser allows configured read-only mutation exceptions', async (t) => {
+  const originalUserGet = UserService.get;
+  const originalJwtSecret = process.env.JWT_SECRET;
+
+  t.after(() => {
+    UserService.get = originalUserGet;
+    process.env.JWT_SECRET = originalJwtSecret;
+  });
+
+  process.env.JWT_SECRET = 'read-only-exception-test-secret';
+  const user = {
+    _id: '507f1f77bcf86cd799439013',
+    email: 'review@example.com',
+    role: 'user',
+    isActive: true,
+    isReadOnly: true,
+    platforms: { homebrain: true, axiom: false }
+  };
+  UserService.get = async () => user;
+  const accessToken = jwt.sign({ sub: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
+  const middleware = authMiddleware.requireUser(undefined, {
+    allowReadOnlyMutation: (req) => req.path === '/session'
+  });
+  const req = {
+    method: 'POST',
+    path: '/session',
+    headers: { authorization: `Bearer ${accessToken}` },
+    get() { return undefined; },
+    protocol: 'https',
+    secure: true
+  };
+  const res = {
+    status() {
+      throw new Error('status should not be called');
+    }
+  };
+  let nextCalled = false;
+
+  await middleware(req, res, () => {
+    nextCalled = true;
+  });
+
+  assert.equal(nextCalled, true);
+});
+
 function generateProviderKeys() {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
     modulusLength: 2048,

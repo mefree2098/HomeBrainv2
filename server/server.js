@@ -21,6 +21,7 @@ const authRoutes = require("./routes/authRoutes");
 const userRoutes = require("./routes/userRoutes");
 const oidcRoutes = require("./routes/oidcRoutes");
 const deviceRoutes = require("./routes/deviceRoutes");
+const roomRoutes = require("./routes/roomRoutes");
 const directRadioRoutes = require("./routes/directRadioRoutes");
 const matterRoutes = require("./routes/matterRoutes");
 const deviceGroupRoutes = require("./routes/deviceGroupRoutes");
@@ -507,6 +508,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/notifications', notificationRoutes);
 // Device Routes
 app.use('/api/devices', deviceRoutes);
+app.use('/api/rooms', roomRoutes);
 app.use('/api/direct-radios', directRadioRoutes);
 app.use('/api/matter', matterRoutes);
 app.use('/api/device-groups', deviceGroupRoutes);

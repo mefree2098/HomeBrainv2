@@ -157,6 +157,7 @@ class UserService {
     name = '',
     role = ROLES.USER,
     isActive = true,
+    isReadOnly = false,
     platforms = DEFAULT_USER_PLATFORMS
   }) {
     if (!email) throw new Error('Email is required');
@@ -181,6 +182,7 @@ class UserService {
         name: sanitizeName(name),
         role,
         isActive: typeof isActive === 'boolean' ? isActive : true,
+        isReadOnly: typeof isReadOnly === 'boolean' ? isReadOnly : false,
         platforms: normalizeUserPlatforms(platforms),
       });
 
@@ -228,6 +230,10 @@ class UserService {
 
     if (Object.prototype.hasOwnProperty.call(data, 'isActive') && typeof data.isActive !== 'boolean') {
       throw new Error('isActive must be a boolean');
+    }
+
+    if (Object.prototype.hasOwnProperty.call(data, 'isReadOnly') && typeof data.isReadOnly !== 'boolean') {
+      throw new Error('isReadOnly must be a boolean');
     }
 
     const nextRole = Object.prototype.hasOwnProperty.call(data, 'role') ? data.role : user.role;
@@ -280,6 +286,10 @@ class UserService {
 
     if (Object.prototype.hasOwnProperty.call(data, 'isActive')) {
       updates.isActive = data.isActive;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(data, 'isReadOnly')) {
+      updates.isReadOnly = data.isReadOnly;
     }
 
     if (Object.prototype.hasOwnProperty.call(data, 'platforms')) {

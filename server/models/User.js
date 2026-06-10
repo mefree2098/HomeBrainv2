@@ -82,6 +82,10 @@ const schema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
+  isReadOnly: {
+    type: Boolean,
+    default: false,
+  },
   platforms: {
     type: platformsSchema,
     default: () => ({ ...DEFAULT_USER_PLATFORMS }),

@@ -16,7 +16,9 @@ const watchRateLimit = rateLimit({
   }
 });
 
-router.use(watchRateLimit, requireUser());
+router.use(watchRateLimit, requireUser(undefined, {
+  allowReadOnlyMutation: (req) => req.method === 'POST' && req.path === '/session',
+}));
 
 function trimString(value, fallback = '') {
   return typeof value === 'string' ? value.trim() : fallback;

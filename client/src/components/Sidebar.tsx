@@ -23,7 +23,8 @@ import {
   Link2,
   Zap,
   Smartphone,
-  Bell
+  Bell,
+  MapPinned
 } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { cn } from "@/lib/utils"
@@ -37,6 +38,7 @@ const navigation = [
   { name: 'RainMachine', href: '/rainmachine', icon: CloudRain },
   { name: 'Data Platform', href: '/data-platform', icon: Database },
   { name: 'Devices', href: '/devices', icon: Lightbulb },
+  { name: 'Rooms', href: '/rooms', icon: MapPinned, adminOnly: true },
   { name: 'Device Groups', href: '/device-groups', icon: Layers3, adminOnly: true },
   { name: 'Scenes', href: '/scenes', icon: Palette },
   { name: 'Workflows', href: '/workflows', icon: Workflow },

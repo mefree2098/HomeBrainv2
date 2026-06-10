@@ -47,7 +47,6 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "A1B2C3D42FA5000000000007"
             BuildableName = "HomeBrainWatch Watch App.app"
-            BlueprintName = "HomeBrainWatch Watch App"
             ReferencedContainer = "container:HomeBrainApp.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -64,7 +63,6 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "A1B2C3D42FA5000000000007"
             BuildableName = "HomeBrainWatch Watch App.app"
-            BlueprintName = "HomeBrainWatch Watch App"
             ReferencedContainer = "container:HomeBrainApp.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

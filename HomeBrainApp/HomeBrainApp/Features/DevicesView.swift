@@ -93,6 +93,7 @@ struct DevicesView: View {
     @State private var matterWifiSsid = ""
     @State private var matterWifiPassword = ""
     @State private var matterThreadDataset = ""
+    @State private var roomRegistryNames: [String] = []
 
     @State private var showCreateSheet = false
     @State private var showAddDeviceDskScanner = false
@@ -154,6 +155,12 @@ struct DevicesView: View {
     }
     private var availableRoomNames: [String] {
         var rooms = Set(["Unassigned"])
+        roomRegistryNames.forEach { room in
+            let trimmed = room.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                rooms.insert(trimmed)
+            }
+        }
         devices.forEach { device in
             let room = device.room.trimmingCharacters(in: .whitespacesAndNewlines)
             if !room.isEmpty {
@@ -3135,9 +3142,28 @@ struct DevicesView: View {
         }
     }
 
+    private func roomNames(from response: Any) -> [String] {
+        let object = JSON.object(response)
+        let data = JSON.object(object["data"])
+        var seen = Set<String>()
+        var names: [String] = []
+
+        JSON.array(data["rooms"]).forEach { room in
+            let name = JSON.string(room, "name").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { return }
+            let key = name.lowercased()
+            guard !seen.contains(key) else { return }
+            seen.insert(key)
+            names.append(name)
+        }
+
+        return names
+    }
+
     private func loadDevices(showLoading: Bool) async {
         if previewMode {
             devices = UIPreviewData.devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            roomRegistryNames = ["Unassigned", "Kitchen", "Living Room", "Main Bedroom", "Upstairs", "Vault"]
             if let previewTypeFilter = Self.previewDeviceTypeFilterFromLaunch() {
                 typeFilter = previewTypeFilter
             }
@@ -3166,12 +3192,16 @@ struct DevicesView: View {
         do {
             async let devicesTask = session.apiClient.get("/api/devices")
             async let profilesTask = session.apiClient.get("/api/profiles")
+            async let roomsTask = session.apiClient.get("/api/rooms")
 
             let response = try await devicesTask
             let object = JSON.object(response)
             let data = JSON.object(object["data"])
             let list = JSON.array(data["devices"]).map(DeviceItem.from)
             devices = list.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            if let roomsResponse = try? await roomsTask {
+                roomRegistryNames = roomNames(from: roomsResponse)
+            }
             await loadMatterStatus()
 
             if let profilesResponse = try? await profilesTask {
@@ -3192,11 +3222,17 @@ struct DevicesView: View {
         }
 
         do {
-            let response = try await session.apiClient.get("/api/devices")
+            async let devicesTask = session.apiClient.get("/api/devices")
+            async let roomsTask = session.apiClient.get("/api/rooms")
+
+            let response = try await devicesTask
             let object = JSON.object(response)
             let data = JSON.object(object["data"])
             let list = JSON.array(data["devices"]).map(DeviceItem.from)
             devices = list.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            if let roomsResponse = try? await roomsTask {
+                roomRegistryNames = roomNames(from: roomsResponse)
+            }
         } catch {
             // The live stream remains the primary path; avoid surfacing transient fallback misses.
         }

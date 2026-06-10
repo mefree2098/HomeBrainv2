@@ -16,6 +16,7 @@ const Weather = lazy(() => import("./pages/Weather"))
 const SenseEnergy = lazy(() => import("./pages/SenseEnergy"))
 const DataPlatform = lazy(() => import("./pages/DataPlatform"))
 const Devices = lazy(() => import("./pages/Devices").then((module) => ({ default: module.Devices })))
+const Rooms = lazy(() => import("./pages/Rooms").then((module) => ({ default: module.Rooms })))
 const DeviceGroups = lazy(() => import("./pages/DeviceGroups").then((module) => ({ default: module.DeviceGroups })))
 const Scenes = lazy(() => import("./pages/Scenes").then((module) => ({ default: module.Scenes })))
 const Workflows = lazy(() => import("./pages/Workflows").then((module) => ({ default: module.Workflows })))
@@ -70,6 +71,7 @@ function App() {
             <Route path="/rainmachine" element={withLayout(<RainMachine />)} />
             <Route path="/data-platform" element={withLayout(<DataPlatform />)} />
             <Route path="/devices" element={withLayout(<Devices />)} />
+            <Route path="/rooms" element={withLayout(<Rooms />, { adminOnly: true })} />
             <Route path="/device-groups" element={withLayout(<DeviceGroups />, { adminOnly: true })} />
             <Route path="/scenes" element={withLayout(<Scenes />)} />
             <Route path="/workflows" element={withLayout(<Workflows />)} />

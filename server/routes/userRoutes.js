@@ -49,8 +49,16 @@ router.get('/:id', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { email, password, name = '', role = 'user', isActive = true } = req.body || {};
-    const user = await UserService.create({ email, password, name, role, isActive });
+    const {
+      email,
+      password,
+      name = '',
+      role = 'user',
+      isActive = true,
+      isReadOnly = false,
+      platforms
+    } = req.body || {};
+    const user = await UserService.create({ email, password, name, role, isActive, isReadOnly, platforms });
 
     return res.status(201).json({
       success: true,
@@ -82,6 +90,13 @@ router.put('/:id', async (req, res) => {
       return res.status(400).json({
         success: false,
         message: 'You cannot deactivate your own account'
+      });
+    }
+
+    if (currentUserId === userId && updateData.isReadOnly === true) {
+      return res.status(400).json({
+        success: false,
+        message: 'You cannot make your own account read-only'
       });
     }
 
