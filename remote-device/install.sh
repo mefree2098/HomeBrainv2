@@ -128,7 +128,7 @@ if [[ "$SCRIPT_DIR" != "$INSTALL_DIR" ]]; then
 cat > package.json << 'EOF'
 {
   "name": "homebrain-remote-device",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "HomeBrain Remote Voice Device for Linux listeners",
   "main": "index.js",
   "scripts": {
@@ -314,6 +314,7 @@ cat > config.json << 'EOF'
   "deviceId": null,
   "deviceToken": null,
   "registrationCode": null,
+  "claimToken": null,
   "voice": {
     "captureMode": "none"
   }
@@ -339,20 +340,79 @@ chmod +x start.sh
 # Register script
 cat > register.sh << 'EOF'
 #!/bin/bash
-if [ -z "$1" ]; then
-    echo "Usage: $0 <registration_code> [hub_url]"
-    echo "Example: $0 ABC123 http://192.168.1.100:3000"
+set -euo pipefail
+
+REGISTRATION_CODE=""
+CLAIM_TOKEN=""
+DEVICE_ID=""
+HUB_URL="${HUB_URL:-http://localhost:3000}"
+
+usage() {
+    echo "Usage: $0 (--registration-code CODE | --claim-token TOKEN --device-id DEVICE_ID) [--hub HUB_URL]"
+    echo "Legacy: $0 <registration_code> [hub_url]"
+}
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --registration-code|--code)
+            REGISTRATION_CODE="${2:-}"
+            shift 2
+            ;;
+        --claim-token|--claim)
+            CLAIM_TOKEN="${2:-}"
+            shift 2
+            ;;
+        --device-id)
+            DEVICE_ID="${2:-}"
+            shift 2
+            ;;
+        --hub|--hub-url)
+            HUB_URL="${2:-}"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            if [[ -z "$REGISTRATION_CODE" && -z "$CLAIM_TOKEN" ]]; then
+                REGISTRATION_CODE="$1"
+            else
+                HUB_URL="$1"
+            fi
+            shift
+            ;;
+    esac
+done
+
+if [[ -z "$REGISTRATION_CODE" && -z "$CLAIM_TOKEN" ]]; then
+    usage
     exit 1
 fi
 
-REGISTRATION_CODE="$1"
-HUB_URL="${2:-http://localhost:3000}"
+if [[ -n "$CLAIM_TOKEN" && -z "$DEVICE_ID" ]]; then
+    echo "A device ID is required when using --claim-token"
+    exit 1
+fi
 
 echo "Registering device with HomeBrain hub..."
-echo "Registration Code: $REGISTRATION_CODE"
+if [[ -n "$CLAIM_TOKEN" ]]; then
+    echo "Claim Token: [redacted]"
+    echo "Device ID: $DEVICE_ID"
+else
+    echo "Registration Code: $REGISTRATION_CODE"
+fi
 echo "Hub URL: $HUB_URL"
 
-node index.js --register "$REGISTRATION_CODE" --hub "$HUB_URL"
+ARGS=(--hub "$HUB_URL")
+if [[ -n "$REGISTRATION_CODE" ]]; then
+    ARGS+=(--register "$REGISTRATION_CODE")
+fi
+if [[ -n "$CLAIM_TOKEN" ]]; then
+    ARGS+=(--claim-token "$CLAIM_TOKEN" --device-id "$DEVICE_ID")
+fi
+
+node index.js "${ARGS[@]}"
 EOF
 
 chmod +x register.sh
@@ -398,9 +458,10 @@ Raspberry Pi is the best-tested target, but other Linux mini PCs and SBCs also w
 
 ## Quick Start
 
-1. **Register your device** with the HomeBrain hub:
+1. **Activate your device** with the HomeBrain hub:
    ```bash
-   ./register.sh YOUR_REGISTRATION_CODE
+   ./register.sh --registration-code YOUR_REGISTRATION_CODE --hub http://YOUR_HUB:3000
+   ./register.sh --claim-token YOUR_CLAIM_TOKEN --device-id YOUR_DEVICE_ID --hub http://YOUR_HUB:3000
    ```
 
 2. **Start the device**:
@@ -446,8 +507,8 @@ print_success "Installation completed successfully!"
 echo ""
 print_status "Next steps:"
 echo "1. Test your audio setup: ./test-audio.sh"
-echo "2. Get a registration code from your HomeBrain hub"
-echo "3. Register your device: ./register.sh YOUR_CODE [HUB_URL]"
+echo "2. Get onboarding credentials from your HomeBrain hub"
+echo "3. Activate your device: ./register.sh --registration-code YOUR_CODE --hub HUB_URL"
 echo "4. Start the device: ./start.sh"
 echo ""
 print_status "Optional - Enable automatic startup:"

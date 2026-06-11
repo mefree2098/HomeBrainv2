@@ -280,6 +280,8 @@ class RemoteUpdateService {
    */
   async initiateUpdate(deviceId, voiceWebSocket, options = { force: false, baseUrl: null }) {
     console.log(`Initiating update for device: ${deviceId}${options.force ? ' (force)' : ''}`);
+    let previousStatus = null;
+    let failureVersion = options?.version || this.currentVersion;
 
     try {
       const device = await VoiceDevice.findById(deviceId);
@@ -287,6 +289,7 @@ class RemoteUpdateService {
       if (!device) {
         throw new Error('Device not found');
       }
+      previousStatus = device.status || null;
 
       // Check if device is online unless force requested
       if (device.status !== 'online' && !options.force) {
@@ -302,6 +305,7 @@ class RemoteUpdateService {
       if (!packageInfo || !packageInfo.downloadUrl) {
         throw new Error('Update package is not available');
       }
+      failureVersion = packageInfo.version || failureVersion;
 
       // Prepare update command
       const origin = options.baseUrl || getConfiguredPublicOrigin() || `http://localhost:${process.env.PORT || 3000}`;
@@ -376,22 +380,26 @@ class RemoteUpdateService {
     } catch (error) {
       console.error(`Error initiating update for device ${deviceId}:`, error);
 
-      // Attempt to reset device status only if it exists and wasn't updating
+      // Preserve the last known device status; a failed send should not mark an offline device online.
       try {
-        await VoiceDevice.findByIdAndUpdate(deviceId, {
-          status: 'online',
+        const failureUpdate = {
           updateStatus: {
             status: 'failed',
-            version: options?.version || this.currentVersion,
+            version: failureVersion,
             error: error.message,
             failedAt: new Date()
           },
           'settings.updateStatus': {
             status: 'failed',
+            version: failureVersion,
             error: error.message,
             failedAt: new Date()
           }
-        });
+        };
+        if (previousStatus) {
+          failureUpdate.status = previousStatus;
+        }
+        await VoiceDevice.findByIdAndUpdate(deviceId, failureUpdate);
       } catch (_) {}
 
       void eventStreamService.publishSafe({
@@ -645,7 +653,9 @@ class RemoteUpdateService {
 
       const rows = devices.map((device) => {
         const installedVersion = device.firmwareVersion || '0.0.0';
-        const isUpToDate = this.compareVersions(installedVersion, latestVersion) >= 0;
+        const registered = device.settings?.registered === true;
+        const lifecycleState = device.settings?.lifecycle?.state || (registered ? 'activated' : 'unregistered');
+        const isUpToDate = registered && this.compareVersions(installedVersion, latestVersion) >= 0;
         const isOnline = device.status === 'online';
         const isUpdating = device.status === 'updating';
         const topLevelUpdateStatus = device?.updateStatus || {};
@@ -687,6 +697,8 @@ class RemoteUpdateService {
           latestVersion,
           isOnline,
           isUpToDate,
+          registered,
+          lifecycleState,
           updateStatus: {
             status: persistedUpdateStatus.status || (isUpdating ? 'installing' : 'idle'),
             version: persistedUpdateStatus.version || null,

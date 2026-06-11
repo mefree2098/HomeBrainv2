@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const rateLimit = require('express-rate-limit');
 const VoiceDevice = require('../models/VoiceDevice');
 const { requireUser, requireAdmin } = require('./middlewares/auth');
 const crypto = require('crypto');
@@ -15,9 +16,25 @@ const elevenLabsService = require('../services/elevenLabsService');
 const voiceAcknowledgmentService = require('../services/voiceAcknowledgmentService');
 const eventStreamService = require('../services/eventStreamService');
 const { getRequestOrigin, toWebSocketOrigin } = require('../utils/publicOrigin');
+const {
+  issueDeviceToken,
+  issueDeviceClaimToken,
+  buildOnboardingSettings,
+  applyDeviceActivation,
+  applyOnboardingReissue,
+  validateDeviceCredentials,
+  validateDeviceAccess: validateVoiceDeviceAccess,
+  getAuthorizedDevice
+} = require('../services/voiceDeviceLifecycleService');
 
 const execFileAsync = promisify(execFile);
 const admin = requireAdmin();
+const onboardingMutationRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false
+});
 const REMOTE_SETUP_PACKAGE_NAME = 'homebrain-remote-setup.tar.gz';
 const REMOTE_SETUP_PACKAGE_DIR = path.join(__dirname, '..', 'public', 'downloads');
 const REMOTE_SETUP_PACKAGE_PATH = path.join(REMOTE_SETUP_PACKAGE_DIR, REMOTE_SETUP_PACKAGE_NAME);
@@ -28,7 +45,9 @@ const REMOTE_SETUP_FILES = [
   'install.sh',
   'README.md',
   'updater.js',
-  'feature_infer.py'
+  'feature_infer.py',
+  'test-audio.js',
+  'setup-audio.js'
 ];
 const BOOTSTRAP_RATE_LIMIT_WINDOW_MS = Math.max(
   1_000,
@@ -45,10 +64,6 @@ const BOOTSTRAP_RATE_LIMIT_MAX_PER_DEVICE = Math.max(
 const BOOTSTRAP_INVALID_ATTEMPT_MAX = Math.max(
   1,
   Number(process.env.REMOTE_BOOTSTRAP_INVALID_ATTEMPT_MAX || 8)
-);
-const DEVICE_CLAIM_TOKEN_TTL_MS = Math.max(
-  60_000,
-  Number(process.env.REMOTE_DEVICE_CLAIM_TOKEN_TTL_MS || 60 * 60 * 1000)
 );
 const bootstrapIpAccessWindow = new Map();
 const bootstrapDeviceAccessWindow = new Map();
@@ -92,35 +107,6 @@ function sendBootstrapRateLimited(res, retryAfterSeconds, message) {
     : 60;
   res.setHeader('Retry-After', String(retryAfter));
   return res.status(429).type('text/plain').send(message || 'Too many bootstrap requests. Please retry later.');
-}
-
-function issueDeviceClaimToken() {
-  return {
-    claimToken: crypto.randomBytes(16).toString('hex'),
-    claimTokenExpires: new Date(Date.now() + DEVICE_CLAIM_TOKEN_TTL_MS)
-  };
-}
-
-function hashDeviceToken(token) {
-  return crypto.createHash('sha256').update(String(token || ''), 'utf8').digest('hex');
-}
-
-function issueDeviceToken() {
-  const deviceToken = crypto.randomBytes(32).toString('hex');
-  return {
-    deviceToken,
-    deviceTokenHash: hashDeviceToken(deviceToken),
-    deviceTokenCreatedAt: new Date()
-  };
-}
-
-function safeEquals(left, right) {
-  const leftValue = Buffer.from(String(left || ''), 'utf8');
-  const rightValue = Buffer.from(String(right || ''), 'utf8');
-  if (leftValue.length !== rightValue.length) {
-    return false;
-  }
-  return crypto.timingSafeEqual(leftValue, rightValue);
 }
 
 function getCredentialValue(req, headerName, bodyNames = [], queryNames = []) {
@@ -280,10 +266,9 @@ router.post('/register', admin, async (req, res) => {
       });
     }
 
-    // Generate unique registration code and device ID
-    const registrationCode = crypto.randomBytes(4).toString('hex').toUpperCase();
+    // Generate unique registration material and device ID
     const deviceId = crypto.randomUUID();
-    const { claimToken, claimTokenExpires } = issueDeviceClaimToken();
+    const onboarding = buildOnboardingSettings({}, { state: 'registered' });
 
     // Create new voice device
     const device = new VoiceDevice({
@@ -293,13 +278,7 @@ router.post('/register', admin, async (req, res) => {
       status: 'offline',
       serialNumber: macAddress || deviceId,
       supportedWakeWords: ['Anna', 'Henry', 'Home Brain'],
-      settings: {
-        registrationCode,
-        claimToken,
-        claimTokenExpires,
-        registered: false,
-        registrationExpires: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
-      }
+      settings: onboarding.settings
     });
 
     await device.save();
@@ -321,9 +300,10 @@ router.post('/register', admin, async (req, res) => {
     res.status(201).json({
       success: true,
       device: sanitizeDeviceForRemote(device),
-      registrationCode: registrationCode,
-      claimToken,
-      claimTokenExpires,
+      registrationCode: onboarding.registrationCode,
+      registrationExpires: onboarding.registrationExpires,
+      claimToken: onboarding.claimToken,
+      claimTokenExpires: onboarding.claimTokenExpires,
       message: 'Device registered successfully. Use the registration code to complete setup.'
     });
 
@@ -336,55 +316,6 @@ router.post('/register', admin, async (req, res) => {
     });
   }
 });
-
-async function validateDeviceAccess(deviceId, credentials = {}) {
-  if (typeof credentials === 'string') {
-    credentials = { registrationCode: credentials };
-  }
-
-  const registrationCode = typeof credentials.registrationCode === 'string'
-    ? credentials.registrationCode.trim()
-    : '';
-  const claimToken = typeof credentials.claimToken === 'string'
-    ? credentials.claimToken.trim()
-    : '';
-  const deviceToken = typeof credentials.deviceToken === 'string'
-    ? credentials.deviceToken.trim()
-    : '';
-
-  if (!registrationCode && !claimToken && !deviceToken) {
-    return null;
-  }
-
-  const device = await VoiceDevice.findById(deviceId);
-  if (!device) {
-    return null;
-  }
-
-  if (registrationCode && device.settings?.registrationCode === registrationCode) {
-    return device;
-  }
-
-  const deviceTokenHash = device.settings?.deviceTokenHash;
-  if (deviceToken && deviceTokenHash && safeEquals(hashDeviceToken(deviceToken), deviceTokenHash)) {
-    return device;
-  }
-
-  const claimTokenValue = device.settings?.claimToken;
-  const claimTokenExpires = device.settings?.claimTokenExpires;
-  const claimTokenActive = Boolean(
-    claimTokenValue
-    && claimTokenExpires
-    && new Date(claimTokenExpires).getTime() > Date.now()
-    && device.settings?.registered === false
-  );
-
-  if (claimToken && claimTokenActive && claimTokenValue === claimToken) {
-    return device;
-  }
-
-  return null;
-}
 
 router.get('/:deviceId/bootstrap.sh', async (req, res) => {
   const { deviceId } = req.params;
@@ -424,11 +355,13 @@ router.get('/:deviceId/bootstrap.sh', async (req, res) => {
       );
     }
 
-    const device = await validateDeviceAccess(deviceId, {
+    const access = await validateVoiceDeviceAccess(deviceId, {
       registrationCode: code,
       claimToken: claim
+    }, {
+      allowDeviceToken: false
     });
-    if (!device) {
+    if (!access.authorized) {
       const invalidAttemptLimit = consumeSlidingWindow(
         bootstrapInvalidAttemptWindow,
         invalidAttemptKey,
@@ -444,13 +377,18 @@ router.get('/:deviceId/bootstrap.sh', async (req, res) => {
       }
       return res.status(403).type('text/plain').send('Invalid device credentials');
     }
+    const device = access.device;
     bootstrapInvalidAttemptWindow.delete(invalidAttemptKey);
 
     await ensureRemoteSetupPackage();
 
     const hubOrigin = getRequestOrigin(req);
     const safeHubOrigin = shellQuote(hubOrigin);
-    const safeRegistrationCode = shellQuote(device.settings?.registrationCode || code);
+    const safeRegistrationCode = shellQuote(access.method === 'registrationCode'
+      ? (device.settings?.registrationCode || code)
+      : '');
+    const safeClaimToken = shellQuote(access.method === 'claimToken' ? claim : '');
+    const safeDeviceId = shellQuote(device._id.toString());
     const archiveUrl = `${hubOrigin}/downloads/${REMOTE_SETUP_PACKAGE_NAME}`;
 
     const script = `#!/usr/bin/env bash
@@ -458,6 +396,8 @@ set -euo pipefail
 
 HUB_URL=${safeHubOrigin}
 REGISTRATION_CODE=${safeRegistrationCode}
+CLAIM_TOKEN=${safeClaimToken}
+DEVICE_ID=${safeDeviceId}
 ARCHIVE_URL=${shellQuote(archiveUrl)}
 INSTALL_DIR="\${HOME}/homebrain-remote"
 TMP_DIR="$(mktemp -d /tmp/homebrain-remote-setup-XXXXXX)"
@@ -482,7 +422,11 @@ cd "\${INSTALL_DIR}"
 chmod +x ./install.sh
 ./install.sh
 
-./register.sh "\${REGISTRATION_CODE}" "\${HUB_URL}"
+if [ -n "\${CLAIM_TOKEN}" ]; then
+  ./register.sh --claim-token "\${CLAIM_TOKEN}" --device-id "\${DEVICE_ID}" --hub "\${HUB_URL}"
+else
+  ./register.sh --registration-code "\${REGISTRATION_CODE}" --device-id "\${DEVICE_ID}" --hub "\${HUB_URL}"
+fi
 sudo systemctl enable homebrain-remote >/dev/null 2>&1 || true
 sudo systemctl restart homebrain-remote
 
@@ -539,11 +483,13 @@ router.get('/:deviceId/cloud-init.yaml', async (req, res) => {
       );
     }
 
-    const device = await validateDeviceAccess(deviceId, {
+    const access = await validateVoiceDeviceAccess(deviceId, {
       registrationCode: code,
       claimToken: claim
+    }, {
+      allowDeviceToken: false
     });
-    if (!device) {
+    if (!access.authorized) {
       const invalidAttemptLimit = consumeSlidingWindow(
         bootstrapInvalidAttemptWindow,
         invalidAttemptKey,
@@ -559,10 +505,11 @@ router.get('/:deviceId/cloud-init.yaml', async (req, res) => {
       }
       return res.status(403).type('text/plain').send('Invalid device credentials');
     }
+    const device = access.device;
     bootstrapInvalidAttemptWindow.delete(invalidAttemptKey);
 
     const hubOrigin = getRequestOrigin(req);
-    const credentialQuery = claim
+    const credentialQuery = access.method === 'claimToken'
       ? `claim=${encodeURIComponent(claim)}`
       : `code=${encodeURIComponent(device.settings?.registrationCode || code)}`;
     const bootstrapUrl = `${hubOrigin}/api/remote-devices/${deviceId}/bootstrap.sh?${credentialQuery}`;
@@ -597,7 +544,7 @@ router.get('/:deviceId/wake-words', async (req, res) => {
   const { platform, arch } = req.query;
 
   try {
-    const device = await validateDeviceAccess(deviceId, getDeviceCredentialsFromRequest(req));
+    const device = await getAuthorizedDevice(deviceId, getDeviceCredentialsFromRequest(req));
     if (!device) {
       return res.status(403).json({
         success: false,
@@ -670,7 +617,7 @@ router.get('/:deviceId/tts', async (req, res) => {
   const { text, voiceId } = req.query;
 
   try {
-    const device = await validateDeviceAccess(deviceId, getDeviceCredentialsFromRequest(req));
+    const device = await getAuthorizedDevice(deviceId, getDeviceCredentialsFromRequest(req));
     if (!device) {
       return res.status(403).json({ success: false, message: 'Invalid device credentials' });
     }
@@ -712,7 +659,7 @@ router.get('/:deviceId/wake-words/:slug', async (req, res) => {
   const { platform, arch } = req.query;
 
   try {
-    const device = await validateDeviceAccess(deviceId, getDeviceCredentialsFromRequest(req));
+    const device = await getAuthorizedDevice(deviceId, getDeviceCredentialsFromRequest(req));
     if (!device) {
       return res.status(403).json({
         success: false,
@@ -760,51 +707,78 @@ router.get('/:deviceId/wake-words/:slug', async (req, res) => {
   }
 });
 
-// Description: Complete device registration with code
+// Description: Complete device registration with onboarding credentials
 // Endpoint: POST /api/remote-devices/activate
-// Request: { registrationCode: string, ipAddress?: string, firmwareVersion?: string }
+// Request: { registrationCode?: string, claimToken?: string, deviceId?: string, ipAddress?: string, firmwareVersion?: string }
 // Response: { success: boolean, device: object, hubUrl: string }
-router.post('/activate', async (req, res) => {
-  console.log('POST /api/remote-devices/activate - Activating device with registration code');
+router.post('/activate', onboardingMutationRateLimit, async (req, res) => {
+  console.log('POST /api/remote-devices/activate - Activating device with onboarding credentials');
 
   try {
-    const { registrationCode, ipAddress, firmwareVersion } = req.body;
+    const { registrationCode, claimToken, deviceId, ipAddress, firmwareVersion } = req.body;
+    const normalizedRegistrationCode = typeof registrationCode === 'string' ? registrationCode.trim() : '';
+    const normalizedClaimToken = typeof claimToken === 'string' ? claimToken.trim() : '';
+    const normalizedDeviceId = typeof deviceId === 'string' ? deviceId.trim() : '';
 
-    if (!registrationCode) {
-      console.warn('POST /api/remote-devices/activate - Missing registration code');
+    if (!normalizedRegistrationCode && !normalizedClaimToken) {
+      console.warn('POST /api/remote-devices/activate - Missing onboarding credentials');
       return res.status(400).json({
         success: false,
-        message: 'Registration code is required'
+        message: 'Registration code or claim token is required'
       });
     }
 
-    // Find device with matching registration code
-    const device = await VoiceDevice.findOne({
-      'settings.registrationCode': registrationCode,
-      'settings.registered': false,
-      'settings.registrationExpires': { $gt: new Date() }
-    });
+    let device = null;
+    let accessMethod = null;
+
+    if (normalizedClaimToken) {
+      if (!normalizedDeviceId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Device ID is required when activating with a claim token'
+        });
+      }
+
+      const claimAccess = await validateVoiceDeviceAccess(
+        normalizedDeviceId,
+        { claimToken: normalizedClaimToken },
+        { allowRegistrationCode: false, allowDeviceToken: false }
+      );
+      if (claimAccess.authorized) {
+        device = claimAccess.device;
+        accessMethod = claimAccess.method;
+      }
+    }
+
+    if (!device && normalizedRegistrationCode) {
+      const candidate = await VoiceDevice.findOne({
+        'settings.registrationCode': normalizedRegistrationCode,
+        'settings.registered': false
+      });
+      const registrationAccess = validateDeviceCredentials(
+        candidate,
+        { registrationCode: normalizedRegistrationCode },
+        { allowClaimToken: false, allowDeviceToken: false }
+      );
+      if (registrationAccess.authorized) {
+        device = candidate;
+        accessMethod = registrationAccess.method;
+      }
+    }
 
     if (!device) {
-      console.warn(`POST /api/remote-devices/activate - Invalid or expired registration code: ${registrationCode}`);
+      console.warn('POST /api/remote-devices/activate - Invalid or expired onboarding credentials');
       return res.status(404).json({
         success: false,
-        message: 'Invalid or expired registration code'
+        message: 'Invalid or expired onboarding credentials'
       });
     }
 
     const issuedDeviceToken = issueDeviceToken();
-
-    // Activate the device
-    device.status = 'online';
-    device.ipAddress = ipAddress;
-    device.firmwareVersion = firmwareVersion;
-    device.settings.registered = true;
-    device.settings.deviceTokenHash = issuedDeviceToken.deviceTokenHash;
-    device.settings.deviceTokenCreatedAt = issuedDeviceToken.deviceTokenCreatedAt;
-    device.settings.claimToken = undefined;
-    device.settings.claimTokenExpires = undefined;
-    device.lastSeen = new Date();
+    applyDeviceActivation(device, issuedDeviceToken, {
+      ipAddress,
+      firmwareVersion
+    });
 
     await device.save();
 
@@ -817,7 +791,8 @@ router.post('/activate', async (req, res) => {
         name: device.name,
         room: device.room,
         firmwareVersion: device.firmwareVersion || null,
-        ipAddress: device.ipAddress || null
+        ipAddress: device.ipAddress || null,
+        accessMethod
       },
       tags: ['remote-device', 'activation']
     });
@@ -843,7 +818,7 @@ router.post('/activate', async (req, res) => {
   }
 });
 
-router.post('/:deviceId/claim-token/rotate', admin, async (req, res) => {
+router.post('/:deviceId/onboarding/reissue', onboardingMutationRateLimit, admin, async (req, res) => {
   const { deviceId } = req.params;
   try {
     const device = await VoiceDevice.findById(deviceId);
@@ -851,6 +826,60 @@ router.post('/:deviceId/claim-token/rotate', admin, async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Device not found'
+      });
+    }
+
+    const onboarding = applyOnboardingReissue(device);
+    await device.save();
+
+    void eventStreamService.publishSafe({
+      type: 'remote_device.onboarding_reissued',
+      source: 'remote_device',
+      category: 'security',
+      payload: {
+        deviceId: device._id.toString(),
+        name: device.name,
+        expiresAt: onboarding.registrationExpires
+      },
+      tags: ['remote-device', 'security', 'registration']
+    });
+
+    return res.status(200).json({
+      success: true,
+      device: sanitizeDeviceForRemote(device),
+      registrationCode: onboarding.registrationCode,
+      registrationExpires: onboarding.registrationExpires,
+      claimToken: onboarding.claimToken,
+      claimTokenExpires: onboarding.claimTokenExpires,
+      message: 'Device onboarding credentials reissued. Re-run the generated installer on the listener.'
+    });
+  } catch (error) {
+    console.error('POST /api/remote-devices/:deviceId/onboarding/reissue - Error:', {
+      deviceId,
+      error: error.message
+    });
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to reissue onboarding credentials'
+    });
+  }
+});
+
+router.post('/:deviceId/claim-token/rotate', onboardingMutationRateLimit, admin, async (req, res) => {
+  const { deviceId } = req.params;
+  try {
+    const device = await VoiceDevice.findById(deviceId);
+    if (!device) {
+      return res.status(404).json({
+        success: false,
+        message: 'Device not found'
+      });
+    }
+
+    if (device.settings?.registered === true) {
+      return res.status(409).json({
+        success: false,
+        message: 'Device is already activated. Use onboarding reissue before redeploying a registered listener.'
       });
     }
 
@@ -880,7 +909,10 @@ router.post('/:deviceId/claim-token/rotate', admin, async (req, res) => {
       claimTokenExpires: issued.claimTokenExpires
     });
   } catch (error) {
-    console.error(`POST /api/remote-devices/${deviceId}/claim-token/rotate - Error:`, error.message);
+    console.error('POST /api/remote-devices/:deviceId/claim-token/rotate - Error:', {
+      deviceId,
+      error: error.message
+    });
     return res.status(500).json({
       success: false,
       message: error.message || 'Failed to rotate claim token'
@@ -897,7 +929,7 @@ router.get('/:deviceId/config', async (req, res) => {
   console.log(`GET /api/remote-devices/${deviceId}/config - Fetching device configuration`);
 
   try {
-    const device = await validateDeviceAccess(deviceId, getDeviceCredentialsFromRequest(req));
+    const device = await getAuthorizedDevice(deviceId, getDeviceCredentialsFromRequest(req));
 
     if (!device) {
       console.warn(`GET /api/remote-devices/${deviceId}/config - Invalid device credentials`);
@@ -936,7 +968,7 @@ router.post('/:deviceId/heartbeat', async (req, res) => {
 
   try {
     const { status, batteryLevel, uptime, lastInteraction } = req.body;
-    const existingDevice = await validateDeviceAccess(deviceId, getDeviceCredentialsFromRequest(req));
+    const existingDevice = await getAuthorizedDevice(deviceId, getDeviceCredentialsFromRequest(req));
     if (!existingDevice) {
       console.warn(`POST /api/remote-devices/${deviceId}/heartbeat - Invalid device credentials`);
       return res.status(403).json({
@@ -1008,7 +1040,7 @@ router.get('/setup-instructions', admin, async (req, res) => {
           title: 'Run the one-command installer',
           description: 'After registering a device in the UI, run the generated command on the listener device.',
           commands: [
-            'curl -fsSL <HUB_URL>/api/remote-devices/<DEVICE_ID>/bootstrap.sh?code=<REGISTRATION_CODE> | bash'
+            'curl -fsSL <HUB_URL>/api/remote-devices/<DEVICE_ID>/bootstrap.sh?claim=<CLAIM_TOKEN> | bash'
           ]
         },
         {
@@ -1030,6 +1062,7 @@ router.get('/setup-instructions', admin, async (req, res) => {
       bootstrapUrlTemplate: `${origin}/api/remote-devices/<DEVICE_ID>/bootstrap.sh?code=<REGISTRATION_CODE>`,
       bootstrapClaimUrlTemplate: `${origin}/api/remote-devices/<DEVICE_ID>/bootstrap.sh?claim=<CLAIM_TOKEN>`,
       quickInstallCommandTemplate: `curl -fsSL ${origin}/api/remote-devices/<DEVICE_ID>/bootstrap.sh?code=<REGISTRATION_CODE> | bash`,
+      quickInstallClaimCommandTemplate: `curl -fsSL ${origin}/api/remote-devices/<DEVICE_ID>/bootstrap.sh?claim=<CLAIM_TOKEN> | bash`,
       cloudInitUrlTemplate: `${origin}/api/remote-devices/<DEVICE_ID>/cloud-init.yaml?claim=<CLAIM_TOKEN>`,
       downloadUrl: `${origin}/downloads/homebrain-remote-setup.sh`,
       configTemplate: {

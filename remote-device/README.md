@@ -25,7 +25,7 @@ Do this from the HomeBrain UI:
 Example:
 
 ```bash
-curl -fsSL "http://<HUB_IP>:3000/api/remote-devices/<DEVICE_ID>/bootstrap.sh?code=<REGISTRATION_CODE>" | bash
+curl -fsSL "http://<HUB_IP>:3000/api/remote-devices/<DEVICE_ID>/bootstrap.sh?claim=<CLAIM_TOKEN>" | bash
 ```
 
 The generated installer activates the listener, stores the hub URL, and saves a device token used for authenticated device-side APIs.
@@ -46,11 +46,12 @@ cd remote-device
 bash install.sh
 ```
 
-Then register it:
+Then activate it with a generated registration code or claim token:
 
 ```bash
 cd ~/homebrain-remote
-./register.sh <REGISTRATION_CODE> http://<HUB_IP>:3000
+./register.sh --registration-code <REGISTRATION_CODE> --hub http://<HUB_IP>:3000
+./register.sh --claim-token <CLAIM_TOKEN> --device-id <DEVICE_ID> --hub http://<HUB_IP>:3000
 ```
 
 ## Audio Test
