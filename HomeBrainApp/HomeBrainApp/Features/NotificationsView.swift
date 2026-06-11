@@ -584,6 +584,9 @@ struct NotificationsView: View {
             if selectedChannel != .all {
                 body["channel"] = selectedChannel.rawValue
             }
+            if includeCleared {
+                body["includeHistory"] = true
+            }
             _ = try await session.apiClient.post("/api/notifications/clear", body: body)
             await loadNotifications()
         } catch {

@@ -35,6 +35,16 @@ function normalizeChannel(value, fallback = 'normal') {
   return fallback;
 }
 
+function normalizeClearChannel(value) {
+  const normalized = normalizeString(value);
+  if (!normalized || normalized === 'all') return '';
+  if (normalized === 'securityCritical' || normalized === 'normal') return normalized;
+
+  const error = new Error('Invalid notification channel.');
+  error.status = 400;
+  throw error;
+}
+
 function normalizeSeverity(value, fallback = 'info') {
   const normalized = normalizeString(value).toLowerCase();
   if (['info', 'warning', 'critical'].includes(normalized)) return normalized;
@@ -531,23 +541,31 @@ async function getUnreadCounts(userId) {
 }
 
 async function clearNotification(userId, notificationId) {
+  const now = new Date();
   const updated = await HomeBrainNotification.findOneAndUpdate(
-    { _id: notificationId, userId, clearedAt: null, resolvedAt: null },
-    { $set: { clearedAt: new Date(), clearedBy: userId } },
+    { _id: notificationId, userId, clearedAt: null },
+    { $set: { clearedAt: now, clearedBy: userId } },
     { new: true }
   );
   const publicNotification = toPublicNotification(updated);
   if (publicNotification) {
     publishEvent('notification.cleared', publicNotification);
+    return publicNotification;
   }
-  return publicNotification;
+
+  const existing = await HomeBrainNotification.findOne({ _id: notificationId, userId }).lean();
+  return toPublicNotification(existing);
 }
 
 async function clearNotifications(userId, options = {}) {
-  const channel = normalizeString(options.channel);
-  const query = { userId, clearedAt: null, resolvedAt: null };
-  if (channel && channel !== 'all') {
-    query.channel = normalizeChannel(channel);
+  const channel = normalizeClearChannel(options.channel);
+  const includeResolved = normalizeBool(options.includeResolved ?? options.includeHistory, false);
+  const query = { userId, clearedAt: null };
+  if (!includeResolved) {
+    query.resolvedAt = null;
+  }
+  if (channel) {
+    query.channel = channel;
   }
   const now = new Date();
   const result = await HomeBrainNotification.updateMany(
@@ -556,11 +574,13 @@ async function clearNotifications(userId, options = {}) {
   );
   publishEvent('notifications.cleared', null, {
     channel: channel || 'all',
-    clearedCount: result.modifiedCount || 0
+    clearedCount: result.modifiedCount || 0,
+    includeResolved
   });
   return {
     clearedCount: result.modifiedCount || 0,
     channel: channel || 'all',
+    includeResolved,
     clearedAt: now
   };
 }
