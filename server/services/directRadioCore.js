@@ -812,6 +812,16 @@ async upsertDirectDeviceRecord(identity, update, options = {}) {
     const directUpdate = applyContactOpenDebounce(existing, update);
     const payload = mergeDirectDeviceUpdateForExisting(existing, directUpdate);
 
+    // Devices created during a pairing window inherit the window's optional
+    // room assignment instead of landing in Unassigned.
+    if (!existing) {
+      const pairingSession = this.activePairings?.get?.(identity.protocol);
+      const sessionRoom = trimString(pairingSession?.assignRoom);
+      if (pairingSession && !isTerminalPairingStatus(pairingSession.status) && sessionRoom) {
+        payload.room = sessionRoom;
+      }
+    }
+
     let device = existing
       ? await Device.findByIdAndUpdate(existing._id, payload, { returnDocument: 'after', runValidators: true })
       : await new Device(payload).save();

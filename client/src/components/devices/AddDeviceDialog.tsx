@@ -42,6 +42,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { getRooms, type RoomRecord } from "@/api/rooms"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { getDeviceSource } from "@/lib/deviceSources"
 import { cn } from "@/lib/utils"
@@ -261,6 +262,9 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
   const [baselineDirectIdentities, setBaselineDirectIdentities] = useState<Set<string>>(new Set())
   const [currentPairing, setCurrentPairing] = useState<DirectRadioPairingSession | null>(null)
   const [foundDevice, setFoundDevice] = useState<DeviceRecord | null>(null)
+  const [assignRoom, setAssignRoom] = useState<string>("")
+  const [rooms, setRooms] = useState<RoomRecord[]>([])
+  const [completedAddedDevices, setCompletedAddedDevices] = useState<NonNullable<DirectRadioPairingSession["addedDevices"]>>([])
   const [expiresAt, setExpiresAt] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -408,7 +412,27 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
   }, [devices, zwaveControllerNodeIds, zwaveControllerNodes])
 
   useEffect(() => {
-    if (!activeProtocol || foundDevice) {
+    if (!open) {
+      return
+    }
+    let cancelled = false
+    void getRooms()
+      .then((response) => {
+        if (!cancelled) {
+          setRooms(response.rooms || [])
+        }
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [open])
+
+  useEffect(() => {
+    // Zigbee/Z-Wave windows now report joined devices through the pairing
+    // session itself (addedDevices); local discovery is only needed for the
+    // single-shot Insteon/Matter flows.
+    if (!activeProtocol || foundDevice || ["zwave", "zigbee"].includes(activeProtocol)) {
       return
     }
 
@@ -434,7 +458,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
   }, [activeProtocol, baselineDirectIdentities, baselineIds, devices, foundDevice])
 
   useEffect(() => {
-    if (!open || !activeProtocol || foundDevice || !onRefresh) {
+    if (!open || !activeProtocol || !onRefresh) {
       return
     }
 
@@ -443,10 +467,10 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
     }, 5_000)
 
     return () => window.clearInterval(poll)
-  }, [activeProtocol, foundDevice, onRefresh, open])
+  }, [activeProtocol, onRefresh, open])
 
   useEffect(() => {
-    if (!open || !activeProtocol || foundDevice || !["zwave", "zigbee"].includes(activeProtocol)) {
+    if (!open || !activeProtocol || !["zwave", "zigbee"].includes(activeProtocol)) {
       return
     }
 
@@ -477,6 +501,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
           setBusy(false)
           setActiveProtocol(null)
           setExpiresAt(null)
+          setCompletedAddedDevices(pairing.addedDevices || [])
           setStatusMessage(pairing.message || `${activeLabel} device joined HomeBrain.`)
           await onRefresh?.()
           return
@@ -511,7 +536,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       cancelled = true
       window.clearInterval(poll)
     }
-  }, [activeLabel, activeProtocol, foundDevice, onRefresh, open])
+  }, [activeLabel, activeProtocol, onRefresh, open])
 
   const captureBaseline = (targetProtocol: AddDeviceProtocol = protocol) => {
     setBaselineIds(new Set(devices.map((device) => device._id)))
@@ -523,6 +548,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
     setFoundDevice(null)
     setErrorMessage(null)
     setZwaveDskPin("")
+    setCompletedAddedDevices([])
   }
 
   const startDirectRadioAdd = async (targetProtocol: DirectRadioProtocol) => {
@@ -541,7 +567,8 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
         protocol: targetProtocol,
         durationSeconds: seconds,
         dskPin: targetProtocol === "zwave" && preloadedDsk ? preloadedDsk : undefined,
-        zwaveSecurityMode: targetProtocol === "zwave" ? zwaveSecurityMode : undefined
+        zwaveSecurityMode: targetProtocol === "zwave" ? zwaveSecurityMode : undefined,
+        room: assignRoom || undefined
       })
       const nextExpiresAt = response?.result?.expiresAt || null
       setExpiresAt(nextExpiresAt)
@@ -549,7 +576,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
       setStatusMessage(
         targetProtocol === "zwave"
           ? `Z-Wave ${getZWaveSecurityLabel(zwaveSecurityMode)} inclusion is live${formatExpiration(nextExpiresAt) ? ` until ${formatExpiration(nextExpiresAt)}` : ""}. ${getZWaveSecurityMessage(zwaveSecurityMode)}`
-          : `Zigbee permit-join is live${formatExpiration(nextExpiresAt) ? ` until ${formatExpiration(nextExpiresAt)}` : ""}. HomeBrain will add the device after interview.`
+          : `Zigbee permit-join is live${formatExpiration(nextExpiresAt) ? ` until ${formatExpiration(nextExpiresAt)}` : ""}. Pair as many devices as you like — the window stays open until it expires or you stop it.`
       )
       await onRefresh?.()
     } catch (error) {
@@ -855,6 +882,9 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
               disabled={busy}
               title="Start inclusion, then perform the device include action."
               detail="Use Auto secure for locks, Legacy S0 for older Kwikset/Schlage locks or sirens, and Standard only for ordinary non-secure devices."
+              rooms={rooms}
+              assignRoom={assignRoom}
+              setAssignRoom={setAssignRoom}
             />
             <Field label="Security">
               <Select value={zwaveSecurityMode} onValueChange={(value) => setZwaveSecurityMode(value as ZWaveSecurityMode)} disabled={busy}>
@@ -953,8 +983,11 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
               durationSeconds={durationSeconds}
               setDurationSeconds={setDurationSeconds}
               disabled={busy}
-              title="Open permit-join, then reset or pair the Zigbee device."
-              detail="HomeBrain creates the device after the coordinator sees the join and interview."
+              title="Open permit-join, then reset or pair your Zigbee devices."
+              detail="HomeBrain creates each device after the coordinator sees its join and interview. The window stays open so you can pair several devices in one pass."
+              rooms={rooms}
+              assignRoom={assignRoom}
+              setAssignRoom={setAssignRoom}
             />
           </TabsContent>
 
@@ -1046,6 +1079,11 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
           </TabsContent>
         </Tabs>
 
+        <PairingAddedDevicesPanel
+          addedDevices={currentPairing?.addedDevices?.length ? currentPairing.addedDevices : completedAddedDevices}
+          windowOpen={Boolean(activeProtocol && ["zwave", "zigbee"].includes(activeProtocol))}
+        />
+
         {statusMessage ? (
           <div className={cn(
             "flex items-start gap-3 rounded-lg border p-3 text-sm",
@@ -1110,7 +1148,10 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
 
         {expiresAt ? (
           <p className="text-xs text-muted-foreground">
-            Window expires at {formatExpiration(expiresAt)}.
+            Window expires at {formatExpiration(expiresAt)}
+            {typeof currentPairing?.secondsRemaining === "number" && currentPairing.secondsRemaining > 0
+              ? ` (${currentPairing.secondsRemaining}s remaining)`
+              : ""}.
           </p>
         ) : null}
       </DialogContent>
@@ -1127,21 +1168,29 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
+const NO_ASSIGN_ROOM_VALUE = "__none__"
+
 function RadioWindowControls({
   durationSeconds,
   setDurationSeconds,
   disabled,
   title,
-  detail
+  detail,
+  rooms,
+  assignRoom,
+  setAssignRoom
 }: {
   durationSeconds: string
   setDurationSeconds: (value: string) => void
   disabled: boolean
   title: string
   detail: string
+  rooms?: RoomRecord[]
+  assignRoom?: string
+  setAssignRoom?: (value: string) => void
 }) {
   return (
-    <div className="grid gap-4 md:grid-cols-[10rem_1fr]">
+    <div className="grid gap-4 md:grid-cols-[10rem_14rem_1fr]">
       <Field label="Window">
         <Select value={durationSeconds} onValueChange={setDurationSeconds} disabled={disabled}>
           <SelectTrigger>
@@ -1155,10 +1204,71 @@ function RadioWindowControls({
           </SelectContent>
         </Select>
       </Field>
+      {setAssignRoom ? (
+        <Field label="Assign room (optional)">
+          <Select
+            value={assignRoom || NO_ASSIGN_ROOM_VALUE}
+            onValueChange={(value) => setAssignRoom(value === NO_ASSIGN_ROOM_VALUE ? "" : value)}
+            disabled={disabled}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="No room" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NO_ASSIGN_ROOM_VALUE}>No room (Unassigned)</SelectItem>
+              {(rooms || []).map((room) => (
+                <SelectItem key={room.name} value={room.name}>
+                  {room.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+      ) : null}
       <div className="rounded-lg border border-border/70 p-4">
         <p className="text-sm font-semibold text-foreground">{title}</p>
         <p className="mt-1 text-sm text-muted-foreground">{detail}</p>
+        {setAssignRoom ? (
+          <p className="mt-1 text-xs text-muted-foreground">
+            Every device added during this window {assignRoom ? `is assigned to ${assignRoom}` : "lands in Unassigned unless you pick a room"}.
+            The window stays open for multiple devices.
+          </p>
+        ) : null}
       </div>
+    </div>
+  )
+}
+
+function PairingAddedDevicesPanel({
+  addedDevices,
+  windowOpen
+}: {
+  addedDevices: NonNullable<DirectRadioPairingSession["addedDevices"]>
+  windowOpen: boolean
+}) {
+  if (!addedDevices.length) {
+    return null
+  }
+
+  return (
+    <div className="space-y-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3">
+      <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-200">
+        {addedDevices.length} device{addedDevices.length === 1 ? "" : "s"} added{windowOpen ? " — window still open" : " during this window"}
+      </p>
+      <ul className="space-y-1">
+        {addedDevices.map((entry, index) => (
+          <li key={`${entry.identityId || entry.directDeviceId || index}`} className="flex items-center gap-2 text-sm text-emerald-800 dark:text-emerald-100">
+            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{entry.name || entry.identityId || "Device"}</span>
+            {entry.room ? <span className="text-xs opacity-80">→ {entry.room}</span> : null}
+            {entry.addedAt ? (
+              <span className="ml-auto text-xs opacity-70">
+                {new Date(entry.addedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+              </span>
+            ) : null}
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }

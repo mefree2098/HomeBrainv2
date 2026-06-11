@@ -139,6 +139,15 @@ export type DirectRadioPairingSession = {
   directDeviceId?: string | null;
   directDeviceName?: string | null;
   message?: string | null;
+  assignRoom?: string | null;
+  addedDevices?: Array<{
+    identityId?: string | null;
+    directDeviceId?: string | null;
+    name?: string | null;
+    room?: string | null;
+    addedAt?: string | null;
+  }>;
+  addedCount?: number;
   completedAt?: string | null;
   failedAt?: string | null;
   expiredAt?: string | null;
@@ -459,6 +468,7 @@ export const startDirectRadioPairing = async (payload: {
   durationSeconds?: number;
   dskPin?: string;
   zwaveSecurityMode?: ZWaveSecurityMode;
+  room?: string;
 }) => {
   try {
     const response = await api.post('/api/direct-radios/pairing/start', payload);
