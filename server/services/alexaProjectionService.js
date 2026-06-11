@@ -19,6 +19,31 @@ const {
 const RESTRICTED_DEVICE_TYPES = new Set(ALEXA_RESTRICTED_SCENE_DEVICE_TYPES);
 const DEVICE_GROUP_FALLBACK_TYPES = new Set(['light', 'switch']);
 const ALLOWED_WORKFLOW_ACTION_TYPES = new Set(['device_control', 'scene_activate', 'delay']);
+const DEVICE_SOURCE_LABELS = Object.freeze({
+  'homebrain-zigbee': 'Zigbee',
+  'homebrain-zwave': 'Z-Wave',
+  'homebrain-thread': 'Thread',
+  'homebrain-matter': 'Matter',
+  ecobee: 'Ecobee',
+  govee: 'Govee',
+  harmony: 'Harmony',
+  insteon: 'INSTEON',
+  rainmachine: 'RainMachine',
+  sense: 'Sense',
+  smartthings: 'SmartThings',
+  tempest: 'Tempest',
+  local: 'HomeBrain'
+});
+const DEVICE_SOURCE_ALIASES = Object.freeze({
+  zigbee: 'homebrain-zigbee',
+  zwave: 'homebrain-zwave',
+  'z-wave': 'homebrain-zwave',
+  zw: 'homebrain-zwave',
+  thread: 'homebrain-thread',
+  matter: 'homebrain-matter',
+  homebrain: 'local',
+  manual: 'local'
+});
 const THERMOSTAT_MODE_MAP = Object.freeze({
   auto: 'AUTO',
   cool: 'COOL',
@@ -76,6 +101,113 @@ function toObjectIdString(value) {
   }
 
   return String(value).trim();
+}
+
+function getPlainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function hasOwn(value, key) {
+  return Object.prototype.hasOwnProperty.call(getPlainObject(value), key);
+}
+
+function normalizeSourceToken(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function canonicalizeDeviceSource(source) {
+  const normalized = normalizeSourceToken(source);
+  return DEVICE_SOURCE_ALIASES[normalized] || normalized;
+}
+
+function getDeviceSourceLabel(source) {
+  const canonical = canonicalizeDeviceSource(source);
+  if (!canonical) {
+    return 'Unknown';
+  }
+
+  if (DEVICE_SOURCE_LABELS[canonical]) {
+    return DEVICE_SOURCE_LABELS[canonical];
+  }
+
+  return canonical
+    .replace(/[_-]/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function getDeviceTransports(device) {
+  const properties = getPlainObject(device?.properties);
+  const matter = getPlainObject(properties.matter);
+  const transports = [
+    matter.transport,
+    properties.matterTransport,
+    properties.transport,
+    properties.networkTransport
+  ].map(normalizeSourceToken).filter(Boolean);
+
+  return new Set(transports);
+}
+
+function getDeviceSource(device) {
+  const properties = getPlainObject(device?.properties);
+  const explicitSource = canonicalizeDeviceSource(device?.source || properties.source);
+  if (explicitSource) {
+    return explicitSource;
+  }
+
+  const direct = getPlainObject(properties.homebrainDirect);
+  const directProtocol = normalizeSourceToken(direct.protocol);
+  if (directProtocol === 'zigbee') {
+    return 'homebrain-zigbee';
+  }
+  if (directProtocol === 'zwave' || directProtocol === 'z-wave') {
+    return 'homebrain-zwave';
+  }
+
+  const matter = getPlainObject(properties.matter);
+  if (hasOwn(matter, 'nodeId') || hasOwn(properties, 'matterNodeId') || hasOwn(properties, 'matterFeatures')) {
+    return 'homebrain-matter';
+  }
+
+  if (properties.smartThingsDeviceId || properties.smartThingsId) {
+    return 'smartthings';
+  }
+  if (properties.harmonyDeviceId || properties.harmonyHubIp) {
+    return 'harmony';
+  }
+  if (properties.insteonAddress || properties.insteonDeviceId) {
+    return 'insteon';
+  }
+  if (properties.senseDeviceId || properties.senseMonitorId) {
+    return 'sense';
+  }
+  if (properties.ecobeeThermostatIdentifier || properties.ecobeeDeviceId) {
+    return 'ecobee';
+  }
+  if (properties.govee || properties.goveeDevice || properties.goveeDeviceId) {
+    return 'govee';
+  }
+  if (properties.rainmachine) {
+    return 'rainmachine';
+  }
+  if (properties.tempestStationId || properties.tempestDeviceId) {
+    return 'tempest';
+  }
+
+  return 'local';
+}
+
+function deviceMatchesSourceFilter(device, sourceFilter) {
+  const canonicalFilter = canonicalizeDeviceSource(sourceFilter);
+  if (!canonicalFilter || canonicalFilter === 'all') {
+    return true;
+  }
+
+  if (canonicalFilter === 'homebrain-thread') {
+    return getDeviceSource(device) === 'homebrain-thread' || getDeviceTransports(device).has('thread');
+  }
+
+  return getDeviceSource(device) === canonicalFilter;
 }
 
 function normalizeDisplayDescription(value, fallback) {
@@ -1172,6 +1304,109 @@ class AlexaProjectionService {
     )));
   }
 
+  async bulkUpdateDeviceExposuresBySource(sourceFilter, updates = {}) {
+    const source = canonicalizeDeviceSource(sourceFilter);
+    if (!source || source === 'all') {
+      throw new Error('A device source is required for bulk Alexa exposure updates');
+    }
+
+    const enabled = Object.prototype.hasOwnProperty.call(updates, 'enabled')
+      ? updates.enabled === true
+      : true;
+    const context = await this.loadContext();
+    const devices = context.devices.filter((device) => deviceMatchesSourceFilter(device, source));
+    const entityIds = devices.map((device) => toObjectIdString(device._id)).filter(Boolean);
+    const existingExposures = entityIds.length > 0
+      ? await AlexaExposure.find({
+        entityType: 'device',
+        entityId: { $in: entityIds }
+      })
+      : [];
+    const exposuresByEntityId = new Map(
+      existingExposures.map((exposure) => [toObjectIdString(exposure.entityId), exposure])
+    );
+
+    let createdCount = 0;
+    let changedCount = 0;
+    let unchangedCount = 0;
+    let validationErrorCount = 0;
+    let validationWarningCount = 0;
+    const failures = [];
+
+    for (const device of devices) {
+      const entityId = toObjectIdString(device._id);
+      if (!entityId) {
+        continue;
+      }
+
+      const existing = exposuresByEntityId.get(entityId);
+      const exposure = existing || new AlexaExposure({
+        entityType: 'device',
+        entityId,
+        projectionType: inferProjectionType('device')
+      });
+      const wasNew = !existing;
+      const previousEnabled = exposure.enabled === true;
+
+      exposure.enabled = enabled;
+      exposure.projectionType = exposure.projectionType || inferProjectionType('device');
+      exposure.endpointIdSeed = buildEndpointId(context.hubId, 'device', entityId);
+
+      const record = this.buildRecordForExposure(exposure.toObject(), context);
+      exposure.validationWarnings = record.validationWarnings;
+      exposure.validationErrors = record.validationErrors;
+
+      try {
+        await exposure.save();
+        if (wasNew) {
+          createdCount += 1;
+        }
+        if (wasNew || previousEnabled !== enabled) {
+          changedCount += 1;
+        } else {
+          unchangedCount += 1;
+        }
+        if (record.validationErrors.length > 0) {
+          validationErrorCount += 1;
+        }
+        if (record.validationWarnings.length > 0) {
+          validationWarningCount += 1;
+        }
+      } catch (error) {
+        failures.push({
+          entityId,
+          name: device?.name || '',
+          error: error.message || 'Failed to update Alexa exposure'
+        });
+      }
+    }
+
+    const summaries = entityIds.length > 0 ? await this.listExposureSummaries() : [];
+    const summaryMap = new Map(
+      summaries
+        .filter((entry) => entry.entityType === 'device')
+        .map((entry) => [toObjectIdString(entry.entityId), entry])
+    );
+    const affectedExposures = entityIds
+      .map((entityId) => summaryMap.get(entityId))
+      .filter(Boolean);
+
+    return {
+      source,
+      sourceLabel: getDeviceSourceLabel(source),
+      enabled,
+      matchedCount: devices.length,
+      createdCount,
+      changedCount,
+      unchangedCount,
+      failedCount: failures.length,
+      validationErrorCount,
+      validationWarningCount,
+      failures,
+      exposures: affectedExposures
+    };
+  }
+
   async ensureExposure(entityType, entityId, defaults = {}) {
     const existing = await AlexaExposure.findOne({
       entityType,
@@ -1208,4 +1443,8 @@ module.exports.inferDeviceTraits = inferDeviceTraits;
 module.exports.inferGroupTraits = inferGroupTraits;
 module.exports.validateSceneExposure = validateSceneExposure;
 module.exports.validateWorkflowExposure = validateWorkflowExposure;
+module.exports.canonicalizeDeviceSource = canonicalizeDeviceSource;
+module.exports.deviceMatchesSourceFilter = deviceMatchesSourceFilter;
+module.exports.getDeviceSource = getDeviceSource;
+module.exports.getDeviceSourceLabel = getDeviceSourceLabel;
 module.exports.supportsColorTemperatureControl = supportsColorTemperatureControl;

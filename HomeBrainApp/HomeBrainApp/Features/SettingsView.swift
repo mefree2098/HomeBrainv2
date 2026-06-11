@@ -1247,7 +1247,15 @@ struct SettingsView: View {
                     SettingsEndpointAction(title: "Generate Private Link Code", method: .post, path: "/api/alexa/link-codes", body: ["mode": "private"]),
                     SettingsEndpointAction(title: "Generate Public Link Code", method: .post, path: "/api/alexa/link-codes", body: ["mode": "public"]),
                     SettingsEndpointAction(title: "Force Discovery Sync", method: .post, path: "/api/alexa/discovery-sync", body: ["reason": "ios-settings"]),
-                    SettingsEndpointAction(title: "Flush Broker Events", method: .post, path: "/api/alexa/events/flush", body: ["limit": 100])
+                    SettingsEndpointAction(title: "Flush Broker Events", method: .post, path: "/api/alexa/events/flush", body: ["limit": 100]),
+                    SettingsEndpointAction(title: "Add All INSTEON Devices", method: .post, path: "/api/alexa/exposures/devices/by-source/insteon", body: ["enabled": true]),
+                    SettingsEndpointAction(title: "Add All Zigbee Devices", method: .post, path: "/api/alexa/exposures/devices/by-source/homebrain-zigbee", body: ["enabled": true]),
+                    SettingsEndpointAction(title: "Add All Z-Wave Devices", method: .post, path: "/api/alexa/exposures/devices/by-source/homebrain-zwave", body: ["enabled": true]),
+                    SettingsEndpointAction(title: "Add All Matter Devices", method: .post, path: "/api/alexa/exposures/devices/by-source/homebrain-matter", body: ["enabled": true]),
+                    SettingsEndpointAction(title: "Add All Thread Devices", method: .post, path: "/api/alexa/exposures/devices/by-source/homebrain-thread", body: ["enabled": true]),
+                    SettingsEndpointAction(title: "Add All SmartThings Devices", method: .post, path: "/api/alexa/exposures/devices/by-source/smartthings", body: ["enabled": true]),
+                    SettingsEndpointAction(title: "Add All Harmony Devices", method: .post, path: "/api/alexa/exposures/devices/by-source/harmony", body: ["enabled": true]),
+                    SettingsEndpointAction(title: "Add All Ecobee Devices", method: .post, path: "/api/alexa/exposures/devices/by-source/ecobee", body: ["enabled": true])
                 ]
             )
 
@@ -3256,6 +3264,7 @@ private struct SettingsDeviceIntegrationsPane: View {
                 actionButton("Status", key: "smartthings-status", method: .get, path: "/api/smartthings/status")
                 actionButton("Get Auth URL", key: "smartthings-auth-url", method: .get, path: "/api/smartthings/auth/url")
                 actionButton("Refresh Devices", key: "smartthings-devices", method: .get, path: "/api/smartthings/devices")
+                actionButton("Add All to Alexa", key: "smartthings-alexa-bulk", method: .post, path: "/api/alexa/exposures/devices/by-source/smartthings", body: ["enabled": true])
                 actionButton("Disconnect", key: "smartthings-disconnect", method: .post, path: "/api/smartthings/disconnect")
             }
         }
@@ -3273,6 +3282,7 @@ private struct SettingsDeviceIntegrationsPane: View {
                 actionButton("Discover Hubs", key: "harmony-discover", method: .post, path: "/api/harmony/discover", body: ["timeoutMs": 5000])
                 actionButton("Sync Devices", key: "harmony-sync", method: .post, path: "/api/harmony/sync", body: ["timeoutMs": 6000])
                 actionButton("Sync Activity State", key: "harmony-sync-state", method: .post, path: "/api/harmony/sync-state")
+                actionButton("Add All to Alexa", key: "harmony-alexa-bulk", method: .post, path: "/api/alexa/exposures/devices/by-source/harmony", body: ["enabled": true])
             }
         }
     }
@@ -3289,6 +3299,7 @@ private struct SettingsDeviceIntegrationsPane: View {
                 actionButton("Pause Runtime Monitoring", key: "insteon-pause", method: .post, path: "/api/insteon/maintenance/runtime-monitoring/stop")
                 actionButton("Resume Runtime Monitoring", key: "insteon-resume", method: .post, path: "/api/insteon/maintenance/runtime-monitoring/start", body: ["immediate": true])
                 actionButton("Re-link All Devices to PLM", key: "insteon-relink", method: .post, path: "/api/insteon/maintenance/relink/start")
+                actionButton("Add All to Alexa", key: "insteon-alexa-bulk", method: .post, path: "/api/alexa/exposures/devices/by-source/insteon", body: ["enabled": true])
             }
 
             Text("Re-linking rebuilds the PLM all-link database for every tracked device and can run for several minutes.")
@@ -3513,6 +3524,8 @@ private struct SettingsDeviceIntegrationsPane: View {
                 actionButton("Start Z-Wave Inclusion", key: "direct-radio-zwave-pair", method: .post, path: "/api/direct-radios/pairing/start", body: ["protocol": "zwave", "durationSeconds": 180])
                 actionButton("Start Z-Wave Exclusion", key: "direct-radio-zwave-exclusion", method: .post, path: "/api/direct-radios/exclusion/start", body: ["durationSeconds": 120])
                 actionButton("Stop Pairing / Exclusion", key: "direct-radio-stop", method: .post, path: "/api/direct-radios/pairing/stop", body: ["protocol": "all"])
+                actionButton("Add Zigbee to Alexa", key: "zigbee-alexa-bulk", method: .post, path: "/api/alexa/exposures/devices/by-source/homebrain-zigbee", body: ["enabled": true])
+                actionButton("Add Z-Wave to Alexa", key: "zwave-alexa-bulk", method: .post, path: "/api/alexa/exposures/devices/by-source/homebrain-zwave", body: ["enabled": true])
             }
         }
     }

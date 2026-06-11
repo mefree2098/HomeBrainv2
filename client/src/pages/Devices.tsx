@@ -32,9 +32,11 @@ import {
   Siren,
   Speaker,
   PlusCircle,
-  SlidersHorizontal
+  SlidersHorizontal,
+  RadioTower
 } from "lucide-react"
 import { getDeviceGroups, getDevices, controlDevice, type DeviceGroupSummary } from "@/api/devices"
+import { bulkUpdateAlexaDeviceExposuresBySource } from "@/api/alexa"
 import { getRooms } from "@/api/rooms"
 import { AddDeviceDialog } from "@/components/devices/AddDeviceDialog"
 import { DeviceDetailsDialog } from "@/components/devices/DeviceDetailsDialog"
@@ -1257,8 +1259,10 @@ export function Devices({
   const {
     loading: loadingAlexaExposure,
     getExposure,
-    saveExposure
+    saveExposure,
+    refresh: refreshAlexaExposures
   } = useAlexaExposureRegistry(isAdmin)
+  const [bulkAlexaSource, setBulkAlexaSource] = useState<string | null>(null)
 
   const buildRoomsFromDevices = useCallback((deviceList: any[]) => {
     const roomMap = new Map<string, any[]>()
@@ -2098,10 +2102,36 @@ export function Devices({
     )
   }
 
-  const sourceOptions = buildDeviceSourceOptions(
-    devices,
-    devices.some((device: any) => getDeviceSource(device) === 'unknown')
+  const sourceOptions = useMemo(
+    () => buildDeviceSourceOptions(
+      devices,
+      devices.some((device: any) => getDeviceSource(device) === 'unknown')
+    ),
+    [devices]
   )
+  const bulkAlexaSourceOptions = useMemo(() => {
+    if (!isAdmin) {
+      return []
+    }
+
+    return sourceOptions
+      .map((source) => {
+        const sourceDevices = devices.filter((device: any) => (
+          device?._id
+          && !isHarmonyExcludedFromHomeBrain(device)
+          && !isRetiredSmartThingsMigrationSource(device)
+          && deviceMatchesSourceFilter(device, source.value)
+        ))
+        const enabledCount = sourceDevices.filter((device: any) => getExposure('device', device._id)?.enabled).length
+
+        return {
+          ...source,
+          count: sourceDevices.length,
+          enabledCount
+        }
+      })
+      .filter((source) => source.count > 0 && source.value !== 'local' && source.value !== 'unknown')
+  }, [devices, getExposure, isAdmin, sourceOptions])
   const smartThingsCategoryOptions = useMemo(
     () => buildSmartThingsCategoryFilterOptions(devices),
     [devices]
@@ -2183,6 +2213,28 @@ export function Devices({
     })
     return savedExposure
   }, [saveExposure, toast])
+
+  const handleBulkEnableAlexaBySource = useCallback(async (source: string, sourceLabel: string) => {
+    setBulkAlexaSource(source)
+    try {
+      const response = await bulkUpdateAlexaDeviceExposuresBySource(source, { enabled: true })
+      await refreshAlexaExposures()
+
+      toast({
+        title: "Alexa bulk enable complete",
+        description: response.message || `Updated ${sourceLabel} devices for Alexa.`,
+        variant: response.result?.failedCount ? "destructive" : "default"
+      })
+    } catch (error) {
+      toast({
+        title: "Alexa bulk enable failed",
+        description: error instanceof Error ? error.message : `Unable to update ${sourceLabel} devices for Alexa.`,
+        variant: "destructive"
+      })
+    } finally {
+      setBulkAlexaSource(null)
+    }
+  }, [refreshAlexaExposures, toast])
 
   const renderAlexaStatusBadge = useCallback((device: any) => {
     if (!isAdmin || !device?._id) {
@@ -2580,6 +2632,53 @@ export function Devices({
           </div>
         </CardContent>
       </Card>
+
+      {bulkAlexaSourceOptions.length > 0 ? (
+        <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
+          <CardContent className="p-4">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex min-w-[14rem] items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-cyan-500/20 bg-cyan-500/10 text-cyan-700 dark:text-cyan-200">
+                  <RadioTower className="h-4 w-4" />
+                </div>
+                <div>
+                  <h2 className="text-sm font-semibold text-foreground">Alexa Bulk Enable</h2>
+                  <p className="text-xs text-muted-foreground">
+                    {bulkAlexaSourceOptions.length} source group{bulkAlexaSourceOptions.length === 1 ? "" : "s"}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-1 flex-wrap gap-2">
+                {bulkAlexaSourceOptions.map((source) => {
+                  const pending = bulkAlexaSource === source.value
+                  const disabled = loadingAlexaExposure || bulkAlexaSource !== null
+
+                  return (
+                    <Button
+                      key={source.value}
+                      variant="outline"
+                      size="sm"
+                      className="h-auto min-h-9 justify-start gap-2 py-2"
+                      onClick={() => handleBulkEnableAlexaBySource(source.value, source.label)}
+                      disabled={disabled}
+                    >
+                      {pending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <RadioTower className="h-4 w-4 text-cyan-600" />
+                      )}
+                      <span className="text-left">Add all {source.label} to Alexa</span>
+                      <Badge variant="secondary" className="ml-auto">
+                        {source.enabledCount}/{source.count}
+                      </Badge>
+                    </Button>
+                  )
+                })}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
         <TabsList className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50">
