@@ -43,6 +43,21 @@ const alexaDeviceRateLimit = rateLimit({
     error: 'Too many Alexa device requests. Please retry shortly.'
   }
 });
+const alexaBulkExposureRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_ALEXA_BULK_EXPOSURE_RATE_LIMIT_WINDOW_MS || 60 * 1000)),
+  limit: Math.max(5, Number(process.env.HOMEBRAIN_ALEXA_BULK_EXPOSURE_RATE_LIMIT_MAX || 30)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator(req) {
+    return typeof ipKeyGenerator === 'function'
+      ? ipKeyGenerator(req.ip)
+      : (req.ip || req.socket?.remoteAddress || 'unknown');
+  },
+  message: {
+    success: false,
+    error: 'Too many Alexa bulk exposure requests. Please retry shortly.'
+  }
+});
 const alexaSessionCaptureRateLimit = rateLimit({
   windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_ALEXA_SESSION_CAPTURE_RATE_LIMIT_WINDOW_MS || 60 * 1000)),
   limit: Math.max(5, Number(process.env.HOMEBRAIN_ALEXA_SESSION_CAPTURE_RATE_LIMIT_MAX || 30)),
@@ -404,6 +419,42 @@ router.get('/exposures', admin, async (_req, res) => {
     return res.status(500).json({
       success: false,
       error: error.message || 'Failed to fetch Alexa exposures'
+    });
+  }
+});
+
+router.post('/exposures/devices/by-source/:source', alexaBulkExposureRateLimit, admin, async (req, res) => {
+  try {
+    const result = await alexaBridgeService.bulkUpdateDeviceExposuresBySource(
+      req.params.source,
+      {
+        enabled: req.body?.enabled !== false
+      }
+    );
+    const action = result.enabled ? 'Enabled' : 'Disabled';
+    const attention = result.validationErrorCount > 0
+      ? ` ${result.validationErrorCount} need Alexa mapping attention.`
+      : '';
+    const failed = result.failedCount > 0
+      ? ` ${result.failedCount} failed.`
+      : '';
+    const message = result.matchedCount === 0
+      ? `No ${result.sourceLabel} devices found.`
+      : `${action} ${result.changedCount} of ${result.matchedCount} ${result.sourceLabel} devices for Alexa.${attention}${failed}`;
+
+    return res.status(200).json({
+      success: result.failedCount === 0,
+      message,
+      result
+    });
+  } catch (error) {
+    console.error('POST /api/alexa/exposures/devices/by-source/:source - Error:', {
+      source: req.params.source,
+      message: error.message
+    });
+    return res.status(400).json({
+      success: false,
+      error: error.message || 'Failed to bulk update Alexa device exposures'
     });
   }
 });

@@ -2,13 +2,18 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  AlexaProjectionService,
   buildEndpointStatePropertiesForDevice,
   buildGroupStateProperties,
+  canonicalizeDeviceSource,
+  deviceMatchesSourceFilter,
+  getDeviceSource,
   inferDeviceTraits,
   inferGroupTraits,
   validateSceneExposure,
   validateWorkflowExposure
 } = require('../services/alexaProjectionService');
+const AlexaExposure = require('../models/AlexaExposure');
 
 test('inferDeviceTraits exposes supported Alexa interfaces for a color-capable light', () => {
   const traits = inferDeviceTraits({
@@ -158,4 +163,118 @@ test('validateWorkflowExposure accepts safe manual workflows and rejects unsuppo
   });
 
   assert.ok(unsafeWorkflow.validationErrors.some((entry) => entry.includes('unsupported action type')));
+});
+
+test('device source helpers canonicalize native radio and inferred integration devices', () => {
+  assert.equal(canonicalizeDeviceSource('zigbee'), 'homebrain-zigbee');
+  assert.equal(canonicalizeDeviceSource('z-wave'), 'homebrain-zwave');
+
+  assert.equal(
+    getDeviceSource({ properties: { homebrainDirect: { protocol: 'zwave' } } }),
+    'homebrain-zwave'
+  );
+  assert.equal(
+    getDeviceSource({ properties: { insteonAddress: '1A.2B.3C' } }),
+    'insteon'
+  );
+  assert.equal(
+    deviceMatchesSourceFilter({ properties: { source: 'homebrain-zigbee' } }, 'zigbee'),
+    true
+  );
+  assert.equal(
+    deviceMatchesSourceFilter({ properties: { matter: { nodeId: 12, transport: 'thread' } } }, 'thread'),
+    true
+  );
+});
+
+test('bulkUpdateDeviceExposuresBySource enables every matching source device', async (t) => {
+  const originalFind = AlexaExposure.find;
+  const originalSave = AlexaExposure.prototype.save;
+  const service = new AlexaProjectionService();
+  const existingExposure = new AlexaExposure({
+    entityType: 'device',
+    entityId: 'device-zigbee-1',
+    enabled: false
+  });
+  const savedExposures = new Map([[existingExposure.entityId, existingExposure]]);
+  const devices = [
+    {
+      _id: 'device-zigbee-1',
+      name: 'Zigbee Lamp',
+      type: 'light',
+      room: 'Living Room',
+      status: true,
+      brightness: 80,
+      isOnline: true,
+      properties: { source: 'homebrain-zigbee' }
+    },
+    {
+      _id: 'device-zigbee-2',
+      name: 'Zigbee Outlet',
+      type: 'switch',
+      room: 'Office',
+      status: false,
+      isOnline: true,
+      properties: { homebrainDirect: { protocol: 'zigbee' } }
+    },
+    {
+      _id: 'device-zwave-1',
+      name: 'Z-Wave Switch',
+      type: 'switch',
+      room: 'Hall',
+      status: true,
+      isOnline: true,
+      properties: { source: 'homebrain-zwave' }
+    }
+  ];
+
+  t.after(() => {
+    AlexaExposure.find = originalFind;
+    AlexaExposure.prototype.save = originalSave;
+  });
+
+  AlexaExposure.find = async (query = {}) => {
+    const ids = new Set(Array.isArray(query.entityId?.$in) ? query.entityId.$in : []);
+    return Array.from(savedExposures.values()).filter((exposure) => (
+      exposure.entityType === query.entityType && ids.has(exposure.entityId)
+    ));
+  };
+  AlexaExposure.prototype.save = async function saveStub() {
+    savedExposures.set(this.entityId, this);
+    return this;
+  };
+  service.loadContext = async () => ({
+    hubId: 'test-hub',
+    devices,
+    devicesById: new Map(devices.map((device) => [device._id, device])),
+    groups: [],
+    groupsById: new Map(),
+    groupsByNormalizedName: new Map(),
+    scenes: [],
+    scenesById: new Map(),
+    workflows: [],
+    workflowsById: new Map(),
+    exposures: Array.from(savedExposures.values()).map((exposure) => exposure.toObject())
+  });
+  service.listExposureSummaries = async () => Array.from(savedExposures.values()).map((exposure) => ({
+    entityType: exposure.entityType,
+    entityId: exposure.entityId,
+    enabled: exposure.enabled,
+    validationWarnings: exposure.validationWarnings,
+    validationErrors: exposure.validationErrors
+  }));
+
+  const result = await service.bulkUpdateDeviceExposuresBySource('zigbee');
+
+  assert.equal(result.source, 'homebrain-zigbee');
+  assert.equal(result.sourceLabel, 'Zigbee');
+  assert.equal(result.matchedCount, 2);
+  assert.equal(result.createdCount, 1);
+  assert.equal(result.changedCount, 2);
+  assert.equal(result.unchangedCount, 0);
+  assert.equal(result.failedCount, 0);
+  assert.equal(result.exposures.length, 2);
+  assert.equal(savedExposures.get('device-zigbee-1').enabled, true);
+  assert.equal(savedExposures.get('device-zigbee-2').enabled, true);
+  assert.equal(savedExposures.has('device-zwave-1'), false);
 });

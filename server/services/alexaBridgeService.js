@@ -531,6 +531,14 @@ class AlexaBridgeService {
     return exposure;
   }
 
+  async bulkUpdateDeviceExposuresBySource(source, updates = {}) {
+    const result = await alexaProjectionService.bulkUpdateDeviceExposuresBySource(source, updates);
+    void this.pushCatalogToBroker('bulk_exposure_updated').catch((error) => {
+      console.warn(`AlexaBridgeService: Failed to push catalog after bulk exposure update: ${error.message}`);
+    });
+    return result;
+  }
+
   async generateLinkCode({ actor = 'system', mode = 'private', ttlMinutes = DEFAULT_LINK_CODE_TTL_MINUTES } = {}) {
     const registration = await this.ensureRegistration();
     const code = generateReadableLinkCode();

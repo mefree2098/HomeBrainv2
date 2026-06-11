@@ -20,6 +20,25 @@ export type AlexaExposureSummary = {
   entity?: Record<string, any> | null;
 };
 
+export type AlexaBulkDeviceExposureResult = {
+  source: string;
+  sourceLabel: string;
+  enabled: boolean;
+  matchedCount: number;
+  createdCount: number;
+  changedCount: number;
+  unchangedCount: number;
+  failedCount: number;
+  validationErrorCount: number;
+  validationWarningCount: number;
+  failures?: Array<{
+    entityId?: string;
+    name?: string;
+    error?: string;
+  }>;
+  exposures?: AlexaExposureSummary[];
+};
+
 export type AlexaBrokerServiceStatus = {
   isInstalled: boolean;
   serviceStatus: string;
@@ -197,6 +216,26 @@ export const updateAlexaExposure = async (
   try {
     const response = await api.put(`/api/alexa/exposures/${entityType}/${entityId}`, payload);
     return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(getApiErrorMessage(error));
+  }
+};
+
+export const bulkUpdateAlexaDeviceExposuresBySource = async (
+  source: string,
+  payload: { enabled?: boolean } = { enabled: true }
+) => {
+  try {
+    const response = await api.post(
+      `/api/alexa/exposures/devices/by-source/${encodeURIComponent(source)}`,
+      payload
+    );
+    return response.data as {
+      success: boolean;
+      message?: string;
+      result?: AlexaBulkDeviceExposureResult;
+    };
   } catch (error) {
     console.error(error);
     throw new Error(getApiErrorMessage(error));
