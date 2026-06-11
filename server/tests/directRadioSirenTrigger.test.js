@@ -161,6 +161,19 @@ test('alarmon sounds a Z-Wave siren through the trigger path', async () => {
   assert.equal(setCalls[0].value, 255);
 });
 
+test('alarmoff stops a Sound-Switch siren instead of muting future playback', async () => {
+  const service = new DirectRadioService();
+  const setCalls = [];
+  service.getDirectNodeForDevice = () => nodeWithCommandClasses([SOUND_CC], setCalls);
+
+  await service.controlZWaveDevice(sirenDevice(), 'alarmoff', null, {});
+
+  assert.equal(setCalls.length, 1);
+  assert.equal(setCalls[0].valueId.commandClass, SOUND_CC);
+  assert.equal(setCalls[0].valueId.property, 'toneId');
+  assert.equal(setCalls[0].value, 0);
+});
+
 test('alarmon raises a muted siren volume before sounding', async () => {
   const service = new DirectRadioService();
   const setCalls = [];
@@ -185,6 +198,32 @@ test('alarmon raises a muted siren volume before sounding', async () => {
 
   assert.equal(setCalls.length, 2);
   assert.equal(setCalls[0].valueId.commandClass, CONFIGURATION_CC);
+  assert.equal(setCalls[0].value, 100);
+  assert.equal(setCalls[1].valueId.commandClass, SOUND_CC);
+  assert.equal(setCalls[1].valueId.property, 'toneId');
+  assert.equal(setCalls[1].value, 255);
+  assert.equal(updateData.properties.sirenVolume, 100);
+});
+
+test('alarmon restores muted Sound Switch runtime volume before sounding', async () => {
+  const service = new DirectRadioService();
+  const setCalls = [];
+  const device = sirenDevice();
+  device.properties.supportsSirenVolume = true;
+  device.properties.sirenVolume = 100;
+  const node = nodeWithCommandClasses([SOUND_CC], setCalls);
+  node.valueDB = {
+    hasValue: (valueId) => valueId?.commandClass === SOUND_CC && valueId?.property === 'volume',
+    getValue: (valueId) => (valueId?.commandClass === SOUND_CC && valueId?.property === 'volume' ? 0 : undefined)
+  };
+  service.getDirectNodeForDevice = () => node;
+
+  const updateData = {};
+  await service.controlZWaveDevice(device, 'alarmon', null, updateData);
+
+  assert.equal(setCalls.length, 2);
+  assert.equal(setCalls[0].valueId.commandClass, SOUND_CC);
+  assert.equal(setCalls[0].valueId.property, 'volume');
   assert.equal(setCalls[0].value, 100);
   assert.equal(setCalls[1].valueId.commandClass, SOUND_CC);
   assert.equal(setCalls[1].valueId.property, 'toneId');

@@ -2369,8 +2369,25 @@ supportsSirenSoundControl(device) {
   },
 
   async ensureAudibleZWaveSirenVolume(device, node, updateData = {}) {
+    const zwave = require('zwave-js');
     const currentVolume = normalizeInteger(device?.properties?.sirenVolume);
-    if (currentVolume === null || currentVolume > 0 || !this.supportsSirenVolumeControl(device)) {
+    const hasSoundSwitchVolume = hasZWaveValue(node, zwave.SoundSwitchCCValues.volume);
+    const hasSoundSwitchDefaultVolume = hasZWaveValue(node, zwave.SoundSwitchCCValues.defaultVolume);
+    const soundSwitchVolume = hasSoundSwitchVolume
+      ? normalizeInteger(getZWaveValue(node, zwave.SoundSwitchCCValues.volume))
+      : null;
+    const soundSwitchDefaultVolume = hasSoundSwitchDefaultVolume
+      ? normalizeInteger(getZWaveValue(node, zwave.SoundSwitchCCValues.defaultVolume))
+      : null;
+    const needsStoredVolumeRepair = currentVolume !== null
+      && currentVolume <= 0
+      && this.supportsSirenVolumeControl(device);
+    const needsRuntimeVolumeRepair = hasSoundSwitchVolume
+      && (soundSwitchVolume === null || soundSwitchVolume <= 0);
+    const needsDefaultVolumeRepair = hasSoundSwitchDefaultVolume
+      && (soundSwitchDefaultVolume === null || soundSwitchDefaultVolume <= 0);
+
+    if (!needsStoredVolumeRepair && !needsRuntimeVolumeRepair && !needsDefaultVolumeRepair) {
       return;
     }
 
@@ -2381,18 +2398,51 @@ supportsSirenSoundControl(device) {
       .filter((value) => value !== null && value > 0);
     const defaultVolume = normalizeInteger(parameter?.defaultValue);
     const maxVolume = normalizeInteger(range?.max) ?? normalizeInteger(parameter?.maxValue) ?? 100;
-    const targetVolume = optionValues.length > 0
-      ? Math.max(...optionValues)
-      : Math.max(1, Math.min(maxVolume, defaultVolume && defaultVolume > 0 ? defaultVolume : maxVolume));
+    let targetVolume = Math.max(1, Math.min(maxVolume, defaultVolume && defaultVolume > 0 ? defaultVolume : maxVolume));
+    if (optionValues.length > 0) {
+      targetVolume = Math.max(...optionValues);
+    }
+    if (currentVolume !== null && currentVolume > 0) {
+      targetVolume = currentVolume;
+    }
+    const repaired = [];
+
+    const repair = async (label, task) => {
+      await task();
+      repaired.push(label);
+    };
 
     try {
-      await this.setZWaveSirenVolume(device, node, targetVolume, updateData);
+      if (needsStoredVolumeRepair) {
+        await repair('stored_volume', async () => {
+          await this.setZWaveSirenVolume(device, node, targetVolume, updateData);
+        });
+      }
+      if (needsRuntimeVolumeRepair) {
+        await repair('sound_switch_volume', async () => {
+          await this.setZWaveValue(node, zwave.SoundSwitchCCValues.volume, targetVolume);
+        });
+      }
+      if (needsDefaultVolumeRepair) {
+        await repair('sound_switch_default_volume', async () => {
+          await this.setZWaveValue(node, zwave.SoundSwitchCCValues.defaultVolume, targetVolume);
+        });
+      }
+      updateData.properties = {
+        ...(device?.properties && typeof device.properties === 'object' ? device.properties : {}),
+        ...(updateData.properties && typeof updateData.properties === 'object' ? updateData.properties : {}),
+        supportsSirenVolume: true,
+        sirenVolume: targetVolume
+      };
       this.log('info', 'zwave', 'Raised muted siren volume before sounding alarm', {
         deviceId: device?._id?.toString?.() || null,
         name: device?.name || null,
         nodeId: node?.id || device?.properties?.homebrainDirect?.nodeId || null,
         previousVolume: currentVolume,
-        targetVolume
+        previousSoundSwitchVolume: soundSwitchVolume,
+        previousSoundSwitchDefaultVolume: soundSwitchDefaultVolume,
+        targetVolume,
+        repaired
       });
     } catch (error) {
       this.log('warn', 'zwave', 'Unable to raise muted siren volume before sounding alarm', {
@@ -2400,7 +2450,10 @@ supportsSirenSoundControl(device) {
         name: device?.name || null,
         nodeId: node?.id || device?.properties?.homebrainDirect?.nodeId || null,
         previousVolume: currentVolume,
+        previousSoundSwitchVolume: soundSwitchVolume,
+        previousSoundSwitchDefaultVolume: soundSwitchDefaultVolume,
         targetVolume,
+        repaired,
         error: error.message
       });
     }
@@ -2595,10 +2648,10 @@ async controlZWaveDevice(device, normalizedAction, commandValue, updateData = {}
         case 'alarmoff':
         case 'turnoffalarm':
         case 'silencealarm':
-          if (device?.properties?.supportsAlarm) {
-            await this.setZWaveValue(node, zwave.BinarySwitchCCValues.targetValue, false).catch(async () => {
-              await this.setZWaveValue(node, zwave.SoundSwitchCCValues.volume, 0);
-            });
+          if (device?.properties?.supportsAlarm || device?.type === 'siren' || this.isSirenLikeDirectDevice(device)) {
+            await this.controlZWaveSiren(node, false);
+          } else {
+            throw new Error('Alarm silence control is not available for this Z-Wave device');
           }
           break;
         default:
