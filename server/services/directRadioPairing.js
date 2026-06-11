@@ -439,6 +439,8 @@ createPairingSession(protocol, seconds, options = {}) {
       directDeviceName: null,
       pendingDsk: null,
       message: options.message || null,
+      assignRoom: trimString(options.assignRoom) || null,
+      addedDevices: [],
       events: []
     };
     this.activePairings.set(protocol, session);
@@ -558,14 +560,25 @@ completePairingSession(protocol, identity, device, reason) {
     }
 
     const timestamp = new Date().toISOString();
-    session.status = 'completed';
-    session.completedAt = timestamp;
     session.detectedIdentity = identity || null;
     session.directDeviceId = device?._id?.toString?.() || null;
     session.directDeviceName = device?.name || null;
-    session.message = device?.name
-      ? `${device.name} joined HomeBrain.`
-      : `${protocol === 'zwave' ? 'Z-Wave' : 'Zigbee'} device joined HomeBrain.`;
+    if (!Array.isArray(session.addedDevices)) {
+      session.addedDevices = [];
+    }
+    const normalizedIdentityId = identityId.toLowerCase();
+    if (!session.addedDevices.some((entry) => trimString(entry.identityId).toLowerCase() === normalizedIdentityId)) {
+      session.addedDevices.push({
+        identityId,
+        directDeviceId: session.directDeviceId,
+        name: device?.name || identityId,
+        room: device?.room || null,
+        addedAt: timestamp
+      });
+    }
+    if (identityId && !session.baselineIdentities.includes(identityId)) {
+      session.baselineIdentities.push(identityId);
+    }
     this.appendPairingEvent(protocol, {
       kind: 'completed',
       reason,
@@ -574,12 +587,36 @@ completePairingSession(protocol, identity, device, reason) {
       directDeviceName: session.directDeviceName,
       timestamp
     });
-    this.clearPairingTimer(protocol);
-    void this.stopPairing(protocol, {
+
+    // Failed-node replacement targets exactly one node: keep the original
+    // single-shot behavior of closing the window on completion.
+    if (protocol === 'zwave' && session.mode === 'replace_failed') {
+      session.status = 'completed';
+      session.completedAt = timestamp;
+      session.message = device?.name
+        ? `${device.name} joined HomeBrain.`
+        : 'Z-Wave device joined HomeBrain.';
+      this.clearPairingTimer(protocol);
+      void this.stopPairing(protocol, {
+        pairingId: session.id,
+        reason: 'pairing_completed'
+      }).catch((error) => {
+        console.warn(`DirectRadioService: Failed to close ${protocol} pairing after completion: ${error.message}`);
+      });
+      return session;
+    }
+
+    // Normal pairing windows stay open so several devices can be added in one
+    // pass; the session completes when the window elapses or is stopped.
+    session.status = 'active';
+    const addedCount = session.addedDevices.length;
+    session.message = `${device?.name || identityId} joined HomeBrain (${addedCount} device${addedCount === 1 ? '' : 's'} added). The window is still open for more devices.`;
+    this.log('info', protocol, 'Pairing window device added; window stays open for more devices', {
       pairingId: session.id,
-      reason: 'pairing_completed'
-    }).catch((error) => {
-      console.warn(`DirectRadioService: Failed to close ${protocol} pairing after completion: ${error.message}`);
+      identityId,
+      deviceName: device?.name || null,
+      addedCount,
+      assignRoom: session.assignRoom || null
     });
     return session;
   },
@@ -623,13 +660,30 @@ armPairingTimer(protocol, sessionId, seconds) {
     const timer = setTimeout(() => {
       const session = this.activePairings.get(protocol);
       if (session?.id === sessionId && !['completed', 'failed', 'stopped'].includes(session.status)) {
-        session.status = 'expired';
-        session.expiredAt = new Date().toISOString();
+        const addedCount = Array.isArray(session.addedDevices) ? session.addedDevices.length : 0;
         const operation = protocol === 'zwave' && session.mode === 'replace_failed'
           ? 'Z-Wave failed-node replacement'
           : protocol === 'zwave'
             ? 'Z-Wave inclusion'
             : 'Zigbee pairing';
+        if (addedCount > 0) {
+          session.status = 'completed';
+          session.completedAt = new Date().toISOString();
+          session.message = `${operation} window closed. ${addedCount} device${addedCount === 1 ? '' : 's'} joined HomeBrain.`;
+          this.appendPairingEvent(protocol, {
+            kind: 'completed',
+            message: session.message
+          });
+          void this.stopPairing(protocol, {
+            pairingId: session.id,
+            reason: 'pairing_window_elapsed'
+          }).catch((error) => {
+            console.warn(`DirectRadioService: Failed to close ${protocol} pairing after window elapsed: ${error.message}`);
+          });
+          return;
+        }
+        session.status = 'expired';
+        session.expiredAt = new Date().toISOString();
         session.message = `${operation} window expired before HomeBrain detected a completed device.`;
         this.appendPairingEvent(protocol, {
           kind: 'expired',
@@ -687,6 +741,9 @@ serializePairingSession(session) {
       directDeviceId: session.directDeviceId || null,
       directDeviceName: session.directDeviceName || null,
       message: session.message || null,
+      assignRoom: session.assignRoom || null,
+      addedDevices: Array.isArray(session.addedDevices) ? session.addedDevices.slice(-24) : [],
+      addedCount: Array.isArray(session.addedDevices) ? session.addedDevices.length : 0,
       completedAt: session.completedAt || null,
       failedAt: session.failedAt || null,
       expiredAt: session.expiredAt || null,
@@ -710,7 +767,7 @@ async startPairing(protocol, options = {}) {
       }
       this.clearPairingTimer('zigbee');
       this.clearZigbeePermitJoinRenewalTimer();
-      const session = this.createPairingSession('zigbee', seconds);
+      const session = this.createPairingSession('zigbee', seconds, { assignRoom: options.assignRoom });
       const permitSeconds = Math.min(seconds, ZIGBEE_PERMIT_JOIN_MAX_CHUNK_SECONDS);
       this.log('info', 'zigbee', 'Opening Zigbee permit-join window', {
         durationSeconds: seconds,
@@ -771,7 +828,7 @@ async startPairing(protocol, options = {}) {
           : dskCredential.pin
             ? 'Z-Wave secure inclusion is opening with the DSK PIN ready before the device joins.'
             : 'Z-Wave secure inclusion is opening. HomeBrain may ask for the first 5 digits from the device DSK label.'
-      });
+      , assignRoom: options.assignRoom });
       session.zwaveSecurityMode = zwaveSecurityMode;
       session.zwaveDskCredentialSource = dskCredential.source || null;
       session.zwaveDskPreloaded = Boolean(dskCredential.pin);

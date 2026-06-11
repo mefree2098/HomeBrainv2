@@ -12,6 +12,24 @@ private struct AddDeviceZWaveNodeSummary: Identifiable {
     let featureCount: Int
 }
 
+private struct AddDevicePairedEntry: Identifiable, Equatable {
+    let identityId: String
+    let name: String
+    let room: String
+    let addedAt: String
+
+    var id: String { identityId.isEmpty ? "\(name)-\(addedAt)" : identityId }
+
+    static func from(_ object: [String: Any]) -> AddDevicePairedEntry {
+        AddDevicePairedEntry(
+            identityId: JSON.string(object, "identityId"),
+            name: JSON.string(object, "name"),
+            room: JSON.string(object, "room"),
+            addedAt: JSON.string(object, "addedAt")
+        )
+    }
+}
+
 private struct AddDeviceZWaveRepairCandidate: Identifiable {
     let id: String
     let nodeId: Int
@@ -110,6 +128,8 @@ struct DevicesView: View {
     @State private var addDeviceRemovingZWaveNodeId: Int?
     @State private var reinterviewingZigbeeDeviceId: String?
     @State private var addDeviceKnownZWaveNodeIds: Set<Int>?
+    @State private var addDeviceAssignRoom = ""
+    @State private var addDeviceAddedDevices: [AddDevicePairedEntry] = []
     @State private var addDeviceKnownZWaveNodes: [AddDeviceZWaveNodeSummary] = []
     @State private var newName = ""
     @State private var newType = "light"
@@ -2735,6 +2755,24 @@ struct DevicesView: View {
                 addDeviceWindowPicker
             }
 
+            addDevicePickerRow("Assign room (optional)") {
+                Picker("Assign room", selection: $addDeviceAssignRoom) {
+                    Text("No room (Unassigned)").tag("")
+                    ForEach(availableRoomNames.filter { $0 != "Unassigned" }, id: \.self) { room in
+                        Text(room).tag(room)
+                    }
+                }
+                .pickerStyle(.menu)
+                .tint(HBPalette.accentBlue)
+                .disabled(addDeviceBusy)
+            }
+
+            Text("The window stays open for its full duration so you can pair several devices in one pass. Every device added is assigned to the selected room.")
+                .font(HBTypography.body(size: 12))
+                .foregroundStyle(HBPalette.textSecondary)
+
+            addDevicePairedListPanel
+
             if addDeviceMode == "zwave" {
                 addDevicePickerRow("Security") {
                     addDeviceSecurityPicker
@@ -2819,6 +2857,40 @@ struct DevicesView: View {
         .pickerStyle(.menu)
         .tint(HBPalette.accentBlue)
         .disabled(addDeviceBusy)
+    }
+
+    @ViewBuilder
+    private var addDevicePairedListPanel: some View {
+        if !addDeviceAddedDevices.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("\(addDeviceAddedDevices.count) device\(addDeviceAddedDevices.count == 1 ? "" : "s") added this window")
+                    .font(HBTypography.body(size: 13, weight: .semibold))
+                    .foregroundStyle(HBPalette.accentGreen)
+                ForEach(addDeviceAddedDevices) { entry in
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(HBPalette.accentGreen)
+                            .font(.system(size: 13))
+                        Text(entry.name.isEmpty ? entry.identityId : entry.name)
+                            .font(HBTypography.body(size: 13))
+                            .lineLimit(1)
+                        if !entry.room.isEmpty {
+                            Text("→ \(entry.room)")
+                                .font(HBTypography.body(size: 12))
+                                .foregroundStyle(HBPalette.textSecondary)
+                        }
+                        Spacer(minLength: 0)
+                        if !entry.addedAt.isEmpty {
+                            Text(JSON.displayDate(from: entry.addedAt))
+                                .font(HBTypography.body(size: 11))
+                                .foregroundStyle(HBPalette.textSecondary)
+                        }
+                    }
+                }
+            }
+            .padding(12)
+            .background(HBPalette.accentGreen.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
     }
 
     private var addDeviceSecurityPicker: some View {
@@ -4536,6 +4608,7 @@ struct DevicesView: View {
         addDeviceBusy = true
         addDevicePendingDsk = ""
         addDeviceDskPin = ""
+        addDeviceAddedDevices = []
         defer { addDeviceBusy = false }
 
         do {
@@ -4543,6 +4616,10 @@ struct DevicesView: View {
                 "protocol": protocolName,
                 "durationSeconds": addDeviceDurationSeconds
             ]
+            let trimmedAssignRoom = addDeviceAssignRoom.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmedAssignRoom.isEmpty {
+                body["room"] = trimmedAssignRoom
+            }
         if protocolName == "zwave" {
             body["zwaveSecurityMode"] = addDeviceZWaveSecurityMode
             if !preloadedDsk.isEmpty {
@@ -4559,7 +4636,7 @@ struct DevicesView: View {
             let suffix = expiresAt.isEmpty ? "" : " Window expires at \(JSON.displayDate(from: expiresAt))."
             addDeviceStatusMessage = protocolName == "zwave"
                 ? "Z-Wave \(zWaveSecurityLabel(addDeviceZWaveSecurityMode)) inclusion is live. \(zWaveSecurityGuidance(addDeviceZWaveSecurityMode))\(suffix)"
-                : "Zigbee permit-join is live. Pair or reset the device; HomeBrain adds it after join and interview.\(suffix)"
+                : "Zigbee permit-join is live. Pair as many devices as you like — the window stays open until it expires or you stop it.\(suffix)"
             await monitorDirectRadioAdd(protocolName: protocolName, durationSeconds: addDeviceDurationSeconds)
         } catch {
             addDeviceStatusMessage = error.localizedDescription
@@ -4588,6 +4665,13 @@ struct DevicesView: View {
                 let pairing = JSON.object(pairings[protocolName])
                 let pairingStatus = JSON.string(pairing, "status")
                 let message = JSON.string(pairing, "message")
+                let added = JSON.array(pairing["addedDevices"]).map(AddDevicePairedEntry.from)
+                if added != addDeviceAddedDevices {
+                    addDeviceAddedDevices = added
+                }
+                if pairingStatus == "active" && !message.isEmpty {
+                    addDeviceStatusMessage = message
+                }
 
                 if protocolName == "zwave" {
                     let pendingDsk = JSON.string(pairing, "pendingDsk")
@@ -4633,8 +4717,12 @@ struct DevicesView: View {
         }
 
         if showCreateSheet {
-            addDeviceStatusMessage = "\(addDeviceModeLabel(protocolName)) pairing window ended before HomeBrain verified a new device. Start pairing again and repeat the physical include action while the window is open."
-            errorMessage = addDeviceStatusMessage
+            if addDeviceAddedDevices.isEmpty {
+                addDeviceStatusMessage = "\(addDeviceModeLabel(protocolName)) pairing window ended before HomeBrain verified a new device. Start pairing again and repeat the physical include action while the window is open."
+                errorMessage = addDeviceStatusMessage
+            } else {
+                addDeviceStatusMessage = "Pairing window closed. \(addDeviceAddedDevices.count) device\(addDeviceAddedDevices.count == 1 ? "" : "s") joined HomeBrain."
+            }
         }
     }
 

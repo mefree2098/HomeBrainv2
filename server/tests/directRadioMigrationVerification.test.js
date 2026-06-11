@@ -4983,8 +4983,13 @@ test('generic pairing baseline ignores already-known Z-Wave nodes', () => {
     },
     'node value updated'
   );
-  assert.equal(completed.status, 'completed');
+  // Multi-device windows stay open after a successful join; the device is
+  // recorded in addedDevices and the session completes when the window ends.
+  assert.equal(completed.status, 'active');
   assert.equal(completed.detectedIdentity.id, '4');
+  assert.equal(completed.addedCount ?? completed.addedDevices.length, 1);
+  assert.equal(completed.addedDevices[0].identityId, '4');
+  assert.ok(completed.baselineIdentities.includes('4'));
 });
 
 test('generic Zigbee pairing ignores already-known devices even when they announce during permit-join', () => {
@@ -5061,10 +5066,12 @@ test('generic Zigbee pairing ignores already-known devices even when they announ
     'deviceInterview'
   );
 
-  assert.equal(completed.status, 'completed');
+  assert.equal(completed.status, 'active');
   assert.equal(completed.directDeviceId, 'device-front-door');
   assert.equal(completed.directDeviceName, 'Front Door');
   assert.equal(completed.detectedIdentity.id, '0xa4c13811e99effff');
+  assert.equal(completed.addedDevices.length, 1);
+  assert.equal(completed.addedDevices[0].name, 'Front Door');
 });
 
 test('Zigbee deviceJoined incomplete shells are detected without creating direct device records', async () => {
@@ -5169,9 +5176,12 @@ test('Z-Wave generic pairing waits for interview completion after a new node is 
     'node value updated'
   );
 
-  assert.equal(completed.status, 'completed');
+  // Multi-device windows stay open after the interview completes; the radio
+  // window is not closed until it elapses or the user stops it.
+  assert.equal(completed.status, 'active');
   assert.equal(completed.directDeviceId, 'device-node-13');
-  assert.equal(stopPairingCalls, 1);
+  assert.equal(completed.addedDevices.length, 1);
+  assert.equal(stopPairingCalls, 0);
 });
 
 test('Z-Wave node refresh requests a fresh interview for an already-included node', async () => {

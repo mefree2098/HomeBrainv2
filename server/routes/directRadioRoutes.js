@@ -356,7 +356,8 @@ router.post('/pairing/start', async (req, res) => {
     const result = await directRadioService.startPairing(protocol, {
       durationSeconds: req.body?.durationSeconds,
       dskPin: req.body?.dskPin,
-      zwaveSecurityMode: req.body?.zwaveSecurityMode || req.body?.securityMode
+      zwaveSecurityMode: req.body?.zwaveSecurityMode || req.body?.securityMode,
+      assignRoom: req.body?.room || req.body?.assignRoom
     });
     res.status(200).json({
       success: true,
