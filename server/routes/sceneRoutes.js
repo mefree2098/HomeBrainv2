@@ -264,6 +264,70 @@ router.post('/activate', async (req, res) => {
 });
 
 /**
+ * POST /api/scenes/deactivate
+ * Deactivate a scene
+ */
+router.post('/deactivate', async (req, res) => {
+  try {
+    console.log('SceneRoutes: POST /api/scenes/deactivate - Deactivating scene');
+    console.log('SceneRoutes: Deactivation data received:', req.body);
+
+    const { sceneId } = req.body;
+
+    if (!sceneId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Scene ID is required'
+      });
+    }
+
+    const result = await sceneService.deactivateScene(sceneId, {
+      command: {
+        source: req.body.source || 'manual',
+        reason: req.body.reason || 'Scene deactivated from HomeBrain UI/API',
+        actor: actorFromRequest(req)
+      }
+    });
+
+    console.log(`SceneRoutes: Scene deactivated successfully: ${result.scene.name}`);
+    res.status(200).json({
+      success: true,
+      message: result.message,
+      scene: result.scene,
+      deviceActions: result.deviceActions,
+      groupActions: result.groupActions,
+      actionResults: result.actionResults,
+      status: result.status
+    });
+  } catch (error) {
+    console.error('SceneRoutes: Error deactivating scene:', error.message);
+    console.error('SceneRoutes: Full error:', error);
+
+    if (error.status) {
+      res.status(error.status).json({
+        success: false,
+        error: error.message
+      });
+    } else if (error.message.includes('not found')) {
+      res.status(404).json({
+        success: false,
+        error: error.message
+      });
+    } else if (error.message.includes('required')) {
+      res.status(400).json({
+        success: false,
+        error: error.message
+      });
+    } else {
+      res.status(500).json({
+        success: false,
+        error: error.message || 'Failed to deactivate scene'
+      });
+    }
+  }
+});
+
+/**
  * PUT /api/scenes/:id
  * Update an existing scene
  */

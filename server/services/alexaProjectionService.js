@@ -69,12 +69,12 @@ function buildReportableCapability(interfaceName, supportedNames = [], extra = {
   };
 }
 
-function buildSceneCapability() {
+function buildSceneCapability({ supportsDeactivation = false } = {}) {
   return {
     type: 'AlexaInterface',
     interface: ALEXA_INTERFACES.SCENE_CONTROLLER,
     version: '3',
-    supportsDeactivation: false,
+    supportsDeactivation,
     proactivelyReported: false
   };
 }
@@ -923,7 +923,7 @@ function buildSceneEndpoint(scene, exposure, hubId, validation) {
     },
     capabilities: [
       buildAlexaBaseCapability(),
-      buildSceneCapability()
+      buildSceneCapability({ supportsDeactivation: true })
     ],
     state: {
       properties: [],

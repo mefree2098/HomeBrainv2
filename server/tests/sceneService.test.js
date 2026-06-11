@@ -39,7 +39,8 @@ test('createScene accepts validated device and group actions', async (t) => {
     deviceActions: [
       {
         deviceId,
-        action: 'turn_off'
+        action: 'set_brightness',
+        brightness: 42
       }
     ],
     groupActions: [
@@ -52,6 +53,7 @@ test('createScene accepts validated device and group actions', async (t) => {
 
   assert.equal(result.name, 'Movie Night');
   assert.equal(result.deviceActions.length, 1);
+  assert.equal(result.deviceActions[0].value, 42);
   assert.equal(result.groupActions.length, 1);
   assert.equal(result.groupActions[0].groupId.toString(), groupId);
 });
@@ -71,6 +73,7 @@ test('activateScene executes device and group actions through workflow execution
   const deviceId = new mongoose.Types.ObjectId().toString();
   const groupId = new mongoose.Types.ObjectId().toString();
   let receivedActions = null;
+  let updateManyCalled = false;
 
   const sceneDoc = {
     _id: sceneId,
@@ -81,8 +84,8 @@ test('activateScene executes device and group actions through workflow execution
     deviceActions: [
       {
         deviceId,
-        action: 'turn_off',
-        value: null
+        action: 'set_brightness',
+        value: 37
       }
     ],
     groupActions: [
@@ -103,8 +106,8 @@ test('activateScene executes device and group actions through workflow execution
               _id: deviceId,
               name: 'Hall Lamp'
             },
-            action: 'turn_off',
-            value: null
+            action: 'set_brightness',
+            value: 37
           }
         ];
       }
@@ -126,7 +129,10 @@ test('activateScene executes device and group actions through workflow execution
     }
   };
 
-  Scene.updateMany = async () => ({ acknowledged: true });
+  Scene.updateMany = async () => {
+    updateManyCalled = true;
+    throw new Error('activateScene should not deactivate other scenes');
+  };
   Scene.findById = async () => sceneDoc;
   workflowExecutionService.executeActionSequence = async (actions) => {
     receivedActions = actions;
@@ -163,11 +169,161 @@ test('activateScene executes device and group actions through workflow execution
   assert.ok(Array.isArray(receivedActions));
   assert.equal(receivedActions.length, 2);
   assert.equal(receivedActions[0].target, deviceId);
+  assert.equal(receivedActions[0].parameters.action, 'set_brightness');
+  assert.equal(receivedActions[0].parameters.value, 37);
+  assert.equal(receivedActions[0].parameters.brightness, 37);
   assert.equal(receivedActions[1].target.kind, 'device_group');
   assert.equal(receivedActions[1].target.group, groupId);
+  assert.equal(updateManyCalled, false);
+  assert.equal(sceneDoc.active, true);
+  assert.equal(sceneDoc.activationCount, 1);
   assert.equal(result.deviceActions.length, 1);
   assert.equal(result.deviceActions[0].deviceName, 'Hall Lamp');
+  assert.equal(result.deviceActions[0].value, 37);
   assert.equal(result.groupActions.length, 1);
   assert.equal(result.groupActions[0].groupName, 'Whole Home Lights');
+  assert.equal(result.status, 'success');
+});
+
+test('deactivateScene turns off safe scene actions without reversing already-off or locked actions', async (t) => {
+  const originalFindById = Scene.findById;
+  const originalExecuteActionSequence = workflowExecutionService.executeActionSequence;
+
+  t.after(() => {
+    Scene.findById = originalFindById;
+    workflowExecutionService.executeActionSequence = originalExecuteActionSequence;
+  });
+
+  const sceneId = new mongoose.Types.ObjectId().toString();
+  const dimmerId = new mongoose.Types.ObjectId().toString();
+  const switchId = new mongoose.Types.ObjectId().toString();
+  const shadesGroupId = new mongoose.Types.ObjectId().toString();
+  const doorsGroupId = new mongoose.Types.ObjectId().toString();
+  let receivedActions = null;
+
+  const sceneDoc = {
+    _id: sceneId,
+    name: 'Evening',
+    active: true,
+    activationCount: 5,
+    deviceActions: [
+      {
+        deviceId: dimmerId,
+        action: 'set_brightness',
+        value: 37
+      },
+      {
+        deviceId: switchId,
+        action: 'turn_off',
+        value: null
+      }
+    ],
+    groupActions: [
+      {
+        groupId: shadesGroupId,
+        action: 'open',
+        value: null
+      },
+      {
+        groupId: doorsGroupId,
+        action: 'lock',
+        value: null
+      }
+    ],
+    async save() {
+      return this;
+    },
+    async populate(path) {
+      if (String(path).startsWith('deviceActions')) {
+        this.deviceActions = [
+          {
+            deviceId: {
+              _id: dimmerId,
+              name: 'Living Room Dimmer'
+            },
+            action: 'set_brightness',
+            value: 37
+          },
+          {
+            deviceId: {
+              _id: switchId,
+              name: 'Porch Switch'
+            },
+            action: 'turn_off',
+            value: null
+          }
+        ];
+      }
+
+      if (String(path).startsWith('groupActions')) {
+        this.groupActions = [
+          {
+            groupId: {
+              _id: shadesGroupId,
+              name: 'Main Shades'
+            },
+            action: 'open',
+            value: null
+          },
+          {
+            groupId: {
+              _id: doorsGroupId,
+              name: 'Door Locks'
+            },
+            action: 'lock',
+            value: null
+          }
+        ];
+      }
+
+      return this;
+    }
+  };
+
+  Scene.findById = async () => sceneDoc;
+  workflowExecutionService.executeActionSequence = async (actions) => {
+    receivedActions = actions;
+    return {
+      status: 'success',
+      successfulActions: 2,
+      failedActions: 0,
+      actionResults: [
+        {
+          actionIndex: 0,
+          success: true,
+          target: dimmerId,
+          message: 'Device action executed'
+        },
+        {
+          actionIndex: 1,
+          success: true,
+          target: {
+            kind: 'device_group',
+            group: 'Main Shades'
+          },
+          message: 'Group action executed',
+          details: {
+            group: 'Main Shades'
+          }
+        }
+      ]
+    };
+  };
+
+  const result = await sceneService.deactivateScene(sceneId);
+
+  assert.equal(sceneDoc.active, false);
+  assert.equal(sceneDoc.activationCount, 5);
+  assert.equal(receivedActions.length, 2);
+  assert.equal(receivedActions[0].target, dimmerId);
+  assert.equal(receivedActions[0].parameters.action, 'turn_off');
+  assert.equal(receivedActions[0].parameters.value, null);
+  assert.equal(receivedActions[1].target.kind, 'device_group');
+  assert.equal(receivedActions[1].target.group, shadesGroupId);
+  assert.equal(receivedActions[1].parameters.action, 'close');
+  assert.equal(result.deviceActions.length, 1);
+  assert.equal(result.deviceActions[0].deviceName, 'Living Room Dimmer');
+  assert.equal(result.groupActions.length, 1);
+  assert.equal(result.groupActions[0].groupName, 'Main Shades');
   assert.equal(result.status, 'success');
 });

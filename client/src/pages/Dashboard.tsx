@@ -52,7 +52,7 @@ import {
   getDeviceSourceLabel
 } from "@/components/devices/DevicePicker"
 import { getDevices, controlDevice } from "@/api/devices"
-import { getScenes, activateScene } from "@/api/scenes"
+import { getScenes, activateScene, deactivateScene } from "@/api/scenes"
 import { getVoiceDevices } from "@/api/voice"
 import { getDashboardViews, updateDashboardViews } from "@/api/profiles"
 import { useFavorites } from "@/hooks/useFavorites"
@@ -742,6 +742,11 @@ export function Dashboard() {
   const handleSceneActivation = async (sceneId: string) => {
     try {
       await activateScene({ sceneId })
+      setScenes(prev => prev.map(scene =>
+        scene._id === sceneId
+          ? { ...scene, active: true }
+          : scene
+      ))
       toast({
         title: "Scene Activated",
         description: "Scene has been activated successfully"
@@ -751,6 +756,28 @@ export function Dashboard() {
       toast({
         title: "Error",
         description: "Failed to activate scene",
+        variant: "destructive"
+      })
+    }
+  }
+
+  const handleSceneDeactivation = async (sceneId: string) => {
+    try {
+      await deactivateScene({ sceneId })
+      setScenes(prev => prev.map(scene =>
+        scene._id === sceneId
+          ? { ...scene, active: false }
+          : scene
+      ))
+      toast({
+        title: "Scene Deactivated",
+        description: "Scene has been turned off successfully"
+      })
+    } catch (error) {
+      console.error("Failed to deactivate scene:", error)
+      toast({
+        title: "Error",
+        description: "Failed to deactivate scene",
         variant: "destructive"
       })
     }
@@ -1077,6 +1104,7 @@ export function Dashboard() {
         <QuickActions
           scenes={scenes}
           onSceneActivate={handleSceneActivation}
+          onSceneDeactivate={handleSceneDeactivation}
           favoriteSceneIds={favoriteSceneIds}
           onToggleFavorite={toggleSceneFavorite}
           canModifyFavorites={hasProfile}

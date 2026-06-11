@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Textarea } from "@/components/ui/textarea"
 import {
   Play,
+  PowerOff,
   Plus,
   Layers3,
   Moon,
@@ -20,7 +21,7 @@ import {
   Edit,
   Trash2
 } from "lucide-react"
-import { getScenes, activateScene, createScene, createSceneFromNaturalLanguage, updateScene, deleteScene, type SceneRecord } from "@/api/scenes"
+import { getScenes, activateScene, deactivateScene, createScene, createSceneFromNaturalLanguage, updateScene, deleteScene, type SceneRecord } from "@/api/scenes"
 import { getDeviceGroups, getDevices, type DeviceGroupSummary, type DeviceRecord } from "@/api/devices"
 import { AlexaExposureControl } from "@/components/alexa/AlexaExposureControl"
 import { useToast } from "@/hooks/useToast"
@@ -96,13 +97,37 @@ export function Scenes() {
       setScenes(prev => prev.map(scene => 
         scene._id === sceneId 
           ? { ...scene, active: true }
-          : { ...scene, active: false }
+          : scene
       ))
     } catch (error) {
       console.error('Failed to activate scene:', error)
       toast({
         title: "Error",
         description: error.message || "Failed to activate scene",
+        variant: "destructive"
+      })
+    }
+  }
+
+  const handleSceneDeactivation = async (sceneId: string, sceneName: string) => {
+    try {
+      console.log('Deactivating scene:', { sceneId, sceneName })
+      await deactivateScene({ sceneId })
+      toast({
+        title: "Scene Deactivated",
+        description: `${sceneName} scene has been turned off successfully`
+      })
+
+      setScenes(prev => prev.map(scene =>
+        scene._id === sceneId
+          ? { ...scene, active: false }
+          : scene
+      ))
+    } catch (error) {
+      console.error('Failed to deactivate scene:', error)
+      toast({
+        title: "Error",
+        description: error.message || "Failed to deactivate scene",
         variant: "destructive"
       })
     }
@@ -396,7 +421,7 @@ export function Scenes() {
 
         <Card className="bg-gradient-to-br from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-800/20 border-green-200 dark:border-green-800">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Active Scene</CardTitle>
+            <CardTitle className="text-sm font-medium">Active Scenes</CardTitle>
             <Play className="h-4 w-4 text-green-600" />
           </CardHeader>
           <CardContent>
@@ -404,7 +429,7 @@ export function Scenes() {
               {scenes.filter(scene => scene.active).length}
             </div>
             <p className="text-xs text-green-600/80 dark:text-green-400/80">
-              Currently running
+              Currently on
             </p>
           </CardContent>
         </Card>
@@ -478,22 +503,31 @@ export function Scenes() {
                   </span>
                 </div>
 
-                <div className="flex gap-2">
-                  <Button
-                    onClick={() => handleSceneActivation(scene._id, scene.name)}
-                    className={`flex-1 bg-gradient-to-r ${getSceneGradient(scene.name)} hover:shadow-lg transition-all duration-200 text-white border-0`}
-                    disabled={scene.active}
-                  >
-                    <Play className="h-4 w-4 mr-2" />
-                    {scene.active ? "Scene Active" : "Activate Scene"}
-                  </Button>
+                <div className="space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      onClick={() => handleSceneActivation(scene._id, scene.name)}
+                      className={`bg-gradient-to-r ${getSceneGradient(scene.name)} hover:shadow-lg transition-all duration-200 text-white border-0`}
+                    >
+                      <Play className="h-4 w-4 mr-2" />
+                      Turn On
+                    </Button>
+                    <Button
+                      onClick={() => handleSceneDeactivation(scene._id, scene.name)}
+                      variant="outline"
+                      className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800 dark:border-red-900/60 dark:text-red-300 dark:hover:bg-red-950/30"
+                    >
+                      <PowerOff className="h-4 w-4 mr-2" />
+                      Turn Off
+                    </Button>
+                  </div>
                   {isAdmin ? (
-                    <>
+                    <div className="flex gap-2">
                       <Button
                         size="icon"
                         variant="outline"
                         onClick={() => handleEditScene(scene)}
-                        className="hover:bg-blue-50 dark:hover:bg-blue-950/20"
+                        className="flex-1 hover:bg-blue-50 dark:hover:bg-blue-950/20"
                       >
                         <Edit className="h-4 w-4" />
                       </Button>
@@ -501,11 +535,11 @@ export function Scenes() {
                         size="icon"
                         variant="outline"
                         onClick={() => handleDeleteScene(scene._id, scene.name)}
-                        className="hover:bg-red-50 dark:hover:bg-red-950/20 hover:text-red-600 dark:hover:text-red-400"
+                        className="flex-1 hover:bg-red-50 dark:hover:bg-red-950/20 hover:text-red-600 dark:hover:text-red-400"
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
-                    </>
+                    </div>
                   ) : null}
                 </div>
 

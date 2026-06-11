@@ -630,6 +630,55 @@ test('device_control action requires SmartThings post-command verification in wo
   assert.equal(result.status, 'success');
 });
 
+test('device_control action preserves explicit scene brightness values', async (t) => {
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const originalFindById = Device.findById;
+  const originalControlDevice = deviceService.controlDevice;
+  let receivedCall = null;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    deviceService.controlDevice = originalControlDevice;
+  });
+
+  Device.findById = () => ({
+    lean: async () => ({
+      _id: deviceId,
+      name: 'Scene Dimmer',
+      type: 'light',
+      status: false,
+      isOnline: true,
+      properties: {
+        source: 'local'
+      }
+    })
+  });
+
+  deviceService.controlDevice = async (target, action, value, options) => {
+    receivedCall = { target, action, value, options };
+    return {
+      message: 'Brightness set'
+    };
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'device_control',
+      target: deviceId,
+      parameters: {
+        action: 'set_brightness',
+        value: 37,
+        brightness: 37
+      }
+    }
+  ], { context: {} });
+
+  assert.equal(result.status, 'success');
+  assert.equal(receivedCall.target, deviceId);
+  assert.equal(receivedCall.action, 'set_brightness');
+  assert.equal(receivedCall.value, 37);
+});
+
 test('device_control action routes native radio and Matter targets without cloud post-command verification', async (t) => {
   const originalFindById = Device.findById;
   const originalControlDevice = deviceService.controlDevice;

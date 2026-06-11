@@ -380,6 +380,84 @@ test('executeDirective acknowledges Alexa workflow scenes without waiting for th
   ]);
 });
 
+test('executeDirective deactivates Alexa scene endpoints', async (t) => {
+  const bridge = new AlexaBridgeService();
+  const sceneService = require('../services/sceneService');
+
+  const originalGetCatalogEntryByEndpointId = alexaProjectionService.getCatalogEntryByEndpointId;
+  const originalGetStateForEndpoint = alexaProjectionService.getStateForEndpoint;
+  const originalDeactivateScene = sceneService.deactivateScene;
+
+  t.after(() => {
+    alexaProjectionService.getCatalogEntryByEndpointId = originalGetCatalogEntryByEndpointId;
+    alexaProjectionService.getStateForEndpoint = originalGetStateForEndpoint;
+    sceneService.deactivateScene = originalDeactivateScene;
+  });
+
+  alexaProjectionService.getCatalogEntryByEndpointId = async () => ({
+    exposure: {
+      entityType: 'scene',
+      entityId: 'scene-movie-night-1'
+    },
+    entity: {
+      _id: 'scene-movie-night-1',
+      name: 'Movie Night'
+    },
+    validationErrors: [],
+    endpoint: {
+      state: {
+        properties: []
+      }
+    }
+  });
+  alexaProjectionService.getStateForEndpoint = async () => {
+    throw new Error('Alexa scene deactivation responses should not fetch endpoint state');
+  };
+
+  let receivedCall = null;
+  sceneService.deactivateScene = async (...args) => {
+    receivedCall = args;
+    return {
+      scene: {
+        _id: 'scene-movie-night-1',
+        name: 'Movie Night'
+      },
+      message: 'Scene deactivated'
+    };
+  };
+
+  const result = await bridge.executeDirective({
+    directive: {
+      header: {
+        namespace: 'Alexa.SceneController',
+        name: 'Deactivate',
+        correlationToken: 'scene-corr-2'
+      },
+      endpoint: {
+        endpointId: 'hb:hub-1:scene:scene-movie-night-1'
+      },
+      payload: {}
+    }
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.namespace, 'Alexa.SceneController');
+  assert.equal(result.name, 'Deactivate');
+  assert.deepEqual(result.properties, []);
+  assert.deepEqual(receivedCall, [
+    'scene-movie-night-1',
+    {
+      command: {
+        source: 'alexa',
+        triggerSource: 'alexa',
+        reason: 'Alexa scene deactivation',
+        actor: 'alexa',
+        correlationId: 'hb:hub-1:scene:scene-movie-night-1'
+      }
+    }
+  ]);
+});
+
 test('getBrokerDeliveryStatus and flushBrokerEvents proxy broker delivery state through relay auth', async (t) => {
   const bridge = new AlexaBridgeService();
   const brokerCalls = [];
