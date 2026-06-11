@@ -108,7 +108,8 @@ router.get('/', async (req, res) => {
 router.delete('/', async (req, res) => {
   try {
     const result = await notificationService.clearNotifications(getUserId(req), {
-      channel: req.query.channel || req.body?.channel
+      channel: req.query.channel || req.body?.channel,
+      includeResolved: req.query.includeResolved ?? req.query.includeHistory ?? req.body?.includeResolved ?? req.body?.includeHistory
     });
     const counts = await notificationService.getUnreadCounts(getUserId(req));
     res.status(200).json({
@@ -125,7 +126,8 @@ router.delete('/', async (req, res) => {
 router.post('/clear', async (req, res) => {
   try {
     const result = await notificationService.clearNotifications(getUserId(req), {
-      channel: req.body?.channel
+      channel: req.body?.channel,
+      includeResolved: req.body?.includeResolved ?? req.body?.includeHistory
     });
     const counts = await notificationService.getUnreadCounts(getUserId(req));
     res.status(200).json({

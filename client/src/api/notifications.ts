@@ -103,8 +103,14 @@ export const clearNotification = async (notificationId: string) => {
   return response.data;
 };
 
-export const clearNotifications = async (channel?: NotificationChannel | 'all') => {
-  const response = await api.post('/api/notifications/clear', channel && channel !== 'all' ? { channel } : {});
+export const clearNotifications = async (
+  channel?: NotificationChannel | 'all',
+  options: { includeHistory?: boolean } = {}
+) => {
+  const body: Record<string, string | boolean> = {};
+  if (channel && channel !== 'all') body.channel = channel;
+  if (options.includeHistory) body.includeHistory = true;
+  const response = await api.post('/api/notifications/clear', body);
   return response.data;
 };
 

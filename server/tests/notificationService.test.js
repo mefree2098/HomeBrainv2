@@ -250,6 +250,156 @@ test('createSystemNotification does not resend APNs for an existing security eve
   assert.equal(sent[0].payload.eventKey, input.eventKey);
 });
 
+test('clearNotifications rejects invalid channels without clearing notifications', async (t) => {
+  const originalUpdateMany = HomeBrainNotification.updateMany;
+  const originalPublishSafe = eventStreamService.publishSafe;
+  let updateManyCalled = false;
+  let publishCalled = false;
+
+  HomeBrainNotification.updateMany = async () => {
+    updateManyCalled = true;
+    return { modifiedCount: 10 };
+  };
+  eventStreamService.publishSafe = () => {
+    publishCalled = true;
+  };
+
+  t.after(() => {
+    HomeBrainNotification.updateMany = originalUpdateMany;
+    eventStreamService.publishSafe = originalPublishSafe;
+  });
+
+  await assert.rejects(
+    () => notificationService.clearNotifications('507f1f77bcf86cd799439011', { channel: '__bogus__' }),
+    (error) => error.message === 'Invalid notification channel.' && error.status === 400
+  );
+  assert.equal(updateManyCalled, false);
+  assert.equal(publishCalled, false);
+});
+
+test('clearNotifications excludes resolved notifications unless history is included', async (t) => {
+  const originalUpdateMany = HomeBrainNotification.updateMany;
+  const originalPublishSafe = eventStreamService.publishSafe;
+  const calls = [];
+
+  HomeBrainNotification.updateMany = async (filter, update) => {
+    calls.push({ filter, update });
+    return { modifiedCount: calls.length };
+  };
+  eventStreamService.publishSafe = () => {};
+
+  t.after(() => {
+    HomeBrainNotification.updateMany = originalUpdateMany;
+    eventStreamService.publishSafe = originalPublishSafe;
+  });
+
+  await notificationService.clearNotifications('507f1f77bcf86cd799439011', { channel: 'normal' });
+  await notificationService.clearNotifications('507f1f77bcf86cd799439011', {
+    channel: 'normal',
+    includeHistory: true
+  });
+
+  assert.equal(calls[0].filter.channel, 'normal');
+  assert.equal(calls[0].filter.clearedAt, null);
+  assert.equal(calls[0].filter.resolvedAt, null);
+  assert.equal(calls[1].filter.channel, 'normal');
+  assert.equal(calls[1].filter.clearedAt, null);
+  assert.equal(Object.hasOwn(calls[1].filter, 'resolvedAt'), false);
+});
+
+test('clearNotification can clear resolved history entries', async (t) => {
+  const originalFindOneAndUpdate = HomeBrainNotification.findOneAndUpdate;
+  const originalFindOne = HomeBrainNotification.findOne;
+  const originalPublishSafe = eventStreamService.publishSafe;
+  let capturedFilter = null;
+  const publishedEvents = [];
+
+  HomeBrainNotification.findOneAndUpdate = async (filter, update) => {
+    capturedFilter = filter;
+    return {
+      _id: filter._id,
+      userId: filter.userId,
+      channel: 'normal',
+      severity: 'warning',
+      category: 'device',
+      title: 'Device offline',
+      message: 'A device is offline.',
+      resolvedAt: new Date('2026-06-10T12:00:00.000Z'),
+      clearedAt: update.$set.clearedAt,
+      createdAt: new Date('2026-06-10T12:00:00.000Z'),
+      updatedAt: new Date('2026-06-10T12:00:00.000Z')
+    };
+  };
+  HomeBrainNotification.findOne = () => {
+    throw new Error('findOne should not be called when update succeeds');
+  };
+  eventStreamService.publishSafe = (event) => {
+    publishedEvents.push(event);
+  };
+
+  t.after(() => {
+    HomeBrainNotification.findOneAndUpdate = originalFindOneAndUpdate;
+    HomeBrainNotification.findOne = originalFindOne;
+    eventStreamService.publishSafe = originalPublishSafe;
+  });
+
+  const result = await notificationService.clearNotification('507f1f77bcf86cd799439011', 'notification-1');
+
+  assert.equal(capturedFilter._id, 'notification-1');
+  assert.equal(capturedFilter.clearedAt, null);
+  assert.equal(Object.hasOwn(capturedFilter, 'resolvedAt'), false);
+  assert.equal(result.id, 'notification-1');
+  assert.ok(result.clearedAt);
+  assert.equal(publishedEvents[0].type, 'notification.cleared');
+});
+
+test('clearNotification is idempotent for already-cleared notifications', async (t) => {
+  const originalFindOneAndUpdate = HomeBrainNotification.findOneAndUpdate;
+  const originalFindOne = HomeBrainNotification.findOne;
+  const originalPublishSafe = eventStreamService.publishSafe;
+  let findOneFilter = null;
+  let publishCalled = false;
+  const clearedAt = new Date('2026-06-10T12:00:00.000Z');
+
+  HomeBrainNotification.findOneAndUpdate = async () => null;
+  HomeBrainNotification.findOne = (filter) => {
+    findOneFilter = filter;
+    return {
+      lean: async () => ({
+        _id: filter._id,
+        userId: filter.userId,
+        channel: 'normal',
+        severity: 'warning',
+        category: 'device',
+        title: 'Device offline',
+        message: 'A device is offline.',
+        clearedAt,
+        createdAt: clearedAt,
+        updatedAt: clearedAt
+      })
+    };
+  };
+  eventStreamService.publishSafe = () => {
+    publishCalled = true;
+  };
+
+  t.after(() => {
+    HomeBrainNotification.findOneAndUpdate = originalFindOneAndUpdate;
+    HomeBrainNotification.findOne = originalFindOne;
+    eventStreamService.publishSafe = originalPublishSafe;
+  });
+
+  const result = await notificationService.clearNotification('507f1f77bcf86cd799439011', 'notification-1');
+
+  assert.deepEqual(findOneFilter, {
+    _id: 'notification-1',
+    userId: '507f1f77bcf86cd799439011'
+  });
+  assert.equal(result.id, 'notification-1');
+  assert.equal(result.clearedAt, clearedAt);
+  assert.equal(publishCalled, false);
+});
+
 test('recordSensorBatteryNotifications separates monitored security battery deaths from normal items', async (t) => {
   const originalUserFind = User.find;
   const originalFindOneAndUpdate = HomeBrainNotification.findOneAndUpdate;

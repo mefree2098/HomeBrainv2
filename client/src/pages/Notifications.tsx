@@ -59,7 +59,7 @@ export function Notifications() {
 
   const handleClearAll = async () => {
     try {
-      await clearNotifications(filter);
+      await clearNotifications(filter, { includeHistory });
       await loadNotifications();
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to clear notifications.';
