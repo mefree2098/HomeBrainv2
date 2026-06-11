@@ -115,6 +115,69 @@ test('validateSceneExposure accepts a scene backed by safe device groups', () =>
   assert.equal(result.devices.length, 2);
 });
 
+test('scene Alexa endpoints support deactivation while workflow scene endpoints remain activate-only', () => {
+  const service = new AlexaProjectionService();
+  const context = {
+    hubId: 'hub-1',
+    devicesById: new Map([
+      ['device-light-1', {
+        _id: 'device-light-1',
+        name: 'Lamp',
+        type: 'light',
+        status: true,
+        brightness: 60,
+        isOnline: true
+      }]
+    ]),
+    groupsById: new Map(),
+    groupsByNormalizedName: new Map(),
+    scenesById: new Map([
+      ['scene-1', {
+        _id: 'scene-1',
+        name: 'Movie Night',
+        deviceActions: [
+          { deviceId: 'device-light-1', action: 'set_brightness', value: 37 }
+        ],
+        groupActions: []
+      }]
+    ]),
+    workflowsById: new Map([
+      ['workflow-1', {
+        _id: 'workflow-1',
+        name: 'Night TV',
+        enabled: true,
+        trigger: { type: 'manual', conditions: {} },
+        actions: [
+          { type: 'device_control', target: 'device-light-1', parameters: { action: 'turn_on' } }
+        ]
+      }]
+    ])
+  };
+
+  const sceneRecord = service.buildRecordForExposure({
+    entityType: 'scene',
+    entityId: 'scene-1',
+    enabled: true,
+    friendlyName: 'Movie Night'
+  }, context);
+  const workflowRecord = service.buildRecordForExposure({
+    entityType: 'workflow',
+    entityId: 'workflow-1',
+    enabled: true,
+    friendlyName: 'Night TV'
+  }, context);
+
+  const sceneController = sceneRecord.endpoint.capabilities.find((capability) => (
+    capability.interface === 'Alexa.SceneController'
+  ));
+  const workflowSceneController = workflowRecord.endpoint.capabilities.find((capability) => (
+    capability.interface === 'Alexa.SceneController'
+  ));
+
+  assert.equal(sceneController.supportsDeactivation, true);
+  assert.equal(workflowSceneController.supportsDeactivation, false);
+});
+
 test('validateWorkflowExposure accepts safe manual workflows and rejects unsupported actions', () => {
   const safeWorkflow = validateWorkflowExposure({
     _id: 'workflow-1',

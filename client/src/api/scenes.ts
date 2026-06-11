@@ -54,6 +54,21 @@ export const activateScene = async (data: { sceneId: string }) => {
   }
 }
 
+// Description: Deactivate a scene
+// Endpoint: POST /api/scenes/deactivate
+// Request: { sceneId: string }
+// Response: { success: boolean, message: string }
+export const deactivateScene = async (data: { sceneId: string }) => {
+  console.log('Deactivating scene:', data)
+  try {
+    const response = await api.post('/api/scenes/deactivate', data);
+    return response.data;
+  } catch (error) {
+    console.error('Error deactivating scene:', error);
+    throw new Error(error?.response?.data?.error || error.message);
+  }
+}
+
 // Description: Create a new scene
 // Endpoint: POST /api/scenes
 // Request: { name: string, description: string, devices: Array<string>, deviceActions?: Array<object>, groupActions?: Array<object> }

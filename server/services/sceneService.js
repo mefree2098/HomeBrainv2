@@ -11,6 +11,116 @@ function toIdString(value) {
   return sanitizeString(value?._id?.toString?.() || value?.toString?.() || value);
 }
 
+function normalizeSceneId(value) {
+  const sceneId = toIdString(value);
+  if (!/^[a-f\d]{24}$/i.test(sceneId)) {
+    const error = new Error('Scene ID must be a valid ID');
+    error.status = 400;
+    throw error;
+  }
+  return sceneId;
+}
+
+function hasOwn(value, key) {
+  return value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, key);
+}
+
+const ACTION_VALUE_KEYS = Object.freeze({
+  set_brightness: ['value', 'brightness', 'level'],
+  setbrightness: ['value', 'brightness', 'level'],
+  set_temperature: ['value', 'temperature', 'targetTemperature'],
+  settemperature: ['value', 'temperature', 'targetTemperature'],
+  set_color: ['value', 'color'],
+  setcolor: ['value', 'color'],
+  set_color_temperature: ['value', 'colorTemperature', 'color_temperature', 'kelvin'],
+  setcolortemperature: ['value', 'colorTemperature', 'color_temperature', 'kelvin'],
+  turn_on: ['value', 'brightness'],
+  turnon: ['value', 'brightness']
+});
+
+function resolveSceneActionValue(action = {}) {
+  const actionName = sanitizeString(action?.action).toLowerCase();
+  const keys = ACTION_VALUE_KEYS[actionName] || ['value'];
+
+  for (const key of keys) {
+    if (hasOwn(action, key) && action[key] !== undefined) {
+      return action[key];
+    }
+  }
+
+  return null;
+}
+
+function buildWorkflowActionParameters(definition = {}) {
+  const action = sanitizeString(definition.action).toLowerCase();
+  const parameters = {
+    action: definition.action,
+    ...(definition.value !== undefined ? { value: definition.value } : {})
+  };
+
+  if (definition.value === undefined || definition.value === null) {
+    return parameters;
+  }
+
+  switch (action) {
+    case 'set_brightness':
+    case 'setbrightness':
+      parameters.brightness = definition.value;
+      break;
+    case 'set_temperature':
+    case 'settemperature':
+      parameters.temperature = definition.value;
+      break;
+    case 'set_color':
+    case 'setcolor':
+      parameters.color = definition.value;
+      break;
+    case 'set_color_temperature':
+    case 'setcolortemperature':
+      parameters.colorTemperature = definition.value;
+      parameters.color_temperature = definition.value;
+      break;
+    default:
+      break;
+  }
+
+  return parameters;
+}
+
+function buildDeactivateActionDefinition(definition = {}) {
+  const action = sanitizeString(definition.action).toLowerCase();
+
+  switch (action) {
+    case 'turn_on':
+    case 'turnon':
+    case 'set_brightness':
+    case 'setbrightness':
+    case 'set_color':
+    case 'setcolor':
+    case 'set_color_temperature':
+    case 'setcolortemperature':
+      return {
+        ...definition,
+        action: 'turn_off',
+        value: null
+      };
+    case 'unlock':
+      return {
+        ...definition,
+        action: 'lock',
+        value: null
+      };
+    case 'open':
+      return {
+        ...definition,
+        action: 'close',
+        value: null
+      };
+    default:
+      return null;
+  }
+}
+
 /**
  * Service for managing smart home scenes
  */
@@ -85,12 +195,12 @@ class SceneService {
       deviceActions: deviceActions.map((action) => ({
         deviceId: action.deviceId,
         action: action.action,
-        value: Object.prototype.hasOwnProperty.call(action, 'value') ? action.value : null
+        value: resolveSceneActionValue(action)
       })),
       groupActions: groupActions.map((action) => ({
         groupId: action.groupId,
         action: action.action,
-        value: Object.prototype.hasOwnProperty.call(action, 'value') ? action.value : null
+        value: resolveSceneActionValue(action)
       }))
     };
   }
@@ -108,7 +218,7 @@ class SceneService {
         kind: 'device',
         targetId,
         action: sanitizeString(action?.action),
-        value: Object.prototype.hasOwnProperty.call(action || {}, 'value') ? action.value : null
+        value: action?.value !== undefined ? action.value : null
       });
     });
 
@@ -122,7 +232,7 @@ class SceneService {
         kind: 'group',
         targetId,
         action: sanitizeString(action?.action),
-        value: Object.prototype.hasOwnProperty.call(action || {}, 'value') ? action.value : null
+        value: action?.value !== undefined ? action.value : null
       });
     });
 
@@ -135,11 +245,14 @@ class SceneService {
       target: definition.kind === 'group'
         ? { kind: 'device_group', group: definition.targetId }
         : definition.targetId,
-      parameters: {
-        action: definition.action,
-        ...(definition.value !== undefined ? { value: definition.value } : {})
-      }
+      parameters: buildWorkflowActionParameters(definition)
     }));
+  }
+
+  _buildSceneDeactivateActionDefinitions(scene) {
+    return this._buildSceneActionDefinitions(scene)
+      .map((definition) => buildDeactivateActionDefinition(definition))
+      .filter(Boolean);
   }
 
   _summarizeSceneExecution(execution = {}, actionDefinitions = [], populatedScene = null) {
@@ -289,20 +402,18 @@ class SceneService {
   }
 
   /**
-   * Activate a scene - sets it as active and deactivates others
+   * Activate a scene - marks it active and executes its configured actions
    * @param {string} sceneId - The scene ID to activate
    * @returns {Promise<Object>} Updated scene object and activation results
    */
   async activateScene(sceneId, options = {}) {
+    let normalizedSceneId = '';
     try {
-      console.log(`SceneService: Activating scene with ID: ${sceneId}`);
-      
-      // First, deactivate all other scenes
-      await Scene.updateMany({}, { active: false });
-      console.log('SceneService: Deactivated all existing scenes');
+      normalizedSceneId = normalizeSceneId(sceneId);
+      console.log('SceneService: Activating scene with ID:', normalizedSceneId);
 
       // Find and activate the requested scene
-      const scene = await Scene.findById(sceneId);
+      const scene = await Scene.findById(normalizedSceneId);
       if (!scene) {
         throw new Error('Scene not found');
       }
@@ -321,14 +432,14 @@ class SceneService {
       const execution = await executeActionSequence(workflowActions, {
         context: {
           ...(options.context && typeof options.context === 'object' ? options.context : {}),
-          sceneId: sceneId.toString(),
+          sceneId: normalizedSceneId,
           commandContext: {
             ...(options.context?.commandContext && typeof options.context.commandContext === 'object'
               ? options.context.commandContext
               : {}),
             ...(options.command && typeof options.command === 'object' ? options.command : {}),
             source: options.command?.source || options.context?.commandContext?.source || 'scene',
-            sceneId: sceneId.toString(),
+            sceneId: normalizedSceneId,
             sceneName: scene.name,
             reason: options.command?.reason || `Scene "${scene.name}" activation`
           }
@@ -346,8 +457,83 @@ class SceneService {
         message: `Scene "${scene.name}" activated successfully`
       };
     } catch (error) {
-      console.error(`SceneService: Error activating scene ${sceneId}:`, error);
-      throw new Error(`Failed to activate scene: ${error.message}`);
+      console.error('SceneService: Error activating scene:', normalizedSceneId || '[invalid scene id]', error);
+      const wrappedError = new Error(`Failed to activate scene: ${error.message}`);
+      if (error.status) {
+        wrappedError.status = error.status;
+      }
+      throw wrappedError;
+    }
+  }
+
+  /**
+   * Deactivate a scene - marks it inactive and executes safe off-style actions
+   * @param {string} sceneId - The scene ID to deactivate
+   * @returns {Promise<Object>} Updated scene object and deactivation results
+   */
+  async deactivateScene(sceneId, options = {}) {
+    let normalizedSceneId = '';
+    try {
+      normalizedSceneId = normalizeSceneId(sceneId);
+      console.log('SceneService: Deactivating scene with ID:', normalizedSceneId);
+
+      const scene = await Scene.findById(normalizedSceneId);
+      if (!scene) {
+        throw new Error('Scene not found');
+      }
+
+      scene.active = false;
+
+      const updatedScene = await scene.save();
+      console.log(`SceneService: Scene "${scene.name}" marked inactive`);
+
+      const actionDefinitions = this._buildSceneDeactivateActionDefinitions(updatedScene);
+      const workflowActions = this._buildWorkflowActionsForScene(actionDefinitions);
+      const { executeActionSequence } = require('./workflowExecutionService');
+      const execution = workflowActions.length > 0
+        ? await executeActionSequence(workflowActions, {
+            context: {
+              ...(options.context && typeof options.context === 'object' ? options.context : {}),
+              sceneId: normalizedSceneId,
+              commandContext: {
+                ...(options.context?.commandContext && typeof options.context.commandContext === 'object'
+                  ? options.context.commandContext
+                  : {}),
+                ...(options.command && typeof options.command === 'object' ? options.command : {}),
+                source: options.command?.source || options.context?.commandContext?.source || 'scene',
+                sceneId: normalizedSceneId,
+                sceneName: scene.name,
+                reason: options.command?.reason || `Scene "${scene.name}" deactivation`
+              }
+            }
+          })
+        : {
+            status: 'success',
+            successfulActions: 0,
+            failedActions: 0,
+            actionResults: []
+          };
+
+      await this._populateSceneDocument(updatedScene);
+      const executionSummary = this._summarizeSceneExecution(execution, actionDefinitions, updatedScene);
+
+      return {
+        scene: updatedScene,
+        deviceActions: executionSummary.deviceActions,
+        groupActions: executionSummary.groupActions,
+        actionResults: executionSummary.actionResults,
+        status: executionSummary.status,
+        message: actionDefinitions.length > 0
+          ? `Scene "${scene.name}" deactivated successfully`
+          : `Scene "${scene.name}" marked inactive`
+      };
+    } catch (error) {
+      console.error('SceneService: Error deactivating scene:', normalizedSceneId || '[invalid scene id]', error);
+      const wrappedError = new Error(`Failed to deactivate scene: ${error.message}`);
+      if (error.status) {
+        wrappedError.status = error.status;
+      }
+      throw wrappedError;
     }
   }
 

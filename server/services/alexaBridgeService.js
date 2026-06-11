@@ -826,18 +826,28 @@ class AlexaBridgeService {
     const name = normalized.name;
     const payload = normalized.payload || {};
 
-    if (namespace === 'Alexa.SceneController' && name === 'Activate') {
+    if (namespace === 'Alexa.SceneController' && (name === 'Activate' || name === 'Deactivate')) {
       if (record.exposure.entityType === 'scene') {
-        await sceneService.activateScene(record.exposure.entityId, {
+        const sceneCommand = {
           command: {
             source: 'alexa',
             triggerSource: 'alexa',
-            reason: 'Alexa scene activation',
+            reason: name === 'Deactivate' ? 'Alexa scene deactivation' : 'Alexa scene activation',
             actor: 'alexa',
             correlationId: normalized.endpointId
           }
-        });
+        };
+
+        if (name === 'Deactivate') {
+          await sceneService.deactivateScene(record.exposure.entityId, sceneCommand);
+        } else {
+          await sceneService.activateScene(record.exposure.entityId, sceneCommand);
+        }
       } else if (record.exposure.entityType === 'workflow') {
+        if (name === 'Deactivate') {
+          throw new Error('Workflow scene endpoints do not support Alexa deactivation');
+        }
+
         void workflowService.executeWorkflow(record.exposure.entityId, {
           triggerType: 'manual',
           triggerSource: 'alexa',
@@ -849,7 +859,7 @@ class AlexaBridgeService {
           console.warn(`AlexaBridgeService: Workflow Alexa activation failed for ${record.exposure.entityId}: ${error.message}`);
         });
       } else {
-        throw new Error('Scene activation directive is only valid for Alexa scene endpoints');
+        throw new Error('Scene directives are only valid for Alexa scene endpoints');
       }
 
       return {

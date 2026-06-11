@@ -30,7 +30,7 @@ struct ScenesView: View {
             } else {
                 HBSectionHeader(
                     title: "Scenes",
-                    subtitle: "Create and activate scene presets",
+                    subtitle: "Create and control scene presets",
                     buttonTitle: "New Scene",
                     buttonIcon: "plus"
                 ) {
@@ -139,10 +139,17 @@ struct ScenesView: View {
             Spacer()
 
             VStack(spacing: 8) {
-                Button("Activate") {
-                    Task { await activate(scene) }
+                HStack(spacing: 8) {
+                    Button("On") {
+                        Task { await activate(scene) }
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Button("Off") {
+                        Task { await deactivate(scene) }
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.borderedProminent)
 
                 Button(isFavorite ? "Unfavorite" : "Favorite") {
                     Task { await toggleFavorite(scene) }
@@ -244,7 +251,22 @@ struct ScenesView: View {
         do {
             _ = try await session.apiClient.post("/api/scenes/activate", body: ["sceneId": scene.id])
             for index in scenes.indices {
-                scenes[index].active = scenes[index].id == scene.id
+                if scenes[index].id == scene.id {
+                    scenes[index].active = true
+                }
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func deactivate(_ scene: SceneItem) async {
+        do {
+            _ = try await session.apiClient.post("/api/scenes/deactivate", body: ["sceneId": scene.id])
+            for index in scenes.indices {
+                if scenes[index].id == scene.id {
+                    scenes[index].active = false
+                }
             }
         } catch {
             errorMessage = error.localizedDescription

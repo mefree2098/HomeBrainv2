@@ -6026,10 +6026,17 @@ struct DashboardView: View {
 
                                 Spacer()
 
-                                Button("Activate") {
-                                    Task { await activateScene(scene) }
+                                HStack(spacing: 8) {
+                                    Button("On") {
+                                        Task { await activateScene(scene) }
+                                    }
+                                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
+
+                                    Button("Off") {
+                                        Task { await deactivateScene(scene) }
+                                    }
+                                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
                                 }
-                                .buttonStyle(HBSecondaryButtonStyle(compact: true))
                             }
                         }
                     }
@@ -6430,10 +6437,17 @@ struct DashboardView: View {
 
                             Spacer()
 
-                            Button("Activate") {
-                                Task { await activateScene(scene) }
+                            HStack(spacing: 8) {
+                                Button("On") {
+                                    Task { await activateScene(scene) }
+                                }
+                                .buttonStyle(HBSecondaryButtonStyle(compact: true))
+
+                                Button("Off") {
+                                    Task { await deactivateScene(scene) }
+                                }
+                                .buttonStyle(HBSecondaryButtonStyle(compact: true))
                             }
-                            .buttonStyle(HBSecondaryButtonStyle(compact: true))
                         }
                     }
                 }
@@ -8613,7 +8627,9 @@ struct DashboardView: View {
     private func activateScene(_ scene: SceneItem) async {
         if previewMode {
             for index in scenes.indices {
-                scenes[index].active = scenes[index].id == scene.id
+                if scenes[index].id == scene.id {
+                    scenes[index].active = true
+                }
             }
             return
         }
@@ -8622,7 +8638,32 @@ struct DashboardView: View {
             let payload: [String: Any] = ["sceneId": scene.id]
             _ = try await session.apiClient.post("/api/scenes/activate", body: payload)
             for index in scenes.indices {
-                scenes[index].active = scenes[index].id == scene.id
+                if scenes[index].id == scene.id {
+                    scenes[index].active = true
+                }
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func deactivateScene(_ scene: SceneItem) async {
+        if previewMode {
+            for index in scenes.indices {
+                if scenes[index].id == scene.id {
+                    scenes[index].active = false
+                }
+            }
+            return
+        }
+
+        do {
+            let payload: [String: Any] = ["sceneId": scene.id]
+            _ = try await session.apiClient.post("/api/scenes/deactivate", body: payload)
+            for index in scenes.indices {
+                if scenes[index].id == scene.id {
+                    scenes[index].active = false
+                }
             }
         } catch {
             errorMessage = error.localizedDescription

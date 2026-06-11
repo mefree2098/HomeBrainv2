@@ -1,6 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Play, Moon, Sun, Shield, Heart } from "lucide-react"
+import { Play, PowerOff, Moon, Sun, Shield, Heart } from "lucide-react"
 
 interface Scene {
   _id: string
@@ -13,13 +13,14 @@ interface Scene {
 interface QuickActionsProps {
   scenes: Scene[]
   onSceneActivate: (sceneId: string) => void
+  onSceneDeactivate: (sceneId: string) => void
   favoriteSceneIds: Set<string>
   onToggleFavorite: (sceneId: string, nextValue: boolean) => void
   canModifyFavorites: boolean
   pendingSceneIds?: Set<string>
 }
 
-export function QuickActions({ scenes, onSceneActivate, favoriteSceneIds, onToggleFavorite, canModifyFavorites, pendingSceneIds }: QuickActionsProps) {
+export function QuickActions({ scenes, onSceneActivate, onSceneDeactivate, favoriteSceneIds, onToggleFavorite, canModifyFavorites, pendingSceneIds }: QuickActionsProps) {
   const getSceneIcon = (name: string) => {
     const lowerName = name.toLowerCase()
     if (lowerName.includes('movie') || lowerName.includes('night')) return <Moon className="h-4 w-4" />
@@ -56,38 +57,50 @@ export function QuickActions({ scenes, onSceneActivate, favoriteSceneIds, onTogg
         {favoriteScenes.length > 0 ? (
           <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             {favoriteScenes.map((scene) => (
-              <div key={scene._id} className="relative">
-                <Button
-                  onClick={() => onSceneActivate(scene._id)}
-                  className={`h-24 w-full rounded-[1.35rem] p-3 flex-col items-start justify-between border-0 bg-gradient-to-br ${getSceneColor(scene.name)} text-left text-white shadow-lg shadow-black/10`}
-                  title={scene.description}
-                >
-                  <div className="flex w-full items-center justify-between">
-                    <span className="rounded-full bg-white/15 p-2">
-                      {getSceneIcon(scene.name)}
-                    </span>
-                    <span className="text-[10px] uppercase tracking-[0.22em] text-white/80">Launch</span>
+              <div
+                key={scene._id}
+                className={`min-h-32 rounded-[1.35rem] bg-gradient-to-br ${getSceneColor(scene.name)} p-3 text-white shadow-lg shadow-black/10`}
+                title={scene.description}
+              >
+                <div className="flex w-full items-center justify-between gap-2">
+                  <span className="rounded-full bg-white/15 p-2">
+                    {getSceneIcon(scene.name)}
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-white/90 hover:bg-white/15 hover:text-white"
+                    onClick={() => onToggleFavorite(scene._id, false)}
+                    disabled={!canModifyFavorites || !!sceneIsPending(scene._id)}
+                    aria-label={`Remove ${scene.name} from quick actions`}
+                  >
+                    <Heart className="h-3.5 w-3.5" fill="currentColor" />
+                  </Button>
+                </div>
+                <div className="mt-3">
+                  <div className="line-clamp-1 text-sm font-medium leading-tight">{scene.name}</div>
+                  <div className="mt-1 line-clamp-1 text-xs text-white/75">
+                    {scene.description || "Instantly orchestrate this scene."}
                   </div>
-                  <div className="w-full">
-                    <div className="font-medium text-sm leading-tight">{scene.name}</div>
-                    <div className="mt-1 line-clamp-1 text-xs text-white/75">
-                      {scene.description || "Instantly orchestrate this scene."}
-                    </div>
-                  </div>
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="absolute right-2 top-2 h-8 w-8 text-white/90 hover:bg-white/15 hover:text-white"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    onToggleFavorite(scene._id, false)
-                  }}
-                  disabled={!canModifyFavorites || !!sceneIsPending(scene._id)}
-                  aria-label={`Remove ${scene.name} from quick actions`}
-                >
-                  <Heart className="h-3.5 w-3.5" fill="currentColor" />
-                </Button>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <Button
+                    size="sm"
+                    onClick={() => onSceneActivate(scene._id)}
+                    className="h-8 bg-white/20 text-white hover:bg-white/30"
+                  >
+                    <Play className="mr-1.5 h-3.5 w-3.5" />
+                    On
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => onSceneDeactivate(scene._id)}
+                    className="h-8 bg-black/20 text-white hover:bg-black/30"
+                  >
+                    <PowerOff className="mr-1.5 h-3.5 w-3.5" />
+                    Off
+                  </Button>
+                </div>
               </div>
             ))}
           </div>
