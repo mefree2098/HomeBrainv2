@@ -85,11 +85,16 @@ sudo apt-get install -y \
     espeak \
     libttspico-utils
 
-# Install Node.js (if not present)
-if ! command -v node &> /dev/null; then
-    print_status "Installing Node.js..."
+# Install or upgrade Node.js
+install_nodejs() {
+    print_status "Installing Node.js 22..."
     curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
     sudo apt-get install -y nodejs
+    hash -r
+}
+
+if ! command -v node &> /dev/null; then
+    install_nodejs
 else
     NODE_VERSION=$(node --version)
     print_success "Node.js already installed: $NODE_VERSION"
@@ -98,7 +103,14 @@ fi
 # Verify Node.js version
 NODE_MAJOR=$(node --version | cut -d. -f1 | sed 's/v//')
 if [[ "$NODE_MAJOR" -lt 20 ]]; then
-    print_error "Node.js version 20 or higher is required"
+    print_warning "Node.js $(node --version) is too old; upgrading to Node.js 22..."
+    install_nodejs
+    NODE_MAJOR=$(node --version | cut -d. -f1 | sed 's/v//')
+fi
+
+if [[ "$NODE_MAJOR" -lt 20 ]]; then
+    print_error "Node.js version 20 or higher is required after upgrade attempt (found $(node --version))"
+    print_error "Remove old NodeSource entries and rerun: sudo rm -f /etc/apt/sources.list.d/nodesource*.list"
     exit 1
 fi
 
