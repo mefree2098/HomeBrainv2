@@ -65,6 +65,11 @@ const argv = yargs(hideBin(process.argv))
     type: 'string',
     description: 'One-time claim token for device setup'
   })
+  .option('register-only', {
+    type: 'boolean',
+    default: false,
+    description: 'Activate the device, save config, and exit without starting the listener'
+  })
   .option('device-id', {
     type: 'string',
     description: 'HomeBrain device ID to activate when using a claim token'
@@ -221,6 +226,10 @@ class HomeBrainRemoteDevice {
           claimToken: argv['claim-token'],
           deviceId: argv['device-id']
         });
+        if (argv['register-only']) {
+          console.log('Registration-only mode complete; listener startup is managed separately.');
+          return;
+        }
       }
 
       // Load device configuration
