@@ -1,4 +1,3 @@
-const crypto = require('crypto');
 const WebSocket = require('ws');
 const VoiceDevice = require('../models/VoiceDevice');
 const VoiceCommand = require('../models/VoiceCommand');
@@ -9,6 +8,7 @@ const speechService = require('../services/speechService');
 const voiceCommandService = require('../services/voiceCommandService');
 const settingsService = require('../services/settingsService');
 const voiceAcknowledgmentService = require('../services/voiceAcknowledgmentService');
+const { validateDeviceCredentials } = require('../services/voiceDeviceLifecycleService');
 
 console.log('voiceWebSocket.js loaded with enhanced logging');
 
@@ -16,19 +16,6 @@ const MAX_AUDIO_SESSION_BYTES = Math.max(
   1024 * 1024,
   Number(process.env.HOMEBRAIN_VOICE_AUDIO_SESSION_MAX_BYTES || 20 * 1024 * 1024)
 );
-
-function hashDeviceToken(token) {
-  return crypto.createHash('sha256').update(String(token || ''), 'utf8').digest('hex');
-}
-
-function safeEquals(left, right) {
-  const leftValue = Buffer.from(String(left || ''), 'utf8');
-  const rightValue = Buffer.from(String(right || ''), 'utf8');
-  if (leftValue.length !== rightValue.length) {
-    return false;
-  }
-  return crypto.timingSafeEqual(leftValue, rightValue);
-}
 
 function redactMessageForLog(message = {}) {
   const redacted = { ...message };
@@ -231,8 +218,10 @@ class VoiceWebSocketServer {
 
     const wakeWordAssetPayload = assets.map((asset) => {
       const params = new URLSearchParams();
-      if (!credentials.deviceToken) {
-        params.set('code', credentials.registrationCode || device.settings?.registrationCode || '');
+      if (!credentials.deviceToken && credentials.registrationCode) {
+        params.set('code', credentials.registrationCode);
+      } else if (!credentials.deviceToken && credentials.claimToken) {
+        params.set('claim', credentials.claimToken);
       }
       if (asset.platform || platform) {
         params.set('platform', asset.platform || platform);
@@ -386,7 +375,7 @@ class VoiceWebSocketServer {
     const connection = this.deviceConnections.get(deviceId);
     if (!connection) return;
 
-    const { registrationCode, deviceToken, deviceInfo = {} } = message;
+    const { registrationCode, claimToken, deviceToken, deviceInfo = {} } = message;
 
     try {
       const device = await VoiceDevice.findById(deviceId);
@@ -398,18 +387,13 @@ class VoiceWebSocketServer {
         return;
       }
 
-      const registrationMatches = Boolean(
-        registrationCode
-        && device.settings?.registrationCode
-        && device.settings.registrationCode === registrationCode
-      );
-      const deviceTokenMatches = Boolean(
+      const credentialAccess = validateDeviceCredentials(device, {
+        registrationCode,
+        claimToken,
         deviceToken
-        && device.settings?.deviceTokenHash
-        && safeEquals(hashDeviceToken(deviceToken), device.settings.deviceTokenHash)
-      );
+      });
 
-      if (!registrationMatches && !deviceTokenMatches) {
+      if (!credentialAccess.authorized) {
         console.warn(`Authentication failed for device ${deviceId}: Invalid device credentials`);
         this.sendMessage(deviceId, {
           type: 'auth_failed',
@@ -421,8 +405,9 @@ class VoiceWebSocketServer {
       connection.authenticated = true;
       connection.deviceInfo = deviceInfo;
       connection.credentials = {
-        registrationCode: registrationMatches ? registrationCode : '',
-        deviceToken: deviceTokenMatches ? deviceToken : ''
+        registrationCode: credentialAccess.method === 'registrationCode' ? registrationCode : '',
+        claimToken: credentialAccess.method === 'claimToken' ? claimToken : '',
+        deviceToken: credentialAccess.method === 'deviceToken' ? deviceToken : ''
       };
 
       const authUpdate = {
@@ -490,11 +475,9 @@ class VoiceWebSocketServer {
           continue;
         }
 
-        const credentials = connection.credentials || {
-          registrationCode: device.settings?.registrationCode || ''
-        };
-        if (!credentials.registrationCode && !credentials.deviceToken) {
-          console.warn(`Cannot send wake word update to ${device.name}: missing registration code`);
+        const credentials = connection.credentials || {};
+        if (!credentials.registrationCode && !credentials.claimToken && !credentials.deviceToken) {
+          console.warn(`Cannot send wake word update to ${device.name}: missing authenticated credentials`);
           continue;
         }
 
@@ -1126,11 +1109,28 @@ class VoiceWebSocketServer {
     const { status, settings } = message;
 
     try {
-      const updateData = { lastSeen: new Date() };
-      if (status) updateData.status = status;
-      if (settings) updateData.settings = { ...updateData.settings, ...settings };
+      const protectedSettingKeys = new Set([
+        'registrationCode',
+        'registrationExpires',
+        'claimToken',
+        'claimTokenExpires',
+        'registered',
+        'deviceTokenHash',
+        'deviceTokenCreatedAt',
+        'lifecycle'
+      ]);
+      const $set = { lastSeen: new Date() };
+      if (status) $set.status = status;
+      if (settings && typeof settings === 'object') {
+        Object.entries(settings).forEach(([key, value]) => {
+          if (!key || key.includes('.') || key.startsWith('$') || protectedSettingKeys.has(key)) {
+            return;
+          }
+          $set[`settings.${key}`] = value;
+        });
+      }
 
-      await VoiceDevice.findByIdAndUpdate(deviceId, updateData);
+      await VoiceDevice.findByIdAndUpdate(deviceId, { $set });
 
       console.log(`Status updated for device ${deviceId}: ${status}`);
 
@@ -1208,9 +1208,7 @@ class VoiceWebSocketServer {
       if (!device) {
         throw new Error('Device not found');
       }
-      const credentials = connection.credentials || {
-        registrationCode: device.settings?.registrationCode || ''
-      };
+      const credentials = connection.credentials || {};
       const { config } = await this.buildWakeWordConfig(device, credentials, connection.deviceInfo || {});
       const ok = this.sendMessage(deviceId, { type: 'config_update', config });
       return ok ? { success: true } : { success: false, error: 'WebSocket send failed' };

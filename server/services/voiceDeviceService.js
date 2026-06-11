@@ -43,7 +43,10 @@ class VoiceDeviceService {
       console.log(`VoiceDeviceService: Found voice device: ${device.name} in ${device.room}`);
       return device;
     } catch (error) {
-      console.error(`VoiceDeviceService: Error fetching voice device ${deviceId}:`, error.message);
+      console.error('VoiceDeviceService: Error fetching voice device:', {
+        deviceId,
+        error: error.message
+      });
       console.error(error.stack);
       
       if (error.message === 'Voice device not found') {
@@ -114,91 +117,201 @@ class VoiceDeviceService {
   }
 
   /**
-   * Test voice device connectivity and functionality
-   * @param {string} deviceId - The device ID to test
-   * @returns {Promise<Object>} Test result object
+   * Diagnose voice device connectivity and functionality from real hub state.
+   * @param {string} deviceId - The device ID to diagnose
+   * @param {Object} options - Diagnostic context
+   * @returns {Promise<Object>} Diagnostic result object
    */
-  async testDevice(deviceId) {
-    console.log(`VoiceDeviceService: Testing voice device: ${deviceId}`);
+  async diagnoseDevice(deviceId, options = {}) {
+    console.log(`VoiceDeviceService: Diagnosing voice device: ${deviceId}`);
     try {
       const device = await this.getDeviceById(deviceId);
-      
-      // Simulate device testing logic
+
+      const diagnostics = this.buildDeviceDiagnostics(device, options);
+      const success = diagnostics.checks.websocketAuthenticated.ok && diagnostics.checks.heartbeatFresh.ok;
+      const errors = Object.values(diagnostics.checks)
+        .filter((check) => !check.ok && check.severity !== 'info')
+        .map((check) => check.message);
+
       const testResults = {
-        connectivity: false,
-        audioInput: false,
-        audioOutput: false,
-        wakeWordDetection: false,
+        connectivity: diagnostics.checks.websocketAuthenticated.ok,
+        audioInput: diagnostics.capabilities.audioInputAvailable,
+        audioOutput: diagnostics.capabilities.audioOutputAvailable,
+        wakeWordDetection: diagnostics.capabilities.wakeWordConfigured,
         latency: null,
-        errors: []
+        errors,
+        checks: diagnostics.checks,
+        websocket: diagnostics.websocket,
+        heartbeat: diagnostics.heartbeat,
+        onboarding: diagnostics.onboarding,
+        updateStatus: diagnostics.updateStatus
       };
 
-      // Test connectivity
-      console.log(`VoiceDeviceService: Testing connectivity for ${device.name}`);
-      if (device.status === 'online') {
-        testResults.connectivity = true;
-        
-        // Simulate audio input test
-        if (device.deviceType === 'microphone' || device.deviceType === 'hub' || device.deviceType === 'display') {
-          testResults.audioInput = true;
-          console.log(`VoiceDeviceService: Audio input test passed for ${device.name}`);
-        }
-        
-        // Simulate audio output test
-        if (device.deviceType === 'speaker' || device.deviceType === 'hub' || device.deviceType === 'display') {
-          testResults.audioOutput = true;
-          console.log(`VoiceDeviceService: Audio output test passed for ${device.name}`);
-        }
-        
-        // Simulate wake word detection test
-        if (device.wakeWordSupport && device.voiceRecognitionEnabled) {
-          testResults.wakeWordDetection = true;
-          console.log(`VoiceDeviceService: Wake word detection test passed for ${device.name}`);
-        }
-        
-        // Simulate latency test (random between 50-200ms)
-        testResults.latency = Math.floor(Math.random() * 150) + 50;
-      } else {
-        testResults.errors.push('Device is offline');
-        console.warn(`VoiceDeviceService: Device ${device.name} is offline`);
-      }
-
-      // Update device's last interaction time if tests passed
-      if (testResults.connectivity) {
-        device.lastInteraction = new Date();
-        device.lastSeen = new Date();
-        await device.save();
-        console.log(`VoiceDeviceService: Updated last interaction for ${device.name}`);
-      }
-
-      const success = testResults.connectivity && 
-                     (testResults.audioInput || testResults.audioOutput) && 
-                     testResults.errors.length === 0;
-      
-      const message = success 
-        ? `Voice device test completed successfully. Latency: ${testResults.latency}ms`
-        : `Voice device test failed: ${testResults.errors.join(', ')}`;
+      const message = success
+        ? 'Voice device diagnostics passed with an authenticated websocket and fresh heartbeat.'
+        : `Voice device diagnostics failed: ${errors.join(', ') || 'no live authenticated websocket found'}`;
 
       const result = {
         success,
         message,
         deviceName: device.name,
         room: device.room,
-        testResults
+        testResults,
+        diagnostics
       };
 
-      console.log(`VoiceDeviceService: Test completed for ${device.name}:`, result);
+      console.log(`VoiceDeviceService: Diagnostics completed for ${device.name}:`, result);
       return result;
       
     } catch (error) {
-      console.error(`VoiceDeviceService: Error testing voice device ${deviceId}:`, error.message);
+      console.error('VoiceDeviceService: Error diagnosing voice device:', {
+        deviceId,
+        error: error.message
+      });
       console.error(error.stack);
       
       if (error.message === 'Voice device not found') {
         throw error;
       }
-      throw new Error(`Failed to test voice device: ${error.message}`);
+      throw new Error(`Failed to diagnose voice device: ${error.message}`);
     }
+  }
+
+  /**
+   * Backward-compatible alias for routes and clients still calling this a test.
+   */
+  async testDevice(deviceId, options = {}) {
+    return this.diagnoseDevice(deviceId, options);
+  }
+
+  buildDeviceDiagnostics(device, options = {}) {
+    const now = options.now instanceof Date ? options.now : new Date();
+    const nowMs = now.getTime();
+    const statsSources = Array.isArray(options.websocketStats) ? options.websocketStats : [];
+    const deviceId = device._id.toString();
+    const connection = statsSources
+      .flatMap((stats) => Array.isArray(stats?.connections) ? stats.connections : [])
+      .find((entry) => entry?.deviceId === deviceId) || null;
+    const lastSeenMs = device.lastSeen ? new Date(device.lastSeen).getTime() : 0;
+    const heartbeatAgeMs = lastSeenMs ? Math.max(0, nowMs - lastSeenMs) : null;
+    const heartbeatFreshThresholdMs = Math.max(
+      30_000,
+      Number(options.heartbeatFreshThresholdMs || process.env.VOICE_DEVICE_HEARTBEAT_FRESH_MS || 90_000)
+    );
+    const settings = device.settings && typeof device.settings === 'object' ? device.settings : {};
+    const registered = settings.registered === true;
+    const hasDeviceToken = typeof settings.deviceTokenHash === 'string' && settings.deviceTokenHash.length > 0;
+    const registrationExpiresAt = settings.registrationExpires ? new Date(settings.registrationExpires) : null;
+    const claimTokenExpiresAt = settings.claimTokenExpires ? new Date(settings.claimTokenExpires) : null;
+    const registrationExpired = Boolean(registrationExpiresAt && registrationExpiresAt.getTime() <= nowMs);
+    const claimTokenExpired = Boolean(claimTokenExpiresAt && claimTokenExpiresAt.getTime() <= nowMs);
+    const supportsAudioInput = ['speaker', 'microphone', 'hub', 'display'].includes(device.deviceType);
+    const supportsAudioOutput = ['speaker', 'hub', 'display'].includes(device.deviceType);
+    const wakeWordConfigured = device.wakeWordSupport !== false
+      && Array.isArray(device.supportedWakeWords)
+      && device.supportedWakeWords.length > 0;
+    const websocketAuthenticated = Boolean(connection?.authenticated);
+    const websocketConnected = Boolean(connection);
+    const heartbeatFresh = heartbeatAgeMs !== null && heartbeatAgeMs <= heartbeatFreshThresholdMs;
+    const persistedUpdateStatus = device.updateStatus?.status && device.updateStatus.status !== 'idle'
+      ? device.updateStatus
+      : { ...(device.updateStatus || {}), ...(settings.updateStatus || {}) };
+
+    const checks = {
+      database: {
+        ok: true,
+        severity: 'info',
+        message: 'Device record exists.'
+      },
+      activated: {
+        ok: registered && hasDeviceToken,
+        severity: 'error',
+        message: registered && hasDeviceToken
+          ? 'Device is activated and has a device token.'
+          : 'Device is not activated with a device token.'
+      },
+      onboarding: {
+        ok: registered || (!registrationExpired && !claimTokenExpired),
+        severity: registered ? 'info' : 'warning',
+        message: registered
+          ? 'Onboarding credentials are not required after activation.'
+          : registrationExpired || claimTokenExpired
+            ? 'Onboarding credentials are expired; reissue onboarding before redeploying.'
+            : 'Onboarding credentials are active.'
+      },
+      websocketConnected: {
+        ok: websocketConnected,
+        severity: 'error',
+        message: websocketConnected
+          ? 'A websocket connection is open.'
+          : 'No live websocket connection is open.'
+      },
+      websocketAuthenticated: {
+        ok: websocketAuthenticated,
+        severity: 'error',
+        message: websocketAuthenticated
+          ? 'The websocket connection is authenticated.'
+          : 'No authenticated websocket connection is present.'
+      },
+      heartbeatFresh: {
+        ok: heartbeatFresh,
+        severity: 'warning',
+        message: heartbeatFresh
+          ? `Last heartbeat is fresh (${heartbeatAgeMs}ms ago).`
+          : heartbeatAgeMs === null
+            ? 'Device has never reported a heartbeat.'
+            : `Last heartbeat is stale (${heartbeatAgeMs}ms ago).`
+      },
+      wakeWordConfigured: {
+        ok: wakeWordConfigured,
+        severity: 'warning',
+        message: wakeWordConfigured
+          ? `Wake words configured: ${device.supportedWakeWords.join(', ')}.`
+          : 'No wake words are configured for this device.'
+      }
+    };
+
+    return {
+      deviceId,
+      generatedAt: now.toISOString(),
+      status: device.status,
+      onboarding: {
+        registered,
+        hasDeviceToken,
+        lifecycleState: settings.lifecycle?.state || (registered ? 'activated' : 'unregistered'),
+        registrationExpiresAt: registrationExpiresAt ? registrationExpiresAt.toISOString() : null,
+        registrationExpired,
+        claimTokenExpiresAt: claimTokenExpiresAt ? claimTokenExpiresAt.toISOString() : null,
+        claimTokenExpired
+      },
+      websocket: {
+        connected: websocketConnected,
+        authenticated: websocketAuthenticated,
+        lastPing: connection?.lastPing || null
+      },
+      heartbeat: {
+        lastSeen: device.lastSeen || null,
+        ageMs: heartbeatAgeMs,
+        freshThresholdMs: heartbeatFreshThresholdMs,
+        fresh: heartbeatFresh
+      },
+      capabilities: {
+        supportsAudioInput,
+        supportsAudioOutput,
+        wakeWordConfigured,
+        audioInputAvailable: websocketAuthenticated && supportsAudioInput,
+        audioOutputAvailable: websocketAuthenticated && supportsAudioOutput
+      },
+      updateStatus: {
+        status: persistedUpdateStatus.status || (device.status === 'updating' ? 'installing' : 'idle'),
+        version: persistedUpdateStatus.version || null,
+        error: persistedUpdateStatus.error || null,
+        startedAt: persistedUpdateStatus.startedAt || null,
+        completedAt: persistedUpdateStatus.completedAt || null,
+        failedAt: persistedUpdateStatus.failedAt || null
+      },
+      checks
+    };
   }
 
   /**

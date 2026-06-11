@@ -61,6 +61,14 @@ const argv = yargs(hideBin(process.argv))
     type: 'string',
     description: 'Registration code for device setup'
   })
+  .option('claim-token', {
+    type: 'string',
+    description: 'One-time claim token for device setup'
+  })
+  .option('device-id', {
+    type: 'string',
+    description: 'HomeBrain device ID to activate when using a claim token'
+  })
   .option('config', {
     alias: 'c',
     type: 'string',
@@ -206,9 +214,13 @@ class HomeBrainRemoteDevice {
         return; // Exit early, will continue after discovery
       }
 
-      // If registration code provided, register device
-      if (argv.register) {
-        await this.registerDevice(argv.register);
+      // If onboarding credentials were provided, activate this device
+      if (argv.register || argv['claim-token']) {
+        await this.registerDevice({
+          registrationCode: argv.register,
+          claimToken: argv['claim-token'],
+          deviceId: argv['device-id']
+        });
       }
 
       // Load device configuration
@@ -248,13 +260,30 @@ class HomeBrainRemoteDevice {
     }
   }
 
-  async registerDevice(registrationCode) {
-    console.log(`Registering device with code: ${registrationCode}`);
+  async registerDevice({ registrationCode = '', claimToken = '', deviceId = '' } = {}) {
+    const normalizedRegistrationCode = typeof registrationCode === 'string' ? registrationCode.trim() : '';
+    const normalizedClaimToken = typeof claimToken === 'string' ? claimToken.trim() : '';
+    const normalizedDeviceId = typeof deviceId === 'string' ? deviceId.trim() : '';
+
+    if (!normalizedRegistrationCode && !normalizedClaimToken) {
+      throw new Error('Registration code or claim token is required');
+    }
+
+    if (normalizedClaimToken && !normalizedDeviceId) {
+      throw new Error('Device ID is required when registering with a claim token');
+    }
+
+    console.log(normalizedClaimToken ? 'Registering device with claim token' : `Registering device with code: ${normalizedRegistrationCode}`);
 
     const hubUrl = argv.hub || this.config.hubUrl || process.env.HUB_URL || 'http://localhost:3000';
     console.log(`Using Hub URL: ${hubUrl}`);
     this.config.hubUrl = hubUrl;
-    this.config.registrationCode = registrationCode;
+    this.config.registrationCode = normalizedRegistrationCode || null;
+    this.config.claimToken = normalizedClaimToken || null;
+    if (normalizedDeviceId) {
+      this.config.deviceId = normalizedDeviceId;
+      this.deviceId = normalizedDeviceId;
+    }
     this.setHubHttpBase(hubUrl);
 
     try {
@@ -267,7 +296,9 @@ class HomeBrainRemoteDevice {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          registrationCode: registrationCode,
+          registrationCode: normalizedRegistrationCode || undefined,
+          claimToken: normalizedClaimToken || undefined,
+          deviceId: normalizedDeviceId || undefined,
           ipAddress: networkInfo.ipAddress,
           firmwareVersion: PACKAGE_VERSION
         })
@@ -287,6 +318,8 @@ class HomeBrainRemoteDevice {
       if (data.deviceToken) {
         this.config.deviceToken = data.deviceToken;
       }
+      this.config.registrationCode = null;
+      this.config.claimToken = null;
       this.setHubHttpBase(data.hubUrl || hubUrl);
 
       await this.saveConfig();
@@ -369,17 +402,27 @@ class HomeBrainRemoteDevice {
 
     console.log('Authenticating with hub...');
 
-    this.sendMessage({
+    const authMessage = {
       type: 'authenticate',
-      registrationCode: this.config.registrationCode || 'auto',
-      deviceToken: this.config.deviceToken || '',
       deviceInfo: {
         version: PACKAGE_VERSION,
         platform: process.platform,
         arch: process.arch,
         nodeVersion: process.version
       }
-    });
+    };
+
+    if (this.config.deviceToken) {
+      authMessage.deviceToken = this.config.deviceToken;
+    }
+    if (this.config.registrationCode) {
+      authMessage.registrationCode = this.config.registrationCode;
+    }
+    if (this.config.claimToken) {
+      authMessage.claimToken = this.config.claimToken;
+    }
+
+    this.sendMessage(authMessage);
   }
 
   async handleMessage(rawData) {
@@ -1805,8 +1848,12 @@ class HomeBrainRemoteDevice {
       if (voiceId) {
         const base = this.getHubHttpBase();
         const params = new URLSearchParams({ text });
-        if (!this.config.deviceToken && this.config.registrationCode) {
-          params.set('code', this.config.registrationCode);
+        if (!this.config.deviceToken) {
+          if (this.config.registrationCode) {
+            params.set('code', this.config.registrationCode);
+          } else if (this.config.claimToken) {
+            params.set('claim', this.config.claimToken);
+          }
         }
         params.set('voiceId', voiceId);
         const url = `${base}/api/remote-devices/${this.deviceId}/tts?${params.toString()}`;
@@ -1958,6 +2005,12 @@ class HomeBrainRemoteDevice {
     if (this.config.registrationCode) {
       return {
         'X-HomeBrain-Registration-Code': this.config.registrationCode
+      };
+    }
+
+    if (this.config.claimToken) {
+      return {
+        'X-HomeBrain-Claim-Token': this.config.claimToken
       };
     }
 
@@ -2523,7 +2576,9 @@ async function loadConfig() {
       recordingDevice: 'default',
       playbackDevice: 'default'
     },
-    deviceToken: null
+    deviceToken: null,
+    registrationCode: null,
+    claimToken: null
   };
 
   try {

@@ -21,6 +21,7 @@ interface SetupInstructions {
   bootstrapUrlTemplate?: string;
   bootstrapClaimUrlTemplate?: string;
   quickInstallCommandTemplate?: string;
+  quickInstallClaimCommandTemplate?: string;
   cloudInitUrlTemplate?: string;
   downloadUrl: string;
   configTemplate: {
@@ -86,11 +87,16 @@ export function RemoteDeviceSetup({ onDeviceRegistered }: RemoteDeviceSetupProps
       .replace("<DEVICE_ID>", deviceId)
       .replace("<CLAIM_TOKEN>", encodeURIComponent(claimToken))
     : fallbackCloudInitUrl;
-  const quickInstallCommand = setupInstructions?.quickInstallCommandTemplate && deviceId
-    ? setupInstructions.quickInstallCommandTemplate
+  const quickInstallClaimTemplate = setupInstructions?.quickInstallClaimCommandTemplate;
+  const quickInstallCommand = quickInstallClaimTemplate && deviceId && claimToken
+    ? quickInstallClaimTemplate
       .replace("<DEVICE_ID>", deviceId)
-      .replace("<REGISTRATION_CODE>", registrationCode)
-    : ((bootstrapScriptClaimUrl || bootstrapScriptUrl) ? `curl -fsSL "${bootstrapScriptClaimUrl || bootstrapScriptUrl}" | bash` : "");
+      .replace("<CLAIM_TOKEN>", claimToken)
+    : setupInstructions?.quickInstallCommandTemplate && deviceId
+      ? setupInstructions.quickInstallCommandTemplate
+        .replace("<DEVICE_ID>", deviceId)
+        .replace("<REGISTRATION_CODE>", registrationCode)
+      : ((bootstrapScriptClaimUrl || bootstrapScriptUrl) ? `curl -fsSL "${bootstrapScriptClaimUrl || bootstrapScriptUrl}" | bash` : "");
 
   const handleOpenDialog = async () => {
     setIsOpen(true);

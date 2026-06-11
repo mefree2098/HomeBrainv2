@@ -1,6 +1,7 @@
 const express = require('express');
 const fs = require('fs');
 const router = express.Router();
+const rateLimit = require('express-rate-limit');
 const voiceDeviceService = require('../services/voiceDeviceService');
 const voiceCommandService = require('../services/voiceCommandService');
 const speechService = require('../services/speechService');
@@ -13,6 +14,27 @@ const VoiceDevice = require('../models/VoiceDevice');
 const eventStreamService = require('../services/eventStreamService');
 
 const admin = requireAdmin();
+const voiceDiagnosticsRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+function collectVoiceWebSocketStats(app) {
+  return ['voiceWebSocket', 'voiceWebSocketHttp']
+    .map((key) => app?.get?.(key))
+    .filter(Boolean)
+    .map((ws) => {
+      try {
+        return typeof ws.getStats === 'function' ? ws.getStats() : null;
+      } catch (error) {
+        console.warn(`Failed to collect ${ws?.constructor?.name || 'voice websocket'} stats:`, error.message);
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
 
 /**
  * @route GET /api/voice/devices
@@ -323,7 +345,7 @@ router.post('/commands/interpret', requireUser(), async (req, res) => {
  * @desc Test voice device connectivity and functionality
  * @access Private
  */
-router.post('/test', admin, async (req, res) => {
+router.post('/test', voiceDiagnosticsRateLimit, admin, async (req, res) => {
   const { deviceId } = req.body;
   console.log(`POST /api/voice/test - Testing voice device: ${deviceId}`);
   
@@ -336,7 +358,9 @@ router.post('/test', admin, async (req, res) => {
   }
 
   try {
-    const testResult = await voiceDeviceService.testDevice(deviceId);
+    const testResult = await voiceDeviceService.testDevice(deviceId, {
+      websocketStats: collectVoiceWebSocketStats(req.app)
+    });
     
     console.log(`POST /api/voice/test - Test completed for device ${deviceId}:`, testResult.success ? 'PASSED' : 'FAILED');
     res.status(200).json({
@@ -344,16 +368,50 @@ router.post('/test', admin, async (req, res) => {
       message: testResult.message,
       deviceName: testResult.deviceName,
       room: testResult.room,
-      testResults: testResult.testResults
+      testResults: testResult.testResults,
+      diagnostics: testResult.diagnostics
     });
   } catch (error) {
-    console.error(`POST /api/voice/test - Error testing device ${deviceId}:`, error.message);
+    console.error('POST /api/voice/test - Error testing device:', {
+      deviceId,
+      error: error.message
+    });
     console.error(error.stack);
     
     const statusCode = error.message === 'Voice device not found' ? 404 : 500;
     res.status(statusCode).json({
       success: false,
       message: error.message || 'Failed to test voice device'
+    });
+  }
+});
+
+router.post('/devices/:id/diagnostics', voiceDiagnosticsRateLimit, admin, async (req, res) => {
+  const { id } = req.params;
+  console.log(`POST /api/voice/devices/${id}/diagnostics - Diagnosing voice device`);
+
+  try {
+    const result = await voiceDeviceService.diagnoseDevice(id, {
+      websocketStats: collectVoiceWebSocketStats(req.app)
+    });
+
+    return res.status(200).json({
+      success: result.success,
+      message: result.message,
+      deviceName: result.deviceName,
+      room: result.room,
+      testResults: result.testResults,
+      diagnostics: result.diagnostics
+    });
+  } catch (error) {
+    console.error('POST /api/voice/devices/:id/diagnostics - Error:', {
+      deviceId: id,
+      error: error.message
+    });
+    const statusCode = error.message === 'Voice device not found' ? 404 : 500;
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || 'Failed to diagnose voice device'
     });
   }
 });
