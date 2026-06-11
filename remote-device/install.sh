@@ -416,7 +416,7 @@ else
 fi
 echo "Hub URL: $HUB_URL"
 
-ARGS=(--hub "$HUB_URL")
+ARGS=(--hub "$HUB_URL" --register-only)
 if [[ -n "$REGISTRATION_CODE" ]]; then
     ARGS+=(--register "$REGISTRATION_CODE")
 fi
