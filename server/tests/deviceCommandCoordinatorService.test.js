@@ -261,3 +261,166 @@ test('device command coordinator can hold equal priority commands when configure
 
   assert.equal(store.claim.action, 'turnon');
 });
+
+test('alarm-status workflows do not reserve ordinary lights as security commands', async (t) => {
+  const originalReadyState = mongoose.connection.readyState;
+  const originalGetSettings = Settings.getSettings;
+  const originalFindOne = DeviceCommandClaim.findOne;
+  const originalCreate = DeviceCommandClaim.create;
+  const originalFindOneAndUpdate = DeviceCommandClaim.findOneAndUpdate;
+  const originalPublishSafe = eventStreamService.publishSafe;
+  const store = createInMemoryClaimStore();
+
+  t.after(() => {
+    Object.defineProperty(mongoose.connection, 'readyState', {
+      value: originalReadyState,
+      configurable: true
+    });
+    Settings.getSettings = originalGetSettings;
+    DeviceCommandClaim.findOne = originalFindOne;
+    DeviceCommandClaim.create = originalCreate;
+    DeviceCommandClaim.findOneAndUpdate = originalFindOneAndUpdate;
+    eventStreamService.publishSafe = originalPublishSafe;
+  });
+
+  Object.defineProperty(mongoose.connection, 'readyState', {
+    value: 1,
+    configurable: true
+  });
+  Settings.getSettings = async () => ({
+    deviceCommandCoordinator: coordinatorService.defaultPolicy,
+    async save() {}
+  });
+  DeviceCommandClaim.findOne = store.findOne.bind(store);
+  DeviceCommandClaim.create = store.create.bind(store);
+  DeviceCommandClaim.findOneAndUpdate = store.findOneAndUpdate.bind(store);
+  eventStreamService.publishSafe = async () => {};
+
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const device = {
+    _id: deviceId,
+    name: 'Master Bedroom',
+    type: 'light',
+    properties: {
+      source: 'insteon'
+    }
+  };
+
+  const workflowAdmission = await coordinatorService.admitCommand({
+    device,
+    action: 'turn_off',
+    value: null,
+    metadata: {
+      source: 'security',
+      workflowId: new mongoose.Types.ObjectId().toString(),
+      workflowName: 'Alarm Armed: Turn Off Insteon Interior',
+      workflowPriority: 5,
+      automationId: new mongoose.Types.ObjectId().toString(),
+      automationName: 'Alarm Armed: Turn Off Insteon Interior',
+      triggerType: 'security_alarm_status',
+      triggerSource: 'scheduler',
+      reason: 'Workflow action turn_off for Master Bedroom'
+    }
+  });
+
+  assert.equal(workflowAdmission.accepted, true);
+  assert.equal(workflowAdmission.command.source, 'workflow');
+  assert.equal(workflowAdmission.command.priority, 45);
+
+  const manualAdmission = await coordinatorService.admitCommand({
+    device,
+    action: 'turn_on',
+    value: null,
+    metadata: {
+      source: 'manual',
+      reason: 'User turned on the master bedroom light'
+    }
+  });
+
+  assert.equal(manualAdmission.accepted, true);
+  assert.equal(manualAdmission.command.source, 'manual');
+  assert.equal(manualAdmission.replaced.source, 'workflow');
+  assert.equal(store.claim.source, 'manual');
+});
+
+test('alarm-status workflows still reserve security-sensitive devices as security commands', async (t) => {
+  const originalReadyState = mongoose.connection.readyState;
+  const originalGetSettings = Settings.getSettings;
+  const originalFindOne = DeviceCommandClaim.findOne;
+  const originalCreate = DeviceCommandClaim.create;
+  const originalFindOneAndUpdate = DeviceCommandClaim.findOneAndUpdate;
+  const originalPublishSafe = eventStreamService.publishSafe;
+  const store = createInMemoryClaimStore();
+
+  t.after(() => {
+    Object.defineProperty(mongoose.connection, 'readyState', {
+      value: originalReadyState,
+      configurable: true
+    });
+    Settings.getSettings = originalGetSettings;
+    DeviceCommandClaim.findOne = originalFindOne;
+    DeviceCommandClaim.create = originalCreate;
+    DeviceCommandClaim.findOneAndUpdate = originalFindOneAndUpdate;
+    eventStreamService.publishSafe = originalPublishSafe;
+  });
+
+  Object.defineProperty(mongoose.connection, 'readyState', {
+    value: 1,
+    configurable: true
+  });
+  Settings.getSettings = async () => ({
+    deviceCommandCoordinator: coordinatorService.defaultPolicy,
+    async save() {}
+  });
+  DeviceCommandClaim.findOne = store.findOne.bind(store);
+  DeviceCommandClaim.create = store.create.bind(store);
+  DeviceCommandClaim.findOneAndUpdate = store.findOneAndUpdate.bind(store);
+  eventStreamService.publishSafe = async () => {};
+
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const device = {
+    _id: deviceId,
+    name: 'Front Deadbolt',
+    type: 'lock',
+    properties: {
+      source: 'homebrain-zwave'
+    }
+  };
+
+  const securityAdmission = await coordinatorService.admitCommand({
+    device,
+    action: 'lock',
+    value: null,
+    metadata: {
+      source: 'security',
+      workflowId: new mongoose.Types.ObjectId().toString(),
+      workflowName: 'Lock all locks when armed stay',
+      automationId: new mongoose.Types.ObjectId().toString(),
+      automationName: 'Lock all locks when armed stay',
+      triggerType: 'security_alarm_status',
+      triggerSource: 'scheduler',
+      reason: 'Workflow action lock for Front Deadbolt'
+    }
+  });
+
+  assert.equal(securityAdmission.accepted, true);
+  assert.equal(securityAdmission.command.source, 'security');
+  assert.equal(securityAdmission.command.priority, 100);
+
+  await assert.rejects(
+    coordinatorService.admitCommand({
+      device,
+      action: 'unlock',
+      value: null,
+      metadata: {
+        source: 'manual',
+        reason: 'Manual unlock while alarm is armed'
+      }
+    }),
+    (error) => {
+      assert.equal(error.code, 'DEVICE_COMMAND_BLOCKED');
+      assert.equal(error.details.active.source, 'security');
+      return true;
+    }
+  );
+});
