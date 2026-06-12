@@ -148,6 +148,7 @@ test('ensureBootstrapState seeds signing keys and the default Axiom client', asy
   assert.equal(agentOpsClient.name, 'Perpetual AgentOps');
   assert.equal(agentOpsClient.platform, 'homebrain');
   assert.deepEqual(agentOpsClient.redirectUris, [
+    'https://agentops.ntechr.com/auth/callback',
     'http://127.0.0.1:4380/auth/callback',
     'http://localhost:4380/auth/callback',
     'http://192.168.1.42:4380/auth/callback'
