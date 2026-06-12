@@ -24,6 +24,7 @@ const DEFAULT_CLIENT_ID = 'homebrain-axiom';
 const DEFAULT_AUDIOBOOK_CLIENT_ID = 'homebrain-audiobook';
 const DEFAULT_AGENTOPS_CLIENT_ID = 'homebrain-agentops';
 const DEFAULT_AGENTOPS_REDIRECT_URIS = Object.freeze([
+  'https://agentops.ntechr.com/auth/callback',
   'http://127.0.0.1:4380/auth/callback',
   'http://localhost:4380/auth/callback',
   'http://192.168.1.42:4380/auth/callback'
