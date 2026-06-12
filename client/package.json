@@ -42,7 +42,7 @@
     "cmdk": "^1.0.0",
     "date-fns": "^3.6.0",
     "json-bigint": "^1.0.0",
-    "lucide-react": "^0.460.0",
+    "lucide-react": "^1.18.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-hook-form": "^7.62.0",
