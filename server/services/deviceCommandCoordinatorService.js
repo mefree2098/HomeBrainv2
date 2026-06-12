@@ -69,6 +69,78 @@ function normalizeSource(value) {
   return SOURCE_ID_SET.has(normalized) ? normalized : 'unknown';
 }
 
+function normalizeToken(value) {
+  return sanitizeString(value).toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+}
+
+function isSecuritySensitiveDevice(device = {}) {
+  const type = normalizeToken(device?.type);
+  const properties = device?.properties && typeof device.properties === 'object'
+    ? device.properties
+    : {};
+  const propertySource = normalizeToken(properties.source);
+
+  return [
+    'lock',
+    'siren',
+    'camera',
+    'sensor',
+    'garage'
+  ].includes(type)
+    || properties.supportsAlarm === true
+    || properties.supportsSirenSound === true
+    || properties.isSecurityDevice === true
+    || Boolean(properties.securityZoneId || properties.securityZone)
+    || propertySource.includes('security');
+}
+
+function isSecuritySensitiveAction(action) {
+  const normalized = normalizeToken(action);
+  return [
+    'alarm_on',
+    'alarmoff',
+    'alarm_off',
+    'alarmon',
+    'arm',
+    'arm_away',
+    'arm_stay',
+    'disarm',
+    'lock',
+    'unlock',
+    'mute',
+    'panic',
+    'set_alarm',
+    'set_siren_sound',
+    'set_siren_volume',
+    'setsirensound',
+    'setsirenvolume',
+    'siren_off',
+    'siren_on'
+  ].includes(normalized);
+}
+
+function isAlarmStatusWorkflowCommand(metadata = {}) {
+  const triggerType = normalizeToken(metadata.triggerType);
+  const triggerSource = normalizeToken(metadata.triggerSource);
+
+  return triggerType === 'security_alarm_status'
+    && (
+      Boolean(metadata.workflowId || metadata.automationId)
+      || triggerSource === 'scheduler'
+      || triggerSource === 'automation_scheduler'
+    );
+}
+
+function fallbackWorkflowSource(metadata = {}) {
+  if (metadata.workflowId) {
+    return 'workflow';
+  }
+  if (metadata.automationId) {
+    return 'automation';
+  }
+  return 'workflow';
+}
+
 function buildDefaultPolicy() {
   return {
     enabled: true,
@@ -237,7 +309,15 @@ class DeviceCommandCoordinatorService {
   }
 
   buildCommandMetadata({ device, action, value, metadata = {}, policy }) {
-    const source = normalizeSource(metadata.source || metadata.commandSource || this.deriveSource(metadata));
+    let source = normalizeSource(metadata.source || metadata.commandSource || this.deriveSource(metadata));
+    if (
+      source === 'security'
+      && isAlarmStatusWorkflowCommand(metadata)
+      && !isSecuritySensitiveDevice(device)
+      && !isSecuritySensitiveAction(action)
+    ) {
+      source = fallbackWorkflowSource(metadata);
+    }
     const sourcePolicy = policy.sources[source] || policy.sources.unknown;
     const rawPriority = metadata.priority ?? metadata.commandPriority;
     const workflowPriority = clampNumber(metadata.workflowPriority, 0, 0, 10);
