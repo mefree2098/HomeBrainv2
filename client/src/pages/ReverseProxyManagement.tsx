@@ -5,6 +5,7 @@ import {
   Globe2,
   Loader2,
   Network,
+  Pencil,
   Plus,
   RefreshCw,
   Save,
@@ -779,18 +780,18 @@ export function ReverseProxyManagement() {
           </div>
         </CardHeader>
         <CardContent>
-          <Table>
+          <Table className="min-w-[78rem]">
             <TableHeader>
               <TableRow>
                 <TableHead>Hostname</TableHead>
                 <TableHead>Platform</TableHead>
-                    <TableHead>Upstream</TableHead>
-                    <TableHead>TLS</TableHead>
-                    <TableHead>Dynamic DNS</TableHead>
-                    <TableHead>Certificate</TableHead>
+                <TableHead>Upstream</TableHead>
+                <TableHead>TLS</TableHead>
+                <TableHead>Dynamic DNS</TableHead>
+                <TableHead>Certificate</TableHead>
                 <TableHead>Validation</TableHead>
                 <TableHead>Last Apply</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
+                <TableHead className="sticky right-0 z-20 bg-card/95 text-right backdrop-blur">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -803,10 +804,24 @@ export function ReverseProxyManagement() {
               ) : null}
               {routes.map((route) => (
                 <TableRow key={route._id}>
-                  <TableCell>
-                    <div className="font-medium">{route.hostname}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {route.enabled ? "Enabled" : "Disabled"}
+                  <TableCell className="min-w-60">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate font-medium">{route.hostname}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {route.enabled ? "Enabled" : "Disabled"}
+                        </div>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 shrink-0"
+                        onClick={() => openEditDialog(route)}
+                        aria-label={`Edit route ${route.hostname}`}
+                        title={`Edit ${route.hostname}`}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
                     </div>
                   </TableCell>
                   <TableCell>{route.displayName || route.platformKey}</TableCell>
@@ -847,12 +862,26 @@ export function ReverseProxyManagement() {
                       <div className="mt-2 text-xs text-red-600">{route.lastApplyError}</div>
                     ) : null}
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="sticky right-0 z-10 bg-card/95 text-right backdrop-blur">
                     <div className="flex justify-end gap-2">
-                      <Button variant="outline" size="sm" onClick={() => openEditDialog(route)}>
-                        Edit
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-9 w-9"
+                        onClick={() => openEditDialog(route)}
+                        aria-label={`Edit route ${route.hostname}`}
+                        title={`Edit ${route.hostname}`}
+                      >
+                        <Pencil className="h-4 w-4" />
                       </Button>
-                      <Button variant="destructive" size="sm" onClick={() => void handleDeleteRoute(route)}>
+                      <Button
+                        variant="destructive"
+                        size="icon"
+                        className="h-9 w-9"
+                        onClick={() => void handleDeleteRoute(route)}
+                        aria-label={`Delete route ${route.hostname}`}
+                        title={`Delete ${route.hostname}`}
+                      >
                         <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>

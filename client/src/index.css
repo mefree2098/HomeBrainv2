@@ -557,7 +557,8 @@
     border-radius: calc(var(--radius) * 1.05);
     border: 1px solid var(--glass-border-strong);
     background: rgba(255, 255, 255, 0.24);
-    overflow: hidden;
+    overflow-x: auto;
+    overflow-y: hidden;
   }
 
   .dark .table-shell {
