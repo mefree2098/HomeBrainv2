@@ -41,6 +41,73 @@ function restoreEnv(name, value) {
   process.env[name] = value;
 }
 
+test('BrokerStore restores a missing primary store from its backup file', async (t) => {
+  const brokerStoreFile = path.join(os.tmpdir(), `homebrain-broker-backup-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
+  t.after(async () => {
+    await fs.rm(brokerStoreFile, { force: true });
+    await fs.rm(`${brokerStoreFile}.bak`, { force: true });
+  });
+
+  const store = new BrokerStore({ filePath: brokerStoreFile });
+  await store.registerHub({
+    hubId: 'hub-backup-test',
+    hubBaseUrl: 'https://hub.example.com',
+    relayToken: 'relay-token',
+    brokerClientId: 'client-test',
+    mode: 'public'
+  });
+  await fs.rm(brokerStoreFile, { force: true });
+
+  const restoredStore = new BrokerStore({ filePath: brokerStoreFile });
+  const hubs = await restoredStore.listHubs();
+
+  assert.equal(hubs.length, 1);
+  assert.equal(hubs[0].hubId, 'hub-backup-test');
+  assert.equal(hubs[0].registration.relayToken, 'relay-token');
+});
+
+test('BrokerStore refuses to overwrite a paired store with empty hub state', async (t) => {
+  const brokerStoreFile = path.join(os.tmpdir(), `homebrain-broker-empty-guard-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
+  t.after(async () => {
+    await fs.rm(brokerStoreFile, { force: true });
+    await fs.rm(`${brokerStoreFile}.bak`, { force: true });
+  });
+
+  const store = new BrokerStore({ filePath: brokerStoreFile });
+  await store.registerHub({
+    hubId: 'hub-empty-guard',
+    hubBaseUrl: 'https://hub.example.com',
+    relayToken: 'relay-token',
+    brokerClientId: 'client-test',
+    mode: 'public'
+  });
+
+  const emptyStore = new BrokerStore({
+    filePath: brokerStoreFile,
+    state: {
+      version: 1,
+      hubs: {},
+      accountLinks: {},
+      authCodes: {},
+      accessTokens: {},
+      refreshTokens: {},
+      permissionGrants: {},
+      eventQueue: [],
+      auditLog: []
+    }
+  });
+
+  await assert.rejects(
+    () => emptyStore.persist(),
+    /Refusing to overwrite non-empty Alexa broker store/
+  );
+
+  const preservedStore = new BrokerStore({ filePath: brokerStoreFile });
+  const hubs = await preservedStore.listHubs();
+  assert.equal(hubs.length, 1);
+  assert.equal(hubs[0].hubId, 'hub-empty-guard');
+});
+
 test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', async (t) => {
   const relayToken = 'relay-secret';
   const linkedAccountsPayloads = [];

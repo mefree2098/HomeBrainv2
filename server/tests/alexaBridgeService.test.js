@@ -584,6 +584,103 @@ test('getBrokerDeliveryStatus and flushBrokerEvents proxy broker delivery state 
   assert.equal(brokerCalls[3].url, '/api/alexa/households/acct-1/revoke');
 });
 
+test('notifyBroker re-pairs broker registration and retries when broker lost the hub', async (t) => {
+  const bridge = new AlexaBridgeService();
+  let statePushCount = 0;
+  let recoveryCount = 0;
+  const brokerServer = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) {
+      chunks.push(chunk);
+    }
+
+    if (req.url === '/api/alexa/hubs/state' && req.method === 'POST') {
+      statePushCount += 1;
+      assert.equal(req.headers.authorization, 'Bearer relay-token-1');
+      assert.equal(req.headers['x-homebrain-hub-id'], 'hub-test-1234');
+
+      if (statePushCount === 1) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: false,
+          error: 'Hub is not registered'
+        }));
+        return;
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: true,
+        state: {
+          states: [],
+          updatedAt: '2026-04-01T12:00:00.000Z'
+        }
+      }));
+      return;
+    }
+
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      success: false,
+      error: 'Not found'
+    }));
+  });
+
+  await new Promise((resolve) => brokerServer.listen(0, '127.0.0.1', resolve));
+  const brokerAddress = brokerServer.address();
+  const registration = {
+    hubId: 'hub-test-1234',
+    status: 'paired',
+    mode: 'public',
+    brokerBaseUrl: `http://127.0.0.1:${brokerAddress.port}`,
+    brokerClientId: 'homebrain-alexa-skill',
+    brokerDisplayName: 'HomeBrain Alexa Broker',
+    relayToken: 'relay-token-1',
+    relayTokenHash: 'ignored-in-test',
+    publicOrigin: 'https://hub.example.com',
+    pendingLinkCodes: [],
+    recentActivity: [],
+    lastStateSyncStatus: 'never',
+    async save() {
+      return this;
+    }
+  };
+
+  const originalEnsureBrokerRegistration = alexaProjectionService.ensureBrokerRegistration;
+  const originalRecoverBrokerRegistration = bridge.recoverBrokerRegistration.bind(bridge);
+
+  alexaProjectionService.ensureBrokerRegistration = async () => registration;
+  bridge.recoverBrokerRegistration = async (options) => {
+    recoveryCount += 1;
+    assert.equal(options.source, 'state_sync');
+    assert.match(options.reason, /not registered/i);
+    return {
+      success: true,
+      repaired: true
+    };
+  };
+
+  t.after(() => {
+    alexaProjectionService.ensureBrokerRegistration = originalEnsureBrokerRegistration;
+    bridge.recoverBrokerRegistration = originalRecoverBrokerRegistration;
+    brokerServer.close();
+  });
+
+  const result = await bridge.notifyBroker('/api/alexa/hubs/state', {
+    hubId: registration.hubId,
+    states: []
+  }, {
+    kind: 'state',
+    type: 'state_sync'
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.recovered, true);
+  assert.equal(recoveryCount, 1);
+  assert.equal(statePushCount, 2);
+  assert.equal(registration.lastStateSyncStatus, 'success');
+});
+
 test('getCertificationReadiness summarizes public-release blockers and passes', async (t) => {
   const bridge = new AlexaBridgeService();
   const registration = {

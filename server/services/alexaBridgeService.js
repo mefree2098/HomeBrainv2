@@ -35,6 +35,40 @@ function secureEqual(left, right) {
   return crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
+function getHttpErrorStatus(error) {
+  return Number(error?.response?.status || error?.status || 0);
+}
+
+function getBrokerErrorMessage(error) {
+  return trimString(
+    error?.response?.data?.error
+    || error?.response?.data?.message
+    || error?.message
+  );
+}
+
+function isBrokerRegistrationRecoverableError(error) {
+  const status = getHttpErrorStatus(error);
+  const message = getBrokerErrorMessage(error).toLowerCase();
+
+  if (status === 404 && (
+    message.includes('hub is not registered')
+    || message.includes('not registered with the broker')
+    || message.includes('hub not registered')
+  )) {
+    return true;
+  }
+
+  if (status === 401 && (
+    message.includes('hub authentication failed')
+    || message.includes('invalid alexa broker credentials')
+  )) {
+    return true;
+  }
+
+  return false;
+}
+
 function randomCodeSegment() {
   return crypto.randomBytes(2).toString('hex').toUpperCase();
 }
@@ -282,6 +316,7 @@ function normalizeAlexaSpeechTarget(target, parameters = {}) {
 class AlexaBridgeService {
   constructor() {
     this.started = false;
+    this.brokerRecoveryPromise = null;
     this.handleDeviceUpdate = this.handleDeviceUpdate.bind(this);
   }
 
@@ -682,6 +717,107 @@ class AlexaBridgeService {
       success: true,
       broker: response.data?.hub || response.data,
       summary: await this.getSummary()
+    };
+  }
+
+  async recoverBrokerRegistration(options = {}) {
+    if (this.brokerRecoveryPromise) {
+      return this.brokerRecoveryPromise;
+    }
+
+    this.brokerRecoveryPromise = this.performBrokerRegistrationRecovery(options)
+      .finally(() => {
+        this.brokerRecoveryPromise = null;
+      });
+
+    return this.brokerRecoveryPromise;
+  }
+
+  async performBrokerRegistrationRecovery(options = {}) {
+    const registration = await this.ensureRegistration();
+    if (registration.status !== 'paired' || !registration.brokerBaseUrl) {
+      return {
+        skipped: true,
+        reason: 'Broker is not paired or does not have a broker URL'
+      };
+    }
+
+    const issued = await this.generateLinkCode({
+      actor: 'system:broker-recovery',
+      mode: registration.mode === 'public' ? 'public' : 'private',
+      ttlMinutes: 5
+    });
+
+    await this.appendActivity(registration, {
+      direction: 'system',
+      type: 'broker_registration_recovery_started',
+      status: 'warning',
+      message: 'Alexa broker registration was missing; attempting automatic re-pair',
+      details: {
+        source: options.source || '',
+        reason: options.reason || '',
+        brokerBaseUrl: registration.brokerBaseUrl
+      }
+    });
+
+    const pairResult = await this.pairWithBroker({
+      brokerBaseUrl: registration.brokerBaseUrl,
+      linkCode: issued.code,
+      mode: registration.mode === 'public' ? 'public' : 'private',
+      brokerClientId: registration.brokerClientId || 'homebrain-alexa-skill',
+      brokerDisplayName: registration.brokerDisplayName || 'HomeBrain Alexa Broker'
+    });
+
+    const refreshResults = [];
+    const refreshTasks = [
+      ['linked_accounts', () => this.pushLinkedAccountsToBroker('broker_registration_recovery', {
+        recoverOnRegistrationFailure: false
+      })],
+      ['catalog', () => this.pushCatalogToBroker('broker_registration_recovery', {
+        recoverOnRegistrationFailure: false
+      })],
+      ['state', () => this.pushStateChangesToBroker([], 'broker_registration_recovery', {
+        recoverOnRegistrationFailure: false
+      })]
+    ];
+
+    for (const [name, task] of refreshTasks) {
+      try {
+        const result = await task();
+        refreshResults.push({
+          name,
+          success: result?.success !== false,
+          skipped: result?.skipped === true
+        });
+      } catch (error) {
+        refreshResults.push({
+          name,
+          success: false,
+          error: getBrokerErrorMessage(error) || error.message
+        });
+      }
+    }
+
+    const failedRefreshes = refreshResults.filter((entry) => entry.success === false);
+    await this.appendActivity(await this.ensureRegistration(), {
+      direction: 'system',
+      type: 'broker_registration_recovery_completed',
+      status: failedRefreshes.length > 0 ? 'warning' : 'success',
+      message: failedRefreshes.length > 0
+        ? 'Alexa broker was re-paired, but some refresh pushes failed'
+        : 'Alexa broker was re-paired and refreshed successfully',
+      details: {
+        source: options.source || '',
+        reason: options.reason || '',
+        refreshResults
+      }
+    });
+
+    return {
+      success: true,
+      repaired: true,
+      pairResult,
+      refreshResults
     };
   }
 
@@ -1102,6 +1238,35 @@ class AlexaBridgeService {
     return persisted;
   }
 
+  async pushLinkedAccountsToBroker(reason = 'manual', options = {}) {
+    const registration = await this.ensureRegistration();
+    const accounts = await AlexaLinkedAccount.find({ hubId: registration.hubId }).lean();
+
+    return this.notifyBroker('/api/alexa/hubs/accounts', {
+      hubId: registration.hubId,
+      reason,
+      timestamp: new Date().toISOString(),
+      accounts: accounts.map((account) => ({
+        brokerAccountId: account.brokerAccountId,
+        alexaUserId: account.alexaUserId || '',
+        alexaAccountId: account.alexaAccountId || '',
+        alexaHouseholdId: account.alexaHouseholdId || '',
+        locale: account.locale || 'en-US',
+        status: account.status || 'linked',
+        permissions: Array.isArray(account.permissions) ? account.permissions : [],
+        acceptedGrantAt: account.acceptedGrantAt || null,
+        lastDiscoveryAt: account.lastDiscoveryAt || null,
+        lastSeenAt: account.lastSeenAt || null,
+        metadata: account.metadata && typeof account.metadata === 'object' ? account.metadata : {}
+      }))
+    }, {
+      type: 'linked_accounts_push',
+      message: `Pushed ${accounts.length} Alexa linked account record(s) to broker (${reason})`,
+      failureMessage: `Failed to push Alexa linked accounts to broker (${reason})`,
+      recoverOnRegistrationFailure: options.recoverOnRegistrationFailure
+    });
+  }
+
   async notifyBroker(pathname, payload, meta = {}) {
     const registration = await this.ensureRegistration();
     if (registration.status !== 'paired' || !registration.brokerBaseUrl || !registration.relayToken) {
@@ -1147,6 +1312,31 @@ class AlexaBridgeService {
         data: response.data
       };
     } catch (error) {
+      const shouldRecover = meta.recoverOnRegistrationFailure !== false
+        && meta.recoveryAttempt !== true
+        && isBrokerRegistrationRecoverableError(error);
+
+      if (shouldRecover) {
+        try {
+          await this.recoverBrokerRegistration({
+            source: meta.type || pathname,
+            reason: getBrokerErrorMessage(error) || error.message
+          });
+
+          const retry = await this.notifyBroker(pathname, payload, {
+            ...meta,
+            recoveryAttempt: true,
+            recoverOnRegistrationFailure: false
+          });
+          return {
+            ...retry,
+            recovered: true
+          };
+        } catch (recoveryError) {
+          error.recoveryError = recoveryError;
+        }
+      }
+
       if (meta.kind === 'catalog') {
         registration.lastCatalogSyncAt = new Date();
         registration.lastCatalogSyncStatus = 'failed';
@@ -1167,7 +1357,10 @@ class AlexaBridgeService {
         details: {
           pathname,
           error: error.message,
-          status: error.response?.status || null
+          status: error.response?.status || null,
+          recoveryError: error.recoveryError
+            ? getBrokerErrorMessage(error.recoveryError) || error.recoveryError.message
+            : ''
         }
       });
 
@@ -1175,7 +1368,7 @@ class AlexaBridgeService {
     }
   }
 
-  async callBroker(pathname, method = 'get', body = undefined) {
+  async callBroker(pathname, method = 'get', body = undefined, options = {}) {
     const registration = await this.ensureRegistration();
     if (registration.status !== 'paired' || !registration.brokerBaseUrl || !registration.relayToken) {
       return {
@@ -1184,23 +1377,44 @@ class AlexaBridgeService {
       };
     }
 
-    const response = await axios({
-      url: `${registration.brokerBaseUrl}${pathname}`,
-      method,
-      data: body,
-      timeout: BROKER_TIMEOUT_MS,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${registration.relayToken}`,
-        'X-HomeBrain-Hub-Id': registration.hubId
-      }
-    });
+    try {
+      const response = await axios({
+        url: `${registration.brokerBaseUrl}${pathname}`,
+        method,
+        data: body,
+        timeout: BROKER_TIMEOUT_MS,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${registration.relayToken}`,
+          'X-HomeBrain-Hub-Id': registration.hubId
+        }
+      });
 
-    return {
-      success: true,
-      status: response.status,
-      data: response.data
-    };
+      return {
+        success: true,
+        status: response.status,
+        data: response.data
+      };
+    } catch (error) {
+      const shouldRecover = options.recoverOnRegistrationFailure !== false
+        && options.recoveryAttempt !== true
+        && isBrokerRegistrationRecoverableError(error);
+
+      if (!shouldRecover) {
+        throw error;
+      }
+
+      await this.recoverBrokerRegistration({
+        source: options.source || `${method.toUpperCase()} ${pathname}`,
+        reason: getBrokerErrorMessage(error) || error.message
+      });
+
+      return this.callBroker(pathname, method, body, {
+        ...options,
+        recoveryAttempt: true,
+        recoverOnRegistrationFailure: false
+      });
+    }
   }
 
   async getBrokerDeliveryStatus() {
@@ -1496,7 +1710,7 @@ class AlexaBridgeService {
     return result.data;
   }
 
-  async pushCatalogToBroker(reason = 'manual') {
+  async pushCatalogToBroker(reason = 'manual', options = {}) {
     const catalog = await alexaProjectionService.buildCatalog();
     return this.notifyBroker('/api/alexa/hubs/catalog', {
       hubId: catalog.hubId,
@@ -1507,11 +1721,12 @@ class AlexaBridgeService {
       kind: 'catalog',
       type: 'catalog_sync',
       message: `Pushed Alexa catalog to broker (${reason})`,
-      failureMessage: `Failed to push Alexa catalog to broker (${reason})`
+      failureMessage: `Failed to push Alexa catalog to broker (${reason})`,
+      recoverOnRegistrationFailure: options.recoverOnRegistrationFailure
     });
   }
 
-  async pushStateChangesToBroker(endpointIds = [], reason = 'state_changed') {
+  async pushStateChangesToBroker(endpointIds = [], reason = 'state_changed', options = {}) {
     const snapshot = await this.getStateSnapshot(endpointIds);
     return this.notifyBroker('/api/alexa/hubs/state', {
       hubId: (await this.ensureRegistration()).hubId,
@@ -1522,7 +1737,8 @@ class AlexaBridgeService {
       kind: 'state',
       type: 'state_sync',
       message: `Pushed Alexa state changes to broker (${reason})`,
-      failureMessage: `Failed to push Alexa state changes to broker (${reason})`
+      failureMessage: `Failed to push Alexa state changes to broker (${reason})`,
+      recoverOnRegistrationFailure: options.recoverOnRegistrationFailure
     });
   }
 

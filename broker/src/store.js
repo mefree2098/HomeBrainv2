@@ -7,6 +7,7 @@ const DEFAULT_ACCESS_TOKEN_TTL_SECONDS = Math.max(300, Number(process.env.HOMEBR
 const DEFAULT_REFRESH_TOKEN_TTL_SECONDS = Math.max(3600, Number(process.env.HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS || 30 * 24 * 60 * 60));
 const MAX_EVENT_QUEUE = 500;
 const MAX_AUDIT_LOG = 500;
+const STORE_BACKUP_SUFFIX = '.bak';
 
 function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -59,6 +60,50 @@ function defaultState() {
     eventQueue: [],
     auditLog: []
   };
+}
+
+function normalizeStoreState(value) {
+  const parsed = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const state = {
+    ...defaultState(),
+    ...parsed
+  };
+
+  state.hubs = state.hubs && typeof state.hubs === 'object' && !Array.isArray(state.hubs) ? state.hubs : {};
+  state.accountLinks = state.accountLinks && typeof state.accountLinks === 'object' && !Array.isArray(state.accountLinks) ? state.accountLinks : {};
+  state.authCodes = state.authCodes && typeof state.authCodes === 'object' && !Array.isArray(state.authCodes) ? state.authCodes : {};
+  state.accessTokens = state.accessTokens && typeof state.accessTokens === 'object' && !Array.isArray(state.accessTokens) ? state.accessTokens : {};
+  state.refreshTokens = state.refreshTokens && typeof state.refreshTokens === 'object' && !Array.isArray(state.refreshTokens) ? state.refreshTokens : {};
+  state.permissionGrants = state.permissionGrants && typeof state.permissionGrants === 'object' && !Array.isArray(state.permissionGrants) ? state.permissionGrants : {};
+  state.eventQueue = Array.isArray(state.eventQueue) ? state.eventQueue : [];
+  state.auditLog = Array.isArray(state.auditLog) ? state.auditLog : [];
+
+  return state;
+}
+
+function persistentRecordCounts(state = {}) {
+  return {
+    hubs: Object.keys(state.hubs || {}).length,
+    accountLinks: Object.keys(state.accountLinks || {}).length,
+    refreshTokens: Object.keys(state.refreshTokens || {}).length,
+    permissionGrants: Object.keys(state.permissionGrants || {}).length
+  };
+}
+
+function persistentRecordTotal(state = {}) {
+  const counts = persistentRecordCounts(state);
+  return counts.hubs + counts.accountLinks + counts.refreshTokens + counts.permissionGrants;
+}
+
+function shouldRefuseEmptyOverwrite(existingState, nextState) {
+  if (!existingState) {
+    return false;
+  }
+
+  const existingCounts = persistentRecordCounts(existingState);
+  const nextCounts = persistentRecordCounts(nextState);
+  return (existingCounts.hubs > 0 && nextCounts.hubs === 0)
+    || (persistentRecordTotal(existingState) > 0 && persistentRecordTotal(nextState) === 0);
 }
 
 function ensureHubRecord(state, hubId) {
@@ -130,9 +175,18 @@ class BrokerStore {
     this.filePath = options.filePath
       || trimString(process.env.HOMEBRAIN_BROKER_STORE_FILE)
       || path.join(__dirname, '..', 'data', 'store.json');
-    this.state = options.state ? clone(options.state) : null;
+    this.state = options.state ? normalizeStoreState(clone(options.state)) : null;
     this.initialized = Boolean(options.state);
     this.pending = Promise.resolve();
+  }
+
+  getBackupFilePath() {
+    return `${this.filePath}${STORE_BACKUP_SUFFIX}`;
+  }
+
+  async readStateFile(filePath) {
+    const raw = await fs.readFile(filePath, 'utf8');
+    return normalizeStoreState(JSON.parse(raw || '{}'));
   }
 
   async init() {
@@ -141,27 +195,61 @@ class BrokerStore {
     }
 
     try {
-      const raw = await fs.readFile(this.filePath, 'utf8');
-      this.state = {
-        ...defaultState(),
-        ...JSON.parse(raw || '{}')
-      };
+      this.state = await this.readStateFile(this.filePath);
     } catch (error) {
-      if (error.code !== 'ENOENT') {
-        throw error;
-      }
+      const primaryMissing = error.code === 'ENOENT';
+      try {
+        this.state = await this.readStateFile(this.getBackupFilePath());
+        await this.persist({
+          skipBackupRefresh: true
+        });
+      } catch (backupError) {
+        if (!primaryMissing) {
+          throw error;
+        }
+        if (backupError.code !== 'ENOENT') {
+          throw backupError;
+        }
 
-      this.state = defaultState();
-      await this.persist();
+        this.state = defaultState();
+        await this.persist({
+          allowEmptyOverwrite: true,
+          skipBackupRefresh: true
+        });
+      }
     }
 
     pruneExpiredEntries(this.state);
     this.initialized = true;
   }
 
-  async persist() {
+  async persist(options = {}) {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-    await fs.writeFile(this.filePath, JSON.stringify(this.state, null, 2), 'utf8');
+
+    let existingState = null;
+    try {
+      existingState = await this.readStateFile(this.filePath);
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        try {
+          existingState = await this.readStateFile(this.getBackupFilePath());
+        } catch (_backupError) {
+          existingState = null;
+        }
+      }
+    }
+
+    if (options.allowEmptyOverwrite !== true && shouldRefuseEmptyOverwrite(existingState, this.state)) {
+      throw new Error('Refusing to overwrite non-empty Alexa broker store with an empty hub state');
+    }
+
+    const temporaryPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
+    await fs.writeFile(temporaryPath, JSON.stringify(normalizeStoreState(this.state), null, 2), 'utf8');
+    await fs.rename(temporaryPath, this.filePath);
+
+    if (options.skipBackupRefresh !== true) {
+      await fs.copyFile(this.filePath, this.getBackupFilePath()).catch(() => {});
+    }
   }
 
   async runExclusive(task) {
