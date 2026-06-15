@@ -679,6 +679,102 @@ test('device_control action preserves explicit scene brightness values', async (
   assert.equal(receivedCall.value, 37);
 });
 
+test('device_control action skips scene targets already in the requested state', async (t) => {
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const originalFindById = Device.findById;
+  const originalControlDevice = deviceService.controlDevice;
+  let controlCalled = false;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    deviceService.controlDevice = originalControlDevice;
+  });
+
+  Device.findById = () => ({
+    lean: async () => ({
+      _id: deviceId,
+      name: 'Scene Dimmer',
+      type: 'light',
+      status: true,
+      brightness: 37,
+      isOnline: true,
+      properties: {
+        source: 'local'
+      }
+    })
+  });
+
+  deviceService.controlDevice = async () => {
+    controlCalled = true;
+    throw new Error('Already-satisfied scene target should not be controlled');
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'device_control',
+      target: deviceId,
+      parameters: {
+        action: 'set_brightness',
+        value: 37,
+        skipIfAlreadyInState: true
+      }
+    }
+  ], { context: {} });
+
+  assert.equal(controlCalled, false);
+  assert.equal(result.status, 'success');
+  assert.equal(result.actionResults[0].success, true);
+  assert.equal(result.actionResults[0].details.skipped, true);
+  assert.equal(result.actionResults[0].details.skipReason, 'already_at_brightness');
+});
+
+test('device_control action propagates release-on-success for scene commands', async (t) => {
+  const deviceId = new mongoose.Types.ObjectId().toString();
+  const originalFindById = Device.findById;
+  const originalControlDevice = deviceService.controlDevice;
+  let receivedOptions = null;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    deviceService.controlDevice = originalControlDevice;
+  });
+
+  Device.findById = () => ({
+    lean: async () => ({
+      _id: deviceId,
+      name: 'Scene Switch',
+      type: 'switch',
+      status: false,
+      isOnline: true,
+      properties: {
+        source: 'local'
+      }
+    })
+  });
+
+  deviceService.controlDevice = async (_target, _action, _value, options) => {
+    receivedOptions = options;
+    return {
+      message: 'Switch turned on'
+    };
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'device_control',
+      target: deviceId,
+      parameters: {
+        action: 'turn_on',
+        releaseCommandClaimOnSuccess: true
+      }
+    }
+  ], { context: {} });
+
+  assert.equal(result.status, 'success');
+  assert.equal(receivedOptions.releaseCommandClaimOnSuccess, true);
+  assert.equal(receivedOptions.command.releaseCommandClaimOnSuccess, true);
+});
+
 test('device_control action routes native radio and Matter targets without cloud post-command verification', async (t) => {
   const originalFindById = Device.findById;
   const originalControlDevice = deviceService.controlDevice;
@@ -1004,6 +1100,114 @@ test('device_control action can target a device group', async (t) => {
   assert.equal(result.actionResults[0].details.group, 'Interior Lights');
   assert.equal(result.actionResults[0].details.executionMode, 'parallel');
   assert.equal(result.actionResults[0].details.successfulTargets, 2);
+});
+
+test('device_control scene group action skips members already in the requested state', async (t) => {
+  const originalResolveGroupExecutionPlanByName = deviceGroupService.resolveGroupExecutionPlanByName;
+  const originalControlDevice = deviceService.controlDevice;
+  const controlledTargets = [];
+
+  t.after(() => {
+    deviceGroupService.resolveGroupExecutionPlanByName = originalResolveGroupExecutionPlanByName;
+    deviceService.controlDevice = originalControlDevice;
+  });
+
+  const offDeviceId = new mongoose.Types.ObjectId().toString();
+  const directOffDeviceId = new mongoose.Types.ObjectId().toString();
+  const onDeviceId = new mongoose.Types.ObjectId().toString();
+  const groupDevices = [
+    {
+      _id: offDeviceId,
+      name: 'Already Off Strip',
+      type: 'light',
+      room: 'Theater',
+      status: false,
+      properties: {
+        source: 'mock'
+      }
+    },
+    {
+      _id: directOffDeviceId,
+      name: 'Already Off Direct Strip',
+      type: 'light',
+      room: 'Theater',
+      status: true,
+      properties: {
+        source: 'mock',
+        directRadioState: {
+          switch: false
+        }
+      }
+    },
+    {
+      _id: onDeviceId,
+      name: 'Still On Strip',
+      type: 'light',
+      room: 'Theater',
+      status: true,
+      properties: {
+        source: 'mock'
+      }
+    }
+  ];
+
+  deviceGroupService.resolveGroupExecutionPlanByName = async () => ({
+    rootGroup: {
+      _id: new mongoose.Types.ObjectId().toString(),
+      name: 'Stars Only Group',
+      normalizedName: 'stars only group'
+    },
+    devices: groupDevices,
+    units: [
+      {
+        groupId: new mongoose.Types.ObjectId().toString(),
+        groupName: 'Stars Only Group',
+        groupRecord: {
+          _id: new mongoose.Types.ObjectId().toString(),
+          name: 'Stars Only Group',
+          normalizedName: 'stars only group'
+        },
+        devices: groupDevices,
+        allowManagedInsteonGroup: false
+      }
+    ],
+    containsNestedGroups: false
+  });
+
+  deviceService.controlDevice = async (target, action) => {
+    controlledTargets.push({ target, action });
+    return {
+      message: 'Device turned off',
+      details: {
+        source: 'mock'
+      }
+    };
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'device_control',
+      target: { kind: 'device_group', group: 'Stars Only Group' },
+      parameters: {
+        action: 'turn_off',
+        skipIfAlreadyInState: true
+      }
+    }
+  ], { context: {} });
+
+  assert.deepEqual(controlledTargets, [{ target: onDeviceId, action: 'turn_off' }]);
+  assert.equal(result.status, 'success');
+  assert.equal(result.actionResults[0].details.executionMode, 'parallel_with_skips');
+  assert.equal(result.actionResults[0].details.totalTargets, 3);
+  assert.equal(result.actionResults[0].details.successfulTargets, 3);
+  assert.equal(result.actionResults[0].details.skippedTargets, 2);
+  assert.deepEqual(
+    result.actionResults[0].details.members
+      .filter((entry) => entry.skipped)
+      .map((entry) => entry.deviceId)
+      .sort(),
+    [directOffDeviceId, offDeviceId].sort()
+  );
 });
 
 test('device_control action does not retry whole device groups by default', async (t) => {
