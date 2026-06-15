@@ -17,10 +17,11 @@ final class WatchCompanionSync: NSObject, WCSessionDelegate {
 
         let session = WCSession.default
         session.delegate = self
-        session.activate()
 
-        if !session.receivedApplicationContext.isEmpty {
-            handle(session.receivedApplicationContext)
+        if session.activationState == .activated {
+            handleReceivedApplicationContextIfPresent(from: session)
+        } else {
+            session.activate()
         }
     }
 
@@ -86,8 +87,9 @@ final class WatchCompanionSync: NSObject, WCSessionDelegate {
         Task { @MainActor in
             if let error {
                 store?.companionStatusMessage = error.localizedDescription
-            } else if !session.receivedApplicationContext.isEmpty {
-                store?.applyCompanionPayload(session.receivedApplicationContext)
+            } else if activationState == .activated,
+                      handleReceivedApplicationContextIfPresent(from: session) {
+                return
             } else if pendingSessionRequest {
                 pendingSessionRequest = false
                 requestSessionSync()
@@ -96,8 +98,23 @@ final class WatchCompanionSync: NSObject, WCSessionDelegate {
     }
 
     func sessionReachabilityDidChange(_ session: WCSession) {
-        guard session.isReachable else { return }
+        guard session.activationState == .activated, session.isReachable else { return }
         requestSessionSync()
+    }
+
+    @discardableResult
+    private func handleReceivedApplicationContextIfPresent(from session: WCSession) -> Bool {
+        guard session.activationState == .activated else {
+            return false
+        }
+
+        let applicationContext = session.receivedApplicationContext
+        guard !applicationContext.isEmpty else {
+            return false
+        }
+
+        handle(applicationContext)
+        return true
     }
 
     func session(_ session: WCSession, didReceiveApplicationContext applicationContext: [String: Any]) {
