@@ -974,11 +974,17 @@ class AlexaBridgeService {
           }
         };
 
-        if (name === 'Deactivate') {
-          await sceneService.deactivateScene(record.exposure.entityId, sceneCommand);
-        } else {
-          await sceneService.activateScene(record.exposure.entityId, sceneCommand);
-        }
+        const runScene = name === 'Deactivate'
+          ? () => sceneService.deactivateScene(record.exposure.entityId, sceneCommand)
+          : () => sceneService.activateScene(record.exposure.entityId, sceneCommand);
+
+        void Promise.resolve()
+          .then(runScene)
+          .catch((error) => {
+            console.warn(
+              `AlexaBridgeService: Alexa scene ${name.toLowerCase()} failed for ${record.exposure.entityId}: ${error.message}`
+            );
+          });
       } else if (record.exposure.entityType === 'workflow') {
         if (name === 'Deactivate') {
           throw new Error('Workflow scene endpoints do not support Alexa deactivation');

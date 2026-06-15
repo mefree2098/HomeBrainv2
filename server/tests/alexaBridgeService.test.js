@@ -380,6 +380,80 @@ test('executeDirective acknowledges Alexa workflow scenes without waiting for th
   ]);
 });
 
+test('executeDirective acknowledges Alexa scene endpoints without waiting for scene actions', async (t) => {
+  const bridge = new AlexaBridgeService();
+  const sceneService = require('../services/sceneService');
+
+  const originalGetCatalogEntryByEndpointId = alexaProjectionService.getCatalogEntryByEndpointId;
+  const originalGetStateForEndpoint = alexaProjectionService.getStateForEndpoint;
+  const originalActivateScene = sceneService.activateScene;
+
+  t.after(() => {
+    alexaProjectionService.getCatalogEntryByEndpointId = originalGetCatalogEntryByEndpointId;
+    alexaProjectionService.getStateForEndpoint = originalGetStateForEndpoint;
+    sceneService.activateScene = originalActivateScene;
+  });
+
+  alexaProjectionService.getCatalogEntryByEndpointId = async () => ({
+    exposure: {
+      entityType: 'scene',
+      entityId: 'scene-stars-only-1'
+    },
+    entity: {
+      _id: 'scene-stars-only-1',
+      name: 'Stars Only'
+    },
+    validationErrors: [],
+    endpoint: {
+      state: {
+        properties: []
+      }
+    }
+  });
+  alexaProjectionService.getStateForEndpoint = async () => {
+    throw new Error('Alexa scene activation responses should not fetch endpoint state');
+  };
+
+  let receivedCall = null;
+  sceneService.activateScene = (...args) => {
+    receivedCall = args;
+    return new Promise(() => {});
+  };
+
+  const result = await bridge.executeDirective({
+    directive: {
+      header: {
+        namespace: 'Alexa.SceneController',
+        name: 'Activate',
+        correlationToken: 'scene-corr-activate'
+      },
+      endpoint: {
+        endpointId: 'hb:hub-1:scene:scene-stars-only-1'
+      },
+      payload: {}
+    }
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(result.success, true);
+  assert.equal(result.namespace, 'Alexa.SceneController');
+  assert.equal(result.name, 'Activate');
+  assert.deepEqual(result.properties, []);
+  assert.deepEqual(receivedCall, [
+    'scene-stars-only-1',
+    {
+      command: {
+        source: 'alexa',
+        triggerSource: 'alexa',
+        reason: 'Alexa scene activation',
+        actor: 'alexa',
+        correlationId: 'hb:hub-1:scene:scene-stars-only-1'
+      }
+    }
+  ]);
+});
+
 test('executeDirective deactivates Alexa scene endpoints', async (t) => {
   const bridge = new AlexaBridgeService();
   const sceneService = require('../services/sceneService');
@@ -439,6 +513,8 @@ test('executeDirective deactivates Alexa scene endpoints', async (t) => {
       payload: {}
     }
   });
+
+  await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(result.success, true);
   assert.equal(result.namespace, 'Alexa.SceneController');

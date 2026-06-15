@@ -55,6 +55,8 @@ function buildWorkflowActionParameters(definition = {}) {
   const action = sanitizeString(definition.action).toLowerCase();
   const parameters = {
     action: definition.action,
+    skipIfAlreadyInState: true,
+    releaseCommandClaimOnSuccess: true,
     ...(definition.value !== undefined ? { value: definition.value } : {})
   };
 
@@ -438,6 +440,7 @@ class SceneService {
               ? options.context.commandContext
               : {}),
             ...(options.command && typeof options.command === 'object' ? options.command : {}),
+            releaseCommandClaimOnSuccess: true,
             source: options.command?.source || options.context?.commandContext?.source || 'scene',
             sceneId: normalizedSceneId,
             sceneName: scene.name,
@@ -500,6 +503,7 @@ class SceneService {
                   ? options.context.commandContext
                   : {}),
                 ...(options.command && typeof options.command === 'object' ? options.command : {}),
+                releaseCommandClaimOnSuccess: true,
                 source: options.command?.source || options.context?.commandContext?.source || 'scene',
                 sceneId: normalizedSceneId,
                 sceneName: scene.name,

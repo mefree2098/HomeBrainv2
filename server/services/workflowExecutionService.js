@@ -137,7 +137,20 @@ async function executeWithDeviceCommandAdmission(device, actionName, value, cont
   });
 
   try {
-    return await executor(admission);
+    const result = await executor(admission);
+    const releaseOnSuccess = overrides?.releaseCommandClaimOnSuccess === true
+      || context?.releaseCommandClaimOnSuccess === true
+      || context?.commandContext?.releaseCommandClaimOnSuccess === true;
+    if (releaseOnSuccess && admission?.accepted && !admission.disabled) {
+      try {
+        await deviceCommandCoordinatorService.releaseCommand(admission.command?.commandId, {
+          reason: 'Workflow device command completed'
+        });
+      } catch (releaseError) {
+        console.warn(`WorkflowExecutionService: Failed to release device command claim after success: ${releaseError.message}`);
+      }
+    }
+    return result;
   } catch (error) {
     if (admission?.accepted && !admission.disabled) {
       try {
@@ -435,6 +448,100 @@ function getActionValue(actionName, parameters = {}) {
   }
 
   return undefined;
+}
+
+function actionFlagEnabled(action, key) {
+  return action?.parameters?.[key] === true || action?.[key] === true;
+}
+
+function isTruthyPower(value) {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return value > 0;
+  }
+  if (typeof value === 'string') {
+    return ['on', 'true', 'open', 'locked', 'active', '1'].includes(value.trim().toLowerCase());
+  }
+  return false;
+}
+
+function getDevicePowerState(device = {}) {
+  if (device?.properties?.directRadioState && typeof device.properties.directRadioState === 'object') {
+    const directState = device.properties.directRadioState;
+    if (Object.prototype.hasOwnProperty.call(directState, 'switch')) {
+      return isTruthyPower(directState.switch);
+    }
+    if (Object.prototype.hasOwnProperty.call(directState, 'state')) {
+      return isTruthyPower(directState.state);
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(device, 'status')) {
+    return isTruthyPower(device.status);
+  }
+
+  return null;
+}
+
+function getDeviceBrightness(device = {}) {
+  const directBrightness = device?.properties?.directRadioState?.brightness;
+  const rawBrightness = directBrightness ?? device?.brightness;
+  const brightness = Number(rawBrightness);
+  return Number.isFinite(brightness) ? Math.round(brightness) : null;
+}
+
+function numericValuesMatch(left, right, tolerance = 1) {
+  const leftNumber = Number(left);
+  const rightNumber = Number(right);
+  return Number.isFinite(leftNumber)
+    && Number.isFinite(rightNumber)
+    && Math.abs(leftNumber - rightNumber) <= tolerance;
+}
+
+function getAlreadySatisfiedReason(device = {}, actionName, value) {
+  const normalizedAction = sanitizeString(actionName).toLowerCase();
+  const powerState = getDevicePowerState(device);
+
+  switch (normalizedAction) {
+    case 'turn_off':
+    case 'turnoff':
+    case 'off':
+      return powerState === false ? 'already_off' : '';
+    case 'turn_on':
+    case 'turnon':
+    case 'on':
+      if (powerState !== true) {
+        return '';
+      }
+      if (value === undefined || value === null || value === '') {
+        return 'already_on';
+      }
+      return numericValuesMatch(getDeviceBrightness(device), value) ? 'already_on_at_brightness' : '';
+    case 'set_brightness':
+    case 'setbrightness':
+      return powerState === true && numericValuesMatch(getDeviceBrightness(device), value)
+        ? 'already_at_brightness'
+        : '';
+    default:
+      return '';
+  }
+}
+
+function buildAlreadySatisfiedResult(device, target, actionName, value, reason) {
+  const deviceName = device?.name || target?.toString?.() || String(target || 'device');
+  return {
+    target: target?.toString?.() || String(target || ''),
+    message: `Skipped ${actionName} on ${deviceName}; device is already in the requested state`,
+    value,
+    details: {
+      skipped: true,
+      skipReason: reason,
+      alreadySatisfied: true,
+      source: getDeviceSource(device)
+    }
+  };
 }
 
 function getInsteonCommandRetryOptions(action, source = '', defaults = {}) {
@@ -1590,11 +1697,21 @@ async function executeDeviceControlForResolvedDevice(device, target, actionName,
   const context = executionOptions?.context && typeof executionOptions.context === 'object'
     ? executionOptions.context
     : {};
+  const alreadySatisfiedReason = actionFlagEnabled(executionOptions?.action, 'skipIfAlreadyInState')
+    ? getAlreadySatisfiedReason(device, actionName, value)
+    : '';
+  if (alreadySatisfiedReason) {
+    return buildAlreadySatisfiedResult(device, target, actionName, value, alreadySatisfiedReason);
+  }
+
   const commandMetadata = buildDeviceCommandMetadata(context, {
     reason: executionOptions?.reason
       || `Workflow action ${actionName} for ${device?.name || target}`,
-    actionType: 'device_control'
+    actionType: 'device_control',
+    releaseCommandClaimOnSuccess: actionFlagEnabled(executionOptions?.action, 'releaseCommandClaimOnSuccess')
+      || context?.commandContext?.releaseCommandClaimOnSuccess === true
   });
+  const releaseCommandClaimOnSuccess = commandMetadata.releaseCommandClaimOnSuccess === true;
   const insteonOptions = {
     ...getInsteonCommandRetryOptions(executionOptions?.action, source),
     ...(executionOptions?.insteon && typeof executionOptions.insteon === 'object'
@@ -1656,6 +1773,7 @@ async function executeDeviceControlForResolvedDevice(device, target, actionName,
   } else {
     controlResult = await deviceService.controlDevice(target.toString(), actionName, value, {
       command: commandMetadata,
+      releaseCommandClaimOnSuccess,
       requirePostActionVerification: source === 'harmony' || source === 'smartthings',
       ...(source === 'harmony'
         ? {
@@ -1714,19 +1832,63 @@ async function executeResolvedDeviceGroupUnit({
     throw new Error(`Device group "${groupName}" has no matching devices`);
   }
 
+  const skipAlreadySatisfied = actionFlagEnabled(action, 'skipIfAlreadyInState');
+  const skippedMembers = [];
+  const commandDevices = skipAlreadySatisfied
+    ? devices.filter((device) => {
+        const target = device?._id?.toString?.() || null;
+        const reason = getAlreadySatisfiedReason(device, actionName, value);
+        if (target && reason) {
+          skippedMembers.push({
+            deviceId: target,
+            deviceName: device.name,
+            room: device.room || '',
+            success: true,
+            skipped: true,
+            skipReason: reason,
+            message: `Skipped ${actionName}; device is already in the requested state`
+          });
+          return false;
+        }
+        return true;
+      })
+    : devices;
+
+  if (commandDevices.length === 0) {
+    return {
+      target: {
+        kind: 'device_group',
+        group: groupName
+      },
+      message: `Skipped ${actionName} on device group "${groupName}" (${skippedMembers.length} already in requested state)`,
+      value,
+      details: {
+        kind: 'device_group',
+        group: groupName,
+        executionMode: 'skipped_already_satisfied',
+        concurrency: 0,
+        totalTargets: devices.length,
+        successfulTargets: skippedMembers.length,
+        failedTargets: 0,
+        skippedTargets: skippedMembers.length,
+        members: skippedMembers
+      }
+    };
+  }
+
   const allowManagedBroadcast = allowManagedInsteonGroup
     && isAckOnlyInsteonVerificationMode(insteonGroupOptions?.verificationMode);
 
   if (allowManagedBroadcast) {
     let groupAdmissions = [];
     try {
-      groupAdmissions = await admitDeviceCommandGroup(devices, actionName, value, context, {
+      groupAdmissions = await admitDeviceCommandGroup(commandDevices, actionName, value, context, {
         actionType: 'device_group_control',
         reason: `Device group "${groupName}" ${actionName}`
       });
       const broadcastResult = await insteonService.tryControlDeviceGroup(
         groupRecord,
-        devices,
+        commandDevices,
         actionName,
         value,
         insteonGroupOptions
@@ -1746,10 +1908,14 @@ async function executeResolvedDeviceGroupUnit({
             group: groupName,
             executionMode: 'insteon_group_broadcast',
             concurrency: 1,
-            totalTargets: targetCount,
-            successfulTargets: targetCount,
+            totalTargets: targetCount + skippedMembers.length,
+            successfulTargets: targetCount + skippedMembers.length,
             failedTargets: 0,
-            members: Array.isArray(broadcastResult?.details?.members) ? broadcastResult.details.members : [],
+            skippedTargets: skippedMembers.length,
+            members: [
+              ...(Array.isArray(broadcastResult?.details?.members) ? broadcastResult.details.members : []),
+              ...skippedMembers
+            ],
             controlMethod: broadcastResult?.details?.controlMethod || null,
             verificationMode: broadcastResult?.details?.verificationMode || null,
             commandVariant: broadcastResult?.details?.commandVariant || null,
@@ -1772,54 +1938,59 @@ async function executeResolvedDeviceGroupUnit({
   }
 
   const concurrency = getDeviceGroupConcurrency(devices);
-  const memberResults = (await mapWithConcurrency(devices, concurrency, async (device) => {
-    const target = device?._id?.toString?.() || null;
-    if (!target) {
-      return null;
-    }
+  const memberResults = [
+    ...skippedMembers,
+    ...(await mapWithConcurrency(commandDevices, concurrency, async (device) => {
+      const target = device?._id?.toString?.() || null;
+      if (!target) {
+        return null;
+      }
 
-    try {
-      const result = await executeDeviceControlForResolvedDevice(
-        device,
-        target,
-        actionName,
-        value,
-        {
-          action,
-          insteon: insteonGroupOptions,
-          context
-        }
-      );
+      try {
+        const result = await executeDeviceControlForResolvedDevice(
+          device,
+          target,
+          actionName,
+          value,
+          {
+            action,
+            insteon: insteonGroupOptions,
+            context
+          }
+        );
 
-      return {
-        deviceId: target,
-        deviceName: device.name,
-        room: device.room || '',
-        success: true,
-        message: result.message,
-        details: result.details || {}
-      };
-    } catch (error) {
-      return {
-        deviceId: target,
-        deviceName: device.name,
-        room: device.room || '',
-        success: false,
-        error: error.message || 'Group device control failed'
-      };
-    }
-  })).filter(Boolean);
+        return {
+          deviceId: target,
+          deviceName: device.name,
+          room: device.room || '',
+          success: true,
+          message: result.message,
+          details: result.details || {}
+        };
+      } catch (error) {
+        return {
+          deviceId: target,
+          deviceName: device.name,
+          room: device.room || '',
+          success: false,
+          error: error.message || 'Group device control failed'
+        };
+      }
+    })).filter(Boolean)
+  ];
 
   const successfulTargets = memberResults.filter((entry) => entry.success).length;
   const failedTargets = memberResults.length - successfulTargets;
+  const skippedTargets = memberResults.filter((entry) => entry.skipped).length;
   const details = {
     kind: 'device_group',
     group: groupName,
-    executionMode: 'parallel',
+    executionMode: skippedTargets > 0 ? 'parallel_with_skips' : 'parallel',
     concurrency,
     totalTargets: memberResults.length,
     successfulTargets,
     failedTargets,
+    skippedTargets,
     members: memberResults
   };
 
