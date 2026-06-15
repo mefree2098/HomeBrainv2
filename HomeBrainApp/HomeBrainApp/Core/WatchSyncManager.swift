@@ -14,6 +14,7 @@ final class WatchSyncManager: NSObject, ObservableObject {
 
     private weak var sessionStore: SessionStore?
     private var didActivate = false
+    private var activationWaiters: [CheckedContinuation<Bool, Never>] = []
 
     func bind(sessionStore: SessionStore) {
         self.sessionStore = sessionStore
@@ -23,23 +24,31 @@ final class WatchSyncManager: NSObject, ObservableObject {
     func activate() {
         guard WCSession.isSupported() else {
             isSupported = false
+            finishActivationWaiters(false)
             return
         }
 
         let session = WCSession.default
         session.delegate = self
-        if !didActivate {
+        activationState = session.activationState
+
+        if session.activationState == .activated {
+            updateState(from: session)
+            finishActivationWaiters(true)
+            return
+        }
+
+        resetWatchState()
+
+        if !didActivate || session.activationState == .inactive {
             didActivate = true
             session.activate()
         }
-        updateState(from: session)
     }
 
     @discardableResult
     func syncNow(watchDeviceId: String? = nil) async -> Bool {
-        activate()
-
-        guard isSupported else {
+        guard await ensureActivated() else {
             lastErrorMessage = "This iPhone does not support Apple Watch sync."
             return false
         }
@@ -100,12 +109,20 @@ final class WatchSyncManager: NSObject, ObservableObject {
     }
 
     func clearWatchSession() {
-        activate()
-
         guard WCSession.isSupported() else {
             return
         }
 
+        Task { @MainActor in
+            guard await ensureActivated() else {
+                return
+            }
+
+            sendClearWatchSessionPayload()
+        }
+    }
+
+    private func sendClearWatchSessionPayload() {
         let payload: [String: Any] = [
             "type": "homebrain.session.clear",
             "sentAt": Date()
@@ -141,9 +158,50 @@ final class WatchSyncManager: NSObject, ObservableObject {
 
     private func updateState(from session: WCSession) {
         activationState = session.activationState
+        guard session.activationState == .activated else {
+            resetWatchState()
+            return
+        }
+
         isPaired = session.isPaired
         isWatchAppInstalled = session.isWatchAppInstalled
         isReachable = session.isReachable
+    }
+
+    private func resetWatchState() {
+        isPaired = false
+        isWatchAppInstalled = false
+        isReachable = false
+    }
+
+    private func ensureActivated() async -> Bool {
+        guard WCSession.isSupported() else {
+            isSupported = false
+            return false
+        }
+
+        let session = WCSession.default
+        session.delegate = self
+
+        if session.activationState == .activated {
+            updateState(from: session)
+            return true
+        }
+
+        return await withCheckedContinuation { continuation in
+            activationWaiters.append(continuation)
+            activate()
+        }
+    }
+
+    private func finishActivationWaiters(_ success: Bool) {
+        guard !activationWaiters.isEmpty else {
+            return
+        }
+
+        let waiters = activationWaiters
+        activationWaiters.removeAll()
+        waiters.forEach { $0.resume(returning: success) }
     }
 
     private func normalized(_ value: String?) -> String? {
@@ -159,8 +217,12 @@ extension WatchSyncManager: WCSessionDelegate {
         error: Error?
     ) {
         Task { @MainActor in
+            if error != nil {
+                didActivate = false
+            }
             updateState(from: session)
             lastErrorMessage = error?.localizedDescription
+            finishActivationWaiters(activationState == .activated && error == nil)
         }
     }
 
@@ -172,7 +234,9 @@ extension WatchSyncManager: WCSessionDelegate {
 
     nonisolated func sessionDidDeactivate(_ session: WCSession) {
         Task { @MainActor in
+            didActivate = false
             session.activate()
+            didActivate = true
             updateState(from: session)
         }
     }
