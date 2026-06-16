@@ -121,12 +121,69 @@ class VoiceWebSocketServer {
 
     console.log(`Voice device WebSocket connection established: ${deviceId}`);
 
+    const pendingMessages = [];
+    let connectionRegistered = false;
+    let socketClosed = false;
+
+    const processMessage = (message) => {
+      try {
+        const parsed = JSON.parse(message.toString());
+        console.log('WebSocket message event for voice device', {
+          deviceId,
+          message: redactMessageForLog(parsed)
+        });
+      } catch (logError) {
+        console.warn('Failed to parse voice device websocket message for logging', {
+          deviceId,
+          error: logError.message
+        });
+      }
+
+      if (!connectionRegistered) {
+        pendingMessages.push(message);
+        console.log('Queued early voice device websocket message until connection setup completes', { deviceId });
+        return;
+      }
+
+      console.log('Queueing voice device websocket message for processing', { deviceId });
+      void this.handleMessage(deviceId, message);
+    };
+
+    // Attach handlers before any async work so fast clients do not lose their
+    // first authenticate message while the device record is loading.
+    ws.on('message', processMessage);
+
+    ws.on('close', (code, reason) => {
+      socketClosed = true;
+      this.handleDisconnection(deviceId, code, reason, ws);
+    });
+
+    ws.on('error', (error) => {
+      console.error('WebSocket error for voice device', {
+        deviceId,
+        error: error?.message || error
+      });
+      this.handleDisconnection(deviceId, 1006, 'Connection error', ws);
+    });
+
+    ws.on('pong', () => {
+      const connection = this.deviceConnections.get(deviceId);
+      if (connection && connection.ws === ws) {
+        connection.lastPing = Date.now();
+      }
+    });
+
     try {
       // Verify device exists in database
       const device = await VoiceDevice.findById(deviceId);
       if (!device) {
         console.warn(`WebSocket connection rejected: Device not found ${deviceId}`);
         ws.close(1008, 'Device not found');
+        return;
+      }
+
+      if (socketClosed || ws.readyState === WebSocket.CLOSED) {
+        console.warn('WebSocket connection closed before setup completed for voice device', { deviceId });
         return;
       }
 
@@ -140,34 +197,7 @@ class VoiceWebSocketServer {
         deviceInfo: null,
         pendingWakeWord: null
       });
-
-      // Set up WebSocket event handlers
-      ws.on('message', (message) => {
-        try {
-          const parsed = JSON.parse(message.toString());
-          console.log(`WebSocket message event for ${deviceId}:`, redactMessageForLog(parsed));
-        } catch (logError) {
-          console.warn(`Failed to parse message for logging from ${deviceId}:`, logError.message);
-        }
-        console.log(`Queueing message for processing for ${deviceId}`);
-        this.handleMessage(deviceId, message);
-      });
-
-      ws.on('close', (code, reason) => {
-        this.handleDisconnection(deviceId, code, reason);
-      });
-
-      ws.on('error', (error) => {
-        console.error(`WebSocket error for device ${deviceId}:`, error);
-        this.handleDisconnection(deviceId, 1006, 'Connection error');
-      });
-
-      ws.on('pong', () => {
-        const connection = this.deviceConnections.get(deviceId);
-        if (connection) {
-          connection.lastPing = Date.now();
-        }
-      });
+      connectionRegistered = true;
 
       // Send welcome message
       this.sendMessage(deviceId, {
@@ -175,6 +205,12 @@ class VoiceWebSocketServer {
         deviceId: deviceId,
         timestamp: new Date().toISOString()
       });
+
+      while (pendingMessages.length > 0) {
+        const pendingMessage = pendingMessages.shift();
+        console.log('Processing queued early voice device websocket message', { deviceId });
+        void this.handleMessage(deviceId, pendingMessage);
+      }
 
       console.log(`Voice device ${device.name} connected; waiting for authentication`);
 
@@ -1183,8 +1219,14 @@ class VoiceWebSocketServer {
     }
   }
 
-  async handleDisconnection(deviceId, code, reason) {
+  async handleDisconnection(deviceId, code, reason, ws = null) {
     console.log(`Voice device ${deviceId} disconnected: ${code} - ${reason}`);
+    const connection = this.deviceConnections.get(deviceId);
+    if (ws && (!connection || connection.ws !== ws)) {
+      console.log('Ignoring stale websocket disconnect for voice device', { deviceId });
+      return;
+    }
+
     this.deviceConnections.delete(deviceId);
     this.audioSessions.delete(deviceId);
 
