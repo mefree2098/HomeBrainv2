@@ -670,7 +670,7 @@ const voiceWsServer = new VoiceWebSocketServer();
 voiceWsServer.initialize(httpServer);
 deviceWebSocket.initialize(httpServer);
 wakeWordTrainingService.setVoiceWebSocket(voiceWsServer);
-wakeWordTrainingService.resumePendingTraining().catch((error) => {
+void dbReady.then(() => wakeWordTrainingService.resumePendingTraining()).catch((error) => {
   console.error('Failed to resume wake word training jobs:', error);
 });
 
