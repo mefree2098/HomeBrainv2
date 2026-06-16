@@ -3488,10 +3488,41 @@ export function Settings() {
     return !candidate || isMaskedSecretPlaceholder(candidate) ? "" : candidate;
   }
 
-  const handleTestLanWhisper = async () => {
+  const persistLanWhisperProbeSettings = async () => {
     const endpoint = watch("lanWhisperEndpoint") || ""
     const apiKeyValue = watch("lanWhisperApiKey") || ""
     const apiKey = !apiKeyValue || isMaskedSecretPlaceholder(apiKeyValue) ? "" : apiKeyValue
+    const payload: Record<string, unknown> = {
+      sttProvider: "lan_whisper",
+      sttModel: sttModelValue,
+      sttLanguage: sttLanguageValue,
+      lanWhisperEndpoint: endpoint,
+      lanWhisperTimeoutMs: Number(watch("lanWhisperTimeoutMs") || 10000)
+    }
+    if (apiKey) {
+      payload.lanWhisperApiKey = apiKey
+    }
+    await updateSettings(payload)
+  }
+
+  const persistS2ProbeSettings = async () => {
+    const payload: Record<string, unknown> = {
+      ttsProvider: "s2_pro",
+      s2ProEndpoint: s2ProEndpointValue,
+      s2ProDefaultVoiceId: s2ProVoiceValue,
+      s2ProModel: s2ProModelValue,
+      s2ProOutputFormat: s2ProOutputFormatValue,
+      s2ProTimeoutMs: s2ProTimeoutValue
+    }
+    const apiKey = getS2ApiKeyForRequest()
+    if (apiKey) {
+      payload.s2ProApiKey = apiKey
+    }
+    await updateSettings(payload)
+  }
+
+  const handleTestLanWhisper = async () => {
+    const endpoint = watch("lanWhisperEndpoint") || ""
 
     if (!endpoint.trim()) {
       toast({
@@ -3504,9 +3535,8 @@ export function Settings() {
 
     setTestingLanWhisper(true)
     try {
+      await persistLanWhisperProbeSettings()
       const response = await testLanWhisper({
-        endpoint,
-        apiKey,
         model: sttModelValue,
         language: sttLanguageValue,
         timeoutMs: Number(watch("lanWhisperTimeoutMs") || 10000)
@@ -3529,8 +3559,6 @@ export function Settings() {
 
   const buildS2Request = (extra: Record<string, unknown> = {}) => ({
     provider: "s2_pro",
-    endpoint: s2ProEndpointValue,
-    apiKey: getS2ApiKeyForRequest(),
     voiceId: s2ProVoiceValue,
     model: s2ProModelValue,
     format: s2ProOutputFormatValue,
@@ -3550,6 +3578,7 @@ export function Settings() {
 
     setLoadingS2Voices(true)
     try {
+      await persistS2ProbeSettings()
       const response = await getTtsVoices(buildS2Request())
       setS2Voices(response.voices || [])
       toast({
@@ -3579,6 +3608,7 @@ export function Settings() {
 
     setTestingS2Pro(true)
     try {
+      await persistS2ProbeSettings()
       const response = await testTtsProvider(buildS2Request({
         text: "HomeBrain S2 Pro test generation."
       }))
@@ -3612,6 +3642,7 @@ export function Settings() {
 
     setPreviewingS2Pro(true)
     try {
+      await persistS2ProbeSettings()
       const audio = await generateTtsPreview(buildS2Request({
         text: "HomeBrain is speaking through the local S2 Pro provider."
       }))

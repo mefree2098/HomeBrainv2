@@ -491,13 +491,8 @@ router.post('/test-lan-whisper', lanWhisperTestRateLimit, auth, async (req, res)
     console.log('POST /api/settings/test-lan-whisper - Testing LAN Whisper connectivity');
 
     const settings = await settingsService.getSettings();
-    const endpoint = typeof req.body?.endpoint === 'string' && req.body.endpoint.trim()
-      ? req.body.endpoint.trim()
-      : settings.lanWhisperEndpoint;
-    const apiKeyCandidate = typeof req.body?.apiKey === 'string' ? req.body.apiKey.trim() : '';
-    const apiKey = apiKeyCandidate && !settingsService.isMaskedSecretValue(apiKeyCandidate)
-      ? apiKeyCandidate
-      : settings.lanWhisperApiKey;
+    const endpoint = settings.lanWhisperEndpoint;
+    const apiKey = settings.lanWhisperApiKey;
     const model = typeof req.body?.model === 'string' && req.body.model.trim()
       ? req.body.model.trim()
       : settings.sttModel || 'large-v3';

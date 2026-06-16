@@ -49,8 +49,8 @@ async function buildOverrides(req) {
   return {
     settings,
     provider: source.provider,
-    endpoint: source.endpoint || settings.s2ProEndpoint,
-    apiKey: resolveApiKey(source.apiKey, settings.s2ProApiKey, isMaskedSecretValue),
+    endpoint: settings.s2ProEndpoint,
+    apiKey: settings.s2ProApiKey,
     voiceId: source.voiceId || settings.s2ProDefaultVoiceId,
     model: source.model || settings.s2ProModel,
     format: source.format || settings.s2ProOutputFormat,

@@ -205,7 +205,7 @@ export const testLocalLLM = async (endpoint: string, model?: string) => {
 // Request: { endpoint: string, apiKey?: string, model?: string, language?: string, timeoutMs?: number }
 // Response: { success: boolean, message: string, endpoint?: string }
 export const testLanWhisper = async (data: {
-  endpoint: string;
+  endpoint?: string;
   apiKey?: string;
   model?: string;
   language?: string;
