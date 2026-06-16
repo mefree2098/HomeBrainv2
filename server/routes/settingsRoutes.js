@@ -6,6 +6,7 @@ const deviceRestartService = require('../services/deviceRestartService');
 const smbBackupSchedulerService = require('../services/smbBackupSchedulerService');
 const dynamicDnsService = require('../services/dynamicDnsService');
 const { testOpenAIModelCompatibility } = require('../services/llmService');
+const speechService = require('../services/speechService');
 const {
   completeCodexLogin,
   getCodexAuthHealth,
@@ -23,6 +24,16 @@ const dynamicDnsPushRateLimit = rateLimit({
   message: {
     success: false,
     message: 'Too many Dynamic DNS push requests. Try again later.'
+  }
+});
+const lanWhisperTestRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_LAN_WHISPER_TEST_RATE_LIMIT_WINDOW_MS || 5 * 60 * 1000)),
+  limit: Math.max(1, Number(process.env.HOMEBRAIN_LAN_WHISPER_TEST_RATE_LIMIT_MAX || 20)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many LAN Whisper test requests. Try again later.'
   }
 });
 
@@ -466,6 +477,51 @@ router.post('/test-local-llm', auth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to test local LLM endpoint',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/settings/test-lan-whisper
+ * Test LAN Whisper endpoint connectivity
+ */
+router.post('/test-lan-whisper', lanWhisperTestRateLimit, auth, async (req, res) => {
+  try {
+    console.log('POST /api/settings/test-lan-whisper - Testing LAN Whisper connectivity');
+
+    const settings = await settingsService.getSettings();
+    const endpoint = settings.lanWhisperEndpoint;
+    const apiKey = settings.lanWhisperApiKey;
+    const model = typeof req.body?.model === 'string' && req.body.model.trim()
+      ? req.body.model.trim()
+      : settings.sttModel || 'large-v3';
+    const language = typeof req.body?.language === 'string' && req.body.language.trim()
+      ? req.body.language.trim()
+      : settings.sttLanguage || 'en';
+    const timeoutMs = Number(req.body?.timeoutMs || settings.lanWhisperTimeoutMs || 10000);
+
+    if (!endpoint || !endpoint.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'LAN Whisper endpoint is required for testing'
+      });
+    }
+
+    const result = await speechService.testLanWhisperConnection({
+      endpoint,
+      apiKey,
+      model,
+      language,
+      timeoutMs
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('Error in POST /api/settings/test-lan-whisper:', error.message);
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to test LAN Whisper endpoint',
       error: error.message
     });
   }

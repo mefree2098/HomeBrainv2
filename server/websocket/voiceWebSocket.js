@@ -16,6 +16,8 @@ const MAX_AUDIO_SESSION_BYTES = Math.max(
   1024 * 1024,
   Number(process.env.HOMEBRAIN_VOICE_AUDIO_SESSION_MAX_BYTES || 20 * 1024 * 1024)
 );
+const DEFAULT_WAKE_WORD_MIN_RMS = 0.02;
+const MAX_WAKE_WORD_MIN_RMS = 0.2;
 
 function redactMessageForLog(message = {}) {
   const redacted = { ...message };
@@ -286,8 +288,8 @@ class VoiceWebSocketServer {
               ? Math.max(0, Math.min(3, Math.round(vadSettings.mode)))
               : 3,
             minRms: typeof vadSettings.minRms === 'number'
-              ? clampValue(vadSettings.minRms, 0, 1)
-              : 0.02
+              ? clampValue(vadSettings.minRms, 0, MAX_WAKE_WORD_MIN_RMS)
+              : DEFAULT_WAKE_WORD_MIN_RMS
           }
         },
         volume: device.volume,

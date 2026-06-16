@@ -1306,7 +1306,8 @@ class HomeBrainRemoteDevice {
     const models = keywordEntries.map((k) => ({ label: k.label, path: k.path, threshold: k.threshold ?? this.wakeWordThreshold }));
     // Default frameSamples to 1s of audio at current sample rate if not set
     this.wakeWordFrameSamples = this.wakeWordFrameSamples || this.wakeWordSampleRate || 16000;
-    const cfg = { type: 'config', models, sampleRate: this.wakeWordSampleRate, frameSamples: this.wakeWordFrameSamples, cooldownMs: this.wakeWordDebounceMs, vad: { minRms: 0.02 } };
+    const minRms = clamp(this.config.wakeWord?.vad?.minRms ?? 0.02, 0, 0.2);
+    const cfg = { type: 'config', models, sampleRate: this.wakeWordSampleRate, frameSamples: this.wakeWordFrameSamples, cooldownMs: this.wakeWordDebounceMs, vad: { minRms } };
     this.sidecar.stdin.write(JSON.stringify(cfg) + '\n');
 
     // Prepare chunking into exact frames for the sidecar
@@ -1849,36 +1850,36 @@ class HomeBrainRemoteDevice {
   async playTTSResponse(text, voice = 'default') {
     console.log(`Playing TTS: "${text}"`);
 
-    // If a specific ElevenLabs voice is provided, fetch audio from the hub and play it.
-    // Otherwise, fall back to local TTS or beep.
+    // Ask the hub for TTS first; the hub decides whether S2 Pro, ElevenLabs, or
+    // another provider should generate the audio.
     let usedRemote = false;
     try {
+      const base = this.getHubHttpBase();
+      const params = new URLSearchParams({ text });
+      if (!this.config.deviceToken) {
+        if (this.config.registrationCode) {
+          params.set('code', this.config.registrationCode);
+        } else if (this.config.claimToken) {
+          params.set('claim', this.config.claimToken);
+        }
+      }
       const voiceId = voice && voice !== 'default' ? voice : null;
       if (voiceId) {
-        const base = this.getHubHttpBase();
-        const params = new URLSearchParams({ text });
-        if (!this.config.deviceToken) {
-          if (this.config.registrationCode) {
-            params.set('code', this.config.registrationCode);
-          } else if (this.config.claimToken) {
-            params.set('claim', this.config.claimToken);
-          }
-        }
         params.set('voiceId', voiceId);
-        const url = `${base}/api/remote-devices/${this.deviceId}/tts?${params.toString()}`;
-        const res = await fetch(url, {
-          headers: this.getDeviceAuthHeaders()
-        });
-        if (res.ok) {
-          const arrayBuf = await res.arrayBuffer();
-          const buf = Buffer.from(arrayBuf);
-          const tmpPath = path.join(os.tmpdir(), `hb_el_${Date.now()}.mp3`);
-          await fsp.writeFile(tmpPath, buf);
-          const played = await playAudioFile(tmpPath);
-          try { await fsp.unlink(tmpPath); } catch (_) {}
-          if (played) {
-            usedRemote = true;
-          }
+      }
+      const url = `${base}/api/remote-devices/${this.deviceId}/tts?${params.toString()}`;
+      const res = await fetch(url, {
+        headers: this.getDeviceAuthHeaders()
+      });
+      if (res.ok) {
+        const arrayBuf = await res.arrayBuffer();
+        const buf = Buffer.from(arrayBuf);
+        const tmpPath = path.join(os.tmpdir(), `hb_tts_${Date.now()}.audio`);
+        await fsp.writeFile(tmpPath, buf);
+        const played = await playAudioFile(tmpPath);
+        try { await fsp.unlink(tmpPath); } catch (_) {}
+        if (played) {
+          usedRemote = true;
         }
       }
     } catch (e) {

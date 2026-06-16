@@ -2,6 +2,8 @@ const Settings = require('../models/Settings');
 
 const SENSITIVE_SETTING_FIELDS = new Set([
   'elevenlabsApiKey',
+  'lanWhisperApiKey',
+  's2ProApiKey',
   'smartthingsToken',
   'smartthingsClientSecret',
   'openaiApiKey',
@@ -82,7 +84,10 @@ class SettingsService {
         'smartthingsToken', 'elevenlabsApiKey', 'elevenlabsDefaultVoiceId',
         'harmonyHubAddresses',
         'hardwareOrbWifiSsid', 'hardwareOrbWifiPassword',
-        'sttProvider', 'sttModel', 'sttLanguage', 'enableSecurityMode',
+        'sttProvider', 'sttModel', 'sttLanguage', 'lanWhisperEndpoint', 'lanWhisperApiKey',
+        'lanWhisperTimeoutMs', 'ttsProvider', 'ttsProviderPriorityList', 's2ProEndpoint',
+        's2ProApiKey', 's2ProDefaultVoiceId', 's2ProModel', 's2ProOutputFormat',
+        's2ProTimeoutMs', 'enableSecurityMode',
         // AI Provider Settings
         'llmProvider', 'openaiApiKey', 'openaiModel',
         'anthropicApiKey', 'anthropicModel',
@@ -139,12 +144,75 @@ class SettingsService {
         sanitizedUpdates.spamFilterLocalLlmModel = sharedLocalModelCandidate;
       }
 
-      ['codexPath', 'codexHome', 'codexAwsVolumeRoot', 'codexModel', 'openaiModel', 'anthropicModel', 'localLlmEndpoint']
+      [
+        'codexPath',
+        'codexHome',
+        'codexAwsVolumeRoot',
+        'codexModel',
+        'openaiModel',
+        'anthropicModel',
+        'localLlmEndpoint',
+        'lanWhisperEndpoint',
+        's2ProEndpoint',
+        's2ProDefaultVoiceId',
+        's2ProModel'
+      ]
         .forEach((key) => {
           if (typeof sanitizedUpdates[key] === 'string') {
             sanitizedUpdates[key] = sanitizedUpdates[key].trim();
           }
         });
+
+      if (typeof sanitizedUpdates.sttProvider === 'string') {
+        const normalizedSttProvider = sanitizedUpdates.sttProvider.trim().toLowerCase();
+        if (['openai', 'local', 'lan_whisper'].includes(normalizedSttProvider)) {
+          sanitizedUpdates.sttProvider = normalizedSttProvider;
+        } else {
+          delete sanitizedUpdates.sttProvider;
+        }
+      }
+
+      if (typeof sanitizedUpdates.ttsProvider === 'string') {
+        const normalizedTtsProvider = sanitizedUpdates.ttsProvider.trim().toLowerCase();
+        if (['elevenlabs', 's2_pro'].includes(normalizedTtsProvider)) {
+          sanitizedUpdates.ttsProvider = normalizedTtsProvider;
+        } else {
+          delete sanitizedUpdates.ttsProvider;
+        }
+      }
+
+      if (Array.isArray(sanitizedUpdates.ttsProviderPriorityList)) {
+        const validTtsProviders = new Set(['s2_pro', 'elevenlabs']);
+        const normalizedPriority = sanitizedUpdates.ttsProviderPriorityList
+          .map((provider) => (typeof provider === 'string' ? provider.trim().toLowerCase() : ''))
+          .filter((provider, index, arr) => validTtsProviders.has(provider) && arr.indexOf(provider) === index);
+        sanitizedUpdates.ttsProviderPriorityList = normalizedPriority.length
+          ? normalizedPriority
+          : ['s2_pro', 'elevenlabs'];
+      }
+
+      if (typeof sanitizedUpdates.s2ProOutputFormat === 'string') {
+        const normalizedFormat = sanitizedUpdates.s2ProOutputFormat.trim().toLowerCase();
+        if (['mp3', 'wav', 'opus', 'flac', 'pcm'].includes(normalizedFormat)) {
+          sanitizedUpdates.s2ProOutputFormat = normalizedFormat;
+        } else {
+          delete sanitizedUpdates.s2ProOutputFormat;
+        }
+      }
+
+      if (Object.prototype.hasOwnProperty.call(sanitizedUpdates, 'lanWhisperTimeoutMs')) {
+        const timeoutMs = Number(sanitizedUpdates.lanWhisperTimeoutMs);
+        sanitizedUpdates.lanWhisperTimeoutMs = Number.isFinite(timeoutMs)
+          ? Math.min(120000, Math.max(1000, Math.trunc(timeoutMs)))
+          : 30000;
+      }
+
+      if (Object.prototype.hasOwnProperty.call(sanitizedUpdates, 's2ProTimeoutMs')) {
+        const timeoutMs = Number(sanitizedUpdates.s2ProTimeoutMs);
+        sanitizedUpdates.s2ProTimeoutMs = Number.isFinite(timeoutMs)
+          ? Math.min(120000, Math.max(1000, Math.trunc(timeoutMs)))
+          : 30000;
+      }
 
       if (typeof sanitizedUpdates.hardwareOrbWifiSsid === 'string') {
         sanitizedUpdates.hardwareOrbWifiSsid = sanitizedUpdates.hardwareOrbWifiSsid.trim();

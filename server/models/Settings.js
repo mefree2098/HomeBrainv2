@@ -123,7 +123,7 @@ const SettingsSchema = new mongoose.Schema({
   },
   sttProvider: {
     type: String,
-    enum: ['openai', 'local'],
+    enum: ['openai', 'local', 'lan_whisper'],
     default: 'openai'
   },
   sttModel: {
@@ -133,6 +133,63 @@ const SettingsSchema = new mongoose.Schema({
   sttLanguage: {
     type: String,
     default: 'en'
+  },
+  lanWhisperEndpoint: {
+    type: String,
+    default: ''
+  },
+  lanWhisperApiKey: {
+    type: String,
+    default: ''
+  },
+  lanWhisperTimeoutMs: {
+    type: Number,
+    min: 1000,
+    max: 120000,
+    default: 30000
+  },
+  ttsProvider: {
+    type: String,
+    enum: ['elevenlabs', 's2_pro'],
+    default: 'elevenlabs'
+  },
+  ttsProviderPriorityList: {
+    type: [String],
+    default: ['s2_pro', 'elevenlabs'],
+    validate: {
+      validator: function(arr) {
+        const validProviders = ['elevenlabs', 's2_pro'];
+        return arr.every(provider => validProviders.includes(provider));
+      },
+      message: 'Invalid TTS provider in priority list'
+    }
+  },
+  s2ProEndpoint: {
+    type: String,
+    default: ''
+  },
+  s2ProApiKey: {
+    type: String,
+    default: ''
+  },
+  s2ProDefaultVoiceId: {
+    type: String,
+    default: ''
+  },
+  s2ProModel: {
+    type: String,
+    default: 's2-pro'
+  },
+  s2ProOutputFormat: {
+    type: String,
+    enum: ['mp3', 'wav', 'opus', 'flac', 'pcm'],
+    default: 'mp3'
+  },
+  s2ProTimeoutMs: {
+    type: Number,
+    min: 1000,
+    max: 120000,
+    default: 30000
   },
   
   // Notification Settings
@@ -623,6 +680,12 @@ SettingsSchema.methods.toSanitized = function() {
   // Mask sensitive data
   if (sanitized.elevenlabsApiKey) {
     sanitized.elevenlabsApiKey = sanitized.elevenlabsApiKey.replace(/.(?=.{4})/g, '*');
+  }
+  if (sanitized.lanWhisperApiKey) {
+    sanitized.lanWhisperApiKey = sanitized.lanWhisperApiKey.replace(/.(?=.{4})/g, '*');
+  }
+  if (sanitized.s2ProApiKey) {
+    sanitized.s2ProApiKey = sanitized.s2ProApiKey.replace(/.(?=.{4})/g, '*');
   }
   if (sanitized.smartthingsToken) {
     sanitized.smartthingsToken = sanitized.smartthingsToken.replace(/.(?=.{4})/g, '*');
