@@ -1,4 +1,5 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const fs = require('fs');
 const fsp = fs.promises;
@@ -7,6 +8,16 @@ const wakeWordTrainingService = require('../services/wakeWordTrainingService');
 const { requireAdmin } = require('./middlewares/auth');
 
 const admin = requireAdmin();
+const wakeWordMutationRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_WAKE_WORD_MUTATION_RATE_LIMIT_WINDOW_MS || 5 * 60 * 1000)),
+  limit: Math.max(1, Number(process.env.HOMEBRAIN_WAKE_WORD_MUTATION_RATE_LIMIT_MAX || 20)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many wake word mutation requests. Try again later.'
+  }
+});
 
 const serializeModel = (model) => ({
   id: model._id,
@@ -53,7 +64,7 @@ router.get('/', admin, async (req, res) => {
 });
 
 // Broadcast updated wake word configuration to connected devices
-router.post('/broadcast', admin, async (req, res) => {
+router.post('/broadcast', wakeWordMutationRateLimit, admin, async (req, res) => {
   try {
     const { phrase, slug } = req.body || {};
     const voiceWs = req.app.get('voiceWebSocket');
@@ -100,6 +111,24 @@ router.get('/queue', admin, async (req, res) => {
   }
 });
 
+router.post('/resume', wakeWordMutationRateLimit, admin, async (req, res) => {
+  try {
+    await wakeWordTrainingService.resumePendingTraining();
+    const queue = await wakeWordTrainingService.getQueueStatus();
+    res.status(202).json({
+      success: true,
+      message: 'Wake word training recovery queued.',
+      queue
+    });
+  } catch (error) {
+    console.error('POST /api/wake-words/resume - Error:', error.message);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to resume wake word training jobs'
+    });
+  }
+});
+
 router.get('/:id', admin, async (req, res) => {
   try {
     const model = await WakeWordModel.findById(req.params.id);
@@ -122,7 +151,7 @@ router.get('/:id', admin, async (req, res) => {
   }
 });
 
-router.post('/', admin, async (req, res) => {
+router.post('/', wakeWordMutationRateLimit, admin, async (req, res) => {
   try {
     const { phrase, slug, options, profiles } = req.body || {};
     if (!phrase) {
@@ -150,7 +179,7 @@ router.post('/', admin, async (req, res) => {
   }
 });
 
-router.post('/:id/retrain', admin, async (req, res) => {
+router.post('/:id/retrain', wakeWordMutationRateLimit, admin, async (req, res) => {
   try {
     const model = await WakeWordModel.findById(req.params.id);
     if (!model) {
@@ -178,7 +207,7 @@ router.post('/:id/retrain', admin, async (req, res) => {
   }
 });
 
-router.delete('/:id', admin, async (req, res) => {
+router.delete('/:id', wakeWordMutationRateLimit, admin, async (req, res) => {
   try {
     const model = await WakeWordModel.findById(req.params.id);
     if (!model) {
