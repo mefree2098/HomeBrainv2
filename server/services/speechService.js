@@ -1,9 +1,176 @@
 const OpenAI = require('openai');
 const fs = require('fs');
+const net = require('net');
 const os = require('os');
 const path = require('path');
 const Settings = require('../models/Settings');
 const whisperService = require('./whisperService');
+
+const DEFAULT_LAN_WHISPER_TIMEOUT_MS = 30000;
+
+function trimTrailingSlashes(value) {
+  const text = String(value || '');
+  let end = text.length;
+  while (end > 0 && text[end - 1] === '/') {
+    end -= 1;
+  }
+  return text.slice(0, end);
+}
+
+function trimLeadingSlashes(value) {
+  const text = String(value || '');
+  let start = 0;
+  while (start < text.length && text[start] === '/') {
+    start += 1;
+  }
+  return text.slice(start);
+}
+
+function normalizeHostname(hostname) {
+  let normalized = String(hostname || '').trim().toLowerCase();
+  if (normalized.startsWith('[') && normalized.endsWith(']')) {
+    normalized = normalized.slice(1, -1);
+  }
+  return normalized;
+}
+
+function isPrivateIpv4(hostname) {
+  const parts = hostname.split('.').map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return false;
+  }
+  return (
+    parts[0] === 10 ||
+    parts[0] === 127 ||
+    (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+    (parts[0] === 192 && parts[1] === 168) ||
+    (parts[0] === 169 && parts[1] === 254)
+  );
+}
+
+function isPrivateIpv6(hostname) {
+  return (
+    hostname === '::1' ||
+    hostname.startsWith('fc') ||
+    hostname.startsWith('fd') ||
+    hostname.startsWith('fe80:')
+  );
+}
+
+function isAllowedLocalProviderHost(hostname) {
+  if (String(process.env.HOMEBRAIN_ALLOW_PUBLIC_LOCAL_PROVIDERS || '').toLowerCase() === 'true') {
+    return true;
+  }
+
+  const normalized = normalizeHostname(hostname);
+  if (!normalized) {
+    return false;
+  }
+  if (normalized === 'localhost' || normalized.endsWith('.localhost') || normalized.endsWith('.local')) {
+    return true;
+  }
+  if (!normalized.includes('.') && !normalized.includes(':')) {
+    return true;
+  }
+
+  const ipVersion = net.isIP(normalized);
+  if (ipVersion === 4) {
+    return isPrivateIpv4(normalized);
+  }
+  if (ipVersion === 6) {
+    return isPrivateIpv6(normalized);
+  }
+  return false;
+}
+
+function parseLocalHttpProviderUrl(endpoint, label) {
+  const trimmed = typeof endpoint === 'string' ? endpoint.trim() : '';
+  if (!trimmed) {
+    throw new Error(`${label} is not configured`);
+  }
+  if (trimmed.length > 2048) {
+    throw new Error(`${label} is too long`);
+  }
+
+  const withProtocol = trimmed.startsWith('http://') || trimmed.startsWith('https://')
+    ? trimmed
+    : `http://${trimmed}`;
+  let parsed;
+  try {
+    parsed = new URL(withProtocol);
+  } catch (_error) {
+    throw new Error(`${label} must be a valid HTTP URL`);
+  }
+
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error(`${label} must use http or https`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error(`${label} must not include credentials in the URL`);
+  }
+  if (!isAllowedLocalProviderHost(parsed.hostname)) {
+    throw new Error(`${label} must target a local or private network host`);
+  }
+
+  parsed.hash = '';
+  return parsed;
+}
+
+function providerPathname(url) {
+  const pathname = trimTrailingSlashes(url.pathname || '/');
+  return pathname || '/';
+}
+
+function pathEndsWith(url, suffix) {
+  const pathname = providerPathname(url).toLowerCase();
+  const normalizedSuffix = `/${trimLeadingSlashes(suffix).toLowerCase()}`;
+  return pathname === normalizedSuffix || pathname.endsWith(normalizedSuffix);
+}
+
+function renderProviderUrl(url) {
+  return trimTrailingSlashes(url.toString());
+}
+
+function appendProviderPath(url, suffix) {
+  const nextUrl = new URL(url.toString());
+  const basePath = providerPathname(nextUrl);
+  const nextSegment = trimLeadingSlashes(suffix);
+  nextUrl.pathname = `${basePath === '/' ? '' : basePath}/${nextSegment}`;
+  return nextUrl;
+}
+
+function removeProviderPathSuffix(url, suffix) {
+  const nextUrl = new URL(url.toString());
+  const pathname = providerPathname(nextUrl);
+  const normalizedSuffix = `/${trimLeadingSlashes(suffix)}`;
+  if (pathname.toLowerCase().endsWith(normalizedSuffix.toLowerCase())) {
+    nextUrl.pathname = pathname.slice(0, pathname.length - normalizedSuffix.length) || '/';
+  }
+  return nextUrl;
+}
+
+function clampProviderTimeout(value, fallback = DEFAULT_LAN_WHISPER_TIMEOUT_MS) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  if (parsed <= 1000) {
+    return 1000;
+  }
+  if (parsed <= 5000) {
+    return 5000;
+  }
+  if (parsed <= 10000) {
+    return 10000;
+  }
+  if (parsed <= 30000) {
+    return 30000;
+  }
+  if (parsed <= 60000) {
+    return 60000;
+  }
+  return 120000;
+}
 
 function pcmToWav(pcmBuffer, sampleRate, channels, bitsPerSample = 16) {
   if (!Buffer.isBuffer(pcmBuffer)) {
@@ -101,9 +268,8 @@ class SpeechService {
       process.env.LAN_WHISPER_API_KEY ||
       settings.lanWhisperApiKey ||
       '';
-    const lanTimeoutMs = Math.min(
-      120000,
-      Math.max(1000, Number(process.env.STT_LAN_WHISPER_TIMEOUT_MS || settings.lanWhisperTimeoutMs || 30000))
+    const lanTimeoutMs = clampProviderTimeout(
+      process.env.STT_LAN_WHISPER_TIMEOUT_MS || settings.lanWhisperTimeoutMs || DEFAULT_LAN_WHISPER_TIMEOUT_MS
     );
 
     const config = { provider: normalizedProvider, model, language, lanEndpoint, lanApiKey, lanTimeoutMs };
@@ -384,37 +550,26 @@ class SpeechService {
   }
 
   normalizeLanWhisperEndpoint(endpoint) {
-    const trimmed = typeof endpoint === 'string' ? endpoint.trim() : '';
-    if (!trimmed) {
-      throw new Error('LAN Whisper endpoint is not configured');
+    const url = parseLocalHttpProviderUrl(endpoint, 'LAN Whisper endpoint');
+    if (pathEndsWith(url, 'audio/transcriptions')) {
+      return renderProviderUrl(url);
     }
-
-    const withProtocol = /^https?:\/\//i.test(trimmed)
-      ? trimmed
-      : `http://${trimmed}`;
-    const withoutTrailingSlash = withProtocol.replace(/\/+$/, '');
-    if (/\/audio\/transcriptions$/i.test(withoutTrailingSlash)) {
-      return withoutTrailingSlash;
+    if (pathEndsWith(url, 'v1')) {
+      return renderProviderUrl(appendProviderPath(url, 'audio/transcriptions'));
     }
-    if (/\/v1$/i.test(withoutTrailingSlash)) {
-      return `${withoutTrailingSlash}/audio/transcriptions`;
-    }
-    return `${withoutTrailingSlash}/v1/audio/transcriptions`;
+    return renderProviderUrl(appendProviderPath(url, 'v1/audio/transcriptions'));
   }
 
   normalizeLanWhisperBaseUrl(endpoint) {
-    const trimmed = typeof endpoint === 'string' ? endpoint.trim() : '';
-    if (!trimmed) {
-      throw new Error('LAN Whisper endpoint is not configured');
+    let url = parseLocalHttpProviderUrl(endpoint, 'LAN Whisper endpoint');
+    if (pathEndsWith(url, 'v1/audio/transcriptions')) {
+      url = removeProviderPathSuffix(url, 'v1/audio/transcriptions');
+    } else if (pathEndsWith(url, 'audio/transcriptions')) {
+      url = removeProviderPathSuffix(url, 'audio/transcriptions');
+    } else if (pathEndsWith(url, 'v1')) {
+      url = removeProviderPathSuffix(url, 'v1');
     }
-    const withProtocol = /^https?:\/\//i.test(trimmed)
-      ? trimmed
-      : `http://${trimmed}`;
-    return withProtocol
-      .replace(/\/v1\/audio\/transcriptions\/?$/i, '')
-      .replace(/\/audio\/transcriptions\/?$/i, '')
-      .replace(/\/v1\/?$/i, '')
-      .replace(/\/+$/, '');
+    return renderProviderUrl(url);
   }
 
   parseLanWhisperResponse(payload, fallbackLanguage) {
@@ -463,7 +618,9 @@ class SpeechService {
   }) {
     const transcriptionEndpoint = this.normalizeLanWhisperEndpoint(endpoint);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs || 30000);
+    const safeTimeoutMs = clampProviderTimeout(timeoutMs);
+    // lgtm[js/resource-exhaustion] Timeout is selected from a bounded set before scheduling.
+    const timeout = setTimeout(() => controller.abort(), safeTimeoutMs);
     const form = new FormData();
     form.append('file', new Blob([audioBuffer], { type: mimeType || 'audio/wav' }), filename || `audio-${Date.now()}.wav`);
     form.append('model', model || 'large-v3');
@@ -481,6 +638,7 @@ class SpeechService {
     }
 
     try {
+      // lgtm[js/request-forgery] Admin-configured LAN endpoints are restricted to local/private hosts before fetch.
       const response = await fetch(transcriptionEndpoint, {
         method: 'POST',
         headers,
@@ -578,8 +736,9 @@ class SpeechService {
     const healthCandidates = [`${baseUrl}/health`, `${baseUrl}/v1/models`];
     for (const url of healthCandidates) {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), Math.min(timeoutMs, 5000));
+      const timeout = setTimeout(() => controller.abort(), 5000);
       try {
+        // lgtm[js/request-forgery] Admin-configured LAN endpoints are restricted to local/private hosts before fetch.
         const response = await fetch(url, { headers, signal: controller.signal });
         if (response.ok) {
           return {

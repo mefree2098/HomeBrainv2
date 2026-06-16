@@ -1,10 +1,31 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const { requireAdmin } = require('./middlewares/auth');
 const Settings = require('../models/Settings');
 const ttsProviderService = require('../services/ttsProviderService');
 
 const auth = requireAdmin();
+const ttsReadRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_TTS_READ_RATE_LIMIT_WINDOW_MS || 60 * 1000)),
+  limit: Math.max(1, Number(process.env.HOMEBRAIN_TTS_READ_RATE_LIMIT_MAX || 120)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many TTS status requests. Try again later.'
+  }
+});
+const ttsProbeRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_TTS_PROBE_RATE_LIMIT_WINDOW_MS || 5 * 60 * 1000)),
+  limit: Math.max(1, Number(process.env.HOMEBRAIN_TTS_PROBE_RATE_LIMIT_MAX || 30)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many TTS provider probe requests. Try again later.'
+  }
+});
 
 function resolveApiKey(candidate, storedValue, isMaskedSecretValue) {
   const normalized = typeof candidate === 'string' ? candidate.trim() : '';
@@ -24,20 +45,35 @@ function isMaskedSecretValue(value) {
 
 async function buildOverrides(req) {
   const settings = await Settings.getSettings();
+  const source = req.body || {};
   return {
     settings,
-    provider: req.body?.provider || req.query?.provider,
-    endpoint: req.body?.endpoint || req.query?.endpoint || settings.s2ProEndpoint,
-    apiKey: resolveApiKey(req.body?.apiKey || req.query?.apiKey, settings.s2ProApiKey, isMaskedSecretValue),
-    voiceId: req.body?.voiceId || req.query?.voiceId || settings.s2ProDefaultVoiceId,
-    model: req.body?.model || req.query?.model || settings.s2ProModel,
-    format: req.body?.format || req.query?.format || settings.s2ProOutputFormat,
-    timeoutMs: req.body?.timeoutMs || req.query?.timeoutMs || settings.s2ProTimeoutMs,
-    text: req.body?.text || req.query?.text
+    provider: source.provider,
+    endpoint: source.endpoint || settings.s2ProEndpoint,
+    apiKey: resolveApiKey(source.apiKey, settings.s2ProApiKey, isMaskedSecretValue),
+    voiceId: source.voiceId || settings.s2ProDefaultVoiceId,
+    model: source.model || settings.s2ProModel,
+    format: source.format || settings.s2ProOutputFormat,
+    timeoutMs: source.timeoutMs || settings.s2ProTimeoutMs,
+    text: source.text
   };
 }
 
-router.get('/status', auth, async (_req, res) => {
+async function buildStoredVoiceOverrides(req) {
+  const settings = await Settings.getSettings();
+  return {
+    settings,
+    provider: req.query?.provider,
+    endpoint: settings.s2ProEndpoint,
+    apiKey: settings.s2ProApiKey,
+    voiceId: settings.s2ProDefaultVoiceId,
+    model: settings.s2ProModel,
+    format: settings.s2ProOutputFormat,
+    timeoutMs: settings.s2ProTimeoutMs
+  };
+}
+
+router.get('/status', ttsReadRateLimit, auth, async (_req, res) => {
   try {
     const settings = await Settings.getSettings();
     return res.status(200).json({
@@ -62,10 +98,10 @@ router.get('/status', auth, async (_req, res) => {
   }
 });
 
-router.get('/voices', auth, async (req, res) => {
+router.get('/voices', ttsReadRateLimit, auth, async (req, res) => {
   try {
     const provider = String(req.query?.provider || 's2_pro').trim().toLowerCase();
-    const overrides = await buildOverrides(req);
+    const overrides = await buildStoredVoiceOverrides(req);
     const result = await ttsProviderService.listVoices(provider, overrides);
     return res.status(200).json({
       ...result,
@@ -80,7 +116,25 @@ router.get('/voices', auth, async (req, res) => {
   }
 });
 
-router.post('/test', auth, async (req, res) => {
+router.post('/voices/query', ttsProbeRateLimit, auth, async (req, res) => {
+  try {
+    const overrides = await buildOverrides(req);
+    const provider = String(overrides.provider || 's2_pro').trim().toLowerCase();
+    const result = await ttsProviderService.listVoices(provider, overrides);
+    return res.status(200).json({
+      ...result,
+      count: Array.isArray(result.voices) ? result.voices.length : 0
+    });
+  } catch (error) {
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to fetch TTS voices',
+      error: error.message
+    });
+  }
+});
+
+router.post('/test', ttsProbeRateLimit, auth, async (req, res) => {
   try {
     const overrides = await buildOverrides(req);
     const result = await ttsProviderService.testProvider(overrides);
@@ -94,7 +148,7 @@ router.post('/test', auth, async (req, res) => {
   }
 });
 
-router.post('/preview', auth, async (req, res) => {
+router.post('/preview', ttsProbeRateLimit, auth, async (req, res) => {
   try {
     const overrides = await buildOverrides(req);
     const speech = await ttsProviderService.textToSpeechDetailed(

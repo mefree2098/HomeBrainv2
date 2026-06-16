@@ -26,6 +26,16 @@ const dynamicDnsPushRateLimit = rateLimit({
     message: 'Too many Dynamic DNS push requests. Try again later.'
   }
 });
+const lanWhisperTestRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_LAN_WHISPER_TEST_RATE_LIMIT_WINDOW_MS || 5 * 60 * 1000)),
+  limit: Math.max(1, Number(process.env.HOMEBRAIN_LAN_WHISPER_TEST_RATE_LIMIT_MAX || 20)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many LAN Whisper test requests. Try again later.'
+  }
+});
 
 function buildCodexOverrides(source = {}) {
   return {
@@ -476,7 +486,7 @@ router.post('/test-local-llm', auth, async (req, res) => {
  * POST /api/settings/test-lan-whisper
  * Test LAN Whisper endpoint connectivity
  */
-router.post('/test-lan-whisper', auth, async (req, res) => {
+router.post('/test-lan-whisper', lanWhisperTestRateLimit, auth, async (req, res) => {
   try {
     console.log('POST /api/settings/test-lan-whisper - Testing LAN Whisper connectivity');
 

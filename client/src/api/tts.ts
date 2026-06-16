@@ -18,7 +18,7 @@ export const getTtsVoices = async (params: {
   timeoutMs?: number;
 }) => {
   try {
-    const response = await api.get('/api/tts/voices', { params });
+    const response = await api.post('/api/tts/voices/query', params);
     return response.data as { success: boolean; provider: string; voices: TtsVoice[]; count: number; endpoint?: string };
   } catch (error) {
     console.error('Error fetching TTS voices:', error);
