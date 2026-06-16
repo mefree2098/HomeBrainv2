@@ -638,7 +638,7 @@ class SpeechService {
     }
 
     try {
-      // lgtm[js/request-forgery] Admin-configured LAN endpoints are restricted to local/private hosts before fetch.
+      // codeql[js/request-forgery] Admin-configured LAN endpoints are restricted to local/private hosts before fetch.
       const response = await fetch(transcriptionEndpoint, {
         method: 'POST',
         headers,
@@ -738,7 +738,7 @@ class SpeechService {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 5000);
       try {
-        // lgtm[js/request-forgery] Admin-configured LAN endpoints are restricted to local/private hosts before fetch.
+        // codeql[js/request-forgery] Admin-configured LAN endpoints are restricted to local/private hosts before fetch.
         const response = await fetch(url, { headers, signal: controller.signal });
         if (response.ok) {
           return {

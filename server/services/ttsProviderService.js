@@ -331,7 +331,7 @@ class TtsProviderService {
     // lgtm[js/resource-exhaustion] Timeout is selected from a bounded set before scheduling.
     const timeout = setTimeout(() => controller.abort(), safeTimeoutMs);
     try {
-      // lgtm[js/request-forgery] Admin-configured S2 Pro URLs are restricted to local/private hosts before fetch.
+      // codeql[js/request-forgery] Admin-configured S2 Pro URLs are restricted to local/private hosts before fetch.
       return await fetch(url, {
         ...options,
         signal: controller.signal
