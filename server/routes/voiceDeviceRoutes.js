@@ -587,6 +587,25 @@ router.put('/devices/:id/settings', admin, async (req, res) => {
     }
 
     const clampValue = (value, min, max) => Math.min(Math.max(value, min), max);
+    const sanitizeWakeWordVad = (value = {}) => {
+      const next = {};
+      if (typeof value.speechThreshold === 'number' && Number.isFinite(value.speechThreshold)) {
+        next.speechThreshold = clampValue(value.speechThreshold, 0, 1);
+      }
+      if (typeof value.history === 'number' && Number.isFinite(value.history)) {
+        next.history = Math.max(1, Math.min(32, Math.round(value.history)));
+      }
+      if (typeof value.minActivations === 'number' && Number.isFinite(value.minActivations)) {
+        next.minActivations = Math.max(1, Math.min(32, Math.round(value.minActivations)));
+      }
+      if (typeof value.mode === 'number' && Number.isFinite(value.mode)) {
+        next.mode = Math.max(0, Math.min(3, Math.round(value.mode)));
+      }
+      if (typeof value.minRms === 'number' && Number.isFinite(value.minRms)) {
+        next.minRms = clampValue(value.minRms, 0, 0.2);
+      }
+      return next;
+    };
     const { volume, microphoneSensitivity, ...settingsUpdates } = updates || {};
 
     if (typeof volume === 'number' && Number.isFinite(volume)) {
@@ -602,7 +621,7 @@ router.put('/devices/:id/settings', admin, async (req, res) => {
       if (settingsUpdates.wakeWordVad && typeof settingsUpdates.wakeWordVad === 'object') {
         nextSettings.wakeWordVad = {
           ...(nextSettings.wakeWordVad || {}),
-          ...settingsUpdates.wakeWordVad
+          ...sanitizeWakeWordVad(settingsUpdates.wakeWordVad)
         };
         delete settingsUpdates.wakeWordVad;
       }

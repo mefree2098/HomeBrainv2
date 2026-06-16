@@ -12,7 +12,6 @@ const path = require('path');
 const os = require('os');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
-const elevenLabsService = require('../services/elevenLabsService');
 const voiceAcknowledgmentService = require('../services/voiceAcknowledgmentService');
 const eventStreamService = require('../services/eventStreamService');
 const { getRequestOrigin, toWebSocketOrigin } = require('../utils/publicOrigin');
@@ -29,6 +28,7 @@ const {
 
 const execFileAsync = promisify(execFile);
 const admin = requireAdmin();
+const ttsProviderService = require('../services/ttsProviderService');
 const onboardingMutationRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
@@ -611,7 +611,7 @@ router.get('/:deviceId/wake-words', async (req, res) => {
   }
 });
 
-// Stream TTS audio for a device using ElevenLabs with device validation
+// Stream TTS audio for a device using the configured HomeBrain TTS provider.
 router.get('/:deviceId/tts', async (req, res) => {
   const { deviceId } = req.params;
   const { text, voiceId } = req.query;
@@ -621,11 +621,14 @@ router.get('/:deviceId/tts', async (req, res) => {
     if (!device) {
       return res.status(403).json({ success: false, message: 'Invalid device credentials' });
     }
-    if (!text || !voiceId) {
-      return res.status(400).json({ success: false, message: 'Missing text or voiceId' });
+    if (!text) {
+      return res.status(400).json({ success: false, message: 'Missing text' });
     }
 
-    const cachedAudioPath = await voiceAcknowledgmentService.findCachedAudio(String(voiceId), String(text));
+    const normalizedVoiceId = voiceId ? String(voiceId) : '';
+    const cachedAudioPath = normalizedVoiceId
+      ? await voiceAcknowledgmentService.findCachedAudio(normalizedVoiceId, String(text))
+      : null;
     if (cachedAudioPath) {
       const stat = await fsPromises.stat(cachedAudioPath);
       res.setHeader('Content-Type', 'audio/mpeg');
@@ -639,14 +642,17 @@ router.get('/:deviceId/tts', async (req, res) => {
       return;
     }
 
-    const speech = await elevenLabsService.textToSpeechDetailed(String(text), String(voiceId));
+    const speech = await ttsProviderService.textToSpeechDetailed(String(text), normalizedVoiceId || undefined);
     const audioBuffer = speech.audioBuffer;
 
-    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Type', speech.contentType || 'audio/mpeg');
     res.setHeader('Content-Length', audioBuffer.length);
     res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('X-ElevenLabs-Cache', speech.cacheHit ? 'hit' : 'miss');
-    res.setHeader('X-ElevenLabs-Emotion-Tagging', speech.tagger?.status || 'unknown');
+    res.setHeader('X-HomeBrain-TTS-Provider', speech.provider || 'unknown');
+    if (speech.provider === 'elevenlabs') {
+      res.setHeader('X-ElevenLabs-Cache', speech.cacheHit ? 'hit' : 'miss');
+      res.setHeader('X-ElevenLabs-Emotion-Tagging', speech.tagger?.status || 'unknown');
+    }
     res.status(200).send(audioBuffer);
   } catch (error) {
     console.error(`GET /api/remote-devices/${deviceId}/tts - Error:`, error.message);

@@ -113,7 +113,8 @@ class FeatureInfer:
         self.frame_samples = int(payload.get("frameSamples") or self.sample_rate)
         vad = payload.get("vad") or {}
         try:
-            self.min_rms = float(vad.get("minRms")) if vad.get("minRms") is not None else self.min_rms
+            if vad.get("minRms") is not None:
+                self.min_rms = max(0.0, min(0.2, float(vad.get("minRms"))))
         except Exception:
             pass
         try:

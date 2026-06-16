@@ -81,6 +81,8 @@ class SpeechService {
     let model;
     if (normalizedProvider === 'whisper_local') {
       model = process.env.STT_MODEL || settings.sttModel || 'small';
+    } else if (normalizedProvider === 'lan_whisper') {
+      model = process.env.STT_MODEL || settings.sttModel || 'large-v3';
     } else {
       model =
         process.env.STT_MODEL ||
@@ -88,8 +90,23 @@ class SpeechService {
         (normalizedProvider === 'openai' ? 'gpt-4o-mini-transcribe' : 'openai');
     }
     const language = process.env.STT_LANGUAGE || settings.sttLanguage || 'en';
+    const lanEndpoint =
+      process.env.STT_LAN_WHISPER_ENDPOINT ||
+      process.env.LAN_WHISPER_ENDPOINT ||
+      process.env.WHISPER_ENDPOINT ||
+      settings.lanWhisperEndpoint ||
+      '';
+    const lanApiKey =
+      process.env.STT_LAN_WHISPER_API_KEY ||
+      process.env.LAN_WHISPER_API_KEY ||
+      settings.lanWhisperApiKey ||
+      '';
+    const lanTimeoutMs = Math.min(
+      120000,
+      Math.max(1000, Number(process.env.STT_LAN_WHISPER_TIMEOUT_MS || settings.lanWhisperTimeoutMs || 30000))
+    );
 
-    const config = { provider: normalizedProvider, model, language };
+    const config = { provider: normalizedProvider, model, language, lanEndpoint, lanApiKey, lanTimeoutMs };
     this.cachedProviderConfig = config;
     this.cachedSettingsTimestamp = now;
     return config;
@@ -269,6 +286,18 @@ class SpeechService {
           language: sttLanguage,
           model: providerConfig.model
         });
+      case 'lan_whisper':
+        return this.transcribeWithLanWhisper({
+          audioBuffer,
+          sampleRate,
+          channels,
+          format,
+          language: sttLanguage,
+          model: providerConfig.model,
+          endpoint: providerConfig.lanEndpoint,
+          apiKey: providerConfig.lanApiKey,
+          timeoutMs: providerConfig.lanTimeoutMs
+        });
       default:
         throw new Error(`Unsupported speech-to-text provider: ${providerConfig.provider}`);
     }
@@ -294,6 +323,18 @@ class SpeechService {
         language: sttLanguage,
         model: resolvedModel,
         realtimeProfile
+      });
+    }
+
+    if (providerConfig.provider === 'lan_whisper') {
+      return this.transcribeMediaWithLanWhisper({
+        audioBuffer,
+        mimeType,
+        language: sttLanguage,
+        model: model || providerConfig.model || 'large-v3',
+        endpoint: providerConfig.lanEndpoint,
+        apiKey: providerConfig.lanApiKey,
+        timeoutMs: providerConfig.lanTimeoutMs
       });
     }
 
@@ -339,6 +380,241 @@ class SpeechService {
       segments,
       confidence: this.computeConfidence(segments),
       processingTimeMs: durationMs
+    };
+  }
+
+  normalizeLanWhisperEndpoint(endpoint) {
+    const trimmed = typeof endpoint === 'string' ? endpoint.trim() : '';
+    if (!trimmed) {
+      throw new Error('LAN Whisper endpoint is not configured');
+    }
+
+    const withProtocol = /^https?:\/\//i.test(trimmed)
+      ? trimmed
+      : `http://${trimmed}`;
+    const withoutTrailingSlash = withProtocol.replace(/\/+$/, '');
+    if (/\/audio\/transcriptions$/i.test(withoutTrailingSlash)) {
+      return withoutTrailingSlash;
+    }
+    if (/\/v1$/i.test(withoutTrailingSlash)) {
+      return `${withoutTrailingSlash}/audio/transcriptions`;
+    }
+    return `${withoutTrailingSlash}/v1/audio/transcriptions`;
+  }
+
+  normalizeLanWhisperBaseUrl(endpoint) {
+    const trimmed = typeof endpoint === 'string' ? endpoint.trim() : '';
+    if (!trimmed) {
+      throw new Error('LAN Whisper endpoint is not configured');
+    }
+    const withProtocol = /^https?:\/\//i.test(trimmed)
+      ? trimmed
+      : `http://${trimmed}`;
+    return withProtocol
+      .replace(/\/v1\/audio\/transcriptions\/?$/i, '')
+      .replace(/\/audio\/transcriptions\/?$/i, '')
+      .replace(/\/v1\/?$/i, '')
+      .replace(/\/+$/, '');
+  }
+
+  parseLanWhisperResponse(payload, fallbackLanguage) {
+    if (payload == null) {
+      return { text: '', language: fallbackLanguage, segments: [] };
+    }
+
+    if (typeof payload === 'string') {
+      const trimmed = payload.trim();
+      if (!trimmed) {
+        return { text: '', language: fallbackLanguage, segments: [] };
+      }
+      try {
+        return this.parseLanWhisperResponse(JSON.parse(trimmed), fallbackLanguage);
+      } catch (_error) {
+        return { text: trimmed, language: fallbackLanguage, segments: [] };
+      }
+    }
+
+    const text = typeof payload.text === 'string'
+      ? payload.text.trim()
+      : typeof payload.transcription === 'string'
+        ? payload.transcription.trim()
+        : typeof payload.result === 'string'
+          ? payload.result.trim()
+          : '';
+
+    return {
+      text,
+      language: payload.language || fallbackLanguage,
+      duration: payload.duration || null,
+      segments: Array.isArray(payload.segments) ? payload.segments : [],
+      raw: payload
+    };
+  }
+
+  async postLanWhisperTranscription({
+    audioBuffer,
+    filename,
+    mimeType,
+    language,
+    model,
+    endpoint,
+    apiKey,
+    timeoutMs
+  }) {
+    const transcriptionEndpoint = this.normalizeLanWhisperEndpoint(endpoint);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs || 30000);
+    const form = new FormData();
+    form.append('file', new Blob([audioBuffer], { type: mimeType || 'audio/wav' }), filename || `audio-${Date.now()}.wav`);
+    form.append('model', model || 'large-v3');
+    form.append('response_format', 'json');
+    form.append('temperature', '0');
+    if (language && language !== 'auto') {
+      form.append('language', language);
+    }
+
+    const headers = {};
+    const normalizedApiKey = typeof apiKey === 'string' ? apiKey.trim() : '';
+    if (normalizedApiKey) {
+      headers.Authorization = `Bearer ${normalizedApiKey}`;
+      headers['X-API-Key'] = normalizedApiKey;
+    }
+
+    try {
+      const response = await fetch(transcriptionEndpoint, {
+        method: 'POST',
+        headers,
+        body: form,
+        signal: controller.signal
+      });
+      const contentType = response.headers.get('content-type') || '';
+      const body = contentType.includes('application/json')
+        ? await response.json()
+        : await response.text();
+
+      if (!response.ok) {
+        const detail = typeof body === 'string'
+          ? body
+          : (body?.error?.message || body?.message || JSON.stringify(body));
+        throw new Error(`LAN Whisper returned HTTP ${response.status}: ${detail}`);
+      }
+
+      return this.parseLanWhisperResponse(body, language);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async transcribeWithLanWhisper({ audioBuffer, sampleRate, channels, format, language, model, endpoint, apiKey, timeoutMs }) {
+    if (format && format.toUpperCase() !== 'S16LE') {
+      throw new Error(`Unsupported audio format "${format}". Only S16LE PCM is currently supported.`);
+    }
+
+    const wavBuffer = pcmToWav(audioBuffer, sampleRate, channels);
+    const startedAt = Date.now();
+    const response = await this.postLanWhisperTranscription({
+      audioBuffer: wavBuffer,
+      filename: `command-${Date.now()}.wav`,
+      mimeType: 'audio/wav',
+      language,
+      model,
+      endpoint,
+      apiKey,
+      timeoutMs
+    });
+    const durationMs = Date.now() - startedAt;
+
+    return {
+      provider: 'lan_whisper',
+      model: model || 'large-v3',
+      text: response.text,
+      language: response.language || language,
+      duration: response.duration || null,
+      segments: response.segments || [],
+      confidence: this.computeConfidence(response.segments || []),
+      processingTimeMs: durationMs,
+      endpoint: this.normalizeLanWhisperEndpoint(endpoint)
+    };
+  }
+
+  async transcribeMediaWithLanWhisper({ audioBuffer, mimeType, language, model, endpoint, apiKey, timeoutMs }) {
+    const normalizedMimeType = normalizeMimeType(mimeType);
+    const extension = extensionForMimeType(normalizedMimeType);
+    const startedAt = Date.now();
+    const response = await this.postLanWhisperTranscription({
+      audioBuffer,
+      filename: `media-${Date.now()}.${extension}`,
+      mimeType: normalizedMimeType,
+      language,
+      model,
+      endpoint,
+      apiKey,
+      timeoutMs
+    });
+    const durationMs = Date.now() - startedAt;
+
+    return {
+      provider: 'lan_whisper',
+      model: model || 'large-v3',
+      text: response.text,
+      language: response.language || language,
+      duration: response.duration || null,
+      segments: response.segments || [],
+      confidence: this.computeConfidence(response.segments || []),
+      processingTimeMs: durationMs,
+      endpoint: this.normalizeLanWhisperEndpoint(endpoint)
+    };
+  }
+
+  async testLanWhisperConnection({ endpoint, apiKey, model, language = 'en', timeoutMs = 10000 } = {}) {
+    const baseUrl = this.normalizeLanWhisperBaseUrl(endpoint);
+    const headers = {};
+    const normalizedApiKey = typeof apiKey === 'string' ? apiKey.trim() : '';
+    if (normalizedApiKey) {
+      headers.Authorization = `Bearer ${normalizedApiKey}`;
+      headers['X-API-Key'] = normalizedApiKey;
+    }
+
+    const healthCandidates = [`${baseUrl}/health`, `${baseUrl}/v1/models`];
+    for (const url of healthCandidates) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), Math.min(timeoutMs, 5000));
+      try {
+        const response = await fetch(url, { headers, signal: controller.signal });
+        if (response.ok) {
+          return {
+            success: true,
+            endpoint: this.normalizeLanWhisperEndpoint(endpoint),
+            message: `LAN Whisper endpoint is reachable at ${url}`,
+            healthUrl: url
+          };
+        }
+      } catch (_error) {
+        // Fall through to the transcription compatibility probe.
+      } finally {
+        clearTimeout(timeout);
+      }
+    }
+
+    const sampleRate = 16000;
+    const silence = Buffer.alloc(Math.round(sampleRate * 0.25) * 2);
+    const result = await this.transcribeWithLanWhisper({
+      audioBuffer: silence,
+      sampleRate,
+      channels: 1,
+      format: 'S16LE',
+      language,
+      model: model || 'large-v3',
+      endpoint,
+      apiKey,
+      timeoutMs
+    });
+
+    return {
+      success: true,
+      endpoint: this.normalizeLanWhisperEndpoint(endpoint),
+      model: result.model,
+      message: 'LAN Whisper transcription endpoint accepted an OpenAI-compatible audio request.'
     };
   }
 

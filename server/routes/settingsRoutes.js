@@ -6,6 +6,7 @@ const deviceRestartService = require('../services/deviceRestartService');
 const smbBackupSchedulerService = require('../services/smbBackupSchedulerService');
 const dynamicDnsService = require('../services/dynamicDnsService');
 const { testOpenAIModelCompatibility } = require('../services/llmService');
+const speechService = require('../services/speechService');
 const {
   completeCodexLogin,
   getCodexAuthHealth,
@@ -466,6 +467,56 @@ router.post('/test-local-llm', auth, async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to test local LLM endpoint',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /api/settings/test-lan-whisper
+ * Test LAN Whisper endpoint connectivity
+ */
+router.post('/test-lan-whisper', auth, async (req, res) => {
+  try {
+    console.log('POST /api/settings/test-lan-whisper - Testing LAN Whisper connectivity');
+
+    const settings = await settingsService.getSettings();
+    const endpoint = typeof req.body?.endpoint === 'string' && req.body.endpoint.trim()
+      ? req.body.endpoint.trim()
+      : settings.lanWhisperEndpoint;
+    const apiKeyCandidate = typeof req.body?.apiKey === 'string' ? req.body.apiKey.trim() : '';
+    const apiKey = apiKeyCandidate && !settingsService.isMaskedSecretValue(apiKeyCandidate)
+      ? apiKeyCandidate
+      : settings.lanWhisperApiKey;
+    const model = typeof req.body?.model === 'string' && req.body.model.trim()
+      ? req.body.model.trim()
+      : settings.sttModel || 'large-v3';
+    const language = typeof req.body?.language === 'string' && req.body.language.trim()
+      ? req.body.language.trim()
+      : settings.sttLanguage || 'en';
+    const timeoutMs = Number(req.body?.timeoutMs || settings.lanWhisperTimeoutMs || 10000);
+
+    if (!endpoint || !endpoint.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'LAN Whisper endpoint is required for testing'
+      });
+    }
+
+    const result = await speechService.testLanWhisperConnection({
+      endpoint,
+      apiKey,
+      model,
+      language,
+      timeoutMs
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    console.error('Error in POST /api/settings/test-lan-whisper:', error.message);
+    return res.status(400).json({
+      success: false,
+      message: error.message || 'Failed to test LAN Whisper endpoint',
       error: error.message
     });
   }

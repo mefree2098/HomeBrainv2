@@ -56,6 +56,7 @@ import {
   testOpenAIApiKey,
   testAnthropicApiKey,
   testLocalLLM,
+  testLanWhisper,
   getCodexModels,
   getCodexAuthHealth,
   completeCodexLogin,
@@ -63,6 +64,8 @@ import {
   getLLMPriorityList,
   updateLLMPriorityList
 } from "@/api/settings"
+import { generateTtsPreview, getTtsVoices, testTtsProvider, type TtsVoice } from "@/api/tts"
+import { playAudioBlob } from "@/api/elevenLabs"
 import {
   flushAlexaBrokerEvents,
   deleteAlexaVoiceUser,
@@ -576,6 +579,11 @@ export function Settings() {
   const [testingOpenAI, setTestingOpenAI] = useState(false)
   const [testingAnthropic, setTestingAnthropic] = useState(false)
   const [testingLocalLLM, setTestingLocalLLM] = useState(false)
+  const [testingLanWhisper, setTestingLanWhisper] = useState(false)
+  const [loadingS2Voices, setLoadingS2Voices] = useState(false)
+  const [testingS2Pro, setTestingS2Pro] = useState(false)
+  const [previewingS2Pro, setPreviewingS2Pro] = useState(false)
+  const [s2Voices, setS2Voices] = useState<TtsVoice[]>([])
   const [smartthingsStatus, setSmartthingsStatus] = useState(null)
   const [testingSmartThings, setTestingSmartThings] = useState(false)
   const [configuringSmartThings, setConfiguringSmartThings] = useState(false)
@@ -743,6 +751,17 @@ export function Settings() {
       sttProvider: "openai",
       sttModel: "gpt-4o-mini-transcribe",
       sttLanguage: "en",
+      lanWhisperEndpoint: "",
+      lanWhisperApiKey: "",
+      lanWhisperTimeoutMs: 30000,
+      ttsProvider: "elevenlabs",
+      ttsProviderPriorityList: ["s2_pro", "elevenlabs"],
+      s2ProEndpoint: "",
+      s2ProApiKey: "",
+      s2ProDefaultVoiceId: "",
+      s2ProModel: "s2-pro",
+      s2ProOutputFormat: "mp3",
+      s2ProTimeoutMs: 30000,
       enableNotifications: true,
       insteonPort: "/dev/ttyUSB0",
       isyHost: "",
@@ -970,8 +989,17 @@ export function Settings() {
   const sttModelValue =
     sttProviderValue === "local"
       ? (sttModelRaw && localWhisperModels.includes(sttModelRaw) ? sttModelRaw : "small")
-      : (sttModelRaw && openaiSttModels.includes(sttModelRaw) ? sttModelRaw : "gpt-4o-mini-transcribe")
+      : sttProviderValue === "lan_whisper"
+        ? (sttModelRaw || "large-v3")
+        : (sttModelRaw && openaiSttModels.includes(sttModelRaw) ? sttModelRaw : "gpt-4o-mini-transcribe")
   const sttLanguageValue = watch("sttLanguage") || "en"
+  const ttsProviderValue = watch("ttsProvider") || "elevenlabs"
+  const s2ProEndpointValue = watch("s2ProEndpoint") || ""
+  const s2ProApiKeyValue = watch("s2ProApiKey") || ""
+  const s2ProVoiceValue = watch("s2ProDefaultVoiceId") || ""
+  const s2ProModelValue = watch("s2ProModel") || "s2-pro"
+  const s2ProOutputFormatValue = watch("s2ProOutputFormat") || "mp3"
+  const s2ProTimeoutValue = Number(watch("s2ProTimeoutMs") || 30000)
   const STHM_NOT_CONFIGURED = "__not_configured__"
   const availableSmartThingsDevices =
     smartThingsDevices.length > 0
@@ -1230,7 +1258,7 @@ export function Settings() {
               return
             }
               // For masked sensitive fields, show a placeholder indicating key is configured
-              if ((key === 'elevenlabsApiKey' || key === 'smartthingsToken' || key === 'smartthingsClientSecret' || key === 'openaiApiKey' || key === 'anthropicApiKey') &&
+              if ((key === 'elevenlabsApiKey' || key === 'lanWhisperApiKey' || key === 's2ProApiKey' || key === 'smartthingsToken' || key === 'smartthingsClientSecret' || key === 'openaiApiKey' || key === 'anthropicApiKey') &&
                   isMaskedSecretPlaceholder(value)) {
                 console.log(`Found masked field: ${key}, showing placeholder`);
                 setValue(key, CONFIGURED_SECRET_PLACEHOLDER); // Placeholder to show key is configured
@@ -1934,6 +1962,12 @@ export function Settings() {
       const settingsToSave = { ...data };
       if (isMaskedSecretPlaceholder(settingsToSave.elevenlabsApiKey)) {
         delete settingsToSave.elevenlabsApiKey; // Don't update if it's just the placeholder
+      }
+      if (isMaskedSecretPlaceholder(settingsToSave.lanWhisperApiKey)) {
+        delete settingsToSave.lanWhisperApiKey;
+      }
+      if (isMaskedSecretPlaceholder(settingsToSave.s2ProApiKey)) {
+        delete settingsToSave.s2ProApiKey;
       }
       if (isMaskedSecretPlaceholder(settingsToSave.smartthingsToken)) {
         delete settingsToSave.smartthingsToken; // Don't update if it's just the placeholder
@@ -3446,6 +3480,150 @@ export function Settings() {
       });
     } finally {
       setTestingLocalLLM(false);
+    }
+  }
+
+  const getS2ApiKeyForRequest = () => {
+    const candidate = s2ProApiKeyValue;
+    return !candidate || isMaskedSecretPlaceholder(candidate) ? "" : candidate;
+  }
+
+  const handleTestLanWhisper = async () => {
+    const endpoint = watch("lanWhisperEndpoint") || ""
+    const apiKeyValue = watch("lanWhisperApiKey") || ""
+    const apiKey = !apiKeyValue || isMaskedSecretPlaceholder(apiKeyValue) ? "" : apiKeyValue
+
+    if (!endpoint.trim()) {
+      toast({
+        title: "Endpoint Required",
+        description: "Enter the LAN Whisper endpoint before testing.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setTestingLanWhisper(true)
+    try {
+      const response = await testLanWhisper({
+        endpoint,
+        apiKey,
+        model: sttModelValue,
+        language: sttLanguageValue,
+        timeoutMs: Number(watch("lanWhisperTimeoutMs") || 10000)
+      })
+
+      toast({
+        title: "LAN Whisper Connected",
+        description: response.message || `Connected to ${response.endpoint || endpoint}.`
+      })
+    } catch (error: any) {
+      toast({
+        title: "LAN Whisper Test Failed",
+        description: error?.message || "Unable to reach the LAN Whisper endpoint.",
+        variant: "destructive"
+      })
+    } finally {
+      setTestingLanWhisper(false)
+    }
+  }
+
+  const buildS2Request = (extra: Record<string, unknown> = {}) => ({
+    provider: "s2_pro",
+    endpoint: s2ProEndpointValue,
+    apiKey: getS2ApiKeyForRequest(),
+    voiceId: s2ProVoiceValue,
+    model: s2ProModelValue,
+    format: s2ProOutputFormatValue,
+    timeoutMs: s2ProTimeoutValue,
+    ...extra
+  })
+
+  const handleQueryS2Voices = async () => {
+    if (!s2ProEndpointValue.trim()) {
+      toast({
+        title: "Endpoint Required",
+        description: "Enter the S2 Pro endpoint before querying voices.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setLoadingS2Voices(true)
+    try {
+      const response = await getTtsVoices(buildS2Request())
+      setS2Voices(response.voices || [])
+      toast({
+        title: "S2 Voices Loaded",
+        description: `Found ${response.count || response.voices?.length || 0} voice${(response.count || response.voices?.length || 0) === 1 ? "" : "s"}.`
+      })
+    } catch (error: any) {
+      toast({
+        title: "Voice Query Failed",
+        description: error?.message || "Unable to query S2 Pro voices.",
+        variant: "destructive"
+      })
+    } finally {
+      setLoadingS2Voices(false)
+    }
+  }
+
+  const handleTestS2Pro = async () => {
+    if (!s2ProEndpointValue.trim()) {
+      toast({
+        title: "Endpoint Required",
+        description: "Enter the S2 Pro endpoint before testing.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setTestingS2Pro(true)
+    try {
+      const response = await testTtsProvider(buildS2Request({
+        text: "HomeBrain S2 Pro test generation."
+      }))
+      toast({
+        title: "S2 Pro Generated Audio",
+        description: response.message || "S2 Pro generated a test audio response."
+      })
+      if (Array.isArray(response.voices)) {
+        setS2Voices(response.voices)
+      }
+    } catch (error: any) {
+      toast({
+        title: "S2 Pro Test Failed",
+        description: error?.message || "Unable to generate audio with S2 Pro.",
+        variant: "destructive"
+      })
+    } finally {
+      setTestingS2Pro(false)
+    }
+  }
+
+  const handlePreviewS2Pro = async () => {
+    if (!s2ProEndpointValue.trim()) {
+      toast({
+        title: "Endpoint Required",
+        description: "Enter the S2 Pro endpoint before previewing.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setPreviewingS2Pro(true)
+    try {
+      const audio = await generateTtsPreview(buildS2Request({
+        text: "HomeBrain is speaking through the local S2 Pro provider."
+      }))
+      await playAudioBlob(audio)
+    } catch (error: any) {
+      toast({
+        title: "Preview Failed",
+        description: error?.message || "Unable to preview S2 Pro audio.",
+        variant: "destructive"
+      })
+    } finally {
+      setPreviewingS2Pro(false)
     }
   }
 
@@ -5088,6 +5266,9 @@ export function Settings() {
                         if (value === "local" && !localWhisperModels.includes(sttModelValue)) {
                           setValue("sttModel", "small")
                         }
+                        if (value === "lan_whisper" && !sttModelValue) {
+                          setValue("sttModel", "large-v3")
+                        }
                         if (value === "openai" && !openaiSttModels.includes(sttModelValue)) {
                           setValue("sttModel", "gpt-4o-mini-transcribe")
                         }
@@ -5099,12 +5280,15 @@ export function Settings() {
                       <SelectContent>
                         <SelectItem value="openai">OpenAI Whisper API (Cloud)</SelectItem>
                         <SelectItem value="local">On-device Whisper (Local)</SelectItem>
+                        <SelectItem value="lan_whisper">LAN Whisper Server</SelectItem>
                       </SelectContent>
                     </Select>
                       <p className="text-xs text-muted-foreground mt-1">
                       {sttProviderValue === "local"
                         ? "Audio stays on this HomeBrain host and is processed locally."
-                        : "Audio is sent securely to OpenAI for transcription."}
+                        : sttProviderValue === "lan_whisper"
+                          ? "Audio is sent to your OpenAI-compatible Whisper server on the LAN."
+                          : "Audio is sent securely to OpenAI for transcription."}
                     </p>
                   </div>
                   <div>
@@ -5130,35 +5314,50 @@ export function Settings() {
                 <div className="grid gap-4 md:grid-cols-2">
                   <div>
                     <label className="text-sm font-medium">
-                      {sttProviderValue === "local" ? "Local Whisper Model" : "Cloud Model"}
+                      {sttProviderValue === "local"
+                        ? "Local Whisper Model"
+                        : sttProviderValue === "lan_whisper"
+                          ? "LAN Whisper Model"
+                          : "Cloud Model"}
                     </label>
-                    <Select value={sttModelValue} onValueChange={(value) => setValue("sttModel", value)}>
-                      <SelectTrigger className="mt-1">
-                        <SelectValue placeholder="Select model" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {sttProviderValue === "local" ? (
-                          <>
-                            <SelectItem value="tiny">tiny (fastest, least accurate)</SelectItem>
-                            <SelectItem value="base">base (balanced)</SelectItem>
-                            <SelectItem value="small">small (recommended)</SelectItem>
-                            <SelectItem value="small.en">small.en (English-optimized)</SelectItem>
-                            <SelectItem value="medium">medium (highest accuracy)</SelectItem>
-                          </>
-                        ) : (
-                          <>
-                            <SelectItem value="gpt-4o-mini-transcribe">gpt-4o-mini-transcribe</SelectItem>
-                            <SelectItem value="gpt-4o-mini-transcribe-latest">
-                              gpt-4o-mini-transcribe-latest
-                            </SelectItem>
-                          </>
-                        )}
-                      </SelectContent>
-                    </Select>
+                    {sttProviderValue === "lan_whisper" ? (
+                      <Input
+                        className="mt-1"
+                        value={sttModelValue}
+                        onChange={(event) => setValue("sttModel", event.target.value)}
+                        placeholder="large-v3"
+                      />
+                    ) : (
+                      <Select value={sttModelValue} onValueChange={(value) => setValue("sttModel", value)}>
+                        <SelectTrigger className="mt-1">
+                          <SelectValue placeholder="Select model" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {sttProviderValue === "local" ? (
+                            <>
+                              <SelectItem value="tiny">tiny (fastest, least accurate)</SelectItem>
+                              <SelectItem value="base">base (balanced)</SelectItem>
+                              <SelectItem value="small">small (recommended)</SelectItem>
+                              <SelectItem value="small.en">small.en (English-optimized)</SelectItem>
+                              <SelectItem value="medium">medium (highest accuracy)</SelectItem>
+                            </>
+                          ) : (
+                            <>
+                              <SelectItem value="gpt-4o-mini-transcribe">gpt-4o-mini-transcribe</SelectItem>
+                              <SelectItem value="gpt-4o-mini-transcribe-latest">
+                                gpt-4o-mini-transcribe-latest
+                              </SelectItem>
+                            </>
+                          )}
+                        </SelectContent>
+                      </Select>
+                    )}
                     <p className="text-xs text-muted-foreground mt-1">
                       {sttProviderValue === "local"
                         ? "Manage downloads and GPU settings on the Whisper Management page."
-                        : "Uses OpenAI’s managed Whisper models via the Audio Transcriptions API."}
+                        : sttProviderValue === "lan_whisper"
+                          ? "Model name is passed through to your LAN Whisper service."
+                          : "Uses OpenAI’s managed Whisper models via the Audio Transcriptions API."}
                     </p>
                   </div>
                   <div className="rounded-lg border border-dashed border-indigo-200 bg-indigo-50/60 p-4 text-sm text-indigo-900 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-100">
@@ -5172,6 +5371,30 @@ export function Settings() {
                           onClick={() => navigate("/whisper")}
                         >
                           Open Whisper Management
+                        </Button>
+                      </>
+                    ) : sttProviderValue === "lan_whisper" ? (
+                      <>
+                        <p>Point this at an OpenAI-compatible <code>/v1/audio/transcriptions</code> service on your 2060 host.</p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="mt-3"
+                          onClick={handleTestLanWhisper}
+                          disabled={testingLanWhisper}
+                        >
+                          {testingLanWhisper ? (
+                            <>
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                              Testing...
+                            </>
+                          ) : (
+                            <>
+                              <TestTube className="h-4 w-4 mr-2" />
+                              Test LAN Whisper
+                            </>
+                          )}
                         </Button>
                       </>
                     ) : (
@@ -5191,6 +5414,38 @@ export function Settings() {
                     )}
                   </div>
                 </div>
+
+                {sttProviderValue === "lan_whisper" && (
+                  <div className="grid gap-4 md:grid-cols-[1fr_0.7fr_0.35fr]">
+                    <div>
+                      <label className="text-sm font-medium">LAN Whisper Endpoint</label>
+                      <Input
+                        {...register("lanWhisperEndpoint")}
+                        className="mt-1"
+                        placeholder="http://192.168.2.x:8000"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">LAN Whisper API Key</label>
+                      <Input
+                        {...register("lanWhisperApiKey")}
+                        type="password"
+                        className="mt-1"
+                        placeholder={isMaskedSecretPlaceholder(watch("lanWhisperApiKey")) ? "API key configured" : "Optional"}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium">Timeout ms</label>
+                      <Input
+                        {...register("lanWhisperTimeoutMs")}
+                        type="number"
+                        min={1000}
+                        max={120000}
+                        className="mt-1"
+                      />
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -5219,6 +5474,162 @@ export function Settings() {
                       <span>Quiet</span>
                       <span>Loud</span>
                     </div>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="text-sm font-medium">TTS Provider</label>
+                    <Select
+                      value={ttsProviderValue}
+                      onValueChange={(value) => {
+                        setValue("ttsProvider", value)
+                        setValue("ttsProviderPriorityList", value === "s2_pro" ? ["s2_pro", "elevenlabs"] : ["elevenlabs", "s2_pro"])
+                      }}
+                    >
+                      <SelectTrigger className="mt-1">
+                        <SelectValue placeholder="Select TTS provider" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="s2_pro">S2 Pro (LAN)</SelectItem>
+                        <SelectItem value="elevenlabs">ElevenLabs</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      HomeBrain tries the selected provider first and keeps the other as fallback when configured.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium">S2 Pro Endpoint</label>
+                    <Input
+                      {...register("s2ProEndpoint")}
+                      className="mt-1"
+                      placeholder="http://192.168.2.x:7860"
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Supports common local endpoints like <code>/v1/audio/speech</code>, <code>/tts</code>, and <code>/text-to-speech</code>.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-4">
+                  <div>
+                    <label className="text-sm font-medium">S2 API Key</label>
+                    <Input
+                      {...register("s2ProApiKey")}
+                      type="password"
+                      className="mt-1"
+                      placeholder={isMaskedSecretPlaceholder(watch("s2ProApiKey")) ? "API key configured" : "Optional"}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">S2 Model</label>
+                    <Input
+                      {...register("s2ProModel")}
+                      className="mt-1"
+                      placeholder="s2-pro"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Output Format</label>
+                    <Select value={s2ProOutputFormatValue} onValueChange={(value) => setValue("s2ProOutputFormat", value)}>
+                      <SelectTrigger className="mt-1">
+                        <SelectValue placeholder="Format" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="mp3">MP3</SelectItem>
+                        <SelectItem value="wav">WAV</SelectItem>
+                        <SelectItem value="opus">Opus</SelectItem>
+                        <SelectItem value="flac">FLAC</SelectItem>
+                        <SelectItem value="pcm">PCM</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <label className="text-sm font-medium">Timeout ms</label>
+                    <Input
+                      {...register("s2ProTimeoutMs")}
+                      type="number"
+                      min={1000}
+                      max={120000}
+                      className="mt-1"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid gap-4 md:grid-cols-[1fr_auto]">
+                  <div>
+                    <label className="text-sm font-medium">S2 Default Voice</label>
+                    <Input
+                      {...register("s2ProDefaultVoiceId")}
+                      className="mt-1"
+                      list="s2-pro-voices"
+                      placeholder="default"
+                    />
+                    <datalist id="s2-pro-voices">
+                      {s2Voices.map((voice) => (
+                        <option key={voice.id} value={voice.id}>
+                          {voice.name}
+                        </option>
+                      ))}
+                    </datalist>
+                  </div>
+                  <div className="flex flex-wrap items-end gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleQueryS2Voices}
+                      disabled={loadingS2Voices}
+                    >
+                      {loadingS2Voices ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Querying...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2" />
+                          Query Voices
+                        </>
+                      )}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleTestS2Pro}
+                      disabled={testingS2Pro}
+                    >
+                      {testingS2Pro ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Testing...
+                        </>
+                      ) : (
+                        <>
+                          <TestTube className="h-4 w-4 mr-2" />
+                          Test
+                        </>
+                      )}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handlePreviewS2Pro}
+                      disabled={previewingS2Pro}
+                    >
+                      {previewingS2Pro ? (
+                        <>
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                          Playing...
+                        </>
+                      ) : (
+                        <>
+                          <Volume2 className="h-4 w-4 mr-2" />
+                          Preview
+                        </>
+                      )}
+                    </Button>
                   </div>
                 </div>
               </CardContent>

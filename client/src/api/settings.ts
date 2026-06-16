@@ -45,6 +45,17 @@ export const updateSettings = async (settings: {
   hardwareOrbWifiSsid?: string;
   hardwareOrbWifiPassword?: string;
   elevenlabsApiKey?: string;
+  lanWhisperEndpoint?: string;
+  lanWhisperApiKey?: string;
+  lanWhisperTimeoutMs?: number;
+  ttsProvider?: string;
+  ttsProviderPriorityList?: string[];
+  s2ProEndpoint?: string;
+  s2ProApiKey?: string;
+  s2ProDefaultVoiceId?: string;
+  s2ProModel?: string;
+  s2ProOutputFormat?: string;
+  s2ProTimeoutMs?: number;
   enableSecurityMode?: boolean;
   llmProvider?: string;
   openaiApiKey?: string;
@@ -182,6 +193,26 @@ export const testAnthropicApiKey = async (apiKey: string, model?: string) => {
 export const testLocalLLM = async (endpoint: string, model?: string) => {
   try {
     const response = await api.post('/api/settings/test-local-llm', { endpoint, model });
+    return response.data;
+  } catch (error) {
+    console.error(error);
+    throw new Error(error?.response?.data?.message || error?.response?.data?.error || error.message);
+  }
+};
+
+// Description: Test LAN Whisper endpoint connectivity
+// Endpoint: POST /api/settings/test-lan-whisper
+// Request: { endpoint: string, apiKey?: string, model?: string, language?: string, timeoutMs?: number }
+// Response: { success: boolean, message: string, endpoint?: string }
+export const testLanWhisper = async (data: {
+  endpoint: string;
+  apiKey?: string;
+  model?: string;
+  language?: string;
+  timeoutMs?: number;
+}) => {
+  try {
+    const response = await api.post('/api/settings/test-lan-whisper', data);
     return response.data;
   } catch (error) {
     console.error(error);

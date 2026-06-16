@@ -31,6 +31,7 @@ const workflowRoutes = require("./routes/workflowRoutes");
 const userProfileRoutes = require("./routes/userProfileRoutes");
 const voiceDeviceRoutes = require("./routes/voiceDeviceRoutes");
 const elevenLabsRoutes = require("./routes/elevenLabsRoutes");
+const ttsRoutes = require("./routes/ttsRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const integrationRoutes = require("./routes/integrationRoutes");
@@ -527,6 +528,7 @@ app.use('/api/profiles', userProfileRoutes);
 app.use('/api/voice', voiceDeviceRoutes);
 // ElevenLabs Routes
 app.use('/api/elevenlabs', elevenLabsRoutes);
+app.use('/api/tts', ttsRoutes);
 // Settings Routes
 app.use('/api/settings', settingsRoutes);
 app.use('/api/notifications', notificationRoutes);
