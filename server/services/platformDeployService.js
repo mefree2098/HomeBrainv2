@@ -24,6 +24,12 @@ const DEPENDENCY_ARTIFACT_PATHS = Object.freeze([
   path.join('broker', 'node_modules'),
   path.join('lambda', 'node_modules')
 ]);
+const WAKEWORD_REQUIRED_PYTHON_MODULES = Object.freeze([
+  'openwakeword',
+  'onnxscript',
+  'pathvalidate',
+  'piper'
+]);
 const DEFAULT_CORE_RESTART_COMMAND = 'sudo -n systemctl daemon-reload || true; sudo -n systemctl start --no-block homebrain-restart-helper';
 
 const DEPLOY_PRESETS = Object.freeze({
@@ -1825,6 +1831,9 @@ class PlatformDeployService {
         await runNpmStep('Install server dependencies', ['ci', '--include=dev', '--include=optional', '--no-audit', '--no-fund', '--prefix', 'server']);
         await runNpmStep('Install client dependencies', ['ci', '--include=dev', '--no-audit', '--no-fund', '--prefix', 'client']);
         await runNpmStep('Install broker dependencies', ['ci', '--include=dev', '--no-audit', '--no-fund', '--prefix', 'broker']);
+        await runCustomStep('Ensure wake-word Python dependencies', async () => {
+          await this.ensureWakeWordPythonDependencies(jobId);
+        });
       }
 
       await runNpmStep('Ensure server native modules', ['run', 'ensure:native', '--prefix', 'server']);
@@ -1918,6 +1927,89 @@ class PlatformDeployService {
     } catch (error) {
       await this.finalizeJobFailure(jobId, error.message || 'Deployment failed', { job });
     }
+  }
+
+  getWakeWordPythonExecutable() {
+    const posixPath = path.join(this.projectRoot, 'server', '.wakeword-venv', 'bin', 'python');
+    if (fs.existsSync(posixPath)) {
+      return posixPath;
+    }
+
+    const windowsPath = path.join(this.projectRoot, 'server', '.wakeword-venv', 'Scripts', 'python.exe');
+    return fs.existsSync(windowsPath) ? windowsPath : null;
+  }
+
+  getWakeWordInstallerPath() {
+    return path.join(this.projectRoot, 'server', 'scripts', 'install-openwakeword-deps.sh');
+  }
+
+  async getWakeWordMissingPythonModules() {
+    const pythonExecutable = this.getWakeWordPythonExecutable();
+    if (!pythonExecutable) {
+      return {
+        pythonExecutable: null,
+        missing: [...WAKEWORD_REQUIRED_PYTHON_MODULES],
+        reason: 'missing-python'
+      };
+    }
+
+    const checkScript = [
+      'import importlib.util, json',
+      `required = ${JSON.stringify(WAKEWORD_REQUIRED_PYTHON_MODULES)}`,
+      'print(json.dumps([name for name in required if importlib.util.find_spec(name) is None]))'
+    ].join('\n');
+    const result = await this.runCommand(pythonExecutable, ['-c', checkScript]);
+
+    try {
+      const missing = JSON.parse(result.stdout || '[]');
+      return {
+        pythonExecutable,
+        missing: Array.isArray(missing) ? missing : []
+      };
+    } catch (error) {
+      throw new Error(`Unable to parse wake-word dependency check output: ${result.stdout || '(empty)'}`);
+    }
+  }
+
+  async ensureWakeWordPythonDependencies(jobId) {
+    const stepName = 'Ensure wake-word Python dependencies';
+    const installerPath = this.getWakeWordInstallerPath();
+    if (!fs.existsSync(installerPath)) {
+      await this.appendJobLog(
+        jobId,
+        `[${new Date().toISOString()}] [${stepName}] Skipped because server/scripts/install-openwakeword-deps.sh is missing.\n`
+      );
+      return { skipped: true, reason: 'missing-installer' };
+    }
+
+    const before = await this.getWakeWordMissingPythonModules();
+    if (before.missing.length === 0) {
+      await this.appendJobLog(
+        jobId,
+        `[${new Date().toISOString()}] [${stepName}] Wake-word Python modules are present.\n`
+      );
+      return { skipped: true, reason: 'already-satisfied' };
+    }
+
+    await this.appendJobLog(
+      jobId,
+      `[${new Date().toISOString()}] [${stepName}] Missing module(s): ${before.missing.join(', ')}. Running wake-word dependency installer.\n`
+    );
+    await this.runLoggedCommand(jobId, stepName, 'bash', [installerPath], {
+      cwd: path.join(this.projectRoot, 'server'),
+      env: { PYTHON_BIN: 'python3' }
+    });
+
+    const after = await this.getWakeWordMissingPythonModules();
+    if (after.missing.length > 0) {
+      throw new Error(`Wake-word Python dependency install completed but module(s) are still missing: ${after.missing.join(', ')}`);
+    }
+
+    return {
+      skipped: false,
+      installed: true,
+      pythonExecutable: after.pythonExecutable
+    };
   }
 
   async installServiceHelpers(jobId) {

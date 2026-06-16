@@ -36,7 +36,7 @@ const schema = new mongoose.Schema({
   artifacts: [{
     format: {
       type: String,
-      enum: ['tflite', 'onnx', 'torchscript', 'raw'],
+      enum: ['tflite', 'onnx', 'ppn', 'torchscript', 'raw'],
       required: true
     },
     path: {

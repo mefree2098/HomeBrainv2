@@ -417,8 +417,17 @@ bootstrap_wakeword() {
   fi
 
   if [[ -x "${HOMEBRAIN_DIR}/server/.wakeword-venv/bin/python" ]]; then
-    print_success "Wake-word virtualenv already exists."
-    return
+    if "${HOMEBRAIN_DIR}/server/.wakeword-venv/bin/python" - <<'PYCODE'
+import importlib.util
+required = ["openwakeword", "onnxscript", "pathvalidate", "piper"]
+missing = [name for name in required if importlib.util.find_spec(name) is None]
+raise SystemExit(1 if missing else 0)
+PYCODE
+    then
+      print_success "Wake-word virtualenv already exists."
+      return
+    fi
+    print_warning "Wake-word virtualenv is missing required modules; refreshing it now."
   fi
 
   print_status "Installing wake-word training dependencies (this can take several minutes)..."
