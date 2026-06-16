@@ -1022,9 +1022,24 @@ require('./server/services/openclawMcpService');
 console.log('OpenClaw integration assets verified.');
 NODE"
 
-  if [[ ! -x "${HOMEBRAIN_DIR}/server/.wakeword-venv/bin/python" && -x "${HOMEBRAIN_DIR}/server/scripts/install-openwakeword-deps.sh" ]]; then
-    print_warning "Wake-word virtualenv is missing. Bootstrapping it now."
-    (cd "${HOMEBRAIN_DIR}/server" && PYTHON_BIN=python3 scripts/install-openwakeword-deps.sh) || true
+  if [[ -x "${HOMEBRAIN_DIR}/server/scripts/install-openwakeword-deps.sh" ]]; then
+    wakeword_deps_ready=0
+    if [[ -x "${HOMEBRAIN_DIR}/server/.wakeword-venv/bin/python" ]]; then
+      if "${HOMEBRAIN_DIR}/server/.wakeword-venv/bin/python" - <<'PYCODE'
+import importlib.util
+required = ["openwakeword", "onnxscript", "pathvalidate", "piper"]
+missing = [name for name in required if importlib.util.find_spec(name) is None]
+raise SystemExit(1 if missing else 0)
+PYCODE
+      then
+        wakeword_deps_ready=1
+      fi
+    fi
+
+    if [[ "${wakeword_deps_ready}" != "1" ]]; then
+      print_warning "Wake-word virtualenv is missing or incomplete. Bootstrapping it now."
+      (cd "${HOMEBRAIN_DIR}/server" && PYTHON_BIN=python3 scripts/install-openwakeword-deps.sh) || true
+    fi
   fi
 
   install_service

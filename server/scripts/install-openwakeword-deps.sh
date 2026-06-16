@@ -114,7 +114,7 @@ else
     ${PIP_FLAGS}
 fi
 # TensorFlow Lite export is optional on Jetson; install the NVIDIA wheel manually if needed.
-python -m pip install "onnxruntime" "onnx" "onnx-tf" ${PIP_FLAGS}
+python -m pip install "onnxruntime" "onnx" "onnxscript" "onnx-tf" ${PIP_FLAGS}
 python -m pip install "openwakeword[train]" ${PIP_FLAGS}
 # Install Piper CLI for local TTS synthesis during dataset generation
 python -m pip install "piper-tts" ${PIP_FLAGS}
@@ -124,7 +124,7 @@ python -m pip install "pathvalidate" ${PIP_FLAGS}
 # Quick sanity checks so runtime failures are caught at install-time.
 python - <<'PYCODE'
 import importlib.util
-required = ["openwakeword", "piper", "pathvalidate"]
+required = ["openwakeword", "onnxscript", "piper", "pathvalidate"]
 missing = [name for name in required if importlib.util.find_spec(name) is None]
 if missing:
     raise SystemExit(f"[wakeword] ERROR: missing required Python modules: {', '.join(missing)}")

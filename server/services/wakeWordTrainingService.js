@@ -3,6 +3,7 @@ const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 const piperVoiceService = require('./piperVoiceService');
 const WakeWordModel = require('../models/WakeWordModel');
@@ -57,6 +58,8 @@ const STATUS_FOR_STAGE = {
   exporting: 'exporting',
   error: 'error'
 };
+const RESUMABLE_STATUSES = new Set(['pending', 'queued', 'generating', 'training', 'exporting', 'error']);
+const ARTIFACT_FORMAT_PRIORITY = ['tflite', 'onnx', 'ppn'];
 
 const DEFAULT_PYTHON = process.env.PYTHON_EXECUTABLE
   || process.env.WAKEWORD_TRAINING_PYTHON
@@ -733,21 +736,174 @@ class WakeWordTrainingService extends EventEmitter {
     }
   }
 
+  computeChecksum(filePath) {
+    const hash = crypto.createHash('sha256');
+    const handle = fs.openSync(filePath, 'r');
+    try {
+      const buffer = Buffer.alloc(64 * 1024);
+      let bytesRead = 0;
+      while ((bytesRead = fs.readSync(handle, buffer, 0, buffer.length, null)) > 0) {
+        hash.update(buffer.subarray(0, bytesRead));
+      }
+    } finally {
+      fs.closeSync(handle);
+    }
+    return hash.digest('hex');
+  }
+
+  getArtifactCandidates(model) {
+    const slug = model?.slug;
+    if (!slug) return [];
+
+    const candidates = [];
+    const seen = new Set();
+    const addCandidate = (candidatePath, metadata = {}) => {
+      if (!candidatePath || typeof candidatePath !== 'string') return;
+      const absolutePath = path.isAbsolute(candidatePath)
+        ? candidatePath
+        : path.resolve(WAKE_WORD_ROOT, candidatePath);
+      const addPath = (resolvedPath) => {
+        if (!resolvedPath || seen.has(resolvedPath)) return;
+        seen.add(resolvedPath);
+        const extension = path.extname(resolvedPath).slice(1).toLowerCase();
+        candidates.push({
+          ...metadata,
+          path: resolvedPath,
+          format: metadata.format || extension
+        });
+      };
+
+      addPath(absolutePath);
+      const basename = path.basename(absolutePath);
+      if (basename) {
+        addPath(path.join(WAKE_WORD_ROOT, basename));
+      }
+    };
+
+    ARTIFACT_FORMAT_PRIORITY.forEach((format) => {
+      addCandidate(path.join(WAKE_WORD_ROOT, `${slug}.${format}`), { format });
+    });
+
+    addCandidate(model.modelPath, { format: model.format, checksum: model.checksum });
+
+    const artifactSources = [
+      ...(Array.isArray(model.artifacts) ? model.artifacts : []),
+      ...(Array.isArray(model.metadata?.artifacts) ? model.metadata.artifacts : [])
+    ];
+    artifactSources.forEach((artifact) => {
+      addCandidate(artifact?.path, {
+        format: artifact?.format,
+        checksum: artifact?.checksum,
+        threshold: artifact?.threshold,
+        sensitivity: artifact?.sensitivity
+      });
+    });
+
+    return candidates;
+  }
+
+  findExistingArtifact(model) {
+    const existing = this.getArtifactCandidates(model)
+      .filter((candidate) => candidate.path && fs.existsSync(candidate.path))
+      .map((candidate) => {
+        const format = (candidate.format || path.extname(candidate.path).slice(1)).toLowerCase();
+        return {
+          ...candidate,
+          format,
+          priority: ARTIFACT_FORMAT_PRIORITY.indexOf(format)
+        };
+      })
+      .filter((candidate) => candidate.priority >= 0)
+      .sort((a, b) => a.priority - b.priority);
+
+    return existing[0] || null;
+  }
+
+  async adoptExistingArtifact(model, artifact) {
+    if (!model || !artifact?.path || !fs.existsSync(artifact.path)) {
+      return null;
+    }
+
+    const stats = await fsp.stat(artifact.path);
+    const checksum = artifact.checksum || this.computeChecksum(artifact.path);
+    const format = artifact.format || path.extname(artifact.path).slice(1).toLowerCase();
+    const engine = format === 'ppn' ? 'porcupine' : 'openwakeword';
+
+    model.status = 'ready';
+    model.progress = 1;
+    model.statusMessage = 'Training complete';
+    model.modelPath = artifact.path;
+    model.checksum = checksum;
+    model.engine = engine;
+    model.format = format;
+    model.error = undefined;
+    model.lastTrainedAt = model.lastTrainedAt || stats.mtime || new Date();
+    model.artifacts = [{
+      format,
+      path: artifact.path,
+      size: stats.size,
+      checksum,
+      threshold: artifact.threshold,
+      sensitivity: artifact.sensitivity,
+      createdAt: stats.mtime || new Date()
+    }];
+    model.metadata = {
+      ...(model.metadata || {}),
+      artifacts: [
+        ...((Array.isArray(model.metadata?.artifacts) ? model.metadata.artifacts : [])
+          .filter((entry) => entry?.path !== artifact.path)),
+        {
+          format,
+          path: artifact.path,
+          size: stats.size,
+          checksum
+        }
+      ]
+    };
+    await model.save();
+
+    await VoiceDevice.updateMany(
+      { wakeWordSupport: true },
+      { $addToSet: { supportedWakeWords: model.phrase } }
+    );
+
+    console.log(`[wakeword] Adopted existing ${format} artifact for ${model.slug}: ${artifact.path}`);
+    await this.notifyDevices(model);
+    return model;
+  }
+
   async resumePendingTraining() {
     const models = await WakeWordModel.find({});
     for (const model of models) {
       if (model.status === 'ready') {
         const exists = model.modelPath && fs.existsSync(model.modelPath);
         if (!exists) {
-          model.status = 'pending';
-          model.modelPath = undefined;
-          model.checksum = undefined;
-          model.progress = 0;
-          await model.save();
-          this.enqueueTraining(model.slug);
+          const artifact = this.findExistingArtifact(model);
+          if (artifact) {
+            await this.adoptExistingArtifact(model, artifact);
+          } else {
+            model.status = 'pending';
+            model.modelPath = undefined;
+            model.checksum = undefined;
+            model.progress = 0;
+            model.statusMessage = 'Queued after missing wake-word artifact was detected';
+            await model.save();
+            await this.enqueueTraining(model.slug);
+          }
         }
-      } else if (model.status === 'pending' || model.status === 'error' || model.status === 'queued') {
-        this.enqueueTraining(model.slug);
+      } else if (RESUMABLE_STATUSES.has(model.status)) {
+        const artifact = this.findExistingArtifact(model);
+        if (artifact) {
+          await this.adoptExistingArtifact(model, artifact);
+          continue;
+        }
+        if (model.status === 'generating' || model.status === 'training' || model.status === 'exporting') {
+          model.status = 'pending';
+          model.progress = 0;
+          model.statusMessage = 'Queued after interrupted wake-word training job was recovered';
+          await model.save();
+        }
+        await this.enqueueTraining(model.slug);
       }
     }
   }

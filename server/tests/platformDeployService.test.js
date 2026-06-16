@@ -455,6 +455,45 @@ test('ensureWritableDependencyArtifacts repairs existing node_modules trees befo
   assert.equal(chmodCall?.args.includes('u+rwX'), true);
 });
 
+test('ensureWakeWordPythonDependencies runs installer when a required module is missing', { concurrency: false }, async (t) => {
+  const service = await createTempService(t);
+  const installerPath = path.join(service.projectRoot, 'server', 'scripts', 'install-openwakeword-deps.sh');
+  const pythonPath = path.join(service.projectRoot, 'server', '.wakeword-venv', 'bin', 'python');
+
+  await fsp.mkdir(path.dirname(installerPath), { recursive: true });
+  await fsp.mkdir(path.dirname(pythonPath), { recursive: true });
+  await fsp.writeFile(installerPath, '#!/usr/bin/env bash\n', 'utf8');
+  await fsp.writeFile(pythonPath, '#!/usr/bin/env python3\n', 'utf8');
+
+  const installerCalls = [];
+  let checkCount = 0;
+  service.appendJobLog = async () => {};
+  service.runCommand = async (command) => {
+    if (command === pythonPath) {
+      checkCount += 1;
+      return {
+        stdout: checkCount === 1 ? '["onnxscript"]' : '[]',
+        stderr: ''
+      };
+    }
+    return { stdout: '', stderr: '' };
+  };
+  service.runLoggedCommand = async (_jobId, stepName, command, args, options) => {
+    installerCalls.push({ stepName, command, args, options });
+  };
+
+  const result = await service.ensureWakeWordPythonDependencies('job-wakeword');
+
+  assert.equal(result.installed, true);
+  assert.equal(checkCount, 2);
+  assert.equal(installerCalls.length, 1);
+  assert.equal(installerCalls[0].stepName, 'Ensure wake-word Python dependencies');
+  assert.equal(installerCalls[0].command, 'bash');
+  assert.deepEqual(installerCalls[0].args, [installerPath]);
+  assert.equal(installerCalls[0].options.cwd, path.join(service.projectRoot, 'server'));
+  assert.equal(installerCalls[0].options.env.PYTHON_BIN, 'python3');
+});
+
 test('buildServiceRestartCommand removes invalid sudo fragments and forces non-interactive sudo', { concurrency: false }, async (t) => {
   const service = await createTempService(t);
   service.restartOllamaOnDeploy = true;
