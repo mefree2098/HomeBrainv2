@@ -118,11 +118,80 @@ function runCommand(command, args = []) {
   });
 }
 
-async function playAudioFile(filePath) {
-  return await runCommand('mpg123', ['-q', filePath])
-    || await runCommand('ffplay', ['-nodisp', '-autoexit', '-loglevel', 'quiet', filePath])
-    || await runCommand('play', ['-q', filePath])
-    || await runCommand('aplay', ['-q', filePath]);
+function detectAudioFileExtension(buffer, contentType = '') {
+  const type = String(contentType || '').split(';')[0].trim().toLowerCase();
+  if (type === 'audio/mpeg' || type === 'audio/mp3') return '.mp3';
+  if (type === 'audio/wav' || type === 'audio/wave' || type === 'audio/x-wav') return '.wav';
+  if (type === 'audio/ogg' || type === 'application/ogg') return '.ogg';
+  if (type === 'audio/flac') return '.flac';
+
+  if (Buffer.isBuffer(buffer) && buffer.length >= 3) {
+    if (buffer.subarray(0, 3).toString('ascii') === 'ID3') {
+      return '.mp3';
+    }
+    if (buffer.length >= 2 && buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0) {
+      return '.mp3';
+    }
+  }
+
+  if (Buffer.isBuffer(buffer) && buffer.length >= 12) {
+    if (buffer.subarray(0, 4).toString('ascii') === 'RIFF' && buffer.subarray(8, 12).toString('ascii') === 'WAVE') {
+      return '.wav';
+    }
+    if (buffer.subarray(0, 4).toString('ascii') === 'OggS') {
+      return '.ogg';
+    }
+    if (buffer.subarray(0, 4).toString('ascii') === 'fLaC') {
+      return '.flac';
+    }
+  }
+
+  return '.bin';
+}
+
+function getPlaybackDeviceArgs(playbackDevice) {
+  const device = typeof playbackDevice === 'string' ? playbackDevice.trim() : '';
+  return device && device !== 'default' ? ['-D', device] : [];
+}
+
+function getAudioPlaybackCommands(filePath, options = {}) {
+  const extension = String(options.extension || path.extname(filePath) || '').toLowerCase();
+  const commands = [];
+
+  if (extension === '.mp3') {
+    commands.push(['mpg123', ['-q', filePath]]);
+    commands.push(['ffplay', ['-nodisp', '-autoexit', '-loglevel', 'quiet', filePath]]);
+    commands.push(['play', ['-q', filePath]]);
+    return commands;
+  }
+
+  if (extension === '.wav') {
+    commands.push(['ffplay', ['-nodisp', '-autoexit', '-loglevel', 'quiet', filePath]]);
+    commands.push(['play', ['-q', filePath]]);
+    commands.push(['aplay', ['-q', ...getPlaybackDeviceArgs(options.playbackDevice), filePath]]);
+    return commands;
+  }
+
+  if (extension === '.ogg' || extension === '.flac') {
+    commands.push(['ffplay', ['-nodisp', '-autoexit', '-loglevel', 'quiet', filePath]]);
+    commands.push(['play', ['-q', filePath]]);
+    return commands;
+  }
+
+  // Unknown compressed/remote audio must not fall through to aplay. aplay treats
+  // unknown bytes as PCM and produces loud static.
+  commands.push(['ffplay', ['-nodisp', '-autoexit', '-loglevel', 'quiet', filePath]]);
+  commands.push(['play', ['-q', filePath]]);
+  return commands;
+}
+
+async function playAudioFile(filePath, options = {}) {
+  for (const [command, args] of getAudioPlaybackCommands(filePath, options)) {
+    if (await runCommand(command, args)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // Parse command line arguments
@@ -2885,9 +2954,14 @@ class HomeBrainRemoteDevice {
       if (res.ok) {
         const arrayBuf = await res.arrayBuffer();
         const buf = Buffer.from(arrayBuf);
-        const tmpPath = path.join(os.tmpdir(), `hb_tts_${Date.now()}.audio`);
+        const contentType = typeof res.headers?.get === 'function' ? res.headers.get('content-type') : '';
+        const extension = detectAudioFileExtension(buf, contentType);
+        const tmpPath = path.join(os.tmpdir(), `hb_tts_${Date.now()}${extension}`);
         await fsp.writeFile(tmpPath, buf);
-        const played = await playAudioFile(tmpPath);
+        const played = await playAudioFile(tmpPath, {
+          extension,
+          playbackDevice: this.config.audio?.playbackDevice
+        });
         try { await fsp.unlink(tmpPath); } catch (_) {}
         if (played) {
           usedRemote = true;
@@ -2906,7 +2980,10 @@ class HomeBrainRemoteDevice {
         if (!played) {
           const tmpWav = path.join(os.tmpdir(), `hb_tts_${Date.now()}.wav`);
           const rendered = await runCommand('pico2wave', ['-w', tmpWav, ttsText]);
-          played = rendered && await playAudioFile(tmpWav);
+          played = rendered && await playAudioFile(tmpWav, {
+            extension: '.wav',
+            playbackDevice: this.config.audio?.playbackDevice
+          });
           try { await fsp.unlink(tmpWav); } catch (_) {}
         }
       } catch (_) {}
@@ -2923,10 +3000,13 @@ class HomeBrainRemoteDevice {
             buffer[i] = Math.sin(2 * Math.PI * freq * (i / sampleRate)) * 0.3;
           }
           const wav = require('node-wav');
-          const wavBuffer = wav.encode([buffer], { sampleRate, float: true, bitDepth: 32 });
+          const wavBuffer = wav.encode([buffer], { sampleRate, float: false, bitDepth: 16 });
           const tmpPath = path.join(os.tmpdir(), `hb_ping_${Date.now()}.wav`);
           await fsp.writeFile(tmpPath, wavBuffer);
-          const ok = await playAudioFile(tmpPath);
+          const ok = await playAudioFile(tmpPath, {
+            extension: '.wav',
+            playbackDevice: this.config.audio?.playbackDevice
+          });
           try { await fsp.unlink(tmpPath); } catch (_) {}
           if (!ok) {
             console.warn('No audio player available (aplay/play). Unable to play TTS or beep.');
@@ -3644,7 +3724,9 @@ async function main() {
 
 module.exports = {
   HomeBrainRemoteDevice,
-  loadConfig
+  loadConfig,
+  detectAudioFileExtension,
+  getAudioPlaybackCommands
 };
 
 // Start the application
