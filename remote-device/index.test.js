@@ -23,6 +23,7 @@ test('buildRecordingOptions passes the configured ALSA recorder and capture devi
     verbose: false,
     recorder: 'arecord',
     recordProgram: 'arecord',
+    audioType: 'raw',
     device: 'plughw:CARD=Jabra,DEV=0'
   });
 });
@@ -46,6 +47,31 @@ test('buildRecordingOptions preserves recorder override and microphoneDevice fal
     verbose: false,
     recorder: 'sox',
     recordProgram: 'sox',
+    audioType: 'raw',
     device: 'hw:2,0'
   });
+});
+
+test('buildRecordingOptions preserves explicit audio type overrides', () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: {
+      sampleRate: 16000,
+      audioType: 'wav'
+    },
+    wakeWord: {}
+  });
+
+  assert.equal(device.buildRecordingOptions().audioType, 'wav');
+});
+
+test('isWakeWordDetectorActive treats the feature sidecar as an active detector', () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: {},
+    wakeWord: {}
+  });
+
+  device.recordingStream = { stop() {} };
+  device.sidecar = { pid: 1234 };
+
+  assert.equal(device.isWakeWordDetectorActive(), true);
 });

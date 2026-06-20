@@ -16,7 +16,7 @@ const MAX_AUDIO_SESSION_BYTES = Math.max(
   1024 * 1024,
   Number(process.env.HOMEBRAIN_VOICE_AUDIO_SESSION_MAX_BYTES || 20 * 1024 * 1024)
 );
-const DEFAULT_WAKE_WORD_MIN_RMS = 0.02;
+const DEFAULT_WAKE_WORD_MIN_RMS = 0.004;
 const MAX_WAKE_WORD_MIN_RMS = 0.2;
 
 function redactMessageForLog(message = {}) {

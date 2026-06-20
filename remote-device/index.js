@@ -120,6 +120,10 @@ class HomeBrainRemoteDevice {
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 10;
     this.recordingStream = null;
+    this.sidecar = null;
+    this.sidecarFrameBytes = 0;
+    this.sidecarAudioBuffer = Buffer.alloc(0);
+    this.sidecarStdoutBuffer = '';
 
     this.configDirectory = path.dirname(path.resolve(argv.config || './config.json'));
     this.packageVersion = PACKAGE_VERSION;
@@ -157,6 +161,9 @@ class HomeBrainRemoteDevice {
     this.testModeListenerAttached = false;
     this.testModeListener = null;
     this.wakeWordDebounceMs = clamp(this.config.wakeWord.debounceMs ?? DEFAULT_WAKE_WORD_DEBOUNCE_MS, 250, 10000);
+    this.wakeWordRuntimeReportIntervalMs = clamp(this.config.wakeWord.runtimeReportIntervalMs ?? 30000, 5000, 300000);
+    this.lastWakeWordRuntimeReportAt = 0;
+    this.wakeWordRuntime = null;
     this.lastWakeWordAt = 0;
     this.vadEnabled = Boolean(WebRtcVad);
     this.vad = null;
@@ -657,12 +664,17 @@ class HomeBrainRemoteDevice {
   }
 
   isWakeWordDetectorActive() {
-    return Boolean(this.recordingStream && this.wakeWordSessions.length > 0 && !this.wakeWordEngineFailed);
+    return Boolean(
+      this.recordingStream
+      && !this.wakeWordEngineFailed
+      && (this.wakeWordSessions.length > 0 || this.sidecar)
+    );
   }
 
   buildRecordingOptions() {
     const audioConfig = this.config.audio || {};
     const recorderName = audioConfig.recorder || audioConfig.recordProgram || 'arecord';
+    const audioType = audioConfig.audioType || 'raw';
 
     return {
       sampleRate: this.wakeWordSampleRate,
@@ -672,8 +684,110 @@ class HomeBrainRemoteDevice {
       verbose: false,
       recorder: recorderName,
       recordProgram: recorderName,
+      audioType,
       device: audioConfig.recordingDevice || audioConfig.microphoneDevice || 'default'
     };
+  }
+
+  resetWakeWordRuntime(engine, recordingOptions = {}, extra = {}) {
+    this.wakeWordRuntime = {
+      engine,
+      active: false,
+      listening: false,
+      restartedAt: new Date().toISOString(),
+      recording: {
+        recorder: recordingOptions.recorder || recordingOptions.recordProgram || 'arecord',
+        device: recordingOptions.device || 'default',
+        audioType: recordingOptions.audioType || 'raw',
+        sampleRate: recordingOptions.sampleRate || recordingOptions.sampleRateHertz || this.wakeWordSampleRate,
+        channels: recordingOptions.channels || 1
+      },
+      sidecar: {
+        ready: false,
+        models: [],
+        frameSamples: this.wakeWordFrameSamples || this.wakeWordSampleRate || 16000,
+        minRms: extra.minRms ?? null
+      },
+      audio: {
+        chunks: 0,
+        bytes: 0,
+        frames: 0,
+        lastAudioAt: null,
+        lastFrameRms: null,
+        peakFrameRms: 0
+      },
+      lastScore: null,
+      lastDetect: null,
+      lastError: null,
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  updateWakeWordRuntime(updates = {}) {
+    if (!this.wakeWordRuntime) {
+      this.resetWakeWordRuntime(this.wakeWordEngine || 'openwakeword', this.buildRecordingOptions());
+    }
+
+    if (updates.sidecar && typeof updates.sidecar === 'object') {
+      this.wakeWordRuntime.sidecar = {
+        ...this.wakeWordRuntime.sidecar,
+        ...updates.sidecar
+      };
+    }
+    if (updates.audio && typeof updates.audio === 'object') {
+      this.wakeWordRuntime.audio = {
+        ...this.wakeWordRuntime.audio,
+        ...updates.audio
+      };
+    }
+
+    for (const key of ['lastScore', 'lastDetect', 'lastError']) {
+      if (Object.prototype.hasOwnProperty.call(updates, key)) {
+        this.wakeWordRuntime[key] = updates[key];
+      }
+    }
+
+    this.wakeWordRuntime.active = this.isWakeWordDetectorActive();
+    this.wakeWordRuntime.listening = Boolean(this.isWakeWordListening);
+    this.wakeWordRuntime.updatedAt = new Date().toISOString();
+  }
+
+  calculatePcmRms(frameBuffer) {
+    if (!frameBuffer || frameBuffer.length < PCM_SAMPLE_WIDTH_BYTES) {
+      return 0;
+    }
+
+    const sampleCount = Math.floor(frameBuffer.length / PCM_SAMPLE_WIDTH_BYTES);
+    let sumSquares = 0;
+    for (let i = 0; i < sampleCount; i += 1) {
+      const sample = frameBuffer.readInt16LE(i * PCM_SAMPLE_WIDTH_BYTES) / 32768;
+      sumSquares += sample * sample;
+    }
+    return Math.sqrt(sumSquares / sampleCount);
+  }
+
+  reportWakeWordRuntimeStatus(force = false, reason = 'periodic') {
+    if (!this.isAuthenticated || !this.wakeWordRuntime) {
+      return false;
+    }
+
+    const now = Date.now();
+    if (!force && now - this.lastWakeWordRuntimeReportAt < this.wakeWordRuntimeReportIntervalMs) {
+      return false;
+    }
+
+    this.lastWakeWordRuntimeReportAt = now;
+    this.updateWakeWordRuntime();
+    return this.sendMessage({
+      type: 'status_update',
+      status: 'online',
+      settings: {
+        wakeWordRuntime: {
+          ...this.wakeWordRuntime,
+          reason
+        }
+      }
+    });
   }
 
   generateWakeWordAssetSignature(keywords = []) {
@@ -1200,12 +1314,13 @@ class HomeBrainRemoteDevice {
       const hasOnnx = keywordEntries.some((k) => /\.onnx$/i.test(k.path || ''));
 
       if (useSidecar && hasOnnx) {
+        const recordingOptions = this.buildRecordingOptions();
+        const minRms = clamp(this.config.wakeWord?.vad?.minRms ?? 0.004, 0, 0.2);
+        this.resetWakeWordRuntime('FeatureSidecar/OWW', recordingOptions, { minRms });
         await this.startFeatureSidecar(keywordEntries);
         this.wakeWordEngineFailed = false;
         this.wakeWordAudioBuffer = Buffer.alloc(0);
         this.wakeWordDetectionQueue = Promise.resolve();
-
-        const recordingOptions = this.buildRecordingOptions();
 
         this.recordingStream = recorder.record(recordingOptions);
         const micStream = this.recordingStream.stream();
@@ -1221,12 +1336,20 @@ class HomeBrainRemoteDevice {
           if (!this.isWakeWordListening) {
             return;
           }
+          this.updateWakeWordRuntime({
+            lastError: {
+              message: streamError?.message || String(streamError),
+              at: new Date().toISOString()
+            }
+          });
+          this.reportWakeWordRuntimeStatus(true, 'recording_error');
           this.handleWakeWordEngineFailure(streamError);
         });
 
         this.isWakeWordListening = true;
         this.wakeWordRestartAttempts = 0;
         console.log('Wake word detection active (FeatureSidecar/OWW)');
+        this.reportWakeWordRuntimeStatus(true, 'started');
         return;
       }
 
@@ -1242,6 +1365,7 @@ class HomeBrainRemoteDevice {
       this.wakeWordDetectionQueue = Promise.resolve();
 
       const recordingOptions = this.buildRecordingOptions();
+      this.resetWakeWordRuntime('OpenWakeWord', recordingOptions);
 
       this.recordingStream = recorder.record(recordingOptions);
       const micStream = this.recordingStream.stream();
@@ -1264,15 +1388,30 @@ class HomeBrainRemoteDevice {
         if (!this.isWakeWordListening) {
           return;
         }
+        this.updateWakeWordRuntime({
+          lastError: {
+            message: streamError?.message || String(streamError),
+            at: new Date().toISOString()
+          }
+        });
+        this.reportWakeWordRuntimeStatus(true, 'recording_error');
         this.handleWakeWordEngineFailure(streamError);
       });
 
       this.isWakeWordListening = true;
       this.wakeWordRestartAttempts = 0;
       console.log('Wake word detection active (OpenWakeWord)');
+      this.reportWakeWordRuntimeStatus(true, 'started');
 
     } catch (error) {
       console.error('Failed to start wake word detection:', error.message);
+      this.updateWakeWordRuntime({
+        lastError: {
+          message: error.message,
+          at: new Date().toISOString()
+        }
+      });
+      this.reportWakeWordRuntimeStatus(true, 'start_failed');
       this.handleWakeWordEngineFailure(error);
     }
   }
@@ -1295,10 +1434,33 @@ class HomeBrainRemoteDevice {
     const args = [script];
     this.sidecar = spawn(python, args, { stdio: ['pipe', 'pipe', 'inherit'] });
 
+    this.sidecar.on('error', (error) => {
+      const message = error?.message || String(error);
+      console.warn(`Feature sidecar failed to start: ${message}`);
+      this.sidecar = null;
+      this.updateWakeWordRuntime({
+        lastError: {
+          message: `Feature sidecar failed to start: ${message}`,
+          at: new Date().toISOString()
+        }
+      });
+      this.reportWakeWordRuntimeStatus(true, 'sidecar_error');
+      if (this.isWakeWordListening) {
+        this.handleWakeWordEngineFailure(error);
+      }
+    });
+
     this.sidecar.on('close', (code, signal) => {
       const details = signal ? `signal ${signal}` : `code ${code}`;
       console.warn(`Feature sidecar exited with ${details}`);
       this.sidecar = null;
+      this.updateWakeWordRuntime({
+        lastError: {
+          message: `Feature sidecar exited with ${details}`,
+          at: new Date().toISOString()
+        }
+      });
+      this.reportWakeWordRuntimeStatus(true, 'sidecar_closed');
       if (this.isWakeWordListening) {
         this.handleWakeWordEngineFailure(new Error('Feature sidecar exited'));
       }
@@ -1308,9 +1470,8 @@ class HomeBrainRemoteDevice {
     const models = keywordEntries.map((k) => ({ label: k.label, path: k.path, threshold: k.threshold ?? this.wakeWordThreshold }));
     // Default frameSamples to 1s of audio at current sample rate if not set
     this.wakeWordFrameSamples = this.wakeWordFrameSamples || this.wakeWordSampleRate || 16000;
-    const minRms = clamp(this.config.wakeWord?.vad?.minRms ?? 0.02, 0, 0.2);
+    const minRms = clamp(this.config.wakeWord?.vad?.minRms ?? 0.004, 0, 0.2);
     const cfg = { type: 'config', models, sampleRate: this.wakeWordSampleRate, frameSamples: this.wakeWordFrameSamples, cooldownMs: this.wakeWordDebounceMs, vad: { minRms } };
-    this.sidecar.stdin.write(JSON.stringify(cfg) + '\n');
 
     // Prepare chunking into exact frames for the sidecar
     this.sidecarFrameBytes = (this.wakeWordFrameSamples || 16000) * PCM_SAMPLE_WIDTH_BYTES;
@@ -1327,17 +1488,52 @@ class HomeBrainRemoteDevice {
         if (!line.trim()) continue;
         try {
           const msg = JSON.parse(line);
-          if (msg.type === 'ready' && (argv.verbose || this.config?.wakeWord?.debug)) {
-            console.log(`[sidecar] ready: ${JSON.stringify(msg.models || [])}`);
+          if (msg.type === 'ready') {
+            this.updateWakeWordRuntime({
+              sidecar: {
+                ready: true,
+                models: Array.isArray(msg.models) ? msg.models : [],
+                readyAt: new Date().toISOString()
+              }
+            });
+            this.reportWakeWordRuntimeStatus(true, 'sidecar_ready');
+            if (argv.verbose || this.config?.wakeWord?.debug) {
+              console.log(`[sidecar] ready: ${JSON.stringify(msg.models || [])}`);
+            }
           }
           if (msg.type === 'error') {
+            this.updateWakeWordRuntime({
+              lastError: {
+                message: msg.message || 'unknown sidecar error',
+                at: new Date().toISOString()
+              }
+            });
+            this.reportWakeWordRuntimeStatus(true, 'sidecar_error');
             console.warn(`[sidecar] error: ${msg.message || 'unknown error'}`);
           }
-          if (msg.type === 'score' && (argv.verbose || this.config?.wakeWord?.debug)) {
-            const s = typeof msg.score === 'number' ? msg.score.toFixed(3) : String(msg.score);
-            console.log(`[sidecar] ${msg.model}: ${s}`);
+          if (msg.type === 'score') {
+            this.updateWakeWordRuntime({
+              lastScore: {
+                model: msg.model || 'unknown',
+                score: typeof msg.score === 'number' ? msg.score : null,
+                at: new Date().toISOString()
+              }
+            });
+            this.reportWakeWordRuntimeStatus(false, 'score');
+            if (argv.verbose || this.config?.wakeWord?.debug) {
+              const s = typeof msg.score === 'number' ? msg.score.toFixed(3) : String(msg.score);
+              console.log(`[sidecar] ${msg.model}: ${s}`);
+            }
           }
           if (msg.type === 'detect' && typeof msg.model === 'string' && typeof msg.score === 'number') {
+            this.updateWakeWordRuntime({
+              lastDetect: {
+                model: msg.model,
+                score: msg.score,
+                at: new Date().toISOString()
+              }
+            });
+            this.reportWakeWordRuntimeStatus(true, 'detect');
             console.log(`[sidecar] DETECT ${msg.model} ${msg.score.toFixed(3)}`);
             this.onWakeWordDetected(msg.model.toLowerCase(), msg.score, msg.model);
           }
@@ -1346,6 +1542,8 @@ class HomeBrainRemoteDevice {
         }
       }
     });
+
+    this.sidecar.stdin.write(JSON.stringify(cfg) + '\n');
   }
 
   stopFeatureSidecar() {
@@ -1363,10 +1561,29 @@ class HomeBrainRemoteDevice {
   enqueueSidecarAudio(data) {
     if (!this.sidecar || !data) return;
     const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    const chunkStats = this.wakeWordRuntime?.audio || {};
+    this.updateWakeWordRuntime({
+      audio: {
+        chunks: (chunkStats.chunks || 0) + 1,
+        bytes: (chunkStats.bytes || 0) + chunk.length,
+        lastAudioAt: new Date().toISOString()
+      }
+    });
     this.sidecarAudioBuffer = Buffer.concat([this.sidecarAudioBuffer, chunk]);
     while (this.sidecarAudioBuffer.length >= (this.sidecarFrameBytes || 32000)) {
       const frame = this.sidecarAudioBuffer.subarray(0, this.sidecarFrameBytes);
       this.sidecarAudioBuffer = this.sidecarAudioBuffer.subarray(this.sidecarFrameBytes);
+      const rms = this.calculatePcmRms(frame);
+      const audioStats = this.wakeWordRuntime?.audio || {};
+      this.updateWakeWordRuntime({
+        audio: {
+          frames: (audioStats.frames || 0) + 1,
+          lastFrameRms: Number(rms.toFixed(6)),
+          peakFrameRms: Number(Math.max(audioStats.peakFrameRms || 0, rms).toFixed(6)),
+          lastAudioAt: new Date().toISOString()
+        }
+      });
+      this.reportWakeWordRuntimeStatus(false, 'audio_frame');
       const header = Buffer.alloc(8);
       header.write('AUD0', 0);
       header.writeUInt32LE(frame.length, 4);
@@ -1389,6 +1606,13 @@ class HomeBrainRemoteDevice {
     this.isWakeWordListening = false;
     const errMsg = (error && error.message) ? error.message : 'unknown error';
     console.error('Wake word engine failure:', errMsg);
+    this.updateWakeWordRuntime({
+      lastError: {
+        message: errMsg,
+        at: new Date().toISOString()
+      }
+    });
+    this.reportWakeWordRuntimeStatus(true, 'engine_failure');
 
     // Clean up resources
     this.releaseWakeWordEngine();
@@ -1431,6 +1655,14 @@ class HomeBrainRemoteDevice {
     }
 
     const bufferData = Buffer.isBuffer(audioData) ? audioData : Buffer.from(audioData);
+    const chunkStats = this.wakeWordRuntime?.audio || {};
+    this.updateWakeWordRuntime({
+      audio: {
+        chunks: (chunkStats.chunks || 0) + 1,
+        bytes: (chunkStats.bytes || 0) + bufferData.length,
+        lastAudioAt: new Date().toISOString()
+      }
+    });
 
     if (this.vadEnabled && this.vad) {
       this.vadBuffer = Buffer.concat([this.vadBuffer, bufferData]);
@@ -1457,6 +1689,17 @@ class HomeBrainRemoteDevice {
     while (this.wakeWordAudioBuffer.length >= frameBytes) {
       const frameBuffer = this.wakeWordAudioBuffer.subarray(0, frameBytes);
       this.wakeWordAudioBuffer = this.wakeWordAudioBuffer.subarray(frameBytes);
+      const rms = this.calculatePcmRms(frameBuffer);
+      const audioStats = this.wakeWordRuntime?.audio || {};
+      this.updateWakeWordRuntime({
+        audio: {
+          frames: (audioStats.frames || 0) + 1,
+          lastFrameRms: Number(rms.toFixed(6)),
+          peakFrameRms: Number(Math.max(audioStats.peakFrameRms || 0, rms).toFixed(6)),
+          lastAudioAt: new Date().toISOString()
+        }
+      });
+      this.reportWakeWordRuntimeStatus(false, 'audio_frame');
 
       if (this.vadEnabled && !this.shouldEvaluateWakeWord()) {
         continue;
@@ -1465,6 +1708,14 @@ class HomeBrainRemoteDevice {
       try {
         const detection = await this.evaluateWakeWordFrame(frameBuffer);
         if (detection) {
+          this.updateWakeWordRuntime({
+            lastDetect: {
+              model: detection.label,
+              score: detection.score,
+              at: new Date().toISOString()
+            }
+          });
+          this.reportWakeWordRuntimeStatus(true, 'detect');
           this.onWakeWordDetected(detection.slug, detection.score, detection.label);
           this.wakeWordAudioBuffer = Buffer.alloc(0);
           break;
@@ -1492,6 +1743,14 @@ class HomeBrainRemoteDevice {
         const outputs = await sessionInfo.session.run(feeds);
         score = this.extractWakeWordScore(outputs, sessionInfo);
       }
+
+      this.updateWakeWordRuntime({
+        lastScore: {
+          model: sessionInfo.label || sessionInfo.slug || 'wake_word',
+          score: typeof score === 'number' ? score : null,
+          at: new Date().toISOString()
+        }
+      });
 
       if (score >= sessionInfo.threshold) {
         return {
@@ -1669,6 +1928,13 @@ class HomeBrainRemoteDevice {
 
     this.stats.wakeWordsDetected++;
     this.lastInteraction = new Date();
+    this.updateWakeWordRuntime({
+      lastDetect: {
+        model: label,
+        score: normalizedConfidence,
+        at: this.lastInteraction.toISOString()
+      }
+    });
 
     this.sendMessage({
       type: 'wake_word_detected',
@@ -1676,6 +1942,7 @@ class HomeBrainRemoteDevice {
       confidence: normalizedConfidence,
       timestamp: this.lastInteraction.toISOString()
     });
+    this.reportWakeWordRuntimeStatus(true, 'wake_word_detected');
 
     this.wakeWordAudioBuffer = Buffer.alloc(0);
     if (this.vadEnabled) {
