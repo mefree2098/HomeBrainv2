@@ -544,6 +544,87 @@ function buildAlreadySatisfiedResult(device, target, actionName, value, reason) 
   };
 }
 
+function isNativeRadioDevice(device = {}) {
+  const source = getDeviceSource(device);
+  const protocol = sanitizeString(device?.properties?.homebrainDirect?.protocol).toLowerCase();
+  return source === 'homebrain-zigbee'
+    || source === 'homebrain-zwave'
+    || protocol === 'zigbee'
+    || protocol === 'zwave';
+}
+
+function shouldRefreshBeforeAlreadySatisfiedCheck(action, context = {}) {
+  return actionFlagEnabled(action, 'skipIfAlreadyInState')
+    && (
+      actionFlagEnabled(action, 'refreshBeforeSkipIfAlreadyInState')
+      || Boolean(context?.sceneId)
+    );
+}
+
+function normalizeActionToken(value) {
+  return sanitizeString(value).toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+function getRequiredVerifiedFieldsForAlreadySatisfied(actionName, value) {
+  switch (normalizeActionToken(actionName)) {
+    case 'turnoff':
+    case 'off':
+      return ['status'];
+    case 'turnon':
+    case 'on':
+      return value === undefined || value === null || value === ''
+        ? ['status']
+        : ['status', 'brightness'];
+    case 'setbrightness':
+      return ['status', 'brightness'];
+    default:
+      return [];
+  }
+}
+
+function hasVerifiedFieldsForAlreadySatisfied(device, actionName, value) {
+  const marker = device?.__homebrainLiveRead;
+  if (!marker?.attempted) {
+    return true;
+  }
+
+  const fields = Array.isArray(marker.fields) ? marker.fields : [];
+  return getRequiredVerifiedFieldsForAlreadySatisfied(actionName, value)
+    .every((field) => fields.includes(field));
+}
+
+async function refreshDeviceBeforeAlreadySatisfiedCheck(device, actionName, context = {}) {
+  if (!device || !isNativeRadioDevice(device)) {
+    return device;
+  }
+  if (device.__homebrainLiveRead?.attempted) {
+    return device;
+  }
+
+  try {
+    return await deviceService.refreshDirectRadioDeviceState(device, {
+      liveRead: true,
+      action: actionName,
+      reason: context?.sceneId ? 'scene_preflight' : 'workflow_state_skip_preflight',
+      ensureStarted: false
+    });
+  } catch (error) {
+    console.warn(
+      `WorkflowExecutionService: Direct radio state refresh before skip check failed for ${device?.name || device?._id || 'device'}: ${error.message}`
+    );
+    return device;
+  }
+}
+
+async function refreshDevicesBeforeAlreadySatisfiedCheck(devices = [], actionName, context = {}) {
+  const refreshed = [];
+  for (const device of devices) {
+    // eslint-disable-next-line no-await-in-loop
+    refreshed.push(await refreshDeviceBeforeAlreadySatisfiedCheck(device, actionName, context));
+  }
+  return refreshed;
+}
+
 function getInsteonCommandRetryOptions(action, source = '', defaults = {}) {
   if (String(source || '').trim().toLowerCase() !== 'insteon') {
     return {};
@@ -1697,7 +1778,11 @@ async function executeDeviceControlForResolvedDevice(device, target, actionName,
   const context = executionOptions?.context && typeof executionOptions.context === 'object'
     ? executionOptions.context
     : {};
-  const alreadySatisfiedReason = actionFlagEnabled(executionOptions?.action, 'skipIfAlreadyInState')
+  if (shouldRefreshBeforeAlreadySatisfiedCheck(executionOptions?.action, context)) {
+    device = await refreshDeviceBeforeAlreadySatisfiedCheck(device, actionName, context);
+  }
+  const canUseAlreadySatisfiedState = hasVerifiedFieldsForAlreadySatisfied(device, actionName, value);
+  const alreadySatisfiedReason = actionFlagEnabled(executionOptions?.action, 'skipIfAlreadyInState') && canUseAlreadySatisfiedState
     ? getAlreadySatisfiedReason(device, actionName, value)
     : '';
   if (alreadySatisfiedReason) {
@@ -1833,11 +1918,16 @@ async function executeResolvedDeviceGroupUnit({
   }
 
   const skipAlreadySatisfied = actionFlagEnabled(action, 'skipIfAlreadyInState');
+  const devicesForStateCheck = skipAlreadySatisfied && shouldRefreshBeforeAlreadySatisfiedCheck(action, context)
+    ? await refreshDevicesBeforeAlreadySatisfiedCheck(devices, actionName, context)
+    : devices;
   const skippedMembers = [];
   const commandDevices = skipAlreadySatisfied
-    ? devices.filter((device) => {
+    ? devicesForStateCheck.filter((device) => {
         const target = device?._id?.toString?.() || null;
-        const reason = getAlreadySatisfiedReason(device, actionName, value);
+        const reason = hasVerifiedFieldsForAlreadySatisfied(device, actionName, value)
+          ? getAlreadySatisfiedReason(device, actionName, value)
+          : '';
         if (target && reason) {
           skippedMembers.push({
             deviceId: target,
@@ -1852,7 +1942,7 @@ async function executeResolvedDeviceGroupUnit({
         }
         return true;
       })
-    : devices;
+    : devicesForStateCheck;
 
   if (commandDevices.length === 0) {
     return {
@@ -1867,7 +1957,7 @@ async function executeResolvedDeviceGroupUnit({
         group: groupName,
         executionMode: 'skipped_already_satisfied',
         concurrency: 0,
-        totalTargets: devices.length,
+        totalTargets: devicesForStateCheck.length,
         successfulTargets: skippedMembers.length,
         failedTargets: 0,
         skippedTargets: skippedMembers.length,
