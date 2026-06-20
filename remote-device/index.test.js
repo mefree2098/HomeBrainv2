@@ -142,6 +142,43 @@ test('startFeatureSidecar captures sidecar stderr when startup exits', async (t)
   assert.match(failureMessage, /missing module/);
 });
 
+test('handleWakeWordEngineFailure preserves string error messages', () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: {},
+    wakeWord: {}
+  });
+
+  device.maxWakeWordRestarts = 0;
+  device.reportWakeWordRuntimeStatus = () => {};
+  device.releaseWakeWordEngine = () => {};
+  device.startTestMode = () => {};
+  device.resetWakeWordRuntime('FeatureSidecar/OWW', device.buildRecordingOptions());
+
+  device.handleWakeWordEngineFailure('arecord has exited with error code 1.');
+
+  assert.match(device.wakeWordRuntime.lastError.message, /arecord has exited with error code 1/);
+});
+
+test('handleRecordingStreamError appends recorder stderr details', () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: {},
+    wakeWord: {}
+  });
+
+  device.maxWakeWordRestarts = 0;
+  device.reportWakeWordRuntimeStatus = () => {};
+  device.releaseWakeWordEngine = () => {};
+  device.startTestMode = () => {};
+  device.resetWakeWordRuntime('FeatureSidecar/OWW', device.buildRecordingOptions());
+  device.recordingStderrBuffer = 'ALSA lib pcm.c: Cannot open audio device default\n';
+
+  device.handleRecordingStreamError('arecord has exited with error code 1.');
+
+  assert.match(device.wakeWordRuntime.lastError.message, /arecord has exited with error code 1/);
+  assert.match(device.wakeWordRuntime.lastError.message, /Cannot open audio device default/);
+  assert.match(device.wakeWordRuntime.recording.stderr, /Cannot open audio device default/);
+});
+
 test('stale stopped sidecar close does not clear the replacement sidecar', async (t) => {
   const childProcess = require('child_process');
   const originalSpawn = childProcess.spawn;
