@@ -793,6 +793,53 @@ class VoiceWebSocketServer {
     }
   }
 
+  stripWakeWordPrefix(commandText, wakeWord) {
+    const command = (commandText || '').toString().trim();
+    if (!command) {
+      return '';
+    }
+
+    const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const normalizePhrase = (value) => (value || '')
+      .toString()
+      .toLowerCase()
+      .replace(/[-_]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const candidates = new Set();
+    const normalizedWake = normalizePhrase(wakeWord);
+    if (normalizedWake) {
+      candidates.add(normalizedWake);
+      candidates.add(normalizedWake.replace(/^hey\s+/, ''));
+      if (!normalizedWake.startsWith('hey ')) {
+        candidates.add(`hey ${normalizedWake}`);
+      }
+    } else {
+      candidates.add('anna');
+      candidates.add('henry');
+    }
+
+    const sortedCandidates = [...candidates]
+      .map(normalizePhrase)
+      .filter(Boolean)
+      .sort((a, b) => b.length - a.length);
+
+    for (const candidate of sortedCandidates) {
+      const pattern = candidate
+        .split(' ')
+        .filter(Boolean)
+        .map(escapeRegex)
+        .join('\\s+');
+      const match = command.match(new RegExp(`^${pattern}(?:\\s*[,;:.!?-]+\\s*|\\s+|$)`, 'i'));
+      if (match) {
+        return command.slice(match[0].length).trim();
+      }
+    }
+
+    return command;
+  }
+
   async processVoiceCommandText(deviceId, context = {}) {
     const connection = this.deviceConnections.get(deviceId);
     if (!connection || !connection.authenticated) {
@@ -807,7 +854,8 @@ class VoiceWebSocketServer {
       return 'local';
     };
 
-    const command = (context.commandText || context.command || '').toString().trim();
+    const rawCommand = (context.commandText || context.command || '').toString().trim();
+    const command = this.stripWakeWordPrefix(rawCommand, connection.pendingWakeWord?.wakeWord);
     if (!command) {
       console.warn(`Empty command received from device ${deviceId}`);
       this.sendMessage(deviceId, {

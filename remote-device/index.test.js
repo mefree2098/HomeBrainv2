@@ -289,6 +289,47 @@ test('startVoiceRecording uses resolved auto capture device for command audio', 
   device.stopVoiceRecording();
 });
 
+test('startVoiceRecording prepends pending wake pre-roll audio', async (t) => {
+  const childProcess = require('child_process');
+  const originalSpawn = childProcess.spawn;
+  t.after(() => {
+    childProcess.spawn = originalSpawn;
+  });
+
+  childProcess.spawn = () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.kill = () => {};
+    return child;
+  };
+
+  const device = new HomeBrainRemoteDevice({
+    audio: { recordingDevice: 'default', sampleRate: 16000, channels: 1 },
+    wakeWord: {}
+  });
+  const messages = [];
+  const preRoll = Buffer.from([1, 2, 3, 4]);
+
+  device.stopFeatureSidecar = () => {};
+  device.sendMessage = (message) => {
+    messages.push(message);
+    return true;
+  };
+  device.pendingCommandPreRollBuffer = preRoll;
+
+  device.startVoiceRecording(5000, true);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(messages[0].type, 'audio_data');
+  assert.equal(messages[0].isStart, true);
+  assert.equal(messages[1].type, 'audio_data');
+  assert.equal(messages[1].preRoll, true);
+  assert.equal(messages[1].sequence, 0);
+  assert.deepEqual(Buffer.from(messages[1].audioData, 'base64'), preRoll);
+
+  device.stopVoiceRecording();
+});
+
 test('isWakeWordDetectorActive treats the feature sidecar as an active detector', () => {
   const device = new HomeBrainRemoteDevice({
     audio: {},
