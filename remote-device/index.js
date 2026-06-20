@@ -660,6 +660,22 @@ class HomeBrainRemoteDevice {
     return Boolean(this.recordingStream && this.wakeWordSessions.length > 0 && !this.wakeWordEngineFailed);
   }
 
+  buildRecordingOptions() {
+    const audioConfig = this.config.audio || {};
+    const recorderName = audioConfig.recorder || audioConfig.recordProgram || 'arecord';
+
+    return {
+      sampleRate: this.wakeWordSampleRate,
+      sampleRateHertz: this.wakeWordSampleRate,
+      channels: audioConfig.channels || 1,
+      threshold: audioConfig.threshold ?? 0.5,
+      verbose: false,
+      recorder: recorderName,
+      recordProgram: recorderName,
+      device: audioConfig.recordingDevice || audioConfig.microphoneDevice || 'default'
+    };
+  }
+
   generateWakeWordAssetSignature(keywords = []) {
     return JSON.stringify(keywords.map((keyword) => ({
       label: keyword.label || '',
@@ -1189,14 +1205,7 @@ class HomeBrainRemoteDevice {
         this.wakeWordAudioBuffer = Buffer.alloc(0);
         this.wakeWordDetectionQueue = Promise.resolve();
 
-        const recordingOptions = {
-          sampleRate: this.wakeWordSampleRate,
-          sampleRateHertz: this.wakeWordSampleRate,
-          threshold: this.config.audio.threshold ?? 0.5,
-          verbose: false,
-          recordProgram: this.config.audio.recordProgram || 'arecord',
-          device: this.config.audio.recordingDevice || this.config.audio.microphoneDevice || 'default'
-        };
+        const recordingOptions = this.buildRecordingOptions();
 
         this.recordingStream = recorder.record(recordingOptions);
         const micStream = this.recordingStream.stream();
@@ -1232,14 +1241,7 @@ class HomeBrainRemoteDevice {
       this.wakeWordAudioBuffer = Buffer.alloc(0);
       this.wakeWordDetectionQueue = Promise.resolve();
 
-      const recordingOptions = {
-        sampleRate: this.wakeWordSampleRate,
-        sampleRateHertz: this.wakeWordSampleRate,
-        threshold: this.config.audio.threshold ?? 0.5,
-        verbose: false,
-        recordProgram: this.config.audio.recordProgram || 'arecord',
-        device: this.config.audio.recordingDevice || this.config.audio.microphoneDevice || 'default'
-      };
+      const recordingOptions = this.buildRecordingOptions();
 
       this.recordingStream = recorder.record(recordingOptions);
       const micStream = this.recordingStream.stream();
@@ -2630,6 +2632,11 @@ async function main() {
     process.exit(1);
   }
 }
+
+module.exports = {
+  HomeBrainRemoteDevice,
+  loadConfig
+};
 
 // Start the application
 if (require.main === module) {
