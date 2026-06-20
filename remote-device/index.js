@@ -1323,6 +1323,19 @@ class HomeBrainRemoteDevice {
     return Math.sqrt(sumSquares / sampleCount);
   }
 
+  getWakeWordMinRms() {
+    return clamp(this.config.wakeWord?.vad?.minRms ?? 0.02, 0, 0.2);
+  }
+
+  shouldProcessWakeWordFrame(frameBuffer, rms = null) {
+    const minRms = this.getWakeWordMinRms();
+    if (minRms <= 0) {
+      return true;
+    }
+    const frameRms = typeof rms === 'number' ? rms : this.calculatePcmRms(frameBuffer);
+    return frameRms >= minRms;
+  }
+
   reportWakeWordRuntimeStatus(force = false, reason = 'periodic') {
     if (!this.isAuthenticated || !this.wakeWordRuntime) {
       return false;
@@ -2239,6 +2252,9 @@ class HomeBrainRemoteDevice {
         }
       });
       this.reportWakeWordRuntimeStatus(false, 'audio_frame');
+      if (!this.shouldProcessWakeWordFrame(frame, rms)) {
+        continue;
+      }
       const header = Buffer.alloc(8);
       header.write('AUD0', 0);
       header.writeUInt32LE(frame.length, 4);
@@ -2355,6 +2371,9 @@ class HomeBrainRemoteDevice {
         }
       });
       this.reportWakeWordRuntimeStatus(false, 'audio_frame');
+      if (!this.shouldProcessWakeWordFrame(frameBuffer, rms)) {
+        continue;
+      }
 
       if (this.vadEnabled && !this.shouldEvaluateWakeWord()) {
         continue;

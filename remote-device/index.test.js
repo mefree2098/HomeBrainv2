@@ -301,6 +301,62 @@ test('isWakeWordDetectorActive treats the feature sidecar as an active detector'
   assert.equal(device.isWakeWordDetectorActive(), true);
 });
 
+test('enqueueSidecarAudio drops wake frames below the RMS gate', () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: { sampleRate: 16000 },
+    wakeWord: { vad: { minRms: 0.02 } }
+  });
+  const sidecar = createFakeSidecar();
+
+  device.sidecar = sidecar;
+  device.sidecarFrameBytes = 4;
+  device.resetWakeWordRuntime('FeatureSidecar/OWW', device.buildRecordingOptions());
+  device.reportWakeWordRuntimeStatus = () => {};
+
+  device.enqueueSidecarAudio(Buffer.alloc(4));
+  assert.equal(sidecar.stdin.writes.length, 0);
+  assert.equal(device.wakeWordRuntime.audio.frames, 1);
+  assert.equal(device.wakeWordRuntime.audio.lastFrameRms, 0);
+
+  const loudFrame = Buffer.alloc(4);
+  loudFrame.writeInt16LE(16000, 0);
+  loudFrame.writeInt16LE(-16000, 2);
+  device.enqueueSidecarAudio(loudFrame);
+
+  assert.equal(sidecar.stdin.writes.length, 2);
+  assert.equal(sidecar.stdin.writes[0].toString('ascii', 0, 4), 'AUD0');
+  assert.deepEqual(sidecar.stdin.writes[1], loudFrame);
+});
+
+test('processAudioForWakeWord skips in-process inference for low-RMS frames', async () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: { sampleRate: 16000 },
+    wakeWord: { vad: { minRms: 0.02 } }
+  });
+  let evaluations = 0;
+
+  device.wakeWordFrameSamples = 2;
+  device.wakeWordSessions = [{ label: 'Anna', threshold: 0.5 }];
+  device.resetWakeWordRuntime('OpenWakeWord', device.buildRecordingOptions());
+  device.reportWakeWordRuntimeStatus = () => {};
+  device.evaluateWakeWordFrame = async () => {
+    evaluations += 1;
+    return null;
+  };
+
+  await device.processAudioForWakeWord(Buffer.alloc(4));
+  assert.equal(evaluations, 0);
+  assert.equal(device.wakeWordRuntime.audio.frames, 1);
+  assert.equal(device.wakeWordRuntime.audio.lastFrameRms, 0);
+
+  const loudFrame = Buffer.alloc(4);
+  loudFrame.writeInt16LE(16000, 0);
+  loudFrame.writeInt16LE(-16000, 2);
+  await device.processAudioForWakeWord(loudFrame);
+
+  assert.equal(evaluations, 1);
+});
+
 test('startFeatureSidecar captures sidecar stderr when startup exits', async (t) => {
   const childProcess = require('child_process');
   const originalSpawn = childProcess.spawn;
