@@ -35,26 +35,62 @@ const VAD_FRAME_BYTES = VAD_FRAME_SAMPLES * PCM_SAMPLE_WIDTH_BYTES;
 const FEATURE_SIDECAR_LAUNCH_COMMAND = [
   'set -eu',
   'feature_script="$1"',
+  'python_can_run_sidecar() {',
+  '    candidate="$1"',
+  '    "$candidate" - <<\'PYCODE\' >/dev/null 2>&1',
+  'import numpy',
+  'import onnxruntime',
+  'import openwakeword',
+  'from openwakeword.utils import AudioFeatures',
+  'PYCODE',
+  '}',
   'run_python() {',
   '    candidate="$1"',
-  '    if [ -n "$candidate" ] && [ -x "$candidate" ]; then',
-  '        exec "$candidate" "$feature_script"',
+  '    label="$2"',
+  '    if [ -z "$candidate" ]; then',
+  '        return 1',
   '    fi',
+  '    case "$candidate" in',
+  '        */*)',
+  '            if [ ! -x "$candidate" ]; then',
+  '                echo "wake sidecar python candidate not executable ($label): $candidate" >&2',
+  '                return 1',
+  '            fi',
+  '            command_path="$candidate"',
+  '            ;;',
+  '        *)',
+  '            if ! command_path=$(command -v "$candidate" 2>/dev/null); then',
+  '                echo "wake sidecar python candidate not found ($label): $candidate" >&2',
+  '                return 1',
+  '            fi',
+  '            ;;',
+  '    esac',
+  '    if python_can_run_sidecar "$command_path"; then',
+  '        echo "wake sidecar using python ($label): $command_path" >&2',
+  '        exec "$command_path" "$feature_script"',
+  '    fi',
+  '    echo "wake sidecar python candidate missing required modules ($label): $command_path" >&2',
+  '    return 1',
   '}',
   'configured_python="${HOMEBRAIN_WAKEWORD_PYTHON:-}"',
   'if [ -n "$configured_python" ]; then',
   '    case "$configured_python" in',
   '        python|python3|python3.10|python3.11|python3.12|python3.13)',
-  '            exec "$configured_python" "$feature_script"',
+  '            run_python "$configured_python" configured || true',
   '            ;;',
-  '        /*)',
-  '            run_python "$configured_python"',
+  '        */*)',
+  '            run_python "$configured_python" configured || true',
+  '            ;;',
+  '        *)',
+  '            echo "wake sidecar ignoring unsupported configured python: $configured_python" >&2',
   '            ;;',
   '    esac',
   'fi',
   'script_dir=$(CDPATH= cd -- "$(dirname -- "$feature_script")" && pwd)',
-  'run_python "$script_dir/.venv/bin/python"',
-  'exec python3 "$feature_script"'
+  'run_python "$script_dir/.venv/bin/python" bundled-venv || true',
+  'run_python python3 system || true',
+  'echo "wake sidecar could not find a Python interpreter with numpy, onnxruntime, and openwakeword" >&2',
+  'exit 1'
 ].join('\n');
 
 const clamp = (value, min, max) => Math.min(Math.max(Number(value) || 0, min), max);
@@ -149,6 +185,7 @@ class HomeBrainRemoteDevice {
     this.sidecarFrameBytes = 0;
     this.sidecarAudioBuffer = Buffer.alloc(0);
     this.sidecarStdoutBuffer = '';
+    this.sidecarStderrBuffer = '';
 
     this.configDirectory = path.dirname(path.resolve(argv.config || './config.json'));
     this.packageVersion = PACKAGE_VERSION;
@@ -731,7 +768,9 @@ class HomeBrainRemoteDevice {
         ready: false,
         models: [],
         frameSamples: this.wakeWordFrameSamples || this.wakeWordSampleRate || 16000,
-        minRms: extra.minRms ?? null
+        minRms: extra.minRms ?? null,
+        stderr: null,
+        stderrAt: null
       },
       audio: {
         chunks: 0,
@@ -1457,10 +1496,11 @@ class HomeBrainRemoteDevice {
     const { spawn } = require('child_process');
     const featureScript = path.join(__dirname, 'feature_infer.py');
     const sidecar = spawn('sh', ['-c', FEATURE_SIDECAR_LAUNCH_COMMAND, 'homebrain-feature-sidecar', featureScript], {
-      stdio: ['pipe', 'pipe', 'inherit'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       env: this.buildFeatureSidecarLaunchEnvironment()
     });
     this.sidecar = sidecar;
+    this.sidecarStderrBuffer = '';
 
     sidecar.on('error', (error) => {
       if (this.sidecar !== sidecar) {
@@ -1482,6 +1522,30 @@ class HomeBrainRemoteDevice {
       }
     });
 
+    sidecar.stderr.on('data', (chunk) => {
+      if (this.sidecar !== sidecar) {
+        return;
+      }
+
+      const text = chunk.toString();
+      if (!text) {
+        return;
+      }
+
+      this.sidecarStderrBuffer = `${this.sidecarStderrBuffer}${text}`.slice(-4000);
+      const trimmed = text.trim();
+      if (trimmed) {
+        console.warn(`[sidecar] ${trimmed}`);
+      }
+      this.updateWakeWordRuntime({
+        sidecar: {
+          stderr: this.sidecarStderrBuffer.slice(-2000),
+          stderrAt: new Date().toISOString()
+        }
+      });
+      this.reportWakeWordRuntimeStatus(false, 'sidecar_stderr');
+    });
+
     sidecar.on('close', (code, signal) => {
       const intentionallyStopped = this.stoppingSidecars.has(sidecar);
       this.stoppingSidecars.delete(sidecar);
@@ -1496,15 +1560,19 @@ class HomeBrainRemoteDevice {
       }
 
       console.warn(`Feature sidecar exited with ${details}`);
+      const stderrTail = this.sidecarStderrBuffer.trim().slice(-1000);
+      const message = stderrTail
+        ? `Feature sidecar exited with ${details}: ${stderrTail}`
+        : `Feature sidecar exited with ${details}`;
       this.updateWakeWordRuntime({
         lastError: {
-          message: `Feature sidecar exited with ${details}`,
+          message,
           at: new Date().toISOString()
         }
       });
       this.reportWakeWordRuntimeStatus(true, 'sidecar_closed');
       if (this.isWakeWordListening) {
-        this.handleWakeWordEngineFailure(new Error('Feature sidecar exited'));
+        this.handleWakeWordEngineFailure(new Error(message));
       }
     });
 
@@ -1604,6 +1672,7 @@ class HomeBrainRemoteDevice {
     this.sidecar = null;
     this.sidecarAudioBuffer = Buffer.alloc(0);
     this.sidecarStdoutBuffer = '';
+    this.sidecarStderrBuffer = '';
   }
 
   enqueueSidecarAudio(data) {
