@@ -689,6 +689,12 @@ test('isIgnorableDirtyEntry treats OTA artifacts as generated output', { concurr
   const service = await createTempService(t);
 
   assert.equal(service.isIgnorableDirtyEntry('?? server/data/wall-panel-ota/'), true);
+  assert.equal(service.isIgnorableDirtyEntry('?? server/data/system-backup/'), true);
   assert.equal(service.isIgnorableDirtyEntry('?? client/dist/asset.js'), true);
+  assert.equal(service.isIgnorableDirtyEntry('?? server/public/wake-words/anna.onnx'), true);
+  assert.equal(service.isIgnorableDirtyEntry('?? server/public/wake-words/anna.onnx.data'), true);
+  assert.equal(service.isIgnorableDirtyEntry('?? server/public/wake-words/anna.tflite'), true);
+  assert.equal(service.isIgnorableDirtyEntry('?? server/public/wake-words/anna.ppn'), true);
+  assert.equal(service.isIgnorableDirtyEntry('?? server/public/wake-words/notes.txt'), false);
   assert.equal(service.isIgnorableDirtyEntry('?? server/src/index.js'), false);
 });
