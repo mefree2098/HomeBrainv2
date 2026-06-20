@@ -8,6 +8,7 @@ import {
   Volume2,
   Wifi,
   WifiOff,
+  Network,
   Battery,
   TestTube,
   MapPin,
@@ -407,6 +408,11 @@ export function VoiceDevices() {
     return `${diffHours}h`
   }
 
+  const getDeviceIpAddress = (device: any) => {
+    const value = device?.ipAddress || device?.settings?.ipAddress || device?.settings?.network?.ipAddress
+    return typeof value === 'string' && value.trim() ? value.trim() : 'Not reported'
+  }
+
   const normalizeVersion = (value: string | undefined | null) => {
     const text = (value || "0.0.0").toString().trim().toLowerCase().replace(/^v/, "")
     const parts = text
@@ -701,6 +707,12 @@ export function VoiceDevices() {
                       <div className="flex items-center gap-2 mt-1">
                         <MapPin className="h-3 w-3 text-muted-foreground" />
                         <span className="text-sm text-muted-foreground">{device.room}</span>
+                      </div>
+                      <div className="mt-1 flex min-w-0 items-center gap-2">
+                        <Network className="h-3 w-3 shrink-0 text-muted-foreground" />
+                        <span className="break-all font-mono text-xs text-muted-foreground">
+                          {getDeviceIpAddress(device)}
+                        </span>
                       </div>
                     </div>
                   </div>

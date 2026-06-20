@@ -804,15 +804,60 @@ class HomeBrainRemoteDevice {
   }
 
   parseAlsaCaptureDevices(output = '') {
+    const isDigits = (text) => Boolean(text) && [...text].every((char) => char >= '0' && char <= '9');
+    const parseBracketedSegment = (segment = '') => {
+      const openIndex = segment.indexOf('[');
+      const closeIndex = openIndex >= 0 ? segment.indexOf(']', openIndex + 1) : -1;
+      if (openIndex >= 0 && closeIndex > openIndex) {
+        return {
+          id: segment.slice(0, openIndex).trim(),
+          name: segment.slice(openIndex + 1, closeIndex).trim()
+        };
+      }
+      return { id: segment.trim(), name: '' };
+    };
+
     return output
-      .split(/\r?\n/)
-      .map((line) => {
-        const match = line.match(/card\s+(\d+):\s*([^\s\[]+)\s*\[([^\]]+)\],\s*device\s+(\d+):\s*([^\[]*?)(?:\s*\[([^\]]+)\])?\s*$/i);
-        if (!match) {
+      .replaceAll('\r', '')
+      .split('\n')
+      .map((rawLine) => {
+        const line = rawLine.trim();
+        if (!line.toLowerCase().startsWith('card ')) {
           return null;
         }
-        const [, cardNumber, cardId, cardName, deviceNumber, deviceName = '', deviceDescription = ''] = match;
-        const label = [cardId, cardName, deviceName.trim(), deviceDescription.trim()]
+
+        const cardSeparator = line.indexOf(':', 5);
+        if (cardSeparator < 0) {
+          return null;
+        }
+
+        const cardNumber = line.slice(5, cardSeparator).trim();
+        if (!isDigits(cardNumber)) {
+          return null;
+        }
+
+        const afterCard = line.slice(cardSeparator + 1).trim();
+        const deviceMarker = afterCard.indexOf(', device ');
+        if (deviceMarker < 0) {
+          return null;
+        }
+
+        const cardSegment = afterCard.slice(0, deviceMarker).trim();
+        const afterDevice = afterCard.slice(deviceMarker + ', device '.length).trim();
+        const deviceSeparator = afterDevice.indexOf(':');
+        if (deviceSeparator < 0) {
+          return null;
+        }
+
+        const deviceNumber = afterDevice.slice(0, deviceSeparator).trim();
+        if (!isDigits(deviceNumber)) {
+          return null;
+        }
+
+        const deviceSegment = afterDevice.slice(deviceSeparator + 1).trim();
+        const { id: cardId, name: cardName } = parseBracketedSegment(cardSegment);
+        const { id: deviceName, name: deviceDescription } = parseBracketedSegment(deviceSegment);
+        const label = [cardId, cardName, deviceName, deviceDescription]
           .filter(Boolean)
           .join(' ');
         return {
