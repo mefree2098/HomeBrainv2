@@ -140,7 +140,7 @@ if [[ "$SCRIPT_DIR" != "$INSTALL_DIR" ]]; then
 cat > package.json << 'EOF'
 {
   "name": "homebrain-remote-device",
-  "version": "1.1.13",
+  "version": "1.1.14",
   "description": "HomeBrain Remote Voice Device for Linux listeners",
   "main": "index.js",
   "scripts": {

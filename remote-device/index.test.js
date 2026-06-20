@@ -6,7 +6,11 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const { HomeBrainRemoteDevice } = require('./index');
+const {
+  HomeBrainRemoteDevice,
+  detectAudioFileExtension,
+  getAudioPlaybackCommands
+} = require('./index');
 
 function createFakeSidecar() {
   const child = new EventEmitter();
@@ -28,6 +32,30 @@ function createFakeSidecar() {
   };
   return child;
 }
+
+test('detectAudioFileExtension recognizes common TTS audio formats', () => {
+  assert.equal(detectAudioFileExtension(Buffer.from('ID3abc'), ''), '.mp3');
+  assert.equal(detectAudioFileExtension(Buffer.from([0xff, 0xfb, 0x90, 0x64]), ''), '.mp3');
+  assert.equal(detectAudioFileExtension(Buffer.from('RIFFxxxxWAVEfmt '), ''), '.wav');
+  assert.equal(detectAudioFileExtension(Buffer.from('anything'), 'audio/mpeg; charset=binary'), '.mp3');
+  assert.equal(detectAudioFileExtension(Buffer.from('anything'), 'audio/wav'), '.wav');
+  assert.equal(detectAudioFileExtension(Buffer.from('not audio'), ''), '.bin');
+});
+
+test('getAudioPlaybackCommands never sends compressed or unknown bytes to aplay', () => {
+  const mp3Commands = getAudioPlaybackCommands('/tmp/tts.mp3', { extension: '.mp3' });
+  assert.deepEqual(mp3Commands.map(([command]) => command), ['mpg123', 'ffplay', 'play']);
+
+  const unknownCommands = getAudioPlaybackCommands('/tmp/tts.bin', { extension: '.bin' });
+  assert.deepEqual(unknownCommands.map(([command]) => command), ['ffplay', 'play']);
+
+  const wavCommands = getAudioPlaybackCommands('/tmp/tts.wav', {
+    extension: '.wav',
+    playbackDevice: 'sysdefault:CARD=MS'
+  });
+  assert.equal(wavCommands.some(([command]) => command === 'aplay'), true);
+  assert.deepEqual(wavCommands.at(-1), ['aplay', ['-q', '-D', 'sysdefault:CARD=MS', '/tmp/tts.wav']]);
+});
 
 test('buildRecordingOptions passes the configured ALSA recorder and capture device', () => {
   const device = new HomeBrainRemoteDevice({
