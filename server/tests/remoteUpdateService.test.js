@@ -56,3 +56,36 @@ test('initiateUpdate preserves previous offline status when websocket delivery f
   assert.equal(updates[0].updateStatus.version, '1.1.0');
   assert.equal(updates[0]['settings.updateStatus'].status, 'failed');
 });
+
+test('updateDeviceStatus uses non-conflicting update paths when completion is reported', async (t) => {
+  const originalFindByIdAndUpdate = VoiceDevice.findByIdAndUpdate;
+  const originalPublishSafe = eventStreamService.publishSafe;
+  const originalVersion = remoteUpdateService.currentVersion;
+  const updates = [];
+
+  t.after(() => {
+    VoiceDevice.findByIdAndUpdate = originalFindByIdAndUpdate;
+    eventStreamService.publishSafe = originalPublishSafe;
+    remoteUpdateService.currentVersion = originalVersion;
+  });
+
+  VoiceDevice.findByIdAndUpdate = async (_deviceId, update) => {
+    updates.push(update);
+    return null;
+  };
+  eventStreamService.publishSafe = async () => {};
+  remoteUpdateService.currentVersion = '1.1.14';
+
+  await remoteUpdateService.updateDeviceStatus('507f1f77bcf86cd799439011', 'completed');
+
+  assert.equal(updates.length, 1);
+  assert.equal(Object.prototype.hasOwnProperty.call(updates[0], 'updateStatus'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(updates[0], 'settings.updateStatus'), false);
+  assert.equal(updates[0].$set.status, 'online');
+  assert.equal(updates[0].$set.firmwareVersion, '1.1.14');
+  assert.equal(updates[0].$set['updateStatus.status'], 'completed');
+  assert.equal(updates[0].$set['settings.updateStatus.status'], 'completed');
+  assert.ok(updates[0].$set['updateStatus.completedAt'] instanceof Date);
+  assert.equal(updates[0].$unset['updateStatus.error'], '');
+  assert.equal(updates[0].$unset['settings.updateStatus.failedAt'], '');
+});

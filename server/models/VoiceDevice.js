@@ -167,7 +167,8 @@ const schema = new mongoose.Schema({
     completedAt: Date,
     failedAt: Date,
     error: String,
-    lastChecked: Date
+    lastChecked: Date,
+    lastUpdated: Date
   },
   createdAt: {
     type: Date,

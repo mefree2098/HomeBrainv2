@@ -508,37 +508,46 @@ class RemoteUpdateService {
 
     try {
       const resolvedVersion = (reportedVersion || this.currentVersion || '').toString().trim() || this.currentVersion;
-      const updateData = {
-        updateStatus: {
-          status,
-          version: resolvedVersion,
-          lastUpdated: new Date()
-        },
+      const now = new Date();
+      const updateSet = {
+        'updateStatus.status': status,
+        'updateStatus.version': resolvedVersion,
+        'updateStatus.lastUpdated': now,
         'settings.updateStatus.status': status,
         'settings.updateStatus.version': resolvedVersion,
-        'settings.updateStatus.lastUpdated': new Date()
+        'settings.updateStatus.lastUpdated': now
       };
+      const updateUnset = {};
 
       if (status === 'completed') {
-        updateData.status = 'online';
-        updateData.firmwareVersion = resolvedVersion;
-        updateData.lastUpdate = new Date();
-        updateData['updateStatus.completedAt'] = new Date();
-        updateData['settings.updateStatus.completedAt'] = new Date();
+        updateSet.status = 'online';
+        updateSet.firmwareVersion = resolvedVersion;
+        updateSet.lastUpdate = now;
+        updateSet['updateStatus.completedAt'] = now;
+        updateSet['settings.updateStatus.completedAt'] = now;
+        updateUnset['updateStatus.error'] = '';
+        updateUnset['updateStatus.failedAt'] = '';
+        updateUnset['settings.updateStatus.error'] = '';
+        updateUnset['settings.updateStatus.failedAt'] = '';
       } else if (status === 'failed') {
-        updateData.status = 'error';
-        updateData['updateStatus.error'] = error;
-        updateData['updateStatus.failedAt'] = new Date();
-        updateData['settings.updateStatus.error'] = error;
-        updateData['settings.updateStatus.failedAt'] = new Date();
+        updateSet.status = 'error';
+        updateSet['updateStatus.error'] = error;
+        updateSet['updateStatus.failedAt'] = now;
+        updateSet['settings.updateStatus.error'] = error;
+        updateSet['settings.updateStatus.failedAt'] = now;
       } else if (status === 'downloading') {
-        updateData.status = 'updating';
-        updateData['updateStatus.startedAt'] = new Date();
+        updateSet.status = 'updating';
+        updateSet['updateStatus.startedAt'] = now;
       } else if (status === 'installing') {
-        updateData.status = 'updating';
+        updateSet.status = 'updating';
       }
 
-      await VoiceDevice.findByIdAndUpdate(deviceId, updateData);
+      const update = { $set: updateSet };
+      if (Object.keys(updateUnset).length > 0) {
+        update.$unset = updateUnset;
+      }
+
+      await VoiceDevice.findByIdAndUpdate(deviceId, update);
 
       void eventStreamService.publishSafe({
         type: 'remote_update.device_status_changed',
