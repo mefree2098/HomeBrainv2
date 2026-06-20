@@ -19,6 +19,14 @@ const MAX_AUDIO_SESSION_BYTES = Math.max(
 const DEFAULT_WAKE_WORD_MIN_RMS = 0.004;
 const MAX_WAKE_WORD_MIN_RMS = 0.2;
 
+function normalizeWakeWordMinRms(value) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    return DEFAULT_WAKE_WORD_MIN_RMS;
+  }
+  return Math.min(Math.max(numericValue, DEFAULT_WAKE_WORD_MIN_RMS), MAX_WAKE_WORD_MIN_RMS);
+}
+
 function redactMessageForLog(message = {}) {
   const redacted = { ...message };
   for (const key of ['registrationCode', 'deviceToken', 'claimToken']) {
@@ -378,9 +386,7 @@ class VoiceWebSocketServer {
             mode: typeof vadSettings.mode === 'number'
               ? Math.max(0, Math.min(3, Math.round(vadSettings.mode)))
               : 3,
-            minRms: typeof vadSettings.minRms === 'number'
-              ? clampValue(vadSettings.minRms, 0, MAX_WAKE_WORD_MIN_RMS)
-              : DEFAULT_WAKE_WORD_MIN_RMS
+            minRms: normalizeWakeWordMinRms(vadSettings.minRms)
           }
         },
         volume: device.volume,

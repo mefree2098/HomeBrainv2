@@ -160,3 +160,24 @@ test('buildWakeWordConfig includes sanitized remote audio settings', async (t) =
     threshold: 0.25
   });
 });
+
+test('buildWakeWordConfig normalizes zero wake-word RMS gate to the default', async (t) => {
+  const originalFind = WakeWordModel.find;
+
+  t.after(() => {
+    WakeWordModel.find = originalFind;
+  });
+
+  WakeWordModel.find = async () => [];
+
+  const voiceWs = new VoiceWebSocketServer();
+  const device = createDevice();
+  device.settings.wakeWordVad = { minRms: 0 };
+
+  const { config } = await voiceWs.buildWakeWordConfig(device, { deviceToken: 'token' }, {
+    platform: 'linux',
+    arch: 'arm64'
+  });
+
+  assert.equal(config.wakeWord.vad.minRms, 0.004);
+});

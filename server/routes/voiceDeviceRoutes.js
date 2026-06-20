@@ -14,6 +14,8 @@ const VoiceDevice = require('../models/VoiceDevice');
 const eventStreamService = require('../services/eventStreamService');
 
 const admin = requireAdmin();
+const DEFAULT_WAKE_WORD_MIN_RMS = 0.004;
+const MAX_WAKE_WORD_MIN_RMS = 0.2;
 const voiceDiagnosticsRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 60,
@@ -602,7 +604,9 @@ router.put('/devices/:id/settings', admin, async (req, res) => {
         next.mode = Math.max(0, Math.min(3, Math.round(value.mode)));
       }
       if (typeof value.minRms === 'number' && Number.isFinite(value.minRms)) {
-        next.minRms = clampValue(value.minRms, 0, 0.2);
+        next.minRms = value.minRms > 0
+          ? clampValue(value.minRms, DEFAULT_WAKE_WORD_MIN_RMS, MAX_WAKE_WORD_MIN_RMS)
+          : DEFAULT_WAKE_WORD_MIN_RMS;
       }
       return next;
     };

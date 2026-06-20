@@ -827,16 +827,16 @@ export function VoiceDevices() {
                     <div className="flex items-center gap-2">
                       <input
                         type="range"
-                        min={0}
+                        min={0.004}
                         max={1}
-                        step={0.01}
+                        step={0.001}
                         defaultValue={device.settings?.wakeWordVad?.minRms ?? 0.02}
                         onMouseUp={(e) => {
                           const val = Number((e.target as HTMLInputElement).value)
                           commitDeviceSettings(
                             device._id,
                             { wakeWordVad: { minRms: val } },
-                            `Wake-word minRms set to ${val.toFixed(2)}`
+                            `Wake-word minRms set to ${val.toFixed(3)}`
                           )
                         }}
                         onTouchEnd={(e) => {
@@ -844,12 +844,12 @@ export function VoiceDevices() {
                           commitDeviceSettings(
                             device._id,
                             { wakeWordVad: { minRms: val } },
-                            `Wake-word minRms set to ${val.toFixed(2)}`
+                            `Wake-word minRms set to ${val.toFixed(3)}`
                           )
                         }}
                         className="w-40"
                       />
-                      <span className="font-mono text-xs">{(device.settings?.wakeWordVad?.minRms ?? 0.02).toFixed(2)}</span>
+                      <span className="font-mono text-xs">{(device.settings?.wakeWordVad?.minRms ?? 0.02).toFixed(3)}</span>
                     </div>
                   </div>
 
