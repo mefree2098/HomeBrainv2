@@ -23,6 +23,8 @@ try {
 const DEFAULT_WAKE_WORD_CONFIDENCE = 0.9;
 const DEFAULT_WAKE_WORD_THRESHOLD = 0.55;
 const DEFAULT_WAKE_WORD_DEBOUNCE_MS = 1500;
+const DEFAULT_WAKE_WORD_MIN_RMS = 0.004;
+const MAX_WAKE_WORD_MIN_RMS = 0.2;
 const PCM_SAMPLE_WIDTH_BYTES = 2;
 const DEFAULT_VAD_WINDOW_MS = 30;
 const DEFAULT_VAD_HISTORY = 8;
@@ -94,6 +96,13 @@ const FEATURE_SIDECAR_LAUNCH_COMMAND = [
 ].join('\n');
 
 const clamp = (value, min, max) => Math.min(Math.max(Number(value) || 0, min), max);
+const normalizeWakeWordMinRms = (value) => {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    return DEFAULT_WAKE_WORD_MIN_RMS;
+  }
+  return clamp(numericValue, DEFAULT_WAKE_WORD_MIN_RMS, MAX_WAKE_WORD_MIN_RMS);
+};
 const slugify = (value) => {
   if (!value) return '';
   return value.toString().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -1324,7 +1333,7 @@ class HomeBrainRemoteDevice {
   }
 
   getWakeWordMinRms() {
-    return clamp(this.config.wakeWord?.vad?.minRms ?? 0.02, 0, 0.2);
+    return normalizeWakeWordMinRms(this.config.wakeWord?.vad?.minRms);
   }
 
   shouldProcessWakeWordFrame(frameBuffer, rms = null) {
@@ -1942,7 +1951,7 @@ class HomeBrainRemoteDevice {
 
       if (useSidecar && hasOnnx) {
         const recordingOptions = this.buildRecordingOptions();
-        const minRms = clamp(this.config.wakeWord?.vad?.minRms ?? 0.004, 0, 0.2);
+        const minRms = this.getWakeWordMinRms();
         this.resetWakeWordRuntime('FeatureSidecar/OWW', recordingOptions, { minRms });
         await this.startFeatureSidecar(keywordEntries);
         this.wakeWordEngineFailed = false;
@@ -2131,7 +2140,7 @@ class HomeBrainRemoteDevice {
     const models = keywordEntries.map((k) => ({ label: k.label, path: k.path, threshold: k.threshold ?? this.wakeWordThreshold }));
     // Default frameSamples to 1s of audio at current sample rate if not set
     this.wakeWordFrameSamples = this.wakeWordFrameSamples || this.wakeWordSampleRate || 16000;
-    const minRms = clamp(this.config.wakeWord?.vad?.minRms ?? 0.004, 0, 0.2);
+    const minRms = this.getWakeWordMinRms();
     const cfg = { type: 'config', models, sampleRate: this.wakeWordSampleRate, frameSamples: this.wakeWordFrameSamples, cooldownMs: this.wakeWordDebounceMs, vad: { minRms } };
 
     // Prepare chunking into exact frames for the sidecar

@@ -1,6 +1,6 @@
 {
   "name": "homebrain-remote-device",
-  "version": "1.1.11",
+  "version": "1.1.12",
   "description": "HomeBrain Remote Voice Device for Linux listeners",
   "main": "index.js",
   "scripts": {

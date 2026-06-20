@@ -328,6 +328,16 @@ test('enqueueSidecarAudio drops wake frames below the RMS gate', () => {
   assert.deepEqual(sidecar.stdin.writes[1], loudFrame);
 });
 
+test('wake-word RMS gate treats zero config as the default minimum', () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: { sampleRate: 16000 },
+    wakeWord: { vad: { minRms: 0 } }
+  });
+
+  assert.equal(device.getWakeWordMinRms(), 0.004);
+  assert.equal(device.shouldProcessWakeWordFrame(Buffer.alloc(4)), false);
+});
+
 test('processAudioForWakeWord skips in-process inference for low-RMS frames', async () => {
   const device = new HomeBrainRemoteDevice({
     audio: { sampleRate: 16000 },

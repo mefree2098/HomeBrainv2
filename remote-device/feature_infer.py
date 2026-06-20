@@ -61,6 +61,8 @@ except Exception as exc:  # pragma: no cover
 
 MAGIC = b"AUD0"
 DEFAULT_SAMPLE_RATE = 16000
+DEFAULT_MIN_RMS = 0.004
+MAX_MIN_RMS = 0.2
 WINDOW_FRAMES = 16
 FEATURE_DIM = 96
 
@@ -79,7 +81,7 @@ class FeatureInfer:
         self.models: List[ModelSpec] = []
         self.sample_rate = DEFAULT_SAMPLE_RATE
         self.frame_samples = DEFAULT_SAMPLE_RATE  # 1 second by default
-        self.min_rms = 0.004  # energy gate to reduce false positives on silence
+        self.min_rms = DEFAULT_MIN_RMS  # energy gate to reduce false positives on silence
         self.cooldown_ms = 1500  # per-model cooldown between detects
         self.last_detect_ts: Dict[str, float] = {}
         # Initialize AudioFeatures; if resources missing, attempt one more download, then retry once
@@ -114,7 +116,8 @@ class FeatureInfer:
         vad = payload.get("vad") or {}
         try:
             if vad.get("minRms") is not None:
-                self.min_rms = max(0.0, min(0.2, float(vad.get("minRms"))))
+                min_rms = float(vad.get("minRms"))
+                self.min_rms = max(DEFAULT_MIN_RMS, min(MAX_MIN_RMS, min_rms)) if min_rms > 0 else DEFAULT_MIN_RMS
         except Exception:
             pass
         try:
