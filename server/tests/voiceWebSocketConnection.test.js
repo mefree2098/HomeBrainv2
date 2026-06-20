@@ -181,3 +181,24 @@ test('buildWakeWordConfig normalizes zero wake-word RMS gate to the default', as
 
   assert.equal(config.wakeWord.vad.minRms, 0.004);
 });
+
+test('stripWakeWordPrefix removes wake words from one-breath commands', () => {
+  const voiceWs = new VoiceWebSocketServer();
+
+  assert.equal(
+    voiceWs.stripWakeWordPrefix('Hey Anna, what time is it?', 'anna'),
+    'what time is it?'
+  );
+  assert.equal(
+    voiceWs.stripWakeWordPrefix('hey henry turn on the kitchen lights', 'hey henry'),
+    'turn on the kitchen lights'
+  );
+  assert.equal(
+    voiceWs.stripWakeWordPrefix('turn on the kitchen lights', 'anna'),
+    'turn on the kitchen lights'
+  );
+  assert.equal(
+    voiceWs.stripWakeWordPrefix('Henry should not be stripped after Anna woke', 'anna'),
+    'Henry should not be stripped after Anna woke'
+  );
+});

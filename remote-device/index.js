@@ -25,6 +25,8 @@ const DEFAULT_WAKE_WORD_THRESHOLD = 0.55;
 const DEFAULT_WAKE_WORD_DEBOUNCE_MS = 1500;
 const DEFAULT_WAKE_WORD_MIN_RMS = 0.004;
 const MAX_WAKE_WORD_MIN_RMS = 0.2;
+const DEFAULT_COMMAND_PREROLL_MS = 2000;
+const MAX_COMMAND_PREROLL_MS = 3000;
 const PCM_SAMPLE_WIDTH_BYTES = 2;
 const DEFAULT_VAD_WINDOW_MS = 30;
 const DEFAULT_VAD_HISTORY = 8;
@@ -212,12 +214,14 @@ class HomeBrainRemoteDevice {
     this.commandProc = null;
     this.commandSessionId = null;
     this.commandSequence = 0;
+    this.pendingCommandPreRollBuffer = null;
 
     // Wake word detection
     this.wakeWordDisplayNames = ['Anna', 'Henry', 'Home Brain', 'Homebrain'];
     this.wakeWords = this.wakeWordDisplayNames.map((word) => word.toLowerCase());
     this.isWakeWordListening = true;
     this.wakeWordAudioBuffer = Buffer.alloc(0);
+    this.wakeWordPreRollBuffer = Buffer.alloc(0);
     this.wakeWordEngine = 'openwakeword';
     this.wakeWordSessions = [];
     this.wakeWordFrameSamples = 0;
@@ -226,6 +230,11 @@ class HomeBrainRemoteDevice {
     this.onnxRuntime = null;
     this.wakeWordThreshold = clamp(this.config.wakeWord.threshold ?? this.config.wakeWord.defaultThreshold ?? DEFAULT_WAKE_WORD_THRESHOLD, 0, 1);
     this.wakeWordReportedConfidence = clamp(this.config.wakeWord.reportedConfidence ?? DEFAULT_WAKE_WORD_CONFIDENCE, 0, 1);
+    this.commandPreRollMs = clamp(
+      this.config.wakeWord.commandPreRollMs ?? this.voiceConfig.commandPreRollMs ?? DEFAULT_COMMAND_PREROLL_MS,
+      0,
+      MAX_COMMAND_PREROLL_MS
+    );
     this.wakeWordEngineFailed = false;
     this.wakeWordDetectionQueue = Promise.resolve();
     this.wakeWordRestartAttempts = 0;
@@ -1332,6 +1341,35 @@ class HomeBrainRemoteDevice {
     return Math.sqrt(sumSquares / sampleCount);
   }
 
+  getCommandPreRollByteLimit() {
+    if (!this.commandPreRollMs || this.commandPreRollMs <= 0) {
+      return 0;
+    }
+    const sampleRate = this.wakeWordSampleRate || this.config.audio?.sampleRate || 16000;
+    return Math.max(0, Math.round((this.commandPreRollMs / 1000) * sampleRate * PCM_SAMPLE_WIDTH_BYTES));
+  }
+
+  appendWakeWordPreRoll(data) {
+    const limit = this.getCommandPreRollByteLimit();
+    if (!limit || !data || data.length === 0) {
+      return;
+    }
+    const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    this.wakeWordPreRollBuffer = Buffer.concat([this.wakeWordPreRollBuffer, chunk]);
+    if (this.wakeWordPreRollBuffer.length > limit) {
+      this.wakeWordPreRollBuffer = this.wakeWordPreRollBuffer.subarray(this.wakeWordPreRollBuffer.length - limit);
+    }
+  }
+
+  captureCommandPreRoll() {
+    const limit = this.getCommandPreRollByteLimit();
+    if (!limit || !this.wakeWordPreRollBuffer?.length) {
+      return null;
+    }
+    const start = Math.max(0, this.wakeWordPreRollBuffer.length - limit);
+    return Buffer.from(this.wakeWordPreRollBuffer.subarray(start));
+  }
+
   getWakeWordMinRms() {
     return normalizeWakeWordMinRms(this.config.wakeWord?.vad?.minRms);
   }
@@ -2238,6 +2276,7 @@ class HomeBrainRemoteDevice {
   enqueueSidecarAudio(data) {
     if (!this.sidecar || !data) return;
     const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    this.appendWakeWordPreRoll(chunk);
     const chunkStats = this.wakeWordRuntime?.audio || {};
     this.updateWakeWordRuntime({
       audio: {
@@ -2335,6 +2374,7 @@ class HomeBrainRemoteDevice {
     }
 
     const bufferData = Buffer.isBuffer(audioData) ? audioData : Buffer.from(audioData);
+    this.appendWakeWordPreRoll(bufferData);
     const chunkStats = this.wakeWordRuntime?.audio || {};
     this.updateWakeWordRuntime({
       audio: {
@@ -2627,6 +2667,7 @@ class HomeBrainRemoteDevice {
     });
     this.reportWakeWordRuntimeStatus(true, 'wake_word_detected');
 
+    this.pendingCommandPreRollBuffer = this.captureCommandPreRoll();
     this.wakeWordAudioBuffer = Buffer.alloc(0);
     if (this.vadEnabled) {
       this.vadHistory = [];
@@ -2686,6 +2727,21 @@ class HomeBrainRemoteDevice {
       channels: 1,
       format: 'S16LE'
     });
+
+    const preRollBuffer = this.pendingCommandPreRollBuffer;
+    this.pendingCommandPreRollBuffer = null;
+    if (Buffer.isBuffer(preRollBuffer) && preRollBuffer.length > 0) {
+      this.sendMessage({
+        type: 'audio_data',
+        sessionId,
+        sequence: this.commandSequence++,
+        audioData: preRollBuffer.toString('base64'),
+        sampleRate: this.wakeWordSampleRate,
+        channels: 1,
+        format: 'S16LE',
+        preRoll: true
+      });
+    }
 
     const startCommandCapture = (attempt = 0) => {
       if (!this.isRecording) return;
