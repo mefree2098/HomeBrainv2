@@ -121,6 +121,7 @@ class HomeBrainRemoteDevice {
     this.maxReconnectAttempts = 10;
     this.recordingStream = null;
     this.sidecar = null;
+    this.stoppingSidecars = new WeakSet();
     this.sidecarFrameBytes = 0;
     this.sidecarAudioBuffer = Buffer.alloc(0);
     this.sidecarStdoutBuffer = '';
@@ -1417,24 +1418,31 @@ class HomeBrainRemoteDevice {
   }
 
   // --- Feature sidecar integration ---
+  resolveWakeWordPythonExecutable() {
+    // Use the bundled venv when present; otherwise fall back to system python3.
+    const venvPy = process.platform === 'win32'
+      ? path.join(__dirname, '.venv', 'Scripts', 'python.exe')
+      : path.join(__dirname, '.venv', 'bin', 'python');
+    if (fs.existsSync(venvPy)) {
+      return venvPy;
+    }
+
+    return 'python3';
+  }
+
   async startFeatureSidecar(keywordEntries) {
     const { spawn } = require('child_process');
-    // Prefer configured interpreter; else local venv; else system python3
-    let python = (this.config && this.config.wakeWord && this.config.wakeWord.python) || null;
-    if (!python) {
-      const venvPy = process.platform === 'win32'
-        ? path.join(__dirname, '.venv', 'Scripts', 'python.exe')
-        : path.join(__dirname, '.venv', 'bin', 'python');
-      if (fs.existsSync(venvPy)) {
-        python = venvPy;
-      }
-    }
-    python = python || 'python3';
+    const python = this.resolveWakeWordPythonExecutable();
     const script = path.join(__dirname, 'feature_infer.py');
     const args = [script];
-    this.sidecar = spawn(python, args, { stdio: ['pipe', 'pipe', 'inherit'] });
+    const sidecar = spawn(python, args, { stdio: ['pipe', 'pipe', 'inherit'] });
+    this.sidecar = sidecar;
 
-    this.sidecar.on('error', (error) => {
+    sidecar.on('error', (error) => {
+      if (this.sidecar !== sidecar) {
+        return;
+      }
+
       const message = error?.message || String(error);
       console.warn(`Feature sidecar failed to start: ${message}`);
       this.sidecar = null;
@@ -1450,10 +1458,20 @@ class HomeBrainRemoteDevice {
       }
     });
 
-    this.sidecar.on('close', (code, signal) => {
+    sidecar.on('close', (code, signal) => {
+      const intentionallyStopped = this.stoppingSidecars.has(sidecar);
+      this.stoppingSidecars.delete(sidecar);
+      if (this.sidecar !== sidecar) {
+        return;
+      }
+
       const details = signal ? `signal ${signal}` : `code ${code}`;
-      console.warn(`Feature sidecar exited with ${details}`);
       this.sidecar = null;
+      if (intentionallyStopped) {
+        return;
+      }
+
+      console.warn(`Feature sidecar exited with ${details}`);
       this.updateWakeWordRuntime({
         lastError: {
           message: `Feature sidecar exited with ${details}`,
@@ -1479,7 +1497,11 @@ class HomeBrainRemoteDevice {
 
     // Read results
     this.sidecarStdoutBuffer = '';
-    this.sidecar.stdout.on('data', (chunk) => {
+    sidecar.stdout.on('data', (chunk) => {
+      if (this.sidecar !== sidecar) {
+        return;
+      }
+
       this.sidecarStdoutBuffer += chunk.toString();
       let idx;
       while ((idx = this.sidecarStdoutBuffer.indexOf('\n')) >= 0) {
@@ -1543,14 +1565,16 @@ class HomeBrainRemoteDevice {
       }
     });
 
-    this.sidecar.stdin.write(JSON.stringify(cfg) + '\n');
+    sidecar.stdin.write(JSON.stringify(cfg) + '\n');
   }
 
   stopFeatureSidecar() {
     try {
       if (this.sidecar) {
-        try { this.sidecar.stdin && this.sidecar.stdin.end(); } catch (_) {}
-        try { this.sidecar.kill('SIGTERM'); } catch (_) {}
+        const sidecar = this.sidecar;
+        this.stoppingSidecars.add(sidecar);
+        try { sidecar.stdin && sidecar.stdin.end(); } catch (_) {}
+        try { sidecar.kill('SIGTERM'); } catch (_) {}
       }
     } catch (_) {}
     this.sidecar = null;
