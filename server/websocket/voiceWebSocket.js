@@ -29,6 +29,47 @@ function redactMessageForLog(message = {}) {
   return redacted;
 }
 
+function sanitizeRemoteAudioConfig(value = {}) {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const next = {};
+  const copyString = (key) => {
+    if (typeof value[key] !== 'string') {
+      return;
+    }
+    const trimmed = value[key].trim();
+    if (trimmed) {
+      next[key] = trimmed.slice(0, 200);
+    }
+  };
+
+  for (const key of [
+    'recordingDevice',
+    'microphoneDevice',
+    'preferredInputName',
+    'playbackDevice',
+    'recorder',
+    'recordProgram',
+    'audioType'
+  ]) {
+    copyString(key);
+  }
+
+  if (typeof value.sampleRate === 'number' && Number.isFinite(value.sampleRate)) {
+    next.sampleRate = Math.max(8000, Math.min(48000, Math.round(value.sampleRate)));
+  }
+  if (typeof value.channels === 'number' && Number.isFinite(value.channels)) {
+    next.channels = Math.max(1, Math.min(2, Math.round(value.channels)));
+  }
+  if (typeof value.threshold === 'number' && Number.isFinite(value.threshold)) {
+    next.threshold = Math.max(0, Math.min(1, value.threshold));
+  }
+
+  return Object.keys(next).length > 0 ? next : null;
+}
+
 class VoiceWebSocketServer {
   constructor() {
     this.wss = null;
@@ -302,6 +343,7 @@ class VoiceWebSocketServer {
       ? device.settings.wakeWordDebounceMs
       : 1500;
     const vadSettings = device.settings?.wakeWordVad || {};
+    const audioSettings = sanitizeRemoteAudioConfig(device.settings?.audio);
 
     return {
       config: {
@@ -330,6 +372,7 @@ class VoiceWebSocketServer {
         },
         volume: device.volume,
         microphoneSensitivity: device.microphoneSensitivity,
+        ...(audioSettings ? { audio: audioSettings } : {}),
         settings: {
           audioSampleRate: 16000,
           audioChannels: 1,
