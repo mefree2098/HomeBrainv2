@@ -88,7 +88,7 @@ test('createSystemNotification sends APNs only for security critical notificatio
     const doc = {
       _id: `notification-${created.length + 1}`,
       ...update.$setOnInsert,
-      metadata: update.$set.metadata,
+      ...update.$set,
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -186,7 +186,7 @@ test('createSystemNotification does not resend APNs for an existing security eve
     if (storedNotification) {
       storedNotification = {
         ...storedNotification,
-        metadata: update.$set.metadata,
+        ...update.$set,
         updatedAt: new Date()
       };
       return { value: storedNotification, lastErrorObject: { updatedExisting: true } };
@@ -195,7 +195,7 @@ test('createSystemNotification does not resend APNs for an existing security eve
     storedNotification = {
       _id: 'notification-existing-event',
       ...update.$setOnInsert,
-      metadata: update.$set.metadata,
+      ...update.$set,
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -248,6 +248,75 @@ test('createSystemNotification does not resend APNs for an existing security eve
 
   assert.equal(sent.length, 1);
   assert.equal(sent[0].payload.eventKey, input.eventKey);
+});
+
+test('createSystemNotification serializes same-key upserts to avoid duplicate active notifications', async (t) => {
+  const originalFindOneAndUpdate = HomeBrainNotification.findOneAndUpdate;
+  const originalPublishSafe = eventStreamService.publishSafe;
+
+  let storedNotification = null;
+  let createCount = 0;
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const publishedEvents = [];
+
+  HomeBrainNotification.findOneAndUpdate = async (_filter, update) => {
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    const existingAtEntry = storedNotification;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    inFlight -= 1;
+
+    if (existingAtEntry) {
+      storedNotification = {
+        ...storedNotification,
+        ...update.$set,
+        updatedAt: new Date()
+      };
+      return { value: storedNotification, lastErrorObject: { updatedExisting: true } };
+    }
+
+    createCount += 1;
+    storedNotification = {
+      _id: `notification-${createCount}`,
+      ...update.$setOnInsert,
+      ...update.$set,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+    return { value: storedNotification, lastErrorObject: { updatedExisting: false } };
+  };
+  eventStreamService.publishSafe = (event) => {
+    publishedEvents.push(event);
+  };
+
+  t.after(() => {
+    HomeBrainNotification.findOneAndUpdate = originalFindOneAndUpdate;
+    eventStreamService.publishSafe = originalPublishSafe;
+  });
+
+  const input = {
+    userIds: ['507f1f77bcf86cd799439011'],
+    channel: 'normal',
+    severity: 'warning',
+    category: 'device',
+    eventType: 'device.offline',
+    eventKey: 'device-offline:normal:irrigation-zone-12',
+    source: 'device-health',
+    title: 'Device offline',
+    message: 'Zone 12 is offline.'
+  };
+
+  await Promise.all([
+    notificationService.createSystemNotification(input),
+    notificationService.createSystemNotification(input)
+  ]);
+
+  assert.equal(maxInFlight, 1);
+  assert.equal(createCount, 1);
+  assert.equal(publishedEvents.length, 1);
+  assert.equal(publishedEvents[0].type, 'notification.created');
+  assert.equal(storedNotification.eventKey, input.eventKey);
 });
 
 test('clearNotifications rejects invalid channels without clearing notifications', async (t) => {
@@ -414,7 +483,7 @@ test('recordSensorBatteryNotifications separates monitored security battery deat
     const doc = {
       _id: `notification-${created.length + 1}`,
       ...update.$setOnInsert,
-      metadata: update.$set.metadata,
+      ...update.$set,
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -522,7 +591,7 @@ test('recordOfflineDeviceNotifications marks configured security devices as secu
     const doc = {
       _id: `notification-${created.length + 1}`,
       ...update.$setOnInsert,
-      metadata: update.$set.metadata,
+      ...update.$set,
       createdAt: new Date(),
       updatedAt: new Date()
     };
@@ -598,7 +667,7 @@ test('recordOfflineDeviceNotifications resolves stale offline notifications when
     const doc = {
       _id: `notification-${created.length + 1}`,
       ...update.$setOnInsert,
-      metadata: update.$set.metadata,
+      ...update.$set,
       createdAt: new Date(),
       updatedAt: new Date()
     };
