@@ -219,6 +219,109 @@ const {
   serializeDoorLockLogRecord
 } = require('./directRadioHelpers');
 
+function mergeDirectRefreshUpdate(baseUpdate = {}, runtimeUpdate = {}) {
+  if (!runtimeUpdate || typeof runtimeUpdate !== 'object') {
+    return baseUpdate;
+  }
+
+  const baseProperties = baseUpdate.properties && typeof baseUpdate.properties === 'object'
+    ? baseUpdate.properties
+    : {};
+  const runtimeProperties = runtimeUpdate.properties && typeof runtimeUpdate.properties === 'object'
+    ? runtimeUpdate.properties
+    : {};
+
+  return {
+    ...baseUpdate,
+    ...runtimeUpdate,
+    properties: {
+      ...baseProperties,
+      ...runtimeProperties,
+      homebrainDirect: {
+        ...(baseProperties.homebrainDirect && typeof baseProperties.homebrainDirect === 'object'
+          ? baseProperties.homebrainDirect
+          : {}),
+        ...(runtimeProperties.homebrainDirect && typeof runtimeProperties.homebrainDirect === 'object'
+          ? runtimeProperties.homebrainDirect
+          : {})
+      },
+      directRadioState: {
+        ...(baseProperties.directRadioState && typeof baseProperties.directRadioState === 'object'
+          ? baseProperties.directRadioState
+          : {}),
+        ...(runtimeProperties.directRadioState && typeof runtimeProperties.directRadioState === 'object'
+          ? runtimeProperties.directRadioState
+          : {})
+      }
+    }
+  };
+}
+
+function normalizeActionToken(value) {
+  return trimString(value).toLowerCase().replace(/[\s_-]+/g, '');
+}
+
+function getZigbeeLiveReadRequiredFields(action) {
+  switch (normalizeActionToken(action)) {
+    case 'turnoff':
+    case 'off':
+      return ['status'];
+    case 'turnon':
+    case 'on':
+      return ['status'];
+    case 'setbrightness':
+      return ['status', 'brightness'];
+    default:
+      return [];
+  }
+}
+
+function getLiveReadFields(update = {}) {
+  return ['status', 'brightness', 'colorTemperature']
+    .filter((field) => Object.prototype.hasOwnProperty.call(update || {}, field));
+}
+
+function stripZigbeeCachedStateFields(update = {}, fields = []) {
+  if (!update || typeof update !== 'object' || fields.length === 0) {
+    return update;
+  }
+
+  const next = { ...update };
+  const properties = next.properties && typeof next.properties === 'object'
+    ? { ...next.properties }
+    : null;
+  const directState = properties?.directRadioState && typeof properties.directRadioState === 'object'
+    ? { ...properties.directRadioState }
+    : null;
+
+  fields.forEach((field) => {
+    delete next[field];
+    if (!directState) {
+      return;
+    }
+    if (field === 'status') {
+      delete directState.switch;
+      delete directState.state;
+    } else if (field === 'brightness') {
+      delete directState.brightness;
+    } else if (field === 'colorTemperature') {
+      delete directState.colorTemperatureK;
+      delete directState.colorTemperatureMired;
+    }
+  });
+
+  if (properties) {
+    if (directState && Object.keys(directState).length > 0) {
+      properties.directRadioState = directState;
+    } else if (directState) {
+      delete properties.directRadioState;
+    }
+    next.properties = properties;
+  }
+
+  return next;
+}
+
 module.exports = {
 publishLog(input = {}) {
     return directRadioEngineLogService.publish(input);
@@ -1015,7 +1118,39 @@ async refreshDirectDeviceState(device, options = {}) {
       return null;
     }
 
-    const directUpdate = applyContactOpenDebounce(device, normalized.update);
+    let refreshUpdate = normalized.update;
+    if (protocol === 'zigbee' && options?.liveRead === true && typeof this.readZigbeeLiveRuntimeState === 'function') {
+      const requiredLiveFields = getZigbeeLiveReadRequiredFields(options.action);
+      const liveRuntimeUpdate = await this.readZigbeeLiveRuntimeState(node, device, {
+        action: options.action,
+        reason: options.reason || 'refresh',
+        features: normalized.update?.properties?.directRadioFeatures
+      }).catch((error) => {
+        this.log('warn', 'zigbee', 'Zigbee live refresh failed', {
+          deviceId: device?._id?.toString?.() || null,
+          name: device?.name || null,
+          action: options.action || null,
+          error: error?.message || String(error || 'Unknown Zigbee refresh error')
+        });
+        return null;
+      });
+      const liveFields = getLiveReadFields(liveRuntimeUpdate);
+      const missingLiveFields = requiredLiveFields.filter((field) => !liveFields.includes(field));
+      if (missingLiveFields.length > 0) {
+        refreshUpdate = stripZigbeeCachedStateFields(refreshUpdate, missingLiveFields);
+      }
+      refreshUpdate = mergeDirectRefreshUpdate(refreshUpdate, liveRuntimeUpdate);
+      refreshUpdate.__homebrainLiveRead = {
+        attempted: true,
+        success: missingLiveFields.length === 0,
+        fields: liveFields,
+        missingFields: missingLiveFields,
+        action: normalizeActionToken(options.action),
+        reason: options.reason || 'refresh'
+      };
+    }
+
+    const directUpdate = applyContactOpenDebounce(device, refreshUpdate);
     const merged = mergeDirectDeviceUpdateForExisting(device, directUpdate);
     const commandState = options?.preserveCommandState && typeof options.preserveCommandState === 'object'
       ? options.preserveCommandState

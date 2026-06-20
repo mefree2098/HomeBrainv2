@@ -1210,6 +1210,162 @@ test('device_control scene group action skips members already in the requested s
   );
 });
 
+test('device_control scene group action refreshes native radio members before skipping', async (t) => {
+  const originalResolveGroupExecutionPlanByName = deviceGroupService.resolveGroupExecutionPlanByName;
+  const originalControlDevice = deviceService.controlDevice;
+  const originalRefreshDirectRadioDeviceState = deviceService.refreshDirectRadioDeviceState;
+  const controlledTargets = [];
+  const refreshedTargets = [];
+
+  t.after(() => {
+    deviceGroupService.resolveGroupExecutionPlanByName = originalResolveGroupExecutionPlanByName;
+    deviceService.controlDevice = originalControlDevice;
+    deviceService.refreshDirectRadioDeviceState = originalRefreshDirectRadioDeviceState;
+  });
+
+  const unverifiedDirectId = new mongoose.Types.ObjectId().toString();
+  const verifiedDirectOffId = new mongoose.Types.ObjectId().toString();
+  const localOffId = new mongoose.Types.ObjectId().toString();
+  const groupDevices = [
+    {
+      _id: unverifiedDirectId,
+      name: 'Unverified Theater Strip',
+      type: 'light',
+      room: 'Theater',
+      status: false,
+      properties: {
+        source: 'homebrain-zigbee',
+        homebrainDirect: {
+          protocol: 'zigbee',
+          ieeeAddr: '0xf0d1b80000000001'
+        },
+        directRadioState: {
+          switch: false
+        }
+      }
+    },
+    {
+      _id: verifiedDirectOffId,
+      name: 'Verified Off Theater Strip',
+      type: 'light',
+      room: 'Theater',
+      status: false,
+      properties: {
+        source: 'homebrain-zigbee',
+        homebrainDirect: {
+          protocol: 'zigbee',
+          ieeeAddr: '0xf0d1b80000000002'
+        },
+        directRadioState: {
+          switch: false
+        }
+      }
+    },
+    {
+      _id: localOffId,
+      name: 'Local Off Strip',
+      type: 'light',
+      room: 'Theater',
+      status: false,
+      properties: {
+        source: 'mock'
+      }
+    }
+  ];
+
+  deviceGroupService.resolveGroupExecutionPlanByName = async () => ({
+    rootGroup: {
+      _id: new mongoose.Types.ObjectId().toString(),
+      name: 'Stars Only Group',
+      normalizedName: 'stars only group'
+    },
+    devices: groupDevices,
+    units: [
+      {
+        groupId: new mongoose.Types.ObjectId().toString(),
+        groupName: 'Stars Only Group',
+        groupRecord: {
+          _id: new mongoose.Types.ObjectId().toString(),
+          name: 'Stars Only Group',
+          normalizedName: 'stars only group'
+        },
+        devices: groupDevices,
+        allowManagedInsteonGroup: false
+      }
+    ],
+    containsNestedGroups: false
+  });
+
+  deviceService.refreshDirectRadioDeviceState = async (device, options) => {
+    refreshedTargets.push({
+      deviceId: device._id,
+      action: options.action,
+      reason: options.reason,
+      liveRead: options.liveRead
+    });
+    if (device._id === verifiedDirectOffId) {
+      return {
+        ...device,
+        __homebrainLiveRead: {
+          attempted: true,
+          success: true,
+          fields: ['status'],
+          missingFields: []
+        }
+      };
+    }
+    return {
+      ...device,
+      __homebrainLiveRead: {
+        attempted: true,
+        success: false,
+        fields: [],
+        missingFields: ['status']
+      }
+    };
+  };
+
+  deviceService.controlDevice = async (target, action) => {
+    controlledTargets.push({ target, action });
+    return {
+      message: 'Device turned off',
+      details: {
+        source: 'homebrain-zigbee'
+      }
+    };
+  };
+
+  const result = await executeActionSequence([
+    {
+      type: 'device_control',
+      target: { kind: 'device_group', group: 'Stars Only Group' },
+      parameters: {
+        action: 'turn_off',
+        skipIfAlreadyInState: true
+      }
+    }
+  ], { context: { sceneId: new mongoose.Types.ObjectId().toString() } });
+
+  assert.deepEqual(
+    refreshedTargets.map((entry) => entry.deviceId).sort(),
+    [unverifiedDirectId, verifiedDirectOffId].sort()
+  );
+  assert.deepEqual(
+    refreshedTargets.map((entry) => ({
+      action: entry.action,
+      reason: entry.reason,
+      liveRead: entry.liveRead
+    })),
+    [
+      { action: 'turn_off', reason: 'scene_preflight', liveRead: true },
+      { action: 'turn_off', reason: 'scene_preflight', liveRead: true }
+    ]
+  );
+  assert.deepEqual(controlledTargets, [{ target: unverifiedDirectId, action: 'turn_off' }]);
+  assert.equal(result.status, 'success');
+  assert.equal(result.actionResults[0].details.skippedTargets, 2);
+});
+
 test('device_control action does not retry whole device groups by default', async (t) => {
   const originalResolveGroupExecutionPlanByName = deviceGroupService.resolveGroupExecutionPlanByName;
   const originalTryControlDeviceGroup = insteonService.tryControlDeviceGroup;

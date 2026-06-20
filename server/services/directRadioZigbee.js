@@ -1655,10 +1655,12 @@ async handleZigbeeDeviceChanged(zigbeeDevice, reason, options = {}) {
     return this.upsertDirectDevice(normalized.identity, normalized.update);
   },
 
-async readZigbeeOnOffState(endpoint, device) {
+async readZigbeeOnOffState(endpoint, device, options = {}) {
     if (!endpoint) {
       return undefined;
     }
+
+    const allowCachedFallback = options.allowCachedFallback !== false;
 
     if (typeof endpoint.read === 'function') {
       try {
@@ -1677,6 +1679,9 @@ async readZigbeeOnOffState(endpoint, device) {
           name: device?.name || null,
           error: error.message
         });
+        if (!allowCachedFallback) {
+          return undefined;
+        }
       }
     }
 
@@ -1687,10 +1692,12 @@ async readZigbeeOnOffState(endpoint, device) {
     ));
   },
 
-async readZigbeeBrightnessState(endpoint, device) {
+async readZigbeeBrightnessState(endpoint, device, options = {}) {
     if (!endpoint) {
       return undefined;
     }
+
+    const allowCachedFallback = options.allowCachedFallback !== false;
 
     if (typeof endpoint.read === 'function') {
       try {
@@ -1709,6 +1716,9 @@ async readZigbeeBrightnessState(endpoint, device) {
           name: device?.name || null,
           error: error.message
         });
+        if (!allowCachedFallback) {
+          return undefined;
+        }
       }
     }
 
@@ -1719,10 +1729,12 @@ async readZigbeeBrightnessState(endpoint, device) {
     ), 'level');
   },
 
-async readZigbeeColorTemperatureState(endpoint, device) {
+async readZigbeeColorTemperatureState(endpoint, device, options = {}) {
     if (!endpoint) {
       return undefined;
     }
+
+    const allowCachedFallback = options.allowCachedFallback !== false;
 
     if (typeof endpoint.read === 'function') {
       try {
@@ -1741,6 +1753,9 @@ async readZigbeeColorTemperatureState(endpoint, device) {
           name: device?.name || null,
           error: error.message
         });
+        if (!allowCachedFallback) {
+          return undefined;
+        }
       }
     }
 
@@ -1749,6 +1764,86 @@ async readZigbeeColorTemperatureState(endpoint, device) {
       ['lightingColorCtrl', 'lightingcolorctrl', 768],
       ['colorTemperature', 'colorTemperatureMireds', 'colorTemp', 'colortemp', 'color_temp']
     ));
+  },
+
+async readZigbeeLiveRuntimeState(zigbeeDevice, device, options = {}) {
+    const action = normalizeSourceText(options.action || '').replace(/[\s_-]+/g, '');
+    const features = new Set([
+      ...(Array.isArray(options.features) ? options.features : []),
+      ...(Array.isArray(device?.properties?.directRadioFeatures) ? device.properties.directRadioFeatures : [])
+    ].map(normalizeFeature).filter(Boolean));
+    const endpoint = readZigbeeEndpoint(zigbeeDevice, action || 'turnoff');
+    if (!endpoint) {
+      return null;
+    }
+
+    const shouldReadSwitch = !action
+      || ['turnon', 'turnoff', 'toggle', 'setbrightness', 'setcolor', 'setcolortemperature'].includes(action)
+      || features.has('switch')
+      || features.has('light')
+      || features.has('brightness')
+      || endpointHasZigbeeCluster(endpoint, ['genOnOff', 'genonoff', 6]);
+    const shouldReadBrightness = action
+      ? ['turnon', 'setbrightness'].includes(action)
+      : features.has('brightness') || endpointHasZigbeeCluster(endpoint, ['genLevelCtrl', 'genlevelctrl', 8]);
+    const shouldReadColorTemperature = action
+      ? action === 'setcolortemperature'
+      : features.has('colorTemperature') || endpointHasZigbeeCluster(endpoint, ['lightingColorCtrl', 'lightingcolorctrl', 768]);
+
+    const directState = {};
+    const update = {};
+
+    if (shouldReadSwitch) {
+      const observedStatus = await this.readZigbeeOnOffState(endpoint, device, { allowCachedFallback: false });
+      if (observedStatus !== undefined) {
+        update.status = observedStatus;
+        directState.switch = observedStatus;
+      }
+    }
+
+    if (shouldReadBrightness) {
+      const observedBrightness = await this.readZigbeeBrightnessState(endpoint, device, { allowCachedFallback: false });
+      if (observedBrightness !== undefined) {
+        update.brightness = observedBrightness;
+        directState.brightness = observedBrightness;
+      }
+    }
+
+    if (shouldReadColorTemperature) {
+      const observedColorTemperature = await this.readZigbeeColorTemperatureState(endpoint, device, { allowCachedFallback: false });
+      if (observedColorTemperature !== undefined) {
+        update.colorTemperature = observedColorTemperature;
+        directState.colorTemperatureK = observedColorTemperature;
+        directState.colorTemperatureMired = kelvinToMired(observedColorTemperature);
+      }
+    }
+
+    if (Object.keys(update).length === 0 && Object.keys(directState).length === 0) {
+      return null;
+    }
+
+    const now = new Date();
+    update.isOnline = true;
+    update.lastSeen = now;
+    update.properties = {
+      homebrainDirect: {
+        lastLiveReadAt: now.toISOString(),
+        lastLiveReadReason: options.reason || 'refresh',
+        lastLiveReadAction: action || null
+      },
+      directRadioState: directState
+    };
+
+    this.log('info', 'zigbee', 'Zigbee live runtime read completed', {
+      deviceId: device?._id?.toString?.() || null,
+      name: device?.name || null,
+      action: action || null,
+      observedStatus: Object.prototype.hasOwnProperty.call(update, 'status') ? update.status : null,
+      observedBrightness: Object.prototype.hasOwnProperty.call(update, 'brightness') ? update.brightness : null,
+      observedColorTemperature: Object.prototype.hasOwnProperty.call(update, 'colorTemperature') ? update.colorTemperature : null
+    });
+
+    return update;
   },
 
 async controlZigbeeDevice(device, normalizedAction, commandValue, updateData = {}) {

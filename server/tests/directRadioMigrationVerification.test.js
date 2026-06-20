@@ -1924,6 +1924,120 @@ test('direct radio post-command refresh keeps command state when Zigbee has no s
   assert.equal(refreshed.colorTemperature, 4000);
 });
 
+test('direct radio live Zigbee refresh uses read response instead of cached on/off state', async () => {
+  const service = createService();
+  const calls = [];
+  const endpoint = {
+    ID: 1,
+    inputClusters: [0, 3, 4, 5, 6, 8],
+    getClusterAttributeValue(cluster, attribute) {
+      if (cluster === 'genOnOff' && attribute === 'onOff') {
+        return 0;
+      }
+      if (cluster === 'genLevelCtrl' && attribute === 'currentLevel') {
+        return 254;
+      }
+      return undefined;
+    },
+    async read(cluster, attributes) {
+      calls.push({ cluster, attributes });
+      return { onOff: 1 };
+    }
+  };
+  service.getDirectNodeForDevice = () => ({
+    ieeeAddr: '0x5c0272fffeadf493',
+    modelID: 'SP 224',
+    manufacturerName: 'innr',
+    interviewCompleted: true,
+    endpoints: [endpoint]
+  });
+
+  const refreshed = await service.refreshDirectDeviceState({
+    name: 'Theater Strip',
+    type: 'light',
+    room: 'Theater',
+    status: false,
+    brightness: 100,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x5c0272fffeadf493'
+      },
+      directRadioState: {
+        switch: false,
+        brightness: 100
+      },
+      directRadioFeatures: ['brightness', 'switch']
+    }
+  }, {
+    liveRead: true,
+    action: 'turn_off',
+    reason: 'scene_preflight'
+  });
+
+  assert.equal(refreshed.status, true);
+  assert.equal(refreshed.properties.directRadioState.switch, true);
+  assert.equal(refreshed.__homebrainLiveRead.success, true);
+  assert.deepEqual(refreshed.__homebrainLiveRead.fields, ['status']);
+  assert.deepEqual(calls, [
+    { cluster: 'genOnOff', attributes: ['onOff'] }
+  ]);
+});
+
+test('direct radio live Zigbee refresh does not trust cached on/off state when read fails', async () => {
+  const service = createService();
+  const endpoint = {
+    ID: 1,
+    inputClusters: [0, 3, 4, 5, 6],
+    getClusterAttributeValue(cluster, attribute) {
+      if (cluster === 'genOnOff' && attribute === 'onOff') {
+        return 0;
+      }
+      return undefined;
+    },
+    async read() {
+      throw new Error('read failed');
+    }
+  };
+  service.getDirectNodeForDevice = () => ({
+    ieeeAddr: '0x5c0272fffeadf493',
+    modelID: 'SP 224',
+    manufacturerName: 'innr',
+    interviewCompleted: true,
+    endpoints: [endpoint]
+  });
+
+  const refreshed = await service.refreshDirectDeviceState({
+    name: 'Theater Strip',
+    type: 'light',
+    room: 'Theater',
+    status: true,
+    brightness: 100,
+    properties: {
+      source: 'homebrain-zigbee',
+      homebrainDirect: {
+        protocol: 'zigbee',
+        ieeeAddr: '0x5c0272fffeadf493'
+      },
+      directRadioState: {
+        switch: true,
+        brightness: 100
+      },
+      directRadioFeatures: ['brightness', 'switch']
+    }
+  }, {
+    liveRead: true,
+    action: 'turn_off',
+    reason: 'scene_preflight'
+  });
+
+  assert.equal(refreshed.status, true);
+  assert.equal(refreshed.properties.directRadioState.switch, true);
+  assert.equal(refreshed.__homebrainLiveRead.success, false);
+  assert.deepEqual(refreshed.__homebrainLiveRead.missingFields, ['status']);
+});
+
 test('active Zigbee migration ignores existing baseline device chatter', async () => {
   const service = createService();
   const migration = {

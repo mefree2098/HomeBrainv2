@@ -1040,6 +1040,70 @@ class DeviceService {
     return deletedDeviceResult;
   }
 
+  async refreshDirectRadioDeviceState(deviceOrId, options = {}) {
+    const deviceId = normalizeIdString(deviceOrId);
+    let device = deviceOrId && typeof deviceOrId === 'object'
+      ? deviceOrId
+      : null;
+
+    if (!device) {
+      device = await Device.findById(deviceId);
+    }
+
+    if (!device) {
+      throw new Error('Device not found');
+    }
+
+    if (!this.isDirectRadioDevice(device)) {
+      return device;
+    }
+
+    const directRadioService = getDirectRadioService();
+    if (options.ensureStarted === true && typeof directRadioService.start === 'function') {
+      await directRadioService.start();
+    }
+
+    const remoteUpdate = await directRadioService.refreshDirectDeviceState(device, {
+      liveRead: options.liveRead === true,
+      action: options.action,
+      reason: options.reason || 'device_state_refresh'
+    });
+
+    if (!remoteUpdate) {
+      return device;
+    }
+
+    const targetId = normalizeIdString(device?._id || deviceId);
+    const updatedDevice = await Device.findByIdAndUpdate(
+      targetId,
+      remoteUpdate,
+      { returnDocument: 'after', runValidators: true }
+    );
+
+    if (updatedDevice) {
+      if (remoteUpdate.__homebrainLiveRead) {
+        updatedDevice.__homebrainLiveRead = remoteUpdate.__homebrainLiveRead;
+      }
+
+      try {
+        await deviceEnergySampleService.recordSamplesForDevices([updatedDevice]);
+      } catch (error) {
+        console.warn(`DeviceService: Failed to persist device energy sample after direct radio refresh: ${error.message}`);
+      }
+
+      const payload = deviceUpdateEmitter.normalizeDevices([updatedDevice]);
+      if (payload.length > 0) {
+        deviceUpdateEmitter.emit('devices:update', payload);
+      }
+    }
+
+    if (remoteUpdate.__homebrainLiveRead && device && typeof device === 'object') {
+      device.__homebrainLiveRead = remoteUpdate.__homebrainLiveRead;
+    }
+
+    return updatedDevice || device;
+  }
+
   /**
    * Control a device (toggle, set brightness, temperature, etc.)
    * @param {string} deviceId - Device ID
