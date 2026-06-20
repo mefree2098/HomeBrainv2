@@ -4,6 +4,27 @@ const whisperService = require('../services/whisperService');
 const { requireAdmin } = require('./middlewares/auth');
 
 const auth = requireAdmin();
+const ALLOWED_START_MODELS = new Set(['tiny', 'base', 'small', 'small.en', 'medium']);
+const ALLOWED_START_DEVICES = new Set(['auto', 'default', 'cpu', 'cuda']);
+const ALLOWED_START_COMPUTE_TYPES = new Set(['auto', 'default', 'float16', 'int8_float16', 'float32', 'int8']);
+
+function normalizeAllowedString(value, allowedValues, fieldName) {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+  if (typeof value !== 'string') {
+    const error = new Error(`${fieldName} must be a string`);
+    error.status = 400;
+    throw error;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!allowedValues.has(normalized)) {
+    const error = new Error(`${fieldName} is not supported`);
+    error.status = 400;
+    throw error;
+  }
+  return normalized;
+}
 
 router.get('/status', auth, async (req, res) => {
   try {
@@ -30,12 +51,22 @@ router.post('/install', auth, async (req, res) => {
 router.post('/service/start', auth, async (req, res) => {
   try {
     console.log('POST /api/whisper/service/start - Starting Whisper service');
-    const { model } = req.body || {};
-    const result = await whisperService.startService(model);
+    const { model, devicePreference, computePreference } = req.body || {};
+    const normalizedModel = normalizeAllowedString(model, ALLOWED_START_MODELS, 'model');
+    const normalizedDevicePreference = normalizeAllowedString(devicePreference, ALLOWED_START_DEVICES, 'devicePreference');
+    const normalizedComputePreference = normalizeAllowedString(computePreference, ALLOWED_START_COMPUTE_TYPES, 'computePreference');
+    const options = {};
+    if (normalizedDevicePreference) {
+      options.devicePreference = normalizedDevicePreference;
+    }
+    if (normalizedComputePreference) {
+      options.computePreference = normalizedComputePreference;
+    }
+    const result = await whisperService.startService(normalizedModel || undefined, options);
     res.json(result);
   } catch (error) {
     console.error('Error starting Whisper service:', error.message);
-    res.status(500).json({ error: error.message || 'Failed to start Whisper service' });
+    res.status(error.status || 500).json({ error: error.message || 'Failed to start Whisper service' });
   }
 });
 
