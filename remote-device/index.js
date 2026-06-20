@@ -32,6 +32,30 @@ const WAKE_WORD_USER_AGENT = `HomeBrain-Remote/${PACKAGE_VERSION}`;
 const VAD_BASE_SAMPLE_RATE = 16000;
 const VAD_FRAME_SAMPLES = Math.round((DEFAULT_VAD_WINDOW_MS / 1000) * VAD_BASE_SAMPLE_RATE);
 const VAD_FRAME_BYTES = VAD_FRAME_SAMPLES * PCM_SAMPLE_WIDTH_BYTES;
+const FEATURE_SIDECAR_LAUNCH_COMMAND = [
+  'set -eu',
+  'feature_script="$1"',
+  'run_python() {',
+  '    candidate="$1"',
+  '    if [ -n "$candidate" ] && [ -x "$candidate" ]; then',
+  '        exec "$candidate" "$feature_script"',
+  '    fi',
+  '}',
+  'configured_python="${HOMEBRAIN_WAKEWORD_PYTHON:-}"',
+  'if [ -n "$configured_python" ]; then',
+  '    case "$configured_python" in',
+  '        python|python3|python3.10|python3.11|python3.12|python3.13)',
+  '            exec "$configured_python" "$feature_script"',
+  '            ;;',
+  '        /*)',
+  '            run_python "$configured_python"',
+  '            ;;',
+  '    esac',
+  'fi',
+  'script_dir=$(CDPATH= cd -- "$(dirname -- "$feature_script")" && pwd)',
+  'run_python "$script_dir/.venv/bin/python"',
+  'exec python3 "$feature_script"'
+].join('\n');
 
 const clamp = (value, min, max) => Math.min(Math.max(Number(value) || 0, min), max);
 const slugify = (value) => {
@@ -1418,24 +1442,24 @@ class HomeBrainRemoteDevice {
   }
 
   // --- Feature sidecar integration ---
-  resolveWakeWordPythonExecutable() {
-    // Use the bundled venv when present; otherwise fall back to system python3.
-    const venvPy = process.platform === 'win32'
-      ? path.join(__dirname, '.venv', 'Scripts', 'python.exe')
-      : path.join(__dirname, '.venv', 'bin', 'python');
-    if (fs.existsSync(venvPy)) {
-      return venvPy;
+  buildFeatureSidecarLaunchEnvironment() {
+    const env = { ...process.env };
+    const configuredPython = String(this.config?.wakeWord?.python || '').trim();
+    if (configuredPython) {
+      env.HOMEBRAIN_WAKEWORD_PYTHON = configuredPython;
+    } else {
+      delete env.HOMEBRAIN_WAKEWORD_PYTHON;
     }
-
-    return 'python3';
+    return env;
   }
 
   async startFeatureSidecar(keywordEntries) {
     const { spawn } = require('child_process');
-    const python = this.resolveWakeWordPythonExecutable();
-    const script = path.join(__dirname, 'feature_infer.py');
-    const args = [script];
-    const sidecar = spawn(python, args, { stdio: ['pipe', 'pipe', 'inherit'] });
+    const featureScript = path.join(__dirname, 'feature_infer.py');
+    const sidecar = spawn('sh', ['-c', FEATURE_SIDECAR_LAUNCH_COMMAND, 'homebrain-feature-sidecar', featureScript], {
+      stdio: ['pipe', 'pipe', 'inherit'],
+      env: this.buildFeatureSidecarLaunchEnvironment()
+    });
     this.sidecar = sidecar;
 
     sidecar.on('error', (error) => {
