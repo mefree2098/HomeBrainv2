@@ -11,7 +11,7 @@ const { hideBin } = require('yargs/helpers');
 const dgram = require('dgram');
 const os = require('os');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const packageInfo = require('./package.json');
 let WebRtcVad = null;
 try {
@@ -656,6 +656,7 @@ class HomeBrainRemoteDevice {
     }
 
     let restartNeeded = false;
+    const previousRecordingSignature = this.getRecordingOptionsSignature();
 
     if (config.wakeWord) {
       this.config.wakeWord = {
@@ -667,6 +668,21 @@ class HomeBrainRemoteDevice {
 
     if (Array.isArray(config.wakeWords)) {
       this.config.wakeWords = config.wakeWords;
+    }
+
+    if (config.audio && typeof config.audio === 'object') {
+      const audioUpdate = this.sanitizeAudioConfig(config.audio);
+      if (Object.keys(audioUpdate).length > 0) {
+        this.config.audio = {
+          ...this.config.audio,
+          ...audioUpdate
+        };
+        if (typeof audioUpdate.sampleRate === 'number') {
+          this.wakeWordSampleRate = audioUpdate.sampleRate;
+        }
+        restartNeeded = restartNeeded || previousRecordingSignature !== this.getRecordingOptionsSignature();
+        console.log(`Audio config updated: recorder=${this.config.audio.recorder || this.config.audio.recordProgram || 'arecord'}, recordingDevice=${this.config.audio.recordingDevice || this.config.audio.microphoneDevice || 'default'}`);
+      }
     }
 
     const previousNamesSignature = JSON.stringify(this.wakeWordDisplayNames);
@@ -734,10 +750,200 @@ class HomeBrainRemoteDevice {
     );
   }
 
+  sanitizeAudioConfig(config = {}) {
+    const next = {};
+    const copyString = (key) => {
+      if (typeof config[key] !== 'string') {
+        return;
+      }
+      const value = config[key].trim();
+      if (value) {
+        next[key] = value.slice(0, 200);
+      }
+    };
+
+    for (const key of [
+      'recordingDevice',
+      'microphoneDevice',
+      'preferredInputName',
+      'playbackDevice',
+      'recorder',
+      'recordProgram',
+      'audioType'
+    ]) {
+      copyString(key);
+    }
+
+    if (typeof config.sampleRate === 'number' && Number.isFinite(config.sampleRate)) {
+      next.sampleRate = Math.max(8000, Math.min(48000, Math.round(config.sampleRate)));
+    }
+    if (typeof config.channels === 'number' && Number.isFinite(config.channels)) {
+      next.channels = Math.max(1, Math.min(2, Math.round(config.channels)));
+    }
+    if (typeof config.threshold === 'number' && Number.isFinite(config.threshold)) {
+      next.threshold = clamp(config.threshold, 0, 1);
+    }
+
+    return next;
+  }
+
+  getRecordingOptionsSignature() {
+    const options = this.buildRecordingOptions();
+    return JSON.stringify({
+      sampleRate: options.sampleRate,
+      channels: options.channels,
+      recorder: options.recorder,
+      audioType: options.audioType,
+      device: options.device
+    });
+  }
+
+  isAutoRecordingDevice(device) {
+    const value = (device || '').toString().trim().toLowerCase();
+    return value === 'auto' || value === 'jabra' || value === 'usb';
+  }
+
+  parseAlsaCaptureDevices(output = '') {
+    const isDigits = (text) => Boolean(text) && [...text].every((char) => char >= '0' && char <= '9');
+    const parseBracketedSegment = (segment = '') => {
+      const openIndex = segment.indexOf('[');
+      const closeIndex = openIndex >= 0 ? segment.indexOf(']', openIndex + 1) : -1;
+      if (openIndex >= 0 && closeIndex > openIndex) {
+        return {
+          id: segment.slice(0, openIndex).trim(),
+          name: segment.slice(openIndex + 1, closeIndex).trim()
+        };
+      }
+      return { id: segment.trim(), name: '' };
+    };
+
+    return output
+      .replaceAll('\r', '')
+      .split('\n')
+      .map((rawLine) => {
+        const line = rawLine.trim();
+        if (!line.toLowerCase().startsWith('card ')) {
+          return null;
+        }
+
+        const cardSeparator = line.indexOf(':', 5);
+        if (cardSeparator < 0) {
+          return null;
+        }
+
+        const cardNumber = line.slice(5, cardSeparator).trim();
+        if (!isDigits(cardNumber)) {
+          return null;
+        }
+
+        const afterCard = line.slice(cardSeparator + 1).trim();
+        const deviceMarker = afterCard.indexOf(', device ');
+        if (deviceMarker < 0) {
+          return null;
+        }
+
+        const cardSegment = afterCard.slice(0, deviceMarker).trim();
+        const afterDevice = afterCard.slice(deviceMarker + ', device '.length).trim();
+        const deviceSeparator = afterDevice.indexOf(':');
+        if (deviceSeparator < 0) {
+          return null;
+        }
+
+        const deviceNumber = afterDevice.slice(0, deviceSeparator).trim();
+        if (!isDigits(deviceNumber)) {
+          return null;
+        }
+
+        const deviceSegment = afterDevice.slice(deviceSeparator + 1).trim();
+        const { id: cardId, name: cardName } = parseBracketedSegment(cardSegment);
+        const { id: deviceName, name: deviceDescription } = parseBracketedSegment(deviceSegment);
+        const label = [cardId, cardName, deviceName, deviceDescription]
+          .filter(Boolean)
+          .join(' ');
+        return {
+          cardNumber,
+          cardId,
+          cardName,
+          deviceNumber,
+          deviceName: deviceName.trim(),
+          deviceDescription: deviceDescription.trim(),
+          label,
+          line: line.trim(),
+          device: `plughw:${cardNumber},${deviceNumber}`
+        };
+      })
+      .filter(Boolean);
+  }
+
+  selectAlsaCaptureDevice(devices = [], preferredName = '') {
+    if (!Array.isArray(devices) || devices.length === 0) {
+      return null;
+    }
+
+    const preferred = preferredName.toString().trim().toLowerCase();
+    const scored = devices.map((device, index) => {
+      const text = `${device.label || ''} ${device.line || ''}`.toLowerCase();
+      let score = 0;
+      if (preferred && text.includes(preferred)) score += 100;
+      if (text.includes('jabra')) score += 80;
+      if (/\busb\b/.test(text)) score += 25;
+      if (/speakerphone|speak|microphone|\bmic\b/.test(text)) score += 10;
+      if (/loopback|hdmi/.test(text)) score -= 50;
+      return { device, index, score };
+    });
+
+    scored.sort((a, b) => (b.score - a.score) || (a.index - b.index));
+    return scored[0].device;
+  }
+
+  detectPreferredCaptureDevice(preferredName = '') {
+    const result = spawnSync('arecord', ['-l'], {
+      encoding: 'utf8',
+      timeout: 2000
+    });
+
+    if (result.error) {
+      console.warn(`Unable to list ALSA capture devices: ${result.error.message}`);
+      return null;
+    }
+
+    const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
+    const devices = this.parseAlsaCaptureDevices(output);
+    const selected = this.selectAlsaCaptureDevice(devices, preferredName);
+    if (selected) {
+      console.log(`Selected ALSA capture device ${selected.device} (${selected.label})`);
+    } else {
+      console.warn('No ALSA capture devices were discovered by arecord -l');
+    }
+    return selected;
+  }
+
+  resolveRecordingDevice(audioConfig = {}) {
+    const configuredDevice = (audioConfig.recordingDevice || audioConfig.microphoneDevice || 'default').toString().trim() || 'default';
+    if (!this.isAutoRecordingDevice(configuredDevice)) {
+      return configuredDevice;
+    }
+
+    const preferredName = audioConfig.preferredInputName || (configuredDevice === 'auto' ? '' : configuredDevice);
+    const detected = this.detectPreferredCaptureDevice(preferredName);
+    if (detected?.device) {
+      this.config.audio = {
+        ...this.config.audio,
+        resolvedRecordingDevice: detected.device,
+        resolvedRecordingDeviceName: detected.label
+      };
+      return detected.device;
+    }
+
+    console.warn('Falling back to ALSA default capture device after auto selection failed.');
+    return 'default';
+  }
+
   buildRecordingOptions() {
     const audioConfig = this.config.audio || {};
     const recorderName = audioConfig.recorder || audioConfig.recordProgram || 'arecord';
     const audioType = audioConfig.audioType || 'raw';
+    const device = this.resolveRecordingDevice(audioConfig);
 
     return {
       sampleRate: this.wakeWordSampleRate,
@@ -748,7 +954,7 @@ class HomeBrainRemoteDevice {
       recorder: recorderName,
       recordProgram: recorderName,
       audioType,
-      device: audioConfig.recordingDevice || audioConfig.microphoneDevice || 'default'
+      device
     };
   }
 

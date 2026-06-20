@@ -86,6 +86,72 @@ test('buildRecordingOptions preserves explicit audio type overrides', () => {
   assert.equal(device.buildRecordingOptions().audioType, 'wav');
 });
 
+test('buildRecordingOptions auto-selects a preferred ALSA capture device', () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: {
+      sampleRate: 16000,
+      recordingDevice: 'auto',
+      preferredInputName: 'Jabra'
+    },
+    wakeWord: {}
+  });
+
+  device.detectPreferredCaptureDevice = (preferredName) => {
+    assert.equal(preferredName, 'Jabra');
+    return {
+      device: 'plughw:2,0',
+      label: 'Jabra Speak USB Audio'
+    };
+  };
+
+  assert.equal(device.buildRecordingOptions().device, 'plughw:2,0');
+  assert.equal(device.config.audio.resolvedRecordingDevice, 'plughw:2,0');
+});
+
+test('selectAlsaCaptureDevice prefers Jabra USB capture devices', () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: {},
+    wakeWord: {}
+  });
+
+  const devices = device.parseAlsaCaptureDevices([
+    'card 0: vc4hdmi [vc4-hdmi], device 0: MAI PCM i2s-hifi-0 [MAI PCM i2s-hifi-0]',
+    'card 2: Jabra [Jabra SPEAK 510 USB], device 0: USB Audio [USB Audio]'
+  ].join('\n'));
+
+  const selected = device.selectAlsaCaptureDevice(devices, 'Jabra');
+
+  assert.equal(selected.device, 'plughw:2,0');
+  assert.match(selected.label, /Jabra/);
+});
+
+test('applyConfigUpdate merges pushed audio config and restarts the detector', async () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: {
+      sampleRate: 16000,
+      recordingDevice: 'default'
+    },
+    wakeWord: {}
+  });
+
+  device.syncWakeWordAssetsFromConfig = async () => false;
+  device.detectPreferredCaptureDevice = () => ({
+    device: 'plughw:2,0',
+    label: 'Jabra Speak USB Audio'
+  });
+
+  const restartNeeded = await device.applyConfigUpdate({
+    audio: {
+      recordingDevice: 'auto',
+      preferredInputName: 'Jabra'
+    }
+  });
+
+  assert.equal(restartNeeded, true);
+  assert.equal(device.config.audio.recordingDevice, 'auto');
+  assert.equal(device.buildRecordingOptions().device, 'plughw:2,0');
+});
+
 test('isWakeWordDetectorActive treats the feature sidecar as an active detector', () => {
   const device = new HomeBrainRemoteDevice({
     audio: {},

@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const WebSocket = require('ws');
 
 const VoiceDevice = require('../models/VoiceDevice');
+const WakeWordModel = require('../models/WakeWordModel');
 const VoiceWebSocketServer = require('../websocket/voiceWebSocket');
 
 class MockWebSocket extends EventEmitter {
@@ -120,4 +121,42 @@ test('voice websocket ignores stale socket disconnects for an active device conn
 
   assert.equal(voiceWs.deviceConnections.has(deviceId), false);
   assert.equal(updateCount, 1);
+});
+
+test('buildWakeWordConfig includes sanitized remote audio settings', async (t) => {
+  const originalFind = WakeWordModel.find;
+
+  t.after(() => {
+    WakeWordModel.find = originalFind;
+  });
+
+  WakeWordModel.find = async () => [];
+
+  const voiceWs = new VoiceWebSocketServer();
+  const device = createDevice();
+  device.settings.audio = {
+    recordingDevice: ' auto ',
+    preferredInputName: ' Jabra ',
+    recorder: 'arecord',
+    audioType: 'raw',
+    sampleRate: 16000,
+    channels: 1,
+    threshold: 0.25,
+    ignoredKey: 'ignored'
+  };
+
+  const { config } = await voiceWs.buildWakeWordConfig(device, { deviceToken: 'token' }, {
+    platform: 'linux',
+    arch: 'arm64'
+  });
+
+  assert.deepEqual(config.audio, {
+    recordingDevice: 'auto',
+    preferredInputName: 'Jabra',
+    recorder: 'arecord',
+    audioType: 'raw',
+    sampleRate: 16000,
+    channels: 1,
+    threshold: 0.25
+  });
 });
