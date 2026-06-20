@@ -187,6 +187,7 @@ class HomeBrainRemoteDevice {
     this.sidecarStdoutBuffer = '';
     this.sidecarStderrBuffer = '';
     this.recordingStderrBuffer = '';
+    this.captureDeviceProbeCache = null;
 
     this.configDirectory = path.dirname(path.resolve(argv.config || './config.json'));
     this.packageVersion = PACKAGE_VERSION;
@@ -875,9 +876,19 @@ class HomeBrainRemoteDevice {
       .filter(Boolean);
   }
 
-  selectAlsaCaptureDevice(devices = [], preferredName = '') {
+  isSafeAlsaIdentifier(value = '') {
+    return Boolean(value) && [...value].every((char) => (
+      (char >= 'a' && char <= 'z')
+      || (char >= 'A' && char <= 'Z')
+      || (char >= '0' && char <= '9')
+      || char === '_'
+      || char === '-'
+    ));
+  }
+
+  rankAlsaCaptureDevices(devices = [], preferredName = '') {
     if (!Array.isArray(devices) || devices.length === 0) {
-      return null;
+      return [];
     }
 
     const preferred = preferredName.toString().trim().toLowerCase();
@@ -893,28 +904,185 @@ class HomeBrainRemoteDevice {
     });
 
     scored.sort((a, b) => (b.score - a.score) || (a.index - b.index));
-    return scored[0].device;
+    return scored.map((entry) => entry.device);
   }
 
-  detectPreferredCaptureDevice(preferredName = '') {
+  selectAlsaCaptureDevice(devices = [], preferredName = '') {
+    return this.rankAlsaCaptureDevices(devices, preferredName)[0] || null;
+  }
+
+  buildCaptureDeviceCandidates(devices = []) {
+    const candidates = [];
+    const seen = new Set();
+    const push = (source, device, kind) => {
+      if (!device || seen.has(device)) {
+        return;
+      }
+      seen.add(device);
+      candidates.push({
+        device,
+        kind,
+        label: source.label,
+        source
+      });
+    };
+
+    for (const source of devices) {
+      if (!source || !source.deviceNumber) {
+        continue;
+      }
+      const hasCardId = this.isSafeAlsaIdentifier(source.cardId);
+      if (hasCardId) {
+        push(source, `plughw:CARD=${source.cardId},DEV=${source.deviceNumber}`, 'plughw-card');
+        push(source, `sysdefault:CARD=${source.cardId}`, 'sysdefault-card');
+        push(source, `dsnoop:CARD=${source.cardId},DEV=${source.deviceNumber}`, 'dsnoop-card');
+      }
+      if (source.cardNumber) {
+        push(source, `plughw:${source.cardNumber},${source.deviceNumber}`, 'plughw-number');
+      }
+      if (hasCardId) {
+        push(source, `hw:CARD=${source.cardId},DEV=${source.deviceNumber}`, 'hw-card');
+      }
+      if (source.cardNumber) {
+        push(source, `hw:${source.cardNumber},${source.deviceNumber}`, 'hw-number');
+      }
+    }
+
+    push({ label: 'ALSA default' }, 'default', 'default');
+    return candidates;
+  }
+
+  listAlsaCaptureDevices() {
     const result = spawnSync('arecord', ['-l'], {
       encoding: 'utf8',
       timeout: 2000
     });
 
     if (result.error) {
-      console.warn(`Unable to list ALSA capture devices: ${result.error.message}`);
-      return null;
+      return {
+        devices: [],
+        error: result.error.message,
+        output: ''
+      };
     }
 
     const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
-    const devices = this.parseAlsaCaptureDevices(output);
-    const selected = this.selectAlsaCaptureDevice(devices, preferredName);
-    if (selected) {
-      console.log(`Selected ALSA capture device ${selected.device} (${selected.label})`);
-    } else {
-      console.warn('No ALSA capture devices were discovered by arecord -l');
+    return {
+      devices: this.parseAlsaCaptureDevices(output),
+      error: result.status === 0 ? null : (result.stderr || `arecord -l exited with code ${result.status}`),
+      output
+    };
+  }
+
+  probeCaptureDevice(device, audioConfig = {}) {
+    const sampleRate = String(audioConfig.sampleRate || this.wakeWordSampleRate || 16000);
+    const channels = String(audioConfig.channels || 1);
+    const result = spawnSync('arecord', [
+      '-D', device,
+      '-q',
+      '-r', sampleRate,
+      '-c', channels,
+      '-t', 'raw',
+      '-f', 'S16_LE',
+      '-d', '1',
+      '/dev/null'
+    ], {
+      encoding: 'utf8',
+      timeout: 3500,
+      maxBuffer: 64 * 1024
+    });
+
+    const stderr = [result.stderr, result.stdout]
+      .filter(Boolean)
+      .join('\n')
+      .trim()
+      .slice(-500);
+
+    return {
+      ok: !result.error && result.status === 0,
+      exit: result.error ? result.error.message : (result.signal ? `signal ${result.signal}` : `code ${result.status}`),
+      stderr: stderr || null
+    };
+  }
+
+  detectPreferredCaptureDevice(preferredName = '', audioConfig = {}) {
+    const cacheKey = JSON.stringify({
+      preferredName,
+      sampleRate: audioConfig.sampleRate || this.wakeWordSampleRate || 16000,
+      channels: audioConfig.channels || 1
+    });
+    if (this.captureDeviceProbeCache?.key === cacheKey) {
+      return this.captureDeviceProbeCache.selected;
     }
+
+    const listed = this.listAlsaCaptureDevices();
+    if (listed.error && listed.devices.length === 0) {
+      console.warn(`Unable to list ALSA capture devices: ${listed.error}`);
+      this.config.audio.lastCaptureProbe = {
+        at: new Date().toISOString(),
+        error: listed.error,
+        attempts: []
+      };
+      return null;
+    }
+
+    const rankedDevices = this.rankAlsaCaptureDevices(listed.devices, preferredName);
+    const candidates = this.buildCaptureDeviceCandidates(rankedDevices).slice(0, 16);
+    if (!candidates.length) {
+      console.warn('No ALSA capture devices were discovered by arecord -l');
+      this.config.audio.lastCaptureProbe = {
+        at: new Date().toISOString(),
+        error: 'No ALSA capture devices were discovered by arecord -l',
+        attempts: []
+      };
+      return null;
+    }
+
+    const attempts = [];
+    for (const candidate of candidates) {
+      const probe = this.probeCaptureDevice(candidate.device, audioConfig);
+      const attempt = {
+        device: candidate.device,
+        kind: candidate.kind,
+        label: candidate.label,
+        ok: probe.ok,
+        exit: probe.exit,
+        stderr: probe.stderr
+      };
+      attempts.push(attempt);
+      if (probe.ok) {
+        const selected = {
+          ...candidate.source,
+          device: candidate.device,
+          label: candidate.label
+        };
+        this.config.audio.lastCaptureProbe = {
+          at: new Date().toISOString(),
+          selected: candidate.device,
+          selectedLabel: candidate.label,
+          attempts
+        };
+        this.captureDeviceProbeCache = { key: cacheKey, selected };
+        console.log(`Selected ALSA capture device ${candidate.device} (${candidate.label}) after probe`);
+        return selected;
+      }
+    }
+
+    const fallback = candidates[0];
+    const selected = fallback ? {
+      ...fallback.source,
+      device: fallback.device,
+      label: fallback.label
+    } : null;
+    this.config.audio.lastCaptureProbe = {
+      at: new Date().toISOString(),
+      selected: selected?.device || null,
+      selectedLabel: selected?.label || null,
+      error: 'No ALSA capture candidate completed a one-second probe',
+      attempts
+    };
+    this.captureDeviceProbeCache = { key: cacheKey, selected };
+    console.warn('No ALSA capture candidate completed a one-second probe; using the highest-ranked candidate for telemetry.');
     return selected;
   }
 
@@ -925,7 +1093,7 @@ class HomeBrainRemoteDevice {
     }
 
     const preferredName = audioConfig.preferredInputName || (configuredDevice === 'auto' ? '' : configuredDevice);
-    const detected = this.detectPreferredCaptureDevice(preferredName);
+    const detected = this.detectPreferredCaptureDevice(preferredName, audioConfig);
     if (detected?.device) {
       this.config.audio = {
         ...this.config.audio,
@@ -967,6 +1135,8 @@ class HomeBrainRemoteDevice {
       recording: {
         recorder: recordingOptions.recorder || recordingOptions.recordProgram || 'arecord',
         device: recordingOptions.device || 'default',
+        deviceName: this.config.audio?.resolvedRecordingDeviceName || null,
+        probe: this.config.audio?.lastCaptureProbe || null,
         audioType: recordingOptions.audioType || 'raw',
         sampleRate: recordingOptions.sampleRate || recordingOptions.sampleRateHertz || this.wakeWordSampleRate,
         channels: recordingOptions.channels || 1,

@@ -125,6 +125,39 @@ test('selectAlsaCaptureDevice prefers Jabra USB capture devices', () => {
   assert.match(selected.label, /Jabra/);
 });
 
+test('detectPreferredCaptureDevice probes ALSA candidates before selecting one', () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: {},
+    wakeWord: {}
+  });
+
+  const devices = device.parseAlsaCaptureDevices([
+    'card 2: Jabra [Jabra SPEAK 510 USB], device 0: USB Audio [USB Audio]'
+  ].join('\n'));
+  const probed = [];
+  device.listAlsaCaptureDevices = () => ({ devices, error: null, output: '' });
+  device.probeCaptureDevice = (candidate) => {
+    probed.push(candidate);
+    return {
+      ok: candidate === 'sysdefault:CARD=Jabra',
+      exit: candidate === 'sysdefault:CARD=Jabra' ? 'code 0' : 'code 1',
+      stderr: candidate === 'sysdefault:CARD=Jabra' ? null : 'read error'
+    };
+  };
+
+  const selected = device.detectPreferredCaptureDevice('Jabra', {
+    sampleRate: 16000,
+    channels: 1
+  });
+
+  assert.equal(selected.device, 'sysdefault:CARD=Jabra');
+  assert.deepEqual(probed, [
+    'plughw:CARD=Jabra,DEV=0',
+    'sysdefault:CARD=Jabra'
+  ]);
+  assert.equal(device.config.audio.lastCaptureProbe.selected, 'sysdefault:CARD=Jabra');
+});
+
 test('applyConfigUpdate merges pushed audio config and restarts the detector', async () => {
   const device = new HomeBrainRemoteDevice({
     audio: {
