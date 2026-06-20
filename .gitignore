@@ -32,10 +32,15 @@ server/data/platform-deploy/
 server/data/direct-radios/
 server/data/device-library/
 server/data/matter/
+server/data/system-backup/
 server/data/wall-panel-ota/
 server/data/weather-provider-cache.json
 server/public/downloads/
 server/public/audio/security/*.json
+server/public/wake-words/*.onnx
+server/public/wake-words/*.onnx.data
+server/public/wake-words/*.tflite
+server/public/wake-words/*.ppn
 
 client/node_modules/
 client/.env.local

@@ -768,8 +768,19 @@ class PlatformDeployService {
     if (!filePath) {
       return false;
     }
+    const lowerPath = filePath.toLowerCase();
+    const isWakeWordArtifact = filePath.startsWith('server/public/wake-words/')
+      && (
+        lowerPath.endsWith('.onnx')
+        || lowerPath.endsWith('.onnx.data')
+        || lowerPath.endsWith('.tflite')
+        || lowerPath.endsWith('.ppn')
+      );
+
     return filePath.startsWith('client/dist/')
       || filePath.startsWith('client/dist.quarantine.')
+      || filePath.startsWith('server/data/system-backup/')
+      || isWakeWordArtifact
       || filePath.startsWith('server/data/wall-panel-ota/');
   }
 
