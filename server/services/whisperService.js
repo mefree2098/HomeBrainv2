@@ -23,6 +23,10 @@ const COMMAND_OUTPUT_LIMIT_BYTES = Math.max(
   16 * 1024,
   Number.parseInt(process.env.WHISPER_COMMAND_OUTPUT_LIMIT_BYTES, 10) || 256 * 1024
 );
+const STARTUP_READY_TIMEOUT_MS = Math.max(
+  5_000,
+  Number.parseInt(process.env.WHISPER_STARTUP_READY_TIMEOUT_MS, 10) || 60_000
+);
 
 // Default LD paths that make Jetson happy (CT2 in /usr/local/lib; CUDA in /usr/local/cuda*/lib64)
 const DEFAULT_LD_LIBRARY_PATHS = [
@@ -124,6 +128,7 @@ class WhisperRuntime {
     this.stdoutBuffer = '';
     this.logBuffer = [];
     this.pending = new Map();
+    this.lastExitMessage = null;
   }
 
   async start(preload = true) {
@@ -160,6 +165,7 @@ class WhisperRuntime {
         childEnv.CUDA_VISIBLE_DEVICES = process.env.WHISPER_CUDA_VISIBLE_DEVICES ?? '0';
       }
 
+      this.lastExitMessage = null;
       this.child = spawn(PYTHON_BIN, args, { env: childEnv, stdio: ['pipe', 'pipe', 'pipe'] });
 
       this.child.once('spawn', () => {
@@ -177,6 +183,7 @@ class WhisperRuntime {
 
       this.child.on('exit', (code, signal) => {
         const message = `Whisper runtime exited with code ${code} signal ${signal}`;
+        this.lastExitMessage = message;
         this._pushLog(message);
         this.child = null;
         if (!resolved) { reject(new Error(message)); resolved = true; }
@@ -264,12 +271,7 @@ class WhisperRuntime {
   async status() {
     if (!this.child) return { running: false, model: null, computeType: null, device: null };
     try {
-      const response = await this._send({ action: 'status', id: crypto.randomUUID() }, 2000);
-      const resolvedCompute = response?.compute_type || this.computeType || null;
-      const resolvedDevice  = response?.device || this.device || null;
-      this.computeType = resolvedCompute || this.computeType;
-      this.device = resolvedDevice || this.device;
-      return { running: true, model: response.model, computeType: resolvedCompute, device: resolvedDevice };
+      return await this._requestStatus(2000);
     } catch {
       const stillAlive = this.child && this.child.exitCode === null && !this.child.killed;
       return {
@@ -279,6 +281,41 @@ class WhisperRuntime {
         device: stillAlive ? this.device : null
       };
     }
+  }
+
+  async waitUntilReady(timeoutMs = STARTUP_READY_TIMEOUT_MS) {
+    const deadline = Date.now() + Math.max(1_000, Number(timeoutMs) || STARTUP_READY_TIMEOUT_MS);
+    let lastError = null;
+
+    while (Date.now() < deadline) {
+      if (!this.child) {
+        throw new Error(this.lastExitMessage || 'Whisper runtime exited before reporting ready');
+      }
+
+      const remaining = Math.max(250, deadline - Date.now());
+      try {
+        return await this._requestStatus(Math.min(2_000, remaining));
+      } catch (error) {
+        lastError = error;
+        if (!this.child) {
+          throw new Error(this.lastExitMessage || error.message || 'Whisper runtime exited before reporting ready');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    }
+
+    const detail = lastError?.message ? `: ${lastError.message}` : '';
+    throw new Error(`Whisper runtime did not report ready within ${timeoutMs}ms${detail}`);
+  }
+
+  async _requestStatus(timeoutMs = 2000) {
+    if (!this.child) throw new Error('Whisper runtime is not running');
+    const response = await this._send({ action: 'status', id: crypto.randomUUID() }, timeoutMs);
+    const resolvedCompute = response?.compute_type || this.computeType || null;
+    const resolvedDevice  = response?.device || this.device || null;
+    this.computeType = resolvedCompute || this.computeType;
+    this.device = resolvedDevice || this.device;
+    return { running: true, model: response.model, computeType: resolvedCompute, device: resolvedDevice };
   }
 
   _send(payload, timeoutMs) {
@@ -973,7 +1010,7 @@ class WhisperService {
     for (const device of deviceCandidates) {
       const computeCandidates = this._resolveComputeCandidates(computePreference, device);
       for (const computeType of computeCandidates) {
-        const runtime = new WhisperRuntime({
+        const runtime = this._createRuntime({
           modelName: targetModel,
           modelDir: config.modelDirectory || DEFAULT_MODEL_DIR,
           device,
@@ -982,7 +1019,7 @@ class WhisperService {
 
         try {
           await runtime.start(true);
-          const runtimeStatus = await runtime.status();
+          const runtimeStatus = await runtime.waitUntilReady(options.startupTimeoutMs || STARTUP_READY_TIMEOUT_MS);
           if (!runtimeStatus.running) throw new Error('Whisper runtime exited before reporting ready');
 
           const resolvedDevice  = runtimeStatus.device || device;
@@ -1029,6 +1066,34 @@ class WhisperService {
     await config.setError(startError?.message || 'Failed to start Whisper service');
     await config.save();
     throw startError || new Error('Failed to start Whisper service');
+  }
+
+  _createRuntime(options) {
+    return new WhisperRuntime(options);
+  }
+
+  async _ensureRuntimeReady(config) {
+    if (this.runtime) {
+      const runtimeStatus = await this.runtime.status().catch(() => ({ running: false }));
+      if (runtimeStatus.running) {
+        return config;
+      }
+
+      this.runtime = null;
+      config.serviceStatus = 'stopped';
+      config.servicePid = null;
+      config.serviceOwner = null;
+      config.activeDevice = null;
+      config.activeComputeType = null;
+      await config.save();
+    }
+
+    if (!config.autoStart) {
+      throw new Error('Whisper service is not running');
+    }
+
+    await this.startService(config.activeModel);
+    return this._getConfig();
   }
 
   async stopService() {
@@ -1119,11 +1184,8 @@ class WhisperService {
 
   async transcribe({ audioBuffer, sampleRate = 16000, channels = 1, language = 'en', beamSize = null }) {
     await this._ensureInstalled();
-    const config = await this._getConfig();
-    if (!this.runtime) {
-      if (config.autoStart) await this.startService(config.activeModel);
-      else throw new Error('Whisper service is not running');
-    }
+    let config = await this._getConfig();
+    config = await this._ensureRuntimeReady(config);
     const wavBuffer = pcmToWav(audioBuffer, sampleRate, channels);
     const tmpDir = ensureDirectory(path.join(os.tmpdir(), 'homebrain-whisper'));
     const filename = `${Date.now()}-${crypto.randomUUID()}.wav`;
@@ -1149,11 +1211,8 @@ class WhisperService {
 
   async transcribeFile({ filePath, language = 'en', vadFilter = true, beamSize = null }) {
     await this._ensureInstalled();
-    const config = await this._getConfig();
-    if (!this.runtime) {
-      if (config.autoStart) await this.startService(config.activeModel);
-      else throw new Error('Whisper service is not running');
-    }
+    let config = await this._getConfig();
+    config = await this._ensureRuntimeReady(config);
 
     const resolvedPath = path.resolve(String(filePath || ''));
     if (!resolvedPath || !fs.existsSync(resolvedPath)) {
@@ -1466,7 +1525,9 @@ class WhisperService {
       || combined.includes('cudnn_status_not_supported')
       || combined.includes('cudnn failed')
       || combined.includes('cublas')
-      || combined.includes('cuda error');
+      || combined.includes('cuda error')
+      || combined.includes('cuda failed')
+      || combined.includes('out of memory');
   }
 }
 
