@@ -9,6 +9,7 @@ const eventStreamService = require('./eventStreamService');
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
 const OFFLINE_DEVICE_EVENT_TYPES = ['device.offline', 'security.device.offline'];
+const activeNotificationUpsertLocks = new Map();
 
 function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -154,6 +155,34 @@ function publishEvent(type, notification, extra = {}) {
   });
 }
 
+async function withNotificationUpsertLock(lockKey, operation) {
+  if (!lockKey) {
+    return operation();
+  }
+
+  const previous = activeNotificationUpsertLocks.get(lockKey) || Promise.resolve();
+  let releaseCurrent = null;
+  const current = previous
+    .catch(() => null)
+    .then(() => new Promise((resolve) => {
+      releaseCurrent = resolve;
+    }));
+
+  activeNotificationUpsertLocks.set(lockKey, current);
+  await previous.catch(() => null);
+
+  try {
+    return await operation();
+  } finally {
+    if (typeof releaseCurrent === 'function') {
+      releaseCurrent();
+    }
+    if (activeNotificationUpsertLocks.get(lockKey) === current) {
+      activeNotificationUpsertLocks.delete(lockKey);
+    }
+  }
+}
+
 async function findHomeBrainUsers() {
   const query = {
     isActive: true,
@@ -179,7 +208,7 @@ async function upsertNotificationForUser(userId, input) {
   const metadata = input.metadata && typeof input.metadata === 'object' ? input.metadata : {};
 
   const filter = eventKey
-    ? { userId, eventKey, clearedAt: null, resolvedAt: null }
+    ? { userId, channel, eventKey, clearedAt: null, resolvedAt: null }
     : { _id: undefined };
 
   if (!eventKey) {
@@ -205,43 +234,46 @@ async function upsertNotificationForUser(userId, input) {
     return { notification: created, created: true };
   }
 
-  const result = await HomeBrainNotification.findOneAndUpdate(
-    filter,
-    {
-      $setOnInsert: {
-        userId,
-        channel,
-        severity,
-        category,
-        eventType,
-        eventKey,
-        source: normalizeString(input.source) || 'homebrain',
-        title,
-        message,
-        deviceId: normalizeString(input.deviceId),
-        zoneDeviceId: normalizeString(input.zoneDeviceId),
-        occurredAt,
-        clearedAt: null,
-        resolvedAt: null,
-        resolvedReason: '',
-        pushDelivery: {
-          status: channel === 'securityCritical' ? 'skipped' : 'not_applicable',
-          skippedReason: channel === 'securityCritical' ? 'push_delivery_pending' : ''
+  const result = await withNotificationUpsertLock(
+    `${String(userId || '')}:${channel}:${eventKey}`,
+    () => HomeBrainNotification.findOneAndUpdate(
+      filter,
+      {
+        $setOnInsert: {
+          userId,
+          channel,
+          eventKey,
+          clearedAt: null,
+          resolvedAt: null,
+          resolvedReason: '',
+          pushDelivery: {
+            status: channel === 'securityCritical' ? 'skipped' : 'not_applicable',
+            skippedReason: channel === 'securityCritical' ? 'push_delivery_pending' : ''
+          }
+        },
+        $set: {
+          severity,
+          category,
+          eventType,
+          source: normalizeString(input.source) || 'homebrain',
+          title,
+          message,
+          deviceId: normalizeString(input.deviceId),
+          zoneDeviceId: normalizeString(input.zoneDeviceId),
+          occurredAt,
+          metadata: {
+            ...metadata,
+            lastObservedAt: now.toISOString()
+          }
         }
       },
-      $set: {
-        metadata: {
-          ...metadata,
-          lastObservedAt: now.toISOString()
-        }
+      {
+        upsert: true,
+        new: true,
+        setDefaultsOnInsert: true,
+        includeResultMetadata: true
       }
-    },
-    {
-      upsert: true,
-      new: true,
-      setDefaultsOnInsert: true,
-      includeResultMetadata: true
-    }
+    )
   );
 
   if (result && Object.prototype.hasOwnProperty.call(result, 'value')) {
