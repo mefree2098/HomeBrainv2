@@ -35,6 +35,16 @@ const onboardingMutationRateLimit = rateLimit({
   standardHeaders: true,
   legacyHeaders: false
 });
+const wakeWordAssetRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.REMOTE_WAKE_WORD_ASSET_RATE_LIMIT_WINDOW_MS || 5 * 60 * 1000)),
+  max: Math.max(1, Number(process.env.REMOTE_WAKE_WORD_ASSET_RATE_LIMIT_MAX || 120)),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many wake word asset requests. Please retry later.'
+  }
+});
 const REMOTE_SETUP_PACKAGE_NAME = 'homebrain-remote-setup.tar.gz';
 const REMOTE_SETUP_PACKAGE_DIR = path.join(__dirname, '..', 'public', 'downloads');
 const REMOTE_SETUP_PACKAGE_PATH = path.join(REMOTE_SETUP_PACKAGE_DIR, REMOTE_SETUP_PACKAGE_NAME);
@@ -70,6 +80,18 @@ const bootstrapDeviceAccessWindow = new Map();
 const bootstrapInvalidAttemptWindow = new Map();
 
 const shellQuote = (value) => `'${String(value ?? '').replace(/'/g, `'\"'\"'`)}'`;
+
+function normalizeWakeWordDependencyName(value) {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.includes('/') || trimmed.includes('\\')) {
+    return null;
+  }
+  const baseName = path.basename(trimmed);
+  return baseName === trimmed ? trimmed : null;
+}
 
 function consumeSlidingWindow(map, key, limit, windowMs) {
   const now = Date.now();
@@ -539,7 +561,7 @@ final_message: "HomeBrain listener bootstrap completed."
   }
 });
 
-router.get('/:deviceId/wake-words', async (req, res) => {
+router.get('/:deviceId/wake-words', wakeWordAssetRateLimit, async (req, res) => {
   const { deviceId } = req.params;
   const { platform, arch } = req.query;
 
@@ -583,6 +605,13 @@ router.get('/:deviceId/wake-words', async (req, res) => {
         checksum: asset.checksum,
         updatedAt: asset.updatedAt,
         downloadPath: `/api/remote-devices/${deviceId}/wake-words/${asset.slug}`,
+        dependencies: Array.isArray(asset.dependencies) ? asset.dependencies.map((dependency) => ({
+          fileName: dependency.fileName,
+          size: dependency.size,
+          checksum: dependency.checksum,
+          updatedAt: dependency.updatedAt,
+          downloadPath: `/api/remote-devices/${deviceId}/wake-words/${asset.slug}?dependency=${encodeURIComponent(dependency.fileName)}`
+        })) : [],
         platform: asset.platform,
         arch: asset.arch,
         engine: asset.engine,
@@ -660,7 +689,7 @@ router.get('/:deviceId/tts', async (req, res) => {
   }
 });
 
-router.get('/:deviceId/wake-words/:slug', async (req, res) => {
+router.get('/:deviceId/wake-words/:slug', wakeWordAssetRateLimit, async (req, res) => {
   const { deviceId, slug } = req.params;
   const { platform, arch } = req.query;
 
@@ -673,7 +702,20 @@ router.get('/:deviceId/wake-words/:slug', async (req, res) => {
       });
     }
 
-    const normalisedSlug = slug.toLowerCase().replace(/\.(ppn|tflite|onnx)$/i, '');
+    const directDependencyName = /\.onnx\.data$/i.test(slug) ? slug : null;
+    const requestedDependencyName = normalizeWakeWordDependencyName(
+      typeof req.query.dependency === 'string' ? req.query.dependency : directDependencyName
+    );
+    if ((req.query.dependency || directDependencyName) && !requestedDependencyName) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid wake word dependency name'
+      });
+    }
+
+    const normalisedSlug = slug.toLowerCase()
+      .replace(/\.onnx\.data$/i, '')
+      .replace(/\.(ppn|tflite|onnx)$/i, '');
     const asset = wakeWordAssets.getAssetForWakeWord(normalisedSlug, {
       slug: normalisedSlug,
       platform,
@@ -688,16 +730,29 @@ router.get('/:deviceId/wake-words/:slug', async (req, res) => {
       });
     }
 
+    const selectedAsset = requestedDependencyName
+      ? (Array.isArray(asset.dependencies) ? asset.dependencies.find((dependency) => (
+        dependency.fileName.toLowerCase() === requestedDependencyName.toLowerCase()
+      )) : null)
+      : asset;
+
+    if (!selectedAsset) {
+      return res.status(404).json({
+        success: false,
+        message: `Wake word dependency not found: ${requestedDependencyName}`
+      });
+    }
+
     res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Length', asset.size);
-    res.setHeader('ETag', asset.checksum);
-    res.setHeader('Content-Disposition', `attachment; filename="${asset.fileName}"`);
+    res.setHeader('Content-Length', selectedAsset.size);
+    res.setHeader('ETag', selectedAsset.checksum);
+    res.setHeader('Content-Disposition', `attachment; filename="${selectedAsset.fileName}"`);
     res.setHeader('X-Wake-Word-Format', asset.format || path.extname(asset.fileName).slice(1));
     res.setHeader('X-Wake-Word-Engine', asset.engine || 'openwakeword');
 
-    const readStream = fs.createReadStream(asset.absolutePath);
+    const readStream = fs.createReadStream(selectedAsset.absolutePath);
     readStream.on('error', (streamError) => {
-      console.error(`Failed to stream wake word asset ${asset.fileName}:`, streamError.message);
+      console.error(`Failed to stream wake word asset ${selectedAsset.fileName}:`, streamError.message);
       res.status(500).end();
     });
 
