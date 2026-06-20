@@ -2663,11 +2663,14 @@ class HomeBrainRemoteDevice {
       if (!this.isRecording) return;
       try {
         const { spawn } = require('child_process');
-        const device = this.config.audio.recordingDevice || this.config.audio.microphoneDevice || 'default';
-        const rate = String(this.wakeWordSampleRate);
+        const recordingOptions = this.buildRecordingOptions();
+        const device = recordingOptions.device || 'default';
+        const rate = String(recordingOptions.sampleRate || recordingOptions.sampleRateHertz || this.wakeWordSampleRate);
+        const channels = String(recordingOptions.channels || 1);
         let sawAudio = false;
         // Prefer arecord directly to avoid sox/rec issues
-        let proc = spawn('arecord', ['-q', '-D', device, '-t', 'raw', '-f', 'S16_LE', '-r', rate, '-c', '1'], { stdio: ['ignore', 'pipe', 'inherit'] });
+        console.log(`Starting voice command capture on ${device}`);
+        let proc = spawn('arecord', ['-q', '-D', device, '-t', 'raw', '-f', 'S16_LE', '-r', rate, '-c', channels], { stdio: ['ignore', 'pipe', 'inherit'] });
         const attach = (p) => {
           this.commandProc = p;
           p.stdout.on('data', (buf) => {

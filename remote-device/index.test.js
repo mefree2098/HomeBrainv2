@@ -244,6 +244,51 @@ test('syncWakeWordAssetsFromConfig downloads ONNX external data dependencies', a
   ]);
 });
 
+test('startVoiceRecording uses resolved auto capture device for command audio', async (t) => {
+  const childProcess = require('child_process');
+  const originalSpawn = childProcess.spawn;
+  t.after(() => {
+    childProcess.spawn = originalSpawn;
+  });
+
+  const spawned = [];
+  childProcess.spawn = (command, args, options) => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.kill = () => {};
+    spawned.push({ command, args, options, child });
+    return child;
+  };
+
+  const device = new HomeBrainRemoteDevice({
+    audio: {
+      recordingDevice: 'auto',
+      preferredInputName: 'Jabra',
+      sampleRate: 16000,
+      channels: 1
+    },
+    wakeWord: {}
+  });
+
+  device.detectPreferredCaptureDevice = () => ({
+    device: 'sysdefault:CARD=MS',
+    label: 'MS Jabra Speak2 40'
+  });
+  device.stopFeatureSidecar = () => {};
+  device.sendMessage = () => true;
+
+  device.startVoiceRecording(5000, true);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  assert.equal(spawned.length, 1);
+  assert.equal(spawned[0].command, 'arecord');
+  assert.deepEqual(spawned[0].args.slice(0, 4), ['-q', '-D', 'sysdefault:CARD=MS', '-t']);
+  assert.equal(spawned[0].args[spawned[0].args.indexOf('-c') + 1], '1');
+  assert.equal(device.config.audio.resolvedRecordingDevice, 'sysdefault:CARD=MS');
+
+  device.stopVoiceRecording();
+});
+
 test('isWakeWordDetectorActive treats the feature sidecar as an active detector', () => {
   const device = new HomeBrainRemoteDevice({
     audio: {},
