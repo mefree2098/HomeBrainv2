@@ -296,18 +296,26 @@ class VoiceWebSocketServer {
     }
 
     const wakeWordAssetPayload = assets.map((asset) => {
-      const params = new URLSearchParams();
-      if (!credentials.deviceToken && credentials.registrationCode) {
-        params.set('code', credentials.registrationCode);
-      } else if (!credentials.deviceToken && credentials.claimToken) {
-        params.set('claim', credentials.claimToken);
-      }
-      if (asset.platform || platform) {
-        params.set('platform', asset.platform || platform);
-      }
-      if (asset.arch || arch) {
-        params.set('arch', asset.arch || arch);
-      }
+      const buildAssetUrl = (dependencyFileName = null) => {
+        const params = new URLSearchParams();
+        if (dependencyFileName) {
+          params.set('dependency', dependencyFileName);
+        }
+        if (!credentials.deviceToken && credentials.registrationCode) {
+          params.set('code', credentials.registrationCode);
+        } else if (!credentials.deviceToken && credentials.claimToken) {
+          params.set('claim', credentials.claimToken);
+        }
+        if (asset.platform || platform) {
+          params.set('platform', asset.platform || platform);
+        }
+        if (asset.arch || arch) {
+          params.set('arch', asset.arch || arch);
+        }
+        return params.toString()
+          ? `/api/remote-devices/${deviceId}/wake-words/${asset.slug}?${params.toString()}`
+          : `/api/remote-devices/${deviceId}/wake-words/${asset.slug}`;
+      };
 
       const modelMetadata = metadataBySlug[asset.slug] || {};
       const rawThreshold = typeof asset.threshold === 'number'
@@ -332,10 +340,15 @@ class VoiceWebSocketServer {
         engine: asset.engine || 'openwakeword',
         format: asset.format,
         updatedAt: asset.updatedAt,
+        dependencies: Array.isArray(asset.dependencies) ? asset.dependencies.map((dependency) => ({
+          fileName: dependency.fileName,
+          checksum: dependency.checksum,
+          size: dependency.size,
+          updatedAt: dependency.updatedAt,
+          downloadUrl: buildAssetUrl(dependency.fileName)
+        })) : [],
         metadata: modelMetadata,
-        downloadUrl: params.toString()
-          ? `/api/remote-devices/${deviceId}/wake-words/${asset.slug}?${params.toString()}`
-          : `/api/remote-devices/${deviceId}/wake-words/${asset.slug}`
+        downloadUrl: buildAssetUrl()
       };
     });
 

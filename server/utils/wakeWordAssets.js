@@ -4,6 +4,7 @@ const crypto = require('crypto');
 
 const WAKE_WORD_ROOT = path.join(__dirname, '..', 'public', 'wake-words');
 const SUPPORTED_EXTENSIONS = ['.tflite', '.onnx', '.ppn'];
+const SUPPORTED_DEPENDENCY_SUFFIXES = ['.data'];
 
 const ensureDirectory = () => {
   try {
@@ -52,6 +53,22 @@ const computeFileHash = (absolutePath) => {
     fs.closeSync(fileHandle);
   }
   return hash.digest('hex');
+};
+
+const getFileDescriptor = (fileName) => {
+  const absolutePath = path.join(WAKE_WORD_ROOT, fileName);
+  if (!fs.existsSync(absolutePath)) {
+    return null;
+  }
+
+  const stats = fs.statSync(absolutePath);
+  return {
+    fileName,
+    absolutePath,
+    size: stats.size,
+    checksum: computeFileHash(absolutePath),
+    updatedAt: stats.mtime
+  };
 };
 
 const normalisePlatform = (platform) => {
@@ -123,6 +140,22 @@ const findFileForWakeWord = (slug, platform, arch) => {
   return null;
 };
 
+const getDependenciesForWakeWordFile = (fileName) => {
+  const dependencies = [];
+  const seen = new Set();
+
+  for (const suffix of SUPPORTED_DEPENDENCY_SUFFIXES) {
+    const dependencyFileName = `${fileName}${suffix}`;
+    const descriptor = getFileDescriptor(dependencyFileName);
+    if (descriptor && !seen.has(dependencyFileName.toLowerCase())) {
+      dependencies.push(descriptor);
+      seen.add(dependencyFileName.toLowerCase());
+    }
+  }
+
+  return dependencies;
+};
+
 const getAssetForWakeWord = (label, options = {}) => {
   const slug = options.slug || slugify(label);
   if (!slug) return null;
@@ -134,12 +167,11 @@ const getAssetForWakeWord = (label, options = {}) => {
     return null;
   }
 
-  const absolutePath = path.join(WAKE_WORD_ROOT, fileName);
-  if (!fs.existsSync(absolutePath)) {
+  const descriptor = getFileDescriptor(fileName);
+  if (!descriptor) {
     return null;
   }
 
-  const stats = fs.statSync(absolutePath);
   const extension = path.extname(fileName).toLowerCase();
   const format = extension.replace('.', '');
   const engine = extension === '.ppn' ? 'porcupine' : 'openwakeword';
@@ -148,16 +180,17 @@ const getAssetForWakeWord = (label, options = {}) => {
     label,
     slug,
     fileName,
-    absolutePath,
-    size: stats.size,
-    checksum: computeFileHash(absolutePath),
-    updatedAt: stats.mtime,
+    absolutePath: descriptor.absolutePath,
+    size: descriptor.size,
+    checksum: descriptor.checksum,
+    updatedAt: descriptor.updatedAt,
     platform: options.platform || null,
     arch: options.arch || null,
     sensitivity: typeof options.sensitivity === 'number' ? options.sensitivity : null,
     threshold: typeof options.threshold === 'number' ? options.threshold : null,
     format,
-    engine
+    engine,
+    dependencies: getDependenciesForWakeWordFile(fileName)
   };
 };
 
@@ -199,5 +232,6 @@ module.exports = {
   getAssetForWakeWord,
   getAssetsForWakeWords,
   listAllAssets,
+  getDependenciesForWakeWordFile,
   WAKE_WORD_ROOT
 };

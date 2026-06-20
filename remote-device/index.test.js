@@ -1,5 +1,9 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const { EventEmitter } = require('node:events');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 
 const { HomeBrainRemoteDevice } = require('./index');
@@ -183,6 +187,61 @@ test('applyConfigUpdate merges pushed audio config and restarts the detector', a
   assert.equal(restartNeeded, true);
   assert.equal(device.config.audio.recordingDevice, 'auto');
   assert.equal(device.buildRecordingOptions().device, 'plughw:2,0');
+});
+
+test('syncWakeWordAssetsFromConfig downloads ONNX external data dependencies', async (t) => {
+  const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'homebrain-wake-assets-'));
+  t.after(() => {
+    fs.rmSync(cacheDir, { recursive: true, force: true });
+  });
+
+  const modelBuffer = Buffer.from('model');
+  const dependencyBuffer = Buffer.from('external-data');
+  const checksum = (buffer) => crypto.createHash('sha256').update(buffer).digest('hex');
+  const downloadedUrls = [];
+
+  const device = new HomeBrainRemoteDevice({
+    hubUrl: 'https://homebrain.example',
+    audio: {},
+    wakeWord: {
+      cacheDir
+    }
+  });
+
+  device.downloadWakeWordAsset = async (url) => {
+    downloadedUrls.push(url);
+    return url.includes('dependency=') ? dependencyBuffer : modelBuffer;
+  };
+
+  const assetsChanged = await device.syncWakeWordAssetsFromConfig({
+    wakeWord: {
+      assets: [{
+        label: 'Hey Anna',
+        slug: 'hey-anna',
+        fileName: 'hey-anna.onnx',
+        format: 'onnx',
+        engine: 'openwakeword',
+        checksum: checksum(modelBuffer),
+        downloadUrl: '/api/remote-devices/device/wake-words/hey-anna',
+        dependencies: [{
+          fileName: 'hey-anna.onnx.data',
+          checksum: checksum(dependencyBuffer),
+          downloadUrl: '/api/remote-devices/device/wake-words/hey-anna?dependency=hey-anna.onnx.data'
+        }]
+      }]
+    }
+  });
+
+  assert.equal(assetsChanged, true);
+  assert.equal(fs.readFileSync(path.join(cacheDir, 'hey-anna.onnx'), 'utf8'), 'model');
+  assert.equal(fs.readFileSync(path.join(cacheDir, 'hey-anna.onnx.data'), 'utf8'), 'external-data');
+  assert.equal(device.hasLocalWakeWordModels(), true);
+  assert.equal(device.config.wakeWord.keywords[0].dependencies[0].fileName, 'hey-anna.onnx.data');
+  assert.equal(device.config.wakeWord.keywords[0].dependencies[0].path, path.join(cacheDir, 'hey-anna.onnx.data'));
+  assert.deepEqual(downloadedUrls, [
+    'https://homebrain.example/api/remote-devices/device/wake-words/hey-anna',
+    'https://homebrain.example/api/remote-devices/device/wake-words/hey-anna?dependency=hey-anna.onnx.data'
+  ]);
 });
 
 test('isWakeWordDetectorActive treats the feature sidecar as an active detector', () => {

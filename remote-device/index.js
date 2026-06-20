@@ -740,7 +740,14 @@ class HomeBrainRemoteDevice {
     if (!Array.isArray(keywords) || keywords.length === 0) {
       return false;
     }
-    return keywords.every((keyword) => keyword.path && fs.existsSync(keyword.path));
+    return keywords.every((keyword) => {
+      if (!keyword.path || !fs.existsSync(keyword.path)) {
+        return false;
+      }
+      return !Array.isArray(keyword.dependencies) || keyword.dependencies.every((dependency) => (
+        dependency.path && fs.existsSync(dependency.path)
+      ));
+    });
   }
 
   isWakeWordDetectorActive() {
@@ -1347,7 +1354,13 @@ class HomeBrainRemoteDevice {
       path: keyword.path ? path.resolve(keyword.path) : '',
       engine: keyword.engine || 'openwakeword',
       sensitivity: typeof keyword.sensitivity === 'number' ? Number(keyword.sensitivity.toFixed(3)) : null,
-      threshold: typeof keyword.threshold === 'number' ? Number(keyword.threshold.toFixed(3)) : null
+      threshold: typeof keyword.threshold === 'number' ? Number(keyword.threshold.toFixed(3)) : null,
+      dependencies: Array.isArray(keyword.dependencies)
+        ? keyword.dependencies.map((dependency) => ({
+          fileName: dependency.fileName || '',
+          path: dependency.path ? path.resolve(dependency.path) : ''
+        }))
+        : []
     })));
   }
 
@@ -1396,6 +1409,34 @@ class HomeBrainRemoteDevice {
     }
   }
 
+  normalizeWakeWordFileName(fileName, fallbackFileName) {
+    const raw = typeof fileName === 'string' ? fileName.trim() : '';
+    const fallback = typeof fallbackFileName === 'string' ? fallbackFileName.trim() : 'wake-word.tflite';
+    const candidate = raw || fallback;
+    const baseName = path.basename(candidate);
+    if (!baseName || baseName !== candidate || baseName.includes('/') || baseName.includes('\\')) {
+      throw new Error(`Invalid wake word asset file name: ${candidate}`);
+    }
+    return baseName;
+  }
+
+  async syncWakeWordFile({ label, localPath, downloadUrl, expectedChecksum, kind = 'model' }) {
+    if (await this.needsWakeWordDownload(localPath, expectedChecksum)) {
+      console.log(`Downloading wake word ${kind} for "${label}"...`);
+      const buffer = await this.downloadWakeWordAsset(downloadUrl);
+      const actualChecksum = crypto.createHash('sha256').update(buffer).digest('hex');
+      if (expectedChecksum && actualChecksum !== expectedChecksum) {
+        throw new Error(`Checksum mismatch for wake word ${kind} "${label}" (expected ${expectedChecksum}, received ${actualChecksum})`);
+      }
+      await fs.promises.writeFile(localPath, buffer);
+      console.log(`Saved wake word ${kind} for "${label}" to ${localPath}`);
+      return true;
+    }
+
+    console.log(`Wake word ${kind} for "${label}" already up to date at ${localPath}`);
+    return false;
+  }
+
   async downloadWakeWordAsset(url) {
     const response = await fetch(url, {
       method: 'GET',
@@ -1439,9 +1480,7 @@ class HomeBrainRemoteDevice {
       const fallbackFormat = typeof asset.format === 'string' && asset.format.trim().length
         ? asset.format.trim().replace(/^\./, '')
         : 'tflite';
-      const fileName = asset.fileName && asset.fileName.trim().length
-        ? asset.fileName.trim()
-        : `${slug}.${fallbackFormat}`;
+      const fileName = this.normalizeWakeWordFileName(asset.fileName, `${slug}.${fallbackFormat}`);
       const localPath = path.resolve(cacheDir, fileName);
       const downloadUrl = asset.downloadUrl ? this.buildAbsoluteHubUrl(asset.downloadUrl) : null;
 
@@ -1450,19 +1489,39 @@ class HomeBrainRemoteDevice {
         continue;
       }
 
-      const expectedChecksum = asset.checksum || null;
-      if (await this.needsWakeWordDownload(localPath, expectedChecksum)) {
-        console.log(`Downloading wake word model for "${label}"...`);
-        const buffer = await this.downloadWakeWordAsset(downloadUrl);
-        const actualChecksum = crypto.createHash('sha256').update(buffer).digest('hex');
-        if (expectedChecksum && actualChecksum !== expectedChecksum) {
-          throw new Error(`Checksum mismatch for wake word "${label}" (expected ${expectedChecksum}, received ${actualChecksum})`);
-        }
-        await fs.promises.writeFile(localPath, buffer);
+      if (await this.syncWakeWordFile({
+        label,
+        localPath,
+        downloadUrl,
+        expectedChecksum: asset.checksum || null,
+        kind: 'model'
+      })) {
         assetsChanged = true;
-        console.log(`Saved wake word model for "${label}" to ${localPath}`);
-      } else {
-        console.log(`Wake word model for "${label}" already up to date at ${localPath}`);
+      }
+
+      const dependencies = [];
+      for (const dependency of Array.isArray(asset.dependencies) ? asset.dependencies : []) {
+        const dependencyFileName = this.normalizeWakeWordFileName(dependency.fileName, '');
+        const dependencyUrl = dependency.downloadUrl ? this.buildAbsoluteHubUrl(dependency.downloadUrl) : null;
+        if (!dependencyUrl) {
+          console.warn(`Wake word dependency "${dependencyFileName}" for "${label}" is missing a download URL`);
+          continue;
+        }
+        const dependencyPath = path.resolve(cacheDir, dependencyFileName);
+        if (await this.syncWakeWordFile({
+          label,
+          localPath: dependencyPath,
+          downloadUrl: dependencyUrl,
+          expectedChecksum: dependency.checksum || null,
+          kind: `dependency ${dependencyFileName}`
+        })) {
+          assetsChanged = true;
+        }
+        dependencies.push({
+          ...dependency,
+          fileName: dependencyFileName,
+          localPath: dependencyPath
+        });
       }
 
       keywords.push({
@@ -1472,7 +1531,11 @@ class HomeBrainRemoteDevice {
         engine: asset.engine || 'openwakeword',
         format: asset.format || path.extname(fileName).slice(1),
         threshold: typeof asset.threshold === 'number' ? clamp(asset.threshold, 0, 1) : undefined,
-        sensitivity: typeof asset.sensitivity === 'number' ? clamp(asset.sensitivity, 0, 1) : undefined
+        sensitivity: typeof asset.sensitivity === 'number' ? clamp(asset.sensitivity, 0, 1) : undefined,
+        dependencies: dependencies.map((dependency) => ({
+          fileName: dependency.fileName,
+          path: dependency.localPath
+        }))
       });
 
       normalizedAssets.push({
@@ -1480,7 +1543,8 @@ class HomeBrainRemoteDevice {
         label,
         slug,
         fileName,
-        localPath
+        localPath,
+        dependencies
       });
     }
 
