@@ -142,7 +142,14 @@ class ElevenLabsService {
    * @returns {Promise<string|null>} The ElevenLabs API key
    * @private
    */
-  async _getApiKey() {
+  async _getApiKey(options = {}) {
+    const explicitApiKey = typeof options === 'string'
+      ? trimString(options)
+      : trimString(options.apiKey);
+    if (explicitApiKey) {
+      return explicitApiKey;
+    }
+
     try {
       const apiKey = await settingsService.getElevenLabsApiKey();
       return apiKey;
@@ -180,6 +187,7 @@ class ElevenLabsService {
       modelId,
       emotionTagging,
       outputFormat: trimString(options.output_format || options.outputFormat),
+      apiKey: trimString(options.apiKey),
       codexModel: trimString(options.codexModel),
       codexEffort: trimString(options.codexEffort) || 'low',
       taggerTimeoutMs: Math.max(
@@ -283,13 +291,16 @@ class ElevenLabsService {
    * Get all available voices from ElevenLabs
    * @returns {Promise<Array>} Array of voice objects
    */
-  async getVoices() {
+  async getVoices(options = {}) {
     try {
       console.log('Fetching voices from ElevenLabs API');
 
-      const apiKey = await this._getApiKey();
+      const apiKey = await this._getApiKey(options);
 
       if (!apiKey) {
+        if (options.requireConfigured === true) {
+          throw new Error('ElevenLabs API key not configured');
+        }
         console.log('ElevenLabs API key not configured, returning mock data');
         return this._getMockVoices();
       }
@@ -317,6 +328,9 @@ class ElevenLabsService {
     } catch (error) {
       console.error('Error fetching voices from ElevenLabs:', error.response?.data || error.message);
       console.error('Full error:', error);
+      if (options.requireConfigured === true) {
+        throw error;
+      }
 
       // Fallback to mock data if API fails
       console.log('Falling back to mock voice data');
@@ -555,7 +569,7 @@ class ElevenLabsService {
   async _generateFreshAudio({ text, voiceId, normalizedOptions, cacheDescriptor, cacheKey }) {
     console.log(`Generating ElevenLabs speech for voice ${voiceId}: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`);
 
-    const apiKey = await this._getApiKey();
+    const apiKey = await this._getApiKey(normalizedOptions);
     if (!apiKey) {
       throw new Error('ElevenLabs API key not configured');
     }

@@ -155,7 +155,7 @@ const SettingsSchema = new mongoose.Schema({
   },
   ttsProviderPriorityList: {
     type: [String],
-    default: ['s2_pro', 'elevenlabs'],
+    default: ['elevenlabs', 's2_pro'],
     validate: {
       validator: function(arr) {
         const validProviders = ['elevenlabs', 's2_pro'];

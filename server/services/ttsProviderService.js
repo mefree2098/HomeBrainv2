@@ -294,7 +294,7 @@ class TtsProviderService {
       .map((provider) => trimString(provider).toLowerCase())
       .filter((provider, index, arr) => ['s2_pro', 'elevenlabs'].includes(provider) && arr.indexOf(provider) === index);
 
-    const fallbackPriority = priority.length ? priority : ['s2_pro', 'elevenlabs'];
+    const fallbackPriority = priority.length ? priority : ['elevenlabs', 's2_pro'];
     const selectedProvider = trimString(settings.ttsProvider).toLowerCase();
     if (['s2_pro', 'elevenlabs'].includes(selectedProvider)) {
       return [selectedProvider, ...fallbackPriority.filter((provider) => provider !== selectedProvider)];
@@ -521,9 +521,12 @@ class TtsProviderService {
     throw new Error(detail || 'No TTS provider was able to generate speech');
   }
 
-  async listVoices(provider = 's2_pro', overrides = {}) {
+  async listVoices(provider = 'elevenlabs', overrides = {}) {
     if (provider === 'elevenlabs') {
-      const voices = await elevenLabsService.getVoices();
+      const voices = await elevenLabsService.getVoices({
+        apiKey: trimString(overrides.apiKey),
+        requireConfigured: true
+      });
       return {
         success: true,
         provider: 'elevenlabs',
@@ -541,7 +544,7 @@ class TtsProviderService {
   }
 
   async testProvider(options = {}) {
-    const provider = trimString(options.provider || 's2_pro').toLowerCase();
+    const provider = trimString(options.provider || 'elevenlabs').toLowerCase();
     if (provider === 's2_pro') {
       const voicesResult = await this.listS2Voices(options).catch((error) => ({
         success: false,
@@ -566,16 +569,23 @@ class TtsProviderService {
 
     const settings = options.settings || await Settings.getSettings();
     const voiceId = trimString(options.voiceId) || trimString(settings.elevenlabsDefaultVoiceId);
+    const voicesResult = await this.listVoices('elevenlabs', options).catch((error) => ({
+      success: false,
+      error: error.message,
+      voices: []
+    }));
     const speech = await elevenLabsService.textToSpeechDetailed(
       trimString(options.text) || DEFAULT_TEST_TEXT,
       voiceId,
-      { cache: false }
+      { ...options, cache: false }
     );
     return {
       success: true,
       provider: 'elevenlabs',
       message: `ElevenLabs generated ${speech.audioBuffer.length} bytes of audio.`,
-      contentType: 'audio/mpeg'
+      contentType: 'audio/mpeg',
+      voiceCount: voicesResult.voices.length,
+      voices: voicesResult.voices
     };
   }
 }

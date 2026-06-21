@@ -584,6 +584,10 @@ export function Settings() {
   const [testingS2Pro, setTestingS2Pro] = useState(false)
   const [previewingS2Pro, setPreviewingS2Pro] = useState(false)
   const [s2Voices, setS2Voices] = useState<TtsVoice[]>([])
+  const [loadingElevenLabsVoices, setLoadingElevenLabsVoices] = useState(false)
+  const [testingElevenLabsTts, setTestingElevenLabsTts] = useState(false)
+  const [previewingElevenLabsTts, setPreviewingElevenLabsTts] = useState(false)
+  const [elevenLabsVoices, setElevenLabsVoices] = useState<TtsVoice[]>([])
   const [smartthingsStatus, setSmartthingsStatus] = useState(null)
   const [testingSmartThings, setTestingSmartThings] = useState(false)
   const [configuringSmartThings, setConfiguringSmartThings] = useState(false)
@@ -755,7 +759,7 @@ export function Settings() {
       lanWhisperApiKey: "",
       lanWhisperTimeoutMs: 30000,
       ttsProvider: "elevenlabs",
-      ttsProviderPriorityList: ["s2_pro", "elevenlabs"],
+      ttsProviderPriorityList: ["elevenlabs", "s2_pro"],
       s2ProEndpoint: "",
       s2ProApiKey: "",
       s2ProDefaultVoiceId: "",
@@ -776,6 +780,7 @@ export function Settings() {
       smartthingsRedirectUri: "",
       harmonyHubAddresses: "",
       elevenlabsApiKey: "",
+      elevenlabsDefaultVoiceId: "",
       llmProvider: "openai",
       openaiApiKey: "",
       openaiModel: "gpt-5.2-codex",
@@ -994,6 +999,8 @@ export function Settings() {
         : (sttModelRaw && openaiSttModels.includes(sttModelRaw) ? sttModelRaw : "gpt-4o-mini-transcribe")
   const sttLanguageValue = watch("sttLanguage") || "en"
   const ttsProviderValue = watch("ttsProvider") || "elevenlabs"
+  const elevenLabsApiKeyValue = watch("elevenlabsApiKey") || ""
+  const elevenLabsVoiceValue = watch("elevenlabsDefaultVoiceId") || ""
   const s2ProEndpointValue = watch("s2ProEndpoint") || ""
   const s2ProApiKeyValue = watch("s2ProApiKey") || ""
   const s2ProVoiceValue = watch("s2ProDefaultVoiceId") || ""
@@ -3488,6 +3495,11 @@ export function Settings() {
     return !candidate || isMaskedSecretPlaceholder(candidate) ? "" : candidate;
   }
 
+  const getElevenLabsApiKeyForRequest = () => {
+    const candidate = elevenLabsApiKeyValue;
+    return !candidate || isMaskedSecretPlaceholder(candidate) ? "" : candidate;
+  }
+
   const persistLanWhisperProbeSettings = async () => {
     const endpoint = watch("lanWhisperEndpoint") || ""
     const apiKeyValue = watch("lanWhisperApiKey") || ""
@@ -3508,6 +3520,7 @@ export function Settings() {
   const persistS2ProbeSettings = async () => {
     const payload: Record<string, unknown> = {
       ttsProvider: "s2_pro",
+      ttsProviderPriorityList: ["s2_pro", "elevenlabs"],
       s2ProEndpoint: s2ProEndpointValue,
       s2ProDefaultVoiceId: s2ProVoiceValue,
       s2ProModel: s2ProModelValue,
@@ -3517,6 +3530,19 @@ export function Settings() {
     const apiKey = getS2ApiKeyForRequest()
     if (apiKey) {
       payload.s2ProApiKey = apiKey
+    }
+    await updateSettings(payload)
+  }
+
+  const persistElevenLabsProbeSettings = async () => {
+    const payload: Record<string, unknown> = {
+      ttsProvider: "elevenlabs",
+      ttsProviderPriorityList: ["elevenlabs", "s2_pro"],
+      elevenlabsDefaultVoiceId: elevenLabsVoiceValue
+    }
+    const apiKey = getElevenLabsApiKeyForRequest()
+    if (apiKey) {
+      payload.elevenlabsApiKey = apiKey
     }
     await updateSettings(payload)
   }
@@ -3565,6 +3591,99 @@ export function Settings() {
     timeoutMs: s2ProTimeoutValue,
     ...extra
   })
+
+  const buildElevenLabsRequest = (extra: Record<string, unknown> = {}) => {
+    const apiKey = getElevenLabsApiKeyForRequest()
+    return {
+      provider: "elevenlabs",
+      voiceId: elevenLabsVoiceValue,
+      ...(apiKey ? { apiKey } : {}),
+      ...extra
+    }
+  }
+
+  const handleQueryElevenLabsVoices = async () => {
+    setLoadingElevenLabsVoices(true)
+    try {
+      await persistElevenLabsProbeSettings()
+      const response = await getTtsVoices(buildElevenLabsRequest())
+      setElevenLabsVoices(response.voices || [])
+      toast({
+        title: "ElevenLabs Voices Loaded",
+        description: `Found ${response.count || response.voices?.length || 0} voice${(response.count || response.voices?.length || 0) === 1 ? "" : "s"}.`
+      })
+    } catch (error: any) {
+      toast({
+        title: "Voice Query Failed",
+        description: error?.message || "Unable to query ElevenLabs voices.",
+        variant: "destructive"
+      })
+    } finally {
+      setLoadingElevenLabsVoices(false)
+    }
+  }
+
+  const handleTestElevenLabsTts = async () => {
+    if (!elevenLabsVoiceValue.trim()) {
+      toast({
+        title: "Voice Required",
+        description: "Enter or select an ElevenLabs default voice before testing.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setTestingElevenLabsTts(true)
+    try {
+      await persistElevenLabsProbeSettings()
+      const response = await testTtsProvider(buildElevenLabsRequest({
+        text: "HomeBrain ElevenLabs test generation."
+      }))
+      toast({
+        title: "ElevenLabs Generated Audio",
+        description: response.message || "ElevenLabs generated a test audio response."
+      })
+      if (Array.isArray(response.voices)) {
+        setElevenLabsVoices(response.voices)
+      }
+    } catch (error: any) {
+      toast({
+        title: "ElevenLabs Test Failed",
+        description: error?.message || "Unable to generate audio with ElevenLabs.",
+        variant: "destructive"
+      })
+    } finally {
+      setTestingElevenLabsTts(false)
+    }
+  }
+
+  const handlePreviewElevenLabsTts = async () => {
+    if (!elevenLabsVoiceValue.trim()) {
+      toast({
+        title: "Voice Required",
+        description: "Enter or select an ElevenLabs default voice before previewing.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    setPreviewingElevenLabsTts(true)
+    try {
+      await persistElevenLabsProbeSettings()
+      const audio = await generateTtsPreview(buildElevenLabsRequest({
+        text: "HomeBrain is speaking through ElevenLabs."
+      }))
+      await playAudioBlob(audio)
+    } catch (error: any) {
+      toast({
+        title: "Preview Failed",
+        description: error?.message || "Unable to preview ElevenLabs audio.",
+        variant: "destructive"
+      })
+    } finally {
+      setPreviewingElevenLabsTts(false)
+    }
+  }
 
   const handleQueryS2Voices = async () => {
     if (!s2ProEndpointValue.trim()) {
@@ -5531,138 +5650,253 @@ export function Settings() {
                     </p>
                   </div>
 
-                  <div>
-                    <label className="text-sm font-medium">S2 Pro Endpoint</label>
-                    <Input
-                      {...register("s2ProEndpoint")}
-                      className="mt-1"
-                      placeholder="http://192.168.2.x:7860"
-                    />
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Supports common local endpoints like <code>/v1/audio/speech</code>, <code>/tts</code>, and <code>/text-to-speech</code>.
-                    </p>
-                  </div>
+                  {ttsProviderValue === "elevenlabs" ? (
+                    <div>
+                      <label className="text-sm font-medium">ElevenLabs API Key</label>
+                      <div className="flex gap-2 mt-1">
+                        <Input
+                          {...register("elevenlabsApiKey")}
+                          type="password"
+                          placeholder={isMaskedSecretPlaceholder(watch("elevenlabsApiKey")) ? "API key configured" : "Enter ElevenLabs API key"}
+                          className="flex-1"
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={handleTestElevenLabsKey}
+                          disabled={testingApiKey}
+                          className="shrink-0"
+                        >
+                          {testingApiKey ? (
+                            <>
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                              Testing...
+                            </>
+                          ) : (
+                            <>
+                              <TestTube className="h-4 w-4 mr-2" />
+                              Test Key
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Uses the stored key when the field shows configured. Enter a new key to replace it.
+                      </p>
+                    </div>
+                  ) : (
+                    <div>
+                      <label className="text-sm font-medium">S2 Pro Endpoint</label>
+                      <Input
+                        {...register("s2ProEndpoint")}
+                        className="mt-1"
+                        placeholder="http://192.168.2.x:7860"
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Supports common local endpoints like <code>/v1/audio/speech</code>, <code>/tts</code>, and <code>/text-to-speech</code>.
+                      </p>
+                    </div>
+                  )}
                 </div>
 
-                <div className="grid gap-4 md:grid-cols-4">
-                  <div>
-                    <label className="text-sm font-medium">S2 API Key</label>
-                    <Input
-                      {...register("s2ProApiKey")}
-                      type="password"
-                      className="mt-1"
-                      placeholder={isMaskedSecretPlaceholder(watch("s2ProApiKey")) ? "API key configured" : "Optional"}
-                    />
+                {ttsProviderValue === "elevenlabs" ? (
+                  <div className="grid gap-4 md:grid-cols-[1fr_auto]">
+                    <div>
+                      <label className="text-sm font-medium">ElevenLabs Default Voice</label>
+                      <Input
+                        {...register("elevenlabsDefaultVoiceId")}
+                        className="mt-1"
+                        list="elevenlabs-tts-voices"
+                        placeholder="Voice ID"
+                      />
+                      <datalist id="elevenlabs-tts-voices">
+                        {elevenLabsVoices.map((voice) => (
+                          <option key={voice.id} value={voice.id}>
+                            {voice.name}
+                          </option>
+                        ))}
+                      </datalist>
+                    </div>
+                    <div className="flex flex-wrap items-end gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={handleQueryElevenLabsVoices}
+                        disabled={loadingElevenLabsVoices}
+                      >
+                        {loadingElevenLabsVoices ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                            Querying...
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw className="h-4 w-4 mr-2" />
+                            Query Voices
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={handleTestElevenLabsTts}
+                        disabled={testingElevenLabsTts}
+                      >
+                        {testingElevenLabsTts ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                            Testing...
+                          </>
+                        ) : (
+                          <>
+                            <TestTube className="h-4 w-4 mr-2" />
+                            Test
+                          </>
+                        )}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={handlePreviewElevenLabsTts}
+                        disabled={previewingElevenLabsTts}
+                      >
+                        {previewingElevenLabsTts ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                            Playing...
+                          </>
+                        ) : (
+                          <>
+                            <Volume2 className="h-4 w-4 mr-2" />
+                            Preview
+                          </>
+                        )}
+                      </Button>
+                    </div>
                   </div>
-                  <div>
-                    <label className="text-sm font-medium">S2 Model</label>
-                    <Input
-                      {...register("s2ProModel")}
-                      className="mt-1"
-                      placeholder="s2-pro"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium">Output Format</label>
-                    <Select value={s2ProOutputFormatValue} onValueChange={(value) => setValue("s2ProOutputFormat", value)}>
-                      <SelectTrigger className="mt-1">
-                        <SelectValue placeholder="Format" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="mp3">MP3</SelectItem>
-                        <SelectItem value="wav">WAV</SelectItem>
-                        <SelectItem value="opus">Opus</SelectItem>
-                        <SelectItem value="flac">FLAC</SelectItem>
-                        <SelectItem value="pcm">PCM</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <label className="text-sm font-medium">Timeout ms</label>
-                    <Input
-                      {...register("s2ProTimeoutMs")}
-                      type="number"
-                      min={1000}
-                      max={120000}
-                      className="mt-1"
-                    />
-                  </div>
-                </div>
+                ) : (
+                  <>
+                    <div className="grid gap-4 md:grid-cols-4">
+                      <div>
+                        <label className="text-sm font-medium">S2 API Key</label>
+                        <Input
+                          {...register("s2ProApiKey")}
+                          type="password"
+                          className="mt-1"
+                          placeholder={isMaskedSecretPlaceholder(watch("s2ProApiKey")) ? "API key configured" : "Optional"}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm font-medium">S2 Model</label>
+                        <Input
+                          {...register("s2ProModel")}
+                          className="mt-1"
+                          placeholder="s2-pro"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-sm font-medium">Output Format</label>
+                        <Select value={s2ProOutputFormatValue} onValueChange={(value) => setValue("s2ProOutputFormat", value)}>
+                          <SelectTrigger className="mt-1">
+                            <SelectValue placeholder="Format" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="mp3">MP3</SelectItem>
+                            <SelectItem value="wav">WAV</SelectItem>
+                            <SelectItem value="opus">Opus</SelectItem>
+                            <SelectItem value="flac">FLAC</SelectItem>
+                            <SelectItem value="pcm">PCM</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <label className="text-sm font-medium">Timeout ms</label>
+                        <Input
+                          {...register("s2ProTimeoutMs")}
+                          type="number"
+                          min={1000}
+                          max={120000}
+                          className="mt-1"
+                        />
+                      </div>
+                    </div>
 
-                <div className="grid gap-4 md:grid-cols-[1fr_auto]">
-                  <div>
-                    <label className="text-sm font-medium">S2 Default Voice</label>
-                    <Input
-                      {...register("s2ProDefaultVoiceId")}
-                      className="mt-1"
-                      list="s2-pro-voices"
-                      placeholder="default"
-                    />
-                    <datalist id="s2-pro-voices">
-                      {s2Voices.map((voice) => (
-                        <option key={voice.id} value={voice.id}>
-                          {voice.name}
-                        </option>
-                      ))}
-                    </datalist>
-                  </div>
-                  <div className="flex flex-wrap items-end gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={handleQueryS2Voices}
-                      disabled={loadingS2Voices}
-                    >
-                      {loadingS2Voices ? (
-                        <>
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
-                          Querying...
-                        </>
-                      ) : (
-                        <>
-                          <RefreshCw className="h-4 w-4 mr-2" />
-                          Query Voices
-                        </>
-                      )}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={handleTestS2Pro}
-                      disabled={testingS2Pro}
-                    >
-                      {testingS2Pro ? (
-                        <>
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
-                          Testing...
-                        </>
-                      ) : (
-                        <>
-                          <TestTube className="h-4 w-4 mr-2" />
-                          Test
-                        </>
-                      )}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={handlePreviewS2Pro}
-                      disabled={previewingS2Pro}
-                    >
-                      {previewingS2Pro ? (
-                        <>
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
-                          Playing...
-                        </>
-                      ) : (
-                        <>
-                          <Volume2 className="h-4 w-4 mr-2" />
-                          Preview
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                </div>
+                    <div className="grid gap-4 md:grid-cols-[1fr_auto]">
+                      <div>
+                        <label className="text-sm font-medium">S2 Default Voice</label>
+                        <Input
+                          {...register("s2ProDefaultVoiceId")}
+                          className="mt-1"
+                          list="s2-pro-voices"
+                          placeholder="default"
+                        />
+                        <datalist id="s2-pro-voices">
+                          {s2Voices.map((voice) => (
+                            <option key={voice.id} value={voice.id}>
+                              {voice.name}
+                            </option>
+                          ))}
+                        </datalist>
+                      </div>
+                      <div className="flex flex-wrap items-end gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={handleQueryS2Voices}
+                          disabled={loadingS2Voices}
+                        >
+                          {loadingS2Voices ? (
+                            <>
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                              Querying...
+                            </>
+                          ) : (
+                            <>
+                              <RefreshCw className="h-4 w-4 mr-2" />
+                              Query Voices
+                            </>
+                          )}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={handleTestS2Pro}
+                          disabled={testingS2Pro}
+                        >
+                          {testingS2Pro ? (
+                            <>
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                              Testing...
+                            </>
+                          ) : (
+                            <>
+                              <TestTube className="h-4 w-4 mr-2" />
+                              Test
+                            </>
+                          )}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={handlePreviewS2Pro}
+                          disabled={previewingS2Pro}
+                        >
+                          {previewingS2Pro ? (
+                            <>
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
+                              Playing...
+                            </>
+                          ) : (
+                            <>
+                              <Volume2 className="h-4 w-4 mr-2" />
+                              Preview
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
