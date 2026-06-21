@@ -634,6 +634,19 @@ test('installServiceHelpers runs setup-services install-service with non-interac
   });
 });
 
+test('platform deploy applies the reverse proxy config after bootstrapping routes', async () => {
+  const servicePath = path.resolve(__dirname, '..', 'services', 'platformDeployService.js');
+  const source = await fsp.readFile(servicePath, 'utf8');
+
+  assert.match(source, /runCustomStep\('Bootstrap reverse proxy state'/);
+  assert.match(source, /runCustomStep\('Apply reverse proxy config'/);
+  assert.match(source, /reverseProxyService\.applyConfig\(`platform-deploy:\$\{job\.actor \|\| 'unknown'\}`\)/);
+  assert.ok(
+    source.indexOf("runCustomStep('Bootstrap reverse proxy state'") < source.indexOf("runCustomStep('Apply reverse proxy config'"),
+    'apply step should run after bootstrap step'
+  );
+});
+
 test('setup-services keeps HomeBrain-managed child services alive across restarts', async () => {
   const setupServicesPath = path.resolve(__dirname, '..', '..', 'scripts', 'setup-services.sh');
   const script = await fsp.readFile(setupServicesPath, 'utf8');

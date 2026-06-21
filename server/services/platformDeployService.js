@@ -1875,6 +1875,20 @@ class PlatformDeployService {
         );
       });
 
+      await runCustomStep('Apply reverse proxy config', async () => {
+        const applySummary = await reverseProxyService.applyConfig(`platform-deploy:${job.actor || 'unknown'}`);
+        const appliedRoutes = Array.isArray(applySummary.appliedRoutes)
+          ? applySummary.appliedRoutes.join(',')
+          : 'none';
+
+        await this.appendJobLog(
+          jobId,
+          `[${new Date().toISOString()}] [Apply reverse proxy config] `
+          + `success=${applySummary.success ? 'yes' : 'no'} `
+          + `appliedRoutes=${appliedRoutes || 'none'}\n`
+        );
+      });
+
       await runCustomStep('Bootstrap identity state', async () => {
         const bootstrapSummary = await oidcService.ensureBootstrapState({
           actor: `platform-deploy:${job.actor || 'unknown'}`

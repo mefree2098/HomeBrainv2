@@ -1,5 +1,8 @@
-// Load environment variables
-require("dotenv").config();
+const path = require("path");
+
+// Load environment variables from the server directory even when systemd starts
+// the process from the repository root.
+require("dotenv").config({ path: path.join(__dirname, ".env") });
 const { acquireSingletonProcessLock } = require("./utils/singletonProcessLock");
 const homebrainServerLock = acquireSingletonProcessLock({
   name: 'homebrain-server',
@@ -110,7 +113,6 @@ const { assertRequiredAuthSecrets } = require("./utils/startupSecrets");
 const cors = require("cors");
 const http = require("http");
 const fs = require("fs");
-const path = require("path");
 const SMARTTHINGS_STARTUP_BOOTSTRAP_DELAY_MS = Math.max(0, Number(process.env.SMARTTHINGS_STARTUP_BOOTSTRAP_DELAY_MS || 5000));
 const AXIOM_STARTUP_SYNC_DELAY_MS = Math.max(0, Number(process.env.AXIOM_STARTUP_SYNC_DELAY_MS || 7000));
 const SHUTDOWN_STEP_TIMEOUT_MS = Math.max(1000, Number(process.env.HOMEBRAIN_SHUTDOWN_STEP_TIMEOUT_MS || 15000));

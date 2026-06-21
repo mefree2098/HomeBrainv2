@@ -12,22 +12,27 @@ if (!process.env.DATABASE_URL || !process.env.DATABASE_URL.startsWith('mongodb')
 const initDb = require('../models/init');
 const reverseProxyService = require('../services/reverseProxyService');
 
-function parseActor(argv) {
+function parseOptions(argv) {
   const actorFlag = argv.find((entry) => entry.startsWith('--actor='));
+  let actor = 'system:bootstrap-script';
+
   if (actorFlag) {
-    return actorFlag.slice('--actor='.length).trim() || 'system:bootstrap-script';
+    actor = actorFlag.slice('--actor='.length).trim() || actor;
+  } else {
+    const actorIndex = argv.indexOf('--actor');
+    if (actorIndex >= 0 && argv[actorIndex + 1]) {
+      actor = String(argv[actorIndex + 1]).trim() || actor;
+    }
   }
 
-  const actorIndex = argv.indexOf('--actor');
-  if (actorIndex >= 0 && argv[actorIndex + 1]) {
-    return String(argv[actorIndex + 1]).trim() || 'system:bootstrap-script';
-  }
-
-  return 'system:bootstrap-script';
+  return {
+    actor,
+    apply: argv.includes('--apply')
+  };
 }
 
 async function main() {
-  const actor = parseActor(process.argv.slice(2));
+  const { actor, apply } = parseOptions(process.argv.slice(2));
   console.log(`Bootstrapping reverse proxy state as ${actor}...`);
 
   await initDb();
@@ -43,6 +48,15 @@ async function main() {
     console.log(`Routes created: ${result.createdRoutes.length > 0 ? result.createdRoutes.join(', ') : 'none'}`);
     console.log(`Routes already present: ${result.existingRoutes.length > 0 ? result.existingRoutes.join(', ') : 'none'}`);
     console.log(`Routes revalidated: ${result.revalidatedRoutes.length > 0 ? result.revalidatedRoutes.join(', ') : 'none'}`);
+
+    if (apply) {
+      const applyResult = await reverseProxyService.applyConfig(actor);
+      const appliedRoutes = Array.isArray(applyResult.appliedRoutes)
+        ? applyResult.appliedRoutes.join(', ')
+        : 'none';
+      console.log(`Caddy config applied: ${applyResult.success ? 'yes' : 'no'}`);
+      console.log(`Caddy routes applied: ${appliedRoutes || 'none'}`);
+    }
   } finally {
     await mongoose.connection.close().catch(() => {});
   }
