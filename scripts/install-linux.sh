@@ -489,7 +489,7 @@ start_and_verify() {
 bootstrap_reverse_proxy_state() {
   print_status "Bootstrapping reverse proxy database state..."
   cd "${HOMEBRAIN_DIR}"
-  node server/scripts/bootstrapReverseProxyState.js --actor system:install
+  node server/scripts/bootstrapReverseProxyState.js --actor system:install --apply
   print_status "Bootstrapping identity database state..."
   node server/scripts/bootstrapIdentityState.js --actor system:install
   print_status "Bootstrapping default admin state..."

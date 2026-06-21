@@ -12,10 +12,17 @@ test('setup-services writes a HomeBrain unit that starts from the repo root', ()
 
   assert.match(script, /WorkingDirectory=\$\{HOMEBRAIN_DIR\}/);
   assert.doesNotMatch(script, /WorkingDirectory=\$\{HOMEBRAIN_DIR\}\/server/);
+  assert.match(script, /EnvironmentFile=-\$\{HOMEBRAIN_DIR\}\/server\/\.env/);
   assert.match(script, /Environment=HOMEBRAIN_BOOTSTRAP_NODE_BIN=\$\{node_bin\}/);
   assert.match(script, /Environment=HOMEBRAIN_PORT=\$\{HOMEBRAIN_PORT\}/);
   assert.match(script, /ExecStart=\$\{HOMEBRAIN_DIR\}\/scripts\/run-homebrain-server-with-modern-node\.sh/);
   assert.doesNotMatch(script, /ExecStart=\$\{node_bin\} scripts\/run-with-modern-node\.js node server\/server\.js/);
+});
+
+test('HomeBrain server loads server/.env independently of the process cwd', () => {
+  const server = fs.readFileSync(path.join(repoRoot, 'server', 'server.js'), 'utf8');
+
+  assert.match(server, /require\("dotenv"\)\.config\(\{ path: path\.join\(__dirname, "\.env"\) \}\)/);
 });
 
 test('setup-services waits for the app mount and avoids tight reboot crash loops', () => {
@@ -46,6 +53,25 @@ test('setup-services neutralizes legacy standalone discovery units', () => {
   assert.doesNotMatch(script, /ExecStart=\/bin\/true/);
   assert.match(script, /systemctl stop "\$\{LEGACY_DISCOVERY_SERVICE_NAME\}\.service"/);
   assert.match(script, /rm -f "\$\{LEGACY_DISCOVERY_SERVICE_PATH\}"/);
+});
+
+test('setup-services removes the legacy direct server start drop-in', () => {
+  const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
+
+  assert.match(script, /LEGACY_DIRECT_SERVER_START_DROPIN_PATH="\$\{SERVICE_DROPIN_DIR\}\/98-direct-server-start\.conf"/);
+  assert.match(script, /neutralize_legacy_direct_server_start_dropin/);
+  assert.match(script, /rm -f "\$\{LEGACY_DIRECT_SERVER_START_DROPIN_PATH\}"/);
+});
+
+test('install and update paths apply Caddy config after bootstrapping reverse proxy state', () => {
+  const setupScript = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
+  const installScript = fs.readFileSync(path.join(repoRoot, 'scripts', 'install-linux.sh'), 'utf8');
+  const bootstrapScript = fs.readFileSync(path.join(repoRoot, 'server', 'scripts', 'bootstrapReverseProxyState.js'), 'utf8');
+
+  assert.match(setupScript, /bootstrapReverseProxyState\.js --actor system:update --apply/);
+  assert.match(installScript, /bootstrapReverseProxyState\.js --actor system:install --apply/);
+  assert.match(bootstrapScript, /argv\.includes\('--apply'\)/);
+  assert.match(bootstrapScript, /reverseProxyService\.applyConfig\(actor\)/);
 });
 
 test('restart helper stops legacy standalone discovery before starting HomeBrain', () => {

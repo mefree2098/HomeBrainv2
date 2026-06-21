@@ -15,6 +15,7 @@ HOMEBRAIN_USER="${HOMEBRAIN_USER:-${SUDO_USER:-$USER}}"
 SERVICE_NAME="homebrain"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 SERVICE_DROPIN_DIR="/etc/systemd/system/${SERVICE_NAME}.service.d"
+LEGACY_DIRECT_SERVER_START_DROPIN_PATH="${SERVICE_DROPIN_DIR}/98-direct-server-start.conf"
 LEGACY_DISCOVERY_SERVICE_NAME="${HOMEBRAIN_LEGACY_DISCOVERY_SERVICE_NAME:-homebrain-discovery}"
 LEGACY_DISCOVERY_SERVICE_PATH="/etc/systemd/system/${LEGACY_DISCOVERY_SERVICE_NAME}.service"
 RESTART_HELPER_SERVICE_NAME="${SERVICE_NAME}-restart-helper"
@@ -470,6 +471,16 @@ neutralize_legacy_discovery_backend_service() {
   print_success "Legacy ${LEGACY_DISCOVERY_SERVICE_NAME} backend unit removed."
 }
 
+neutralize_legacy_direct_server_start_dropin() {
+  if [[ ! -e "${LEGACY_DIRECT_SERVER_START_DROPIN_PATH}" ]]; then
+    return 0
+  fi
+
+  print_warning "Removing legacy direct HomeBrain server start drop-in at ${LEGACY_DIRECT_SERVER_START_DROPIN_PATH}; the managed launcher owns service startup now."
+  sudo rm -f "${LEGACY_DIRECT_SERVER_START_DROPIN_PATH}"
+  print_success "Legacy direct server start drop-in removed."
+}
+
 print_port_listener_summary() {
   sudo ss -lntup 2>/dev/null | grep -E '(:80|:443|:3000|:27017)\b|:12345\b' || true
 }
@@ -520,6 +531,7 @@ StartLimitBurst=30
 Type=simple
 User=${HOMEBRAIN_USER}
 WorkingDirectory=${HOMEBRAIN_DIR}
+EnvironmentFile=-${HOMEBRAIN_DIR}/server/.env
 Environment=NODE_ENV=production
 Environment="HOME=${homebrain_home}"
 Environment="USER=${HOMEBRAIN_USER}"
@@ -603,6 +615,7 @@ EOF
   configure_mongodb_resource_guard
   install_backup_smb_tools
   neutralize_legacy_discovery_backend_service
+  neutralize_legacy_direct_server_start_dropin
 
   sudo systemctl daemon-reload
   sudo systemctl enable "${SERVICE_NAME}"
@@ -1050,7 +1063,7 @@ PYCODE
   wait_for_homebrain_http 20 1
 
   print_status "Bootstrapping reverse proxy database state..."
-  sudo -u "$HOMEBRAIN_USER" bash -lc "cd $(printf '%q' "$HOMEBRAIN_DIR") && node server/scripts/bootstrapReverseProxyState.js --actor system:update"
+  sudo -u "$HOMEBRAIN_USER" bash -lc "cd $(printf '%q' "$HOMEBRAIN_DIR") && node server/scripts/bootstrapReverseProxyState.js --actor system:update --apply"
   print_status "Bootstrapping identity database state..."
   sudo -u "$HOMEBRAIN_USER" bash -lc "cd $(printf '%q' "$HOMEBRAIN_DIR") && node server/scripts/bootstrapIdentityState.js --actor system:update"
   print_status "Bootstrapping default admin state..."
