@@ -5,6 +5,8 @@ const { requireAdmin } = require('./middlewares/auth');
 const Settings = require('../models/Settings');
 const ttsProviderService = require('../services/ttsProviderService');
 
+const VALID_TTS_PROVIDERS = new Set(['elevenlabs', 's2_pro']);
+
 const auth = requireAdmin();
 const ttsReadRateLimit = rateLimit({
   windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_TTS_READ_RATE_LIMIT_WINDOW_MS || 60 * 1000)),
@@ -43,34 +45,52 @@ function isMaskedSecretValue(value) {
   return /^[*•]{4,}[^*•\s]*$/.test(trimmed);
 }
 
-async function buildOverrides(req) {
-  const settings = await Settings.getSettings();
-  const source = req.body || {};
-  return {
+function normalizeProvider(candidate, fallback = 'elevenlabs') {
+  const normalized = typeof candidate === 'string' ? candidate.trim().toLowerCase() : '';
+  if (VALID_TTS_PROVIDERS.has(normalized)) {
+    return normalized;
+  }
+  const normalizedFallback = typeof fallback === 'string' ? fallback.trim().toLowerCase() : '';
+  return VALID_TTS_PROVIDERS.has(normalizedFallback) ? normalizedFallback : 'elevenlabs';
+}
+
+function buildProviderOverrides(settings, source = {}) {
+  const provider = normalizeProvider(source.provider, settings.ttsProvider || 'elevenlabs');
+  const base = {
     settings,
-    provider: source.provider,
-    endpoint: settings.s2ProEndpoint,
-    apiKey: settings.s2ProApiKey,
-    voiceId: source.voiceId || settings.s2ProDefaultVoiceId,
-    model: source.model || settings.s2ProModel,
-    format: source.format || settings.s2ProOutputFormat,
-    timeoutMs: source.timeoutMs || settings.s2ProTimeoutMs,
+    provider,
     text: source.text
   };
+
+  if (provider === 's2_pro') {
+    return {
+      ...base,
+      endpoint: settings.s2ProEndpoint,
+      apiKey: resolveApiKey(source.apiKey, settings.s2ProApiKey, isMaskedSecretValue),
+      voiceId: source.voiceId || settings.s2ProDefaultVoiceId,
+      model: source.model || settings.s2ProModel,
+      format: source.format || settings.s2ProOutputFormat,
+      timeoutMs: source.timeoutMs || settings.s2ProTimeoutMs
+    };
+  }
+
+  return {
+    ...base,
+    apiKey: resolveApiKey(source.apiKey, settings.elevenlabsApiKey, isMaskedSecretValue),
+    voiceId: source.voiceId || settings.elevenlabsDefaultVoiceId,
+    modelId: source.modelId || source.model_id,
+    outputFormat: source.outputFormat || source.output_format
+  };
+}
+
+async function buildOverrides(req) {
+  const settings = await Settings.getSettings();
+  return buildProviderOverrides(settings, req.body || {});
 }
 
 async function buildStoredVoiceOverrides(req) {
   const settings = await Settings.getSettings();
-  return {
-    settings,
-    provider: req.query?.provider,
-    endpoint: settings.s2ProEndpoint,
-    apiKey: settings.s2ProApiKey,
-    voiceId: settings.s2ProDefaultVoiceId,
-    model: settings.s2ProModel,
-    format: settings.s2ProOutputFormat,
-    timeoutMs: settings.s2ProTimeoutMs
-  };
+  return buildProviderOverrides(settings, { provider: req.query?.provider });
 }
 
 router.get('/status', ttsReadRateLimit, auth, async (_req, res) => {
@@ -80,7 +100,7 @@ router.get('/status', ttsReadRateLimit, auth, async (_req, res) => {
       success: true,
       status: {
         provider: settings.ttsProvider || 'elevenlabs',
-        priorityList: settings.ttsProviderPriorityList || ['s2_pro', 'elevenlabs'],
+        priorityList: settings.ttsProviderPriorityList || ['elevenlabs', 's2_pro'],
         s2ProConfigured: Boolean(settings.s2ProEndpoint),
         s2ProEndpoint: settings.s2ProEndpoint || '',
         s2ProDefaultVoiceId: settings.s2ProDefaultVoiceId || '',
@@ -100,8 +120,8 @@ router.get('/status', ttsReadRateLimit, auth, async (_req, res) => {
 
 router.get('/voices', ttsReadRateLimit, auth, async (req, res) => {
   try {
-    const provider = String(req.query?.provider || 's2_pro').trim().toLowerCase();
     const overrides = await buildStoredVoiceOverrides(req);
+    const provider = overrides.provider;
     const result = await ttsProviderService.listVoices(provider, overrides);
     return res.status(200).json({
       ...result,
@@ -119,7 +139,7 @@ router.get('/voices', ttsReadRateLimit, auth, async (req, res) => {
 router.post('/voices/query', ttsProbeRateLimit, auth, async (req, res) => {
   try {
     const overrides = await buildOverrides(req);
-    const provider = String(overrides.provider || 's2_pro').trim().toLowerCase();
+    const provider = overrides.provider;
     const result = await ttsProviderService.listVoices(provider, overrides);
     return res.status(200).json({
       ...result,

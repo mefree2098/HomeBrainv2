@@ -140,6 +140,28 @@ test('legacy model and emotion-tagging opt out keep caller voice settings intact
   });
 });
 
+test('getVoices can require a configured ElevenLabs API key', async (t) => {
+  const cacheRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'homebrain-elevenlabs-voices-'));
+  const service = loadService(cacheRoot);
+  const originalApiKey = service._getApiKey;
+
+  service._getApiKey = async () => '';
+
+  t.after(async () => {
+    service._getApiKey = originalApiKey;
+    await fs.rm(cacheRoot, { recursive: true, force: true });
+    delete process.env.HOMEBRAIN_ELEVENLABS_CACHE_DIR;
+  });
+
+  await assert.rejects(
+    () => service.getVoices({ requireConfigured: true }),
+    /ElevenLabs API key not configured/
+  );
+
+  const fallbackVoices = await service.getVoices();
+  assert.equal(fallbackVoices.length > 0, true);
+});
+
 test('emotion tag sanitization rejects Codex output that changes spoken words or adds SSML', async (t) => {
   const cacheRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'homebrain-elevenlabs-sanitize-'));
   const service = loadService(cacheRoot);

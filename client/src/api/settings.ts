@@ -45,6 +45,7 @@ export const updateSettings = async (settings: {
   hardwareOrbWifiSsid?: string;
   hardwareOrbWifiPassword?: string;
   elevenlabsApiKey?: string;
+  elevenlabsDefaultVoiceId?: string;
   lanWhisperEndpoint?: string;
   lanWhisperApiKey?: string;
   lanWhisperTimeoutMs?: number;
