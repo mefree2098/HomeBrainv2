@@ -109,6 +109,77 @@ test('processCommand handles direct office light control without LLM interpretat
   assert.equal(controlCall[1], 'turnOn');
 });
 
+test('immediate voice fallback prefers exact device names over longer Harmony activity matches', async (t) => {
+  const voiceCommandService = require('../services/voiceCommandService');
+  const deviceService = require('../services/deviceService');
+
+  const originalGetContext = voiceCommandService.getContext;
+  const originalControlDevice = deviceService.controlDevice;
+
+  const exactDeviceId = 'exact-master-bedroom';
+  const harmonyDeviceId = 'harmony-master-bedroom-satellite';
+  let controlledDeviceId = null;
+
+  t.after(() => {
+    voiceCommandService.getContext = originalGetContext;
+    deviceService.controlDevice = originalControlDevice;
+  });
+
+  const exactDevice = {
+    _id: { toString: () => exactDeviceId },
+    id: exactDeviceId,
+    name: 'Master Bedroom',
+    room: 'Unassigned',
+    type: 'light',
+    source: 'insteon',
+    capabilities: ['turn_on', 'turn_off', 'set_brightness'],
+    properties: { source: 'insteon' }
+  };
+  const harmonyActivity = {
+    _id: { toString: () => harmonyDeviceId },
+    id: harmonyDeviceId,
+    name: 'Bedroom Hub - Master Bedroom Satellite',
+    room: 'Bedroom Hub',
+    type: 'switch',
+    source: 'harmony',
+    capabilities: ['turn_on', 'turn_off', 'toggle'],
+    properties: {
+      source: 'harmony',
+      harmonyEntityType: 'activity',
+      harmonyActivityLabel: 'Master Bedroom Satellite'
+    }
+  };
+
+  voiceCommandService.getContext = async () => ({
+    devices: [harmonyActivity, exactDevice],
+    scenes: [],
+    workflows: [],
+    raw: { devices: [], scenes: [], workflows: [] },
+    deviceMap: new Map([
+      [exactDeviceId, exactDevice],
+      [harmonyDeviceId, harmonyActivity]
+    ]),
+    sceneMap: new Map(),
+    workflowMap: new Map()
+  });
+
+  deviceService.controlDevice = async (deviceId) => {
+    controlledDeviceId = deviceId;
+    return { success: true };
+  };
+
+  const result = await voiceCommandService.processCommand({
+    commandText: 'turn on master bedroom',
+    room: null,
+    wakeWord: 'hey anna'
+  });
+
+  assert.equal(controlledDeviceId, exactDeviceId);
+  assert.equal(result.execution.status, 'success');
+  assert.equal(result.execution.actions[0].deviceName, 'Master Bedroom');
+  assert.equal(result.execution.actions[0].deviceId, exactDeviceId);
+});
+
 test('processCommand executes workflow revisions for admin users', async (t) => {
   const voiceCommandService = require('../services/voiceCommandService');
   const workflowService = require('../services/workflowService');

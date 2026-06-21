@@ -602,24 +602,112 @@ RULES
     };
   }
 
+  normalizeVoiceSearchText(value) {
+    return String(value || '')
+      .toLowerCase()
+      .replace(/&apos;|&#39;/g, "'")
+      .replace(/&amp;/g, 'and')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  extractDeviceTargetPhrase(commandText) {
+    let target = this.normalizeVoiceSearchText(commandText);
+    if (!target) {
+      return '';
+    }
+
+    const actionPrefixes = [
+      /^(?:please\s+)?(?:turn|switch|power)\s+(?:on|off)\s+(?:the\s+)?/,
+      /^(?:please\s+)?(?:turn|switch)\s+(?:the\s+)?/,
+      /^(?:please\s+)?(?:set|dim|brighten|fade|activate|deactivate|run|start|stop|toggle)\s+(?:the\s+)?/,
+      /^(?:please\s+)?(?:open|close|lock|unlock)\s+(?:the\s+)?/
+    ];
+
+    for (const pattern of actionPrefixes) {
+      target = target.replace(pattern, '').trim();
+    }
+
+    target = target
+      .replace(/\b(?:to|at)\s+\d{1,3}\s*(?:percent|%)?\s*$/i, '')
+      .replace(/\b(?:to|at)\s+\d{1,3}\s*(?:degrees?)?\s*$/i, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    return target;
+  }
+
+  getDeviceVoiceAliases(device = {}) {
+    const aliases = new Set();
+    const pushAlias = (value) => {
+      const normalized = this.normalizeVoiceSearchText(value);
+      if (normalized) {
+        aliases.add(normalized);
+      }
+    };
+
+    pushAlias(device.name);
+    pushAlias(device.properties?.harmonyActivityLabel);
+    pushAlias(device.properties?.harmonyDeviceLabel);
+
+    const normalizedName = this.normalizeVoiceSearchText(device.name);
+    const normalizedRoom = this.normalizeVoiceSearchText(device.room);
+    if (normalizedName && normalizedRoom && normalizedName.startsWith(`${normalizedRoom} `)) {
+      pushAlias(normalizedName.slice(normalizedRoom.length).replace(/^[-\s]+/, ''));
+    }
+
+    return [...aliases];
+  }
+
   findBestDevice(commandText, devices) {
-    const text = commandText.toLowerCase();
+    const text = this.normalizeVoiceSearchText(commandText);
+    const targetPhrase = this.extractDeviceTargetPhrase(commandText);
     let best = null;
-    let bestScore = 0;
+    let bestScore = Number.NEGATIVE_INFINITY;
+
+    if (targetPhrase) {
+      for (const device of devices) {
+        const aliases = this.getDeviceVoiceAliases(device);
+        if (aliases.some((alias) => alias === targetPhrase)) {
+          return device;
+        }
+        if (aliases.some((alias) => alias === `${targetPhrase} light` || alias === `${targetPhrase} lights`)) {
+          return device;
+        }
+      }
+    }
+
+    const targetTokens = (targetPhrase || text).split(/\s+/).filter((token) => token.length >= 3);
 
     for (const device of devices) {
-      const nameTokens = device.name.toLowerCase().split(/\s+/);
+      const aliases = this.getDeviceVoiceAliases(device);
+      const nameTokens = aliases.join(' ').split(/\s+/);
       let score = 0;
-      for (const token of nameTokens) {
+      for (const token of targetTokens.length ? targetTokens : nameTokens) {
         if (token.length < 3) continue;
-        if (text.includes(token)) {
-          score += 1;
+        if (aliases.some((alias) => alias.includes(token)) || text.includes(token)) {
+          score += 2;
         }
       }
 
-      if (device.room && text.includes(device.room.toLowerCase())) {
+      if (targetPhrase && aliases.some((alias) => alias.includes(targetPhrase))) {
+        score += 4;
+      }
+
+      if (device.room && text.includes(this.normalizeVoiceSearchText(device.room))) {
         score += 1.5;
       }
+
+      if (
+        device.source === 'harmony' ||
+        device.properties?.source === 'harmony' ||
+        device.properties?.harmonyEntityType
+      ) {
+        score -= 0.75;
+      }
+
+      score -= Math.max(0, nameTokens.length - targetTokens.length) * 0.1;
 
       if (score > bestScore) {
         best = device;
@@ -627,7 +715,7 @@ RULES
       }
     }
 
-    return best;
+    return bestScore > 0 ? best : null;
   }
 
   extractNumber(commandText) {

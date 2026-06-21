@@ -22,6 +22,12 @@ const voiceDiagnosticsRateLimit = rateLimit({
   standardHeaders: true,
   legacyHeaders: false
 });
+const browserVoiceAudioRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false
+});
 
 function collectVoiceWebSocketStats(app) {
   return ['voiceWebSocket', 'voiceWebSocketHttp']
@@ -249,6 +255,105 @@ router.post(['/browser/acknowledgment', '/browser/acknowledgment/'], requireUser
     });
   }
 });
+
+async function handleBrowserResponseAudio(req, res) {
+  const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+  const wakeWord = typeof req.body?.wakeWord === 'string' ? req.body.wakeWord.trim() : '';
+  const requestedVoiceId = typeof req.body?.voiceId === 'string' ? req.body.voiceId.trim() : '';
+
+  if (!text) {
+    return res.status(400).json({
+      success: false,
+      message: 'Text is required for browser response audio'
+    });
+  }
+
+  if (text.length > 5000) {
+    return res.status(400).json({
+      success: false,
+      message: 'Text is too long. Maximum 5000 characters allowed.'
+    });
+  }
+
+  let fallbackVoiceId = requestedVoiceId;
+  try {
+    const settings = await Settings.getSettings();
+    const configuredVoiceId = settings?.elevenlabsDefaultVoiceId;
+    if (!fallbackVoiceId && typeof configuredVoiceId === 'string' && configuredVoiceId.trim().length > 0) {
+      fallbackVoiceId = configuredVoiceId.trim();
+    }
+  } catch (_error) {
+    // Keep the requested voice when settings are unavailable.
+  }
+
+  let profile = null;
+  try {
+    profile = await voiceAcknowledgmentService.resolveProfileForWakeWord(wakeWord);
+  } catch (error) {
+    console.warn('POST /api/voice/browser/response-audio - Wake-word profile lookup failed:', error.message);
+  }
+
+  const voiceId = profile?.voiceId || fallbackVoiceId;
+  if (!voiceId || voiceId === 'default') {
+    return res.status(204).end();
+  }
+
+  try {
+    const cachedAudioPath = await voiceAcknowledgmentService.findCachedAudio(voiceId, text);
+    if (cachedAudioPath) {
+      const stat = await fs.promises.stat(cachedAudioPath);
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Content-Length', stat.size);
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Browser-Voice-Source', profile ? 'wake-word-profile-cache' : 'fallback-cache');
+      res.setHeader('X-Browser-Voice-Id', voiceId);
+      const stream = fs.createReadStream(cachedAudioPath);
+      stream.on('error', (streamError) => {
+        console.error('POST /api/voice/browser/response-audio - Stream error:', streamError.message);
+        if (!res.headersSent) {
+          res.status(500).json({
+            success: false,
+            message: 'Failed to stream cached response audio'
+          });
+          return;
+        }
+        res.end();
+      });
+      stream.pipe(res);
+      return;
+    }
+
+    const speech = await elevenLabsService.textToSpeechDetailed(text, voiceId);
+    const audioBuffer = speech.audioBuffer;
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Length', audioBuffer.length);
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Browser-Voice-Source', profile ? 'wake-word-profile-tts' : 'fallback-tts');
+    res.setHeader('X-Browser-Voice-Id', voiceId);
+    res.setHeader('X-ElevenLabs-Cache', speech.cacheHit ? 'hit' : 'miss');
+    res.setHeader('X-ElevenLabs-Model', speech.modelId || 'unknown');
+    res.setHeader('X-ElevenLabs-Emotion-Tagging', speech.tagger?.status || 'unknown');
+    return res.status(200).send(audioBuffer);
+  } catch (error) {
+    console.error('POST /api/voice/browser/response-audio - Error:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to generate browser response audio'
+    });
+  }
+}
+
+/**
+ * @route POST /api/voice/browser/response-audio
+ * @desc Resolve browser voice response audio by wake word on the server
+ * @access Private
+ */
+router.post(
+  ['/browser/response-audio', '/browser/response-audio/'],
+  browserVoiceAudioRateLimit,
+  requireUser(),
+  handleBrowserResponseAudio
+);
 
 /**
  * @route POST /api/voice/commands/interpret
