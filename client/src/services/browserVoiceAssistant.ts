@@ -1,4 +1,4 @@
-import { fetchBrowserWakeAcknowledgmentAudio, interpretVoiceCommand, transcribeBrowserAudio } from "@/api/voice";
+import { fetchBrowserResponseAudio, fetchBrowserWakeAcknowledgmentAudio, interpretVoiceCommand, transcribeBrowserAudio } from "@/api/voice";
 import { getUserProfiles } from "@/api/profiles";
 import { textToSpeechElevenLabs, playAudioBlob } from "@/api/elevenLabs";
 import { getSettings } from "@/api/settings";
@@ -1685,6 +1685,24 @@ class BrowserVoiceAssistant {
 
     const voiceId = this.resolveVoiceId(wakeWord);
     try {
+      try {
+        this.updateStatus({}, `requesting server-resolved response audio (wake=${wakeWord || "unknown"})`);
+        const serverAudioBlob = await fetchBrowserResponseAudio({
+          text,
+          wakeWord,
+          voiceId
+        });
+        if (serverAudioBlob) {
+          await playAudioBlob(serverAudioBlob);
+          this.updateStatus({}, "response playback completed (server-resolved ElevenLabs)");
+          return;
+        }
+        this.updateStatus({}, "server-resolved response audio unavailable");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "server response audio failed";
+        this.updateStatus({}, `server-resolved response audio failed: ${message}`);
+      }
+
       if (voiceId) {
         try {
           this.updateStatus({}, `playing ElevenLabs response (voice=${voiceId})`);
