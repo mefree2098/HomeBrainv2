@@ -283,6 +283,7 @@ class HomeBrainRemoteDevice {
     this.commandProc = null;
     this.commandSessionId = null;
     this.commandSequence = 0;
+    this.commandAudioSource = null;
     this.pendingCommandPreRollBuffer = null;
 
     // Wake word detection
@@ -1439,6 +1440,29 @@ class HomeBrainRemoteDevice {
     return Buffer.from(this.wakeWordPreRollBuffer.subarray(start));
   }
 
+  streamCommandAudioChunk(data, metadata = {}) {
+    if (!this.isRecording || !this.commandSessionId || !data) {
+      return false;
+    }
+
+    const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    if (!chunk.length) {
+      return false;
+    }
+
+    this.sendMessage({
+      type: 'audio_data',
+      sessionId: this.commandSessionId,
+      sequence: this.commandSequence++,
+      audioData: chunk.toString('base64'),
+      sampleRate: this.wakeWordSampleRate,
+      channels: 1,
+      format: 'S16LE',
+      ...metadata
+    });
+    return true;
+  }
+
   getWakeWordMinRms() {
     return normalizeWakeWordMinRms(this.config.wakeWord?.vad?.minRms);
   }
@@ -2070,10 +2094,16 @@ class HomeBrainRemoteDevice {
         const micStream = this.recordingStream.stream();
 
         micStream.on('data', (data) => {
-          if (!this.isWakeWordListening || this.isRecording) {
+          const audioChunk = Buffer.isBuffer(data) ? Buffer.from(data) : Buffer.from(data);
+          if (this.isRecording) {
+            this.streamCommandAudioChunk(audioChunk, { source: 'wake_stream' });
             return;
           }
-          this.enqueueSidecarAudio(data);
+          if (!this.isWakeWordListening) {
+            this.appendWakeWordPreRoll(audioChunk);
+            return;
+          }
+          this.enqueueSidecarAudio(audioChunk);
         });
 
         micStream.on('error', (streamError) => {
@@ -2109,11 +2139,16 @@ class HomeBrainRemoteDevice {
       const micStream = this.recordingStream.stream();
 
       micStream.on('data', (data) => {
-        if (!this.isWakeWordListening || this.isRecording) {
+        const audioChunk = Buffer.isBuffer(data) ? Buffer.from(data) : Buffer.from(data);
+        if (this.isRecording) {
+          this.streamCommandAudioChunk(audioChunk, { source: 'wake_stream' });
+          return;
+        }
+        if (!this.isWakeWordListening) {
+          this.appendWakeWordPreRoll(audioChunk);
           return;
         }
 
-        const audioChunk = Buffer.isBuffer(data) ? Buffer.from(data) : Buffer.from(data);
         this.wakeWordDetectionQueue = this.wakeWordDetectionQueue
           .then(() => this.processAudioForWakeWord(audioChunk))
           .catch((processingError) => {
@@ -2770,18 +2805,22 @@ class HomeBrainRemoteDevice {
       return;
     }
 
-    // Pause wake word mic to free the device while recording
+    // Reuse the wake-word mic stream for command audio when it is already open.
+    // USB speakerphones are much more reliable when ALSA is not torn down and
+    // reopened between wake detection and command capture.
+    const reuseWakeStream = Boolean(this.recordingStream);
     this.resumeWakeWordAfterCommand = false;
     this.isWakeWordListening = false;
-    if (this.recordingStream) {
-      try { this.recordingStream.stop(); } catch (_) {}
-      this.recordingStream = null;
+    if (reuseWakeStream) {
       this.resumeWakeWordAfterCommand = true;
+      this.commandAudioSource = 'wake_stream';
+    } else {
+      this.commandAudioSource = 'arecord';
     }
     this.stopFeatureSidecar();
 
     // Default: stream PCM to hub during listening window
-    console.log('Starting voice command recording (pcm)...');
+    console.log(`Starting voice command recording (pcm via ${this.commandAudioSource})...`);
     this.isRecording = true;
 
     const sessionId = `${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
@@ -2800,16 +2839,13 @@ class HomeBrainRemoteDevice {
     const preRollBuffer = this.pendingCommandPreRollBuffer;
     this.pendingCommandPreRollBuffer = null;
     if (Buffer.isBuffer(preRollBuffer) && preRollBuffer.length > 0) {
-      this.sendMessage({
-        type: 'audio_data',
-        sessionId,
-        sequence: this.commandSequence++,
-        audioData: preRollBuffer.toString('base64'),
-        sampleRate: this.wakeWordSampleRate,
-        channels: 1,
-        format: 'S16LE',
+      this.streamCommandAudioChunk(preRollBuffer, {
         preRoll: true
       });
+    }
+
+    if (reuseWakeStream) {
+      return;
     }
 
     const startCommandCapture = (attempt = 0) => {
@@ -2828,17 +2864,7 @@ class HomeBrainRemoteDevice {
           this.commandProc = p;
           p.stdout.on('data', (buf) => {
             sawAudio = true;
-            if (!this.isRecording || !this.commandSessionId) return;
-            const b64 = Buffer.from(buf).toString('base64');
-            this.sendMessage({
-              type: 'audio_data',
-              sessionId: this.commandSessionId,
-              sequence: this.commandSequence++,
-              audioData: b64,
-              sampleRate: this.wakeWordSampleRate,
-              channels: 1,
-              format: 'S16LE'
-            });
+            this.streamCommandAudioChunk(buf, { source: 'arecord' });
           });
           p.on('close', (code) => {
             if (this.isRecording) {
@@ -2889,6 +2915,7 @@ class HomeBrainRemoteDevice {
 
     const shouldResumeWakeWord = this.resumeWakeWordAfterCommand;
     this.resumeWakeWordAfterCommand = false;
+    this.commandAudioSource = null;
 
     if (this.commandSessionId) {
       this.sendMessage({

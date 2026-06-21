@@ -358,6 +358,60 @@ test('startVoiceRecording prepends pending wake pre-roll audio', async (t) => {
   device.stopVoiceRecording();
 });
 
+test('startVoiceRecording reuses the active wake mic stream for command audio', async (t) => {
+  const childProcess = require('child_process');
+  const originalSpawn = childProcess.spawn;
+  t.after(() => {
+    childProcess.spawn = originalSpawn;
+  });
+
+  let spawned = 0;
+  childProcess.spawn = () => {
+    spawned += 1;
+    throw new Error('command recording should reuse the active wake stream');
+  };
+
+  const device = new HomeBrainRemoteDevice({
+    audio: { recordingDevice: 'sysdefault:CARD=MS', sampleRate: 16000, channels: 1 },
+    wakeWord: {}
+  });
+  const messages = [];
+  let stopped = false;
+  let restarts = 0;
+
+  device.recordingStream = {
+    stop() {
+      stopped = true;
+    }
+  };
+  device.sidecar = createFakeSidecar();
+  device.sendMessage = (message) => {
+    messages.push(message);
+    return true;
+  };
+  device.restartWakeWordDetection = async () => {
+    restarts += 1;
+  };
+
+  device.startVoiceRecording(5000, true);
+  device.streamCommandAudioChunk(Buffer.from([9, 8, 7, 6]), { source: 'wake_stream' });
+
+  assert.equal(spawned, 0);
+  assert.equal(stopped, false);
+  assert.equal(device.recordingStream != null, true);
+  assert.equal(device.sidecar, null);
+  assert.equal(messages[0].type, 'audio_data');
+  assert.equal(messages[0].isStart, true);
+  assert.equal(messages[1].source, 'wake_stream');
+  assert.equal(messages[1].sequence, 0);
+  assert.deepEqual(Buffer.from(messages[1].audioData, 'base64'), Buffer.from([9, 8, 7, 6]));
+
+  device.stopVoiceRecording();
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  assert.equal(restarts, 1);
+});
+
 test('isWakeWordDetectorActive treats the feature sidecar as an active detector', () => {
   const device = new HomeBrainRemoteDevice({
     audio: {},

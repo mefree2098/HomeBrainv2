@@ -43,6 +43,72 @@ test('getDeviceCapabilities keeps fan-labeled Insteon devices on the dimmer path
   assert.deepEqual(capabilities, ['turn_on', 'turn_off', 'toggle', 'set_brightness']);
 });
 
+test('processCommand handles direct office light control without LLM interpretation', async (t) => {
+  const voiceCommandService = require('../services/voiceCommandService');
+  const deviceService = require('../services/deviceService');
+
+  const originalGetContext = voiceCommandService.getContext;
+  const originalInterpretCommand = voiceCommandService.interpretCommand;
+  const originalControlDevice = deviceService.controlDevice;
+
+  t.after(() => {
+    voiceCommandService.getContext = originalGetContext;
+    voiceCommandService.interpretCommand = originalInterpretCommand;
+    deviceService.controlDevice = originalControlDevice;
+  });
+
+  const officeId = 'office-device-id';
+  const officeDevice = {
+    _id: { toString: () => officeId },
+    name: 'Office',
+    room: 'Unassigned',
+    type: 'light',
+    properties: { source: 'insteon' }
+  };
+
+  let llmCalled = false;
+  let controlCall = null;
+
+  voiceCommandService.getContext = async () => ({
+    devices: [{
+      id: officeId,
+      name: 'Office',
+      room: 'Unassigned',
+      type: 'light',
+      source: 'insteon',
+      capabilities: ['turn_on', 'turn_off', 'set_brightness'],
+      properties: officeDevice.properties
+    }],
+    scenes: [],
+    workflows: [],
+    raw: { devices: [officeDevice], scenes: [], workflows: [] },
+    deviceMap: new Map([[officeId, officeDevice]]),
+    sceneMap: new Map(),
+    workflowMap: new Map()
+  });
+  voiceCommandService.interpretCommand = async () => {
+    llmCalled = true;
+    throw new Error('LLM should not be called for direct office control');
+  };
+  deviceService.controlDevice = async (...args) => {
+    controlCall = args;
+    return { success: true };
+  };
+
+  const result = await voiceCommandService.processCommand({
+    commandText: 'turn on the office',
+    room: 'Vault',
+    wakeWord: 'anna'
+  });
+
+  assert.equal(llmCalled, false);
+  assert.equal(result.intent.action, 'device_control');
+  assert.equal(result.execution.status, 'success');
+  assert.equal(result.execution.actions[0].deviceName, 'Office');
+  assert.equal(controlCall[0], officeId);
+  assert.equal(controlCall[1], 'turnOn');
+});
+
 test('processCommand executes workflow revisions for admin users', async (t) => {
   const voiceCommandService = require('../services/voiceCommandService');
   const workflowService = require('../services/workflowService');
