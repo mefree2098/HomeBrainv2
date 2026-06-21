@@ -1171,7 +1171,8 @@ class SenseService {
     await this.upsertSenseDevices({
       integration,
       summary: this.latestRealtimeSummary,
-      emitUpdates: false
+      emitUpdates: false,
+      realtimeConnected: false
     });
 
     return catalog;
@@ -1533,7 +1534,8 @@ class SenseService {
     const updatedDevices = await this.upsertSenseDevices({
       integration,
       summary,
-      emitUpdates: true
+      emitUpdates: true,
+      realtimeConnected: true
     });
 
     if (updatedDevices.length > 0) {
@@ -1595,8 +1597,21 @@ class SenseService {
     return this.latestTrendSummary.monitor || {};
   }
 
-  async upsertSenseDevices({ integration, summary = null, emitUpdates = true } = {}) {
+  async upsertSenseDevices({
+    integration,
+    summary = null,
+    emitUpdates = true,
+    realtimeConnected = Boolean(summary)
+  } = {}) {
     const updatedDevices = [];
+    const liveSnapshot = asPlainObject(integration.snapshot?.live);
+    const hasRealtimeSummary = summary && typeof summary === 'object';
+    const feedConnected = realtimeConnected === true || integration.isConnected === true;
+    const dataStale = feedConnected !== true;
+    const observedAt = parseOptionalDate(summary?.observedAt)
+      || parseOptionalDate(integration.lastRealtimeAt)
+      || parseOptionalDate(liveSnapshot.observedAt)
+      || new Date();
     const currentPowerByDeviceId = new Map();
     const activeDevices = safeArray(summary?.activeDevices)
       .filter((entry) => entry?.synthetic !== true);
@@ -1619,7 +1634,6 @@ class SenseService {
       }
     });
 
-    const observedAt = parseOptionalDate(summary?.observedAt) || new Date();
     const monitorName = trimString(integration.monitorName, 'Sense Monitor');
     const rateCentsPerKwh = sanitizeElectricityRateCentsPerKwh(
       integration.electricityRateCentsPerKwh,
@@ -1657,10 +1671,53 @@ class SenseService {
       });
     }
 
+    const previousMonitorSense = asPlainObject(monitorDevice.properties?.sense);
+    const monitorPowerW = roundNumber(pickFirstNumber(
+      summary?.powerW,
+      liveSnapshot.powerW,
+      previousMonitorSense.currentPowerW,
+      0
+    ), 1) || 0;
+    const monitorSolarW = roundNumber(pickFirstNumber(
+      summary?.solarW,
+      liveSnapshot.solarW,
+      previousMonitorSense.solarPowerW,
+      0
+    ), 1) || 0;
+    const monitorNetW = roundNumber(pickFirstNumber(
+      summary?.netW,
+      liveSnapshot.netW,
+      previousMonitorSense.netPowerW,
+      monitorPowerW - monitorSolarW
+    ), 1) || 0;
+    const monitorAlwaysOnW = roundNumber(pickFirstNumber(
+      summary?.alwaysOnW,
+      liveSnapshot.alwaysOnW,
+      previousMonitorSense.alwaysOnW
+    ), 1);
+    const monitorOtherW = roundNumber(pickFirstNumber(
+      summary?.otherW,
+      liveSnapshot.otherW,
+      previousMonitorSense.otherW,
+      0
+    ), 1) || 0;
+    const monitorUntrackedW = roundNumber(pickFirstNumber(
+      summary?.untrackedW,
+      liveSnapshot.untrackedW,
+      previousMonitorSense.untrackedW,
+      0
+    ), 1) || 0;
+    const monitorActiveDeviceCount = pickFirstNumber(
+      summary?.activeDeviceCount,
+      liveSnapshot.activeDeviceCount,
+      previousMonitorSense.activeDeviceCount,
+      0
+    ) || 0;
+
     monitorDevice.name = `${monitorName} Whole Home`;
     monitorDevice.room = trimString(integration.room, monitorDevice.room || 'Electrical Panel');
-    monitorDevice.status = summary ? summary.powerW > 0 : true;
-    monitorDevice.isOnline = integration.isConnected === true;
+    monitorDevice.status = monitorPowerW > 0;
+    monitorDevice.isOnline = feedConnected;
     monitorDevice.lastSeen = observedAt;
     monitorDevice.brand = 'Sense';
     monitorDevice.model = 'Home Energy Monitor';
@@ -1673,17 +1730,21 @@ class SenseService {
         monitorId: integration.monitorId,
         monitorName,
         solarConfigured: integration.solarConfigured === true,
-        currentPowerW: summary?.powerW ?? 0,
-        solarPowerW: summary?.solarW ?? 0,
-        netPowerW: summary?.netW ?? 0,
-        alwaysOnW: summary?.alwaysOnW ?? null,
-        otherW: summary?.otherW ?? 0,
-        untrackedW: summary?.untrackedW ?? 0,
-        activeDeviceCount: summary?.activeDeviceCount ?? 0,
-        voltage: safeArray(summary?.voltage),
-        frequencyHz: summary?.frequencyHz ?? null,
+        feedConnected,
+        dataStale,
+        currentPowerW: monitorPowerW,
+        solarPowerW: monitorSolarW,
+        netPowerW: monitorNetW,
+        alwaysOnW: monitorAlwaysOnW,
+        otherW: monitorOtherW,
+        untrackedW: monitorUntrackedW,
+        activeDeviceCount: monitorActiveDeviceCount,
+        voltage: safeArray(summary?.voltage).length > 0
+          ? safeArray(summary?.voltage)
+          : safeArray(previousMonitorSense.voltage),
+        frequencyHz: pickFirstNumber(summary?.frequencyHz, previousMonitorSense.frequencyHz),
         electricityRateCentsPerKwh: rateCentsPerKwh,
-        currentCostUsdPerHour: calculateCurrentCostRateUsdPerHour(summary?.powerW ?? 0, rateCentsPerKwh),
+        currentCostUsdPerHour: calculateCurrentCostRateUsdPerHour(monitorPowerW, rateCentsPerKwh),
         monthToDateCostUsd: calculateCostUsd(monitorTrendSummary.month?.consumptionTotalKwh, rateCentsPerKwh),
         projectedMonthCostUsd: calculateCostUsd(monitorMonthProjection.projectedMonthKwh, rateCentsPerKwh),
         lastSnapshotAt: observedAt.toISOString(),
@@ -1725,7 +1786,13 @@ class SenseService {
       }
 
       const current = currentPowerByDeviceId.get(catalogEntry.senseDeviceId) || null;
-      const powerW = current?.powerW ?? 0;
+      const previousSense = asPlainObject(device.properties?.sense);
+      const powerW = hasRealtimeSummary
+        ? (roundNumber(current?.powerW ?? 0, 1) || 0)
+        : (roundNumber(pickFirstNumber(previousSense.currentPowerW, 0), 1) || 0);
+      const sharePct = hasRealtimeSummary
+        ? (roundNumber(current?.sharePct ?? 0, 1) || 0)
+        : (roundNumber(pickFirstNumber(previousSense.currentSharePct, 0), 1) || 0);
       const deviceTrendSummary = this.getDeviceTrendSummary(catalogEntry.senseDeviceId);
       const deviceMonthProjection = projectMonthlyEnergyWindow({
         monthEnergyKwh: deviceTrendSummary.month?.energyKwh,
@@ -1738,7 +1805,7 @@ class SenseService {
       device.room = trimString(catalogEntry.room, trimString(integration.room, device.room || 'Electrical Panel'));
       device.type = 'sensor';
       device.status = powerW > 0.05;
-      device.isOnline = integration.isConnected === true;
+      device.isOnline = integration.enabled !== false;
       device.lastSeen = observedAt;
       device.brand = 'Sense';
       device.model = trimString(catalogEntry.model, device.model || 'Detected Load');
@@ -1751,8 +1818,10 @@ class SenseService {
           monitorId: integration.monitorId,
           senseDeviceId: catalogEntry.senseDeviceId,
           icon: trimString(catalogEntry.icon),
-          currentPowerW: roundNumber(powerW, 1) || 0,
-          currentSharePct: current?.sharePct ?? 0,
+          feedConnected,
+          dataStale,
+          currentPowerW: powerW,
+          currentSharePct: sharePct,
           electricityRateCentsPerKwh: rateCentsPerKwh,
           currentCostUsdPerHour: calculateCurrentCostRateUsdPerHour(powerW, rateCentsPerKwh),
           monthToDateCostUsd: calculateCostUsd(deviceTrendSummary.month?.energyKwh, rateCentsPerKwh),
@@ -1854,7 +1923,8 @@ class SenseService {
     await this.upsertSenseDevices({
       integration,
       summary: this.latestRealtimeSummary,
-      emitUpdates: true
+      emitUpdates: true,
+      realtimeConnected: false
     });
 
     integration.lastTrendSyncAt = new Date();

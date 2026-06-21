@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const axios = require('axios');
 
 const senseService = require('../services/senseService');
+const Device = require('../models/Device');
 const SenseIntegration = require('../models/SenseIntegration');
 
 const {
@@ -342,6 +343,220 @@ test('updateRealtimeState persists important websocket state transitions with up
   } finally {
     SenseIntegration.updateOne = originalUpdateOne;
   }
+});
+
+const buildSenseTestDevice = ({
+  id,
+  name,
+  entityType,
+  senseDeviceId = null,
+  isOnline = false,
+  status = false,
+  currentPowerW = 0,
+  currentSharePct = 0,
+  lastSnapshotAt = '2026-06-17T19:34:11.427Z'
+}) => ({
+  _id: id,
+  name,
+  type: 'sensor',
+  room: 'Electrical Panel',
+  status,
+  isOnline,
+  brand: 'Sense',
+  model: entityType === 'monitor' ? 'Home Energy Monitor' : 'Detected Load',
+  lastSeen: new Date(lastSnapshotAt),
+  properties: {
+    source: 'sense',
+    sense: {
+      entityType,
+      monitorId: 'monitor-1',
+      ...(senseDeviceId ? { senseDeviceId } : {}),
+      currentPowerW,
+      currentSharePct,
+      lastSnapshotAt
+    }
+  },
+  saveCount: 0,
+  async save() {
+    this.saveCount += 1;
+    return this;
+  }
+});
+
+const installSenseDeviceFindStub = ({ monitorDevice, loadDevice }, t) => {
+  const originalFind = Device.find;
+  const originalDeleteMany = Device.deleteMany;
+
+  Device.find = async (query = {}) => {
+    const entityType = query['properties.sense.entityType'];
+    if (entityType === 'monitor') {
+      return [monitorDevice];
+    }
+
+    if (
+      entityType === 'device'
+      && query['properties.sense.senseDeviceId'] === loadDevice.properties.sense.senseDeviceId
+    ) {
+      return [loadDevice];
+    }
+
+    return [];
+  };
+  Device.deleteMany = async () => ({ deletedCount: 0 });
+
+  t.after(() => {
+    Device.find = originalFind;
+    Device.deleteMany = originalDeleteMany;
+  });
+};
+
+test('upsertSenseDevices marks stale Sense telemetry without taking every detected load offline', async (t) => {
+  const service = new senseService.SenseService();
+  const staleRealtimeAt = '2026-06-17T19:34:11.427Z';
+  const monitorDevice = buildSenseTestDevice({
+    id: 'monitor-device',
+    name: 'Main Panel Whole Home',
+    entityType: 'monitor',
+    isOnline: true,
+    status: true,
+    currentPowerW: 2810.6,
+    lastSnapshotAt: staleRealtimeAt
+  });
+  const loadDevice = buildSenseTestDevice({
+    id: 'load-device',
+    name: 'Dryer',
+    entityType: 'device',
+    senseDeviceId: 'load-1',
+    isOnline: false,
+    status: false,
+    currentPowerW: 42.5,
+    currentSharePct: 10.2,
+    lastSnapshotAt: staleRealtimeAt
+  });
+
+  installSenseDeviceFindStub({ monitorDevice, loadDevice }, t);
+  service.deviceCatalog = new Map([
+    ['load-1', {
+      senseDeviceId: 'load-1',
+      name: 'Dryer',
+      icon: 'dryer',
+      room: 'Electrical Panel',
+      model: 'Detected Load'
+    }]
+  ]);
+
+  await service.upsertSenseDevices({
+    integration: {
+      monitorId: 'monitor-1',
+      monitorName: 'Main Panel',
+      room: 'Electrical Panel',
+      enabled: true,
+      isConnected: false,
+      lastRealtimeAt: new Date(staleRealtimeAt),
+      snapshot: {
+        live: {
+          observedAt: staleRealtimeAt,
+          powerW: 2810.6,
+          solarW: 0,
+          netW: 2810.6,
+          alwaysOnW: 350,
+          otherW: 120,
+          activeDeviceCount: 3
+        }
+      },
+      electricityRateCentsPerKwh: 11
+    },
+    summary: null,
+    emitUpdates: false,
+    realtimeConnected: false
+  });
+
+  assert.equal(monitorDevice.isOnline, false);
+  assert.equal(monitorDevice.properties.sense.feedConnected, false);
+  assert.equal(monitorDevice.properties.sense.dataStale, true);
+  assert.equal(monitorDevice.properties.sense.currentPowerW, 2810.6);
+  assert.equal(monitorDevice.lastSeen.toISOString(), staleRealtimeAt);
+
+  assert.equal(loadDevice.isOnline, true);
+  assert.equal(loadDevice.status, true);
+  assert.equal(loadDevice.properties.sense.feedConnected, false);
+  assert.equal(loadDevice.properties.sense.dataStale, true);
+  assert.equal(loadDevice.properties.sense.currentPowerW, 42.5);
+  assert.equal(loadDevice.properties.sense.currentSharePct, 10.2);
+  assert.equal(loadDevice.properties.sense.lastSnapshotAt, staleRealtimeAt);
+  assert.equal(loadDevice.lastSeen.toISOString(), staleRealtimeAt);
+});
+
+test('upsertSenseDevices treats a fresh Sense realtime payload as connected even before integration save', async (t) => {
+  const service = new senseService.SenseService();
+  const monitorDevice = buildSenseTestDevice({
+    id: 'monitor-device',
+    name: 'Main Panel Whole Home',
+    entityType: 'monitor',
+    isOnline: false
+  });
+  const loadDevice = buildSenseTestDevice({
+    id: 'load-device',
+    name: 'Dryer',
+    entityType: 'device',
+    senseDeviceId: 'load-1',
+    isOnline: false
+  });
+
+  installSenseDeviceFindStub({ monitorDevice, loadDevice }, t);
+  service.deviceCatalog = new Map([
+    ['load-1', {
+      senseDeviceId: 'load-1',
+      name: 'Dryer',
+      icon: 'dryer',
+      room: 'Electrical Panel',
+      model: 'Detected Load'
+    }]
+  ]);
+
+  await service.upsertSenseDevices({
+    integration: {
+      monitorId: 'monitor-1',
+      monitorName: 'Main Panel',
+      room: 'Electrical Panel',
+      enabled: true,
+      isConnected: false,
+      electricityRateCentsPerKwh: 11
+    },
+    summary: {
+      observedAt: '2026-06-21T12:00:00.000Z',
+      powerW: 100,
+      solarW: 0,
+      netW: 100,
+      alwaysOnW: 0,
+      otherW: 55,
+      untrackedW: 0,
+      activeDeviceCount: 1,
+      voltage: [121.1, 120.9],
+      frequencyHz: 60,
+      activeDevices: [{
+        senseDeviceId: 'load-1',
+        powerW: 45,
+        sharePct: 45
+      }]
+    },
+    emitUpdates: false,
+    realtimeConnected: true
+  });
+
+  assert.equal(monitorDevice.isOnline, true);
+  assert.equal(monitorDevice.properties.sense.feedConnected, true);
+  assert.equal(monitorDevice.properties.sense.dataStale, false);
+  assert.equal(monitorDevice.properties.sense.currentPowerW, 100);
+  assert.equal(monitorDevice.lastSeen.toISOString(), '2026-06-21T12:00:00.000Z');
+
+  assert.equal(loadDevice.isOnline, true);
+  assert.equal(loadDevice.status, true);
+  assert.equal(loadDevice.properties.sense.feedConnected, true);
+  assert.equal(loadDevice.properties.sense.dataStale, false);
+  assert.equal(loadDevice.properties.sense.currentPowerW, 45);
+  assert.equal(loadDevice.properties.sense.currentSharePct, 45);
+  assert.equal(loadDevice.properties.sense.lastSnapshotAt, '2026-06-21T12:00:00.000Z');
 });
 
 test('Sense refresh failures back off scheduled polling without disabling the integration', async (t) => {
