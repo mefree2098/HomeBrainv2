@@ -26,6 +26,7 @@ client/.env.local
 server/node_modules/
 server/certificates/
 server/.wakeword-venv/
+server/data/elevenlabs-cache/
 server/data/voice-acknowledgments/
 server/data/whisper/
 server/data/platform-deploy/
