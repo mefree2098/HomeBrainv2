@@ -779,6 +779,7 @@ class PlatformDeployService {
 
     return filePath.startsWith('client/dist/')
       || filePath.startsWith('client/dist.quarantine.')
+      || filePath.startsWith('server/data/elevenlabs-cache/')
       || filePath.startsWith('server/data/system-backup/')
       || isWakeWordArtifact
       || filePath.startsWith('server/data/wall-panel-ota/');
