@@ -7,6 +7,6 @@
     "test": "node --test tests/*.test.js"
   },
   "dependencies": {
-    "axios": "^1.16.1"
+    "axios": "^1.18.1"
   }
 }
