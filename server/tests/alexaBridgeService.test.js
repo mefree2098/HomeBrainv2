@@ -449,7 +449,8 @@ test('executeDirective acknowledges Alexa scene endpoints without waiting for sc
         reason: 'Alexa scene activation',
         actor: 'alexa',
         correlationId: 'hb:hub-1:scene:scene-stars-only-1'
-      }
+      },
+      waitForCompletion: false
     }
   ]);
 });

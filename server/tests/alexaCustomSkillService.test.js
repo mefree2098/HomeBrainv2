@@ -2,7 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const AlexaLinkedAccount = require('../models/AlexaLinkedAccount');
+const Scene = require('../models/Scene');
 const alexaCustomSkillService = require('../services/alexaCustomSkillService');
+const sceneService = require('../services/sceneService');
 const userProfileService = require('../services/userProfileService');
 
 test('dispatch resolves a mapped Alexa profile and returns a personalized who-am-i response', async (t) => {
@@ -165,4 +167,49 @@ test('ensureAudioClip returns the mounted Alexa custom-skill audio route', async
 
   assert.equal(result.url.startsWith('https://homebrain.example.com/api/alexa/custom-skill/audio/'), true);
   assert.match(result.url, /[?&]token=/);
+});
+
+test('activateSceneByName triggers scenes without waiting for scene actions', async (t) => {
+  const originalFindOne = Scene.findOne;
+  const originalActivateScene = sceneService.activateScene;
+
+  t.after(() => {
+    Scene.findOne = originalFindOne;
+    sceneService.activateScene = originalActivateScene;
+  });
+
+  Scene.findOne = () => ({
+    select: async () => ({
+      _id: 'scene-stars-only-1',
+      name: 'Stars Only'
+    })
+  });
+
+  let receivedCall = null;
+  sceneService.activateScene = async (...args) => {
+    receivedCall = args;
+    return {
+      status: 'triggered',
+      scene: {
+        _id: 'scene-stars-only-1',
+        name: 'Stars Only'
+      }
+    };
+  };
+
+  const sceneName = await alexaCustomSkillService.activateSceneByName('Stars Only');
+
+  assert.equal(sceneName, 'Stars Only');
+  assert.deepEqual(receivedCall, [
+    'scene-stars-only-1',
+    {
+      command: {
+        source: 'alexa',
+        triggerSource: 'alexa_custom_skill',
+        reason: 'Alexa custom skill scene activation: Stars Only',
+        actor: 'alexa_custom_skill'
+      },
+      waitForCompletion: false
+    }
+  ]);
 });

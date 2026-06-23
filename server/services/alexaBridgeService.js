@@ -976,7 +976,10 @@ class AlexaBridgeService {
 
         const runScene = name === 'Deactivate'
           ? () => sceneService.deactivateScene(record.exposure.entityId, sceneCommand)
-          : () => sceneService.activateScene(record.exposure.entityId, sceneCommand);
+          : () => sceneService.activateScene(record.exposure.entityId, {
+              ...sceneCommand,
+              waitForCompletion: false
+            });
 
         void Promise.resolve()
           .then(runScene)
