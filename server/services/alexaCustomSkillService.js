@@ -395,7 +395,8 @@ class AlexaCustomSkillService {
         triggerSource: 'alexa_custom_skill',
         reason: `Alexa custom skill scene activation: ${scene.name}`,
         actor: 'alexa_custom_skill'
-      }
+      },
+      waitForCompletion: false
     });
     return scene.name;
   }
