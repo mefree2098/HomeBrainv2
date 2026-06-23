@@ -8,6 +8,8 @@ interface Scene {
   description: string
   devices: Array<string>
   active: boolean
+  activationCount?: number
+  lastActivated?: string
 }
 
 interface QuickActionsProps {
@@ -90,7 +92,7 @@ export function QuickActions({ scenes, onSceneActivate, onSceneDeactivate, favor
                     className="h-8 bg-white/20 text-white hover:bg-white/30"
                   >
                     <Play className="mr-1.5 h-3.5 w-3.5" />
-                    On
+                    Run
                   </Button>
                   <Button
                     size="sm"
@@ -98,7 +100,7 @@ export function QuickActions({ scenes, onSceneActivate, onSceneDeactivate, favor
                     className="h-8 bg-black/20 text-white hover:bg-black/30"
                   >
                     <PowerOff className="mr-1.5 h-3.5 w-3.5" />
-                    Off
+                    Reset
                   </Button>
                 </div>
               </div>

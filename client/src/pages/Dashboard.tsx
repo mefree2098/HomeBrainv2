@@ -96,6 +96,8 @@ interface Scene {
   description: string
   devices: Array<string>
   active: boolean
+  activationCount?: number
+  lastActivated?: string
 }
 
 interface VoiceDevice {
@@ -741,15 +743,21 @@ export function Dashboard() {
 
   const handleSceneActivation = async (sceneId: string) => {
     try {
-      await activateScene({ sceneId })
+      const result = await activateScene({ sceneId, waitForCompletion: false })
       setScenes(prev => prev.map(scene =>
         scene._id === sceneId
-          ? { ...scene, active: true }
+          ? {
+              ...scene,
+              ...(result.scene || {}),
+              active: false,
+              activationCount: result.scene?.activationCount ?? ((scene.activationCount || 0) + 1),
+              lastActivated: result.scene?.lastActivated ?? new Date().toISOString()
+            }
           : scene
       ))
       toast({
-        title: "Scene Activated",
-        description: "Scene has been activated successfully"
+        title: "Scene Triggered",
+        description: "Scene has been triggered successfully"
       })
     } catch (error) {
       console.error("Failed to activate scene:", error)
@@ -763,15 +771,15 @@ export function Dashboard() {
 
   const handleSceneDeactivation = async (sceneId: string) => {
     try {
-      await deactivateScene({ sceneId })
+      const result = await deactivateScene({ sceneId })
       setScenes(prev => prev.map(scene =>
         scene._id === sceneId
-          ? { ...scene, active: false }
+          ? { ...scene, ...(result.scene || {}), active: false }
           : scene
       ))
       toast({
         title: "Scene Deactivated",
-        description: "Scene has been turned off successfully"
+        description: "Scene has been deactivated successfully"
       })
     } catch (error) {
       console.error("Failed to deactivate scene:", error)

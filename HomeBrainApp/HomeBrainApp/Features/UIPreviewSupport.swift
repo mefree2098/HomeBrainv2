@@ -346,9 +346,9 @@ enum UIPreviewData {
     ]
 
     static let scenes: [SceneItem] = [
-        SceneItem(id: "scene-movie", name: "Movie Night", details: "Dim lights, close shades, activate surround sound", active: false, category: "entertainment", activationCount: 42),
-        SceneItem(id: "scene-bedtime", name: "Bedtime Shutdown", details: "Secure doors, dim hallways, reduce climate", active: false, category: "comfort", activationCount: 31),
-        SceneItem(id: "scene-focus", name: "Focus Mode", details: "Brighten office, mute distractions, start concentration soundtrack", active: true, category: "comfort", activationCount: 18)
+        SceneItem(id: "scene-movie", name: "Movie Night", details: "Dim lights, close shades, activate surround sound", active: false, category: "entertainment", activationCount: 42, lastActivated: "2026-06-23T19:17:42.624Z"),
+        SceneItem(id: "scene-bedtime", name: "Bedtime Shutdown", details: "Secure doors, dim hallways, reduce climate", active: false, category: "comfort", activationCount: 31, lastActivated: "2026-06-22T04:45:00.000Z"),
+        SceneItem(id: "scene-focus", name: "Focus Mode", details: "Brighten office, mute distractions, start concentration soundtrack", active: false, category: "comfort", activationCount: 18, lastActivated: "2026-06-21T15:20:00.000Z")
     ]
 
     static let voiceDevices: [VoiceDeviceItem] = [

@@ -654,15 +654,30 @@ nonisolated struct SceneItem: Identifiable {
     var active: Bool
     var category: String
     var activationCount: Int
+    var lastActivated: String?
+
+    var lastTriggeredText: String {
+        guard
+            let lastActivated,
+            let date = JSON.date(from: lastActivated)
+        else {
+            return "Last triggered: never"
+        }
+
+        let timestamp = DateFormatter.localizedString(from: date, dateStyle: .medium, timeStyle: .short)
+        return "Last triggered: \(timestamp)"
+    }
 
     nonisolated static func from(_ object: [String: Any]) -> SceneItem {
+        let lastActivated = JSON.string(object, "lastActivated").trimmingCharacters(in: .whitespacesAndNewlines)
         SceneItem(
             id: JSON.id(object),
             name: JSON.string(object, "name", fallback: "Untitled Scene"),
             details: JSON.string(object, "description", fallback: "No description"),
             active: JSON.bool(object, "active"),
             category: JSON.string(object, "category", fallback: "custom"),
-            activationCount: JSON.int(object, "activationCount")
+            activationCount: JSON.int(object, "activationCount"),
+            lastActivated: lastActivated.isEmpty ? nil : lastActivated
         )
     }
 }

@@ -116,14 +116,6 @@ struct ScenesView: View {
                             .font(HBTypography.body(.caption))
                             .foregroundStyle(Color.yellow)
                     }
-                    if scene.active {
-                        Text("ACTIVE")
-                            .font(HBTypography.body(.caption2))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.green.opacity(0.2))
-                            .clipShape(Capsule())
-                    }
                 }
 
                 Text(scene.details)
@@ -131,7 +123,11 @@ struct ScenesView: View {
                     .foregroundStyle(HBPalette.textSecondary)
                     .lineLimit(1)
 
-                Text("\(scene.category.capitalized) · activated \(scene.activationCount)x")
+                Text("\(scene.category.capitalized) · triggered \(scene.activationCount)x")
+                    .font(HBTypography.body(.caption2))
+                    .foregroundStyle(HBPalette.textSecondary)
+
+                Text(scene.lastTriggeredText)
                     .font(HBTypography.body(.caption2))
                     .foregroundStyle(HBPalette.textSecondary)
             }
@@ -140,12 +136,12 @@ struct ScenesView: View {
 
             VStack(spacing: 8) {
                 HStack(spacing: 8) {
-                    Button("On") {
+                    Button("Trigger") {
                         Task { await activate(scene) }
                     }
                     .buttonStyle(.borderedProminent)
 
-                    Button("Off") {
+                    Button("Deactivate") {
                         Task { await deactivate(scene) }
                     }
                     .buttonStyle(.bordered)
