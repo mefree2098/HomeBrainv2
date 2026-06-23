@@ -10,6 +10,7 @@ import {
   PowerOff,
   Plus,
   Layers3,
+  Clock3,
   Moon,
   Sun,
   Shield,
@@ -30,6 +31,33 @@ import { SceneEditDialog } from "@/components/scenes/SceneEditDialog"
 import { useFavorites } from "@/hooks/useFavorites"
 import { useAuth } from "@/contexts/AuthContext"
 import { useAlexaExposureRegistry } from "@/hooks/useAlexaExposureRegistry"
+
+const formatLastTriggered = (value?: string | null) => {
+  if (!value) {
+    return "Last triggered: never"
+  }
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return "Last triggered: unknown"
+  }
+
+  return `Last triggered: ${date.toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  })}`
+}
+
+const mergeTriggeredScene = (current: SceneRecord, updated?: SceneRecord): SceneRecord => ({
+  ...current,
+  ...(updated || {}),
+  active: false,
+  activationCount: updated?.activationCount ?? ((current.activationCount || 0) + 1),
+  lastActivated: updated?.lastActivated ?? new Date().toISOString()
+})
 
 export function Scenes() {
   const { toast } = useToast()
@@ -87,16 +115,15 @@ export function Scenes() {
   const handleSceneActivation = async (sceneId: string, sceneName: string) => {
     try {
       console.log('Activating scene:', { sceneId, sceneName })
-      await activateScene({ sceneId })
+      const result = await activateScene({ sceneId, waitForCompletion: false })
       toast({
-        title: "Scene Activated",
-        description: `${sceneName} scene has been activated successfully`
+        title: "Scene Triggered",
+        description: `${sceneName} scene has been triggered successfully`
       })
       
-      // Update scene state locally
       setScenes(prev => prev.map(scene => 
         scene._id === sceneId 
-          ? { ...scene, active: true }
+          ? mergeTriggeredScene(scene, result.scene)
           : scene
       ))
     } catch (error) {
@@ -115,7 +142,7 @@ export function Scenes() {
       await deactivateScene({ sceneId })
       toast({
         title: "Scene Deactivated",
-        description: `${sceneName} scene has been turned off successfully`
+        description: `${sceneName} scene has been deactivated successfully`
       })
 
       setScenes(prev => prev.map(scene =>
@@ -283,6 +310,10 @@ export function Scenes() {
     )
   }
 
+  const triggeredSceneCount = scenes.filter((scene) => (
+    Boolean(scene.lastActivated) || (Number(scene.activationCount) || 0) > 0
+  )).length
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -421,15 +452,15 @@ export function Scenes() {
 
         <Card className="bg-gradient-to-br from-green-50 to-green-100 dark:from-green-900/20 dark:to-green-800/20 border-green-200 dark:border-green-800">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Active Scenes</CardTitle>
-            <Play className="h-4 w-4 text-green-600" />
+            <CardTitle className="text-sm font-medium">Triggered Scenes</CardTitle>
+            <Clock3 className="h-4 w-4 text-green-600" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-green-700 dark:text-green-300">
-              {scenes.filter(scene => scene.active).length}
+              {triggeredSceneCount}
             </div>
             <p className="text-xs text-green-600/80 dark:text-green-400/80">
-              Currently on
+              Have run at least once
             </p>
           </CardContent>
         </Card>
@@ -483,15 +514,18 @@ export function Scenes() {
                     >
                       <Heart className="h-4 w-4" fill={isFavorite ? 'currentColor' : 'none'} />
                     </Button>
-                    {scene.active && (
-                      <Badge className="bg-green-500 text-white animate-pulse">
-                        Active
-                      </Badge>
-                    )}
+                    <Badge variant="outline">
+                      {(Number(scene.activationCount) || 0)}x
+                    </Badge>
                   </div>
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Clock3 className="h-3.5 w-3.5" />
+                  <span>{formatLastTriggered(scene.lastActivated)}</span>
+                </div>
+
                 <div className="flex items-center justify-between text-sm text-muted-foreground">
                   <span>
                     {(scene.deviceActions?.length || 0) + (scene.groupActions?.length || 0)} action{((scene.deviceActions?.length || 0) + (scene.groupActions?.length || 0)) === 1 ? "" : "s"}
@@ -510,7 +544,7 @@ export function Scenes() {
                       className={`bg-gradient-to-r ${getSceneGradient(scene.name)} hover:shadow-lg transition-all duration-200 text-white border-0`}
                     >
                       <Play className="h-4 w-4 mr-2" />
-                      Turn On
+                      Trigger
                     </Button>
                     <Button
                       onClick={() => handleSceneDeactivation(scene._id, scene.name)}
@@ -518,7 +552,7 @@ export function Scenes() {
                       className="border-red-200 text-red-700 hover:bg-red-50 hover:text-red-800 dark:border-red-900/60 dark:text-red-300 dark:hover:bg-red-950/30"
                     >
                       <PowerOff className="h-4 w-4 mr-2" />
-                      Turn Off
+                      Deactivate
                     </Button>
                   </div>
                   {isAdmin ? (

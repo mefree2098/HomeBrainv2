@@ -218,6 +218,7 @@ router.post('/activate', async (req, res) => {
     }
     
     const result = await sceneService.activateScene(sceneId, {
+      waitForCompletion: req.body.waitForCompletion === true,
       command: {
         source: req.body.source || 'manual',
         reason: req.body.reason || 'Scene activated from HomeBrain UI/API',

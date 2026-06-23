@@ -127,6 +127,14 @@ function buildDeactivateActionDefinition(definition = {}) {
  * Service for managing smart home scenes
  */
 class SceneService {
+  async _clearLegacyActiveSceneFlags() {
+    try {
+      await Scene.updateMany({ active: true }, { $set: { active: false } });
+    } catch (error) {
+      console.warn(`SceneService: Failed to clear legacy active scene flags: ${error.message}`);
+    }
+  }
+
   _applyScenePopulates(query) {
     return query
       .populate('deviceActions.deviceId', 'name type room location status')
@@ -320,6 +328,7 @@ class SceneService {
   async getAllScenes() {
     try {
       console.log('SceneService: Fetching all scenes from database');
+      await this._clearLegacyActiveSceneFlags();
       const scenes = await this._applyScenePopulates(
         Scene.find().sort({ createdAt: -1 })
       );
@@ -404,7 +413,7 @@ class SceneService {
   }
 
   /**
-   * Activate a scene - marks it active and executes its configured actions
+   * Activate a scene - records a momentary trigger and executes its configured actions
    * @param {string} sceneId - The scene ID to activate
    * @returns {Promise<Object>} Updated scene object and activation results
    */
@@ -420,18 +429,18 @@ class SceneService {
         throw new Error('Scene not found');
       }
 
-      // Update scene status
-      scene.active = true;
+      // Scenes are momentary triggers; keep the legacy active flag off.
+      scene.active = false;
       scene.activationCount = (scene.activationCount || 0) + 1;
       scene.lastActivated = new Date();
 
       const updatedScene = await scene.save();
-      console.log(`SceneService: Scene "${scene.name}" activated successfully`);
+      console.log(`SceneService: Scene "${scene.name}" triggered successfully`);
 
       const actionDefinitions = this._buildSceneActionDefinitions(updatedScene);
       const workflowActions = this._buildWorkflowActionsForScene(actionDefinitions);
       const { executeActionSequence } = require('./workflowExecutionService');
-      const execution = await executeActionSequence(workflowActions, {
+      const buildExecutionOptions = () => ({
         context: {
           ...(options.context && typeof options.context === 'object' ? options.context : {}),
           sceneId: normalizedSceneId,
@@ -448,8 +457,29 @@ class SceneService {
           }
         }
       });
-      await this._populateSceneDocument(updatedScene);
-      const executionSummary = this._summarizeSceneExecution(execution, actionDefinitions, updatedScene);
+
+      const runSceneActions = async () => {
+        const execution = await executeActionSequence(workflowActions, buildExecutionOptions());
+        await this._populateSceneDocument(updatedScene);
+        return this._summarizeSceneExecution(execution, actionDefinitions, updatedScene);
+      };
+
+      if (options.waitForCompletion === false) {
+        void runSceneActions().catch((error) => {
+          console.error(`SceneService: Background scene trigger failed for ${normalizedSceneId}:`, error);
+        });
+        await this._populateSceneDocument(updatedScene);
+        return {
+          scene: updatedScene,
+          deviceActions: [],
+          groupActions: [],
+          actionResults: [],
+          status: 'triggered',
+          message: `Scene "${scene.name}" trigger started`
+        };
+      }
+
+      const executionSummary = await runSceneActions();
 
       return {
         scene: updatedScene,
@@ -457,7 +487,7 @@ class SceneService {
         groupActions: executionSummary.groupActions,
         actionResults: executionSummary.actionResults,
         status: executionSummary.status,
-        message: `Scene "${scene.name}" activated successfully`
+        message: `Scene "${scene.name}" triggered successfully`
       };
     } catch (error) {
       console.error('SceneService: Error activating scene:', normalizedSceneId || '[invalid scene id]', error);
@@ -628,15 +658,19 @@ class SceneService {
       console.log('SceneService: Calculating scene statistics');
 
       const totalScenes = await Scene.countDocuments();
-      const activeScenes = await Scene.countDocuments({ active: true });
+      const triggeredScenes = await Scene.countDocuments({ activationCount: { $gt: 0 } });
+      const legacyActiveScenes = await Scene.countDocuments({ active: true });
       const scenesByCategory = await Scene.aggregate([
         { $group: { _id: '$category', count: { $sum: 1 } } }
       ]);
 
       const stats = {
         totalScenes,
-        activeScenes,
-        inactiveScenes: totalScenes - activeScenes,
+        activeScenes: 0,
+        inactiveScenes: totalScenes,
+        triggeredScenes,
+        neverTriggeredScenes: totalScenes - triggeredScenes,
+        legacyActiveScenes,
         scenesByCategory: scenesByCategory.reduce((acc, item) => {
           acc[item._id] = item.count;
           return acc;

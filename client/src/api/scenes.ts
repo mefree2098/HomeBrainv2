@@ -20,6 +20,8 @@ export type SceneRecord = {
   icon?: string;
   color?: string;
   active?: boolean;
+  activationCount?: number;
+  lastActivated?: string;
   deviceActions?: SceneDeviceAction[];
   groupActions?: SceneGroupAction[];
 };
@@ -41,9 +43,9 @@ export const getScenes = async () => {
 
 // Description: Activate a scene
 // Endpoint: POST /api/scenes/activate
-// Request: { sceneId: string }
+// Request: { sceneId: string, waitForCompletion?: boolean }
 // Response: { success: boolean, message: string }
-export const activateScene = async (data: { sceneId: string }) => {
+export const activateScene = async (data: { sceneId: string; waitForCompletion?: boolean }) => {
   console.log('Activating scene:', data)
   try {
     const response = await api.post('/api/scenes/activate', data);
