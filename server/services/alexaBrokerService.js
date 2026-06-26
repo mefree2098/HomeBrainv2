@@ -21,6 +21,7 @@ const DEFAULT_LOG_LIMIT = 500;
 const DEFAULT_LIFECYCLE_LIMIT = 50;
 const DEFAULT_MONITOR_INTERVAL_MS = 15000;
 const DEFAULT_HEALTH_FAILURE_THRESHOLD = 2;
+const DEFAULT_RECOVERY_RETRY_DELAY_MS = 5000;
 const MANAGED_REVERSE_PROXY_NOTES = 'Managed automatically by the HomeBrain Alexa Broker deployment flow.';
 
 function trimString(value) {
@@ -223,11 +224,13 @@ class AlexaBrokerService {
     this.lifecycleLimit = options.lifecycleLimit || DEFAULT_LIFECYCLE_LIMIT;
     this.monitorIntervalMs = options.monitorIntervalMs || DEFAULT_MONITOR_INTERVAL_MS;
     this.healthFailureThreshold = options.healthFailureThreshold || DEFAULT_HEALTH_FAILURE_THRESHOLD;
+    this.recoveryRetryDelayMs = options.recoveryRetryDelayMs || DEFAULT_RECOVERY_RETRY_DELAY_MS;
     this.child = null;
     this.installProcess = null;
     this.logBuffer = [];
     this.stoppingChild = false;
     this.monitorTimer = null;
+    this.recoveryTimer = null;
     this.monitorInFlight = false;
     this.consecutiveHealthFailures = 0;
     this.lastAutoRecoveryAt = 0;
@@ -339,14 +342,42 @@ class AlexaBrokerService {
     }
   }
 
+  clearRecoveryTimer() {
+    if (!this.recoveryTimer) {
+      return;
+    }
+
+    clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = null;
+  }
+
+  scheduleRecoveryAttempt({ reason = 'broker recovery requested', delayMs = this.recoveryRetryDelayMs } = {}) {
+    if (this.recoveryTimer) {
+      return;
+    }
+
+    const retryDelayMs = Math.max(1000, Number(delayMs || this.recoveryRetryDelayMs) || DEFAULT_RECOVERY_RETRY_DELAY_MS);
+    this.pushLog(`Scheduling Alexa broker auto-recovery retry in ${retryDelayMs}ms: ${reason}`, 'broker-service');
+
+    this.recoveryTimer = setTimeout(() => {
+      this.recoveryTimer = null;
+      void this.runMonitorPass({ trigger: 'retry' });
+    }, retryDelayMs);
+
+    if (typeof this.recoveryTimer.unref === 'function') {
+      this.recoveryTimer.unref();
+    }
+  }
+
   async runMonitorPass({ trigger = 'interval' } = {}) {
     if (this.monitorInFlight) {
       return;
     }
 
+    let config = null;
     this.monitorInFlight = true;
     try {
-      const config = await this.getConfig();
+      config = await this.getConfig();
 
       if (this.installProcess || this.stoppingChild) {
         return;
@@ -358,11 +389,13 @@ class AlexaBrokerService {
 
       if (probe.available && childAlive) {
         this.consecutiveHealthFailures = 0;
+        this.clearRecoveryTimer();
         return;
       }
 
       if (probe.available && !childAlive) {
         this.consecutiveHealthFailures = 0;
+        this.clearRecoveryTimer();
         if (config.serviceStatus !== 'running_external') {
           config.serviceStatus = 'running_external';
           config.servicePid = null;
@@ -414,6 +447,9 @@ class AlexaBrokerService {
       });
     } catch (error) {
       this.pushLog(`Broker auto-recovery check failed: ${error.message}`, 'broker-service');
+      if (this.shouldAutoRecover(config)) {
+        this.scheduleRecoveryAttempt({ reason: error.message || 'auto-recovery check failed' });
+      }
     } finally {
       this.monitorInFlight = false;
     }
@@ -596,15 +632,19 @@ class AlexaBrokerService {
         message: error.message || 'Alexa broker process failed to launch',
         timestamp: new Date()
       };
+      const automaticRecoveryEligible = this.shouldAutoRecover(config);
       this.appendLifecycleEvent(config, {
         type: 'process_error',
         status: 'error',
         message: error.message || 'Alexa broker process failed to launch',
         details: {
-          automaticRecoveryEligible: this.shouldAutoRecover(config)
+          automaticRecoveryEligible
         }
       });
       await config.save();
+      if (automaticRecoveryEligible) {
+        this.scheduleRecoveryAttempt({ reason: error.message || 'Alexa broker process failed to launch' });
+      }
     });
 
     child.on('exit', async (code, signal) => {
@@ -649,6 +689,9 @@ class AlexaBrokerService {
       await config.save();
 
       if (!exitedDuringStop) {
+        if (this.shouldAutoRecover(config)) {
+          this.scheduleRecoveryAttempt({ reason: exitSummary });
+        }
         void this.runMonitorPass({ trigger: 'process_exit' });
       }
     });
@@ -1189,6 +1232,7 @@ class AlexaBrokerService {
         }
       });
       await config.save();
+      this.clearRecoveryTimer();
       return {
         success: true,
         message: options.quietIfRunning
@@ -1247,6 +1291,7 @@ class AlexaBrokerService {
       });
       await config.save();
       this.consecutiveHealthFailures = 0;
+      this.clearRecoveryTimer();
 
       return {
         success: true,
@@ -1286,6 +1331,9 @@ class AlexaBrokerService {
         }
       });
       await config.save();
+      if (this.shouldAutoRecover(config)) {
+        this.scheduleRecoveryAttempt({ reason: error.message || 'broker failed to become healthy' });
+      }
       throw error;
     }
   }

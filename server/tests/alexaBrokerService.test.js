@@ -346,6 +346,40 @@ test('runMonitorPass starts the broker automatically when it is offline and auto
   assert.match(startOptions?.reason || '', /ECONNREFUSED/);
 });
 
+test('runMonitorPass schedules a short retry when automatic recovery fails', async () => {
+  const config = {
+    isInstalled: true,
+    autoStart: true,
+    resumeAfterHostRestart: false,
+    manualStopRequested: false,
+    serviceStatus: 'stopped'
+  };
+
+  const service = new AlexaBrokerService({
+    projectRoot: '/tmp/homebrain-test'
+  });
+
+  let retryOptions = null;
+  service.getConfig = async () => config;
+  service.probeHealth = async () => ({
+    available: false,
+    localBaseUrl: 'http://127.0.0.1:4301',
+    health: null,
+    message: 'connect ECONNREFUSED 127.0.0.1:4301'
+  });
+  service.isChildAlive = () => false;
+  service.startService = async () => {
+    throw new Error('Alexa broker stopped before it became healthy');
+  };
+  service.scheduleRecoveryAttempt = (options = {}) => {
+    retryOptions = options;
+  };
+
+  await service.runMonitorPass({ trigger: 'test' });
+
+  assert.match(retryOptions?.reason || '', /stopped before it became healthy/);
+});
+
 test('runMonitorPass leaves the broker stopped after a manual stop request', async () => {
   const config = {
     isInstalled: true,
