@@ -1612,7 +1612,38 @@ if (require.main === module) {
   const app = createApp({ startDispatcher: true });
   const port = Number(process.env.PORT || 4301);
   const bindHost = trimString(process.env.HOMEBRAIN_BROKER_BIND_HOST) || '0.0.0.0';
-  app.listen(port, bindHost, () => {
+  const server = app.listen(port, bindHost, () => {
     console.log(`HomeBrain Alexa broker listening on ${bindHost}:${port}`);
+  });
+
+  server.on('error', (error) => {
+    console.error(`[broker] HTTP server error: ${error.message}`);
+    process.exit(1);
+  });
+
+  server.on('close', () => {
+    console.log('[broker] HTTP server closed');
+  });
+
+  const shutdown = (signal) => {
+    console.log(`[broker] Received ${signal}; shutting down`);
+    server.close(() => {
+      process.exit(0);
+    });
+    setTimeout(() => {
+      process.exit(1);
+    }, 5000).unref();
+  };
+
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.on('uncaughtException', (error) => {
+    console.error(`[broker] Uncaught exception: ${error.stack || error.message}`);
+    process.exitCode = 1;
+    server.close(() => process.exit(1));
+  });
+  process.on('unhandledRejection', (reason) => {
+    const message = reason instanceof Error ? reason.stack || reason.message : String(reason);
+    console.error(`[broker] Unhandled rejection: ${message}`);
   });
 }
