@@ -1591,17 +1591,20 @@ struct AppShellView: View {
         .animation(.easeInOut(duration: 0.22), value: session.backendConnectionState)
     }
 
-    @ViewBuilder
-    private var detailContent: some View {
+    private var detailContent: AnyView {
         if let current = selection ?? visibleSections.first {
-            sectionView(current)
-                .id("\(current.rawValue)-\(detailRefreshGeneration)")
-        } else {
+            return AnyView(
+                sectionView(current)
+                    .id("\(current.rawValue)-\(detailRefreshGeneration)")
+            )
+        }
+
+        return AnyView(
             EmptyStateView(
                 title: "Select a section",
                 subtitle: "Use the left sidebar to open a HomeBrain module."
             )
-        }
+        )
     }
 
     private var showsBackendRecoveryBanner: Bool {
@@ -1612,115 +1615,102 @@ struct AppShellView: View {
         !(currentSection == .dashboard && dashboardChrome.isDirty)
     }
 
-    @ViewBuilder
-    private func sectionView(_ section: AppSection) -> some View {
+    private func sectionView(_ section: AppSection) -> AnyView {
         switch section {
         case .dashboard:
-            DashboardView(previewMode: previewMode, onOpenDevice: openDeviceFromDashboard)
-                .environmentObject(dashboardChrome)
+            return AnyView(
+                DashboardView(previewMode: previewMode, onOpenDevice: openDeviceFromDashboard)
+                    .environmentObject(dashboardChrome)
+            )
         case .weather:
             if previewMode {
-                UIPreviewModuleView(section: section)
-            } else {
-                WeatherView()
+                return AnyView(UIPreviewModuleView(section: section))
             }
+            return AnyView(WeatherView())
         case .senseEnergy:
             if previewMode {
-                UIPreviewModuleView(section: section)
-            } else {
-                SenseEnergyView()
+                return AnyView(UIPreviewModuleView(section: section))
             }
+            return AnyView(SenseEnergyView())
         case .watchApp:
             if previewMode {
-                UIPreviewModuleView(section: section)
-            } else {
-                WatchAppView()
+                return AnyView(UIPreviewModuleView(section: section))
             }
+            return AnyView(WatchAppView())
         case .rainMachine:
             if previewMode {
-                UIPreviewModuleView(section: section)
-            } else {
-                RainMachineView()
+                return AnyView(UIPreviewModuleView(section: section))
             }
+            return AnyView(RainMachineView())
         case .dataPlatform:
             if previewMode {
-                UIPreviewModuleView(section: section)
-            } else {
-                DataPlatformView()
+                return AnyView(UIPreviewModuleView(section: section))
             }
+            return AnyView(DataPlatformView())
         case .views:
             if previewMode {
-                UIPreviewModuleView(section: section)
-            } else {
-                DashboardViewsView()
+                return AnyView(UIPreviewModuleView(section: section))
             }
+            return AnyView(DashboardViewsView())
         case .devices:
-            DevicesView(previewMode: previewMode)
-                .environmentObject(deviceFocusState)
+            return AnyView(
+                DevicesView(previewMode: previewMode)
+                    .environmentObject(deviceFocusState)
+            )
         case .rooms:
-            RoomsView(previewMode: previewMode)
+            return AnyView(RoomsView(previewMode: previewMode))
         case .scenes:
             if previewMode {
-                UIPreviewModuleView(section: section)
-            } else {
-                ScenesView()
+                return AnyView(UIPreviewModuleView(section: section))
             }
+            return AnyView(ScenesView())
         case .workflows:
             if previewMode {
-                UIPreviewModuleView(section: section)
-            } else {
-                WorkflowsView()
+                return AnyView(UIPreviewModuleView(section: section))
             }
+            return AnyView(WorkflowsView())
         case .voiceDevices:
             if previewMode {
-                UIPreviewModuleView(section: section)
-            } else {
-                VoiceDevicesView()
+                return AnyView(UIPreviewModuleView(section: section))
             }
+            return AnyView(VoiceDevicesView())
         case .userProfiles:
             if previewMode {
-                UIPreviewModuleView(section: section)
-            } else {
-                UserProfilesView()
+                return AnyView(UIPreviewModuleView(section: section))
             }
+            return AnyView(UserProfilesView())
         case .notifications:
-            NotificationsView()
+            return AnyView(NotificationsView())
         case .settings:
             if previewMode {
-                SettingsView(previewMode: true)
-            } else {
-                SettingsView()
+                return AnyView(SettingsView(previewMode: true))
             }
+            return AnyView(SettingsView())
         case .operations:
             if previewMode {
-                UIPreviewModuleView(section: section)
-            } else {
-                OperationsView()
+                return AnyView(UIPreviewModuleView(section: section))
             }
+            return AnyView(OperationsView())
         case .platformDeploy:
             if previewMode {
-                UIPreviewModuleView(section: section)
-            } else {
-                PlatformDeployView()
+                return AnyView(UIPreviewModuleView(section: section))
             }
+            return AnyView(PlatformDeployView())
         case .ollama:
             if previewMode {
-                UIPreviewModuleView(section: section)
-            } else {
-                OllamaView()
+                return AnyView(UIPreviewModuleView(section: section))
             }
+            return AnyView(OllamaView())
         case .whisper:
             if previewMode {
-                UIPreviewModuleView(section: section)
-            } else {
-                WhisperView()
+                return AnyView(UIPreviewModuleView(section: section))
             }
+            return AnyView(WhisperView())
         case .ssl:
             if previewMode {
-                UIPreviewModuleView(section: section)
-            } else {
-                SSLView()
+                return AnyView(UIPreviewModuleView(section: section))
             }
+            return AnyView(SSLView())
         }
     }
 
