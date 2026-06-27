@@ -6205,7 +6205,12 @@ struct DashboardView: View {
 
                     Spacer(minLength: 0)
 
-                    favoriteButton(for: device)
+                    HStack(spacing: 8) {
+                        if supportsLightColor(device) {
+                            dashboardColorWheelPicker(for: device, size: compact ? 32 : 36)
+                        }
+                        favoriteButton(for: device)
+                    }
                 }
 
                 HStack(spacing: 8) {
@@ -6279,6 +6284,43 @@ struct DashboardView: View {
         .buttonStyle(.plain)
         .disabled(isPending)
         .accessibilityLabel(isFavorite ? "Remove \(device.name) from favorites" : "Add \(device.name) to favorites")
+    }
+
+    private func dashboardColorWheelPicker(for device: DeviceItem, size: CGFloat) -> some View {
+        let pending = pendingControlDeviceIds.contains(device.id)
+        let currentColor = dashboardColor(from: currentDashboardLightColor(for: device))
+
+        return ZStack {
+            Circle()
+                .fill(
+                    AngularGradient(
+                        colors: [.red, .orange, .yellow, .green, .cyan, .blue, .purple, .red],
+                        center: .center
+                    )
+                )
+
+            Circle()
+                .fill(currentColor)
+                .frame(width: size * 0.58, height: size * 0.58)
+                .overlay(Circle().stroke(Color.white.opacity(0.8), lineWidth: 1))
+
+            Image(systemName: "paintpalette.fill")
+                .font(.system(size: size * 0.34, weight: .bold))
+                .foregroundStyle(Color.white)
+                .shadow(color: Color.black.opacity(0.55), radius: 3, x: 0, y: 1)
+
+            ColorPicker("", selection: dashboardColorBinding(for: device), supportsOpacity: false)
+                .labelsHidden()
+                .frame(width: size, height: size)
+                .opacity(0.02)
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .overlay(Circle().stroke(Color.white.opacity(0.22), lineWidth: 1))
+        .shadow(color: HBPalette.accentBlue.opacity(0.2), radius: 10, x: 0, y: 5)
+        .disabled(pending)
+        .opacity(pending ? 0.55 : 1)
+        .accessibilityLabel("Set color for \(device.name)")
     }
 
     private func featuredThermostatControls(for device: DeviceItem, compact: Bool) -> some View {
@@ -6703,12 +6745,8 @@ struct DashboardView: View {
                     Spacer(minLength: 0)
 
                     if supportsLightColor(device) {
-                        ColorPicker("", selection: dashboardColorBinding(for: device), supportsOpacity: false)
-                            .labelsHidden()
-                            .scaleEffect(0.82)
-                            .frame(width: 24, height: 24)
+                        dashboardColorWheelPicker(for: device, size: 28)
                             .padding(.top, 1)
-                            .disabled(pending)
                     }
                 }
 
@@ -8556,11 +8594,12 @@ struct DashboardView: View {
             return boolValue(device.properties["supportsColor"]) && supportsLightFade(device)
         }
 
-        if device.type == "light" {
-            return true
-        }
+        let directRadioFeatures = Set((dashboardStringArray(from: device.properties["directRadioFeatures"]) ?? []).map { $0.lowercased() })
+        let matterFeatures = Set((dashboardStringArray(from: device.properties["matterFeatures"]) ?? []).map { $0.lowercased() })
 
         return boolValue(device.properties["supportsColor"])
+            || directRadioFeatures.contains("color")
+            || matterFeatures.contains("color")
     }
 
     private func supportsEnergyMonitoring(_ device: DeviceItem) -> Bool {

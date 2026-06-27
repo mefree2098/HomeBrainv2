@@ -702,7 +702,12 @@ struct DevicesView: View {
 
                     Spacer(minLength: 0)
 
-                    favoriteButton(for: device)
+                    HStack(spacing: 8) {
+                        if supportsLightColor(device) {
+                            deviceColorWheelPicker(for: device, size: 36, applyImmediately: true)
+                        }
+                        favoriteButton(for: device)
+                    }
                 }
 
                 deviceIdentityBadges(for: device)
@@ -821,6 +826,43 @@ struct DevicesView: View {
         .buttonStyle(.plain)
         .disabled(isPending)
         .accessibilityLabel(isFavorite ? "Remove \(device.name) from favorites" : "Add \(device.name) to favorites")
+    }
+
+    private func deviceColorWheelPicker(for device: DeviceItem, size: CGFloat, applyImmediately: Bool) -> some View {
+        let pending = pendingControls.contains(device.id)
+        let currentColor = Color(hex: currentLightColor(for: device)) ?? .white
+
+        return ZStack {
+            Circle()
+                .fill(
+                    AngularGradient(
+                        colors: [.red, .orange, .yellow, .green, .cyan, .blue, .purple, .red],
+                        center: .center
+                    )
+                )
+
+            Circle()
+                .fill(currentColor)
+                .frame(width: size * 0.58, height: size * 0.58)
+                .overlay(Circle().stroke(Color.white.opacity(0.8), lineWidth: 1))
+
+            Image(systemName: "paintpalette.fill")
+                .font(.system(size: size * 0.34, weight: .bold))
+                .foregroundStyle(Color.white)
+                .shadow(color: Color.black.opacity(0.55), radius: 3, x: 0, y: 1)
+
+            ColorPicker("", selection: colorBinding(for: device, applyImmediately: applyImmediately), supportsOpacity: false)
+                .labelsHidden()
+                .frame(width: size, height: size)
+                .opacity(0.02)
+        }
+        .frame(width: size, height: size)
+        .clipShape(Circle())
+        .overlay(Circle().stroke(Color.white.opacity(0.22), lineWidth: 1))
+        .shadow(color: HBPalette.accentBlue.opacity(0.2), radius: 10, x: 0, y: 5)
+        .disabled(pending)
+        .opacity(pending ? 0.55 : 1)
+        .accessibilityLabel("Set color for \(device.name)")
     }
 
     @ViewBuilder
@@ -1697,11 +1739,7 @@ struct DevicesView: View {
                     }
 
                     HStack(spacing: 10) {
-                        ColorPicker("", selection: colorBinding(for: device), supportsOpacity: false)
-                            .labelsHidden()
-                            .frame(width: 34, height: 34)
-                            .background(HBGlassBackground(cornerRadius: 12, variant: .panelSoft))
-                            .disabled(pending)
+                        deviceColorWheelPicker(for: device, size: 36, applyImmediately: false)
 
                         Button("Apply Color") {
                             Task { await handleDeviceControl(deviceId: device.id, action: "set_color", value: currentLightColor(for: device)) }
@@ -5427,12 +5465,24 @@ struct DevicesView: View {
         return 4000
     }
 
-    private func colorBinding(for device: DeviceItem) -> Binding<Color> {
+    private func colorBinding(for device: DeviceItem, applyImmediately: Bool = false) -> Binding<Color> {
         Binding {
             Color(hex: currentLightColor(for: device)) ?? .white
         } set: { newColor in
             if let hex = newColor.toHexRGB() {
-                lightColorDrafts[device.id] = hex.lowercased()
+                let normalized = hex.lowercased()
+                let current = currentLightColor(for: device)
+                lightColorDrafts[device.id] = normalized
+                guard applyImmediately, normalized != current else {
+                    return
+                }
+                Task {
+                    await handleDeviceControl(
+                        deviceId: device.id,
+                        action: "set_color",
+                        value: normalized
+                    )
+                }
             }
         }
     }
@@ -5801,11 +5851,9 @@ struct DevicesView: View {
             return boolValue(device.properties["supportsColor"]) && supportsLightFade(device)
         }
 
-        if device.type == "light" {
-            return true
-        }
-
         return boolValue(device.properties["supportsColor"])
+            || propertyStringSet(for: device, key: "directRadioFeatures").contains("color")
+            || propertyStringSet(for: device, key: "matterFeatures").contains("color")
     }
 
     private func supportsLightColorTemperature(_ device: DeviceItem) -> Bool {
