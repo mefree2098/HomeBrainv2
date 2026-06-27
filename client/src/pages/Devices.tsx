@@ -24,6 +24,7 @@ import {
   PowerOff,
   Heart,
   Minus,
+  Palette,
   Plus,
   Loader2,
   CheckCircle2,
@@ -362,6 +363,42 @@ const normalizeHexColor = (value: unknown): string => {
 
 const getLightColor = (device: any): string => {
   return normalizeHexColor(device?.color)
+}
+
+function DeviceColorWheelControl({
+  color,
+  deviceName,
+  disabled,
+  onChange
+}: {
+  color: string
+  deviceName: string
+  disabled?: boolean
+  onChange: (color: string) => void
+}) {
+  return (
+    <label
+      className={`relative flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full border border-white/20 shadow-[0_10px_24px_-14px_rgba(34,211,238,0.85)] transition-transform hover:scale-105 ${
+        disabled ? 'cursor-not-allowed opacity-55 hover:scale-100' : ''
+      }`}
+      title={`Set color for ${deviceName}`}
+    >
+      <span className="absolute inset-0 bg-[conic-gradient(from_90deg,#ef4444,#f97316,#eab308,#22c55e,#06b6d4,#3b82f6,#a855f7,#ef4444)]" />
+      <span
+        className="absolute inset-[5px] rounded-full border border-white/70 shadow-[inset_0_1px_2px_rgba(255,255,255,0.5)]"
+        style={{ backgroundColor: color }}
+      />
+      <Palette className="relative z-10 h-4 w-4 text-white drop-shadow-[0_1px_2px_rgba(15,23,42,0.85)]" />
+      <input
+        type="color"
+        value={color}
+        aria-label={`Set color for ${deviceName}`}
+        onChange={(event) => onChange(normalizeHexColor(event.target.value))}
+        disabled={disabled}
+        className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
+      />
+    </label>
+  )
 }
 
 const clampColorTemperature = (value: unknown): number => {
@@ -971,6 +1008,7 @@ const supportsLightColor = (device: any): boolean => {
   }
 
   return Boolean(device?.properties?.supportsColor)
+    || hasDirectRadioFeature(device, 'color')
     || (Array.isArray(device?.properties?.matterFeatures)
       && device.properties.matterFeatures.includes('color'))
 }
@@ -2379,6 +2417,9 @@ export function Devices({
     const stateText = getDeviceStateText(device)
     const sourceLabel = getDeviceSourceLabel(getDeviceSource(device))
     const primaryActionLabel = canPrimaryControl ? getDevicePrimaryActionLabel(device) : "Details"
+    const supportsColor = supportsLightColor(device)
+    const color = lightColorDrafts[device._id] || getLightColor(device)
+    const isPendingControl = !!pendingControls[device._id]
 
     return (
       <Card
@@ -2408,16 +2449,30 @@ export function Devices({
               </div>
             </div>
 
-            <Button
-              variant="ghost"
-              size="icon"
-              className={`h-9 w-9 shrink-0 ${isFavorite ? 'text-red-500 hover:text-red-500' : 'text-muted-foreground hover:text-red-500'}`}
-              onClick={() => toggleDeviceFavorite(device._id, !isFavorite)}
-              disabled={!hasProfile || isPendingFavorite}
-              aria-label={isFavorite ? `Remove ${device.name} from favorites` : `Add ${device.name} to favorites`}
-            >
-              <Heart className="h-4 w-4" fill={isFavorite ? 'currentColor' : 'none'} />
-            </Button>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {supportsColor ? (
+                <DeviceColorWheelControl
+                  color={color}
+                  deviceName={device.name}
+                  disabled={isPendingControl}
+                  onChange={(nextColor) => {
+                    setLightColorDrafts(prev => ({ ...prev, [device._id]: nextColor }))
+                    handleDeviceControl(device._id, 'set_color', nextColor)
+                  }}
+                />
+              ) : null}
+
+              <Button
+                variant="ghost"
+                size="icon"
+                className={`h-9 w-9 shrink-0 ${isFavorite ? 'text-red-500 hover:text-red-500' : 'text-muted-foreground hover:text-red-500'}`}
+                onClick={() => toggleDeviceFavorite(device._id, !isFavorite)}
+                disabled={!hasProfile || isPendingFavorite}
+                aria-label={isFavorite ? `Remove ${device.name} from favorites` : `Add ${device.name} to favorites`}
+              >
+                <Heart className="h-4 w-4" fill={isFavorite ? 'currentColor' : 'none'} />
+              </Button>
+            </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -2452,7 +2507,7 @@ export function Devices({
               variant={canPrimaryControl ? getDevicePrimaryActionVariant(device) : "outline"}
               className="min-w-0"
               size="sm"
-              disabled={!!pendingControls[device._id]}
+              disabled={isPendingControl}
             >
               {getDevicePrimaryActionIcon(device)}
               {primaryActionLabel}

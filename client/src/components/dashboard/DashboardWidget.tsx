@@ -10,6 +10,7 @@ import {
   Home,
   Lightbulb,
   Lock,
+  Palette,
   Power,
   PowerOff,
   Thermometer
@@ -22,6 +23,7 @@ interface Device {
   room: string
   status: boolean
   brightness?: number
+  color?: string
   temperature?: number
   targetTemperature?: number
   properties?: Record<string, any>
@@ -123,12 +125,38 @@ const propertyListIncludes = (properties: Record<string, any> | undefined, keys:
   ))
 }
 
+const normalizeHexColor = (value: unknown): string => {
+  if (typeof value !== "string") {
+    return "#ffffff"
+  }
+
+  const normalized = value.trim()
+  return /^#[0-9a-fA-F]{6}$/.test(normalized)
+    ? normalized.toLowerCase()
+    : "#ffffff"
+}
+
+const getLightColor = (device: Device): string => {
+  return normalizeHexColor(device?.color)
+}
+
 const hasSmartThingsLevelState = (properties: Record<string, any> | undefined): boolean => {
   const levelValue = properties?.smartThingsAttributeValues?.switchLevel?.level
   const levelMetadata = properties?.smartThingsAttributeMetadata?.switchLevel?.level
 
   return levelValue !== undefined && levelValue !== null
     || Boolean(levelMetadata && typeof levelMetadata === "object" && Object.keys(levelMetadata).length > 0)
+}
+
+const supportsLightColor = (device: Device): boolean => {
+  const properties = device?.properties
+  if (propertyListIncludes(properties, ["smartThingsCapabilities", "smartthingsCapabilities"], "colorControl")) {
+    return true
+  }
+
+  return Boolean(properties?.supportsColor)
+    || propertyListIncludes(properties, ["directRadioFeatures"], "color")
+    || propertyListIncludes(properties, ["matterFeatures"], "color")
 }
 
 const supportsBrightnessControl = (device: Device): boolean => {
@@ -141,6 +169,38 @@ const supportsBrightnessControl = (device: Device): boolean => {
     || propertyListIncludes(properties, ["directRadioFeatures"], "brightness")
     || propertyListIncludes(properties, ["matterFeatures"], "brightness")
     || hasSmartThingsLevelState(properties)
+}
+
+function ColorWheelControl({
+  color,
+  deviceName,
+  onChange
+}: {
+  color: string
+  deviceName: string
+  onChange: (color: string) => void
+}) {
+  return (
+    <label
+      className="relative flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full border border-white/20 shadow-[0_10px_24px_-14px_rgba(34,211,238,0.85)] transition-transform hover:scale-105"
+      title={`Set color for ${deviceName}`}
+    >
+      <span className="absolute inset-0 bg-[conic-gradient(from_90deg,#ef4444,#f97316,#eab308,#22c55e,#06b6d4,#3b82f6,#a855f7,#ef4444)]" />
+      <span
+        className="absolute inset-[5px] rounded-full border border-white/70 shadow-[inset_0_1px_2px_rgba(255,255,255,0.5)]"
+        style={{ backgroundColor: color }}
+      />
+      <Palette className="relative z-10 h-4 w-4 text-white drop-shadow-[0_1px_2px_rgba(15,23,42,0.85)]" />
+      <input
+        type="color"
+        value={color}
+        aria-label={`Set color for ${deviceName}`}
+        onClick={(event) => event.stopPropagation()}
+        onChange={(event) => onChange(normalizeHexColor(event.target.value))}
+        className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+      />
+    </label>
+  )
 }
 
 const getDeviceIcon = (type: string) => {
@@ -184,12 +244,17 @@ export function DashboardWidget({
   className
 }: DashboardWidgetProps) {
   const [brightness, setBrightness] = useState(device.brightness || 0)
+  const [color, setColor] = useState(getLightColor(device))
   const [temperature, setTemperature] = useState(Math.round(device.targetTemperature ?? device.temperature ?? 70))
   const [thermostatMode, setThermostatMode] = useState(getThermostatMode(device))
 
   useEffect(() => {
     setBrightness(device.brightness ?? 0)
   }, [device.brightness])
+
+  useEffect(() => {
+    setColor(getLightColor(device))
+  }, [device._id, device.color])
 
   useEffect(() => {
     setTemperature(Math.round(device.targetTemperature ?? device.temperature ?? 70))
@@ -206,6 +271,7 @@ export function DashboardWidget({
   const showRoom = !compact || Boolean(device.room)
   const showVoiceHint = !compact
   const showBrightnessSlider = supportsBrightnessControl(device) && device.status && !compact
+  const showColorWheel = supportsLightColor(device)
   const showDetailedThermostatControls = thermostat && !compact
 
   const handleToggle = () => {
@@ -277,22 +343,35 @@ export function DashboardWidget({
             </div>
           </div>
 
-          <Button
-            variant="ghost"
-            size="icon"
-            className={cn(
-              "shrink-0 rounded-full",
-              isFavorite ? "text-red-500 hover:text-red-500" : "text-muted-foreground hover:text-red-500"
-            )}
-            onClick={(event) => {
-              event.stopPropagation()
-              onToggleFavorite(device._id, !isFavorite)
-            }}
-            disabled={!canToggleFavorite || isFavoritePending}
-            aria-label={isFavorite ? `Remove ${device.name} from favorites` : `Add ${device.name} to favorites`}
-          >
-            <Heart className="h-4 w-4" fill={isFavorite ? "currentColor" : "none"} />
-          </Button>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {showColorWheel ? (
+              <ColorWheelControl
+                color={color}
+                deviceName={device.name}
+                onChange={(nextColor) => {
+                  setColor(nextColor)
+                  onControl(device._id, "set_color", nextColor)
+                }}
+              />
+            ) : null}
+
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn(
+                "shrink-0 rounded-full",
+                isFavorite ? "text-red-500 hover:text-red-500" : "text-muted-foreground hover:text-red-500"
+              )}
+              onClick={(event) => {
+                event.stopPropagation()
+                onToggleFavorite(device._id, !isFavorite)
+              }}
+              disabled={!canToggleFavorite || isFavoritePending}
+              aria-label={isFavorite ? `Remove ${device.name} from favorites` : `Add ${device.name} to favorites`}
+            >
+              <Heart className="h-4 w-4" fill={isFavorite ? "currentColor" : "none"} />
+            </Button>
+          </div>
         </div>
       </CardHeader>
 

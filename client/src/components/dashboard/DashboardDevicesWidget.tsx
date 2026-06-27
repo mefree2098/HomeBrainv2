@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
-import { Loader2, Power, PowerOff, Zap } from "lucide-react"
+import { Loader2, Palette, Power, PowerOff, Zap } from "lucide-react"
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
 import { getDeviceEnergyHistory, type DeviceEnergySample } from "@/api/devices"
 import { Badge } from "@/components/ui/badge"
@@ -291,11 +291,9 @@ const supportsLightColor = (device: DeviceLike) => {
     return Boolean(device?.properties?.supportsColor && supportsLightFade(device))
   }
 
-  if (device.type === "light") {
-    return true
-  }
-
   return Boolean(device?.properties?.supportsColor)
+    || propertyListIncludes(device, ["directRadioFeatures"], "color")
+    || propertyListIncludes(device, ["matterFeatures"], "color")
 }
 
 const toFiniteNumber = (value: unknown): number | null => {
@@ -459,6 +457,43 @@ const getGridClass = (size: Props["size"]) => {
   }
 }
 
+function ColorWheelControl({
+  color,
+  deviceName,
+  disabled,
+  onChange
+}: {
+  color: string
+  deviceName: string
+  disabled?: boolean
+  onChange: (color: string) => void
+}) {
+  return (
+    <label
+      className={cn(
+        "relative mt-0.5 flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full border border-white/20 shadow-[0_10px_24px_-14px_rgba(34,211,238,0.85)] transition-transform hover:scale-105",
+        disabled && "cursor-not-allowed opacity-55 hover:scale-100"
+      )}
+      title={`Set color for ${deviceName}`}
+    >
+      <span className="absolute inset-0 bg-[conic-gradient(from_90deg,#ef4444,#f97316,#eab308,#22c55e,#06b6d4,#3b82f6,#a855f7,#ef4444)]" />
+      <span
+        className="absolute inset-[5px] rounded-full border border-white/70 shadow-[inset_0_1px_2px_rgba(255,255,255,0.5)]"
+        style={{ backgroundColor: color }}
+      />
+      <Palette className="relative z-10 h-4 w-4 text-white drop-shadow-[0_1px_2px_rgba(15,23,42,0.85)]" />
+      <input
+        type="color"
+        value={color}
+        aria-label={`Set color for ${deviceName}`}
+        onChange={(event) => onChange(normalizeHexColor(event.target.value))}
+        disabled={disabled}
+        className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
+      />
+    </label>
+  )
+}
+
 function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: Props["onControl"] }) {
   const [brightness, setBrightness] = useState(clampBrightness(Number(device.brightness)))
   const [color, setColor] = useState(getLightColor(device))
@@ -571,23 +606,14 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
             <p className="line-clamp-1 text-[11px] text-slate-300/75">{device.room || "Unassigned"}</p>
           </div>
           {supportsColor ? (
-            <div className="relative mt-0.5 h-8 w-8 shrink-0 overflow-hidden rounded-full border border-white/15 bg-slate-950/40 shadow-[inset_0_1px_2px_rgba(255,255,255,0.08)]">
-              <div
-                className="pointer-events-none absolute inset-[2px] rounded-full border border-white/60"
-                style={{ backgroundColor: color }}
-              />
-              <input
-                type="color"
-                value={color}
-                aria-label={`Set color for ${device.name}`}
-                onChange={(event) => {
-                  const nextColor = normalizeHexColor(event.target.value)
-                  setColor(nextColor)
-                  onControl(device._id, "set_color", nextColor)
-                }}
-                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-              />
-            </div>
+            <ColorWheelControl
+              color={color}
+              deviceName={device.name}
+              onChange={(nextColor) => {
+                setColor(nextColor)
+                onControl(device._id, "set_color", nextColor)
+              }}
+            />
           ) : null}
         </div>
 

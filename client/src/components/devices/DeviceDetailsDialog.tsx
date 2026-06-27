@@ -789,6 +789,7 @@ function supportsLightColor(device: DeviceLike | null): boolean {
   }
 
   return Boolean(properties?.supportsColor)
+    || hasDirectRadioFeature(device, "color")
     || (Array.isArray(properties?.matterFeatures) && properties.matterFeatures.includes("color"))
 }
 
