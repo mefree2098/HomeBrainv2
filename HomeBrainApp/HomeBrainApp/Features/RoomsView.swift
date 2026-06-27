@@ -1,6 +1,6 @@
 import SwiftUI
 
-private struct RoomItem: Identifiable, Equatable {
+nonisolated private struct RoomItem: Identifiable, Equatable {
     let registryId: String?
     let name: String
     let normalizedName: String

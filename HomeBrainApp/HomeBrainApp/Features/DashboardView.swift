@@ -913,6 +913,10 @@ struct DashboardView: View {
     @State private var pendingWidgetDeviceIDs: [String] = []
     @State private var pendingWidgetDeviceSearch = ""
     @State private var pendingWidgetDeviceSource = DeviceItem.allSelectionSourcesValue
+    @State private var editingDevicesWidgetID: String?
+    @State private var editingWidgetDeviceIDs: [String] = []
+    @State private var editingWidgetDeviceSearch = ""
+    @State private var editingWidgetDeviceSource = DeviceItem.allSelectionSourcesValue
     @State private var pendingWeatherLocationMode: DashboardWeatherLocationMode = .saved
     @State private var pendingWeatherLocationQuery = ""
     @State private var dashboardNameAction: DashboardNameAction?
@@ -1002,6 +1006,16 @@ struct DashboardView: View {
             }
         )
     }
+    private var isPresentingDevicesWidgetEditorSheet: Binding<Bool> {
+        Binding(
+            get: { editingDevicesWidgetID != nil },
+            set: { presented in
+                if !presented {
+                    resetDevicesWidgetEditor()
+                }
+            }
+        )
+    }
     private var weatherInfoDetailWidth: CGFloat {
         if usesPortraitCompactLayout {
             let availableWidth = max((contentWidth > 0 ? contentWidth : 390) - 28, 0)
@@ -1050,22 +1064,19 @@ struct DashboardView: View {
     }
 
     private var filteredPendingDevices: [DeviceItem] {
-        let query = pendingWidgetDeviceSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let matches: [DeviceItem]
+        filteredDevices(
+            searchText: pendingWidgetDeviceSearch,
+            sourceFilter: pendingWidgetDeviceSource,
+            pinnedDeviceIDs: [pendingWidgetDeviceID].filter { !$0.isEmpty } + pendingWidgetDeviceIDs
+        )
+    }
 
-        matches = sortedDevices.filter { device in
-            device.matchesSelectionFilters(searchText: query, sourceFilter: pendingWidgetDeviceSource)
-        }
-
-        let pinnedIDs = Set([pendingWidgetDeviceID].filter { !$0.isEmpty } + pendingWidgetDeviceIDs)
-        if pinnedIDs.isEmpty {
-            return matches
-        }
-
-        let pinnedDevices = sortedDevices.filter { device in
-            pinnedIDs.contains(device.id) && !matches.contains(where: { $0.id == device.id })
-        }
-        return pinnedDevices + matches
+    private var filteredEditingDevices: [DeviceItem] {
+        filteredDevices(
+            searchText: editingWidgetDeviceSearch,
+            sourceFilter: editingWidgetDeviceSource,
+            pinnedDeviceIDs: editingWidgetDeviceIDs
+        )
     }
 
     private var onlineDevices: Int {
@@ -1474,6 +1485,9 @@ struct DashboardView: View {
         .sheet(isPresented: $showingAddWidgetSheet) {
             dashboardAddWidgetSheet
         }
+        .sheet(isPresented: isPresentingDevicesWidgetEditorSheet) {
+            dashboardDevicesWidgetEditorSheet
+        }
         .sheet(isPresented: isPresentingSecurityPinSheet) {
             securityPinSheet
                 .presentationDetents([.height(280)])
@@ -1559,6 +1573,12 @@ struct DashboardView: View {
 
                         if isEditingDashboard {
                             HStack(spacing: 8) {
+                                if widget.type == .devices {
+                                    widgetToolbarButton(systemImage: "checklist") {
+                                        prepareEditDevicesWidgetSheet(widget)
+                                    }
+                                }
+
                                 widgetSizeMenu(widget)
 
                                 widgetToolbarButton(
@@ -1674,6 +1694,14 @@ struct DashboardView: View {
                             Text(size.title)
                         }
                     }
+                }
+            }
+
+            if widget.type == .devices {
+                Button {
+                    prepareEditDevicesWidgetSheet(widget)
+                } label: {
+                    Label("Edit Devices", systemImage: "checklist")
                 }
             }
 
@@ -1921,6 +1949,94 @@ struct DashboardView: View {
                         || (pendingWidgetType == .devices && pendingWidgetDeviceIDs.isEmpty)
                         || (pendingWidgetType == .weather && pendingWeatherLocationMode == .custom && pendingWeatherLocationQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     )
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private var dashboardDevicesWidgetEditorSheet: some View {
+        NavigationStack {
+            Form {
+                Section("Devices") {
+                    TextField("Search devices", text: $editingWidgetDeviceSearch)
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+
+                    Picker("Source", selection: $editingWidgetDeviceSource) {
+                        ForEach(DeviceItem.selectionSourceOptions(for: sortedDevices)) { option in
+                            Text(option.label).tag(option.value)
+                        }
+                    }
+
+                    HStack {
+                        Text("\(editingWidgetDeviceIDs.count) selected")
+                            .font(HBTypography.body(size: 13, weight: .medium))
+                            .foregroundStyle(HBPalette.textSecondary)
+
+                        Spacer()
+
+                        Button("Select Visible") {
+                            selectFilteredEditingDevices()
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(filteredEditingDevices.isEmpty)
+
+                        Button("Clear") {
+                            editingWidgetDeviceIDs = []
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(editingWidgetDeviceIDs.isEmpty)
+                    }
+
+                    if filteredEditingDevices.isEmpty {
+                        Text("No devices match your search.")
+                            .font(HBTypography.body(size: 13, weight: .medium))
+                            .foregroundStyle(HBPalette.textSecondary)
+                    } else {
+                        ForEach(filteredEditingDevices) { device in
+                            Button {
+                                toggleEditingWidgetDeviceSelection(device.id)
+                            } label: {
+                                HStack(spacing: 12) {
+                                    Image(systemName: editingWidgetDeviceIDs.contains(device.id) ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(
+                                            editingWidgetDeviceIDs.contains(device.id)
+                                                ? HBPalette.accentBlue
+                                                : HBPalette.textMuted
+                                        )
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(device.name)
+                                            .foregroundStyle(HBPalette.textPrimary)
+                                        Text("\(device.displayRoom) • \(device.type)")
+                                            .font(HBTypography.body(size: 12, weight: .medium))
+                                            .foregroundStyle(HBPalette.textSecondary)
+                                        Text(device.selectionSourceLabel)
+                                            .font(HBTypography.body(size: 11, weight: .semibold))
+                                            .foregroundStyle(HBPalette.textMuted)
+                                    }
+                                    Spacer()
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(HBPageBackground().ignoresSafeArea())
+            .navigationTitle("Edit Devices")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        resetDevicesWidgetEditor()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        applyDevicesWidgetEdits()
+                    }
+                    .disabled(editingWidgetDeviceIDs.isEmpty)
                 }
             }
         }
@@ -4906,7 +5022,6 @@ struct DashboardView: View {
             .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
     }
 
-    @ViewBuilder
     private func weatherOutdoorClimateRow(
         snapshot: DashboardWeatherSnapshot,
         widgetID: String,
@@ -4914,8 +5029,8 @@ struct DashboardView: View {
         includeIcon: Bool,
         weatherGlyphSize: CGFloat,
         weatherGlyphFrame: CGFloat
-    ) -> some View {
-        HStack(alignment: .center, spacing: compact ? 7 : 9) {
+    ) -> AnyView {
+        AnyView(HStack(alignment: .center, spacing: compact ? 7 : 9) {
             weatherClimateScopeLabel("Outside", compact: compact)
 
             weatherInfoPopoverTrigger(
@@ -4943,16 +5058,15 @@ struct DashboardView: View {
                 )
             }
         }
-        .frame(maxWidth: .infinity, alignment: usesPortraitCompactLayout ? .leading : .trailing)
+        .frame(maxWidth: .infinity, alignment: usesPortraitCompactLayout ? .leading : .trailing))
     }
 
-    @ViewBuilder
     private func weatherIndoorClimateRow(
         widgetID: String,
         indoorAir: DashboardIndoorAirSnapshot?,
         compact: Bool
-    ) -> some View {
-        HStack(alignment: .center, spacing: compact ? 7 : 9) {
+    ) -> AnyView {
+        AnyView(HStack(alignment: .center, spacing: compact ? 7 : 9) {
             weatherClimateScopeLabel("Indoor", compact: compact)
 
             if let indoorAir {
@@ -4963,7 +5077,7 @@ struct DashboardView: View {
                 weatherIndoorInline(snapshot: nil, compact: compact)
             }
         }
-        .frame(maxWidth: .infinity, alignment: usesPortraitCompactLayout ? .leading : .trailing)
+        .frame(maxWidth: .infinity, alignment: usesPortraitCompactLayout ? .leading : .trailing))
     }
 
     private func weatherIndoorInline(snapshot: DashboardIndoorAirSnapshot?, compact: Bool) -> some View {
@@ -5085,12 +5199,11 @@ struct DashboardView: View {
         .fixedSize(horizontal: true, vertical: false)
     }
 
-    @ViewBuilder
     private func weatherInfoPopoverTrigger<Content: View>(
         topic: DashboardWeatherInfoTopic,
         arrowEdge: Edge = .bottom,
         @ViewBuilder content: () -> Content
-    ) -> some View {
+    ) -> AnyView {
         let trigger = Button {
             toggleWeatherInfo(topic)
         } label: {
@@ -5098,7 +5211,7 @@ struct DashboardView: View {
         }
         .buttonStyle(.plain)
 
-        trigger
+        return AnyView(trigger)
     }
 
     private func presentWeatherInfo(_ topic: DashboardWeatherInfoTopic) {
@@ -6804,6 +6917,34 @@ struct DashboardView: View {
         }
     }
 
+    private func filteredDevices(
+        searchText: String,
+        sourceFilter: String,
+        pinnedDeviceIDs: [String]
+    ) -> [DeviceItem] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let matches = sortedDevices.filter { device in
+            device.matchesSelectionFilters(searchText: query, sourceFilter: sourceFilter)
+        }
+
+        let pinnedIDs = Set(pinnedDeviceIDs.filter { !$0.isEmpty })
+        if pinnedIDs.isEmpty {
+            return matches
+        }
+
+        let pinnedDevices = sortedDevices.filter { device in
+            pinnedIDs.contains(device.id) && !matches.contains(where: { $0.id == device.id })
+        }
+        return pinnedDevices + matches
+    }
+
+    private func orderedSelectedDeviceIDs(from selected: Set<String>, preservingUnknownFrom existing: [String]) -> [String] {
+        let sortedKnownIDs = sortedDevices.map(\.id).filter { selected.contains($0) }
+        let sortedKnownIDSet = Set(sortedKnownIDs)
+        let unknownIDs = existing.filter { selected.contains($0) && !sortedKnownIDSet.contains($0) }
+        return sortedKnownIDs + unknownIDs
+    }
+
     private func togglePendingWidgetDeviceSelection(_ deviceID: String) {
         var selected = Set(pendingWidgetDeviceIDs)
         if selected.contains(deviceID) {
@@ -6817,6 +6958,28 @@ struct DashboardView: View {
             .filter { selected.contains($0) }
     }
 
+    private func toggleEditingWidgetDeviceSelection(_ deviceID: String) {
+        var selected = Set(editingWidgetDeviceIDs)
+        if selected.contains(deviceID) {
+            selected.remove(deviceID)
+        } else {
+            selected.insert(deviceID)
+        }
+
+        editingWidgetDeviceIDs = orderedSelectedDeviceIDs(
+            from: selected,
+            preservingUnknownFrom: editingWidgetDeviceIDs
+        )
+    }
+
+    private func selectFilteredEditingDevices() {
+        let selected = Set(editingWidgetDeviceIDs + filteredEditingDevices.map(\.id))
+        editingWidgetDeviceIDs = orderedSelectedDeviceIDs(
+            from: selected,
+            preservingUnknownFrom: editingWidgetDeviceIDs
+        )
+    }
+
     private func prepareAddWidgetSheet() {
         pendingWidgetType = .hero
         pendingWidgetTitle = DashboardWidgetType.hero.title
@@ -6828,6 +6991,38 @@ struct DashboardView: View {
             pendingWeatherLocationMode = .saved
         pendingWeatherLocationQuery = ""
         showingAddWidgetSheet = true
+    }
+
+    private func prepareEditDevicesWidgetSheet(_ widget: DashboardWidgetItem) {
+        guard widget.type == .devices else { return }
+        let selectedIDs = Set(widget.settings.deviceIds)
+        editingDevicesWidgetID = widget.id
+        editingWidgetDeviceIDs = orderedSelectedDeviceIDs(
+            from: selectedIDs,
+            preservingUnknownFrom: widget.settings.deviceIds
+        )
+        editingWidgetDeviceSearch = ""
+        editingWidgetDeviceSource = DeviceItem.allSelectionSourcesValue
+    }
+
+    private func applyDevicesWidgetEdits() {
+        guard let widgetID = editingDevicesWidgetID else { return }
+        let selectedIDs = dashboardNormalizeStringArray(editingWidgetDeviceIDs) ?? []
+        guard !selectedIDs.isEmpty else { return }
+
+        updateWidget(widgetID) { widget in
+            widget.settings.deviceIds = selectedIDs
+        }
+        infoMessage = "Devices widget updated. Save the dashboard to keep changes."
+        errorMessage = nil
+        resetDevicesWidgetEditor()
+    }
+
+    private func resetDevicesWidgetEditor() {
+        editingDevicesWidgetID = nil
+        editingWidgetDeviceIDs = []
+        editingWidgetDeviceSearch = ""
+        editingWidgetDeviceSource = DeviceItem.allSelectionSourcesValue
     }
 
     private func updateWidget(_ widgetID: String, mutate: (inout DashboardWidgetItem) -> Void) {

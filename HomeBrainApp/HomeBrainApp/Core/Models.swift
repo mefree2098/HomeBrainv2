@@ -670,7 +670,7 @@ nonisolated struct SceneItem: Identifiable {
 
     nonisolated static func from(_ object: [String: Any]) -> SceneItem {
         let lastActivated = JSON.string(object, "lastActivated").trimmingCharacters(in: .whitespacesAndNewlines)
-        SceneItem(
+        return SceneItem(
             id: JSON.id(object),
             name: JSON.string(object, "name", fallback: "Untitled Scene"),
             details: JSON.string(object, "description", fallback: "No description"),
