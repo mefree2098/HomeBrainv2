@@ -12,6 +12,7 @@ import {
   Mic,
   Play,
   Shield,
+  SlidersHorizontal,
   Trash2,
   Zap
 } from "lucide-react"
@@ -278,6 +279,10 @@ export function Dashboard() {
   const [pendingWidgetDeviceIds, setPendingWidgetDeviceIds] = useState<string[]>([])
   const [pendingWidgetDeviceSearch, setPendingWidgetDeviceSearch] = useState("")
   const [pendingWidgetDeviceSource, setPendingWidgetDeviceSource] = useState(ALL_DEVICE_SOURCES_VALUE)
+  const [editingDevicesWidgetId, setEditingDevicesWidgetId] = useState<string | null>(null)
+  const [editingWidgetDeviceIds, setEditingWidgetDeviceIds] = useState<string[]>([])
+  const [editingWidgetDeviceSearch, setEditingWidgetDeviceSearch] = useState("")
+  const [editingWidgetDeviceSource, setEditingWidgetDeviceSource] = useState(ALL_DEVICE_SOURCES_VALUE)
   const [pendingWeatherLocationMode, setPendingWeatherLocationMode] = useState<DashboardWeatherLocationMode>("saved")
   const [pendingWeatherLocationQuery, setPendingWeatherLocationQuery] = useState("")
   const [selectedSecurityDeviceId, setSelectedSecurityDeviceId] = useState<string | null>(null)
@@ -563,6 +568,28 @@ export function Dashboard() {
     return [...devices].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }))
   }, [devices])
 
+  const orderSelectedDeviceIds = useCallback((deviceIds: Iterable<string>, fallbackOrder: string[] = []) => {
+    const selected = new Set(
+      Array.from(deviceIds)
+        .map((deviceId) => deviceId.trim())
+        .filter(Boolean)
+    )
+
+    const knownIds = sortedDevices
+      .map((device) => device._id)
+      .filter((deviceId) => selected.has(deviceId))
+
+    const fallbackIds = fallbackOrder.filter((deviceId) => (
+      selected.has(deviceId) && !knownIds.includes(deviceId)
+    ))
+
+    const remainingIds = Array.from(selected).filter((deviceId) => (
+      !knownIds.includes(deviceId) && !fallbackIds.includes(deviceId)
+    ))
+
+    return [...knownIds, ...fallbackIds, ...remainingIds]
+  }, [sortedDevices])
+
   const filteredPendingDevices = useMemo(() => {
     const matches = filterDevicesForDevicePicker(
       sortedDevices,
@@ -586,6 +613,26 @@ export function Dashboard() {
     return [...pinnedDevices, ...matches]
   }, [pendingWidgetDeviceId, pendingWidgetDeviceIds, pendingWidgetDeviceSearch, pendingWidgetDeviceSource, sortedDevices])
 
+  const filteredEditingDevices = useMemo(() => {
+    const matches = filterDevicesForDevicePicker(
+      sortedDevices,
+      editingWidgetDeviceSearch,
+      editingWidgetDeviceSource
+    ) as Device[]
+
+    if (editingWidgetDeviceIds.length === 0) {
+      return matches
+    }
+
+    const matchedIds = new Set(matches.map((device) => device._id))
+    const pinnedDeviceIds = new Set(editingWidgetDeviceIds)
+    const pinnedDevices = sortedDevices.filter((device) => (
+      pinnedDeviceIds.has(device._id) && !matchedIds.has(device._id)
+    ))
+
+    return [...pinnedDevices, ...matches]
+  }, [editingWidgetDeviceIds, editingWidgetDeviceSearch, editingWidgetDeviceSource, sortedDevices])
+
   const togglePendingWidgetDeviceSelection = useCallback((deviceId: string, nextValue: boolean) => {
     setPendingWidgetDeviceIds((previous) => {
       const selected = new Set(previous)
@@ -596,11 +643,47 @@ export function Dashboard() {
         selected.delete(deviceId)
       }
 
-      return sortedDevices
-        .map((device) => device._id)
-        .filter((candidateId) => selected.has(candidateId))
+      return orderSelectedDeviceIds(selected, previous)
     })
-  }, [sortedDevices])
+  }, [orderSelectedDeviceIds])
+
+  const toggleEditingWidgetDeviceSelection = useCallback((deviceId: string, nextValue: boolean) => {
+    setEditingWidgetDeviceIds((previous) => {
+      const selected = new Set(previous)
+
+      if (nextValue) {
+        selected.add(deviceId)
+      } else {
+        selected.delete(deviceId)
+      }
+
+      return orderSelectedDeviceIds(selected, previous)
+    })
+  }, [orderSelectedDeviceIds])
+
+  const selectVisibleEditingDevices = useCallback(() => {
+    setEditingWidgetDeviceIds((previous) => {
+      const selected = new Set(previous)
+      filteredEditingDevices.forEach((device) => selected.add(device._id))
+
+      return orderSelectedDeviceIds(selected, previous)
+    })
+  }, [filteredEditingDevices, orderSelectedDeviceIds])
+
+  const deselectVisibleEditingDevices = useCallback(() => {
+    const visibleIds = new Set(filteredEditingDevices.map((device) => device._id))
+
+    setEditingWidgetDeviceIds((previous) => {
+      return orderSelectedDeviceIds(previous.filter((deviceId) => !visibleIds.has(deviceId)), previous)
+    })
+  }, [filteredEditingDevices, orderSelectedDeviceIds])
+
+  const closeDevicesWidgetEditor = useCallback(() => {
+    setEditingDevicesWidgetId(null)
+    setEditingWidgetDeviceIds([])
+    setEditingWidgetDeviceSearch("")
+    setEditingWidgetDeviceSource(ALL_DEVICE_SOURCES_VALUE)
+  }, [])
 
   const isLoaded = !loading && !favoritesLoading && !dashboardLoading
   const onlineDevices = devices.filter((device) => device.status).length
@@ -937,6 +1020,43 @@ export function Dashboard() {
       widgets: view.widgets.filter((widget) => widget.id !== widgetId)
     }))
   }, [mutateSelectedView])
+
+  const openDevicesWidgetEditor = useCallback((widget: DashboardWidgetConfig) => {
+    if (widget.type !== "devices") {
+      return
+    }
+
+    const deviceIds = Array.isArray(widget.settings.deviceIds)
+      ? widget.settings.deviceIds
+          .map((deviceId) => deviceId.trim())
+          .filter(Boolean)
+      : []
+
+    setEditingDevicesWidgetId(widget.id)
+    setEditingWidgetDeviceIds(orderSelectedDeviceIds(deviceIds, deviceIds))
+    setEditingWidgetDeviceSearch("")
+    setEditingWidgetDeviceSource(ALL_DEVICE_SOURCES_VALUE)
+  }, [orderSelectedDeviceIds])
+
+  const applyDevicesWidgetEdit = useCallback(() => {
+    if (!editingDevicesWidgetId || editingWidgetDeviceIds.length === 0) {
+      return
+    }
+
+    updateWidget(editingDevicesWidgetId, (current) => ({
+      ...current,
+      settings: {
+        ...current.settings,
+        deviceIds: editingWidgetDeviceIds
+      }
+    }))
+
+    toast({
+      title: "Devices Widget Updated",
+      description: "Save the dashboard to keep these device changes."
+    })
+    closeDevicesWidgetEditor()
+  }, [closeDevicesWidgetEditor, editingDevicesWidgetId, editingWidgetDeviceIds, toast, updateWidget])
 
   const prepareAddWidget = useCallback((type: DashboardWidgetType = "hero") => {
     const descriptor = ADDABLE_WIDGETS.find((widget) => widget.type === type)
@@ -1311,6 +1431,18 @@ export function Dashboard() {
 
                   {isEditingLayout ? (
                     <div className="flex flex-wrap items-center gap-2">
+                      {widget.type === "devices" ? (
+                        <Button
+                          variant="outline"
+                          size="icon"
+                          onClick={() => openDevicesWidgetEditor(widget)}
+                          aria-label="Edit devices in widget"
+                          title="Edit devices"
+                        >
+                          <SlidersHorizontal className="h-4 w-4" />
+                        </Button>
+                      ) : null}
+
                       <Select
                         value={widget.size}
                         onValueChange={(value) => updateWidget(widget.id, (current) => ({ ...current, size: value as DashboardWidgetSize }))}
@@ -1407,6 +1539,109 @@ export function Dashboard() {
             <Button variant="outline" onClick={closeViewDialog}>Cancel</Button>
             <Button onClick={submitViewDialog} disabled={!pendingViewName.trim()}>
               Save
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(editingDevicesWidgetId)} onOpenChange={(open) => !open && closeDevicesWidgetEditor()}>
+        <DialogContent className="w-[min(94vw,44rem)]">
+          <DialogHeader>
+            <DialogTitle>Edit Devices Widget</DialogTitle>
+            <DialogDescription>
+              Add or remove the devices shown in this widget.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_220px]">
+              <div className="space-y-2">
+                <Label htmlFor="edit-widget-devices-search">Search Devices</Label>
+                <Input
+                  id="edit-widget-devices-search"
+                  value={editingWidgetDeviceSearch}
+                  onChange={(event) => setEditingWidgetDeviceSearch(event.target.value)}
+                  placeholder="Search by name, room, type, or source"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-widget-devices-source">Source</Label>
+                <DeviceSourceFilterSelect
+                  id="edit-widget-devices-source"
+                  devices={sortedDevices}
+                  value={editingWidgetDeviceSource}
+                  onValueChange={setEditingWidgetDeviceSource}
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="outline">{editingWidgetDeviceIds.length} selected</Badge>
+                <Badge variant="secondary">{filteredEditingDevices.length} visible</Badge>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={selectVisibleEditingDevices}
+                  disabled={filteredEditingDevices.length === 0}
+                >
+                  Select Visible
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={deselectVisibleEditingDevices}
+                  disabled={filteredEditingDevices.length === 0}
+                >
+                  Remove Visible
+                </Button>
+              </div>
+            </div>
+
+            <div className="max-h-80 space-y-2 overflow-y-auto rounded-[1rem] border border-border/60 p-2">
+              {filteredEditingDevices.length > 0 ? filteredEditingDevices.map((device) => {
+                const checked = editingWidgetDeviceIds.includes(device._id)
+
+                return (
+                  <label
+                    key={device._id}
+                    className="flex cursor-pointer items-start gap-3 rounded-[0.9rem] border border-white/10 bg-white/5 px-3 py-2.5 transition-colors hover:bg-white/10"
+                  >
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={(value) => toggleEditingWidgetDeviceSelection(device._id, value === true)}
+                      className="mt-0.5"
+                    />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-foreground">{device.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {device.room || "Unassigned"} · {device.type} · {getDeviceSourceLabel(getDeviceSource(device))}
+                      </p>
+                    </div>
+                  </label>
+                )
+              }) : (
+                <div className="rounded-[0.9rem] border border-dashed border-border/60 px-3 py-5 text-center text-sm text-muted-foreground">
+                  No devices match your search
+                </div>
+              )}
+            </div>
+
+            {editingWidgetDeviceIds.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                Select at least one device, or delete the widget from the dashboard.
+              </p>
+            ) : null}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={closeDevicesWidgetEditor}>Cancel</Button>
+            <Button onClick={applyDevicesWidgetEdit} disabled={editingWidgetDeviceIds.length === 0}>
+              Update Widget
             </Button>
           </DialogFooter>
         </DialogContent>
