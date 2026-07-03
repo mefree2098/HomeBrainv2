@@ -239,6 +239,36 @@ function safeOrigin(value) {
   }
 }
 
+function closeServerAndExit(server, exitCode = 0, options = {}) {
+  const timeoutMs = Number(options.timeoutMs) || 5000;
+  const exitProcess = typeof options.exitProcess === 'function'
+    ? options.exitProcess
+    : process.exit.bind(process);
+  let exited = false;
+
+  const finish = () => {
+    if (exited) {
+      return;
+    }
+    exited = true;
+    exitProcess(exitCode);
+  };
+
+  process.exitCode = exitCode;
+
+  try {
+    server.close(finish);
+  } catch (_error) {
+    finish();
+    return;
+  }
+
+  const timer = setTimeout(finish, timeoutMs);
+  if (typeof timer.unref === 'function') {
+    timer.unref();
+  }
+}
+
 function buildBrokerBaseUrl(req) {
   const configured = sanitizeBaseUrl(process.env.HOMEBRAIN_BROKER_PUBLIC_BASE_URL);
   if (configured) {
@@ -1604,6 +1634,7 @@ module.exports = {
   createApp,
   buildAbsoluteUrl,
   buildBrokerBaseUrl,
+  closeServerAndExit,
   extractBearerToken,
   renderAuthorizePage
 };
@@ -1627,23 +1658,18 @@ if (require.main === module) {
 
   const shutdown = (signal) => {
     console.log(`[broker] Received ${signal}; shutting down`);
-    server.close(() => {
-      process.exit(0);
-    });
-    setTimeout(() => {
-      process.exit(1);
-    }, 5000).unref();
+    closeServerAndExit(server, 0);
   };
 
   process.once('SIGTERM', () => shutdown('SIGTERM'));
   process.once('SIGINT', () => shutdown('SIGINT'));
   process.on('uncaughtException', (error) => {
     console.error(`[broker] Uncaught exception: ${error.stack || error.message}`);
-    process.exitCode = 1;
-    server.close(() => process.exit(1));
+    closeServerAndExit(server, 1);
   });
   process.on('unhandledRejection', (reason) => {
     const message = reason instanceof Error ? reason.stack || reason.message : String(reason);
     console.error(`[broker] Unhandled rejection: ${message}`);
+    closeServerAndExit(server, 1);
   });
 }

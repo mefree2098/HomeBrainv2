@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 const fs = require('fs/promises');
 
-const { createApp } = require('../src/app');
+const { closeServerAndExit, createApp } = require('../src/app');
 const { BrokerStore } = require('../src/store');
 const { AlexaDeviceService } = require('../src/alexaDeviceService');
 
@@ -980,4 +980,32 @@ test('broker rejects unauthenticated event access and invalid redirect URIs', as
   });
 
   assert.equal(invalidAuthorizeResponse.status, 400);
+});
+
+test('closeServerAndExit closes the server before exiting nonzero', async (t) => {
+  const previousExitCode = process.exitCode;
+  let closeCalls = 0;
+  const exitCodes = [];
+
+  t.after(() => {
+    process.exitCode = previousExitCode;
+  });
+
+  closeServerAndExit({
+    close(callback) {
+      closeCalls += 1;
+      setImmediate(callback);
+    }
+  }, 1, {
+    timeoutMs: 100,
+    exitProcess(code) {
+      exitCodes.push(code);
+    }
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(closeCalls, 1);
+  assert.deepEqual(exitCodes, [1]);
+  assert.equal(process.exitCode, 1);
 });
