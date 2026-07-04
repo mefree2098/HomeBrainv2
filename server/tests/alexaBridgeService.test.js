@@ -448,7 +448,7 @@ test('executeDirective acknowledges Alexa scene endpoints without waiting for sc
         triggerSource: 'alexa',
         reason: 'Alexa scene activation',
         actor: 'alexa',
-        correlationId: 'hb:hub-1:scene:scene-stars-only-1'
+        correlationId: 'scene-corr-activate'
       },
       waitForCompletion: false
     }
@@ -529,7 +529,7 @@ test('executeDirective deactivates Alexa scene endpoints', async (t) => {
         triggerSource: 'alexa',
         reason: 'Alexa scene deactivation',
         actor: 'alexa',
-        correlationId: 'hb:hub-1:scene:scene-movie-night-1'
+        correlationId: 'scene-corr-2'
       }
     }
   ]);

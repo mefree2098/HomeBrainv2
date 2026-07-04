@@ -57,6 +57,8 @@ function buildWorkflowActionParameters(definition = {}) {
     action: definition.action,
     skipIfAlreadyInState: true,
     releaseCommandClaimOnSuccess: true,
+    disableActionRetry: true,
+    retryOnFailure: false,
     ...(definition.value !== undefined ? { value: definition.value } : {})
   };
 
