@@ -146,6 +146,7 @@ function normalizeDirectivePayload(requestBody = {}) {
     payload: requestBody.payload || directive.payload || topLevelDirective.payload || {},
     endpointId: requestBody.endpointId || endpoint.endpointId || '',
     correlationToken: requestBody.correlationToken || header.correlationToken || directive.correlationToken || '',
+    messageId: requestBody.messageId || header.messageId || directive.messageId || '',
     rawDirective: directive
   };
 }
@@ -970,7 +971,7 @@ class AlexaBridgeService {
             triggerSource: 'alexa',
             reason: name === 'Deactivate' ? 'Alexa scene deactivation' : 'Alexa scene activation',
             actor: 'alexa',
-            correlationId: normalized.endpointId
+            correlationId: normalized.correlationToken || normalized.messageId || normalized.endpointId
           }
         };
 

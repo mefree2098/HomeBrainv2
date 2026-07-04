@@ -211,8 +211,12 @@ test('activateScene executes device and group actions through workflow execution
   assert.equal(receivedActions[0].parameters.action, 'set_brightness');
   assert.equal(receivedActions[0].parameters.value, 37);
   assert.equal(receivedActions[0].parameters.brightness, 37);
+  assert.equal(receivedActions[0].parameters.disableActionRetry, true);
+  assert.equal(receivedActions[0].parameters.retryOnFailure, false);
   assert.equal(receivedActions[1].target.kind, 'device_group');
   assert.equal(receivedActions[1].target.group, groupId);
+  assert.equal(receivedActions[1].parameters.disableActionRetry, true);
+  assert.equal(receivedActions[1].parameters.retryOnFailure, false);
   assert.equal(updateManyCalled, false);
   assert.equal(sceneDoc.active, false);
   assert.equal(sceneDoc.activationCount, 1);
