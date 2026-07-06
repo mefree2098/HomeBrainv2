@@ -566,8 +566,23 @@ class SystemBackupService {
     }
   }
 
+  async recoverInterruptedBackupJob(job) {
+    if (!job || !isBackupActiveStatus(job.status) || this._runningBackupPromise) {
+      return job || null;
+    }
+
+    return this.updateBackupJob(job.id, {
+      status: 'failed',
+      phase: 'failed',
+      completedAt: this.now().toISOString(),
+      error: 'Backup was interrupted before completion. The HomeBrain process is no longer running this backup job.',
+      message: 'Backup failed because the HomeBrain process stopped before the job completed.'
+    });
+  }
+
   async getLatestBackupJob() {
-    return buildBackupJobSummary(await this.readLatestBackupJobRecord());
+    const latestJob = await this.readLatestBackupJobRecord();
+    return buildBackupJobSummary(await this.recoverInterruptedBackupJob(latestJob));
   }
 
   async writeSmbCredentialsFile(options = {}, tempRoot) {
@@ -774,7 +789,7 @@ class SystemBackupService {
 
     const target = parseSmbShareTarget(resolvedOptions.shareUrl || resolvedOptions.sharePath, resolvedOptions.remoteDirectory);
 
-    const latestJob = await this.readLatestBackupJobRecord();
+    const latestJob = await this.recoverInterruptedBackupJob(await this.readLatestBackupJobRecord());
     if ((latestJob && isBackupActiveStatus(latestJob.status)) || this._runningBackupPromise) {
       const error = new Error('A disaster recovery backup job is already running');
       error.code = 'BACKUP_RUNNING';

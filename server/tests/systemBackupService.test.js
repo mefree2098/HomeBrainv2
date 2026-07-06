@@ -314,6 +314,84 @@ test('SMB backup jobs persist only sanitized share metadata', { concurrency: fal
   assert.doesNotMatch(raw, /matt:super-secret/);
 });
 
+test('getLatestBackupJob marks interrupted active SMB backup as failed', { concurrency: false }, async (t) => {
+  const { projectRoot, tempRoot } = await createTempProject(t);
+  const service = new SystemBackupService({
+    projectRoot,
+    tempRoot,
+    now: () => new Date('2026-05-11T08:30:00.000Z')
+  });
+
+  await service.writeBackupJob({
+    id: 'stale-job',
+    actor: 'system:scheduler',
+    archiveName: null,
+    status: 'creating',
+    phase: 'creating-archive',
+    createdAt: '2026-05-10T08:30:00.000Z',
+    updatedAt: '2026-05-10T08:30:00.000Z',
+    completedAt: null,
+    error: null,
+    message: 'Creating HomeBrain disaster recovery archive.',
+    remoteTarget: null,
+    source: 'scheduled',
+    retention: null,
+    manifest: null
+  });
+
+  const latest = await service.getLatestBackupJob();
+  const stored = await service.readBackupJob('stale-job');
+
+  assert.equal(latest.status, 'failed');
+  assert.equal(latest.phase, 'failed');
+  assert.equal(latest.completedAt, '2026-05-11T08:30:00.000Z');
+  assert.match(latest.error, /interrupted before completion/);
+  assert.equal(stored.status, 'failed');
+  assert.equal(stored.completedAt, '2026-05-11T08:30:00.000Z');
+});
+
+test('startSmbBackupJob recovers interrupted latest backup before queuing a new one', { concurrency: false }, async (t) => {
+  const { projectRoot, tempRoot } = await createTempProject(t);
+  const service = new SystemBackupService({
+    projectRoot,
+    tempRoot,
+    now: () => new Date('2026-05-11T08:30:00.000Z')
+  });
+
+  service.executeSmbBackupJob = async () => new Promise(() => {});
+
+  await service.writeBackupJob({
+    id: 'interrupted-job',
+    actor: 'system:scheduler',
+    archiveName: null,
+    status: 'uploading',
+    phase: 'uploading-smb',
+    createdAt: '2026-05-10T08:30:00.000Z',
+    updatedAt: '2026-05-10T08:45:00.000Z',
+    completedAt: null,
+    error: null,
+    message: 'Uploading backup archive to SMB share.',
+    remoteTarget: null,
+    source: 'scheduled',
+    retention: null,
+    manifest: null
+  });
+
+  const nextJob = await service.startSmbBackupJob({
+    shareUrl: 'smb://nas.local/backups',
+    remoteDirectory: 'HomeBrain',
+    confirmBackup: 'BACKUP HOMEBRAIN TO SMB'
+  });
+  const interruptedJob = await service.readBackupJob('interrupted-job');
+  const latestJob = await service.readLatestBackupJobRecord();
+
+  assert.equal(interruptedJob.status, 'failed');
+  assert.match(interruptedJob.error, /interrupted before completion/);
+  assert.equal(nextJob.status, 'queued');
+  assert.notEqual(nextJob.id, 'interrupted-job');
+  assert.equal(latestJob.id, nextJob.id);
+});
+
 test('SMB share parser accepts UNC paths and rejects incomplete shares', () => {
   const parsed = systemBackupServiceModule._test.parseSmbShareTarget('//nas/backups/homebrain', 'daily');
   assert.equal(parsed.sharePath, '//nas/backups');
