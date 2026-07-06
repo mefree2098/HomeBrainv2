@@ -461,6 +461,8 @@ configure_firewall() {
   sudo ufw allow ssh
   sudo ufw allow 80/tcp
   sudo ufw allow 443/tcp
+  sudo ufw allow 53/tcp
+  sudo ufw allow 53/udp
   sudo ufw allow 12345/udp
   sudo ufw --force enable
   print_success "Firewall configured."
@@ -507,6 +509,7 @@ print_summary() {
   echo "Open HomeBrain at: http://${ip}:3000"
   echo "Health check:     http://${ip}:3000/ping"
   echo "Reverse proxy:    bash ${HOMEBRAIN_DIR}/scripts/setup-services.sh setup-caddy"
+  echo "Platform services: bash ${HOMEBRAIN_DIR}/scripts/setup-services.sh setup-platform-services"
   echo
   echo "Useful commands:"
   echo "  bash ${HOMEBRAIN_DIR}/scripts/setup-services.sh status"
@@ -534,7 +537,7 @@ main() {
   install_app
   bootstrap_wakeword
   install_service
-  bash "${HOMEBRAIN_DIR}/scripts/setup-services.sh" setup-caddy
+  bash "${HOMEBRAIN_DIR}/scripts/setup-services.sh" setup-platform-services
   configure_deploy_sudoers
   configure_firewall
   start_and_verify

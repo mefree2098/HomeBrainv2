@@ -39,6 +39,16 @@ MONGODB_RESOURCE_GUARD_PATH="${MONGODB_SERVICE_DROPIN_DIR}/10-homebrain-resource
 CADDY_SERVICE_NAME="${CADDY_SERVICE_NAME:-caddy-api}"
 CADDY_SERVICE_PATH="/etc/systemd/system/${CADDY_SERVICE_NAME}.service"
 CADDY_BOOTSTRAP_PATH="${CADDY_BOOTSTRAP_PATH:-/etc/caddy/Caddyfile}"
+MQTT_SERVICE_NAME="${HOMEBRAIN_MQTT_SERVICE_NAME:-homebrain-mqtt}"
+MQTT_SERVICE_PATH="/etc/systemd/system/${MQTT_SERVICE_NAME}.service"
+MQTT_CONFIG_PATH="${HOMEBRAIN_MQTT_CONFIG_PATH:-/etc/mosquitto/homebrain.conf}"
+MQTT_BIND_ADDRESS="${HOMEBRAIN_MQTT_BIND_ADDRESS:-127.0.0.1}"
+MQTT_PORT="${HOMEBRAIN_MQTT_PORT:-1883}"
+MQTT_DATA_DIR="${HOMEBRAIN_MQTT_DATA_DIR:-/var/lib/homebrain/mqtt}"
+MQTT_LOG_DIR="${HOMEBRAIN_MQTT_LOG_DIR:-/var/log/homebrain/mqtt}"
+PIHOLE_WEB_PORT="${HOMEBRAIN_PIHOLE_WEB_PORT:-8081}"
+PIHOLE_WEB_TLS_PORT="${HOMEBRAIN_PIHOLE_WEB_TLS_PORT:-8444}"
+PIHOLE_ADMIN_ROUTE_HOST="${HOMEBRAIN_PIHOLE_ADMIN_ROUTE_HOST:-}"
 OLLAMA_HELPER_SOURCE_PATH="${HOMEBRAIN_DIR}/scripts/ollama-host-control.sh"
 OLLAMA_HELPER_INSTALL_DIR="${HOMEBRAIN_HELPER_INSTALL_DIR}"
 OLLAMA_HELPER_INSTALL_PATH="${OLLAMA_HELPER_INSTALL_DIR}/ollama-host-control.sh"
@@ -265,6 +275,17 @@ homebrain_service_unit_exists() {
     | grep -qx "${SERVICE_NAME}.service"
 }
 
+service_unit_exists() {
+  local unit_name="$1"
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return 1
+  fi
+
+  sudo systemctl list-unit-files --type=service --no-legend 2>/dev/null \
+    | awk '{print $1}' \
+    | grep -qx "${unit_name}.service"
+}
+
 homebrain_restart_helper_unit_exists() {
   if ! command -v systemctl >/dev/null 2>&1; then
     return 1
@@ -482,7 +503,7 @@ neutralize_legacy_direct_server_start_dropin() {
 }
 
 print_port_listener_summary() {
-  sudo ss -lntup 2>/dev/null | grep -E '(:80|:443|:3000|:27017)\b|:12345\b' || true
+  sudo ss -lntup 2>/dev/null | grep -E '(:53|:80|:443|:1883|:3000|:8081|:8444|:27017)\b|:12345\b' || true
 }
 
 report_edge_port_owner() {
@@ -762,12 +783,24 @@ configure_deploy_sudoers() {
     deploy_commands+=("/bin/bash ${setup_services_path} install-service")
     deploy_commands+=("/bin/bash ${setup_services_path} refresh-privileges")
     deploy_commands+=("/bin/bash ${setup_services_path} configure-mongodb")
+    deploy_commands+=("/bin/bash ${setup_services_path} setup-caddy")
+    deploy_commands+=("/bin/bash ${setup_services_path} setup-mqtt")
+    deploy_commands+=("/bin/bash ${setup_services_path} setup-pihole")
+    deploy_commands+=("/bin/bash ${setup_services_path} setup-platform-services")
+    deploy_commands+=("/bin/bash ${setup_services_path} check-platform-service-updates *")
+    deploy_commands+=("/bin/bash ${setup_services_path} update-platform-service *")
   fi
 
   if [[ -x /usr/bin/bash && /usr/bin/bash != /bin/bash ]]; then
     deploy_commands+=("/usr/bin/bash ${setup_services_path} install-service")
     deploy_commands+=("/usr/bin/bash ${setup_services_path} refresh-privileges")
     deploy_commands+=("/usr/bin/bash ${setup_services_path} configure-mongodb")
+    deploy_commands+=("/usr/bin/bash ${setup_services_path} setup-caddy")
+    deploy_commands+=("/usr/bin/bash ${setup_services_path} setup-mqtt")
+    deploy_commands+=("/usr/bin/bash ${setup_services_path} setup-pihole")
+    deploy_commands+=("/usr/bin/bash ${setup_services_path} setup-platform-services")
+    deploy_commands+=("/usr/bin/bash ${setup_services_path} check-platform-service-updates *")
+    deploy_commands+=("/usr/bin/bash ${setup_services_path} update-platform-service *")
   fi
 
   print_status "Refreshing HomeBrain sudoers access for service management and Ollama updates..."
@@ -941,6 +974,255 @@ setup_caddy() {
   fi
 }
 
+mqtt_bind_is_loopback() {
+  [[ "${MQTT_BIND_ADDRESS}" == "127.0.0.1" || "${MQTT_BIND_ADDRESS}" == "localhost" || "${MQTT_BIND_ADDRESS}" == "::1" ]]
+}
+
+install_mqtt_package() {
+  print_status "Ensuring Mosquitto MQTT broker is installed..."
+  sudo apt-get update
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y mosquitto mosquitto-clients
+  print_success "Mosquitto package installed."
+}
+
+write_mqtt_config() {
+  if ! id -u mosquitto >/dev/null 2>&1; then
+    sudo useradd --system --home /var/lib/mosquitto --shell /usr/sbin/nologin mosquitto
+  fi
+
+  if ! mqtt_bind_is_loopback && [[ -z "${HOMEBRAIN_MQTT_PASSWORD_FILE:-}" ]]; then
+    print_error "Refusing to write an anonymous MQTT listener on ${MQTT_BIND_ADDRESS}. Set HOMEBRAIN_MQTT_PASSWORD_FILE for LAN listeners."
+    exit 1
+  fi
+
+  sudo install -d -m 0755 "$(dirname "${MQTT_CONFIG_PATH}")"
+  sudo install -d -o mosquitto -g mosquitto -m 0750 "${MQTT_DATA_DIR}"
+  sudo install -d -o mosquitto -g mosquitto -m 0750 "${MQTT_LOG_DIR}"
+
+  local allow_anonymous="true"
+  local password_file_line=""
+  if [[ -n "${HOMEBRAIN_MQTT_PASSWORD_FILE:-}" ]]; then
+    allow_anonymous="false"
+    password_file_line="password_file ${HOMEBRAIN_MQTT_PASSWORD_FILE}"
+  fi
+
+  print_status "Writing ${MQTT_CONFIG_PATH}"
+  sudo tee "${MQTT_CONFIG_PATH}" >/dev/null <<EOF
+per_listener_settings true
+listener ${MQTT_PORT} ${MQTT_BIND_ADDRESS}
+allow_anonymous ${allow_anonymous}
+${password_file_line}
+persistence true
+persistence_location ${MQTT_DATA_DIR}/
+autosave_interval 60
+log_dest stdout
+log_type error
+log_type warning
+log_type notice
+connection_messages false
+EOF
+
+  sudo chown root:mosquitto "${MQTT_CONFIG_PATH}"
+  sudo chmod 0640 "${MQTT_CONFIG_PATH}"
+}
+
+install_mqtt_service() {
+  local mosquitto_bin
+  mosquitto_bin="$(command -v mosquitto 2>/dev/null || true)"
+  if [[ -z "${mosquitto_bin}" ]]; then
+    print_error "Mosquitto is not installed."
+    exit 1
+  fi
+
+  print_status "Writing ${MQTT_SERVICE_PATH}"
+  sudo tee "${MQTT_SERVICE_PATH}" >/dev/null <<EOF
+[Unit]
+Description=HomeBrain MQTT Broker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mosquitto
+Group=mosquitto
+ExecStart=${mosquitto_bin} -c ${MQTT_CONFIG_PATH}
+ExecReload=/bin/kill -HUP \$MAINPID
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=${MQTT_DATA_DIR} ${MQTT_LOG_DIR} /run
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  sudo systemctl daemon-reload
+  sudo systemctl enable "${MQTT_SERVICE_NAME}"
+}
+
+setup_mqtt() {
+  install_mqtt_package
+  write_mqtt_config
+  install_mqtt_service
+
+  if [[ "${MQTT_SERVICE_NAME}" != "mosquitto" ]] && sudo systemctl list-unit-files | grep -q '^mosquitto.service'; then
+    print_warning "Disabling the stock mosquitto.service so ${MQTT_SERVICE_NAME} owns the broker runtime."
+    sudo systemctl disable --now mosquitto || true
+  fi
+
+  print_status "Starting ${MQTT_SERVICE_NAME}..."
+  sudo systemctl restart "${MQTT_SERVICE_NAME}"
+
+  if timeout 5 bash -lc ":</dev/tcp/${MQTT_BIND_ADDRESS}/${MQTT_PORT}" >/dev/null 2>&1; then
+    print_success "MQTT broker is reachable at ${MQTT_BIND_ADDRESS}:${MQTT_PORT}."
+  else
+    print_warning "MQTT broker service started, but ${MQTT_BIND_ADDRESS}:${MQTT_PORT} did not accept a TCP probe yet."
+  fi
+}
+
+configure_pihole_ports() {
+  if ! command -v pihole-FTL >/dev/null 2>&1; then
+    print_warning "pihole-FTL is not available yet; skipping Pi-hole web port configuration."
+    return
+  fi
+
+  local port_config="${PIHOLE_WEB_PORT}o,[::]:${PIHOLE_WEB_PORT}o,${PIHOLE_WEB_TLS_PORT}os,[::]:${PIHOLE_WEB_TLS_PORT}os"
+  print_status "Configuring Pi-hole web server on ${PIHOLE_WEB_PORT}/${PIHOLE_WEB_TLS_PORT} so Caddy keeps owning 80/443..."
+  sudo pihole-FTL --config webserver.port "${port_config}" >/dev/null || true
+
+  if sudo systemctl list-unit-files --type=service --no-legend 2>/dev/null | awk '{print $1}' | grep -qx 'pihole-FTL.service'; then
+    sudo systemctl restart pihole-FTL || true
+  fi
+}
+
+setup_pihole() {
+  if command -v pihole >/dev/null 2>&1; then
+    print_success "Pi-hole is already installed."
+    configure_pihole_ports
+    return
+  fi
+
+  print_status "Installing Pi-hole using the official installer..."
+  sudo apt-get update
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates dnsutils
+
+  local installer_path="/tmp/homebrain-pihole-install.sh"
+  curl -fsSL https://install.pi-hole.net -o "${installer_path}"
+  chmod 0755 "${installer_path}"
+
+  if sudo bash "${installer_path}" --unattended; then
+    rm -f "${installer_path}"
+    configure_pihole_ports
+    print_success "Pi-hole installed and configured for HomeBrain management."
+  else
+    rm -f "${installer_path}"
+    print_error "Pi-hole install failed. Re-run 'bash scripts/setup-services.sh setup-pihole' from a shell to inspect installer output if this host needs custom network choices."
+    exit 1
+  fi
+}
+
+setup_platform_services() {
+  setup_caddy
+  setup_mqtt
+  setup_pihole
+}
+
+json_bool() {
+  if [[ "${1:-}" == "true" ]]; then
+    printf 'true'
+  else
+    printf 'false'
+  fi
+}
+
+json_escape() {
+  python3 - "$1" <<'PY'
+import json
+import sys
+print(json.dumps(sys.argv[1]))
+PY
+}
+
+check_apt_service_update() {
+  local service_id="$1"
+  local package_name="$2"
+  local current_version candidate_version update_available
+
+  sudo apt-get update -qq >/dev/null
+  current_version="$(dpkg-query -W -f='${Version}' "${package_name}" 2>/dev/null || true)"
+  candidate_version="$(apt-cache policy "${package_name}" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')"
+  if [[ -n "${current_version}" && -n "${candidate_version}" && "${current_version}" != "${candidate_version}" ]]; then
+    update_available="true"
+  else
+    update_available="false"
+  fi
+
+  printf '{"serviceId":%s,"currentVersion":%s,"latestVersion":%s,"updateAvailable":%s}\n' \
+    "$(json_escape "${service_id}")" \
+    "$(json_escape "${current_version}")" \
+    "$(json_escape "${candidate_version}")" \
+    "$(json_bool "${update_available}")"
+}
+
+check_pihole_update() {
+  local current_version latest_version update_available
+  current_version="$(pihole version 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' || true)"
+  latest_version="$(pihole version 2>/dev/null | awk -F': *' '/Latest/ {print $2; exit}' || true)"
+  if [[ -n "${latest_version}" && "${current_version}" != *"${latest_version}"* ]]; then
+    update_available="true"
+  else
+    update_available="false"
+  fi
+
+  printf '{"serviceId":"pihole","currentVersion":%s,"latestVersion":%s,"updateAvailable":%s}\n' \
+    "$(json_escape "${current_version}")" \
+    "$(json_escape "${latest_version}")" \
+    "$(json_bool "${update_available}")"
+}
+
+check_platform_service_updates() {
+  case "${1:-}" in
+    caddy) check_apt_service_update caddy caddy ;;
+    mqtt|mosquitto) check_apt_service_update mqtt mosquitto ;;
+    pihole) check_pihole_update ;;
+    *)
+      print_error "Usage: $0 check-platform-service-updates [caddy|mqtt|pihole]"
+      exit 1
+      ;;
+  esac
+}
+
+update_platform_service() {
+  case "${1:-}" in
+    caddy)
+      sudo apt-get update
+      sudo DEBIAN_FRONTEND=noninteractive apt-get install --only-upgrade -y caddy
+      sudo systemctl restart "${CADDY_SERVICE_NAME}"
+      ;;
+    mqtt|mosquitto)
+      sudo apt-get update
+      sudo DEBIAN_FRONTEND=noninteractive apt-get install --only-upgrade -y mosquitto mosquitto-clients
+      sudo systemctl restart "${MQTT_SERVICE_NAME}"
+      ;;
+    pihole)
+      if ! command -v pihole >/dev/null 2>&1; then
+        setup_pihole
+        return
+      fi
+      sudo pihole -up
+      configure_pihole_ports
+      ;;
+    *)
+      print_error "Usage: $0 update-platform-service [caddy|mqtt|pihole]"
+      exit 1
+      ;;
+  esac
+}
+
 show_status() {
   echo "MongoDB:"
   sudo systemctl status mongod --no-pager || true
@@ -950,6 +1232,20 @@ show_status() {
   echo
   echo "Caddy:"
   sudo systemctl status "${CADDY_SERVICE_NAME}" --no-pager || true
+  echo
+  echo "MQTT:"
+  if service_unit_exists "${MQTT_SERVICE_NAME}"; then
+    sudo systemctl status "${MQTT_SERVICE_NAME}" --no-pager || true
+  else
+    echo "${MQTT_SERVICE_NAME}.service is not installed. Run: bash ${HOMEBRAIN_DIR}/scripts/setup-services.sh setup-mqtt"
+  fi
+  echo
+  echo "Pi-hole:"
+  if service_unit_exists "pihole-FTL"; then
+    sudo systemctl status pihole-FTL --no-pager || true
+  else
+    echo "pihole-FTL.service is not installed. Run: bash ${HOMEBRAIN_DIR}/scripts/setup-services.sh setup-pihole"
+  fi
   echo
   echo "Listening ports:"
   print_port_listener_summary
@@ -966,11 +1262,25 @@ show_logs() {
     caddy)
       sudo journalctl -u "${CADDY_SERVICE_NAME}" -n 100 --no-pager
       ;;
+    mqtt)
+      if service_unit_exists "${MQTT_SERVICE_NAME}"; then
+        sudo journalctl -u "${MQTT_SERVICE_NAME}" -n 100 --no-pager
+      else
+        print_warning "${MQTT_SERVICE_NAME}.service is not installed. Run setup-mqtt first."
+      fi
+      ;;
+    pihole)
+      if service_unit_exists "pihole-FTL"; then
+        sudo journalctl -u pihole-FTL -n 100 --no-pager
+      else
+        print_warning "pihole-FTL.service is not installed. Run setup-pihole first."
+      fi
+      ;;
     follow)
-      sudo journalctl -f -u "${SERVICE_NAME}" -u mongod -u "${CADDY_SERVICE_NAME}"
+      sudo journalctl -f -u "${SERVICE_NAME}" -u mongod -u "${CADDY_SERVICE_NAME}" -u "${MQTT_SERVICE_NAME}" -u pihole-FTL
       ;;
     *)
-      print_error "Usage: $0 logs [homebrain|mongodb|caddy|follow]"
+      print_error "Usage: $0 logs [homebrain|mongodb|caddy|mqtt|pihole|follow]"
       exit 1
       ;;
   esac
@@ -1075,7 +1385,11 @@ run_health_check() {
   print_status "Running health checks..."
 
   echo "Service state:"
-  for service in mongod "${SERVICE_NAME}" "${CADDY_SERVICE_NAME}"; do
+  for service in mongod "${SERVICE_NAME}" "${CADDY_SERVICE_NAME}" "${MQTT_SERVICE_NAME}" pihole-FTL; do
+    if ! service_unit_exists "$service"; then
+      echo "  $service: not installed"
+      continue
+    fi
     if sudo systemctl is-active --quiet "$service"; then
       echo "  $service: running"
     else
@@ -1101,6 +1415,16 @@ run_health_check() {
     echo "  caddy admin: ok"
   else
     echo "  caddy admin: failed"
+  fi
+  if timeout 3 bash -lc ":</dev/tcp/${MQTT_BIND_ADDRESS}/${MQTT_PORT}" >/dev/null 2>&1; then
+    echo "  mqtt broker: ok"
+  else
+    echo "  mqtt broker: unavailable"
+  fi
+  if timeout 3 bash -lc ":</dev/tcp/127.0.0.1/53" >/dev/null 2>&1; then
+    echo "  pihole dns: ok"
+  else
+    echo "  pihole dns: unavailable"
   fi
   report_edge_port_owner
   echo
@@ -1185,6 +1509,11 @@ Commands:
   refresh-privileges Install privileged helpers and refresh HomeBrain sudoers
   configure-mongodb Write the MongoDB WiredTiger cache guard
   setup-caddy       Install Caddy as the native public edge service
+  setup-mqtt        Install Mosquitto as the local HomeBrain MQTT broker
+  setup-pihole      Install Pi-hole and configure its web ports for Caddy coexistence
+  setup-platform-services Install/refresh Caddy, MQTT, and Pi-hole
+  check-platform-service-updates [target] Check updates for caddy, mqtt, or pihole
+  update-platform-service [target] Update caddy, mqtt, or pihole
   start             Start MongoDB and HomeBrain
   stop              Stop HomeBrain
   restart           Restart HomeBrain
@@ -1203,6 +1532,11 @@ main() {
     refresh-privileges) refresh_privileges ;;
     configure-mongodb) configure_mongodb_resource_guard ;;
     setup-caddy) setup_caddy ;;
+    setup-mqtt) setup_mqtt ;;
+    setup-pihole) setup_pihole ;;
+    setup-platform-services) setup_platform_services ;;
+    check-platform-service-updates) check_platform_service_updates "${2:-}" ;;
+    update-platform-service) update_platform_service "${2:-}" ;;
     start) start_services ;;
     stop) stop_services ;;
     restart) restart_services ;;

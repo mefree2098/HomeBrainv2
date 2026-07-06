@@ -157,8 +157,8 @@ See [`HomeBrainWatch/README.md`](HomeBrainWatch/README.md).
 
 ## Production Service Management
 
-The installer creates managed services for HomeBrain and its public edge. Use
-the setup helper for day-to-day operations:
+The installer creates managed services for HomeBrain, its public edge, the local
+MQTT broker, and Pi-hole. Use the setup helper for day-to-day operations:
 
 ```bash
 bash scripts/setup-services.sh status
@@ -166,11 +166,17 @@ bash scripts/setup-services.sh logs follow
 bash scripts/setup-services.sh health
 bash scripts/setup-services.sh update
 bash scripts/setup-services.sh refresh-privileges
+bash scripts/setup-services.sh setup-platform-services
 ```
 
 Public HTTPS routing is managed from `Reverse Proxy / Domains` in the HomeBrain
 UI. The built-in `Platform Deploy` flow deploys HomeBrain while keeping Caddy
 up, so public routing can survive an app service restart.
+
+The MQTT broker is loopback-only by default. HomeBrain publishes platform events,
+device update batches, retained per-device state, and availability messages when
+the broker is reachable. Caddy, Mosquitto, and Pi-hole can be checked and updated
+from Platform Deploy with an opt-in delayed auto-update policy.
 
 ## Ollama Runtime Ownership
 

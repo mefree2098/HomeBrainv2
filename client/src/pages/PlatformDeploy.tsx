@@ -17,6 +17,15 @@ import {
   restartPlatformServices,
   startPlatformDeploy
 } from "@/api/platformDeploy";
+import {
+  PlatformService,
+  checkPlatformServiceUpdates,
+  getPlatformServices,
+  installPlatformService,
+  runPlatformServicePolicy,
+  updatePlatformService,
+  updatePlatformServicePolicy
+} from "@/api/platformServices";
 import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, Rocket, RotateCcw, ShieldAlert } from "lucide-react";
 import { AxiosError } from "axios";
 
@@ -135,10 +144,12 @@ export function PlatformDeploy() {
   const [presets, setPresets] = useState<DeployPreset[]>(FALLBACK_PRESETS);
   const [selectedPreset, setSelectedPreset] = useState<DeployPresetId>("safe");
   const [health, setHealth] = useState<DeployHealthResponse | null>(null);
+  const [platformServices, setPlatformServices] = useState<PlatformService[]>([]);
   const [loading, setLoading] = useState(true);
   const [startingDeploy, setStartingDeploy] = useState(false);
   const [restartingServices, setRestartingServices] = useState(false);
   const [checkingHealth, setCheckingHealth] = useState(false);
+  const [serviceAction, setServiceAction] = useState<string | null>(null);
   const [deployOptions, setDeployOptions] = useState<DeployOptionState>({
     ...FALLBACK_PRESETS[0].defaults
   });
@@ -188,9 +199,16 @@ export function PlatformDeploy() {
     }
   }, [toast]);
 
+  const loadPlatformServices = useCallback(async () => {
+    const response = await getPlatformServices();
+    if (response.success) {
+      setPlatformServices(response.services);
+    }
+  }, []);
+
   const refreshAll = useCallback(async () => {
     try {
-      await Promise.all([loadStatus(), loadPresets(), loadHealth(false)]);
+      await Promise.all([loadStatus(), loadPresets(), loadHealth(false), loadPlatformServices()]);
     } catch (error: unknown) {
       toast({
         title: "Deploy data unavailable",
@@ -200,7 +218,7 @@ export function PlatformDeploy() {
     } finally {
       setLoading(false);
     }
-  }, [loadStatus, loadPresets, loadHealth, toast]);
+  }, [loadStatus, loadPresets, loadHealth, loadPlatformServices, toast]);
 
   useEffect(() => {
     void refreshAll();
@@ -307,6 +325,53 @@ export function PlatformDeploy() {
     }
   };
 
+  const runServiceAction = async (
+    actionKey: string,
+    title: string,
+    action: () => Promise<{ service?: PlatformService }>
+  ) => {
+    setServiceAction(actionKey);
+    try {
+      const response = await action();
+      if (response.service) {
+        setPlatformServices((current) => current.map((service) => (
+          service.serviceId === response.service?.serviceId ? response.service : service
+        )));
+      } else {
+        await loadPlatformServices();
+      }
+      toast({ title, description: "Platform service state refreshed." });
+    } catch (error: unknown) {
+      toast({
+        title: `${title} failed`,
+        description: getErrorMessage(error, "Unable to update platform service."),
+        variant: "destructive"
+      });
+    } finally {
+      setServiceAction(null);
+    }
+  };
+
+  const handleRunPlatformPolicy = async () => {
+    setServiceAction("policy:run");
+    try {
+      const result = await runPlatformServicePolicy();
+      await loadPlatformServices();
+      toast({
+        title: "Platform policy run complete",
+        description: `Checked: ${result.checked.length}, updated: ${result.updated.length}.`
+      });
+    } catch (error: unknown) {
+      toast({
+        title: "Policy run failed",
+        description: getErrorMessage(error, "Unable to run platform service policy."),
+        variant: "destructive"
+      });
+    } finally {
+      setServiceAction(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex h-64 items-center justify-center">
@@ -347,12 +412,35 @@ export function PlatformDeploy() {
       status: health?.checks.reverseProxy.status
     },
     {
+      key: "mqttBroker",
+      title: "MQTT Broker",
+      message: `${health?.checks.mqttBroker?.message || "Unknown"} Prefix: ${health?.checks.mqttBroker?.topicPrefix || "n/a"}`,
+      status: health?.checks.mqttBroker?.status
+    },
+    {
       key: "deployment",
       title: "Backend Runtime",
       message: health?.checks.deployment.message || "Unknown",
       status: health?.checks.deployment.status
     }
   ] as const;
+
+  const renderServiceActionButton = (
+    service: PlatformService,
+    action: "install" | "check" | "update",
+    label: string,
+    onClick: () => void,
+    disabled = false
+  ) => {
+    const key = `${service.serviceId}:${action}`;
+    const busy = serviceAction === key;
+    return (
+      <Button size="sm" variant={action === "update" ? "default" : "outline"} onClick={onClick} disabled={busy || disabled}>
+        {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : action === "check" ? <RefreshCw className="mr-2 h-4 w-4" /> : null}
+        {label}
+      </Button>
+    );
+  };
 
   return (
     <div className="space-y-6">
@@ -589,6 +677,87 @@ export function PlatformDeploy() {
                 Some checks are degraded
               </div>
               Review the check messages above before the next production deployment.
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>Managed Platform Services</span>
+            <Button variant="outline" size="sm" onClick={handleRunPlatformPolicy} disabled={serviceAction === "policy:run"}>
+              {serviceAction === "policy:run" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+              Run Update Policy
+            </Button>
+          </CardTitle>
+          <CardDescription>
+            Caddy, MQTT, and Pi-hole are provisioned during deploy and can be updated after a stability delay.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-3 lg:grid-cols-3">
+          {platformServices.map((service) => (
+            <div key={service.serviceId} className="rounded-md border p-3">
+              <div className="mb-3 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="font-medium">{service.displayName}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{service.managementNotes}</div>
+                </div>
+                <Badge variant={service.active ? "secondary" : "destructive"}>
+                  {service.active ? "running" : service.installed ? "stopped" : "missing"}
+                </Badge>
+              </div>
+              <div className="space-y-1 text-xs text-muted-foreground">
+                <div>Current: {service.currentVersion || "unknown"}</div>
+                <div>Latest: {service.latestVersion || "unknown"}</div>
+                <div>Last checked: {formatTimestamp(service.lastCheckedAt)}</div>
+                <div>Auto eligible: {formatTimestamp(service.eligibleForAutoUpdateAt)}</div>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {renderServiceActionButton(service, "install", service.installed ? "Repair" : "Install", () => {
+                  void runServiceAction(`${service.serviceId}:install`, `${service.displayName} install`, () => installPlatformService(service.serviceId));
+                })}
+                {renderServiceActionButton(service, "check", "Check", () => {
+                  void runServiceAction(`${service.serviceId}:check`, `${service.displayName} update check`, () => checkPlatformServiceUpdates(service.serviceId));
+                })}
+                {renderServiceActionButton(service, "update", "Update", () => {
+                  void runServiceAction(`${service.serviceId}:update`, `${service.displayName} update`, () => updatePlatformService(service.serviceId));
+                }, !service.installed || !service.updateAvailable)}
+              </div>
+              <div className="mt-4 space-y-3 border-t pt-3">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm">Weekly checks</span>
+                  <Switch
+                    checked={service.policy.autoCheckEnabled}
+                    onCheckedChange={(checked) => {
+                      void runServiceAction(`${service.serviceId}:policy-check`, `${service.displayName} policy`, () => updatePlatformServicePolicy(service.serviceId, {
+                        autoCheckEnabled: checked
+                      }));
+                    }}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm">Auto-update after {service.policy.stabilityDelayDays}d</span>
+                  <Switch
+                    checked={service.policy.autoUpdateEnabled}
+                    onCheckedChange={(checked) => {
+                      void runServiceAction(`${service.serviceId}:policy-update`, `${service.displayName} policy`, () => updatePlatformServicePolicy(service.serviceId, {
+                        autoUpdateEnabled: checked
+                      }));
+                    }}
+                  />
+                </div>
+                {service.updateAvailable ? (
+                  <div className="rounded-md border border-yellow-300 bg-yellow-50 p-2 text-xs text-yellow-800 dark:border-yellow-900 dark:bg-yellow-950/40 dark:text-yellow-100">
+                    Update candidate is waiting for the stability window.
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ))}
+          {platformServices.length === 0 ? (
+            <div className="rounded-md border p-3 text-sm text-muted-foreground lg:col-span-3">
+              Platform service inventory is not available yet.
             </div>
           ) : null}
         </CardContent>

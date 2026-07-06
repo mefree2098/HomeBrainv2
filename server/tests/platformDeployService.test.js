@@ -634,6 +634,30 @@ test('installServiceHelpers runs setup-services install-service with non-interac
   });
 });
 
+test('provisionPlatformServices runs setup-services setup-platform-services with non-interactive sudo', { concurrency: false }, async (t) => {
+  const service = await createTempService(t);
+  const scriptsDir = path.join(service.projectRoot, 'scripts');
+  const setupServicesPath = path.join(scriptsDir, 'setup-services.sh');
+
+  await fsp.mkdir(scriptsDir, { recursive: true });
+  await fsp.writeFile(setupServicesPath, '#!/usr/bin/env bash\n', 'utf8');
+
+  let call = null;
+  service.runCommand = async (command, args) => {
+    call = { command, args };
+    return { code: 0, stdout: '', stderr: '' };
+  };
+  service.appendJobLog = async () => {};
+
+  const result = await service.provisionPlatformServices('job-platform-services');
+
+  assert.deepEqual(result, { skipped: false });
+  assert.deepEqual(call, {
+    command: 'sudo',
+    args: ['-n', '/bin/bash', setupServicesPath, 'setup-platform-services']
+  });
+});
+
 test('platform deploy applies the reverse proxy config after bootstrapping routes', async () => {
   const servicePath = path.resolve(__dirname, '..', 'services', 'platformDeployService.js');
   const source = await fsp.readFile(servicePath, 'utf8');
@@ -669,6 +693,18 @@ test('setup-services installs a MongoDB WiredTiger cache guard for Jetson hosts'
   assert.match(script, /--wiredTigerCacheSizeGB/);
   assert.match(script, /HOMEBRAIN_MONGODB_WIREDTIGER_CACHE_GB/);
   assert.match(script, /configure_mongodb_resource_guard/);
+});
+
+test('setup-services provisions Pi-hole and managed third-party update commands', async () => {
+  const setupServicesPath = path.resolve(__dirname, '..', '..', 'scripts', 'setup-services.sh');
+  const script = await fsp.readFile(setupServicesPath, 'utf8');
+
+  assert.match(script, /setup_pihole\(\)/);
+  assert.match(script, /setup_platform_services\(\)/);
+  assert.match(script, /check_platform_service_updates\(\)/);
+  assert.match(script, /update_platform_service\(\)/);
+  assert.match(script, /pihole -up/);
+  assert.match(script, /webserver\.port/);
 });
 
 test('installServiceHelpers skips when helper installation lacks passwordless sudo', { concurrency: false }, async (t) => {

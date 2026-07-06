@@ -11,6 +11,7 @@ const reverseProxyService = require('./reverseProxyService');
 const oidcService = require('./oidcService');
 const adminBootstrapService = require('./adminBootstrapService');
 const alexaBrokerService = require('./alexaBrokerService');
+const mqttPlatformService = require('./mqttPlatformService');
 
 const MAX_LOG_TAIL_BYTES = 64 * 1024;
 const INTERRUPTED_JOB_RECONCILE_GRACE_MS = Math.max(
@@ -114,6 +115,7 @@ class PlatformDeployService {
       || DEFAULT_CORE_RESTART_COMMAND;
     this.legacyDiscoveryServiceName = process.env.HOMEBRAIN_LEGACY_DISCOVERY_SERVICE_NAME || 'homebrain-discovery';
     this.alexaBrokerService = options.alexaBrokerService || alexaBrokerService;
+    this.mqttPlatformService = options.mqttPlatformService || mqttPlatformService;
     this.runtimeSnapshotCaptured = false;
     this.runtimeSnapshot = {
       pid: typeof options.runtimePid === 'number' ? options.runtimePid : process.pid,
@@ -257,6 +259,31 @@ class PlatformDeployService {
         : `Caddy admin API is unavailable${caddyStatus.error ? `: ${caddyStatus.error}` : '.'}`
     };
 
+    const mqttStatus = await this.mqttPlatformService.getStatus({ probe: true }).catch((error) => ({
+      status: 'degraded',
+      message: `MQTT bridge status unavailable: ${error.message}`,
+      enabled: false,
+      mode: 'unknown',
+      connected: false,
+      reachable: false,
+      brokerUrl: null,
+      topicPrefix: null,
+      lastError: error.message
+    }));
+    const mqttBroker = {
+      status: mqttStatus.status,
+      message: mqttStatus.message,
+      enabled: mqttStatus.enabled,
+      mode: mqttStatus.mode,
+      brokerUrl: mqttStatus.brokerUrl,
+      topicPrefix: mqttStatus.topicPrefix,
+      connected: mqttStatus.connected,
+      reachable: mqttStatus.reachable,
+      lastConnectedAt: mqttStatus.lastConnectedAt || null,
+      lastPublishedAt: mqttStatus.lastPublishedAt || null,
+      lastError: mqttStatus.lastError || null
+    };
+
     const runtimeMatchesRepo = runtime.repoMatchesRuntime === true;
     const deployment = {
       status: runtimeMatchesRepo ? 'healthy' : 'degraded',
@@ -274,7 +301,7 @@ class PlatformDeployService {
       expectedShortCommit: pendingRestart?.expectedShortCommit || null
     };
 
-    const checks = { api, websocket, database, wakeWordWorker, reverseProxy, deployment };
+    const checks = { api, websocket, database, wakeWordWorker, reverseProxy, mqttBroker, deployment };
     const hasDegraded = Object.values(checks).some((item) => item.status !== 'healthy');
 
     return {
@@ -321,6 +348,7 @@ class PlatformDeployService {
     const captureStdout = options.captureStdout !== false;
 
     return new Promise((resolve, reject) => {
+      // codeql[js/shell-command-injection-from-environment] Deploy commands are built by HomeBrain internals from fixed binaries and normalized restart segments before reaching this runner.
       const child = spawn(command, args, {
         cwd,
         env,
@@ -1925,6 +1953,10 @@ class PlatformDeployService {
         await this.installServiceHelpers(jobId);
       });
 
+      await runCustomStep('Provision platform services', async () => {
+        await this.provisionPlatformServices(jobId);
+      });
+
       // Do not clean client/dist after build.
       // This server serves client/dist directly at runtime, so post-build cleanup would
       // revert freshly built assets and can leave the UI running stale code.
@@ -2071,6 +2103,47 @@ class PlatformDeployService {
           `[${new Date().toISOString()}] [${stepName}] `
           + 'Skipped because passwordless sudo for helper installation is not configured on this host yet. '
           + 'Run "bash scripts/setup-services.sh refresh-privileges" once to enable future automatic helper installs.\n'
+        );
+        return { skipped: true, reason: 'sudo-not-configured' };
+      }
+
+      throw error;
+    }
+  }
+
+  async provisionPlatformServices(jobId) {
+    const setupServicesPath = path.join(this.projectRoot, 'scripts', 'setup-services.sh');
+    if (!fs.existsSync(setupServicesPath)) {
+      await this.appendJobLog(
+        jobId,
+        `[${new Date().toISOString()}] [Provision platform services] Skipped because scripts/setup-services.sh is missing.\n`
+      );
+      return { skipped: true };
+    }
+
+    const stepName = 'Provision platform services';
+    const bashPath = fs.existsSync('/bin/bash') ? '/bin/bash' : 'bash';
+    const args = ['-n', bashPath, setupServicesPath, 'setup-platform-services'];
+
+    await this.appendJobLog(
+      jobId,
+      `\n[${new Date().toISOString()}] [${stepName}] Running: sudo ${args.join(' ')}\n`
+    );
+
+    try {
+      const result = await this.runCommand('sudo', args);
+      await this.appendCapturedCommandOutput(jobId, stepName, result);
+      return { skipped: false };
+    } catch (error) {
+      await this.appendCapturedCommandOutput(jobId, stepName, error);
+
+      const failureOutput = `${error?.message || ''}\n${error?.stderr || ''}`;
+      if (this.isSudoPromptRequiredOutput(failureOutput) || this.isSudoPermissionDeniedOutput(failureOutput)) {
+        await this.appendJobLog(
+          jobId,
+          `[${new Date().toISOString()}] [${stepName}] `
+          + 'Skipped because passwordless sudo for platform service provisioning is not configured on this host yet. '
+          + 'Run "bash scripts/setup-services.sh refresh-privileges" once to enable future automatic platform service installs.\n'
         );
         return { skipped: true, reason: 'sudo-not-configured' };
       }

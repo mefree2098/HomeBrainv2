@@ -40,6 +40,7 @@
     "home-controller": "^0.9.2",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^9.2.2",
+    "mqtt": "^5.15.2",
     "node-forge": "^1.4.0",
     "openai": "^6.25.0",
     "serialport": "^8.0.8",
