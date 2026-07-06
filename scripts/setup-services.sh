@@ -271,8 +271,7 @@ homebrain_service_unit_exists() {
   fi
 
   sudo systemctl list-unit-files --type=service --no-legend 2>/dev/null \
-    | awk '{print $1}' \
-    | grep -qx "${SERVICE_NAME}.service"
+    | awk -v unit="${SERVICE_NAME}.service" '$1 == unit { found = 1 } END { exit(found ? 0 : 1) }'
 }
 
 service_unit_exists() {
@@ -282,8 +281,7 @@ service_unit_exists() {
   fi
 
   sudo systemctl list-unit-files --type=service --no-legend 2>/dev/null \
-    | awk '{print $1}' \
-    | grep -qx "${unit_name}.service"
+    | awk -v unit="${unit_name}.service" '$1 == unit { found = 1 } END { exit(found ? 0 : 1) }'
 }
 
 homebrain_restart_helper_unit_exists() {
@@ -292,8 +290,7 @@ homebrain_restart_helper_unit_exists() {
   fi
 
   sudo systemctl list-unit-files --type=service --no-legend 2>/dev/null \
-    | awk '{print $1}' \
-    | grep -qx "${RESTART_HELPER_SERVICE_NAME}.service"
+    | awk -v unit="${RESTART_HELPER_SERVICE_NAME}.service" '$1 == unit { found = 1 } END { exit(found ? 0 : 1) }'
 }
 
 get_homebrain_service_state() {
@@ -954,7 +951,7 @@ setup_caddy() {
   write_caddy_bootstrap
   install_caddy_service
 
-  if [[ "${CADDY_SERVICE_NAME}" != "caddy" ]] && sudo systemctl list-unit-files | grep -q '^caddy.service'; then
+  if [[ "${CADDY_SERVICE_NAME}" != "caddy" ]] && service_unit_exists "caddy"; then
     print_warning "Disabling the stock caddy.service so ${CADDY_SERVICE_NAME} owns the edge runtime."
     sudo systemctl disable --now caddy || true
   fi
@@ -983,6 +980,19 @@ install_mqtt_package() {
   sudo apt-get update
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y mosquitto mosquitto-clients
   print_success "Mosquitto package installed."
+}
+
+disable_stock_mqtt_service() {
+  if [[ "${MQTT_SERVICE_NAME}" == "mosquitto" ]]; then
+    return
+  fi
+
+  if service_unit_exists "mosquitto"; then
+    print_warning "Disabling the stock mosquitto.service so ${MQTT_SERVICE_NAME} owns the broker runtime."
+    sudo systemctl stop mosquitto.service || true
+    sudo systemctl disable mosquitto.service || true
+    sudo systemctl mask mosquitto.service || true
+  fi
 }
 
 write_mqtt_config() {
@@ -1066,16 +1076,19 @@ EOF
 
 setup_mqtt() {
   install_mqtt_package
+  disable_stock_mqtt_service
   write_mqtt_config
   install_mqtt_service
-
-  if [[ "${MQTT_SERVICE_NAME}" != "mosquitto" ]] && sudo systemctl list-unit-files | grep -q '^mosquitto.service'; then
-    print_warning "Disabling the stock mosquitto.service so ${MQTT_SERVICE_NAME} owns the broker runtime."
-    sudo systemctl disable --now mosquitto || true
-  fi
+  disable_stock_mqtt_service
 
   print_status "Starting ${MQTT_SERVICE_NAME}..."
   sudo systemctl restart "${MQTT_SERVICE_NAME}"
+
+  if ! sudo systemctl is-active --quiet "${MQTT_SERVICE_NAME}"; then
+    sudo systemctl status "${MQTT_SERVICE_NAME}" --no-pager || true
+    print_error "${MQTT_SERVICE_NAME} did not become active."
+    exit 1
+  fi
 
   if timeout 5 bash -lc ":</dev/tcp/${MQTT_BIND_ADDRESS}/${MQTT_PORT}" >/dev/null 2>&1; then
     print_success "MQTT broker is reachable at ${MQTT_BIND_ADDRESS}:${MQTT_PORT}."
@@ -1099,6 +1112,67 @@ configure_pihole_ports() {
   fi
 }
 
+detect_pihole_interface() {
+  ip route get 8.8.8.8 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }'
+}
+
+detect_pihole_ipv4_address() {
+  local interface="$1"
+  local ipv4_bare
+  ipv4_bare="$(ip route get 8.8.8.8 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }')"
+
+  if [[ -n "${interface}" && -n "${ipv4_bare}" ]]; then
+    ip -oneline -family inet address show dev "${interface}" 2>/dev/null \
+      | awk -v ip="${ipv4_bare}" '$4 ~ "^" ip "/" { print $4; found = 1; exit } END { exit(found ? 0 : 1) }' \
+      || true
+  fi
+}
+
+write_pihole_setup_vars() {
+  if [[ -f /etc/pihole/pihole.toml ]]; then
+    return
+  fi
+
+  local setup_vars_path="/etc/pihole/setupVars.conf"
+  if sudo test -f "${setup_vars_path}"; then
+    return
+  fi
+
+  local interface ipv4_address upstream_dns_1 upstream_dns_2 query_logging privacy_level
+  interface="${HOMEBRAIN_PIHOLE_INTERFACE:-$(detect_pihole_interface)}"
+  ipv4_address="${HOMEBRAIN_PIHOLE_IPV4_ADDRESS:-$(detect_pihole_ipv4_address "${interface}")}"
+  upstream_dns_1="${HOMEBRAIN_PIHOLE_UPSTREAM_DNS_1:-1.1.1.1}"
+  upstream_dns_2="${HOMEBRAIN_PIHOLE_UPSTREAM_DNS_2:-1.0.0.1}"
+  query_logging="${HOMEBRAIN_PIHOLE_QUERY_LOGGING:-true}"
+  privacy_level="${HOMEBRAIN_PIHOLE_PRIVACY_LEVEL:-0}"
+
+  if [[ -z "${interface}" ]]; then
+    interface="lo"
+  fi
+
+  if [[ -z "${ipv4_address}" ]]; then
+    ipv4_address="127.0.0.1/8"
+  fi
+
+  print_status "Writing ${setup_vars_path} for unattended Pi-hole installation"
+  sudo install -d -m 0755 /etc/pihole
+  sudo tee "${setup_vars_path}" >/dev/null <<EOF
+PIHOLE_INTERFACE=${interface}
+IPV4_ADDRESS=${ipv4_address}
+IPV6_ADDRESS=${HOMEBRAIN_PIHOLE_IPV6_ADDRESS:-}
+PIHOLE_DNS_1=${upstream_dns_1}
+PIHOLE_DNS_2=${upstream_dns_2}
+QUERY_LOGGING=${query_logging}
+PRIVACY_LEVEL=${privacy_level}
+INSTALL_WEB_SERVER=true
+INSTALL_WEB_INTERFACE=true
+LIGHTTPD_ENABLED=false
+BLOCKING_ENABLED=true
+DNSMASQ_LISTENING=local
+EOF
+  sudo chmod 0644 "${setup_vars_path}"
+}
+
 setup_pihole() {
   if command -v pihole >/dev/null 2>&1; then
     print_success "Pi-hole is already installed."
@@ -1113,8 +1187,9 @@ setup_pihole() {
   local installer_path="/tmp/homebrain-pihole-install.sh"
   curl -fsSL https://install.pi-hole.net -o "${installer_path}"
   chmod 0755 "${installer_path}"
+  write_pihole_setup_vars
 
-  if sudo bash "${installer_path}" --unattended; then
+  if sudo env DEBIAN_FRONTEND=noninteractive TERM="${TERM:-dumb}" bash "${installer_path}" --unattended; then
     rm -f "${installer_path}"
     configure_pihole_ports
     print_success "Pi-hole installed and configured for HomeBrain management."
