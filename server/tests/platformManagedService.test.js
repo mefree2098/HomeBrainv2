@@ -1,8 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
 const { EventEmitter } = require('events');
 
 const { PlatformManagedServiceManager } = require('../services/platformManagedService');
+
+const projectRoot = path.resolve(__dirname, '..', '..');
 
 function createSpawnStub(calls, handlers = {}) {
   return (command, args) => {
@@ -29,7 +32,7 @@ function createSpawnStub(calls, handlers = {}) {
 test('runSetupCommand uses the managed setup-services helper with sudo', async () => {
   const calls = [];
   const manager = new PlatformManagedServiceManager({
-    projectRoot: '/Users/matt/Documents/HomeBrainv2',
+    projectRoot,
     spawnProcess: createSpawnStub(calls)
   });
 
