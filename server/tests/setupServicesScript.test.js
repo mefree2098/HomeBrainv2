@@ -100,6 +100,13 @@ test('setup-services installs smbclient for SMB disaster recovery backups', () =
   assert.match(script, /apt-get install -y smbclient/);
 });
 
+test('setup-services checks systemd units without grep short-circuit pipelines', () => {
+  const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
+
+  assert.match(script, /awk -v unit="\$\{unit_name\}\.service"/);
+  assert.doesNotMatch(script, /list-unit-files \| grep -q/);
+});
+
 test('service helpers do a post-stop HomeBrain process sweep', () => {
   const setupScript = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
   const restartHelper = fs.readFileSync(path.join(repoRoot, 'scripts', 'restart-homebrain-service.sh'), 'utf8');

@@ -701,10 +701,24 @@ test('setup-services provisions Pi-hole and managed third-party update commands'
 
   assert.match(script, /setup_pihole\(\)/);
   assert.match(script, /setup_platform_services\(\)/);
+  assert.match(script, /write_pihole_setup_vars\(\)/);
+  assert.match(script, /setupVars\.conf/);
+  assert.match(script, /DEBIAN_FRONTEND=noninteractive TERM="\$\{TERM:-dumb\}"/);
   assert.match(script, /check_platform_service_updates\(\)/);
   assert.match(script, /update_platform_service\(\)/);
   assert.match(script, /pihole -up/);
   assert.match(script, /webserver\.port/);
+});
+
+test('setup-services makes HomeBrain own the MQTT broker service', async () => {
+  const setupServicesPath = path.resolve(__dirname, '..', '..', 'scripts', 'setup-services.sh');
+  const script = await fsp.readFile(setupServicesPath, 'utf8');
+
+  assert.match(script, /disable_stock_mqtt_service\(\)/);
+  assert.match(script, /systemctl stop mosquitto\.service/);
+  assert.match(script, /systemctl disable mosquitto\.service/);
+  assert.match(script, /systemctl mask mosquitto\.service/);
+  assert.match(script, /systemctl is-active --quiet "\$\{MQTT_SERVICE_NAME\}"/);
 });
 
 test('installServiceHelpers skips when helper installation lacks passwordless sudo', { concurrency: false }, async (t) => {
