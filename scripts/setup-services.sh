@@ -1227,7 +1227,7 @@ check_apt_service_update() {
   local package_name="$2"
   local current_version candidate_version update_available
 
-  sudo apt-get update -qq >/dev/null
+  sudo apt-get update -qq >/dev/null 2>/dev/null || true
   current_version="$(dpkg-query -W -f='${Version}' "${package_name}" 2>/dev/null || true)"
   candidate_version="$(apt-cache policy "${package_name}" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')"
   if [[ -n "${current_version}" && -n "${candidate_version}" && "${current_version}" != "${candidate_version}" ]]; then
@@ -1244,14 +1244,19 @@ check_apt_service_update() {
 }
 
 check_pihole_update() {
-  local current_version latest_version update_available
-  current_version="$(pihole version 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' || true)"
-  latest_version="$(pihole version 2>/dev/null | awk -F': *' '/Latest/ {print $2; exit}' || true)"
-  if [[ -n "${latest_version}" && "${current_version}" != *"${latest_version}"* ]]; then
-    update_available="true"
-  else
-    update_available="false"
-  fi
+  local version_output current_version latest_version update_available version_pair current latest
+  version_output="$(pihole version 2>/dev/null || true)"
+  current_version="$(printf '%s' "${version_output}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g')"
+  latest_version="$(printf '%s\n' "${version_output}" | sed -nE 's/^([^[:space:]]+) version is [^[:space:]]+ \(Latest: ([^)]+)\).*$/\1 \2/p' | paste -sd, - | sed 's/,/, /g')"
+  update_available="false"
+  while IFS= read -r version_pair; do
+    current="${version_pair%%|*}"
+    latest="${version_pair#*|}"
+    if [[ -n "${current}" && -n "${latest}" && "${current}" != "${latest}" ]]; then
+      update_available="true"
+      break
+    fi
+  done < <(printf '%s\n' "${version_output}" | sed -nE 's/^.* version is ([^[:space:]]+) \(Latest: ([^)]+)\).*$/\1|\2/p')
 
   printf '{"serviceId":"pihole","currentVersion":%s,"latestVersion":%s,"updateAvailable":%s}\n' \
     "$(json_escape "${current_version}")" \
