@@ -45,6 +45,8 @@ The installer now:
 - optionally bootstraps wake-word training dependencies
 - creates and enables `homebrain`
 - installs and enables `caddy-api`
+- installs and enables the loopback-only `homebrain-mqtt` Mosquitto broker
+- installs and configures Pi-hole with its web UI moved away from Caddy-owned `80/443`
 - seeds the reverse-proxy database state for Caddy management
 - seeds the HomeBrain OIDC identity state for the default Axiom SSO client
 - configures the HomeBrain Ollama helper, sudoers entry, and service override so the UI can manage Ollama updates and host-side service restarts safely
@@ -84,6 +86,9 @@ Use the Linux listener path for microphones, speakers, and wake-word audio. Use 
 Production:
 
 - `3000/tcp`: internal HomeBrain UI/API upstream
+- `53/tcp` and `53/udp`: Pi-hole DNS when installed
+- `1883/tcp`: local MQTT broker on `127.0.0.1` by default
+- `8081/tcp` and `8444/tcp`: Pi-hole web/API ports by default
 - `80/tcp`: Caddy public HTTP ingress
 - `443/tcp`: Caddy public HTTPS ingress
 - `12345/udp`: listener auto-discovery
@@ -112,6 +117,18 @@ Show Caddy logs only:
 bash scripts/setup-services.sh logs caddy
 ```
 
+Show MQTT broker logs only:
+
+```bash
+bash scripts/setup-services.sh logs mqtt
+```
+
+Show Pi-hole logs only:
+
+```bash
+bash scripts/setup-services.sh logs pihole
+```
+
 Restart HomeBrain:
 
 ```bash
@@ -122,6 +139,12 @@ Re-run Caddy bootstrap if needed:
 
 ```bash
 bash scripts/setup-services.sh setup-caddy
+```
+
+Install or refresh platform services:
+
+```bash
+bash scripts/setup-services.sh setup-platform-services
 ```
 
 Health check:
@@ -135,6 +158,22 @@ Repair HomeBrain's privileged helper access for Ollama management:
 ```bash
 bash scripts/setup-services.sh refresh-privileges
 ```
+
+## MQTT Platform Broker
+
+HomeBrain can run a local Mosquitto broker as `homebrain-mqtt`. The default listener is `127.0.0.1:1883`, which is meant for HomeBrain itself and hub-side helpers, not unauthenticated LAN clients.
+
+The backend MQTT bridge runs in `auto` mode by default. When the broker is reachable, HomeBrain publishes platform events to `homebrain/events/{category}/{type}`, device update batches to `homebrain/devices/update`, retained per-device state to `homebrain/devices/{id}/state`, and availability to `homebrain/status`. When the broker is absent, the bridge stays idle and the API continues normally.
+
+To expose MQTT beyond loopback, set `HOMEBRAIN_MQTT_BIND_ADDRESS` and provide `HOMEBRAIN_MQTT_PASSWORD_FILE` before running `setup-mqtt`; the setup script refuses anonymous non-loopback listeners.
+
+## Managed Third-Party Services
+
+HomeBrain manages Caddy, Mosquitto, and Pi-hole as first-class platform services. A normal Platform Deploy now runs `setup-platform-services` before the backend restart, so production pushes refresh the host service definitions and install missing platform dependencies.
+
+The Platform Deploy page exposes install/repair, update checks, manual updates, and policy automation for each service. The default policy checks weekly and treats an update as eligible for automatic deployment only after it has been visible for 30 days. Automatic deployment is opt-in per service.
+
+Pi-hole is installed through the official Pi-hole installer and updated with `pihole -up`. Caddy and Mosquitto are updated through the host package manager. The setup script keeps Pi-hole's web server on `8081/8444` by default so Caddy continues to own public `80/443`.
 
 ## Ollama Management
 

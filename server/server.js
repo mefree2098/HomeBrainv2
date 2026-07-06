@@ -50,6 +50,7 @@ const ecobeeRoutes = require("./routes/ecobeeRoutes");
 const harmonyRoutes = require("./routes/harmonyRoutes");
 const maintenanceRoutes = require("./routes/maintenanceRoutes");
 const platformDeployRoutes = require("./routes/platformDeployRoutes");
+const platformServiceRoutes = require("./routes/platformServiceRoutes");
 const reverseProxyRoutes = require("./routes/reverseProxyRoutes");
 const remoteDeviceRoutes = require("./routes/remoteDeviceRoutes");
 const panelRoutes = require("./routes/panelRoutes");
@@ -103,10 +104,13 @@ const automationSchedulerService = require("./services/automationSchedulerServic
 const alexaBridgeService = require("./services/alexaBridgeService");
 const alexaBrokerService = require("./services/alexaBrokerService");
 const platformUpdateMonitorService = require("./services/platformUpdateMonitorService");
+const platformManagedService = require("./services/platformManagedService");
 const directRadioService = require("./services/directRadioService");
 const matterService = require("./services/matterService");
 const deviceLibraryUpdateService = require("./services/deviceLibraryUpdateService");
 const telemetryService = require("./services/telemetryService");
+const eventStreamService = require("./services/eventStreamService");
+const mqttPlatformService = require("./services/mqttPlatformService");
 const openclawMcpService = require("./services/openclawMcpService");
 const { sendNotFound, sendUnhandledError } = require("./utils/apiErrorResponses");
 const { assertRequiredAuthSecrets } = require("./utils/startupSecrets");
@@ -554,6 +558,7 @@ app.use('/api/harmony', harmonyRoutes);
 app.use('/api/maintenance', maintenanceRoutes);
 // Platform Deploy Routes
 app.use('/api/platform-deploy', platformDeployRoutes);
+app.use('/api/platform-services', platformServiceRoutes);
 // Reverse Proxy Routes
 app.use('/api/admin/reverse-proxy', reverseProxyRoutes);
 // Remote Device Routes
@@ -720,6 +725,7 @@ async function startAutomationRuntimeServices() {
 
   automationSchedulerService.start();
   platformUpdateMonitorService.start();
+  platformManagedService.start();
   deviceLibraryUpdateService.start();
 
   directRadioService.start()
@@ -778,6 +784,19 @@ void dbReady
     console.log('Alexa Broker Service initialized successfully');
   } catch (error) {
     console.error('Failed to initialize Alexa Broker Service:', error.message);
+  }
+})();
+
+// Initialize MQTT platform bridge
+(async () => {
+  try {
+    const status = await mqttPlatformService.initialize({
+      eventStreamService,
+      deviceUpdateEmitter
+    });
+    console.log(`MQTT Platform Bridge initialized: ${status.message}`);
+  } catch (error) {
+    console.error('Failed to initialize MQTT Platform Bridge:', error.message);
   }
 })();
 
@@ -858,6 +877,8 @@ async function gracefulShutdown(signal) {
   await runShutdownStep('SMB backup scheduler', () => smbBackupSchedulerService.stop());
   await runShutdownStep('Dynamic DNS scheduler', () => dynamicDnsService.stop());
   await runShutdownStep('platform update monitor service', () => platformUpdateMonitorService.stop({ disconnectInsteon: true }));
+  await runShutdownStep('platform managed services monitor', () => platformManagedService.stop());
+  await runShutdownStep('MQTT platform bridge', () => mqttPlatformService.shutdown());
   await runShutdownStep('Matter service', () => matterService.shutdown());
   await runShutdownStep('device library update service', () => deviceLibraryUpdateService.stop());
 

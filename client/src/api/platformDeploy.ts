@@ -112,6 +112,17 @@ export interface DeployHealthResponse {
       pendingJobs?: number;
     };
     reverseProxy: DeployHealthCheck;
+    mqttBroker: DeployHealthCheck & {
+      enabled?: boolean;
+      mode?: string;
+      brokerUrl?: string | null;
+      topicPrefix?: string | null;
+      connected?: boolean;
+      reachable?: boolean;
+      lastConnectedAt?: string | null;
+      lastPublishedAt?: string | null;
+      lastError?: string | null;
+    };
     deployment: DeployHealthCheck & {
       bootedAt?: string;
       pid?: number;

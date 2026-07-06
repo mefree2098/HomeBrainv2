@@ -39,6 +39,7 @@ require('./OllamaConfig');
 require('./ReverseProxyRoute');
 require('./ReverseProxyAuditLog');
 require('./ReverseProxySettings');
+require('./PlatformManagedService');
 require('./OIDCProviderSettings');
 require('./OIDCClient');
 require('./OIDCAuthorizationCode');
