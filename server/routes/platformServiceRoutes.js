@@ -41,6 +41,129 @@ router.get('/', async (req, res) => {
   }
 });
 
+router.get('/mqtt/manage', async (req, res) => {
+  try {
+    const result = await platformManagedService.getMqttManagement({
+      limit: req.query?.limit || 50
+    });
+    return res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    logRouteError('GET /api/platform-services/mqtt/manage', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to load MQTT management'
+    });
+  }
+});
+
+router.patch('/mqtt/config', async (req, res) => {
+  try {
+    const result = await platformManagedService.updateMqttConfig(req.body || {});
+    return res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    logRouteError('PATCH /api/platform-services/mqtt/config', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to update MQTT configuration'
+    });
+  }
+});
+
+router.post('/mqtt/test-publish', async (req, res) => {
+  try {
+    const result = await platformManagedService.publishMqttTest(req.body || {});
+    return res.status(200).json({
+      success: true,
+      result
+    });
+  } catch (error) {
+    logRouteError('POST /api/platform-services/mqtt/test-publish', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to publish MQTT test message'
+    });
+  }
+});
+
+router.get('/pihole/manage', async (req, res) => {
+  try {
+    const result = await platformManagedService.getPiholeManagement({
+      queryLimit: req.query?.limit || 80
+    });
+    return res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    logRouteError('GET /api/platform-services/pihole/manage', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to load Pi-hole management'
+    });
+  }
+});
+
+router.patch('/pihole/config', async (req, res) => {
+  try {
+    const result = await platformManagedService.updatePiholeConfig(req.body || {}, {
+      actor: getActor(req)
+    });
+    return res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    logRouteError('PATCH /api/platform-services/pihole/config', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to update Pi-hole configuration'
+    });
+  }
+});
+
+router.post('/pihole/ensure-route', async (req, res) => {
+  try {
+    const result = await platformManagedService.ensurePiholeRoute({
+      actor: getActor(req),
+      apply: req.body?.apply === true
+    });
+    return res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    logRouteError('POST /api/platform-services/pihole/ensure-route', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to ensure Pi-hole reverse proxy route'
+    });
+  }
+});
+
+router.post('/pihole/gravity', async (req, res) => {
+  try {
+    const result = await platformManagedService.runPiholeGravity({
+      actor: getActor(req)
+    });
+    return res.status(202).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    logRouteError('POST /api/platform-services/pihole/gravity', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to update Pi-hole gravity'
+    });
+  }
+});
+
 router.post('/:serviceId/install', async (req, res) => {
   try {
     const service = await platformManagedService.installService(req.params.serviceId, {

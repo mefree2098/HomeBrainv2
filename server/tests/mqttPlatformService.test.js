@@ -132,6 +132,48 @@ test('MQTT bridge publishes retained per-device state topics', async (t) => {
   assert.equal(payload.device.name, 'Kitchen Light');
 });
 
+test('MQTT bridge uses platform-managed broker configuration overrides', async (t) => {
+  const published = [];
+  const client = createFakeMqttClient(published);
+  let connectArgs = null;
+  const service = new MqttPlatformService({
+    env: {
+      NODE_ENV: 'test',
+      HOMEBRAIN_MQTT_ENABLED: 'false',
+      HOMEBRAIN_MQTT_URL: 'mqtt://ignored.example.test:1883'
+    },
+    configOverride: {
+      mode: 'enabled',
+      protocol: 'mqtts',
+      host: 'broker.homebrain.test',
+      port: 8883,
+      topicPrefix: 'homebrain/live',
+      clientId: 'homebrain-managed-client',
+      username: 'homebrain',
+      password: 'secret'
+    },
+    logger: createLogger(),
+    mqttFactory: () => ({
+      connect: (url, options) => {
+        connectArgs = { url, options };
+        return client;
+      }
+    })
+  });
+
+  t.after(async () => {
+    await service.shutdown();
+  });
+
+  await service.publishEvent({ type: 'test.event', category: 'test' });
+
+  assert.equal(connectArgs.url, 'mqtts://broker.homebrain.test:8883');
+  assert.equal(connectArgs.options.clientId, 'homebrain-managed-client');
+  assert.equal(connectArgs.options.username, 'homebrain');
+  assert.equal(connectArgs.options.password, 'secret');
+  assert.equal(published[0].topic, 'homebrain/live/events/test/test.event');
+});
+
 test('MQTT bridge auto mode skips publishing when the broker is unavailable', async () => {
   let mqttConnectAttempted = false;
   let probeCount = 0;

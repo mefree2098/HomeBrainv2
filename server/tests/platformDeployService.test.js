@@ -664,11 +664,17 @@ test('platform deploy applies the reverse proxy config after bootstrapping route
   const source = await fsp.readFile(servicePath, 'utf8');
 
   assert.match(source, /runCustomStep\('Bootstrap reverse proxy state'/);
+  assert.match(source, /runCustomStep\('Bootstrap platform service routes'/);
   assert.match(source, /runCustomStep\('Apply reverse proxy config'/);
+  assert.match(source, /platformManagedService\.ensureManagedRoutes/);
   assert.match(source, /this\.applyReverseProxyConfigForDeploy\(job, jobId\)/);
   assert.ok(
     source.indexOf("runCustomStep('Bootstrap reverse proxy state'") < source.indexOf("runCustomStep('Apply reverse proxy config'"),
     'apply step should run after bootstrap step'
+  );
+  assert.ok(
+    source.indexOf("runCustomStep('Bootstrap platform service routes'") < source.indexOf("runCustomStep('Apply reverse proxy config'"),
+    'apply step should run after platform service routes are bootstrapped'
   );
 });
 

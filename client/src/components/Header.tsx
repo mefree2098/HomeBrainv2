@@ -51,6 +51,7 @@ const ROUTE_META: Record<string, { label: string; detail: string }> = {
   "/users": { label: "User Access", detail: "Account and role control" },
   "/settings": { label: "System Configuration", detail: "Core tuning" },
   "/platform-deploy": { label: "Deployment Bay", detail: "Platform rollout status" },
+  "/platform-services": { label: "Platform Services", detail: "Managed Caddy, MQTT, and Pi-hole" },
   "/reverse-proxy": { label: "Ingress Fabric", detail: "Domains and TLS routing" },
   "/operations": { label: "Operations Center", detail: "Service telemetry" },
   "/ssl": { label: "Certificate Vault", detail: "Trust fabric monitoring" },

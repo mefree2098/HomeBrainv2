@@ -77,6 +77,10 @@ const platformManagedServiceSchema = new mongoose.Schema({
       min: 0,
       max: 365
     }
+  },
+  config: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
   }
 }, {
   timestamps: true
