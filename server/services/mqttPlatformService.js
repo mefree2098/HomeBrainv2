@@ -36,11 +36,27 @@ function normalizeTopicPrefix(value) {
 }
 
 function sanitizeTopicSegment(value, fallback = 'unknown') {
-  const sanitized = String(value ?? '')
-    .trim()
-    .replace(/[#+/]+/g, '-')
-    .replace(/[^A-Za-z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+  let sanitized = '';
+  for (const char of String(value ?? '').trim()) {
+    if (
+      (char >= 'A' && char <= 'Z')
+      || (char >= 'a' && char <= 'z')
+      || (char >= '0' && char <= '9')
+      || char === '.'
+      || char === '_'
+      || char === '-'
+    ) {
+      sanitized += char;
+    } else {
+      sanitized += '-';
+    }
+  }
+  while (sanitized.startsWith('-')) {
+    sanitized = sanitized.slice(1);
+  }
+  while (sanitized.endsWith('-')) {
+    sanitized = sanitized.slice(0, -1);
+  }
 
   return sanitized || fallback;
 }

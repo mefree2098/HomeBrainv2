@@ -90,7 +90,10 @@ function clampNumber(value, fallback, min, max) {
 }
 
 function normalizeHostname(value) {
-  const candidate = trimString(value).toLowerCase().replace(/\.+$/, '');
+  let candidate = trimString(value).toLowerCase();
+  while (candidate.endsWith('.')) {
+    candidate = candidate.slice(0, -1);
+  }
   if (!candidate) {
     return '';
   }
