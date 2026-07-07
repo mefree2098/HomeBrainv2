@@ -1905,17 +1905,7 @@ class PlatformDeployService {
       });
 
       await runCustomStep('Apply reverse proxy config', async () => {
-        const applySummary = await reverseProxyService.applyConfig(`platform-deploy:${job.actor || 'unknown'}`);
-        const appliedRoutes = Array.isArray(applySummary.appliedRoutes)
-          ? applySummary.appliedRoutes.join(',')
-          : 'none';
-
-        await this.appendJobLog(
-          jobId,
-          `[${new Date().toISOString()}] [Apply reverse proxy config] `
-          + `success=${applySummary.success ? 'yes' : 'no'} `
-          + `appliedRoutes=${appliedRoutes || 'none'}\n`
-        );
+        await this.applyReverseProxyConfigForDeploy(job, jobId);
       });
 
       await runCustomStep('Bootstrap identity state', async () => {
@@ -2150,6 +2140,53 @@ class PlatformDeployService {
 
       throw error;
     }
+  }
+
+  async applyReverseProxyConfigForDeploy(job, jobId) {
+    const actor = `platform-deploy:${job?.actor || 'unknown'}`;
+    let status = null;
+    try {
+      status = await reverseProxyService.getStatus();
+    } catch (error) {
+      await this.appendJobLog(
+        jobId,
+        `[${new Date().toISOString()}] [Apply reverse proxy config] `
+        + `Unable to precheck current Caddy config (${error.message}); applying normally.\n`
+      );
+    }
+
+    if (status?.config?.changed === false) {
+      const desiredHash = status.config.desiredHash || 'unknown';
+      await this.appendJobLog(
+        jobId,
+        `[${new Date().toISOString()}] [Apply reverse proxy config] `
+        + `success=yes skipped=yes reason=unchanged desiredHash=${desiredHash}\n`
+      );
+      return {
+        success: true,
+        skipped: true,
+        reason: 'unchanged',
+        desiredHash,
+        appliedRoutes: []
+      };
+    }
+
+    const applySummary = await reverseProxyService.applyConfig(actor);
+    const appliedRoutes = Array.isArray(applySummary.appliedRoutes)
+      ? applySummary.appliedRoutes.join(',')
+      : 'none';
+
+    await this.appendJobLog(
+      jobId,
+      `[${new Date().toISOString()}] [Apply reverse proxy config] `
+      + `success=${applySummary.success ? 'yes' : 'no'} `
+      + `appliedRoutes=${appliedRoutes || 'none'}\n`
+    );
+
+    return {
+      ...applySummary,
+      skipped: false
+    };
   }
 }
 
