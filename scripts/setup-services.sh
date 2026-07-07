@@ -1229,7 +1229,7 @@ check_apt_service_update() {
 
   sudo apt-get update -qq >/dev/null 2>/dev/null || true
   current_version="$(dpkg-query -W -f='${Version}' "${package_name}" 2>/dev/null || true)"
-  candidate_version="$(apt-cache policy "${package_name}" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')"
+  candidate_version="$(apt-cache policy "${package_name}" 2>/dev/null | awk '/Candidate:/ {candidate=$2} END {print candidate}')"
   if [[ -n "${current_version}" && -n "${candidate_version}" && "${current_version}" != "${candidate_version}" ]]; then
     update_available="true"
   else

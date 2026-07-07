@@ -226,6 +226,7 @@ test('platform service update checks tolerate apt warnings and parse Pi-hole lat
   const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
 
   assert.match(script, /sudo apt-get update -qq >\/dev\/null 2>\/dev\/null \|\| true/);
+  assert.match(script, /awk '\/Candidate:\/ \{candidate=\$2\} END \{print candidate\}'/);
   assert.match(script, /version_output="\$\(pihole version 2>\/dev\/null \|\| true\)"/);
   assert.match(script, /latest_version="\$\(printf '%s\\n' "\$\{version_output\}"[\s\S]+sed 's\/,\/, \/g'\)"/);
   assert.match(script, /current="\$\{version_pair%%\|\*\}"/);
