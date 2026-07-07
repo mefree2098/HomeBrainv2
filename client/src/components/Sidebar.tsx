@@ -24,7 +24,8 @@ import {
   Zap,
   Smartphone,
   Bell,
-  MapPinned
+  MapPinned,
+  ServerCog
 } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { cn } from "@/lib/utils"
@@ -51,6 +52,7 @@ const navigation = [
   { name: 'Ollama / LLM', href: '/ollama', icon: Brain, adminOnly: true },
   { name: 'Whisper STT', href: '/whisper', icon: Cpu, adminOnly: true },
   { name: 'Platform Deploy', href: '/platform-deploy', icon: Rocket, adminOnly: true },
+  { name: 'Platform Services', href: '/platform-services', icon: ServerCog, adminOnly: true },
   { name: 'Reverse Proxy', href: '/reverse-proxy', icon: Waypoints, adminOnly: true },
   { name: 'Operations', href: '/operations', icon: Activity, adminOnly: true },
   { name: 'Settings', href: '/settings', icon: Settings, adminOnly: true },

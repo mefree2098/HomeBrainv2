@@ -12,6 +12,7 @@ const oidcService = require('./oidcService');
 const adminBootstrapService = require('./adminBootstrapService');
 const alexaBrokerService = require('./alexaBrokerService');
 const mqttPlatformService = require('./mqttPlatformService');
+const platformManagedService = require('./platformManagedService');
 
 const MAX_LOG_TAIL_BYTES = 64 * 1024;
 const INTERRUPTED_JOB_RECONCILE_GRACE_MS = Math.max(
@@ -1901,6 +1902,20 @@ class PlatformDeployService {
           + `settingsUpdated=${bootstrapSummary.settingsUpdated.join(',') || 'none'} `
           + `createdRoutes=${bootstrapSummary.createdRoutes.join(',') || 'none'} `
           + `revalidatedRoutes=${bootstrapSummary.revalidatedRoutes.join(',') || 'none'}\n`
+        );
+      });
+
+      await runCustomStep('Bootstrap platform service routes', async () => {
+        const routeSummary = await platformManagedService.ensureManagedRoutes({
+          actor: `platform-deploy:${job.actor || 'unknown'}`
+        });
+
+        await this.appendJobLog(
+          jobId,
+          `[${new Date().toISOString()}] [Bootstrap platform service routes] `
+          + `createdRoutes=${routeSummary.created.join(',') || 'none'} `
+          + `updatedRoutes=${routeSummary.updated.join(',') || 'none'} `
+          + `skipped=${routeSummary.skipped.map((entry) => `${entry.serviceId}:${entry.reason}`).join(',') || 'none'}\n`
         );
       });
 

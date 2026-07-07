@@ -1,7 +1,10 @@
 const { EventEmitter } = require('events');
 const net = require('net');
 const os = require('os');
+const mongoose = require('mongoose');
 const { URL } = require('url');
+
+const PlatformManagedService = require('../models/PlatformManagedService');
 
 const DEFAULT_TOPIC_PREFIX = 'homebrain';
 const DEFAULT_BROKER_URL = 'mqtt://127.0.0.1:1883';
@@ -86,6 +89,7 @@ class MqttPlatformService extends EventEmitter {
   constructor(options = {}) {
     super();
     this.env = options.env || process.env;
+    this.configOverride = options.configOverride || null;
     this.logger = options.logger || console;
     this.mqttFactory = options.mqttFactory || (() => require('mqtt'));
     this.netConnect = options.netConnect || net.createConnection;
@@ -105,6 +109,9 @@ class MqttPlatformService extends EventEmitter {
     this.deviceUpdateEmitter = null;
     this.eventListener = null;
     this.deviceUpdateListener = null;
+    this.topicMonitorListener = null;
+    this.subscribedMonitorTopic = '';
+    this.recentMessages = [];
     this.status = {
       connected: false,
       reachable: false,
@@ -115,19 +122,31 @@ class MqttPlatformService extends EventEmitter {
   }
 
   getMode() {
-    return normalizeBooleanMode(this.env.HOMEBRAIN_MQTT_ENABLED, { nodeEnv: this.env.NODE_ENV });
+    return normalizeBooleanMode(this.configOverride?.mode ?? this.env.HOMEBRAIN_MQTT_ENABLED, { nodeEnv: this.env.NODE_ENV });
   }
 
   getBrokerUrl() {
+    if (this.configOverride?.brokerUrl) {
+      return this.configOverride.brokerUrl;
+    }
+
+    if (this.configOverride?.host || this.configOverride?.port || this.configOverride?.protocol) {
+      return buildBrokerUrl({
+        HOMEBRAIN_MQTT_PROTOCOL: this.configOverride.protocol || this.env.HOMEBRAIN_MQTT_PROTOCOL,
+        HOMEBRAIN_MQTT_HOST: this.configOverride.host || this.env.HOMEBRAIN_MQTT_HOST,
+        HOMEBRAIN_MQTT_PORT: this.configOverride.port || this.env.HOMEBRAIN_MQTT_PORT
+      });
+    }
+
     return buildBrokerUrl(this.env);
   }
 
   getTopicPrefix() {
-    return normalizeTopicPrefix(this.env.HOMEBRAIN_MQTT_TOPIC_PREFIX || DEFAULT_TOPIC_PREFIX);
+    return normalizeTopicPrefix(this.configOverride?.topicPrefix || this.env.HOMEBRAIN_MQTT_TOPIC_PREFIX || DEFAULT_TOPIC_PREFIX);
   }
 
   getClientId() {
-    const configured = String(this.env.HOMEBRAIN_MQTT_CLIENT_ID || '').trim();
+    const configured = String(this.configOverride?.clientId || this.env.HOMEBRAIN_MQTT_CLIENT_ID || '').trim();
     if (configured) {
       return configured;
     }
@@ -141,9 +160,9 @@ class MqttPlatformService extends EventEmitter {
     const options = {
       clientId: this.getClientId(),
       clean: true,
-      keepalive: Math.max(15, Number(this.env.HOMEBRAIN_MQTT_KEEPALIVE_SECONDS || 60)),
-      connectTimeout: Math.max(1_000, Number(this.env.HOMEBRAIN_MQTT_CONNECT_TIMEOUT_MS || 3_000)),
-      reconnectPeriod: Math.max(0, Number(this.env.HOMEBRAIN_MQTT_RECONNECT_MS || 15_000)),
+      keepalive: Math.max(15, Number(this.configOverride?.keepaliveSeconds || this.env.HOMEBRAIN_MQTT_KEEPALIVE_SECONDS || 60)),
+      connectTimeout: Math.max(1_000, Number(this.configOverride?.connectTimeoutMs || this.env.HOMEBRAIN_MQTT_CONNECT_TIMEOUT_MS || 3_000)),
+      reconnectPeriod: Math.max(0, Number(this.configOverride?.reconnectMs || this.env.HOMEBRAIN_MQTT_RECONNECT_MS || 15_000)),
       will: {
         topic: `${topicPrefix}/status`,
         payload: JSON.stringify({
@@ -156,14 +175,60 @@ class MqttPlatformService extends EventEmitter {
       }
     };
 
-    if (this.env.HOMEBRAIN_MQTT_USERNAME) {
-      options.username = this.env.HOMEBRAIN_MQTT_USERNAME;
+    if (this.configOverride?.username || this.env.HOMEBRAIN_MQTT_USERNAME) {
+      options.username = this.configOverride?.username || this.env.HOMEBRAIN_MQTT_USERNAME;
     }
-    if (this.env.HOMEBRAIN_MQTT_PASSWORD) {
-      options.password = this.env.HOMEBRAIN_MQTT_PASSWORD;
+    if (this.configOverride?.password || this.env.HOMEBRAIN_MQTT_PASSWORD) {
+      options.password = this.configOverride?.password || this.env.HOMEBRAIN_MQTT_PASSWORD;
     }
 
     return options;
+  }
+
+  async loadPersistedConfig() {
+    if (this.env.NODE_ENV === 'test' && !this.configOverride) {
+      return this.configOverride;
+    }
+    if (mongoose.connection.readyState !== 1) {
+      return this.configOverride;
+    }
+
+    const record = await PlatformManagedService.findOne({ serviceId: 'mqtt' }).lean();
+    const nextConfig = record?.config?.mqtt && typeof record.config.mqtt === 'object'
+      ? record.config.mqtt
+      : null;
+    this.configOverride = nextConfig;
+    return this.configOverride;
+  }
+
+  async disconnectClient() {
+    const client = this.client;
+    this.client = null;
+    this.status.connected = false;
+    this.subscribedMonitorTopic = '';
+    this.topicMonitorListener = null;
+
+    if (!client?.end) {
+      return;
+    }
+
+    await new Promise((resolve) => {
+      try {
+        client.end(true, {}, resolve);
+      } catch (_error) {
+        resolve();
+      }
+    });
+  }
+
+  async reloadConfig({ reconnect = false } = {}) {
+    await this.loadPersistedConfig();
+    await this.disconnectClient();
+    this.lastConnectAttemptAt = 0;
+    if (reconnect && this.getMode() !== 'disabled') {
+      await this.ensureClient();
+    }
+    return this.getStatus({ probe: true });
   }
 
   async probeBroker() {
@@ -259,6 +324,7 @@ class MqttPlatformService extends EventEmitter {
         this.status.reachable = true;
         this.status.lastConnectedAt = new Date().toISOString();
         this.status.lastError = null;
+        this.subscribeToTopicMonitor();
         void this.publishAvailability('online');
         this.emit('connect');
       });
@@ -283,6 +349,7 @@ class MqttPlatformService extends EventEmitter {
   }
 
   async publishJson(topic, payload, options = {}) {
+    await this.loadPersistedConfig().catch(() => null);
     const client = await this.ensureClient();
     if (!client?.connected) {
       return {
@@ -310,6 +377,44 @@ class MqttPlatformService extends EventEmitter {
         resolve({ success: true, topic });
       });
     });
+  }
+
+  subscribeToTopicMonitor() {
+    const client = this.client;
+    if (!client?.subscribe || !client?.on) {
+      return;
+    }
+
+    const monitorTopic = `${this.getTopicPrefix()}/#`;
+    if (this.subscribedMonitorTopic === monitorTopic) {
+      return;
+    }
+
+    this.subscribedMonitorTopic = monitorTopic;
+    client.subscribe(monitorTopic, { qos: 0 }, (error) => {
+      if (error) {
+        this.status.lastError = error.message;
+      }
+    });
+
+    if (!this.topicMonitorListener) {
+      this.topicMonitorListener = (topic, message, packet = {}) => {
+        const payload = Buffer.isBuffer(message) ? message.toString('utf8') : String(message || '');
+        this.recentMessages.unshift({
+          topic: String(topic || ''),
+          payload: payload.slice(0, 2048),
+          qos: packet.qos ?? null,
+          retain: packet.retain === true,
+          receivedAt: new Date().toISOString()
+        });
+        this.recentMessages = this.recentMessages.slice(0, 100);
+      };
+      client.on('message', this.topicMonitorListener);
+    }
+  }
+
+  getRecentMessages(limit = 50) {
+    return this.recentMessages.slice(0, Math.max(1, Math.min(100, Number(limit) || 50)));
   }
 
   async publishAvailability(status) {
@@ -413,6 +518,7 @@ class MqttPlatformService extends EventEmitter {
   }
 
   async initialize(dependencies = {}) {
+    await this.loadPersistedConfig().catch(() => null);
     this.attach(dependencies);
     if (this.getMode() === 'enabled') {
       await this.ensureClient();
@@ -421,6 +527,7 @@ class MqttPlatformService extends EventEmitter {
   }
 
   async getStatus({ probe = false } = {}) {
+    await this.loadPersistedConfig().catch(() => null);
     const mode = this.getMode();
     const enabled = mode !== 'disabled';
     let reachable = this.status.reachable || Boolean(this.client?.connected);
@@ -453,7 +560,8 @@ class MqttPlatformService extends EventEmitter {
       reachable,
       lastConnectedAt: this.status.lastConnectedAt,
       lastPublishedAt: this.status.lastPublishedAt,
-      lastError: this.status.lastError
+      lastError: this.status.lastError,
+      recentMessageCount: this.recentMessages.length
     };
   }
 
@@ -463,20 +571,7 @@ class MqttPlatformService extends EventEmitter {
     if (client?.connected) {
       await this.publishAvailability('offline').catch(() => null);
     }
-    this.client = null;
-    this.status.connected = false;
-
-    if (!client?.end) {
-      return;
-    }
-
-    await new Promise((resolve) => {
-      try {
-        client.end(true, {}, resolve);
-      } catch (_error) {
-        resolve();
-      }
-    });
+    await this.disconnectClient();
   }
 }
 
@@ -487,3 +582,4 @@ module.exports.MqttPlatformService = MqttPlatformService;
 module.exports.normalizeTopicPrefix = normalizeTopicPrefix;
 module.exports.sanitizeTopicSegment = sanitizeTopicSegment;
 module.exports.redactBrokerUrl = redactBrokerUrl;
+module.exports.buildBrokerUrl = buildBrokerUrl;

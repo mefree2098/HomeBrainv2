@@ -27,6 +27,7 @@ const UserProfiles = lazy(() => import("./pages/UserProfiles").then((module) => 
 const Users = lazy(() => import("./pages/Users").then((module) => ({ default: module.Users })))
 const Settings = lazy(() => import("./pages/Settings").then((module) => ({ default: module.Settings })))
 const PlatformDeploy = lazy(() => import("./pages/PlatformDeploy").then((module) => ({ default: module.PlatformDeploy })))
+const PlatformServices = lazy(() => import("./pages/PlatformServices").then((module) => ({ default: module.PlatformServices })))
 const ReverseProxyManagement = lazy(() => import("./pages/ReverseProxyManagement"))
 const Operations = lazy(() => import("./pages/Operations").then((module) => ({ default: module.Operations })))
 const SSLManagement = lazy(() => import("./pages/SSLManagement"))
@@ -85,6 +86,7 @@ function App() {
             <Route path="/settings" element={withLayout(<Settings />, { adminOnly: true })} />
             <Route path="/alexa-broker" element={withLayout(<AlexaBrokerManagement />, { adminOnly: true })} />
             <Route path="/platform-deploy" element={withLayout(<PlatformDeploy />, { adminOnly: true })} />
+            <Route path="/platform-services" element={withLayout(<PlatformServices />, { adminOnly: true })} />
             <Route path="/openclaw" element={<Navigate to="/settings" replace />} />
             <Route path="/reverse-proxy" element={withLayout(<ReverseProxyManagement />, { adminOnly: true })} />
             <Route path="/operations" element={withLayout(<Operations />, { adminOnly: true })} />
