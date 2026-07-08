@@ -1038,6 +1038,20 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
 
       setWeather(response.weather)
     } catch (fetchError) {
+      if (locationMode !== "saved") {
+        try {
+          const fallbackResponse = await getDashboardWeather({
+            forceTempestSync: options.forceTempestSync === true,
+            forceIndoorAirSync: options.forceIndoorAirSync === true,
+            refreshIndoorAir
+          })
+          setWeather(fallbackResponse.weather)
+          setError("Using saved climate location because the selected location source did not load.")
+          return
+        } catch (_fallbackError) {
+          // Fall through to the original error so the user sees the most relevant failure.
+        }
+      }
       setWeather(null)
       setError(fetchError instanceof Error ? fetchError.message : "Failed to load weather.")
     } finally {

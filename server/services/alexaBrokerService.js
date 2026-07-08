@@ -1,4 +1,5 @@
 const fs = require('fs');
+const net = require('net');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
@@ -22,6 +23,7 @@ const DEFAULT_LIFECYCLE_LIMIT = 50;
 const DEFAULT_MONITOR_INTERVAL_MS = 15000;
 const DEFAULT_HEALTH_FAILURE_THRESHOLD = 2;
 const DEFAULT_RECOVERY_RETRY_DELAY_MS = 5000;
+const DEFAULT_STARTUP_STABILITY_MS = 300;
 const MANAGED_REVERSE_PROXY_NOTES = 'Managed automatically by the HomeBrain Alexa Broker deployment flow.';
 
 function trimString(value) {
@@ -182,6 +184,11 @@ function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isPositivePid(value) {
+  const pid = Number(value);
+  return Number.isInteger(pid) && pid > 0;
+}
+
 function waitForChildExit(child, timeoutMs = 5000) {
   return new Promise((resolve) => {
     if (!child || child.exitCode != null || child.killed) {
@@ -205,6 +212,29 @@ function waitForChildExit(child, timeoutMs = 5000) {
   });
 }
 
+function readProcessCommand(pid) {
+  if (!isPositivePid(pid) || process.platform === 'win32') {
+    return '';
+  }
+
+  try {
+    return fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').replace(/\0/g, ' ').trim();
+  } catch (_error) {
+    return '';
+  }
+}
+
+function commandLooksLikeBrokerRuntime(command, brokerRoot) {
+  const normalized = trimString(command);
+  if (!normalized) {
+    return false;
+  }
+
+  const entryScript = path.join(brokerRoot, 'src', 'app.js');
+  return normalized.includes(entryScript)
+    || (normalized.includes('broker/src/app.js') && /\bnode\b/.test(normalized));
+}
+
 function normalizeLifecycleStatus(status) {
   return ['info', 'success', 'warning', 'error'].includes(String(status || '').trim())
     ? String(status).trim()
@@ -225,6 +255,7 @@ class AlexaBrokerService {
     this.monitorIntervalMs = options.monitorIntervalMs || DEFAULT_MONITOR_INTERVAL_MS;
     this.healthFailureThreshold = options.healthFailureThreshold || DEFAULT_HEALTH_FAILURE_THRESHOLD;
     this.recoveryRetryDelayMs = options.recoveryRetryDelayMs || DEFAULT_RECOVERY_RETRY_DELAY_MS;
+    this.startupStabilityMs = options.startupStabilityMs ?? DEFAULT_STARTUP_STABILITY_MS;
     this.child = null;
     this.installProcess = null;
     this.logBuffer = [];
@@ -256,6 +287,37 @@ class AlexaBrokerService {
 
   isChildAlive() {
     return Boolean(this.child && this.child.exitCode == null && !this.child.killed);
+  }
+
+  isSpawnedChildAlive(child) {
+    return Boolean(child && child.exitCode == null && !child.killed);
+  }
+
+  isProcessRunning(pid) {
+    if (!isPositivePid(pid)) {
+      return false;
+    }
+
+    try {
+      process.kill(Number(pid), 0);
+      return true;
+    } catch (error) {
+      return error?.code === 'EPERM';
+    }
+  }
+
+  isTrackedBrokerProcessAlive(config) {
+    const pid = Number(config?.servicePid);
+    if (!this.isProcessRunning(pid)) {
+      return false;
+    }
+
+    const command = readProcessCommand(pid);
+    return command ? commandLooksLikeBrokerRuntime(command, this.brokerRoot) : true;
+  }
+
+  isManagedRuntimeAlive(config) {
+    return this.isChildAlive() || this.isTrackedBrokerProcessAlive(config);
   }
 
   pushLog(value, prefix = '') {
@@ -383,35 +445,45 @@ class AlexaBrokerService {
         return;
       }
 
-      const childAlive = this.isChildAlive();
+      const managedAlive = this.isManagedRuntimeAlive(config);
       const probe = await this.probeHealth(config);
       const canAutoRecover = this.shouldAutoRecover(config);
 
-      if (probe.available && childAlive) {
+      if (probe.available && managedAlive) {
         this.consecutiveHealthFailures = 0;
         this.clearRecoveryTimer();
+        if (config.serviceStatus !== 'running') {
+          config.serviceStatus = 'running';
+          await config.save();
+        }
         return;
       }
 
-      if (probe.available && !childAlive) {
+      if ((probe.available || probe.portOccupied) && !managedAlive) {
         this.consecutiveHealthFailures = 0;
         this.clearRecoveryTimer();
         if (config.serviceStatus !== 'running_external') {
           config.serviceStatus = 'running_external';
           config.servicePid = null;
           config.serviceOwner = null;
+          if (!probe.available) {
+            config.lastError = {
+              message: probe.message || 'Alexa broker port is occupied but did not answer the broker health check.',
+              timestamp: new Date()
+            };
+          }
           await config.save();
         }
         return;
       }
 
       if (!canAutoRecover) {
-        this.consecutiveHealthFailures = childAlive ? this.consecutiveHealthFailures + 1 : 0;
+        this.consecutiveHealthFailures = managedAlive ? this.consecutiveHealthFailures + 1 : 0;
         return;
       }
 
       const now = Date.now();
-      if (childAlive) {
+      if (managedAlive) {
         this.consecutiveHealthFailures += 1;
         if (this.consecutiveHealthFailures < this.healthFailureThreshold) {
           return;
@@ -595,18 +667,56 @@ class AlexaBrokerService {
       });
       return {
         available: true,
+        portOccupied: true,
         localBaseUrl,
         health: response.data || null,
         message: ''
       };
     } catch (error) {
+      const portProbe = await this.probeTcpPort(config);
       return {
         available: false,
+        portOccupied: portProbe.occupied,
         localBaseUrl,
         health: null,
-        message: error?.message || 'Broker health check failed'
+        message: [
+          error?.message || 'Broker health check failed',
+          portProbe.occupied ? 'TCP port is already in use.' : ''
+        ].filter(Boolean).join(' ')
       };
     }
+  }
+
+  async probeTcpPort(config, timeoutMs = 1000) {
+    const host = resolveLocalHealthHost(config.bindHost);
+    const port = sanitizePositiveInteger(config.servicePort, DEFAULT_PORT, { min: 1, max: 65535 });
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const socket = net.createConnection({ host, port });
+
+      const finish = (result) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        socket.destroy();
+        resolve(result);
+      };
+
+      const timer = setTimeout(() => {
+        finish({ occupied: false, message: 'TCP probe timed out' });
+      }, timeoutMs);
+
+      socket.once('connect', () => {
+        finish({ occupied: true, message: '' });
+      });
+
+      socket.once('error', (error) => {
+        finish({ occupied: false, message: error?.message || 'TCP probe failed' });
+      });
+    });
   }
 
   attachProcessListeners(child) {
@@ -697,17 +807,24 @@ class AlexaBrokerService {
     });
   }
 
-  async waitForHealthyBroker(config, timeoutMs = 10000) {
+  async waitForHealthyBroker(config, timeoutMs = 10000, child = this.child) {
     const startedAt = Date.now();
     let lastMessage = 'Broker health check timed out';
 
     while (Date.now() - startedAt < timeoutMs) {
-      if (!this.isChildAlive()) {
+      if (!this.isSpawnedChildAlive(child)) {
         throw new Error('Alexa broker stopped before it became healthy');
       }
 
       const probe = await this.probeHealth(config);
       if (probe.available) {
+        const stabilityDelay = Math.max(0, Number(this.startupStabilityMs) || 0);
+        if (stabilityDelay > 0) {
+          await wait(stabilityDelay);
+        }
+        if (!this.isSpawnedChildAlive(child)) {
+          throw new Error('Alexa broker stopped before its startup health could be confirmed');
+        }
         return probe;
       }
 
@@ -838,7 +955,7 @@ class AlexaBrokerService {
 
   async prepareForHostRestart() {
     const config = await this.getConfig();
-    const shouldResume = this.isChildAlive();
+    const shouldResume = this.isManagedRuntimeAlive(config);
 
     if (config.resumeAfterHostRestart !== shouldResume) {
       config.resumeAfterHostRestart = shouldResume;
@@ -1159,7 +1276,7 @@ class AlexaBrokerService {
       installResult = await this.install();
     }
 
-    const serviceResult = this.isChildAlive()
+    const serviceResult = this.isManagedRuntimeAlive(config)
       ? await this.restartService({
         actor,
         source: 'deploy',
@@ -1200,9 +1317,14 @@ class AlexaBrokerService {
       throw new Error('Alexa broker install is still running. Wait for it to finish before starting the service.');
     }
 
-    if (this.isChildAlive()) {
+    if (this.isManagedRuntimeAlive(config)) {
       if (config.lastError) {
         config.lastError = null;
+      }
+      config.serviceStatus = 'running';
+      if (this.isChildAlive()) {
+        config.servicePid = this.child?.pid || config.servicePid || null;
+        config.serviceOwner = os.userInfo().username;
       }
       config.manualStopRequested = false;
       await config.save();
@@ -1214,21 +1336,29 @@ class AlexaBrokerService {
     }
 
     const existingProbe = await this.probeHealth(config);
-    if (existingProbe.available) {
+    if (existingProbe.available || existingProbe.portOccupied) {
       config.serviceStatus = 'running_external';
       config.servicePid = null;
       config.serviceOwner = null;
       config.resumeAfterHostRestart = false;
       config.manualStopRequested = false;
-      config.lastError = null;
+      config.lastError = existingProbe.available
+        ? null
+        : {
+          message: existingProbe.message || 'Alexa broker port is already in use but /health is not responding.',
+          timestamp: new Date()
+        };
       this.appendLifecycleEvent(config, {
-        type: 'running_external',
+        type: existingProbe.available ? 'running_external' : 'port_occupied',
         status: 'warning',
-        message: 'HomeBrain detected an Alexa broker that is already running outside the managed service on the configured port.',
+        message: existingProbe.available
+          ? 'HomeBrain detected an Alexa broker that is already running outside the managed service on the configured port.'
+          : 'HomeBrain detected another process already occupying the configured Alexa broker port.',
         details: {
           actor,
           automatic,
-          source
+          source,
+          healthMessage: existingProbe.message || ''
         }
       });
       await config.save();
@@ -1237,7 +1367,9 @@ class AlexaBrokerService {
         success: true,
         message: options.quietIfRunning
           ? 'Alexa broker is already running'
-          : 'Alexa broker is already running outside HomeBrain on the configured port',
+          : existingProbe.available
+            ? 'Alexa broker is already running outside HomeBrain on the configured port'
+            : 'Alexa broker port is already in use, but the broker health check is not responding',
         externallyManaged: true,
         status: await this.getStatus()
       };
@@ -1267,7 +1399,7 @@ class AlexaBrokerService {
     );
 
     try {
-      const probe = await this.waitForHealthyBroker(config);
+      const probe = await this.waitForHealthyBroker(config, 10000, child);
       config.serviceStatus = 'running';
       config.servicePid = child.pid || null;
       config.serviceOwner = os.userInfo().username;
@@ -1338,6 +1470,48 @@ class AlexaBrokerService {
     }
   }
 
+  async stopTrackedBrokerProcess(pid) {
+    if (!isPositivePid(pid) || !this.isProcessRunning(pid)) {
+      return;
+    }
+
+    try {
+      process.kill(Number(pid), 'SIGTERM');
+    } catch (error) {
+      if (error?.code !== 'ESRCH') {
+        throw error;
+      }
+      return;
+    }
+
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 5000) {
+      if (!this.isProcessRunning(pid)) {
+        return;
+      }
+      await wait(200);
+    }
+
+    try {
+      process.kill(Number(pid), 'SIGKILL');
+    } catch (error) {
+      if (error?.code !== 'ESRCH') {
+        throw error;
+      }
+      return;
+    }
+
+    const killStartedAt = Date.now();
+    while (Date.now() - killStartedAt < 3000) {
+      if (!this.isProcessRunning(pid)) {
+        return;
+      }
+      await wait(200);
+    }
+
+    throw new Error(`Alexa broker process ${pid} did not stop after SIGKILL.`);
+  }
+
   async stopService(options = {}) {
     const config = await this.getConfig();
     const preserveResumeAfterHostRestart = options.preserveResumeAfterHostRestart === true;
@@ -1346,11 +1520,21 @@ class AlexaBrokerService {
     const source = trimString(options.source) || (manualStop ? 'manual' : 'internal');
     const stopReason = trimString(options.reason);
 
-    if (!this.isChildAlive()) {
+    const trackedPid = !this.isChildAlive() && this.isTrackedBrokerProcessAlive(config)
+      ? Number(config.servicePid)
+      : null;
+
+    if (!this.isChildAlive() && !trackedPid) {
       const probe = await this.probeHealth(config);
-      if (probe.available) {
+      if (probe.available || probe.portOccupied) {
         config.serviceStatus = 'running_external';
         config.manualStopRequested = manualStop;
+        if (!probe.available) {
+          config.lastError = {
+            message: probe.message || 'Alexa broker port is occupied but did not answer the broker health check.',
+            timestamp: new Date()
+          };
+        }
         if (!preserveResumeAfterHostRestart) {
           config.resumeAfterHostRestart = false;
         }
@@ -1392,6 +1576,49 @@ class AlexaBrokerService {
       return {
         success: true,
         message: 'Alexa broker is already stopped',
+        status: await this.getStatus()
+      };
+    }
+
+    if (trackedPid) {
+      this.stoppingChild = true;
+      this.pushLog(`Stopping tracked Alexa broker process ${trackedPid}`, 'broker');
+      try {
+        await this.stopTrackedBrokerProcess(trackedPid);
+      } catch (error) {
+        this.stoppingChild = false;
+        throw error;
+      }
+
+      config.serviceStatus = config.isInstalled ? 'stopped' : 'not_installed';
+      config.servicePid = null;
+      config.serviceOwner = null;
+      config.manualStopRequested = manualStop;
+      if (!preserveResumeAfterHostRestart) {
+        config.resumeAfterHostRestart = false;
+      }
+      config.lastStoppedAt = new Date();
+      this.appendLifecycleEvent(config, {
+        type: manualStop ? 'manual_stop' : 'stopped',
+        status: 'info',
+        message: manualStop
+          ? 'Alexa broker was stopped manually. Automatic recovery is paused until it is started again.'
+          : `Alexa broker stopped${stopReason ? `: ${stopReason}` : '.'}`,
+        details: {
+          actor,
+          source,
+          reason: stopReason || null,
+          pid: trackedPid
+        }
+      });
+      await config.save();
+
+      this.stoppingChild = false;
+      this.consecutiveHealthFailures = 0;
+
+      return {
+        success: true,
+        message: 'Alexa broker stopped successfully',
         status: await this.getStatus()
       };
     }
@@ -1474,6 +1701,15 @@ class AlexaBrokerService {
     const latestEvent = lifecycleEvents.length > 0 ? lifecycleEvents[lifecycleEvents.length - 1] : null;
 
     if (effectiveStatus === 'running_external') {
+      if (probe?.portOccupied && !probe?.available) {
+        return {
+          level: 'warning',
+          source: 'port_occupied',
+          message: `The configured Alexa broker port is already in use, but /health is not responding. Last health check: ${probe.message || 'unavailable'}`,
+          timestamp: latestEvent?.occurredAt || null
+        };
+      }
+
       return {
         level: 'warning',
         source: 'running_external',
@@ -1552,17 +1788,21 @@ class AlexaBrokerService {
       this.findManagedReverseProxyRoute(config)
     ]);
     const childAlive = this.isChildAlive();
+    const trackedProcessAlive = !childAlive && this.isTrackedBrokerProcessAlive(config);
+    const managedRuntimeAlive = childAlive || trackedProcessAlive;
     let effectiveStatus = config.serviceStatus;
     let serviceRunning = false;
 
     if (!config.isInstalled && config.serviceStatus !== 'installing') {
       effectiveStatus = 'not_installed';
-    } else if (probe.available && childAlive) {
+    } else if (probe.available && managedRuntimeAlive) {
       effectiveStatus = 'running';
       serviceRunning = true;
-    } else if (probe.available && !childAlive) {
+    } else if (probe.available && !managedRuntimeAlive) {
       effectiveStatus = 'running_external';
       serviceRunning = true;
+    } else if (probe.portOccupied && !managedRuntimeAlive) {
+      effectiveStatus = 'running_external';
     } else if (config.serviceStatus === 'starting' || config.serviceStatus === 'installing') {
       effectiveStatus = config.serviceStatus;
     } else if (config.isInstalled) {
@@ -1573,7 +1813,10 @@ class AlexaBrokerService {
 
     if (effectiveStatus !== config.serviceStatus) {
       config.serviceStatus = effectiveStatus;
-      if (!serviceRunning) {
+      if (childAlive) {
+        config.servicePid = this.child?.pid || config.servicePid || null;
+        config.serviceOwner = os.userInfo().username;
+      } else if (!trackedProcessAlive) {
         config.servicePid = null;
         config.serviceOwner = null;
       }
@@ -1595,10 +1838,16 @@ class AlexaBrokerService {
       ...sanitized,
       serviceStatus: effectiveStatus,
       serviceRunning,
-      servicePid: childAlive ? (this.child?.pid || sanitized.servicePid || null) : null,
+      servicePid: childAlive
+        ? (this.child?.pid || sanitized.servicePid || null)
+        : trackedProcessAlive
+          ? (sanitized.servicePid || null)
+          : null,
       serviceOwner: childAlive
         ? (os.userInfo().username || sanitized.serviceOwner || null)
-        : effectiveStatus === 'running_external'
+        : trackedProcessAlive
+          ? (sanitized.serviceOwner || os.userInfo().username || null)
+          : effectiveStatus === 'running_external'
           ? null
           : sanitized.serviceOwner,
       localBaseUrl: buildLocalBaseUrl(config.bindHost, config.servicePort),
