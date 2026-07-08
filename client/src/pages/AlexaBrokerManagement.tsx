@@ -465,8 +465,11 @@ export default function AlexaBrokerManagement() {
         setServiceStatus(response.status);
       }
       await loadData();
+      const resolvedSuccessTitle = key === 'start' && response?.externallyManaged
+        ? 'Broker already running'
+        : successTitle;
       toast({
-        title: successTitle,
+        title: resolvedSuccessTitle,
         description: response?.message || successDescription
       });
     } catch (error: any) {

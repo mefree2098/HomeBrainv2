@@ -312,6 +312,63 @@ test('getStatus clears stale lastError once the broker is healthy again', async 
   assert.ok(config.saveCalls >= 1);
 });
 
+test('getStatus treats a healthy tracked broker pid as managed after a backend restart', async () => {
+  const config = {
+    isInstalled: true,
+    serviceStatus: 'running_external',
+    servicePid: 1234,
+    serviceOwner: 'matt',
+    servicePort: 4301,
+    bindHost: '127.0.0.1',
+    lastError: null,
+    lifecycleEvents: [],
+    saveCalls: 0,
+    async save() {
+      this.saveCalls += 1;
+    },
+    toSanitized() {
+      return {
+        isInstalled: this.isInstalled,
+        serviceStatus: this.serviceStatus,
+        servicePid: this.servicePid,
+        serviceOwner: this.serviceOwner,
+        servicePort: this.servicePort,
+        bindHost: this.bindHost,
+        lastError: this.lastError,
+        lifecycleEvents: this.lifecycleEvents
+      };
+    }
+  };
+
+  const service = new AlexaBrokerService({
+    projectRoot: '/tmp/homebrain-test',
+    configModel: {
+      getConfig: async () => config
+    }
+  });
+
+  service.getConfig = async () => config;
+  service.probeHealth = async () => ({
+    available: true,
+    portOccupied: true,
+    localBaseUrl: 'http://127.0.0.1:4301',
+    health: { ok: true },
+    message: ''
+  });
+  service.findManagedReverseProxyRoute = async () => null;
+  service.isChildAlive = () => false;
+  service.isTrackedBrokerProcessAlive = () => true;
+
+  const status = await service.getStatus();
+
+  assert.equal(status.serviceStatus, 'running');
+  assert.equal(status.serviceRunning, true);
+  assert.equal(status.servicePid, 1234);
+  assert.equal(status.serviceOwner, 'matt');
+  assert.equal(status.statusReason, null);
+  assert.ok(config.saveCalls >= 1);
+});
+
 test('runMonitorPass starts the broker automatically when it is offline and auto recovery is enabled', async () => {
   const config = {
     isInstalled: true,
@@ -378,6 +435,80 @@ test('runMonitorPass schedules a short retry when automatic recovery fails', asy
   await service.runMonitorPass({ trigger: 'test' });
 
   assert.match(retryOptions?.reason || '', /stopped before it became healthy/);
+});
+
+test('runMonitorPass does not spawn a second broker when the configured port is occupied', async () => {
+  const config = {
+    isInstalled: true,
+    autoStart: true,
+    resumeAfterHostRestart: false,
+    manualStopRequested: false,
+    serviceStatus: 'stopped',
+    servicePid: null,
+    serviceOwner: null,
+    lastError: null,
+    saveCalls: 0,
+    async save() {
+      this.saveCalls += 1;
+    }
+  };
+
+  const service = new AlexaBrokerService({
+    projectRoot: '/tmp/homebrain-test'
+  });
+
+  let startCalled = false;
+  service.getConfig = async () => config;
+  service.probeHealth = async () => ({
+    available: false,
+    portOccupied: true,
+    localBaseUrl: 'http://127.0.0.1:4301',
+    health: null,
+    message: 'timeout of 2000ms exceeded TCP port is already in use.'
+  });
+  service.isChildAlive = () => false;
+  service.isTrackedBrokerProcessAlive = () => false;
+  service.startService = async () => {
+    startCalled = true;
+    return { success: true };
+  };
+
+  await service.runMonitorPass({ trigger: 'test' });
+
+  assert.equal(startCalled, false);
+  assert.equal(config.serviceStatus, 'running_external');
+  assert.match(config.lastError?.message || '', /TCP port is already in use/);
+  assert.ok(config.saveCalls >= 1);
+});
+
+test('waitForHealthyBroker rejects when health belongs to another process and the spawned child exits', async () => {
+  const service = new AlexaBrokerService({
+    projectRoot: '/tmp/homebrain-test',
+    startupStabilityMs: 10
+  });
+
+  const child = {
+    exitCode: null,
+    killed: false
+  };
+
+  service.probeHealth = async () => {
+    setTimeout(() => {
+      child.exitCode = 1;
+    }, 0);
+    return {
+      available: true,
+      portOccupied: true,
+      localBaseUrl: 'http://127.0.0.1:4301',
+      health: { ok: true },
+      message: ''
+    };
+  };
+
+  await assert.rejects(
+    () => service.waitForHealthyBroker({ bindHost: '127.0.0.1', servicePort: 4301 }, 100, child),
+    /startup health could be confirmed/
+  );
 });
 
 test('runMonitorPass leaves the broker stopped after a manual stop request', async () => {
