@@ -76,10 +76,13 @@ router.get('/', async (req, res) => {
     if (req.query.isOnline !== undefined) filters.isOnline = req.query.isOnline === 'true';
     if (source) filters.source = source;
     
-    const refreshSmartThings = req.query.refresh === '1' || req.query.refresh === 'true';
+    const shouldRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+    const refreshSmartThings = shouldRefresh;
+    const refreshHarmony = shouldRefresh || req.query.refreshHarmony === '1' || req.query.refreshHarmony === 'true';
     const includeExcludedHarmony = req.query.includeExcludedHarmony === '1' || req.query.includeExcludedHarmony === 'true';
     const devices = await deviceService.getAllDevices(filters, {
       refreshSmartThings,
+      refreshHarmony,
       includeExcludedHarmony
     });
     const serializedDevices = serializeDevices(devices, {

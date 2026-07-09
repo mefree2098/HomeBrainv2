@@ -26,6 +26,7 @@ const MAX_HARMONY_COMMAND_HOLD_MS = 5000;
 const MAX_HARMONY_ACTIVITY_VERIFY_TIMEOUT_MS = 120_000;
 const MAX_HARMONY_ACTIVITY_VERIFY_INTERVAL_MS = 15_000;
 const MAX_SMARTTHINGS_POST_COMMAND_STATE_AGE_MS = 24 * 60 * 60 * 1000;
+const MAX_HARMONY_STALE_STATE_AGE_MS = 24 * 60 * 60 * 1000;
 
 function normalizeIdString(value) {
   if (value === undefined || value === null) {
@@ -107,6 +108,12 @@ const DEFAULT_HARMONY_ACTIVITY_VERIFY_INTERVAL_MS = parseBoundedMs(
   3_000,
   500,
   MAX_HARMONY_ACTIVITY_VERIFY_INTERVAL_MS
+);
+const DEFAULT_HARMONY_STALE_STATE_AGE_MS = parseBoundedMs(
+  process.env.HARMONY_STALE_STATE_MAX_AGE_MS,
+  2 * 60 * 1000,
+  0,
+  MAX_HARMONY_STALE_STATE_AGE_MS
 );
 const DEFAULT_SMARTTHINGS_POST_COMMAND_STATE_AGE_MS = parseBoundedMs(
   process.env.SMARTTHINGS_POST_COMMAND_STATE_MAX_AGE_MS,
@@ -447,6 +454,14 @@ class DeviceService {
         await this.refreshSmartThingsDevices(devices);
         devices = await Device.find(visibilityQuery).sort({ room: 1, name: 1 });
       }
+      if (options.refreshHarmony || canonicalizeDeviceSource(filters.source) === 'harmony') {
+        const refreshed = await this.refreshStaleHarmonyDevices(devices, {
+          force: options.refreshHarmony === true
+        });
+        if (refreshed.refreshed) {
+          devices = await Device.find(visibilityQuery).sort({ room: 1, name: 1 });
+        }
+      }
 
       console.log(`DeviceService: Found ${devices.length} devices`);
       
@@ -508,6 +523,70 @@ class DeviceService {
     }
 
     return refreshedDevices;
+  }
+
+  getHarmonyStateAgeMs(device, now = Date.now()) {
+    const lastSeenAt = new Date(device?.lastSeen || 0).getTime();
+    if (!Number.isFinite(lastSeenAt) || lastSeenAt <= 0) {
+      return Infinity;
+    }
+
+    return Math.max(0, now - lastSeenAt);
+  }
+
+  isHarmonyStateStale(device, staleAfterMs = DEFAULT_HARMONY_STALE_STATE_AGE_MS, now = Date.now()) {
+    if (!this.isHarmonyDevice(device)) {
+      return false;
+    }
+
+    if (device?.isOnline === false) {
+      return true;
+    }
+
+    if (!this.isHarmonyActivityDevice(device)) {
+      return false;
+    }
+
+    const boundedStaleAfterMs = parseBoundedMs(
+      staleAfterMs,
+      DEFAULT_HARMONY_STALE_STATE_AGE_MS,
+      0,
+      MAX_HARMONY_STALE_STATE_AGE_MS
+    );
+
+    if (boundedStaleAfterMs <= 0) {
+      return true;
+    }
+
+    return this.getHarmonyStateAgeMs(device, now) > boundedStaleAfterMs;
+  }
+
+  async refreshStaleHarmonyDevices(devices = [], options = {}) {
+    const harmonyDevices = Array.isArray(devices)
+      ? devices.filter((device) => this.isHarmonyDevice(device))
+      : [];
+
+    if (harmonyDevices.length === 0) {
+      return { refreshed: false, hubIps: [] };
+    }
+
+    const now = Date.now();
+    const hubIps = [...new Set(harmonyDevices
+      .filter((device) => options.force === true || this.isHarmonyStateStale(device, options.staleAfterMs, now))
+      .map((device) => (device?.properties?.harmonyHubIp || '').toString().trim())
+      .filter(Boolean))];
+
+    if (hubIps.length === 0) {
+      return { refreshed: false, hubIps: [] };
+    }
+
+    try {
+      await harmonyService.syncActivityStates({ hubIps, force: true });
+      return { refreshed: true, hubIps };
+    } catch (error) {
+      console.warn(`DeviceService: Unable to refresh stale Harmony state: ${error.message}`);
+      return { refreshed: false, hubIps, error };
+    }
   }
 
   /**
@@ -1204,11 +1283,13 @@ class DeviceService {
         await this.ensureRainMachineState({ immediate: true });
       }
 
-      if (isHarmony && normalizedAction === 'toggle' && !skipIntegrationRefresh) {
+      if (isHarmony && !skipIntegrationRefresh) {
         const refreshedDevice = await Device.findById(deviceId);
         if (refreshedDevice) {
           device = refreshedDevice;
         }
+      } else if (isHarmony && this.isHarmonyStateStale(device)) {
+        await this.refreshHarmonyOnlineStatus(device);
       }
 
       if (!device.isOnline) {
