@@ -22,6 +22,9 @@ const DEFAULT_LOG_LIMIT = 500;
 const DEFAULT_LIFECYCLE_LIMIT = 50;
 const DEFAULT_MONITOR_INTERVAL_MS = 15000;
 const DEFAULT_HEALTH_FAILURE_THRESHOLD = 2;
+const DEFAULT_PORT_OCCUPIED_HEALTH_FAILURE_THRESHOLD = 8;
+const DEFAULT_HEALTH_PROBE_TIMEOUT_MS = 2000;
+const DEFAULT_TCP_PROBE_TIMEOUT_MS = 1000;
 const DEFAULT_RECOVERY_RETRY_DELAY_MS = 5000;
 const DEFAULT_STARTUP_STABILITY_MS = 300;
 const MANAGED_REVERSE_PROXY_NOTES = 'Managed automatically by the HomeBrain Alexa Broker deployment flow.';
@@ -191,7 +194,7 @@ function isPositivePid(value) {
 
 function waitForChildExit(child, timeoutMs = 5000) {
   return new Promise((resolve) => {
-    if (!child || child.exitCode != null || child.killed) {
+    if (!child || child.exitCode != null || child.signalCode != null) {
       resolve();
       return;
     }
@@ -246,6 +249,7 @@ class AlexaBrokerService {
     this.projectRoot = options.projectRoot || path.resolve(__dirname, '..', '..');
     this.brokerRoot = options.brokerRoot || path.join(this.projectRoot, 'broker');
     this.spawnProcess = options.spawnProcess || spawn;
+    this.netConnect = options.netConnect || net.createConnection;
     this.httpClient = options.httpClient || axios;
     this.configModel = options.configModel || AlexaBrokerConfig;
     this.reverseProxyRouteModel = options.reverseProxyRouteModel || ReverseProxyRoute;
@@ -254,9 +258,18 @@ class AlexaBrokerService {
     this.lifecycleLimit = options.lifecycleLimit || DEFAULT_LIFECYCLE_LIMIT;
     this.monitorIntervalMs = options.monitorIntervalMs || DEFAULT_MONITOR_INTERVAL_MS;
     this.healthFailureThreshold = options.healthFailureThreshold || DEFAULT_HEALTH_FAILURE_THRESHOLD;
+    this.portOccupiedHealthFailureThreshold = options.portOccupiedHealthFailureThreshold
+      || sanitizePositiveInteger(
+        process.env.HOMEBRAIN_ALEXA_BROKER_PORT_OCCUPIED_HEALTH_FAILURE_THRESHOLD,
+        DEFAULT_PORT_OCCUPIED_HEALTH_FAILURE_THRESHOLD,
+        { min: DEFAULT_HEALTH_FAILURE_THRESHOLD, max: 60 }
+      );
+    this.healthProbeTimeoutMs = options.healthProbeTimeoutMs || DEFAULT_HEALTH_PROBE_TIMEOUT_MS;
+    this.tcpProbeTimeoutMs = options.tcpProbeTimeoutMs || DEFAULT_TCP_PROBE_TIMEOUT_MS;
     this.recoveryRetryDelayMs = options.recoveryRetryDelayMs || DEFAULT_RECOVERY_RETRY_DELAY_MS;
     this.startupStabilityMs = options.startupStabilityMs ?? DEFAULT_STARTUP_STABILITY_MS;
     this.child = null;
+    this.stoppingChildren = new WeakSet();
     this.installProcess = null;
     this.logBuffer = [];
     this.stoppingChild = false;
@@ -485,7 +498,18 @@ class AlexaBrokerService {
       const now = Date.now();
       if (managedAlive) {
         this.consecutiveHealthFailures += 1;
-        if (this.consecutiveHealthFailures < this.healthFailureThreshold) {
+        const failureThreshold = probe.portOccupied
+          ? Math.max(this.healthFailureThreshold, this.portOccupiedHealthFailureThreshold)
+          : this.healthFailureThreshold;
+
+        if (probe.portOccupied) {
+          this.pushLog(
+            `Broker /health probe failed but ${probe.localBaseUrl} is still accepting TCP connections (${this.consecutiveHealthFailures}/${failureThreshold}).`,
+            'broker-service'
+          );
+        }
+
+        if (this.consecutiveHealthFailures < failureThreshold) {
           return;
         }
 
@@ -663,7 +687,7 @@ class AlexaBrokerService {
 
     try {
       const response = await this.httpClient.get(`${localBaseUrl}/health`, {
-        timeout: 2000
+        timeout: this.healthProbeTimeoutMs
       });
       return {
         available: true,
@@ -687,13 +711,13 @@ class AlexaBrokerService {
     }
   }
 
-  async probeTcpPort(config, timeoutMs = 1000) {
+  async probeTcpPort(config, timeoutMs = this.tcpProbeTimeoutMs) {
     const host = resolveLocalHealthHost(config.bindHost);
     const port = sanitizePositiveInteger(config.servicePort, DEFAULT_PORT, { min: 1, max: 65535 });
 
     return new Promise((resolve) => {
+      let socket;
       let settled = false;
-      const socket = net.createConnection({ host, port });
 
       const finish = (result) => {
         if (settled) {
@@ -701,7 +725,11 @@ class AlexaBrokerService {
         }
         settled = true;
         clearTimeout(timer);
-        socket.destroy();
+        try {
+          socket?.destroy?.();
+        } catch (_error) {
+          // noop
+        }
         resolve(result);
       };
 
@@ -709,13 +737,25 @@ class AlexaBrokerService {
         finish({ occupied: false, message: 'TCP probe timed out' });
       }, timeoutMs);
 
-      socket.once('connect', () => {
+      try {
+        socket = this.netConnect({ host, port });
+      } catch (error) {
+        finish({ occupied: false, message: error?.message || 'TCP probe failed' });
+        return;
+      }
+
+      socket.once?.('connect', () => {
         finish({ occupied: true, message: '' });
       });
 
-      socket.once('error', (error) => {
+      socket.once?.('error', (error) => {
         finish({ occupied: false, message: error?.message || 'TCP probe failed' });
       });
+
+      socket.once?.('timeout', () => {
+        finish({ occupied: false, message: 'TCP probe timed out' });
+      });
+      socket.setTimeout?.(timeoutMs);
     });
   }
 
@@ -758,15 +798,17 @@ class AlexaBrokerService {
     });
 
     child.on('exit', async (code, signal) => {
-      const exitedDuringStop = this.stoppingChild === true;
+      const exitedDuringStop = this.stoppingChildren.has(child)
+        || (this.child === child && this.stoppingChild === true);
       const exitSummary = `Broker process exited with code ${code}${signal ? ` (${signal})` : ''}`;
       this.pushLog(exitSummary, 'broker');
 
+      this.stoppingChildren.delete(child);
+
       if (this.child === child) {
         this.child = null;
+        this.stoppingChild = false;
       }
-
-      this.stoppingChild = false;
 
       const config = await this.configModel.getConfig();
       config.servicePid = null;
@@ -1434,6 +1476,7 @@ class AlexaBrokerService {
     } catch (error) {
       this.stoppingChild = true;
       if (this.child === child && child.exitCode == null && !child.killed) {
+        this.stoppingChildren.add(child);
         child.kill('SIGTERM');
         await waitForChildExit(child, 5000);
       }
@@ -1625,12 +1668,13 @@ class AlexaBrokerService {
 
     const child = this.child;
     this.stoppingChild = true;
+    this.stoppingChildren.add(child);
     this.pushLog('Stopping Alexa broker service', 'broker');
 
     child.kill('SIGTERM');
     await waitForChildExit(child, 5000);
 
-    if (child.exitCode == null && !child.killed) {
+    if (child.exitCode == null && child.signalCode == null) {
       child.kill('SIGKILL');
       await waitForChildExit(child, 3000);
     }
