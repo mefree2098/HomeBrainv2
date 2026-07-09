@@ -1036,13 +1036,17 @@ class AlexaProjectionService {
 
   async loadContext() {
     const registration = await this.ensureBrokerRegistration();
-    const [devices, groups, scenes, workflows, exposures] = await Promise.all([
+    let [devices, groups, scenes, workflows, exposures] = await Promise.all([
       Device.find().lean(),
       deviceGroupService.listGroups(),
       Scene.find().lean(),
       Workflow.find().lean(),
       AlexaExposure.find().lean()
     ]);
+    const harmonyRefresh = await deviceService.refreshStaleHarmonyDevices(devices);
+    if (harmonyRefresh.refreshed) {
+      devices = await Device.find().lean();
+    }
 
     const devicesById = new Map(devices.map((device) => [toObjectIdString(device._id), device]));
     const groupsById = new Map(groups.map((group) => [toObjectIdString(group._id), group]));

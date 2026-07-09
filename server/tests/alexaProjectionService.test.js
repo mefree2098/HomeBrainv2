@@ -13,7 +13,12 @@ const {
   validateSceneExposure,
   validateWorkflowExposure
 } = require('../services/alexaProjectionService');
+const Device = require('../models/Device');
+const Scene = require('../models/Scene');
+const Workflow = require('../models/Workflow');
 const AlexaExposure = require('../models/AlexaExposure');
+const deviceGroupService = require('../services/deviceGroupService');
+const deviceService = require('../services/deviceService');
 
 test('inferDeviceTraits exposes supported Alexa interfaces for a color-capable light', () => {
   const traits = inferDeviceTraits({
@@ -248,6 +253,73 @@ test('device source helpers canonicalize native radio and inferred integration d
     deviceMatchesSourceFilter({ properties: { matter: { nodeId: 12, transport: 'thread' } } }, 'thread'),
     true
   );
+});
+
+test('loadContext refreshes stale Harmony devices before building Alexa state', async (t) => {
+  const originalDeviceFind = Device.find;
+  const originalSceneFind = Scene.find;
+  const originalWorkflowFind = Workflow.find;
+  const originalExposureFind = AlexaExposure.find;
+  const originalListGroups = deviceGroupService.listGroups;
+  const originalRefreshStaleHarmonyDevices = deviceService.refreshStaleHarmonyDevices;
+
+  t.after(() => {
+    Device.find = originalDeviceFind;
+    Scene.find = originalSceneFind;
+    Workflow.find = originalWorkflowFind;
+    AlexaExposure.find = originalExposureFind;
+    deviceGroupService.listGroups = originalListGroups;
+    deviceService.refreshStaleHarmonyDevices = originalRefreshStaleHarmonyDevices;
+  });
+
+  const staleDevice = {
+    _id: 'device-harmony-alexa',
+    name: 'Bedroom Hub - Master Bedroom Fire TV',
+    type: 'switch',
+    status: false,
+    isOnline: false,
+    lastSeen: new Date(Date.now() - 24 * 60 * 60 * 1000),
+    properties: {
+      source: 'harmony',
+      harmonyHubIp: '192.168.1.50',
+      harmonyActivityId: '123456'
+    }
+  };
+  const refreshedDevice = {
+    ...staleDevice,
+    status: true,
+    isOnline: true,
+    lastSeen: new Date()
+  };
+  const deviceResults = [[staleDevice], [refreshedDevice]];
+  const service = new AlexaProjectionService();
+  let refreshReceivedDevices = null;
+
+  service.ensureBrokerRegistration = async () => ({ hubId: 'test-hub' });
+  Device.find = () => ({
+    lean: async () => deviceResults.shift() || []
+  });
+  Scene.find = () => ({
+    lean: async () => []
+  });
+  Workflow.find = () => ({
+    lean: async () => []
+  });
+  AlexaExposure.find = () => ({
+    lean: async () => []
+  });
+  deviceGroupService.listGroups = async () => [];
+  deviceService.refreshStaleHarmonyDevices = async (devices) => {
+    refreshReceivedDevices = devices;
+    return { refreshed: true, hubIps: ['192.168.1.50'] };
+  };
+
+  const context = await service.loadContext();
+
+  assert.equal(refreshReceivedDevices[0].isOnline, false);
+  assert.equal(context.devices.length, 1);
+  assert.equal(context.devices[0].isOnline, true);
+  assert.equal(context.devicesById.get('device-harmony-alexa').status, true);
 });
 
 test('bulkUpdateDeviceExposuresBySource enables every matching source device', async (t) => {

@@ -453,6 +453,7 @@ test('controlDevice skips Harmony refresh and verification when fast control opt
     type: 'switch',
     status: false,
     isOnline: true,
+    lastSeen: new Date(),
     properties: {
       source: 'harmony',
       harmonyHubIp: '192.168.1.50',
@@ -461,6 +462,7 @@ test('controlDevice skips Harmony refresh and verification when fast control opt
   };
 
   let ensureHarmonyCalls = 0;
+  let refreshHarmonyCalls = 0;
   let pollHarmonyCalls = 0;
   let controlHarmonyCalls = 0;
   const emitted = [];
@@ -479,7 +481,10 @@ test('controlDevice skips Harmony refresh and verification when fast control opt
   deviceService.ensureHarmonyState = async () => {
     ensureHarmonyCalls += 1;
   };
-  deviceService.refreshHarmonyOnlineStatus = async () => true;
+  deviceService.refreshHarmonyOnlineStatus = async () => {
+    refreshHarmonyCalls += 1;
+    return true;
+  };
   deviceService.controlHarmonyDevice = async (_device, _action, _value, updateData) => {
     controlHarmonyCalls += 1;
     updateData.isOnline = true;
@@ -501,6 +506,7 @@ test('controlDevice skips Harmony refresh and verification when fast control opt
   });
 
   assert.equal(ensureHarmonyCalls, 0);
+  assert.equal(refreshHarmonyCalls, 0);
   assert.equal(controlHarmonyCalls, 1);
   assert.equal(pollHarmonyCalls, 0);
   assert.equal(updated.status, true);
@@ -508,6 +514,78 @@ test('controlDevice skips Harmony refresh and verification when fast control opt
   assert.equal(persistedUpdate.status, true);
   assert.equal(persistedUpdate.isOnline, true);
   assert.equal(emitted.length >= 1, true);
+});
+
+test('controlDevice refreshes stale Harmony state before fast Alexa-style control', async (t) => {
+  const originalFindById = Device.findById;
+  const originalFindByIdAndUpdate = Device.findByIdAndUpdate;
+  const originalEnsureHarmonyState = deviceService.ensureHarmonyState;
+  const originalRefreshHarmonyOnlineStatus = deviceService.refreshHarmonyOnlineStatus;
+  const originalControlHarmonyDevice = deviceService.controlHarmonyDevice;
+  const originalPollHarmonyState = deviceService.pollHarmonyState;
+  const originalEmit = deviceUpdateEmitter.emit;
+
+  t.after(() => {
+    Device.findById = originalFindById;
+    Device.findByIdAndUpdate = originalFindByIdAndUpdate;
+    deviceService.ensureHarmonyState = originalEnsureHarmonyState;
+    deviceService.refreshHarmonyOnlineStatus = originalRefreshHarmonyOnlineStatus;
+    deviceService.controlHarmonyDevice = originalControlHarmonyDevice;
+    deviceService.pollHarmonyState = originalPollHarmonyState;
+    deviceUpdateEmitter.emit = originalEmit;
+  });
+
+  const harmonyDevice = {
+    _id: 'device-harmony-stale',
+    name: 'Master Bedroom TV',
+    type: 'switch',
+    status: false,
+    isOnline: true,
+    lastSeen: new Date(Date.now() - 10 * 60 * 1000),
+    properties: {
+      source: 'harmony',
+      harmonyHubIp: '192.168.1.50',
+      harmonyActivityId: '123456'
+    }
+  };
+
+  let ensureHarmonyCalls = 0;
+  let refreshHarmonyCalls = 0;
+  let controlHarmonyCalls = 0;
+
+  Device.findById = async () => ({ ...harmonyDevice });
+  Device.findByIdAndUpdate = async (_id, update) => ({
+    ...harmonyDevice,
+    ...update
+  });
+  deviceService.ensureHarmonyState = async () => {
+    ensureHarmonyCalls += 1;
+  };
+  deviceService.refreshHarmonyOnlineStatus = async (device) => {
+    refreshHarmonyCalls += 1;
+    device.isOnline = true;
+    device.lastSeen = new Date();
+    return true;
+  };
+  deviceService.controlHarmonyDevice = async (_device, _action, _value, updateData) => {
+    controlHarmonyCalls += 1;
+    updateData.isOnline = true;
+  };
+  deviceService.pollHarmonyState = async () => {
+    throw new Error('pollHarmonyState should not run when skipPostActionVerification is true');
+  };
+  deviceUpdateEmitter.emit = () => {};
+
+  const updated = await deviceService.controlDevice('device-harmony-stale', 'turn_on', undefined, {
+    skipIntegrationRefresh: true,
+    skipPostActionVerification: true
+  });
+
+  assert.equal(ensureHarmonyCalls, 0);
+  assert.equal(refreshHarmonyCalls, 1);
+  assert.equal(controlHarmonyCalls, 1);
+  assert.equal(updated.status, true);
+  assert.equal(updated.isOnline, true);
 });
 
 test('controlDevice can require Harmony activity post-action verification', async (t) => {
@@ -1405,6 +1483,87 @@ test('getAllDevices hides Harmony devices excluded from HomeBrain unless explici
   assert.equal(queries.length, 2);
   assert.match(JSON.stringify(queries[0]), /harmonyExcludeFromHomeBrain/);
   assert.doesNotMatch(JSON.stringify(queries[1]), /harmonyExcludeFromHomeBrain/);
+});
+
+test('getAllDevices refreshes stale Harmony state before returning Harmony-filtered devices', async (t) => {
+  const originalFind = Device.find;
+  const originalSyncActivityStates = harmonyService.syncActivityStates;
+  const originalScheduleIntegrationRefresh = deviceService.scheduleIntegrationRefresh;
+
+  t.after(() => {
+    Device.find = originalFind;
+    harmonyService.syncActivityStates = originalSyncActivityStates;
+    deviceService.scheduleIntegrationRefresh = originalScheduleIntegrationRefresh;
+  });
+
+  const staleDevice = {
+    _id: 'device-harmony-stale-list',
+    name: 'Bedroom Hub - Master Bedroom Fire TV',
+    isOnline: false,
+    lastSeen: new Date(Date.now() - 24 * 60 * 60 * 1000),
+    properties: {
+      source: 'harmony',
+      harmonyHubIp: '192.168.1.50',
+      harmonyActivityId: '123456'
+    }
+  };
+  const refreshedDevice = {
+    ...staleDevice,
+    isOnline: true,
+    lastSeen: new Date()
+  };
+  const results = [[staleDevice], [refreshedDevice]];
+  const queries = [];
+  let syncArgs = null;
+
+  Device.find = (query = {}) => {
+    queries.push(query);
+    return {
+      sort: async () => results.shift() || []
+    };
+  };
+  harmonyService.syncActivityStates = async (args) => {
+    syncArgs = args;
+    return { success: true, refreshed: 1, failed: 0 };
+  };
+  deviceService.scheduleIntegrationRefresh = () => Promise.resolve(null);
+
+  const devices = await deviceService.getAllDevices({ source: 'harmony' });
+
+  assert.equal(queries.length, 2);
+  assert.deepEqual(syncArgs, {
+    hubIps: ['192.168.1.50'],
+    force: true
+  });
+  assert.equal(devices.length, 1);
+  assert.equal(devices[0].isOnline, true);
+});
+
+test('isHarmonyStateStale only treats old Harmony activity rows as stale', () => {
+  const oldLastSeen = new Date(Date.now() - 10 * 60 * 1000);
+  const rawCommandDevice = {
+    isOnline: true,
+    lastSeen: oldLastSeen,
+    properties: {
+      source: 'harmony',
+      harmonyEntityType: 'device',
+      harmonyHubIp: '192.168.1.50',
+      harmonyDeviceId: '123'
+    }
+  };
+  const activityDevice = {
+    isOnline: true,
+    lastSeen: oldLastSeen,
+    properties: {
+      source: 'harmony',
+      harmonyEntityType: 'activity',
+      harmonyHubIp: '192.168.1.50',
+      harmonyActivityId: '456'
+    }
+  };
+
+  assert.equal(deviceService.isHarmonyStateStale(rawCommandDevice), false);
+  assert.equal(deviceService.isHarmonyStateStale(activityDevice), true);
 });
 
 test('getAllDevices hides the Z-Wave controller node from normal device surfaces', async (t) => {
