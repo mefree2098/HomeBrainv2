@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
 
 const {
   AlexaBrokerService,
@@ -509,6 +510,108 @@ test('waitForHealthyBroker rejects when health belongs to another process and th
     () => service.waitForHealthyBroker({ bindHost: '127.0.0.1', servicePort: 4301 }, 100, child),
     /startup health could be confirmed/
   );
+});
+
+test('runMonitorPass does not restart a live broker on transient health timeouts while the port is occupied', async () => {
+  const config = {
+    isInstalled: true,
+    autoStart: true,
+    resumeAfterHostRestart: false,
+    manualStopRequested: false,
+    serviceStatus: 'running'
+  };
+
+  const service = new AlexaBrokerService({
+    projectRoot: '/tmp/homebrain-test',
+    healthFailureThreshold: 2,
+    portOccupiedHealthFailureThreshold: 4
+  });
+
+  const restartCalls = [];
+  service.getConfig = async () => config;
+  service.probeHealth = async () => ({
+    available: false,
+    portOccupied: true,
+    localBaseUrl: 'http://127.0.0.1:4301',
+    health: null,
+    message: 'timeout of 2000ms exceeded TCP port is already in use.'
+  });
+  service.isManagedRuntimeAlive = () => true;
+  service.restartService = async (options = {}) => {
+    restartCalls.push(options);
+    return { success: true };
+  };
+
+  await service.runMonitorPass({ trigger: 'test' });
+  await service.runMonitorPass({ trigger: 'test' });
+
+  assert.equal(restartCalls.length, 0);
+  assert.equal(service.consecutiveHealthFailures, 2);
+
+  await service.runMonitorPass({ trigger: 'test' });
+  await service.runMonitorPass({ trigger: 'test' });
+
+  assert.equal(restartCalls.length, 1);
+  assert.equal(restartCalls[0]?.automatic, true);
+  assert.match(restartCalls[0]?.reason || '', /TCP port is already in use/);
+});
+
+test('stopService waits for a signaled child exit and records it as an intentional stop', async () => {
+  const config = {
+    isInstalled: true,
+    autoStart: true,
+    resumeAfterHostRestart: false,
+    manualStopRequested: false,
+    serviceStatus: 'running',
+    servicePid: 4321,
+    serviceOwner: 'tester',
+    lifecycleEvents: [],
+    saveCalls: 0,
+    async save() {
+      this.saveCalls += 1;
+    }
+  };
+
+  const service = new AlexaBrokerService({
+    projectRoot: '/tmp/homebrain-test',
+    configModel: {
+      getConfig: async () => config
+    }
+  });
+
+  const child = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.pid = 4321;
+  child.exitCode = null;
+  child.signalCode = null;
+  child.killed = false;
+  child.kill = () => {
+    child.killed = true;
+    setTimeout(() => {
+      child.exitCode = 0;
+      child.emit('exit', 0, null);
+    }, 10);
+    return true;
+  };
+
+  service.getConfig = async () => config;
+  service.getStatus = async () => ({ serviceStatus: config.serviceStatus });
+  service.child = child;
+  service.attachProcessListeners(child);
+
+  await service.stopService({
+    actor: 'test',
+    manual: false,
+    source: 'test_stop',
+    reason: 'test restart'
+  });
+
+  assert.equal(service.child, null);
+  assert.equal(service.stoppingChild, false);
+  assert.equal(config.serviceStatus, 'stopped');
+  assert.equal(config.lifecycleEvents.some((event) => event.type === 'unexpected_exit'), false);
+  assert.equal(config.lifecycleEvents.some((event) => event.type === 'stopped'), true);
 });
 
 test('runMonitorPass leaves the broker stopped after a manual stop request', async () => {
