@@ -59,6 +59,11 @@ type SecuritySensor = {
   requiresAttention: boolean
 }
 
+type SecuritySensorRoomGroup = {
+  room: string
+  sensors: SecuritySensor[]
+}
+
 type DoorLock = {
   deviceId: string
   localDeviceId: string | null
@@ -192,6 +197,11 @@ const normalizeSensorSelection = (sensorKeys: string[] | null | undefined) => {
   ))
 
   return normalizedKeys
+}
+
+const getSensorRoomName = (sensor: SecuritySensor) => {
+  const room = typeof sensor.room === "string" ? sensor.room.trim() : ""
+  return room || "Unassigned"
 }
 
 const formatAlarmState = (alarmState?: string | null) => {
@@ -899,6 +909,31 @@ export function SecurityAlarmWidget({
 
     return sensors.filter((sensor) => selectedSensorKeySet.has(getSensorSelectionKey(sensor)))
   }, [selectedSensorKeySet, sensors])
+  const sensorRoomGroups = useMemo<SecuritySensorRoomGroup[]>(() => {
+    const groups = new Map<string, SecuritySensorRoomGroup>()
+
+    sensors.forEach((sensor) => {
+      const room = getSensorRoomName(sensor)
+      const key = room.toLowerCase()
+      const existing = groups.get(key)
+      if (existing) {
+        existing.sensors.push(sensor)
+      } else {
+        groups.set(key, { room, sensors: [sensor] })
+      }
+    })
+
+    return Array.from(groups.values())
+      .map((group) => ({
+        ...group,
+        sensors: [...group.sensors].sort((left, right) => left.name.localeCompare(right.name))
+      }))
+      .sort((left, right) => {
+        if (left.room === "Unassigned") return 1
+        if (right.room === "Unassigned") return -1
+        return left.room.localeCompare(right.room)
+      })
+  }, [sensors])
   const sensorCount = typeof alarmStatus?.sensorCount === "number" ? alarmStatus.sensorCount : sensors.length
   const activeSensorCount = typeof alarmStatus?.activeSensorCount === "number"
     ? alarmStatus.activeSensorCount
@@ -975,6 +1010,17 @@ export function SecurityAlarmWidget({
     void persistSensorSelection(null)
   }
 
+  const applySensorSelection = (currentSet: Set<string>, allSensorKeys: string[]) => {
+    const nextSelection = (
+      currentSet.size === allSensorKeys.length && allSensorKeys.every((key) => currentSet.has(key))
+    )
+      ? null
+      : allSensorKeys.filter((key) => currentSet.has(key))
+
+    setSelectedSensorKeys(nextSelection)
+    void persistSensorSelection(nextSelection)
+  }
+
   const toggleSensorSelection = (sensor: SecuritySensor) => {
     const sensorKey = getSensorSelectionKey(sensor)
     const allSensorKeys = Array.from(new Set(sensors.map(getSensorSelectionKey)))
@@ -986,14 +1032,24 @@ export function SecurityAlarmWidget({
       currentSet.add(sensorKey)
     }
 
-    const nextSelection = (
-      currentSet.size === allSensorKeys.length && allSensorKeys.every((key) => currentSet.has(key))
-    )
-      ? null
-      : allSensorKeys.filter((key) => currentSet.has(key))
+    applySensorSelection(currentSet, allSensorKeys)
+  }
 
-    setSelectedSensorKeys(nextSelection)
-    void persistSensorSelection(nextSelection)
+  const toggleSensorRoomSelection = (roomSensors: SecuritySensor[]) => {
+    const allSensorKeys = Array.from(new Set(sensors.map(getSensorSelectionKey)))
+    const roomSensorKeys = Array.from(new Set(roomSensors.map(getSensorSelectionKey)))
+    const currentSet = selectedSensorKeys === null ? new Set(allSensorKeys) : new Set(selectedSensorKeys)
+    const roomIsSelected = roomSensorKeys.every((key) => currentSet.has(key))
+
+    roomSensorKeys.forEach((key) => {
+      if (roomIsSelected) {
+        currentSet.delete(key)
+      } else {
+        currentSet.add(key)
+      }
+    })
+
+    applySensorSelection(currentSet, allSensorKeys)
   }
 
   const toggleSirenOutputSelection = async (siren: SirenOutput) => {
@@ -1371,7 +1427,7 @@ export function SecurityAlarmWidget({
                   <PopoverContent
                     align="end"
                     sideOffset={8}
-                    className="w-72 rounded-[1rem] border border-white/10 bg-background/95 p-3 shadow-2xl backdrop-blur"
+                    className="w-80 rounded-[1rem] border border-white/10 bg-background/95 p-3 shadow-2xl backdrop-blur"
                   >
                     <div className="space-y-3">
                       <div className="flex items-start justify-between gap-3">
@@ -1379,9 +1435,7 @@ export function SecurityAlarmWidget({
                           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
                             Visible Sensors
                           </p>
-                          <p className="mt-1 text-[11px] text-muted-foreground">
-                            Toggle sensors without closing the picker.
-                          </p>
+                          <p className="mt-1 text-[11px] text-muted-foreground">Grouped by assigned room.</p>
                         </div>
                         <Button
                           type="button"
@@ -1405,40 +1459,76 @@ export function SecurityAlarmWidget({
                       </Button>
 
                       {sensors.length > 0 ? (
-                        <ScrollArea className="max-h-64">
-                          <div className="space-y-1 pr-2">
-                            {sensors.map((sensor) => {
-                              const sensorKey = getSensorSelectionKey(sensor)
-                              const isChecked = selectedSensorKeySet === null ? true : selectedSensorKeySet.has(sensorKey)
+                        <ScrollArea className="max-h-72">
+                          <div className="space-y-3 pr-2">
+                            {sensorRoomGroups.map((group) => {
+                              const selectedCount = group.sensors.filter((sensor) => (
+                                selectedSensorKeySet === null
+                                  || selectedSensorKeySet.has(getSensorSelectionKey(sensor))
+                              )).length
+                              const roomIsSelected = selectedCount === group.sensors.length
 
                               return (
-                                <button
-                                  key={sensorKey}
-                                  type="button"
-                                  onClick={() => toggleSensorSelection(sensor)}
-                                  className={cn(
-                                    "flex w-full items-center gap-3 rounded-[0.85rem] border px-3 py-2.5 text-left transition-colors",
-                                    isChecked
-                                      ? "border-cyan-500/25 bg-cyan-500/10"
-                                      : "border-white/10 bg-white/8 hover:bg-white/12 dark:bg-slate-950/10 dark:hover:bg-slate-950/20"
-                                  )}
-                                  aria-pressed={isChecked}
-                                >
-                                  <span className={cn(
-                                    "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
-                                    isChecked
-                                      ? "border-cyan-500/30 bg-cyan-500/15 text-cyan-600 dark:text-cyan-300"
-                                      : "border-white/15 text-transparent"
-                                  )}>
-                                    <Check className="h-3 w-3" />
-                                  </span>
-                                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-                                    {sensor.name}
-                                  </span>
-                                  <span className="shrink-0 text-[10px] text-muted-foreground">
-                                    {getCompactSensorStatus(sensor)}
-                                  </span>
-                                </button>
+                                <div key={group.room.toLowerCase()} className="space-y-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleSensorRoomSelection(group.sensors)}
+                                    className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-white/10"
+                                    aria-pressed={roomIsSelected}
+                                  >
+                                    <span className={cn(
+                                      "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                                      roomIsSelected
+                                        ? "border-cyan-500/30 bg-cyan-500/15 text-cyan-600 dark:text-cyan-300"
+                                        : "border-white/15 text-transparent"
+                                    )}>
+                                      <Check className="h-3 w-3" />
+                                    </span>
+                                    <span className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
+                                      {group.room}
+                                    </span>
+                                    <span className="shrink-0 text-[10px] text-muted-foreground">
+                                      {selectedCount}/{group.sensors.length}
+                                    </span>
+                                  </button>
+
+                                  <div className="space-y-1 border-l border-white/10 pl-2">
+                                    {group.sensors.map((sensor) => {
+                                      const sensorKey = getSensorSelectionKey(sensor)
+                                      const isChecked = selectedSensorKeySet === null || selectedSensorKeySet.has(sensorKey)
+
+                                      return (
+                                        <button
+                                          key={sensorKey}
+                                          type="button"
+                                          onClick={() => toggleSensorSelection(sensor)}
+                                          className={cn(
+                                            "flex w-full items-center gap-3 rounded-[0.85rem] border px-3 py-2.5 text-left transition-colors",
+                                            isChecked
+                                              ? "border-cyan-500/25 bg-cyan-500/10"
+                                              : "border-white/10 bg-white/8 hover:bg-white/12 dark:bg-slate-950/10 dark:hover:bg-slate-950/20"
+                                          )}
+                                          aria-pressed={isChecked}
+                                        >
+                                          <span className={cn(
+                                            "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                                            isChecked
+                                              ? "border-cyan-500/30 bg-cyan-500/15 text-cyan-600 dark:text-cyan-300"
+                                              : "border-white/15 text-transparent"
+                                          )}>
+                                            <Check className="h-3 w-3" />
+                                          </span>
+                                          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+                                            {sensor.name}
+                                          </span>
+                                          <span className="shrink-0 text-[10px] text-muted-foreground">
+                                            {getCompactSensorStatus(sensor)}
+                                          </span>
+                                        </button>
+                                      )
+                                    })}
+                                  </div>
+                                </div>
                               )
                             })}
                           </div>

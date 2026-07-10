@@ -61,6 +61,7 @@ import {
 } from "@/lib/deviceSources"
 
 const THERMOSTAT_MODES = ['auto', 'cool', 'heat', 'off'] as const
+const ALL_DEVICE_ROOMS_VALUE = '__all_rooms__'
 const HARMONY_CARD_COMMANDS = [
   { key: 'volume_down', label: 'Vol -' },
   { key: 'mute', label: 'Mute' },
@@ -1275,6 +1276,7 @@ export function Devices({
   const [searchTerm, setSearchTerm] = useState("")
   const [filterType, setFilterType] = useState("all")
   const [filterSource, setFilterSource] = useState(ALL_DEVICE_SOURCES_VALUE)
+  const [filterRoom, setFilterRoom] = useState(ALL_DEVICE_ROOMS_VALUE)
   const [sortMode, setSortMode] = useState("default")
   const [viewMode, setViewMode] = useState("grid")
   const [activeTab, setActiveTab] = useState("all")
@@ -2182,12 +2184,15 @@ export function Devices({
     const matchesSearch = deviceName.includes(lowerSearch) || deviceRoom.includes(lowerSearch)
     const matchesType = matchesDeviceTypeFilter(device, filterType)
     const matchesSource = deviceMatchesSourceFilter(device, filterSource)
+    const matchesRoom = filterRoom === ALL_DEVICE_ROOMS_VALUE
+      || deviceRoom === filterRoom.toLowerCase()
 
     return !isHarmonyExcludedFromHomeBrain(device)
       && !isRetiredSmartThingsMigrationSource(device)
       && matchesSearch
       && matchesType
       && matchesSource
+      && matchesRoom
   }
 
   const sortDevices = (deviceList: any[]) => {
@@ -2380,6 +2385,7 @@ export function Devices({
     setSearchTerm(targetDevice.name || "")
     setFilterType("all")
     setFilterSource("all")
+    setFilterRoom(ALL_DEVICE_ROOMS_VALUE)
     setSortMode("default")
     setViewMode("grid")
     setActiveTab("all")
@@ -2669,6 +2675,20 @@ export function Devices({
                 {sourceOptions.map((source) => (
                   <SelectItem key={source.value} value={source.value}>
                     {source.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={filterRoom} onValueChange={setFilterRoom}>
+              <SelectTrigger className="w-52">
+                <Home className="mr-2 h-4 w-4" />
+                <SelectValue placeholder="Filter by room" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_DEVICE_ROOMS_VALUE}>All Rooms</SelectItem>
+                {availableRoomNames.map((room) => (
+                  <SelectItem key={room.toLowerCase()} value={room.toLowerCase()}>
+                    {room}
                   </SelectItem>
                 ))}
               </SelectContent>

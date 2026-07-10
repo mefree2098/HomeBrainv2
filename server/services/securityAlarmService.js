@@ -128,6 +128,27 @@ const toNumber = (value) => {
   return null;
 };
 
+const toOptionalBoolean = (value) => {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value !== 0;
+  }
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (['true', '1', 'yes', 'on', 'active', 'detected', 'motion', 'occupied'].includes(normalized)) {
+    return true;
+  }
+  if (['false', '0', 'no', 'off', 'inactive', 'clear', 'cleared', 'idle', 'unoccupied'].includes(normalized)) {
+    return false;
+  }
+  return null;
+};
+
 const normalizeZWaveStatus = (value) => {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value;
@@ -337,6 +358,22 @@ const getBatteryState = (batteryLevel) => {
     return 'low';
   }
   return 'ok';
+};
+
+const getSecuritySensorActiveState = (device, sensorType) => {
+  if (sensorType === 'motion') {
+    const directState = device?.properties?.directRadioState;
+    if (directState && typeof directState === 'object') {
+      for (const candidate of [directState.motionActive, directState.motion, directState.occupancy]) {
+        const motionActive = toOptionalBoolean(candidate);
+        if (motionActive !== null) {
+          return motionActive;
+        }
+      }
+    }
+  }
+
+  return Boolean(device?.status);
 };
 
 const inferSensorTypeFromKeywords = (device, zone) => {
@@ -1077,7 +1114,7 @@ class SecurityAlarmService {
     const monitoredModes = this.getZoneMonitoredModes(zone, sensorType);
     const isMonitored = monitoredModes.length > 0;
     const isBypassed = Boolean(zone?.bypassed);
-    const isActive = isAvailable ? Boolean(device?.status) : false;
+    const isActive = isAvailable ? getSecuritySensorActiveState(device, sensorType) : false;
     const requiresAttention = !isAvailable || !isOnline || batteryState === 'low' || batteryState === 'critical';
 
     let monitorState = 'Available';

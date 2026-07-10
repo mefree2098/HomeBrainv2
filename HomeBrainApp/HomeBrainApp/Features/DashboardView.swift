@@ -1118,6 +1118,15 @@ struct DashboardView: View {
         return securitySensors.filter { selectedSecuritySensorIDSet.contains(securitySensorSelectionKey($0)) }
     }
 
+    private var securitySensorRoomNames: [String] {
+        Array(Set(securitySensors.map(securitySensorRoomName)))
+            .sorted { left, right in
+                if left == "Unassigned" { return false }
+                if right == "Unassigned" { return true }
+                return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
+            }
+    }
+
     private var securityMonitoredSensorCount: Int {
         securitySensors.filter { $0.isMonitored && !$0.isBypassed }.count
     }
@@ -3484,7 +3493,7 @@ struct DashboardView: View {
                         .tracking(2.0)
                         .foregroundStyle(HBPalette.textMuted)
 
-                    Text("Toggle sensors without closing the picker.")
+                    Text("Grouped by assigned room.")
                         .font(HBTypography.body(size: 12, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                 }
@@ -3526,13 +3535,31 @@ struct DashboardView: View {
                     .background(HBGlassBackground(cornerRadius: 14, variant: .panelSoft))
             } else {
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(securitySensors) { sensor in
-                            securitySensorPickerRow(sensor)
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(securitySensorRoomNames, id: \.self) { room in
+                            let roomSensors = securitySensors
+                                .filter { securitySensorRoomName($0) == room }
+                                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+
+                            VStack(alignment: .leading, spacing: 7) {
+                                securitySensorRoomPickerRow(room: room, sensors: roomSensors)
+
+                                VStack(alignment: .leading, spacing: 7) {
+                                    ForEach(roomSensors) { sensor in
+                                        securitySensorPickerRow(sensor)
+                                    }
+                                }
+                                .padding(.leading, 8)
+                                .overlay(alignment: .leading) {
+                                    Rectangle()
+                                        .fill(HBPalette.panelStrokeStrong)
+                                        .frame(width: 1)
+                                }
+                            }
                         }
                     }
                 }
-                .frame(maxHeight: 260)
+                .frame(maxHeight: 300)
             }
         }
         .frame(width: preferredWidth, alignment: .leading)
@@ -3541,6 +3568,11 @@ struct DashboardView: View {
 
     private func securitySensorSelectionKey(_ sensor: DashboardSecuritySensorItem) -> String {
         sensor.localDeviceId ?? sensor.id
+    }
+
+    private func securitySensorRoomName(_ sensor: DashboardSecuritySensorItem) -> String {
+        let room = sensor.room?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return room.isEmpty ? "Unassigned" : room
     }
 
     private func resetVisibleSecuritySensors() {
@@ -3561,6 +3593,27 @@ struct DashboardView: View {
             currentSelection.insert(sensorKey)
         }
 
+        applyVisibleSecuritySensorSelection(currentSelection, allSensorKeys: allSensorKeys)
+    }
+
+    private func toggleVisibleSecuritySensorRoom(_ sensors: [DashboardSecuritySensorItem]) {
+        let allSensorKeys = Array(Set(securitySensors.map(securitySensorSelectionKey))).sorted()
+        let roomSensorKeys = Set(sensors.map(securitySensorSelectionKey))
+        var currentSelection = Set(selectedSecuritySensorIDs ?? allSensorKeys)
+        let roomIsSelected = roomSensorKeys.allSatisfy { currentSelection.contains($0) }
+
+        roomSensorKeys.forEach { sensorKey in
+            if roomIsSelected {
+                currentSelection.remove(sensorKey)
+            } else {
+                currentSelection.insert(sensorKey)
+            }
+        }
+
+        applyVisibleSecuritySensorSelection(currentSelection, allSensorKeys: allSensorKeys)
+    }
+
+    private func applyVisibleSecuritySensorSelection(_ currentSelection: Set<String>, allSensorKeys: [String]) {
         if currentSelection.count == allSensorKeys.count && allSensorKeys.allSatisfy({ currentSelection.contains($0) }) {
             securityVisibleSensorIDs = nil
             Task {
@@ -3574,6 +3627,41 @@ struct DashboardView: View {
         Task {
             await persistVisibleSecuritySensors(nextSelection)
         }
+    }
+
+    private func securitySensorRoomPickerRow(room: String, sensors: [DashboardSecuritySensorItem]) -> some View {
+        let selectedSet = selectedSecuritySensorIDSet ?? Set(securitySensors.map(securitySensorSelectionKey))
+        let selectedCount = sensors.filter { selectedSet.contains(securitySensorSelectionKey($0)) }.count
+        let roomIsSelected = selectedCount == sensors.count
+
+        return Button {
+            toggleVisibleSecuritySensorRoom(sensors)
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: roomIsSelected ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(roomIsSelected ? HBPalette.accentBlue : HBPalette.textMuted)
+
+                Image(systemName: "house")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(HBPalette.textSecondary)
+
+                Text(room)
+                    .font(HBTypography.body(size: 12, weight: .bold))
+                    .foregroundStyle(HBPalette.textPrimary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Text("\(selectedCount)/\(sensors.count)")
+                    .font(HBTypography.body(size: 10, weight: .semibold))
+                    .foregroundStyle(HBPalette.textSecondary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func securitySensorIconName(_ sensorType: String) -> String {

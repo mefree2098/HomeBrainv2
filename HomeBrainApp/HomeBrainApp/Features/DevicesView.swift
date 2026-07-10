@@ -68,6 +68,7 @@ struct DevicesView: View {
     @State private var searchText = ""
     @State private var typeFilter = "all"
     @State private var sourceFilter = DeviceItem.allSelectionSourcesValue
+    @State private var roomFilter = "all"
 
     @State private var lightBrightnessDrafts: [String: Double] = [:]
     @State private var lightColorDrafts: [String: String] = [:]
@@ -217,7 +218,12 @@ struct DevicesView: View {
             } else {
                 matchesType = device.type == typeFilter
             }
-            return !isRetiredSmartThingsMigrationSource(device) && matchesSearchAndSource && matchesType
+            let matchesRoom = roomFilter == "all"
+                || device.room.localizedCaseInsensitiveCompare(roomFilter) == .orderedSame
+            return !isRetiredSmartThingsMigrationSource(device)
+                && matchesSearchAndSource
+                && matchesType
+                && matchesRoom
         }
     }
 
@@ -225,6 +231,10 @@ struct DevicesView: View {
         DeviceItem.selectionSourceOptions(for: devices)
             .first(where: { $0.value == sourceFilter })?
             .label ?? "All sources"
+    }
+
+    private var roomFilterLabel: String {
+        roomFilter == "all" ? "All rooms" : roomFilter
     }
 
     private var thermostatDevices: [DeviceItem] {
@@ -532,6 +542,7 @@ struct DevicesView: View {
     private var deviceSummaryBadges: some View {
         let showsTypeFilter = typeFilter != "all"
         let showsSourceFilter = sourceFilter != DeviceItem.allSelectionSourcesValue
+        let showsRoomFilter = roomFilter != "all"
         let showsSearchFilter = !searchText.isEmpty
 
         return ViewThatFits(in: .horizontal) {
@@ -544,6 +555,9 @@ struct DevicesView: View {
                 if showsSourceFilter {
                     HBBadge(text: sourceFilterLabel)
                 }
+                if showsRoomFilter {
+                    HBBadge(text: roomFilterLabel)
+                }
                 if showsSearchFilter {
                     HBBadge(text: "Search active")
                 }
@@ -555,13 +569,16 @@ struct DevicesView: View {
                     HBBadge(text: "\(devices.filter(\.isOnline).count) online")
                 }
 
-                if showsTypeFilter || showsSourceFilter || showsSearchFilter {
+                if showsTypeFilter || showsSourceFilter || showsRoomFilter || showsSearchFilter {
                     HStack(spacing: 8) {
                         if showsTypeFilter {
                             HBBadge(text: deviceTypeFilterLabel(typeFilter))
                         }
                         if showsSourceFilter {
                             HBBadge(text: sourceFilterLabel)
+                        }
+                        if showsRoomFilter {
+                            HBBadge(text: roomFilterLabel)
                         }
                         if showsSearchFilter {
                             HBBadge(text: "Search active")
@@ -611,6 +628,20 @@ struct DevicesView: View {
                             .pickerStyle(.menu)
                             .tint(HBPalette.accentBlue)
                         }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Room")
+                                .font(HBTypography.body(size: 14, weight: .semibold))
+                                .foregroundStyle(HBPalette.textSecondary)
+                            Picker("Room", selection: $roomFilter) {
+                                Text("All rooms").tag("all")
+                                ForEach(availableRoomNames, id: \.self) { room in
+                                    Text(room).tag(room)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .tint(HBPalette.accentBlue)
+                        }
                     }
                 } else {
                     HStack(spacing: 14) {
@@ -640,6 +671,20 @@ struct DevicesView: View {
                             Picker("Source", selection: $sourceFilter) {
                                 ForEach(DeviceItem.selectionSourceOptions(for: devices)) { option in
                                     Text(option.label).tag(option.value)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                            .tint(HBPalette.accentBlue)
+                        }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Room")
+                                .font(HBTypography.body(size: 14, weight: .semibold))
+                                .foregroundStyle(HBPalette.textSecondary)
+                            Picker("Room", selection: $roomFilter) {
+                                Text("All rooms").tag("all")
+                                ForEach(availableRoomNames, id: \.self) { room in
+                                    Text(room).tag(room)
                                 }
                             }
                             .pickerStyle(.menu)
