@@ -28,6 +28,10 @@ private let windRapidChartColor = weatherHexColor(0xFACC15)
 private let indoorTemperatureChartColor = weatherHexColor(0x10B981)
 private let indoorHumidityChartColor = weatherHexColor(0x38BDF8)
 private let indoorPM25ChartColor = weatherHexColor(0xA78BFA)
+private let indoorAQIChartColor = weatherHexColor(0xF59E0B)
+private let environmentalPressureChartColor = weatherHexColor(0x10B981)
+private let environmentalRainRateChartColor = weatherHexColor(0x60A5FA)
+private let environmentalSolarChartColor = weatherHexColor(0xF59E0B)
 
 private func weatherOptionalDouble(_ value: Any?) -> Double? {
     if let value = value as? Double {
@@ -238,6 +242,39 @@ private struct WeatherChartPoint: Identifiable {
 private struct WeatherChartSegment: Identifiable {
     let id: String
     let points: [WeatherChartPoint]
+}
+
+private struct WeatherChartLegendItem {
+    let label: String
+    let color: Color
+}
+
+private struct WeatherChartLegend: View {
+    let items: [WeatherChartLegendItem]
+
+    var body: some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 104), spacing: 12)],
+            alignment: .leading,
+            spacing: 8
+        ) {
+            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                HStack(spacing: 7) {
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(item.color)
+                        .frame(width: 10, height: 10)
+                    Text(item.label)
+                        .font(HBTypography.body(size: 12, weight: .semibold))
+                        .foregroundStyle(HBPalette.textSecondary)
+                        .lineLimit(1)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(item.label) series")
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Chart key")
+    }
 }
 
 private func buildWeatherChartSegments<Entry>(
@@ -1342,6 +1379,14 @@ struct WeatherView: View {
         )
     }
 
+    private var indoorAQISegments: [WeatherChartSegment] {
+        buildWeatherChartSegments(
+            from: indoorAirTrendData,
+            value: { $0.usAqi },
+            label: { formatTimeOnly($0.observedAt) }
+        )
+    }
+
     private var atmosphericTrendData: [TempestObservationSnapshot] {
         Array(
             (dashboard?.observations ?? [])
@@ -1382,6 +1427,30 @@ struct WeatherView: View {
         buildWeatherChartSegments(
             from: atmosphericTrendData,
             value: { celsiusToFahrenheit($0.derivedDouble("dew_point_c")) },
+            label: { formatTimeOnly($0.observedAt) }
+        )
+    }
+
+    private var environmentalPressureSegments: [WeatherChartSegment] {
+        buildWeatherChartSegments(
+            from: atmosphericTrendData,
+            value: { millibarToInHg($0.metricDouble("pressure_mb")) },
+            label: { formatTimeOnly($0.observedAt) }
+        )
+    }
+
+    private var environmentalRainRatePoints: [WeatherChartPoint] {
+        buildWeatherChartPoints(
+            from: atmosphericTrendData,
+            value: { millimetersToInches($0.derivedDouble("rain_rate_mm_per_hr")) },
+            label: { formatTimeOnly($0.observedAt) }
+        )
+    }
+
+    private var environmentalSolarSegments: [WeatherChartSegment] {
+        buildWeatherChartSegments(
+            from: atmosphericTrendData,
+            value: { $0.metricDouble("solar_radiation_wm2") },
             label: { formatTimeOnly($0.observedAt) }
         )
     }
@@ -1471,6 +1540,7 @@ struct WeatherView: View {
                         weatherSensorAndForecastPanels(for: dashboard)
                         indoorAirHistoryPanel
                         weatherHistoricalPanels(for: dashboard)
+                        weatherEnvironmentalPanel
                         weatherEventsPanel
                     } else if weatherLocationMode == .auto && locationManager.isRequesting {
                         EmptyStateView(
@@ -1950,6 +2020,11 @@ struct WeatherView: View {
                                     .foregroundStyle(HBPalette.textMuted)
                             }
                         }
+                        WeatherChartLegend(items: [
+                            WeatherChartLegendItem(label: "Temp", color: forecastTemperatureChartColor),
+                            WeatherChartLegendItem(label: "Wind", color: forecastWindChartColor),
+                            WeatherChartLegendItem(label: "Precip", color: forecastPrecipitationChartColor)
+                        ])
                     }
                 }
             }
@@ -2033,7 +2108,7 @@ struct WeatherView: View {
             VStack(alignment: .leading, spacing: 14) {
                 chartHeader(
                     title: "Indoor Air History",
-                    subtitle: "Temperature, humidity, and PM2.5 from the Govee indoor air monitor."
+                    subtitle: "Temperature, humidity, PM2.5, and derived indoor AQI from the Govee monitor."
                 )
 
                 if indoorAirTrendData.isEmpty {
@@ -2081,6 +2156,19 @@ struct WeatherView: View {
                                 .foregroundStyle(indoorPM25ChartColor)
                             }
                         }
+
+                        ForEach(indoorAQISegments) { segment in
+                            ForEach(segment.points) { point in
+                                LineMark(
+                                    x: .value("Sample", point.index),
+                                    y: .value("AQI", point.value),
+                                    series: .value("AQI Segment", segment.id)
+                                )
+                                .interpolationMethod(.monotone)
+                                .lineStyle(StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
+                                .foregroundStyle(indoorAQIChartColor)
+                            }
+                        }
                     }
                     .frame(height: 260)
                     .chartXScale(domain: 0...max(indoorAirAxisLabels.count - 1, 0))
@@ -2100,6 +2188,12 @@ struct WeatherView: View {
                                 .foregroundStyle(HBPalette.textMuted)
                         }
                     }
+                    WeatherChartLegend(items: [
+                        WeatherChartLegendItem(label: "Temp", color: indoorTemperatureChartColor),
+                        WeatherChartLegendItem(label: "Humidity", color: indoorHumidityChartColor),
+                        WeatherChartLegendItem(label: "PM2.5", color: indoorPM25ChartColor),
+                        WeatherChartLegendItem(label: "AQI", color: indoorAQIChartColor)
+                    ])
                 }
             }
         }
@@ -2194,6 +2288,11 @@ struct WeatherView: View {
                                     .foregroundStyle(HBPalette.textMuted)
                             }
                         }
+                        WeatherChartLegend(items: [
+                            WeatherChartLegendItem(label: "Temperature", color: atmosphericTemperatureChartColor),
+                            WeatherChartLegendItem(label: "Feels Like", color: atmosphericFeelsLikeChartColor),
+                            WeatherChartLegendItem(label: "Dew Point", color: atmosphericDewPointChartColor)
+                        ])
                     }
                 }
             }
@@ -2269,11 +2368,93 @@ struct WeatherView: View {
                                     .foregroundStyle(HBPalette.textMuted)
                             }
                         }
+                        WeatherChartLegend(items: [
+                            WeatherChartLegendItem(label: "Average", color: windAverageChartColor),
+                            WeatherChartLegendItem(label: "Gust", color: windGustChartColor),
+                            WeatherChartLegendItem(label: "Rapid", color: windRapidChartColor)
+                        ])
                     }
                 }
             }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var weatherEnvironmentalPanel: some View {
+        HBPanel {
+            VStack(alignment: .leading, spacing: 14) {
+                chartHeader(
+                    title: "Pressure, Rain, and Solar",
+                    subtitle: "Local environmental energy profile across the last 24 hours."
+                )
+
+                if atmosphericTrendData.isEmpty {
+                    EmptyStateView(
+                        title: "No environmental telemetry",
+                        subtitle: "Pressure, rainfall, and solar history appear here once Tempest observations are available."
+                    )
+                } else {
+                    Chart {
+                        ForEach(environmentalRainRatePoints) { point in
+                            BarMark(
+                                x: .value("Sample", point.index),
+                                y: .value("Rain Rate", point.value)
+                            )
+                            .foregroundStyle(environmentalRainRateChartColor)
+                        }
+
+                        ForEach(environmentalPressureSegments) { segment in
+                            ForEach(segment.points) { point in
+                                LineMark(
+                                    x: .value("Sample", point.index),
+                                    y: .value("Pressure", point.value),
+                                    series: .value("Pressure Segment", segment.id)
+                                )
+                                .interpolationMethod(.monotone)
+                                .foregroundStyle(environmentalPressureChartColor)
+                                .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                            }
+                        }
+
+                        ForEach(environmentalSolarSegments) { segment in
+                            ForEach(segment.points) { point in
+                                LineMark(
+                                    x: .value("Sample", point.index),
+                                    y: .value("Solar", point.value),
+                                    series: .value("Solar Segment", segment.id)
+                                )
+                                .interpolationMethod(.monotone)
+                                .foregroundStyle(environmentalSolarChartColor)
+                                .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                            }
+                        }
+                    }
+                    .frame(height: 320)
+                    .chartXScale(domain: 0...max(atmosphericAxisLabels.count - 1, 0))
+                    .chartXAxis {
+                        AxisMarks(values: weatherChartAxisValues(count: atmosphericAxisLabels.count)) { value in
+                            if let index = value.as(Int.self), atmosphericAxisLabels.indices.contains(index) {
+                                AxisValueLabel(atmosphericAxisLabels[index])
+                                    .foregroundStyle(HBPalette.textMuted)
+                            }
+                        }
+                    }
+                    .chartYAxis {
+                        AxisMarks(position: .leading) {
+                            AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [4, 4]))
+                                .foregroundStyle(HBPalette.panelStroke.opacity(0.35))
+                            AxisValueLabel()
+                                .foregroundStyle(HBPalette.textMuted)
+                        }
+                    }
+                    WeatherChartLegend(items: [
+                        WeatherChartLegendItem(label: "Pressure", color: environmentalPressureChartColor),
+                        WeatherChartLegendItem(label: "Rain Rate", color: environmentalRainRateChartColor),
+                        WeatherChartLegendItem(label: "Solar", color: environmentalSolarChartColor)
+                    ])
+                }
+            }
+        }
     }
 
     private var weatherEventsPanel: some View {

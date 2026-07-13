@@ -32,7 +32,13 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
+import {
+  ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
+  ChartTooltip,
+  ChartTooltipContent
+} from "@/components/ui/chart"
 import {
   Dialog,
   DialogContent,
@@ -633,6 +639,7 @@ export function Weather() {
                 <XAxis dataKey="time" tickLine={false} axisLine={false} minTickGap={24} />
                 <YAxis tickLine={false} axisLine={false} width={40} />
                 <ChartTooltip content={<ChartTooltipContent />} />
+                <ChartLegend content={<ChartLegendContent className="flex-wrap gap-x-4 gap-y-2" />} />
                 <Line type="monotone" dataKey="temperatureF" stroke="var(--color-temperatureF)" strokeWidth={3} dot={false} />
                 <Line type="monotone" dataKey="windSpeedMph" stroke="var(--color-windSpeedMph)" strokeWidth={2} dot={false} />
                 <Line type="monotone" dataKey="precipitationChance" stroke="var(--color-precipitationChance)" strokeWidth={2} dot={false} />
@@ -794,6 +801,7 @@ export function Weather() {
                 <XAxis dataKey="time" tickLine={false} axisLine={false} minTickGap={24} />
                 <YAxis tickLine={false} axisLine={false} width={40} />
                 <ChartTooltip content={<ChartTooltipContent />} />
+                <ChartLegend content={<ChartLegendContent className="flex-wrap gap-x-4 gap-y-2" />} />
                 <Line type="monotone" dataKey="temperatureF" stroke="var(--color-temperatureF)" strokeWidth={2.5} dot={false} />
                 <Line type="monotone" dataKey="humidityPct" stroke="var(--color-humidityPct)" strokeWidth={2.5} dot={false} />
                 <Line type="monotone" dataKey="pm25UgM3" stroke="var(--color-pm25UgM3)" strokeWidth={2.5} dot={false} />
@@ -834,6 +842,7 @@ export function Weather() {
                 <XAxis dataKey="time" tickLine={false} axisLine={false} minTickGap={24} />
                 <YAxis tickLine={false} axisLine={false} width={40} />
                 <ChartTooltip content={<ChartTooltipContent />} />
+                <ChartLegend content={<ChartLegendContent className="flex-wrap gap-x-4 gap-y-2" />} />
                 <Area type="monotone" dataKey="temperatureF" stroke="var(--color-temperatureF)" fill="url(#temperatureFill)" strokeWidth={2.5} />
                 <Line type="monotone" dataKey="feelsLikeF" stroke="var(--color-feelsLikeF)" strokeWidth={2.5} dot={false} />
                 <Line type="monotone" dataKey="dewPointF" stroke="var(--color-dewPointF)" strokeWidth={2} dot={false} />
@@ -861,6 +870,7 @@ export function Weather() {
                 <XAxis dataKey="time" tickLine={false} axisLine={false} minTickGap={24} />
                 <YAxis tickLine={false} axisLine={false} width={40} />
                 <ChartTooltip content={<ChartTooltipContent />} />
+                <ChartLegend content={<ChartLegendContent className="flex-wrap gap-x-4 gap-y-2" />} />
                 <Line type="monotone" dataKey="windAvgMph" stroke="var(--color-windAvgMph)" strokeWidth={2.5} dot={false} />
                 <Line type="monotone" dataKey="windGustMph" stroke="var(--color-windGustMph)" strokeWidth={2.5} dot={false} />
                 <Line type="monotone" dataKey="windRapidMph" stroke="var(--color-windRapidMph)" strokeWidth={2} dot={false} />
@@ -890,6 +900,7 @@ export function Weather() {
                 <XAxis dataKey="time" tickLine={false} axisLine={false} minTickGap={24} />
                 <YAxis tickLine={false} axisLine={false} width={42} />
                 <ChartTooltip content={<ChartTooltipContent />} />
+                <ChartLegend content={<ChartLegendContent className="flex-wrap gap-x-4 gap-y-2" />} />
                 <Bar dataKey="rainRateInPerHr" fill="var(--color-rainRateInPerHr)" radius={[4, 4, 0, 0]} />
                 <Line type="monotone" dataKey="pressureInHg" stroke="var(--color-pressureInHg)" strokeWidth={2.5} dot={false} />
                 <Line type="monotone" dataKey="solarRadiationWm2" stroke="var(--color-solarRadiationWm2)" strokeWidth={2} dot={false} />
