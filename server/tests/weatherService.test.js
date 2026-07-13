@@ -10,6 +10,7 @@ const goveeAirQualityService = require('../services/goveeAirQualityService');
 
 const {
   buildLocationName,
+  compactWeatherDashboardPayload,
   createWeatherPayload,
   describeWeatherCode,
   fetchDashboardWeather,
@@ -18,6 +19,8 @@ const {
   normalizeLocationQuery,
   parseUsCityStateQuery,
   pickUsCityStateResult,
+  resolveWeatherDashboardRequestOptions,
+  resolveWeatherHistoryPointLimit,
   __resetWeatherCachesForTests
 } = require('../services/weatherService');
 
@@ -62,6 +65,97 @@ test('describeWeatherCode maps known weather codes to readable labels', () => {
   assert.deepEqual(describeWeatherCode(0), { label: 'Clear', icon: 'sunny' });
   assert.deepEqual(describeWeatherCode(63), { label: 'Rain', icon: 'rain' });
   assert.deepEqual(describeWeatherCode(999), { label: 'Unknown', icon: 'cloudy' });
+});
+
+test('resolveWeatherHistoryPointLimit bounds full and compact dashboard requests', () => {
+  assert.equal(resolveWeatherHistoryPointLimit(undefined, false), 720);
+  assert.equal(resolveWeatherHistoryPointLimit(undefined, true), 240);
+  assert.equal(resolveWeatherHistoryPointLimit('120', true), 120);
+  assert.equal(resolveWeatherHistoryPointLimit('2', true), 10);
+  assert.equal(resolveWeatherHistoryPointLimit('5000', false), 720);
+});
+
+test('resolveWeatherDashboardRequestOptions protects installed iOS clients and preserves upgraded requests', () => {
+  assert.deepEqual(resolveWeatherDashboardRequestOptions({
+    clientType: 'ios',
+    tempestHistoryHours: '336',
+    indoorAirHistoryHours: '336'
+  }), {
+    compact: true,
+    historyPointLimit: 32,
+    tempestHistoryHours: 48,
+    indoorAirHistoryHours: 48,
+    useLegacyIOSGuard: true
+  });
+
+  assert.deepEqual(resolveWeatherDashboardRequestOptions({
+    clientType: 'ios',
+    compact: 'true',
+    historyPointLimit: '240',
+    tempestHistoryHours: '336',
+    indoorAirHistoryHours: '336'
+  }), {
+    compact: true,
+    historyPointLimit: 240,
+    tempestHistoryHours: '336',
+    indoorAirHistoryHours: '336',
+    useLegacyIOSGuard: false
+  });
+
+  assert.deepEqual(resolveWeatherDashboardRequestOptions({
+    clientType: 'web',
+    tempestHistoryHours: '336',
+    indoorAirHistoryHours: '336'
+  }), {
+    compact: false,
+    historyPointLimit: 720,
+    tempestHistoryHours: '336',
+    indoorAirHistoryHours: '336',
+    useLegacyIOSGuard: false
+  });
+});
+
+test('compactWeatherDashboardPayload removes duplicate and non-chart history data', () => {
+  const hourlyForecast = [{ time: '2026-07-13T12:00', temperatureF: 80 }];
+  const payload = compactWeatherDashboardPayload({
+    forecast: { hourlyForecast, current: { temperatureF: 80 } },
+    hourlyForecast,
+    tempest: {
+      station: { id: 'station-1' },
+      observations: [{
+        stationId: 1,
+        observationType: 'obs_st',
+        observedAt: '2026-07-13T12:00:00.000Z',
+        metrics: { temp_c: 20, battery_volts: 2.5 },
+        derived: { dew_point_c: 8, unused: 42 }
+      }]
+    },
+    indoorAir: {
+      monitor: { id: 'monitor-1', co2Ppm: 500 },
+      samples: [{
+        id: 'sample-1',
+        deviceName: 'Inside Air',
+        room: 'Inside',
+        observedAt: '2026-07-13T12:00:00.000Z',
+        temperatureF: 72,
+        humidityPct: 40,
+        pm25UgM3: 3,
+        usAqi: 12,
+        metrics: { temperature_f: 72 },
+        qualityAdvice: 'Extra copy that charts do not need'
+      }]
+    }
+  });
+
+  assert.deepEqual(payload.hourlyForecast, hourlyForecast);
+  assert.deepEqual(payload.forecast.hourlyForecast, []);
+  assert.equal(payload.forecast.current.temperatureF, 80);
+  assert.deepEqual(payload.tempest.observations[0].metrics, { temp_c: 20 });
+  assert.deepEqual(payload.tempest.observations[0].derived, { dew_point_c: 8 });
+  assert.equal(payload.indoorAir.monitor.co2Ppm, 500);
+  assert.equal(payload.indoorAir.samples[0].temperatureF, 72);
+  assert.equal(payload.indoorAir.samples[0].metrics, undefined);
+  assert.equal(payload.indoorAir.samples[0].qualityAdvice, undefined);
 });
 
 test('normalizeLocationQuery standardizes comma spacing', () => {
@@ -452,12 +546,14 @@ test('fetchWeatherDashboard does not block on Tempest module telemetry by defaul
   const originalAxiosGet = axios.get;
   const originalGetSelectedStationSnapshot = tempestService.getSelectedStationSnapshot;
   const originalGetDashboardData = tempestService.getDashboardData;
+  const originalGetGoveeDashboardData = goveeAirQualityService.getDashboardData;
   const originalGetTempestModuleTelemetry = telemetryService.getTempestModuleTelemetry;
 
   t.after(() => {
     axios.get = originalAxiosGet;
     tempestService.getSelectedStationSnapshot = originalGetSelectedStationSnapshot;
     tempestService.getDashboardData = originalGetDashboardData;
+    goveeAirQualityService.getDashboardData = originalGetGoveeDashboardData;
     telemetryService.getTempestModuleTelemetry = originalGetTempestModuleTelemetry;
   });
 
@@ -517,13 +613,27 @@ test('fetchWeatherDashboard does not block on Tempest module telemetry by defaul
   };
 
   let telemetryCalls = 0;
+  let tempestDashboardArgs = null;
+  let goveeDashboardArgs = null;
   tempestService.getSelectedStationSnapshot = async () => station;
-  tempestService.getDashboardData = async () => ({
-    available: true,
-    station,
-    observations: [],
-    events: []
-  });
+  tempestService.getDashboardData = async (args) => {
+    tempestDashboardArgs = args;
+    return {
+      available: true,
+      station,
+      observations: [],
+      events: []
+    };
+  };
+  goveeAirQualityService.getDashboardData = async (args) => {
+    goveeDashboardArgs = args;
+    return {
+      available: false,
+      monitor: null,
+      samples: [],
+      health: null
+    };
+  };
   telemetryService.getTempestModuleTelemetry = async () => {
     telemetryCalls += 1;
     return { generatedAt: '2026-04-02T17:00:00.000Z' };
@@ -532,11 +642,17 @@ test('fetchWeatherDashboard does not block on Tempest module telemetry by defaul
   const payload = await fetchWeatherDashboard({
     latitude: '39.7392',
     longitude: '-104.9903',
-    label: 'Current location'
+    label: 'Current location',
+    compact: true,
+    historyPointLimit: '240',
+    tempestHistoryHours: '336',
+    indoorAirHistoryHours: '336'
   });
 
   assert.equal(telemetryCalls, 0);
   assert.equal(payload.tempest.moduleTelemetry, null);
+  assert.deepEqual(tempestDashboardArgs, { hours: '336', limit: 240 });
+  assert.deepEqual(goveeDashboardArgs, { hours: '336', limit: 240 });
 });
 
 test('fetchWeatherDashboard times out optional Tempest module telemetry', async (t) => {

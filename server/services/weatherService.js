@@ -21,6 +21,9 @@ const DEFAULT_WEATHER_GOVEE_STALE_AFTER_MS = 5 * 60 * 1000;
 const DEFAULT_WEATHER_MODULE_TELEMETRY_TIMEOUT_MS = 1500;
 const MAX_WEATHER_CHART_HOURS = 24 * 14;
 const MAX_WEATHER_HISTORY_POINTS = 720;
+const COMPACT_WEATHER_HISTORY_POINTS = 240;
+const LEGACY_IOS_WEATHER_HOURS = 48;
+const LEGACY_IOS_WEATHER_POINTS = 32;
 const WEATHER_CACHE_COORDINATE_PRECISION = 2;
 const WEATHER_RECOVERY_COORDINATE_PRECISION = 1;
 const forecastCache = new Map();
@@ -155,6 +158,104 @@ const parseBooleanFlag = (value, fallback = false) => {
 
   return fallback;
 };
+
+const resolveWeatherHistoryPointLimit = (value, compact = false) => {
+  const fallback = compact ? COMPACT_WEATHER_HISTORY_POINTS : MAX_WEATHER_HISTORY_POINTS;
+  const parsed = parsePositiveInteger(value, fallback);
+  return Math.max(10, Math.min(MAX_WEATHER_HISTORY_POINTS, parsed));
+};
+
+const resolveWeatherDashboardRequestOptions = (options = {}) => {
+  const clientType = typeof options.clientType === 'string' ? options.clientType.trim().toLowerCase() : '';
+  // The first iOS slider build requested all 14 days but did not identify a point
+  // limit. Keep that already-installed client responsive until it is upgraded.
+  const useLegacyIOSGuard = clientType === 'ios'
+    && (options.historyPointLimit === undefined || options.historyPointLimit === null || options.historyPointLimit === '');
+  const compact = parseBooleanFlag(options.compact, useLegacyIOSGuard);
+
+  return {
+    compact,
+    historyPointLimit: resolveWeatherHistoryPointLimit(
+      useLegacyIOSGuard ? LEGACY_IOS_WEATHER_POINTS : options.historyPointLimit,
+      compact
+    ),
+    tempestHistoryHours: useLegacyIOSGuard
+      ? Math.min(parsePositiveInteger(options.tempestHistoryHours, LEGACY_IOS_WEATHER_HOURS), LEGACY_IOS_WEATHER_HOURS)
+      : (options.tempestHistoryHours || 24),
+    indoorAirHistoryHours: useLegacyIOSGuard
+      ? Math.min(parsePositiveInteger(options.indoorAirHistoryHours, LEGACY_IOS_WEATHER_HOURS), LEGACY_IOS_WEATHER_HOURS)
+      : (options.indoorAirHistoryHours || 24),
+    useLegacyIOSGuard
+  };
+};
+
+const pickWeatherChartValues = (source, keys) => {
+  const input = source && typeof source === 'object' ? source : {};
+  return keys.reduce((result, key) => {
+    if (input[key] !== undefined) {
+      result[key] = input[key];
+    }
+    return result;
+  }, {});
+};
+
+function compactWeatherDashboardPayload(payload) {
+  const forecast = payload?.forecast && typeof payload.forecast === 'object'
+    ? {
+        ...payload.forecast,
+        // The dashboard already exposes the same array at the top level. Avoid sending
+        // all 336 forecast points twice to mobile clients.
+        hourlyForecast: []
+      }
+    : payload?.forecast;
+  const tempest = payload?.tempest && typeof payload.tempest === 'object'
+    ? {
+        ...payload.tempest,
+        observations: (Array.isArray(payload.tempest.observations) ? payload.tempest.observations : []).map((entry) => ({
+          stationId: entry.stationId,
+          deviceId: entry.deviceId,
+          observationType: entry.observationType,
+          source: entry.source,
+          observedAt: entry.observedAt,
+          metrics: pickWeatherChartValues(entry.metrics, [
+            'temp_c',
+            'wind_avg_mps',
+            'wind_gust_mps',
+            'wind_rapid_mps',
+            'pressure_mb',
+            'solar_radiation_wm2'
+          ]),
+          derived: pickWeatherChartValues(entry.derived, [
+            'feels_like_c',
+            'dew_point_c',
+            'rain_rate_mm_per_hr'
+          ])
+        }))
+      }
+    : payload?.tempest;
+  const indoorAir = payload?.indoorAir && typeof payload.indoorAir === 'object'
+    ? {
+        ...payload.indoorAir,
+        samples: (Array.isArray(payload.indoorAir.samples) ? payload.indoorAir.samples : []).map((sample) => ({
+          id: sample.id,
+          deviceName: sample.deviceName,
+          room: sample.room,
+          observedAt: sample.observedAt,
+          temperatureF: sample.temperatureF,
+          humidityPct: sample.humidityPct,
+          pm25UgM3: sample.pm25UgM3,
+          usAqi: sample.usAqi
+        }))
+      }
+    : payload?.indoorAir;
+
+  return {
+    ...payload,
+    forecast,
+    tempest,
+    indoorAir
+  };
+}
 
 const weatherModuleTelemetryTimeoutMs = () => parsePositiveInteger(
   process.env.WEATHER_MODULE_TELEMETRY_TIMEOUT_MS,
@@ -1112,13 +1213,15 @@ async function fetchDashboardWeather(options = {}) {
 
 async function fetchWeatherDashboard(options = {}) {
   const includeModuleTelemetry = parseBooleanFlag(options.includeModuleTelemetry);
+  const requestOptions = resolveWeatherDashboardRequestOptions(options);
   const forecast = await fetchDashboardWeather({
     ...options,
     includeModuleTelemetry: false,
     refreshIndoorAir: parseBooleanFlag(options.refreshIndoorAir)
   });
   const tempest = await tempestService.getDashboardData({
-    hours: options.tempestHistoryHours || 24
+    hours: requestOptions.tempestHistoryHours,
+    limit: requestOptions.historyPointLimit
   }).catch(() => ({
     available: false,
     station: null,
@@ -1127,8 +1230,8 @@ async function fetchWeatherDashboard(options = {}) {
     moduleTelemetry: null
   }));
   const indoorAir = await goveeAirQualityService.getDashboardData({
-    hours: options.indoorAirHistoryHours || 24,
-    limit: MAX_WEATHER_HISTORY_POINTS
+    hours: requestOptions.indoorAirHistoryHours,
+    limit: requestOptions.historyPointLimit
   }).catch(() => ({
     available: false,
     monitor: null,
@@ -1141,7 +1244,7 @@ async function fetchWeatherDashboard(options = {}) {
       ? await loadTempestModuleTelemetry(tempest.station.id)
       : null);
 
-  return {
+  const payload = {
     fetchedAt: new Date().toISOString(),
     forecast,
     climate: forecast?.climate || null,
@@ -1153,11 +1256,14 @@ async function fetchWeatherDashboard(options = {}) {
     },
     indoorAir
   };
+
+  return requestOptions.compact ? compactWeatherDashboardPayload(payload) : payload;
 }
 
 module.exports = {
   buildLocationName,
   createWeatherPayload,
+  compactWeatherDashboardPayload,
   describeWeatherCode,
   fetchDashboardWeather,
   fetchWeatherDashboard,
@@ -1165,6 +1271,8 @@ module.exports = {
   normalizeLocationQuery,
   parseUsCityStateQuery,
   pickUsCityStateResult,
+  resolveWeatherHistoryPointLimit,
+  resolveWeatherDashboardRequestOptions,
   __resetWeatherCachesForTests: () => {
     forecastCache.clear();
     airQualityCache.clear();

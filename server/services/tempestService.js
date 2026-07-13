@@ -1492,7 +1492,7 @@ class TempestService {
     }));
   }
 
-  async getDashboardData({ hours = 24 } = {}) {
+  async getDashboardData({ hours = 24, limit = OBSERVATION_RETENTION_LIMIT } = {}) {
     const station = await this.getSelectedStationSnapshot();
     if (!station) {
       return {
@@ -1506,7 +1506,7 @@ class TempestService {
     return {
       available: true,
       station,
-      observations: await this.getObservations({ stationId: station.stationId, hours, limit: OBSERVATION_RETENTION_LIMIT }),
+      observations: await this.getObservations({ stationId: station.stationId, hours, limit }),
       events: await this.getEvents({ stationId: station.stationId, limit: 32 })
     };
   }
