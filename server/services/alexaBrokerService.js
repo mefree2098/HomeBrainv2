@@ -18,6 +18,7 @@ const DEFAULT_ALEXA_COMMAND_LOCALE = 'en-US';
 const DEFAULT_ALEXA_COMMAND_AMAZON_PAGE = 'amazon.com';
 const DEFAULT_ALEXA_COMMAND_SERVICE_HOST = 'pitangui.amazon.com';
 const DEFAULT_ALEXA_COMMAND_TIMEOUT_MS = 10000;
+const DEFAULT_REFRESH_TOKEN_TTL_SECONDS = 0;
 const DEFAULT_LOG_LIMIT = 500;
 const DEFAULT_LIFECYCLE_LIMIT = 50;
 const DEFAULT_MONITOR_INTERVAL_MS = 15000;
@@ -136,6 +137,15 @@ function sanitizePositiveInteger(value, fallback, { min = 1, max = Number.MAX_SA
   }
 
   return Math.max(min, Math.min(max, parsed));
+}
+
+function sanitizeNonNegativeInteger(value, fallback, { max = Number.MAX_SAFE_INTEGER } = {}) {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+
+  return Math.max(0, Math.min(max, parsed));
 }
 
 function normalizeHost(value, fallback = DEFAULT_BIND_HOST) {
@@ -660,7 +670,10 @@ class AlexaBrokerService {
       HOMEBRAIN_BROKER_STORE_FILE: trimString(config.storeFile),
       HOMEBRAIN_ALEXA_AUTH_CODE_TTL_MS: String(sanitizePositiveInteger(config.authCodeTtlMs, 300000)),
       HOMEBRAIN_ALEXA_ACCESS_TOKEN_TTL_SECONDS: String(sanitizePositiveInteger(config.accessTokenTtlSeconds, 3600)),
-      HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS: String(sanitizePositiveInteger(config.refreshTokenTtlSeconds, 15552000)),
+      HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS: String(sanitizeNonNegativeInteger(
+        config.refreshTokenTtlSeconds,
+        DEFAULT_REFRESH_TOKEN_TTL_SECONDS
+      )),
       HOMEBRAIN_ALEXA_LWA_TOKEN_URL: sanitizeUrl(config.lwaTokenUrl, 'https://api.amazon.com/auth/o2/token'),
       HOMEBRAIN_ALEXA_EVENT_GATEWAY_URL: sanitizeUrl(config.eventGatewayUrl, 'https://api.amazonalexa.com/v3/events'),
       HOMEBRAIN_ALEXA_COMMAND_PROVIDER: normalizeAlexaCommandProvider(config.alexaCommandProvider),
@@ -1186,7 +1199,10 @@ class AlexaBrokerService {
     }
 
     if (Object.prototype.hasOwnProperty.call(updates, 'refreshTokenTtlSeconds')) {
-      config.refreshTokenTtlSeconds = sanitizePositiveInteger(updates.refreshTokenTtlSeconds, config.refreshTokenTtlSeconds || 15552000, { min: 3600 });
+      config.refreshTokenTtlSeconds = sanitizeNonNegativeInteger(
+        updates.refreshTokenTtlSeconds,
+        config.refreshTokenTtlSeconds ?? DEFAULT_REFRESH_TOKEN_TTL_SECONDS
+      );
     }
 
     if (Object.prototype.hasOwnProperty.call(updates, 'lwaTokenUrl')) {

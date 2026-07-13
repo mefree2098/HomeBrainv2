@@ -110,10 +110,10 @@ These details matter and are easy to miss:
    - Leave `PKCE Authorization` disabled in the Alexa developer console for HomeBrain right now.
    - If PKCE is turned on, the current broker will not verify `code_verifier` and can break account linking.
 
-6. The broker's default refresh-token TTL is too short for a strong production setup.
-   - The code default is 30 days.
+6. Alexa account-link refresh tokens should not expire by default.
+   - Older broker builds used a 30-day default, which can force an unexpected relink after inactivity.
    - Amazon currently recommends a refresh-token TTL of at least 180 days or no expiration.
-   - Set `HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS` explicitly in production.
+   - Set `HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS=0` in production for no expiration.
 
 ## 4. What you need before you touch Alexa
 
@@ -236,9 +236,9 @@ HOMEBRAIN_ALEXA_EVENT_CLIENT_SECRET=
 # Put the broker state on persistent storage, not inside the repo.
 HOMEBRAIN_BROKER_STORE_FILE=/var/lib/homebrain-alexa/store.json
 
-# Use a production-grade refresh token lifetime.
+# Use durable refresh tokens for Alexa account linking. 0 means no expiration.
 HOMEBRAIN_ALEXA_ACCESS_TOKEN_TTL_SECONDS=3600
-HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS=15552000
+HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS=0
 HOMEBRAIN_ALEXA_AUTH_CODE_TTL_MS=300000
 ```
 
@@ -293,7 +293,7 @@ HOMEBRAIN_ALEXA_ALLOWED_REDIRECT_URIS=https://pitangui.amazon.com/api/skill/link
 HOMEBRAIN_ALEXA_EVENT_CLIENT_ID= \
 HOMEBRAIN_ALEXA_EVENT_CLIENT_SECRET= \
 HOMEBRAIN_BROKER_STORE_FILE=/var/lib/homebrain-alexa/store.json \
-HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS=15552000 \
+HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS=0 \
 npm run broker
 ```
 
@@ -739,7 +739,7 @@ HOMEBRAIN_ALEXA_EVENT_CLIENT_ID=<copied from Send Alexa Events>
 HOMEBRAIN_ALEXA_EVENT_CLIENT_SECRET=<copied from Send Alexa Events>
 HOMEBRAIN_BROKER_STORE_FILE=/var/lib/homebrain-alexa/store.json
 HOMEBRAIN_ALEXA_ACCESS_TOKEN_TTL_SECONDS=3600
-HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS=15552000
+HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS=0
 HOMEBRAIN_ALEXA_AUTH_CODE_TTL_MS=300000
 ```
 
@@ -861,7 +861,7 @@ Check:
 
 Check:
 
-- `HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS` is long enough
+- `HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS` is `0` or otherwise long enough
 - refresh tokens are not being expired too aggressively
 - the broker store file is persistent and not being wiped
 - the broker secret has not changed without updating the Alexa console
@@ -879,8 +879,8 @@ These are current implementation realities, not guesswork:
 3. The custom skill Lambda only requires `HOMEBRAIN_BROKER_BASE_URL`.
    - Older internal notes that mention `HOMEBRAIN_ALEXA_CUSTOM_DEFAULT_LOCALE` are stale.
 
-4. The broker default refresh-token TTL is not ideal for production.
-   - Override it explicitly.
+4. Broker builds before this durable-token fix used a shorter refresh-token TTL.
+   - Verify production is running code that treats `HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS=0` as no expiration.
 
 5. Amazon's account-linking requirements page currently includes certificate-authority restrictions for OAuth providers.
    - Validate your broker certificate chain against Amazon's current requirements before public rollout.
