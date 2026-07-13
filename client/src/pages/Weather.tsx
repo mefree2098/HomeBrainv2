@@ -47,6 +47,7 @@ import {
   DialogTitle
 } from "@/components/ui/dialog"
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
+import { Slider } from "@/components/ui/slider"
 import { WeatherGlyph } from "@/components/weather/WeatherGlyph"
 import { useAuth } from "@/contexts/AuthContext"
 import { cn } from "@/lib/utils"
@@ -55,6 +56,19 @@ const cToF = (value: number | null | undefined) => value == null ? null : Number
 const mpsToMph = (value: number | null | undefined) => value == null ? null : Number((value * 2.2369362921).toFixed(1))
 const mmToIn = (value: number | null | undefined) => value == null ? null : Number((value / 25.4).toFixed(3))
 const mbToInHg = (value: number | null | undefined) => value == null ? null : Number((value * 0.0295299831).toFixed(2))
+
+const WEATHER_CHART_RANGE_OPTIONS = [
+  { hours: 6, label: "6 hours", shortLabel: "6h" },
+  { hours: 12, label: "12 hours", shortLabel: "12h" },
+  { hours: 24, label: "24 hours", shortLabel: "24h" },
+  { hours: 48, label: "48 hours", shortLabel: "48h" },
+  { hours: 72, label: "72 hours", shortLabel: "72h" },
+  { hours: 24 * 7, label: "7 days", shortLabel: "7d" },
+  { hours: 24 * 14, label: "14 days", shortLabel: "14d" }
+] as const
+const DEFAULT_WEATHER_CHART_HOURS = 48
+const MAX_WEATHER_CHART_HOURS = 24 * 14
+const MAX_WEATHER_CHART_POINTS = 240
 
 const formatTemperature = (value: number | null | undefined) => value == null ? "--" : `${Math.round(value)}°`
 const formatPercent = (value: number | null | undefined) => value == null ? "--" : `${Math.round(value)}%`
@@ -72,16 +86,81 @@ const deriveRainRateFromLastMinute = (value: number | null | undefined) => (
 
 type WeatherModuleKey = "wind" | "pressure" | "rain" | "humidity" | "solar" | "signal" | "lightning"
 
-const formatChartTime = (value: string) => {
+const formatChartTime = (value: string, rangeHours = 24) => {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) {
     return "--"
   }
 
-  return date.toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit"
+  if (rangeHours > 72) {
+    return date.toLocaleString([], {
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric"
+    })
+  }
+
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
+}
+
+const filterToChartRange = <T,>(items: T[], hours: number, getTimestamp: (item: T) => string | null | undefined) => {
+  const cutoff = Date.now() - hours * 60 * 60 * 1000
+  return items.filter((item) => {
+    const timestamp = getTimestamp(item)
+    if (!timestamp) {
+      return false
+    }
+    const time = new Date(timestamp).getTime()
+    return Number.isFinite(time) && time >= cutoff
   })
+}
+
+const downsampleChartData = <T,>(items: T[], maxPoints = MAX_WEATHER_CHART_POINTS) => {
+  if (items.length <= maxPoints) {
+    return items
+  }
+
+  return Array.from({ length: maxPoints }, (_, index) => {
+    const sourceIndex = Math.round((index * (items.length - 1)) / (maxPoints - 1))
+    return items[sourceIndex]
+  })
+}
+
+function WeatherChartRangeSlider({
+  value,
+  onValueChange
+}: {
+  value: number
+  onValueChange: (hours: number) => void
+}) {
+  const selectedIndex = Math.max(0, WEATHER_CHART_RANGE_OPTIONS.findIndex((option) => option.hours === value))
+  const selected = WEATHER_CHART_RANGE_OPTIONS[selectedIndex]
+
+  return (
+    <div className="rounded-xl border border-border/60 bg-background/35 px-3 py-2.5">
+      <div className="mb-2 flex items-center justify-between gap-3 text-xs">
+        <span className="font-medium text-foreground">Time scale</span>
+        <span className="tabular-nums text-muted-foreground">{selected.label}</span>
+      </div>
+      <Slider
+        aria-label={`Chart time scale: ${selected.label}`}
+        min={0}
+        max={WEATHER_CHART_RANGE_OPTIONS.length - 1}
+        step={1}
+        value={[selectedIndex]}
+        onValueChange={([nextIndex]) => {
+          const next = WEATHER_CHART_RANGE_OPTIONS[nextIndex]
+          if (next) {
+            onValueChange(next.hours)
+          }
+        }}
+      />
+      <div className="mt-1.5 flex justify-between text-[10px] text-muted-foreground">
+        <span>{WEATHER_CHART_RANGE_OPTIONS[0].shortLabel}</span>
+        <span>{WEATHER_CHART_RANGE_OPTIONS.at(-1)?.shortLabel}</span>
+      </div>
+    </div>
+  )
 }
 
 const formatDateTime = (value: string | null | undefined) => {
@@ -328,6 +407,11 @@ export function Weather() {
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [openModuleKey, setOpenModuleKey] = useState<WeatherModuleKey | null>(null)
+  const [forecastRangeHours, setForecastRangeHours] = useState(DEFAULT_WEATHER_CHART_HOURS)
+  const [indoorAirRangeHours, setIndoorAirRangeHours] = useState(DEFAULT_WEATHER_CHART_HOURS)
+  const [atmosphericRangeHours, setAtmosphericRangeHours] = useState(DEFAULT_WEATHER_CHART_HOURS)
+  const [windRangeHours, setWindRangeHours] = useState(DEFAULT_WEATHER_CHART_HOURS)
+  const [environmentalRangeHours, setEnvironmentalRangeHours] = useState(DEFAULT_WEATHER_CHART_HOURS)
 
   const loadDashboard = useCallback(async (options: { silent?: boolean; forceTempestSync?: boolean; forceIndoorAirSync?: boolean; refreshIndoorAir?: boolean } = {}) => {
     const silent = options.silent === true
@@ -342,8 +426,8 @@ export function Weather() {
 
     try {
       const response = await getWeatherDashboard({
-        tempestHistoryHours: 24,
-        indoorAirHistoryHours: 24,
+        tempestHistoryHours: MAX_WEATHER_CHART_HOURS,
+        indoorAirHistoryHours: MAX_WEATHER_CHART_HOURS,
         forceTempestSync: options.forceTempestSync === true,
         forceIndoorAirSync: options.forceIndoorAirSync === true,
         refreshIndoorAir
@@ -382,13 +466,11 @@ export function Weather() {
   const livePrecipitationNow = station?.metrics.rainLastMinuteIn ?? forecast?.current.precipitationIn ?? null
   const liveRainDetected = (liveRainRate != null && liveRainRate > 0) || (livePrecipitationNow != null && livePrecipitationNow > 0)
 
-  const tempTrendData = useMemo(() => {
+  const tempestHistoryData = useMemo(() => {
     const observations = Array.isArray(dashboard?.tempest?.observations) ? dashboard.tempest.observations : []
     return observations
       .filter((entry) => entry.observationType !== "rapid_wind")
-      .slice(-240)
       .map((entry) => ({
-        time: formatChartTime(entry.observedAt),
         observedAt: entry.observedAt,
         temperatureF: cToF(entry.metrics?.temp_c as number | null | undefined),
         feelsLikeF: cToF(entry.derived?.feels_like_c as number | null | undefined),
@@ -401,41 +483,78 @@ export function Weather() {
       }))
   }, [dashboard?.tempest?.observations])
 
+  const atmosphericTrendData = useMemo(() => downsampleChartData(
+    filterToChartRange(tempestHistoryData, atmosphericRangeHours, (entry) => entry.observedAt)
+  ).map((entry) => ({
+    ...entry,
+    time: formatChartTime(entry.observedAt, atmosphericRangeHours)
+  })), [atmosphericRangeHours, tempestHistoryData])
+
+  const environmentalTrendData = useMemo(() => downsampleChartData(
+    filterToChartRange(tempestHistoryData, environmentalRangeHours, (entry) => entry.observedAt)
+  ).map((entry) => ({
+    ...entry,
+    time: formatChartTime(entry.observedAt, environmentalRangeHours)
+  })), [environmentalRangeHours, tempestHistoryData])
+
   const windTrendData = useMemo(() => {
     const observations = Array.isArray(dashboard?.tempest?.observations) ? dashboard.tempest.observations : []
-    return observations
-      .slice(-240)
-      .map((entry) => ({
-        time: formatChartTime(entry.observedAt),
+    const standard = downsampleChartData(filterToChartRange(
+      observations.filter((entry) => entry.observationType !== "rapid_wind"),
+      windRangeHours,
+      (entry) => entry.observedAt
+    ))
+    const rapid = filterToChartRange(
+      observations.filter((entry) => entry.observationType === "rapid_wind"),
+      windRangeHours,
+      (entry) => entry.observedAt
+    )
+    const base = standard.length > 0 ? standard : downsampleChartData(rapid)
+
+    return base.map((entry) => {
+      const entryTime = new Date(entry.observedAt).getTime()
+      const closestRapid = rapid.reduce<(typeof rapid)[number] | null>((closest, candidate) => {
+        if (!closest) {
+          return candidate
+        }
+        return Math.abs(new Date(candidate.observedAt).getTime() - entryTime)
+          < Math.abs(new Date(closest.observedAt).getTime() - entryTime)
+          ? candidate
+          : closest
+      }, null)
+
+      return {
+        time: formatChartTime(entry.observedAt, windRangeHours),
         observedAt: entry.observedAt,
         windAvgMph: mpsToMph(entry.metrics?.wind_avg_mps as number | null | undefined),
         windGustMph: mpsToMph(entry.metrics?.wind_gust_mps as number | null | undefined),
-        windRapidMph: mpsToMph(entry.metrics?.wind_rapid_mps as number | null | undefined),
+        windRapidMph: mpsToMph(closestRapid?.metrics?.wind_rapid_mps as number | null | undefined),
         windDirectionDeg: entry.metrics?.wind_direction_deg as number | null | undefined
-      }))
-  }, [dashboard?.tempest?.observations])
+      }
+    })
+  }, [dashboard?.tempest?.observations, windRangeHours])
 
   const forecastTrendData = useMemo(() => {
     const hourly = Array.isArray(dashboard?.hourlyForecast) ? dashboard.hourlyForecast : []
-    return hourly.slice(0, 18).map((entry) => ({
-      time: formatChartTime(entry.time),
+    return downsampleChartData(hourly.slice(0, forecastRangeHours)).map((entry) => ({
+      time: formatChartTime(entry.time, forecastRangeHours),
       temperatureF: entry.temperatureF,
       windSpeedMph: entry.windSpeedMph,
       precipitationChance: entry.precipitationChance
     }))
-  }, [dashboard?.hourlyForecast])
+  }, [dashboard?.hourlyForecast, forecastRangeHours])
 
   const indoorAirTrendData = useMemo(() => {
     const samples = Array.isArray(dashboard?.indoorAir?.samples) ? dashboard.indoorAir.samples : []
-    return samples.slice(-240).map((entry) => ({
-      time: formatChartTime(entry.observedAt || ""),
+    return downsampleChartData(filterToChartRange(samples, indoorAirRangeHours, (entry) => entry.observedAt)).map((entry) => ({
+      time: formatChartTime(entry.observedAt || "", indoorAirRangeHours),
       observedAt: entry.observedAt,
       temperatureF: entry.temperatureF,
       humidityPct: entry.humidityPct,
       pm25UgM3: entry.pm25UgM3,
       usAqi: entry.usAqi
     }))
-  }, [dashboard?.indoorAir?.samples])
+  }, [dashboard?.indoorAir?.samples, indoorAirRangeHours])
 
   const recentEvents = useMemo(() => {
     const events = Array.isArray(dashboard?.tempest?.events) ? dashboard.tempest.events : []
@@ -623,9 +742,10 @@ export function Weather() {
         <Card className="overflow-hidden border-white/10 bg-white/5">
           <CardHeader>
             <CardTitle>Forecast Flightpath</CardTitle>
-            <CardDescription>Next 18 hours of temperature, wind, and precipitation probability.</CardDescription>
+            <CardDescription>Next {WEATHER_CHART_RANGE_OPTIONS.find((option) => option.hours === forecastRangeHours)?.label} of temperature, wind, and precipitation probability.</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
+            <WeatherChartRangeSlider value={forecastRangeHours} onValueChange={setForecastRangeHours} />
             <ChartContainer
               className="h-[280px] w-full"
               config={{
@@ -783,9 +903,10 @@ export function Weather() {
       <Card className="border-white/10 bg-white/5">
         <CardHeader>
           <CardTitle>Indoor Air History</CardTitle>
-          <CardDescription>Temperature, humidity, PM2.5, and derived indoor AQI from the Govee monitor.</CardDescription>
+          <CardDescription>Last {WEATHER_CHART_RANGE_OPTIONS.find((option) => option.hours === indoorAirRangeHours)?.label} of temperature, humidity, PM2.5, and derived indoor AQI.</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          <WeatherChartRangeSlider value={indoorAirRangeHours} onValueChange={setIndoorAirRangeHours} />
           {indoorAirTrendData.length > 0 ? (
             <ChartContainer
               className="h-[260px] w-full"
@@ -820,9 +941,10 @@ export function Weather() {
         <Card className="border-white/10 bg-white/5">
           <CardHeader>
             <CardTitle>Atmospheric Curve</CardTitle>
-            <CardDescription>Temperature, feels-like, and dew point from live station history.</CardDescription>
+            <CardDescription>Last {WEATHER_CHART_RANGE_OPTIONS.find((option) => option.hours === atmosphericRangeHours)?.label} of temperature, feels-like, and dew point.</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
+            <WeatherChartRangeSlider value={atmosphericRangeHours} onValueChange={setAtmosphericRangeHours} />
             <ChartContainer
               className="h-[300px] w-full"
               config={{
@@ -831,7 +953,7 @@ export function Weather() {
                 dewPointF: { label: "Dew Point", color: "#34d399" }
               }}
             >
-              <AreaChart data={tempTrendData}>
+              <AreaChart data={atmosphericTrendData}>
                 <defs>
                   <linearGradient id="temperatureFill" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#22d3ee" stopOpacity={0.4} />
@@ -854,9 +976,10 @@ export function Weather() {
         <Card className="border-white/10 bg-white/5">
           <CardHeader>
             <CardTitle>Wind Vector Matrix</CardTitle>
-            <CardDescription>Average, gust, and rapid wind samples from the station feed.</CardDescription>
+            <CardDescription>Last {WEATHER_CHART_RANGE_OPTIONS.find((option) => option.hours === windRangeHours)?.label} of average, gust, and rapid wind samples.</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
+            <WeatherChartRangeSlider value={windRangeHours} onValueChange={setWindRangeHours} />
             <ChartContainer
               className="h-[300px] w-full"
               config={{
@@ -884,9 +1007,10 @@ export function Weather() {
         <Card className="border-white/10 bg-white/5">
           <CardHeader>
             <CardTitle>Pressure, Rain, and Solar</CardTitle>
-            <CardDescription>Local environmental energy profile across the last 24 hours.</CardDescription>
+            <CardDescription>Local environmental energy profile across the last {WEATHER_CHART_RANGE_OPTIONS.find((option) => option.hours === environmentalRangeHours)?.label}.</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-4">
+            <WeatherChartRangeSlider value={environmentalRangeHours} onValueChange={setEnvironmentalRangeHours} />
             <ChartContainer
               className="h-[320px] w-full"
               config={{
@@ -895,7 +1019,7 @@ export function Weather() {
                 solarRadiationWm2: { label: "Solar", color: "#f59e0b" }
               }}
             >
-              <ComposedChart data={tempTrendData}>
+              <ComposedChart data={environmentalTrendData}>
                 <CartesianGrid vertical={false} strokeDasharray="4 4" />
                 <XAxis dataKey="time" tickLine={false} axisLine={false} minTickGap={24} />
                 <YAxis tickLine={false} axisLine={false} width={42} />
