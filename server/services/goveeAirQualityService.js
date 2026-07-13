@@ -1746,12 +1746,23 @@ class GoveeAirQualityService {
       query.sourceKey = latest.sourceKey;
     }
 
-    const samples = await TelemetrySample.find(query)
-      .sort({ recordedAt: -1 })
-      .limit(normalizedLimit)
-      .lean();
+    const samples = await TelemetrySample.aggregate([
+      { $match: query },
+      { $sort: { recordedAt: 1 } },
+      {
+        $bucketAuto: {
+          groupBy: '$recordedAt',
+          buckets: normalizedLimit,
+          output: {
+            sample: { $last: '$$ROOT' }
+          }
+        }
+      },
+      { $replaceRoot: { newRoot: '$sample' } },
+      { $sort: { recordedAt: 1 } }
+    ]);
 
-    return samples.reverse().map((sample) => this.sampleFromTelemetry(sample));
+    return samples.map((sample) => this.sampleFromTelemetry(sample));
   }
 
   async getDashboardData({ hours = DEFAULT_HISTORY_HOURS, limit = DEFAULT_HISTORY_LIMIT } = {}) {

@@ -1424,9 +1424,34 @@ class TempestService {
       $gte: new Date(Date.now() - hoursBack * 60 * 60 * 1000)
     };
 
-    const observations = await TempestObservation.find(query)
-      .sort({ observedAt: -1 })
-      .limit(maxRecords);
+    const sampleObservations = (observationTypeQuery) => TempestObservation.aggregate([
+      {
+        $match: {
+          ...query,
+          observationType: observationTypeQuery
+        }
+      },
+      { $sort: { observedAt: 1 } },
+      {
+        $bucketAuto: {
+          groupBy: '$observedAt',
+          buckets: maxRecords,
+          output: {
+            observation: { $last: '$$ROOT' }
+          }
+        }
+      },
+      { $replaceRoot: { newRoot: '$observation' } },
+      { $sort: { observedAt: 1 } }
+    ]);
+
+    const [standardObservations, rapidWindObservations] = await Promise.all([
+      sampleObservations({ $ne: 'rapid_wind' }),
+      sampleObservations('rapid_wind')
+    ]);
+
+    const observations = [...standardObservations, ...rapidWindObservations]
+      .sort((left, right) => new Date(left.observedAt).getTime() - new Date(right.observedAt).getTime());
 
     return observations
       .map((entry) => ({
@@ -1437,8 +1462,7 @@ class TempestService {
         observedAt: entry.observedAt,
         metrics: entry.metrics,
         derived: entry.derived
-      }))
-      .reverse();
+      }));
   }
 
   async getEvents({ stationId = null, limit = 40 } = {}) {

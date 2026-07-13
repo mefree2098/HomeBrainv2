@@ -98,6 +98,7 @@ test('buildLocationName creates a readable fallback label', () => {
 });
 
 test('createWeatherPayload normalizes current and daily forecast data', () => {
+  const hourlyTimes = Array.from({ length: 400 }, (_, index) => `2026-03-${String(23 + Math.floor(index / 24)).padStart(2, '0')}T${String(index % 24).padStart(2, '0')}:00`);
   const payload = createWeatherPayload(
     {
       timezone: 'America/Denver',
@@ -117,6 +118,13 @@ test('createWeatherPayload normalizes current and daily forecast data', () => {
         precipitation_probability_max: [55],
         sunrise: ['2026-03-23T07:01'],
         sunset: ['2026-03-23T19:14']
+      },
+      hourly: {
+        time: hourlyTimes,
+        temperature_2m: hourlyTimes.map((_, index) => 50 + index / 10),
+        precipitation_probability: hourlyTimes.map((_, index) => index % 100),
+        wind_speed_10m: hourlyTimes.map((_, index) => 5 + index / 100),
+        weather_code: hourlyTimes.map(() => 2)
       }
     },
     {
@@ -134,6 +142,8 @@ test('createWeatherPayload normalizes current and daily forecast data', () => {
   assert.equal(payload.today.condition, 'Light Rain');
   assert.equal(payload.today.sunrise, '2026-03-23T07:01');
   assert.equal(Array.isArray(payload.hourlyForecast), true);
+  assert.equal(payload.hourlyForecast.length, 336);
+  assert.equal(payload.hourlyForecast.at(-1)?.time, hourlyTimes[335]);
 });
 
 test('fetchDashboardWeather skips heavy telemetry and stale indoor-air sync by default', async (t) => {

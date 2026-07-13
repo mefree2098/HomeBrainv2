@@ -19,6 +19,8 @@ const DEFAULT_WEATHER_TEMPEST_STALE_AFTER_MS = 15 * 60 * 1000;
 const DEFAULT_WEATHER_GOVEE_SYNC_COOLDOWN_MS = 60 * 1000;
 const DEFAULT_WEATHER_GOVEE_STALE_AFTER_MS = 5 * 60 * 1000;
 const DEFAULT_WEATHER_MODULE_TELEMETRY_TIMEOUT_MS = 1500;
+const MAX_WEATHER_CHART_HOURS = 24 * 14;
+const MAX_WEATHER_HISTORY_POINTS = 720;
 const WEATHER_CACHE_COORDINATE_PRECISION = 2;
 const WEATHER_RECOVERY_COORDINATE_PRECISION = 1;
 const forecastCache = new Map();
@@ -792,7 +794,7 @@ function createWeatherPayload(forecastResponse, airQualityResponse, location) {
       condition: todayDescriptor.label,
       icon: todayDescriptor.icon
     },
-    hourlyForecast: hourlyTimes.slice(0, 24).map((time, index) => {
+    hourlyForecast: hourlyTimes.slice(0, MAX_WEATHER_CHART_HOURS).map((time, index) => {
       const descriptor = describeWeatherCode(hourlyCodes[index]);
       return {
         time,
@@ -986,7 +988,7 @@ async function buildDashboardWeatherPayload(location, options = {}) {
               wind_speed_unit: 'mph',
               precipitation_unit: 'inch',
               timezone: 'auto',
-              forecast_days: 2
+              forecast_hours: MAX_WEATHER_CHART_HOURS
             },
             timeout: 10000
           });
@@ -1125,7 +1127,8 @@ async function fetchWeatherDashboard(options = {}) {
     moduleTelemetry: null
   }));
   const indoorAir = await goveeAirQualityService.getDashboardData({
-    hours: options.indoorAirHistoryHours || 24
+    hours: options.indoorAirHistoryHours || 24,
+    limit: MAX_WEATHER_HISTORY_POINTS
   }).catch(() => ({
     available: false,
     monitor: null,
