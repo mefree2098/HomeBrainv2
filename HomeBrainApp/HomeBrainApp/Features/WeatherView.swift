@@ -202,8 +202,8 @@ private func formatChartTime(_ date: Date) -> String {
     date.formatted(.dateTime.hour(.defaultDigits(amPM: .abbreviated)))
 }
 
-private func formatWeatherChartTimestamp(_ value: String?, hours: Int) -> String {
-    guard let value, let date = JSON.date(from: value) else {
+private func formatWeatherChartTimestamp(_ date: Date?, hours: Int) -> String {
+    guard let date else {
         return "--"
     }
     return DateFormatter.localizedString(
@@ -227,11 +227,11 @@ private func downsampleWeatherChartData<Entry>(_ entries: [Entry], limit: Int = 
 private func weatherChartHistory<Entry>(
     _ entries: [Entry],
     hours: Int,
-    timestamp: (Entry) -> String?
+    timestamp: (Entry) -> Date?
 ) -> [Entry] {
     let cutoff = Date().addingTimeInterval(-Double(hours) * 60 * 60)
     let filtered = entries.filter { entry in
-        guard let value = timestamp(entry), let date = JSON.date(from: value) else {
+        guard let date = timestamp(entry) else {
             return false
         }
         return date >= cutoff
@@ -267,6 +267,7 @@ private func weatherSymbolName(icon: String, isDay: Bool) -> String {
 
 private struct WeatherHourlySnapshot: Identifiable {
     let time: String
+    let date: Date?
     let temperatureF: Double?
     let precipitationChance: Double?
     let windSpeedMph: Double?
@@ -274,11 +275,11 @@ private struct WeatherHourlySnapshot: Identifiable {
     let icon: String
 
     var id: String { time }
-    var date: Date? { JSON.date(from: time) }
-
     static func from(_ object: [String: Any]) -> WeatherHourlySnapshot {
-        WeatherHourlySnapshot(
-            time: JSON.string(object, "time"),
+        let time = JSON.string(object, "time")
+        return WeatherHourlySnapshot(
+            time: time,
+            date: JSON.date(from: time),
             temperatureF: weatherOptionalDouble(object["temperatureF"]),
             precipitationChance: weatherOptionalDouble(object["precipitationChance"]),
             windSpeedMph: weatherOptionalDouble(object["windSpeedMph"]),
@@ -291,7 +292,6 @@ private struct WeatherHourlySnapshot: Identifiable {
 private struct WeatherChartPoint: Identifiable {
     let id: String
     let index: Int
-    let label: String
     let value: Double
 }
 
@@ -301,7 +301,7 @@ private struct WeatherChartSegment: Identifiable {
 }
 
 private struct WeatherWindChartSample {
-    let observedAt: String
+    let observedDate: Date?
     let averageMph: Double?
     let gustMph: Double?
     let rapidMph: Double?
@@ -392,8 +392,7 @@ private struct WeatherChartRangeSlider: View {
 
 private func buildWeatherChartSegments<Entry>(
     from entries: [Entry],
-    value: (Entry) -> Double?,
-    label: (Entry) -> String
+    value: (Entry) -> Double?
 ) -> [WeatherChartSegment] {
     var segments: [WeatherChartSegment] = []
     var currentPoints: [WeatherChartPoint] = []
@@ -425,7 +424,6 @@ private func buildWeatherChartSegments<Entry>(
             WeatherChartPoint(
                 id: "point-\(segmentIndex)-\(index)",
                 index: index,
-                label: label(entry),
                 value: entryValue
             )
         )
@@ -437,8 +435,7 @@ private func buildWeatherChartSegments<Entry>(
 
 private func buildWeatherChartPoints<Entry>(
     from entries: [Entry],
-    value: (Entry) -> Double?,
-    label: (Entry) -> String
+    value: (Entry) -> Double?
 ) -> [WeatherChartPoint] {
     entries.enumerated().compactMap { index, entry in
         guard let entryValue = value(entry) else {
@@ -448,7 +445,6 @@ private func buildWeatherChartPoints<Entry>(
         return WeatherChartPoint(
             id: "point-\(index)",
             index: index,
-            label: label(entry),
             value: entryValue
         )
     }
@@ -587,11 +583,12 @@ private struct TempestObservationSnapshot: Identifiable {
     let observationType: String
     let source: String
     let observedAt: String
+    let observedDate: Date?
     let metrics: [String: Any]
     let derived: [String: Any]
 
     var id: String { "\(observationType)-\(observedAt)" }
-    var date: Date? { JSON.date(from: observedAt) }
+    var date: Date? { observedDate }
 
     func metricDouble(_ key: String) -> Double? {
         weatherOptionalDouble(metrics[key])
@@ -602,12 +599,14 @@ private struct TempestObservationSnapshot: Identifiable {
     }
 
     static func from(_ object: [String: Any]) -> TempestObservationSnapshot {
-        TempestObservationSnapshot(
+        let observedAt = JSON.string(object, "observedAt")
+        return TempestObservationSnapshot(
             stationId: weatherOptionalInt(object["stationId"]),
             deviceId: weatherOptionalInt(object["deviceId"]),
             observationType: JSON.string(object, "observationType", fallback: "obs_st"),
             source: JSON.string(object, "source", fallback: "ws"),
-            observedAt: JSON.string(object, "observedAt"),
+            observedAt: observedAt,
+            observedDate: JSON.date(from: observedAt),
             metrics: JSON.object(object["metrics"]),
             derived: JSON.object(object["derived"])
         )
@@ -646,6 +645,7 @@ private struct GoveeIndoorAirSnapshot: Identifiable, Equatable {
     let deviceName: String
     let room: String
     let observedAt: String?
+    let observedDate: Date?
     let temperatureF: Double?
     let humidityPct: Double?
     let pm25UgM3: Double?
@@ -661,11 +661,13 @@ private struct GoveeIndoorAirSnapshot: Identifiable, Equatable {
             return nil
         }
 
+        let observedAt = JSON.optionalString(object, "observedAt")
         return GoveeIndoorAirSnapshot(
             id: JSON.string(object, "id", fallback: UUID().uuidString),
             deviceName: JSON.string(object, "deviceName", fallback: "Govee Indoor Air"),
             room: JSON.string(object, "room", fallback: "Inside"),
-            observedAt: JSON.optionalString(object, "observedAt"),
+            observedAt: observedAt,
+            observedDate: JSON.date(from: observedAt),
             temperatureF: weatherOptionalDouble(object["temperatureF"]),
             humidityPct: weatherOptionalDouble(object["humidityPct"]),
             pm25UgM3: weatherOptionalDouble(object["pm25UgM3"]),
@@ -1446,30 +1448,27 @@ struct WeatherView: View {
     }
 
     private var forecastAxisLabels: [String] {
-        forecastTrendData.map { formatWeatherChartTimestamp($0.time, hours: chartRangeOption(at: forecastRangeIndex).hours) }
+        forecastTrendData.map { formatWeatherChartTimestamp($0.date, hours: chartRangeOption(at: forecastRangeIndex).hours) }
     }
 
     private var forecastTemperaturePoints: [WeatherChartPoint] {
         buildWeatherChartPoints(
             from: forecastTrendData,
-            value: { $0.temperatureF },
-            label: { formatWeatherChartTimestamp($0.time, hours: chartRangeOption(at: forecastRangeIndex).hours) }
+            value: { $0.temperatureF }
         )
     }
 
     private var forecastWindPoints: [WeatherChartPoint] {
         buildWeatherChartPoints(
             from: forecastTrendData,
-            value: { $0.windSpeedMph },
-            label: { formatWeatherChartTimestamp($0.time, hours: chartRangeOption(at: forecastRangeIndex).hours) }
+            value: { $0.windSpeedMph }
         )
     }
 
     private var forecastPrecipitationPoints: [WeatherChartPoint] {
         buildWeatherChartPoints(
             from: forecastTrendData,
-            value: { $0.precipitationChance },
-            label: { formatWeatherChartTimestamp($0.time, hours: chartRangeOption(at: forecastRangeIndex).hours) }
+            value: { $0.precipitationChance }
         )
     }
 
@@ -1477,43 +1476,39 @@ struct WeatherView: View {
         weatherChartHistory(
             dashboard?.indoorAirSamples ?? [],
             hours: chartRangeOption(at: indoorAirRangeIndex).hours,
-            timestamp: { $0.observedAt }
+            timestamp: { $0.observedDate }
         )
     }
 
     private var indoorAirAxisLabels: [String] {
-        indoorAirTrendData.map { formatWeatherChartTimestamp($0.observedAt, hours: chartRangeOption(at: indoorAirRangeIndex).hours) }
+        indoorAirTrendData.map { formatWeatherChartTimestamp($0.observedDate, hours: chartRangeOption(at: indoorAirRangeIndex).hours) }
     }
 
     private var indoorTemperatureSegments: [WeatherChartSegment] {
         buildWeatherChartSegments(
             from: indoorAirTrendData,
-            value: { $0.temperatureF },
-            label: { formatWeatherChartTimestamp($0.observedAt, hours: chartRangeOption(at: indoorAirRangeIndex).hours) }
+            value: { $0.temperatureF }
         )
     }
 
     private var indoorHumiditySegments: [WeatherChartSegment] {
         buildWeatherChartSegments(
             from: indoorAirTrendData,
-            value: { $0.humidityPct },
-            label: { formatWeatherChartTimestamp($0.observedAt, hours: chartRangeOption(at: indoorAirRangeIndex).hours) }
+            value: { $0.humidityPct }
         )
     }
 
     private var indoorPM25Segments: [WeatherChartSegment] {
         buildWeatherChartSegments(
             from: indoorAirTrendData,
-            value: { $0.pm25UgM3 },
-            label: { formatWeatherChartTimestamp($0.observedAt, hours: chartRangeOption(at: indoorAirRangeIndex).hours) }
+            value: { $0.pm25UgM3 }
         )
     }
 
     private var indoorAQISegments: [WeatherChartSegment] {
         buildWeatherChartSegments(
             from: indoorAirTrendData,
-            value: { $0.usAqi },
-            label: { formatWeatherChartTimestamp($0.observedAt, hours: chartRangeOption(at: indoorAirRangeIndex).hours) }
+            value: { $0.usAqi }
         )
     }
 
@@ -1521,24 +1516,24 @@ struct WeatherView: View {
         weatherChartHistory(
             (dashboard?.observations ?? []).filter { $0.observationType != "rapid_wind" },
             hours: chartRangeOption(at: atmosphericRangeIndex).hours,
-            timestamp: { $0.observedAt }
+            timestamp: { $0.observedDate }
         )
     }
 
     private var atmosphericAxisLabels: [String] {
-        atmosphericTrendData.map { formatWeatherChartTimestamp($0.observedAt, hours: chartRangeOption(at: atmosphericRangeIndex).hours) }
+        atmosphericTrendData.map { formatWeatherChartTimestamp($0.observedDate, hours: chartRangeOption(at: atmosphericRangeIndex).hours) }
     }
 
     private var environmentalTrendData: [TempestObservationSnapshot] {
         weatherChartHistory(
             (dashboard?.observations ?? []).filter { $0.observationType != "rapid_wind" },
             hours: chartRangeOption(at: environmentalRangeIndex).hours,
-            timestamp: { $0.observedAt }
+            timestamp: { $0.observedDate }
         )
     }
 
     private var environmentalAxisLabels: [String] {
-        environmentalTrendData.map { formatWeatherChartTimestamp($0.observedAt, hours: chartRangeOption(at: environmentalRangeIndex).hours) }
+        environmentalTrendData.map { formatWeatherChartTimestamp($0.observedDate, hours: chartRangeOption(at: environmentalRangeIndex).hours) }
     }
 
     private var windTrendData: [WeatherWindChartSample] {
@@ -1547,27 +1542,35 @@ struct WeatherView: View {
         let standard = weatherChartHistory(
             observations.filter { $0.observationType != "rapid_wind" },
             hours: hours,
-            timestamp: { $0.observedAt }
+            timestamp: { $0.observedDate }
         )
         let rapid = weatherChartHistory(
             observations.filter { $0.observationType == "rapid_wind" },
             hours: hours,
-            timestamp: { $0.observedAt }
+            timestamp: { $0.observedDate }
         )
         let base = standard.isEmpty ? rapid : standard
+        let rapidTimed: [(date: Date, observation: TempestObservationSnapshot)] = rapid.compactMap { observation in
+            guard let date = observation.observedDate else { return nil }
+            return (date: date, observation: observation)
+        }
+        var rapidIndex = 0
 
         return base.map { entry in
-            let entryDate = JSON.date(from: entry.observedAt)
-            let closestRapid = rapid.min { left, right in
-                guard let entryDate,
-                      let leftDate = JSON.date(from: left.observedAt),
-                      let rightDate = JSON.date(from: right.observedAt) else {
-                    return false
+            var closestRapid: TempestObservationSnapshot?
+            if let entryDate = entry.observedDate, !rapidTimed.isEmpty {
+                while rapidIndex + 1 < rapidTimed.count {
+                    let currentDistance = abs(rapidTimed[rapidIndex].date.timeIntervalSince(entryDate))
+                    let nextDistance = abs(rapidTimed[rapidIndex + 1].date.timeIntervalSince(entryDate))
+                    guard nextDistance <= currentDistance else {
+                        break
+                    }
+                    rapidIndex += 1
                 }
-                return abs(leftDate.timeIntervalSince(entryDate)) < abs(rightDate.timeIntervalSince(entryDate))
+                closestRapid = rapidTimed[rapidIndex].observation
             }
             return WeatherWindChartSample(
-                observedAt: entry.observedAt,
+                observedDate: entry.observedDate,
                 averageMph: metersPerSecondToMph(entry.metricDouble("wind_avg_mps")),
                 gustMph: metersPerSecondToMph(entry.metricDouble("wind_gust_mps")),
                 rapidMph: metersPerSecondToMph(closestRapid?.metricDouble("wind_rapid_mps"))
@@ -1576,78 +1579,69 @@ struct WeatherView: View {
     }
 
     private var windAxisLabels: [String] {
-        windTrendData.map { formatWeatherChartTimestamp($0.observedAt, hours: chartRangeOption(at: windRangeIndex).hours) }
+        windTrendData.map { formatWeatherChartTimestamp($0.observedDate, hours: chartRangeOption(at: windRangeIndex).hours) }
     }
 
     private var atmosphericTemperatureSegments: [WeatherChartSegment] {
         buildWeatherChartSegments(
             from: atmosphericTrendData,
-            value: { celsiusToFahrenheit($0.metricDouble("temp_c")) },
-            label: { formatWeatherChartTimestamp($0.observedAt, hours: chartRangeOption(at: atmosphericRangeIndex).hours) }
+            value: { celsiusToFahrenheit($0.metricDouble("temp_c")) }
         )
     }
 
     private var atmosphericFeelsLikeSegments: [WeatherChartSegment] {
         buildWeatherChartSegments(
             from: atmosphericTrendData,
-            value: { celsiusToFahrenheit($0.derivedDouble("feels_like_c")) },
-            label: { formatWeatherChartTimestamp($0.observedAt, hours: chartRangeOption(at: atmosphericRangeIndex).hours) }
+            value: { celsiusToFahrenheit($0.derivedDouble("feels_like_c")) }
         )
     }
 
     private var atmosphericDewPointSegments: [WeatherChartSegment] {
         buildWeatherChartSegments(
             from: atmosphericTrendData,
-            value: { celsiusToFahrenheit($0.derivedDouble("dew_point_c")) },
-            label: { formatWeatherChartTimestamp($0.observedAt, hours: chartRangeOption(at: atmosphericRangeIndex).hours) }
+            value: { celsiusToFahrenheit($0.derivedDouble("dew_point_c")) }
         )
     }
 
     private var environmentalPressureSegments: [WeatherChartSegment] {
         buildWeatherChartSegments(
             from: environmentalTrendData,
-            value: { millibarToInHg($0.metricDouble("pressure_mb")) },
-            label: { formatWeatherChartTimestamp($0.observedAt, hours: chartRangeOption(at: environmentalRangeIndex).hours) }
+            value: { millibarToInHg($0.metricDouble("pressure_mb")) }
         )
     }
 
     private var environmentalRainRatePoints: [WeatherChartPoint] {
         buildWeatherChartPoints(
             from: environmentalTrendData,
-            value: { millimetersToInches($0.derivedDouble("rain_rate_mm_per_hr")) },
-            label: { formatWeatherChartTimestamp($0.observedAt, hours: chartRangeOption(at: environmentalRangeIndex).hours) }
+            value: { millimetersToInches($0.derivedDouble("rain_rate_mm_per_hr")) }
         )
     }
 
     private var environmentalSolarSegments: [WeatherChartSegment] {
         buildWeatherChartSegments(
             from: environmentalTrendData,
-            value: { $0.metricDouble("solar_radiation_wm2") },
-            label: { formatWeatherChartTimestamp($0.observedAt, hours: chartRangeOption(at: environmentalRangeIndex).hours) }
+            value: { $0.metricDouble("solar_radiation_wm2") }
         )
     }
 
     private var windAverageSegments: [WeatherChartSegment] {
         buildWeatherChartSegments(
             from: windTrendData,
-            value: { $0.averageMph },
-            label: { formatWeatherChartTimestamp($0.observedAt, hours: chartRangeOption(at: windRangeIndex).hours) }
+            value: { $0.averageMph }
         )
     }
 
     private var windGustSegments: [WeatherChartSegment] {
         buildWeatherChartSegments(
             from: windTrendData,
-            value: { $0.gustMph },
-            label: { formatWeatherChartTimestamp($0.observedAt, hours: chartRangeOption(at: windRangeIndex).hours) }
+            value: { $0.gustMph }
         )
     }
 
     private var windRapidSegments: [WeatherChartSegment] {
         buildWeatherChartSegments(
             from: windTrendData,
-            value: { $0.rapidMph },
-            label: { formatWeatherChartTimestamp($0.observedAt, hours: chartRangeOption(at: windRangeIndex).hours) }
+            value: { $0.rapidMph }
         )
     }
 
@@ -3246,7 +3240,9 @@ struct WeatherView: View {
     private func resolvedWeatherQuery() -> [URLQueryItem]? {
         var query: [URLQueryItem] = [
             URLQueryItem(name: "tempestHistoryHours", value: String(maximumWeatherChartHours)),
-            URLQueryItem(name: "indoorAirHistoryHours", value: String(maximumWeatherChartHours))
+            URLQueryItem(name: "indoorAirHistoryHours", value: String(maximumWeatherChartHours)),
+            URLQueryItem(name: "historyPointLimit", value: String(weatherChartHistoryLimit)),
+            URLQueryItem(name: "compact", value: "true")
         ]
 
         switch weatherLocationMode {
