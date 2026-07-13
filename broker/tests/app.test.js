@@ -108,6 +108,60 @@ test('BrokerStore refuses to overwrite a paired store with empty hub state', asy
   assert.equal(hubs[0].hubId, 'hub-empty-guard');
 });
 
+test('BrokerStore issues durable Alexa refresh tokens and rotates legacy expired records', async (t) => {
+  const brokerStoreFile = path.join(os.tmpdir(), `homebrain-broker-refresh-token-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
+  const previousRefreshTokenTtl = process.env.HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS;
+  process.env.HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS = '0';
+
+  t.after(async () => {
+    restoreEnv('HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS', previousRefreshTokenTtl);
+    await fs.rm(brokerStoreFile, { force: true });
+    await fs.rm(`${brokerStoreFile}.bak`, { force: true });
+  });
+
+  const brokerStore = new BrokerStore({ filePath: brokerStoreFile });
+  await brokerStore.registerHub({
+    hubId: 'hub-refresh-token-test',
+    hubBaseUrl: 'https://hub.example.com',
+    relayToken: 'relay-token',
+    brokerClientId: 'client-test',
+    mode: 'public'
+  });
+  const account = await brokerStore.createAccountLink({
+    hubId: 'hub-refresh-token-test',
+    locale: 'en-US'
+  });
+  const issued = await brokerStore.issueTokens({
+    brokerAccountId: account.brokerAccountId,
+    hubId: 'hub-refresh-token-test',
+    clientId: 'client-test',
+    scopes: ['smart_home']
+  });
+
+  const initialRefreshTokens = await brokerStore.read((state) => Object.values(state.refreshTokens));
+  assert.equal(initialRefreshTokens.length, 1);
+  assert.equal(initialRefreshTokens[0].expiresAt, null);
+
+  await brokerStore.write((state) => {
+    Object.values(state.refreshTokens).forEach((entry) => {
+      entry.expiresAt = '2020-01-01T00:00:00.000Z';
+      entry.revokedAt = null;
+    });
+  });
+
+  const rotated = await brokerStore.rotateRefreshToken(issued.refreshToken, {
+    clientId: 'client-test'
+  });
+
+  assert.ok(rotated.accessToken);
+  assert.ok(rotated.refreshToken);
+
+  const afterRotateRefreshTokens = await brokerStore.read((state) => Object.values(state.refreshTokens));
+  assert.equal(afterRotateRefreshTokens.length, 1);
+  assert.equal(afterRotateRefreshTokens[0].brokerAccountId, account.brokerAccountId);
+  assert.equal(afterRotateRefreshTokens[0].expiresAt, null);
+});
+
 test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', async (t) => {
   const relayToken = 'relay-secret';
   const linkedAccountsPayloads = [];

@@ -4,7 +4,7 @@ const path = require('path');
 
 const DEFAULT_AUTH_CODE_TTL_MS = Math.max(60 * 1000, Number(process.env.HOMEBRAIN_ALEXA_AUTH_CODE_TTL_MS || 5 * 60 * 1000));
 const DEFAULT_ACCESS_TOKEN_TTL_SECONDS = Math.max(300, Number(process.env.HOMEBRAIN_ALEXA_ACCESS_TOKEN_TTL_SECONDS || 60 * 60));
-const DEFAULT_REFRESH_TOKEN_TTL_SECONDS = Math.max(3600, Number(process.env.HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS || 30 * 24 * 60 * 60));
+const DEFAULT_REFRESH_TOKEN_TTL_SECONDS = 0;
 const MAX_EVENT_QUEUE = 500;
 const MAX_AUDIT_LOG = 500;
 const STORE_BACKUP_SUFFIX = '.bak';
@@ -46,6 +46,29 @@ function clone(value) {
 function safeDateMs(value) {
   const timestamp = new Date(value || 0).getTime();
   return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function getRefreshTokenTtlSeconds() {
+  const rawValue = trimString(process.env.HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS);
+  if (!rawValue) {
+    return DEFAULT_REFRESH_TOKEN_TTL_SECONDS;
+  }
+
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_REFRESH_TOKEN_TTL_SECONDS;
+  }
+
+  return Math.max(0, parsed);
+}
+
+function getRefreshTokenExpiresAt(now = Date.now()) {
+  const ttlSeconds = getRefreshTokenTtlSeconds();
+  if (ttlSeconds <= 0) {
+    return null;
+  }
+
+  return new Date(now + ttlSeconds * 1000).toISOString();
 }
 
 function defaultState() {
@@ -154,7 +177,7 @@ function pruneExpiredEntries(state) {
 
   Object.keys(state.refreshTokens || {}).forEach((key) => {
     const entry = state.refreshTokens[key];
-    if (!entry || entry.revokedAt || new Date(entry.expiresAt || 0).getTime() <= now) {
+    if (!entry || entry.revokedAt) {
       delete state.refreshTokens[key];
     }
   });
@@ -537,7 +560,7 @@ class BrokerStore {
         locale: trimString(payload.locale) || accountLink.locale || 'en-US',
         createdAt: timestamp,
         lastUsedAt: timestamp,
-        expiresAt: new Date(now + DEFAULT_REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(),
+        expiresAt: getRefreshTokenExpiresAt(now),
         revokedAt: null
       };
 
@@ -608,7 +631,7 @@ class BrokerStore {
         locale: refreshRecord.locale,
         createdAt: timestamp,
         lastUsedAt: timestamp,
-        expiresAt: new Date(now + DEFAULT_REFRESH_TOKEN_TTL_SECONDS * 1000).toISOString(),
+        expiresAt: getRefreshTokenExpiresAt(now),
         revokedAt: null
       };
 
@@ -1069,3 +1092,4 @@ module.exports.BrokerStore = BrokerStore;
 module.exports.sha256 = sha256;
 module.exports.randomIdentifier = randomIdentifier;
 module.exports.permissionGrantKey = permissionGrantKey;
+module.exports.getRefreshTokenTtlSeconds = getRefreshTokenTtlSeconds;

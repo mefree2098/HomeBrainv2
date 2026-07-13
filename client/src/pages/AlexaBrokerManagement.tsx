@@ -108,7 +108,7 @@ const emptyDraft: BrokerDraft = {
   storeFile: '',
   authCodeTtlMs: '300000',
   accessTokenTtlSeconds: '3600',
-  refreshTokenTtlSeconds: '15552000',
+  refreshTokenTtlSeconds: '0',
   lwaTokenUrl: 'https://api.amazon.com/auth/o2/token',
   eventGatewayUrl: 'https://api.amazonalexa.com/v3/events',
   rateLimitWindowMs: '60000',
@@ -155,7 +155,7 @@ function hydrateDraftFromStatus(status: AlexaBrokerServiceStatus | null): Broker
     storeFile: status.storeFile || '',
     authCodeTtlMs: String(status.authCodeTtlMs || 300000),
     accessTokenTtlSeconds: String(status.accessTokenTtlSeconds || 3600),
-    refreshTokenTtlSeconds: String(status.refreshTokenTtlSeconds || 15552000),
+    refreshTokenTtlSeconds: String(status.refreshTokenTtlSeconds ?? 0),
     lwaTokenUrl: status.lwaTokenUrl || 'https://api.amazon.com/auth/o2/token',
     eventGatewayUrl: status.eventGatewayUrl || 'https://api.amazonalexa.com/v3/events',
     alexaCommandProvider: status.alexaCommandProvider || 'disabled',
@@ -1300,7 +1300,7 @@ export default function AlexaBrokerManagement() {
               <Input value={draft.accessTokenTtlSeconds} onChange={(event) => updateDraft('accessTokenTtlSeconds', event.target.value)} />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">Refresh Token TTL (s)</label>
+              <label className="text-sm font-medium">Refresh Token TTL (s, 0 = no expiration)</label>
               <Input value={draft.refreshTokenTtlSeconds} onChange={(event) => updateDraft('refreshTokenTtlSeconds', event.target.value)} />
             </div>
             <div className="space-y-2">

@@ -196,7 +196,7 @@ const alexaBrokerConfigSchema = new mongoose.Schema({
   },
   refreshTokenTtlSeconds: {
     type: Number,
-    default: 15552000
+    default: 0
   },
   lwaTokenUrl: {
     type: String,
@@ -281,6 +281,7 @@ alexaBrokerConfigSchema.pre('save', function preSave() {
     })).filter((entry) => entry.key && entry.alexaDeviceId)
     : [];
   this.storeFile = String(this.storeFile || '').trim();
+  this.refreshTokenTtlSeconds = Math.max(0, Number.parseInt(String(this.refreshTokenTtlSeconds ?? 0), 10) || 0);
   this.lwaTokenUrl = String(this.lwaTokenUrl || '').trim() || 'https://api.amazon.com/auth/o2/token';
   this.eventGatewayUrl = String(this.eventGatewayUrl || '').trim() || 'https://api.amazonalexa.com/v3/events';
   this.lifecycleEvents = Array.isArray(this.lifecycleEvents)

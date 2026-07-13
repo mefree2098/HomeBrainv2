@@ -55,7 +55,7 @@ test('buildRuntimeEnv serializes managed Alexa broker configuration', () => {
     storeFile: '/var/lib/homebrain-alexa/store.json',
     authCodeTtlMs: 300000,
     accessTokenTtlSeconds: 3600,
-    refreshTokenTtlSeconds: 15552000,
+    refreshTokenTtlSeconds: 0,
     lwaTokenUrl: 'https://api.amazon.com/auth/o2/token',
     eventGatewayUrl: 'https://api.amazonalexa.com/v3/events',
     rateLimitWindowMs: 60000,
@@ -73,6 +73,7 @@ test('buildRuntimeEnv serializes managed Alexa broker configuration', () => {
   assert.equal(env.HOMEBRAIN_ALEXA_COMMAND_SESSION_COOKIE, 'session-cookie');
   assert.equal(env.HOMEBRAIN_ALEXA_COMMAND_SERVICE_HOST, 'pitangui.amazon.com');
   assert.equal(env.HOMEBRAIN_ALEXA_COMMAND_TIMEOUT_MS, '10000');
+  assert.equal(env.HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS, '0');
   assert.deepEqual(JSON.parse(env.HOMEBRAIN_ALEXA_COMMAND_TARGETS_JSON), [{
     key: 'kitchen',
     alexaDeviceId: 'kitchen-echo-serial',
@@ -98,6 +99,7 @@ test('updateConfig stores managed HomeBrain Alexa command bridge settings', asyn
     alexaCommandSessionData: '',
     alexaCommandTargets: [],
     alexaCommandTimeoutMs: 10000,
+    refreshTokenTtlSeconds: 15552000,
     saveCalls: 0,
     async save() {
       this.saveCalls += 1;
@@ -122,7 +124,8 @@ test('updateConfig stores managed HomeBrain Alexa command bridge settings', asyn
     alexaCommandServiceHost: 'pitangui.amazon.com',
     alexaCommandSessionCookie: 'new-cookie',
     alexaCommandTargets: 'kitchen = kitchen-echo-serial | Kitchen Alexa | Kitchen',
-    alexaCommandTimeoutMs: '2500'
+    alexaCommandTimeoutMs: '2500',
+    refreshTokenTtlSeconds: '0'
   });
 
   assert.equal(response.success, true);
@@ -137,6 +140,7 @@ test('updateConfig stores managed HomeBrain Alexa command bridge settings', asyn
     enabled: true
   }]);
   assert.equal(config.alexaCommandTimeoutMs, 2500);
+  assert.equal(config.refreshTokenTtlSeconds, 0);
   assert.equal(config.saveCalls, 1);
 
   await service.updateConfig({
