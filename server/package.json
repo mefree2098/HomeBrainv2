@@ -23,7 +23,7 @@
     "@anthropic-ai/sdk": "^0.27.3",
     "@harmonyhub/client-ws": "file:vendor/harmony-client-ws",
     "@harmonyhub/discover": "^1.0.9",
-    "@matter/main": "^0.16.11",
+    "@matter/main": "^0.17.5",
     "@matter/nodejs": "^0.16.11",
     "@matter/nodejs-ble": "^0.16.11",
     "@modelcontextprotocol/sdk": "^1.29.0",
