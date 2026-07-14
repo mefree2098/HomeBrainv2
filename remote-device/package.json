@@ -19,7 +19,7 @@
   "author": "HomeBrain",
   "license": "Apache-2.0",
   "dependencies": {
-    "ws": "^8.21.0",
+    "ws": "^8.21.1",
     "node-record-lpcm16": "^1.0.1",
     "node-fetch": "^2.7.0",
     "yargs": "^17.7.2",
