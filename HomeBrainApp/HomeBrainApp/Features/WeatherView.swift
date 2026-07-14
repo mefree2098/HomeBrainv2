@@ -1922,7 +1922,7 @@ struct WeatherView: View {
                                 )
                             }
 
-                            HStack(alignment: .top, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 12) {
                                 VStack(alignment: .leading, spacing: 6) {
                                     Label(forecast.locationName, systemImage: "mappin.and.ellipse")
                                         .font(HBTypography.body(size: 13, weight: .medium))
@@ -1934,26 +1934,23 @@ struct WeatherView: View {
                                         .foregroundStyle(HBPalette.textPrimary)
                                 }
 
-                                Spacer(minLength: 12)
-
-                                VStack(alignment: .trailing, spacing: 6) {
-                                    HStack(spacing: 8) {
-                                        if let station {
-                                            HBTempestBatteryBadge(volts: station.metrics.batteryVolts)
-                                        }
-                                        HBBadge(text: stationLive ? "Live Telemetry" : "Forecast Only")
-                                        if let trend = station?.metrics.pressureTrend, stationLive {
-                                            HBBadge(
-                                                text: trend,
-                                                foreground: HBPalette.textPrimary,
-                                                background: HBPalette.panel.opacity(0.94),
-                                                stroke: HBPalette.panelStroke
-                                            )
-                                        }
+                                HStack(spacing: 8) {
+                                    if let station {
+                                        HBTempestBatteryBadge(volts: station.metrics.batteryVolts)
                                     }
-
-                                    HBWeatherSyncCaption(value: lastSyncedAt)
+                                    HBBadge(text: stationLive ? "Live Telemetry" : "Forecast Only")
                                 }
+
+                                if let trend = station?.metrics.pressureTrend, stationLive {
+                                    HBBadge(
+                                        text: trend,
+                                        foreground: HBPalette.textPrimary,
+                                        background: HBPalette.panel.opacity(0.94),
+                                        stroke: HBPalette.panelStroke
+                                    )
+                                }
+
+                                HBWeatherSyncCaption(value: lastSyncedAt)
                             }
                         }
                     }
@@ -2142,7 +2139,8 @@ struct WeatherView: View {
                             ForEach(forecastTemperaturePoints) { point in
                                 LineMark(
                                     x: .value("Sample", point.index),
-                                    y: .value("Temperature", point.value)
+                                    y: .value("Temperature", point.value),
+                                    series: .value("Series", "forecast-temperature")
                                 )
                                 .interpolationMethod(.monotone)
                                 .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
@@ -2152,7 +2150,8 @@ struct WeatherView: View {
                             ForEach(forecastWindPoints) { point in
                                 LineMark(
                                     x: .value("Sample", point.index),
-                                    y: .value("Wind", point.value)
+                                    y: .value("Wind", point.value),
+                                    series: .value("Series", "forecast-wind")
                                 )
                                 .interpolationMethod(.monotone)
                                 .lineStyle(StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
@@ -2162,7 +2161,8 @@ struct WeatherView: View {
                             ForEach(forecastPrecipitationPoints) { point in
                                 LineMark(
                                     x: .value("Sample", point.index),
-                                    y: .value("Precip", point.value)
+                                    y: .value("Precip", point.value),
+                                    series: .value("Series", "forecast-precipitation")
                                 )
                                 .interpolationMethod(.monotone)
                                 .lineStyle(StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
@@ -2291,7 +2291,7 @@ struct WeatherView: View {
                                 LineMark(
                                     x: .value("Sample", point.index),
                                     y: .value("Indoor Temp", point.value),
-                                    series: .value("Indoor Temp Segment", segment.id)
+                                    series: .value("Series", "indoor-temperature-\(segment.id)")
                                 )
                                 .interpolationMethod(.monotone)
                                 .lineStyle(StrokeStyle(lineWidth: 2.6, lineCap: .round, lineJoin: .round))
@@ -2304,7 +2304,7 @@ struct WeatherView: View {
                                 LineMark(
                                     x: .value("Sample", point.index),
                                     y: .value("Indoor RH", point.value),
-                                    series: .value("Indoor RH Segment", segment.id)
+                                    series: .value("Series", "indoor-humidity-\(segment.id)")
                                 )
                                 .interpolationMethod(.monotone)
                                 .lineStyle(StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
@@ -2317,7 +2317,7 @@ struct WeatherView: View {
                                 LineMark(
                                     x: .value("Sample", point.index),
                                     y: .value("PM2.5", point.value),
-                                    series: .value("PM2.5 Segment", segment.id)
+                                    series: .value("Series", "indoor-pm25-\(segment.id)")
                                 )
                                 .interpolationMethod(.monotone)
                                 .lineStyle(StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
@@ -2330,7 +2330,7 @@ struct WeatherView: View {
                                 LineMark(
                                     x: .value("Sample", point.index),
                                     y: .value("AQI", point.value),
-                                    series: .value("AQI Segment", segment.id)
+                                    series: .value("Series", "indoor-aqi-\(segment.id)")
                                 )
                                 .interpolationMethod(.monotone)
                                 .lineStyle(StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
@@ -2389,7 +2389,7 @@ struct WeatherView: View {
                                     AreaMark(
                                         x: .value("Sample", point.index),
                                         y: .value("Temperature", point.value),
-                                        series: .value("Temperature Segment", segment.id)
+                                        series: .value("Series", "atmospheric-temperature-\(segment.id)")
                                     )
                                         .interpolationMethod(.monotone)
                                         .foregroundStyle(
@@ -2405,7 +2405,7 @@ struct WeatherView: View {
                                     LineMark(
                                         x: .value("Sample", point.index),
                                         y: .value("Temperature", point.value),
-                                        series: .value("Temperature Segment", segment.id)
+                                        series: .value("Series", "atmospheric-temperature-\(segment.id)")
                                     )
                                         .interpolationMethod(.monotone)
                                         .foregroundStyle(atmosphericTemperatureChartColor)
@@ -2418,7 +2418,7 @@ struct WeatherView: View {
                                     LineMark(
                                         x: .value("Sample", point.index),
                                         y: .value("Feels Like", point.value),
-                                        series: .value("Feels Like Segment", segment.id)
+                                        series: .value("Series", "atmospheric-feels-like-\(segment.id)")
                                     )
                                         .interpolationMethod(.monotone)
                                         .foregroundStyle(atmosphericFeelsLikeChartColor)
@@ -2431,7 +2431,7 @@ struct WeatherView: View {
                                     LineMark(
                                         x: .value("Sample", point.index),
                                         y: .value("Dew Point", point.value),
-                                        series: .value("Dew Point Segment", segment.id)
+                                        series: .value("Series", "atmospheric-dew-point-\(segment.id)")
                                     )
                                         .interpolationMethod(.monotone)
                                         .foregroundStyle(atmosphericDewPointChartColor)
@@ -2486,7 +2486,7 @@ struct WeatherView: View {
                                     LineMark(
                                         x: .value("Sample", point.index),
                                         y: .value("Average", point.value),
-                                        series: .value("Average Segment", segment.id)
+                                        series: .value("Series", "wind-average-\(segment.id)")
                                     )
                                         .interpolationMethod(.monotone)
                                         .foregroundStyle(windAverageChartColor)
@@ -2499,7 +2499,7 @@ struct WeatherView: View {
                                     LineMark(
                                         x: .value("Sample", point.index),
                                         y: .value("Gust", point.value),
-                                        series: .value("Gust Segment", segment.id)
+                                        series: .value("Series", "wind-gust-\(segment.id)")
                                     )
                                         .interpolationMethod(.monotone)
                                         .foregroundStyle(windGustChartColor)
@@ -2512,7 +2512,7 @@ struct WeatherView: View {
                                     LineMark(
                                         x: .value("Sample", point.index),
                                         y: .value("Rapid", point.value),
-                                        series: .value("Rapid Segment", segment.id)
+                                        series: .value("Series", "wind-rapid-\(segment.id)")
                                     )
                                         .interpolationMethod(.monotone)
                                         .foregroundStyle(windRapidChartColor)
@@ -2579,7 +2579,7 @@ struct WeatherView: View {
                                 LineMark(
                                     x: .value("Sample", point.index),
                                     y: .value("Pressure", point.value),
-                                    series: .value("Pressure Segment", segment.id)
+                                    series: .value("Series", "environmental-pressure-\(segment.id)")
                                 )
                                 .interpolationMethod(.monotone)
                                 .foregroundStyle(environmentalPressureChartColor)
@@ -2592,7 +2592,7 @@ struct WeatherView: View {
                                 LineMark(
                                     x: .value("Sample", point.index),
                                     y: .value("Solar", point.value),
-                                    series: .value("Solar Segment", segment.id)
+                                    series: .value("Series", "environmental-solar-\(segment.id)")
                                 )
                                 .interpolationMethod(.monotone)
                                 .foregroundStyle(environmentalSolarChartColor)
