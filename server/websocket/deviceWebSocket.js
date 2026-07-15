@@ -19,10 +19,16 @@ class DeviceWebSocket {
     this.wss = new WebSocket.Server({ noServer: true });
 
     this.wss.on('connection', async (socket, request) => {
+      socket.authenticated = false;
       try {
         const token = extractToken(request);
         const user = await verifyAccessToken(token, undefined, request);
+        if (user?.isReviewSandbox === true) {
+          socket.close(4403, 'Review sandbox uses an isolated device stream');
+          return;
+        }
         socket.user = user;
+        socket.authenticated = true;
       } catch (error) {
         console.warn('DeviceWebSocket: authentication failed:', error.message);
         socket.close(4401, 'Unauthorized');
@@ -146,7 +152,11 @@ class DeviceWebSocket {
     const message = JSON.stringify(payload);
 
     this.wss.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
+      if (
+        client.readyState === WebSocket.OPEN
+        && client.authenticated === true
+        && client.user?.isReviewSandbox !== true
+      ) {
         try {
           client.send(message);
         } catch (error) {

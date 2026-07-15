@@ -164,6 +164,7 @@ struct DevicesView: View {
     private var useTwoColumnLayout: Bool { useLandscapeCompactLayout || contentWidth >= 860 }
     private var usesStackedFilterLayout: Bool { contentWidth < 620 }
     private var isEmbeddedFocusMode: Bool { embeddedFocusDeviceID?.isEmpty == false }
+    private var isReviewSandbox: Bool { !previewMode && session.currentUser?.isReviewSandbox == true }
     private var addDeviceSheetPadding: CGFloat { useLandscapeCompactLayout ? 12 : (isCompact ? 16 : 22) }
     private var addDeviceSheetSpacing: CGFloat { useLandscapeCompactLayout ? 12 : 16 }
     private var embeddedFocusedDevice: DeviceItem? {
@@ -524,10 +525,12 @@ struct DevicesView: View {
             VStack(alignment: .leading, spacing: 16) {
                 HBSectionHeader(
                     title: "Smart Devices",
-                    subtitle: "Manage dimming, color, thermostat, and power controls across the residence mesh.",
+                    subtitle: isReviewSandbox
+                        ? "Control synthetic devices in the isolated App Review home."
+                        : "Manage dimming, color, thermostat, and power controls across the residence mesh.",
                     eyebrow: "Hardware Orchestration",
-                    buttonTitle: "Add Device",
-                    buttonIcon: "plus"
+                    buttonTitle: isReviewSandbox ? nil : "Add Device",
+                    buttonIcon: isReviewSandbox ? nil : "plus"
                 ) {
                     showCreateSheet = true
                 }
@@ -786,10 +789,12 @@ struct DevicesView: View {
             }
         }
         .contextMenu {
-            Button(role: .destructive) {
-                pendingDeleteDevice = device
-            } label: {
-                Label("Delete Device", systemImage: "trash")
+            if !isReviewSandbox {
+                Button(role: .destructive) {
+                    pendingDeleteDevice = device
+                } label: {
+                    Label("Delete Device", systemImage: "trash")
+                }
             }
         }
     }
@@ -2282,7 +2287,15 @@ struct DevicesView: View {
                             }
                         }
 
-                        deviceIdentityEditor(for: device)
+                        if isReviewSandbox {
+                            HBPanel {
+                                Label("Synthetic device — controls affect this review account only", systemImage: "checkmark.shield")
+                                    .font(HBTypography.body(size: 14, weight: .semibold))
+                                    .foregroundStyle(HBPalette.textSecondary)
+                            }
+                        } else {
+                            deviceIdentityEditor(for: device)
+                        }
 
                         HBPanel {
                             VStack(alignment: .leading, spacing: 12) {
@@ -2311,19 +2324,19 @@ struct DevicesView: View {
                             }
                         }
 
-                        if device.type == "lock" {
+                        if device.type == "lock" && !isReviewSandbox {
                             lockPinManagementPanel(for: device)
                         }
 
-                        if isSmartThingsBackedDevice(device) {
+                        if isSmartThingsBackedDevice(device) && !isReviewSandbox {
                             directRadioMigrationPanel(for: device)
                         }
 
-                        if needsMigrationFinalization(device) {
+                        if needsMigrationFinalization(device) && !isReviewSandbox {
                             directRadioMigrationFinalizationPanel(for: device)
                         }
 
-                        if isNativeZigbeeDevice(device) {
+                        if isNativeZigbeeDevice(device) && !isReviewSandbox {
                             zigbeeMaintenancePanel(for: device)
                         }
 
@@ -2341,22 +2354,24 @@ struct DevicesView: View {
                             }
                         }
 
-                        HBPanel {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text("Device Record")
-                                    .font(HBTypography.body(size: 17, weight: .bold))
-                                    .foregroundStyle(HBPalette.textPrimary)
-                                Text("Remove stale HomeBrain records after exclusion, replacement, or controller cleanup.")
-                                    .font(HBTypography.body(size: 13, weight: .medium))
-                                    .foregroundStyle(HBPalette.textSecondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                Button(role: .destructive) {
-                                    pendingDeleteDevice = device
-                                } label: {
-                                    Label("Delete Device", systemImage: "trash")
-                                        .frame(maxWidth: .infinity)
+                        if !isReviewSandbox {
+                            HBPanel {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    Text("Device Record")
+                                        .font(HBTypography.body(size: 17, weight: .bold))
+                                        .foregroundStyle(HBPalette.textPrimary)
+                                    Text("Remove stale HomeBrain records after exclusion, replacement, or controller cleanup.")
+                                        .font(HBTypography.body(size: 13, weight: .medium))
+                                        .foregroundStyle(HBPalette.textSecondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Button(role: .destructive) {
+                                        pendingDeleteDevice = device
+                                    } label: {
+                                        Label("Delete Device", systemImage: "trash")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(HBDestructiveButtonStyle())
                                 }
-                                .buttonStyle(HBDestructiveButtonStyle())
                             }
                         }
                     }

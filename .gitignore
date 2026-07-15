@@ -52,6 +52,12 @@ HomeBrainApp/**/.DS_Store
 HomeBrainWatch/**/xcuserdata/
 HomeBrainWatch/**/.DS_Store
 
+# Local App Store media and signed build artifacts
+HomeBrainApp/AppStoreAssets/**/build/
+HomeBrainApp/AppStoreAssets/**/*.png
+HomeBrainApp/AppStoreAssets/**/*.mov
+HomeBrainApp/AppStoreAssets/**/*.mp4
+
 node_modules/
 uploads
 .codex-home/

@@ -1,22 +1,25 @@
 import SwiftUI
 
 struct AuthView: View {
-    enum Mode: String, CaseIterable, Identifiable {
-        case login = "Login"
-        case register = "Register"
-
-        var id: String { rawValue }
+    private enum Field: Hashable {
+        case endpoint
+        case email
+        case password
     }
 
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @EnvironmentObject private var session: SessionStore
+    #if DEBUG
     @EnvironmentObject private var uiPreview: UIPreviewStore
+    #endif
 
-    @State private var mode: Mode = .login
+    @FocusState private var focusedField: Field?
     @State private var serverURL = ""
     @State private var email = ""
     @State private var password = ""
-    @State private var confirmPassword = ""
 
+    #if DEBUG
     private let previewSections: [AppShellView.AppSection] = [
         .dashboard,
         .senseEnergy,
@@ -27,6 +30,21 @@ struct AuthView: View {
         .settings,
         .ollama
     ]
+    #endif
+
+    private var usesCompactSpacing: Bool {
+        horizontalSizeClass == .compact
+    }
+
+    private var usesStackedControls: Bool {
+        dynamicTypeSize.isAccessibilitySize
+    }
+
+    private var hasRequiredCredentials: Bool {
+        !serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !password.isEmpty
+    }
 
     var body: some View {
         NavigationStack {
@@ -35,25 +53,30 @@ struct AuthView: View {
                     .ignoresSafeArea()
 
                 ScrollView(showsIndicators: false) {
-                    VStack(spacing: 18) {
+                    VStack(spacing: usesCompactSpacing ? 12 : 18) {
                         HStack {
                             Spacer(minLength: 0)
                             HBThemeToggleMenu()
                         }
 
-                        HBDeckSurface(cornerRadius: 32) {
-                            VStack(alignment: .leading, spacing: 22) {
+                        HBDeckSurface(cornerRadius: usesCompactSpacing ? 26 : 32) {
+                            VStack(alignment: .leading, spacing: usesCompactSpacing ? 12 : 18) {
                                 heroPanel
                                 authPanel
+                                #if DEBUG
                                 previewPanel
+                                #endif
                             }
-                            .padding(20)
+                            .padding(usesCompactSpacing ? 10 : 18)
                         }
-                        .frame(maxWidth: 720)
+                        .frame(maxWidth: 680)
                     }
-                    .padding(18)
                     .frame(maxWidth: .infinity)
+                    .padding(.horizontal, usesCompactSpacing ? 14 : 28)
+                    .padding(.vertical, usesCompactSpacing ? 8 : 24)
                 }
+                .scrollDismissesKeyboard(.interactively)
+                .scrollBounceBehavior(.basedOnSize)
             }
             .toolbar(.hidden, for: .navigationBar)
             .onAppear {
@@ -66,153 +89,246 @@ struct AuthView: View {
 
     private var heroPanel: some View {
         HBPanel {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top, spacing: 14) {
-                    Image("HomeBrainBrandIcon")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 42, height: 42)
-                        .padding(10)
-                        .background(HBGlassBackground(cornerRadius: 18, variant: .panelSoft))
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Identity Layer")
-                            .font(HBTypography.display(size: 11, weight: .bold))
-                            .textCase(.uppercase)
-                            .tracking(2.8)
-                            .foregroundStyle(HBPalette.textMuted)
-
-                        Text("HomeBrain iOS Command Deck")
-                            .font(HBTypography.display(size: 32, weight: .bold))
-                            .foregroundStyle(
-                                LinearGradient(
-                                    colors: [HBPalette.accentBlue, HBPalette.accentPurple],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-
-                        Text("Authenticate to the residence control mesh, sync with your hub, and bring the native app into the same cinematic command layer as the web deck.")
-                            .font(HBTypography.body(size: 16, weight: .medium))
-                            .foregroundStyle(HBPalette.textSecondary)
-                    }
+            if usesStackedControls {
+                VStack(alignment: .leading, spacing: 14) {
+                    brandIcon(size: 42)
+                    heroCopy
                 }
-
-                HStack(spacing: 10) {
-                    HBBadge(text: "Glass UI online")
-                    HBBadge(text: "Adaptive themes ready")
+            } else {
+                HStack(alignment: .top, spacing: usesCompactSpacing ? 12 : 16) {
+                    brandIcon(size: usesCompactSpacing ? 38 : 48)
+                    heroCopy
                 }
             }
         }
+    }
+
+    private var heroCopy: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Private Home Control")
+                .font(HBTypography.display(.caption2, weight: .bold))
+                .textCase(.uppercase)
+                .tracking(2.2)
+                .foregroundStyle(HBPalette.textMuted)
+
+            Text("Welcome to HomeBrain")
+                .font(HBTypography.display(.title, weight: .bold))
+                .foregroundStyle(
+                    LinearGradient(
+                        colors: [HBPalette.accentBlue, HBPalette.accentPurple],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
+
+            Text("Connect securely to your HomeBrain hub and manage your home from iPhone, iPad, and Apple Watch.")
+                .font(HBTypography.body(.body, weight: .medium))
+                .foregroundStyle(HBPalette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !usesCompactSpacing || usesStackedControls {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        HBBadge(text: "Private hub")
+                        HBBadge(text: "Secure access")
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HBBadge(text: "Private hub")
+                        HBBadge(text: "Secure access")
+                    }
+                }
+            }
+        }
+    }
+
+    private func brandIcon(size: CGFloat) -> some View {
+        Image("HomeBrainBrandIcon")
+            .resizable()
+            .scaledToFit()
+            .frame(width: size, height: size)
+            .padding(10)
+            .background(HBGlassBackground(cornerRadius: 18, variant: .panelSoft))
+            .accessibilityHidden(true)
     }
 
     private var authPanel: some View {
         HBPanel {
             VStack(alignment: .leading, spacing: 18) {
-                Text("Secure Access")
-                    .font(HBTypography.display(size: 11, weight: .bold))
-                    .textCase(.uppercase)
-                    .tracking(2.8)
-                    .foregroundStyle(HBPalette.textMuted)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Sign In")
+                        .font(HBTypography.display(.title2, weight: .bold))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .accessibilityAddTraits(.isHeader)
 
-                Picker("Mode", selection: $mode) {
-                    ForEach(Mode.allCases) { value in
-                        Text(value.rawValue).tag(value)
-                    }
-                }
-                .pickerStyle(.segmented)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Hub Endpoint")
-                        .font(HBTypography.body(size: 13, weight: .semibold))
+                    Text("Use the account credentials supplied by your HomeBrain administrator.")
+                        .font(HBTypography.body(.subheadline, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
-
-                    HStack(spacing: 10) {
-                        TextField("https://homebrain.local", text: $serverURL)
-                            .keyboardType(.URL)
-                            .textInputAutocapitalization(.never)
-                            .disableAutocorrection(true)
-                            .hbPanelTextField()
-
-                        Button("Save") {
-                            if session.updateServerURL(serverURL) {
-                                serverURL = session.serverURLString
-                                session.authError = nil
-                            } else {
-                                session.authError = "Enter a valid server URL."
-                            }
-                        }
-                        .buttonStyle(HBSecondaryButtonStyle())
-                    }
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Credentials")
-                        .font(HBTypography.body(size: 13, weight: .semibold))
-                        .foregroundStyle(HBPalette.textSecondary)
-
-                    TextField("Email", text: $email)
-                        .textInputAutocapitalization(.never)
-                        .disableAutocorrection(true)
-                        .keyboardType(.emailAddress)
-                        .hbPanelTextField()
-
-                    SecureField("Password", text: $password)
-                        .hbPanelTextField()
-
-                    if mode == .register {
-                        SecureField("Confirm password", text: $confirmPassword)
-                            .hbPanelTextField()
-                    }
-                }
+                endpointSection
+                credentialSection
 
                 if let authError = session.authError, !authError.isEmpty {
                     InlineErrorView(message: authError, retry: nil)
                 }
 
-                HStack(spacing: 12) {
-                    Button {
-                        submit()
-                    } label: {
-                        if session.isProcessingAuth {
-                            HStack(spacing: 8) {
-                                ProgressView()
-                                Text(mode == .login ? "Signing In..." : "Creating Account...")
-                            }
-                            .frame(maxWidth: .infinity)
-                        } else {
-                            Label(mode == .login ? "Sign In" : "Create Account", systemImage: mode == .login ? "arrow.right.circle" : "person.crop.circle.badge.plus")
-                                .frame(maxWidth: .infinity)
-                        }
-                    }
-                    .buttonStyle(HBPrimaryButtonStyle())
-                    .disabled(session.isProcessingAuth || email.isEmpty || password.isEmpty || serverURL.isEmpty)
+                signInActions
 
-                    Button("Use Saved Hub") {
-                        serverURL = session.serverURLString
-                    }
-                    .buttonStyle(HBSecondaryButtonStyle())
+                Label {
+                    Text("Accounts are created on the HomeBrain hub. This app does not offer public or in-app registration.")
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "person.crop.circle.badge.checkmark")
+                        .foregroundStyle(HBPalette.accentBlue)
                 }
-
-                Text(mode == .login ? "Enter your HomeBrain credentials to rejoin the command deck." : "Create an operator account to personalize favorites, voice routines, and access control.")
-                    .font(HBTypography.body(size: 14, weight: .medium))
-                    .foregroundStyle(HBPalette.textSecondary)
+                .font(HBTypography.body(.footnote, weight: .medium))
+                .foregroundStyle(HBPalette.textSecondary)
+                .accessibilityIdentifier("auth.provisioningNotice")
             }
         }
     }
 
+    private var endpointSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("HomeBrain Hub")
+                .font(HBTypography.body(.subheadline, weight: .semibold))
+                .foregroundStyle(HBPalette.textSecondary)
+
+            if usesStackedControls {
+                VStack(spacing: 10) {
+                    endpointField
+                    saveEndpointButton
+                        .frame(maxWidth: .infinity)
+                }
+            } else {
+                HStack(spacing: 10) {
+                    endpointField
+                    saveEndpointButton
+                }
+            }
+
+            Text("Enter the secure address provided with your HomeBrain setup.")
+                .font(HBTypography.body(.caption, weight: .medium))
+                .foregroundStyle(HBPalette.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var endpointField: some View {
+        TextField("https://your-homebrain.example", text: $serverURL)
+            .keyboardType(.URL)
+            .textContentType(.URL)
+            .textInputAutocapitalization(.never)
+            .disableAutocorrection(true)
+            .submitLabel(.next)
+            .focused($focusedField, equals: .endpoint)
+            .onSubmit { focusedField = .email }
+            .hbPanelTextField()
+            .accessibilityLabel("HomeBrain hub address")
+            .accessibilityIdentifier("auth.endpoint")
+    }
+
+    private var saveEndpointButton: some View {
+        Button("Save Hub") {
+            saveEndpoint()
+        }
+        .buttonStyle(HBSecondaryButtonStyle())
+        .accessibilityHint("Validates and saves this HomeBrain hub address")
+        .accessibilityIdentifier("auth.endpoint.save")
+    }
+
+    private var credentialSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Account")
+                .font(HBTypography.body(.subheadline, weight: .semibold))
+                .foregroundStyle(HBPalette.textSecondary)
+
+            TextField("Email", text: $email)
+                .textInputAutocapitalization(.never)
+                .disableAutocorrection(true)
+                .keyboardType(.emailAddress)
+                .textContentType(.username)
+                .submitLabel(.next)
+                .focused($focusedField, equals: .email)
+                .onSubmit { focusedField = .password }
+                .hbPanelTextField()
+                .accessibilityIdentifier("auth.email")
+
+            SecureField("Password", text: $password)
+                .textContentType(.password)
+                .submitLabel(.go)
+                .focused($focusedField, equals: .password)
+                .onSubmit { submit() }
+                .hbPanelTextField()
+                .accessibilityIdentifier("auth.password")
+        }
+    }
+
+    @ViewBuilder
+    private var signInActions: some View {
+        if usesStackedControls {
+            VStack(spacing: 10) {
+                signInButton
+                useSavedHubButton
+            }
+        } else {
+            HStack(spacing: 12) {
+                signInButton
+                useSavedHubButton
+            }
+        }
+    }
+
+    private var signInButton: some View {
+        Button {
+            submit()
+        } label: {
+            Group {
+                if session.isProcessingAuth {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .tint(.white)
+                        Text("Signing In…")
+                    }
+                } else {
+                    Label("Sign In", systemImage: "arrow.right.circle.fill")
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(HBPrimaryButtonStyle())
+        .disabled(session.isProcessingAuth || !hasRequiredCredentials)
+        .accessibilityIdentifier("auth.signIn")
+    }
+
+    private var useSavedHubButton: some View {
+        Button("Use Saved Hub") {
+            serverURL = session.serverURLString
+            focusedField = .email
+        }
+        .buttonStyle(HBSecondaryButtonStyle())
+        .frame(maxWidth: usesStackedControls ? .infinity : nil)
+        .accessibilityIdentifier("auth.endpoint.restore")
+    }
+
+    #if DEBUG
     private var previewPanel: some View {
         HBPanel {
             VStack(alignment: .leading, spacing: 16) {
                 Text("UI Preview")
-                    .font(HBTypography.display(size: 11, weight: .bold))
+                    .font(HBTypography.display(.caption2, weight: .bold))
                     .textCase(.uppercase)
-                    .tracking(2.8)
+                    .tracking(2.2)
                     .foregroundStyle(HBPalette.textMuted)
 
                 Text("Jump directly into the app shell without authentication to inspect layouts, theme behavior, and spacing on each module.")
-                    .font(HBTypography.body(size: 15, weight: .medium))
+                    .font(HBTypography.body(.subheadline, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 10)], spacing: 10) {
                     ForEach(previewSections) { section in
@@ -228,13 +344,13 @@ struct AuthView: View {
 
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(section.title)
-                                        .font(HBTypography.body(size: 15, weight: .semibold))
+                                        .font(HBTypography.body(.subheadline, weight: .semibold))
                                         .foregroundStyle(HBPalette.textPrimary)
                                         .lineLimit(1)
                                     Text(section.chromeKicker)
-                                        .font(HBTypography.display(size: 10, weight: .bold))
+                                        .font(HBTypography.display(.caption2, weight: .bold))
                                         .textCase(.uppercase)
-                                        .tracking(1.6)
+                                        .tracking(1.4)
                                         .foregroundStyle(HBPalette.textMuted)
                                         .lineLimit(1)
                                 }
@@ -249,29 +365,46 @@ struct AuthView: View {
             }
         }
     }
+    #endif
+
+    private func saveEndpoint() {
+        if session.updateServerURL(serverURL) {
+            serverURL = session.serverURLString
+            session.authError = nil
+            focusedField = .email
+        } else {
+            session.authError = "Enter a valid HomeBrain hub address."
+            focusedField = .endpoint
+        }
+    }
 
     private func submit() {
+        guard hasRequiredCredentials else {
+            if serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                focusedField = .endpoint
+            } else if email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                focusedField = .email
+            } else {
+                focusedField = .password
+            }
+            return
+        }
+
         guard session.updateServerURL(serverURL) else {
-            session.authError = "Enter a valid server URL."
+            session.authError = "Enter a valid HomeBrain hub address."
+            focusedField = .endpoint
             return
         }
 
         serverURL = session.serverURLString
         session.authError = nil
-
-        if mode == .register {
-            guard password == confirmPassword else {
-                session.authError = "Passwords do not match."
-                return
-            }
-            Task {
-                await session.register(email: email, password: password)
-            }
-            return
-        }
+        focusedField = nil
 
         Task {
-            await session.login(email: email, password: password)
+            await session.login(
+                email: email.trimmingCharacters(in: .whitespacesAndNewlines),
+                password: password
+            )
         }
     }
 }

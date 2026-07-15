@@ -16,6 +16,7 @@ final class UIPreviewStore: ObservableObject {
     private let sectionKey = "homebrain.ios.ui-preview.section"
 
     init() {
+        #if DEBUG
         let forcedSection = Self.previewSectionFromLaunch()
         isForcedByLaunch = Self.previewEnabledFromLaunch() || forcedSection != nil
 
@@ -23,6 +24,12 @@ final class UIPreviewStore: ObservableObject {
         selectedSectionRaw = forcedSection
             ?? defaults.string(forKey: sectionKey)
             ?? AppShellView.AppSection.dashboard.rawValue
+        #else
+        isForcedByLaunch = false
+        isEnabled = false
+        selectedSectionRaw = defaults.string(forKey: sectionKey)
+            ?? AppShellView.AppSection.dashboard.rawValue
+        #endif
     }
 
     var selectedSection: AppShellView.AppSection {

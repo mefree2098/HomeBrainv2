@@ -23,6 +23,10 @@ struct ScenesView: View {
 
     private let categories = ["comfort", "security", "entertainment", "energy", "custom"]
 
+    private var isReviewSandbox: Bool {
+        session.currentUser?.isReviewSandbox == true
+    }
+
     var body: some View {
         VStack(spacing: 12) {
             if isLoading {
@@ -30,20 +34,28 @@ struct ScenesView: View {
             } else {
                 HBSectionHeader(
                     title: "Scenes",
-                    subtitle: "Create and control scene presets",
-                    buttonTitle: "New Scene",
-                    buttonIcon: "plus"
+                    subtitle: isReviewSandbox
+                        ? "Run synthetic presets in the isolated review home"
+                        : "Create and control scene presets",
+                    buttonTitle: isReviewSandbox ? nil : "New Scene",
+                    buttonIcon: isReviewSandbox ? nil : "plus"
                 ) {
                     resetSceneEditor()
                     showCreateSheet = true
                 }
 
                 HStack {
-                    Button("AI Scene") {
-                        showNaturalLanguageSheet = true
+                    if isReviewSandbox {
+                        Label("Virtual scene actions affect demo devices only", systemImage: "checkmark.shield")
+                            .font(HBTypography.body(.caption))
+                            .foregroundStyle(HBPalette.textSecondary)
+                    } else {
+                        Button("AI Scene") {
+                            showNaturalLanguageSheet = true
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(HBPalette.accentBlue)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(HBPalette.accentBlue)
 
                     Spacer()
                 }
@@ -75,6 +87,7 @@ struct ScenesView: View {
                             HBCardRow {
                                 sceneRow(scene)
                             }
+                            .deleteDisabled(isReviewSandbox)
                             .listRowSeparator(.hidden)
                             .listRowBackground(Color.clear)
                         }
@@ -153,10 +166,12 @@ struct ScenesView: View {
                 .buttonStyle(.bordered)
                 .disabled(favoritesProfileId == nil || isPendingFavorite)
 
-                Button("Edit") {
-                    beginEditing(scene)
+                if !isReviewSandbox {
+                    Button("Edit") {
+                        beginEditing(scene)
+                    }
+                    .buttonStyle(.bordered)
                 }
-                .buttonStyle(.bordered)
             }
         }
     }

@@ -155,26 +155,6 @@ final class SessionStore: ObservableObject {
         }
     }
 
-    func register(email: String, password: String) async {
-        isProcessingAuth = true
-        authError = nil
-        defer { isProcessingAuth = false }
-
-        do {
-            let payload: [String: Any] = ["email": email, "password": password]
-            let response = try await apiClient.post("/api/auth/register", body: payload, authorized: false)
-            let responseObject = JSON.object(response)
-
-            if responseObject["accessToken"] != nil || JSON.object(responseObject["data"])["accessToken"] != nil {
-                try applyAuthPayload(responseObject)
-            } else {
-                await login(email: email, password: password)
-            }
-        } catch {
-            authError = error.localizedDescription
-        }
-    }
-
     func logout() {
         Task {
             let payload: [String: Any] = [
@@ -185,6 +165,26 @@ final class SessionStore: ObservableObject {
             await MainActor.run {
                 clearAuthData()
             }
+        }
+    }
+
+    @discardableResult
+    func deleteAccount(password: String) async -> Bool {
+        isProcessingAuth = true
+        authError = nil
+        defer { isProcessingAuth = false }
+
+        do {
+            _ = try await apiClient.delete(
+                "/api/auth/account",
+                body: ["password": password]
+            )
+            authError = nil
+            clearAuthData()
+            return true
+        } catch {
+            authError = error.localizedDescription
+            return false
         }
     }
 

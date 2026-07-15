@@ -307,6 +307,11 @@ struct SettingsView: View {
     @State private var presentedSettingsSurface: SettingsParitySurface?
     @State private var presentedWebSettingsArea: SettingsWebArea?
     @State private var selectedSettingsArea: SettingsWebArea = .general
+    @State private var showingDeleteAccount = false
+    @State private var deleteAccountPassword = ""
+    @State private var deleteAccountConfirmation = ""
+    @State private var deleteAccountError: String?
+    @State private var isDeletingAccount = false
 
     @State private var serverURL = ""
     @State private var authSessionMaxAgeDays = 365
@@ -450,6 +455,10 @@ struct SettingsView: View {
         previewMode || session.currentUser?.role == "admin"
     }
 
+    private var isReviewSandbox: Bool {
+        !previewMode && session.currentUser?.isReviewSandbox == true
+    }
+
     private var usesCompactSettingsAreaSelector: Bool {
         horizontalSizeClass == .compact || contentWidth < 620
     }
@@ -500,7 +509,9 @@ struct SettingsView: View {
     var body: some View {
         GeometryReader { proxy in
             VStack(spacing: 12) {
-                if isLoading {
+                if isReviewSandbox {
+                    reviewSandboxSettings
+                } else if isLoading {
                     LoadingView(title: "Loading settings...")
                 } else {
                     HBSectionHeader(
@@ -525,6 +536,10 @@ struct SettingsView: View {
                             }
                         }
 
+                        if session.currentUser != nil {
+                            settingsAccountSection
+                        }
+
                         Section(usesCompactSettingsAreaSelector ? "Area" : "Settings Areas") {
                             settingsAreaSelector
                         }
@@ -547,7 +562,14 @@ struct SettingsView: View {
             }
         }
         .task {
+            guard !isReviewSandbox else {
+                isLoading = false
+                return
+            }
             await loadSettings()
+        }
+        .sheet(isPresented: $showingDeleteAccount) {
+            deleteAccountSheet
         }
         .sheet(item: $presentedSettingsSurface) { surface in
             NavigationStack {
@@ -578,6 +600,126 @@ struct SettingsView: View {
                     }
             }
             .environmentObject(session)
+        }
+    }
+
+    private var reviewSandboxSettings: some View {
+        VStack(spacing: 12) {
+            HBSectionHeader(
+                title: "Settings",
+                subtitle: "Apple App Review demo environment"
+            )
+
+            Form {
+                Section("Review Sandbox") {
+                    Label("Synthetic demo data", systemImage: "checkmark.shield")
+                        .foregroundStyle(HBPalette.accentGreen)
+
+                    Text("The rooms, devices, scenes, workflows, notifications, weather, and Watch content available to this account are virtual examples created for App Review.")
+                        .font(HBTypography.body(.footnote))
+                        .foregroundStyle(HBPalette.textSecondary)
+
+                    Text("This sandbox is isolated from the owner's household. Actions taken here cannot view or control production devices, integrations, credentials, or global HomeBrain settings.")
+                        .font(HBTypography.body(.footnote))
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+
+                settingsAccountSection
+            }
+            .hbFormStyle()
+        }
+    }
+
+    private var settingsAccountSection: some View {
+        Section("Account") {
+            LabeledContent("Signed in as", value: session.currentUser?.email ?? "")
+
+            Text(isReviewSandbox
+                 ? "Deleting this review account removes its login, sessions, and isolated demo data. It does not affect the owner's household or any production resources."
+                 : "Deleting your account removes your login, sessions, notifications, push registrations, voice-command history, and security PIN. Devices, rooms, scenes, and workflows remain with the HomeBrain hub.")
+                .font(HBTypography.body(.footnote))
+                .foregroundStyle(HBPalette.textSecondary)
+
+            Button(role: .destructive) {
+                deleteAccountPassword = ""
+                deleteAccountConfirmation = ""
+                deleteAccountError = nil
+                showingDeleteAccount = true
+            } label: {
+                Label("Delete Account", systemImage: "person.crop.circle.badge.xmark")
+            }
+        }
+    }
+
+    private var deleteAccountSheet: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(isReviewSandbox
+                         ? "This permanently deletes the review account, signs it out on all devices, and removes its isolated demo data. No production household resources are affected."
+                         : "This permanently deletes your HomeBrain account and signs it out on all devices. Household configuration remains available to other authorized hub accounts.")
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+
+                Section("Confirm your identity") {
+                    SecureField("Current password", text: $deleteAccountPassword)
+                        .textContentType(.password)
+
+                    TextField("Type DELETE", text: $deleteAccountConfirmation)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                }
+
+                if let deleteAccountError, !deleteAccountError.isEmpty {
+                    Section {
+                        InlineErrorView(message: deleteAccountError, retry: nil)
+                    }
+                }
+            }
+            .hbFormStyle()
+            .navigationTitle("Delete Account")
+            .navigationBarTitleDisplayMode(.inline)
+            .interactiveDismissDisabled(isDeletingAccount)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        showingDeleteAccount = false
+                    }
+                    .disabled(isDeletingAccount)
+                }
+
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(role: .destructive) {
+                        Task { await deleteCurrentAccount() }
+                    } label: {
+                        if isDeletingAccount {
+                            ProgressView()
+                        } else {
+                            Text("Delete")
+                        }
+                    }
+                    .disabled(
+                        isDeletingAccount
+                        || deleteAccountPassword.isEmpty
+                        || deleteAccountConfirmation != "DELETE"
+                    )
+                }
+            }
+        }
+    }
+
+    private func deleteCurrentAccount() async {
+        isDeletingAccount = true
+        deleteAccountError = nil
+        let deleted = await session.deleteAccount(password: deleteAccountPassword)
+        isDeletingAccount = false
+
+        if deleted {
+            showingDeleteAccount = false
+            deleteAccountPassword = ""
+            deleteAccountConfirmation = ""
+        } else {
+            deleteAccountError = session.authError ?? "HomeBrain could not delete the account."
         }
     }
 
@@ -1808,6 +1950,13 @@ struct SettingsView: View {
     }
 
     private func loadSettings() async {
+        guard !isReviewSandbox else {
+            isLoading = false
+            errorMessage = nil
+            infoMessage = ""
+            return
+        }
+
         if previewMode {
             var previewAreaToOpen: SettingsWebArea?
             if !appliedPreviewLaunchActions {

@@ -86,6 +86,10 @@ const schema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  isReviewSandbox: {
+    type: Boolean,
+    default: false,
+  },
   platforms: {
     type: platformsSchema,
     default: () => ({ ...DEFAULT_USER_PLATFORMS }),

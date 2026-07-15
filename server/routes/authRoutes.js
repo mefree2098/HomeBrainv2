@@ -2,6 +2,7 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const UserService = require('../services/userService.js');
 const authSessionService = require('../services/authSessionService.js');
+const accountDeletionService = require('../services/accountDeletionService.js');
 const { requireUser, extractToken, verifyAccessToken } = require('./middlewares/auth.js');
 const User = require('../models/User.js');
 const { ALL_ROLES, ROLES } = require('../../shared/config/roles.js');
@@ -79,6 +80,18 @@ const oidcExchangeRateLimit = rateLimit({
   message: {
     success: false,
     message: 'Too many OIDC exchange attempts. Please retry shortly.'
+  }
+});
+
+const accountDeletionRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_ACCOUNT_DELETE_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000)),
+  limit: Math.max(3, Number(process.env.HOMEBRAIN_ACCOUNT_DELETE_RATE_LIMIT_MAX || 5)),
+  keyGenerator: rateLimitIpKey,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many account deletion attempts. Please retry shortly.'
   }
 });
 
@@ -328,6 +341,27 @@ router.post('/refresh', refreshRateLimit, async (req, res) => {
 
 router.get('/me', requireUser(ALL_ROLES, { platform: null }), async (req, res) => {
   return res.status(200).json(buildAuthenticatedUserPayload(req.user, req));
+});
+
+router.delete('/account', accountDeletionRateLimit, requireUser(ALL_ROLES, {
+  platform: null,
+  allowReadOnlyMutation: true
+}), async (req, res) => {
+  try {
+    await accountDeletionService.deleteAccount(req.user._id, req.body?.password);
+    clearAuthCookies(res);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Your HomeBrain account and associated personal data were deleted.'
+    });
+  } catch (error) {
+    console.error(`DELETE /api/auth/account - Error: ${error.message}`);
+    return res.status(error.status || 500).json({
+      success: false,
+      message: error.message || 'Failed to delete account'
+    });
+  }
 });
 
 router.get('/sessions', requireUser(ALL_ROLES, { platform: null }), async (req, res) => {

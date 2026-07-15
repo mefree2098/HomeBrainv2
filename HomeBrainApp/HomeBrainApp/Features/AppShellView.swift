@@ -360,6 +360,19 @@ struct AppShellView: View {
         if previewMode {
             return AppSection.allCases
         }
+        if session.currentUser?.isReviewSandbox == true {
+            return [
+                .dashboard,
+                .weather,
+                .watchApp,
+                .devices,
+                .rooms,
+                .scenes,
+                .workflows,
+                .notifications,
+                .settings
+            ]
+        }
         return AppSection.allCases.filter { !($0.adminOnly && session.currentUser?.role != "admin") }
     }
 
