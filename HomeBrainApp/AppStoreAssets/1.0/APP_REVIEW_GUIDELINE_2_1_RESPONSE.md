@@ -39,7 +39,7 @@ The recording should begin with launching HomeBrain and show this flow:
 7. Open Devices and toggle a virtual light or change its virtual brightness.
 8. Open Rooms, Scenes, and Workflows; activate one virtual scene and execute one virtual workflow.
 9. Open Weather, choose **Use Device Location**, and respond to the Location prompt. Explain that location is optional and used for local weather.
-10. Enable Voice Commands and respond to the Microphone and Speech Recognition prompts. Use a harmless command such as “turn on the living room light”; the result changes only the virtual sandbox.
+10. Enable Voice Commands and respond to the Microphone and Speech Recognition prompts. Say “Hey HomeBrain, turn on the living room light”; the result changes only the virtual sandbox.
 11. Show Notifications and the Apple Watch configuration/companion screen. If a paired Watch is available, show its Overview, Security, Lights, and Weather sections.
 12. Sign out of the persistent review account.
 13. Sign in with the separate disposable deletion-test credential from the Notes field.
@@ -68,7 +68,7 @@ Simulator coverage can be listed separately as supplemental testing, but it does
 
 ### 1. Physical-device recording
 
-Attach `[FILENAME]`, captured on `[PHYSICAL DEVICE MODEL]` running `[OS VERSION]`. Confirm that it begins with app launch and includes sign-in, all permission prompts encountered, representative sandbox control, the Watch experience, and deletion of the disposable account.
+Attach `[FILENAME]`, captured on `[PHYSICAL DEVICE MODEL]` running `[OS VERSION]`. Confirm that it begins with app launch and includes sign-in, all permission prompts encountered, representative sandbox control, the iPhone Apple Watch companion/configuration screen, and deletion of the disposable account. Mention paired-Watch screens only if they are actually present in the attachment.
 
 ### 2. Devices and operating systems tested
 
@@ -136,7 +136,7 @@ Replace all bracketed values and attach the verified physical-device recording b
 ```text
 Hello App Review,
 
-Thank you for the request. We have attached “[FILENAME],” captured on a physical [DEVICE MODEL] running [OS VERSION]. The recording begins with launching HomeBrain and demonstrates the sign-in-only flow, all permission prompts encountered, Dashboard, a virtual device action, Rooms, Scenes, Workflows, Weather, Voice Commands, the Watch experience, account deletion with a disposable account, and return to the signed-out screen.
+Thank you for the request. We have attached “[FILENAME],” captured on a physical [DEVICE MODEL] running [OS VERSION]. The recording begins with launching HomeBrain and demonstrates the sign-in-only flow, all permission prompts encountered, Dashboard, a virtual device action, Rooms, Scenes, Workflows, Weather, Voice Commands, the iPhone Apple Watch companion/configuration screen, account deletion with a disposable account, and return to the signed-out screen.
 
 Replacement build 1.0 (6) removes the in-app Register option, provides isolated interactive review data, adds in-app account deletion, clarifies the Location/Microphone/Speech purpose strings, and excludes the developer UI Preview from Release builds.
 
@@ -182,6 +182,8 @@ Replace all bracketed values. Put the persistent review email/password in the de
 ```text
 PURPOSE
 HomeBrain is a companion for owners and authorized household users of a HomeBrain hub. It provides one private interface for compatible devices, rooms, scenes, workflows, security state, weather, notifications, energy information, optional voice commands, and Apple Watch. The iOS app is sign-in only: accounts are provisioned by a HomeBrain administrator; public and in-app registration are not supported.
+
+It replaces fragmented vendor apps with one consistent interface for an authorized household's connected-home controls and status.
 
 REVIEW ACCESS
 Endpoint: https://freestonefamily.com
