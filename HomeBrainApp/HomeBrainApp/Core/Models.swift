@@ -29,6 +29,55 @@ nonisolated struct AppUser: Codable, Identifiable {
     let email: String
     let role: String
     let platforms: AppUserPlatforms
+    let isReviewSandbox: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case email
+        case role
+        case platforms
+        case isReviewSandbox
+        case reviewSandboxEnabled
+    }
+
+    init(
+        id: String,
+        name: String,
+        email: String,
+        role: String,
+        platforms: AppUserPlatforms,
+        isReviewSandbox: Bool = false
+    ) {
+        self.id = id
+        self.name = name
+        self.email = email
+        self.role = role
+        self.platforms = platforms
+        self.isReviewSandbox = isReviewSandbox
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(String.self, forKey: .id) ?? ""
+        name = try container.decodeIfPresent(String.self, forKey: .name) ?? ""
+        email = try container.decodeIfPresent(String.self, forKey: .email) ?? ""
+        role = try container.decodeIfPresent(String.self, forKey: .role) ?? "user"
+        platforms = try container.decodeIfPresent(AppUserPlatforms.self, forKey: .platforms) ?? AppUserPlatforms()
+        isReviewSandbox = try container.decodeIfPresent(Bool.self, forKey: .isReviewSandbox)
+            ?? container.decodeIfPresent(Bool.self, forKey: .reviewSandboxEnabled)
+            ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(name, forKey: .name)
+        try container.encode(email, forKey: .email)
+        try container.encode(role, forKey: .role)
+        try container.encode(platforms, forKey: .platforms)
+        try container.encode(isReviewSandbox, forKey: .isReviewSandbox)
+    }
 
     var hasHomeBrainAccess: Bool {
         platforms.homebrain
@@ -46,7 +95,12 @@ nonisolated struct AppUser: Codable, Identifiable {
             name: JSON.string(object, "name", fallback: email),
             email: email,
             role: JSON.string(object, "role", fallback: "user"),
-            platforms: AppUserPlatforms.from(JSON.object(object["platforms"]))
+            platforms: AppUserPlatforms.from(JSON.object(object["platforms"])),
+            isReviewSandbox: JSON.bool(
+                object,
+                "isReviewSandbox",
+                fallback: JSON.bool(object, "reviewSandboxEnabled")
+            )
         )
     }
 }

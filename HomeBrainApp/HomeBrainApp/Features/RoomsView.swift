@@ -50,6 +50,10 @@ struct RoomsView: View {
         horizontalSizeClass == .compact
     }
 
+    private var isReviewSandbox: Bool {
+        !previewMode && session.currentUser?.isReviewSandbox == true
+    }
+
     private var selectedRoom: RoomItem? {
         rooms.first { $0.name == selectedRoomName } ?? rooms.first
     }
@@ -170,11 +174,15 @@ struct RoomsView: View {
             VStack(alignment: .leading, spacing: 14) {
                 HBSectionHeader(
                     title: "Rooms",
-                    subtitle: "Manage saved room names and assignments across HomeBrain.",
+                    subtitle: isReviewSandbox
+                        ? "Browse the synthetic room registry for the isolated review home."
+                        : "Manage saved room names and assignments across HomeBrain.",
                     eyebrow: "Room Registry"
                 )
 
-                if usesCompactLayout {
+                if isReviewSandbox {
+                    refreshButton
+                } else if usesCompactLayout {
                     VStack(alignment: .leading, spacing: 10) {
                         createRoomFields
                         refreshButton
@@ -286,32 +294,40 @@ struct RoomsView: View {
                         Spacer()
                     }
 
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Name")
+                    if isReviewSandbox {
+                        Label("Synthetic App Review room", systemImage: "checkmark.shield")
                             .font(HBTypography.body(size: 14, weight: .semibold))
                             .foregroundStyle(HBPalette.textSecondary)
+                    } else {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Name")
+                                .font(HBTypography.body(size: 14, weight: .semibold))
+                                .foregroundStyle(HBPalette.textSecondary)
 
-                        HStack(alignment: .bottom, spacing: 10) {
-                            TextField("Room name", text: $editRoomName)
-                                .hbPanelTextField()
-                                .disabled(selectedRoom.isDefault || isSaving)
+                            HStack(alignment: .bottom, spacing: 10) {
+                                TextField("Room name", text: $editRoomName)
+                                    .hbPanelTextField()
+                                    .disabled(selectedRoom.isDefault || isSaving)
 
-                            Button {
-                                Task { await renameSelectedRoom() }
-                            } label: {
-                                Label("Rename", systemImage: "square.and.pencil")
+                                Button {
+                                    Task { await renameSelectedRoom() }
+                                } label: {
+                                    Label("Rename", systemImage: "square.and.pencil")
+                                }
+                                .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                                .disabled(!canRenameRoom)
                             }
-                            .buttonStyle(HBSecondaryButtonStyle(compact: true))
-                            .disabled(!canRenameRoom)
                         }
-                    }
 
-                    deletePanel(for: selectedRoom)
+                        deletePanel(for: selectedRoom)
+                    }
                 }
             } else {
                 EmptyStateView(
                     title: "No rooms",
-                    subtitle: "Create a room to make it available in HomeBrain."
+                    subtitle: isReviewSandbox
+                        ? "Reset the review sandbox to restore its synthetic rooms."
+                        : "Create a room to make it available in HomeBrain."
                 )
             }
         }

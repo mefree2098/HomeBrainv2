@@ -25,6 +25,20 @@ function makeQueryResult(value) {
   };
 }
 
+function stubEligibleNotificationUsers(t) {
+  const originalFind = User.find;
+  const queries = [];
+  User.find = (query) => {
+    queries.push(query);
+    const ids = Array.isArray(query?._id?.$in) ? query._id.$in : [];
+    return makeQueryResult(ids.map((_id) => ({ _id })));
+  };
+  t.after(() => {
+    User.find = originalFind;
+  });
+  return queries;
+}
+
 test('registerPushDevice enables security critical push by default only for iPhone', async (t) => {
   const originalFindOneAndUpdate = PushSubscription.findOneAndUpdate;
   const updates = [];
@@ -74,6 +88,7 @@ test('registerPushDevice enables security critical push by default only for iPho
 });
 
 test('createSystemNotification sends APNs only for security critical notifications', async (t) => {
+  const userQueries = stubEligibleNotificationUsers(t);
   const originalFindOneAndUpdate = HomeBrainNotification.findOneAndUpdate;
   const originalFindByIdAndUpdate = HomeBrainNotification.findByIdAndUpdate;
   const originalFind = PushSubscription.find;
@@ -169,9 +184,11 @@ test('createSystemNotification sends APNs only for security critical notificatio
   assert.equal(sent[1].payload.environment, 'development');
   assert.equal(sent[0].payload.eventType, 'security.alarm.triggered');
   assert.equal(sent[0].payload.channel, 'securityCritical');
+  assert.equal(userQueries.every((query) => query.isReviewSandbox?.$ne === true), true);
 });
 
 test('createSystemNotification does not resend APNs for an existing security event', async (t) => {
+  stubEligibleNotificationUsers(t);
   const originalFindOneAndUpdate = HomeBrainNotification.findOneAndUpdate;
   const originalFindByIdAndUpdate = HomeBrainNotification.findByIdAndUpdate;
   const originalFind = PushSubscription.find;
@@ -251,6 +268,7 @@ test('createSystemNotification does not resend APNs for an existing security eve
 });
 
 test('createSystemNotification serializes same-key upserts to avoid duplicate active notifications', async (t) => {
+  stubEligibleNotificationUsers(t);
   const originalFindOneAndUpdate = HomeBrainNotification.findOneAndUpdate;
   const originalPublishSafe = eventStreamService.publishSafe;
 

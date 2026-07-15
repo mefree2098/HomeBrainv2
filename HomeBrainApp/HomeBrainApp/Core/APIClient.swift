@@ -61,8 +61,8 @@ final class APIClient {
         try await request(path: path, method: .patch, body: body, query: [])
     }
 
-    func delete(_ path: String) async throws -> Any {
-        try await request(path: path, method: .delete, body: nil, query: [])
+    func delete(_ path: String, body: Any? = nil) async throws -> Any {
+        try await request(path: path, method: .delete, body: body, query: [])
     }
 
     func download(
@@ -204,8 +204,7 @@ final class APIClient {
            authorized,
            !hasRetried,
            path != "/api/auth/refresh",
-           path != "/api/auth/login",
-           path != "/api/auth/register" {
+           path != "/api/auth/login" {
             try await sessionStore.refreshTokens()
             return try await dataRequest(
                 path: path,

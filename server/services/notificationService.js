@@ -186,6 +186,7 @@ async function withNotificationUpsertLock(lockKey, operation) {
 async function findHomeBrainUsers() {
   const query = {
     isActive: true,
+    isReviewSandbox: { $ne: true },
     $or: [
       { 'platforms.homebrain': true },
       { platforms: { $exists: false } },
@@ -399,7 +400,11 @@ async function updatePushDelivery(notificationId, delivery) {
 
 async function createSystemNotification(input = {}) {
   const users = Array.isArray(input.userIds) && input.userIds.length > 0
-    ? input.userIds.map((userId) => ({ _id: userId }))
+    ? await User.find({
+      _id: { $in: input.userIds },
+      isActive: true,
+      isReviewSandbox: { $ne: true }
+    }).select('_id').lean()
     : await findHomeBrainUsers();
 
   const notifications = [];

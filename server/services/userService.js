@@ -1,5 +1,6 @@
 const User = require('../models/User.js');
 const { generatePasswordHash, validatePassword } = require('../utils/password.js');
+const reviewSandboxService = require('./reviewSandboxService.js');
 const { ALL_ROLES, ROLES } = require('../../shared/config/roles.js');
 const {
   DEFAULT_USER_PLATFORMS,
@@ -106,6 +107,9 @@ class UserService {
       }
 
       const result = await User.deleteOne({ _id: id }).exec();
+      if (result.deletedCount === 1) {
+        await reviewSandboxService.deleteForUser(id);
+      }
       return (result.deletedCount === 1);
     } catch (err) {
       throw new Error(`Database error while deleting user ${id}: ${err}`);

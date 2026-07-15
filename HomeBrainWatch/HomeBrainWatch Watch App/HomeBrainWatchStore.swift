@@ -30,7 +30,11 @@ final class HomeBrainWatchStore: ObservableObject {
     }
 
   init() {
+    #if DEBUG
     isPreviewMode = Self.previewEnabledFromLaunch()
+    #else
+    isPreviewMode = false
+    #endif
     if isPreviewMode {
       isAuthenticated = true
       dashboard = Self.previewDashboard()
@@ -192,6 +196,7 @@ final class HomeBrainWatchStore: ObservableObject {
     try HomeBrainAPIClient(baseURLString: serverURL, deviceID: deviceID)
   }
 
+  #if DEBUG
   private static func previewEnabledFromLaunch() -> Bool {
     let processInfo = ProcessInfo.processInfo
     if processInfo.arguments.contains("-ui-preview") {
@@ -202,6 +207,7 @@ final class HomeBrainWatchStore: ObservableObject {
     }
     return false
   }
+  #endif
 
   private static func previewDashboard() -> WatchDashboard {
     return WatchDashboard(

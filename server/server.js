@@ -21,6 +21,7 @@ const { databaseAvailabilityGuard } = require("./middleware/databaseAvailability
 const express = require("express");
 const basicRoutes = require("./routes/index");
 const authRoutes = require("./routes/authRoutes");
+const reviewSandboxRoutes = require("./routes/reviewSandboxRoutes");
 const userRoutes = require("./routes/userRoutes");
 const oidcRoutes = require("./routes/oidcRoutes");
 const deviceRoutes = require("./routes/deviceRoutes");
@@ -78,6 +79,7 @@ const watchRoutes = require("./routes/watchRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
 const deviceWebSocket = require("./websocket/deviceWebSocket");
 const deviceUpdateEmitter = require("./services/deviceUpdateEmitter");
+const reviewSandboxService = require("./services/reviewSandboxService");
 const adminBootstrapService = require("./services/adminBootstrapService");
 const { requireUser } = require("./routes/middlewares/auth");
 const DiscoveryService = require("./services/discoveryService");
@@ -449,6 +451,10 @@ app.on("error", (error) => {
 
 // Device Updates Stream (SSE)
 app.get('/api/devices/stream', requireUser(), (req, res) => {
+  if (req.user?.isReviewSandbox === true) {
+    return reviewSandboxService.handleDeviceStream(req.user, req, res);
+  }
+
   console.log('Device SSE: client connected');
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -510,6 +516,10 @@ app.use(oidcRoutes);
 app.use(basicRoutes);
 // Authentication Routes
 app.use('/api/auth', authRoutes);
+// Authenticated App Review accounts are projected into a per-user virtual home.
+// The gate handles an explicit allowlist and denies every unmatched API request,
+// preventing sandbox traffic from reaching household services or collections.
+app.use('/api', reviewSandboxRoutes);
 // User Management Routes
 app.use('/api/users', userRoutes);
 app.use('/api/notifications', notificationRoutes);

@@ -3,8 +3,13 @@ const express = require('express');
 const router = express.Router();
 
 const UserService = require('../services/userService.js');
+const reviewSandboxService = require('../services/reviewSandboxService.js');
+const HomeBrainNotification = require('../models/HomeBrainNotification');
+const PushSubscription = require('../models/PushSubscription');
+const UserSession = require('../models/UserSession');
 const { requireAdmin } = require('./middlewares/auth.js');
 const { USER_PLATFORMS, normalizeUserPlatforms } = require('../utils/userPlatforms');
+const { ROLES } = require('../../shared/config/roles');
 
 router.use(requireAdmin());
 
@@ -158,6 +163,96 @@ router.post('/:id/reset-password', async (req, res) => {
       success: false,
       message: error.message || 'Failed to reset password'
     });
+  }
+});
+
+router.get('/:id/review-sandbox', async (req, res) => {
+  try {
+    const user = await UserService.get(req.params.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const sandbox = user.isReviewSandbox
+      ? await reviewSandboxService.provisionForUser(user)
+      : null;
+    return res.status(200).json({
+      success: true,
+      enabled: user.isReviewSandbox === true,
+      readOnly: user.isReadOnly === true,
+      sandbox
+    });
+  } catch (error) {
+    console.error(`GET /api/users/${req.params.id}/review-sandbox - Error:`, error.message);
+    return res.status(error.status || 500).json({ success: false, message: error.message || 'Failed to inspect review sandbox' });
+  }
+});
+
+router.post('/:id/review-sandbox/reset', async (req, res) => {
+  try {
+    const user = await UserService.get(req.params.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    if (String(user._id) === String(req.user?._id)) {
+      return res.status(400).json({ success: false, message: 'You cannot convert your own administrator account into a review sandbox' });
+    }
+    if (user.role === ROLES.ADMIN) {
+      return res.status(400).json({ success: false, message: 'Create a standard user account for the review sandbox' });
+    }
+
+    user.role = ROLES.USER;
+    user.isActive = false;
+    user.isReadOnly = true;
+    user.isReviewSandbox = true;
+    user.platforms = normalizeUserPlatforms({ homebrain: true, axiom: false });
+    await user.save();
+
+    await Promise.all([
+      HomeBrainNotification.deleteMany({ userId: user._id }).exec(),
+      PushSubscription.deleteMany({ userId: user._id }).exec(),
+      UserSession.deleteMany({ userId: user._id }).exec()
+    ]);
+    const sandbox = await reviewSandboxService.provisionForUser(user, { reset: true });
+    user.isActive = true;
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Apple App Review sandbox reset successfully',
+      user,
+      sandbox
+    });
+  } catch (error) {
+    console.error(`POST /api/users/${req.params.id}/review-sandbox/reset - Error:`, error.message);
+    return res.status(error.status || 500).json({ success: false, message: error.message || 'Failed to reset review sandbox' });
+  }
+});
+
+router.delete('/:id/review-sandbox', async (req, res) => {
+  try {
+    const user = await UserService.get(req.params.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+    user.isReviewSandbox = false;
+    user.isActive = false;
+    user.isReadOnly = true;
+    user.platforms = normalizeUserPlatforms({ homebrain: false, axiom: false });
+    await user.save();
+    await Promise.all([
+      reviewSandboxService.deleteForUser(user._id),
+      UserSession.deleteMany({ userId: user._id }).exec(),
+      HomeBrainNotification.deleteMany({ userId: user._id }).exec(),
+      PushSubscription.deleteMany({ userId: user._id }).exec()
+    ]);
+    return res.status(200).json({
+      success: true,
+      message: 'Review sandbox and account access disabled'
+    });
+  } catch (error) {
+    console.error(`DELETE /api/users/${req.params.id}/review-sandbox - Error:`, error.message);
+    return res.status(error.status || 500).json({ success: false, message: error.message || 'Failed to disable review sandbox' });
   }
 });
 
