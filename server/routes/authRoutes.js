@@ -86,7 +86,7 @@ const oidcExchangeRateLimit = rateLimit({
 const accountDeletionRateLimit = rateLimit({
   windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_ACCOUNT_DELETE_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000)),
   limit: Math.max(3, Number(process.env.HOMEBRAIN_ACCOUNT_DELETE_RATE_LIMIT_MAX || 5)),
-  keyGenerator: (req) => `${rateLimitIpKey(req)}:${String(req.user?._id || 'unknown-user')}`,
+  keyGenerator: rateLimitIpKey,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -343,10 +343,10 @@ router.get('/me', requireUser(ALL_ROLES, { platform: null }), async (req, res) =
   return res.status(200).json(buildAuthenticatedUserPayload(req.user, req));
 });
 
-router.delete('/account', requireUser(ALL_ROLES, {
+router.delete('/account', accountDeletionRateLimit, requireUser(ALL_ROLES, {
   platform: null,
   allowReadOnlyMutation: true
-}), accountDeletionRateLimit, async (req, res) => {
+}), async (req, res) => {
   try {
     await accountDeletionService.deleteAccount(req.user._id, req.body?.password);
     clearAuthCookies(res);

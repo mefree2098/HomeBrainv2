@@ -1,4 +1,5 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 
 const router = express.Router();
 
@@ -11,6 +12,22 @@ const { requireAdmin } = require('./middlewares/auth.js');
 const { USER_PLATFORMS, normalizeUserPlatforms } = require('../utils/userPlatforms');
 const { ROLES } = require('../../shared/config/roles');
 
+const { ipKeyGenerator } = rateLimit;
+const adminUserRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_ADMIN_USER_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000)),
+  limit: Math.max(30, Number(process.env.HOMEBRAIN_ADMIN_USER_RATE_LIMIT_MAX || 240)),
+  keyGenerator: (req) => typeof ipKeyGenerator === 'function'
+    ? ipKeyGenerator(req.ip)
+    : (req.ip || req.socket?.remoteAddress || 'unknown'),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many user-management requests. Please retry shortly.'
+  }
+});
+
+router.use(adminUserRateLimit);
 router.use(requireAdmin());
 
 router.get('/', async (_req, res) => {
@@ -183,7 +200,7 @@ router.get('/:id/review-sandbox', async (req, res) => {
       sandbox
     });
   } catch (error) {
-    console.error(`GET /api/users/${req.params.id}/review-sandbox - Error:`, error.message);
+    console.error('GET /api/users/:id/review-sandbox - Error:', error.message);
     return res.status(error.status || 500).json({ success: false, message: error.message || 'Failed to inspect review sandbox' });
   }
 });
@@ -224,7 +241,7 @@ router.post('/:id/review-sandbox/reset', async (req, res) => {
       sandbox
     });
   } catch (error) {
-    console.error(`POST /api/users/${req.params.id}/review-sandbox/reset - Error:`, error.message);
+    console.error('POST /api/users/:id/review-sandbox/reset - Error:', error.message);
     return res.status(error.status || 500).json({ success: false, message: error.message || 'Failed to reset review sandbox' });
   }
 });
@@ -251,7 +268,7 @@ router.delete('/:id/review-sandbox', async (req, res) => {
       message: 'Review sandbox and account access disabled'
     });
   } catch (error) {
-    console.error(`DELETE /api/users/${req.params.id}/review-sandbox - Error:`, error.message);
+    console.error('DELETE /api/users/:id/review-sandbox - Error:', error.message);
     return res.status(error.status || 500).json({ success: false, message: error.message || 'Failed to disable review sandbox' });
   }
 });
