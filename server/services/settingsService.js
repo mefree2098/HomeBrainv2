@@ -91,7 +91,7 @@ class SettingsService {
         // AI Provider Settings
         'llmProvider', 'openaiApiKey', 'openaiModel',
         'anthropicApiKey', 'anthropicModel',
-        'codexPath', 'codexHome', 'codexHomeProfile', 'codexAwsVolumeRoot', 'codexModel',
+        'codexPath', 'codexHome', 'codexHomeProfile', 'codexAwsVolumeRoot', 'codexModel', 'codexEffort',
         'localLlmEndpoint', 'localLlmModel', 'homebrainLocalLlmModel', 'spamFilterLocalLlmModel', 'llmPriorityList',
         'deviceCommandCoordinator',
         'integrationPreferences',
@@ -149,6 +149,7 @@ class SettingsService {
         'codexHome',
         'codexAwsVolumeRoot',
         'codexModel',
+        'codexEffort',
         'openaiModel',
         'anthropicModel',
         'localLlmEndpoint',
@@ -159,7 +160,9 @@ class SettingsService {
       ]
         .forEach((key) => {
           if (typeof sanitizedUpdates[key] === 'string') {
-            sanitizedUpdates[key] = sanitizedUpdates[key].trim();
+            sanitizedUpdates[key] = key === 'codexEffort'
+              ? sanitizedUpdates[key].trim().toLowerCase()
+              : sanitizedUpdates[key].trim();
           }
         });
 

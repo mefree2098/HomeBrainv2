@@ -8,6 +8,7 @@ const {
   buildCodexOutputSchema,
   extractCodexTurnText,
   pickCodexModel,
+  resolveCodexThinkingLevels,
   resolveCodexBinaryOnPath,
   resolveCodexLaunchSpec,
   resolveDraftCodexHome,
@@ -56,6 +57,60 @@ test('pickCodexModel prefers an exact match and otherwise falls back to the defa
 
   assert.equal(pickCodexModel('gpt-5.4-mini', models), 'gpt-5.4-mini');
   assert.equal(pickCodexModel('missing-model', models), 'gpt-5.4');
+});
+
+test('resolveCodexThinkingLevels returns the levels advertised by the selected model', () => {
+  const models = [
+    {
+      id: 'gpt-5.6-sol',
+      supportedReasoningEfforts: [
+        { reasoningEffort: 'low', description: 'Fast' },
+        { reasoningEffort: 'medium', description: 'Balanced' },
+        { reasoningEffort: 'max', description: 'Deepest' },
+        { reasoningEffort: 'ultra', description: 'Deepest with delegation' }
+      ],
+      defaultReasoningEffort: 'low',
+      isDefault: true
+    },
+    {
+      id: 'gpt-5.4',
+      supportedReasoningEfforts: [
+        { reasoningEffort: 'low', description: 'Fast' },
+        { reasoningEffort: 'medium', description: 'Balanced' },
+        { reasoningEffort: 'high', description: 'Deep' },
+        { reasoningEffort: 'xhigh', description: 'Extra deep' }
+      ],
+      defaultReasoningEffort: 'medium'
+    }
+  ];
+
+  assert.deepEqual(resolveCodexThinkingLevels('gpt-5.6-sol', 'ultra', models), {
+    selectedModel: 'gpt-5.6-sol',
+    thinkingLevels: [
+      { reasoningEffort: 'low', description: 'Fast' },
+      { reasoningEffort: 'medium', description: 'Balanced' },
+      { reasoningEffort: 'max', description: 'Deepest' },
+      { reasoningEffort: 'ultra', description: 'Deepest with delegation' }
+    ],
+    defaultThinkingLevel: 'low',
+    selectedThinkingLevel: 'ultra'
+  });
+});
+
+test('resolveCodexThinkingLevels falls back to the model default when a level is unsupported', () => {
+  const models = [{
+    id: 'gpt-5.4',
+    supportedReasoningEfforts: [
+      { reasoningEffort: 'low', description: 'Fast' },
+      { reasoningEffort: 'medium', description: 'Balanced' }
+    ],
+    defaultReasoningEffort: 'medium',
+    isDefault: true
+  }];
+
+  const result = resolveCodexThinkingLevels('gpt-5.4', 'ultra', models);
+  assert.equal(result.selectedThinkingLevel, 'medium');
+  assert.equal(result.defaultThinkingLevel, 'medium');
 });
 
 test('extractCodexTurnText prioritizes final answers over later fallbacks', () => {
@@ -156,4 +211,24 @@ test('resolveSessionOptions reuses an authenticated shared Codex home before the
   assert.equal(options.codexHome, '');
   assert.equal(options.codexHomeProfile, 'local');
   assert.equal(options.effectiveCodexHome, sharedHome);
+});
+
+test('resolveSessionOptions normalizes the persisted Codex thinking level', async (t) => {
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'homebrain-codex-effort-test-'));
+  const fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), 'homebrain-codex-effort-home-'));
+  t.after(async () => {
+    await fs.rm(cwd, { recursive: true, force: true });
+    await fs.rm(fakeHome, { recursive: true, force: true });
+  });
+
+  const options = await resolveSessionOptions({
+    settings: {
+      codexHomeProfile: 'local',
+      codexEffort: 'ULTRA'
+    },
+    cwd,
+    homeDir: fakeHome
+  });
+
+  assert.equal(options.codexEffort, 'ultra');
 });

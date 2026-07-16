@@ -34,7 +34,6 @@ const DEFAULT_NOTIFICATION_OPTOUT = [
   'app/list/updated'
 ];
 const VALID_CODEX_HOME_PROFILES = new Set(['auto', 'azure', 'aws', 'local', 'custom']);
-const VALID_CODEX_EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh']);
 const TURN_RESULT_PHASE = 'final_answer';
 
 const pendingCodexLogins = new Map();
@@ -474,6 +473,53 @@ function pickCodexModel(preferredModel, models = []) {
 
   const defaultModel = models.find((model) => model?.isDefault) || models[0];
   return defaultModel?.id || defaultModel?.model || trimmedPreferredModel || DEFAULT_CODEX_MODEL;
+}
+
+function getCodexModelOption(preferredModel, models = []) {
+  if (!Array.isArray(models) || models.length === 0) {
+    return null;
+  }
+
+  const selectedModel = pickCodexModel(preferredModel, models);
+  return models.find((model) => {
+    const identifiers = [model?.id, model?.model]
+      .filter(Boolean)
+      .map((value) => String(value).trim());
+    return identifiers.includes(selectedModel);
+  }) || null;
+}
+
+function normalizeThinkingLevel(value) {
+  const normalized = sanitizeString(value).toLowerCase();
+  return /^[a-z][a-z0-9_-]{0,31}$/.test(normalized) ? normalized : '';
+}
+
+function resolveCodexThinkingLevels(preferredModel, preferredEffort, models = []) {
+  const model = getCodexModelOption(preferredModel, models);
+  const thinkingLevels = Array.isArray(model?.supportedReasoningEfforts)
+    ? model.supportedReasoningEfforts.map((entry) => ({
+      reasoningEffort: normalizeThinkingLevel(
+        typeof entry === 'string' ? entry : entry?.reasoningEffort
+      ),
+      description: sanitizeString(typeof entry === 'object' ? entry?.description : '')
+    })).filter((entry) => entry.reasoningEffort)
+    : [];
+  const advertisedLevels = new Set(thinkingLevels.map((entry) => entry.reasoningEffort));
+  const requestedEffort = normalizeThinkingLevel(preferredEffort);
+  const advertisedDefault = normalizeThinkingLevel(model?.defaultReasoningEffort);
+  const defaultThinkingLevel = advertisedLevels.has(advertisedDefault)
+    ? advertisedDefault
+    : (thinkingLevels[0]?.reasoningEffort || 'medium');
+  const selectedThinkingLevel = advertisedLevels.size === 0
+    ? (requestedEffort || defaultThinkingLevel)
+    : (advertisedLevels.has(requestedEffort) ? requestedEffort : defaultThinkingLevel);
+
+  return {
+    selectedModel: model?.id || model?.model || pickCodexModel(preferredModel, models),
+    thinkingLevels,
+    defaultThinkingLevel,
+    selectedThinkingLevel
+  };
 }
 
 function extractCodexTurnText(state = {}) {
@@ -1006,9 +1052,7 @@ class CodexAppServerSession {
     outputSchema = null,
     effort = 'medium'
   }) {
-    const resolvedEffort = VALID_CODEX_EFFORTS.has(sanitizeString(effort))
-      ? sanitizeString(effort)
-      : 'medium';
+    const resolvedEffort = normalizeThinkingLevel(effort) || 'medium';
 
     const threadResponse = await this.request('thread/start', {
       cwd: this.cwd,
@@ -1105,7 +1149,8 @@ async function resolveSessionOptions({
     codexAwsVolumeRoot: sanitizeString(overrides.codexAwsVolumeRoot) ||
       sanitizeString(effectiveSettings.codexAwsVolumeRoot) ||
       DEFAULT_AWS_VOLUME_ROOT,
-    codexModel: sanitizeString(overrides.codexModel) || sanitizeString(effectiveSettings.codexModel) || DEFAULT_CODEX_MODEL
+    codexModel: sanitizeString(overrides.codexModel) || sanitizeString(effectiveSettings.codexModel) || DEFAULT_CODEX_MODEL,
+    codexEffort: normalizeThinkingLevel(overrides.codexEffort || effectiveSettings.codexEffort) || 'medium'
   };
 
   const resolvedHome = await resolveCodexHomePath({
@@ -1166,17 +1211,23 @@ async function getCodexModels({
         loginRequired: true,
         effectiveCodexPath: sessionOptions.effectiveCodexPath,
         effectiveCodexHome: sessionOptions.effectiveCodexHome,
+        selectedModel: sessionOptions.codexModel,
+        thinkingLevels: [],
+        defaultThinkingLevel: null,
+        selectedThinkingLevel: sessionOptions.codexEffort,
         models: []
       };
     }
 
     const models = await session.listModels({ includeHidden });
+    const thinking = resolveCodexThinkingLevels(sessionOptions.codexModel, sessionOptions.codexEffort, models);
     return {
       source: 'codex',
       includeHidden: Boolean(includeHidden),
       loginRequired: false,
       effectiveCodexPath: sessionOptions.effectiveCodexPath,
       effectiveCodexHome: sessionOptions.effectiveCodexHome,
+      ...thinking,
       models
     };
   });
@@ -1394,7 +1445,8 @@ async function sendRequestToCodex(message, settings, requestConfig = {}) {
       codexHome: requestConfig?.codexHome,
       codexHomeProfile: requestConfig?.codexHomeProfile,
       codexAwsVolumeRoot: requestConfig?.codexAwsVolumeRoot,
-      codexModel: requestConfig?.codexModel
+      codexModel: requestConfig?.codexModel,
+      codexEffort: requestConfig?.codexEffort
     }
   }, async (session, sessionOptions) => {
     session.turnTimeoutMs = codexTimeoutMs;
@@ -1406,12 +1458,17 @@ async function sendRequestToCodex(message, settings, requestConfig = {}) {
 
     const models = await session.listModels({ includeHidden: false });
     const selectedModel = pickCodexModel(requestConfig?.codexModel || sessionOptions.codexModel, models);
+    const thinking = resolveCodexThinkingLevels(
+      selectedModel,
+      requestConfig?.codexEffort || sessionOptions.codexEffort,
+      models
+    );
     const result = await session.runTurn({
       message,
       model: selectedModel,
       developerInstructions: requestConfig?.developerInstructions,
       outputSchema,
-      effort: requestConfig?.codexEffort || 'medium'
+      effort: thinking.selectedThinkingLevel
     });
 
     if (result.turn?.status === 'failed') {
@@ -1430,7 +1487,8 @@ async function sendRequestToCodex(message, settings, requestConfig = {}) {
       runtime: {
         processor: 'codex-app-server',
         model: result.model || selectedModel,
-        codexHome: sessionOptions.effectiveCodexHome
+        codexHome: sessionOptions.effectiveCodexHome,
+        thinkingLevel: thinking.selectedThinkingLevel
       },
       tokenUsage: result.tokenUsage || null
     };
@@ -1457,6 +1515,7 @@ module.exports = {
   getCodexAuthHealth,
   getCodexModels,
   pickCodexModel,
+  resolveCodexThinkingLevels,
   resolveLocalCodexHomeCandidates,
   resolveCodexHomePath,
   resolveCodexBinaryOnPath,

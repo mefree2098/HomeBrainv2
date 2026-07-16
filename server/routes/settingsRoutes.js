@@ -43,7 +43,8 @@ function buildCodexOverrides(source = {}) {
     codexHome: source.codexHome,
     codexHomeProfile: source.codexHomeProfile,
     codexAwsVolumeRoot: source.codexAwsVolumeRoot,
-    codexModel: source.codexModel
+    codexModel: source.codexModel,
+    codexEffort: source.codexEffort
   };
 }
 

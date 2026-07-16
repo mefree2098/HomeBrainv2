@@ -314,6 +314,13 @@ const SettingsSchema = new mongoose.Schema({
     type: String,
     default: 'gpt-5.4'
   },
+  codexEffort: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    match: /^[a-z][a-z0-9_-]{0,31}$/,
+    default: 'medium'
+  },
   localLlmEndpoint: {
     type: String,
     default: 'http://localhost:11434'
@@ -625,6 +632,14 @@ SettingsSchema.statics.getSettings = async function() {
     : '';
   if (!codexHomeProfile) {
     settings.codexHomeProfile = 'local';
+    updated = true;
+  }
+
+  const codexEffort = typeof settings.codexEffort === 'string'
+    ? settings.codexEffort.trim().toLowerCase()
+    : '';
+  if (!codexEffort) {
+    settings.codexEffort = 'medium';
     updated = true;
   }
 
