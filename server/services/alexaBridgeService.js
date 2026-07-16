@@ -17,9 +17,21 @@ const { normalizeAlexaName, parseEndpointId } = require('../../shared/alexa/cont
 const DEFAULT_LINK_CODE_TTL_MINUTES = 15;
 const MAX_LINK_CODES = 10;
 const BROKER_TIMEOUT_MS = 10000;
+const DEFAULT_DEVICE_UPDATE_SYNC_DEBOUNCE_MS = sanitizeDeviceUpdateSyncDebounceMs(
+  process.env.HOMEBRAIN_ALEXA_DEVICE_UPDATE_SYNC_DEBOUNCE_MS,
+  500
+);
 
 function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function sanitizeDeviceUpdateSyncDebounceMs(value, fallback) {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return fallback;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : fallback;
 }
 
 function sha256(value) {
@@ -315,9 +327,16 @@ function normalizeAlexaSpeechTarget(target, parameters = {}) {
 }
 
 class AlexaBridgeService {
-  constructor() {
+  constructor(options = {}) {
     this.started = false;
     this.brokerRecoveryPromise = null;
+    this.deviceUpdateSyncDebounceMs = sanitizeDeviceUpdateSyncDebounceMs(
+      options.deviceUpdateSyncDebounceMs,
+      DEFAULT_DEVICE_UPDATE_SYNC_DEBOUNCE_MS
+    );
+    this.pendingDeviceUpdateIds = new Set();
+    this.deviceUpdateSyncTimer = null;
+    this.deviceUpdateSyncPromise = null;
     this.handleDeviceUpdate = this.handleDeviceUpdate.bind(this);
   }
 
@@ -1752,47 +1771,100 @@ class AlexaBridgeService {
     });
   }
 
-  async handleDeviceUpdate(devices = []) {
-    try {
-      const registration = await this.ensureRegistration();
-      if (registration.status !== 'paired' || !registration.brokerBaseUrl) {
-        return;
-      }
+  scheduleDeviceUpdateSync() {
+    if (
+      this.deviceUpdateSyncTimer
+      || this.deviceUpdateSyncPromise
+      || this.pendingDeviceUpdateIds.size === 0
+    ) {
+      return;
+    }
 
-      const catalog = await alexaProjectionService.buildCatalog();
-      const endpointIdSet = new Set();
-      const deviceIds = new Set((Array.isArray(devices) ? devices : [])
-        .map((device) => device?._id?.toString?.() || String(device?._id || ''))
-        .filter(Boolean));
+    this.deviceUpdateSyncTimer = setTimeout(() => {
+      this.deviceUpdateSyncTimer = null;
+      void this.flushPendingDeviceUpdates();
+    }, this.deviceUpdateSyncDebounceMs);
 
-      catalog.endpoints.forEach((endpoint) => {
-        const parsed = parseEndpointId(endpoint.endpointId);
-        if (!parsed) {
-          return;
-        }
+    if (typeof this.deviceUpdateSyncTimer.unref === 'function') {
+      this.deviceUpdateSyncTimer.unref();
+    }
+  }
 
-        if (parsed.entityType === 'device' && deviceIds.has(parsed.entityId)) {
-          endpointIdSet.add(endpoint.endpointId);
-        }
+  async flushPendingDeviceUpdates() {
+    if (this.deviceUpdateSyncTimer) {
+      clearTimeout(this.deviceUpdateSyncTimer);
+      this.deviceUpdateSyncTimer = null;
+    }
 
-        if (parsed.entityType === 'device_group') {
-          const groupDeviceIds = Array.isArray(endpoint.cookie?.groupDeviceIds)
-            ? endpoint.cookie.groupDeviceIds
-            : [];
-          if (groupDeviceIds.some((deviceId) => deviceIds.has(String(deviceId)))) {
-            endpointIdSet.add(endpoint.endpointId);
-          }
-        }
+    if (this.deviceUpdateSyncPromise) {
+      return this.deviceUpdateSyncPromise;
+    }
+
+    const deviceIds = Array.from(this.pendingDeviceUpdateIds);
+    this.pendingDeviceUpdateIds.clear();
+    if (deviceIds.length === 0) {
+      return;
+    }
+
+    this.deviceUpdateSyncPromise = this.syncDeviceUpdatesToBroker(deviceIds)
+      .catch((error) => {
+        deviceIds.forEach((deviceId) => this.pendingDeviceUpdateIds.add(deviceId));
+        console.warn(`AlexaBridgeService: Failed to process device update for broker sync: ${error.message}`);
+      })
+      .finally(() => {
+        this.deviceUpdateSyncPromise = null;
+        this.scheduleDeviceUpdateSync();
       });
 
-      if (endpointIdSet.size === 0) {
+    return this.deviceUpdateSyncPromise;
+  }
+
+  async syncDeviceUpdatesToBroker(deviceIds = []) {
+    const registration = await this.ensureRegistration();
+    if (registration.status !== 'paired' || !registration.brokerBaseUrl) {
+      return;
+    }
+
+    const catalog = await alexaProjectionService.buildCatalog();
+    const endpointIdSet = new Set();
+    const changedDeviceIds = new Set((Array.isArray(deviceIds) ? deviceIds : [])
+      .map((deviceId) => String(deviceId || '').trim())
+      .filter(Boolean));
+
+    catalog.endpoints.forEach((endpoint) => {
+      const parsed = parseEndpointId(endpoint.endpointId);
+      if (!parsed) {
         return;
       }
 
-      await this.pushStateChangesToBroker(Array.from(endpointIdSet), 'device_update');
-    } catch (error) {
-      console.warn(`AlexaBridgeService: Failed to process device update for broker sync: ${error.message}`);
+      if (parsed.entityType === 'device' && changedDeviceIds.has(parsed.entityId)) {
+        endpointIdSet.add(endpoint.endpointId);
+      }
+
+      if (parsed.entityType === 'device_group') {
+        const groupDeviceIds = Array.isArray(endpoint.cookie?.groupDeviceIds)
+          ? endpoint.cookie.groupDeviceIds
+          : [];
+        if (groupDeviceIds.some((deviceId) => changedDeviceIds.has(String(deviceId)))) {
+          endpointIdSet.add(endpoint.endpointId);
+        }
+      }
+    });
+
+    if (endpointIdSet.size === 0) {
+      return;
     }
+
+    await this.pushStateChangesToBroker(Array.from(endpointIdSet), 'device_update');
+  }
+
+  handleDeviceUpdate(devices = []) {
+    const deviceIds = (Array.isArray(devices) ? devices : [])
+      .map((device) => device?._id?.toString?.() || String(device?._id || ''))
+      .filter(Boolean);
+
+    deviceIds.forEach((deviceId) => this.pendingDeviceUpdateIds.add(deviceId));
+    this.scheduleDeviceUpdateSync();
   }
 
   start() {

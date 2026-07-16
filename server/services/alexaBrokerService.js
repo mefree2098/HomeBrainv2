@@ -1376,6 +1376,15 @@ class AlexaBrokerService {
     }
 
     if (this.isManagedRuntimeAlive(config)) {
+      const existingProbe = await this.probeHealth(config);
+      if (!existingProbe.available && !automatic) {
+        return this.restartService({
+          actor,
+          source: `${source}_unhealthy_recovery`,
+          reason: existingProbe.message || 'managed broker process is running but unhealthy'
+        });
+      }
+
       if (config.lastError) {
         config.lastError = null;
       }

@@ -758,6 +758,107 @@ test('notifyBroker re-pairs broker registration and retries when broker lost the
   assert.equal(registration.lastStateSyncStatus, 'success');
 });
 
+test('device update bursts are coalesced into one serialized Alexa broker state push', async (t) => {
+  const bridge = new AlexaBridgeService({ deviceUpdateSyncDebounceMs: 1 });
+  const originalBuildCatalog = alexaProjectionService.buildCatalog;
+  const pushes = [];
+
+  alexaProjectionService.buildCatalog = async () => ({
+    endpoints: [
+      { endpointId: 'hb:hub-test:device:device-1', cookie: {} },
+      { endpointId: 'hb:hub-test:device:device-2', cookie: {} },
+      {
+        endpointId: 'hb:hub-test:device_group:downstairs',
+        cookie: { groupDeviceIds: ['device-1', 'device-2'] }
+      }
+    ]
+  });
+  bridge.ensureRegistration = async () => ({
+    status: 'paired',
+    brokerBaseUrl: 'http://127.0.0.1:4301'
+  });
+  bridge.pushStateChangesToBroker = async (endpointIds, reason) => {
+    pushes.push({ endpointIds, reason });
+  };
+
+  t.after(() => {
+    alexaProjectionService.buildCatalog = originalBuildCatalog;
+    if (bridge.deviceUpdateSyncTimer) {
+      clearTimeout(bridge.deviceUpdateSyncTimer);
+    }
+  });
+
+  bridge.handleDeviceUpdate([{ _id: 'device-1' }]);
+  bridge.handleDeviceUpdate([{ _id: 'device-2' }]);
+  await bridge.flushPendingDeviceUpdates();
+
+  assert.equal(pushes.length, 1);
+  assert.equal(pushes[0].reason, 'device_update');
+  assert.deepEqual(new Set(pushes[0].endpointIds), new Set([
+    'hb:hub-test:device:device-1',
+    'hb:hub-test:device:device-2',
+    'hb:hub-test:device_group:downstairs'
+  ]));
+});
+
+test('device updates received during a slow broker push wait for the active push', async (t) => {
+  const bridge = new AlexaBridgeService({ deviceUpdateSyncDebounceMs: 1 });
+  const originalBuildCatalog = alexaProjectionService.buildCatalog;
+  let releaseFirstPush;
+  let markFirstPushStarted;
+  const firstPushStarted = new Promise((resolve) => {
+    markFirstPushStarted = resolve;
+  });
+  let activePushes = 0;
+  let maxActivePushes = 0;
+  const pushes = [];
+
+  alexaProjectionService.buildCatalog = async () => ({
+    endpoints: [
+      { endpointId: 'hb:hub-test:device:device-1', cookie: {} },
+      { endpointId: 'hb:hub-test:device:device-2', cookie: {} }
+    ]
+  });
+  bridge.ensureRegistration = async () => ({
+    status: 'paired',
+    brokerBaseUrl: 'http://127.0.0.1:4301'
+  });
+  bridge.pushStateChangesToBroker = async (endpointIds) => {
+    activePushes += 1;
+    maxActivePushes = Math.max(maxActivePushes, activePushes);
+    pushes.push(endpointIds);
+    if (pushes.length === 1) {
+      markFirstPushStarted();
+      await new Promise((resolve) => {
+        releaseFirstPush = resolve;
+      });
+    }
+    activePushes -= 1;
+  };
+
+  t.after(() => {
+    alexaProjectionService.buildCatalog = originalBuildCatalog;
+    releaseFirstPush?.();
+    if (bridge.deviceUpdateSyncTimer) {
+      clearTimeout(bridge.deviceUpdateSyncTimer);
+    }
+  });
+
+  bridge.handleDeviceUpdate([{ _id: 'device-1' }]);
+  const firstFlush = bridge.flushPendingDeviceUpdates();
+  await firstPushStarted;
+  bridge.handleDeviceUpdate([{ _id: 'device-2' }]);
+
+  assert.equal(pushes.length, 1);
+  releaseFirstPush();
+  await firstFlush;
+  await bridge.flushPendingDeviceUpdates();
+
+  assert.equal(pushes.length, 2);
+  assert.equal(maxActivePushes, 1);
+  assert.deepEqual(pushes[1], ['hb:hub-test:device:device-2']);
+});
+
 test('getCertificationReadiness summarizes public-release blockers and passes', async (t) => {
   const bridge = new AlexaBridgeService();
   const registration = {

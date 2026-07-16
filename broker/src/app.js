@@ -528,7 +528,7 @@ async function queueEventsForActivePermissionGrants(store, hubId, buildPayloadsF
     return [];
   }
 
-  const records = [];
+  const events = [];
   for (const grant of grants) {
     const payloads = await Promise.resolve(buildPayloadsForGrant(grant));
     const list = Array.isArray(payloads) ? payloads : [payloads];
@@ -536,16 +536,24 @@ async function queueEventsForActivePermissionGrants(store, hubId, buildPayloadsF
       if (!payload) {
         continue;
       }
-      records.push(await store.enqueueEvent({
+      events.push({
         ...payload,
         hubId,
         brokerAccountId: grant.brokerAccountId,
         permissionGrantId: grant.permissionGrantId
-      }));
+      });
     }
   }
 
-  return records;
+  if (events.length === 0) {
+    return [];
+  }
+
+  if (typeof store.enqueueEvents === 'function') {
+    return store.enqueueEvents(events);
+  }
+
+  return Promise.all(events.map((event) => store.enqueueEvent(event)));
 }
 
 function queueCatalogEvents(store, hubId, endpoints = []) {
