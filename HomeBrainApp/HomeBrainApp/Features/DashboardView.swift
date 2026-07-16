@@ -513,6 +513,7 @@ private final class DashboardLocationManager: NSObject, ObservableObject, CLLoca
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        guard isRequesting else { return }
         handleAuthorizationStatus(manager.authorizationStatus)
     }
 
@@ -2267,9 +2268,6 @@ struct DashboardView: View {
         }
 
         if widget.settings.weatherLocationMode == .auto && locationManager.coordinate == nil {
-            if locationManager.errorMessage == nil && !locationManager.isRequesting {
-                locationManager.requestLocation()
-            }
             return
         }
 
@@ -2296,8 +2294,10 @@ struct DashboardView: View {
                     return
                 }
 
-                query.append(URLQueryItem(name: "latitude", value: String(coordinate.latitude)))
-                query.append(URLQueryItem(name: "longitude", value: String(coordinate.longitude)))
+                let approximateLatitude = (coordinate.latitude * 100).rounded() / 100
+                let approximateLongitude = (coordinate.longitude * 100).rounded() / 100
+                query.append(URLQueryItem(name: "latitude", value: String(approximateLatitude)))
+                query.append(URLQueryItem(name: "longitude", value: String(approximateLongitude)))
                 query.append(URLQueryItem(name: "label", value: "Current location"))
             }
 

@@ -7,6 +7,7 @@ const PushSubscription = require('../models/PushSubscription');
 const HomeBrainNotification = require('../models/HomeBrainNotification');
 const OIDCAuthorizationCode = require('../models/OIDCAuthorizationCode');
 const VoiceCommand = require('../models/VoiceCommand');
+const EventStreamEvent = require('../models/EventStreamEvent');
 const SecurityAlarm = require('../models/SecurityAlarm');
 const CodexSkillIntegration = require('../models/CodexSkillIntegration');
 const UserService = require('../services/userService');
@@ -27,6 +28,7 @@ function installDeletionMocks(t, calls) {
     notificationUpdateMany: HomeBrainNotification.updateMany,
     oidcDeleteMany: OIDCAuthorizationCode.deleteMany,
     voiceDeleteMany: VoiceCommand.deleteMany,
+    eventStreamDeleteMany: EventStreamEvent.deleteMany,
     alarmUpdateMany: SecurityAlarm.updateMany,
     codexUpdateMany: CodexSkillIntegration.updateMany,
     reviewSandboxDeleteForUser: reviewSandboxService.deleteForUser
@@ -40,6 +42,7 @@ function installDeletionMocks(t, calls) {
     HomeBrainNotification.updateMany = originals.notificationUpdateMany;
     OIDCAuthorizationCode.deleteMany = originals.oidcDeleteMany;
     VoiceCommand.deleteMany = originals.voiceDeleteMany;
+    EventStreamEvent.deleteMany = originals.eventStreamDeleteMany;
     SecurityAlarm.updateMany = originals.alarmUpdateMany;
     CodexSkillIntegration.updateMany = originals.codexUpdateMany;
     reviewSandboxService.deleteForUser = originals.reviewSandboxDeleteForUser;
@@ -67,6 +70,10 @@ function installDeletionMocks(t, calls) {
   };
   VoiceCommand.deleteMany = (query) => {
     calls.push(['voiceCommands', query]);
+    return executable();
+  };
+  EventStreamEvent.deleteMany = (query) => {
+    calls.push(['voiceEvents', query]);
     return executable();
   };
   reviewSandboxService.deleteForUser = async (id) => {
@@ -122,8 +129,17 @@ test('deleteAccount removes the user and associated personal records', async (t)
       'securityCodes',
       'sessions',
       'user',
-      'voiceCommands'
+      'voiceCommands',
+      'voiceEvents'
     ]
+  );
+  assert.deepEqual(
+    calls.find(([name]) => name === 'voiceEvents')?.[1],
+    {
+      actorUserId: userId,
+      category: 'voice',
+      type: { $in: ['voice.command_processed', 'voice.command_failed'] }
+    }
   );
   assert.equal(calls.at(-1)[0], 'user');
 });

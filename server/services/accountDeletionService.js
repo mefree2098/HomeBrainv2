@@ -4,6 +4,7 @@ const PushSubscription = require('../models/PushSubscription');
 const HomeBrainNotification = require('../models/HomeBrainNotification');
 const OIDCAuthorizationCode = require('../models/OIDCAuthorizationCode');
 const VoiceCommand = require('../models/VoiceCommand');
+const EventStreamEvent = require('../models/EventStreamEvent');
 const SecurityAlarm = require('../models/SecurityAlarm');
 const CodexSkillIntegration = require('../models/CodexSkillIntegration');
 const UserService = require('./userService');
@@ -59,6 +60,11 @@ async function deleteAccount(userId, password) {
     ).exec(),
     OIDCAuthorizationCode.deleteMany(identityQuery).exec(),
     VoiceCommand.deleteMany(identityQuery).exec(),
+    EventStreamEvent.deleteMany({
+      actorUserId: user._id,
+      category: 'voice',
+      type: { $in: ['voice.command_processed', 'voice.command_failed'] }
+    }).exec(),
     reviewSandboxService.deleteForUser(user._id),
     SecurityAlarm.updateMany(
       {},

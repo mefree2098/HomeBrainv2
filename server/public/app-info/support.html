@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Support and setup help for the HomeBrain iPhone, iPad, and Apple Watch apps.">
+    <title>HomeBrain Support</title>
+    <link rel="stylesheet" href="/app-info/public-info.css">
+    <script src="/app-info/support.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">HomeBrain</p>
+        <h1>Support</h1>
+        <p class="meta">Help for iPhone, iPad, Apple Watch, and the HomeBrain hub</p>
+      </header>
+
+      <section class="notice">
+        <h2>Before signing in</h2>
+        <p>The mobile app connects to an existing HomeBrain hub. Enter the secure hub address and the account credentials supplied by your HomeBrain administrator. The iOS app does not offer public or in-app account registration.</p>
+      </section>
+
+      <section>
+        <h2>Setup checklist</h2>
+        <ol>
+          <li>Confirm that your HomeBrain hub is online and reachable from the iPhone or iPad.</li>
+          <li>Enter the full hub URL, including <strong>https://</strong> when your hub uses HTTPS.</li>
+          <li>Sign in with the email address and password created by your hub administrator.</li>
+          <li>Approve notifications, location, microphone, or speech recognition only if you want the related optional feature.</li>
+          <li>For Apple Watch, install the companion app and use the Watch App screen on iPhone to choose and synchronize Watch features.</li>
+        </ol>
+      </section>
+
+      <section>
+        <h2>Common fixes</h2>
+        <ul>
+          <li><strong>Can't reach the hub:</strong> verify the hub URL, network or VPN connection, HTTPS certificate, and reverse-proxy configuration.</li>
+          <li><strong>Can't sign in:</strong> ask the hub administrator to confirm that the account is active and has HomeBrain access.</li>
+          <li><strong>Devices look offline:</strong> refresh the screen, then check the corresponding integration from the HomeBrain web console.</li>
+          <li><strong>Notifications do not arrive:</strong> enable notifications in Apple Settings and confirm that push notifications are enabled for the account.</li>
+          <li><strong>Watch data is stale:</strong> open the Watch App screen on iPhone and synchronize the current signed-in session and Watch layout.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Account deletion</h2>
+        <p>Open <strong>Settings → Account → Delete Account</strong> in the iOS app, enter the current password, type <strong>DELETE</strong>, and confirm. This removes the account and account-specific records attributable to it. Shared household configuration, security records required by other authorized users, older operational logs that cannot be attributed to an account, and backups may remain under the hub operator's retention practices.</p>
+      </section>
+
+      <section id="support-request">
+        <h2>Contact support</h2>
+        <p>You do not need a HomeBrain or third-party account to send this private request. Eligible administrators receive a normal system notification and must authenticate with an active, non-sandbox administrator account to retrieve the private request details.</p>
+        <p>Include enough detail to reproduce the issue, but never send passwords, access tokens, private hub URLs, home addresses, or device identifiers.</p>
+
+        <form id="support-request-form" novalidate>
+          <div class="form-grid">
+            <label>
+              Name <span class="optional">(optional)</span>
+              <input id="support-name" name="name" type="text" autocomplete="name" maxlength="80">
+            </label>
+            <label>
+              Reply email
+              <input id="support-email" name="email" type="email" autocomplete="email" maxlength="254" required>
+            </label>
+            <label>
+              App version <span class="optional">(optional)</span>
+              <input id="support-app-version" name="appVersion" type="text" maxlength="40" placeholder="For example, 1.0 (42)">
+            </label>
+            <label>
+              Apple device and OS <span class="optional">(optional)</span>
+              <input id="support-device" name="device" type="text" maxlength="100" placeholder="For example, iPhone 16, iOS 26.0">
+            </label>
+          </div>
+
+          <label>
+            Subject
+            <input id="support-subject" name="subject" type="text" minlength="3" maxlength="120" required>
+          </label>
+
+          <label>
+            How can we help?
+            <textarea id="support-message" name="message" rows="7" minlength="20" maxlength="1400" required></textarea>
+          </label>
+
+          <div class="support-honeypot" aria-hidden="true">
+            <label for="support-website">Leave this field blank</label>
+            <input id="support-website" name="website" type="text" tabindex="-1" autocomplete="off" maxlength="200">
+          </div>
+
+          <p class="form-disclosure">By sending this form, you provide the contact and diagnostic details above to the active administrators of this HomeBrain service so they can investigate and reply. See the <a href="/privacy#support-requests">Privacy Policy</a>.</p>
+          <button id="support-submit" type="submit">Send support request</button>
+          <p id="support-status" class="form-status" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+
+      <footer>
+        <a href="/privacy">Privacy Policy</a>
+      </footer>
+    </main>
+  </body>
+</html>

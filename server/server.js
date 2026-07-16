@@ -74,6 +74,7 @@ const openclawRoutes = require("./routes/openclawRoutes");
 const openclawMcpRoutes = require("./routes/openclawMcpRoutes");
 const codexSkillRoutes = require("./routes/codexSkillRoutes");
 const generalDownloadRoutes = require("./routes/generalDownloadRoutes");
+const publicInfoRoutes = require("./routes/publicInfoRoutes");
 const deviceCommandCoordinatorRoutes = require("./routes/deviceCommandCoordinatorRoutes");
 const watchRoutes = require("./routes/watchRoutes");
 const VoiceWebSocketServer = require("./websocket/voiceWebSocket");
@@ -639,6 +640,10 @@ if (fs.existsSync(securityAudioPath)) {
   console.log(`Serving security audio prompts from ${securityAudioPath} at /audio/security`);
   app.use('/audio/security', express.static(securityAudioPath));
 }
+
+// Public App Store support and privacy information. Mount these before the
+// client fallback so they never require a HomeBrain session or client JS.
+app.use(publicInfoRoutes);
 
 // Serve built client app in production (fallback for SPA routes)
 const clientDistPath = path.join(__dirname, '..', 'client', 'dist');

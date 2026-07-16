@@ -538,6 +538,7 @@ struct SettingsView: View {
 
                         if session.currentUser != nil {
                             settingsAccountSection
+                            settingsHelpAndLegalSection
                         }
 
                         Section(usesCompactSettingsAreaSelector ? "Area" : "Settings Areas") {
@@ -625,6 +626,7 @@ struct SettingsView: View {
                 }
 
                 settingsAccountSection
+                settingsHelpAndLegalSection
             }
             .hbFormStyle()
         }
@@ -647,6 +649,18 @@ struct SettingsView: View {
                 showingDeleteAccount = true
             } label: {
                 Label("Delete Account", systemImage: "person.crop.circle.badge.xmark")
+            }
+        }
+    }
+
+    private var settingsHelpAndLegalSection: some View {
+        Section("Help & Legal") {
+            Link(destination: URL(string: "https://freestonefamily.com/support")!) {
+                Label("HomeBrain Support", systemImage: "questionmark.circle")
+            }
+
+            Link(destination: URL(string: "https://freestonefamily.com/privacy")!) {
+                Label("Privacy Policy", systemImage: "hand.raised")
             }
         }
     }

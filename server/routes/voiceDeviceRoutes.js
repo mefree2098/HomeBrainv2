@@ -407,12 +407,11 @@ router.post('/commands/interpret', requireUser(), async (req, res) => {
       type: 'voice.command_processed',
       source: 'voice',
       category: 'voice',
+      actorUserId: req.user?._id,
       payload: {
         wakeWord: typeof wakeWord === 'string' ? wakeWord : 'dashboard',
         room: typeof room === 'string' ? room : null,
-        deviceId: typeof deviceId === 'string' ? deviceId : null,
-        command: commandText.trim(),
-        responseText: result?.responseText || null
+        deviceId: typeof deviceId === 'string' ? deviceId : null
       },
       tags: ['voice', 'command']
     });
@@ -430,11 +429,11 @@ router.post('/commands/interpret', requireUser(), async (req, res) => {
       source: 'voice',
       category: 'voice',
       severity: 'error',
+      actorUserId: req.user?._id,
       payload: {
         wakeWord: typeof wakeWord === 'string' ? wakeWord : 'dashboard',
         room: typeof room === 'string' ? room : null,
         deviceId: typeof deviceId === 'string' ? deviceId : null,
-        command: commandText.trim(),
         error: error.message || 'Unknown error'
       },
       tags: ['voice', 'command']

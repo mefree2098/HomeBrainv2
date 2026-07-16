@@ -1227,6 +1227,7 @@ private final class WeatherLocationManager: NSObject, ObservableObject, CLLocati
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        guard isRequesting else { return }
         handleAuthorizationStatus(manager.authorizationStatus)
     }
 
@@ -1742,9 +1743,6 @@ struct WeatherView: View {
             }
         }
         .onChange(of: weatherLocationModeRaw) { _, _ in
-            if weatherLocationMode == .auto {
-                locationManager.requestLocation()
-            }
             Task { await loadWeatherDashboard(silent: dashboard != nil) }
         }
         .onChange(of: autoLocationKey) { _, _ in
@@ -3257,15 +3255,17 @@ struct WeatherView: View {
             query.append(URLQueryItem(name: "address", value: trimmed))
         case .auto:
             guard let coordinate = locationManager.coordinate else {
-                if locationManager.errorMessage == nil && !locationManager.isRequesting {
-                    locationManager.requestLocation()
-                } else if let message = locationManager.errorMessage {
+                if let message = locationManager.errorMessage {
                     errorMessage = message
+                } else {
+                    errorMessage = "Tap Use Device Location to load weather for your approximate location."
                 }
                 return nil
             }
-            query.append(URLQueryItem(name: "latitude", value: String(coordinate.latitude)))
-            query.append(URLQueryItem(name: "longitude", value: String(coordinate.longitude)))
+            let approximateLatitude = (coordinate.latitude * 100).rounded() / 100
+            let approximateLongitude = (coordinate.longitude * 100).rounded() / 100
+            query.append(URLQueryItem(name: "latitude", value: String(approximateLatitude)))
+            query.append(URLQueryItem(name: "longitude", value: String(approximateLongitude)))
             query.append(URLQueryItem(name: "label", value: "Current location"))
         }
 
