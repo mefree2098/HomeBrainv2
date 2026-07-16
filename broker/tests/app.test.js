@@ -108,6 +108,87 @@ test('BrokerStore refuses to overwrite a paired store with empty hub state', asy
   assert.equal(hubs[0].hubId, 'hub-empty-guard');
 });
 
+test('BrokerStore serves health and authentication reads while a durable write is pending', async () => {
+  const store = new BrokerStore({
+    state: {
+      version: 1,
+      hubs: {
+        'hub-priority-read': {
+          hubId: 'hub-priority-read',
+          registration: { relayToken: 'relay-token' }
+        }
+      },
+      accountLinks: {},
+      authCodes: {},
+      accessTokens: {},
+      refreshTokens: {},
+      permissionGrants: {},
+      eventQueue: [],
+      auditLog: []
+    }
+  });
+
+  let releasePersist;
+  let markPersistStarted;
+  const persistStarted = new Promise((resolve) => {
+    markPersistStarted = resolve;
+  });
+  store.persist = async () => {
+    markPersistStarted();
+    await new Promise((resolve) => {
+      releasePersist = resolve;
+    });
+  };
+
+  const writePromise = store.appendAudit({
+    type: 'slow_write',
+    message: 'Simulated durable write backlog'
+  });
+  await persistStarted;
+
+  const timeoutMarker = Symbol('timeout');
+  const readResult = await Promise.race([
+    store.getHub('hub-priority-read'),
+    new Promise((resolve) => setTimeout(() => resolve(timeoutMarker), 50))
+  ]);
+
+  releasePersist();
+  await writePromise;
+
+  assert.notEqual(readResult, timeoutMarker);
+  assert.equal(readResult.hubId, 'hub-priority-read');
+});
+
+test('BrokerStore persists a batch of queued Alexa events in one durable write', async () => {
+  const store = new BrokerStore({
+    state: {
+      version: 1,
+      hubs: {},
+      accountLinks: {},
+      authCodes: {},
+      accessTokens: {},
+      refreshTokens: {},
+      permissionGrants: {},
+      eventQueue: [],
+      auditLog: []
+    }
+  });
+  let persistCalls = 0;
+  store.persist = async () => {
+    persistCalls += 1;
+  };
+
+  const records = await store.enqueueEvents([
+    { hubId: 'hub-batch', kind: 'change_report', payload: { value: 1 } },
+    { hubId: 'hub-batch', kind: 'change_report', payload: { value: 2 } },
+    { hubId: 'hub-batch', kind: 'change_report', payload: { value: 3 } }
+  ]);
+
+  assert.equal(records.length, 3);
+  assert.equal(persistCalls, 1);
+  assert.equal((await store.listQueuedEvents({ hubId: 'hub-batch' })).length, 3);
+});
+
 test('BrokerStore issues durable Alexa refresh tokens and rotates legacy expired records', async (t) => {
   const brokerStoreFile = path.join(os.tmpdir(), `homebrain-broker-refresh-token-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
   const previousRefreshTokenTtl = process.env.HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS;

@@ -200,6 +200,7 @@ class BrokerStore {
       || path.join(__dirname, '..', 'data', 'store.json');
     this.state = options.state ? normalizeStoreState(clone(options.state)) : null;
     this.initialized = Boolean(options.state);
+    this.initializing = null;
     this.pending = Promise.resolve();
   }
 
@@ -213,6 +214,23 @@ class BrokerStore {
   }
 
   async init() {
+    if (this.initialized) {
+      return;
+    }
+
+    if (this.initializing) {
+      return this.initializing;
+    }
+
+    this.initializing = this.initializeState();
+    try {
+      await this.initializing;
+    } finally {
+      this.initializing = null;
+    }
+  }
+
+  async initializeState() {
     if (this.initialized) {
       return;
     }
@@ -282,11 +300,9 @@ class BrokerStore {
   }
 
   async read(task) {
-    return this.runExclusive(async () => {
-      await this.init();
-      pruneExpiredEntries(this.state);
-      return clone(await task(this.state));
-    });
+    await this.init();
+    pruneExpiredEntries(this.state);
+    return clone(await task(this.state));
   }
 
   async write(task) {
@@ -867,28 +883,35 @@ class BrokerStore {
   }
 
   async enqueueEvent(payload = {}) {
+    const records = await this.enqueueEvents([payload]);
+    return records[0];
+  }
+
+  async enqueueEvents(payloads = []) {
     return this.write((state) => {
       const timestamp = new Date().toISOString();
-      const record = {
-        eventId: randomIdentifier('hbevent'),
-        kind: trimString(payload.kind) || 'change_report',
-        hubId: trimString(payload.hubId),
-        brokerAccountId: trimString(payload.brokerAccountId),
-        permissionGrantId: trimString(payload.permissionGrantId),
-        createdAt: timestamp,
-        status: trimString(payload.status) || 'queued',
-        attempts: Math.max(0, Number(payload.attempts || 0)),
-        maxAttempts: Math.max(1, Number(payload.maxAttempts || 3)),
-        lastAttemptAt: payload.lastAttemptAt || null,
-        nextAttemptAt: payload.nextAttemptAt || timestamp,
-        deliveredAt: payload.deliveredAt || null,
-        lastError: trimString(payload.lastError || ''),
-        payload: payload.payload && typeof payload.payload === 'object' ? payload.payload : {},
-        metadata: payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}
-      };
-      state.eventQueue.push(record);
+      const records = (Array.isArray(payloads) ? payloads : [payloads])
+        .filter((payload) => payload && typeof payload === 'object')
+        .map((payload) => ({
+          eventId: randomIdentifier('hbevent'),
+          kind: trimString(payload.kind) || 'change_report',
+          hubId: trimString(payload.hubId),
+          brokerAccountId: trimString(payload.brokerAccountId),
+          permissionGrantId: trimString(payload.permissionGrantId),
+          createdAt: timestamp,
+          status: trimString(payload.status) || 'queued',
+          attempts: Math.max(0, Number(payload.attempts || 0)),
+          maxAttempts: Math.max(1, Number(payload.maxAttempts || 3)),
+          lastAttemptAt: payload.lastAttemptAt || null,
+          nextAttemptAt: payload.nextAttemptAt || timestamp,
+          deliveredAt: payload.deliveredAt || null,
+          lastError: trimString(payload.lastError || ''),
+          payload: payload.payload && typeof payload.payload === 'object' ? payload.payload : {},
+          metadata: payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}
+        }));
+      state.eventQueue.push(...records);
       state.eventQueue = state.eventQueue.slice(-MAX_EVENT_QUEUE);
-      return record;
+      return records;
     });
   }
 

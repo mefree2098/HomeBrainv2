@@ -259,6 +259,40 @@ test('deployService starts the broker before applying the managed reverse proxy 
   assert.deepEqual(calls, ['start', 'route']);
 });
 
+test('manual start restarts a managed broker process that is alive but unhealthy', async () => {
+  const config = {
+    isInstalled: true,
+    serviceStatus: 'running'
+  };
+  const service = new AlexaBrokerService({
+    projectRoot: '/tmp/homebrain-test'
+  });
+  let restartOptions = null;
+
+  service.getConfig = async () => config;
+  service.isManagedRuntimeAlive = () => true;
+  service.probeHealth = async () => ({
+    available: false,
+    portOccupied: true,
+    localBaseUrl: 'http://127.0.0.1:4301',
+    message: 'timeout of 2000ms exceeded TCP port is already in use.'
+  });
+  service.restartService = async (options = {}) => {
+    restartOptions = options;
+    return { success: true, message: 'restarted unhealthy broker' };
+  };
+
+  const result = await service.startService({
+    actor: 'admin@example.com',
+    source: 'admin_start'
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(restartOptions.actor, 'admin@example.com');
+  assert.equal(restartOptions.source, 'admin_start_unhealthy_recovery');
+  assert.match(restartOptions.reason, /timeout of 2000ms/);
+});
+
 test('getStatus clears stale lastError once the broker is healthy again', async () => {
   const config = {
     isInstalled: true,
