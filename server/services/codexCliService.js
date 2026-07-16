@@ -221,6 +221,30 @@ function resolveInstalledCodexBinary() {
   return matchedPath || null;
 }
 
+function resolveCodexBinaryOnPath(pathValue = process.env.PATH || '') {
+  const pathEntries = String(pathValue)
+    .split(path.delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const executableNames = process.platform === 'win32'
+    ? ['codex.exe', 'codex.cmd', 'codex.bat', 'codex']
+    : ['codex'];
+
+  for (const pathEntry of pathEntries) {
+    for (const executableName of executableNames) {
+      const candidate = path.join(pathEntry, executableName);
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return candidate;
+      } catch (error) {
+        // Keep searching PATH for an executable Codex launcher.
+      }
+    }
+  }
+
+  return null;
+}
+
 function resolveCodexLaunchSpec(configuredPath = '') {
   const requestedPath = sanitizeString(configuredPath) || sanitizeString(DEFAULT_CODEX_PATH);
 
@@ -234,6 +258,16 @@ function resolveCodexLaunchSpec(configuredPath = '') {
   }
 
   if (!requestedPath || requestedPath === 'codex' || requestedPath === '@openai/codex') {
+    const pathBinary = resolveCodexBinaryOnPath();
+    if (pathBinary) {
+      return {
+        command: pathBinary,
+        args: ['app-server', '--listen', 'stdio://'],
+        resolvedPath: pathBinary,
+        source: 'path'
+      };
+    }
+
     const installedBinary = resolveInstalledCodexBinary();
     if (installedBinary) {
       return {
@@ -1425,6 +1459,7 @@ module.exports = {
   pickCodexModel,
   resolveLocalCodexHomeCandidates,
   resolveCodexHomePath,
+  resolveCodexBinaryOnPath,
   resolveCodexLaunchSpec,
   resolveDraftCodexHome,
   resolveSessionOptions,

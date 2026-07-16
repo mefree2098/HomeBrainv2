@@ -37,6 +37,16 @@ const SERVICE_DEFINITIONS = Object.freeze([
     setupCommand: 'setup-pihole',
     updateTarget: 'pihole',
     managementNotes: 'Managed DNS sinkhole and network filtering service.'
+  },
+  {
+    serviceId: 'codex',
+    displayName: 'Codex CLI',
+    packageName: '@openai/codex',
+    systemdUnit: '',
+    runtimeKind: 'cli',
+    setupCommand: 'setup-codex',
+    updateTarget: 'codex',
+    managementNotes: 'OpenAI coding agent CLI used by HomeBrain for current model access.'
   }
 ]);
 
@@ -277,6 +287,7 @@ class PlatformManagedServiceManager {
       displayName: definition.displayName,
       packageName: definition.packageName,
       systemdUnit: definition.systemdUnit,
+      runtimeKind: definition.runtimeKind || 'daemon',
       managementNotes: definition.managementNotes,
       installed: Boolean(runtime.installed),
       active: Boolean(runtime.active),
@@ -693,12 +704,19 @@ class PlatformManagedServiceManager {
   }
 
   async getRuntimeStatus(definition) {
-    const installed = await this.runCommand('bash', ['-lc', `command -v ${definition.serviceId === 'pihole' ? 'pihole' : definition.packageName}`])
+    const executableName = definition.serviceId === 'pihole'
+      ? 'pihole'
+      : definition.serviceId === 'codex'
+        ? 'codex'
+        : definition.packageName;
+    const installed = await this.runCommand('bash', ['-lc', `command -v ${executableName}`])
       .then(() => true)
       .catch(() => false);
-    const active = await this.runCommand('systemctl', ['is-active', '--quiet', definition.systemdUnit])
-      .then(() => true)
-      .catch(() => false);
+    const active = definition.runtimeKind === 'cli'
+      ? installed
+      : await this.runCommand('systemctl', ['is-active', '--quiet', definition.systemdUnit])
+        .then(() => true)
+        .catch(() => false);
 
     let currentVersion = '';
     try {
@@ -708,6 +726,8 @@ class PlatformManagedServiceManager {
         currentVersion = (await this.runCommand('bash', ['-lc', "mosquitto -h 2>&1 | awk 'NR==1 {print}'"])).stdout;
       } else if (definition.serviceId === 'pihole') {
         currentVersion = (await this.runCommand('bash', ['-lc', "pihole version 2>/dev/null | tr '\\n' ' ' | sed 's/[[:space:]]\\+/ /g' || true"])).stdout;
+      } else if (definition.serviceId === 'codex') {
+        currentVersion = (await this.runCommand('bash', ['-lc', "codex --version 2>/dev/null | awk 'NR==1 {print $NF}' || true"])).stdout;
       }
     } catch (error) {
       currentVersion = '';

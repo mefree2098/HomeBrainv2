@@ -692,10 +692,10 @@ export function PlatformDeploy() {
             </Button>
           </CardTitle>
           <CardDescription>
-            Caddy, MQTT, and Pi-hole are provisioned during deploy and can be updated after a stability delay.
+            Caddy, MQTT, Pi-hole, and the Codex CLI can be installed, checked, and updated from the hub.
           </CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-3 lg:grid-cols-3">
+        <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           {platformServices.map((service) => (
             <div key={service.serviceId} className="rounded-md border p-3">
               <div className="mb-3 flex items-start justify-between gap-3">
@@ -704,7 +704,9 @@ export function PlatformDeploy() {
                   <div className="mt-1 text-xs text-muted-foreground">{service.managementNotes}</div>
                 </div>
                 <Badge variant={service.active ? "secondary" : "destructive"}>
-                  {service.active ? "running" : service.installed ? "stopped" : "missing"}
+                  {service.runtimeKind === "cli"
+                    ? service.installed ? "ready" : "missing"
+                    : service.active ? "running" : service.installed ? "stopped" : "missing"}
                 </Badge>
               </div>
               <div className="space-y-1 text-xs text-muted-foreground">

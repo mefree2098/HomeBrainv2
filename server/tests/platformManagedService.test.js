@@ -44,6 +44,41 @@ test('runSetupCommand uses the managed setup-services helper with sudo', async (
   assert.equal(calls[0].args[0], '-n');
 });
 
+test('managed service definitions expose Codex CLI as a non-daemon runtime', () => {
+  const manager = new PlatformManagedServiceManager();
+  const codex = manager.getDefinitions().find((entry) => entry.serviceId === 'codex');
+
+  assert.deepEqual(codex, {
+    serviceId: 'codex',
+    displayName: 'Codex CLI',
+    packageName: '@openai/codex',
+    systemdUnit: '',
+    runtimeKind: 'cli',
+    setupCommand: 'setup-codex',
+    updateTarget: 'codex',
+    managementNotes: 'OpenAI coding agent CLI used by HomeBrain for current model access.'
+  });
+});
+
+test('getRuntimeStatus treats an installed Codex CLI as ready without probing systemd', async () => {
+  const calls = [];
+  const manager = new PlatformManagedServiceManager({
+    projectRoot,
+    spawnProcess: createSpawnStub(calls, {
+      'bash -lc command -v codex': () => ({ code: 0, stdout: '/usr/local/bin/codex' }),
+      "bash -lc codex --version 2>/dev/null | awk 'NR==1 {print $NF}' || true": () => ({ code: 0, stdout: '0.144.5' })
+    })
+  });
+  const definition = manager.getDefinitions().find((entry) => entry.serviceId === 'codex');
+
+  assert.deepEqual(await manager.getRuntimeStatus(definition), {
+    installed: true,
+    active: true,
+    currentVersion: '0.144.5'
+  });
+  assert.equal(calls.some((call) => call.command === 'systemctl'), false);
+});
+
 test('isDueForCheck honors weekly policy intervals', () => {
   const manager = new PlatformManagedServiceManager();
   const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();

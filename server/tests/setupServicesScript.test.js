@@ -232,3 +232,14 @@ test('platform service update checks tolerate apt warnings and parse Pi-hole lat
   assert.match(script, /current="\$\{version_pair%%\|\*\}"/);
   assert.match(script, /latest="\$\{version_pair#\*\|\}"/);
 });
+
+test('setup-services manages Codex CLI installation and npm update discovery', () => {
+  const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
+
+  assert.match(script, /setup_codex_cli\(\)/);
+  assert.match(script, /install --global @openai\/codex@latest/);
+  assert.match(script, /view @openai\/codex version/);
+  assert.match(script, /codex --version/);
+  assert.match(script, /codex\) check_codex_cli_update/);
+  assert.match(script, /codex\)\s+setup_codex_cli/);
+});
