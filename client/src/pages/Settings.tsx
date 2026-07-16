@@ -516,10 +516,53 @@ type CodexModelOption = {
   displayName?: string
   description?: string
   isDefault?: boolean
+  supportedReasoningEfforts?: CodexThinkingLevelOption[]
+  defaultReasoningEffort?: string
+}
+
+type CodexThinkingLevelOption = {
+  reasoningEffort: string
+  description?: string
 }
 
 const DEFAULT_CODEX_MODEL = "gpt-5.4"
+const DEFAULT_CODEX_EFFORT = "medium"
 const DEFAULT_CODEX_HOME_DISPLAY = "~/.codex/homebrain"
+const FALLBACK_CODEX_THINKING_LEVELS: CodexThinkingLevelOption[] = [
+  { reasoningEffort: "none", description: "No additional reasoning when supported" },
+  { reasoningEffort: "minimal", description: "Minimal reasoning for the fastest response" },
+  { reasoningEffort: "low", description: "Fast responses with lighter reasoning" },
+  { reasoningEffort: "medium", description: "Balances speed and reasoning depth" },
+  { reasoningEffort: "high", description: "Greater reasoning depth for complex problems" },
+  { reasoningEffort: "xhigh", description: "Extra high reasoning depth" },
+  { reasoningEffort: "max", description: "Maximum reasoning depth for the hardest problems" },
+  { reasoningEffort: "ultra", description: "Maximum reasoning with automatic task delegation" }
+]
+
+function formatCodexThinkingLevel(value: string) {
+  const labels: Record<string, string> = {
+    none: "None",
+    minimal: "Minimal",
+    low: "Low",
+    medium: "Medium",
+    high: "High",
+    xhigh: "Extra High",
+    max: "Max",
+    ultra: "Ultra"
+  }
+  return labels[value] || value.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase())
+}
+
+function getCodexModelId(model: CodexModelOption) {
+  return (model.id || model.model || "").toString()
+}
+
+function getCodexThinkingLevels(model: CodexModelOption | undefined) {
+  const advertised = Array.isArray(model?.supportedReasoningEfforts)
+    ? model.supportedReasoningEfforts.filter((entry) => entry?.reasoningEffort)
+    : []
+  return advertised.length > 0 ? advertised : FALLBACK_CODEX_THINKING_LEVELS
+}
 
 function resolveDraftCodexHome(customHome: string) {
   const trimmedCustomHome = (customHome || "").trim()
@@ -791,6 +834,7 @@ export function Settings() {
       codexHomeProfile: "local",
       codexAwsVolumeRoot: "",
       codexModel: DEFAULT_CODEX_MODEL,
+      codexEffort: DEFAULT_CODEX_EFFORT,
       localLlmEndpoint: "http://localhost:11434",
       homebrainLocalLlmModel: "llama2-7b",
       spamFilterLocalLlmModel: "llama2-7b",
@@ -1052,6 +1096,10 @@ export function Settings() {
   const codexPathValue = (watch("codexPath") || "").toString()
   const codexCustomHomeValue = (watch("codexHome") || "").toString()
   const codexModelValue = (watch("codexModel") || DEFAULT_CODEX_MODEL).toString()
+  const codexEffortValue = (watch("codexEffort") || DEFAULT_CODEX_EFFORT).toString()
+  const selectedCodexModel = codexModels.find((model) => getCodexModelId(model) === codexModelValue)
+  const codexThinkingLevels = getCodexThinkingLevels(selectedCodexModel)
+  const selectedCodexThinkingLevel = codexThinkingLevels.find((entry) => entry.reasoningEffort === codexEffortValue)
   const effectiveCodexHomeValue = resolveDraftCodexHome(codexCustomHomeValue)
   const deviceRestartScheduleEnabled = watch("deviceRestartScheduleEnabled") === true
   const deviceRestartScheduleFrequency = (watch("deviceRestartScheduleFrequency") || "weekly").toString()
@@ -1313,7 +1361,8 @@ export function Settings() {
             codexHome: loadedCodexHome,
             codexHomeProfile: loadedCodexHomeProfile,
             codexAwsVolumeRoot: "",
-            codexModel: (response.settings.codexModel || DEFAULT_CODEX_MODEL).toString()
+            codexModel: (response.settings.codexModel || DEFAULT_CODEX_MODEL).toString(),
+            codexEffort: (response.settings.codexEffort || DEFAULT_CODEX_EFFORT).toString()
           }, { showToast: false }).catch((codexError: any) => {
             console.error("Failed to load Codex models:", codexError)
           })
@@ -2047,6 +2096,7 @@ export function Settings() {
       settingsToSave.codexHomeProfile = normalizedCodexHomeProfile
       settingsToSave.codexPath = (settingsToSave.codexPath || "").toString().trim()
       settingsToSave.codexModel = (settingsToSave.codexModel || "").toString().trim()
+      settingsToSave.codexEffort = (settingsToSave.codexEffort || DEFAULT_CODEX_EFFORT).toString().trim().toLowerCase()
       settingsToSave.codexHome = normalizedCodexHomeProfile === "custom" ? normalizedCodexHome : ""
       settingsToSave.codexAwsVolumeRoot = ""
 
@@ -3180,11 +3230,12 @@ export function Settings() {
       codexHome: normalizedCodexHome,
       codexHomeProfile: normalizedCodexHomeProfile,
       codexAwsVolumeRoot: "",
-      codexModel: codexModelValue.trim()
+      codexModel: codexModelValue.trim(),
+      codexEffort: codexEffortValue.trim().toLowerCase()
     }
   }
 
-  const applyCodexModelResponse = (response: any, fallbackModel: string) => {
+  const applyCodexModelResponse = (response: any, fallbackModel: string, fallbackEffort: string) => {
     const models = Array.isArray(response?.models) ? response.models : []
     setCodexModels(models)
     setCodexLoginRequired(response?.loginRequired === true)
@@ -3198,24 +3249,40 @@ export function Settings() {
 
     if (models.length > 0) {
       const selectedModelIds = models
-        .map((model: CodexModelOption) => (model.id || model.model || "").toString())
+        .map((model: CodexModelOption) => getCodexModelId(model))
         .filter(Boolean)
       const preferredModel = fallbackModel.trim()
       const nextModel =
         (preferredModel && selectedModelIds.includes(preferredModel) ? preferredModel : "") ||
         (models.find((model: CodexModelOption) => model.isDefault)?.id || models[0]?.id || models[0]?.model || DEFAULT_CODEX_MODEL)
       setValue("codexModel", nextModel)
+
+      const nextModelOption = models.find((model: CodexModelOption) => getCodexModelId(model) === nextModel)
+      const availableThinkingLevels = getCodexThinkingLevels(nextModelOption)
+      const availableEfforts = new Set(availableThinkingLevels.map((entry) => entry.reasoningEffort))
+      const preferredEffort = fallbackEffort.trim().toLowerCase()
+      const advertisedDefault = (nextModelOption?.defaultReasoningEffort || response?.defaultThinkingLevel || DEFAULT_CODEX_EFFORT).toString()
+      const nextEffort = availableEfforts.has(preferredEffort)
+        ? preferredEffort
+        : availableEfforts.has(advertisedDefault)
+          ? advertisedDefault
+          : (availableThinkingLevels[0]?.reasoningEffort || DEFAULT_CODEX_EFFORT)
+      setValue("codexEffort", nextEffort)
     }
   }
 
   const loadCodexModelsForDraft = async (
-    draft: { codexPath?: string; codexHome?: string; codexHomeProfile?: string; codexAwsVolumeRoot?: string; codexModel?: string },
+    draft: { codexPath?: string; codexHome?: string; codexHomeProfile?: string; codexAwsVolumeRoot?: string; codexModel?: string; codexEffort?: string },
     options: { showToast?: boolean; startLogin?: boolean } = {}
   ) => {
     const { showToast = true, startLogin = false } = options
     const response = await getCodexModels(draft, { startLogin })
 
-    applyCodexModelResponse(response, (draft.codexModel || "").toString())
+    applyCodexModelResponse(
+      response,
+      (draft.codexModel || "").toString(),
+      (draft.codexEffort || DEFAULT_CODEX_EFFORT).toString()
+    )
 
     if (response?.loginRequired && response?.pendingLoginId) {
       setCodexAuthSummary("Login started. Open the returned URL, then paste the localhost callback URL here if the browser cannot reach it directly.")
@@ -3251,7 +3318,8 @@ export function Settings() {
       codexHomeProfile: profile,
       codexHome: profile === "custom" ? normalizedCodexHome : "",
       codexAwsVolumeRoot: "",
-      codexModel: (values.codexModel || "").toString().trim()
+      codexModel: (values.codexModel || "").toString().trim(),
+      codexEffort: (values.codexEffort || DEFAULT_CODEX_EFFORT).toString().trim().toLowerCase()
     }
 
     const response = await updateSettings(payload)
@@ -3263,6 +3331,28 @@ export function Settings() {
     }
 
     return response
+  }
+
+  const handleCodexModelChange = (nextModel: string) => {
+    setValue("codexModel", nextModel)
+    const model = codexModels.find((entry) => getCodexModelId(entry) === nextModel)
+    if (!model) {
+      return
+    }
+
+    const levels = getCodexThinkingLevels(model)
+    const supportedEfforts = new Set(levels.map((entry) => entry.reasoningEffort))
+    if (supportedEfforts.has(codexEffortValue)) {
+      return
+    }
+
+    const advertisedDefault = (model.defaultReasoningEffort || DEFAULT_CODEX_EFFORT).toString()
+    setValue(
+      "codexEffort",
+      supportedEfforts.has(advertisedDefault)
+        ? advertisedDefault
+        : (levels[0]?.reasoningEffort || DEFAULT_CODEX_EFFORT)
+    )
   }
 
   const handleRefreshCodexModels = async (options: { showToast?: boolean; startLogin?: boolean } = {}) => {
@@ -8844,13 +8934,13 @@ export function Settings() {
 
                   <div>
                     <label className="text-sm font-medium">Codex Model</label>
-                    <Select value={codexModelValue} onValueChange={(value) => setValue("codexModel", value)}>
+                    <Select value={codexModelValue} onValueChange={handleCodexModelChange}>
                       <SelectTrigger className="mt-1">
                         <SelectValue placeholder={loadingCodexModels ? "Loading Codex models..." : "Select Codex model"} />
                       </SelectTrigger>
                       <SelectContent>
                         {codexModels.map((model) => {
-                          const modelId = (model.id || model.model || "").toString()
+                          const modelId = getCodexModelId(model)
                           if (!modelId) return null
                           return (
                             <SelectItem key={modelId} value={modelId}>
@@ -8863,12 +8953,39 @@ export function Settings() {
                     <Input
                       className="mt-2"
                       value={codexModelValue}
-                      onChange={(event) => setValue("codexModel", event.target.value)}
+                      onChange={(event) => handleCodexModelChange(event.target.value)}
                       placeholder="Or enter any Codex model ID"
                     />
                     <p className="text-xs text-muted-foreground mt-1">
-                      Refresh the model list to pull currently available Codex models for the signed-in account.
+                      Refresh to query the currently available Codex models and model-specific thinking levels for the signed-in account.
                     </p>
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium">Thinking Level</label>
+                    <Select
+                      value={codexEffortValue}
+                      onValueChange={(value) => setValue("codexEffort", value)}
+                    >
+                      <SelectTrigger className="mt-1">
+                        <SelectValue placeholder={loadingCodexModels ? "Loading thinking levels..." : "Select thinking level"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {codexThinkingLevels.map((level) => (
+                          <SelectItem key={level.reasoningEffort} value={level.reasoningEffort}>
+                            {formatCodexThinkingLevel(level.reasoningEffort)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {selectedCodexThinkingLevel?.description || "Refresh the model list to query the thinking levels supported by the selected Codex model."}
+                    </p>
+                    {selectedCodexModel?.defaultReasoningEffort ? (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Model default: {formatCodexThinkingLevel(selectedCodexModel.defaultReasoningEffort)}. Higher levels can improve complex work but take longer and use more tokens.
+                      </p>
+                    ) : null}
                   </div>
 
                   <div className="flex flex-wrap gap-2">
@@ -8886,7 +9003,7 @@ export function Settings() {
                       ) : (
                         <>
                           <RefreshCw className="h-4 w-4 mr-2" />
-                          Refresh Model List
+                          Refresh Models + Levels
                         </>
                       )}
                     </Button>

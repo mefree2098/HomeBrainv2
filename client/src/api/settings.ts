@@ -68,6 +68,7 @@ export const updateSettings = async (settings: {
   codexHomeProfile?: string;
   codexAwsVolumeRoot?: string;
   codexModel?: string;
+  codexEffort?: string;
   localLlmEndpoint?: string;
   homebrainLocalLlmModel?: string;
   spamFilterLocalLlmModel?: string;
@@ -227,6 +228,7 @@ type CodexSettingsDraft = {
   codexHomeProfile?: string;
   codexAwsVolumeRoot?: string;
   codexModel?: string;
+  codexEffort?: string;
 };
 
 const buildCodexQuery = (draft: CodexSettingsDraft = {}, extra: Record<string, string | number | boolean | undefined> = {}) => {
@@ -238,6 +240,7 @@ const buildCodexQuery = (draft: CodexSettingsDraft = {}, extra: Record<string, s
     codexHomeProfile: draft.codexHomeProfile,
     codexAwsVolumeRoot: draft.codexAwsVolumeRoot,
     codexModel: draft.codexModel,
+    codexEffort: draft.codexEffort,
     ...extra
   };
 
