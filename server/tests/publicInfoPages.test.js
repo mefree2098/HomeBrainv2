@@ -33,6 +33,7 @@ test('public privacy and support pages are available without authentication', as
       const response = await fetch(`${origin}${pathname}`);
       assert.equal(response.status, 200);
       assert.match(response.headers.get('content-type') || '', /^text\/html/);
+      assert.ok(response.headers.get('ratelimit-policy'));
       const body = await response.text();
       assert.match(body, new RegExp(requiredText));
       assert.doesNotMatch(body, /\{\{|TODO|REPLACE_ME|example\.com/i);

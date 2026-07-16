@@ -21,6 +21,23 @@ const supportRequestRateLimit = rateLimit({
     message: 'Too many support requests. Please wait 15 minutes and try again.'
   }
 });
+const supportAdminRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many support administration requests. Please retry shortly.'
+  }
+});
+const publicInfoReadRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: 'Too many requests. Please retry shortly.'
+});
 const requireSupportAdmin = requireAdmin();
 const SUPPORT_REQUEST_STATUSES = new Set(['open', 'in_progress', 'resolved']);
 
@@ -413,8 +430,8 @@ function sendPublicPage(filename) {
   };
 }
 
-router.get('/privacy/', (_req, res) => res.redirect(308, '/privacy'));
-router.get('/support/', (_req, res) => res.redirect(308, '/support'));
+router.get('/privacy/', publicInfoReadRateLimit, (_req, res) => res.redirect(308, '/privacy'));
+router.get('/support/', publicInfoReadRateLimit, (_req, res) => res.redirect(308, '/support'));
 router.post(
   '/api/public/support-requests',
   supportRequestRateLimit,
@@ -423,26 +440,29 @@ router.post(
 );
 router.get(
   '/api/public/support-requests',
+  supportAdminRateLimit,
   requireSupportAdmin,
   rejectReviewSandboxAdmin,
   listSupportRequests
 );
 router.get(
   '/api/public/support-requests/:requestId',
+  supportAdminRateLimit,
   requireSupportAdmin,
   rejectReviewSandboxAdmin,
   getSupportRequest
 );
 router.patch(
   '/api/public/support-requests/:requestId',
+  supportAdminRateLimit,
   requireSupportAdmin,
   rejectReviewSandboxAdmin,
   parseSupportRequestJson,
   updateSupportRequest
 );
-router.get('/privacy', sendPublicPage('privacy.html'));
-router.get('/support', sendPublicPage('support.html'));
-router.use('/app-info', express.static(publicInfoRoot, {
+router.get('/privacy', publicInfoReadRateLimit, sendPublicPage('privacy.html'));
+router.get('/support', publicInfoReadRateLimit, sendPublicPage('support.html'));
+router.use('/app-info', publicInfoReadRateLimit, express.static(publicInfoRoot, {
   fallthrough: false,
   immutable: false,
   maxAge: '1h'
