@@ -783,6 +783,7 @@ configure_deploy_sudoers() {
     deploy_commands+=("/bin/bash ${setup_services_path} setup-caddy")
     deploy_commands+=("/bin/bash ${setup_services_path} setup-mqtt")
     deploy_commands+=("/bin/bash ${setup_services_path} setup-pihole")
+    deploy_commands+=("/bin/bash ${setup_services_path} setup-codex")
     deploy_commands+=("/bin/bash ${setup_services_path} setup-platform-services")
     deploy_commands+=("/bin/bash ${setup_services_path} check-platform-service-updates *")
     deploy_commands+=("/bin/bash ${setup_services_path} update-platform-service *")
@@ -795,6 +796,7 @@ configure_deploy_sudoers() {
     deploy_commands+=("/usr/bin/bash ${setup_services_path} setup-caddy")
     deploy_commands+=("/usr/bin/bash ${setup_services_path} setup-mqtt")
     deploy_commands+=("/usr/bin/bash ${setup_services_path} setup-pihole")
+    deploy_commands+=("/usr/bin/bash ${setup_services_path} setup-codex")
     deploy_commands+=("/usr/bin/bash ${setup_services_path} setup-platform-services")
     deploy_commands+=("/usr/bin/bash ${setup_services_path} check-platform-service-updates *")
     deploy_commands+=("/usr/bin/bash ${setup_services_path} update-platform-service *")
@@ -1200,6 +1202,27 @@ setup_pihole() {
   fi
 }
 
+setup_codex_cli() {
+  local npm_bin codex_bin version
+  npm_bin="$(command -v npm 2>/dev/null || true)"
+  if [[ -z "${npm_bin}" ]]; then
+    print_error "npm is required to install the Codex CLI. Install Node.js and npm first."
+    exit 1
+  fi
+
+  print_status "Installing the latest Codex CLI from the official @openai/codex package..."
+  sudo env npm_config_update_notifier=false "${npm_bin}" install --global @openai/codex@latest
+  hash -r
+  codex_bin="$(command -v codex 2>/dev/null || true)"
+  if [[ -z "${codex_bin}" ]]; then
+    print_error "Codex CLI installation completed, but the codex executable is not on PATH."
+    exit 1
+  fi
+
+  version="$("${codex_bin}" --version 2>/dev/null | awk 'NR==1 {print $NF}')"
+  print_success "Codex CLI ${version:-unknown} is installed at ${codex_bin}."
+}
+
 setup_platform_services() {
   setup_caddy
   setup_mqtt
@@ -1264,13 +1287,41 @@ check_pihole_update() {
     "$(json_bool "${update_available}")"
 }
 
+check_codex_cli_update() {
+  local npm_bin current_version latest_version update_available
+  npm_bin="$(command -v npm 2>/dev/null || true)"
+  if [[ -z "${npm_bin}" ]]; then
+    print_error "npm is required to check Codex CLI updates."
+    exit 1
+  fi
+
+  current_version="$(codex --version 2>/dev/null | awk 'NR==1 {print $NF}' || true)"
+  latest_version="$("${npm_bin}" view @openai/codex version 2>/dev/null | tail -n 1 | tr -d '[:space:]')"
+  if [[ -z "${latest_version}" ]]; then
+    print_error "Unable to resolve the latest @openai/codex version from npm."
+    exit 1
+  fi
+
+  if [[ -z "${current_version}" || "${current_version}" != "${latest_version}" ]]; then
+    update_available="true"
+  else
+    update_available="false"
+  fi
+
+  printf '{"serviceId":"codex","currentVersion":%s,"latestVersion":%s,"updateAvailable":%s}\n' \
+    "$(json_escape "${current_version}")" \
+    "$(json_escape "${latest_version}")" \
+    "$(json_bool "${update_available}")"
+}
+
 check_platform_service_updates() {
   case "${1:-}" in
     caddy) check_apt_service_update caddy caddy ;;
     mqtt|mosquitto) check_apt_service_update mqtt mosquitto ;;
     pihole) check_pihole_update ;;
+    codex) check_codex_cli_update ;;
     *)
-      print_error "Usage: $0 check-platform-service-updates [caddy|mqtt|pihole]"
+      print_error "Usage: $0 check-platform-service-updates [caddy|mqtt|pihole|codex]"
       exit 1
       ;;
   esac
@@ -1296,8 +1347,11 @@ update_platform_service() {
       sudo pihole -up
       configure_pihole_ports
       ;;
+    codex)
+      setup_codex_cli
+      ;;
     *)
-      print_error "Usage: $0 update-platform-service [caddy|mqtt|pihole]"
+      print_error "Usage: $0 update-platform-service [caddy|mqtt|pihole|codex]"
       exit 1
       ;;
   esac
@@ -1591,9 +1645,10 @@ Commands:
   setup-caddy       Install Caddy as the native public edge service
   setup-mqtt        Install Mosquitto as the local HomeBrain MQTT broker
   setup-pihole      Install Pi-hole and configure its web ports for Caddy coexistence
+  setup-codex       Install or repair the global OpenAI Codex CLI
   setup-platform-services Install/refresh Caddy, MQTT, and Pi-hole
-  check-platform-service-updates [target] Check updates for caddy, mqtt, or pihole
-  update-platform-service [target] Update caddy, mqtt, or pihole
+  check-platform-service-updates [target] Check updates for caddy, mqtt, pihole, or codex
+  update-platform-service [target] Update caddy, mqtt, pihole, or codex
   start             Start MongoDB and HomeBrain
   stop              Stop HomeBrain
   restart           Restart HomeBrain
@@ -1614,6 +1669,7 @@ main() {
     setup-caddy) setup_caddy ;;
     setup-mqtt) setup_mqtt ;;
     setup-pihole) setup_pihole ;;
+    setup-codex) setup_codex_cli ;;
     setup-platform-services) setup_platform_services ;;
     check-platform-service-updates) check_platform_service_updates "${2:-}" ;;
     update-platform-service) update_platform_service "${2:-}" ;;

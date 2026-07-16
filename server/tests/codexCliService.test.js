@@ -8,6 +8,7 @@ const {
   buildCodexOutputSchema,
   extractCodexTurnText,
   pickCodexModel,
+  resolveCodexBinaryOnPath,
   resolveCodexLaunchSpec,
   resolveDraftCodexHome,
   resolveLocalCodexHomeCandidates,
@@ -27,6 +28,24 @@ test('resolveCodexLaunchSpec uses node for explicit JavaScript entrypoints', () 
   assert.equal(spec.command, process.execPath);
   assert.deepEqual(spec.args, ['/opt/tools/codex-wrapper.js', 'app-server', '--listen', 'stdio://']);
   assert.equal(spec.source, 'script');
+});
+
+test('resolveCodexLaunchSpec prefers the platform-managed Codex CLI on PATH', async (t) => {
+  const binDir = await fs.mkdtemp(path.join(os.tmpdir(), 'homebrain-codex-bin-'));
+  const codexPath = path.join(binDir, process.platform === 'win32' ? 'codex.exe' : 'codex');
+  const originalPath = process.env.PATH;
+  await fs.writeFile(codexPath, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  process.env.PATH = binDir;
+  t.after(async () => {
+    process.env.PATH = originalPath;
+    await fs.rm(binDir, { recursive: true, force: true });
+  });
+
+  assert.equal(resolveCodexBinaryOnPath(), codexPath);
+  const spec = resolveCodexLaunchSpec();
+  assert.equal(spec.command, codexPath);
+  assert.equal(spec.resolvedPath, codexPath);
+  assert.equal(spec.source, 'path');
 });
 
 test('pickCodexModel prefers an exact match and otherwise falls back to the default model', () => {

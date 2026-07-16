@@ -169,7 +169,7 @@ To expose MQTT beyond loopback, set `HOMEBRAIN_MQTT_BIND_ADDRESS` and provide `H
 
 ## Managed Third-Party Services
 
-HomeBrain manages Caddy, Mosquitto, and Pi-hole as first-class platform services. A normal Platform Deploy now runs `setup-platform-services` before the backend restart, so production pushes refresh the host service definitions and install missing platform dependencies.
+HomeBrain manages Caddy, Mosquitto, Pi-hole, and the OpenAI Codex CLI as first-class platform services. A normal Platform Deploy runs `setup-platform-services` before the backend restart, so production pushes refresh the host daemon definitions and install missing platform dependencies. Codex CLI is installed or repaired on demand from Platform Services with `npm install --global @openai/codex@latest`.
 
 The Platform Deploy page exposes install/repair, update checks, manual updates, and policy automation for each service. The default policy checks weekly and treats an update as eligible for automatic deployment only after it has been visible for 30 days. Automatic deployment is opt-in per service.
 

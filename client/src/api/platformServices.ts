@@ -12,6 +12,7 @@ export interface PlatformService {
   displayName: string;
   packageName: string;
   systemdUnit: string;
+  runtimeKind: "daemon" | "cli";
   managementNotes: string;
   installed: boolean;
   active: boolean;
