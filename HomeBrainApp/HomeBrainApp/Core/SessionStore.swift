@@ -35,8 +35,10 @@ final class SessionStore: ObservableObject {
 
     private let defaults = UserDefaults.standard
     private let serverURLKey = "homebrain.serverURL"
-    private let accessTokenKey = "homebrain.accessToken"
-    private let refreshTokenKey = "homebrain.refreshToken"
+    private static let legacyAccessTokenKey = "homebrain.accessToken"
+    private static let legacyRefreshTokenKey = "homebrain.refreshToken"
+    private static let accessTokenAccount = "accessToken"
+    private static let refreshTokenAccount = "refreshToken"
     private let currentUserKey = "homebrain.currentUser"
     private let clientInstallationIdKey = "homebrain.clientInstallationId"
     private static let defaultServerURL = "http://homebrain.local:3000"
@@ -70,9 +72,32 @@ final class SessionStore: ObservableObject {
             defaults.set(resolvedServerURL, forKey: serverURLKey)
         }
 
+        var storedAccessToken = KeychainStore.read(account: Self.accessTokenAccount)
+        var storedRefreshToken = KeychainStore.read(account: Self.refreshTokenAccount)
+        let legacyAccessToken = defaults.string(forKey: Self.legacyAccessTokenKey)
+        let legacyRefreshToken = defaults.string(forKey: Self.legacyRefreshTokenKey)
+
+        do {
+            if storedAccessToken == nil, let legacyAccessToken, !legacyAccessToken.isEmpty {
+                try KeychainStore.save(legacyAccessToken, account: Self.accessTokenAccount)
+                storedAccessToken = legacyAccessToken
+            }
+            if storedRefreshToken == nil, let legacyRefreshToken, !legacyRefreshToken.isEmpty {
+                try KeychainStore.save(legacyRefreshToken, account: Self.refreshTokenAccount)
+                storedRefreshToken = legacyRefreshToken
+            }
+        } catch {
+            KeychainStore.delete(account: Self.accessTokenAccount)
+            KeychainStore.delete(account: Self.refreshTokenAccount)
+            storedAccessToken = nil
+            storedRefreshToken = nil
+        }
+        defaults.removeObject(forKey: Self.legacyAccessTokenKey)
+        defaults.removeObject(forKey: Self.legacyRefreshTokenKey)
+
         self.serverURLString = resolvedServerURL
-        self.accessToken = defaults.string(forKey: accessTokenKey)
-        self.refreshToken = defaults.string(forKey: refreshTokenKey)
+        self.accessToken = storedAccessToken
+        self.refreshToken = storedRefreshToken
 
         if let userData = defaults.data(forKey: currentUserKey),
            let decoded = try? JSONDecoder().decode(AppUser.self, from: userData) {
@@ -283,11 +308,20 @@ final class SessionStore: ObservableObject {
             throw APIError.server(statusCode: 403, message: Self.homeBrainAccessDeniedMessage)
         }
 
+        do {
+            try KeychainStore.save(refresh, account: Self.refreshTokenAccount)
+            try KeychainStore.save(access, account: Self.accessTokenAccount)
+        } catch {
+            KeychainStore.delete(account: Self.accessTokenAccount)
+            KeychainStore.delete(account: Self.refreshTokenAccount)
+            throw error
+        }
+
         authError = nil
         accessToken = access
         self.refreshToken = refresh
-        defaults.set(access, forKey: accessTokenKey)
-        defaults.set(refresh, forKey: refreshTokenKey)
+        defaults.removeObject(forKey: Self.legacyAccessTokenKey)
+        defaults.removeObject(forKey: Self.legacyRefreshTokenKey)
 
         if let user {
             currentUser = user
@@ -308,8 +342,10 @@ final class SessionStore: ObservableObject {
         accessToken = nil
         refreshToken = nil
         currentUser = nil
-        defaults.removeObject(forKey: accessTokenKey)
-        defaults.removeObject(forKey: refreshTokenKey)
+        KeychainStore.delete(account: Self.accessTokenAccount)
+        KeychainStore.delete(account: Self.refreshTokenAccount)
+        defaults.removeObject(forKey: Self.legacyAccessTokenKey)
+        defaults.removeObject(forKey: Self.legacyRefreshTokenKey)
         defaults.removeObject(forKey: currentUserKey)
     }
 

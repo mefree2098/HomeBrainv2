@@ -84,6 +84,7 @@ class EventStreamService extends EventEmitter {
       type,
       source: (input.source || 'system').toString(),
       category: (input.category || 'general').toString(),
+      ...(input.actorUserId ? { actorUserId: input.actorUserId } : {}),
       severity: ['info', 'warn', 'error'].includes(input.severity) ? input.severity : 'info',
       payload: input.payload && typeof input.payload === 'object' ? input.payload : {},
       tags: Array.isArray(input.tags)

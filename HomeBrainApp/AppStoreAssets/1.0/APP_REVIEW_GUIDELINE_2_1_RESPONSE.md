@@ -1,6 +1,6 @@
 # HomeBrain App Review response — Guideline 2.1
 
-Prepared July 15, 2026 for HomeBrain **1.0 (build 6)**.
+Prepared July 15, 2026 for HomeBrain **1.0 (build 7)**.
 
 This document contains two paste-ready versions:
 
@@ -9,14 +9,16 @@ This document contains two paste-ready versions:
 
 Replace every bracketed value only after verifying it. Do not paste passwords into public App Store metadata; put them in App Store Connect's Sign-in Information fields.
 
-## What changed in build 6
+## What changed in build 7
 
 - The iOS app is **sign-in only**. It has no Register or Create Account option. HomeBrain accounts are created on the HomeBrain backend by an administrator and then supplied to authorized household users.
 - A dedicated Apple App Review account is restricted to a per-user virtual sandbox. Its rooms, devices, groups, scenes, workflows, notifications, weather, security state, voice results, and Watch data are synthetic. Sandbox requests cannot fall through to household devices, integrations, credentials, or global settings.
 - The review account can change virtual state—such as toggling a demo light, running a scene, or executing a workflow—without controlling a real residence.
-- **Settings → Account → Delete Account** provides in-app account deletion. The user must enter the current password and type `DELETE`. Successful deletion removes the account and associated personal data, invalidates its sessions, and returns the app to the signed-out screen.
+- **Settings → Account → Delete Account** provides in-app account deletion. The user must enter the current password and type `DELETE`. Successful deletion removes the account, sessions, push registrations, isolated sandbox data, and other account-linked data, then returns the app to the signed-out screen. Older unattributable operational records and backups may remain under the hub operator's configured retention practices; they are not available through the deleted account.
 - The unauthenticated developer UI Preview and launch override are disabled in Release builds.
-- Location, Microphone, and Speech Recognition purpose strings now state when the capability is requested and include a concrete example.
+- Location, Camera, Local Network, Microphone, and Speech Recognition purpose strings now state when the capability is used and include a concrete example.
+- Coordinates sent for optional local weather are rounded to two decimal places and are disclosed as **Coarse Location**.
+- Public help and privacy pages are available at `https://freestonefamily.com/support` and `https://freestonefamily.com/privacy`.
 
 The backend still protects the final active HomeBrain administrator from deletion until another administrator exists. This protection does not affect the standard non-admin review accounts.
 
@@ -26,7 +28,9 @@ Official guidance: [Offering account deletion in your app](https://developer.app
 
 Apple requested a recording captured on a physical device running the latest operating system. Attach the verified physical-device recording before replying.
 
-**Attachment:** `[HomeBrain-1.0-build-6-App-Review-DEVICE-OS.mov]`
+**Attachment:** `[HomeBrain-1.0-build-7-App-Review-DEVICE-OS.mov]`
+
+A simulator capture may be used internally as a rehearsal, but it does **not** satisfy Apple's request and should not be described as the required attachment. Until the physical-device capture is produced and checked against the submitted build, leave the attachment filename, device, OS, and test-date fields below unresolved.
 
 The recording should begin with launching HomeBrain and show this flow:
 
@@ -47,6 +51,8 @@ The recording should begin with launching HomeBrain and show this flow:
 
 Do **not** delete the persistent App Review credential. Reset or recreate the disposable deletion-test account before every submission if Apple may repeat the flow.
 
+The review endpoint is public HTTPS, so it does not trigger Local Network permission. That permission is used only when a customer enters a LAN hub such as `homebrain.local`. Camera access is limited to the administrator-only **Add Z-Wave Device** QR-pairing flow; the read-only reviewer accounts cannot open that flow and therefore will not receive a Camera prompt. State both facts in the recording narration and Notes rather than exposing an administrator credential.
+
 HomeBrain has no StoreKit purchase, subscription, paid-content, advertising, or App Tracking Transparency flow. It has no public social feed or publicly shared user-generated content, so purchase and UGC reporting/blocking flows do not apply. User-created room names, scenes, and workflows are private to an authorized HomeBrain hub.
 
 ## Device and operating-system test matrix
@@ -55,10 +61,10 @@ Apple asked for devices actually tested before submission. Do not claim availabi
 
 | Device model | Operating system | Verification | Result/date |
 | --- | --- | --- | --- |
-| iPhone Air | iOS 27.0 | Fresh install; launch; endpoint; login; Notifications, Location, Microphone, and Speech prompts; Dashboard; virtual device action; scene/workflow; Weather; Voice; Watch screen; deletion with disposable account; sign-out | `[PASS and date, or omit]` |
-| iPhone 16 Pro Max | iOS 26.5.2 | Login; primary navigation; virtual device action; background/foreground; sign-out | `[PASS and date, or omit]` |
-| iPad (9th generation) | iPadOS 26.4 | Login; portrait and landscape layouts; Dashboard; Devices; Rooms; scene/workflow; sign-out | `[PASS and date, or omit]` |
-| Apple Watch `[model]` | watchOS `[version]` | Companion session; Overview; Security; Lights; Weather; sign-out/session expiry | `[PASS and date, or omit]` |
+| `[PHYSICAL IPHONE MODEL]` | `[iOS VERSION]` | Fresh install; launch; endpoint; login; permission prompts; Dashboard; virtual device action; scene/workflow; Weather; Voice; Watch screen; deletion with disposable account; sign-out | `[PASS DATE, or omit]` |
+| `[SECOND PHYSICAL IPHONE MODEL, if tested]` | `[iOS VERSION]` | Login; primary navigation; virtual device action; background/foreground; sign-out | `[PASS DATE, or omit]` |
+| `[PHYSICAL IPAD MODEL, if tested]` | `[iPadOS VERSION]` | Login; portrait and landscape layouts; Dashboard; Devices; Rooms; scene/workflow; sign-out | `[PASS DATE, or omit]` |
+| `[PHYSICAL APPLE WATCH MODEL, if tested]` | `[watchOS VERSION]` | Companion session; Overview; Security; Lights; Weather; sign-out/session expiry | `[PASS DATE, or omit]` |
 
 Simulator coverage can be listed separately as supplemental testing, but it does not replace the physical-device recording Apple requested:
 
@@ -100,9 +106,12 @@ Setup:
 4. No VPN, private DNS, local-network access, sample file, purchase, subscription, or physical smart-home accessory is required.
 5. The preconfigured synthetic demo home loads. Its review-only navigation includes Dashboard, Weather, Watch App, Devices, Rooms, Scenes, Workflows, Notifications, and Settings.
 6. The sandbox contains nine virtual devices, six named rooms, two groups, three scenes, three workflows, two notifications, synthetic weather, a virtual security state, and Watch configuration. These examples persist for that review account and can be changed safely.
-7. Location is requested only when **Use Device Location** is selected. Microphone and Speech Recognition are requested only when Voice Commands are enabled. Notification permission is requested after sign-in when security notifications are enabled.
+7. Location is requested only when **Use Device Location** is selected. Microphone and Speech Recognition are requested only when Voice Commands are enabled. Notification permission is requested after sign-in when security notifications are enabled. Local Network is used only for a customer-entered LAN hub, and Camera is used only by a hub administrator who chooses **Add Z-Wave Device** and scans its QR code; neither capability is required by the public read-only review environment.
 8. The Watch companion uses the same authorized HomeBrain session transferred from its paired iPhone.
 9. To test deletion, sign out of the persistent account, sign in with the disposable account, then open **Settings → Account → Delete Account**, enter its password, type `DELETE`, and confirm.
+
+- Support: `https://freestonefamily.com/support`
+- Privacy policy: `https://freestonefamily.com/privacy`
 
 Immediately before replying, verify the public endpoint over cellular internet, both credentials, the reset sandbox contents, and the complete deletion flow.
 
@@ -114,12 +123,16 @@ Services used by the submitted app:
 - **Apple Push Notification service (APNs):** optional HomeBrain notifications on configured customer hubs. The App Review sandbox serves synthetic in-app notification records and does not require live push delivery to demonstrate core functionality.
 - **Apple Speech Recognition and the device microphone:** optional conversion of a spoken command to text when the user enables Voice Commands.
 - **Apple Core Location:** optional device location when the user explicitly chooses automatic local weather.
+- **Device camera:** administrator-only scanning of a Z-Wave device QR code when that administrator explicitly starts the add-device flow.
+- **Local Network:** direct connection to a customer-entered HomeBrain hub on the same LAN, such as `homebrain.local`; this is not required by the public App Review endpoint.
 - **WatchConnectivity and watchOS:** session transfer and companion features on Apple Watch.
 - **Open-Meteo:** forecast, geocoding, and air-quality data for configured customer weather dashboards. The App Review sandbox can display synthetic weather without depending on this service.
 
 Depending on the customer's hub configuration, HomeBrain can integrate with WeatherFlow Tempest, Govee, Ecobee, Sense Energy, RainMachine, HomeBrain-managed Zigbee/Z-Wave/Thread/Matter/Insteon devices, Samsung SmartThings, Amazon Alexa, Logitech Harmony, and other administrator-configured home platforms. Optional hub-side voice/AI providers include local Ollama and Whisper, OpenAI, Anthropic, ElevenLabs, and local text-to-speech. None of these optional providers, integrations, or physical accessories is required to review the isolated demo environment.
 
 There is no payment processor because the iOS app has no purchases or subscriptions. There is no advertising or tracking SDK in the submitted iOS app.
+
+For App Privacy, optional weather coordinates are rounded to two decimal places before transmission and should be declared as **Coarse Location**, linked to the user, used for App Functionality, and not used for tracking. Voice-command text is sent to the HomeBrain backend to interpret the requested action. Account-attributable voice history is deleted with the account in the current implementation; older records that cannot be reliably attributed and backups may remain under the hub operator's configured retention practices.
 
 ### 6. Regional differences
 
@@ -136,41 +149,41 @@ Replace all bracketed values and attach the verified physical-device recording b
 ```text
 Hello App Review,
 
-Thank you for the request. We have attached “[FILENAME],” captured on a physical [DEVICE MODEL] running [OS VERSION]. The recording begins with launching HomeBrain and demonstrates the sign-in-only flow, all permission prompts encountered, Dashboard, a virtual device action, Rooms, Scenes, Workflows, Weather, Voice Commands, the iPhone Apple Watch companion/configuration screen, account deletion with a disposable account, and return to the signed-out screen.
-
-Replacement build 1.0 (6) removes the in-app Register option, provides isolated interactive review data, adds in-app account deletion, clarifies the Location/Microphone/Speech purpose strings, and excludes the developer UI Preview from Release builds.
+We attached [FILENAME], recorded on a physical [DEVICE MODEL] running [OS VERSION] on [DATE]. It begins at app launch and shows the requested core, permission, Watch companion, and deletion flows.
 
 1. RECORDING
-The attached physical-device recording shows the typical user flow. HomeBrain has no purchases, subscriptions, paid content, advertising, ATT flow, or public UGC feed. Notifications are requested after sign-in when enabled. Location is requested only when Use Device Location is selected. Microphone and Speech Recognition are requested only when Voice Commands are enabled.
+Build 1.0 (7) has no purchases, subscriptions, paid content, ads, ATT, or public UGC. Notifications prompt after sign-in; Location after Use Device Location; and Microphone/Speech after Voice Commands. Local Network is only for a customer LAN hub. Camera is an administrator-only Z-Wave QR scanner unavailable to the read-only review accounts.
 
-2. DEVICES TESTED
-- [DEVICE / OS / test date]
-- [DEVICE / OS / test date]
-- [IPAD / iPadOS / test date]
-- [APPLE WATCH / watchOS / test date]
+2. DEVICES AND OPERATING SYSTEMS TESTED
+- [PHYSICAL DEVICE MODEL] - [OS VERSION] - tested [DATE]
+- [PHYSICAL DEVICE MODEL] - [OS VERSION] - tested [DATE]
+- [PHYSICAL IPAD MODEL] - [iPadOS VERSION] - tested [DATE]
+- [PHYSICAL WATCH MODEL] - [watchOS VERSION] - tested [DATE]
 
-3. PURPOSE AND AUDIENCE
-HomeBrain is a companion for owners and authorized household users of a HomeBrain hub. It provides one private interface for compatible devices, rooms, scenes, workflows, security state, weather, notifications, energy information, optional voice commands, and Apple Watch. It reduces the need to operate a connected home through separate vendor apps. The app requires an administrator-provisioned HomeBrain account and has no public or in-app registration.
+3. PURPOSE AND TARGET AUDIENCE
+HomeBrain gives owners and authorized household users one private interface for compatible devices, rooms, scenes, workflows, security, weather, notifications, energy, optional voice, and Apple Watch instead of separate vendor apps. Accounts are administrator-provisioned; iOS registration is not supported.
 
 4. SETUP AND ACCESS
-Review endpoint: https://freestonefamily.com
-Use the persistent demo username and password in the App Review Sign-in Information fields. No VPN, LAN, private DNS, sample file, purchase, subscription, or physical accessory is required. Enter the endpoint, sign in, and the synthetic demo Dashboard loads. The review account can access Dashboard, Weather, Watch App, Devices, Rooms, Scenes, Workflows, Notifications, and Settings.
+Endpoint: https://freestonefamily.com
+Use the persistent review username/password in the App Review Sign-in Information fields. Enter the endpoint, save it, and sign in. No VPN, LAN, private DNS, sample file, purchase, subscription, or physical accessory is required.
 
-The demo account is restricted to a per-user App Review sandbox containing nine virtual devices, six named rooms, two groups, three scenes, three workflows, two notifications, synthetic weather, virtual security state, and Watch configuration. Actions persist only in that account's sandbox and cannot read or control the owner's household devices, integrations, credentials, or settings.
+The persistent account is limited to a per-user sandbox with nine virtual devices plus synthetic rooms, groups, scenes, workflows, notifications, weather, security, and Watch data. Actions cannot reach the owner's household devices, integrations, credentials, or settings.
 
-ACCOUNT DELETION
-The private Notes field includes a separate disposable deletion-test credential. Sign in with it, then open Settings > Account > Delete Account, enter its password, type DELETE, and confirm. The account, sessions, push registrations, notifications, voice-command history, security PIN references, and isolated sandbox state are removed, and the app returns to sign-in. Please do not delete the persistent demo credential.
+Notes identifies a disposable deletion-test account. Use Settings > Account > Delete Account, enter its password, type DELETE, and confirm. This removes the account, sessions, push registrations, sandbox, and linked data, then returns to sign-in. Older unattributable logs and backups may remain under configured retention. Do not delete the persistent account.
 
-5. SERVICES AND PLATFORMS
-HomeBrain uses its backend/hub, Apple Push Notification service, Apple Speech Recognition, the device microphone, Core Location, WatchConnectivity/watchOS, and Open-Meteo. Optional hub integrations include WeatherFlow Tempest, Govee, Ecobee, Sense Energy, RainMachine, Zigbee/Z-Wave/Thread/Matter/Insteon, SmartThings, Alexa, Harmony, local Ollama/Whisper, and optional OpenAI/Anthropic/ElevenLabs providers. Optional providers and physical accessories are not required in the isolated review environment. No payment processor is used.
+Support: https://freestonefamily.com/support
+Privacy: https://freestonefamily.com/privacy
 
-6. REGIONS
-The same binary, review environment, and app features operate in every App Store region. There is no region-gated content. Optional provider/hardware availability and weather results can vary by provider and selected location.
+5. EXTERNAL SERVICES AND PLATFORMS
+Core services: HomeBrain backend/hub; Apple APNs, Speech, microphone, Core Location, WatchConnectivity/watchOS; administrator-started camera QR pairing; Local Network for customer LAN hubs; Open-Meteo. Optional integrations: Tempest, Govee, Ecobee, Sense, RainMachine, Zigbee/Z-Wave/Thread/Matter/Insteon, SmartThings, Alexa, Harmony, Ollama/Whisper, OpenAI, Anthropic, and ElevenLabs. Optional services/hardware are not required for review. No payment processor is used.
 
-7. REGULATION AND PROTECTED MATERIAL
-HomeBrain is a consumer smart-home app, not a highly regulated service. It does not distribute protected third-party media or editorial content. Device/provider information is displayed only for integrations authorized by the hub owner, so no regulatory credential or protected-content authorization document is applicable.
+6. REGIONAL DIFFERENCES
+The same binary, review sandbox, and features operate in every App Store region; no content is region-gated. Optional provider/hardware availability and weather results can vary by provider and selected location.
 
-We have copied this information into App Review Information Notes and verified the endpoint and both credentials immediately before replying.
+7. REGULATED INDUSTRIES OR PROTECTED MATERIAL
+HomeBrain is a consumer smart-home app, not a highly regulated service, and distributes no protected third-party media/editorial content. Provider/device information comes only from hub-owner-authorized integrations; no credential or protected-content authorization document applies.
+
+This information is also in App Review Information Notes. We verified the endpoint and both accounts immediately before replying.
 
 Thank you.
 ```
@@ -181,26 +194,26 @@ Replace all bracketed values. Put the persistent review email/password in the de
 
 ```text
 PURPOSE
-HomeBrain is a companion for owners and authorized household users of a HomeBrain hub. It provides one private interface for compatible devices, rooms, scenes, workflows, security state, weather, notifications, energy information, optional voice commands, and Apple Watch. The iOS app is sign-in only: accounts are provisioned by a HomeBrain administrator; public and in-app registration are not supported.
-
-It replaces fragmented vendor apps with one consistent interface for an authorized household's connected-home controls and status.
+HomeBrain gives owners and authorized household users one private interface for compatible devices, rooms, scenes, workflows, security, weather, notifications, energy, optional voice, and Apple Watch instead of separate vendor apps. It is sign-in only: a HomeBrain administrator provisions accounts; public and in-app registration are not supported.
 
 REVIEW ACCESS
 Endpoint: https://freestonefamily.com
 Persistent account: use the Username/Password in the Sign-in Information fields.
 Disposable deletion-test email: [EMAIL]
 Disposable deletion-test password: [PASSWORD]
+Support: https://freestonefamily.com/support
+Privacy: https://freestonefamily.com/privacy
 
-No VPN, LAN, private DNS, sample file, purchase, subscription, or physical accessory is required. Enter the endpoint, sign in, and the synthetic demo home loads. The review-only navigation contains Dashboard, Weather, Watch App, Devices, Rooms, Scenes, Workflows, Notifications, and Settings.
+No VPN, LAN, private DNS, sample file, purchase, subscription, or accessory is required. Enter the endpoint and sign in; the synthetic demo home loads with Dashboard, Weather, Watch App, Devices, Rooms, Scenes, Workflows, Notifications, and Settings.
 
 SANDBOX ISOLATION
-The persistent account is restricted to a per-user virtual sandbox with nine devices, six named rooms, two groups, three scenes, three workflows, two notifications, synthetic weather, virtual security, and Watch data. Its actions cannot read or control the owner's household devices, integrations, credentials, or global settings.
+The persistent account has a per-user sandbox with nine devices, six rooms, two groups, three scenes, three workflows, two notifications, synthetic weather/security, and Watch data. It cannot reach household devices, integrations, credentials, or settings.
 
 ACCOUNT DELETION
-Use only the disposable account for this test. Open Settings > Account > Delete Account, enter its current password, type DELETE, and confirm. The account and associated personal data are deleted and the app returns to sign-in. Please do not delete the persistent review credential. The disposable account is reset before each submission.
+Use only the disposable account. Open Settings > Account > Delete Account, enter its password, type DELETE, and confirm. The account, sessions, push registrations, sandbox, and linked data are removed; the app returns to sign-in. Older unattributable logs/backups may remain under configured retention. Do not delete the persistent credential. We reset the disposable account before submission.
 
 PERMISSIONS
-Notifications are requested after sign-in when security notifications are enabled. Location is optional and requested only after choosing Use Device Location for weather. Microphone and Apple Speech Recognition are optional and requested only after enabling Voice Commands.
+Notifications prompt after sign-in. Optional Location prompts only after Use Device Location; coordinates are rounded to two decimals and disclosed as Coarse Location. Optional Microphone/Speech prompt after enabling Voice Commands; HomeBrain receives command text. Local Network is only for a customer LAN hub such as homebrain.local. Camera is only for the administrator Add Z-Wave Device QR flow, unavailable to read-only reviewers.
 
 PHYSICAL TESTING
 [DEVICE / OS / test date]
@@ -208,23 +221,26 @@ PHYSICAL TESTING
 [IPAD / iPadOS / test date]
 [WATCH / watchOS / test date]
 Physical-device recording attached: [FILENAME]
+Any simulator capture is an internal rehearsal only and is not the recording requested by Apple.
 
 SERVICES
-HomeBrain backend/hub; Apple APNs, Speech Recognition, device microphone, Core Location, WatchConnectivity/watchOS; Open-Meteo. Optional hub integrations include Tempest, Govee, Ecobee, Sense, RainMachine, Zigbee/Z-Wave/Thread/Matter/Insteon, SmartThings, Alexa, Harmony, local Ollama/Whisper, and optional OpenAI/Anthropic/ElevenLabs providers. Optional integrations and hardware are not required for review. There are no payments/subscriptions, ads, ATT, or public UGC.
+Core: HomeBrain backend/hub; Apple APNs, Speech, microphone, Core Location, WatchConnectivity/watchOS; administrator camera QR pairing; Local Network for customer LAN hubs; Open-Meteo. Optional: Tempest, Govee, Ecobee, Sense, RainMachine, Zigbee/Z-Wave/Thread/Matter/Insteon, SmartThings, Alexa, Harmony, Ollama/Whisper, OpenAI, Anthropic, ElevenLabs. None is required for review. No payments/subscriptions, ads, ATT, or public UGC.
 
 REGIONS AND REGULATION
-The same binary, review environment, and features operate in all App Store regions; optional provider/hardware availability and weather data can vary. HomeBrain is a consumer smart-home app, not a highly regulated service, and distributes no protected third-party media or editorial content.
+The same binary/review environment works in all regions; optional providers, hardware, and weather vary. HomeBrain is a consumer smart-home app, not a regulated service, and distributes no protected third-party media/editorial content.
 ```
 
-## Purpose strings in build 6
+## Purpose strings in build 7
 
 - Location: `HomeBrain uses your approximate location only when you choose Use Device Location, for example to show the local forecast on your Weather dashboard.`
+- Camera: `HomeBrain uses the camera only when a hub administrator chooses Add Z-Wave Device and scans a device QR code, for example to securely pair a lock or sensor.`
+- Local Network: `HomeBrain uses your local network to connect to the HomeBrain hub address you enter, for example homebrain.local, and to display and control devices on that hub.`
 - Microphone: `HomeBrain uses the microphone only when you enable Voice Commands, for example when you say “turn on the patio lights.”`
 - Speech Recognition: `HomeBrain uses Apple Speech Recognition to turn an optional spoken home-control command into text, for example “set the thermostat to 70.”`
 
 ## Pre-reply verification checklist
 
-- `[ ]` Build **1.0 (6)** is selected in the App Store Connect version.
+- `[ ]` Build **1.0 (7)** is selected in the App Store Connect version.
 - `[ ]` Production runs the backend revision containing `/api/auth/account` and the review-sandbox gate.
 - `[ ]` Persistent review account is active, non-admin, reviewer-only, and can log in from a clean install over cellular internet.
 - `[ ]` Persistent account shows only synthetic sandbox content and can safely change virtual state.

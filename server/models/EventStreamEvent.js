@@ -25,6 +25,11 @@ const eventStreamEventSchema = new mongoose.Schema({
     default: 'general',
     trim: true
   },
+  actorUserId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    select: false
+  },
   severity: {
     type: String,
     enum: ['info', 'warn', 'error'],
@@ -63,5 +68,12 @@ eventStreamEventSchema.index(
 eventStreamEventSchema.index({ type: 1, createdAt: -1 });
 eventStreamEventSchema.index({ source: 1, createdAt: -1 });
 eventStreamEventSchema.index({ category: 1, createdAt: -1 });
+eventStreamEventSchema.index(
+  { actorUserId: 1, type: 1, createdAt: -1 },
+  {
+    name: 'event_stream_actor_type_created_at',
+    partialFilterExpression: { actorUserId: { $exists: true } }
+  }
+);
 
 module.exports = mongoose.model('EventStreamEvent', eventStreamEventSchema);

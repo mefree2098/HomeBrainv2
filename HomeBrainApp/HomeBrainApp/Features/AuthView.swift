@@ -37,7 +37,7 @@ struct AuthView: View {
     }
 
     private var usesStackedControls: Bool {
-        dynamicTypeSize.isAccessibilitySize
+        horizontalSizeClass == .compact || dynamicTypeSize.isAccessibilitySize
     }
 
     private var hasRequiredCredentials: Bool {
@@ -188,8 +188,40 @@ struct AuthView: View {
                 .font(HBTypography.body(.footnote, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .accessibilityIdentifier("auth.provisioningNotice")
+
+                legalLinks
             }
         }
+    }
+
+    private var legalLinks: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 16) {
+                supportLink
+                privacyLink
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                supportLink
+                privacyLink
+            }
+        }
+        .font(HBTypography.body(.footnote, weight: .semibold))
+        .tint(HBPalette.accentBlue)
+    }
+
+    private var supportLink: some View {
+        Link(destination: URL(string: "https://freestonefamily.com/support")!) {
+            Label("Support", systemImage: "questionmark.circle")
+        }
+        .accessibilityIdentifier("auth.support")
+    }
+
+    private var privacyLink: some View {
+        Link(destination: URL(string: "https://freestonefamily.com/privacy")!) {
+            Label("Privacy Policy", systemImage: "hand.raised")
+        }
+        .accessibilityIdentifier("auth.privacy")
     }
 
     private var endpointSection: some View {
