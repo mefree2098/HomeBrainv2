@@ -43,6 +43,7 @@ function normalizeAction(action) {
 function nodeTypeForAction(actionType) {
   switch (actionType) {
     case 'device_control':
+    case 'reachy_action':
       return 'device_action';
     case 'scene_activate':
       return 'scene_action';

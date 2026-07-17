@@ -5689,7 +5689,9 @@ export function Settings() {
               </CardContent>
             </Card>
 
-            <WakeWordManager />
+            <div id="wake-word-models" className="scroll-mt-24">
+              <WakeWordManager />
+            </div>
 
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>

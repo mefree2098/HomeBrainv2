@@ -49,7 +49,7 @@ const platformManagedServiceSchema = new mongoose.Schema({
   },
   lastUpdateStatus: {
     type: String,
-    enum: ['never', 'success', 'failed', 'skipped'],
+    enum: ['never', 'in_progress', 'success', 'failed', 'skipped'],
     default: 'never'
   },
   lastError: {

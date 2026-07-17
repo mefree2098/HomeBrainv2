@@ -9,6 +9,8 @@ const { sendLLMRequestWithFallbackDetailed } = require('./llmService');
 const deviceService = require('./deviceService');
 const mongoose = require('mongoose');
 const Settings = require('../models/Settings');
+const VoiceDevice = require('../models/VoiceDevice');
+const reachyMiniService = require('./reachyMiniService');
 const {
   executeActionSequence,
   getActionTargetCandidate,
@@ -24,7 +26,7 @@ const MAX_SCENE_PROMPT_ENTRIES = 25;
 const MIN_KEYWORD_LENGTH = 3;
 const MAX_AUTOMATIONS_PER_REQUEST = 12;
 const VALID_TRIGGER_TYPES = new Set(['time', 'device_state', 'weather', 'location', 'sensor', 'schedule', 'manual', 'security_alarm_status']);
-const VALID_ACTION_TYPES = new Set(['device_control', 'scene_activate', 'notification', 'delay', 'condition', 'workflow_control', 'variable_control', 'repeat', 'isy_network_resource', 'http_request', 'alexa_speak']);
+const VALID_ACTION_TYPES = new Set(['device_control', 'scene_activate', 'notification', 'delay', 'condition', 'workflow_control', 'variable_control', 'repeat', 'isy_network_resource', 'http_request', 'alexa_speak', 'reachy_action']);
 const VALID_SECURITY_ALARM_STATES = new Set(['disarmed', 'armedStay', 'armedAway', 'triggered', 'arming', 'disarming']);
 const VALID_SOLAR_SCHEDULE_EVENTS = new Set(['sunrise', 'sunset']);
 const DYNAMIC_TARGET_CONTEXT_KEYS = new Set(['triggeringDeviceId']);
@@ -1585,6 +1587,16 @@ async function validateAndFixAutomation(automation) {
     sceneMap.set(scene.name.toLowerCase(), scene);
   });
 
+  const hasReachyAction = automation.actions.some((action) => action?.type === 'reachy_action');
+  const reachyRobots = hasReachyAction
+    ? await VoiceDevice.find({ deviceType: 'robot' }).lean()
+    : [];
+  const reachyMap = new Map();
+  reachyRobots.forEach((robot) => {
+    reachyMap.set(robot._id.toString(), robot);
+    reachyMap.set(String(robot.name || '').trim().toLowerCase(), robot);
+  });
+
   const fixedActions = automation.actions.map((action, index) => {
     const fixedAction = { ...action };
 
@@ -1739,6 +1751,28 @@ async function validateAndFixAutomation(automation) {
         };
         fixed = true;
       }
+    }
+
+    if (action.type === 'reachy_action') {
+      let normalized;
+      try {
+        normalized = reachyMiniService.normalizeWorkflowAction(action);
+      } catch (error) {
+        issues.push(`Invalid Reachy action at index ${index}: ${error.message}`);
+        return null;
+      }
+      const robot = reachyMap.get(normalized.target)
+        || reachyMap.get(normalized.target.toLowerCase());
+      if (!robot) {
+        issues.push(`Reachy Mini not found: ${normalized.target}`);
+        return null;
+      }
+      fixedAction.target = robot._id.toString();
+      fixedAction.parameters = {
+        command: normalized.command,
+        commandParameters: normalized.parameters
+      };
+      fixed = true;
     }
 
     return fixedAction;

@@ -14,7 +14,7 @@ const schema = new mongoose.Schema({
   deviceType: {
     type: String,
     required: true,
-    enum: ['hub', 'speaker', 'display', 'mobile', 'microphone'],
+    enum: ['hub', 'speaker', 'display', 'mobile', 'microphone', 'robot'],
     default: 'speaker',
   },
   status: {
@@ -195,6 +195,10 @@ schema.pre('save', function() {
 schema.index({ status: 1 });
 schema.index({ room: 1 });
 schema.index({ deviceType: 1 });
+schema.index({ 'settings.reachy.unitId': 1 }, {
+  unique: true,
+  partialFilterExpression: { deviceType: 'robot', 'settings.reachy.unitId': { $type: 'string' } }
+});
 schema.index({ lastSeen: -1 });
 
 const VoiceDevice = mongoose.model('VoiceDevice', schema);

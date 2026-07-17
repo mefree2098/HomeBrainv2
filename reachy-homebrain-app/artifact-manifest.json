@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "artifact": "reachy-homebrain-app",
+  "appEntryPoint": "reachy-homebrain-app",
+  "version": "0.1.0",
+  "protocol": {
+    "name": "homebrain-reachy",
+    "version": 1
+  },
+  "python": ">=3.11",
+  "reachyMiniSdk": ">=1.9,<2",
+  "target": "reachy-mini-wireless-arm64",
+  "installScript": "install.sh",
+  "configExample": "config.example.json",
+  "updateStrategy": "managed-app-release",
+  "stableLauncherFiles": [
+    "src/reachy_homebrain/__init__.py",
+    "src/reachy_homebrain/__main__.py",
+    "src/reachy_homebrain/launcher_constants.py",
+    "src/reachy_homebrain/main.py",
+    "src/reachy_homebrain/releases.py",
+    "src/reachy_homebrain/sdk_compat.py"
+  ],
+  "compatibility": {
+    "launcherApi": 1,
+    "dependencyFingerprint": "1f9ca0b4085d1c9befadcc42ac21428c0de080dfcdf3e2b71950519953ba8c63",
+    "launcherFingerprint": "2f4e8e2e928ae60b3fe199250546e917ab04bf3735b5fe3db262ecc49ee8d9b3",
+    "requiresManualReinstall": false
+  },
+  "sourceLayout": "src/reachy_homebrain"
+}

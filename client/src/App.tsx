@@ -34,6 +34,7 @@ const SSLManagement = lazy(() => import("./pages/SSLManagement"))
 const AlexaBrokerManagement = lazy(() => import("./pages/AlexaBrokerManagement"))
 const OllamaManagement = lazy(() => import("./pages/OllamaManagement"))
 const WhisperManagement = lazy(() => import("./pages/WhisperManagement"))
+const ReachyMini = lazy(() => import("./pages/ReachyMini"))
 
 function LoadingScreen() {
   return (
@@ -93,6 +94,7 @@ function App() {
             <Route path="/ssl" element={withLayout(<SSLManagement />, { adminOnly: true })} />
             <Route path="/ollama" element={withLayout(<OllamaManagement />, { adminOnly: true })} />
             <Route path="/whisper" element={withLayout(<WhisperManagement />, { adminOnly: true })} />
+            <Route path="/reachy-mini" element={withLayout(<ReachyMini />, { adminOnly: true })} />
             <Route path="*" element={<BlankPage />} />
           </Routes>
         </Suspense>

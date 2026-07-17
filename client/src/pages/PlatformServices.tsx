@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { AxiosError } from "axios";
+import { useNavigate } from "react-router-dom";
 import {
   Activity,
   AlertTriangle,
@@ -151,6 +152,101 @@ const getStatusVariant = (value?: string | boolean | null): BadgeVariant => {
   return "outline";
 };
 
+const shortDigest = (value?: string | null) => value ? `${value.slice(0, 12)}…` : "not reported";
+
+function ReachyFleetDetails({ service, onManage }: { service: PlatformService; onManage: () => void }) {
+  const devices = service.devices || [];
+  return (
+    <div className="space-y-3 rounded-xl border border-cyan-500/15 bg-cyan-500/[0.04] p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="font-medium">Reachy runtime inventory</p>
+          <p className="text-xs text-muted-foreground">
+            Each robot reports its immutable runtime digest and stable-launcher compatibility independently.
+          </p>
+        </div>
+        <Button type="button" variant="outline" size="sm" onClick={onManage}>Manage robots</Button>
+      </div>
+      {devices.length === 0 ? (
+        <p className="rounded-lg border border-dashed p-3 text-sm text-muted-foreground">
+          No Reachy Mini is enrolled. Set up a robot before a remote companion package can be installed or updated.
+        </p>
+      ) : (
+        <div className="overflow-x-auto rounded-lg border border-border/60">
+          <table className="min-w-[68rem] w-full text-left text-xs">
+            <thead className="bg-background/70 text-muted-foreground">
+              <tr>
+                <th className="px-3 py-2 font-medium">Robot</th>
+                <th className="px-3 py-2 font-medium">Connection</th>
+                <th className="px-3 py-2 font-medium">Runtime</th>
+                <th className="px-3 py-2 font-medium">Integrity</th>
+                <th className="px-3 py-2 font-medium">Launcher</th>
+                <th className="px-3 py-2 font-medium">Update state</th>
+              </tr>
+            </thead>
+            <tbody>
+              {devices.map((device) => {
+                const blocked = device.manualReinstallRequired || device.versionCollision || device.downgradeBlocked;
+                const state = device.state || (device.updateAvailable ? "available" : "idle");
+                const diagnostic = device.error || device.unavailableReason;
+                return (
+                  <tr key={device.deviceId} className="border-t border-border/50 align-top">
+                    <td className="px-3 py-3">
+                      <div className="font-medium">{device.name || "Reachy Mini"}</div>
+                      <div className="mt-1 font-mono text-[11px] text-muted-foreground">{device.deviceId}</div>
+                      {device.room ? <div className="mt-1 text-muted-foreground">{device.room}</div> : null}
+                    </td>
+                    <td className="px-3 py-3">
+                      <Badge variant={getStatusVariant(device.online === true)}>{device.online ? "online" : "offline"}</Badge>
+                      {device.unavailableReason ? <p className="mt-2 max-w-56 text-amber-700 dark:text-amber-300">{device.unavailableReason}</p> : null}
+                    </td>
+                    <td className="px-3 py-3">
+                      <div className="font-mono">{device.installedVersion || "not installed"}</div>
+                      <div className="mt-1 text-muted-foreground">Latest: {device.latestVersion || "unknown"}</div>
+                    </td>
+                    <td className="px-3 py-3">
+                      <Badge variant={device.integrityStatus === "verified" ? "secondary" : device.versionCollision ? "destructive" : "outline"}>
+                        {device.integrityStatus || "unknown"}
+                      </Badge>
+                      <div className="mt-2 font-mono text-[11px]" title={device.installedAggregateSha256 || undefined}>
+                        {shortDigest(device.installedAggregateSha256)}
+                      </div>
+                    </td>
+                    <td className="px-3 py-3">
+                      <Badge variant={device.compatibility?.status === "compatible" ? "secondary" : blocked ? "destructive" : "outline"}>
+                        {device.compatibility?.status || "unknown"}
+                      </Badge>
+                      <div className="mt-2 text-muted-foreground">API {device.compatibility?.launcherApi ?? "?"}</div>
+                      <div className="mt-1 font-mono text-[11px]" title={device.compatibility?.launcherFingerprint || undefined}>
+                        launcher {shortDigest(device.compatibility?.launcherFingerprint)}
+                      </div>
+                      <div className="mt-1 font-mono text-[11px]" title={device.compatibility?.dependencyFingerprint || undefined}>
+                        deps {shortDigest(device.compatibility?.dependencyFingerprint)}
+                      </div>
+                    </td>
+                    <td className="px-3 py-3">
+                      <Badge variant={blocked || state === "failed" ? "destructive" : device.current ? "secondary" : "outline"}>
+                        {device.manualReinstallRequired
+                          ? "manual reinstall"
+                          : device.versionCollision
+                            ? "version collision"
+                            : device.downgradeBlocked
+                              ? "downgrade blocked"
+                              : state.replace(/_/g, " ")}
+                      </Badge>
+                      {diagnostic ? <p className="mt-2 max-w-64 text-red-600 dark:text-red-300">{diagnostic}</p> : null}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const hydrateMqttForm = (data: MqttManagementResponse | null): MqttFormState => {
   const config = data?.config;
   if (!config) {
@@ -216,6 +312,7 @@ const summarizeValue = (value: unknown) => {
 
 export function PlatformServices() {
   const { toast } = useToast();
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState("updates");
   const [services, setServices] = useState<PlatformService[]>([]);
   const [mqtt, setMqtt] = useState<MqttManagementResponse | null>(null);
@@ -276,6 +373,34 @@ export function PlatformServices() {
     const updates = services.filter((service) => service.updateAvailable).length;
     return { installed, active, updates };
   }, [services]);
+  const managedUpdateInProgress = useMemo(
+    () => services.some((service) => service.lastUpdateStatus === "in_progress"),
+    [services]
+  );
+
+  useEffect(() => {
+    if (!managedUpdateInProgress) {
+      return;
+    }
+    let cancelled = false;
+    const refreshManagedUpdates = async () => {
+      try {
+        const result = await getPlatformServices();
+        if (!cancelled) {
+          setServices(result.services);
+        }
+      } catch {
+        // Keep the last trustworthy status; the normal refresh control reports errors.
+      }
+    };
+    const interval = window.setInterval(() => {
+      void refreshManagedUpdates();
+    }, 5_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [managedUpdateInProgress]);
 
   const updateServiceInState = (nextService: PlatformService) => {
     setServices((current) => current.map((service) => (
@@ -296,9 +421,37 @@ export function PlatformServices() {
     try {
       const result = await action();
       updateServiceInState(result.service);
+      const inProgress = result.service.lastUpdateStatus === "in_progress";
+      const operation = actionKey.split(":").at(-1);
+      const success = operation === "check"
+        ? {
+            title: "Update check complete",
+            description: result.service.updateAvailable
+              ? `${result.service.displayName} ${result.service.latestVersion || "has an update"} is available.`
+              : `No eligible ${result.service.displayName} update is currently available.`
+          }
+        : operation === "policy"
+          ? {
+              title: "Update policy saved",
+              description: `${result.service.displayName} will use the saved check, stability, and automatic-update policy.`
+            }
+          : operation === "install"
+            ? {
+                title: "Service installed",
+                description: `${result.service.displayName} installation completed.`
+              }
+            : inProgress
+              ? {
+                  title: "Service update started",
+                  description: `${result.service.displayName} is deploying to its remote runtime.`
+                }
+              : {
+                  title: "Service update complete",
+                  description: `${result.service.displayName} finished its update operation.`
+                };
       toast({
-        title: "Service updated",
-        description: `${result.service.displayName} is current in HomeBrain.`
+        title: success.title,
+        description: success.description
       });
     } catch (error) {
       toast({
@@ -498,9 +651,9 @@ export function PlatformServices() {
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
           <p className="section-kicker">Platform Services</p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight">Managed Third-Party Services</h1>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight">Managed Platform Services</h1>
           <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-            Caddy, Mosquitto MQTT, and Pi-hole lifecycle controls with service-specific runtime management.
+            Caddy, Mosquitto MQTT, Pi-hole, and robot companion package lifecycle controls with service-specific runtime management.
           </p>
         </div>
         <Button variant="outline" onClick={() => refreshAll(true)} disabled={refreshing}>
@@ -595,9 +748,12 @@ export function PlatformServices() {
                   {services.map((service) => {
                     const policyForm = policyForms[service.serviceId];
                     const busyPrefix = `${service.serviceId}:`;
-                    const isBusy = serviceAction.startsWith(busyPrefix);
+                    const isRemoteUpdateInProgress = service.lastUpdateStatus === "in_progress";
+                    const isBusy = serviceAction.startsWith(busyPrefix) || isRemoteUpdateInProgress;
+                    const isReachyCompanion = service.serviceId === "reachy-homebrain-app";
                     return (
-                      <TableRow key={service.serviceId}>
+                      <Fragment key={service.serviceId}>
+                      <TableRow>
                         <TableCell className="min-w-56">
                           <div className="font-medium">{service.displayName}</div>
                           <div className="mt-1 text-xs text-muted-foreground">{service.managementNotes}</div>
@@ -619,8 +775,9 @@ export function PlatformServices() {
                           ) : null}
                         </TableCell>
                         <TableCell className="min-w-52">
-                          <Badge variant={service.updateAvailable ? "default" : "outline"}>
-                            {service.updateAvailable ? "available" : "current"}
+                          <Badge variant={service.updateAvailable && !isRemoteUpdateInProgress ? "default" : "outline"}>
+                            {isRemoteUpdateInProgress ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+                            {isRemoteUpdateInProgress ? "deploying" : service.updateAvailable ? "available" : "current"}
                           </Badge>
                           {service.eligibleForAutoUpdateAt ? (
                             <div className="mt-2 text-xs text-muted-foreground">
@@ -697,15 +854,21 @@ export function PlatformServices() {
                               <Button
                                 variant="outline"
                                 size="sm"
-                                onClick={() => runServiceAction(
-                                  `${service.serviceId}:install`,
-                                  `Unable to install ${service.displayName}.`,
-                                  async () => installPlatformService(service.serviceId)
-                                )}
+                                onClick={() => {
+                                  if (isReachyCompanion) {
+                                    navigate("/reachy-mini");
+                                    return;
+                                  }
+                                  void runServiceAction(
+                                    `${service.serviceId}:install`,
+                                    `Unable to install ${service.displayName}.`,
+                                    async () => installPlatformService(service.serviceId)
+                                  );
+                                }}
                                 disabled={isBusy}
                               >
                                 {serviceAction === `${service.serviceId}:install` ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-2 h-4 w-4" />}
-                                Install
+                                {isReachyCompanion ? "Set up" : "Install"}
                               </Button>
                             ) : null}
                             <Button
@@ -737,14 +900,23 @@ export function PlatformServices() {
                                 `Unable to update ${service.displayName}.`,
                                 async () => updatePlatformService(service.serviceId)
                               )}
-                              disabled={isBusy || !service.installed}
+                              disabled={isBusy || !service.installed || (isReachyCompanion && !service.updateAvailable)}
+                              title={isReachyCompanion && !service.updateAvailable ? "The Reachy companion fleet is current." : undefined}
                             >
                               {serviceAction === `${service.serviceId}:update` ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Zap className="mr-2 h-4 w-4" />}
-                              Update
+                              {isReachyCompanion && !service.updateAvailable ? "Current" : "Update"}
                             </Button>
                           </div>
                         </TableCell>
                       </TableRow>
+                      {isReachyCompanion ? (
+                        <TableRow className="hover:bg-transparent">
+                          <TableCell colSpan={8} className="pt-0">
+                            <ReachyFleetDetails service={service} onManage={() => navigate("/reachy-mini")} />
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                      </Fragment>
                     );
                   })}
                 </TableBody>

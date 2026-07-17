@@ -25,7 +25,8 @@ import {
   Smartphone,
   Bell,
   MapPinned,
-  ServerCog
+  ServerCog,
+  Bot
 } from "lucide-react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { cn } from "@/lib/utils"
@@ -47,6 +48,7 @@ const navigation = [
   { name: 'Notifications', href: '/notifications', icon: Bell },
   { name: 'Voice Profiles', href: '/voice-profiles', icon: Volume2 },
   { name: 'Voice Devices', href: '/voice-devices', icon: Mic, adminOnly: true },
+  { name: 'Reachy Mini', href: '/reachy-mini', icon: Bot, adminOnly: true },
   { name: 'Alexa Broker', href: '/alexa-broker', icon: Link2, adminOnly: true },
   { name: 'Users', href: '/users', icon: Users, adminOnly: true },
   { name: 'Ollama / LLM', href: '/ollama', icon: Brain, adminOnly: true },

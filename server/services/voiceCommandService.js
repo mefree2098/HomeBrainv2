@@ -1,4 +1,5 @@
 const Device = require('../models/Device');
+const DeviceGroup = require('../models/DeviceGroup');
 const Scene = require('../models/Scene');
 const Workflow = require('../models/Workflow');
 const deviceService = require('./deviceService');
@@ -8,6 +9,7 @@ const workflowService = require('./workflowService');
 const insteonService = require('./insteonService');
 const { sendLLMRequestWithFallbackDetailed } = require('./llmService');
 const { ROLES } = require('../../shared/config/roles.js');
+const reachyMiniService = require('./reachyMiniService');
 
 const ACTION_MAP = {
   turn_on: 'turnOn',
@@ -267,16 +269,17 @@ class VoiceCommandService {
       .includes('set_brightness');
   }
 
-  async getContext() {
+  async getContext({ forceRefresh = false } = {}) {
     const now = Date.now();
-    if (this.lastContextCache.data && now - this.lastContextCache.updatedAt < this.CONTEXT_TTL_MS) {
+    if (!forceRefresh && this.lastContextCache.data && now - this.lastContextCache.updatedAt < this.CONTEXT_TTL_MS) {
       return this.lastContextCache.data;
     }
 
-    const [devices, scenes, workflows] = await Promise.all([
+    const [devices, groups, scenes, workflows] = await Promise.all([
       Device.find().lean(),
-      Scene.find().select('_id name room category').lean(),
-      Workflow.find().select('_id name description enabled category trigger').lean()
+      DeviceGroup.find().select('_id name normalizedName childGroupIds').lean(),
+      Scene.find().select('_id name room category deviceActions groupActions').lean(),
+      Workflow.find().select('_id name description enabled category trigger actions graph').lean()
     ]);
 
     const deviceMap = new Map();
@@ -325,16 +328,75 @@ class VoiceCommandService {
       return normalized;
     });
 
+    const groupsById = new Map(groups.map((group) => [group._id.toString(), group]));
+    const directDeviceIdsByGroupName = new Map();
+    devices.forEach((device) => {
+      (Array.isArray(device.groups) ? device.groups : []).forEach((groupName) => {
+        const key = this.normalizeReachyPolicyToken(groupName);
+        if (!key) return;
+        if (!directDeviceIdsByGroupName.has(key)) directDeviceIdsByGroupName.set(key, new Set());
+        directDeviceIdsByGroupName.get(key).add(device._id.toString());
+      });
+    });
+
+    const resolvedGroups = new Map();
+    const resolveGroup = (groupId, path = new Set()) => {
+      if (resolvedGroups.has(groupId)) return resolvedGroups.get(groupId);
+      const group = groupsById.get(groupId);
+      if (!group || path.has(groupId)) {
+        return { deviceIds: [], complete: false };
+      }
+
+      const nextPath = new Set(path);
+      nextPath.add(groupId);
+      const groupNameKey = this.normalizeReachyPolicyToken(group.normalizedName || group.name);
+      const deviceIds = new Set(directDeviceIdsByGroupName.get(groupNameKey) || []);
+      let complete = true;
+      for (const childValue of Array.isArray(group.childGroupIds) ? group.childGroupIds : []) {
+        const childId = childValue?._id?.toString?.() || childValue?.toString?.() || '';
+        if (!childId || childId === '[object Object]') {
+          complete = false;
+          continue;
+        }
+        const child = resolveGroup(childId, nextPath);
+        child.deviceIds.forEach((deviceId) => deviceIds.add(deviceId));
+        complete = complete && child.complete;
+      }
+
+      const resolved = {
+        ...group,
+        deviceIds: Array.from(deviceIds),
+        complete
+      };
+      resolvedGroups.set(groupId, resolved);
+      return resolved;
+    };
+
+    const groupMap = new Map();
+    groups.forEach((group) => {
+      const groupId = group._id.toString();
+      const resolved = resolveGroup(groupId);
+      [groupId, group.name, group.normalizedName]
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+        .forEach((key) => {
+          groupMap.set(key, resolved);
+          groupMap.set(this.normalizeReachyPolicyToken(key), resolved);
+        });
+    });
+
     const context = {
       devices: devicesWithMeta,
       scenes: scenesWithMeta,
       workflows: workflowsWithMeta,
       raw: {
         devices,
+        groups,
         scenes,
         workflows
       },
       deviceMap,
+      groupMap,
       sceneMap,
       workflowMap
     };
@@ -1127,6 +1189,366 @@ RULES
     };
   }
 
+  normalizeReachyPolicyToken(value) {
+    return String(value ?? '')
+      .normalize('NFKC')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '');
+  }
+
+  toReachyPolicyId(value, preferredKeys = []) {
+    if (typeof value === 'string' || typeof value === 'number') {
+      return String(value).trim();
+    }
+    if (!value || typeof value !== 'object') return '';
+
+    const keys = [
+      ...preferredKeys,
+      'deviceId',
+      'groupId',
+      'sceneId',
+      'workflowId',
+      '_id',
+      'id'
+    ];
+    for (const key of keys) {
+      if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+      const candidate = value[key];
+      if (candidate === value) continue;
+      const resolved = this.toReachyPolicyId(candidate);
+      if (resolved) return resolved;
+    }
+
+    const rendered = value.toString?.();
+    return rendered && rendered !== '[object Object]' ? String(rendered).trim() : '';
+  }
+
+  lookupReachyPolicyMap(map, value, preferredKeys = []) {
+    if (!map?.get) return null;
+    const id = this.toReachyPolicyId(value, preferredKeys);
+    if (!id) return null;
+    return map.get(id) || map.get(this.normalizeReachyPolicyToken(id)) || null;
+  }
+
+  getReachyPolicyActionToken(action = {}) {
+    const candidates = [
+      action.action,
+      action.command,
+      action.operation,
+      action.parameters?.action,
+      action.parameters?.command,
+      action.parameters?.operation,
+      action.parameters?.commandParameters?.command
+    ];
+    return this.normalizeReachyPolicyToken(candidates.find((value) => value != null && String(value).trim()) || '');
+  }
+
+  getReachyPolicyTarget(action = {}, context = {}) {
+    const parameters = action?.parameters || {};
+    const target = action?.target;
+    const targetKind = this.normalizeReachyPolicyToken(
+      target?.kind || target?.targetKind || parameters?.kind || parameters?.targetKind
+    );
+    const explicitGroup = action?.groupId
+      || target?.groupId
+      || target?.group
+      || parameters?.groupId
+      || parameters?.group;
+    if (explicitGroup || ['group', 'devicegroup'].includes(targetKind)) {
+      const value = explicitGroup || target;
+      return { kind: 'group', id: this.toReachyPolicyId(value, ['groupId', 'group']), raw: value };
+    }
+
+    const explicitDevice = action?.deviceId
+      || target?.deviceId
+      || parameters?.deviceId
+      || parameters?.target?.deviceId;
+    if (explicitDevice) {
+      return {
+        kind: 'device',
+        id: this.toReachyPolicyId(explicitDevice, ['deviceId']),
+        raw: explicitDevice
+      };
+    }
+
+    if (typeof target === 'string' || typeof target === 'number') {
+      if (this.lookupReachyPolicyMap(context?.deviceMap, target)) {
+        return { kind: 'device', id: this.toReachyPolicyId(target), raw: target };
+      }
+      if (this.lookupReachyPolicyMap(context?.groupMap, target)) {
+        return { kind: 'group', id: this.toReachyPolicyId(target), raw: target };
+      }
+      return { kind: 'unknown', id: this.toReachyPolicyId(target), raw: target };
+    }
+
+    return { kind: 'unknown', id: '', raw: target || null };
+  }
+
+  isReachySensitiveDevice(device) {
+    if (!device || typeof device !== 'object') return true;
+    const normalizedType = this.normalizeReachyPolicyToken(device.type || device.normalized?.type);
+    if (['lock', 'garage', 'siren', 'camera', 'securitysystem', 'accesscontrol'].includes(normalizedType)) {
+      return true;
+    }
+
+    const properties = device.properties || device.normalized?.properties || {};
+    if (
+      properties.supportsAlarm === true
+      || properties.supportsSirenSound === true
+      || properties.supportsLock === true
+      || properties.supportsGarageDoor === true
+    ) {
+      return true;
+    }
+
+    const descriptorValues = [
+      device.name,
+      device.model,
+      properties.deviceClass,
+      properties.category,
+      properties.capability,
+      properties.capabilityId,
+      ...(Array.isArray(properties.capabilities) ? properties.capabilities : []),
+      ...(Array.isArray(properties.smartThingsCapabilities) ? properties.smartThingsCapabilities : []),
+      ...(Array.isArray(properties.smartthingsCapabilities) ? properties.smartthingsCapabilities : []),
+      ...(Array.isArray(properties.smartThingsCategories) ? properties.smartThingsCategories : []),
+      ...(Array.isArray(properties.directRadioFeatures) ? properties.directRadioFeatures : [])
+    ];
+    return descriptorValues.some((value) => {
+      const token = this.normalizeReachyPolicyToken(
+        value && typeof value === 'object'
+          ? value.id || value.capabilityId || value.name || ''
+          : value
+      );
+      return /(?:lock|garagedoor|garageopener|siren|alarm|securitysystem|camera|accesscontrol|doorcontroller|gatecontroller)/.test(token);
+    });
+  }
+
+  isReachySensitivePropertyMutation(action = {}) {
+    const actionToken = this.getReachyPolicyActionToken(action);
+    const propertyMutation = /(?:set|update|write)(?:device)?(?:property|attribute|capability|state|status)/.test(actionToken);
+    const sensitiveProperty = /(?:lock|garage|door|alarm|siren|security|armstate|access|gate|camera|privacy)/;
+    const sensitiveValues = new Set([
+      'lock', 'locked', 'unlock', 'unlocked', 'open', 'opened', 'close', 'closed',
+      'arm', 'armed', 'disarm', 'disarmed', 'armaway', 'armstay', 'alarmon', 'alarmoff'
+    ]);
+    const descriptorKeys = new Set([
+      'property', 'propertyname', 'attribute', 'attributename', 'capability', 'capabilityid',
+      'field', 'fieldname', 'path', 'key', 'statename'
+    ]);
+    const valueKeys = new Set(['value', 'state', 'status', 'desiredvalue', 'newvalue']);
+    const seen = new WeakSet();
+
+    const inspect = (value, depth = 0) => {
+      if (!value || typeof value !== 'object' || depth > 12) return false;
+      if (seen.has(value)) return false;
+      seen.add(value);
+      for (const [rawKey, nested] of Object.entries(value)) {
+        const key = this.normalizeReachyPolicyToken(rawKey);
+        const scalar = nested == null || typeof nested === 'object'
+          ? ''
+          : this.normalizeReachyPolicyToken(nested);
+        if (descriptorKeys.has(key) && sensitiveProperty.test(scalar)) return true;
+        if (sensitiveProperty.test(key) && (nested != null || propertyMutation)) return true;
+        if (propertyMutation && valueKeys.has(key) && sensitiveValues.has(scalar)) return true;
+        if (nested && typeof nested === 'object' && inspect(nested, depth + 1)) return true;
+      }
+      return false;
+    };
+
+    return inspect(action);
+  }
+
+  isReachyHighRiskUtterance(commandText) {
+    const text = this.normalizeVoiceSearchText(commandText);
+    if (!text) return false;
+    return /\b(?:un\s*)?lock(?:ed|ing|s)?\b/.test(text)
+      || /\b(?:disarm|arm)(?:ed|ing)?\b/.test(text)
+      || /\b(?:garage|siren)\b/.test(text)
+      || /\b(?:security\s+alarm|alarm\s+system|admin(?:istrator)?|access\s+code|lock\s+code)\b/.test(text)
+      || /\b(?:snapshot|photo|picture|camera|face\s+tracking|release\s+(?:the\s+)?(?:reachy|robot))\b/.test(text);
+  }
+
+  isReachyHighRiskDeviceAction(action, context) {
+    const actionToken = this.getReachyPolicyActionToken(action);
+    if (
+      /^(?:un)?lock(?:ed)?$/.test(actionToken)
+      || /^(?:dis)?arm(?:ed|away|stay)?$/.test(actionToken)
+      || ['alarmon', 'alarmoff', 'turnonalarm', 'turnoffalarm', 'soundalarm', 'silencealarm'].includes(actionToken)
+      || this.isReachySensitivePropertyMutation(action)
+    ) {
+      return true;
+    }
+
+    const target = this.getReachyPolicyTarget(action, context);
+    if (target.kind === 'device') {
+      const device = this.lookupReachyPolicyMap(context?.deviceMap, target.id)
+        || (target.raw && typeof target.raw === 'object' ? target.raw : null);
+      return !device || this.isReachySensitiveDevice(device);
+    }
+
+    if (target.kind === 'group') {
+      const group = this.lookupReachyPolicyMap(context?.groupMap, target.id, ['groupId', 'group']);
+      if (!group || group.complete !== true) return true;
+      const members = Array.isArray(group.deviceIds)
+        ? group.deviceIds
+        : Array.isArray(group.devices)
+          ? group.devices
+          : Array.isArray(group.members)
+            ? group.members
+            : [];
+      if (members.length === 0) return true;
+      return members.some((member) => {
+        const memberId = this.toReachyPolicyId(member, ['deviceId']);
+        const device = this.lookupReachyPolicyMap(context?.deviceMap, memberId)
+          || (member && typeof member === 'object' ? member : null);
+        return !device || this.isReachySensitiveDevice(device);
+      });
+    }
+
+    // Device-control actions with an unresolved target must never be treated as safe.
+    return true;
+  }
+
+  isReachySensitiveScene(scene, context) {
+    if (!scene) return true;
+    if (this.normalizeReachyPolicyToken(scene.category) === 'security') return true;
+    const deviceActions = Array.isArray(scene.deviceActions) ? scene.deviceActions : [];
+    const groupActions = Array.isArray(scene.groupActions) ? scene.groupActions : [];
+    return deviceActions.some((action) => this.isReachyHighRiskDeviceAction(action, context))
+      || groupActions.some((action) => this.isReachyHighRiskDeviceAction({
+        ...action,
+        target: { kind: 'device_group', group: action.groupId }
+      }, context));
+  }
+
+  isReachyPrivateRobotAction(action = {}) {
+    const token = this.getReachyPolicyActionToken(action);
+    return new Set([
+      'snapshot',
+      'takesnapshot',
+      'startfacetracking',
+      'enablecamera',
+      'release',
+      'releaseapp',
+      'install',
+      'installpackage',
+      'update',
+      'updatepackage',
+      'rollback',
+      'bootstrap'
+    ]).has(token);
+  }
+
+  isReachySensitiveWorkflowAction(value, context, visited, seen = new WeakSet(), depth = 0) {
+    if (depth > 32) return true;
+    if (Array.isArray(value)) {
+      return value.some((entry) => this.isReachySensitiveWorkflowAction(entry, context, visited, seen, depth + 1));
+    }
+    if (!value || typeof value !== 'object') return false;
+    if (seen.has(value)) return false;
+    seen.add(value);
+
+    const type = this.normalizeReachyPolicyToken(value.type || value.actionType || value.kind);
+    const payload = value.data && typeof value.data === 'object'
+      ? { ...value, ...value.data, parameters: value.data.parameters || value.parameters }
+      : value;
+
+    if (['devicecontrol', 'deviceaction'].includes(type)) {
+      if (this.isReachyHighRiskDeviceAction(payload, context)) return true;
+    }
+    if (['sceneactivate', 'sceneaction'].includes(type)) {
+      const sceneId = this.toReachyPolicyId(
+        payload.sceneId || payload.target || payload.parameters?.sceneId,
+        ['sceneId']
+      );
+      const scene = this.lookupReachyPolicyMap(context?.sceneMap, sceneId, ['sceneId']);
+      if (this.isReachySensitiveScene(scene, context)) return true;
+    }
+    if (['workflowcontrol', 'workflowaction'].includes(type)) {
+      const workflowId = this.toReachyPolicyId(
+        payload.workflowId || payload.target || payload.parameters?.workflowId,
+        ['workflowId']
+      );
+      const workflow = this.lookupReachyPolicyMap(context?.workflowMap, workflowId, ['workflowId']);
+      if (this.isReachySensitiveWorkflow(workflow, context, visited)) return true;
+    }
+    if (['httprequest', 'isynetworkresource'].includes(type)) return true;
+    if (type === 'reachyaction' && this.isReachyPrivateRobotAction(payload)) return true;
+
+    const hasImplicitDeviceTarget = Boolean(
+      value.deviceId
+      || value.groupId
+      || value.target?.deviceId
+      || value.target?.groupId
+      || value.parameters?.deviceId
+      || value.parameters?.groupId
+    );
+    const hasImplicitControl = Boolean(
+      value.action
+      || value.command
+      || value.parameters?.action
+      || value.parameters?.command
+      || value.parameters?.property
+      || value.parameters?.propertyName
+      || value.parameters?.attribute
+      || value.parameters?.capability
+    );
+    if (!type && hasImplicitDeviceTarget && hasImplicitControl) {
+      if (this.isReachyHighRiskDeviceAction(value, context)) return true;
+    }
+
+    const nestedKeys = new Set([
+      'actions', 'ontrueactions', 'onfalseactions', 'thenactions', 'elseactions',
+      'steps', 'branches', 'children', 'parameters', 'data', 'graph', 'nodes'
+    ]);
+    for (const [rawKey, nested] of Object.entries(value)) {
+      const key = this.normalizeReachyPolicyToken(rawKey);
+      if (!nestedKeys.has(key) && !key.endsWith('actions')) continue;
+      if (this.isReachySensitiveWorkflowAction(nested, context, visited, seen, depth + 1)) return true;
+    }
+    return false;
+  }
+
+  isReachySensitiveWorkflow(workflow, context, visited = new Set()) {
+    if (!workflow) return true;
+    const workflowId = this.toReachyPolicyId(workflow, ['workflowId']);
+    if (workflowId && visited.has(workflowId)) return true;
+    if (this.normalizeReachyPolicyToken(workflow.category) === 'security') return true;
+    if (this.normalizeReachyPolicyToken(workflow.trigger?.type) === 'securityalarmstatus') return true;
+
+    if (workflowId) visited.add(workflowId);
+    try {
+      const seen = new WeakSet();
+      return this.isReachySensitiveWorkflowAction(workflow.actions || [], context, visited, seen)
+        || this.isReachySensitiveWorkflowAction(workflow.graph || {}, context, visited, seen);
+    } finally {
+      if (workflowId) visited.delete(workflowId);
+    }
+  }
+
+  enforceReachyOriginPolicy(commandText, interpretation, context) {
+    if (!interpretation) return interpretation;
+    let blocked = this.isReachyHighRiskUtterance(commandText);
+    for (const action of Array.isArray(interpretation.actions) ? interpretation.actions : []) {
+      const type = this.normalizeReachyPolicyToken(action?.type);
+      if (this.isReachySensitiveWorkflowAction(action, context, new Set())) blocked = true;
+      // Creating or revising automations from an unauthenticated room voice is
+      // an administrative mutation and has no trusted confirmation channel.
+      if (['automationcreate', 'workflowcreate', 'workflowrevise'].includes(type)) blocked = true;
+    }
+    if (!blocked) return interpretation;
+    return {
+      intent: 'reachy_high_risk_denied',
+      confidence: 1,
+      normalizedCommand: commandText,
+      actions: [],
+      response: 'That security-sensitive action is not available through Reachy voice control. Use the authenticated HomeBrain controls.',
+      followUpQuestion: null,
+      usedFallback: false
+    };
+  }
+
   shouldRejectUnsafeControlInterpretation(commandText, interpretation) {
     if (!this.hasControlIntentActions(interpretation)) {
       return false;
@@ -1176,6 +1598,7 @@ RULES
   }
 
   async executeDeviceAction(action, context, commandContext = {}) {
+    const { authorizeExecution: _authorizeExecution, ...safeCommandContext } = commandContext;
     const result = {
       type: 'device_control',
       deviceId: action.deviceId,
@@ -1210,7 +1633,7 @@ RULES
             ? `Voice command: ${commandContext.commandText}`
             : `Voice command for ${deviceRecord.name}`,
           actor: commandContext.wakeWord || commandContext.room || 'voice',
-          ...commandContext
+          ...safeCommandContext
         }
       });
 
@@ -1252,6 +1675,7 @@ RULES
   }
 
   async executeSceneAction(action, commandContext = {}) {
+    const { authorizeExecution: _authorizeExecution, ...safeCommandContext } = commandContext;
     const result = {
       type: 'scene_activate',
       sceneId: action.sceneId,
@@ -1268,7 +1692,7 @@ RULES
             ? `Voice scene command: ${commandContext.commandText}`
             : 'Voice scene activation',
           actor: commandContext.wakeWord || commandContext.room || 'voice',
-          ...commandContext
+          ...safeCommandContext
         }
       });
       result.success = true;
@@ -1438,6 +1862,17 @@ RULES
 
     for (const action of actions) {
       if (!action || typeof action !== 'object') continue;
+      if (
+        typeof commandContext.authorizeExecution === 'function'
+        && commandContext.authorizeExecution() !== true
+      ) {
+        executionResults.push({
+          type: 'authorization',
+          success: false,
+          message: 'Voice device authorization was revoked before execution'
+        });
+        break;
+      }
       if (action.type === 'device_control' && action.deviceId) {
         const deviceResult = await this.executeDeviceAction(action, context, commandContext);
         executionResults.push(deviceResult);
@@ -1707,6 +2142,128 @@ RULES
     }
   }
 
+  async tryProcessExplicitReachyCommand(commandText, options = {}) {
+    const original = typeof commandText === 'string' ? commandText.trim() : '';
+    const text = original.toLowerCase().replace(/[^a-z0-9\s_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!text || !/\breachy\b/.test(text)) {
+      return null;
+    }
+
+    const denied = /\b(unlock|disarm|open\s+(?:the\s+)?garage|install|update|upgrade|package|credential|token|admin|privacy|enable\s+(?:the\s+)?camera|disable\s+(?:the\s+)?camera|snapshot|photo|picture|start\s+face\s+tracking|face\s+tracking|release)\b/.test(text);
+    if (denied) {
+      return {
+        processedText: original,
+        intent: { action: 'reachy_action_denied', confidence: 1, entities: { target: 'Reachy' } },
+        execution: { status: 'failed', actions: [], errorMessage: 'This Reachy operation is not allowed by voice.' },
+        responseText: 'That Reachy operation requires the authenticated HomeBrain controls.',
+        llm: { provider: 'heuristic', model: 'reachy-safety-router', processingTimeMs: 0 },
+        followUpQuestion: null,
+        usedFallback: false
+      };
+    }
+
+    let command = null;
+    let parameters = {};
+    const look = text.match(/\blook\s+(left|right|up|down|center|at\s+(?:the\s+)?speaker)\b/);
+    const emotion = text.match(/\b(?:play|be|act)\s+(happy|sad|curious|listening|speaking|alert|neutral)\b/);
+    const move = text.match(/\b(?:play\s+)?(nod|shake\s+(?:your\s+)?head|greet|celebrate|dance)\b/);
+    if (look) {
+      command = 'look';
+      parameters = { direction: look[1].startsWith('at') ? 'speaker' : look[1] };
+    } else if (/\b(?:go\s+to\s+sleep|sleep)\b/.test(text)) {
+      command = 'sleep';
+    } else if (/\bwake(?:\s+up)?\b/.test(text)) {
+      command = 'wake';
+    } else if (/\b(?:neutral|rest)\b/.test(text)) {
+      command = 'neutral';
+    } else if (/\bstart\s+face\s+tracking\b/.test(text)) {
+      command = 'start_face_tracking';
+    } else if (/\bstop\s+face\s+tracking\b/.test(text)) {
+      command = 'stop_face_tracking';
+    } else if (/\bstop\b/.test(text)) {
+      command = 'stop';
+    } else if (emotion) {
+      command = 'play_emotion';
+      parameters = { emotion: emotion[1] };
+    } else if (move) {
+      command = 'play_move';
+      parameters = {
+        move: move[1].startsWith('shake') ? 'shake_head' : move[1]
+      };
+    }
+
+    if (!command) {
+      return {
+        processedText: original,
+        intent: { action: 'reachy_action', confidence: 0.7, entities: { target: 'Reachy' } },
+        execution: { status: 'failed', actions: [], errorMessage: 'Unsupported explicit Reachy voice command.' },
+        responseText: 'I heard Reachy, but that robot command is not available by voice.',
+        llm: { provider: 'heuristic', model: 'reachy-safety-router', processingTimeMs: 0 },
+        followUpQuestion: null,
+        usedFallback: false
+      };
+    }
+
+    try {
+      const robots = await reachyMiniService.getRobots();
+      const candidates = robots.filter((robot) => robot.online);
+      const roomMatch = candidates.find((robot) => options.room && robot.room?.toLowerCase() === String(options.room).toLowerCase());
+      const robot = roomMatch || (candidates.length === 1 ? candidates[0] : null);
+      if (!robot) {
+        return {
+          processedText: original,
+          intent: { action: 'reachy_action', confidence: 0.9, entities: { target: 'Reachy' } },
+          execution: { status: 'failed', actions: [], errorMessage: 'No unambiguous online Reachy target.' },
+          responseText: candidates.length > 1
+            ? 'More than one Reachy is online. Use its HomeBrain name or room in the dashboard.'
+            : 'Reachy is not online right now.',
+          llm: { provider: 'heuristic', model: 'reachy-safety-router', processingTimeMs: 0 },
+          followUpQuestion: null,
+          usedFallback: false
+        };
+      }
+      if (typeof options.authorizeExecution === 'function' && options.authorizeExecution() !== true) {
+        return this.buildRevokedVoiceResult(original);
+      }
+      const result = await reachyMiniService.dispatchCommand(robot.id, command, parameters, {
+        source: 'voice',
+        awaitTerminal: true,
+        authorizeExecution: options.authorizeExecution
+      });
+      return {
+        processedText: original,
+        intent: { action: 'reachy_action', confidence: 1, entities: { target: robot.id, command } },
+        execution: { status: 'success', actions: [{ type: 'reachy_action', command, commandId: result.commandId }] },
+        responseText: `Reachy ${command.replace(/_/g, ' ')} completed.`,
+        llm: { provider: 'heuristic', model: 'reachy-safety-router', processingTimeMs: 0 },
+        followUpQuestion: null,
+        usedFallback: false
+      };
+    } catch (error) {
+      return {
+        processedText: original,
+        intent: { action: 'reachy_action', confidence: 1, entities: { target: 'Reachy', command } },
+        execution: { status: 'failed', actions: [], errorMessage: error.message },
+        responseText: `Reachy could not complete that command: ${error.message}`,
+        llm: { provider: 'heuristic', model: 'reachy-safety-router', processingTimeMs: 0 },
+        followUpQuestion: null,
+        usedFallback: false
+      };
+    }
+  }
+
+  buildRevokedVoiceResult(commandText) {
+    return {
+      processedText: commandText,
+      intent: { action: 'voice_authorization_revoked', confidence: 1, entities: {} },
+      execution: { status: 'failed', actions: [], errorMessage: 'Voice device authorization was revoked' },
+      responseText: '',
+      llm: { provider: 'policy', model: 'connection-generation-guard', processingTimeMs: 0 },
+      followUpQuestion: null,
+      usedFallback: false
+    };
+  }
+
   async processCommand(options) {
     const {
       commandText,
@@ -1714,10 +2271,42 @@ RULES
       wakeWord,
       deviceId,
       stt,
-      userRole = ROLES.USER
+      userRole = ROLES.USER,
+      originDeviceType = null,
+      authorizeExecution = null
     } = options;
+    const executionAuthorized = () => (
+      typeof authorizeExecution !== 'function' || authorizeExecution() === true
+    );
+    if (!executionAuthorized()) return { ...this.buildRevokedVoiceResult(commandText), stt };
 
-    const context = await this.getContext();
+    // allowHighRiskVoiceActions is intentionally reserved until HomeBrain has
+    // a trusted per-user confirmation channel on Reachy. Today all high-risk
+    // Reachy-origin commands are denied before interpretation or execution.
+    if (originDeviceType === 'robot' && this.isReachyHighRiskUtterance(commandText)) {
+      return {
+        processedText: commandText,
+        intent: { action: 'reachy_high_risk_denied', confidence: 1, entities: {} },
+        execution: { status: 'failed', actions: [], errorMessage: 'Security-sensitive Reachy voice action denied' },
+        responseText: 'That security-sensitive action is not available through Reachy voice control. Use the authenticated HomeBrain controls.',
+        llm: { provider: 'policy', model: 'reachy-deny-by-default', processingTimeMs: 0 },
+        followUpQuestion: null,
+        usedFallback: false,
+        stt
+      };
+    }
+
+    const reachyIntent = await this.tryProcessExplicitReachyCommand(commandText, {
+      room,
+      userRole,
+      authorizeExecution
+    });
+    if (reachyIntent) {
+      return { ...reachyIntent, stt };
+    }
+
+    let context = await this.getContext();
+    if (!executionAuthorized()) return { ...this.buildRevokedVoiceResult(commandText), stt };
 
     let interpretation = null;
     let llm = {
@@ -1752,6 +2341,7 @@ RULES
       interpretation = interpretationResult.interpretation;
       llm = interpretationResult.llm;
     }
+    if (!executionAuthorized()) return { ...this.buildRevokedVoiceResult(commandText), stt };
 
     interpretation = this.enforceRolePermissions(interpretation, userRole);
 
@@ -1823,6 +2413,30 @@ RULES
       interpretation = this.fallbackInterpretation(commandText, context, room);
     }
 
+    // This must run after every fallback has had its final say. A fallback can
+    // synthesize a device action even when the LLM returned no interpretation.
+    if (originDeviceType === 'robot') {
+      // Scene/workflow/device records are mutable. Never authorize a robot
+      // command against the ordinary 15-second voice prompt cache; refresh the
+      // policy snapshot at the execution boundary and re-check authorization
+      // after the database read.
+      context = await this.getContext({ forceRefresh: true });
+      if (!executionAuthorized()) return { ...this.buildRevokedVoiceResult(commandText), stt };
+      interpretation = this.enforceReachyOriginPolicy(commandText, interpretation, context);
+      if (interpretation?.intent === 'reachy_high_risk_denied') {
+        return {
+          processedText: interpretation.normalizedCommand || commandText,
+          intent: { action: 'reachy_high_risk_denied', confidence: 1, entities: {} },
+          execution: { status: 'failed', actions: [], errorMessage: 'Security-sensitive Reachy voice action denied' },
+          responseText: interpretation.response,
+          llm,
+          followUpQuestion: null,
+          usedFallback: false,
+          stt
+        };
+      }
+    }
+
     if (!interpretation) {
       return {
         processedText: commandText,
@@ -1851,7 +2465,8 @@ RULES
         room,
         wakeWord,
         source: 'voice',
-        triggerSource: 'voice'
+        triggerSource: 'voice',
+        authorizeExecution
       })
       : {
         status: 'success',

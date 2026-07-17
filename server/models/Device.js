@@ -30,6 +30,7 @@ const schema = new mongoose.Schema({
       'remote',
       'media_activity',
       'voice_assistant',
+      'robot',
       'ai_provider',
       'developer_tool'
     ],
@@ -132,6 +133,7 @@ schema.index({ isOnline: 1 });
 // safe against any pre-existing duplicate rows; the application-level guards in
 // maintenanceService/directRadioService enforce identity correctness.
 schema.index({ 'properties.source': 1 });
+schema.index({ 'properties.reachy.voiceDeviceId': 1 }, { sparse: true });
 schema.index({ 'properties.smartThingsDeviceId': 1 });
 schema.index({ 'properties.smartThingsMigration.smartThingsDeviceId': 1 });
 schema.index({ 'properties.homebrainDirect.ieeeAddr': 1 });
