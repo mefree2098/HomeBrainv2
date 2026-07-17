@@ -60,6 +60,16 @@ const TTS_RATE_LIMIT_MAX_PER_DEVICE = Math.max(
 const MAX_REMOTE_TTS_TEXT_LENGTH = 1_000;
 const ttsIpAccessWindow = new Map();
 const ttsDeviceAccessWindow = new Map();
+const remoteTtsFilesystemRateLimit = rateLimit({
+  windowMs: TTS_RATE_LIMIT_WINDOW_MS,
+  max: TTS_RATE_LIMIT_MAX_PER_IP,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many TTS requests. Please retry later.'
+  }
+});
 const REMOTE_SETUP_PACKAGE_NAME = 'homebrain-remote-setup.tar.gz';
 const REMOTE_SETUP_PACKAGE_DIR = path.join(__dirname, '..', 'public', 'downloads');
 const REMOTE_SETUP_PACKAGE_PATH = path.join(REMOTE_SETUP_PACKAGE_DIR, REMOTE_SETUP_PACKAGE_NAME);
@@ -709,56 +719,65 @@ router.get('/:deviceId/wake-words', wakeWordAssetRateLimit, async (req, res) => 
 
 // Stream TTS audio for a device using an authenticated JSON body. Spoken text
 // must never be placed in a URL where reverse proxies and request logs retain it.
-router.post('/:deviceId/tts', express.json({ limit: '8kb' }), remoteTtsRateLimit, async (req, res) => {
-  const { deviceId } = req.params;
+router.post(
+  '/:deviceId/tts',
+  remoteTtsFilesystemRateLimit,
+  express.json({ limit: '8kb' }),
+  remoteTtsRateLimit,
+  async (req, res) => {
+    const { deviceId } = req.params;
 
-  try {
-    const { text, voiceId } = normalizeRemoteTtsPayload(req.body);
-    const deviceToken = typeof req.get('X-HomeBrain-Device-Token') === 'string'
-      ? req.get('X-HomeBrain-Device-Token').trim()
-      : '';
-    const device = await getAuthorizedDevice(deviceId, { deviceToken }, {
-      allowRegistrationCode: false,
-      allowClaimToken: false,
-      allowDeviceToken: true
-    });
-    if (!device) {
-      return res.status(403).json({ success: false, message: 'Invalid device credentials' });
-    }
-
-    const cachedAudioPath = voiceId
-      ? await voiceAcknowledgmentService.findCachedAudio(voiceId, text)
-      : null;
-    if (cachedAudioPath) {
-      const stat = await fsPromises.stat(cachedAudioPath);
-      res.setHeader('Content-Type', 'audio/mpeg');
-      res.setHeader('Content-Length', stat.size);
-      res.setHeader('Cache-Control', 'no-store');
-      const cachedStream = fs.createReadStream(cachedAudioPath);
-      cachedStream.on('error', () => {
-        res.status(500).end();
+    try {
+      const { text, voiceId } = normalizeRemoteTtsPayload(req.body);
+      const deviceToken = typeof req.get('X-HomeBrain-Device-Token') === 'string'
+        ? req.get('X-HomeBrain-Device-Token').trim()
+        : '';
+      const device = await getAuthorizedDevice(deviceId, { deviceToken }, {
+        allowRegistrationCode: false,
+        allowClaimToken: false,
+        allowDeviceToken: true
       });
-      cachedStream.pipe(res);
-      return;
-    }
+      if (!device) {
+        return res.status(403).json({ success: false, message: 'Invalid device credentials' });
+      }
 
-    const speech = await ttsProviderService.textToSpeechDetailed(text, voiceId || undefined);
-    const audioBuffer = speech.audioBuffer;
+      const cachedAudioPath = voiceId
+        ? await voiceAcknowledgmentService.findCachedAudio(voiceId, text)
+        : null;
+      if (cachedAudioPath) {
+        const stat = await fsPromises.stat(cachedAudioPath);
+        res.setHeader('Content-Type', 'audio/mpeg');
+        res.setHeader('Content-Length', stat.size);
+        res.setHeader('Cache-Control', 'no-store');
+        const cachedStream = fs.createReadStream(cachedAudioPath);
+        cachedStream.on('error', () => {
+          res.status(500).end();
+        });
+        cachedStream.pipe(res);
+        return;
+      }
 
-    res.setHeader('Content-Type', speech.contentType || 'audio/mpeg');
-    res.setHeader('Content-Length', audioBuffer.length);
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('X-HomeBrain-TTS-Provider', speech.provider || 'unknown');
-    if (speech.provider === 'elevenlabs') {
-      res.setHeader('X-ElevenLabs-Cache', speech.cacheHit ? 'hit' : 'miss');
-      res.setHeader('X-ElevenLabs-Emotion-Tagging', speech.tagger?.status || 'unknown');
+      const speech = await ttsProviderService.textToSpeechDetailed(text, voiceId || undefined);
+      const audioBuffer = speech.audioBuffer;
+
+      res.setHeader('Content-Type', speech.contentType || 'audio/mpeg');
+      res.setHeader('Content-Length', audioBuffer.length);
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-HomeBrain-TTS-Provider', speech.provider || 'unknown');
+      if (speech.provider === 'elevenlabs') {
+        res.setHeader('X-ElevenLabs-Cache', speech.cacheHit ? 'hit' : 'miss');
+        res.setHeader('X-ElevenLabs-Emotion-Tagging', speech.tagger?.status || 'unknown');
+      }
+      res.status(200).send(audioBuffer);
+    } catch (error) {
+      console.error('POST /api/remote-devices/:deviceId/tts - Error', {
+        deviceId: String(deviceId),
+        error: error.message
+      });
+      res.status(error.status || 500).json({ success: false, message: error.message || 'Failed to generate TTS' });
     }
-    res.status(200).send(audioBuffer);
-  } catch (error) {
-    console.error(`POST /api/remote-devices/${deviceId}/tts - Error:`, error.message);
-    res.status(error.status || 500).json({ success: false, message: error.message || 'Failed to generate TTS' });
   }
-});
+);
 
 router.get('/:deviceId/tts', (_req, res) => res.status(405).json({
   success: false,
@@ -1283,4 +1302,5 @@ module.exports.normalizeRemoteTtsPayload = normalizeRemoteTtsPayload;
 module.exports.remoteTtsRateLimit = remoteTtsRateLimit;
 module.exports.ttsIpAccessWindow = ttsIpAccessWindow;
 module.exports.ttsDeviceAccessWindow = ttsDeviceAccessWindow;
+module.exports.remoteTtsFilesystemRateLimit = remoteTtsFilesystemRateLimit;
 module.exports.MAX_REMOTE_TTS_TEXT_LENGTH = MAX_REMOTE_TTS_TEXT_LENGTH;

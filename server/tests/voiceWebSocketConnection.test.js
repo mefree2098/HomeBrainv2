@@ -74,6 +74,34 @@ function connectReachy(voiceWs, ws = new MockWebSocket()) {
   return connection;
 }
 
+test('TTS voice lookup logs untrusted device identifiers as structured fields', async (t) => {
+  const originalWarn = console.warn;
+  const warnings = [];
+  t.after(() => { console.warn = originalWarn; });
+  console.warn = (...args) => warnings.push(args);
+
+  const untrustedDeviceId = 'device-%s-%d';
+  const voiceWs = new VoiceWebSocketServer();
+  const ws = new MockWebSocket();
+  voiceWs.deviceConnections.set(untrustedDeviceId, {
+    ws,
+    authenticated: true,
+    device: createDevice()
+  });
+  voiceWs.getPreferredVoiceId = async () => {
+    throw new Error('lookup-%s-failed');
+  };
+
+  const result = await voiceWs.playTtsToDevice(untrustedDeviceId, 'safe test phrase');
+
+  assert.deepEqual(result, { success: true });
+  assert.deepEqual(warnings, [[
+    'Failed to resolve preferred voice for device',
+    { deviceId: untrustedDeviceId, error: 'lookup-%s-failed' }
+  ]]);
+  assert.equal(ws.sent[0].voice, 'default');
+});
+
 test('voice websocket buffers early auth messages while device record loads', async (t) => {
   const originalFindById = VoiceDevice.findById;
   let resolveFindById;

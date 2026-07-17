@@ -1319,3 +1319,39 @@ test('ambiguous prepare acknowledgement is disarmed before any later restart can
   });
   service.shutdown();
 });
+
+test('background companion update errors log untrusted device identifiers as structured fields', async (t) => {
+  const { service, device } = connectedService();
+  const originalError = console.error;
+  const errors = [];
+  t.after(() => {
+    console.error = originalError;
+    service.shutdown();
+  });
+  console.error = (...args) => errors.push(args);
+  device.settings.reachy.appManagement = {
+    requestId: 'structured-log-stage',
+    state: 'staging'
+  };
+  service.updateAppManagementState = async () => {};
+  service.activateStagedCompanionUpdate = async () => {
+    throw new Error('activation-%s-failed');
+  };
+  const untrustedDeviceId = 'device-%s-%d';
+
+  const result = await service.handleAppManagementResult(untrustedDeviceId, {
+    action: 'package_stage',
+    requestId: 'structured-log-stage',
+    success: true,
+    status: 'staged',
+    version: '0.2.0',
+    aggregateSha256: 'b'.repeat(64)
+  });
+  await tick();
+
+  assert.equal(result.status, 'staged');
+  assert.deepEqual(errors, [[
+    'ReachyMiniService: companion update failed',
+    { deviceId: untrustedDeviceId, error: 'activation-%s-failed' }
+  ]]);
+});

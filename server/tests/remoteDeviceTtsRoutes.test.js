@@ -129,3 +129,31 @@ test('Reachy TTS rate limiting is scoped to both device and requester IP', () =>
   router.ttsIpAccessWindow.clear();
   router.ttsDeviceAccessWindow.clear();
 });
+
+test('Reachy TTS filesystem handler has framework and device-scoped rate limits', () => {
+  const handlers = routeHandlers('/:deviceId/tts', 'post');
+  const frameworkIndex = handlers.indexOf(router.remoteTtsFilesystemRateLimit);
+  const deviceIndex = handlers.indexOf(router.remoteTtsRateLimit);
+  assert.equal(frameworkIndex, 0);
+  assert.ok(deviceIndex > frameworkIndex);
+  assert.equal(handlers.at(-1) === router.remoteTtsRateLimit, false);
+});
+
+test('Reachy TTS errors log untrusted device identifiers as structured fields', async (t) => {
+  const originalError = console.error;
+  const errors = [];
+  t.after(() => { console.error = originalError; });
+  console.error = (...args) => errors.push(args);
+
+  const untrustedDeviceId = 'device-%s-%d';
+  const req = request({ body: { text: 42 } });
+  req.params.deviceId = untrustedDeviceId;
+  const res = response();
+  await routeHandlers('/:deviceId/tts', 'post').at(-1)(req, res);
+
+  assert.equal(res.statusCode, 400);
+  assert.deepEqual(errors, [[
+    'POST /api/remote-devices/:deviceId/tts - Error',
+    { deviceId: untrustedDeviceId, error: 'TTS text must be a string' }
+  ]]);
+});

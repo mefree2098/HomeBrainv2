@@ -48,6 +48,23 @@ const snapshotUploadRateLimit = rateLimit({
   legacyHeaders: false,
   message: { success: false, message: 'Reachy snapshot upload rate limit exceeded.' }
 });
+const readRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Reachy read rate limit exceeded. Please retry shortly.' }
+});
+// A runtime release currently contains 18 files. This bounded IP-wide budget
+// permits over 60 complete 19-request updates per minute for fleets behind one
+// NAT, without attacker-controlled key cardinality or any shared stop quota.
+const deviceArtifactRateLimit = rateLimit({
+  windowMs: 60 * 1000,
+  max: 1200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Reachy artifact download rate limit exceeded. Please retry shortly.' }
+});
 
 function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -65,8 +82,9 @@ function getOnboardingHeaderCredentials(req) {
   };
 }
 
-async function authorizeSteadyReachyDevice(req, res) {
-  const access = await validateDeviceAccess(req.params.deviceId, {
+async function authorizeSteadyReachyDevice(req, res, normalizedDeviceId = null) {
+  const deviceId = normalizedDeviceId || reachySnapshotService.normalizeDeviceId(req.params?.deviceId);
+  const access = await validateDeviceAccess(deviceId, {
     deviceToken: trimString(req.get('X-HomeBrain-Device-Token'))
   }, {
     allowRegistrationCode: false,
@@ -135,7 +153,7 @@ async function createReachyPackage() {
   }
 }
 
-router.get(['/status', '/status/'], user, async (_req, res) => {
+router.get(['/status', '/status/'], readRateLimit, user, async (_req, res) => {
   try {
     const robots = await reachyMiniService.getRobots();
     return res.status(200).json({
@@ -159,7 +177,7 @@ async function listRobots(_req, res) {
     return sendError(res, error, 'Failed to list Reachy Mini devices');
   }
 }
-router.get(['/', '/devices', '/devices/'], user, listRobots);
+router.get(['/', '/devices', '/devices/'], readRateLimit, user, listRobots);
 
 router.post(['/register', '/devices'], onboardingRateLimit, admin, async (req, res) => {
   try {
@@ -203,7 +221,7 @@ router.post('/activate', onboardingRateLimit, async (req, res) => {
 // Fleet routes must remain above every dynamic /:deviceId route. Besides
 // making routing intent explicit, this prevents future wildcard aliases from
 // treating the literal "companion" segment as a device ID.
-router.get('/companion/status', admin, async (_req, res) => {
+router.get('/companion/status', readRateLimit, admin, async (_req, res) => {
   try {
     const fleet = await reachyMiniService.getCompanionFleetStatus();
     return res.status(200).json({ success: true, ...fleet });
@@ -320,7 +338,7 @@ echo "The app is installed in Reachy's managed /venvs/apps_venv environment."
     return res.status(200).type('text/x-shellscript').send(script);
   } catch (error) {
     console.error('ReachyMiniRoutes: bootstrap generation failed:', error.message);
-    return res.status(responseStatus(error)).type('text/plain').send(error.message || 'Failed to build bootstrap script');
+    return res.status(responseStatus(error)).type('text/plain').send('Failed to build bootstrap script');
   }
 });
 
@@ -333,7 +351,7 @@ async function getRobot(req, res) {
     return sendError(res, error, 'Failed to load Reachy Mini');
   }
 }
-router.get(['/devices/:deviceId', '/:deviceId'], user, getRobot);
+router.get(['/devices/:deviceId', '/:deviceId'], readRateLimit, user, getRobot);
 
 async function reissue(req, res) {
   try {
@@ -356,7 +374,7 @@ async function reissue(req, res) {
 }
 router.post(['/:deviceId/reissue', '/:deviceId/onboarding/reissue'], onboardingRateLimit, admin, reissue);
 
-router.patch(['/:deviceId/settings', '/devices/:deviceId/settings'], admin, async (req, res) => {
+router.patch(['/:deviceId/settings', '/devices/:deviceId/settings'], commandRateLimit, admin, async (req, res) => {
   try {
     const device = await reachyMiniService.updateSettings(req.params.deviceId, req.body || {});
     return res.status(200).json({ success: true, robot: reachyMiniService.sanitizeRobot(device) });
@@ -379,7 +397,7 @@ router.post(['/:deviceId/commands', '/:deviceId/command'], commandRateLimit, adm
   }
 });
 
-router.get('/:deviceId/commands/:commandId', admin, async (req, res) => {
+router.get('/:deviceId/commands/:commandId', readRateLimit, admin, async (req, res) => {
   try {
     const command = reachyMiniService.getCommandStatus(req.params.deviceId, req.params.commandId);
     return res.status(200).json({ success: true, command });
@@ -427,23 +445,34 @@ router.post(
   snapshotUploadRateLimit,
   express.raw({ type: 'image/jpeg', limit: 2 * 1024 * 1024 }),
   async (req, res) => {
-    // Bind the upload to the privacy generation that existed before the
-    // asynchronous credential/permission read. A concurrent disable advances
-    // this epoch and makes store() fail closed even if this DB snapshot is old.
-    const expectedDeviceEpoch = reachySnapshotService.getDeviceEpoch(req.params.deviceId);
     try {
-      const device = await authorizeSteadyReachyDevice(req, res);
+      const deviceId = reachySnapshotService.normalizeDeviceId(req.params?.deviceId);
+      const snapshotId = reachySnapshotService.normalizeSnapshotId(req.params?.snapshotId);
+      // Bind the upload to the privacy generation that existed before the
+      // asynchronous credential/permission read. A concurrent disable advances
+      // this epoch and makes store() fail closed even if this DB snapshot is old.
+      const expectedDeviceEpoch = reachySnapshotService.getDeviceEpoch(deviceId);
+      const device = await authorizeSteadyReachyDevice(req, res, deviceId);
       if (!device) return undefined;
-      if (String(req.get('Content-Type') || '').split(';')[0].trim().toLowerCase() !== 'image/jpeg') {
+      const contentTypeHeader = req.get('Content-Type');
+      if (typeof contentTypeHeader !== 'string' || contentTypeHeader.split(';')[0].trim().toLowerCase() !== 'image/jpeg') {
         return res.status(415).json({ success: false, message: 'Snapshot Content-Type must be image/jpeg' });
       }
-      const declaredLength = Number(req.get('Content-Length'));
-      if (!Number.isInteger(declaredLength) || declaredLength < 1 || !Buffer.isBuffer(req.body) || declaredLength !== req.body.length) {
+      const contentLengthHeader = req.get('Content-Length');
+      if (typeof contentLengthHeader !== 'string' || !/^\d{1,10}$/.test(contentLengthHeader.trim())) {
+        return res.status(400).json({ success: false, message: 'Snapshot requires an exact Content-Length header' });
+      }
+      const declaredLength = Number.parseInt(contentLengthHeader.trim(), 10);
+      if (!Buffer.isBuffer(req.body)) {
+        return res.status(400).json({ success: false, message: 'Snapshot body must be binary JPEG data' });
+      }
+      const snapshotBuffer = Buffer.from(req.body);
+      if (!Number.isSafeInteger(declaredLength) || declaredLength < 1 || declaredLength !== snapshotBuffer.byteLength) {
         return res.status(400).json({ success: false, message: 'Snapshot requires an exact Content-Length header' });
       }
       const reachySettings = device.settings?.reachy || {};
       if (trimString(reachySettings.privacyFault)) {
-        await reachySnapshotService.removeDevice(req.params.deviceId);
+        await reachySnapshotService.removeDevice(deviceId);
         return res.status(503).json({
           success: false,
           message: 'Snapshots are unavailable while Reachy physical privacy state cannot be confirmed'
@@ -453,7 +482,7 @@ router.post(
       if (safeSettings.cameraEnabled !== true || safeSettings.snapshotEnabled !== true) {
         return res.status(403).json({ success: false, message: 'Snapshots are disabled in Reachy privacy settings' });
       }
-      const command = reachyMiniService.getCommandStatus(req.params.deviceId, req.params.snapshotId);
+      const command = reachyMiniService.getCommandStatus(deviceId, snapshotId);
       if (
         command.command !== 'snapshot'
         || command.terminal === true
@@ -462,9 +491,9 @@ router.post(
         return res.status(409).json({ success: false, message: 'Snapshot does not correlate to an active successful snapshot command' });
       }
       const snapshot = await reachySnapshotService.store({
-        deviceId: req.params.deviceId,
-        snapshotId: req.params.snapshotId,
-        buffer: req.body,
+        deviceId,
+        snapshotId,
+        buffer: snapshotBuffer,
         capturedAt: req.get('X-Reachy-Captured-At'),
         expectedDeviceEpoch
       });
@@ -475,12 +504,14 @@ router.post(
   }
 );
 
-router.get('/:deviceId/snapshots/:snapshotId', admin, async (req, res) => {
+router.get('/:deviceId/snapshots/:snapshotId', readRateLimit, admin, async (req, res) => {
   try {
-    const device = await reachyMiniService.getRobot(req.params.deviceId);
+    const deviceId = reachySnapshotService.normalizeDeviceId(req.params?.deviceId);
+    const snapshotId = reachySnapshotService.normalizeSnapshotId(req.params?.snapshotId);
+    const device = await reachyMiniService.getRobot(deviceId);
     const reachySettings = device.settings?.reachy || {};
     if (trimString(reachySettings.privacyFault)) {
-      await reachySnapshotService.removeDevice(req.params.deviceId);
+      await reachySnapshotService.removeDevice(deviceId);
       return res.status(503).json({
         success: false,
         message: 'Snapshots are unavailable while Reachy physical privacy state cannot be confirmed'
@@ -488,10 +519,10 @@ router.get('/:deviceId/snapshots/:snapshotId', admin, async (req, res) => {
     }
     const safeSettings = reachySettings.safeSettings || {};
     if (safeSettings.cameraEnabled !== true || safeSettings.snapshotEnabled !== true) {
-      await reachySnapshotService.removeDevice(req.params.deviceId);
+      await reachySnapshotService.removeDevice(deviceId);
       return res.status(403).json({ success: false, message: 'Snapshots are disabled in Reachy privacy settings' });
     }
-    const { snapshot, buffer } = await reachySnapshotService.take(req.params.deviceId, req.params.snapshotId);
+    const { snapshot, buffer } = await reachySnapshotService.take(deviceId, snapshotId);
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Content-Length', String(buffer.length));
     res.setHeader('Cache-Control', 'no-store');
@@ -503,7 +534,7 @@ router.get('/:deviceId/snapshots/:snapshotId', admin, async (req, res) => {
   }
 });
 
-router.get('/:deviceId/companion/manifest', async (req, res) => {
+router.get('/:deviceId/companion/manifest', deviceArtifactRateLimit, async (req, res) => {
   try {
     const device = await authorizeSteadyReachyDevice(req, res);
     if (!device) return undefined;
@@ -526,7 +557,7 @@ router.get('/:deviceId/companion/manifest', async (req, res) => {
   }
 });
 
-router.get('/:deviceId/companion/files', async (req, res) => {
+router.get('/:deviceId/companion/files', deviceArtifactRateLimit, async (req, res) => {
   try {
     const device = await authorizeSteadyReachyDevice(req, res);
     if (!device) return undefined;
@@ -550,7 +581,7 @@ async function companionStatusForDevice(req, res) {
     return sendError(res, error, 'Failed to load Reachy companion status');
   }
 }
-router.get('/:deviceId/companion/status', admin, companionStatusForDevice);
+router.get('/:deviceId/companion/status', readRateLimit, admin, companionStatusForDevice);
 
 async function checkCompanion(req, res) {
   try {
@@ -576,7 +607,7 @@ async function updateCompanion(req, res) {
 }
 router.post('/:deviceId/companion/update', onboardingRateLimit, admin, updateCompanion);
 
-router.delete(['/:deviceId', '/devices/:deviceId'], admin, async (req, res) => {
+router.delete(['/:deviceId', '/devices/:deviceId'], onboardingRateLimit, admin, async (req, res) => {
   try {
     const result = await reachyMiniService.deleteRobot(req.params.deviceId, {
       actorUserId: req.user?._id
@@ -591,5 +622,8 @@ module.exports = router;
 module.exports.createReachyPackage = createReachyPackage;
 module.exports.buildOnboardingDelivery = buildOnboardingDelivery;
 module.exports.getOnboardingHeaderCredentials = getOnboardingHeaderCredentials;
+module.exports.onboardingRateLimit = onboardingRateLimit;
 module.exports.commandRateLimit = commandRateLimit;
 module.exports.stopRateLimit = stopRateLimit;
+module.exports.readRateLimit = readRateLimit;
+module.exports.deviceArtifactRateLimit = deviceArtifactRateLimit;

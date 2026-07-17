@@ -6,9 +6,62 @@ const path = require('node:path');
 const MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024;
 const MAX_DIMENSION = 4096;
 const SNAPSHOT_TTL_MS = 2 * 60 * 1000;
+const DEVICE_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._:-]{0,126}[a-z0-9])?$/i;
+const SNAPSHOT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-function inspectJpeg(buffer) {
-  if (!Buffer.isBuffer(buffer) || buffer.length < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) {
+function invalidSnapshotInput(message, status = 400) {
+  return Object.assign(new Error(message), { status });
+}
+
+function normalizeDeviceId(value) {
+  if (typeof value !== 'string') throw invalidSnapshotInput('deviceId must be a string');
+  const normalized = value.trim().toLowerCase();
+  if (!DEVICE_ID_PATTERN.test(normalized)) {
+    throw invalidSnapshotInput('deviceId contains invalid characters');
+  }
+  return normalized;
+}
+
+function normalizeSnapshotId(value) {
+  if (typeof value !== 'string') throw invalidSnapshotInput('snapshotId must be a string');
+  const normalized = value.trim().toLowerCase();
+  if (!SNAPSHOT_ID_PATTERN.test(normalized)) {
+    throw invalidSnapshotInput('snapshotId must be the snapshot command UUID');
+  }
+  return normalized;
+}
+
+function normalizeDeviceEpoch(value) {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw invalidSnapshotInput('Snapshot permission epoch is invalid');
+  }
+  return value;
+}
+
+function normalizeCapturedAt(value) {
+  if (value == null) return null;
+  if (typeof value !== 'string') throw invalidSnapshotInput('Snapshot capture timestamp must be a string');
+  const normalized = value.trim();
+  if (normalized.length < 1 || normalized.length > 64) {
+    throw invalidSnapshotInput('Snapshot capture timestamp is invalid');
+  }
+  const timestamp = Date.parse(normalized);
+  if (!Number.isFinite(timestamp)) throw invalidSnapshotInput('Snapshot capture timestamp is invalid');
+  return new Date(timestamp).toISOString();
+}
+
+function copySnapshotBuffer(value, { enforceSize = true } = {}) {
+  if (!Buffer.isBuffer(value)) throw invalidSnapshotInput('Snapshot payload must be a byte buffer');
+  const buffer = Buffer.from(value);
+  if (enforceSize && (buffer.byteLength < 1 || buffer.byteLength > MAX_SNAPSHOT_BYTES)) {
+    throw invalidSnapshotInput(`Snapshot must be between 1 byte and ${MAX_SNAPSHOT_BYTES} bytes`, 413);
+  }
+  return buffer;
+}
+
+function inspectJpeg(value) {
+  const buffer = copySnapshotBuffer(value, { enforceSize: false });
+  if (buffer.byteLength < 4 || buffer[0] !== 0xff || buffer[1] !== 0xd8) {
     throw Object.assign(new Error('Snapshot payload is not a valid JPEG'), { status: 400 });
   }
   let offset = 2;
@@ -93,27 +146,20 @@ class ReachySnapshotService {
   }
 
   getDeviceEpoch(deviceId) {
-    return this.deviceEpochs.get(String(deviceId)) || 0;
+    return this.deviceEpochs.get(normalizeDeviceId(deviceId)) || 0;
   }
 
   async store({ deviceId, snapshotId, buffer, capturedAt = null, expectedDeviceEpoch = undefined }) {
-    const normalizedDeviceId = String(deviceId);
+    const normalizedDeviceId = normalizeDeviceId(deviceId);
+    const normalizedSnapshotId = normalizeSnapshotId(snapshotId);
     const boundDeviceEpoch = expectedDeviceEpoch === undefined
       ? this.getDeviceEpoch(normalizedDeviceId)
-      : Number(expectedDeviceEpoch);
-    if (!Number.isInteger(boundDeviceEpoch) || boundDeviceEpoch < 0) {
-      throw Object.assign(new Error('Snapshot permission epoch is invalid'), { status: 400 });
-    }
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(snapshotId || '')) {
-      throw Object.assign(new Error('snapshotId must be the snapshot command UUID'), { status: 400 });
-    }
-    if (!Buffer.isBuffer(buffer) || buffer.length === 0 || buffer.length > MAX_SNAPSHOT_BYTES) {
-      throw Object.assign(new Error(`Snapshot must be between 1 byte and ${MAX_SNAPSHOT_BYTES} bytes`), { status: 413 });
-    }
-    if (this.snapshots.has(snapshotId)) {
+      : normalizeDeviceEpoch(expectedDeviceEpoch);
+    const snapshotBuffer = copySnapshotBuffer(buffer);
+    if (this.snapshots.has(normalizedSnapshotId)) {
       throw Object.assign(new Error('Snapshot was already uploaded'), { status: 409 });
     }
-    const dimensions = inspectJpeg(buffer);
+    const dimensions = inspectJpeg(snapshotBuffer);
     // The route captures this epoch before its asynchronous permission read.
     // Reject before reservation if a privacy disable completed in between.
     if (boundDeviceEpoch !== this.getDeviceEpoch(normalizedDeviceId)) {
@@ -121,13 +167,11 @@ class ReachySnapshotService {
     }
     const filePath = path.join(os.tmpdir(), `homebrain-reachy-snapshot-${crypto.randomUUID()}.jpg`);
     const expiresAt = new Date(Date.now() + SNAPSHOT_TTL_MS);
-    const parsedCapturedAt = capturedAt && Number.isFinite(new Date(capturedAt).getTime())
-      ? new Date(capturedAt).toISOString()
-      : null;
+    const parsedCapturedAt = normalizeCapturedAt(capturedAt);
     const snapshot = {
-      id: snapshotId,
+      id: normalizedSnapshotId,
       deviceId: normalizedDeviceId,
-      bytes: buffer.length,
+      bytes: snapshotBuffer.byteLength,
       contentType: 'image/jpeg',
       width: dimensions.width,
       height: dimensions.height,
@@ -141,21 +185,21 @@ class ReachySnapshotService {
     };
     // Reserve synchronously before the first await so concurrent uploads of
     // the same command UUID cannot both create private temp files.
-    this.snapshots.set(snapshotId, snapshot);
+    this.snapshots.set(normalizedSnapshotId, snapshot);
     try {
-      await fsPromises.writeFile(filePath, buffer, { mode: 0o600, flag: 'wx' });
+      await fsPromises.writeFile(filePath, snapshotBuffer, { mode: 0o600, flag: 'wx' });
       if (
-        this.snapshots.get(snapshotId) !== snapshot
+        this.snapshots.get(normalizedSnapshotId) !== snapshot
         || snapshot.deviceEpoch !== this.getDeviceEpoch(normalizedDeviceId)
       ) {
         throw Object.assign(new Error('Snapshot permission was revoked during upload'), { status: 403 });
       }
       snapshot.reserving = false;
-      snapshot.timer = setTimeout(() => this.remove(snapshotId).catch(() => {}), SNAPSHOT_TTL_MS);
+      snapshot.timer = setTimeout(() => this.remove(normalizedSnapshotId).catch(() => {}), SNAPSHOT_TTL_MS);
       snapshot.timer.unref?.();
       return this.toPublic(snapshot);
     } catch (error) {
-      if (this.snapshots.get(snapshotId) === snapshot) this.snapshots.delete(snapshotId);
+      if (this.snapshots.get(normalizedSnapshotId) === snapshot) this.snapshots.delete(normalizedSnapshotId);
       await fsPromises.rm(filePath, { force: true }).catch(() => {});
       throw error;
     }
@@ -174,12 +218,14 @@ class ReachySnapshotService {
   }
 
   async take(deviceId, snapshotId) {
-    const snapshot = this.snapshots.get(snapshotId);
-    if (!snapshot || snapshot.deviceId !== String(deviceId)) {
+    const normalizedDeviceId = normalizeDeviceId(deviceId);
+    const normalizedSnapshotId = normalizeSnapshotId(snapshotId);
+    const snapshot = this.snapshots.get(normalizedSnapshotId);
+    if (!snapshot || snapshot.deviceId !== normalizedDeviceId) {
       throw Object.assign(new Error('Snapshot not found or already consumed'), { status: 404 });
     }
     if (Date.parse(snapshot.expiresAt) <= Date.now()) {
-      await this.remove(snapshotId);
+      await this.remove(normalizedSnapshotId);
       throw Object.assign(new Error('Snapshot expired'), { status: 410 });
     }
     if (snapshot.reserving) {
@@ -188,8 +234,8 @@ class ReachySnapshotService {
     if (snapshot.consuming) {
       throw Object.assign(new Error('Snapshot is already being consumed'), { status: 409 });
     }
-    if (snapshot.deviceEpoch !== this.getDeviceEpoch(deviceId)) {
-      await this.remove(snapshotId);
+    if (snapshot.deviceEpoch !== this.getDeviceEpoch(normalizedDeviceId)) {
+      await this.remove(normalizedSnapshotId);
       throw Object.assign(new Error('Snapshot permission was revoked'), { status: 403 });
     }
     snapshot.consuming = true;
@@ -197,9 +243,9 @@ class ReachySnapshotService {
     let revoked = false;
     try {
       buffer = await fsPromises.readFile(snapshot.filePath);
-      revoked = snapshot.deviceEpoch !== this.getDeviceEpoch(deviceId);
+      revoked = snapshot.deviceEpoch !== this.getDeviceEpoch(normalizedDeviceId);
     } finally {
-      this.snapshots.delete(snapshotId);
+      this.snapshots.delete(normalizedSnapshotId);
       clearTimeout(snapshot.timer);
       await fsPromises.rm(snapshot.filePath, { force: true });
     }
@@ -210,16 +256,17 @@ class ReachySnapshotService {
   }
 
   async remove(snapshotId) {
-    const snapshot = this.snapshots.get(snapshotId);
+    const normalizedSnapshotId = normalizeSnapshotId(snapshotId);
+    const snapshot = this.snapshots.get(normalizedSnapshotId);
     if (!snapshot) return false;
-    this.snapshots.delete(snapshotId);
+    this.snapshots.delete(normalizedSnapshotId);
     clearTimeout(snapshot.timer);
     await fsPromises.rm(snapshot.filePath, { force: true });
     return true;
   }
 
   async removeDevice(deviceId) {
-    const normalizedDeviceId = String(deviceId);
+    const normalizedDeviceId = normalizeDeviceId(deviceId);
     // Increment before the first await so in-flight uploads/reads fail their
     // post-I/O epoch check and can never return pre-revocation image bytes.
     this.deviceEpochs.set(normalizedDeviceId, this.getDeviceEpoch(normalizedDeviceId) + 1);
@@ -241,3 +288,5 @@ module.exports.ReachySnapshotService = ReachySnapshotService;
 module.exports.MAX_SNAPSHOT_BYTES = MAX_SNAPSHOT_BYTES;
 module.exports.SNAPSHOT_TTL_MS = SNAPSHOT_TTL_MS;
 module.exports.inspectJpeg = inspectJpeg;
+module.exports.normalizeDeviceId = normalizeDeviceId;
+module.exports.normalizeSnapshotId = normalizeSnapshotId;

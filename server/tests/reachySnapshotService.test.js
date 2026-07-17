@@ -80,6 +80,36 @@ test('snapshot validation enforces UUID, size, uniqueness, and expiry', async (t
   assert.equal(service.snapshots.has(snapshotId), false);
 });
 
+test('snapshot boundaries reject coercible IDs, epochs, timestamps, and payloads', async (t) => {
+  const service = new ReachySnapshotService();
+  t.after(() => service.cleanup());
+  const snapshotId = crypto.randomUUID();
+
+  assert.throws(() => service.getDeviceEpoch(['robot-1']), (error) => error.status === 400);
+  await assert.rejects(
+    service.store({ deviceId: 'robot-1', snapshotId: [snapshotId], buffer: jpeg() }),
+    (error) => error.status === 400
+  );
+  await assert.rejects(
+    service.store({ deviceId: 'robot-1', snapshotId, buffer: jpeg(), expectedDeviceEpoch: '0' }),
+    (error) => error.status === 400
+  );
+  await assert.rejects(
+    service.store({ deviceId: 'robot-1', snapshotId, buffer: Array.from(jpeg()) }),
+    (error) => error.status === 400
+  );
+  await assert.rejects(
+    service.store({ deviceId: 'robot-1', snapshotId, buffer: jpeg(), capturedAt: ['2026-07-17T12:00:00Z'] }),
+    (error) => error.status === 400
+  );
+  await assert.rejects(
+    service.store({ deviceId: 'robot-1', snapshotId, buffer: jpeg(), capturedAt: 'not-a-timestamp' }),
+    (error) => error.status === 400
+  );
+  assert.throws(() => inspectJpeg(Array.from(jpeg())), (error) => error.status === 400);
+  assert.equal(service.snapshots.size, 0);
+});
+
 test('snapshot read failure still consumes metadata and securely removes the file', async (t) => {
   const service = new ReachySnapshotService();
   const snapshotId = crypto.randomUUID();

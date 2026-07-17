@@ -3702,7 +3702,10 @@ class ReachyMiniService {
     setImmediate(() => {
       this.activateStagedCompanionUpdate(deviceId, result).catch(async (error) => {
         if (error.code === 'REACHY_UPDATE_CANCELLED') return;
-        console.error(`ReachyMiniService: companion update failed for ${deviceId}:`, error.message);
+        console.error('ReachyMiniService: companion update failed', {
+          deviceId: String(deviceId),
+          error: error.message
+        });
         try {
           await this.updateAppManagementState(deviceId, {
             state: 'failed',

@@ -2017,7 +2017,10 @@ class VoiceWebSocketServer {
     try {
       voiceId = await this.getPreferredVoiceId(connection);
     } catch (error) {
-      console.warn(`Failed to resolve preferred voice for device ${deviceId}:`, error.message);
+      console.warn('Failed to resolve preferred voice for device', {
+        deviceId: String(deviceId),
+        error: error.message
+      });
     }
     const payload = { type: 'tts_response', text, voice: voiceId || 'default' };
     const ok = this.sendMessage(deviceId, payload);

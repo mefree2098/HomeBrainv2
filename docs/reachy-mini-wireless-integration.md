@@ -1096,11 +1096,11 @@ admitted.
 
 ### Automated and Simulated Results
 
-- complete HomeBrain server test suite: 1,190 passed, 0 failed, across all 115
+- complete HomeBrain server test suite: 1,200 passed, 0 failed, across all 115
   server test files
 - independently focused Reachy, voice, WebSocket, platform-package, TTS,
-  automation, privacy, and snapshot regression matrices: passed with no
-  remaining audit finding
+  automation, privacy, snapshot, request-boundary, and package-download
+  regression matrices: 104 passed, 0 failed, with no remaining audit finding
 - companion package: 142 passed, 0 failed, with 69% branch coverage
 - Ruff format and lint: passed
 - client ESLint: passed

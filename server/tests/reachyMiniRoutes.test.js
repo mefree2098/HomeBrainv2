@@ -71,10 +71,23 @@ function routeHandler(routePath, method = 'get') {
   return layer.route.stack.at(-1).handle;
 }
 
-function invokeRateLimiter(limiter, ip) {
+function routeMiddlewareOrder(routePath, method, middleware) {
+  const layer = router.stack.find((candidate) => {
+    const paths = Array.isArray(candidate.route?.path) ? candidate.route.path : [candidate.route?.path];
+    return paths.includes(routePath) && candidate.route?.methods?.[method];
+  });
+  assert.ok(layer, `route ${method.toUpperCase()} ${routePath} exists`);
+  return {
+    middlewareIndex: layer.route.stack.findIndex((entry) => entry.handle === middleware),
+    handlerIndex: layer.route.stack.length - 1
+  };
+}
+
+function invokeRateLimiter(limiter, ip, params = {}) {
   return new Promise((resolve, reject) => {
     const req = {
       ip,
+      params,
       headers: {},
       socket: { remoteAddress: ip },
       app: { get: () => false }
@@ -154,18 +167,20 @@ test('bootstrap route authorizes header claim and generated script retains no se
 test('delivered install command never runs bash when bootstrap download fails', async (t) => {
   const temporary = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'reachy-install-command-test-'));
   t.after(() => fsPromises.rm(temporary, { recursive: true, force: true }));
+  const curlLog = path.join(temporary, 'curl-called');
   const bashLog = path.join(temporary, 'bash-called');
   const curlStub = path.join(temporary, 'curl');
   const bashStub = path.join(temporary, 'bash');
-  await fsPromises.writeFile(curlStub, '#!/bin/sh\nexit 22\n', { mode: 0o700 });
+  await fsPromises.writeFile(curlStub, `#!/bin/sh\necho called > '${curlLog}'\nexit 22\n`, { mode: 0o700 });
   await fsPromises.writeFile(bashStub, `#!/bin/sh\necho called > '${bashLog}'\n`, { mode: 0o700 });
   const delivery = buildOnboardingDelivery(fakeRequest(), { _id: DEVICE_ID });
-  const result = spawnSync('/bin/bash', ['-c', delivery.installCommand], {
-    input: 'entered-secret\n',
+  const result = spawnSync('/bin/bash', [], {
+    input: `${delivery.installCommand}\nentered-secret\n`,
     encoding: 'utf8',
     env: { ...process.env, PATH: `${temporary}:${process.env.PATH}` }
   });
   assert.notEqual(result.status, 0);
+  assert.equal(fs.existsSync(curlLog), true);
   assert.equal(fs.existsSync(bashLog), false);
 });
 
@@ -191,6 +206,57 @@ test('static companion fleet route is declared before dynamic device routes', ()
   assert.ok(fleetIndex >= 0);
   assert.ok(dynamicIndex >= 0);
   assert.ok(fleetIndex < dynamicIndex);
+});
+
+test('every Reachy authorization and filesystem route applies its scoped limiter before work', () => {
+  const expected = [
+    ['/status', 'get', router.readRateLimit],
+    ['/', 'get', router.readRateLimit],
+    ['/companion/status', 'get', router.readRateLimit],
+    ['/devices/:deviceId', 'get', router.readRateLimit],
+    ['/:deviceId/settings', 'patch', router.commandRateLimit],
+    ['/:deviceId/commands/:commandId', 'get', router.readRateLimit],
+    ['/:deviceId/snapshots/:snapshotId', 'get', router.readRateLimit],
+    ['/:deviceId/companion/manifest', 'get', router.deviceArtifactRateLimit],
+    ['/:deviceId/companion/files', 'get', router.deviceArtifactRateLimit],
+    ['/:deviceId/companion/status', 'get', router.readRateLimit],
+    ['/:deviceId', 'delete', router.onboardingRateLimit]
+  ];
+  for (const [routePath, method, limiter] of expected) {
+    const order = routeMiddlewareOrder(routePath, method, limiter);
+    assert.ok(order.middlewareIndex >= 0, `${method.toUpperCase()} ${routePath} has limiter`);
+    assert.ok(order.middlewareIndex < order.handlerIndex, `${method.toUpperCase()} ${routePath} limits before handler`);
+  }
+});
+
+test('bounded artifact budget accommodates NAT fleets and remains independent of emergency stop', async (t) => {
+  const ip = '203.0.113.43';
+  const params = { deviceId: DEVICE_ID };
+  t.after(() => {
+    router.deviceArtifactRateLimit.resetKey(ip);
+    router.stopRateLimit.resetKey(ip);
+  });
+  router.deviceArtifactRateLimit.resetKey(ip);
+  router.stopRateLimit.resetKey(ip);
+  // One manifest plus 18 files is 19 requests. Fifty-four successful calls
+  // prove more than two complete attempts fit before we exercise the ceiling.
+  for (let request = 0; request < 54; request += 1) {
+    const result = await invokeRateLimiter(router.deviceArtifactRateLimit, ip, params);
+    assert.equal(result.limited, false, `artifact request ${request + 1}`);
+  }
+  // Rotating attacker-controlled route IDs must not create a fresh budget.
+  for (let request = 54; request < 1200; request += 1) {
+    const rotatedParams = { deviceId: request.toString(16).padStart(24, '0') };
+    const result = await invokeRateLimiter(router.deviceArtifactRateLimit, ip, rotatedParams);
+    assert.equal(result.limited, false);
+  }
+  const exhausted = await invokeRateLimiter(router.deviceArtifactRateLimit, ip, {
+    deviceId: 'f'.repeat(24)
+  });
+  assert.equal(exhausted.limited, true);
+  assert.equal(exhausted.statusCode, 429);
+  const emergencyStop = await invokeRateLimiter(router.stopRateLimit, ip);
+  assert.equal(emergencyStop.limited, false);
 });
 
 test('emergency stop retains an independent budget after ordinary command quota exhaustion', async (t) => {
@@ -359,11 +425,104 @@ test('snapshot retrieval rechecks current privacy permission and purges revoked 
   reachySnapshotService.removeDevice = async (deviceId) => { purgedDevice = deviceId; };
 
   const request = fakeRequest();
-  request.params.snapshotId = 'snapshot-id';
+  request.params.snapshotId = crypto.randomUUID();
   const response = fakeResponse();
   await routeHandler('/:deviceId/snapshots/:snapshotId')(request, response);
 
   assert.equal(response.statusCode, 403);
   assert.equal(takeCalled, false);
   assert.equal(purgedDevice, DEVICE_ID);
+});
+
+test('snapshot upload rejects array parameters and non-buffer bodies before authorization', async () => {
+  const handler = routeHandler('/:deviceId/snapshots/:snapshotId', 'post');
+  const arrayIdRequest = fakeRequest();
+  arrayIdRequest.params.deviceId = [DEVICE_ID];
+  arrayIdRequest.params.snapshotId = crypto.randomUUID();
+  const arrayIdResponse = fakeResponse();
+  await handler(arrayIdRequest, arrayIdResponse);
+  assert.equal(arrayIdResponse.statusCode, 400);
+
+  const originalFindById = VoiceDevice.findById;
+  VoiceDevice.findById = async () => ({
+    _id: DEVICE_ID,
+    deviceType: 'robot',
+    settings: {
+      registered: true,
+      deviceTokenHash: hashDeviceToken('device-secret'),
+      reachy: { safeSettings: { cameraEnabled: true, snapshotEnabled: true } }
+    }
+  });
+  try {
+    const stringBodyRequest = fakeRequest({
+      'x-homebrain-device-token': 'device-secret',
+      'content-type': 'image/jpeg',
+      'content-length': '4'
+    });
+    stringBodyRequest.params.snapshotId = crypto.randomUUID();
+    stringBodyRequest.body = 'jpeg';
+    const stringBodyResponse = fakeResponse();
+    await handler(stringBodyRequest, stringBodyResponse);
+    assert.equal(stringBodyResponse.statusCode, 400);
+    assert.match(stringBodyResponse.body.message, /binary JPEG data/i);
+  } finally {
+    VoiceDevice.findById = originalFindById;
+  }
+});
+
+test('snapshot upload accepts a normalized Buffer body with exact length', async (t) => {
+  const originalFindById = VoiceDevice.findById;
+  const originalGetCommandStatus = reachyMiniService.getCommandStatus;
+  t.after(async () => {
+    VoiceDevice.findById = originalFindById;
+    reachyMiniService.getCommandStatus = originalGetCommandStatus;
+    await reachySnapshotService.cleanup();
+  });
+  await reachySnapshotService.cleanup();
+  VoiceDevice.findById = async () => ({
+    _id: DEVICE_ID,
+    deviceType: 'robot',
+    settings: {
+      registered: true,
+      deviceTokenHash: hashDeviceToken('device-secret'),
+      reachy: {
+        privacyFault: null,
+        safeSettings: { cameraEnabled: true, snapshotEnabled: true }
+      }
+    }
+  });
+  reachyMiniService.getCommandStatus = () => ({
+    command: 'snapshot',
+    status: 'started',
+    terminal: false
+  });
+  const buffer = jpeg();
+  const request = fakeRequest({
+    'x-homebrain-device-token': 'device-secret',
+    'content-type': 'image/jpeg',
+    'content-length': String(buffer.byteLength)
+  });
+  request.params.snapshotId = crypto.randomUUID();
+  request.body = buffer;
+  const response = fakeResponse();
+
+  await routeHandler('/:deviceId/snapshots/:snapshotId', 'post')(request, response);
+
+  assert.equal(response.statusCode, 201);
+  assert.equal(response.body.success, true);
+  assert.equal(response.body.snapshot.bytes, buffer.byteLength);
+});
+
+test('bootstrap failures never reflect exception markup into the response', async (t) => {
+  const originalFindById = VoiceDevice.findById;
+  t.after(() => { VoiceDevice.findById = originalFindById; });
+  VoiceDevice.findById = async () => {
+    throw new Error('<img src=x onerror=alert(1)>');
+  };
+  const response = fakeResponse();
+  await routeHandler('/:deviceId/bootstrap.sh')(fakeRequest(), response);
+  assert.equal(response.statusCode, 500);
+  assert.equal(response.contentType, 'text/plain');
+  assert.equal(response.body, 'Failed to build bootstrap script');
+  assert.equal(response.body.includes('<'), false);
 });
