@@ -15,7 +15,8 @@ export type WorkflowActionType =
   | "repeat"
   | "isy_network_resource"
   | "http_request"
-  | "alexa_speak";
+  | "alexa_speak"
+  | "reachy_action";
 
 export interface WorkflowTrigger {
   type: WorkflowTriggerType;

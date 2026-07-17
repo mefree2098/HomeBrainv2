@@ -30,6 +30,13 @@ import { Textarea } from "@/components/ui/textarea";
 import type { AlexaDeviceSummary } from "@/api/alexa";
 import type { DeviceGroupSummary } from "@/api/devices";
 import type { Workflow, WorkflowAction, WorkflowActionTarget, WorkflowTriggerType } from "@/api/workflows";
+import {
+  getReachyMiniCapabilities,
+  getReachyMiniDeviceId,
+  getReachyMiniDevices,
+  reachyMiniSupportsAction,
+  type ReachyMiniDevice
+} from "@/api/reachyMini";
 import { DevicePicker } from "@/components/devices/DevicePicker";
 import { getDeviceSource, getDeviceSourceFacets } from "@/lib/deviceSources";
 import {
@@ -100,12 +107,14 @@ const ACTION_LABELS: Record<WorkflowAction["type"], string> = {
   repeat: "Repeat",
   isy_network_resource: "ISY network resource",
   http_request: "HTTP request",
-  alexa_speak: "Alexa announcement"
+  alexa_speak: "Alexa announcement",
+  reachy_action: "Reachy Mini action"
 };
 const ACTION_TYPE_OPTIONS: Array<{ value: WorkflowAction["type"]; label: string }> = [
   { value: "device_control", label: "Control device" },
   { value: "scene_activate", label: "Activate scene" },
   { value: "alexa_speak", label: "Alexa announcement" },
+  { value: "reachy_action", label: "Reachy Mini action" },
   { value: "delay", label: "Delay" },
   { value: "notification", label: "Notification" },
   { value: "condition", label: "Condition gate" }
@@ -124,6 +133,92 @@ const DEVICE_ACTION_LABELS: Record<string, string> = {
   close: "Close",
   harmony_command: "Send Harmony command"
 };
+
+const REACHY_ACTION_OPTIONS = [
+  { value: "wake", label: "Wake" },
+  { value: "sleep", label: "Sleep" },
+  { value: "neutral", label: "Return to neutral" },
+  { value: "stop", label: "Stop motion" },
+  { value: "look", label: "Look direction" },
+  { value: "set_antennas", label: "Set antennas" },
+  { value: "set_body_yaw", label: "Rotate body" },
+  { value: "set_motor_mode", label: "Set motor mode" },
+  { value: "play_emotion", label: "Play expression" },
+  { value: "play_move", label: "Play movement" },
+  { value: "start_face_tracking", label: "Start face tracking" },
+  { value: "stop_face_tracking", label: "Stop face tracking" },
+  { value: "set_volume", label: "Set speaker volume" },
+  { value: "set_microphone_volume", label: "Set microphone volume" },
+  { value: "speak", label: "Speak" },
+  { value: "release_app", label: "Release HomeBrain app" }
+] as const;
+
+function getReachyActionOptions(device: ReachyMiniDevice | null | undefined) {
+  if (!device) return [];
+  return REACHY_ACTION_OPTIONS.filter((option) => {
+    if (!reachyMiniSupportsAction(device, option.value)) return false;
+    if (option.value === "start_face_tracking") {
+      return device.settings?.cameraEnabled === true;
+    }
+    return true;
+  });
+}
+
+const REACHY_LOOK_DIRECTIONS = [
+  { value: "center", label: "Center" },
+  { value: "left", label: "Left" },
+  { value: "right", label: "Right" },
+  { value: "up", label: "Up" },
+  { value: "down", label: "Down" },
+  { value: "speaker", label: "Active speaker" }
+] as const;
+
+const REACHY_MOTOR_MODES = [
+  { value: "disabled", label: "Motors off" },
+  { value: "gravity_compensation", label: "Compliant / gravity compensation" },
+  { value: "enabled", label: "Active" }
+] as const;
+
+const REACHY_EMOTIONS = ["neutral", "happy", "curious", "sad", "listening", "speaking", "alert"] as const;
+
+const REACHY_ANTENNA_POSITIONS = ["neutral", "up", "down", "happy", "sad", "curious"] as const;
+
+const REACHY_MOVE_PRESETS = ["nod", "shake_head", "greet", "celebrate", "dance", "yes", "no"] as const;
+
+function getDefaultReachyParameters(action = "wake") {
+  if (action === "look") return { action, direction: "center" };
+  if (action === "set_antennas") return { action, position: "neutral" };
+  if (action === "set_body_yaw") return { action, angleDeg: 0 };
+  if (action === "set_motor_mode") return { action, mode: "gravity_compensation" };
+  if (action === "play_emotion") return { action, emotion: "happy" };
+  if (action === "play_move") return { action, move: "greet" };
+  if (action === "set_volume" || action === "set_microphone_volume") return { action, volume: 50 };
+  if (action === "speak") return { action, text: "" };
+  return { action };
+}
+
+function normalizeReachyActionForEditor(action: WorkflowAction): WorkflowAction {
+  if (action.type !== "reachy_action") return action;
+  const parameters = action.parameters && typeof action.parameters === "object" ? action.parameters : {};
+  const nested = parameters.commandParameters
+    && typeof parameters.commandParameters === "object"
+    && !Array.isArray(parameters.commandParameters)
+    ? parameters.commandParameters as Record<string, unknown>
+    : {};
+  const command = String(parameters.action || parameters.command || "wake");
+  const metadata = { ...parameters };
+  delete metadata.command;
+  delete metadata.commandParameters;
+  delete metadata.action;
+  return {
+    ...action,
+    parameters: {
+      ...metadata,
+      ...nested,
+      action: command
+    }
+  };
+}
 
 type TriggerPropertyKind = "boolean" | "number" | "string";
 
@@ -1094,7 +1189,7 @@ function buildGraph(triggerType: WorkflowTriggerType, actions: WorkflowAction[])
   actions.forEach((action, index) => {
     const id = `action-${index + 1}`;
     const visualType =
-      action.type === "device_control"
+      action.type === "device_control" || action.type === "reachy_action"
         ? "device_action"
         : action.type === "scene_activate"
           ? "scene_action"
@@ -1415,6 +1510,15 @@ function getSceneLabel(scenes: SceneLite[], sceneId: string | null | undefined) 
   return scene ? scene.name : "Selected scene";
 }
 
+function getReachyLabel(reachyDevices: ReachyMiniDevice[], reachyId: string | null | undefined) {
+  if (!reachyId) {
+    return "No Reachy selected";
+  }
+
+  const reachy = reachyDevices.find((entry) => getReachyMiniDeviceId(entry) === reachyId);
+  return reachy ? reachy.name : "Selected Reachy";
+}
+
 function describeTrigger(
   triggerType: WorkflowTriggerType,
   triggerConditions: Record<string, unknown>,
@@ -1503,7 +1607,8 @@ function describeAction(
   devices: DeviceLite[],
   scenes: SceneLite[],
   triggerDeviceId: string | null,
-  alexaDevices: AlexaDeviceSummary[]
+  alexaDevices: AlexaDeviceSummary[],
+  reachyDevices: ReachyMiniDevice[]
 ) {
   switch (action.type) {
     case "device_control": {
@@ -1545,6 +1650,38 @@ function describeAction(
       const targetLabel = getAlexaDeviceLabel(alexaDevices, action.target);
       return message ? `${targetLabel} -> say "${message}".` : `${targetLabel} -> say a message.`;
     }
+    case "reachy_action": {
+      const targetLabel = getReachyLabel(reachyDevices, typeof action.target === "string" ? action.target : null);
+      const command = String(action.parameters?.action || "wake");
+      if (command === "look") {
+        return `${targetLabel} -> look ${String(action.parameters?.direction || "center")}.`;
+      }
+      if (command === "set_antennas") {
+        return `${targetLabel} -> set antennas to ${String(action.parameters?.position || "neutral")}.`;
+      }
+      if (command === "set_body_yaw") {
+        return `${targetLabel} -> rotate body to ${String(action.parameters?.angleDeg ?? 0)}°.`;
+      }
+      if (command === "set_motor_mode") {
+        return `${targetLabel} -> set motors to ${String(action.parameters?.mode || "gravity_compensation").replace(/_/g, " ")}.`;
+      }
+      if (command === "play_emotion") {
+        return `${targetLabel} -> play ${String(action.parameters?.emotion || "happy")} expression.`;
+      }
+      if (command === "play_move") {
+        return `${targetLabel} -> play ${String(action.parameters?.move || "greet").replace(/_/g, " ")} movement.`;
+      }
+      if (command === "set_volume" || command === "set_microphone_volume") {
+        const label = command === "set_volume" ? "speaker" : "microphone";
+        return `${targetLabel} -> set ${label} volume to ${String(action.parameters?.volume ?? 50)}%.`;
+      }
+      if (command === "speak") {
+        const text = String(action.parameters?.text || "").trim();
+        return text ? `${targetLabel} -> say "${text}".` : `${targetLabel} -> speak.`;
+      }
+      const actionLabel = REACHY_ACTION_OPTIONS.find((option) => option.value === command)?.label || command.replace(/_/g, " ");
+      return `${targetLabel} -> ${actionLabel.toLowerCase()}.`;
+    }
     case "condition":
       return "Only continue when the condition evaluates as true.";
     default:
@@ -1572,6 +1709,10 @@ export function WorkflowBuilderDialog({
   const [triggerType, setTriggerType] = useState<WorkflowTriggerType>("manual");
   const [triggerConditions, setTriggerConditions] = useState<Record<string, unknown>>({});
   const [actions, setActions] = useState<WorkflowAction[]>([DEFAULT_ACTION]);
+  const [reachyDevices, setReachyDevices] = useState<ReachyMiniDevice[]>([]);
+  const [reachyDevicesLoading, setReachyDevicesLoading] = useState(false);
+  const [reachyDevicesError, setReachyDevicesError] = useState("");
+  const [reachyDevicesRefreshKey, setReachyDevicesRefreshKey] = useState(0);
 
   const actionableDevices = useMemo(
     () => devices.filter((device) => !isWorkflowEnergyMonitorDevice(device)),
@@ -1592,7 +1733,9 @@ export function WorkflowBuilderDialog({
       setVoiceAliasesText((initialWorkflow.voiceAliases || []).join(", "));
       setTriggerType((initialWorkflow.trigger?.type as WorkflowTriggerType) || "manual");
       setTriggerConditions(initialWorkflow.trigger?.conditions || {});
-      setActions(initialWorkflow.actions?.length ? initialWorkflow.actions : [buildDefaultAction("manual", actionableDevices)]);
+      setActions(initialWorkflow.actions?.length
+        ? initialWorkflow.actions.map(normalizeReachyActionForEditor)
+        : [buildDefaultAction("manual", actionableDevices)]);
       return;
     }
 
@@ -1606,6 +1749,60 @@ export function WorkflowBuilderDialog({
     setTriggerConditions({});
     setActions([buildDefaultAction("manual", actionableDevices)]);
   }, [actionableDevices, initialWorkflow, open]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    let active = true;
+    setReachyDevicesLoading(true);
+    setReachyDevicesError("");
+    getReachyMiniDevices()
+      .then((response) => {
+        if (active) {
+          setReachyDevices(response.devices || []);
+          setReachyDevicesError("");
+        }
+      })
+      .catch((error) => {
+        if (active) {
+          setReachyDevices([]);
+          setReachyDevicesError(error instanceof Error ? error.message : "Unable to load Reachy Mini devices.");
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setReachyDevicesLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [open, reachyDevicesRefreshKey]);
+
+  useEffect(() => {
+    const defaultReachy = reachyDevices[0] || null;
+    const defaultReachyId = defaultReachy ? getReachyMiniDeviceId(defaultReachy) : "";
+    if (!defaultReachyId) {
+      return;
+    }
+
+    setActions((current) => current.map((action) => {
+      if (action.type !== "reachy_action" || action.target) return action;
+      const availableActions = getReachyActionOptions(defaultReachy);
+      const command = String(action.parameters?.action || "wake");
+      const nextCommand = availableActions.some((option) => option.value === command)
+        ? command
+        : availableActions[0]?.value;
+      return {
+        ...action,
+        target: defaultReachyId,
+        parameters: nextCommand ? getDefaultReachyParameters(nextCommand) : action.parameters
+      };
+    }));
+  }, [reachyDevices]);
 
   const visualGraph = useMemo(() => buildGraph(triggerType, actions), [triggerType, actions]);
 
@@ -1736,9 +1933,37 @@ export function WorkflowBuilderDialog({
     [devices, triggerConditions, triggerType]
   );
   const actionSummaries = useMemo(
-    () => actions.map((action) => describeAction(action, devices, scenes, triggerDeviceId, alexaDevices)),
-    [actions, alexaDevices, devices, scenes, triggerDeviceId]
+    () => actions.map((action) => describeAction(action, devices, scenes, triggerDeviceId, alexaDevices, reachyDevices)),
+    [actions, alexaDevices, devices, reachyDevices, scenes, triggerDeviceId]
   );
+  const reachyActionValidationIssues = useMemo(() => actions.flatMap((action, index) => {
+    if (action.type !== "reachy_action") return [];
+    const issues: string[] = [];
+    const targetId = typeof action.target === "string" ? action.target.trim() : "";
+    const target = targetId
+      ? reachyDevices.find((device) => getReachyMiniDeviceId(device) === targetId)
+      : null;
+    const command = String(action.parameters?.action || "wake");
+    if (!targetId) {
+      issues.push(`Step ${index + 1}: select a Reachy Mini.`);
+    } else if (!target) {
+      issues.push(`Step ${index + 1}: the selected Reachy Mini is no longer enrolled.`);
+    } else if (!getReachyActionOptions(target).some((option) => option.value === command)) {
+      issues.push(`Step ${index + 1}: ${command.replace(/_/g, " ")} is unavailable on the selected Reachy Mini or blocked by its privacy settings.`);
+    }
+    if (
+      target
+      && command === "look"
+      && action.parameters?.direction === "speaker"
+      && target.settings?.speechDirectionEnabled !== true
+    ) {
+      issues.push(`Step ${index + 1}: enable and save speaker-direction metadata on the selected Reachy Mini first.`);
+    }
+    if (command === "speak" && !String(action.parameters?.text || "").trim()) {
+      issues.push(`Step ${index + 1}: enter the speech text.`);
+    }
+    return issues;
+  }), [actions, reachyDevices]);
 
   const addAction = () => {
     if (isDeviceTriggerType(triggerType) && !triggerDeviceSupportsControl) {
@@ -1846,6 +2071,8 @@ export function WorkflowBuilderDialog({
   };
 
   const handleActionTypeChange = (index: number, nextType: WorkflowAction["type"]) => {
+    const defaultReachy = reachyDevices[0] || null;
+    const defaultReachyAction = getReachyActionOptions(defaultReachy)[0]?.value;
     const defaultControlTarget = triggerType === "device_state" && triggerDeviceSupportsControl
       ? getDefaultDeviceTarget(triggerType, actionableDevices)
       : actionableDevices[0]?._id || null
@@ -1853,6 +2080,8 @@ export function WorkflowBuilderDialog({
       ? scenes[0]?._id || null
       : nextType === "device_control"
         ? defaultControlTarget
+        : nextType === "reachy_action"
+          ? (defaultReachy ? getReachyMiniDeviceId(defaultReachy) : null)
         : nextType === "alexa_speak"
           ? buildAlexaDeviceTarget(alexaDevices[0])
         : null;
@@ -1872,6 +2101,8 @@ export function WorkflowBuilderDialog({
                 brokerAccountId: alexaDevices[0]?.brokerAccountId || "",
                 deviceName: alexaDevices[0]?.name || ""
               }
+          : nextType === "reachy_action"
+            ? getDefaultReachyParameters(defaultReachyAction)
           : nextType === "condition"
             ? {}
             : buildDeviceControlParameters({
@@ -1882,7 +2113,7 @@ export function WorkflowBuilderDialog({
   };
 
   const onSubmit = async () => {
-    if (!name.trim() || actions.length === 0) {
+    if (!name.trim() || actions.length === 0 || reachyActionValidationIssues.length > 0) {
       return;
     }
 
@@ -2432,6 +2663,23 @@ export function WorkflowBuilderDialog({
                           || (actionValue === "turn_on" && actionConfig.supportsTurnOnValue)
                         );
                       const showHarmonyCommandFields = action.type === "device_control" && actionValue === "harmony_command";
+                      const reachyActionValue = REACHY_ACTION_OPTIONS.some((option) => option.value === action.parameters?.action)
+                        ? String(action.parameters?.action)
+                        : "wake";
+                      const selectedReachy = action.type === "reachy_action" && typeof action.target === "string"
+                        ? reachyDevices.find((device) => getReachyMiniDeviceId(device) === action.target) || null
+                        : null;
+                      const availableReachyActions = getReachyActionOptions(selectedReachy);
+                      const selectedReachyActionAvailable = availableReachyActions.some((option) => option.value === reachyActionValue);
+                      const selectedReachyActionDefinition = REACHY_ACTION_OPTIONS.find((option) => option.value === reachyActionValue);
+                      const selectedReachyCapabilities = new Set(getReachyMiniCapabilities(selectedReachy));
+                      const availableReachyLookDirections = REACHY_LOOK_DIRECTIONS.filter((direction) => (
+                        direction.value !== "speaker"
+                        || (
+                          selectedReachyCapabilities.has("speech_direction")
+                          && selectedReachy?.settings?.speechDirectionEnabled === true
+                        )
+                      ));
 
                       return (
                         <Card key={`${action.type}-${index}`} className="overflow-hidden">
@@ -2702,6 +2950,263 @@ export function WorkflowBuilderDialog({
                                   </div>
                                 )}
                               </>
+                            )}
+
+                            {action.type === "reachy_action" && (
+                              <div className="space-y-4">
+                                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                                  <div className="space-y-2">
+                                    <Label>Action type</Label>
+                                    <Select value={action.type} onValueChange={(value) => handleActionTypeChange(index, value as WorkflowAction["type"])}>
+                                      <SelectTrigger>
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {ACTION_TYPE_OPTIONS.map((option) => (
+                                          <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+
+                                  <div className="space-y-2">
+                                    <Label>Reachy Mini</Label>
+                                    <Select
+                                      value={typeof action.target === "string" && action.target ? action.target : undefined}
+                                      onValueChange={(value) => {
+                                        const nextReachy = reachyDevices.find((device) => getReachyMiniDeviceId(device) === value) || null;
+                                        const nextOptions = getReachyActionOptions(nextReachy);
+                                        if (nextOptions.some((option) => option.value === reachyActionValue)) {
+                                          updateAction(index, { target: value });
+                                          return;
+                                        }
+                                        const nextAction = nextOptions[0]?.value;
+                                        updateAction(
+                                          index,
+                                          {
+                                            target: value,
+                                            parameters: nextAction ? getDefaultReachyParameters(nextAction) : action.parameters
+                                          },
+                                          { replaceParameters: true }
+                                        );
+                                      }}
+                                      disabled={reachyDevicesLoading || reachyDevices.length === 0}
+                                    >
+                                      <SelectTrigger>
+                                        <SelectValue placeholder={reachyDevicesLoading ? "Loading Reachy devices..." : "Select Reachy"} />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {reachyDevices.map((reachy) => {
+                                          const reachyId = getReachyMiniDeviceId(reachy);
+                                          return (
+                                            <SelectItem key={reachyId} value={reachyId}>
+                                              {reachy.name}{reachy.room ? ` · ${reachy.room}` : ""}{reachy.online ? " · Online" : " · Offline"}
+                                            </SelectItem>
+                                          );
+                                        })}
+                                      </SelectContent>
+                                    </Select>
+                                    {reachyDevicesError ? (
+                                      <div className="space-y-2 rounded-lg border border-red-500/25 bg-red-500/10 p-2.5">
+                                        <p className="text-xs text-red-700 dark:text-red-300">
+                                          Reachy devices could not be loaded: {reachyDevicesError}
+                                        </p>
+                                        <Button
+                                          type="button"
+                                          variant="outline"
+                                          size="sm"
+                                          disabled={reachyDevicesLoading}
+                                          onClick={() => setReachyDevicesRefreshKey((current) => current + 1)}
+                                        >
+                                          Retry
+                                        </Button>
+                                      </div>
+                                    ) : !reachyDevicesLoading && reachyDevices.length === 0 ? (
+                                      <p className="text-xs text-amber-700 dark:text-amber-300">
+                                        Enroll a Reachy Mini before adding this action.
+                                      </p>
+                                    ) : !action.target ? (
+                                      <p className="text-xs text-red-600 dark:text-red-300">Select a Reachy Mini for this step.</p>
+                                    ) : null}
+                                  </div>
+
+                                  <div className="space-y-2">
+                                    <Label>Robot action</Label>
+                                    <Select
+                                      value={reachyActionValue}
+                                      disabled={!selectedReachy || availableReachyActions.length === 0}
+                                      onValueChange={(value) => updateAction(
+                                        index,
+                                        { parameters: getDefaultReachyParameters(value) },
+                                        { replaceParameters: true }
+                                      )}
+                                    >
+                                      <SelectTrigger>
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        {!selectedReachyActionAvailable && selectedReachyActionDefinition ? (
+                                          <SelectItem value={selectedReachyActionDefinition.value} disabled>
+                                            {selectedReachyActionDefinition.label} · unavailable
+                                          </SelectItem>
+                                        ) : null}
+                                        {availableReachyActions.map((option) => (
+                                          <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                </div>
+
+                                {reachyActionValue === "look" && (
+                                  <div className="grid gap-2 sm:max-w-sm">
+                                    <Label>Direction</Label>
+                                    <Select
+                                      value={String(action.parameters?.direction || "center")}
+                                      onValueChange={(direction) => updateAction(index, { parameters: { direction } })}
+                                    >
+                                      <SelectTrigger><SelectValue /></SelectTrigger>
+                                      <SelectContent>
+                                        {availableReachyLookDirections.map((direction) => (
+                                          <SelectItem key={direction.value} value={direction.value}>{direction.label}</SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                )}
+
+                                {reachyActionValue === "set_antennas" && (
+                                  <div className="grid gap-2 sm:max-w-sm">
+                                    <Label>Antenna position</Label>
+                                    <Select
+                                      value={String(action.parameters?.position || "neutral")}
+                                      onValueChange={(position) => updateAction(index, { parameters: { position } })}
+                                    >
+                                      <SelectTrigger><SelectValue /></SelectTrigger>
+                                      <SelectContent>
+                                        {REACHY_ANTENNA_POSITIONS.map((position) => (
+                                          <SelectItem key={position} value={position} className="capitalize">{position}</SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                )}
+
+                                {reachyActionValue === "set_body_yaw" && (
+                                  <div className="grid gap-2 sm:max-w-sm">
+                                    <Label htmlFor={`reachy-body-yaw-${index}`}>Body angle (-45° to 45°)</Label>
+                                    <Input
+                                      id={`reachy-body-yaw-${index}`}
+                                      type="number"
+                                      min={-45}
+                                      max={45}
+                                      step={1}
+                                      value={Number(action.parameters?.angleDeg ?? 0)}
+                                      onChange={(event) => {
+                                        const value = Number(event.target.value);
+                                        updateAction(index, { parameters: { angleDeg: Number.isFinite(value) ? Math.max(-45, Math.min(45, value)) : 0 } });
+                                      }}
+                                    />
+                                  </div>
+                                )}
+
+                                {reachyActionValue === "set_motor_mode" && (
+                                  <div className="grid gap-2 sm:max-w-md">
+                                    <Label>Motor mode</Label>
+                                    <Select
+                                      value={String(action.parameters?.mode || "gravity_compensation")}
+                                      onValueChange={(mode) => updateAction(index, { parameters: { mode } })}
+                                    >
+                                      <SelectTrigger><SelectValue /></SelectTrigger>
+                                      <SelectContent>
+                                        {REACHY_MOTOR_MODES.map((mode) => (
+                                          <SelectItem key={mode.value} value={mode.value}>{mode.label}</SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                )}
+
+                                {reachyActionValue === "play_emotion" && (
+                                  <div className="grid gap-2 sm:max-w-sm">
+                                    <Label>Expression</Label>
+                                    <Select
+                                      value={String(action.parameters?.emotion || "happy")}
+                                      onValueChange={(emotion) => updateAction(index, { parameters: { emotion } })}
+                                    >
+                                      <SelectTrigger><SelectValue /></SelectTrigger>
+                                      <SelectContent>
+                                        {REACHY_EMOTIONS.map((emotion) => (
+                                          <SelectItem key={emotion} value={emotion} className="capitalize">{emotion}</SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                )}
+
+                                {reachyActionValue === "play_move" && (
+                                  <div className="grid gap-2 sm:max-w-sm">
+                                    <Label>Movement</Label>
+                                    <Select
+                                      value={String(action.parameters?.move || "greet")}
+                                      onValueChange={(move) => updateAction(index, { parameters: { move } })}
+                                    >
+                                      <SelectTrigger><SelectValue /></SelectTrigger>
+                                      <SelectContent>
+                                        {REACHY_MOVE_PRESETS.map((move) => (
+                                          <SelectItem key={move} value={move} className="capitalize">{move.replace(/_/g, " ")}</SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                )}
+
+                                {(reachyActionValue === "set_volume" || reachyActionValue === "set_microphone_volume") && (
+                                  <div className="grid gap-2 sm:max-w-sm">
+                                    <Label htmlFor={`reachy-volume-${index}`}>
+                                      {reachyActionValue === "set_volume" ? "Speaker" : "Microphone"} volume (0-100%)
+                                    </Label>
+                                    <Input
+                                      id={`reachy-volume-${index}`}
+                                      type="number"
+                                      min={0}
+                                      max={100}
+                                      step={1}
+                                      value={Number(action.parameters?.volume ?? 50)}
+                                      onChange={(event) => {
+                                        const value = Number(event.target.value);
+                                        updateAction(index, { parameters: { volume: Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0 } });
+                                      }}
+                                    />
+                                  </div>
+                                )}
+
+                                {reachyActionValue === "speak" && (
+                                  <div className="space-y-2">
+                                    <Label>Speech</Label>
+                                    <Textarea
+                                      value={String(action.parameters?.text || "")}
+                                      onChange={(event) => updateAction(index, { parameters: { text: event.target.value } })}
+                                      className="min-h-[100px]"
+                                      maxLength={1000}
+                                      placeholder="What should Reachy say?"
+                                    />
+                                    {!String(action.parameters?.text || "").trim() ? (
+                                      <p className="text-xs text-red-600 dark:text-red-300">Speech text is required.</p>
+                                    ) : null}
+                                  </div>
+                                )}
+
+                                {reachyActionValue === "release_app" && (
+                                  <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-800 dark:text-amber-200">
+                                    Releasing Reachy stops HomeBrain voice, sensing, and motion until the HomeBrain Reachy app is started again.
+                                  </div>
+                                )}
+
+                                <p className="text-xs text-muted-foreground">
+                                  HomeBrain queues a semantic command; Reachy's onboard app plans and safety-clamps the physical motion.
+                                </p>
+                              </div>
                             )}
 
                             {action.type === "scene_activate" && (
@@ -2977,14 +3482,20 @@ export function WorkflowBuilderDialog({
         </div>
 
         <DialogFooter className="items-center gap-3 border-t border-border/60 bg-background/95 px-5 py-4 sm:justify-between sm:space-x-0 sm:px-7">
-          <p className="text-xs text-muted-foreground">
-            Changes here update the workflow and its linked automation runtime behavior.
-          </p>
+          {reachyActionValidationIssues.length > 0 ? (
+            <p className="text-xs font-medium text-red-600 dark:text-red-300" role="alert">
+              {reachyActionValidationIssues[0]}
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Changes here update the workflow and its linked automation runtime behavior.
+            </p>
+          )}
           <div className="flex w-full flex-col-reverse gap-3 sm:w-auto sm:flex-row">
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button onClick={() => void onSubmit()} disabled={isSaving || !name.trim() || actions.length === 0} className="sm:min-w-[220px]">
+            <Button onClick={() => void onSubmit()} disabled={isSaving || !name.trim() || actions.length === 0 || reachyActionValidationIssues.length > 0} className="sm:min-w-[220px]">
               <Save className="h-4 w-4" />
               {isSaving ? "Saving..." : "Save Workflow"}
             </Button>

@@ -9,6 +9,7 @@ const CAPABILITY_DEFINITIONS = [
   { key: 'irrigation_controller', label: 'Irrigation Controller', section: 'Irrigation', selectable: true },
   { key: 'thermostat', label: 'Thermostat', section: 'Climate', selectable: true },
   { key: 'voice_assistant', label: 'Voice Assistant', section: 'Voice', selectable: true },
+  { key: 'robot', label: 'Robot', section: 'Robotics', selectable: true },
   { key: 'ai_provider', label: 'AI Provider', section: 'AI', selectable: true },
   { key: 'remote_control', label: 'Remote Control', section: 'Media', selectable: false },
   { key: 'telemetry_source', label: 'Telemetry Source', section: 'Data', selectable: false },
@@ -173,6 +174,19 @@ const INTEGRATION_MODULE_DEFINITIONS = [
     deviceSource: 'alexa',
     capabilities: ['voice_assistant', 'workflow_actions'],
     deviceTypes: ['voice_assistant'],
+    telemetrySourceTypes: []
+  },
+  {
+    id: 'reachy-mini',
+    label: 'Reachy Mini',
+    provider: 'Pollen Robotics',
+    category: 'Robotics',
+    description: 'Reachy Mini Wireless voice, perception, semantic motion, workflows, and managed companion updates.',
+    settingsTab: 'reachy-mini',
+    apiBasePath: '/api/reachy-mini',
+    deviceSource: 'reachy',
+    capabilities: ['robot', 'voice_assistant', 'device_control', 'workflow_actions', 'workflow_conditions', 'alerts_source'],
+    deviceTypes: ['robot'],
     telemetrySourceTypes: []
   },
   {

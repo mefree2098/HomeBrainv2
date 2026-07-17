@@ -17,6 +17,7 @@
 - INSTEON service internals: [`insteon-service.md`](insteon-service.md)
 - End-user guide: [`user-guide.md`](user-guide.md)
 - Wake-word setup: [`wake-word-setup.md`](wake-word-setup.md)
+- Reachy Mini Wireless integration: [`reachy-mini-wireless-integration.md`](reachy-mini-wireless-integration.md)
 - Troubleshooting: [`troubleshooting.md`](troubleshooting.md)
 - Remote listener guide: [`../remote-device/README.md`](../remote-device/README.md)
 

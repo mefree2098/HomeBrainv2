@@ -1,0 +1,7 @@
+include README.md
+include LICENSE
+include config.example.json
+include artifact-manifest.json
+include install.sh
+include index.html
+include style.css

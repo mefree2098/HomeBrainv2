@@ -1,4 +1,6 @@
 const WebSocket = require('ws');
+const crypto = require('node:crypto');
+const net = require('node:net');
 const VoiceDevice = require('../models/VoiceDevice');
 const VoiceCommand = require('../models/VoiceCommand');
 const UserProfile = require('../models/UserProfile');
@@ -9,6 +11,7 @@ const voiceCommandService = require('../services/voiceCommandService');
 const settingsService = require('../services/settingsService');
 const voiceAcknowledgmentService = require('../services/voiceAcknowledgmentService');
 const { validateDeviceCredentials } = require('../services/voiceDeviceLifecycleService');
+const reachyMiniService = require('../services/reachyMiniService');
 
 console.log('voiceWebSocket.js loaded with enhanced logging');
 
@@ -16,8 +19,14 @@ const MAX_AUDIO_SESSION_BYTES = Math.max(
   1024 * 1024,
   Number(process.env.HOMEBRAIN_VOICE_AUDIO_SESSION_MAX_BYTES || 20 * 1024 * 1024)
 );
+const MAX_VOICE_WEBSOCKET_PAYLOAD_BYTES = 2 * 1024 * 1024;
 const DEFAULT_WAKE_WORD_MIN_RMS = 0.004;
 const MAX_WAKE_WORD_MIN_RMS = 0.2;
+const REACHY_CAPTURE_GRANT_TTL_MS = 7000;
+const REACHY_WAKE_TIMESTAMP_MAX_SKEW_MS = 30000;
+const REACHY_AUDIO_SESSION_MAX_MS = 30000;
+const REACHY_AUDIO_SESSION_MAX_BYTES = 16000 * 2 * 30;
+const REACHY_AUDIO_MAX_SEQUENCE = 100000;
 
 function normalizeWakeWordMinRms(value) {
   const numericValue = Number(value);
@@ -28,11 +37,34 @@ function normalizeWakeWordMinRms(value) {
 }
 
 function redactMessageForLog(message = {}) {
-  const redacted = { ...message };
-  for (const key of ['registrationCode', 'deviceToken', 'claimToken']) {
-    if (Object.prototype.hasOwnProperty.call(redacted, key)) {
-      redacted[key] = '[redacted]';
-    }
+  if (!message || typeof message !== 'object' || Array.isArray(message)) return {};
+  const redacted = {};
+  for (const key of [
+    'type',
+    'action',
+    'status',
+    'requestId',
+    'commandId',
+    'sessionId',
+    'sequence',
+    'isStart',
+    'isFinal',
+    'sampleRate',
+    'channels',
+    'format',
+    'timestamp'
+  ]) {
+    if (['string', 'number', 'boolean'].includes(typeof message[key])) redacted[key] = message[key];
+  }
+  for (const key of ['registrationCode', 'deviceToken', 'claimToken', 'authorization']) {
+    if (Object.prototype.hasOwnProperty.call(message, key)) redacted[key] = '[redacted secret]';
+  }
+  if (typeof message.audioData === 'string') {
+    redacted.audioBytesApprox = Math.floor(message.audioData.length * 3 / 4);
+    redacted.audioData = '[redacted audio]';
+  }
+  for (const key of ['command', 'text', 'transcript', 'originalText', 'processedText', 'responseText']) {
+    if (typeof message[key] === 'string') redacted[key] = '[redacted text]';
   }
   return redacted;
 }
@@ -82,12 +114,18 @@ class VoiceWebSocketServer {
   constructor() {
     this.wss = null;
     this.deviceConnections = new Map(); // deviceId -> WebSocket connection
+    this.pendingConnections = new Map(); // WebSocket -> pre-auth connection
+    this.messageChains = new Map(); // deviceId -> serialized inbound generation queue
     this.heartbeatInterval = 30000; // 30 seconds
     this.heartbeatTimer = null;
     this.audioSessions = new Map(); // deviceId -> audio capture session
     this.settingsCache = { value: null, fetchedAt: 0 };
     this.profileCache = { value: null, fetchedAt: 0 };
     this.upgradeHandlers = [];
+    this.reachyCaptureGrantTtlMs = REACHY_CAPTURE_GRANT_TTL_MS;
+    this.reachyWakeTimestampMaxSkewMs = REACHY_WAKE_TIMESTAMP_MAX_SKEW_MS;
+    this.reachyAudioSessionMaxMs = REACHY_AUDIO_SESSION_MAX_MS;
+    this.reachyAudioSessionMaxBytes = REACHY_AUDIO_SESSION_MAX_BYTES;
   }
 
   initialize(server) {
@@ -96,6 +134,7 @@ class VoiceWebSocketServer {
 
       this.wss = new WebSocket.Server({
         noServer: true,
+        maxPayload: MAX_VOICE_WEBSOCKET_PAYLOAD_BYTES,
         verifyClient: (info) => {
           const url = new URL(info.req.url, `http://${info.req.headers.host}`);
           let deviceId = url.searchParams.get('deviceId');
@@ -195,7 +234,7 @@ class VoiceWebSocketServer {
       }
 
       console.log('Queueing voice device websocket message for processing', { deviceId });
-      void this.handleMessage(deviceId, message);
+      void this.enqueueMessage(deviceId, message, ws);
     };
 
     // Attach handlers before any async work so fast clients do not lose their
@@ -237,19 +276,37 @@ class VoiceWebSocketServer {
       }
 
       // Store connection
-      this.deviceConnections.set(deviceId, {
+      const socketPeerAddress = String(req.socket?.remoteAddress || '').replace(/^::ffff:/i, '');
+      const forwardedAddresses = String(req.headers?.['x-forwarded-for'] || '')
+        .split(',')
+        .map((entry) => entry.trim().replace(/^::ffff:/i, ''))
+        .filter(Boolean);
+      // Only a loopback reverse proxy is trusted, and append-style proxy
+      // chains are read from the right. A client-controlled leading XFF value
+      // can never become the daemon orchestration address.
+      const forwardedPeerAddress = forwardedAddresses.at(-1) || '';
+      const peerAddress = ['127.0.0.1', '::1'].includes(socketPeerAddress) && net.isIP(forwardedPeerAddress)
+        ? forwardedPeerAddress
+        : socketPeerAddress;
+      const pendingConnection = {
         ws: ws,
+        deviceId,
         device: device,
+        peerAddress,
         lastPing: Date.now(),
         authenticated: false,
         credentials: null,
         deviceInfo: null,
-        pendingWakeWord: null
-      });
+        pendingWakeWord: null,
+        captureGrant: null
+      };
+      pendingConnection.generation = crypto.randomUUID();
+      pendingConnection.revoked = false;
+      this.pendingConnections.set(ws, pendingConnection);
       connectionRegistered = true;
 
       // Send welcome message
-      this.sendMessage(deviceId, {
+      this.sendToConnection(pendingConnection, {
         type: 'welcome',
         deviceId: deviceId,
         timestamp: new Date().toISOString()
@@ -258,7 +315,7 @@ class VoiceWebSocketServer {
       while (pendingMessages.length > 0) {
         const pendingMessage = pendingMessages.shift();
         console.log('Processing queued early voice device websocket message', { deviceId });
-        void this.handleMessage(deviceId, pendingMessage);
+        void this.enqueueMessage(deviceId, pendingMessage, ws);
       }
 
       console.log(`Voice device ${device.name} connected; waiting for authentication`);
@@ -267,6 +324,34 @@ class VoiceWebSocketServer {
       console.error(`Error handling WebSocket connection for ${deviceId}:`, error);
       ws.close(1011, 'Server error');
     }
+  }
+
+  enqueueMessage(deviceId, rawMessage, sourceWs) {
+    const id = String(deviceId);
+    const previous = this.messageChains.get(id) || Promise.resolve();
+    const current = previous
+      .catch(() => {})
+      .then(() => this.handleMessage(id, rawMessage, sourceWs));
+    this.messageChains.set(id, current);
+    void current.finally(() => {
+      if (this.messageChains.get(id) === current) this.messageChains.delete(id);
+    });
+    return current;
+  }
+
+  async waitForDeviceMessages(deviceId) {
+    const pending = this.messageChains.get(String(deviceId));
+    if (pending) await pending.catch(() => {});
+  }
+
+  isCurrentAuthenticatedConnection(deviceId, connection) {
+    return Boolean(
+      connection
+      && connection.authenticated === true
+      && connection.revoked !== true
+      && this.deviceConnections.get(String(deviceId)) === connection
+      && (!connection.ws || connection.ws.readyState === WebSocket.OPEN)
+    );
   }
 
   async buildWakeWordConfig(device, credentials = {}, deviceInfo = {}) {
@@ -403,13 +488,23 @@ class VoiceWebSocketServer {
     };
   }
 
-  async handleMessage(deviceId, rawMessage) {
+  async handleMessage(deviceId, rawMessage, sourceWs = null) {
+    const activeConnection = this.deviceConnections.get(deviceId);
+    const connection = sourceWs
+      ? (activeConnection?.ws === sourceWs ? activeConnection : this.pendingConnections.get(sourceWs))
+      : activeConnection;
+
+    if (!connection) {
+      console.warn(`Received message from unconnected or superseded device socket: ${deviceId}`);
+      sourceWs?.close?.(1008, 'Superseded connection');
+      return;
+    }
+
     try {
       const message = JSON.parse(rawMessage.toString());
-      const connection = this.deviceConnections.get(deviceId);
-
-      if (!connection) {
-        console.warn(`Received message from unconnected device: ${deviceId}`);
+      if (sourceWs && connection.ws !== sourceWs) {
+        console.warn(`Rejected message from superseded voice-device socket: ${deviceId}`);
+        sourceWs.close?.(1008, 'Superseded connection');
         return;
       }
 
@@ -417,7 +512,7 @@ class VoiceWebSocketServer {
 
       if (message.type !== 'authenticate' && !connection.authenticated) {
         console.warn(`Rejected unauthenticated ${message.type || 'unknown'} message from device ${deviceId}`);
-        this.sendMessage(deviceId, {
+        this.sendToConnection(connection, {
           type: 'auth_failed',
           message: 'Device authentication required'
         });
@@ -426,35 +521,59 @@ class VoiceWebSocketServer {
 
       switch (message.type) {
         case 'authenticate':
-          await this.handleAuthentication(deviceId, message);
+          await this.handleAuthentication(deviceId, message, connection);
           break;
 
         case 'heartbeat':
-          await this.handleHeartbeat(deviceId, message);
+          await this.handleHeartbeat(deviceId, message, connection);
           break;
 
         case 'wake_word_detected':
-          await this.handleWakeWordDetection(deviceId, message);
+          await this.handleWakeWordDetection(deviceId, message, connection);
           break;
 
         case 'voice_command':
-          await this.handleVoiceCommand(deviceId, message);
+          await this.handleVoiceCommand(deviceId, message, connection);
           break;
 
         case 'audio_data':
-          await this.handleAudioData(deviceId, message);
+          await this.handleAudioData(deviceId, message, connection);
           break;
 
         case 'status_update':
-          await this.handleStatusUpdate(deviceId, message);
+          await this.handleStatusUpdate(deviceId, message, connection);
           break;
 
         case 'update_status':
-          await this.handleUpdateStatus(deviceId, message);
+          if (connection?.device?.deviceType === 'robot' && message.action === 'prepare_update') {
+            reachyMiniService.handleUpdateStatus(deviceId, message);
+          } else {
+            await this.handleUpdateStatus(deviceId, message, connection);
+          }
+          break;
+
+        case 'robot_capabilities':
+          await reachyMiniService.handleCapabilities(deviceId, message);
+          break;
+
+        case 'robot_state':
+          await reachyMiniService.handleRobotState(deviceId, message);
+          break;
+
+        case 'robot_event':
+          await reachyMiniService.handleRobotEvent(deviceId, message);
+          break;
+
+        case 'robot_command_result':
+          await reachyMiniService.handleCommandResult(deviceId, message);
+          break;
+
+        case 'app_management_result':
+          await reachyMiniService.handleAppManagementResult(deviceId, message);
           break;
 
         case 'error':
-          await this.handleDeviceError(deviceId, message);
+          await this.handleDeviceError(deviceId, message, connection);
           break;
 
         default:
@@ -464,15 +583,15 @@ class VoiceWebSocketServer {
     } catch (error) {
       console.error(`Error processing message from device ${deviceId}:`, error);
       console.error('Failed message type could not be processed safely');
-      this.sendMessage(deviceId, {
+      this.sendToConnection(connection, {
         type: 'error',
         message: 'Failed to process message'
       });
     }
   }
 
-  async handleAuthentication(deviceId, message) {
-    const connection = this.deviceConnections.get(deviceId);
+  async handleAuthentication(deviceId, message, sourceConnection = null) {
+    const connection = sourceConnection || this.deviceConnections.get(deviceId);
     if (!connection) return;
 
     const { registrationCode, claimToken, deviceToken, deviceInfo = {} } = message;
@@ -480,10 +599,11 @@ class VoiceWebSocketServer {
     try {
       const device = await VoiceDevice.findById(deviceId);
       if (!device) {
-        this.sendMessage(deviceId, {
+        this.sendToConnection(connection, {
           type: 'auth_failed',
           message: 'Device not found'
         });
+        connection.ws?.close?.(1008, 'Device not found');
         return;
       }
 
@@ -495,26 +615,57 @@ class VoiceWebSocketServer {
 
       if (!credentialAccess.authorized) {
         console.warn(`Authentication failed for device ${deviceId}: Invalid device credentials`);
-        this.sendMessage(deviceId, {
+        this.sendToConnection(connection, {
           type: 'auth_failed',
           message: 'Invalid device credentials'
         });
+        connection.ws?.close?.(1008, 'Invalid device credentials');
         return;
       }
 
-      connection.authenticated = true;
-      connection.deviceInfo = deviceInfo;
-      connection.credentials = {
+      const authenticatedCredentials = {
         registrationCode: credentialAccess.method === 'registrationCode' ? registrationCode : '',
         claimToken: credentialAccess.method === 'claimToken' ? claimToken : '',
         deviceToken: credentialAccess.method === 'deviceToken' ? deviceToken : ''
       };
 
+      // A robot credential is bound to one physical Reachy identity. Complete
+      // the atomic first-bind/match check before authentication state changes
+      // or auth_success is observable; identity errors are fail-closed.
+      let authenticatedDevice = device;
+      if (device.deviceType === 'robot') {
+        try {
+          authenticatedDevice = await reachyMiniService.handleConnected(deviceId, {
+            ...deviceInfo,
+            peerAddress: connection.peerAddress || null
+          });
+        } catch (reachyError) {
+          connection.authenticated = false;
+          connection.credentials = null;
+          connection.deviceInfo = null;
+          connection.pendingWakeWord = null;
+          connection.captureGrant = null;
+          this.audioSessions.delete(deviceId);
+          console.error(`Rejected Reachy identity during authentication for ${deviceId}:`, reachyError.message);
+          this.sendToConnection(connection, {
+            type: 'auth_failed',
+            code: reachyError.code || 'REACHY_IDENTITY_REJECTED',
+            message: 'Reachy hardware identity verification failed'
+          });
+          connection.ws?.close?.(1008, 'Reachy identity rejected');
+          return;
+        }
+      }
+
       const authUpdate = {
         status: 'online',
         lastSeen: new Date()
       };
-      if (typeof deviceInfo?.version === 'string' && deviceInfo.version.trim().length > 0) {
+      if (
+        device.deviceType !== 'robot'
+        && typeof deviceInfo?.version === 'string'
+        && deviceInfo.version.trim().length > 0
+      ) {
         authUpdate.firmwareVersion = deviceInfo.version.trim();
       }
       const refreshedDevice = await VoiceDevice.findByIdAndUpdate(
@@ -524,11 +675,15 @@ class VoiceWebSocketServer {
       );
       if (refreshedDevice) {
         connection.device = refreshedDevice;
+        authenticatedDevice = refreshedDevice;
       }
 
       console.log(`Authenticating device ${deviceId} (${device.name})`);
 
-      const { config, assets } = await this.buildWakeWordConfig(device, connection.credentials, deviceInfo);
+      const { config, assets } = await this.buildWakeWordConfig(authenticatedDevice, authenticatedCredentials, deviceInfo);
+      if (device.deviceType === 'robot') {
+        config.robot = reachyMiniService.buildRobotConfig(authenticatedDevice);
+      }
 
       if (!assets.length) {
         console.warn(`No wake word assets available for device ${device.name}. Ensure files exist in server/public/wake-words.`);
@@ -539,19 +694,77 @@ class VoiceWebSocketServer {
 
       console.log(`Sending auth_success to ${deviceId} with ${assets.length} wake word asset(s)`);
 
-      this.sendMessage(deviceId, {
+      const activeSource = this.deviceConnections.get(deviceId) === connection;
+      const pendingSource = this.pendingConnections.get(connection.ws) === connection;
+      if ((!activeSource && !pendingSource) || connection.ws?.readyState !== WebSocket.OPEN) {
+        console.warn(`Discarding completed authentication for closed or superseded socket: ${deviceId}`);
+        return;
+      }
+
+      // Credentials may be rotated while identity checks/config generation are
+      // awaiting I/O. Re-read the durable record immediately before promotion;
+      // a reissued token can never authenticate from a stale object snapshot.
+      const promotionDevice = await VoiceDevice.findById(deviceId);
+      const promotionAccess = validateDeviceCredentials(promotionDevice, {
+        registrationCode,
+        claimToken,
+        deviceToken
+      });
+      if (!promotionAccess.authorized || promotionAccess.method !== credentialAccess.method) {
+        connection.authenticated = false;
+        connection.credentials = null;
+        connection.deviceInfo = null;
+        connection.pendingWakeWord = null;
+        connection.captureGrant = null;
+        this.audioSessions.delete(deviceId);
+        this.sendToConnection(connection, {
+          type: 'auth_failed',
+          message: 'Device credentials changed during authentication'
+        });
+        connection.ws?.close?.(1008, 'Device credentials changed');
+        return;
+      }
+      const stillActiveSource = this.deviceConnections.get(deviceId) === connection;
+      const stillPendingSource = this.pendingConnections.get(connection.ws) === connection;
+      if ((!stillActiveSource && !stillPendingSource) || connection.ws?.readyState !== WebSocket.OPEN) {
+        console.warn(`Discarding authentication after credential revalidation for closed socket: ${deviceId}`);
+        return;
+      }
+
+      connection.deviceInfo = deviceInfo;
+      connection.credentials = authenticatedCredentials;
+      connection.device = promotionDevice || authenticatedDevice;
+      connection.authenticated = true;
+      const previousConnection = this.deviceConnections.get(deviceId);
+      this.deviceConnections.set(deviceId, connection);
+      this.pendingConnections.delete(connection.ws);
+      this.sendToConnection(connection, {
         type: 'auth_success',
         config
       });
+      if (previousConnection && previousConnection !== connection) {
+        previousConnection.authenticated = false;
+        previousConnection.credentials = null;
+        previousConnection.pendingWakeWord = null;
+        previousConnection.captureGrant = null;
+        previousConnection.ws?.close?.(1008, 'Superseded connection');
+      }
 
       console.log(`Device ${device.name} authenticated successfully`);
 
     } catch (error) {
       console.error(`Authentication error for device ${deviceId}:`, error);
-      this.sendMessage(deviceId, {
+      connection.authenticated = false;
+      connection.credentials = null;
+      connection.deviceInfo = null;
+      connection.pendingWakeWord = null;
+      connection.captureGrant = null;
+      this.audioSessions.delete(deviceId);
+      this.sendToConnection(connection, {
         type: 'auth_failed',
         message: 'Authentication error'
       });
+      connection.ws?.close?.(1008, 'Authentication failed');
     }
   }
 
@@ -597,8 +810,10 @@ class VoiceWebSocketServer {
     }
   }
 
-  async handleHeartbeat(deviceId, message) {
+  async handleHeartbeat(deviceId, message, sourceConnection = null) {
     const { status, batteryLevel, uptime, firmwareVersion } = message;
+    const connection = sourceConnection || this.deviceConnections.get(deviceId);
+    if (!this.isCurrentAuthenticatedConnection(deviceId, connection)) return;
 
     try {
       const updateData = {
@@ -613,7 +828,12 @@ class VoiceWebSocketServer {
 
       await VoiceDevice.findByIdAndUpdate(deviceId, updateData);
 
-      this.sendMessage(deviceId, {
+      if (!this.isCurrentAuthenticatedConnection(deviceId, connection)) return;
+      if (connection?.device?.deviceType === 'robot' && message.robotState && typeof message.robotState === 'object') {
+        await reachyMiniService.handleRobotState(deviceId, { state: message.robotState });
+      }
+
+      this.sendToConnection(connection, {
         type: 'heartbeat_ack',
         timestamp: new Date().toISOString()
       });
@@ -623,25 +843,74 @@ class VoiceWebSocketServer {
     }
   }
 
-  async handleWakeWordDetection(deviceId, message) {
-    const connection = this.deviceConnections.get(deviceId);
+  async handleWakeWordDetection(deviceId, message, sourceConnection = null) {
+    const connection = sourceConnection || this.deviceConnections.get(deviceId);
     if (!connection || !connection.authenticated) return;
+    if (!this.isReachyVoiceInputAllowed(connection)) {
+      this.clearRejectedReachyAudio(deviceId, connection);
+      return;
+    }
 
     const { wakeWord, confidence, timestamp } = message;
-    const normalizedWake = (wakeWord || 'anna').toString().toLowerCase();
-    const eventTimestamp = timestamp ? new Date(timestamp) : new Date();
+    const isReachy = connection.device?.deviceType === 'robot';
+    const normalizeWakePhrase = (value) => String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ');
+    const normalizedWake = normalizeWakePhrase(wakeWord || (isReachy ? '' : 'anna'));
+    const serverNow = Date.now();
+    let clientTimestamp = timestamp == null ? null : new Date(timestamp);
+    if (isReachy) {
+      connection.captureGrant = null;
+      connection.pendingWakeWord = null;
+      const supportedWakeWords = Array.isArray(connection.device?.supportedWakeWords)
+        ? connection.device.supportedWakeWords.map(normalizeWakePhrase).filter(Boolean)
+        : [];
+      const thresholdValue = connection.device?.settings?.wakeWordThreshold;
+      const threshold = Number.isFinite(thresholdValue)
+        ? Math.max(0, Math.min(1, thresholdValue))
+        : 0.55;
+      const validTimestamp = clientTimestamp instanceof Date
+        && Number.isFinite(clientTimestamp.getTime())
+        && Math.abs(serverNow - clientTimestamp.getTime()) <= this.reachyWakeTimestampMaxSkewMs;
+      if (
+        !normalizedWake
+        || !supportedWakeWords.includes(normalizedWake)
+        || typeof confidence !== 'number'
+        || !Number.isFinite(confidence)
+        || confidence < 0
+        || confidence > 1
+        || confidence < threshold
+        || !validTimestamp
+      ) {
+        console.warn('Rejected invalid Reachy wake-word telemetry', {
+          deviceId,
+          phraseSupported: supportedWakeWords.includes(normalizedWake),
+          confidenceValid: typeof confidence === 'number' && Number.isFinite(confidence),
+          thresholdMet: typeof confidence === 'number' && Number.isFinite(confidence) && confidence >= threshold,
+          timestampValid: validTimestamp
+        });
+        return;
+      }
+    }
+    if (!(clientTimestamp instanceof Date) || !Number.isFinite(clientTimestamp.getTime())) {
+      clientTimestamp = null;
+    }
+    // Client time is telemetry only. Authorization and persisted event ordering
+    // use the hub clock so a compromised or drifting robot clock cannot extend a
+    // capture window or backdate household audio.
+    const eventTimestamp = new Date(serverNow);
     const displayWake = typeof wakeWord === 'string' && wakeWord.trim().length > 0
       ? wakeWord.trim()
       : normalizedWake;
-    const safeConfidence = typeof confidence === 'number'
+    const safeConfidence = typeof confidence === 'number' && Number.isFinite(confidence)
       ? Math.max(0, Math.min(1, confidence))
       : null;
-    connection.pendingWakeWord = {
-      wakeWord: normalizedWake,
-      timestamp: eventTimestamp
-    };
 
-    console.log(`Wake word detected by ${connection.device.name}: ${displayWake} (confidence: ${confidence})`);
+    console.log('Wake word detected by voice device', {
+      deviceId,
+      confidence: safeConfidence
+    });
 
     try {
       // Persist a minimal, schema-compliant VoiceCommand record for wake word events
@@ -656,7 +925,7 @@ class VoiceWebSocketServer {
         sourceRoom,
         intent: {
           action: 'system_control',
-          confidence: typeof confidence === 'number' ? Math.max(0, Math.min(1, confidence)) : 1.0,
+          confidence: safeConfidence ?? 1.0,
           entities: {}
         },
         execution: {
@@ -681,13 +950,6 @@ class VoiceWebSocketServer {
 
       await voiceCommand.save();
 
-      // Send acknowledgment and prepare for voice command
-      this.sendMessage(deviceId, {
-        type: 'wake_word_ack',
-        message: 'Ready for voice command',
-        timeout: 5000 // 5 seconds to speak command
-      });
-
       // Update device last interaction
       await VoiceDevice.findByIdAndUpdate(deviceId, {
         lastInteraction: eventTimestamp,
@@ -696,7 +958,43 @@ class VoiceWebSocketServer {
         ...(safeConfidence !== null ? { lastWakeWordConfidence: safeConfidence } : {})
       });
 
+      if (this.deviceConnections.get(deviceId) !== connection || !connection.authenticated) {
+        this.clearRejectedReachyAudio(deviceId, connection);
+        return;
+      }
+
+      connection.pendingWakeWord = {
+        wakeWord: normalizedWake,
+        timestamp: eventTimestamp,
+        clientTimestamp
+      };
+      if (isReachy) {
+        connection.captureGrant = {
+          id: crypto.randomUUID(),
+          issuedAt: serverNow,
+          expiresAt: serverNow + this.reachyCaptureGrantTtlMs,
+          wakeWord: normalizedWake
+        };
+      }
+
+      // A Reachy grant becomes observable only after both event persistence and
+      // device-state persistence succeed. The grant is short-lived, server-time
+      // based, and consumed by exactly one text or audio capture start.
+      const acknowledged = this.sendToConnection(connection, {
+        type: 'wake_word_ack',
+        message: 'Ready for voice command',
+        timeout: Math.min(5000, this.reachyCaptureGrantTtlMs),
+        ...(isReachy ? {
+          captureGrantId: connection.captureGrant.id,
+          sessionId: connection.captureGrant.id
+        } : {})
+      });
+      if (!acknowledged && isReachy) {
+        this.clearRejectedReachyAudio(deviceId, connection);
+      }
+
     } catch (error) {
+      if (isReachy) this.clearRejectedReachyAudio(deviceId, connection);
       console.error(`Wake word handling error for device ${deviceId}:`, error);
     }
   }
@@ -841,8 +1139,9 @@ class VoiceWebSocketServer {
   }
 
   async processVoiceCommandText(deviceId, context = {}) {
-    const connection = this.deviceConnections.get(deviceId);
-    if (!connection || !connection.authenticated) {
+    const connection = context.sourceConnection || this.deviceConnections.get(deviceId);
+    const authorizeExecution = () => this.isCurrentAuthenticatedConnection(deviceId, connection);
+    if (!authorizeExecution()) {
       console.warn(`processVoiceCommandText called for unauthenticated device ${deviceId}`);
       return;
     }
@@ -858,7 +1157,7 @@ class VoiceWebSocketServer {
     const command = this.stripWakeWordPrefix(rawCommand, connection.pendingWakeWord?.wakeWord);
     if (!command) {
       console.warn(`Empty command received from device ${deviceId}`);
-      this.sendMessage(deviceId, {
+      this.sendToConnection(connection, {
         type: 'command_error',
         message: 'I did not catch that. Please try again.'
       });
@@ -877,7 +1176,11 @@ class VoiceWebSocketServer {
       ? context.receivedAt
       : (context.timestamp ? new Date(context.timestamp) : new Date());
 
-    console.log(`Voice command received from ${connection.device.name}: ${command}`);
+    console.log('Voice command received from authenticated device', {
+      deviceId,
+      characterCount: command.length,
+      transport: context?.metadata?.transport || null
+    });
 
     await this.updateDeviceAudioState(deviceId, {
       lastTranscriptText: command,
@@ -888,6 +1191,7 @@ class VoiceWebSocketServer {
       lastTranscriptLanguage: context?.stt?.language || null,
       lastTranscriptError: null
     });
+    if (!authorizeExecution()) return;
 
     try {
       const voiceCommand = new VoiceCommand({
@@ -929,6 +1233,7 @@ class VoiceWebSocketServer {
       }
 
       await voiceCommand.save();
+      if (!authorizeExecution()) return;
 
       const wakeWordForVoice = connection.pendingWakeWord?.wakeWord;
       const preferredVoiceId = await this.getPreferredVoiceId(connection, {
@@ -944,7 +1249,8 @@ class VoiceWebSocketServer {
         console.warn(`Failed to fetch acknowledgment for ${deviceId}:`, ackError.message);
       }
 
-      this.sendMessage(deviceId, {
+      if (!authorizeExecution()) return;
+      this.sendToConnection(connection, {
         type: 'command_processing',
         commandId: voiceCommand._id,
         message: 'Processing your command...',
@@ -958,7 +1264,9 @@ class VoiceWebSocketServer {
         room: connection.device.room,
         wakeWord: connection.pendingWakeWord?.wakeWord || 'anna',
         deviceId,
-        stt: context.stt || null
+        stt: context.stt || null,
+        originDeviceType: connection.device.deviceType,
+        authorizeExecution
       });
 
       const executionTime = Date.now() - processingStart;
@@ -996,9 +1304,12 @@ class VoiceWebSocketServer {
         voiceCommand.execution.errorMessage = undefined;
       }
 
+      const createdAtMs = voiceCommand.createdAt instanceof Date
+        ? voiceCommand.createdAt.getTime()
+        : Number.NaN;
       voiceCommand.response = {
         text: responseText,
-        responseTime: Date.now() - voiceCommand.createdAt.getTime()
+        responseTime: Date.now() - (Number.isFinite(createdAtMs) ? createdAtMs : processingStart)
       };
 
       const llmInfo = result.llm || {};
@@ -1024,8 +1335,9 @@ class VoiceWebSocketServer {
       await voiceCommand.save();
 
       connection.pendingWakeWord = null;
+      if (!authorizeExecution()) return;
 
-      this.sendMessage(deviceId, {
+      this.sendToConnection(connection, {
         type: 'tts_response',
         commandId: voiceCommand._id,
         text: responseText,
@@ -1038,18 +1350,106 @@ class VoiceWebSocketServer {
       if (connection) {
         connection.pendingWakeWord = null;
       }
+      if (!authorizeExecution()) return;
       await this.updateDeviceAudioState(deviceId, {
         lastTranscriptError: error.message || 'Command processing failed',
         lastTranscriptAt: new Date()
       });
-      this.sendMessage(deviceId, {
+      if (!authorizeExecution()) return;
+      this.sendToConnection(connection, {
         type: 'command_error',
         message: 'Failed to process voice command'
       });
     }
   }
 
-  async handleVoiceCommand(deviceId, message) {
+  isReachyVoiceInputAllowed(connection) {
+    if (connection?.device?.deviceType !== 'robot') return true;
+    const settings = connection.device.settings?.reachy?.safeSettings || {};
+    return settings.microphoneEnabled === true && settings.wakeWordEnabled === true;
+  }
+
+  clearRejectedReachyAudio(deviceId, connection) {
+    this.audioSessions.delete(String(deviceId));
+    if (connection) {
+      connection.pendingWakeWord = null;
+      connection.captureGrant = null;
+    }
+  }
+
+  consumeReachyCaptureGrant(connection, presentedGrantId, presentedSessionId = null, requireSessionMatch = false) {
+    if (connection?.device?.deviceType !== 'robot') return true;
+    const grant = connection.captureGrant;
+    connection.captureGrant = null;
+    const expected = typeof grant?.id === 'string' ? grant.id : '';
+    const presented = typeof presentedGrantId === 'string' ? presentedGrantId : '';
+    const matchingGrant = expected.length > 0
+      && expected.length === presented.length
+      && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(presented));
+    const session = typeof presentedSessionId === 'string' ? presentedSessionId : '';
+    const matchingSession = !requireSessionMatch || (
+      expected.length > 0
+      && expected.length === session.length
+      && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(session))
+    );
+    if (!grant || !matchingGrant || !matchingSession || !Number.isFinite(grant.expiresAt) || grant.expiresAt < Date.now()) {
+      connection.pendingWakeWord = null;
+      return false;
+    }
+    return true;
+  }
+
+  sendReachyAudioError(deviceId, connection, sessionId, message) {
+    this.clearRejectedReachyAudio(deviceId, connection);
+    void this.updateDeviceAudioState(deviceId, {
+      audioStreamActive: false,
+      lastTranscriptError: message,
+      lastTranscriptAt: new Date()
+    }).catch((error) => {
+      console.warn('Failed to persist rejected Reachy audio state', {
+        deviceId: String(deviceId),
+        error: error.message
+      });
+    });
+    this.sendToConnection(connection, {
+      type: 'audio_error',
+      ...(sessionId ? { sessionId } : {}),
+      error: message
+    });
+  }
+
+  decodeCanonicalBase64(value) {
+    if (
+      typeof value !== 'string'
+      || value.length === 0
+      || value.length % 4 !== 0
+      || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
+    ) {
+      return null;
+    }
+    const decoded = Buffer.from(value, 'base64');
+    if (decoded.length === 0 || decoded.toString('base64') !== value) return null;
+    return decoded;
+  }
+
+  async handleVoiceCommand(deviceId, message, sourceConnection = null) {
+    const connection = sourceConnection || this.deviceConnections.get(deviceId);
+    if (!connection || !connection.authenticated) return;
+    if (!this.isReachyVoiceInputAllowed(connection)) {
+      this.clearRejectedReachyAudio(deviceId, connection);
+      return;
+    }
+    if (
+      connection.device?.deviceType === 'robot'
+      && !this.consumeReachyCaptureGrant(connection, message?.captureGrantId)
+    ) {
+      console.warn('Rejected Reachy text command without a fresh wake capture grant', { deviceId });
+      this.sendToConnection(connection, {
+        type: 'command_error',
+        message: 'A fresh wake word is required'
+      });
+      return;
+    }
     await this.processVoiceCommandText(deviceId, {
       commandText: message?.command,
       confidence: typeof message?.confidence === 'number' ? message.confidence : undefined,
@@ -1057,13 +1457,18 @@ class VoiceWebSocketServer {
       metadata: {
         transport: 'websocket',
         source: 'device_message'
-      }
+      },
+      sourceConnection: connection
     });
   }
 
-  async handleAudioData(deviceId, message) {
-    const connection = this.deviceConnections.get(deviceId);
+  async handleAudioData(deviceId, message, sourceConnection = null) {
+    const connection = sourceConnection || this.deviceConnections.get(deviceId);
     if (!connection || !connection.authenticated) return;
+    if (!this.isReachyVoiceInputAllowed(connection)) {
+      this.clearRejectedReachyAudio(deviceId, connection);
+      return;
+    }
 
     const {
       sessionId,
@@ -1076,6 +1481,21 @@ class VoiceWebSocketServer {
       sequence
     } = message;
 
+    if (connection.device?.deviceType === 'robot') {
+      await this.handleReachyAudioData(deviceId, connection, {
+        sessionId,
+        audioData,
+        sampleRate,
+        channels,
+        format,
+        isStart,
+        isFinal,
+        sequence,
+        captureGrantId: message.captureGrantId
+      });
+      return;
+    }
+
     const resolvedSessionId = sessionId || `${deviceId}-${Date.now()}`;
     let session = this.audioSessions.get(deviceId);
 
@@ -1086,6 +1506,7 @@ class VoiceWebSocketServer {
     ) {
       session = {
         sessionId: resolvedSessionId,
+        connection,
         chunks: [],
         sampleRate: typeof sampleRate === 'number' ? sampleRate : 16000,
         channels: typeof channels === 'number' ? channels : 1,
@@ -1153,9 +1574,171 @@ class VoiceWebSocketServer {
     }
   }
 
+  async handleReachyAudioData(deviceId, connection, message) {
+    const id = String(deviceId);
+    const {
+      sessionId,
+      audioData,
+      sampleRate,
+      channels,
+      format,
+      isStart,
+      isFinal,
+      sequence,
+      captureGrantId
+    } = message;
+    const validSessionId = typeof sessionId === 'string'
+      && sessionId.length > 0
+      && sessionId.length <= 128
+      && sessionId.trim() === sessionId
+      && !/[\u0000-\u001f\u007f]/.test(sessionId);
+    const fail = (error) => {
+      console.warn('Rejected Reachy audio frame', { deviceId: id, error });
+      this.sendReachyAudioError(id, connection, validSessionId ? sessionId : null, error);
+    };
+
+    if (!validSessionId) {
+      fail('Invalid audio session identifier');
+      return;
+    }
+
+    let session = this.audioSessions.get(id);
+    if (isStart === true) {
+      const startHasAudio = audioData != null;
+      const startSequenceValid = startHasAudio
+        ? Number.isSafeInteger(sequence) && sequence === 0
+        : sequence == null;
+      if (
+        session
+        || sampleRate !== 16000
+        || channels !== 1
+        || typeof format !== 'string'
+        || format.toUpperCase() !== 'S16LE'
+        || isFinal === true
+        || !startSequenceValid
+      ) {
+        fail('Invalid audio session start');
+        return;
+      }
+      const firstChunk = startHasAudio ? this.decodeCanonicalBase64(audioData) : null;
+      if (startHasAudio && (!firstChunk || firstChunk.length % 2 !== 0)) {
+        fail('Invalid S16LE audio payload');
+        return;
+      }
+      if (!this.consumeReachyCaptureGrant(connection, captureGrantId, sessionId, true)) {
+        fail('A fresh wake word is required');
+        return;
+      }
+      const startedAtMs = Date.now();
+      session = {
+        sessionId,
+        connection,
+        chunks: firstChunk ? [firstChunk] : [],
+        sampleRate: 16000,
+        channels: 1,
+        format: 'S16LE',
+        startedAt: new Date(startedAtMs),
+        startedAtMs,
+        lastSequence: firstChunk ? 0 : -1,
+        chunkCount: firstChunk ? 1 : 0,
+        totalBytes: firstChunk?.length || 0
+      };
+      this.audioSessions.set(id, session);
+      try {
+        await this.updateDeviceAudioState(id, {
+          audioStreamActive: true,
+          audioStreamStartedAt: session.startedAt,
+          lastTranscriptError: null
+        });
+      } catch (error) {
+        fail('Unable to initialize audio session');
+        return;
+      }
+      if (!this.isCurrentAuthenticatedConnection(id, connection)) {
+        this.audioSessions.delete(id);
+        return;
+      }
+      this.sendToConnection(connection, {
+        type: 'audio_received',
+        sessionId,
+        bytesReceived: firstChunk?.length || 0,
+        isFinal: false
+      });
+      return;
+    }
+
+    if (!session || session.sessionId !== sessionId) {
+      fail('Audio session is not authorized');
+      return;
+    }
+    if (
+      !Number.isSafeInteger(sequence)
+      || sequence < 0
+      || sequence > REACHY_AUDIO_MAX_SEQUENCE
+      || sequence !== session.lastSequence + 1
+    ) {
+      fail('Invalid or replayed audio sequence');
+      return;
+    }
+    if (Date.now() - session.startedAtMs > this.reachyAudioSessionMaxMs) {
+      fail('Audio session exceeded maximum duration');
+      return;
+    }
+    if (sampleRate != null && sampleRate !== 16000) {
+      fail('Unsupported audio sample rate');
+      return;
+    }
+    if (channels != null && channels !== 1) {
+      fail('Unsupported audio channel count');
+      return;
+    }
+    if (format != null && (typeof format !== 'string' || format.toUpperCase() !== 'S16LE')) {
+      fail('Unsupported audio format');
+      return;
+    }
+
+    let chunk = null;
+    if (audioData != null) {
+      chunk = this.decodeCanonicalBase64(audioData);
+      if (!chunk || chunk.length % 2 !== 0) {
+        fail('Invalid S16LE audio payload');
+        return;
+      }
+    } else if (isFinal !== true) {
+      fail('Audio payload is required');
+      return;
+    }
+    if (session.totalBytes + (chunk?.length || 0) > this.reachyAudioSessionMaxBytes) {
+      fail('Audio session exceeded maximum size');
+      return;
+    }
+
+    if (chunk) {
+      session.chunks.push(chunk);
+      session.totalBytes += chunk.length;
+      session.chunkCount += 1;
+    }
+    session.lastSequence = sequence;
+    session.lastReceivedAt = new Date();
+    this.sendToConnection(connection, {
+      type: 'audio_received',
+      sessionId,
+      bytesReceived: chunk?.length || 0,
+      isFinal: Boolean(isFinal)
+    });
+
+    if (isFinal === true) {
+      try {
+        await this.finalizeAudioSession(id, session);
+      } finally {
+        this.audioSessions.delete(id);
+      }
+    }
+  }
+
   async finalizeAudioSession(deviceId, session) {
-    const connection = this.deviceConnections.get(deviceId);
-    if (!connection || !connection.authenticated) {
+    const connection = session?.connection || this.deviceConnections.get(deviceId);
+    if (!this.isCurrentAuthenticatedConnection(deviceId, connection)) {
       return;
     }
 
@@ -1197,6 +1780,7 @@ class VoiceWebSocketServer {
         channels: session.channels,
         format: session.format
       });
+      if (!this.isCurrentAuthenticatedConnection(deviceId, connection)) return;
     } catch (error) {
       console.error(`Speech-to-text failed for device ${deviceId}:`, error.message);
       await markInactive({
@@ -1249,14 +1833,29 @@ class VoiceWebSocketServer {
       metadata: {
         transport: 'websocket',
         source: 'audio_stream'
-      }
+      },
+      sourceConnection: connection
     });
   }
 
-  async handleStatusUpdate(deviceId, message) {
+  async handleStatusUpdate(deviceId, message, sourceConnection = null) {
     const { status, settings } = message;
 
     try {
+      const connection = sourceConnection || this.deviceConnections.get(deviceId);
+      if (this.deviceConnections.get(deviceId) !== connection) return;
+      if (connection?.device?.deviceType === 'robot') {
+        if (settings?.reachy && typeof settings.reachy === 'object') {
+          await reachyMiniService.handleRuntimeStatus(deviceId, settings.reachy);
+        } else if (settings?.robotState && typeof settings.robotState === 'object') {
+          await reachyMiniService.handleRobotState(deviceId, { state: settings.robotState });
+        }
+        await VoiceDevice.findByIdAndUpdate(deviceId, {
+          lastSeen: new Date(),
+          ...(status && { status })
+        });
+        return;
+      }
       const protectedSettingKeys = new Set([
         'registrationCode',
         'registrationExpires',
@@ -1287,9 +1886,10 @@ class VoiceWebSocketServer {
     }
   }
 
-  async handleUpdateStatus(deviceId, message) {
-    const connection = this.deviceConnections.get(deviceId);
+  async handleUpdateStatus(deviceId, message, sourceConnection = null) {
+    const connection = sourceConnection || this.deviceConnections.get(deviceId);
     if (!connection) return;
+    if (this.deviceConnections.get(deviceId) !== connection) return;
 
     const { status, version, error } = message;
 
@@ -1309,9 +1909,10 @@ class VoiceWebSocketServer {
     }
   }
 
-  async handleDeviceError(deviceId, message) {
-    const connection = this.deviceConnections.get(deviceId);
+  async handleDeviceError(deviceId, message, sourceConnection = null) {
+    const connection = sourceConnection || this.deviceConnections.get(deviceId);
     if (!connection) return;
+    if (this.deviceConnections.get(deviceId) !== connection) return;
 
     const { error, details } = message;
 
@@ -1331,6 +1932,11 @@ class VoiceWebSocketServer {
 
   async handleDisconnection(deviceId, code, reason, ws = null) {
     console.log(`Voice device ${deviceId} disconnected: ${code} - ${reason}`);
+    if (ws && this.pendingConnections.has(ws)) {
+      this.pendingConnections.delete(ws);
+      console.log('Removed unauthenticated websocket connection', { deviceId });
+      return;
+    }
     const connection = this.deviceConnections.get(deviceId);
     if (ws && (!connection || connection.ws !== ws)) {
       console.log('Ignoring stale websocket disconnect for voice device', { deviceId });
@@ -1347,9 +1953,37 @@ class VoiceWebSocketServer {
         lastSeen: new Date(),
         audioStreamActive: false
       });
+      if (connection?.device?.deviceType === 'robot') {
+        await reachyMiniService.handleDisconnected(deviceId);
+      }
     } catch (error) {
       console.error(`Error handling disconnection for device ${deviceId}:`, error);
     }
+  }
+
+  revokeDeviceCredentials(deviceId, reason = 'Device credentials reissued') {
+    const id = String(deviceId);
+    this.audioSessions.delete(id);
+    const connections = new Set();
+    const active = this.deviceConnections.get(id);
+    if (active) connections.add(active);
+    for (const [ws, pending] of this.pendingConnections.entries()) {
+      const pendingDeviceId = String(pending.deviceId || pending.device?._id || '');
+      if (pendingDeviceId !== id) continue;
+      connections.add(pending);
+      this.pendingConnections.delete(ws);
+    }
+    if (active) this.deviceConnections.delete(id);
+    for (const connection of connections) {
+      connection.revoked = true;
+      connection.authenticated = false;
+      connection.credentials = null;
+      connection.deviceInfo = null;
+      connection.pendingWakeWord = null;
+      connection.captureGrant = null;
+      connection.ws?.close?.(1008, reason);
+    }
+    return connections.size;
   }
 
   async pushConfigToDevice(deviceId) {
@@ -1364,6 +1998,9 @@ class VoiceWebSocketServer {
       }
       const credentials = connection.credentials || {};
       const { config } = await this.buildWakeWordConfig(device, credentials, connection.deviceInfo || {});
+      if (device.deviceType === 'robot') {
+        config.robot = reachyMiniService.buildRobotConfig(device);
+      }
       const ok = this.sendMessage(deviceId, { type: 'config_update', config });
       return ok ? { success: true } : { success: false, error: 'WebSocket send failed' };
     } catch (error) {
@@ -1387,24 +2024,32 @@ class VoiceWebSocketServer {
     return ok ? { success: true } : { success: false, error: 'Send failed' };
   }
 
-  sendMessage(deviceId, message) {
-    const connection = this.deviceConnections.get(deviceId);
+  sendToConnection(connection, message) {
     if (!connection || connection.ws.readyState !== WebSocket.OPEN) {
       return false;
     }
 
     try {
       if (message && message.type) {
-        console.log(`Dispatching message "${message.type}" to device ${deviceId}`);
+        console.log(`Dispatching message "${message.type}" to voice device socket`);
       } else {
-        console.log(`Dispatching unnamed message to device ${deviceId}`);
+        console.log('Dispatching unnamed message to voice device socket');
       }
       connection.ws.send(JSON.stringify(message));
       return true;
     } catch (error) {
-      console.error(`Error sending message to device ${deviceId}:`, error);
+      console.error('Error sending message to voice device socket:', error);
       return false;
     }
+  }
+
+  sendMessage(deviceId, message) {
+    return this.sendToConnection(this.deviceConnections.get(String(deviceId)), message);
+  }
+
+  isDeviceAuthenticated(deviceId) {
+    const connection = this.deviceConnections.get(String(deviceId));
+    return Boolean(connection?.authenticated && connection.ws?.readyState === WebSocket.OPEN);
   }
 
   broadcastToRoom(room, message) {
@@ -1442,6 +2087,8 @@ class VoiceWebSocketServer {
   }
 
   stop() {
+    reachyMiniService.shutdown();
+    this.messageChains.clear();
     if (this.heartbeatTimer) {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
@@ -1474,6 +2121,7 @@ class VoiceWebSocketServer {
       this.wss.close();
       this.wss = null;
       this.deviceConnections.clear();
+      this.pendingConnections.clear();
       this.audioSessions.clear();
       console.log('Voice WebSocket Server stopped');
     }
@@ -1494,3 +2142,5 @@ class VoiceWebSocketServer {
 }
 
 module.exports = VoiceWebSocketServer;
+module.exports.redactMessageForLog = redactMessageForLog;
+module.exports.MAX_VOICE_WEBSOCKET_PAYLOAD_BYTES = MAX_VOICE_WEBSOCKET_PAYLOAD_BYTES;

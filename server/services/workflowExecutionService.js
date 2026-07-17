@@ -7,6 +7,7 @@ const deviceGroupService = require('./deviceGroupService');
 const sceneService = require('./sceneService');
 const insteonService = require('./insteonService');
 const deviceCommandCoordinatorService = require('./deviceCommandCoordinatorService');
+const reachyMiniService = require('./reachyMiniService');
 const { resolveDeviceProperty } = require('../utils/devicePropertyResolver');
 
 function parseBoundedMs(value, fallback, min, max) {
@@ -1104,6 +1105,10 @@ function describeWorkflowAction(action, options = {}) {
       const alexaTargetLabel = describeActionTarget(getActionTargetCandidate(action, ['alexaDeviceId', 'deviceId']));
       const prefix = message ? `Have Alexa say "${message}"` : 'Have Alexa speak';
       return alexaTargetLabel ? `${prefix} on ${alexaTargetLabel}` : prefix;
+    }
+    case 'reachy_action': {
+      const normalized = reachyMiniService.normalizeWorkflowAction(action);
+      return `Reachy ${normalized.command.replace(/_/g, ' ')}`;
     }
     case 'delay': {
       const seconds = options.resolvedDelaySeconds ?? resolveDelaySeconds(action);
@@ -3084,6 +3089,8 @@ async function executeAction(action, context = {}, options = {}) {
       return executeNotification(action);
     case 'alexa_speak':
       return executeAlexaSpeak(action, context);
+    case 'reachy_action':
+      return reachyMiniService.executeWorkflowAction(action, context);
     case 'isy_network_resource':
       return executeIsyNetworkResource(action);
     case 'delay':

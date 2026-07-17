@@ -54,6 +54,7 @@ const platformDeployRoutes = require("./routes/platformDeployRoutes");
 const platformServiceRoutes = require("./routes/platformServiceRoutes");
 const reverseProxyRoutes = require("./routes/reverseProxyRoutes");
 const remoteDeviceRoutes = require("./routes/remoteDeviceRoutes");
+const reachyMiniRoutes = require("./routes/reachyMiniRoutes");
 const panelRoutes = require("./routes/panelRoutes");
 const wakeWordRoutes = require("./routes/wakeWordRoutes");
 const remoteUpdateRoutes = require("./routes/remoteUpdateRoutes");
@@ -113,6 +114,8 @@ const matterService = require("./services/matterService");
 const deviceLibraryUpdateService = require("./services/deviceLibraryUpdateService");
 const telemetryService = require("./services/telemetryService");
 const eventStreamService = require("./services/eventStreamService");
+const reachyMiniService = require("./services/reachyMiniService");
+const reachySnapshotService = require("./services/reachySnapshotService");
 const mqttPlatformService = require("./services/mqttPlatformService");
 const openclawMcpService = require("./services/openclawMcpService");
 const { sendNotFound, sendUnhandledError } = require("./utils/apiErrorResponses");
@@ -574,6 +577,7 @@ app.use('/api/platform-services', platformServiceRoutes);
 app.use('/api/admin/reverse-proxy', reverseProxyRoutes);
 // Remote Device Routes
 app.use('/api/remote-devices', remoteDeviceRoutes);
+app.use('/api/reachy-mini', reachyMiniRoutes);
 // Wall Panel Routes
 app.use('/api/panels', panelRoutes);
 // Piper Voice Routes
@@ -690,8 +694,12 @@ const httpServer = http.createServer(app);
 // Initialize WebSocket server on HTTP
 const voiceWsServer = new VoiceWebSocketServer();
 voiceWsServer.initialize(httpServer);
+reachyMiniService.setVoiceWebSocket(voiceWsServer);
 deviceWebSocket.initialize(httpServer);
 wakeWordTrainingService.setVoiceWebSocket(voiceWsServer);
+void dbReady.then(() => reachyMiniService.initializeUpdateRecovery()).catch((error) => {
+  console.error('Failed to initialize Reachy companion update recovery:', error);
+});
 void dbReady.then(() => wakeWordTrainingService.resumePendingTraining()).catch((error) => {
   console.error('Failed to resume wake word training jobs:', error);
 });
@@ -883,7 +891,12 @@ async function gracefulShutdown(signal) {
 
   console.log(`Received ${signal}, shutting down gracefully`);
 
+  // Abort/disarm Reachy update transactions while the authenticated robot
+  // socket is still available. voiceWsServer.stop() also calls shutdown()
+  // defensively, but ordering here closes the deploy-time release race.
+  await runShutdownStep('Reachy companion updater', () => reachyMiniService.shutdown());
   await runShutdownStep('voice websocket server', () => voiceWsServer.stop());
+  await runShutdownStep('Reachy snapshot storage', () => reachySnapshotService.cleanup());
   await runShutdownStep('device websocket server', () => deviceWebSocket.stop());
   await runShutdownStep('direct radio service', () => directRadioService.shutdown(), DIRECT_RADIO_SHUTDOWN_TIMEOUT_MS);
   await runShutdownStep('discovery service', () => discoveryService.stop());

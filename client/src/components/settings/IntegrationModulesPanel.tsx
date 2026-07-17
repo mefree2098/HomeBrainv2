@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import {
   Activity,
+  Bot,
   CheckCircle2,
   CloudSun,
   Database,
@@ -12,6 +13,7 @@ import {
   Workflow,
   XCircle
 } from "lucide-react"
+import { useNavigate } from "react-router-dom"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -43,7 +45,8 @@ const CATEGORY_ICONS: Record<string, typeof CloudSun> = {
   Voice: SlidersHorizontal,
   AI: SlidersHorizontal,
   Data: Database,
-  Developer: Workflow
+  Developer: Workflow,
+  Robotics: Bot
 }
 
 function formatHealthLabel(module: IntegrationModule) {
@@ -70,6 +73,7 @@ function moduleSort(left: IntegrationModule, right: IntegrationModule) {
 
 export function IntegrationModulesPanel() {
   const { toast } = useToast()
+  const navigate = useNavigate()
   const [catalog, setCatalog] = useState<IntegrationCatalog | null>(null)
   const [loading, setLoading] = useState(true)
   const [savingKey, setSavingKey] = useState("")
@@ -310,6 +314,19 @@ export function IntegrationModulesPanel() {
                           <p className="mt-3 rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-1 text-xs text-amber-300">
                             {module.lastError}
                           </p>
+                        ) : null}
+
+                        {module.id.toLowerCase().includes("reachy") ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="mt-3 w-full gap-2"
+                            onClick={() => navigate("/reachy-mini")}
+                          >
+                            <Bot className="h-4 w-4" />
+                            Manage Reachy Mini
+                          </Button>
                         ) : null}
                       </div>
                     )

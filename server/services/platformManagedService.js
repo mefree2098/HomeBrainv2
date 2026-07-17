@@ -47,6 +47,16 @@ const SERVICE_DEFINITIONS = Object.freeze([
     setupCommand: 'setup-codex',
     updateTarget: 'codex',
     managementNotes: 'OpenAI coding agent CLI used by HomeBrain for current model access.'
+  },
+  {
+    serviceId: 'reachy-homebrain-app',
+    displayName: 'Reachy Mini Companion',
+    packageName: 'reachy-homebrain-app',
+    systemdUnit: '',
+    runtimeKind: 'remote-fleet',
+    setupCommand: '',
+    updateTarget: 'reachy-homebrain-app',
+    managementNotes: 'HomeBrain companion app managed across paired Reachy Mini Wireless robots.'
   }
 ]);
 
@@ -186,6 +196,13 @@ function parseListInput(value) {
     .filter(Boolean);
 }
 
+function createReachyUpdateInProgressError() {
+  const error = new Error('A Reachy companion fleet update is already in progress');
+  error.status = 409;
+  error.code = 'REACHY_UPDATE_IN_PROGRESS';
+  return error;
+}
+
 class PlatformManagedServiceManager {
   constructor(options = {}) {
     this.projectRoot = options.projectRoot || path.resolve(__dirname, '..', '..');
@@ -275,7 +292,10 @@ class PlatformManagedServiceManager {
   normalizeRecord(record, definition, runtime = {}) {
     const doc = typeof record?.toObject === 'function' ? record.toObject() : record;
     const policy = doc?.policy || {};
-    const updateAvailable = Boolean(doc?.updateAvailable);
+    const remoteFleet = definition.runtimeKind === 'remote-fleet';
+    const updateAvailable = remoteFleet
+      ? Boolean(runtime.updateAvailable)
+      : Boolean(doc?.updateAvailable);
     const eligibleAt = doc?.eligibleForAutoUpdateAt ? new Date(doc.eligibleForAutoUpdateAt).toISOString() : null;
     const autoUpdateEligible = updateAvailable
       && Boolean(policy.autoUpdateEnabled)
@@ -290,9 +310,14 @@ class PlatformManagedServiceManager {
       runtimeKind: definition.runtimeKind || 'daemon',
       managementNotes: definition.managementNotes,
       installed: Boolean(runtime.installed),
+      ...(remoteFleet ? {
+        paired: Boolean(runtime.paired),
+        setupRequired: Boolean(runtime.setupRequired),
+        devices: Array.isArray(runtime.devices) ? runtime.devices : []
+      } : {}),
       active: Boolean(runtime.active),
-      currentVersion: doc?.currentVersion || runtime.currentVersion || '',
-      latestVersion: doc?.latestVersion || '',
+      currentVersion: remoteFleet ? (runtime.currentVersion || '') : (doc?.currentVersion || runtime.currentVersion || ''),
+      latestVersion: remoteFleet ? (runtime.latestVersion || doc?.latestVersion || '') : (doc?.latestVersion || ''),
       updateAvailable,
       candidateFirstSeenAt: doc?.candidateFirstSeenAt ? new Date(doc.candidateFirstSeenAt).toISOString() : null,
       eligibleForAutoUpdateAt: eligibleAt,
@@ -704,6 +729,10 @@ class PlatformManagedServiceManager {
   }
 
   async getRuntimeStatus(definition) {
+    if (definition.serviceId === 'reachy-homebrain-app') {
+      const reachyMiniService = require('./reachyMiniService');
+      return reachyMiniService.getCompanionFleetStatus();
+    }
     const executableName = definition.serviceId === 'pihole'
       ? 'pihole'
       : definition.serviceId === 'codex'
@@ -740,6 +769,200 @@ class PlatformManagedServiceManager {
     };
   }
 
+  async reconcileReachyRecord(record, fleet, options = {}) {
+    if (!record || !fleet) return record;
+    record.currentVersion = fleet.currentVersion || '';
+    record.latestVersion = fleet.latestVersion || record.latestVersion || '';
+    record.updateAvailable = Boolean(fleet.updateAvailable);
+    if (options.checkedAt) record.lastCheckedAt = options.checkedAt;
+
+    const update = record.config?.reachyUpdate;
+    if (record.lastUpdateStatus === 'in_progress' && update) {
+      const plannedDeviceIds = Array.isArray(update.plannedDeviceIds)
+        ? update.plannedDeviceIds.map((value) => String(value || '')).filter(Boolean)
+        : [];
+      const acceptedDeviceIds = Array.isArray(update.deviceIds)
+        ? update.deviceIds.map((value) => String(value || '')).filter(Boolean)
+        : [];
+      const dispatchFailures = Array.isArray(update.dispatchFailures)
+        ? update.dispatchFailures.filter((failure) => failure && failure.deviceId)
+        : [];
+      const trackedDeviceIds = Array.from(new Set([
+        ...plannedDeviceIds,
+        ...acceptedDeviceIds,
+        ...dispatchFailures.map((failure) => String(failure.deviceId))
+      ]));
+      const fleetStatuses = Array.isArray(fleet.devices) ? fleet.devices : [];
+      const statusByDeviceId = new Map(
+        fleetStatuses.map((status) => [String(status.deviceId), status])
+      );
+      const requestByDeviceId = new Map(
+        (Array.isArray(update.requests) ? update.requests : [])
+          .filter((request) => request?.deviceId && request?.requestId)
+          .map((request) => [String(request.deviceId), request])
+      );
+      const dispatchFailureByDeviceId = new Map(
+        dispatchFailures.map((failure) => [String(failure.deviceId), failure])
+      );
+      const activeStates = new Set(['staging', 'staged', 'updating']);
+      const failureStates = new Set([
+        'failed',
+        'manual_reinstall_required',
+        'version_collision',
+        'downgrade_blocked'
+      ]);
+      const startedAt = Date.parse(update.startedAt || '');
+      const dispatchCompleted = Number.isFinite(Date.parse(update.dispatchCompletedAt || ''));
+      const stale = Number.isFinite(startedAt) && Date.now() - startedAt > 30 * 60 * 1000;
+      const outcomes = [];
+      let recoveredCorrelation = false;
+
+      for (const deviceId of trackedDeviceIds) {
+        const status = statusByDeviceId.get(deviceId) || null;
+        const expectedRequest = requestByDeviceId.get(deviceId) || null;
+        const statusRequestId = trimString(status?.requestId);
+        const statusRequestedAt = Date.parse(status?.requestedAt || status?.updateStartedAt || '');
+        const freshPlannedRequest = Boolean(
+          statusRequestId
+          && Number.isFinite(startedAt)
+          && Number.isFinite(statusRequestedAt)
+          && statusRequestedAt >= startedAt - 5_000
+        );
+        const requestMatches = expectedRequest
+          ? statusRequestId === String(expectedRequest.requestId)
+          : (acceptedDeviceIds.includes(deviceId) ? Boolean(statusRequestId) : freshPlannedRequest);
+        const current = Boolean(status?.current === true && status?.updateAvailable === false);
+
+        // A hub crash can happen after Reachy durably enters staging but before
+        // the accepted request correlation is saved. Recover that correlation
+        // only from a fleet request created during this exact batch window.
+        if (!expectedRequest && freshPlannedRequest) {
+          update.deviceIds = Array.from(new Set([
+            ...(Array.isArray(update.deviceIds) ? update.deviceIds : []).map((value) => String(value || '')).filter(Boolean),
+            deviceId
+          ]));
+          update.requests = [
+            ...(Array.isArray(update.requests) ? update.requests : []),
+            { deviceId, requestId: statusRequestId, recovered: true }
+          ];
+          requestByDeviceId.set(deviceId, { deviceId, requestId: statusRequestId, recovered: true });
+          recoveredCorrelation = true;
+        }
+
+        if (current || (requestMatches && status?.state === 'completed')) {
+          outcomes.push({ deviceId, state: 'success', status });
+        } else if (requestMatches && activeStates.has(status?.state)) {
+          outcomes.push({ deviceId, state: 'active', status });
+        } else if (requestMatches && failureStates.has(status?.state)) {
+          outcomes.push({ deviceId, state: 'failed', status, error: status?.error });
+        } else if (dispatchFailureByDeviceId.has(deviceId)) {
+          outcomes.push({
+            deviceId,
+            state: 'failed',
+            status,
+            error: dispatchFailureByDeviceId.get(deviceId)?.error
+          });
+        } else if (dispatchCompleted) {
+          outcomes.push({
+            deviceId,
+            state: 'failed',
+            status,
+            error: status?.unavailableReason || 'Reachy did not acknowledge the planned update'
+          });
+        } else {
+          outcomes.push({ deviceId, state: 'unresolved', status });
+        }
+      }
+
+      if (recoveredCorrelation) record.markModified?.('config');
+      const active = outcomes.filter((outcome) => outcome.state === 'active');
+      const failures = outcomes.filter((outcome) => outcome.state === 'failed');
+      const successes = outcomes.filter((outcome) => outcome.state === 'success');
+      const unresolved = outcomes.filter((outcome) => outcome.state === 'unresolved');
+      const totalFailures = failures.length;
+
+      if (active.length === 0 && unresolved.length === 0 && totalFailures > 0) {
+        record.lastUpdateStatus = 'failed';
+        record.lastUpdatedAt = new Date();
+        record.lastError = successes.length > 0
+          ? `Reachy update partially completed (${successes.length} succeeded, ${totalFailures} failed)`
+          : (
+              failures.find((failure) => failure.error)?.error
+              || 'Reachy companion update failed'
+            );
+      } else if (
+        active.length === 0
+        && unresolved.length === 0
+        && trackedDeviceIds.length > 0
+        && successes.length === trackedDeviceIds.length
+      ) {
+        record.lastUpdateStatus = 'success';
+        record.lastUpdatedAt = new Date();
+        record.lastError = '';
+        record.updateAvailable = Boolean(fleet.updateAvailable);
+      } else if (stale) {
+        record.lastUpdateStatus = 'failed';
+        record.lastUpdatedAt = new Date();
+        record.lastError = successes.length > 0
+          ? `Reachy update partially completed (${successes.length} succeeded, ${trackedDeviceIds.length - successes.length} failed)`
+          : 'Reachy companion update did not reach a terminal state';
+      }
+
+      if (record.lastUpdateStatus !== 'in_progress') {
+        record.config = { ...(record.config || {}) };
+        delete record.config.reachyUpdate;
+        record.markModified?.('config');
+      }
+    }
+    await record.save();
+    return record;
+  }
+
+  async claimReachyUpdateBatch(record, reachyUpdate) {
+    if (record?.lastUpdateStatus === 'in_progress') {
+      throw createReachyUpdateInProgressError();
+    }
+
+    const claimedAt = new Date();
+    if (record?._id) {
+      const claimed = await PlatformManagedService.findOneAndUpdate(
+        { _id: record._id, lastUpdateStatus: { $ne: 'in_progress' } },
+        {
+          $set: {
+            'config.reachyUpdate': reachyUpdate,
+            lastUpdatedAt: claimedAt,
+            lastUpdateStatus: 'in_progress',
+            lastError: ''
+          }
+        },
+        { returnDocument: 'after', runValidators: true }
+      );
+      if (!claimed) throw createReachyUpdateInProgressError();
+      return claimed;
+    }
+
+    // Isolated unit tests may use a document-shaped record without a Mongo ID.
+    // Production records always take the atomic findOneAndUpdate path above.
+    record.config = { ...(record.config || {}), reachyUpdate };
+    record.lastUpdatedAt = claimedAt;
+    record.lastUpdateStatus = 'in_progress';
+    record.lastError = '';
+    record.markModified?.('config');
+    await record.save();
+    return record;
+  }
+
+  async reconcileReachyFleetStatus(options = {}) {
+    if (!this.isDatabaseReady()) return null;
+    const definition = this.getServiceDefinition('reachy-homebrain-app');
+    const [record, fleet] = await Promise.all([
+      this.getOrCreateRecord(definition),
+      require('./reachyMiniService').getCompanionFleetStatus({ force: options.force === true })
+    ]);
+    await this.reconcileReachyRecord(record, fleet, options);
+    return this.normalizeRecord(record, definition, fleet);
+  }
+
   async listServices() {
     if (!this.isDatabaseReady()) {
       return Promise.all(SERVICE_DEFINITIONS.map(async (definition) => (
@@ -753,6 +976,9 @@ class PlatformManagedServiceManager {
         this.getOrCreateRecord(definition),
         this.getRuntimeStatus(definition)
       ]);
+      if (definition.serviceId === 'reachy-homebrain-app') {
+        await this.reconcileReachyRecord(record, runtime);
+      }
       services.push(this.normalizeRecord(record, definition, runtime));
     }
     return services;
@@ -769,8 +995,18 @@ class PlatformManagedServiceManager {
     let updateInfo;
 
     try {
-      const result = await this.runSetupCommand('check-platform-service-updates', definition.updateTarget);
-      updateInfo = parseJsonOutput(result.stdout);
+      if (serviceId === 'reachy-homebrain-app') {
+        const fleet = await require('./reachyMiniService').getCompanionFleetStatus({ force: true });
+        updateInfo = {
+          latestVersion: fleet.latestVersion,
+          currentVersion: fleet.currentVersion,
+          updateAvailable: fleet.updateAvailable
+        };
+        await this.reconcileReachyRecord(record, fleet, { checkedAt });
+      } else {
+        const result = await this.runSetupCommand('check-platform-service-updates', definition.updateTarget);
+        updateInfo = parseJsonOutput(result.stdout);
+      }
     } catch (error) {
       record.lastCheckedAt = checkedAt;
       record.lastError = error.message || 'Update check failed';
@@ -793,7 +1029,9 @@ class PlatformManagedServiceManager {
     record.candidateFirstSeenAt = firstSeenAt;
     record.eligibleForAutoUpdateAt = updateAvailable && firstSeenAt ? addDays(firstSeenAt, stabilityDelayDays) : null;
     record.lastCheckedAt = checkedAt;
-    record.lastError = '';
+    if (serviceId !== 'reachy-homebrain-app' || record.lastUpdateStatus !== 'failed') {
+      record.lastError = '';
+    }
     await record.save();
 
     void eventStreamService.publishSafe({
@@ -821,13 +1059,27 @@ class PlatformManagedServiceManager {
     }
 
     try {
-      await this.runSetupCommand(definition.setupCommand);
+      if (serviceId === 'reachy-homebrain-app') {
+        const fleet = await require('./reachyMiniService').getCompanionFleetStatus();
+        if (!fleet.paired) {
+          throw new Error('Reachy setup is required: pair a Reachy Mini from the Reachy settings page first.');
+        }
+        if (!fleet.installed || fleet.setupRequired) {
+          throw new Error('Reachy bootstrap is required: run the one-time installer from the Reachy settings page.');
+        }
+      } else {
+        await this.runSetupCommand(definition.setupCommand);
+      }
     } catch (error) {
       const record = await this.getOrCreateRecord(definition);
       record.lastUpdateStatus = 'failed';
       record.lastError = error.message || 'Install failed';
       await record.save();
       throw error;
+    }
+
+    if (serviceId === 'reachy-homebrain-app') {
+      return this.checkForUpdates(serviceId, { actor });
     }
 
     void eventStreamService.publishSafe({
@@ -846,10 +1098,92 @@ class PlatformManagedServiceManager {
       throw new Error(`Unknown platform service: ${serviceId}`);
     }
 
-    const record = await this.getOrCreateRecord(definition);
+    let record = await this.getOrCreateRecord(definition);
+    let reachyUpdateClaimed = false;
+    if (serviceId === 'reachy-homebrain-app' && record.lastUpdateStatus === 'in_progress') {
+      throw createReachyUpdateInProgressError();
+    }
     try {
-      await this.runSetupCommand('update-platform-service', definition.updateTarget);
+      if (serviceId === 'reachy-homebrain-app') {
+        const reachyMiniService = require('./reachyMiniService');
+        const fleet = await reachyMiniService.getCompanionFleetStatus({ force: true });
+        const candidates = fleet.devices.filter((device) => device.updateAvailable && !device.unavailableReason);
+        if (!candidates.length && fleet.updateAvailable) {
+          throw new Error('Reachy companion updates are available, but no paired robot is currently reachable.');
+        }
+        if (!candidates.length) {
+          record.lastUpdatedAt = new Date();
+          record.lastUpdateStatus = 'skipped';
+          record.lastError = '';
+          record.currentVersion = fleet.currentVersion || record.currentVersion || '';
+          record.latestVersion = fleet.latestVersion || record.latestVersion || '';
+          record.updateAvailable = Boolean(fleet.updateAvailable);
+          await record.save();
+          return this.normalizeRecord(record, definition, fleet);
+        }
+        const startedAt = new Date().toISOString();
+        const dispatched = [];
+        const dispatchFailures = [];
+        // Persist the complete batch intent before the first robot receives a
+        // stage request. Every accepted correlation is then appended and saved
+        // immediately, so a later robot failure or hub crash can never erase an
+        // already-triggered physical-fleet side effect.
+        const reachyUpdate = {
+          plannedDeviceIds: candidates.map((device) => device.deviceId),
+          deviceIds: [],
+          requests: [],
+          dispatchFailures: [],
+          startedAt,
+          actor,
+          automatic
+        };
+        record = await this.claimReachyUpdateBatch(record, reachyUpdate);
+        reachyUpdateClaimed = true;
+
+        for (const device of candidates) {
+          try {
+            const accepted = await reachyMiniService.requestCompanionUpdate(device.deviceId, {
+              manifestUrl: `/api/reachy-mini/${device.deviceId}/companion/manifest`,
+              actorUserId: null
+            });
+            if (!accepted?.requestId || accepted.accepted === false) {
+              throw new Error(accepted?.reason || 'Reachy did not accept the update request');
+            }
+            dispatched.push({ deviceId: device.deviceId, requestId: accepted.requestId });
+            record.config.reachyUpdate.deviceIds = dispatched.map((entry) => entry.deviceId);
+            record.config.reachyUpdate.requests = [...dispatched];
+          } catch (error) {
+            dispatchFailures.push({
+              deviceId: device.deviceId,
+              error: String(error?.message || 'Update dispatch failed').slice(0, 500),
+              failedAt: new Date().toISOString()
+            });
+            record.config.reachyUpdate.dispatchFailures = [...dispatchFailures];
+          }
+          record.markModified?.('config');
+          await record.save();
+        }
+        record.config.reachyUpdate.dispatchCompletedAt = new Date().toISOString();
+        record.markModified?.('config');
+        await record.save();
+        if (dispatched.length === 0) {
+          record.lastUpdateStatus = 'failed';
+          record.lastUpdatedAt = new Date();
+          record.lastError = dispatchFailures[0]?.error || 'No Reachy update request was accepted';
+          await record.save();
+          throw new Error(record.lastError);
+        }
+        if (dispatchFailures.length > 0) {
+          record.lastError = `Reachy update dispatch partially accepted (${dispatched.length} accepted, ${dispatchFailures.length} failed)`;
+          await record.save();
+        }
+      } else {
+        await this.runSetupCommand('update-platform-service', definition.updateTarget);
+      }
     } catch (error) {
+      if (serviceId === 'reachy-homebrain-app' && !reachyUpdateClaimed) {
+        throw error;
+      }
       record.lastUpdatedAt = new Date();
       record.lastUpdateStatus = 'failed';
       record.lastError = error.message || 'Update failed';
@@ -858,11 +1192,13 @@ class PlatformManagedServiceManager {
     }
 
     record.lastUpdatedAt = new Date();
-    record.lastUpdateStatus = 'success';
-    record.updateAvailable = false;
+    record.lastUpdateStatus = serviceId === 'reachy-homebrain-app' ? 'in_progress' : 'success';
+    record.updateAvailable = serviceId === 'reachy-homebrain-app' ? record.updateAvailable : false;
     record.candidateFirstSeenAt = null;
     record.eligibleForAutoUpdateAt = null;
-    record.lastError = '';
+    if (serviceId !== 'reachy-homebrain-app' || !record.lastError) {
+      record.lastError = '';
+    }
     await record.save();
 
     void eventStreamService.publishSafe({
@@ -873,6 +1209,9 @@ class PlatformManagedServiceManager {
       tags: ['platform-services', serviceId, automatic ? 'auto-update' : 'manual-update']
     });
 
+    if (serviceId === 'reachy-homebrain-app') {
+      return this.normalizeRecord(record, definition, await this.getRuntimeStatus(definition));
+    }
     return this.checkForUpdates(serviceId, { actor });
   }
 

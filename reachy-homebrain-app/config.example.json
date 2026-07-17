@@ -1,0 +1,20 @@
+{
+  "hub_url": "https://homebrain.example.com",
+  "unit_id": "",
+  "device_id": "",
+  "device_token": "",
+  "registration_code": "",
+  "claim_token": "",
+  "allow_insecure_http": false,
+  "heartbeat_interval_s": 30,
+  "status_interval_s": 60,
+  "reconnect_initial_s": 1,
+  "reconnect_max_s": 30,
+  "command_default_ttl_ms": 5000,
+  "command_max_ttl_ms": 30000,
+  "command_audio_max_s": 8,
+  "audio_preroll_ms": 400,
+  "safe_shutdown": "sleep",
+  "safe_disconnect": "neutral",
+  "log_level": "INFO"
+}

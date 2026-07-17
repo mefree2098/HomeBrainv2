@@ -8,6 +8,7 @@ const STANDARD_DEVICE_SOURCE_OPTIONS = Object.freeze([
   { value: 'harmony', label: 'Harmony', aliases: [] },
   { value: 'insteon', label: 'Insteon', aliases: [] },
   { value: 'rainmachine', label: 'RainMachine', aliases: [] },
+  { value: 'reachy', label: 'Reachy Mini', aliases: ['reachy-mini'] },
   { value: 'sense', label: 'Sense', aliases: [] },
   { value: 'smartthings', label: 'SmartThings', aliases: [] },
   { value: 'tempest', label: 'Tempest', aliases: [] }

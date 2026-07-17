@@ -6,6 +6,7 @@ const RainMachineIntegration = require('../models/RainMachineIntegration');
 const SenseIntegration = require('../models/SenseIntegration');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const EcobeeIntegration = require('../models/EcobeeIntegration');
+const VoiceDevice = require('../models/VoiceDevice');
 const {
   getCapabilityDefinitions,
   getModuleDefinition,
@@ -488,6 +489,45 @@ async function loadStaticModule(definition) {
   });
 }
 
+async function loadReachyModule(definition, preferences) {
+  if (!isDatabaseConnected()) {
+    return buildModuleStatus(definition, {
+      configured: false,
+      enabled: false,
+      connected: false,
+      supportsEnabledToggle: false
+    });
+  }
+  const robots = await VoiceDevice.find({ deviceType: 'robot' });
+  const reachyMiniService = require('./reachyMiniService');
+  const isOnline = (robot) => reachyMiniService.isConnected(robot._id.toString());
+  const resources = robots.map((robot) => decorateResource({
+    id: robot._id.toString(),
+    label: robot.name,
+    deviceType: 'robot',
+    room: robot.room,
+    sourceKey: `reachy:${robot._id}`,
+    nativeId: robot.settings?.reachy?.unitId || robot._id.toString(),
+    online: isOnline(robot),
+    primary: false
+  }, definition, 'robot', preferences));
+  return buildModuleStatus(definition, {
+    configured: robots.length > 0,
+    enabled: robots.length > 0,
+    connected: robots.some(isOnline),
+    supportsEnabledToggle: false,
+    lastSeenAt: robots.reduce((latest, robot) => {
+      const value = robot.lastSeen ? new Date(robot.lastSeen) : null;
+      return value && (!latest || value > latest) ? value : latest;
+    }, null),
+    resources,
+    detail: {
+      robotCount: robots.length,
+      onlineCount: robots.filter(isOnline).length
+    }
+  });
+}
+
 async function loadModuleStatus(definition, preferences) {
   try {
     switch (definition.id) {
@@ -514,6 +554,8 @@ async function loadModuleStatus(definition, preferences) {
       case 'codex-skill':
       case 'openclaw':
         return await loadStaticModule(definition);
+      case 'reachy-mini':
+        return await loadReachyModule(definition, preferences);
       default:
         return buildModuleStatus(definition, {});
     }

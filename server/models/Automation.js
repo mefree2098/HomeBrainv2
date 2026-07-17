@@ -17,7 +17,7 @@ const actionSchema = new mongoose.Schema({
   type: {
     type: String,
     required: true,
-    enum: ['device_control', 'scene_activate', 'notification', 'delay', 'condition', 'workflow_control', 'variable_control', 'repeat', 'isy_network_resource', 'http_request', 'alexa_speak'],
+    enum: ['device_control', 'scene_activate', 'notification', 'delay', 'condition', 'workflow_control', 'variable_control', 'repeat', 'isy_network_resource', 'http_request', 'alexa_speak', 'reachy_action'],
   },
   target: {
     type: mongoose.Schema.Types.Mixed, // Can be device ID, scene ID, or other targets
@@ -27,6 +27,16 @@ const actionSchema = new mongoose.Schema({
     default: {},
   },
 }, { _id: false });
+
+actionSchema.pre('validate', function validateReachyAction() {
+  if (this.type === 'reachy_action') {
+    require('../services/reachyMiniService').normalizeWorkflowAction({
+      type: this.type,
+      target: this.target,
+      parameters: this.parameters
+    });
+  }
+});
 
 const schema = new mongoose.Schema({
   name: {

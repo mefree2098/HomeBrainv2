@@ -205,8 +205,8 @@ class VoiceDeviceService {
     const claimTokenExpiresAt = settings.claimTokenExpires ? new Date(settings.claimTokenExpires) : null;
     const registrationExpired = Boolean(registrationExpiresAt && registrationExpiresAt.getTime() <= nowMs);
     const claimTokenExpired = Boolean(claimTokenExpiresAt && claimTokenExpiresAt.getTime() <= nowMs);
-    const supportsAudioInput = ['speaker', 'microphone', 'hub', 'display'].includes(device.deviceType);
-    const supportsAudioOutput = ['speaker', 'hub', 'display'].includes(device.deviceType);
+    const supportsAudioInput = ['speaker', 'microphone', 'hub', 'display', 'robot'].includes(device.deviceType);
+    const supportsAudioOutput = ['speaker', 'hub', 'display', 'robot'].includes(device.deviceType);
     const wakeWordConfigured = device.wakeWordSupport !== false
       && Array.isArray(device.supportedWakeWords)
       && device.supportedWakeWords.length > 0;

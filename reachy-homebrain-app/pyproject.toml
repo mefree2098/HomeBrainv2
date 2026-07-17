@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reachy-homebrain-app"
+version = "0.1.0"
+description = "Secure Reachy Mini Wireless companion app for HomeBrain"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "HomeBrain" }]
+dependencies = [
+  "numpy>=1.26,<3",
+  "reachy-mini>=1.9,<2",
+  "websockets>=12,<17",
+]
+
+[project.optional-dependencies]
+wakeword = [
+  "onnxruntime>=1.19,<2",
+  "openwakeword>=0.6,<0.7",
+]
+test = [
+  "pytest>=8,<10",
+  "pytest-asyncio>=0.23,<2",
+  "pytest-cov>=5,<8",
+  "ruff>=0.12,<1",
+]
+
+[project.scripts]
+homebrain-reachy = "reachy_homebrain.app:main"
+
+[project.entry-points."reachy_mini_apps"]
+reachy-homebrain-app = "reachy_homebrain.main:ReachyHomebrain"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.data-files]
+"share/reachy-homebrain-app" = [
+  "artifact-manifest.json",
+  "LICENSE",
+  "config.example.json",
+  "index.html",
+  "style.css",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --strict-config"
+testpaths = ["tests"]
+pythonpath = ["src"]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+branch = true
+source = ["reachy_homebrain"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "if __name__ == .__main__.:",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
