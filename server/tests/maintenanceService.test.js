@@ -3,10 +3,44 @@ const assert = require('node:assert/strict');
 
 const Device = require('../models/Device');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
+const VoiceDevice = require('../models/VoiceDevice');
 const maintenanceService = require('../services/maintenanceService');
 const insteonService = require('../services/insteonService');
 const smartThingsService = require('../services/smartThingsService');
 const systemBackupService = require('../services/systemBackupService');
+
+test('getVoiceSystemHealth counts the current VoiceDevice schema fields', async (t) => {
+  const originalCountDocuments = VoiceDevice.countDocuments;
+  const queries = [];
+
+  t.after(() => {
+    VoiceDevice.countDocuments = originalCountDocuments;
+  });
+
+  VoiceDevice.countDocuments = async (query) => {
+    queries.push(query);
+    if (query === undefined) return 3;
+    if (query.voiceRecognitionEnabled) return 1;
+    if (query.status === 'online') return 2;
+    return 0;
+  };
+
+  const health = await maintenanceService.getVoiceSystemHealth();
+
+  assert.deepEqual(health, {
+    devices: 3,
+    online: 2,
+    listening: 1
+  });
+  assert.deepEqual(queries, [
+    undefined,
+    { status: 'online' },
+    {
+      status: 'online',
+      voiceRecognitionEnabled: { $ne: false }
+    }
+  ]);
+});
 
 test('forceInsteonSync delegates to the PLM sync service and starts runtime monitoring', async (t) => {
   const originalSyncDevicesFromPLM = insteonService.syncDevicesFromPLM;

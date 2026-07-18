@@ -1391,6 +1391,21 @@ class MaintenanceService {
   }
 
   /**
+   * Read voice device health using the current VoiceDevice schema.
+   * @returns {Promise<Object>} Voice device health counts
+   */
+  async getVoiceSystemHealth() {
+    const devices = await VoiceDevice.countDocuments();
+    const online = await VoiceDevice.countDocuments({ status: 'online' });
+    const listening = await VoiceDevice.countDocuments({
+      status: 'online',
+      voiceRecognitionEnabled: { $ne: false }
+    });
+
+    return { devices, online, listening };
+  }
+
+  /**
    * Perform system health check
    * @returns {Promise<Object>} System health status
    */
@@ -1452,9 +1467,7 @@ class MaintenanceService {
       });
 
       // Check voice system
-      health.voiceSystem.devices = await VoiceDevice.countDocuments();
-      health.voiceSystem.online = await VoiceDevice.countDocuments({ isOnline: true });
-      health.voiceSystem.listening = await VoiceDevice.countDocuments({ isListening: true });
+      health.voiceSystem = await this.getVoiceSystemHealth();
 
       console.log('MaintenanceService: System health check completed');
 
