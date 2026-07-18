@@ -109,6 +109,23 @@ function isThreadKernelRebuildEnabled() {
   return envFlagEnabled(process.env.HOMEBRAIN_ENABLE_THREAD_KERNEL_REBUILD);
 }
 
+function enableMatterBleForEnvironment(environment, runtime) {
+  if (!runtime?.NodeJsBle || !runtime?.Ble) {
+    return false;
+  }
+  if (typeof environment?.vars?.set !== 'function' || typeof environment?.maybeGet !== 'function') {
+    throw new Error('Matter BLE requires a configurable controller environment');
+  }
+
+  // matter.js 0.17 installs BLE through the environment service bundle. The
+  // legacy static Ble.get singleton is no longer consulted by the controller.
+  environment.vars.set('ble.enable', true);
+  if (!environment.maybeGet(runtime.Ble)) {
+    throw new Error('Matter BLE failed to register in the controller environment');
+  }
+  return true;
+}
+
 function isAllowedLocalOtbrHost(hostname) {
   let host = normalizeLower(hostname);
   if (host.startsWith('[')) {
@@ -3328,9 +3345,7 @@ class MatterService {
     environment.vars.set('storage.path', config.storagePath);
     environment.get(runtime.StorageService).location = config.storagePath;
 
-    if (runtime.NodeJsBle && runtime.Ble) {
-      runtime.Ble.get = runtime.singleton(() => new runtime.NodeJsBle({ environment }));
-    }
+    enableMatterBleForEnvironment(environment, runtime);
 
     let controller = null;
     try {
@@ -4230,6 +4245,7 @@ matterService._test = {
   buildThreadSetupGuidance,
   buildUniversalSilabsFlasherArgs,
   compareFirmwareEntries,
+  enableMatterBleForEnvironment,
   endpointDescriptorFromRecord,
   inferSonoffThreadFirmwareTarget,
   getSerialPortListFunction,

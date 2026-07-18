@@ -10,6 +10,18 @@ const directRadioProtocolCatalogService = require('../services/directRadioProtoc
 const Device = require('../models/Device');
 const matterService = require('../services/matterService');
 
+test('Matter BLE is registered in the controller environment used for commissioning', (t) => {
+  const runtime = matterService.loadMatterRuntime();
+  const environment = runtime.NodeJsEnvironment();
+
+  t.after(() => {
+    environment.vars.set('ble.enable', false);
+  });
+
+  assert.equal(matterService._test.enableMatterBleForEnvironment(environment, runtime), true);
+  assert.ok(environment.maybeGet(runtime.Ble) instanceof runtime.NodeJsBle);
+});
+
 test('Matter catalog maps Thread contact sensors with battery support', () => {
   const descriptor = {
     name: 'Back Door Contact',

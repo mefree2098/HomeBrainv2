@@ -19,7 +19,7 @@ if [[ -z "${NODE_MIN_VERSION:-}" ]]; then
   if [[ "${NODE_MAJOR}" == "20" ]]; then
     NODE_MIN_VERSION="20.19.0"
   else
-    NODE_MIN_VERSION="22.12.0"
+    NODE_MIN_VERSION="22.13.0"
   fi
 fi
 MONGODB_VERSION="${MONGODB_VERSION:-6.0}"

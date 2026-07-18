@@ -7,6 +7,7 @@ const { spawn } = require('node:child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 const runnerPath = path.join(repoRoot, 'scripts', 'run-with-modern-node.js');
+const { isProjectSupported, parseVersion } = require(runnerPath);
 
 function waitForFile(filePath, timeoutMs = 5000) {
   const startedAt = Date.now();
@@ -43,6 +44,14 @@ function waitForExit(child, timeoutMs = 5000) {
     });
   });
 }
+
+test('run-with-modern-node enforces the dependency-compatible Node floor', () => {
+  assert.equal(isProjectSupported(parseVersion('20.18.9')), false);
+  assert.equal(isProjectSupported(parseVersion('20.19.0')), true);
+  assert.equal(isProjectSupported(parseVersion('22.12.0')), false);
+  assert.equal(isProjectSupported(parseVersion('22.13.0')), true);
+  assert.equal(isProjectSupported(parseVersion('23.0.0')), true);
+});
 
 test('run-with-modern-node forwards termination signals to the spawned command', async (t) => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'homebrain-modern-node-test-'));
