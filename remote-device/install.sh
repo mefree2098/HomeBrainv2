@@ -140,7 +140,7 @@ if [[ "$SCRIPT_DIR" != "$INSTALL_DIR" ]]; then
 cat > package.json << 'EOF'
 {
   "name": "homebrain-remote-device",
-  "version": "1.1.14",
+  "version": "1.1.15",
   "description": "HomeBrain Remote Voice Device for Linux listeners",
   "main": "index.js",
   "scripts": {
@@ -149,13 +149,13 @@ cat > package.json << 'EOF'
     "setup-audio": "node setup-audio.js"
   },
   "dependencies": {
-    "ws": "^8.18.0",
+    "ws": "^8.21.1",
     "node-record-lpcm16": "^1.0.1",
     "node-fetch": "^2.7.0",
     "yargs": "^17.7.2",
     "node-wav": "^0.0.2",
     "audio-buffer-utils": "^5.1.2",
-    "onnxruntime-node": "^1.19.0",
+    "onnxruntime-node": "1.21.1",
     "tflite-node": "1.0.0"
   },
   "engines": {

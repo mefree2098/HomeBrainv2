@@ -351,7 +351,7 @@ Use a current supported Node.js runtime in AWS Lambda.
 This repo itself supports:
 
 - Node `20.19+`
-- Node `22.12+`
+- Node `22.13+`
 
 Node.js `22.x` is the most natural fit for new Lambda deployments if it's available in your AWS account.
 

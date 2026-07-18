@@ -239,7 +239,7 @@ Security checklist:
 The repository now also advertises its runtime preference directly:
 
 - [`.nvmrc`](.nvmrc) prefers Node `22`
-- root, server, and client `package.json` files declare `^20.19.0 || >=22.12.0`
+- root, server, and client `package.json` files declare `^20.19.0 || >=22.13.0`
 
 For Jetson deployment, Node `22.x` is the intended production runtime.
 
