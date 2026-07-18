@@ -830,6 +830,7 @@ function inferZWaveFeaturesFromText(parts = []) {
   if (/\b(?:siren|alarm|sound switch)\b/.test(text)) addFeature(features, 'alarm');
   if (/\bchime\b/.test(text)) addFeature(features, 'chime');
   if (/\b(?:button|scene controller|remote)\b/.test(text)) addFeature(features, 'button');
+  if (/\b(?:repeater|extender)\b/.test(text)) addFeature(features, 'repeater');
   if (/\b(?:thermostat|setpoint|heating|cooling)\b/.test(text)) addFeature(features, 'thermostat');
   if (/\bfan\b/.test(text)) addFeature(features, 'fan');
   if (/\b(?:garage|barrier)\b/.test(text)) addFeature(features, 'garage');
