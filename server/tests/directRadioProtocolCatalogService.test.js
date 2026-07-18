@@ -80,6 +80,20 @@ test('Z-Wave protocol catalog infers siren alarm capabilities from config text',
   assert.ok(features.includes('chime'));
 });
 
+test('Z-Wave catalog classifies DSD37 range extenders as mesh repeaters', async () => {
+  const entry = await directRadioProtocolCatalogService.lookupZWaveCatalogEntry({
+    manufacturerId: '0x0086',
+    productType: '0x0004',
+    productId: '0x0025'
+  });
+
+  assert.ok(entry);
+  assert.equal(entry.label, 'DSD37');
+  assert.equal(entry.description, 'Range Extender');
+  assert.ok(entry.homebrainFeatures.includes('repeater'));
+  assert.ok(entry.capabilities.some((capability) => capability.type === 'mesh_repeater'));
+});
+
 test('Z-Wave catalog includes Zooz ZSE50 siren and chime metadata', async () => {
   const entry = await directRadioProtocolCatalogService.lookupZWaveCatalogEntry({
     manufacturerId: '0x027a',
