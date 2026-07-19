@@ -121,6 +121,7 @@ const openclawMcpService = require("./services/openclawMcpService");
 const { sendNotFound, sendUnhandledError } = require("./utils/apiErrorResponses");
 const { assertRequiredAuthSecrets } = require("./utils/startupSecrets");
 const cors = require("cors");
+const { buildCorsOptions } = require("./config/corsOptions");
 const http = require("http");
 const fs = require("fs");
 const SMARTTHINGS_STARTUP_BOOTSTRAP_DELAY_MS = Math.max(0, Number(process.env.SMARTTHINGS_STARTUP_BOOTSTRAP_DELAY_MS || 5000));
@@ -146,80 +147,6 @@ function envFlagEnabled(value, fallback = true) {
   }
 
   return fallback;
-}
-
-function splitList(value) {
-  return String(value || '')
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
-function normalizeOrigin(value) {
-  if (!value || typeof value !== 'string') {
-    return '';
-  }
-
-  try {
-    return new URL(value.trim()).origin;
-  } catch (_error) {
-    return '';
-  }
-}
-
-function buildAllowedOrigins() {
-  const configured = [
-    process.env.CLIENT_URL,
-    process.env.HOMEBRAIN_PUBLIC_BASE_URL,
-    process.env.PUBLIC_BASE_URL,
-    process.env.AXIOM_PUBLIC_BASE_URL,
-    process.env.AXIOM_PUBLIC_URL,
-    ...splitList(process.env.CORS_ALLOWED_ORIGINS)
-  ].map(normalizeOrigin).filter(Boolean);
-
-  if (process.env.NODE_ENV !== 'production') {
-    configured.push(
-      'http://localhost:5173',
-      'http://127.0.0.1:5173',
-      'http://localhost:3000',
-      'http://127.0.0.1:3000'
-    );
-  }
-
-  return [...new Set(configured)];
-}
-
-function buildCorsOptions(req = null) {
-  const allowedOrigins = buildAllowedOrigins();
-
-  return {
-    origin(origin, callback) {
-      if (!origin) {
-        return callback(null, true);
-      }
-
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-
-      const error = new Error('CORS origin not allowed');
-      error.status = 403;
-      return callback(error);
-    },
-    credentials: true,
-    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: [
-      'Authorization',
-      'Content-Type',
-      'X-CSRF-Token',
-      'X-HomeBrain-Client-Type',
-      'X-HomeBrain-Client-Name',
-      'X-HomeBrain-Device-Id',
-      'X-HomeBrain-Registration-Code',
-      'X-HomeBrain-Claim-Token',
-      'X-HomeBrain-Device-Token'
-    ]
-  };
 }
 
 function buildConnectSrc(req = null) {
