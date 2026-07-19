@@ -170,6 +170,7 @@ router.post('/login', loginRateLimit, async (req, res) => {
         sessionIssue.tokens.accessToken,
         sessionIssue.tokens.refreshToken,
         {
+          req,
           sessionTokenMaxAge: sessionIssue.tokens.refreshMaxAgeMs
         }
       );
@@ -232,6 +233,7 @@ router.post('/register', registrationRateLimit, async (req, res, next) => {
       sessionIssue.tokens.accessToken,
       sessionIssue.tokens.refreshToken,
       {
+        req,
         sessionTokenMaxAge: sessionIssue.tokens.refreshMaxAgeMs
       }
     );
@@ -284,7 +286,7 @@ router.post('/logout', async (req, res) => {
     await user.save();
   }
 
-  clearAuthCookies(res);
+  clearAuthCookies(res, { req });
 
   res.status(200).json({ message: 'User logged out successfully.' });
 });
@@ -296,7 +298,7 @@ router.post('/refresh', refreshRateLimit, async (req, res) => {
 
   if (!refreshToken) {
     console.log('No refresh token provided in request');
-    clearAuthCookies(res);
+    clearAuthCookies(res, { req });
     return res.status(401).json({
       success: false,
       message: 'Refresh token is required'
@@ -310,6 +312,7 @@ router.post('/refresh', refreshRateLimit, async (req, res) => {
       sessionIssue.tokens.accessToken,
       sessionIssue.tokens.refreshToken,
       {
+        req,
         sessionTokenMaxAge: sessionIssue.tokens.refreshMaxAgeMs
       }
     );
@@ -329,7 +332,7 @@ router.post('/refresh', refreshRateLimit, async (req, res) => {
     console.error('Full error details:', error);
 
     if ((error.status || 500) < 500) {
-      clearAuthCookies(res);
+      clearAuthCookies(res, { req });
     }
 
     return res.status(error.status || 403).json({
@@ -349,7 +352,7 @@ router.delete('/account', accountDeletionRateLimit, requireUser(ALL_ROLES, {
 }), async (req, res) => {
   try {
     await accountDeletionService.deleteAccount(req.user._id, req.body?.password);
-    clearAuthCookies(res);
+    clearAuthCookies(res, { req });
 
     return res.status(200).json({
       success: true,
@@ -404,7 +407,7 @@ router.delete('/sessions/:sessionId', requireUser(ALL_ROLES, { platform: null })
     const signedOutCurrentSession = currentSessionId === session.sessionId;
 
     if (signedOutCurrentSession) {
-      clearAuthCookies(res);
+      clearAuthCookies(res, { req });
     }
 
     return res.status(200).json({
