@@ -74,6 +74,65 @@ test('install and update paths apply Caddy config after bootstrapping reverse pr
   assert.match(bootstrapScript, /reverseProxyService\.applyConfig\(actor\)/);
 });
 
+test('Pi-hole installer download retries transient failures and uses the official GitHub fallback', (t) => {
+  const setupScript = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'homebrain-pihole-download-test-'));
+  const binDir = path.join(tempDir, 'bin');
+  const installerPath = path.join(tempDir, 'pihole-install.sh');
+  const curlLogPath = path.join(tempDir, 'curl.log');
+  const primaryUrl = 'https://primary.invalid/install.sh';
+  const fallbackUrl = 'https://fallback.invalid/basic-install.sh';
+
+  assert.match(setupScript, /https:\/\/install\.pi-hole\.net/);
+  assert.match(setupScript, /https:\/\/raw\.githubusercontent\.com\/pi-hole\/pi-hole\/master\/automated%20install\/basic-install\.sh/);
+
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(binDir, 'curl'),
+    `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${curlLogPath}"
+output_path=""
+source_url=""
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    -o) output_path="$2"; shift 2 ;;
+    http*) source_url="$1"; shift ;;
+    *) shift ;;
+  esac
+done
+if [[ "\${source_url}" == "${primaryUrl}" ]]; then
+  exit 6
+fi
+printf '%s\\n' '#!/usr/bin/env bash' '# Official Pi-hole installer' > "\${output_path}"
+`,
+    { mode: 0o755 }
+  );
+
+  const result = spawnSync(
+    'bash',
+    ['-c', 'source "$1"; download_pihole_installer "$2"', 'bash', path.join(repoRoot, 'scripts', 'setup-services.sh'), installerPath],
+    {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        HOMEBRAIN_PIHOLE_INSTALLER_URL: primaryUrl,
+        HOMEBRAIN_PIHOLE_INSTALLER_FALLBACK_URL: fallbackUrl,
+        PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`
+      }
+    }
+  );
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(fs.readFileSync(installerPath, 'utf8'), /Official Pi-hole installer/);
+  const curlCalls = fs.readFileSync(curlLogPath, 'utf8').trim().split('\n');
+  assert.equal(curlCalls.length, 2);
+  assert.match(curlCalls[0], /--retry 5 --retry-all-errors --retry-delay 3/);
+  assert.ok(curlCalls[0].includes(primaryUrl));
+  assert.ok(curlCalls[1].includes(fallbackUrl));
+});
+
 test('restart helper stops legacy standalone discovery before starting HomeBrain', () => {
   const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'restart-homebrain-service.sh'), 'utf8');
 

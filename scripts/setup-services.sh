@@ -49,6 +49,8 @@ MQTT_LOG_DIR="${HOMEBRAIN_MQTT_LOG_DIR:-/var/log/homebrain/mqtt}"
 PIHOLE_WEB_PORT="${HOMEBRAIN_PIHOLE_WEB_PORT:-8081}"
 PIHOLE_WEB_TLS_PORT="${HOMEBRAIN_PIHOLE_WEB_TLS_PORT:-8444}"
 PIHOLE_ADMIN_ROUTE_HOST="${HOMEBRAIN_PIHOLE_ADMIN_ROUTE_HOST:-}"
+PIHOLE_INSTALLER_URL="${HOMEBRAIN_PIHOLE_INSTALLER_URL:-https://install.pi-hole.net}"
+PIHOLE_INSTALLER_FALLBACK_URL="${HOMEBRAIN_PIHOLE_INSTALLER_FALLBACK_URL:-https://raw.githubusercontent.com/pi-hole/pi-hole/master/automated%20install/basic-install.sh}"
 OLLAMA_HELPER_SOURCE_PATH="${HOMEBRAIN_DIR}/scripts/ollama-host-control.sh"
 OLLAMA_HELPER_INSTALL_DIR="${HOMEBRAIN_HELPER_INSTALL_DIR}"
 OLLAMA_HELPER_INSTALL_PATH="${OLLAMA_HELPER_INSTALL_DIR}/ollama-host-control.sh"
@@ -1175,6 +1177,47 @@ EOF
   sudo chmod 0644 "${setup_vars_path}"
 }
 
+download_pihole_installer() {
+  local installer_path="$1"
+  local source_index source_name source_url
+  local source_urls=(
+    "${PIHOLE_INSTALLER_URL}"
+    "${PIHOLE_INSTALLER_FALLBACK_URL}"
+  )
+  local source_names=(
+    "Pi-hole download endpoint"
+    "Pi-hole GitHub repository fallback"
+  )
+
+  for source_index in "${!source_urls[@]}"; do
+    source_url="${source_urls[${source_index}]}"
+    source_name="${source_names[${source_index}]}"
+    [[ -z "${source_url}" ]] && continue
+    rm -f "${installer_path}"
+    print_status "Downloading the official installer from the ${source_name}..."
+
+    if curl --fail --show-error --silent --location \
+      --retry 5 --retry-all-errors --retry-delay 3 \
+      --connect-timeout 20 --max-time 180 \
+      "${source_url}" -o "${installer_path}"; then
+      if [[ -s "${installer_path}" ]] \
+        && head -n 1 "${installer_path}" | grep -Eq '^#!.*(bash|sh)' \
+        && grep -q 'Pi-hole' "${installer_path}"; then
+        print_success "Pi-hole installer downloaded."
+        return 0
+      fi
+
+      print_warning "The installer downloaded from the ${source_name} did not pass validation."
+    else
+      print_warning "The ${source_name} failed after retries."
+    fi
+  done
+
+  rm -f "${installer_path}"
+  print_error "Unable to download the Pi-hole installer from either official source. Check DNS with 'getent hosts install.pi-hole.net' and retry 'bash scripts/setup-services.sh setup-pihole'."
+  return 1
+}
+
 setup_pihole() {
   if command -v pihole >/dev/null 2>&1; then
     print_success "Pi-hole is already installed."
@@ -1187,7 +1230,9 @@ setup_pihole() {
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates dnsutils
 
   local installer_path="/tmp/homebrain-pihole-install.sh"
-  curl -fsSL https://install.pi-hole.net -o "${installer_path}"
+  if ! download_pihole_installer "${installer_path}"; then
+    exit 1
+  fi
   chmod 0755 "${installer_path}"
   write_pihole_setup_vars
 
@@ -1686,4 +1731,6 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
