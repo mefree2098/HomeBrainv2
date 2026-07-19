@@ -372,13 +372,18 @@ async function getAuthenticatedUserFromSession(req, res) {
   const { user, session } = await authSessionService.resolveUserFromSessionToken(sessionToken);
   if (!user) {
     if (sessionToken || accessToken) {
-      clearAuthCookies(res);
+      clearAuthCookies(res, { req });
     }
     return null;
   }
 
-  setAccessTokenCookie(res, generateAccessToken(user, { sessionId: session?.sessionId }));
-  setSessionTokenCookie(res, sessionToken);
+  setAccessTokenCookie(
+    res,
+    generateAccessToken(user, { sessionId: session?.sessionId }),
+    undefined,
+    { req }
+  );
+  setSessionTokenCookie(res, sessionToken, undefined, { req });
   return user;
 }
 

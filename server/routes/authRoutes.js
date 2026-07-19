@@ -95,6 +95,18 @@ const accountDeletionRateLimit = rateLimit({
   }
 });
 
+const sessionMutationRateLimit = rateLimit({
+  windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_SESSION_MUTATION_RATE_LIMIT_WINDOW_MS || 15 * 60 * 1000)),
+  limit: Math.max(10, Number(process.env.HOMEBRAIN_SESSION_MUTATION_RATE_LIMIT_MAX || 60)),
+  keyGenerator: buildClientRateLimitKey,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: 'Too many session changes. Please retry shortly.'
+  }
+});
+
 function trimString(value, fallback = '') {
   return typeof value === 'string' ? value.trim() : fallback;
 }
@@ -170,6 +182,7 @@ router.post('/login', loginRateLimit, async (req, res) => {
         sessionIssue.tokens.accessToken,
         sessionIssue.tokens.refreshToken,
         {
+          req,
           sessionTokenMaxAge: sessionIssue.tokens.refreshMaxAgeMs
         }
       );
@@ -232,6 +245,7 @@ router.post('/register', registrationRateLimit, async (req, res, next) => {
       sessionIssue.tokens.accessToken,
       sessionIssue.tokens.refreshToken,
       {
+        req,
         sessionTokenMaxAge: sessionIssue.tokens.refreshMaxAgeMs
       }
     );
@@ -246,7 +260,7 @@ router.post('/register', registrationRateLimit, async (req, res, next) => {
   }
 });
 
-router.post('/logout', async (req, res) => {
+router.post('/logout', sessionMutationRateLimit, async (req, res) => {
   const email = trimString(req.body?.email);
   const explicitRefreshToken = req.body?.refreshToken || getCookieValue(req, SESSION_TOKEN_COOKIE_NAME);
 
@@ -284,7 +298,7 @@ router.post('/logout', async (req, res) => {
     await user.save();
   }
 
-  clearAuthCookies(res);
+  clearAuthCookies(res, { req });
 
   res.status(200).json({ message: 'User logged out successfully.' });
 });
@@ -296,7 +310,7 @@ router.post('/refresh', refreshRateLimit, async (req, res) => {
 
   if (!refreshToken) {
     console.log('No refresh token provided in request');
-    clearAuthCookies(res);
+    clearAuthCookies(res, { req });
     return res.status(401).json({
       success: false,
       message: 'Refresh token is required'
@@ -310,6 +324,7 @@ router.post('/refresh', refreshRateLimit, async (req, res) => {
       sessionIssue.tokens.accessToken,
       sessionIssue.tokens.refreshToken,
       {
+        req,
         sessionTokenMaxAge: sessionIssue.tokens.refreshMaxAgeMs
       }
     );
@@ -329,7 +344,7 @@ router.post('/refresh', refreshRateLimit, async (req, res) => {
     console.error('Full error details:', error);
 
     if ((error.status || 500) < 500) {
-      clearAuthCookies(res);
+      clearAuthCookies(res, { req });
     }
 
     return res.status(error.status || 403).json({
@@ -349,7 +364,7 @@ router.delete('/account', accountDeletionRateLimit, requireUser(ALL_ROLES, {
 }), async (req, res) => {
   try {
     await accountDeletionService.deleteAccount(req.user._id, req.body?.password);
-    clearAuthCookies(res);
+    clearAuthCookies(res, { req });
 
     return res.status(200).json({
       success: true,
@@ -385,42 +400,47 @@ router.get('/sessions', requireUser(ALL_ROLES, { platform: null }), async (req, 
   }
 });
 
-router.delete('/sessions/:sessionId', requireUser(ALL_ROLES, { platform: null }), async (req, res) => {
-  try {
-    const session = await authSessionService.revokeSessionById(
-      req.user._id,
-      req.params.sessionId,
-      'revoked-by-user'
-    );
+router.delete(
+  '/sessions/:sessionId',
+  sessionMutationRateLimit,
+  requireUser(ALL_ROLES, { platform: null }),
+  async (req, res) => {
+    try {
+      const session = await authSessionService.revokeSessionById(
+        req.user._id,
+        req.params.sessionId,
+        'revoked-by-user'
+      );
 
-    if (!session) {
-      return res.status(404).json({
+      if (!session) {
+        return res.status(404).json({
+          success: false,
+          message: 'Session not found'
+        });
+      }
+
+      const currentSessionId = authSessionService.getSessionIdFromAccessToken(extractToken(req));
+      const signedOutCurrentSession = currentSessionId === session.sessionId;
+
+      if (signedOutCurrentSession) {
+        clearAuthCookies(res, { req });
+      }
+
+      return res.status(200).json({
+        success: true,
+        signedOutCurrentSession,
+        message: signedOutCurrentSession
+          ? 'Current session revoked and signed out.'
+          : 'Session revoked successfully.'
+      });
+    } catch (error) {
+      return res.status(error.status || 500).json({
         success: false,
-        message: 'Session not found'
+        message: error.message || 'Failed to revoke session'
       });
     }
-
-    const currentSessionId = authSessionService.getSessionIdFromAccessToken(extractToken(req));
-    const signedOutCurrentSession = currentSessionId === session.sessionId;
-
-    if (signedOutCurrentSession) {
-      clearAuthCookies(res);
-    }
-
-    return res.status(200).json({
-      success: true,
-      signedOutCurrentSession,
-      message: signedOutCurrentSession
-        ? 'Current session revoked and signed out.'
-        : 'Session revoked successfully.'
-    });
-  } catch (error) {
-    return res.status(error.status || 500).json({
-      success: false,
-      message: error.message || 'Failed to revoke session'
-    });
   }
-});
+);
 
 router.get('/registration-status', async (_req, res) => {
   try {

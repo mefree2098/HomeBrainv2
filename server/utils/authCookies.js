@@ -1,12 +1,35 @@
 const ACCESS_TOKEN_COOKIE_NAME = 'hbAccessToken';
 const SESSION_TOKEN_COOKIE_NAME = 'hbSessionToken';
 
-const SECURE_COOKIE = process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production';
 const ACCESS_TOKEN_COOKIE_MAX_AGE = Number(process.env.ACCESS_TOKEN_COOKIE_MAX_AGE || 60 * 60 * 1000);
 const SESSION_TOKEN_COOKIE_MAX_AGE = Number(process.env.SESSION_TOKEN_COOKIE_MAX_AGE || 30 * 24 * 60 * 60 * 1000);
 const COOKIE_SAMESITE = ['strict', 'lax', 'none'].includes(String(process.env.COOKIE_SAMESITE || '').toLowerCase())
   ? String(process.env.COOKIE_SAMESITE).toLowerCase()
   : 'lax';
+
+function parseBooleanOverride(value) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  if (['true', '1', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['false', '0', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+  return null;
+}
+
+function resolveCookieSecure(req, env = process.env) {
+  const configuredValue = parseBooleanOverride(env.COOKIE_SECURE);
+  if (configuredValue !== null) {
+    return configuredValue;
+  }
+
+  return req?.secure === true || String(req?.protocol || '').toLowerCase() === 'https';
+}
+
+// Kept for callers that consumed the previous exported constant. Cookie writers use
+// resolveCookieSecure() so HTTP and HTTPS requests can be handled correctly at runtime.
+const SECURE_COOKIE = resolveCookieSecure(null);
 
 function getCookieValue(req, name) {
   const rawCookies = req?.headers?.cookie;
@@ -42,28 +65,39 @@ function buildCookieOptions(maxAge, options = {}) {
   return {
     httpOnly: true,
     sameSite: COOKIE_SAMESITE,
-    secure: SECURE_COOKIE,
+    secure: resolveCookieSecure(options.req, options.env),
     path: '/',
     ...(includeMaxAge ? { maxAge } : {})
   };
 }
 
-function setAccessTokenCookie(res, accessToken, maxAge = ACCESS_TOKEN_COOKIE_MAX_AGE) {
-  res.cookie(ACCESS_TOKEN_COOKIE_NAME, accessToken, buildCookieOptions(maxAge));
+function setAccessTokenCookie(res, accessToken, maxAge = ACCESS_TOKEN_COOKIE_MAX_AGE, options = {}) {
+  res.cookie(ACCESS_TOKEN_COOKIE_NAME, accessToken, buildCookieOptions(maxAge, options));
 }
 
-function setSessionTokenCookie(res, sessionToken, maxAge = SESSION_TOKEN_COOKIE_MAX_AGE) {
-  res.cookie(SESSION_TOKEN_COOKIE_NAME, sessionToken, buildCookieOptions(maxAge));
+function setSessionTokenCookie(res, sessionToken, maxAge = SESSION_TOKEN_COOKIE_MAX_AGE, options = {}) {
+  res.cookie(SESSION_TOKEN_COOKIE_NAME, sessionToken, buildCookieOptions(maxAge, options));
 }
 
 function setAuthCookies(res, accessToken, sessionToken, options = {}) {
-  setAccessTokenCookie(res, accessToken, options.accessTokenMaxAge || ACCESS_TOKEN_COOKIE_MAX_AGE);
-  setSessionTokenCookie(res, sessionToken, options.sessionTokenMaxAge || SESSION_TOKEN_COOKIE_MAX_AGE);
+  setAccessTokenCookie(
+    res,
+    accessToken,
+    options.accessTokenMaxAge || ACCESS_TOKEN_COOKIE_MAX_AGE,
+    options
+  );
+  setSessionTokenCookie(
+    res,
+    sessionToken,
+    options.sessionTokenMaxAge || SESSION_TOKEN_COOKIE_MAX_AGE,
+    options
+  );
 }
 
-function clearAuthCookies(res) {
-  res.clearCookie(ACCESS_TOKEN_COOKIE_NAME, buildCookieOptions(ACCESS_TOKEN_COOKIE_MAX_AGE, { includeMaxAge: false }));
-  res.clearCookie(SESSION_TOKEN_COOKIE_NAME, buildCookieOptions(SESSION_TOKEN_COOKIE_MAX_AGE, { includeMaxAge: false }));
+function clearAuthCookies(res, options = {}) {
+  const clearOptions = { ...options, includeMaxAge: false };
+  res.clearCookie(ACCESS_TOKEN_COOKIE_NAME, buildCookieOptions(ACCESS_TOKEN_COOKIE_MAX_AGE, clearOptions));
+  res.clearCookie(SESSION_TOKEN_COOKIE_NAME, buildCookieOptions(SESSION_TOKEN_COOKIE_MAX_AGE, clearOptions));
 }
 
 module.exports = {
@@ -73,7 +107,9 @@ module.exports = {
   SESSION_TOKEN_COOKIE_MAX_AGE,
   COOKIE_SAMESITE,
   SECURE_COOKIE,
+  buildCookieOptions,
   getCookieValue,
+  resolveCookieSecure,
   setAccessTokenCookie,
   setSessionTokenCookie,
   setAuthCookies,
