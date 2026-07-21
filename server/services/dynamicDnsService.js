@@ -95,6 +95,17 @@ function encodeAzurePathSegment(value) {
   return encodeURIComponent(String(value));
 }
 
+function getMissingAzureSettings(settings = {}) {
+  const missing = [];
+  if (!trimString(settings.dynamicDnsAzureTenantId)) missing.push('tenant ID');
+  if (!trimString(settings.dynamicDnsAzureClientId)) missing.push('client ID');
+  if (!trimString(settings.dynamicDnsAzureClientSecret)) missing.push('client secret');
+  if (!trimString(settings.dynamicDnsAzureSubscriptionId)) missing.push('subscription ID');
+  if (!trimString(settings.dynamicDnsAzureResourceGroup)) missing.push('resource group');
+  if (!normalizeHostname(settings.dynamicDnsAzureZoneName)) missing.push('zone name');
+  return missing;
+}
+
 class DynamicDnsService {
   constructor() {
     this.timer = null;
@@ -114,14 +125,31 @@ class DynamicDnsService {
       return;
     }
 
+    const missing = getMissingAzureSettings(settings);
+    if (missing.length > 0) {
+      console.error(`Dynamic DNS is enabled but Azure settings are incomplete: missing ${missing.join(', ')}`);
+      return;
+    }
+
     const intervalMs = normalizeIntervalMs(settings.dynamicDnsCheckIntervalSeconds);
     this.nextCheckAt = new Date(Date.now() + intervalMs);
     this.timer = setInterval(() => {
       this.nextCheckAt = new Date(Date.now() + intervalMs);
-      void this.checkAndUpdate({ reason: 'scheduled' });
+      this.runBackgroundCheck({ reason: 'scheduled' });
     }, intervalMs);
 
-    void this.checkAndUpdate({ reason: 'startup' });
+    if (typeof this.timer?.unref === 'function') {
+      this.timer.unref();
+    }
+
+    this.runBackgroundCheck({ reason: 'startup' });
+  }
+
+  runBackgroundCheck(options = {}) {
+    const reason = trimString(options.reason, 'background');
+    void this.checkAndUpdate(options).catch((error) => {
+      console.error(`Dynamic DNS ${reason} check failed: ${error.message || error}`);
+    });
   }
 
   stop() {
@@ -304,13 +332,7 @@ class DynamicDnsService {
     const zoneName = normalizeHostname(settings.dynamicDnsAzureZoneName);
     const ttl = Math.max(30, Math.min(86400, Number(settings.dynamicDnsAzureTtlSeconds || 60)));
 
-    const missing = [];
-    if (!tenantId) missing.push('tenant ID');
-    if (!clientId) missing.push('client ID');
-    if (!clientSecret) missing.push('client secret');
-    if (!subscriptionId) missing.push('subscription ID');
-    if (!resourceGroup) missing.push('resource group');
-    if (!zoneName) missing.push('zone name');
+    const missing = getMissingAzureSettings(settings);
     if (missing.length > 0) {
       throw new Error(`Azure Dynamic DNS settings missing ${missing.join(', ')}`);
     }
