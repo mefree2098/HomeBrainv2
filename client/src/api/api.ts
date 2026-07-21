@@ -40,6 +40,25 @@ const mergeLiveSettingsInputValues = (url: string, data: any): any => {
   return merged;
 };
 
+declare global {
+  // Settings.tsx historically calls loadSettings() from a handler even though
+  // its local implementation is scoped to the mount effect. Keep a safe global
+  // fallback so successful maintenance actions can refresh instead of throwing.
+  var loadSettings: (() => Promise<void>) | undefined;
+}
+
+const installSettingsRefreshFallback = () => {
+  if (typeof window === 'undefined' || typeof globalThis.loadSettings === 'function') {
+    return;
+  }
+
+  globalThis.loadSettings = async () => {
+    window.location.reload();
+  };
+};
+
+installSettingsRefreshFallback();
+
 const localApi = axios.create({
   withCredentials: true,
   headers: {
