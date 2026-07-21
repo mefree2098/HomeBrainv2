@@ -20,7 +20,7 @@
     "node": "^20.19.0 || >=22.13.0"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.111.0",
+    "@anthropic-ai/sdk": "^0.112.4",
     "@harmonyhub/client-ws": "file:vendor/harmony-client-ws",
     "@harmonyhub/discover": "^1.0.9",
     "@matter/main": "^0.17.6",
