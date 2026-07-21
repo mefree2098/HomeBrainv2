@@ -176,3 +176,64 @@ test('background Dynamic DNS failures are caught and logged', async (t) => {
     true
   );
 });
+
+test('Azure DNS authorization failures preserve status and actionable guidance through pushNow', async (t) => {
+  dynamicDnsService.stop();
+  const originalGetSettings = Settings.getSettings;
+  const originalUpdateSettings = Settings.updateSettings;
+  const originalRouteFind = ReverseProxyRoute.find;
+  const originalAxiosGet = axios.get;
+  const originalAxiosPost = axios.post;
+  const originalAxiosPut = axios.put;
+  const updatePayloads = [];
+
+  t.after(() => {
+    dynamicDnsService.stop();
+    Settings.getSettings = originalGetSettings;
+    Settings.updateSettings = originalUpdateSettings;
+    ReverseProxyRoute.find = originalRouteFind;
+    axios.get = originalAxiosGet;
+    axios.post = originalAxiosPost;
+    axios.put = originalAxiosPut;
+  });
+
+  Settings.getSettings = async () => createSettings();
+  Settings.updateSettings = async (updates) => {
+    updatePayloads.push(updates);
+    return { ...createSettings(), ...updates };
+  };
+  mockRouteFind([]);
+  axios.get = async () => ({ data: { ip: '203.0.113.44' } });
+  axios.post = async () => ({ data: { access_token: 'azure-token' } });
+  axios.put = async () => {
+    const error = new Error('Request failed with status code 403');
+    error.response = {
+      status: 403,
+      data: {
+        error: {
+          code: 'AuthorizationFailed',
+          message: "The client does not have authorization to perform action 'Microsoft.Network/dnsZones/A/write' over the requested scope."
+        }
+      },
+      headers: {
+        'x-ms-correlation-request-id': 'azure-request-id'
+      }
+    };
+    throw error;
+  };
+
+  await assert.rejects(
+    dynamicDnsService.pushNow('admin@example.com'),
+    (error) => {
+      assert.equal(error.status, 403);
+      assert.equal(error.code, 'AuthorizationFailed');
+      assert.match(error.message, /DNS Zone Contributor/);
+      assert.match(error.message, /Microsoft\.Network\/dnsZones\/A\/write/);
+      assert.match(error.message, /azure-request-id/);
+      return true;
+    }
+  );
+
+  assert.equal(updatePayloads.at(-1).dynamicDnsLastStatus, 'failed');
+  assert.match(updatePayloads.at(-1).dynamicDnsLastError, /DNS Zone Contributor/);
+});

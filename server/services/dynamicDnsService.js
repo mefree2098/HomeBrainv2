@@ -3,6 +3,7 @@ const axios = require('axios');
 
 const Settings = require('../models/Settings');
 const ReverseProxyRoute = require('../models/ReverseProxyRoute');
+const { createAzureDnsError } = require('./azureDnsError');
 
 const AZURE_API_VERSION = '2018-05-01';
 const DEFAULT_PUBLIC_IP_URLS = [
@@ -223,13 +224,21 @@ class DynamicDnsService {
         } catch (error) {
           errors.push({
             hostname: record.hostname,
-            error: error.message || 'Dynamic DNS update failed'
+            error: error.message || 'Dynamic DNS update failed',
+            status: error.status,
+            code: error.code
           });
         }
       }
 
       if (errors.length > 0) {
-        throw new Error(errors.map((entry) => `${entry.hostname}: ${entry.error}`).join('; '));
+        const aggregateError = new Error(errors.map((entry) => `${entry.hostname}: ${entry.error}`).join('; '));
+        const firstTypedError = errors.find((entry) => Number.isFinite(Number(entry.status)) || entry.code);
+        if (firstTypedError) {
+          aggregateError.status = firstTypedError.status;
+          aggregateError.code = firstTypedError.code;
+        }
+        throw aggregateError;
       }
 
       await Settings.updateSettings({
@@ -337,7 +346,12 @@ class DynamicDnsService {
       throw new Error(`Azure Dynamic DNS settings missing ${missing.join(', ')}`);
     }
 
-    const token = await this.getAzureAccessToken({ tenantId, clientId, clientSecret });
+    const token = await this.getAzureAccessToken({
+      tenantId,
+      clientId,
+      clientSecret,
+      settings
+    });
     const recordName = getAzureRecordName(record.hostname, zoneName);
     const url = [
       'https://management.azure.com/subscriptions',
@@ -350,18 +364,26 @@ class DynamicDnsService {
       encodeAzurePathSegment(recordName)
     ].join('/') + `?api-version=${AZURE_API_VERSION}`;
 
-    await axios.put(url, {
-      properties: {
-        TTL: ttl,
-        ARecords: [{ ipv4Address: publicIp }]
-      }
-    }, {
-      timeout: 15000,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      }
-    });
+    try {
+      await axios.put(url, {
+        properties: {
+          TTL: ttl,
+          ARecords: [{ ipv4Address: publicIp }]
+        }
+      }, {
+        timeout: 15000,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+    } catch (error) {
+      throw createAzureDnsError(error, {
+        settings,
+        operation: 'write the Azure DNS A record',
+        hostname: record.hostname
+      });
+    }
 
     return {
       provider: 'azure',
@@ -374,25 +396,40 @@ class DynamicDnsService {
     };
   }
 
-  async getAzureAccessToken({ tenantId, clientId, clientSecret }) {
+  async getAzureAccessToken({ tenantId, clientId, clientSecret, settings = {} }) {
     const params = new URLSearchParams();
     params.set('client_id', clientId);
     params.set('client_secret', clientSecret);
     params.set('scope', 'https://management.azure.com/.default');
     params.set('grant_type', 'client_credentials');
 
-    const response = await axios.post(
-      `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`,
-      params.toString(),
-      {
-        timeout: 15000,
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-      }
-    );
+    let response;
+    try {
+      response = await axios.post(
+        `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`,
+        params.toString(),
+        {
+          timeout: 15000,
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        }
+      );
+    } catch (error) {
+      throw createAzureDnsError(error, {
+        authentication: true,
+        operation: 'authenticate to Azure',
+        settings: {
+          ...settings,
+          dynamicDnsAzureTenantId: tenantId,
+          dynamicDnsAzureClientId: clientId
+        }
+      });
+    }
 
     const token = response.data?.access_token;
     if (!token) {
-      throw new Error('Azure token response did not include an access token');
+      const tokenError = new Error('Azure token response did not include an access token');
+      tokenError.status = 502;
+      throw tokenError;
     }
     return token;
   }
