@@ -32,7 +32,7 @@
     "node": "^20.19.0 || >=22.13.0"
   },
   "dependencies": {
-    "concurrently": "^10.0.3"
+    "concurrently": "^9.2.4"
   },
   "devDependencies": {
     "cross-env": "^7.0.3"
