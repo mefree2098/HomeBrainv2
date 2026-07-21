@@ -1,7 +1,44 @@
 import axios, { AxiosRequestConfig, AxiosError, InternalAxiosRequestConfig } from 'axios';
 import JSONbig from 'json-bigint';
 
+const LIVE_SETTINGS_INPUT_FIELDS = [
+  'dynamicDnsPrimaryHostname',
+  'dynamicDnsPublicIpUrl',
+  'dynamicDnsAzureTenantId',
+  'dynamicDnsAzureClientId',
+  'dynamicDnsAzureClientSecret',
+  'dynamicDnsAzureSubscriptionId',
+  'dynamicDnsAzureResourceGroup',
+  'dynamicDnsAzureZoneName',
+] as const;
 
+const mergeLiveSettingsInputValues = (url: string, data: any): any => {
+  if (
+    typeof document === 'undefined' ||
+    url !== '/api/settings' ||
+    !data ||
+    typeof data !== 'object' ||
+    Array.isArray(data)
+  ) {
+    return data;
+  }
+
+  const form = document.querySelector('form');
+  if (!form) {
+    return data;
+  }
+
+  const merged = { ...data };
+  for (const fieldName of LIVE_SETTINGS_INPUT_FIELDS) {
+    const input = form.querySelector<HTMLInputElement>(`input[name="${fieldName}"]`);
+    const liveValue = input?.value;
+    if (typeof liveValue === 'string' && liveValue.trim()) {
+      merged[fieldName] = liveValue;
+    }
+  }
+
+  return merged;
+};
 
 const localApi = axios.create({
   withCredentials: true,
@@ -36,8 +73,6 @@ const localApi = axios.create({
     }
   }]
 });
-
-
 
 let refreshRequest: Promise<void> | null = null;
 const WEB_INSTALLATION_ID_KEY = 'homebrain.webInstallationId';
@@ -82,7 +117,7 @@ const getApiInstance = (url: string) => {
 
 // Check if the URL is for the refresh token endpoint to avoid infinite loops
 const isRefreshTokenEndpoint = (url: string): boolean => {
-  return url.includes("/api/auth/refresh");
+  return url.includes('/api/auth/refresh');
 };
 
 const clearClientAuthState = () => {
@@ -110,7 +145,6 @@ const refreshAccessToken = async (): Promise<void> => {
 
   refreshRequest = (async () => {
     const response = await localApi.post('/api/auth/refresh', {});
-
     persistAuthPayload(response?.data?.data as Record<string, unknown>);
   })();
 
@@ -174,8 +208,6 @@ const setupInterceptors = (apiInstance: typeof axios) => {
 
 setupInterceptors(localApi);
 
-
-
 const api = {
   request: (config: AxiosRequestConfig) => {
     const apiInstance = getApiInstance(config.url || '');
@@ -191,7 +223,7 @@ const api = {
   },
   put: (url: string, data?: any, config?: AxiosRequestConfig) => {
     const apiInstance = getApiInstance(url);
-    return apiInstance.put(url, data, config);
+    return apiInstance.put(url, mergeLiveSettingsInputValues(url, data), config);
   },
   delete: (url: string, config?: AxiosRequestConfig) => {
     const apiInstance = getApiInstance(url);
