@@ -128,3 +128,51 @@ test('scheduled check skips provider update when cached public IP is unchanged',
   assert.equal(putCount, 0);
   assert.equal(updatePayloads.at(-1).dynamicDnsLastStatus, 'unchanged');
 });
+
+test('incomplete Azure settings do not arm the background scheduler', (t) => {
+  dynamicDnsService.stop();
+  const originalConsoleError = console.error;
+  const messages = [];
+
+  t.after(() => {
+    dynamicDnsService.stop();
+    console.error = originalConsoleError;
+  });
+
+  console.error = (...args) => messages.push(args.join(' '));
+  dynamicDnsService.configureFromSettings(createSettings({
+    dynamicDnsAzureTenantId: '',
+    dynamicDnsAzureClientId: '',
+    dynamicDnsAzureClientSecret: ''
+  }));
+
+  assert.equal(dynamicDnsService.timer, null);
+  assert.equal(dynamicDnsService.nextCheckAt, null);
+  assert.equal(messages.some((message) => message.includes('missing tenant ID, client ID, client secret')), true);
+});
+
+test('background Dynamic DNS failures are caught and logged', async (t) => {
+  dynamicDnsService.stop();
+  const originalCheckAndUpdate = dynamicDnsService.checkAndUpdate;
+  const originalConsoleError = console.error;
+  const messages = [];
+
+  t.after(() => {
+    dynamicDnsService.stop();
+    dynamicDnsService.checkAndUpdate = originalCheckAndUpdate;
+    console.error = originalConsoleError;
+  });
+
+  dynamicDnsService.checkAndUpdate = async () => {
+    throw new Error('provider unavailable');
+  };
+  console.error = (...args) => messages.push(args.join(' '));
+
+  dynamicDnsService.runBackgroundCheck({ reason: 'startup' });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(
+    messages.some((message) => message.includes('Dynamic DNS startup check failed: provider unavailable')),
+    true
+  );
+});

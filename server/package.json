@@ -53,6 +53,7 @@
     "zwave-js": "^15.24.2"
   },
   "overrides": {
+    "brace-expansion": "5.0.7",
     "minimatch": "10.2.3",
     "home-controller": {
       "spark": "file:vendor/spark-stub"
