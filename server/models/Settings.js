@@ -201,7 +201,7 @@ const SettingsSchema = new mongoose.Schema({
   // Integration Settings
   insteonPort: {
     type: String,
-    default: '/dev/ttyUSB0'
+    default: ''
   },
   isyHost: {
     type: String,

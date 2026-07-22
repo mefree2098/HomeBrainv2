@@ -1579,6 +1579,26 @@ test('startRuntimeMonitoring attempts a background connect when tracked Insteon 
   assert.equal(connectCalls, 1);
 });
 
+test('runtime monitoring does not claim ttyUSB0 on a fresh non-INSTEON installation', async (t) => {
+  const originalGetSettings = Settings.getSettings;
+  const originalCountDocuments = Device.countDocuments;
+
+  t.after(() => {
+    Settings.getSettings = originalGetSettings;
+    Device.countDocuments = originalCountDocuments;
+  });
+
+  Settings.getSettings = async () => ({
+    insteonPort: '/dev/ttyUSB0'
+  });
+  Device.countDocuments = async () => 0;
+
+  const context = await insteonService._resolveRuntimeMonitoringContext();
+
+  assert.equal(context.shouldConnect, false);
+  assert.equal(context.reason, 'no-runtime-target');
+});
+
 test('clearPlmCommandQueue clears queued operations and pending runtime refresh timers', async (t) => {
   const originalQueue = insteonService._plmOperationQueue;
   const originalPendingRefreshes = insteonService._pendingRuntimeStateRefreshes;

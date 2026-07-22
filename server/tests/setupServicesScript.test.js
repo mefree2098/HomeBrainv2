@@ -35,6 +35,17 @@ test('setup-services waits for the app mount and avoids tight reboot crash loops
   assert.match(script, /RestartSec=10/);
 });
 
+test('setup-services grants the HomeBrain account persistent USB serial access', () => {
+  const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
+
+  assert.match(script, /ensure_homebrain_hardware_access\(\)/);
+  assert.match(script, /local hardware_groups=\(dialout plugdev\)/);
+  assert.match(script, /sudo usermod -aG "\$\{hardware_group\}" "\$\{HOMEBRAIN_USER\}"/);
+  assert.match(script, /User=\$\{HOMEBRAIN_USER\}\nSupplementaryGroups=dialout/);
+  assert.match(script, /install_service\(\) \{[\s\S]*?ensure_homebrain_hardware_access/);
+  assert.match(script, /refresh_privileges\(\) \{\n  ensure_homebrain_hardware_access/);
+});
+
 test('setup-services installs privileged Thread helpers and grants sudoers access', () => {
   const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
 

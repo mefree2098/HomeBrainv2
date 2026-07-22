@@ -169,6 +169,30 @@ test('direct radio status tolerates Z-Wave node cache startup errors', async () 
   assert.ok(status.controllers.zwave.diagnostics.some((entry) => /node cache is still starting/i.test(entry)));
 });
 
+test('direct radio status tolerates the Z-Wave controller getter warming up', async () => {
+  const service = new DirectRadioService();
+  service.zwave.started = true;
+  service.detected.zwave = {
+    path: '/dev/serial/by-id/usb-Zooz_800_Z-Wave_Stick_533D004242-if00'
+  };
+  service.zwave.driver = {};
+  Object.defineProperty(service.zwave.driver, 'controller', {
+    get() {
+      const error = new Error('The controller is not yet ready! (ZW0103)');
+      error.code = 'ZW0103';
+      throw error;
+    }
+  });
+
+  const status = await service.getStatus();
+
+  assert.equal(status.controllers.zwave.started, true);
+  assert.equal(status.controllers.zwave.controllerFirmwareVersion, null);
+  assert.equal(status.controllers.zwave.controllerSdkVersion, null);
+  assert.match(status.controllers.zwave.nodeCacheError, /not yet ready/i);
+  assert.ok(status.controllers.zwave.diagnostics.some((entry) => /node cache is still starting/i.test(entry)));
+});
+
 test('direct radio status reports Zigbee device last-seen and link quality', async () => {
   const service = new DirectRadioService();
   service.zigbee.controller = {

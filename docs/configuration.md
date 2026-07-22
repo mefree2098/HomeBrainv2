@@ -48,6 +48,8 @@ If you want local speech-to-text:
 
 Open `Settings -> Integrations`.
 
+On Linux and Jetson installations, the installer automatically grants the HomeBrain service account access to USB serial radios through the `dialout` group and, when available, `plugdev`. Running `bash scripts/setup-services.sh update` or `bash scripts/setup-services.sh refresh-privileges` repairs this access on an existing installation before HomeBrain restarts.
+
 Current integration areas in the UI:
 
 - SmartThings
@@ -60,7 +62,7 @@ Practical guidance:
 - SmartThings: use OAuth, not a short-lived PAT
 - Ecobee: configure OAuth and test before syncing devices
 - Harmony: discover hubs, then sync activities to devices
-- INSTEON: use a real serial path or a serial-to-TCP bridge; the PLM is not an Ethernet device
+- INSTEON: it is unconfigured by default; only set a real stable `/dev/serial/by-id/...` PLM path or a serial-to-TCP bridge when this home actually uses INSTEON
 - ISY: use the built-in test, extract, preview, and sync tools from the same settings area
 
 ## 5. User Profiles
