@@ -226,7 +226,7 @@ function getDefaultAskUrl() {
   return process.env.CADDY_ON_DEMAND_ASK_URL || DEFAULT_ASK_URL;
 }
 
-function getDefaultPublicHostname() {
+function getConfiguredPublicHostname() {
   const explicitHost = trimString(process.env.HOMEBRAIN_PUBLIC_HOST).toLowerCase();
   if (explicitHost) {
     try {
@@ -249,7 +249,11 @@ function getDefaultPublicHostname() {
     }
   }
 
-  return DEFAULT_PUBLIC_HOSTNAME;
+  return null;
+}
+
+function getDefaultPublicHostname() {
+  return getConfiguredPublicHostname() || DEFAULT_PUBLIC_HOSTNAME;
 }
 
 function getDefaultAxiomHostname(homebrainHostname) {
@@ -328,6 +332,8 @@ function buildPresetSuggestions() {
 }
 
 function buildBootstrapRouteSeeds() {
+  const hasConfiguredPublicHostname = Boolean(getConfiguredPublicHostname());
+
   return buildPresetSuggestions().map((route) => {
     if (route.platformKey === 'axiom') {
       return {
@@ -342,6 +348,14 @@ function buildBootstrapRouteSeeds() {
         ...route,
         enabled: false,
         notes: 'Seeded automatically for Audiobook Studio. The Audiobook installer enables this route after the upstream is live.'
+      };
+    }
+
+    if (!hasConfiguredPublicHostname && route.platformKey === 'homebrain') {
+      return {
+        ...route,
+        enabled: false,
+        notes: 'Seeded automatically as a disabled template. Replace it with the real HomeBrain hostname before enabling it.'
       };
     }
 

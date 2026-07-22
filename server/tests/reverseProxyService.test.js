@@ -323,7 +323,10 @@ test('ensureBootstrapState backfills settings and creates only missing seeded ro
 
   const createdRoutes = [];
   reverseProxyService.createRoute = async (payload) => {
-    createdRoutes.push(payload.hostname);
+    createdRoutes.push({
+      hostname: payload.hostname,
+      enabled: payload.enabled
+    });
     return { hostname: payload.hostname };
   };
 
@@ -343,14 +346,57 @@ test('ensureBootstrapState backfills settings and creates only missing seeded ro
     ['acmeEmail', 'caddyAdminUrl', 'caddyStorageRoot', 'expectedPublicIp', 'expectedPublicIpv6'].sort()
   );
   assert.deepEqual(
-    createdRoutes.sort(),
-    ['example.com', 'mail.example.com'].sort()
+    createdRoutes.sort((left, right) => left.hostname.localeCompare(right.hostname)),
+    [
+      { hostname: 'example.com', enabled: false },
+      { hostname: 'mail.example.com', enabled: false }
+    ]
   );
   assert.deepEqual(revalidatedRoutes, ['www.example.com']);
   assert.deepEqual(
     result.createdRoutes.sort(),
     ['example.com', 'mail.example.com'].sort()
   );
+});
+
+test('ensureBootstrapState enables seeded HomeBrain routes when a real public hostname is configured', async (t) => {
+  const originalGetSettings = ReverseProxySettings.getSettings;
+  const originalFind = ReverseProxyRoute.find;
+  const originalAuditCreate = ReverseProxyAuditLog.create;
+  const originalCreateRoute = reverseProxyService.createRoute;
+  const originalPublicBaseUrl = process.env.HOMEBRAIN_PUBLIC_BASE_URL;
+  const originalPublicHost = process.env.HOMEBRAIN_PUBLIC_HOST;
+
+  t.after(() => {
+    ReverseProxySettings.getSettings = originalGetSettings;
+    ReverseProxyRoute.find = originalFind;
+    ReverseProxyAuditLog.create = originalAuditCreate;
+    reverseProxyService.createRoute = originalCreateRoute;
+    restoreEnv('HOMEBRAIN_PUBLIC_BASE_URL', originalPublicBaseUrl);
+    restoreEnv('HOMEBRAIN_PUBLIC_HOST', originalPublicHost);
+  });
+
+  process.env.HOMEBRAIN_PUBLIC_BASE_URL = 'https://selene.ntechr.com';
+  delete process.env.HOMEBRAIN_PUBLIC_HOST;
+
+  ReverseProxySettings.getSettings = async () => createSettings();
+  ReverseProxyRoute.find = async () => [];
+  ReverseProxyAuditLog.create = async () => ({ ok: true });
+
+  const createdRoutes = [];
+  reverseProxyService.createRoute = async (payload) => {
+    createdRoutes.push(payload);
+    return { hostname: payload.hostname };
+  };
+
+  await reverseProxyService.ensureBootstrapState({ actor: 'system:test-bootstrap' });
+
+  const homebrainRoutes = createdRoutes.filter((route) => route.platformKey === 'homebrain');
+  assert.deepEqual(homebrainRoutes.map((route) => route.hostname).sort(), [
+    'selene.ntechr.com',
+    'www.selene.ntechr.com'
+  ]);
+  assert.equal(homebrainRoutes.every((route) => route.enabled === true), true);
 });
 
 test('ensureBootstrapState preserves explicitly cleared expected public IP settings', async (t) => {
