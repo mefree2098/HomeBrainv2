@@ -810,7 +810,7 @@ export function Settings() {
       s2ProOutputFormat: "mp3",
       s2ProTimeoutMs: 30000,
       enableNotifications: true,
-      insteonPort: "/dev/ttyUSB0",
+      insteonPort: "",
       isyHost: "",
       isyPort: 443,
       isyUsername: "",

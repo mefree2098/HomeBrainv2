@@ -1836,15 +1836,12 @@ class InsteonService {
       && normalizedSerialPath
       && normalizedSerialPath !== DEFAULT_INSTEON_SERIAL_PORT
     );
-    const serialPathExists = Boolean(normalizedSerialPath && fs.existsSync(normalizedSerialPath));
 
     return {
-      shouldConnect: Boolean(explicitSerialTarget || serialPathExists || trackedDeviceCount > 0),
+      shouldConnect: Boolean(explicitSerialTarget || trackedDeviceCount > 0),
       reason: explicitSerialTarget
         ? 'configured-serial-target'
-        : serialPathExists
-          ? 'serial-port-present'
-          : (trackedDeviceCount > 0 ? 'tracked-insteon-devices' : 'no-runtime-target')
+        : (trackedDeviceCount > 0 ? 'tracked-insteon-devices' : 'no-runtime-target')
     };
   }
 

@@ -3274,7 +3274,6 @@ class MatterService {
 
     const runtime = {};
     runtime.Environment = require('@matter/main').Environment;
-    runtime.StorageService = require('@matter/main').StorageService;
     runtime.singleton = require('@matter/main').singleton;
     runtime.GeneralCommissioning = require('@matter/main/clusters').GeneralCommissioning;
     runtime.clusters = require('@matter/main/clusters');
@@ -3342,8 +3341,10 @@ class MatterService {
     const runtime = this.loadMatterRuntime();
     await fsp.mkdir(config.storagePath, { recursive: true });
     const environment = runtime.NodeJsEnvironment();
+    // matter.js 0.17 configures StorageService from environment variables.
+    // StorageService.location is now read-only and assigning it prevents a
+    // brand-new Matter controller from starting.
     environment.vars.set('storage.path', config.storagePath);
-    environment.get(runtime.StorageService).location = config.storagePath;
 
     enableMatterBleForEnvironment(environment, runtime);
 

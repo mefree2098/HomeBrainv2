@@ -123,6 +123,46 @@ resolve_user_home() {
   echo "${home_dir}"
 }
 
+ensure_homebrain_hardware_access() {
+  local hardware_group
+  local current_groups
+  local added_groups=()
+  local hardware_groups=(dialout plugdev)
+
+  if ! id "${HOMEBRAIN_USER}" >/dev/null 2>&1; then
+    print_error "HomeBrain service user ${HOMEBRAIN_USER} does not exist."
+    exit 1
+  fi
+
+  print_status "Ensuring ${HOMEBRAIN_USER} can access USB and serial radio adapters..."
+
+  if ! getent group dialout >/dev/null 2>&1; then
+    print_warning "The dialout group is missing; creating it for USB serial adapter access."
+    sudo groupadd --system dialout
+  fi
+
+  current_groups="$(id -nG "${HOMEBRAIN_USER}")"
+  for hardware_group in "${hardware_groups[@]}"; do
+    if ! getent group "${hardware_group}" >/dev/null 2>&1; then
+      print_warning "Optional hardware group ${hardware_group} is unavailable; skipping it."
+      continue
+    fi
+
+    if [[ " ${current_groups} " == *" ${hardware_group} "* ]]; then
+      continue
+    fi
+
+    sudo usermod -aG "${hardware_group}" "${HOMEBRAIN_USER}"
+    added_groups+=("${hardware_group}")
+  done
+
+  if [[ "${#added_groups[@]}" -gt 0 ]]; then
+    print_success "Added ${HOMEBRAIN_USER} to hardware access group(s): ${added_groups[*]}."
+  else
+    print_success "${HOMEBRAIN_USER} already has the required hardware access groups."
+  fi
+}
+
 run_modern_npm() {
   local quoted_args=()
   local arg
@@ -525,6 +565,7 @@ report_edge_port_owner() {
 
 install_service() {
   require_repo
+  ensure_homebrain_hardware_access
 
   local node_bin
   node_bin="$(resolve_node_bin)"
@@ -550,6 +591,7 @@ StartLimitBurst=30
 [Service]
 Type=simple
 User=${HOMEBRAIN_USER}
+SupplementaryGroups=dialout
 WorkingDirectory=${HOMEBRAIN_DIR}
 EnvironmentFile=-${HOMEBRAIN_DIR}/server/.env
 Environment=NODE_ENV=production
@@ -813,6 +855,7 @@ EOF
 }
 
 refresh_privileges() {
+  ensure_homebrain_hardware_access
   configure_homebrain_ollama_privilege_override
   install_ollama_privileged_helper
   install_otbr_privileged_helper

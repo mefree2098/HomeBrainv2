@@ -1292,7 +1292,18 @@ async getStatus() {
         zigbeeNetwork = { error: error.message };
       }
     }
+    const zwaveController = this.getZWaveController();
     const zwaveNodes = this.getZWaveControllerNodes({ log: false, context: 'status' });
+    let zwaveControllerFirmwareVersion = null;
+    let zwaveControllerSdkVersion = null;
+    if (zwaveController) {
+      try {
+        zwaveControllerFirmwareVersion = zwaveController.firmwareVersion ?? null;
+        zwaveControllerSdkVersion = zwaveController.sdkVersion ?? null;
+      } catch (error) {
+        this.zwave.nodeCacheError = error?.message || String(error);
+      }
+    }
     const activeMigrations = Array.from(this.activeMigrations.values())
       .filter((migration) => (
         ['awaiting_smartthings_exclusion', 'excluding', 'excluded', 'pairing', 'exclusion_failed', 'pairing_failed'].includes(migration.status)
@@ -1368,8 +1379,8 @@ async getStatus() {
           // Surface stick firmware so known-bad 800-series SDK builds (e.g.
           // the 7.21.x/7.22.0 controller lockups fixed in Zooz fw 1.50) are
           // visible without opening the case.
-          controllerFirmwareVersion: this.zwave.driver?.controller?.firmwareVersion ?? null,
-          controllerSdkVersion: this.zwave.driver?.controller?.sdkVersion ?? null,
+          controllerFirmwareVersion: zwaveControllerFirmwareVersion,
+          controllerSdkVersion: zwaveControllerSdkVersion,
           error: this.zwave.error,
           diagnostics: zwaveStatusDiagnostics,
           nodeCacheError: zwaveNodeCacheError,

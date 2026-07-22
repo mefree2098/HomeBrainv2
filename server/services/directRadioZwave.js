@@ -1703,7 +1703,12 @@ recordZWaveInclusionFailed(message) {
   },
 
 getZWaveController() {
-    return this.zwave.driver?.controller || null;
+    try {
+      return this.zwave.driver?.controller || null;
+    } catch (error) {
+      this.zwave.nodeCacheError = error?.message || String(error);
+      return null;
+    }
   },
 
 getZWaveNode(nodeId, options = {}) {

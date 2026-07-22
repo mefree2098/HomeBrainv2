@@ -88,6 +88,8 @@ The installer:
 - installs dependencies from committed lockfiles and rebuilds native modules when needed
 - creates the production React build
 - installs OpenWakeWord/Piper training dependencies unless explicitly disabled
+- grants the HomeBrain service account `dialout` serial access and available `plugdev` USB access for Zigbee, Z-Wave, and Thread adapters
+- leaves INSTEON unconfigured so an unused integration cannot claim a Zigbee adapter that Linux assigned to `/dev/ttyUSB0`
 - creates and enables the `homebrain` systemd service
 - installs Caddy as the `caddy-api` public edge on ports `80/443`
 - installs a loopback-only Mosquitto broker as `homebrain-mqtt`
@@ -156,7 +158,7 @@ cd /home/<user>/HomeBrainv2
 | Stop HomeBrain | `bash scripts/setup-services.sh stop` |
 | Restart HomeBrain | `bash scripts/setup-services.sh restart` |
 | Pull, install, build, restart, verify, and re-bootstrap state | `bash scripts/setup-services.sh update` |
-| Repair privileged helpers and sudoers | `bash scripts/setup-services.sh refresh-privileges` |
+| Repair hardware groups, privileged helpers, and sudoers | `bash scripts/setup-services.sh refresh-privileges` |
 | Install/refresh Caddy, MQTT, and Pi-hole | `bash scripts/setup-services.sh setup-platform-services` |
 | Install/repair the global Codex CLI | `bash scripts/setup-services.sh setup-codex` |
 | Check a managed-service update | `bash scripts/setup-services.sh check-platform-service-updates caddy` |

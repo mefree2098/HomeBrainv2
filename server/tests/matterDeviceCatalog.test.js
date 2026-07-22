@@ -1,5 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const {
   MATTER_SOURCE,
@@ -20,6 +23,50 @@ test('Matter BLE is registered in the controller environment used for commission
 
   assert.equal(matterService._test.enableMatterBleForEnvironment(environment, runtime), true);
   assert.ok(environment.maybeGet(runtime.Ble) instanceof runtime.NodeJsBle);
+});
+
+test('Matter controller configures storage through environment vars without mutating StorageService', async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'homebrain-matter-storage-test-'));
+  const service = new matterService.MatterService();
+  const variables = new Map();
+  let controllerOptions = null;
+
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+
+  class TestController {
+    constructor(options) {
+      controllerOptions = options;
+    }
+
+    async start() {}
+  }
+
+  const environment = {
+    vars: {
+      set(key, value) {
+        variables.set(key, value);
+      }
+    },
+    get() {
+      throw new Error('StorageService must not be mutated');
+    }
+  };
+
+  service.loadMatterRuntime = () => ({
+    NodeJsEnvironment: () => environment,
+    CommissioningController: TestController
+  });
+
+  const controller = await service.createMatterController({
+    storagePath: tempDir,
+    adminFabricLabel: 'HomeBrain Test',
+    adminVendorId: 0xfff1,
+    adminFabricId: 1
+  });
+
+  assert.ok(controller instanceof TestController);
+  assert.equal(variables.get('storage.path'), tempDir);
+  assert.equal(controllerOptions.environment.environment, environment);
 });
 
 test('Matter catalog maps Thread contact sensors with battery support', () => {
