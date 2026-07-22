@@ -6,6 +6,7 @@ const path = require('path');
 
 const URL_ENV_VAR = 'HOMEBRAIN_CODEX_URL';
 const TOKEN_ENV_VAR = 'HOMEBRAIN_CODEX_TOKEN';
+const TARGET_ENV_VAR = 'HOMEBRAIN_CODEX_TARGET';
 
 function getConfigPathCandidates() {
   const candidates = [];
@@ -31,14 +32,17 @@ function printUsage() {
   const configPaths = getConfigPathCandidates();
   const message = [
     'Usage:',
-    '  node scripts/homebrain-live.js overview [--window-minutes 60]',
-    '  node scripts/homebrain-live.js deploy-status',
-    '  node scripts/homebrain-live.js deploy-health',
-    '  node scripts/homebrain-live.js deploy-run [--preset safe|minimal|full] [--allow-dirty true|false]',
-    '  node scripts/homebrain-live.js events-latest [--limit 50] [--category deploy] [--source platform_deploy]',
-    '  node scripts/homebrain-live.js events-tail [--category deploy] [--source platform_deploy]',
-    '  node scripts/homebrain-live.js request <path> [--method GET] [--body \'{"key":"value"}\']',
+    '  node scripts/homebrain-live.js target-list',
+    '  node scripts/homebrain-live.js target-set <name> --url <url> [--token <token>|--token-stdin] [--default true]',
+    '  node scripts/homebrain-live.js overview [--target <name>] [--window-minutes 60]',
+    '  node scripts/homebrain-live.js deploy-status [--target <name>]',
+    '  node scripts/homebrain-live.js deploy-health [--target <name>]',
+    '  node scripts/homebrain-live.js deploy-run [--target <name>] [--preset safe|minimal|full] [--allow-dirty true|false]',
+    '  node scripts/homebrain-live.js events-latest [--target <name>] [--limit 50] [--category deploy] [--source platform_deploy]',
+    '  node scripts/homebrain-live.js events-tail [--target <name>] [--category deploy] [--source platform_deploy]',
+    '  node scripts/homebrain-live.js request <path> [--target <name>] [--method GET] [--body \'{"key":"value"}\']',
     '',
+    `Select a named target with --target or ${TARGET_ENV_VAR}.`,
     `Connection values come from ${URL_ENV_VAR} and ${TOKEN_ENV_VAR},`,
     `or from ${configPaths.join(' or ')}.`
   ].join('\n');
@@ -87,14 +91,64 @@ function loadConfig() {
   return {};
 }
 
+function saveConfig(config) {
+  const configPath = getPreferredConfigPath();
+  const configDir = path.dirname(configPath);
+  const tempPath = `${configPath}.${process.pid}.tmp`;
+
+  fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(tempPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(tempPath, configPath);
+  fs.chmodSync(configPath, 0o600);
+  return configPath;
+}
+
 function sanitizeBaseUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '');
 }
 
+function normalizeTargetName(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(normalized)) {
+    throw new Error('Target name must use 1-64 lowercase letters, numbers, underscores, or hyphens');
+  }
+  return normalized;
+}
+
+function resolveConfiguredTarget(config, requestedTarget = '') {
+  if (requestedTarget) {
+    const targetName = normalizeTargetName(requestedTarget);
+    const target = config.targets?.[targetName];
+    if (!target || typeof target !== 'object') {
+      const available = Object.keys(config.targets || {}).sort();
+      throw new Error(
+        `HomeBrain target "${targetName}" is not configured.${available.length ? ` Available targets: ${available.join(', ')}` : ''}`
+      );
+    }
+    return { targetName, target };
+  }
+
+  const defaultTarget = String(config.defaultTarget || '').trim();
+  if (defaultTarget && config.targets?.[defaultTarget]) {
+    return { targetName: defaultTarget, target: config.targets[defaultTarget] };
+  }
+
+  // Preserve the original single-target config as the default so upgrading the
+  // helper cannot silently redirect existing Freestone workflows. An explicit
+  // defaultTarget set later is allowed to override this legacy fallback.
+  if (config.baseUrl || config.token) {
+    return { targetName: 'legacy-default', target: config };
+  }
+
+  return { targetName: '', target: {} };
+}
+
 function resolveConnection(flags) {
   const config = loadConfig();
-  const baseUrl = sanitizeBaseUrl(flags.url || process.env[URL_ENV_VAR] || config.baseUrl || '');
-  const token = String(flags.token || process.env[TOKEN_ENV_VAR] || config.token || '').trim();
+  const requestedTarget = flags.target || process.env[TARGET_ENV_VAR] || '';
+  const configured = resolveConfiguredTarget(config, requestedTarget);
+  const baseUrl = sanitizeBaseUrl(flags.url || process.env[URL_ENV_VAR] || configured.target.baseUrl || '');
+  const token = String(flags.token || process.env[TOKEN_ENV_VAR] || configured.target.token || '').trim();
 
   if (!baseUrl || !token) {
     throw new Error(
@@ -102,7 +156,68 @@ function resolveConnection(flags) {
     );
   }
 
-  return { baseUrl, token };
+  return { baseUrl, token, targetName: configured.targetName || 'direct' };
+}
+
+function targetSummary(name, target, defaultTarget) {
+  return {
+    name,
+    baseUrl: sanitizeBaseUrl(target?.baseUrl),
+    configured: Boolean(target?.baseUrl && target?.token),
+    default: name === defaultTarget
+  };
+}
+
+function runTargetList() {
+  const config = loadConfig();
+  const configuredDefault = config.defaultTarget && config.targets?.[config.defaultTarget]
+    ? config.defaultTarget
+    : (config.baseUrl ? 'legacy-default' : null);
+  const targets = Object.entries(config.targets || {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([name, target]) => targetSummary(name, target, configuredDefault));
+
+  printJson({
+    legacyDefault: config.baseUrl
+      ? targetSummary('legacy-default', config, configuredDefault)
+      : null,
+    defaultTarget: configuredDefault,
+    targets
+  });
+}
+
+async function readStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks).toString('utf8').trim();
+}
+
+async function runTargetSet(positional, flags) {
+  const targetName = normalizeTargetName(positional[1]);
+  const config = loadConfig();
+  const existing = config.targets?.[targetName] || {};
+  const baseUrl = sanitizeBaseUrl(flags.url || existing.baseUrl || '');
+  const useTokenStdin = parseBoolean(flags['token-stdin'] ?? flags.tokenStdin, false) === true;
+  const token = String(useTokenStdin ? await readStdin() : (flags.token || existing.token || '')).trim();
+
+  if (!baseUrl || !token) {
+    throw new Error('target-set requires --url and either --token or --token-stdin');
+  }
+
+  config.targets = config.targets && typeof config.targets === 'object' ? config.targets : {};
+  config.targets[targetName] = { baseUrl, token };
+  if (parseBoolean(flags.default, false) === true) {
+    config.defaultTarget = targetName;
+  }
+
+  const configPath = saveConfig(config);
+  printJson({
+    success: true,
+    configPath,
+    target: targetSummary(targetName, config.targets[targetName], config.defaultTarget)
+  });
 }
 
 function parseBoolean(value, fallback = undefined) {
@@ -185,6 +300,10 @@ async function runOverview(connection, flags) {
   ]);
 
   printJson({
+    connection: {
+      target: connection.targetName,
+      baseUrl: connection.baseUrl
+    },
     user,
     deployStatus,
     deployHealth,
@@ -350,6 +469,16 @@ async function main() {
     process.exit(command ? 0 : 1);
   }
 
+  if (command === 'target-list') {
+    runTargetList();
+    return;
+  }
+
+  if (command === 'target-set') {
+    await runTargetSet(positional, flags);
+    return;
+  }
+
   const connection = resolveConnection(flags);
 
   switch (command) {
@@ -379,7 +508,19 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  process.stderr.write(`${error.message}\n`);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    process.stderr.write(`${error.message}\n`);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  loadConfig,
+  normalizeTargetName,
+  resolveConfiguredTarget,
+  resolveConnection,
+  runTargetSet,
+  saveConfig,
+  targetSummary
+};

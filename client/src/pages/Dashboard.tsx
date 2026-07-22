@@ -1397,10 +1397,21 @@ export function Dashboard() {
 
   return (
     <div className="space-y-4">
-      {!hasProfile || dashboardDirty ? (
+      {dashboardDirty ? (
         <div className="flex flex-wrap gap-2 px-1">
-          {dashboardDirty ? <Badge variant="secondary">Unsaved changes</Badge> : null}
-          {!hasProfile ? <Badge variant="outline">Profile required to persist layout changes</Badge> : null}
+          <Badge variant="secondary">Unsaved changes</Badge>
+        </div>
+      ) : null}
+
+      {!hasProfile ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300/70 bg-amber-50/80 px-4 py-3 text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+          <div>
+            <p className="text-sm font-medium">Dashboard editing needs an active Voice Profile.</p>
+            <p className="mt-1 text-xs opacity-80">Layouts and favorites are saved to that profile so they follow you across browsers and devices.</p>
+          </div>
+          <Button asChild size="sm" variant="outline">
+            <Link to="/voice-profiles">Create Voice Profile</Link>
+          </Button>
         </div>
       ) : null}
 
