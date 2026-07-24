@@ -1341,6 +1341,7 @@ class RainMachineService {
       });
       const compactSnapshot = compactRainMachineSnapshot(snapshot);
 
+      persistedIntegration.isConnected = true;
       const deviceSync = await this.syncDevices(compactSnapshot, persistedIntegration);
       const reportSync = await this.syncReports({
         endpoint,
@@ -1357,7 +1358,6 @@ class RainMachineService {
       persistedIntegration.apiVersion = compactSnapshot.controller.apiVersion || '';
       persistedIntegration.hardwareVersion = compactSnapshot.controller.hardwareVersion;
       persistedIntegration.softwareVersion = compactSnapshot.controller.softwareVersion || '';
-      persistedIntegration.isConnected = true;
       persistedIntegration.lastConnectedAt = new Date();
       persistedIntegration.lastSyncAt = new Date();
       if (reportSync.synced) {

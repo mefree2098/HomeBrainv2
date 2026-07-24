@@ -443,3 +443,76 @@ test('getDashboardSafe returns cached dashboard payload when dashboard assembly 
   assert.equal(dashboard.runtime?.queueLength, 0);
   assert.deepEqual(dashboard.dailyStats, []);
 });
+
+test('performSync restores connectivity before synchronizing recovered RainMachine devices', async (t) => {
+  const service = new rainMachineService.RainMachineService();
+  const originalGetIntegration = RainMachineIntegration.getIntegration;
+  let saved = false;
+  const integration = {
+    _id: 'rainmachine-integration',
+    enabled: true,
+    host: 'rainmachine.local',
+    protocol: 'http',
+    port: 8081,
+    password: 'configured',
+    room: 'Irrigation',
+    controllerId: 'AA:BB:CC',
+    controllerName: 'Back Yard',
+    isConnected: false,
+    snapshot: {},
+    async save() {
+      saved = true;
+    }
+  };
+
+  RainMachineIntegration.getIntegration = async () => integration;
+  t.after(() => {
+    RainMachineIntegration.getIntegration = originalGetIntegration;
+  });
+
+  service.resolveEndpoint = async () => ({
+    host: 'rainmachine.local',
+    protocol: 'http',
+    port: 8081,
+    baseUrl: 'http://rainmachine.local:8081/api/4'
+  });
+  service.request = async (_endpoint, options) => {
+    if (options.path === 'apiVer') {
+      return { apiVer: '4.6.1', hwVer: 3, swVer: '4.0.1144' };
+    }
+    if (options.path === 'provision') {
+      return { system: { netName: 'Back Yard' } };
+    }
+    if (options.path === 'zone') {
+      return { zones: [] };
+    }
+    if (options.path === 'program') {
+      return { programs: [] };
+    }
+    return {};
+  };
+  service.requestSafe = async (_endpoint, _options, fallback) => fallback;
+  service.syncReports = async () => ({
+    synced: false,
+    dailyStatsCount: 0,
+    wateringDayCount: 0,
+    simulatedWateringDayCount: 0
+  });
+
+  let connectedDuringDeviceSync = null;
+  service.syncDevices = async (_snapshot, syncIntegration) => {
+    connectedDuringDeviceSync = syncIntegration.isConnected;
+    return {
+      controllerDeviceId: 'controller-device',
+      zoneDeviceCount: 0,
+      deduped: 0
+    };
+  };
+
+  const result = await service.performSync({ reason: 'scheduled-sync' });
+
+  assert.equal(result.success, true);
+  assert.equal(connectedDuringDeviceSync, true);
+  assert.equal(integration.isConnected, true);
+  assert.equal(saved, true);
+});
