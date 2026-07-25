@@ -152,6 +152,10 @@ function normalizeOtaState(input = {}) {
     artifactSizeBytes: Math.max(0, normalizeNumber(input.artifactSizeBytes, 0)),
     bytesTransferred: Math.max(0, normalizeNumber(input.bytesTransferred, 0)),
     bytesTotal: Math.max(0, normalizeNumber(input.bytesTotal, 0)),
+    deliveryIpAddress: normalizePanelClientIp(input.deliveryIpAddress),
+    deliveryOrigin: normalizePanelDeliveryOrigin(input.deliveryOrigin),
+    recoveryTargetPanelId: toId(input.recoveryTargetPanelId),
+    recoverySourcePanelId: toId(input.recoverySourcePanelId),
     requestedAt: normalizeTimestamp(input.requestedAt),
     startedAt: normalizeTimestamp(input.startedAt),
     completedAt: normalizeTimestamp(input.completedAt),
@@ -255,6 +259,37 @@ function createError(status, message) {
 
 function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizePanelClientIp(value) {
+  const candidate = trimString(value).replace(/^::ffff:/i, '');
+  return net.isIP(candidate) === 4 ? candidate : '';
+}
+
+function panelClientIpIsPrivate(value) {
+  const candidate = normalizePanelClientIp(value);
+  if (!candidate) {
+    return false;
+  }
+
+  const octets = candidate.split('.').map((part) => Number(part));
+  return octets[0] === 10
+    || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+    || (octets[0] === 192 && octets[1] === 168);
+}
+
+function normalizePanelDeliveryOrigin(value) {
+  const candidate = trimString(value);
+  if (!candidate) {
+    return '';
+  }
+
+  try {
+    const parsed = new URL(candidate);
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.origin : '';
+  } catch (_error) {
+    return '';
+  }
 }
 
 function secureEqual(left, right) {
@@ -1611,9 +1646,34 @@ function buildPanelOtaDownloadUrl(panel, origin = '') {
   return `${resolvedOrigin}/api/panels/${encodeURIComponent(panelId)}/ota/download`;
 }
 
-function buildPanelOtaPayload(panel, origin = '') {
+function panelOtaDeliveryIsAllowed(otaInput = {}, origin = '', requestIpAddress = '') {
+  const ota = normalizeOtaState(otaInput);
+  const requestIp = normalizePanelClientIp(requestIpAddress);
+  const requestOrigin = normalizePanelDeliveryOrigin(origin);
+  const deliveryChecks = [];
+  if (ota.deliveryIpAddress) {
+    deliveryChecks.push(requestIp === ota.deliveryIpAddress);
+  }
+  if (ota.deliveryOrigin) {
+    deliveryChecks.push(requestOrigin === ota.deliveryOrigin);
+  }
+  return deliveryChecks.length === 0 || deliveryChecks.some(Boolean);
+}
+
+function buildPanelOtaPayload(
+  panel,
+  origin = '',
+  requestIpAddress = '',
+  requestDeliveryOrigin = origin
+) {
   const ota = normalizeOtaState(panel?.ota || {});
-  const updateAvailable = isFirmwareUpdateAvailable(panel?.firmwareVersion, ota.targetVersion);
+  const deliveryAllowed = panelOtaDeliveryIsAllowed(
+    ota,
+    requestDeliveryOrigin,
+    requestIpAddress
+  );
+  const updateAvailable = deliveryAllowed
+    && isFirmwareUpdateAvailable(panel?.firmwareVersion, ota.targetVersion);
   const downloadReady = updateAvailable && DOWNLOADABLE_OTA_STATUSES.has(ota.status) && ota.artifactPath;
 
   return {
@@ -2135,9 +2195,18 @@ class WallPanelService {
     await fsp.rm(path.dirname(artifactPath), { recursive: true, force: true }).catch(() => null);
   }
 
-  async validatePanelFirmwareArtifact(artifactPath, { targetVersion = '' } = {}) {
+  async validatePanelFirmwareArtifact(
+    artifactPath,
+    {
+      targetVersion = '',
+      panelId = '',
+      registrationCode = ''
+    } = {}
+  ) {
     const artifact = await fsp.readFile(artifactPath);
     const expectedVersion = trimString(targetVersion);
+    const expectedPanelId = toId(panelId);
+    const expectedRegistrationCode = trimString(registrationCode);
 
     if (expectedVersion && !artifact.includes(Buffer.from(expectedVersion))) {
       throw createError(
@@ -2153,6 +2222,20 @@ class WallPanelService {
           'HomeBrain built a hardware orb firmware image with placeholder Wi-Fi credentials. Save the orb Wi-Fi SSID and password in Settings > Hardware Orbs, then retry.'
         );
       }
+    }
+
+    if (expectedPanelId && !artifact.includes(Buffer.from(expectedPanelId))) {
+      throw createError(
+        500,
+        `HomeBrain built a hardware orb firmware image for the wrong panel identity instead of ${expectedPanelId}.`
+      );
+    }
+
+    if (expectedRegistrationCode && !artifact.includes(Buffer.from(expectedRegistrationCode))) {
+      throw createError(
+        500,
+        'HomeBrain built a hardware orb firmware image with mismatched panel credentials.'
+      );
     }
 
     return artifact.length;
@@ -2657,7 +2740,11 @@ class WallPanelService {
       await this.runPanelFirmwareBuild(panel, jobId, buildTarget, processEnv);
 
       const builtArtifactPath = path.join(this.panelFirmwareProjectDir, buildTarget.artifactRelativePath);
-      await this.validatePanelFirmwareArtifact(builtArtifactPath, { targetVersion });
+      await this.validatePanelFirmwareArtifact(builtArtifactPath, {
+        targetVersion,
+        panelId: panel.id,
+        registrationCode: panel.settings?.registrationCode
+      });
       const panelDir = path.join(this.panelOtaArtifactsDir, panel.id);
       await fsp.mkdir(panelDir, { recursive: true });
 
@@ -2692,8 +2779,286 @@ class WallPanelService {
     });
   }
 
-  async pushFirmwareUpdate(panelId, origin = '') {
+  async buildPanelIdentityRecoveryArtifact(
+    sourcePanel,
+    targetPanel,
+    {
+      jobId,
+      targetVersion,
+      origin = ''
+    }
+  ) {
+    const buildTarget = resolvePanelBuildTarget(targetPanel.hardwareProfile);
+    if (!buildTarget) {
+      throw createError(
+        400,
+        `Hardware profile ${targetPanel.hardwareProfile} does not have an OTA build target yet`
+      );
+    }
+
+    await this.ensureOtaArtifactsDir();
+    await this.updatePanelOtaState(sourcePanel.id, jobId, {
+      status: 'building',
+      phase: 'identity-recovery-building',
+      progress: 12,
+      message: `Building identity recovery firmware for ${targetPanel.name || targetPanel.id}...`,
+      startedAt: new Date(),
+      hardwareProfile: targetPanel.hardwareProfile
+    });
+
+    const { artifactPath, stat } = await this.runExclusivePanelFirmwareTask(async () => {
+      const processEnv = await this.createPanelFirmwareBuildEnv(targetPanel, { targetVersion, origin });
+      await this.runPanelFirmwareBuild(sourcePanel, jobId, buildTarget, processEnv);
+
+      const builtArtifactPath = path.join(this.panelFirmwareProjectDir, buildTarget.artifactRelativePath);
+      await this.validatePanelFirmwareArtifact(builtArtifactPath, {
+        targetVersion,
+        panelId: targetPanel.id,
+        registrationCode: targetPanel.settings.registrationCode
+      });
+
+      const panelDir = path.join(this.panelOtaArtifactsDir, sourcePanel.id);
+      await fsp.mkdir(panelDir, { recursive: true });
+      const artifactPath = path.join(panelDir, `${jobId}.bin`);
+      await fsp.copyFile(builtArtifactPath, artifactPath);
+      const stat = await fsp.stat(artifactPath);
+      return { artifactPath, stat };
+    });
+
+    await this.updatePanelOtaState(sourcePanel.id, jobId, {
+      status: 'ready',
+      phase: 'identity-recovery-ready',
+      progress: 60,
+      message: `Identity recovery firmware for ${targetPanel.name || targetPanel.id} is ready.`,
+      artifactPath,
+      artifactSizeBytes: stat.size,
+      bytesTransferred: 0,
+      bytesTotal: stat.size
+    });
+
+    void eventStreamService.publishSafe({
+      type: 'wall_panel.ota_identity_recovery_ready',
+      source: 'wall_panel',
+      category: 'panel',
+      payload: {
+        sourcePanelId: sourcePanel.id,
+        targetPanelId: targetPanel.id,
+        jobId,
+        targetVersion,
+        artifactSizeBytes: stat.size
+      },
+      tags: ['wall-panel', 'ota', 'identity-recovery']
+    });
+  }
+
+  async pushPanelIdentityRecovery(sourcePanelId, input = {}, origin = '') {
+    const targetPanelId = toId(input.targetPanelId);
+    const deliveryIpAddress = normalizePanelClientIp(input.expectedIpAddress || input.deliveryIpAddress);
+    const requestedDeliveryOrigin = trimString(input.expectedOrigin || input.deliveryOrigin);
+    const deliveryOrigin = normalizePanelDeliveryOrigin(requestedDeliveryOrigin)
+      || normalizePanelDeliveryOrigin(origin);
+
+    if (!targetPanelId) {
+      throw createError(400, 'Identity recovery requires the intended hardware orb panel ID');
+    }
+    if (targetPanelId === toId(sourcePanelId)) {
+      throw createError(400, 'Identity recovery requires different source and target panel IDs');
+    }
+    if ((input.expectedIpAddress || input.deliveryIpAddress) && !panelClientIpIsPrivate(deliveryIpAddress)) {
+      throw createError(400, 'Identity recovery requires a private IPv4 delivery address');
+    }
+    if (requestedDeliveryOrigin && !normalizePanelDeliveryOrigin(requestedDeliveryOrigin)) {
+      throw createError(400, 'Identity recovery requires a valid HTTP(S) delivery origin');
+    }
+    if (!deliveryIpAddress && !deliveryOrigin) {
+      throw createError(400, 'Identity recovery requires a targeted delivery IP or origin');
+    }
+
+    const sourceDoc = await getPanelDocument(sourcePanelId);
+    const targetDoc = await getPanelDocument(targetPanelId);
+    const sourcePanel = normalizePanelDocument(sourceDoc);
+    const targetPanel = normalizePanelDocument(targetDoc);
+    const sourceOta = normalizeOtaState(sourcePanel.ota || {});
+    const targetOta = normalizeOtaState(targetPanel.ota || {});
+
+    if (!sourcePanel.settings.registered || !targetPanel.settings.registered) {
+      throw createError(400, 'Both hardware orb identities must be registered before OTA identity recovery');
+    }
+    if (sourcePanel.hardwareProfile !== targetPanel.hardwareProfile) {
+      throw createError(400, 'Identity recovery requires matching hardware orb profiles');
+    }
+    if (otaStatusIsActive(sourceOta.status)) {
+      throw createError(409, 'The source hardware orb already has a firmware update in progress');
+    }
+
+    await this.getPanelWifiBuildConfig();
+
+    const jobId = crypto.randomUUID();
+    const targetVersion = buildPanelFirmwareVersion();
+    const requestedAt = new Date();
+    const previousSourceArtifact = sourceOta.artifactPath;
+    const previousTargetArtifact = targetOta.artifactPath;
+
+    sourceDoc.status = 'updating';
+    sourceDoc.ota = mergeOtaState(sourceOta, {
+      jobId,
+      status: 'queued',
+      phase: 'identity-recovery-queued',
+      progress: 4,
+      targetVersion,
+      currentVersion: trimString(sourceDoc.firmwareVersion),
+      message: `Queued identity recovery to ${targetPanel.name || targetPanel.id}.`,
+      hardwareProfile: sourcePanel.hardwareProfile,
+      previousPanelStatus: trimString(sourcePanel.status) || 'online',
+      artifactPath: '',
+      artifactSizeBytes: 0,
+      bytesTransferred: 0,
+      bytesTotal: 0,
+      deliveryIpAddress,
+      deliveryOrigin,
+      recoveryTargetPanelId: targetPanel.id,
+      recoverySourcePanelId: '',
+      requestedAt,
+      startedAt: null,
+      completedAt: null,
+      lastError: ''
+    });
+
+    targetDoc.status = 'updating';
+    targetDoc.ota = mergeOtaState(targetOta, {
+      jobId,
+      status: 'rebooting',
+      phase: 'identity-recovery',
+      progress: 97,
+      targetVersion,
+      currentVersion: trimString(targetDoc.firmwareVersion),
+      message: `Waiting for ${targetPanel.name || targetPanel.id} to reboot with corrected identity firmware.`,
+      hardwareProfile: targetPanel.hardwareProfile,
+      previousPanelStatus: trimString(targetPanel.status) === 'updating'
+        ? 'online'
+        : (trimString(targetPanel.status) || 'online'),
+      artifactPath: '',
+      artifactSizeBytes: 0,
+      bytesTransferred: 1,
+      bytesTotal: 0,
+      deliveryIpAddress: '',
+      deliveryOrigin: '',
+      recoveryTargetPanelId: '',
+      recoverySourcePanelId: sourcePanel.id,
+      requestedAt,
+      startedAt: requestedAt,
+      completedAt: null,
+      lastError: ''
+    });
+
+    await targetDoc.save();
+    await sourceDoc.save();
+    await Promise.all([
+      this.cleanupOtaArtifactFile(previousSourceArtifact).catch(() => null),
+      this.cleanupOtaArtifactFile(previousTargetArtifact).catch(() => null)
+    ]);
+
+    void this.buildPanelIdentityRecoveryArtifact(
+      normalizePanelDocument(sourceDoc),
+      targetPanel,
+      { jobId, targetVersion, origin }
+    ).catch(async (error) => {
+      console.error('Wall panel OTA identity recovery build failed:', error.message);
+      await this.failPanelOtaJob(sourcePanel.id, jobId, error);
+      await this.updatePanelOtaState(targetPanel.id, jobId, {
+        status: 'failed',
+        phase: 'failed',
+        progress: 0,
+        message: error.message,
+        lastError: error.message,
+        completedAt: new Date()
+      }, { allowMissingJob: true }).catch(() => null);
+    });
+
+    void eventStreamService.publishSafe({
+      type: 'wall_panel.ota_identity_recovery_requested',
+      source: 'wall_panel',
+      category: 'panel',
+      payload: {
+        sourcePanelId: sourcePanel.id,
+        targetPanelId: targetPanel.id,
+        jobId,
+        targetVersion,
+        deliveryIpAddress,
+        deliveryOrigin
+      },
+      tags: ['wall-panel', 'ota', 'identity-recovery']
+    });
+
+    return {
+      sourcePanel: await this.serializePanelForResponse(sourceDoc),
+      targetPanel: await this.serializePanelForResponse(targetDoc)
+    };
+  }
+
+  async completePanelIdentityRecovery(sourcePanelId, targetPanelId, targetVersion) {
+    if (!sourcePanelId || !targetPanelId || !targetVersion) {
+      return false;
+    }
+
+    const sourceDoc = await getPanelDocument(sourcePanelId).catch(() => null);
+    if (!sourceDoc) {
+      return false;
+    }
+
+    const sourceOta = normalizeOtaState(sourceDoc.ota || {});
+    if (
+      sourceOta.recoveryTargetPanelId !== targetPanelId
+      || sourceOta.targetVersion !== targetVersion
+    ) {
+      return false;
+    }
+
+    const sourceArtifactPath = sourceOta.artifactPath;
+    sourceDoc.status = 'online';
+    sourceDoc.ota = mergeOtaState(sourceOta, {
+      status: 'completed',
+      phase: 'completed',
+      progress: 100,
+      message: `Identity recovery completed for ${targetPanelId}.`,
+      lastError: '',
+      artifactPath: '',
+      deliveryIpAddress: '',
+      deliveryOrigin: '',
+      recoveryTargetPanelId: '',
+      completedAt: new Date()
+    });
+    await sourceDoc.save();
+    await this.cleanupOtaArtifactFile(sourceArtifactPath).catch(() => null);
+
+    void eventStreamService.publishSafe({
+      type: 'wall_panel.ota_identity_recovery_completed',
+      source: 'wall_panel',
+      category: 'panel',
+      payload: {
+        sourcePanelId,
+        targetPanelId,
+        targetVersion
+      },
+      tags: ['wall-panel', 'ota', 'identity-recovery']
+    });
+
+    return true;
+  }
+
+  async pushFirmwareUpdate(panelId, origin = '', input = {}) {
     let panel = normalizePanelDocument(await getPanelDocument(panelId));
+    const force = input.force === true;
+    const deliveryIpAddress = normalizePanelClientIp(input.expectedIpAddress || input.deliveryIpAddress);
+    const requestedDeliveryOrigin = trimString(input.expectedOrigin || input.deliveryOrigin);
+    const deliveryOrigin = normalizePanelDeliveryOrigin(requestedDeliveryOrigin);
+
+    if ((input.expectedIpAddress || input.deliveryIpAddress) && !panelClientIpIsPrivate(deliveryIpAddress)) {
+      throw createError(400, 'A targeted hardware orb OTA requires a private IPv4 delivery address');
+    }
+    if (requestedDeliveryOrigin && !deliveryOrigin) {
+      throw createError(400, 'A targeted hardware orb OTA requires a valid HTTP(S) delivery origin');
+    }
 
     if (!panel.settings.registered) {
       throw createError(400, 'This hardware orb has not completed its first activation yet');
@@ -2717,8 +3082,10 @@ class WallPanelService {
       throw createError(400, `Hardware profile ${panel.hardwareProfile} is not OTA-capable yet`);
     }
 
-    const targetVersion = await this.getLatestPanelFirmwareVersion().catch(() => buildPanelFirmwareVersion());
-    if (!isFirmwareUpdateAvailable(panel.firmwareVersion, targetVersion)) {
+    const targetVersion = force
+      ? buildPanelFirmwareVersion()
+      : await this.getLatestPanelFirmwareVersion().catch(() => buildPanelFirmwareVersion());
+    if (!force && !isFirmwareUpdateAvailable(panel.firmwareVersion, targetVersion)) {
       throw createError(409, 'This hardware orb already has the latest HomeBrain firmware content. No OTA push is needed.');
     }
 
@@ -2744,7 +3111,11 @@ class WallPanelService {
       artifactPath: '',
       artifactSizeBytes: 0,
       bytesTransferred: 0,
-      bytesTotal: 0
+      bytesTotal: 0,
+      deliveryIpAddress,
+      deliveryOrigin,
+      recoveryTargetPanelId: '',
+      recoverySourcePanelId: ''
     });
     await panelDoc.save();
 
@@ -2840,6 +3211,12 @@ class WallPanelService {
     await this.runExclusivePanelFirmwareTask(async () => {
       const processEnv = await this.createPanelFirmwareBuildEnv(panel, { targetVersion, origin });
       const platformioCandidate = await this.runPanelFirmwareBuild(panel, jobId, buildTarget, processEnv);
+      const builtArtifactPath = path.join(this.panelFirmwareProjectDir, buildTarget.artifactRelativePath);
+      await this.validatePanelFirmwareArtifact(builtArtifactPath, {
+        targetVersion,
+        panelId: panel.id,
+        registrationCode: panel.settings.registrationCode
+      });
 
       await this.updatePanelOtaState(panel.id, jobId, {
         status: 'flashing',
@@ -2958,12 +3335,21 @@ class WallPanelService {
     };
   }
 
-  async getPanelOtaArtifact(panelId, credentials = {}) {
+  async getPanelOtaArtifact(
+    panelId,
+    credentials = {},
+    origin = '',
+    requestIpAddress = '',
+    requestDeliveryOrigin = origin
+  ) {
     const panel = normalizePanelDocument(await ensurePanelAccess(panelId, credentials));
     const ota = normalizeOtaState(panel.ota || {});
 
     if (!DOWNLOADABLE_OTA_STATUSES.has(ota.status) || !ota.artifactPath) {
       throw createError(404, 'No OTA package is available for this hardware orb');
+    }
+    if (!panelOtaDeliveryIsAllowed(ota, requestDeliveryOrigin, requestIpAddress)) {
+      throw createError(404, 'No OTA package is available for this hardware orb on this delivery path');
     }
 
     const stat = await fsp.stat(ota.artifactPath).catch(() => null);
@@ -3252,7 +3638,9 @@ class WallPanelService {
     const currentOta = normalizeOtaState(panel.ota || {});
     const reportedFirmwareVersion = panel.firmwareVersion;
     const expectedFirmwareVersion = currentOta.targetVersion;
+    const recoverySourcePanelId = currentOta.recoverySourcePanelId;
     let cleanupFailedOtaArtifact = false;
+    let completeIdentityRecovery = false;
 
     if (
       reportedFirmwareVersion
@@ -3282,8 +3670,10 @@ class WallPanelService {
         currentVersion: panel.firmwareVersion,
         message: 'Orb is now running the latest HomeBrain firmware.',
         lastError: '',
+        recoverySourcePanelId: '',
         completedAt: new Date()
       });
+      completeIdentityRecovery = Boolean(recoverySourcePanelId);
     } else if (panel.firmwareVersion === currentOta.targetVersion) {
       panel.status = 'online';
       panel.ota = mergeOtaState(currentOta, {
@@ -3306,6 +3696,15 @@ class WallPanelService {
     if (cleanupFailedOtaArtifact) {
       await this.cleanupPanelOtaArtifact(panel, currentOta.artifactPath).catch(() => null);
     }
+    if (completeIdentityRecovery) {
+      await this.completePanelIdentityRecovery(
+        recoverySourcePanelId,
+        toId(panel._id),
+        panel.firmwareVersion
+      ).catch((error) => {
+        console.warn(`WallPanelService: Failed to finish identity recovery bookkeeping: ${error.message}`);
+      });
+    }
 
     void eventStreamService.publishSafe({
       type: 'wall_panel.activated',
@@ -3322,7 +3721,13 @@ class WallPanelService {
     return this.serializePanelForResponse(panel);
   }
 
-  async getPanelState(panelId, credentials = {}, origin = '') {
+  async getPanelState(
+    panelId,
+    credentials = {},
+    origin = '',
+    requestIpAddress = '',
+    requestDeliveryOrigin = origin
+  ) {
     const panelDoc = await ensurePanelAccess(panelId, credentials);
     void this.markPanelStatePoll(panelDoc).catch((error) => {
       console.warn(`WallPanelService: Failed to record panel state heartbeat for ${panelId}: ${error.message}`);
@@ -3381,7 +3786,7 @@ class WallPanelService {
         supportsEncoder: true,
         supportsSwipeModes: true
       },
-      ota: buildPanelOtaPayload(panel, origin),
+      ota: buildPanelOtaPayload(panel, origin, requestIpAddress, requestDeliveryOrigin),
       orientation: buildOrientationSnapshot(panel),
       theme: buildThemeSnapshot(),
       modeOrder,
