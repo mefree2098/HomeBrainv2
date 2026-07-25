@@ -18,7 +18,7 @@ import {
   DialogTitle
 } from "./ui/dialog"
 import { useAuth } from "@/contexts/AuthContext"
-import { useLocation, useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router"
 import { useState, useEffect, useRef } from "react"
 import { useToast } from "@/hooks/useToast"
 import { getDeviceStats } from "@/api/devices"

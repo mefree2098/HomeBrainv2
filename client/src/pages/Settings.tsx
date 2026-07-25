@@ -169,7 +169,7 @@ import {
   type InsteonIsySyncRunLogEntry,
   type InsteonStatusResponse
 } from "@/api/insteon"
-import { useNavigate, useSearchParams } from "react-router-dom"
+import { useNavigate, useSearchParams } from "react-router"
 import { SettingsResourceUtilizationTab } from "@/components/system/SystemResourceUtilization"
 import { SenseIntegrationCard } from "@/components/sense/SenseIntegrationCard"
 import { TempestIntegrationCard } from "@/components/weather/TempestIntegrationCard"
