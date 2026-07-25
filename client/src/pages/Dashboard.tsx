@@ -1,5 +1,5 @@
 import { Suspense, lazy, useState, useEffect, useMemo, useCallback, useRef } from "react"
-import { Link } from "react-router-dom"
+import { Link } from "react-router"
 import {
   ArrowDown,
   ArrowUp,

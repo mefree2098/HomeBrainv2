@@ -1,5 +1,5 @@
 import { Suspense, lazy, type ReactNode } from "react"
-import { BrowserRouter as Router, Navigate, Routes, Route } from "react-router-dom"
+import { BrowserRouter as Router, Navigate, Routes, Route } from "react-router"
 import { ThemeProvider } from "./components/ui/theme-provider"
 import { Toaster } from "./components/ui/toaster"
 import { AuthProvider } from "./contexts/AuthContext"

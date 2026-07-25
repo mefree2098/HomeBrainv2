@@ -28,7 +28,7 @@ import {
   ServerCog,
   Bot
 } from "lucide-react"
-import { useLocation, useNavigate } from "react-router-dom"
+import { useLocation, useNavigate } from "react-router"
 import { cn } from "@/lib/utils"
 import { Button } from "./ui/button"
 import { useAuth } from "@/contexts/AuthContext"
