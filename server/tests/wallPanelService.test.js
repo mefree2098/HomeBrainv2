@@ -58,8 +58,11 @@ function withoutConfiguredPublicOrigin(t) {
   delete process.env.PUBLIC_BASE_URL;
 }
 
-function buildTestFirmwareArtifact(version) {
-  return Buffer.from(`firmware-binary\\0${version}\\0HomeBrain-Test-WiFi\\0HomeBrain-Test-Password\\0`);
+function buildTestFirmwareArtifact(version, panelId = 'panel-build', registrationCode = '') {
+  return Buffer.from(
+    `firmware-binary\\0${version}\\0${panelId}\\0${registrationCode}\\0`
+    + 'HomeBrain-Test-WiFi\\0HomeBrain-Test-Password\\0'
+  );
 }
 
 test('registerPanel issues panel credentials and default mode order', async (t) => {
@@ -246,6 +249,97 @@ test('activatePanel completes an OTA after download progress has started', async
   assert.equal(result.ota.phase, 'completed');
   assert.equal(result.ota.progress, 100);
   assert.equal(result.ota.currentVersion, 'panel-target');
+});
+
+test('activatePanel completes identity recovery for both panel records', async (t) => {
+  const originalFindById = WallPanel.findById;
+  const cleanedArtifacts = [];
+
+  const sourcePanelDoc = {
+    _id: 'panel-source',
+    name: 'Master Bedroom Orb',
+    room: 'Master Bedroom',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'updating',
+    firmwareVersion: 'panel-master-current',
+    ota: {
+      jobId: 'job-recovery',
+      status: 'rebooting',
+      phase: 'rebooting',
+      progress: 97,
+      targetVersion: 'panel-office-recovered',
+      recoveryTargetPanelId: 'panel-target',
+      artifactPath: '/tmp/job-recovery.bin'
+    },
+    settings: {
+      registered: true,
+      registrationCode: 'HBWP-MASTER-1234'
+    },
+    async save() {
+      return this;
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+  const targetPanelDoc = {
+    _id: 'panel-target',
+    name: 'Office Orb',
+    room: 'Office',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'updating',
+    firmwareVersion: 'panel-office-old',
+    ota: {
+      jobId: 'job-recovery',
+      status: 'rebooting',
+      phase: 'identity-recovery',
+      progress: 97,
+      targetVersion: 'panel-office-recovered',
+      bytesTransferred: 1,
+      recoverySourcePanelId: 'panel-source'
+    },
+    settings: {
+      registered: true,
+      registrationCode: 'HBWP-OFFICE-1234'
+    },
+    async save() {
+      return this;
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+  });
+
+  WallPanel.findById = async (panelId) => (
+    panelId === 'panel-source' ? sourcePanelDoc : targetPanelDoc
+  );
+
+  const service = new WallPanelService();
+  service.cleanupOtaArtifactFile = async (artifactPath) => {
+    cleanedArtifacts.push(artifactPath);
+    return true;
+  };
+  service.serializePanelForResponse = async (panel) => panel;
+
+  const result = await service.activatePanel('panel-target', {
+    registrationCode: 'HBWP-OFFICE-1234'
+  }, {
+    ipAddress: '192.168.2.2',
+    firmwareVersion: 'panel-office-recovered'
+  });
+
+  assert.equal(result.status, 'online');
+  assert.equal(result.ota.status, 'completed');
+  assert.equal(result.ota.recoverySourcePanelId, '');
+  assert.equal(sourcePanelDoc.status, 'online');
+  assert.equal(sourcePanelDoc.ota.status, 'completed');
+  assert.equal(sourcePanelDoc.ota.recoveryTargetPanelId, '');
+  assert.equal(sourcePanelDoc.ota.artifactPath, '');
+  assert.deepEqual(cleanedArtifacts, ['/tmp/job-recovery.bin']);
 });
 
 test('activatePanel fails an OTA when the orb reboots into a different firmware version', async (t) => {
@@ -1201,6 +1295,146 @@ test('pushFirmwareUpdate rejects timestamp-only firmware churn before queuing OT
   assert.equal(saveCount, 0);
 });
 
+test('pushFirmwareUpdate can force a newer build targeted to one private Orb address', async (t) => {
+  withPanelWifiBuildSettings(t);
+  const originalFindById = WallPanel.findById;
+  const panelDoc = {
+    _id: 'panel-force-ota',
+    name: 'Master Bedroom Orb',
+    room: 'Master Bedroom',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'online',
+    firmwareVersion: 'panel-20260725T031842Z-8154711b',
+    ota: {
+      status: 'completed',
+      phase: 'completed'
+    },
+    settings: {
+      registered: true,
+      registrationCode: 'HBWP-MASTER-1234'
+    },
+    async save() {
+      return this;
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+  });
+
+  WallPanel.findById = async () => panelDoc;
+
+  const service = new WallPanelService();
+  service.buildPanelOtaArtifact = async () => {};
+  service.serializePanelForResponse = async (panel) => panel;
+
+  const result = await service.pushFirmwareUpdate(
+    'panel-force-ota',
+    'https://freestonefamily.com',
+    {
+      force: true,
+      expectedIpAddress: '192.168.2.30',
+      expectedOrigin: 'http://192.168.2.61:3000'
+    }
+  );
+
+  assert.equal(result.ota.status, 'queued');
+  assert.notEqual(result.ota.targetVersion, panelDoc.firmwareVersion);
+  assert.equal(result.ota.deliveryIpAddress, '192.168.2.30');
+  assert.equal(result.ota.deliveryOrigin, 'http://192.168.2.61:3000');
+});
+
+test('pushPanelIdentityRecovery queues target credentials behind the source identity', async (t) => {
+  withPanelWifiBuildSettings(t);
+  const originalFindById = WallPanel.findById;
+  const buildCalls = [];
+
+  const sourcePanelDoc = {
+    _id: 'panel-master',
+    name: 'Master Bedroom Orb',
+    room: 'Master Bedroom',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'online',
+    firmwareVersion: 'panel-master-current',
+    ota: {
+      status: 'completed',
+      phase: 'completed'
+    },
+    settings: {
+      registered: true,
+      registrationCode: 'HBWP-MASTER-1234'
+    },
+    async save() {
+      return this;
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+  const targetPanelDoc = {
+    _id: 'panel-office',
+    name: 'Office Orb',
+    room: 'Office',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    status: 'updating',
+    firmwareVersion: 'panel-office-old',
+    ota: {
+      jobId: 'job-stuck',
+      status: 'downloading',
+      artifactPath: '/tmp/job-stuck.bin'
+    },
+    settings: {
+      registered: true,
+      registrationCode: 'HBWP-OFFICE-1234'
+    },
+    async save() {
+      return this;
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+
+  t.after(() => {
+    WallPanel.findById = originalFindById;
+  });
+
+  WallPanel.findById = async (panelId) => (
+    panelId === 'panel-master' ? sourcePanelDoc : targetPanelDoc
+  );
+
+  const service = new WallPanelService();
+  service.cleanupOtaArtifactFile = async () => true;
+  service.buildPanelIdentityRecoveryArtifact = async (...args) => {
+    buildCalls.push(args);
+  };
+  service.serializePanelForResponse = async (panel) => panel;
+
+  const result = await service.pushPanelIdentityRecovery(
+    'panel-master',
+    {
+      targetPanelId: 'panel-office',
+      expectedIpAddress: '192.168.2.2'
+    }
+  );
+
+  assert.equal(result.sourcePanel.ota.status, 'queued');
+  assert.equal(result.sourcePanel.ota.deliveryIpAddress, '192.168.2.2');
+  assert.equal(result.sourcePanel.ota.recoveryTargetPanelId, 'panel-office');
+  assert.equal(result.targetPanel.ota.status, 'rebooting');
+  assert.equal(result.targetPanel.ota.recoverySourcePanelId, 'panel-master');
+  assert.equal(result.targetPanel.ota.previousPanelStatus, 'online');
+  assert.equal(result.sourcePanel.ota.jobId, result.targetPanel.ota.jobId);
+  assert.equal(result.sourcePanel.ota.targetVersion, result.targetPanel.ota.targetVersion);
+  assert.equal(buildCalls.length, 1);
+  assert.equal(buildCalls[0][0].id, 'panel-master');
+  assert.equal(buildCalls[0][1].id, 'panel-office');
+  assert.equal(buildCalls[0][1].settings.registrationCode, 'HBWP-OFFICE-1234');
+});
+
 test('buildPanelOtaArtifact falls back to Homebrew PlatformIO when pio is missing from PATH', async (t) => {
   withPanelWifiBuildSettings(t);
   const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'wall-panel-ota-'));
@@ -1630,6 +1864,93 @@ test('validatePanelFirmwareArtifact rejects placeholder Wi-Fi credentials', asyn
   );
 });
 
+test('validatePanelFirmwareArtifact rejects a firmware image for another panel identity', async (t) => {
+  const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'wall-panel-identity-validation-'));
+  const artifactPath = path.join(tempRoot, 'firmware.bin');
+  const targetVersion = 'panel-20260725T070000Z-abcd';
+
+  t.after(async () => {
+    await fs.promises.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  await fs.promises.writeFile(
+    artifactPath,
+    buildTestFirmwareArtifact(
+      targetVersion,
+      'master-bedroom-panel',
+      'HBWP-MASTER-1234'
+    )
+  );
+
+  const service = new WallPanelService();
+  await assert.rejects(
+    () => service.validatePanelFirmwareArtifact(artifactPath, {
+      targetVersion,
+      panelId: 'office-panel',
+      registrationCode: 'HBWP-OFFICE-1234'
+    }),
+    /wrong panel identity/i
+  );
+});
+
+test('getPanelOtaArtifact hides a targeted package from a different delivery path', async (t) => {
+  const originalFindById = WallPanel.findById;
+  const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'wall-panel-targeted-ota-'));
+  const artifactPath = path.join(tempRoot, 'firmware.bin');
+  await fs.promises.writeFile(artifactPath, Buffer.from('targeted firmware'));
+
+  const panelDoc = {
+    _id: 'panel-targeted-download',
+    name: 'Master Bedroom Orb',
+    room: 'Master Bedroom',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    firmwareVersion: 'panel-old',
+    ota: {
+      jobId: 'job-targeted',
+      status: 'ready',
+      targetVersion: 'panel-new',
+      artifactPath,
+      deliveryIpAddress: '192.168.2.2',
+      deliveryOrigin: 'https://freestonefamily.com'
+    },
+    settings: {
+      registered: true,
+      registrationCode: 'HBWP-MASTER-1234'
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+
+  t.after(async () => {
+    WallPanel.findById = originalFindById;
+    await fs.promises.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  WallPanel.findById = async () => panelDoc;
+  const service = new WallPanelService();
+
+  await assert.rejects(
+    () => service.getPanelOtaArtifact(
+      'panel-targeted-download',
+      { registrationCode: 'HBWP-MASTER-1234' },
+      'https://freestonefamily.com',
+      '192.168.2.30',
+      'http://192.168.2.61:3000'
+    ),
+    /No OTA package is available/i
+  );
+
+  const artifact = await service.getPanelOtaArtifact(
+    'panel-targeted-download',
+    { registrationCode: 'HBWP-MASTER-1234' },
+    'https://freestonefamily.com',
+    '203.0.113.10',
+    'https://freestonefamily.com'
+  );
+  assert.equal(artifact.artifactPath, artifactPath);
+});
+
 test('createPanelFirmwareBuildEnv injects per-orb firmware credentials', async (t) => {
   withPanelWifiBuildSettings(t);
   withoutConfiguredPublicOrigin(t);
@@ -1904,6 +2225,12 @@ test('flashPanelInitialFirmware uploads to the selected USB port with per-panel 
       args: [],
       label: 'pio'
     };
+  };
+  service.validatePanelFirmwareArtifact = async (_artifactPath, expected) => {
+    assert.equal(expected.targetVersion, 'panel-20260421T210500Z-test');
+    assert.equal(expected.panelId, 'panel-usb-flash');
+    assert.equal(expected.registrationCode, 'HBWP-1234-5678-90AB');
+    return 1024;
   };
 
   await service.flashPanelInitialFirmware(panelDoc, {
