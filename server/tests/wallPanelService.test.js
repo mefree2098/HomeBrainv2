@@ -36,6 +36,28 @@ function withPanelWifiBuildSettings(t, overrides = {}) {
   });
 }
 
+function withoutConfiguredPublicOrigin(t) {
+  const originalHomeBrainPublicBaseUrl = process.env.HOMEBRAIN_PUBLIC_BASE_URL;
+  const originalPublicBaseUrl = process.env.PUBLIC_BASE_URL;
+
+  t.after(() => {
+    if (originalHomeBrainPublicBaseUrl === undefined) {
+      delete process.env.HOMEBRAIN_PUBLIC_BASE_URL;
+    } else {
+      process.env.HOMEBRAIN_PUBLIC_BASE_URL = originalHomeBrainPublicBaseUrl;
+    }
+
+    if (originalPublicBaseUrl === undefined) {
+      delete process.env.PUBLIC_BASE_URL;
+    } else {
+      process.env.PUBLIC_BASE_URL = originalPublicBaseUrl;
+    }
+  });
+
+  delete process.env.HOMEBRAIN_PUBLIC_BASE_URL;
+  delete process.env.PUBLIC_BASE_URL;
+}
+
 function buildTestFirmwareArtifact(version) {
   return Buffer.from(`firmware-binary\\0${version}\\0HomeBrain-Test-WiFi\\0HomeBrain-Test-Password\\0`);
 }
@@ -1610,6 +1632,7 @@ test('validatePanelFirmwareArtifact rejects placeholder Wi-Fi credentials', asyn
 
 test('createPanelFirmwareBuildEnv injects per-orb firmware credentials', async (t) => {
   withPanelWifiBuildSettings(t);
+  withoutConfiguredPublicOrigin(t);
   const originalNetworkInterfaces = os.networkInterfaces;
   t.after(() => {
     os.networkInterfaces = originalNetworkInterfaces;
@@ -1651,6 +1674,7 @@ test('createPanelFirmwareBuildEnv injects per-orb firmware credentials', async (
 
 test('createPanelFirmwareBuildEnv never embeds a DHCP-derived IP address', async (t) => {
   withPanelWifiBuildSettings(t);
+  withoutConfiguredPublicOrigin(t);
   const service = new WallPanelService();
   const env = await service.createPanelFirmwareBuildEnv({
     _id: 'panel-stable-hub',
@@ -1668,6 +1692,37 @@ test('createPanelFirmwareBuildEnv never embeds a DHCP-derived IP address', async
   });
 
   assert.equal(env.HOMEBRAIN_PANEL_HUB_URL, 'http://homebrain.local:3000');
+});
+
+test('createPanelFirmwareBuildEnv prefers the configured public hostname', async (t) => {
+  withPanelWifiBuildSettings(t);
+  const originalPublicBaseUrl = process.env.HOMEBRAIN_PUBLIC_BASE_URL;
+  t.after(() => {
+    if (originalPublicBaseUrl === undefined) {
+      delete process.env.HOMEBRAIN_PUBLIC_BASE_URL;
+    } else {
+      process.env.HOMEBRAIN_PUBLIC_BASE_URL = originalPublicBaseUrl;
+    }
+  });
+  process.env.HOMEBRAIN_PUBLIC_BASE_URL = 'https://freestonefamily.com';
+
+  const service = new WallPanelService();
+  const env = await service.createPanelFirmwareBuildEnv({
+    _id: 'panel-public-hub',
+    id: 'panel-public-hub',
+    name: 'Master Bedroom Orb',
+    room: 'Master Bedroom',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    ipAddress: '192.168.2.2',
+    settings: {
+      registrationCode: 'HBWP-1234-5678-90AB'
+    }
+  }, {
+    targetVersion: 'panel-20260725T060100Z-test',
+    origin: 'http://192.168.2.32:3000'
+  });
+
+  assert.equal(env.HOMEBRAIN_PANEL_HUB_URL, 'https://freestonefamily.com');
 });
 
 test('listProvisioningUsbPorts selects a single Espressif USB serial candidate', async () => {
@@ -1742,6 +1797,7 @@ test('listProvisioningUsbPorts ignores FTDI-style PLM serial ports when selectin
 
 test('flashPanelInitialFirmware uploads to the selected USB port with per-panel build env', async (t) => {
   withPanelWifiBuildSettings(t);
+  withoutConfiguredPublicOrigin(t);
   const originalFindById = WallPanel.findById;
   const originalPublishSafe = eventStreamService.publishSafe;
   const uploadCommands = [];
