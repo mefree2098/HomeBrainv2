@@ -302,7 +302,7 @@ router.post('/:panelId/ota/recover-identity', panelFirmwareMutationRateLimit, ad
       ...recovery
     });
   } catch (error) {
-    console.error(`POST /api/panels/${req.params.panelId}/ota/recover-identity - Error:`, error.message);
+    console.error('POST /api/panels/:panelId/ota/recover-identity - Error:', error.message);
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || 'Failed to start hardware orb identity recovery'
