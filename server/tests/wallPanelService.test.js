@@ -1725,6 +1725,51 @@ test('createPanelFirmwareBuildEnv prefers the configured public hostname', async
   assert.equal(env.HOMEBRAIN_PANEL_HUB_URL, 'https://freestonefamily.com');
 });
 
+test('runExclusivePanelFirmwareTask serializes shared PlatformIO work', async () => {
+  const service = new WallPanelService();
+  const steps = [];
+  let releaseFirstTask;
+  const firstTaskGate = new Promise((resolve) => {
+    releaseFirstTask = resolve;
+  });
+
+  const firstTask = service.runExclusivePanelFirmwareTask(async () => {
+    steps.push('first-started');
+    await firstTaskGate;
+    steps.push('first-finished');
+  });
+  const secondTask = service.runExclusivePanelFirmwareTask(async () => {
+    steps.push('second-started');
+    steps.push('second-finished');
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(steps, ['first-started']);
+
+  releaseFirstTask();
+  await Promise.all([firstTask, secondTask]);
+  assert.deepEqual(steps, [
+    'first-started',
+    'first-finished',
+    'second-started',
+    'second-finished'
+  ]);
+});
+
+test('runExclusivePanelFirmwareTask releases the queue after a failed build', async () => {
+  const service = new WallPanelService();
+
+  await assert.rejects(
+    () => service.runExclusivePanelFirmwareTask(async () => {
+      throw new Error('simulated build failure');
+    }),
+    /simulated build failure/
+  );
+
+  const result = await service.runExclusivePanelFirmwareTask(async () => 'next build ran');
+  assert.equal(result, 'next build ran');
+});
+
 test('listProvisioningUsbPorts selects a single Espressif USB serial candidate', async () => {
   const service = new WallPanelService();
   service._serialPortModule = {

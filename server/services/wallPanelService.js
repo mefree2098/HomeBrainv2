@@ -1644,6 +1644,7 @@ class WallPanelService {
       expiresAt: 0,
       value: ''
     };
+    this.panelFirmwareBuildQueue = Promise.resolve();
     this._serialPortModule = undefined;
     this._serialPortLoadError = null;
   }
@@ -2121,6 +2122,12 @@ class WallPanelService {
     };
 
     return this.createPlatformioEnv(firmwareEnv);
+  }
+
+  runExclusivePanelFirmwareTask(task) {
+    const queuedTask = this.panelFirmwareBuildQueue.then(task, task);
+    this.panelFirmwareBuildQueue = queuedTask.catch(() => undefined);
+    return queuedTask;
   }
 
   async cleanPanelFirmwareBuildOutput(buildTarget) {
@@ -2645,17 +2652,20 @@ class WallPanelService {
       hardwareProfile: panel.hardwareProfile
     });
 
-    const processEnv = await this.createPanelFirmwareBuildEnv(panel, { targetVersion, origin });
-    await this.runPanelFirmwareBuild(panel, jobId, buildTarget, processEnv);
+    const { artifactPath, stat } = await this.runExclusivePanelFirmwareTask(async () => {
+      const processEnv = await this.createPanelFirmwareBuildEnv(panel, { targetVersion, origin });
+      await this.runPanelFirmwareBuild(panel, jobId, buildTarget, processEnv);
 
-    const builtArtifactPath = path.join(this.panelFirmwareProjectDir, buildTarget.artifactRelativePath);
-    await this.validatePanelFirmwareArtifact(builtArtifactPath, { targetVersion });
-    const panelDir = path.join(this.panelOtaArtifactsDir, panel.id);
-    await fsp.mkdir(panelDir, { recursive: true });
+      const builtArtifactPath = path.join(this.panelFirmwareProjectDir, buildTarget.artifactRelativePath);
+      await this.validatePanelFirmwareArtifact(builtArtifactPath, { targetVersion });
+      const panelDir = path.join(this.panelOtaArtifactsDir, panel.id);
+      await fsp.mkdir(panelDir, { recursive: true });
 
-    const artifactPath = path.join(panelDir, `${jobId}.bin`);
-    await fsp.copyFile(builtArtifactPath, artifactPath);
-    const stat = await fsp.stat(artifactPath);
+      const artifactPath = path.join(panelDir, `${jobId}.bin`);
+      await fsp.copyFile(builtArtifactPath, artifactPath);
+      const stat = await fsp.stat(artifactPath);
+      return { artifactPath, stat };
+    });
 
     await this.updatePanelOtaState(panel.id, jobId, {
       status: 'ready',
@@ -2827,24 +2837,26 @@ class WallPanelService {
       throw createError(400, `Hardware profile ${panel.hardwareProfile} cannot be flashed by HomeBrain yet`);
     }
 
-    const processEnv = await this.createPanelFirmwareBuildEnv(panel, { targetVersion, origin });
-    const platformioCandidate = await this.runPanelFirmwareBuild(panel, jobId, buildTarget, processEnv);
+    await this.runExclusivePanelFirmwareTask(async () => {
+      const processEnv = await this.createPanelFirmwareBuildEnv(panel, { targetVersion, origin });
+      const platformioCandidate = await this.runPanelFirmwareBuild(panel, jobId, buildTarget, processEnv);
 
-    await this.updatePanelOtaState(panel.id, jobId, {
-      status: 'flashing',
-      phase: 'usb-flashing',
-      progress: 66,
-      message: 'Firmware image built. Starting USB upload...'
-    }, { allowMissingJob: true });
+      await this.updatePanelOtaState(panel.id, jobId, {
+        status: 'flashing',
+        phase: 'usb-flashing',
+        progress: 66,
+        message: 'Firmware image built. Starting USB upload...'
+      }, { allowMissingJob: true });
 
-    await this.runPlatformioUploadCandidate(
-      panel,
-      jobId,
-      buildTarget,
-      platformioCandidate,
-      processEnv,
-      serialPath
-    );
+      await this.runPlatformioUploadCandidate(
+        panel,
+        jobId,
+        buildTarget,
+        platformioCandidate,
+        processEnv,
+        serialPath
+      );
+    });
 
     const updatedPanel = await this.updatePanelOtaState(panel.id, jobId, {
       status: 'provisioned',
