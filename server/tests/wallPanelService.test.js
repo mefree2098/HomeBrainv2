@@ -1610,6 +1610,20 @@ test('validatePanelFirmwareArtifact rejects placeholder Wi-Fi credentials', asyn
 
 test('createPanelFirmwareBuildEnv injects per-orb firmware credentials', async (t) => {
   withPanelWifiBuildSettings(t);
+  const originalNetworkInterfaces = os.networkInterfaces;
+  t.after(() => {
+    os.networkInterfaces = originalNetworkInterfaces;
+  });
+  os.networkInterfaces = () => ({
+    en0: [
+      {
+        family: 'IPv4',
+        internal: false,
+        address: '192.168.2.32'
+      }
+    ]
+  });
+
   const service = new WallPanelService();
   const env = await service.createPanelFirmwareBuildEnv({
     _id: 'panel-usb-env',
@@ -1617,6 +1631,7 @@ test('createPanelFirmwareBuildEnv injects per-orb firmware credentials', async (
     name: 'Kitchen Orb',
     room: 'Kitchen',
     hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    ipAddress: '192.168.2.38',
     settings: {
       registrationCode: 'HBWP-1234-5678-90AB'
     }
@@ -1632,6 +1647,27 @@ test('createPanelFirmwareBuildEnv injects per-orb firmware credentials', async (
   assert.equal(env.HOMEBRAIN_PANEL_HOSTNAME, 'homebrain-kitchen-orb');
   assert.equal(env.HOMEBRAIN_PANEL_WIFI_SSID, 'HomeBrain-Test-WiFi');
   assert.equal(env.HOMEBRAIN_PANEL_WIFI_PASSWORD, 'HomeBrain-Test-Password');
+});
+
+test('createPanelFirmwareBuildEnv never embeds a DHCP-derived IP address', async (t) => {
+  withPanelWifiBuildSettings(t);
+  const service = new WallPanelService();
+  const env = await service.createPanelFirmwareBuildEnv({
+    _id: 'panel-stable-hub',
+    id: 'panel-stable-hub',
+    name: 'Office Orb',
+    room: 'Office',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    ipAddress: '192.168.2.38',
+    settings: {
+      registrationCode: 'HBWP-1234-5678-90AB'
+    }
+  }, {
+    targetVersion: 'panel-20260725T060000Z-test',
+    origin: 'http://192.168.2.32:3000'
+  });
+
+  assert.equal(env.HOMEBRAIN_PANEL_HUB_URL, 'http://homebrain.local:3000');
 });
 
 test('listProvisioningUsbPorts selects a single Espressif USB serial candidate', async () => {

@@ -49,6 +49,7 @@ const PANEL_STATE_HEARTBEAT_INTERVAL_MS = Math.max(
   5_000,
   Number(process.env.HOMEBRAIN_PANEL_STATE_HEARTBEAT_INTERVAL_MS || 30_000)
 );
+const DEFAULT_PANEL_FIRMWARE_HUB_URL = 'http://homebrain.local:3000';
 
 const PANEL_MODE_ORDER = Object.freeze(['thermostat', 'room', 'home', 'media', 'quiet']);
 const PANEL_MODE_SET = new Set(PANEL_MODE_ORDER);
@@ -1572,6 +1573,34 @@ function resolvePanelOtaOrigin(panel, origin = '') {
   return trimString(origin) || getConfiguredPublicOrigin();
 }
 
+function normalizeStablePanelFirmwareHubUrl(value) {
+  const candidate = trimString(value);
+  if (!candidate) {
+    return '';
+  }
+
+  try {
+    const parsed = new URL(candidate);
+    const hostname = parsed.hostname.replace(/^\[|\]$/g, '');
+    if (
+      !['http:', 'https:'].includes(parsed.protocol)
+      || net.isIP(hostname)
+      || hostname.toLowerCase() === 'localhost'
+    ) {
+      return '';
+    }
+    return parsed.origin;
+  } catch (_error) {
+    return '';
+  }
+}
+
+function resolvePanelFirmwareHubUrl(origin = '') {
+  return normalizeStablePanelFirmwareHubUrl(getConfiguredPublicOrigin())
+    || normalizeStablePanelFirmwareHubUrl(origin)
+    || DEFAULT_PANEL_FIRMWARE_HUB_URL;
+}
+
 function buildPanelOtaDownloadUrl(panel, origin = '') {
   const panelId = toId(panel?._id || panel?.id);
   const resolvedOrigin = resolvePanelOtaOrigin(panel, origin);
@@ -2079,20 +2108,17 @@ class WallPanelService {
 
   async createPanelFirmwareBuildEnv(panel, { targetVersion = '', origin = '' } = {}) {
     const normalized = normalizePanelDocument(panel);
-    const hubUrl = resolvePanelOtaOrigin(normalized, origin);
+    const hubUrl = resolvePanelFirmwareHubUrl(origin);
     const wifi = await this.getPanelWifiBuildConfig();
     const firmwareEnv = {
       HOMEBRAIN_PANEL_BUILD_VERSION: trimString(targetVersion) || buildPanelFirmwareVersion(),
       HOMEBRAIN_PANEL_ID: normalized.id,
       HOMEBRAIN_PANEL_REGISTRATION_CODE: normalized.settings.registrationCode,
       HOMEBRAIN_PANEL_HOSTNAME: buildPanelHostname(normalized),
+      HOMEBRAIN_PANEL_HUB_URL: hubUrl,
       HOMEBRAIN_PANEL_WIFI_SSID: wifi.ssid,
       HOMEBRAIN_PANEL_WIFI_PASSWORD: wifi.password
     };
-
-    if (hubUrl) {
-      firmwareEnv.HOMEBRAIN_PANEL_HUB_URL = hubUrl;
-    }
 
     return this.createPlatformioEnv(firmwareEnv);
   }
