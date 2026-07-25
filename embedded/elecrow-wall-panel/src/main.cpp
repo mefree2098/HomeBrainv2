@@ -99,6 +99,8 @@ constexpr unsigned long kOtaProgressRenderIntervalMs = 240;
 constexpr uint8_t kNetworkJobQueueCapacity = 12;
 constexpr uint8_t kNetworkResultQueueCapacity = 12;
 constexpr uint16_t kNetworkTaskIdleDelayMs = 8;
+constexpr uint16_t kNetworkTaskStackBytes = 16 * 1024;
+constexpr unsigned long kNetworkTaskStallRestartMs = 60 * 1000UL;
 constexpr uint16_t kLoopIdleDelayMs = 1;
 constexpr char kCachedPanelStatePath[] = "/last-panel-state.json";
 constexpr char kCachedPanelStateTempPath[] = "/last-panel-state.tmp";
@@ -317,6 +319,9 @@ NetworkJob gActiveNetworkJob;
 bool gNetworkJobActive = false;
 NetworkResult gNetworkResults[kNetworkResultQueueCapacity];
 uint8_t gNetworkResultCount = 0;
+unsigned long gActiveNetworkJobStartedAt = 0;
+volatile unsigned long gNetworkTaskHeartbeatAt = 0;
+unsigned long gNetworkTaskCreatedAt = 0;
 unsigned long gLastLvglTickAt = 0;
 
 lv_obj_t* gScreen = nullptr;
@@ -392,6 +397,10 @@ String panelActivateUrl() {
 
 String panelOtaStatusUrl() {
   return normalizeHubUrl() + panelBasePath() + "/ota/status";
+}
+
+bool deadlineReached(unsigned long now, unsigned long deadline) {
+  return static_cast<int32_t>(now - deadline) >= 0;
 }
 
 uint8_t readEncoderStateFast() {
@@ -2419,6 +2428,7 @@ bool dequeueNetworkJob(NetworkJob& job) {
   gNetworkJobCount -= 1;
   gActiveNetworkJob = job;
   gNetworkJobActive = true;
+  gActiveNetworkJobStartedAt = millis();
   xSemaphoreGive(gNetworkMutex);
   return true;
 }
@@ -2428,12 +2438,13 @@ void finishActiveNetworkJob() {
     return;
   }
 
-  if (xSemaphoreTake(gNetworkMutex, pdMS_TO_TICKS(10)) != pdTRUE) {
-    return;
-  }
+  // The worker must not abandon this transition: leaving the active flag set
+  // makes the UI believe network work is pending forever.
+  xSemaphoreTake(gNetworkMutex, portMAX_DELAY);
 
   gActiveNetworkJob = NetworkJob();
   gNetworkJobActive = false;
+  gActiveNetworkJobStartedAt = 0;
   xSemaphoreGive(gNetworkMutex);
 }
 
@@ -2442,9 +2453,9 @@ bool enqueueNetworkResult(const NetworkResult& result) {
     return false;
   }
 
-  if (xSemaphoreTake(gNetworkMutex, pdMS_TO_TICKS(10)) != pdTRUE) {
-    return false;
-  }
+  // Results are produced only by the worker, so wait for the short UI-side
+  // critical section instead of silently dropping the completion.
+  xSemaphoreTake(gNetworkMutex, portMAX_DELAY);
 
   if (gNetworkResultCount >= kNetworkResultQueueCapacity) {
     for (uint8_t index = 1; index < gNetworkResultCount; index += 1) {
@@ -2564,6 +2575,8 @@ void panelNetworkTask(void* parameter) {
   (void)parameter;
 
   for (;;) {
+    gNetworkTaskHeartbeatAt = millis();
+
     if (gOtaInProgress || WiFi.status() != WL_CONNECTED) {
       vTaskDelay(pdMS_TO_TICKS(kNetworkTaskIdleDelayMs));
       continue;
@@ -2578,6 +2591,7 @@ void panelNetworkTask(void* parameter) {
     const NetworkResult result = executeNetworkJob(job);
     finishActiveNetworkJob();
     enqueueNetworkResult(result);
+    gNetworkTaskHeartbeatAt = millis();
   }
 }
 
@@ -4389,7 +4403,7 @@ void dispatchQueuedThermostatCommitIfReady() {
     return;
   }
 
-  if (millis() < gQueuedThermostatDispatchAt) {
+  if (!deadlineReached(millis(), gQueuedThermostatDispatchAt)) {
     return;
   }
 
@@ -4496,7 +4510,7 @@ void dispatchQueuedDeviceLevelIfReady() {
     return;
   }
 
-  if (millis() < gQueuedDeviceLevelDispatchAt) {
+  if (!deadlineReached(millis(), gQueuedDeviceLevelDispatchAt)) {
     return;
   }
 
@@ -4813,7 +4827,7 @@ void dispatchDeferredStateRefreshIfReady() {
     return;
   }
 
-  if (millis() < gDeferredStateRefreshAt) {
+  if (!deadlineReached(millis(), gDeferredStateRefreshAt)) {
     return;
   }
 
@@ -4831,6 +4845,37 @@ void dispatchDeferredStateRefreshIfReady() {
   if (enqueuePanelStateFetchJob(true)) {
     gDeferredStateRefresh = false;
   }
+}
+
+void ensurePanelNetworkTaskHealthy() {
+  const unsigned long now = millis();
+  const bool taskNeverStarted = gNetworkTaskHeartbeatAt == 0
+    && now - gNetworkTaskCreatedAt >= kNetworkTaskStallRestartMs;
+  const bool taskHeartbeatStale = gNetworkTaskHeartbeatAt != 0
+    && now - gNetworkTaskHeartbeatAt >= kNetworkTaskStallRestartMs;
+
+  bool activeJobStale = false;
+  if (gNetworkMutex && xSemaphoreTake(gNetworkMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+    activeJobStale = gNetworkJobActive
+      && gActiveNetworkJobStartedAt != 0
+      && now - gActiveNetworkJobStartedAt >= kNetworkTaskStallRestartMs;
+    xSemaphoreGive(gNetworkMutex);
+  }
+
+  if (!taskNeverStarted && !taskHeartbeatStale && !activeJobStale) {
+    return;
+  }
+
+  Serial.println(
+    String("[panel] network worker stalled; restarting orb")
+    + " taskMissing=" + String(taskNeverStarted ? "yes" : "no")
+    + " heartbeatStale=" + String(taskHeartbeatStale ? "yes" : "no")
+    + " activeJobStale=" + String(activeJobStale ? "yes" : "no")
+  );
+  setStatusLine("Restarting network");
+  renderMode();
+  delay(250);
+  ESP.restart();
 }
 
 void maybeResolvePendingOtaValidation() {
@@ -4884,8 +4929,21 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(kEncoderBPin), encoderInterruptHandler, CHANGE);
   gLastLvglTickAt = millis();
   gNetworkMutex = xSemaphoreCreateMutex();
+  gNetworkTaskCreatedAt = millis();
   if (gNetworkMutex != nullptr) {
-    xTaskCreatePinnedToCore(panelNetworkTask, "hb-panel-net", 10 * 1024, nullptr, 1, &gNetworkTaskHandle, 0);
+    const BaseType_t taskResult = xTaskCreatePinnedToCore(
+      panelNetworkTask,
+      "hb-panel-net",
+      kNetworkTaskStackBytes,
+      nullptr,
+      1,
+      &gNetworkTaskHandle,
+      0
+    );
+    if (taskResult != pdPASS) {
+      gNetworkTaskHandle = nullptr;
+      Serial.println("[panel] failed to create network worker");
+    }
   }
 
   setupWiFi();
@@ -4906,6 +4964,7 @@ void loop() {
   commitPendingDeviceLevelIfReady();
   persistBrightnessIfReady();
   ensureWiFiConnected();
+  ensurePanelNetworkTaskHealthy();
   dispatchQueuedThermostatCommitIfReady();
   dispatchQueuedDeviceLevelIfReady();
   dispatchDeferredStateRefreshIfReady();
