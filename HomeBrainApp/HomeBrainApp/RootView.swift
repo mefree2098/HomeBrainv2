@@ -10,10 +10,12 @@ struct RootView: View {
         Group {
             if session.isAuthenticated && !uiPreview.isForcedByLaunch {
                 AppShellView(previewMode: false)
+                    .id(session.sessionContextID)
             } else if uiPreview.isEnabled {
                 AppShellView(previewMode: true)
             } else {
                 AuthView()
+                    .id(session.sessionContextID)
             }
         }
         .font(HBTypography.body())

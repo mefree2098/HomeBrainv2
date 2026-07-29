@@ -40,7 +40,9 @@ struct HomeBrainAppApp: App {
                         }
                     }
                 }
-                .onChange(of: sessionStore.serverURLString) { _, _ in
+                .onChange(of: sessionStore.sessionContextID) { _, _ in
+                    watchSyncManager.handleInstanceChange()
+                    pushNotificationManager.handleInstanceChange()
                     guard sessionStore.isAuthenticated else { return }
                     Task {
                         _ = await watchSyncManager.syncNow()

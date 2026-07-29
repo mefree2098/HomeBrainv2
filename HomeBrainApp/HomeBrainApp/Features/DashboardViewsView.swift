@@ -205,7 +205,7 @@ struct DashboardViewsView: View {
                     spacing: 10
                 ) {
                     Button {
-                        DashboardSupport.setDefaultViewID(view.id, forProfileID: profileID)
+                        DashboardSupport.setDefaultViewID(view.id, serverURL: session.serverURLString, forProfileID: profileID)
                         defaultViewID = view.id
                         infoMessage = "\"\(view.name)\" will open by default on this device."
                     } label: {
@@ -315,7 +315,11 @@ struct DashboardViewsView: View {
             let context = DashboardSupport.profileContext(fromProfilesPayload: response)
             profileID = context.profileId
             dashboardViews = context.views
-            defaultViewID = DashboardSupport.resolveSelectedViewID(profileId: context.profileId, views: context.views)
+            defaultViewID = DashboardSupport.resolveSelectedViewID(
+                serverURL: session.serverURLString,
+                profileId: context.profileId,
+                views: context.views
+            )
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -368,8 +372,12 @@ struct DashboardViewsView: View {
         pendingDeleteView = nil
 
         if defaultViewID == view.id {
-            let nextDefault = DashboardSupport.resolveSelectedViewID(profileId: profileID, views: dashboardViews)
-            DashboardSupport.setDefaultViewID(nextDefault, forProfileID: profileID)
+            let nextDefault = DashboardSupport.resolveSelectedViewID(
+                serverURL: session.serverURLString,
+                profileId: profileID,
+                views: dashboardViews
+            )
+            DashboardSupport.setDefaultViewID(nextDefault, serverURL: session.serverURLString, forProfileID: profileID)
             defaultViewID = nextDefault
         }
     }
@@ -381,8 +389,13 @@ struct DashboardViewsView: View {
         do {
             let savedViews = try await DashboardSupport.saveViews(nextViews, profileId: profileID, apiClient: session.apiClient)
             dashboardViews = savedViews
-            defaultViewID = DashboardSupport.resolveSelectedViewID(profileId: profileID, views: savedViews, current: defaultViewID)
-            DashboardSupport.setDefaultViewID(defaultViewID, forProfileID: profileID)
+            defaultViewID = DashboardSupport.resolveSelectedViewID(
+                serverURL: session.serverURLString,
+                profileId: profileID,
+                views: savedViews,
+                current: defaultViewID
+            )
+            DashboardSupport.setDefaultViewID(defaultViewID, serverURL: session.serverURLString, forProfileID: profileID)
             infoMessage = successMessage
             errorMessage = nil
         } catch {

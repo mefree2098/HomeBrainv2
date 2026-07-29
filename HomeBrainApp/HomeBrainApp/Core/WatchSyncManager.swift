@@ -21,6 +21,11 @@ final class WatchSyncManager: NSObject, ObservableObject {
         activate()
     }
 
+    func handleInstanceChange() {
+        lastSyncDate = nil
+        lastErrorMessage = nil
+    }
+
     func activate() {
         guard WCSession.isSupported() else {
             isSupported = false
@@ -78,6 +83,8 @@ final class WatchSyncManager: NSObject, ObservableObject {
 
             let payload: [String: Any] = [
                 "type": "homebrain.session",
+                "instanceID": sessionStore.activeInstanceID ?? "",
+                "instanceName": sessionStore.activeInstance?.displayName ?? "HomeBrain",
                 "serverURL": sessionStore.serverURLString,
                 "accessToken": accessToken,
                 "refreshToken": refreshToken,

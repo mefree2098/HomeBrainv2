@@ -919,19 +919,13 @@ struct SettingsView: View {
 
     private var settingsConnectionSection: some View {
         Section("Connection") {
-            TextField("Server URL", text: $serverURL)
-                .keyboardType(.URL)
-                .textInputAutocapitalization(.never)
-                .disableAutocorrection(true)
+            LabeledContent("Active HomeBrain", value: session.activeInstance?.displayName ?? "HomeBrain")
+            LabeledContent("Server URL", value: session.serverURLString)
 
-            Button("Apply Server URL") {
-                if session.updateServerURL(serverURL) {
-                    serverURL = session.serverURLString
-                    infoMessage = "Server URL updated."
-                    errorMessage = nil
-                } else {
-                    errorMessage = "Enter a valid server URL."
-                }
+            Button {
+                session.beginAddingInstance()
+            } label: {
+                Label("Add Another HomeBrain", systemImage: "plus.circle")
             }
         }
     }
@@ -1284,19 +1278,13 @@ struct SettingsView: View {
         case .general:
             Form {
                 Section("Connection") {
-                    TextField("Server URL", text: $serverURL)
-                        .keyboardType(.URL)
-                        .textInputAutocapitalization(.never)
-                        .disableAutocorrection(true)
+                    LabeledContent("Active HomeBrain", value: session.activeInstance?.displayName ?? "HomeBrain")
+                    LabeledContent("Server URL", value: session.serverURLString)
 
-                    Button("Apply Server URL") {
-                        if session.updateServerURL(serverURL) {
-                            serverURL = session.serverURLString
-                            infoMessage = "Server URL updated."
-                            errorMessage = nil
-                        } else {
-                            errorMessage = "Enter a valid server URL."
-                        }
+                    Button {
+                        session.beginAddingInstance()
+                    } label: {
+                        Label("Add Another HomeBrain", systemImage: "plus.circle")
                     }
                 }
 
@@ -2105,10 +2093,6 @@ struct SettingsView: View {
 
     private func saveSettings() async {
         do {
-            guard session.updateServerURL(serverURL) else {
-                errorMessage = "Enter a valid server URL."
-                return
-            }
             serverURL = session.serverURLString
 
             let payload: [String: Any] = [

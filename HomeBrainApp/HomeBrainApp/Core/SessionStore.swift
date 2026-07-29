@@ -10,13 +10,17 @@ enum BackendConnectionState: Equatable {
 
 @MainActor
 final class SessionStore: ObservableObject {
-    @Published var serverURLString: String
+    @Published private(set) var serverURLString = ""
     @Published var currentUser: AppUser?
     @Published var authError: String?
     @Published var isProcessingAuth = false
 
     @Published private(set) var accessToken: String?
     @Published private(set) var refreshToken: String?
+    @Published private(set) var savedInstances: [HomeBrainInstance] = []
+    @Published private(set) var activeInstanceID: String?
+    @Published private(set) var sessionContextID = UUID()
+    @Published private(set) var isAddingInstance = false
     @Published private(set) var backendConnectionState: BackendConnectionState = .online
     @Published private(set) var backendConnectionMessage = ""
     @Published private(set) var backendRecoveryGeneration = 0
@@ -28,9 +32,15 @@ final class SessionStore: ObservableObject {
     private var refreshTaskID: UUID?
     private var backendRecoveryTask: Task<Void, Never>?
     private var backendOutageStartedAt: Date?
+    private var instanceToRestoreAfterAdding: String?
 
     var isAuthenticated: Bool {
         accessToken != nil && currentUser?.hasHomeBrainAccess == true
+    }
+
+    var activeInstance: HomeBrainInstance? {
+        guard let activeInstanceID else { return nil }
+        return savedInstances.first { $0.id == activeInstanceID }
     }
 
     private let defaults = UserDefaults.standard
@@ -40,6 +50,8 @@ final class SessionStore: ObservableObject {
     private static let accessTokenAccount = "accessToken"
     private static let refreshTokenAccount = "refreshToken"
     private let currentUserKey = "homebrain.currentUser"
+    private let instancesKey = "homebrain.instances.v1"
+    private let activeInstanceIDKey = "homebrain.activeInstanceID"
     private let clientInstallationIdKey = "homebrain.clientInstallationId"
     private static let defaultServerURL = "http://homebrain.local:3000"
     private static let homeBrainAccessDeniedMessage = "This account does not have HomeBrain access."
@@ -72,42 +84,83 @@ final class SessionStore: ObservableObject {
             defaults.set(resolvedServerURL, forKey: serverURLKey)
         }
 
-        var storedAccessToken = KeychainStore.read(account: Self.accessTokenAccount)
-        var storedRefreshToken = KeychainStore.read(account: Self.refreshTokenAccount)
+        var legacyKeychainAccessToken = KeychainStore.read(account: Self.accessTokenAccount)
+        var legacyKeychainRefreshToken = KeychainStore.read(account: Self.refreshTokenAccount)
         let legacyAccessToken = defaults.string(forKey: Self.legacyAccessTokenKey)
         let legacyRefreshToken = defaults.string(forKey: Self.legacyRefreshTokenKey)
 
         do {
-            if storedAccessToken == nil, let legacyAccessToken, !legacyAccessToken.isEmpty {
+            if legacyKeychainAccessToken == nil, let legacyAccessToken, !legacyAccessToken.isEmpty {
                 try KeychainStore.save(legacyAccessToken, account: Self.accessTokenAccount)
-                storedAccessToken = legacyAccessToken
+                legacyKeychainAccessToken = legacyAccessToken
             }
-            if storedRefreshToken == nil, let legacyRefreshToken, !legacyRefreshToken.isEmpty {
+            if legacyKeychainRefreshToken == nil, let legacyRefreshToken, !legacyRefreshToken.isEmpty {
                 try KeychainStore.save(legacyRefreshToken, account: Self.refreshTokenAccount)
-                storedRefreshToken = legacyRefreshToken
+                legacyKeychainRefreshToken = legacyRefreshToken
             }
         } catch {
             KeychainStore.delete(account: Self.accessTokenAccount)
             KeychainStore.delete(account: Self.refreshTokenAccount)
-            storedAccessToken = nil
-            storedRefreshToken = nil
+            legacyKeychainAccessToken = nil
+            legacyKeychainRefreshToken = nil
         }
         defaults.removeObject(forKey: Self.legacyAccessTokenKey)
         defaults.removeObject(forKey: Self.legacyRefreshTokenKey)
 
-        self.serverURLString = resolvedServerURL
-        self.accessToken = storedAccessToken
-        self.refreshToken = storedRefreshToken
+        if let data = defaults.data(forKey: instancesKey),
+           let decoded = try? JSONDecoder().decode([HomeBrainInstance].self, from: data) {
+            savedInstances = decoded.sorted { $0.lastUsedAt > $1.lastUsedAt }
+        }
 
-        if let userData = defaults.data(forKey: currentUserKey),
-           let decoded = try? JSONDecoder().decode(AppUser.self, from: userData) {
-            self.currentUser = decoded
+        if savedInstances.isEmpty,
+           let userData = defaults.data(forKey: currentUserKey),
+           let legacyUser = try? JSONDecoder().decode(AppUser.self, from: userData),
+           legacyKeychainAccessToken != nil || legacyKeychainRefreshToken != nil {
+            let migratedID = UUID().uuidString
+            let migratedInstance = HomeBrainInstance(
+                id: migratedID,
+                serverURL: resolvedServerURL,
+                user: legacyUser,
+                addedAt: Date(),
+                lastUsedAt: Date()
+            )
+
+            do {
+                if let legacyKeychainAccessToken {
+                    try KeychainStore.save(legacyKeychainAccessToken, account: Self.accessTokenAccount(for: migratedID))
+                }
+                if let legacyKeychainRefreshToken {
+                    try KeychainStore.save(legacyKeychainRefreshToken, account: Self.refreshTokenAccount(for: migratedID))
+                }
+                savedInstances = [migratedInstance]
+                persistInstances()
+                defaults.set(migratedID, forKey: activeInstanceIDKey)
+            } catch {
+                KeychainStore.delete(account: Self.accessTokenAccount(for: migratedID))
+                KeychainStore.delete(account: Self.refreshTokenAccount(for: migratedID))
+                savedInstances = []
+            }
+        }
+
+        KeychainStore.delete(account: Self.accessTokenAccount)
+        KeychainStore.delete(account: Self.refreshTokenAccount)
+        defaults.removeObject(forKey: currentUserKey)
+
+        let preferredInstanceID = defaults.string(forKey: activeInstanceIDKey)
+        let resolvedInstanceID = savedInstances.contains(where: { $0.id == preferredInstanceID })
+            ? preferredInstanceID
+            : savedInstances.first?.id
+
+        if let resolvedInstanceID {
+            activateInstance(resolvedInstanceID, updateLastUsedAt: false)
         } else {
-            self.currentUser = nil
+            serverURLString = resolvedServerURL
+            defaults.set(resolvedServerURL, forKey: serverURLKey)
         }
     }
 
     func bootstrap() async {
+        let contextID = sessionContextID
         guard hasStoredSession else {
             return
         }
@@ -118,7 +171,8 @@ final class SessionStore: ObservableObject {
         }
 
         do {
-            try await ensureValidAccessToken()
+            try await ensureValidAccessToken(contextID: contextID)
+            try assertActiveContext(contextID)
 
             if currentUser != nil {
                 authError = nil
@@ -126,6 +180,7 @@ final class SessionStore: ObservableObject {
             }
 
             let response = try await apiClient.get("/api/auth/me")
+            try assertActiveContext(contextID)
             let object = JSON.object(response)
             if let user = AppUser.from(object) {
                 if user.hasHomeBrainAccess {
@@ -139,13 +194,17 @@ final class SessionStore: ObservableObject {
             } else {
                 clearAuthData()
             }
+        } catch is CancellationError {
+            return
         } catch let apiError as APIError {
+            guard contextID == sessionContextID else { return }
             if case .unauthorized = apiError {
                 clearAuthData()
             } else {
                 authError = apiError.localizedDescription
             }
         } catch {
+            guard contextID == sessionContextID else { return }
             authError = error.localizedDescription
         }
     }
@@ -160,13 +219,88 @@ final class SessionStore: ObservableObject {
             return false
         }
 
+        if let activeInstance, currentUser != nil, normalized != activeInstance.serverURL {
+            authError = "To connect to a different platform, add it as another HomeBrain."
+            return false
+        }
+
+        let endpointChanged = serverURLString != normalized
         serverURLString = normalized
         defaults.set(normalized, forKey: serverURLKey)
+        if endpointChanged {
+            refreshTask?.cancel()
+            refreshTask = nil
+            refreshTaskID = nil
+            sessionContextID = UUID()
+        }
         resetBackendConnectionState()
         return true
     }
 
+    func beginAddingInstance() {
+        guard !isAddingInstance else { return }
+        unregisterPushForActiveInstanceBestEffort()
+        instanceToRestoreAfterAdding = activeInstanceID
+        isAddingInstance = true
+        deactivateRuntimeSession(serverURL: "")
+    }
+
+    func cancelAddingInstance() {
+        guard isAddingInstance else { return }
+        let restoreID = instanceToRestoreAfterAdding
+        isAddingInstance = false
+        instanceToRestoreAfterAdding = nil
+
+        if let restoreID, savedInstances.contains(where: { $0.id == restoreID }) {
+            activateInstance(restoreID)
+        } else if let fallbackID = savedInstances.first?.id {
+            activateInstance(fallbackID)
+        } else {
+            deactivateRuntimeSession(serverURL: Self.defaultServerURL)
+        }
+    }
+
+    func switchInstance(to instanceID: String) {
+        guard instanceID != activeInstanceID || !isAuthenticated,
+              savedInstances.contains(where: { $0.id == instanceID }) else {
+            return
+        }
+
+        unregisterPushForActiveInstanceBestEffort()
+        isAddingInstance = false
+        instanceToRestoreAfterAdding = nil
+        activateInstance(instanceID)
+        Task { await bootstrap() }
+    }
+
+    func removeInstance(_ instanceID: String) {
+        guard let instance = savedInstances.first(where: { $0.id == instanceID }) else {
+            return
+        }
+
+        let storedRefreshToken = KeychainStore.read(account: Self.refreshTokenAccount(for: instanceID))
+        let storedAccessToken = KeychainStore.read(account: Self.accessTokenAccount(for: instanceID))
+        revokeSessionBestEffort(instance: instance, refreshToken: storedRefreshToken)
+        unregisterPushBestEffort(instance: instance, accessToken: storedAccessToken)
+
+        KeychainStore.delete(account: Self.accessTokenAccount(for: instanceID))
+        KeychainStore.delete(account: Self.refreshTokenAccount(for: instanceID))
+        savedInstances.removeAll { $0.id == instanceID }
+        persistInstances()
+
+        guard activeInstanceID == instanceID else { return }
+
+        if let fallbackID = savedInstances.first?.id {
+            activateInstance(fallbackID)
+            Task { await bootstrap() }
+        } else {
+            defaults.removeObject(forKey: activeInstanceIDKey)
+            deactivateRuntimeSession(serverURL: Self.defaultServerURL)
+        }
+    }
+
     func login(email: String, password: String) async {
+        let contextID = sessionContextID
         isProcessingAuth = true
         authError = nil
         defer { isProcessingAuth = false }
@@ -174,23 +308,22 @@ final class SessionStore: ObservableObject {
         do {
             let payload: [String: Any] = ["email": email, "password": password]
             let response = try await apiClient.post("/api/auth/login", body: payload, authorized: false)
+            try assertActiveContext(contextID)
             try applyAuthPayload(JSON.object(response))
+        } catch is CancellationError {
+            return
         } catch {
+            guard contextID == sessionContextID else { return }
             authError = error.localizedDescription
         }
     }
 
     func logout() {
-        Task {
-            let payload: [String: Any] = [
-                "email": currentUser?.email ?? "",
-                "refreshToken": refreshToken ?? ""
-            ]
-            _ = try? await apiClient.post("/api/auth/logout", body: payload, authorized: false)
-            await MainActor.run {
-                clearAuthData()
-            }
+        guard let activeInstanceID else {
+            clearAuthData()
+            return
         }
+        removeInstance(activeInstanceID)
     }
 
     @discardableResult
@@ -205,7 +338,11 @@ final class SessionStore: ObservableObject {
                 body: ["password": password]
             )
             authError = nil
-            clearAuthData()
+            if let activeInstanceID {
+                removeInstanceLocally(activeInstanceID)
+            } else {
+                clearAuthData()
+            }
             return true
         } catch {
             authError = error.localizedDescription
@@ -213,14 +350,22 @@ final class SessionStore: ObservableObject {
         }
     }
 
-    func refreshTokens() async throws {
+    func refreshTokens(for contextID: UUID? = nil) async throws {
+        if let contextID {
+            try assertActiveContext(contextID)
+        }
+
         if let refreshTask {
             try await refreshTask.value
+            if let contextID {
+                try assertActiveContext(contextID)
+            }
             return
         }
 
+        let refreshContextID = sessionContextID
         let task = Task { @MainActor in
-            try await self.performTokenRefresh()
+            try await self.performTokenRefresh(contextID: refreshContextID)
         }
         let taskID = UUID()
         refreshTask = task
@@ -233,6 +378,9 @@ final class SessionStore: ObservableObject {
         }
 
         try await task.value
+        if let contextID {
+            try assertActiveContext(contextID)
+        }
     }
 
     func expireAuthentication(message: String = APIError.unauthorized.localizedDescription) {
@@ -241,16 +389,23 @@ final class SessionStore: ObservableObject {
         clearAuthData()
     }
 
-    func ensureValidAccessToken(forceRefresh: Bool = false) async throws {
+    func ensureValidAccessToken(forceRefresh: Bool = false, contextID: UUID? = nil) async throws {
+        if let contextID {
+            try assertActiveContext(contextID)
+        }
         guard forceRefresh || accessTokenRequiresRefresh(accessToken) else {
             return
         }
 
-        try await refreshTokens()
+        try await refreshTokens(for: contextID)
     }
 
-    func validAccessToken() async throws -> String {
-        try await ensureValidAccessToken()
+    func validAccessToken(contextID: UUID? = nil) async throws -> String {
+        try await ensureValidAccessToken(contextID: contextID)
+
+        if let contextID {
+            try assertActiveContext(contextID)
+        }
 
         guard let accessToken = normalizedToken(accessToken) else {
             expireAuthentication()
@@ -258,6 +413,12 @@ final class SessionStore: ObservableObject {
         }
 
         return accessToken
+    }
+
+    func assertActiveContext(_ contextID: UUID) throws {
+        guard contextID == sessionContextID else {
+            throw CancellationError()
+        }
     }
 
     func reportBackendRequestSucceeded() {
@@ -278,18 +439,21 @@ final class SessionStore: ObservableObject {
     }
 
     func checkBackendConnectionNow() async {
+        let contextID = sessionContextID
         backendConnectionState = .reconnecting
         backendConnectionMessage = transientBackendMessage(for: nil)
 
         do {
             try await pingBackend()
+            guard contextID == sessionContextID else { return }
             markBackendOnline()
         } catch {
+            guard contextID == sessionContextID else { return }
             reportTransientBackendFailure(error)
         }
     }
 
-    private func applyAuthPayload(_ rootObject: [String: Any]) throws {
+    private func applyAuthPayload(_ rootObject: [String: Any], establishesInstance: Bool = true) throws {
         let dataObject = JSON.object(rootObject["data"])
 
         let resolvedAccessToken = JSON.optionalString(rootObject, "accessToken")
@@ -301,52 +465,243 @@ final class SessionStore: ObservableObject {
             throw APIError.server(statusCode: 400, message: "Authentication tokens are missing from server response.")
         }
 
-        let user = AppUser.from(rootObject) ?? AppUser.from(dataObject)
+        guard let user = AppUser.from(rootObject) ?? AppUser.from(dataObject) ?? currentUser else {
+            throw APIError.server(statusCode: 400, message: "Account details are missing from the server response.")
+        }
 
-        if let user, !user.hasHomeBrainAccess {
+        if !user.hasHomeBrainAccess {
             clearAuthData()
             throw APIError.server(statusCode: 403, message: Self.homeBrainAccessDeniedMessage)
         }
 
+        guard let normalizedServerURL = Self.normalizedServerURLString(from: serverURLString) else {
+            throw APIError.invalidURL
+        }
+
+        let instanceID: String
+        if !establishesInstance, let activeInstanceID {
+            instanceID = activeInstanceID
+        } else {
+            let existingInstance = savedInstances.first {
+                $0.serverURL == normalizedServerURL
+                    && $0.user.email.caseInsensitiveCompare(user.email) == .orderedSame
+            }
+            instanceID = existingInstance?.id ?? UUID().uuidString
+        }
+
         do {
-            try KeychainStore.save(refresh, account: Self.refreshTokenAccount)
-            try KeychainStore.save(access, account: Self.accessTokenAccount)
+            try KeychainStore.save(refresh, account: Self.refreshTokenAccount(for: instanceID))
+            try KeychainStore.save(access, account: Self.accessTokenAccount(for: instanceID))
         } catch {
-            KeychainStore.delete(account: Self.accessTokenAccount)
-            KeychainStore.delete(account: Self.refreshTokenAccount)
+            KeychainStore.delete(account: Self.accessTokenAccount(for: instanceID))
+            KeychainStore.delete(account: Self.refreshTokenAccount(for: instanceID))
             throw error
         }
 
         authError = nil
         accessToken = access
         self.refreshToken = refresh
-        defaults.removeObject(forKey: Self.legacyAccessTokenKey)
-        defaults.removeObject(forKey: Self.legacyRefreshTokenKey)
-
-        if let user {
-            currentUser = user
-            persistCurrentUser(user)
+        currentUser = user
+        activeInstanceID = instanceID
+        if establishesInstance {
+            isAddingInstance = false
+            instanceToRestoreAfterAdding = nil
         }
+
+        let now = Date()
+        if let index = savedInstances.firstIndex(where: { $0.id == instanceID }) {
+            savedInstances[index].user = user
+            if establishesInstance {
+                savedInstances[index].lastUsedAt = now
+            }
+        } else {
+            savedInstances.append(
+                HomeBrainInstance(
+                    id: instanceID,
+                    serverURL: normalizedServerURL,
+                    user: user,
+                    addedAt: now,
+                    lastUsedAt: now
+                )
+            )
+        }
+        savedInstances.sort { $0.lastUsedAt > $1.lastUsedAt }
+        persistInstances()
+        defaults.set(instanceID, forKey: activeInstanceIDKey)
+        defaults.set(normalizedServerURL, forKey: serverURLKey)
+        if establishesInstance {
+            sessionContextID = UUID()
+        }
+        resetBackendConnectionState()
     }
 
     private func persistCurrentUser(_ user: AppUser) {
-        if let encoded = try? JSONEncoder().encode(user) {
-            defaults.set(encoded, forKey: currentUserKey)
+        guard let activeInstanceID,
+              let index = savedInstances.firstIndex(where: { $0.id == activeInstanceID }) else {
+            return
         }
+
+        savedInstances[index].user = user
+        persistInstances()
     }
 
     private func clearAuthData() {
         refreshTask?.cancel()
         refreshTask = nil
         refreshTaskID = nil
+        if let activeInstanceID {
+            KeychainStore.delete(account: Self.accessTokenAccount(for: activeInstanceID))
+            KeychainStore.delete(account: Self.refreshTokenAccount(for: activeInstanceID))
+        }
         accessToken = nil
         refreshToken = nil
         currentUser = nil
-        KeychainStore.delete(account: Self.accessTokenAccount)
-        KeychainStore.delete(account: Self.refreshTokenAccount)
         defaults.removeObject(forKey: Self.legacyAccessTokenKey)
         defaults.removeObject(forKey: Self.legacyRefreshTokenKey)
         defaults.removeObject(forKey: currentUserKey)
+        sessionContextID = UUID()
+        resetBackendConnectionState()
+    }
+
+    private func activateInstance(_ instanceID: String, updateLastUsedAt: Bool = true) {
+        guard let index = savedInstances.firstIndex(where: { $0.id == instanceID }) else {
+            return
+        }
+
+        refreshTask?.cancel()
+        refreshTask = nil
+        refreshTaskID = nil
+        let instance = savedInstances[index]
+        activeInstanceID = instanceID
+        serverURLString = instance.serverURL
+        currentUser = instance.user
+        accessToken = KeychainStore.read(account: Self.accessTokenAccount(for: instanceID))
+        refreshToken = KeychainStore.read(account: Self.refreshTokenAccount(for: instanceID))
+        authError = nil
+
+        if updateLastUsedAt {
+            savedInstances[index].lastUsedAt = Date()
+            savedInstances.sort { $0.lastUsedAt > $1.lastUsedAt }
+            persistInstances()
+        }
+
+        defaults.set(instanceID, forKey: activeInstanceIDKey)
+        defaults.set(instance.serverURL, forKey: serverURLKey)
+        sessionContextID = UUID()
+        resetBackendConnectionState()
+    }
+
+    private func deactivateRuntimeSession(serverURL: String) {
+        refreshTask?.cancel()
+        refreshTask = nil
+        refreshTaskID = nil
+        activeInstanceID = nil
+        serverURLString = serverURL
+        accessToken = nil
+        refreshToken = nil
+        currentUser = nil
+        authError = nil
+        isProcessingAuth = false
+        sessionContextID = UUID()
+        resetBackendConnectionState()
+    }
+
+    private func removeInstanceLocally(_ instanceID: String) {
+        KeychainStore.delete(account: Self.accessTokenAccount(for: instanceID))
+        KeychainStore.delete(account: Self.refreshTokenAccount(for: instanceID))
+        savedInstances.removeAll { $0.id == instanceID }
+        persistInstances()
+
+        if let fallbackID = savedInstances.first?.id {
+            activateInstance(fallbackID)
+            Task { await bootstrap() }
+        } else {
+            defaults.removeObject(forKey: activeInstanceIDKey)
+            deactivateRuntimeSession(serverURL: Self.defaultServerURL)
+        }
+    }
+
+    private func persistInstances() {
+        guard let encoded = try? JSONEncoder().encode(savedInstances) else { return }
+        defaults.set(encoded, forKey: instancesKey)
+    }
+
+    private static func accessTokenAccount(for instanceID: String) -> String {
+        "instance.\(instanceID).accessToken"
+    }
+
+    private static func refreshTokenAccount(for instanceID: String) -> String {
+        "instance.\(instanceID).refreshToken"
+    }
+
+    private func revokeSessionBestEffort(instance: HomeBrainInstance, refreshToken: String?) {
+        guard let refreshToken = normalizedToken(refreshToken),
+              let url = instanceURL(instance, path: "/api/auth/logout") else {
+            return
+        }
+
+        let payload: [String: Any] = [
+            "email": instance.user.email,
+            "refreshToken": refreshToken
+        ]
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 5
+        request.httpBody = body
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        for (header, value) in clientHeaders {
+            request.setValue(value, forHTTPHeaderField: header)
+        }
+
+        Task {
+            _ = try? await URLSession.shared.data(for: request)
+        }
+    }
+
+    private func unregisterPushForActiveInstanceBestEffort() {
+        guard let activeInstance, let activeInstanceID else { return }
+        let storedAccessToken = KeychainStore.read(account: Self.accessTokenAccount(for: activeInstanceID))
+        unregisterPushBestEffort(instance: activeInstance, accessToken: storedAccessToken)
+    }
+
+    private func unregisterPushBestEffort(instance: HomeBrainInstance, accessToken: String?) {
+        guard let accessToken = normalizedToken(accessToken) else { return }
+        let encodedInstallationID = clientInstallationId
+            .addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? clientInstallationId
+        guard let url = instanceURL(
+            instance,
+            path: "/api/notifications/push/devices/\(encodedInstallationID)"
+        ) else {
+            return
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.timeoutInterval = 5
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        for (header, value) in clientHeaders {
+            request.setValue(value, forHTTPHeaderField: header)
+        }
+
+        Task {
+            _ = try? await URLSession.shared.data(for: request)
+        }
+    }
+
+    private func instanceURL(_ instance: HomeBrainInstance, path: String) -> URL? {
+        guard let baseURL = URL(string: instance.serverURL),
+              var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+
+        let basePath = components.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let requestPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let joinedPath = [basePath, requestPath].filter { !$0.isEmpty }.joined(separator: "/")
+        components.percentEncodedPath = joinedPath.isEmpty ? "" : "/\(joinedPath)"
+        components.queryItems = nil
+        return components.url
     }
 
     private func resetBackendConnectionState() {
@@ -362,27 +717,31 @@ final class SessionStore: ObservableObject {
             return
         }
 
+        let contextID = sessionContextID
         backendRecoveryTask = Task { [weak self] in
-            await self?.runBackendRecoveryMonitor()
+            await self?.runBackendRecoveryMonitor(contextID: contextID)
         }
     }
 
-    private func runBackendRecoveryMonitor() async {
+    private func runBackendRecoveryMonitor(contextID: UUID) async {
         var attempt = 0
         defer {
             backendRecoveryTask = nil
         }
 
         while !Task.isCancelled {
+            guard contextID == sessionContextID else { return }
             if backendConnectionState == .online {
                 return
             }
 
             do {
                 try await pingBackend()
+                guard contextID == sessionContextID else { return }
                 markBackendOnline()
                 return
             } catch {
+                guard contextID == sessionContextID else { return }
                 attempt += 1
                 backendConnectionState = attempt >= 3 ? .offline : .reconnecting
                 backendConnectionMessage = transientBackendMessage(for: nil)
@@ -451,7 +810,8 @@ final class SessionStore: ObservableObject {
         normalizedToken(accessToken) != nil || normalizedToken(refreshToken) != nil
     }
 
-    private func performTokenRefresh() async throws {
+    private func performTokenRefresh(contextID: UUID) async throws {
+        try assertActiveContext(contextID)
         guard let refreshToken = normalizedToken(refreshToken) else {
             expireAuthentication()
             throw APIError.unauthorized
@@ -461,12 +821,13 @@ final class SessionStore: ObservableObject {
         do {
             let response = try await apiClient.post("/api/auth/refresh", body: payload, authorized: false)
             try Task.checkCancellation()
+            try assertActiveContext(contextID)
 
             guard normalizedToken(self.refreshToken) == refreshToken else {
                 throw CancellationError()
             }
 
-            try applyAuthPayload(JSON.object(response))
+            try applyAuthPayload(JSON.object(response), establishesInstance: false)
         } catch let apiError as APIError {
             if case .unauthorized = apiError {
                 expireAuthentication()

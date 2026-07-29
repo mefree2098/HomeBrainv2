@@ -43,7 +43,11 @@ final class PushNotificationManager: NSObject, ObservableObject, UNUserNotificat
     }
 
     func handleLogout() {
-        pendingDeviceToken = nil
+        lastRegistrationError = nil
+    }
+
+    func handleInstanceChange() {
+        lastRegisteredAt = nil
         lastRegistrationError = nil
     }
 
