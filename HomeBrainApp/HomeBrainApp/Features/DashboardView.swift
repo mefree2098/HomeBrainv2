@@ -7261,6 +7261,7 @@ struct DashboardView: View {
             let savedViews = try await DashboardSupport.saveViews(dashboardViews, profileId: profileID, apiClient: session.apiClient)
             dashboardViews = savedViews
             selectedDashboardViewID = DashboardSupport.resolveSelectedViewID(
+                serverURL: session.serverURLString,
                 profileId: profileID,
                 views: savedViews,
                 current: selectedDashboardViewID
@@ -7268,7 +7269,11 @@ struct DashboardView: View {
             dashboardDirty = false
             infoMessage = "Dashboard layout saved for this profile."
             errorMessage = nil
-            DashboardSupport.setDefaultViewID(selectedDashboardViewID, forProfileID: profileID)
+            DashboardSupport.setDefaultViewID(
+                selectedDashboardViewID,
+                serverURL: session.serverURLString,
+                forProfileID: profileID
+            )
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -7321,7 +7326,11 @@ struct DashboardView: View {
             return
         }
 
-        DashboardSupport.setDefaultViewID(selectedDashboardViewID, forProfileID: profileID)
+        DashboardSupport.setDefaultViewID(
+            selectedDashboardViewID,
+            serverURL: session.serverURLString,
+            forProfileID: profileID
+        )
     }
 
     private func handleDashboardChromeCommand() {
@@ -7554,6 +7563,7 @@ struct DashboardView: View {
             let previewViews = [previewDashboardView()]
             dashboardViews = previewViews
             selectedDashboardViewID = DashboardSupport.resolveSelectedViewID(
+                serverURL: "preview",
                 profileId: UIPreviewData.favoriteProfileId,
                 views: previewViews,
                 current: selectedDashboardViewID
@@ -7603,6 +7613,7 @@ struct DashboardView: View {
             dashboardProfileId = dashboardContext.profileId ?? favoritesContext.profileId
             dashboardViews = dashboardContext.views
             selectedDashboardViewID = DashboardSupport.resolveSelectedViewID(
+                serverURL: session.serverURLString,
                 profileId: dashboardContext.profileId ?? favoritesContext.profileId,
                 views: dashboardContext.views,
                 current: selectedDashboardViewID

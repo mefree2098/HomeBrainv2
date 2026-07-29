@@ -269,6 +269,7 @@ struct AppShellView: View {
     @StateObject private var deviceFocusState = DeviceFocusState()
     @StateObject private var notificationTray = NotificationTrayStore()
     @State private var isNotificationTrayOpen = false
+    @State private var isManagingInstances = false
     @State private var presentedDashboardDeviceID: String?
     @State private var detailRefreshGeneration = 0
     @AppStorage("homebrain.ios.theme-mode") private var themeModeRaw = HBThemeMode.system.rawValue
@@ -520,6 +521,10 @@ struct AppShellView: View {
                 .presentationDetents([.large])
             }
         }
+        .sheet(isPresented: $isManagingInstances) {
+            HomeBrainInstancesView()
+                .environmentObject(session)
+        }
     }
 
     private var responsiveShell: some View {
@@ -596,8 +601,14 @@ struct AppShellView: View {
                 chromeIconButton(systemImage: "gearshape") {
                     selection = .settings
                 }
-                        chromeIconButton(systemImage: "rectangle.portrait.and.arrow.right") {
-                            exitShell()
+                        if previewMode {
+                            chromeIconButton(systemImage: "rectangle.portrait.and.arrow.right") {
+                                exitShell()
+                            }
+                        } else {
+                            HomeBrainInstanceSwitcherButton(compact: true) {
+                                isManagingInstances = true
+                            }
                         }
                     }
                     .padding(.horizontal, 12)
@@ -629,8 +640,14 @@ struct AppShellView: View {
             chromeIconButton(systemImage: "gearshape") {
                 selection = .settings
             }
-                chromeIconButton(systemImage: "rectangle.portrait.and.arrow.right") {
-                    exitShell()
+                if previewMode {
+                    chromeIconButton(systemImage: "rectangle.portrait.and.arrow.right") {
+                        exitShell()
+                    }
+                } else {
+                    HomeBrainInstanceSwitcherButton(compact: true) {
+                        isManagingInstances = true
+                    }
                 }
             }
             .padding(.horizontal, 16)
@@ -858,10 +875,45 @@ struct AppShellView: View {
                 Label("Settings", systemImage: "gearshape")
             }
 
+            if !previewMode {
+                Menu {
+                    ForEach(session.savedInstances) { instance in
+                        Button {
+                            session.switchInstance(to: instance.id)
+                        } label: {
+                            Label(
+                                instance.displayName,
+                                systemImage: instance.id == session.activeInstanceID ? "checkmark.circle.fill" : "house"
+                            )
+                        }
+                        .disabled(instance.id == session.activeInstanceID)
+                    }
+
+                    Divider()
+
+                    Button {
+                        session.beginAddingInstance()
+                    } label: {
+                        Label("Add HomeBrain", systemImage: "plus.circle")
+                    }
+
+                    Button {
+                        isManagingInstances = true
+                    } label: {
+                        Label("Manage HomeBrains", systemImage: "slider.horizontal.3")
+                    }
+                } label: {
+                    Label("Switch HomeBrain", systemImage: "rectangle.2.swap")
+                }
+            }
+
             Button {
                 exitShell()
             } label: {
-                Label(previewMode ? "Exit Preview" : "Sign Out", systemImage: "rectangle.portrait.and.arrow.right")
+                Label(
+                    previewMode ? "Exit Preview" : "Sign Out of \(session.activeInstance?.displayName ?? "HomeBrain")",
+                    systemImage: "rectangle.portrait.and.arrow.right"
+                )
             }
         } label: {
             Image(systemName: "ellipsis")
@@ -905,7 +957,7 @@ struct AppShellView: View {
 
             VStack(alignment: .leading, spacing: compact ? 1 : 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Text("HomeBrain")
+                    Text(previewMode ? "HomeBrain" : (session.activeInstance?.displayName ?? "HomeBrain"))
                         .font(HBTypography.display(size: ultraCompact ? 13 : (compact ? 14 : 17), weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .lineLimit(1)
@@ -1391,7 +1443,7 @@ struct AppShellView: View {
                                 .foregroundStyle(HBPalette.textMuted)
                             .textCase(.uppercase)
                             .tracking(2.8)
-                            Text("Residence Systems")
+                            Text(previewMode ? "Residence Systems" : (session.activeInstance?.displayName ?? "Residence Systems"))
                                 .font(HBTypography.display(size: 18, weight: .bold))
                                 .foregroundStyle(HBPalette.textPrimary)
                     }

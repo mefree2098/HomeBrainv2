@@ -7,6 +7,7 @@ final class HomeBrainWatchStore: ObservableObject {
     @AppStorage("homebrain.serverURL") var serverURL = "http://homebrain.local:3000"
     @AppStorage("homebrain.email") var email = ""
     @AppStorage("homebrain.deviceID") private var storedDeviceID = ""
+    @AppStorage("homebrain.companionPayloadTimestamp") private var companionPayloadTimestamp = 0.0
 
     @Published var password = ""
     @Published var dashboard: WatchDashboard?
@@ -87,6 +88,15 @@ final class HomeBrainWatchStore: ObservableObject {
 
     func applyCompanionPayload(_ payload: [String: Any]) {
         let type = payload["type"] as? String
+        let sentAt = (payload["sentAt"] as? Date)?.timeIntervalSince1970
+            ?? (payload["sentAt"] as? NSNumber)?.doubleValue
+            ?? 0
+        if sentAt > 0, sentAt < companionPayloadTimestamp {
+            return
+        }
+        if sentAt > 0 {
+            companionPayloadTimestamp = sentAt
+        }
 
         if type == "homebrain.session.clear" {
             signOut()
@@ -114,7 +124,8 @@ final class HomeBrainWatchStore: ObservableObject {
             try KeychainStore.save(refreshToken, account: refreshTokenAccount)
             isAuthenticated = true
             errorMessage = nil
-            companionStatusMessage = "Signed in from iPhone."
+            let instanceName = normalized(payload["instanceName"] as? String) ?? "HomeBrain"
+            companionStatusMessage = "Signed in to \(instanceName) from iPhone."
             Task { await refreshDashboard() }
         } catch {
             companionStatusMessage = displayMessage(for: error)

@@ -55,6 +55,13 @@ struct AuthView: View {
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: usesCompactSpacing ? 12 : 18) {
                         HStack {
+                            if session.isAddingInstance {
+                                Button("Cancel") {
+                                    session.cancelAddingInstance()
+                                }
+                                .buttonStyle(HBSecondaryButtonStyle())
+                                .accessibilityIdentifier("auth.addInstance.cancel")
+                            }
                             Spacer(minLength: 0)
                             HBThemeToggleMenu()
                         }
@@ -62,6 +69,9 @@ struct AuthView: View {
                         HBDeckSurface(cornerRadius: usesCompactSpacing ? 26 : 32) {
                             VStack(alignment: .leading, spacing: usesCompactSpacing ? 12 : 18) {
                                 heroPanel
+                                if !session.isAddingInstance && !session.savedInstances.isEmpty {
+                                    savedInstancesPanel
+                                }
                                 authPanel
                                 #if DEBUG
                                 previewPanel
@@ -111,7 +121,7 @@ struct AuthView: View {
                 .tracking(2.2)
                 .foregroundStyle(HBPalette.textMuted)
 
-            Text("Welcome to HomeBrain")
+            Text(session.isAddingInstance ? "Add a HomeBrain" : "Welcome to HomeBrain")
                 .font(HBTypography.display(.title, weight: .bold))
                 .foregroundStyle(
                     LinearGradient(
@@ -123,7 +133,9 @@ struct AuthView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
 
-            Text("Connect securely to your HomeBrain hub and manage your home from iPhone, iPad, and Apple Watch.")
+            Text(session.isAddingInstance
+                ? "Sign in to another HomeBrain platform. Your existing platforms stay saved and completely separate."
+                : "Connect securely to your HomeBrain hub and manage your home from iPhone, iPad, and Apple Watch.")
                 .font(HBTypography.body(.body, weight: .medium))
                 .foregroundStyle(HBPalette.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -158,7 +170,7 @@ struct AuthView: View {
         HBPanel {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Sign In")
+                    Text(session.isAddingInstance ? "Sign In to New Platform" : "Sign In")
                         .font(HBTypography.display(.title2, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .accessibilityAddTraits(.isHeader)
@@ -190,6 +202,54 @@ struct AuthView: View {
                 .accessibilityIdentifier("auth.provisioningNotice")
 
                 legalLinks
+            }
+        }
+    }
+
+    private var savedInstancesPanel: some View {
+        HBPanel {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Saved HomeBrains")
+                        .font(HBTypography.display(.title3, weight: .bold))
+                        .foregroundStyle(HBPalette.textPrimary)
+
+                    Text("Select a saved platform to switch instantly, or enter a password below if that session needs to be renewed.")
+                        .font(HBTypography.body(.subheadline, weight: .medium))
+                        .foregroundStyle(HBPalette.textSecondary)
+                }
+
+                ForEach(session.savedInstances) { instance in
+                    Button {
+                        serverURL = instance.serverURL
+                        email = instance.user.email
+                        session.switchInstance(to: instance.id)
+                        focusedField = .password
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: instance.id == session.activeInstanceID ? "house.circle.fill" : "house.circle")
+                                .font(.system(size: 26))
+                                .foregroundStyle(HBPalette.accentBlue)
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(instance.displayName)
+                                    .font(HBTypography.body(.body, weight: .semibold))
+                                    .foregroundStyle(HBPalette.textPrimary)
+                                Text(instance.accountSummary)
+                                    .font(HBTypography.body(.caption, weight: .medium))
+                                    .foregroundStyle(HBPalette.textSecondary)
+                                    .lineLimit(1)
+                            }
+
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right")
+                                .foregroundStyle(HBPalette.textMuted)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(HBSecondaryButtonStyle())
+                    .accessibilityIdentifier("auth.savedInstance.\(instance.id)")
+                }
             }
         }
     }
@@ -422,6 +482,9 @@ struct AuthView: View {
             return
         }
 
+        let submittedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let submittedPassword = password
+
         guard session.updateServerURL(serverURL) else {
             session.authError = "Enter a valid HomeBrain hub address."
             focusedField = .endpoint
@@ -434,8 +497,8 @@ struct AuthView: View {
 
         Task {
             await session.login(
-                email: email.trimmingCharacters(in: .whitespacesAndNewlines),
-                password: password
+                email: submittedEmail,
+                password: submittedPassword
             )
         }
     }

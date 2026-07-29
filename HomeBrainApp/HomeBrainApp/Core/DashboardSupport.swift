@@ -282,29 +282,41 @@ enum DashboardSupport {
         return normalizeViews(from: root["views"] ?? data["views"])
     }
 
-    static func resolveSelectedViewID(profileId: String?, views: [DashboardViewItem], current: String? = nil) -> String {
+    static func resolveSelectedViewID(serverURL: String, profileId: String?, views: [DashboardViewItem], current: String? = nil) -> String {
         if let current, views.contains(where: { $0.id == current }) {
             return current
         }
 
-        if let stored = defaultViewID(forProfileID: profileId), views.contains(where: { $0.id == stored }) {
+        if let stored = defaultViewID(serverURL: serverURL, forProfileID: profileId), views.contains(where: { $0.id == stored }) {
             return stored
         }
 
         return views.first?.id ?? ""
     }
 
-    static func defaultViewID(forProfileID profileId: String?) -> String? {
-        let key = preferenceKey(forProfileID: profileId)
+    static func defaultViewID(serverURL: String, forProfileID profileId: String?) -> String? {
+        let key = preferenceKey(serverURL: serverURL, forProfileID: profileId)
         let stored = defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let stored, !stored.isEmpty {
             return stored
         }
+
+        let suffix = (profileId?.isEmpty == false ? profileId! : "global")
+        let migrationKey = "homebrain.ios.dashboard.default-view.migrated.\(suffix)"
+        guard !defaults.bool(forKey: migrationKey) else { return nil }
+        defaults.set(true, forKey: migrationKey)
+
+        let legacyKey = "homebrain.ios.dashboard.default-view.\(suffix)"
+        let legacyValue = defaults.string(forKey: legacyKey)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let legacyValue, !legacyValue.isEmpty {
+            defaults.set(legacyValue, forKey: key)
+            return legacyValue
+        }
         return nil
     }
 
-    static func setDefaultViewID(_ viewId: String?, forProfileID profileId: String?) {
-        let key = preferenceKey(forProfileID: profileId)
+    static func setDefaultViewID(_ viewId: String?, serverURL: String, forProfileID profileId: String?) {
+        let key = preferenceKey(serverURL: serverURL, forProfileID: profileId)
         let trimmed = viewId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if trimmed.isEmpty {
             defaults.removeObject(forKey: key)
@@ -338,9 +350,16 @@ enum DashboardSupport {
         }
     }
 
-    private static func preferenceKey(forProfileID profileId: String?) -> String {
+    private static func preferenceKey(serverURL: String, forProfileID profileId: String?) -> String {
+        let normalizedServer = serverURL
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "https://", with: "")
+            .replacingOccurrences(of: "http://", with: "")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
         let suffix = (profileId?.isEmpty == false ? profileId! : "global")
-        return "homebrain.ios.dashboard.default-view.\(suffix)"
+        return "homebrain.ios.dashboard.default-view.\(normalizedServer).\(suffix)"
     }
 
     private static func localViewsKey(serverURL: String, profileId: String?) -> String {

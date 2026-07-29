@@ -1323,8 +1323,8 @@ struct WeatherView: View {
 
     @StateObject private var locationManager = WeatherLocationManager()
 
-    @AppStorage("homebrain.ios.weather.location-mode") private var weatherLocationModeRaw = DashboardWeatherLocationMode.saved.rawValue
-    @AppStorage("homebrain.ios.weather.location-query") private var weatherLocationQuery = ""
+    @State private var weatherLocationModeRaw = DashboardWeatherLocationMode.saved.rawValue
+    @State private var weatherLocationQuery = ""
 
     @State private var dashboard: WeatherDashboardSnapshot?
     @State private var tempestStatus: TempestStatusSnapshot?
@@ -1733,6 +1733,7 @@ struct WeatherView: View {
             await refreshAll(silent: false, includeTempestStatus: isAdmin, forceTempestSync: true, forceIndoorAirSync: true)
         }
         .task {
+            loadLocationPreferences()
             await refreshAll(silent: false, includeTempestStatus: isAdmin)
         }
         .task {
@@ -1743,12 +1744,45 @@ struct WeatherView: View {
             }
         }
         .onChange(of: weatherLocationModeRaw) { _, _ in
+            persistLocationPreferences()
             Task { await loadWeatherDashboard(silent: dashboard != nil) }
+        }
+        .onChange(of: weatherLocationQuery) { _, _ in
+            persistLocationPreferences()
         }
         .onChange(of: autoLocationKey) { _, _ in
             guard weatherLocationMode == .auto else { return }
             Task { await loadWeatherDashboard(silent: dashboard != nil) }
         }
+    }
+
+    private func loadLocationPreferences() {
+        guard let activeInstanceID = session.activeInstanceID else { return }
+        let defaults = UserDefaults.standard
+        let modeKey = "homebrain.ios.weather.location-mode.\(activeInstanceID)"
+        let queryKey = "homebrain.ios.weather.location-query.\(activeInstanceID)"
+
+        if let storedMode = defaults.string(forKey: modeKey) {
+            weatherLocationModeRaw = storedMode
+            weatherLocationQuery = defaults.string(forKey: queryKey) ?? ""
+            return
+        }
+
+        let legacyMigrationKey = "homebrain.ios.weather.location-preferences.migrated"
+        if !defaults.bool(forKey: legacyMigrationKey) {
+            weatherLocationModeRaw = defaults.string(forKey: "homebrain.ios.weather.location-mode")
+                ?? DashboardWeatherLocationMode.saved.rawValue
+            weatherLocationQuery = defaults.string(forKey: "homebrain.ios.weather.location-query") ?? ""
+            defaults.set(true, forKey: legacyMigrationKey)
+        }
+        persistLocationPreferences()
+    }
+
+    private func persistLocationPreferences() {
+        guard let activeInstanceID = session.activeInstanceID else { return }
+        let defaults = UserDefaults.standard
+        defaults.set(weatherLocationModeRaw, forKey: "homebrain.ios.weather.location-mode.\(activeInstanceID)")
+        defaults.set(weatherLocationQuery, forKey: "homebrain.ios.weather.location-query.\(activeInstanceID)")
     }
 
     private var locationUnavailableMessage: String {

@@ -72,7 +72,15 @@ final class APIClient {
         query: [URLQueryItem] = [],
         authorized: Bool = true
     ) async throws -> (data: Data, suggestedFilename: String?) {
-        let (data, response) = try await dataRequest(path: path, method: method, body: body, query: query, authorized: authorized)
+        let contextID = sessionStore.sessionContextID
+        let (data, response) = try await dataRequest(
+            path: path,
+            method: method,
+            body: body,
+            query: query,
+            authorized: authorized,
+            contextID: contextID
+        )
         return (data, suggestedFilename(from: response))
     }
 
@@ -96,13 +104,15 @@ final class APIClient {
         authorized: Bool = true,
         hasRetried: Bool = false
     ) async throws -> Any {
+        let contextID = sessionStore.sessionContextID
         let (data, _) = try await dataRequest(
             path: path,
             method: method,
             body: body,
             query: query,
             authorized: authorized,
-            hasRetried: hasRetried
+            hasRetried: hasRetried,
+            contextID: contextID
         )
         return try parseJSONPayload(data: data)
     }
@@ -114,8 +124,10 @@ final class APIClient {
         query: [URLQueryItem],
         authorized: Bool = true,
         hasRetried: Bool = false,
-        transientAttempt: Int = 0
+        transientAttempt: Int = 0,
+        contextID: UUID
     ) async throws -> (Data, HTTPURLResponse) {
+        try sessionStore.assertActiveContext(contextID)
         guard let url = buildURL(path: path, query: query) else {
             throw APIError.invalidURL
         }
@@ -132,7 +144,8 @@ final class APIClient {
         }
 
         if authorized {
-            let accessToken = try await sessionStore.validAccessToken()
+            let accessToken = try await sessionStore.validAccessToken(contextID: contextID)
+            try sessionStore.assertActiveContext(contextID)
             urlRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         }
 
@@ -148,7 +161,9 @@ final class APIClient {
         let response: URLResponse
         do {
             (data, response) = try await urlSession.data(for: urlRequest)
+            try sessionStore.assertActiveContext(contextID)
         } catch {
+            try sessionStore.assertActiveContext(contextID)
             guard isTransientTransportError(error) else {
                 throw error
             }
@@ -163,7 +178,8 @@ final class APIClient {
                     query: query,
                     authorized: authorized,
                     hasRetried: hasRetried,
-                    transientAttempt: transientAttempt + 1
+                    transientAttempt: transientAttempt + 1,
+                    contextID: contextID
                 )
             }
 
@@ -193,7 +209,8 @@ final class APIClient {
                     query: query,
                     authorized: authorized,
                     hasRetried: hasRetried,
-                    transientAttempt: transientAttempt + 1
+                    transientAttempt: transientAttempt + 1,
+                    contextID: contextID
                 )
             }
 
@@ -205,7 +222,8 @@ final class APIClient {
            !hasRetried,
            path != "/api/auth/refresh",
            path != "/api/auth/login" {
-            try await sessionStore.refreshTokens()
+            try await sessionStore.refreshTokens(for: contextID)
+            try sessionStore.assertActiveContext(contextID)
             return try await dataRequest(
                 path: path,
                 method: method,
@@ -213,7 +231,8 @@ final class APIClient {
                 query: query,
                 authorized: authorized,
                 hasRetried: true,
-                transientAttempt: transientAttempt
+                transientAttempt: transientAttempt,
+                contextID: contextID
             )
         }
 
