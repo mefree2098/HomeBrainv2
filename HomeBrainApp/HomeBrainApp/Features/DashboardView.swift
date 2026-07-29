@@ -2268,6 +2268,9 @@ struct DashboardView: View {
         }
 
         if widget.settings.weatherLocationMode == .auto && locationManager.coordinate == nil {
+            if !locationManager.isRequesting, locationManager.errorMessage == nil {
+                locationManager.requestLocation()
+            }
             return
         }
 
