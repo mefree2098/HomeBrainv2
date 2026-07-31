@@ -88,6 +88,8 @@ test('ensureBootstrapState seeds signing keys and the default Axiom client', asy
   const originalAudiobookClientId = process.env.OIDC_AUDIOBOOK_CLIENT_ID;
   const originalAgentOpsClientId = process.env.OIDC_AGENTOPS_CLIENT_ID;
   const originalAgentOpsRedirectUris = process.env.OIDC_AGENTOPS_REDIRECT_URIS;
+  const originalS2ClientId = process.env.OIDC_S2_CLIENT_ID;
+  const originalS2RedirectUri = process.env.OIDC_S2_REDIRECT_URI;
 
   t.after(() => {
     OIDCProviderSettings.getSettings = originalGetSettings;
@@ -102,6 +104,8 @@ test('ensureBootstrapState seeds signing keys and the default Axiom client', asy
     restoreEnv('OIDC_AUDIOBOOK_CLIENT_ID', originalAudiobookClientId);
     restoreEnv('OIDC_AGENTOPS_CLIENT_ID', originalAgentOpsClientId);
     restoreEnv('OIDC_AGENTOPS_REDIRECT_URIS', originalAgentOpsRedirectUris);
+    restoreEnv('OIDC_S2_CLIENT_ID', originalS2ClientId);
+    restoreEnv('OIDC_S2_REDIRECT_URI', originalS2RedirectUri);
   });
 
   process.env.HOMEBRAIN_PUBLIC_BASE_URL = 'https://example.com';
@@ -113,6 +117,8 @@ test('ensureBootstrapState seeds signing keys and the default Axiom client', asy
   delete process.env.OIDC_AUDIOBOOK_CLIENT_ID;
   delete process.env.OIDC_AGENTOPS_CLIENT_ID;
   delete process.env.OIDC_AGENTOPS_REDIRECT_URIS;
+  delete process.env.OIDC_S2_CLIENT_ID;
+  delete process.env.OIDC_S2_REDIRECT_URI;
 
   let saved = false;
   OIDCProviderSettings.getSettings = async () => ({
@@ -137,11 +143,13 @@ test('ensureBootstrapState seeds signing keys and the default Axiom client', asy
   const result = await oidcService.ensureBootstrapState({ actor: 'system:test-bootstrap' });
   const axiomClient = createdClients.find((client) => client.clientId === 'homebrain-axiom');
   const agentOpsClient = createdClients.find((client) => client.clientId === 'homebrain-agentops');
+  const s2Client = createdClients.find((client) => client.clientId === 'homebrain-s2-voice-studio');
 
   assert.equal(saved, true);
   assert.deepEqual(result.settingsUpdated, ['signingKeys']);
   assert.ok(result.createdClients.includes('homebrain-axiom'));
   assert.ok(result.createdClients.includes('homebrain-agentops'));
+  assert.ok(result.createdClients.includes('homebrain-s2-voice-studio'));
   assert.deepEqual(axiomClient.redirectUris, ['https://mail.example.com/api/identity/homebrain/callback']);
   assert.equal(axiomClient.requirePkce, true);
   assert.equal(axiomClient.tokenEndpointAuthMethod, 'none');
@@ -155,6 +163,100 @@ test('ensureBootstrapState seeds signing keys and the default Axiom client', asy
   ]);
   assert.equal(agentOpsClient.requirePkce, true);
   assert.equal(agentOpsClient.tokenEndpointAuthMethod, 'none');
+  assert.equal(s2Client.name, 'S2 Voice Studio');
+  assert.equal(s2Client.platform, 'custom');
+  assert.deepEqual(s2Client.redirectUris, ['https://s2.ntechr.com/auth/oidc/callback']);
+  assert.deepEqual(s2Client.scopes, ['openid', 'profile', 'email']);
+  assert.equal(s2Client.enabled, true);
+  assert.equal(s2Client.requirePkce, true);
+  assert.equal(s2Client.tokenEndpointAuthMethod, 'none');
+});
+
+test('handleAuthorize accepts only the exact S2 callback URI', async (t) => {
+  const originalGetSettings = OIDCProviderSettings.getSettings;
+  const originalFindOne = OIDCClient.findOne;
+  const originalCreate = OIDCClient.create;
+  const originalPublicBaseUrl = process.env.HOMEBRAIN_PUBLIC_BASE_URL;
+  const originalS2ClientId = process.env.OIDC_S2_CLIENT_ID;
+  const originalS2RedirectUri = process.env.OIDC_S2_REDIRECT_URI;
+
+  t.after(() => {
+    OIDCProviderSettings.getSettings = originalGetSettings;
+    OIDCClient.findOne = originalFindOne;
+    OIDCClient.create = originalCreate;
+    restoreEnv('HOMEBRAIN_PUBLIC_BASE_URL', originalPublicBaseUrl);
+    restoreEnv('OIDC_S2_CLIENT_ID', originalS2ClientId);
+    restoreEnv('OIDC_S2_REDIRECT_URI', originalS2RedirectUri);
+  });
+
+  process.env.HOMEBRAIN_PUBLIC_BASE_URL = 'https://example.com';
+  delete process.env.OIDC_S2_CLIENT_ID;
+  delete process.env.OIDC_S2_REDIRECT_URI;
+
+  const providerKeys = generateProviderKeys();
+  OIDCProviderSettings.getSettings = async () => ({
+    ...providerKeys,
+    async save() {
+      return this;
+    }
+  });
+
+  const s2Client = {
+    clientId: 'homebrain-s2-voice-studio',
+    name: 'S2 Voice Studio',
+    platform: 'custom',
+    enabled: true,
+    redirectUris: ['https://s2.ntechr.com/auth/oidc/callback'],
+    scopes: ['openid', 'profile', 'email'],
+    requirePkce: true,
+    tokenEndpointAuthMethod: 'none',
+    async save() {
+      return this;
+    }
+  };
+
+  OIDCClient.findOne = async ({ clientId }) => (
+    clientId === s2Client.clientId ? s2Client : null
+  );
+  OIDCClient.create = async (payload) => payload;
+
+  const buildRequest = (redirectUri) => ({
+    query: {
+      response_type: 'code',
+      client_id: s2Client.clientId,
+      redirect_uri: redirectUri,
+      scope: 'openid profile email',
+      state: 'state-s2',
+      prompt: 'none',
+      code_challenge: crypto.createHash('sha256').update('verifier-s2').digest('base64url'),
+      code_challenge_method: 'S256'
+    },
+    headers: {}
+  });
+
+  const acceptedResponse = createMockResponse();
+  await oidcService.handleAuthorize(
+    buildRequest('https://s2.ntechr.com/auth/oidc/callback'),
+    acceptedResponse
+  );
+  assert.equal(acceptedResponse.statusCode, 302);
+  assert.match(acceptedResponse.redirectUrl, /^https:\/\/s2\.ntechr\.com\/auth\/oidc\/callback\?/);
+  assert.equal(new URL(acceptedResponse.redirectUrl).searchParams.get('error'), 'login_required');
+
+  const rejectedRedirectUris = [
+    'https://voice.ntechr.com/auth/oidc/callback',
+    'http://s2.ntechr.com/auth/oidc/callback',
+    'https://s2.ntechr.com:8443/auth/oidc/callback',
+    'https://s2.ntechr.com/auth/oidc/other',
+    'https://s2.ntechr.com/auth/oidc/callback?next=/dashboard'
+  ];
+
+  for (const redirectUri of rejectedRedirectUris) {
+    await assert.rejects(
+      oidcService.handleAuthorize(buildRequest(redirectUri), createMockResponse()),
+      /redirect_uri is not registered for this client/
+    );
+  }
 });
 
 test('ensureBootstrapState seeds Audiobook client when public URL is configured', async (t) => {
