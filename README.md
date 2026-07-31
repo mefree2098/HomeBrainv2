@@ -293,7 +293,7 @@ Notifications are shared across web, iPhone, and Apple Watch with history, unrea
 
 Administrators can create admin, standard, or read-only users; enable HomeBrain/Axiom platform access; activate/deactivate accounts; and manage sessions. Browser sessions use cookies, while native/API clients can use long-lived bearer sessions according to client policy.
 
-HomeBrain also acts as an OIDC provider with discovery, JWKS, authorization, token, and user-info endpoints. Managed bootstrap state registers the built-in Axiom and AgentOps clients used by the wider platform.
+HomeBrain also acts as an OIDC provider with discovery, JWKS, authorization, token, and user-info endpoints. Managed bootstrap state registers the built-in Axiom and AgentOps clients plus an inert, optional S2 Voice Studio public client.
 
 ### Codex and OpenClaw
 

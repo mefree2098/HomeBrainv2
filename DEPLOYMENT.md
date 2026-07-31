@@ -378,7 +378,7 @@ Both can share the same public IP because Caddy routes by hostname.
 
 ## Axiom SSO Through HomeBrain
 
-HomeBrain now acts as an OIDC provider for Axiom. The installer, `setup-services.sh update`, and `Platform Deploy` all seed the default Axiom client automatically.
+HomeBrain acts as an OIDC provider for its managed public clients. The installer, `setup-services.sh update`, and `Platform Deploy` seed the client registrations automatically.
 
 Use these Axiom OIDC settings:
 
@@ -403,6 +403,25 @@ HomeBrain exposes these OIDC endpoints:
 - `/oauth/authorize`
 - `/oauth/token`
 - `/oauth/userinfo`
+
+### Optional S2 Voice Studio client
+
+HomeBrain pre-registers an inert public client for S2 Voice Studio. This does not install, start, contact, or proxy S2, so HomeBrain deployments that do not use S2 are unaffected. When S2 is installed, use:
+
+- Client ID: `homebrain-s2-voice-studio`
+- Redirect URI: `https://s2.ntechr.com/auth/oidc/callback`
+- Client auth: `none` (public client; do not create a client secret)
+- PKCE: required with `S256`
+- Requested scopes: `openid profile email`
+
+The exact client ID and redirect URI can be overridden before bootstrap when a deployment uses a different S2 hostname:
+
+```dotenv
+OIDC_S2_CLIENT_ID=homebrain-s2-voice-studio
+OIDC_S2_REDIRECT_URI=https://s2.ntechr.com/auth/oidc/callback
+```
+
+Register the exact HTTPS callback only. Wildcard redirect URIs are not supported.
 
 ## Updating HomeBrain Later
 

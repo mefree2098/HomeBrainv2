@@ -23,6 +23,8 @@ const {
 const DEFAULT_CLIENT_ID = 'homebrain-axiom';
 const DEFAULT_AUDIOBOOK_CLIENT_ID = 'homebrain-audiobook';
 const DEFAULT_AGENTOPS_CLIENT_ID = 'homebrain-agentops';
+const DEFAULT_S2_CLIENT_ID = 'homebrain-s2-voice-studio';
+const DEFAULT_S2_REDIRECT_URI = 'https://s2.ntechr.com/auth/oidc/callback';
 const DEFAULT_AGENTOPS_REDIRECT_URIS = Object.freeze([
   'https://agentops.ntechr.com/auth/callback',
   'http://127.0.0.1:4380/auth/callback',
@@ -95,6 +97,10 @@ function getAgentOpsClientId() {
   return trimString(process.env.OIDC_AGENTOPS_CLIENT_ID) || DEFAULT_AGENTOPS_CLIENT_ID;
 }
 
+function getS2ClientId() {
+  return trimString(process.env.OIDC_S2_CLIENT_ID) || DEFAULT_S2_CLIENT_ID;
+}
+
 function deriveAxiomRedirectUri() {
   return getAxiomCallbackUrl();
 }
@@ -106,6 +112,10 @@ function deriveAudiobookRedirectUri() {
 function deriveAgentOpsRedirectUris() {
   const configuredUris = uniqueStrings(String(process.env.OIDC_AGENTOPS_REDIRECT_URIS || '').split(','));
   return configuredUris.length > 0 ? configuredUris : [...DEFAULT_AGENTOPS_REDIRECT_URIS];
+}
+
+function deriveS2RedirectUri() {
+  return trimString(process.env.OIDC_S2_REDIRECT_URI) || DEFAULT_S2_REDIRECT_URI;
 }
 
 function buildStandardClaims(user) {
@@ -298,6 +308,14 @@ async function ensureBootstrapState({ actor = 'system:oidc-bootstrap' } = {}) {
     redirectUris: deriveAgentOpsRedirectUris(),
     name: 'Perpetual AgentOps',
     platform: 'homebrain',
+    actor
+  });
+
+  await ensureManagedClient(summary, {
+    clientId: getS2ClientId(),
+    redirectUri: deriveS2RedirectUri(),
+    name: 'S2 Voice Studio',
+    platform: 'custom',
     actor
   });
 
@@ -750,6 +768,8 @@ module.exports = {
   DEFAULT_CLIENT_ID,
   DEFAULT_AUDIOBOOK_CLIENT_ID,
   DEFAULT_AGENTOPS_CLIENT_ID,
+  DEFAULT_S2_CLIENT_ID,
+  DEFAULT_S2_REDIRECT_URI,
   SUPPORTED_SCOPES,
   buildDiscoveryDocument,
   buildJwks,
