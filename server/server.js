@@ -803,6 +803,7 @@ void dbReady
 // Initialize Sense energy integration
 (async () => {
   try {
+    await dbReady;
     await senseService.initialize();
     console.log('Sense Service initialized successfully');
   } catch (error) {
