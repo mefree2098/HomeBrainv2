@@ -259,6 +259,120 @@ test('startBackgroundMonitoring polls Harmony activity state for known hubs', as
   });
 });
 
+test('getMonitoringHubIps drops an untracked stale alias after a hub address migration', async (t) => {
+  const originalDistinct = Device.distinct;
+
+  t.after(() => {
+    Device.distinct = originalDistinct;
+  });
+
+  Device.distinct = async (field, query) => {
+    assert.equal(field, 'properties.harmonyHubIp');
+    assert.deepEqual(query, { 'properties.source': 'harmony' });
+    return ['192.168.2.27'];
+  };
+
+  const service = new HarmonyService();
+  service.getConfiguredHubAddresses = async () => [];
+  service.getKnownHubRegistry = async () => [
+    {
+      ip: '192.168.2.16',
+      friendlyName: 'Bedroom Hub',
+      lastActivitySyncStatus: 'failed'
+    },
+    {
+      ip: '192.168.2.27',
+      friendlyName: 'Bedroom Hub',
+      lastActivitySyncStatus: 'success'
+    }
+  ];
+
+  const hubIps = await service.getMonitoringHubIps();
+  assert.deepEqual(hubIps, ['192.168.2.27']);
+});
+
+test('recoverMovedHubAddresses resyncs devices only for the same stable Harmony remoteId', async (t) => {
+  const originalDistinct = Device.distinct;
+
+  t.after(() => {
+    Device.distinct = originalDistinct;
+  });
+
+  Device.distinct = async (field, query) => {
+    assert.equal(field, 'properties.harmonyRemoteId');
+    assert.deepEqual(query, {
+      'properties.source': 'harmony',
+      'properties.harmonyHubIp': { $in: ['192.168.2.16'] }
+    });
+    return ['9173577'];
+  };
+
+  const service = new HarmonyService();
+  service.discoverHubs = async (options) => {
+    assert.equal(options.force, true);
+    return [
+      {
+        ip: '192.168.2.27',
+        remoteId: '9173577',
+        discovered: true
+      },
+      {
+        ip: '192.168.2.44',
+        remoteId: 'other-hub',
+        discovered: true
+      }
+    ];
+  };
+  service.syncDevices = async (options) => {
+    assert.ok(options.timeoutMs > 0);
+    return {
+      success: true,
+      hubsSynced: 1,
+      hubsFailed: 0,
+      updated: 12
+    };
+  };
+
+  const result = await service.recoverMovedHubAddresses({
+    failed: 1,
+    details: [
+      { hubIp: '192.168.2.16', success: false },
+      { hubIp: '192.168.2.44', success: true }
+    ]
+  });
+
+  assert.equal(result.attempted, true);
+  assert.equal(result.recovered, true);
+  assert.deepEqual(result.failedHubIps, ['192.168.2.16']);
+  assert.deepEqual(result.replacementHubIps, ['192.168.2.27']);
+  assert.equal(result.syncResult.updated, 12);
+});
+
+test('runBackgroundMonitoringPass checks failed state polls for moved hub recovery', async () => {
+  const service = new HarmonyService();
+  service.backgroundMonitoringStarted = true;
+  service.getMonitoringHubIps = async () => ['192.168.2.16'];
+  service.syncActivityStates = async () => ({
+    failed: 1,
+    details: [{ hubIp: '192.168.2.16', success: false }]
+  });
+
+  let recoverySummary = null;
+  service.recoverMovedHubAddresses = async (summary) => {
+    recoverySummary = summary;
+    return { attempted: false, reason: 'no_replacement_discovered' };
+  };
+  service._scheduleBackgroundMonitoringPass = () => {};
+
+  await service.runBackgroundMonitoringPass('test');
+
+  assert.deepEqual(recoverySummary, {
+    failed: 1,
+    details: [{ hubIp: '192.168.2.16', success: false }]
+  });
+  assert.equal(service.backgroundMonitorInProgress, false);
+});
+
 test('syncDevices dedupes duplicate HomeBrain rows for a Harmony activity', async (t) => {
   const originalFind = Device.find;
   const originalCreate = Device.create;
