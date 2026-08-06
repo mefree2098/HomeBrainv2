@@ -515,6 +515,11 @@ class HarmonyService {
       5000,
       Number(process.env.HARMONY_BACKGROUND_MONITOR_INTERVAL_MS || 15000)
     );
+    this.backgroundRecoveryCooldownMs = Math.max(
+      60000,
+      Number(process.env.HARMONY_BACKGROUND_RECOVERY_COOLDOWN_MS || 300000)
+    );
+    this.lastBackgroundRecoveryAt = 0;
     this.clientOperationTimeoutMs = normalizeTimeoutMs(
       options.clientOperationTimeoutMs,
       DEFAULT_CLIENT_OPERATION_TIMEOUT_MS
@@ -872,12 +877,80 @@ class HarmonyService {
       this.getConfiguredHubAddresses(),
       this.getKnownHubRegistry()
     ]);
+    const trackedSet = new Set(toUniqueHostList(trackedHubIps));
+    const configuredSet = new Set(toUniqueHostList(configuredHubIps));
+    const visibleKnownHubs = pruneStaleRememberedHubAliases(knownHubs.map((hub) => {
+      const activitySyncHealthy = hub.lastActivitySyncStatus === 'success';
+      return {
+        ...hub,
+        source: mergeHubSources('remembered', configuredSet.has(hub.ip) ? 'configured' : ''),
+        discovered: activitySyncHealthy,
+        success: activitySyncHealthy,
+        trackedActivityDevices: trackedSet.has(hub.ip) ? 1 : 0
+      };
+    }));
 
     return toUniqueHostList([
       ...trackedHubIps,
       ...configuredHubIps,
-      ...knownHubs.map((hub) => hub.ip)
+      ...visibleKnownHubs.map((hub) => hub.ip)
     ]);
+  }
+
+  async recoverMovedHubAddresses(stateSummary = {}) {
+    const failedHubIps = toUniqueHostList(
+      (Array.isArray(stateSummary?.details) ? stateSummary.details : [])
+        .filter((detail) => detail?.success === false)
+        .map((detail) => detail?.hubIp)
+    );
+    if (failedHubIps.length === 0) {
+      return { attempted: false, reason: 'no_failed_hubs' };
+    }
+
+    const now = Date.now();
+    if (now - this.lastBackgroundRecoveryAt < this.backgroundRecoveryCooldownMs) {
+      return { attempted: false, reason: 'cooldown' };
+    }
+
+    const failedRemoteIds = await Device.distinct('properties.harmonyRemoteId', {
+      'properties.source': 'harmony',
+      'properties.harmonyHubIp': { $in: failedHubIps }
+    });
+    const failedRemoteIdSet = new Set(
+      (Array.isArray(failedRemoteIds) ? failedRemoteIds : [])
+        .map((remoteId) => trimHarmonyValue(remoteId))
+        .filter(Boolean)
+    );
+    if (failedRemoteIdSet.size === 0) {
+      return { attempted: false, reason: 'no_stable_identity' };
+    }
+
+    const failedHubIpSet = new Set(failedHubIps);
+    const discoveredHubs = await this.discoverHubs({
+      timeoutMs: DEFAULT_DISCOVERY_TIMEOUT_MS,
+      force: true
+    });
+    const replacements = discoveredHubs.filter((hub) => {
+      const ip = normalizeHost(hub?.ip);
+      const remoteId = trimHarmonyValue(hub?.remoteId);
+      return hub?.discovered === true
+        && Boolean(ip)
+        && !failedHubIpSet.has(ip)
+        && failedRemoteIdSet.has(remoteId);
+    });
+    if (replacements.length === 0) {
+      return { attempted: false, reason: 'no_replacement_discovered' };
+    }
+
+    this.lastBackgroundRecoveryAt = now;
+    const syncResult = await this.syncDevices({ timeoutMs: DEFAULT_DISCOVERY_TIMEOUT_MS });
+    return {
+      attempted: true,
+      recovered: syncResult.hubsSynced > 0 && syncResult.hubsFailed === 0,
+      failedHubIps,
+      replacementHubIps: replacements.map((hub) => normalizeHost(hub.ip)),
+      syncResult
+    };
   }
 
   async runBackgroundMonitoringPass(reason = 'interval') {
@@ -890,7 +963,17 @@ class HarmonyService {
     try {
       const hubIps = await this.getMonitoringHubIps();
       if (hubIps.length > 0) {
-        await this.syncActivityStates({ hubIps, force: true });
+        const stateSummary = await this.syncActivityStates({ hubIps, force: true });
+        const recovery = await this.recoverMovedHubAddresses(stateSummary);
+        if (recovery.recovered) {
+          console.info(
+            `HarmonyService: migrated a discovered hub address from ${recovery.failedHubIps.join(', ')} to ${recovery.replacementHubIps.join(', ')}`
+          );
+        } else if (recovery.attempted) {
+          console.warn(
+            `HarmonyService: discovered a replacement hub address at ${recovery.replacementHubIps.join(', ')}, but the device migration did not complete`
+          );
+        }
       }
     } catch (error) {
       console.warn(`HarmonyService: background monitoring pass failed (${reason}): ${error.message}`);
