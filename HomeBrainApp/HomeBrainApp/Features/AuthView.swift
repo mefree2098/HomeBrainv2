@@ -40,10 +40,8 @@ struct AuthView: View {
         horizontalSizeClass == .compact || dynamicTypeSize.isAccessibilitySize
     }
 
-    private var hasRequiredCredentials: Bool {
-        !serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !password.isEmpty
+    private var isAppReviewAccount: Bool {
+        AppReviewAccessConfiguration.isReviewerEmail(email)
     }
 
     var body: some View {
@@ -93,6 +91,11 @@ struct AuthView: View {
                 if serverURL.isEmpty {
                     serverURL = session.serverURLString
                 }
+            }
+            .onChange(of: email) { _, newValue in
+                guard AppReviewAccessConfiguration.isReviewerEmail(newValue) else { return }
+                serverURL = AppReviewAccessConfiguration.publicEndpoint
+                session.authError = nil
             }
         }
     }
@@ -307,6 +310,13 @@ struct AuthView: View {
                 .font(HBTypography.body(.caption, weight: .medium))
                 .foregroundStyle(HBPalette.textMuted)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if isAppReviewAccount {
+                Label("Public App Review demo server selected", systemImage: "checkmark.shield.fill")
+                    .font(HBTypography.body(.caption, weight: .semibold))
+                    .foregroundStyle(HBPalette.accentGreen)
+                    .accessibilityIdentifier("auth.reviewEndpointSelected")
+            }
         }
     }
 
@@ -393,7 +403,8 @@ struct AuthView: View {
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(HBPrimaryButtonStyle())
-        .disabled(session.isProcessingAuth || !hasRequiredCredentials)
+        .disabled(session.isProcessingAuth)
+        .accessibilityHint("Validates the fields and signs in to the selected HomeBrain hub")
         .accessibilityIdentifier("auth.signIn")
     }
 
@@ -471,22 +482,34 @@ struct AuthView: View {
     }
 
     private func submit() {
-        guard hasRequiredCredentials else {
-            if serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                focusedField = .endpoint
-            } else if email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                focusedField = .email
-            } else {
-                focusedField = .password
-            }
+        let submittedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !submittedEmail.isEmpty else {
+            session.authError = "Enter the email address supplied by your HomeBrain administrator."
+            focusedField = .email
             return
         }
 
-        let submittedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !password.isEmpty else {
+            session.authError = "Enter your HomeBrain account password."
+            focusedField = .password
+            return
+        }
+
+        let requestedEndpoint = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let submittedEndpoint = AppReviewAccessConfiguration.resolvedEndpoint(
+            forEmail: submittedEmail,
+            requestedEndpoint: requestedEndpoint
+        )
+        guard !submittedEndpoint.isEmpty else {
+            session.authError = "Enter the HomeBrain hub address supplied with your account."
+            focusedField = .endpoint
+            return
+        }
+
         let submittedPassword = password
 
-        guard session.updateServerURL(serverURL) else {
-            session.authError = "Enter a valid HomeBrain hub address."
+        guard session.updateServerURL(submittedEndpoint) else {
+            session.authError = "Enter a valid HomeBrain hub address, including http:// or https://."
             focusedField = .endpoint
             return
         }

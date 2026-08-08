@@ -134,6 +134,9 @@ final class APIClient {
 
         var urlRequest = URLRequest(url: url)
         urlRequest.httpMethod = method.rawValue
+        if path == "/api/auth/login" {
+            urlRequest.timeoutInterval = 15
+        }
         urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         urlRequest.cachePolicy = .reloadIgnoringLocalCacheData
         urlRequest.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
