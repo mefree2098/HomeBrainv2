@@ -1639,21 +1639,8 @@ struct AppShellView: View {
     }
 
     private var detailStack: some View {
-        VStack(spacing: 10) {
-            if showsBackendRecoveryBanner {
-                BackendRecoveryBanner(
-                    state: session.backendConnectionState,
-                    message: session.backendConnectionMessage
-                ) {
-                    Task { await session.checkBackendConnectionNow() }
-                }
-                .transition(.move(edge: .top).combined(with: .opacity))
-            }
-
-            detailContent
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .animation(.easeInOut(duration: 0.22), value: session.backendConnectionState)
+        detailContent
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var detailContent: AnyView {
@@ -1670,10 +1657,6 @@ struct AppShellView: View {
                 subtitle: "Use the left sidebar to open a HomeBrain module."
             )
         )
-    }
-
-    private var showsBackendRecoveryBanner: Bool {
-        !previewMode && session.backendConnectionState != .online
     }
 
     private var shouldReloadActiveSectionAfterBackendRecovery: Bool {
@@ -1922,89 +1905,6 @@ struct AppShellView: View {
             uiPreview.exit()
         } else {
             session.logout()
-        }
-    }
-}
-
-private struct BackendRecoveryBanner: View {
-    let state: BackendConnectionState
-    let message: String
-    let onRetry: () -> Void
-
-    private var title: String {
-        switch state {
-        case .online:
-            return "Connected"
-        case .reconnecting:
-            return "Reconnecting to HomeBrain"
-        case .offline:
-            return "HomeBrain is still unavailable"
-        }
-    }
-
-    private var statusMessage: String {
-        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty {
-            return trimmed
-        }
-        return "HomeBrain is restarting or temporarily unreachable. Reconnecting..."
-    }
-
-    var body: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                Circle()
-                    .fill(iconColor.opacity(0.16))
-                    .frame(width: 34, height: 34)
-
-                if state == .reconnecting {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(iconColor)
-                } else {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 14, weight: .bold))
-                        .foregroundStyle(iconColor)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(HBTypography.body(size: 14, weight: .bold))
-                    .foregroundStyle(HBPalette.textPrimary)
-                    .lineLimit(1)
-
-                Text(statusMessage)
-                    .font(HBTypography.body(size: 12, weight: .semibold))
-                    .foregroundStyle(HBPalette.textSecondary)
-                    .lineLimit(2)
-            }
-
-            Spacer(minLength: 8)
-
-            Button(action: onRetry) {
-                Label("Retry", systemImage: "arrow.clockwise")
-                    .font(HBTypography.body(size: 13, weight: .bold))
-            }
-            .buttonStyle(HBSecondaryButtonStyle(compact: true))
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .background(HBGlassBackground(cornerRadius: 18, variant: .panel))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(iconColor.opacity(0.35), lineWidth: 1)
-        )
-    }
-
-    private var iconColor: Color {
-        switch state {
-        case .online:
-            return HBPalette.accentGreen
-        case .reconnecting:
-            return HBPalette.accentOrange
-        case .offline:
-            return HBPalette.accentRed
         }
     }
 }

@@ -22,7 +22,6 @@ final class SessionStore: ObservableObject {
     @Published private(set) var sessionContextID = UUID()
     @Published private(set) var isAddingInstance = false
     @Published private(set) var backendConnectionState: BackendConnectionState = .online
-    @Published private(set) var backendConnectionMessage = ""
     @Published private(set) var backendRecoveryGeneration = 0
     @Published private(set) var backendLastRecoveredAt: Date?
 
@@ -31,7 +30,7 @@ final class SessionStore: ObservableObject {
     private var refreshTask: Task<Void, Error>?
     private var refreshTaskID: UUID?
     private var backendRecoveryTask: Task<Void, Never>?
-    private var backendOutageStartedAt: Date?
+    private var backendRecoveryTaskID: UUID?
     private var instanceToRestoreAfterAdding: String?
 
     var isAuthenticated: Bool {
@@ -426,22 +425,19 @@ final class SessionStore: ObservableObject {
     }
 
     func reportTransientBackendFailure(_ error: Error, path: String? = nil) {
-        if backendOutageStartedAt == nil {
-            backendOutageStartedAt = Date()
-        }
-
         if backendConnectionState == .online {
             backendConnectionState = .reconnecting
         }
 
-        backendConnectionMessage = transientBackendMessage(for: path)
         startBackendRecoveryMonitor()
     }
 
-    func checkBackendConnectionNow() async {
+    func resumeBackendRecoveryIfNeeded() async {
+        guard backendConnectionState != .online else {
+            return
+        }
+
         let contextID = sessionContextID
-        backendConnectionState = .reconnecting
-        backendConnectionMessage = transientBackendMessage(for: nil)
 
         do {
             try await pingBackend()
@@ -707,9 +703,8 @@ final class SessionStore: ObservableObject {
     private func resetBackendConnectionState() {
         backendRecoveryTask?.cancel()
         backendRecoveryTask = nil
-        backendOutageStartedAt = nil
+        backendRecoveryTaskID = nil
         backendConnectionState = .online
-        backendConnectionMessage = ""
     }
 
     private func startBackendRecoveryMonitor() {
@@ -717,34 +712,44 @@ final class SessionStore: ObservableObject {
             return
         }
 
+        let taskID = UUID()
         let contextID = sessionContextID
+        backendRecoveryTaskID = taskID
         backendRecoveryTask = Task { [weak self] in
-            await self?.runBackendRecoveryMonitor(contextID: contextID)
+            await self?.runBackendRecoveryMonitor(contextID: contextID, taskID: taskID)
         }
     }
 
-    private func runBackendRecoveryMonitor(contextID: UUID) async {
+    private func runBackendRecoveryMonitor(contextID: UUID, taskID: UUID) async {
         var attempt = 0
         defer {
-            backendRecoveryTask = nil
+            finishBackendRecoveryTask(taskID)
         }
 
         while !Task.isCancelled {
             guard contextID == sessionContextID else { return }
             if backendConnectionState == .online {
+                finishBackendRecoveryTask(taskID)
                 return
             }
 
             do {
                 try await pingBackend()
                 guard contextID == sessionContextID else { return }
+                // Recovery observers retry immediately. Release this slot first so a
+                // still-warming API can register a fresh monitor without getting stuck.
+                finishBackendRecoveryTask(taskID)
                 markBackendOnline()
                 return
             } catch {
                 guard contextID == sessionContextID else { return }
+                guard backendConnectionState != .online else {
+                    finishBackendRecoveryTask(taskID)
+                    return
+                }
+
                 attempt += 1
                 backendConnectionState = attempt >= 3 ? .offline : .reconnecting
-                backendConnectionMessage = transientBackendMessage(for: nil)
 
                 let delay = min(15.0, Double(attempt) * 2.0)
                 try? await Task.sleep(for: .seconds(delay))
@@ -752,11 +757,18 @@ final class SessionStore: ObservableObject {
         }
     }
 
+    private func finishBackendRecoveryTask(_ taskID: UUID) {
+        guard backendRecoveryTaskID == taskID else {
+            return
+        }
+
+        backendRecoveryTask = nil
+        backendRecoveryTaskID = nil
+    }
+
     private func markBackendOnline() {
         let wasUnavailable = backendConnectionState != .online
         backendConnectionState = .online
-        backendConnectionMessage = ""
-        backendOutageStartedAt = nil
 
         if wasUnavailable {
             backendLastRecoveredAt = Date()
@@ -796,14 +808,6 @@ final class SessionStore: ObservableObject {
         components.queryItems = nil
 
         return components.url
-    }
-
-    private func transientBackendMessage(for path: String?) -> String {
-        if let path, path.contains("/api/devices/stream") {
-            return "Live device updates paused while HomeBrain reconnects."
-        }
-
-        return "HomeBrain is restarting or temporarily unreachable. Reconnecting..."
     }
 
     private var hasStoredSession: Bool {
