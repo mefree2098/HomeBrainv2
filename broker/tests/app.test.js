@@ -189,7 +189,7 @@ test('BrokerStore persists a batch of queued Alexa events in one durable write',
   assert.equal((await store.listQueuedEvents({ hubId: 'hub-batch' })).length, 3);
 });
 
-test('BrokerStore issues durable Alexa refresh tokens and rotates legacy expired records', async (t) => {
+test('BrokerStore reuses durable Alexa refresh tokens across repeated exchanges', async (t) => {
   const brokerStoreFile = path.join(os.tmpdir(), `homebrain-broker-refresh-token-${Date.now()}-${Math.random().toString(16).slice(2)}.json`);
   const previousRefreshTokenTtl = process.env.HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS;
   process.env.HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS = '0';
@@ -230,17 +230,24 @@ test('BrokerStore issues durable Alexa refresh tokens and rotates legacy expired
     });
   });
 
-  const rotated = await brokerStore.rotateRefreshToken(issued.refreshToken, {
+  const refreshed = await brokerStore.refreshAccessToken(issued.refreshToken, {
+    clientId: 'client-test'
+  });
+  const retried = await brokerStore.refreshAccessToken(issued.refreshToken, {
     clientId: 'client-test'
   });
 
-  assert.ok(rotated.accessToken);
-  assert.ok(rotated.refreshToken);
+  assert.ok(refreshed.accessToken);
+  assert.ok(retried.accessToken);
+  assert.notEqual(retried.accessToken, refreshed.accessToken);
+  assert.equal(refreshed.refreshToken, issued.refreshToken);
+  assert.equal(retried.refreshToken, issued.refreshToken);
 
-  const afterRotateRefreshTokens = await brokerStore.read((state) => Object.values(state.refreshTokens));
-  assert.equal(afterRotateRefreshTokens.length, 1);
-  assert.equal(afterRotateRefreshTokens[0].brokerAccountId, account.brokerAccountId);
-  assert.equal(afterRotateRefreshTokens[0].expiresAt, null);
+  const afterRefreshTokens = await brokerStore.read((state) => Object.values(state.refreshTokens));
+  assert.equal(afterRefreshTokens.length, 1);
+  assert.equal(afterRefreshTokens[0].brokerAccountId, account.brokerAccountId);
+  assert.equal(afterRefreshTokens[0].expiresAt, null);
+  assert.equal(afterRefreshTokens[0].revokedAt, null);
 });
 
 test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', async (t) => {
@@ -481,6 +488,38 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
   const tokens = await tokenResponse.json();
   assert.ok(tokens.access_token);
   assert.ok(tokens.refresh_token);
+
+  const firstRefreshResponse = await fetch(`${broker.baseUrl}/api/oauth/alexa/token`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: 'client-test',
+      refresh_token: tokens.refresh_token
+    })
+  });
+  assert.equal(firstRefreshResponse.status, 200);
+  const firstRefreshedTokens = await firstRefreshResponse.json();
+  assert.notEqual(firstRefreshedTokens.access_token, tokens.access_token);
+  assert.equal(firstRefreshedTokens.refresh_token, tokens.refresh_token);
+
+  const retriedRefreshResponse = await fetch(`${broker.baseUrl}/api/oauth/alexa/token`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: 'client-test',
+      refresh_token: tokens.refresh_token
+    })
+  });
+  assert.equal(retriedRefreshResponse.status, 200);
+  const retriedRefreshTokens = await retriedRefreshResponse.json();
+  assert.notEqual(retriedRefreshTokens.access_token, firstRefreshedTokens.access_token);
+  assert.equal(retriedRefreshTokens.refresh_token, tokens.refresh_token);
 
   const resolveResponse = await fetch(`${broker.baseUrl}/api/oauth/alexa/resolve`, {
     method: 'POST',

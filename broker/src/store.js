@@ -595,9 +595,10 @@ class BrokerStore {
     });
   }
 
-  async rotateRefreshToken(refreshToken, meta = {}) {
+  async refreshAccessToken(refreshToken, meta = {}) {
     return this.write((state) => {
-      const tokenHash = sha256(trimString(refreshToken));
+      const normalizedRefreshToken = trimString(refreshToken);
+      const tokenHash = sha256(normalizedRefreshToken);
       const refreshRecord = state.refreshTokens[tokenHash];
       if (!refreshRecord) {
         throw new Error('Refresh token is invalid or expired');
@@ -611,16 +612,13 @@ class BrokerStore {
         throw new Error('Refresh token client mismatch');
       }
 
-      refreshRecord.revokedAt = new Date().toISOString();
       const accountLink = state.accountLinks[refreshRecord.brokerAccountId];
       if (!accountLink) {
         throw new Error('Linked account not found');
       }
 
       const accessToken = randomToken(32);
-      const nextRefreshToken = randomToken(32);
       const accessTokenHash = sha256(accessToken);
-      const nextRefreshTokenHash = sha256(nextRefreshToken);
       const now = Date.now();
       const scopes = uniqueStrings(refreshRecord.scopes || ['smart_home']);
       const timestamp = new Date().toISOString();
@@ -638,25 +636,18 @@ class BrokerStore {
         revokedAt: null
       };
 
-      state.refreshTokens[nextRefreshTokenHash] = {
-        tokenHash: nextRefreshTokenHash,
-        brokerAccountId: refreshRecord.brokerAccountId,
-        hubId: refreshRecord.hubId,
-        clientId: refreshRecord.clientId,
-        scopes,
-        locale: refreshRecord.locale,
-        createdAt: timestamp,
-        lastUsedAt: timestamp,
-        expiresAt: getRefreshTokenExpiresAt(now),
-        revokedAt: null
-      };
+      // Alexa can retry a refresh from another edge after the first response has
+      // already been issued. Keep the durable refresh token valid so that retry
+      // does not receive invalid_grant and unlink the household.
+      refreshRecord.lastUsedAt = timestamp;
+      refreshRecord.expiresAt = getRefreshTokenExpiresAt(now);
 
       accountLink.lastSeenAt = timestamp;
       accountLink.updatedAt = timestamp;
 
       return {
         accessToken,
-        refreshToken: nextRefreshToken,
+        refreshToken: normalizedRefreshToken,
         tokenType: 'bearer',
         expiresIn: DEFAULT_ACCESS_TOKEN_TTL_SECONDS,
         scope: scopes.join(' '),

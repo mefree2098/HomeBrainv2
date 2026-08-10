@@ -955,7 +955,7 @@ function createApp(options = {}) {
       }
 
       if (grantType === 'refresh_token') {
-        const tokens = await store.rotateRefreshToken(req.body.refresh_token, { clientId: client.clientId });
+        const tokens = await store.refreshAccessToken(req.body.refresh_token, { clientId: client.clientId });
         return res.status(200).json({
           token_type: tokens.tokenType,
           access_token: tokens.accessToken,

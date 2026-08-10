@@ -114,6 +114,7 @@ These details matter and are easy to miss:
    - Older broker builds used a 30-day default, which can force an unexpected relink after inactivity.
    - Amazon currently recommends a refresh-token TTL of at least 180 days or no expiration.
    - Set `HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS=0` in production for no expiration.
+   - HomeBrain reuses the durable refresh token when issuing a new access token. Alexa can retry a refresh from another edge, so immediately revoking the prior refresh token can break account linking.
 
 ## 4. What you need before you touch Alexa
 
@@ -863,6 +864,7 @@ Check:
 
 - `HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS` is `0` or otherwise long enough
 - refresh tokens are not being expired too aggressively
+- refresh-token retries return a new access token without invalidating the durable refresh token
 - the broker store file is persistent and not being wiped
 - the broker secret has not changed without updating the Alexa console
 
