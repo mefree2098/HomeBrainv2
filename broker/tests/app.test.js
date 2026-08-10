@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs/promises');
 
 const { closeServerAndExit, createApp } = require('../src/app');
-const { BrokerStore } = require('../src/store');
+const { BrokerOAuthGrantError, BrokerStore } = require('../src/store');
 const { AlexaDeviceService } = require('../src/alexaDeviceService');
 
 function listen(server) {
@@ -236,18 +236,143 @@ test('BrokerStore reuses durable Alexa refresh tokens across repeated exchanges'
   const retried = await brokerStore.refreshAccessToken(issued.refreshToken, {
     clientId: 'client-test'
   });
+  const [concurrentRefresh, concurrentRetry] = await Promise.all([
+    brokerStore.refreshAccessToken(issued.refreshToken, {
+      clientId: 'client-test'
+    }),
+    brokerStore.refreshAccessToken(issued.refreshToken, {
+      clientId: 'client-test'
+    })
+  ]);
 
   assert.ok(refreshed.accessToken);
   assert.ok(retried.accessToken);
   assert.notEqual(retried.accessToken, refreshed.accessToken);
+  assert.notEqual(concurrentRefresh.accessToken, concurrentRetry.accessToken);
   assert.equal(refreshed.refreshToken, issued.refreshToken);
   assert.equal(retried.refreshToken, issued.refreshToken);
+  assert.equal(concurrentRefresh.refreshToken, issued.refreshToken);
+  assert.equal(concurrentRetry.refreshToken, issued.refreshToken);
 
-  const afterRefreshTokens = await brokerStore.read((state) => Object.values(state.refreshTokens));
+  const reloadedStore = new BrokerStore({ filePath: brokerStoreFile });
+  const afterRestart = await reloadedStore.refreshAccessToken(issued.refreshToken, {
+    clientId: 'client-test',
+    requestId: 'restart-refresh-test'
+  });
+  assert.ok(afterRestart.accessToken);
+  assert.equal(afterRestart.refreshToken, issued.refreshToken);
+
+  const afterRefreshTokens = await reloadedStore.read((state) => Object.values(state.refreshTokens));
   assert.equal(afterRefreshTokens.length, 1);
   assert.equal(afterRefreshTokens[0].brokerAccountId, account.brokerAccountId);
   assert.equal(afterRefreshTokens[0].expiresAt, null);
   assert.equal(afterRefreshTokens[0].revokedAt, null);
+
+  const refreshAudits = await reloadedStore.listAuditLog({
+    type: 'oauth_token_refresh_succeeded',
+    limit: 10
+  });
+  assert.equal(refreshAudits.length, 5);
+  assert.equal(refreshAudits[0].details.durableRefreshTokenReused, true);
+  assert.equal(refreshAudits[0].details.requestId, 'restart-refresh-test');
+
+  const metrics = await reloadedStore.getMetricsSnapshot({ hubId: 'hub-refresh-token-test' });
+  assert.equal(metrics.oauth.refreshSuccesses, 5);
+  assert.equal(metrics.oauth.refreshFailures, 0);
+  assert.ok(metrics.oauth.lastRefreshAt);
+  assert.equal(metrics.oauth.lastRefreshFailureAt, null);
+});
+
+test('Alexa token endpoint reserves invalid_grant for invalid credentials and reports transient failures as server_error', async (t) => {
+  const previousAllowedClientIds = process.env.HOMEBRAIN_ALEXA_ALLOWED_CLIENT_IDS;
+  const previousOauthClients = process.env.HOMEBRAIN_ALEXA_OAUTH_CLIENTS;
+  const previousClientSecret = process.env.HOMEBRAIN_ALEXA_OAUTH_CLIENT_SECRET;
+  process.env.HOMEBRAIN_ALEXA_ALLOWED_CLIENT_IDS = 'client-test';
+  delete process.env.HOMEBRAIN_ALEXA_OAUTH_CLIENTS;
+  process.env.HOMEBRAIN_ALEXA_OAUTH_CLIENT_SECRET = 'client-secret';
+
+  const auditRecords = [];
+  let refreshFailure = new Error('simulated broker store outage');
+  const store = {
+    refreshAccessToken: async () => {
+      throw refreshFailure;
+    },
+    listHubs: async () => [{
+      hubId: 'hub-token-errors',
+      registration: { mode: 'public' }
+    }],
+    appendAudit: async (record) => {
+      auditRecords.push(record);
+      return record;
+    }
+  };
+  const server = await listen(http.createServer(createApp({
+    store,
+    startDispatcher: false,
+    autoKickDispatcher: false
+  })));
+
+  t.after(async () => {
+    restoreEnv('HOMEBRAIN_ALEXA_ALLOWED_CLIENT_IDS', previousAllowedClientIds);
+    restoreEnv('HOMEBRAIN_ALEXA_OAUTH_CLIENTS', previousOauthClients);
+    restoreEnv('HOMEBRAIN_ALEXA_OAUTH_CLIENT_SECRET', previousClientSecret);
+    await close(server.server);
+  });
+
+  const requestRefresh = (overrides = {}) => fetch(`${server.baseUrl}/api/oauth/alexa/token`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded'
+    },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: 'client-test',
+      client_secret: 'client-secret',
+      refresh_token: 'durable-refresh-token',
+      ...overrides
+    })
+  });
+
+  const transientResponse = await requestRefresh();
+  assert.equal(transientResponse.status, 500);
+  assert.equal(transientResponse.headers.get('cache-control'), 'no-store');
+  assert.equal(transientResponse.headers.get('pragma'), 'no-cache');
+  const transientPayload = await transientResponse.json();
+  assert.equal(transientPayload.error, 'server_error');
+  assert.equal(transientPayload.error_description, 'Token exchange is temporarily unavailable');
+  assert.equal(transientPayload.error_description.includes('store outage'), false);
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(auditRecords.at(-1).type, 'oauth_token_refresh_failed');
+  assert.equal(auditRecords.at(-1).hubId, 'hub-token-errors');
+  assert.equal(auditRecords.at(-1).details.oauthError, 'server_error');
+  assert.equal(auditRecords.at(-1).details.reason, 'Token exchange is temporarily unavailable');
+  assert.equal(auditRecords.at(-1).details.transient, true);
+  assert.equal(auditRecords.at(-1).details.refreshTokenFingerprint.length, 12);
+
+  refreshFailure = new BrokerOAuthGrantError('Refresh token is invalid or expired', {
+    hubId: 'hub-token-errors',
+    brokerAccountId: 'account-token-errors'
+  });
+  const invalidGrantResponse = await requestRefresh();
+  assert.equal(invalidGrantResponse.status, 400);
+  const invalidGrantPayload = await invalidGrantResponse.json();
+  assert.equal(invalidGrantPayload.error, 'invalid_grant');
+  assert.equal(invalidGrantPayload.error_description, 'Refresh token is invalid or expired');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(auditRecords.at(-1).details.oauthError, 'invalid_grant');
+  assert.equal(auditRecords.at(-1).details.transient, false);
+  const auditCountBeforeInvalidClient = auditRecords.length;
+
+  const invalidClientResponse = await requestRefresh({
+    client_secret: 'wrong-secret'
+  });
+  assert.equal(invalidClientResponse.status, 401);
+  assert.equal(invalidClientResponse.headers.get('www-authenticate'), 'Basic realm="HomeBrain Alexa Broker"');
+  const invalidClientPayload = await invalidClientResponse.json();
+  assert.equal(invalidClientPayload.error, 'invalid_client');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(auditRecords.length, auditCountBeforeInvalidClient);
 });
 
 test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', async (t) => {
@@ -501,6 +626,8 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
     })
   });
   assert.equal(firstRefreshResponse.status, 200);
+  assert.equal(firstRefreshResponse.headers.get('cache-control'), 'no-store');
+  assert.equal(firstRefreshResponse.headers.get('pragma'), 'no-cache');
   const firstRefreshedTokens = await firstRefreshResponse.json();
   assert.notEqual(firstRefreshedTokens.access_token, tokens.access_token);
   assert.equal(firstRefreshedTokens.refresh_token, tokens.refresh_token);
@@ -520,6 +647,15 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
   const retriedRefreshTokens = await retriedRefreshResponse.json();
   assert.notEqual(retriedRefreshTokens.access_token, firstRefreshedTokens.access_token);
   assert.equal(retriedRefreshTokens.refresh_token, tokens.refresh_token);
+
+  const oauthRefreshAudits = await brokerStore.listAuditLog({
+    type: 'oauth_token_refresh_succeeded',
+    limit: 10
+  });
+  assert.equal(oauthRefreshAudits.length, 2);
+  assert.equal(oauthRefreshAudits[0].details.durableRefreshTokenReused, true);
+  assert.equal(oauthRefreshAudits[0].details.refreshTokenFingerprint.length, 12);
+  assert.ok(oauthRefreshAudits[0].details.requestId);
 
   const resolveResponse = await fetch(`${broker.baseUrl}/api/oauth/alexa/resolve`, {
     method: 'POST',

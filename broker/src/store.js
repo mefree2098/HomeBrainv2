@@ -35,6 +35,17 @@ function permissionGrantKey(brokerAccountId, eventRegion = 'NA') {
   return `${trimString(brokerAccountId)}::${trimString(eventRegion || 'NA').toUpperCase()}`;
 }
 
+class BrokerOAuthGrantError extends Error {
+  constructor(message, context = {}) {
+    super(message);
+    this.name = 'BrokerOAuthGrantError';
+    this.oauthError = 'invalid_grant';
+    this.oauthStatus = 400;
+    this.hubId = trimString(context.hubId);
+    this.brokerAccountId = trimString(context.brokerAccountId);
+  }
+}
+
 function clone(value) {
   if (value === undefined) {
     return undefined;
@@ -156,6 +167,22 @@ function ensureHubRecord(state, hubId) {
   }
 
   return state.hubs[key];
+}
+
+function appendAuditRecord(state, payload = {}) {
+  const record = {
+    auditId: randomIdentifier('hbaudit'),
+    type: trimString(payload.type) || 'info',
+    hubId: trimString(payload.hubId),
+    brokerAccountId: trimString(payload.brokerAccountId),
+    createdAt: new Date().toISOString(),
+    severity: trimString(payload.severity) || 'info',
+    details: payload.details && typeof payload.details === 'object' ? payload.details : {},
+    message: trimString(payload.message)
+  };
+  state.auditLog.push(record);
+  state.auditLog = state.auditLog.slice(-MAX_AUDIT_LOG);
+  return record;
 }
 
 function pruneExpiredEntries(state) {
@@ -518,19 +545,19 @@ class BrokerStore {
       const codeHash = sha256(trimString(code));
       const record = state.authCodes[codeHash];
       if (!record) {
-        throw new Error('Authorization code is invalid or expired');
+        throw new BrokerOAuthGrantError('Authorization code is invalid or expired');
       }
 
       if (record.consumedAt) {
-        throw new Error('Authorization code has already been used');
+        throw new BrokerOAuthGrantError('Authorization code has already been used', record);
       }
 
       if (meta.clientId && trimString(meta.clientId) !== record.clientId) {
-        throw new Error('Authorization code client mismatch');
+        throw new BrokerOAuthGrantError('Authorization code client mismatch', record);
       }
 
       if (meta.redirectUri && trimString(meta.redirectUri) !== record.redirectUri) {
-        throw new Error('Authorization code redirect URI mismatch');
+        throw new BrokerOAuthGrantError('Authorization code redirect URI mismatch', record);
       }
 
       record.consumedAt = new Date().toISOString();
@@ -601,20 +628,20 @@ class BrokerStore {
       const tokenHash = sha256(normalizedRefreshToken);
       const refreshRecord = state.refreshTokens[tokenHash];
       if (!refreshRecord) {
-        throw new Error('Refresh token is invalid or expired');
+        throw new BrokerOAuthGrantError('Refresh token is invalid or expired');
       }
 
       if (refreshRecord.revokedAt) {
-        throw new Error('Refresh token has been revoked');
+        throw new BrokerOAuthGrantError('Refresh token has been revoked', refreshRecord);
       }
 
       if (meta.clientId && trimString(meta.clientId) !== refreshRecord.clientId) {
-        throw new Error('Refresh token client mismatch');
+        throw new BrokerOAuthGrantError('Refresh token client mismatch', refreshRecord);
       }
 
       const accountLink = state.accountLinks[refreshRecord.brokerAccountId];
-      if (!accountLink) {
-        throw new Error('Linked account not found');
+      if (!accountLink || accountLink.status === 'revoked') {
+        throw new BrokerOAuthGrantError('Linked account is no longer active', refreshRecord);
       }
 
       const accessToken = randomToken(32);
@@ -644,6 +671,19 @@ class BrokerStore {
 
       accountLink.lastSeenAt = timestamp;
       accountLink.updatedAt = timestamp;
+
+      appendAuditRecord(state, {
+        type: 'oauth_token_refresh_succeeded',
+        hubId: refreshRecord.hubId,
+        brokerAccountId: refreshRecord.brokerAccountId,
+        message: 'Alexa renewed its access token with the durable refresh token',
+        details: {
+          clientId: refreshRecord.clientId,
+          requestId: trimString(meta.requestId),
+          refreshTokenFingerprint: tokenHash.slice(0, 12),
+          durableRefreshTokenReused: true
+        }
+      });
 
       return {
         accessToken,
@@ -970,21 +1010,7 @@ class BrokerStore {
   }
 
   async appendAudit(payload = {}) {
-    return this.write((state) => {
-      const record = {
-        auditId: randomIdentifier('hbaudit'),
-        type: trimString(payload.type) || 'info',
-        hubId: trimString(payload.hubId),
-        brokerAccountId: trimString(payload.brokerAccountId),
-        createdAt: new Date().toISOString(),
-        severity: trimString(payload.severity) || 'info',
-        details: payload.details && typeof payload.details === 'object' ? payload.details : {},
-        message: trimString(payload.message)
-      };
-      state.auditLog.push(record);
-      state.auditLog = state.auditLog.slice(-MAX_AUDIT_LOG);
-      return record;
-    });
+    return this.write((state) => appendAuditRecord(state, payload));
   }
 
   async listAuditLog(filters = {}) {
@@ -1031,6 +1057,14 @@ class BrokerStore {
         return oldest;
       }, null);
       const grantRefreshErrors = permissionGrants.filter((entry) => trimString(entry.lastError));
+      const oauthRefreshSuccesses = auditLog.filter((entry) => entry.type === 'oauth_token_refresh_succeeded');
+      const oauthRefreshFailures = auditLog.filter((entry) => entry.type === 'oauth_token_refresh_failed');
+      const lastOauthRefreshSuccess = oauthRefreshSuccesses
+        .slice()
+        .sort((left, right) => safeDateMs(right.createdAt) - safeDateMs(left.createdAt))[0] || null;
+      const lastOauthRefreshFailure = oauthRefreshFailures
+        .slice()
+        .sort((left, right) => safeDateMs(right.createdAt) - safeDateMs(left.createdAt))[0] || null;
       const byAuditType = {};
       auditLog.forEach((entry) => {
         const key = trimString(entry.type) || 'info';
@@ -1056,7 +1090,13 @@ class BrokerStore {
           authCodesActive: authCodes.length,
           accessTokensActive: accessTokens.filter((entry) => !entry.revokedAt).length,
           refreshTokensActive: refreshTokens.filter((entry) => !entry.revokedAt).length,
-          clientIds: Array.from(new Set(accessTokens.map((entry) => trimString(entry.clientId)).filter(Boolean))).sort()
+          clientIds: Array.from(new Set(accessTokens.map((entry) => trimString(entry.clientId)).filter(Boolean))).sort(),
+          refreshSuccesses: oauthRefreshSuccesses.length,
+          refreshFailures: oauthRefreshFailures.length,
+          lastRefreshAt: lastOauthRefreshSuccess?.createdAt || null,
+          lastRefreshFailureAt: lastOauthRefreshFailure?.createdAt || null,
+          lastRefreshFailureCode: trimString(lastOauthRefreshFailure?.details?.oauthError),
+          lastRefreshFailureReason: trimString(lastOauthRefreshFailure?.details?.reason)
         },
         permissionGrants: {
           total: permissionGrants.length,
@@ -1107,3 +1147,4 @@ module.exports.sha256 = sha256;
 module.exports.randomIdentifier = randomIdentifier;
 module.exports.permissionGrantKey = permissionGrantKey;
 module.exports.getRefreshTokenTtlSeconds = getRefreshTokenTtlSeconds;
+module.exports.BrokerOAuthGrantError = BrokerOAuthGrantError;
