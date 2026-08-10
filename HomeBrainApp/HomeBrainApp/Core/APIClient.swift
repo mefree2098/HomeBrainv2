@@ -38,7 +38,7 @@ enum HTTPMethod: String {
 final class APIClient {
     unowned let sessionStore: SessionStore
     private let urlSession: URLSession
-    private static let transientRetryDelays: [TimeInterval] = [0.75, 1.5, 3.0, 5.0]
+    private static let transientRetryDelays: [TimeInterval] = [0.75, 1.5, 3.0, 5.0, 10.0, 15.0]
 
     init(sessionStore: SessionStore, urlSession: URLSession = .shared) {
         self.sessionStore = sessionStore
@@ -101,8 +101,7 @@ final class APIClient {
         method: HTTPMethod,
         body: Any?,
         query: [URLQueryItem],
-        authorized: Bool = true,
-        hasRetried: Bool = false
+        authorized: Bool = true
     ) async throws -> Any {
         let contextID = sessionStore.sessionContextID
         let (data, _) = try await dataRequest(
@@ -111,7 +110,6 @@ final class APIClient {
             body: body,
             query: query,
             authorized: authorized,
-            hasRetried: hasRetried,
             contextID: contextID
         )
         return try parseJSONPayload(data: data)
@@ -123,8 +121,6 @@ final class APIClient {
         body: Any?,
         query: [URLQueryItem],
         authorized: Bool = true,
-        hasRetried: Bool = false,
-        transientAttempt: Int = 0,
         contextID: UUID
     ) async throws -> (Data, HTTPURLResponse) {
         try sessionStore.assertActiveContext(contextID)
@@ -132,126 +128,113 @@ final class APIClient {
             throw APIError.invalidURL
         }
 
-        var urlRequest = URLRequest(url: url)
-        urlRequest.httpMethod = method.rawValue
-        if path == "/api/auth/login" {
-            urlRequest.timeoutInterval = 15
-        }
-        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        urlRequest.cachePolicy = .reloadIgnoringLocalCacheData
-        urlRequest.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
-        urlRequest.setValue("no-cache", forHTTPHeaderField: "Pragma")
-
-        for (header, value) in sessionStore.clientHeaders {
-            urlRequest.setValue(value, forHTTPHeaderField: header)
-        }
-
-        if authorized {
-            let accessToken = try await sessionStore.validAccessToken(contextID: contextID)
-            try sessionStore.assertActiveContext(contextID)
-            urlRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
-        }
-
+        let requestBody: Data?
         if let body {
-            if JSONSerialization.isValidJSONObject(body) {
-                urlRequest.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
-            } else {
+            guard JSONSerialization.isValidJSONObject(body) else {
                 throw APIError.parsingFailed
             }
+            requestBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        } else {
+            requestBody = nil
         }
 
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await urlSession.data(for: urlRequest)
+        var didRetryAuthentication = false
+        var transientAttempt = 0
+
+        while true {
+            try Task.checkCancellation()
             try sessionStore.assertActiveContext(contextID)
-        } catch {
-            try sessionStore.assertActiveContext(contextID)
-            guard isTransientTransportError(error) else {
-                throw error
+
+            var urlRequest = URLRequest(url: url)
+            urlRequest.httpMethod = method.rawValue
+            if path == "/api/auth/login" {
+                urlRequest.timeoutInterval = 15
+            }
+            urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            urlRequest.cachePolicy = .reloadIgnoringLocalCacheData
+            urlRequest.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+            urlRequest.setValue("no-cache", forHTTPHeaderField: "Pragma")
+            urlRequest.httpBody = requestBody
+
+            for (header, value) in sessionStore.clientHeaders {
+                urlRequest.setValue(value, forHTTPHeaderField: header)
             }
 
-            sessionStore.reportTransientBackendFailure(error, path: path)
-            if shouldRetryTransientRequest(method: method, attempt: transientAttempt) {
-                try await sleepBeforeTransientRetry(attempt: transientAttempt)
-                return try await dataRequest(
-                    path: path,
-                    method: method,
-                    body: body,
-                    query: query,
-                    authorized: authorized,
-                    hasRetried: hasRetried,
-                    transientAttempt: transientAttempt + 1,
-                    contextID: contextID
-                )
+            if authorized {
+                let accessToken = try await sessionStore.validAccessToken(contextID: contextID)
+                try sessionStore.assertActiveContext(contextID)
+                urlRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
             }
 
-            throw APIError.transientBackendUnavailable(message: transientBackendMessage())
-        }
-
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw APIError.invalidResponse
-        }
-
-        let statusCode = httpResponse.statusCode
-        let parsedErrorMessage = { self.parseErrorMessage(from: self.payloadForError(from: data)) }
-
-        if isTransientHTTPStatus(statusCode) {
-            let message = parsedErrorMessage()
-            sessionStore.reportTransientBackendFailure(
-                APIError.server(statusCode: statusCode, message: message),
-                path: path
-            )
-
-            if shouldRetryTransientRequest(method: method, attempt: transientAttempt) {
-                try await sleepBeforeTransientRetry(attempt: transientAttempt)
-                return try await dataRequest(
-                    path: path,
-                    method: method,
-                    body: body,
-                    query: query,
-                    authorized: authorized,
-                    hasRetried: hasRetried,
-                    transientAttempt: transientAttempt + 1,
-                    contextID: contextID
-                )
-            }
-
-            throw APIError.transientBackendUnavailable(message: transientBackendMessage())
-        }
-
-        if statusCode == 401 || statusCode == 403,
-           authorized,
-           !hasRetried,
-           path != "/api/auth/refresh",
-           path != "/api/auth/login" {
-            try await sessionStore.refreshTokens(for: contextID)
-            try sessionStore.assertActiveContext(contextID)
-            return try await dataRequest(
-                path: path,
-                method: method,
-                body: body,
-                query: query,
-                authorized: authorized,
-                hasRetried: true,
-                transientAttempt: transientAttempt,
-                contextID: contextID
-            )
-        }
-
-        guard (200..<300).contains(statusCode) else {
-            let message = parsedErrorMessage()
-            if statusCode == 401 {
-                if authorized {
-                    sessionStore.expireAuthentication(message: message)
+            let data: Data
+            let response: URLResponse
+            do {
+                (data, response) = try await urlSession.data(for: urlRequest)
+                try sessionStore.assertActiveContext(contextID)
+            } catch {
+                try sessionStore.assertActiveContext(contextID)
+                guard isTransientTransportError(error) else {
+                    throw error
                 }
-                throw APIError.unauthorized
-            }
-            throw APIError.server(statusCode: statusCode, message: message)
-        }
 
-        sessionStore.reportBackendRequestSucceeded()
-        return (data, httpResponse)
+                sessionStore.reportTransientBackendFailure(error, path: path)
+                guard shouldAutomaticallyRetryTransientRequest(path: path, method: method) else {
+                    throw APIError.transientBackendUnavailable(message: transientBackendMessage())
+                }
+
+                try await sleepBeforeTransientRetry(attempt: transientAttempt)
+                transientAttempt = nextTransientRetryAttempt(after: transientAttempt)
+                continue
+            }
+
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw APIError.invalidResponse
+            }
+
+            let statusCode = httpResponse.statusCode
+            let parsedErrorMessage = { self.parseErrorMessage(from: self.payloadForError(from: data)) }
+
+            if isTransientHTTPStatus(statusCode) {
+                let message = parsedErrorMessage()
+                sessionStore.reportTransientBackendFailure(
+                    APIError.server(statusCode: statusCode, message: message),
+                    path: path
+                )
+
+                guard shouldAutomaticallyRetryTransientRequest(path: path, method: method) else {
+                    throw APIError.transientBackendUnavailable(message: transientBackendMessage())
+                }
+
+                try await sleepBeforeTransientRetry(attempt: transientAttempt)
+                transientAttempt = nextTransientRetryAttempt(after: transientAttempt)
+                continue
+            }
+
+            if statusCode == 401 || statusCode == 403,
+               authorized,
+               !didRetryAuthentication,
+               path != "/api/auth/refresh",
+               path != "/api/auth/login" {
+                try await sessionStore.refreshTokens(for: contextID)
+                try sessionStore.assertActiveContext(contextID)
+                didRetryAuthentication = true
+                continue
+            }
+
+            guard (200..<300).contains(statusCode) else {
+                let message = parsedErrorMessage()
+                if statusCode == 401 {
+                    if authorized {
+                        sessionStore.expireAuthentication(message: message)
+                    }
+                    throw APIError.unauthorized
+                }
+                throw APIError.server(statusCode: statusCode, message: message)
+            }
+
+            sessionStore.reportBackendRequestSucceeded()
+            return (data, httpResponse)
+        }
     }
 
     private func buildURL(path: String, query: [URLQueryItem]) -> URL? {
@@ -356,8 +339,14 @@ final class APIClient {
         statusCode == 408 || statusCode == 502 || statusCode == 503 || statusCode == 504
     }
 
-    private func shouldRetryTransientRequest(method: HTTPMethod, attempt: Int) -> Bool {
-        method == .get && attempt < Self.transientRetryDelays.count
+    private func shouldAutomaticallyRetryTransientRequest(path: String, method: HTTPMethod) -> Bool {
+        // The server deliberately reuses native-app refresh tokens, so repeating this
+        // request after a lost response is safe just like repeating a read.
+        method == .get || (method == .post && path == "/api/auth/refresh")
+    }
+
+    private func nextTransientRetryAttempt(after attempt: Int) -> Int {
+        min(attempt + 1, Self.transientRetryDelays.count - 1)
     }
 
     private func sleepBeforeTransientRetry(attempt: Int) async throws {

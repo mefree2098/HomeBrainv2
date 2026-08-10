@@ -4,6 +4,7 @@ import UIKit
 struct RootView: View {
     @EnvironmentObject private var session: SessionStore
     @EnvironmentObject private var uiPreview: UIPreviewStore
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage("homebrain.ios.theme-mode") private var themeModeRaw = HBThemeMode.system.rawValue
 
     var body: some View {
@@ -22,14 +23,14 @@ struct RootView: View {
         .preferredColorScheme((HBThemeMode(rawValue: themeModeRaw) ?? .system).colorScheme)
         .tint(HBPalette.accentBlue)
         .task {
-            await session.bootstrap()
+            await restoreSessionAndRecovery()
             applyPreviewOrientationIfNeeded()
         }
         .onAppear {
             applyPreviewOrientationIfNeeded()
         }
         .onChange(of: session.backendRecoveryGeneration) { _, generation in
-            guard generation > 0, !session.isAuthenticated else {
+            guard generation > 0 else {
                 return
             }
 
@@ -42,6 +43,18 @@ struct RootView: View {
                 uiPreview.exit()
             }
         }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active else { return }
+
+            Task {
+                await restoreSessionAndRecovery()
+            }
+        }
+    }
+
+    private func restoreSessionAndRecovery() async {
+        await session.bootstrap()
+        await session.resumeBackendRecoveryIfNeeded()
     }
 
     private func applyPreviewOrientationIfNeeded() {
