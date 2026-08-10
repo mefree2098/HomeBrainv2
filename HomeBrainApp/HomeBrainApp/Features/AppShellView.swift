@@ -401,6 +401,7 @@ struct AppShellView: View {
                 .padding(.top, topBarHeight + topBarBottomSpacing + compactTopBarClearance)
 
                 topBar
+                    .dynamicTypeSize(.large)
                     .padding(.top, compactTopBarClearance)
                     .frame(height: topBarHeight + compactTopBarClearance, alignment: .bottom)
                     .frame(maxWidth: .infinity, alignment: .bottom)
@@ -963,12 +964,14 @@ struct AppShellView: View {
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
 
-                    Text("OS")
-                        .font(HBTypography.display(size: 8, weight: .bold))
-                        .textCase(.uppercase)
-                        .tracking(2.0)
-                        .baselineOffset(compact ? 3 : 4)
-                        .foregroundStyle(HBPalette.textMuted)
+                    if !ultraCompact {
+                        Text("OS")
+                            .font(HBTypography.display(size: 8, weight: .bold))
+                            .textCase(.uppercase)
+                            .tracking(2.0)
+                            .baselineOffset(compact ? 3 : 4)
+                            .foregroundStyle(HBPalette.textMuted)
+                    }
                 }
 
                 Text(subtitle)
@@ -980,7 +983,7 @@ struct AppShellView: View {
         }
         .frame(
             minWidth: ultraCompact ? 0 : (usesPortraitPhoneTopBar ? 132 : (isCompact ? 152 : (compact ? 178 : 208))),
-            maxWidth: ultraCompact ? 158 : .infinity,
+            maxWidth: ultraCompact ? (usesPortraitPhoneTopBar ? 190 : 158) : .infinity,
             alignment: .leading
         )
         .layoutPriority(2)
@@ -1728,7 +1731,7 @@ struct AppShellView: View {
             }
             return AnyView(UserProfilesView())
         case .notifications:
-            return AnyView(NotificationsView())
+            return AnyView(NotificationsView(previewMode: previewMode))
         case .settings:
             if previewMode {
                 return AnyView(SettingsView(previewMode: true))
