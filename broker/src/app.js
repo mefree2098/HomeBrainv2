@@ -1066,7 +1066,7 @@ function createApp(options = {}) {
       });
     } catch (error) {
       const failure = classifyOAuthTokenError(error);
-      console.warn(`[broker] Alexa token exchange failed (${failure.oauthError}): ${error.message}`);
+      console.warn('[broker] Alexa token exchange failed; classified details were recorded in the broker audit trail.');
 
       if (grantType === 'refresh_token' && clientAuthenticated) {
         appendOAuthRefreshFailureAudit(store, {
