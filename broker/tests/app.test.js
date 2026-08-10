@@ -523,11 +523,12 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
   const previousAllowedRedirectUris = process.env.HOMEBRAIN_ALEXA_ALLOWED_REDIRECT_URIS;
   const previousAllowedClientIds = process.env.HOMEBRAIN_ALEXA_ALLOWED_CLIENT_IDS;
   const previousOauthClientSecret = process.env.HOMEBRAIN_ALEXA_OAUTH_CLIENT_SECRET;
+  const alexaRedirectUri = 'https://pitangui.amazon.com/api/skill/link/M1MYQJ82WOQ4RY';
   process.env.HOMEBRAIN_ALEXA_EVENT_CLIENT_ID = 'event-client-id';
   process.env.HOMEBRAIN_ALEXA_EVENT_CLIENT_SECRET = 'event-client-secret';
   process.env.HOMEBRAIN_ALEXA_LWA_TOKEN_URL = `${amazon.baseUrl}/auth/o2/token`;
   process.env.HOMEBRAIN_ALEXA_EVENT_GATEWAY_URL = `${amazon.baseUrl}/v3/events`;
-  process.env.HOMEBRAIN_ALEXA_ALLOWED_REDIRECT_URIS = 'http://127.0.0.1/callback';
+  process.env.HOMEBRAIN_ALEXA_ALLOWED_REDIRECT_URIS = alexaRedirectUri;
   process.env.HOMEBRAIN_ALEXA_ALLOWED_CLIENT_IDS = 'client-test';
   process.env.HOMEBRAIN_ALEXA_OAUTH_CLIENT_SECRET = 'client-test-secret';
 
@@ -573,6 +574,18 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
   assert.equal(registerPayload.success, true);
   assert.equal(registerPayload.hub.hubId, 'hub-test');
 
+  const authorizePageResponse = await fetch(`${broker.baseUrl}/api/oauth/alexa/authorize?${new URLSearchParams({
+    response_type: 'code',
+    client_id: 'client-test',
+    redirect_uri: alexaRedirectUri,
+    scope: 'smart_home',
+    state: 'state-123'
+  })}`);
+  assert.equal(authorizePageResponse.status, 200);
+  const authorizePageCsp = authorizePageResponse.headers.get('content-security-policy');
+  assert.match(authorizePageCsp, /form-action 'self' https:\/\/pitangui\.amazon\.com;/);
+  assert.doesNotMatch(authorizePageCsp, /form-action[^;]*\*/);
+
   const authorizeResponse = await fetch(`${broker.baseUrl}/api/oauth/alexa/authorize`, {
     method: 'POST',
     redirect: 'manual',
@@ -582,7 +595,7 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
     body: new URLSearchParams({
       response_type: 'code',
       client_id: 'client-test',
-      redirect_uri: 'http://127.0.0.1/callback',
+      redirect_uri: alexaRedirectUri,
       scope: 'smart_home',
       state: 'state-123',
       hubRef: 'hub-test',
@@ -592,6 +605,10 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
   });
 
   assert.equal(authorizeResponse.status, 302);
+  assert.match(
+    authorizeResponse.headers.get('content-security-policy'),
+    /form-action 'self' https:\/\/pitangui\.amazon\.com;/
+  );
   const redirectLocation = authorizeResponse.headers.get('location');
   assert.ok(redirectLocation);
 
@@ -609,7 +626,7 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
       grant_type: 'authorization_code',
       client_id: 'client-test',
       client_secret: 'client-test-secret',
-      redirect_uri: 'http://127.0.0.1/callback',
+      redirect_uri: alexaRedirectUri,
       code: authorizationCode
     })
   });
@@ -1301,6 +1318,9 @@ test('broker rejects unauthenticated event access and invalid redirect URIs', as
   });
 
   assert.equal(invalidAuthorizeResponse.status, 400);
+  const invalidAuthorizeCsp = invalidAuthorizeResponse.headers.get('content-security-policy');
+  assert.match(invalidAuthorizeCsp, /form-action 'self';/);
+  assert.doesNotMatch(invalidAuthorizeCsp, /evil\.example/);
 });
 
 test('closeServerAndExit closes the server before exiting nonzero', async (t) => {
