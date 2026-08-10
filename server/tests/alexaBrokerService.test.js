@@ -111,6 +111,7 @@ test('updateConfig stores managed HomeBrain Alexa command bridge settings', asyn
   });
 
   service.getConfig = async () => config;
+  service.isManagedRuntimeAlive = () => true;
   service.getStatus = async () => ({
     alexaCommandProvider: config.alexaCommandProvider,
     alexaCommandSessionConfigured: Boolean(config.alexaCommandSessionCookie || config.alexaCommandSessionData)
@@ -129,6 +130,7 @@ test('updateConfig stores managed HomeBrain Alexa command bridge settings', asyn
   });
 
   assert.equal(response.success, true);
+  assert.equal(response.restartRequired, true);
   assert.equal(config.alexaCommandProvider, 'homebrain');
   assert.equal(config.alexaCommandDefaultType, 'speak');
   assert.equal(config.alexaCommandSessionCookie, 'new-cookie');

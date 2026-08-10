@@ -48,10 +48,22 @@ function buildAcceptGrantResponse(directive = {}) {
   return buildEventEnvelope({
     header: responseHeader({
       namespace: 'Alexa.Authorization',
-      name: 'AcceptGrant.Response',
-      messageId: directive?.directive?.header?.messageId
+      name: 'AcceptGrant.Response'
     }),
     payload: {}
+  });
+}
+
+function buildAcceptGrantErrorResponse({ message = 'Failed to store Alexa event-gateway authorization' } = {}) {
+  return buildEventEnvelope({
+    header: responseHeader({
+      namespace: 'Alexa.Authorization',
+      name: 'ErrorResponse'
+    }),
+    payload: {
+      type: 'ACCEPT_GRANT_FAILED',
+      message
+    }
   });
 }
 
@@ -59,8 +71,7 @@ function buildDiscoveryResponse({ directive = {}, endpoints = [] } = {}) {
   return buildEventEnvelope({
     header: responseHeader({
       namespace: 'Alexa.Discovery',
-      name: 'Discover.Response',
-      messageId: directive?.directive?.header?.messageId
+      name: 'Discover.Response'
     }),
     payload: {
       endpoints: Array.isArray(endpoints) ? endpoints : []
@@ -75,7 +86,6 @@ function buildStateReportResponse({ directive = {}, endpoint = null, properties 
       header: responseHeader({
         namespace: 'Alexa',
         name: 'StateReport',
-        messageId: directive?.directive?.header?.messageId,
         correlationToken: directive?.directive?.header?.correlationToken
       }),
       endpoint,
@@ -91,7 +101,6 @@ function buildControlResponse({ directive = {}, endpoint = null, properties = []
       header: responseHeader({
         namespace: 'Alexa',
         name: 'Response',
-        messageId: directive?.directive?.header?.messageId,
         correlationToken: directive?.directive?.header?.correlationToken
       }),
       endpoint,
@@ -113,7 +122,6 @@ function buildSceneLifecycleResponse({
       header: responseHeader({
         namespace: 'Alexa.SceneController',
         name: lifecycleName,
-        messageId: directive?.directive?.header?.messageId,
         correlationToken: directive?.directive?.header?.correlationToken
       }),
       endpoint,
@@ -146,7 +154,6 @@ function buildErrorResponse({ directive = {}, type = 'INTERNAL_ERROR', message =
     header: responseHeader({
       namespace: 'Alexa',
       name: 'ErrorResponse',
-      messageId: directive?.directive?.header?.messageId,
       correlationToken: directive?.directive?.header?.correlationToken
     }),
     endpoint: directive?.directive?.endpoint || null,
@@ -289,6 +296,7 @@ function buildChangeReport({ endpoint = null, properties = [], causeType = 'PHYS
 
 module.exports = {
   buildAcceptGrantResponse,
+  buildAcceptGrantErrorResponse,
   buildAddOrUpdateReport,
   buildChangeReport,
   buildControlResponse,

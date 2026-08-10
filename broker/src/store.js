@@ -3,11 +3,24 @@ const fs = require('fs/promises');
 const path = require('path');
 
 const DEFAULT_AUTH_CODE_TTL_MS = Math.max(60 * 1000, Number(process.env.HOMEBRAIN_ALEXA_AUTH_CODE_TTL_MS || 5 * 60 * 1000));
+const DEFAULT_AUTH_CODE_REPLAY_TTL_MS = Math.max(
+  60 * 1000,
+  Number(process.env.HOMEBRAIN_ALEXA_AUTH_CODE_REPLAY_TTL_MS || 5 * 60 * 1000)
+);
 const DEFAULT_ACCESS_TOKEN_TTL_SECONDS = Math.max(300, Number(process.env.HOMEBRAIN_ALEXA_ACCESS_TOKEN_TTL_SECONDS || 60 * 60));
 const DEFAULT_REFRESH_TOKEN_TTL_SECONDS = 0;
 const MAX_EVENT_QUEUE = 500;
 const MAX_AUDIT_LOG = 500;
 const STORE_BACKUP_SUFFIX = '.bak';
+const DEFAULT_EVENT_PROCESSING_LEASE_MS = Math.max(
+  30 * 1000,
+  Number(process.env.HOMEBRAIN_ALEXA_EVENT_PROCESSING_LEASE_MS || 2 * 60 * 1000)
+);
+const DEFAULT_PERSIST_ATTEMPTS = Math.max(
+  1,
+  Number(process.env.HOMEBRAIN_ALEXA_STORE_PERSIST_ATTEMPTS || 3)
+);
+const TERMINAL_EVENT_STATUSES = new Set(['delivered', 'failed', 'skipped']);
 
 function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -21,6 +34,16 @@ function uniqueStrings(values = []) {
 
 function sha256(value) {
   return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('hex');
+}
+
+function pkceS256(value) {
+  return crypto.createHash('sha256').update(String(value || ''), 'utf8').digest('base64url');
+}
+
+function secureEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left || ''), 'utf8');
+  const rightBuffer = Buffer.from(String(right || ''), 'utf8');
+  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
 }
 
 function randomToken(size = 32) {
@@ -84,7 +107,7 @@ function getRefreshTokenExpiresAt(now = Date.now()) {
 
 function defaultState() {
   return {
-    version: 1,
+    version: 3,
     hubs: {},
     accountLinks: {},
     authCodes: {},
@@ -111,6 +134,7 @@ function normalizeStoreState(value) {
   state.permissionGrants = state.permissionGrants && typeof state.permissionGrants === 'object' && !Array.isArray(state.permissionGrants) ? state.permissionGrants : {};
   state.eventQueue = Array.isArray(state.eventQueue) ? state.eventQueue : [];
   state.auditLog = Array.isArray(state.auditLog) ? state.auditLog : [];
+  state.version = Math.max(3, Number(state.version || 0));
 
   return state;
 }
@@ -185,12 +209,34 @@ function appendAuditRecord(state, payload = {}) {
   return record;
 }
 
+function compactEventQueue(state, { enforceLimit = false } = {}) {
+  const queue = Array.isArray(state.eventQueue) ? state.eventQueue : [];
+  while (queue.length > MAX_EVENT_QUEUE) {
+    const terminalIndex = queue.findIndex((entry) => TERMINAL_EVENT_STATUSES.has(trimString(entry?.status)));
+    if (terminalIndex < 0) {
+      if (enforceLimit) {
+        throw new Error(`Alexa event queue capacity of ${MAX_EVENT_QUEUE} active events has been reached`);
+      }
+      break;
+    }
+    queue.splice(terminalIndex, 1);
+  }
+  state.eventQueue = queue;
+}
+
 function pruneExpiredEntries(state) {
   const now = Date.now();
 
   Object.keys(state.authCodes || {}).forEach((key) => {
     const entry = state.authCodes[key];
-    if (!entry || new Date(entry.expiresAt || 0).getTime() <= now || entry.consumedAt) {
+    const expiresAt = safeDateMs(entry?.expiresAt);
+    const replayExpiresAt = safeDateMs(entry?.replayExpiresAt)
+      || (safeDateMs(entry?.consumedAt) + DEFAULT_AUTH_CODE_REPLAY_TTL_MS);
+    if (
+      !entry
+      || (!entry.consumedAt && expiresAt <= now)
+      || (entry.consumedAt && replayExpiresAt <= now)
+    ) {
       delete state.authCodes[key];
     }
   });
@@ -209,15 +255,215 @@ function pruneExpiredEntries(state) {
     }
   });
 
-  Object.keys(state.permissionGrants || {}).forEach((key) => {
-    const entry = state.permissionGrants[key];
-    if (entry && entry.revokedAt) {
-      delete state.permissionGrants[key];
+  const refreshBackedAccountIds = new Set(Object.values(state.refreshTokens || {})
+    .filter((entry) => entry && !entry.revokedAt)
+    .map((entry) => entry.brokerAccountId));
+  Object.values(state.accountLinks || {}).forEach((account) => {
+    if (!account) {
+      return;
+    }
+    if (account.status === 'linked' && !refreshBackedAccountIds.has(account.brokerAccountId)) {
+      account.status = 'error';
+      account.metadata = {
+        ...(account.metadata || {}),
+        credentialError: 'missing_refresh_token',
+        credentialErrorAt: account.metadata?.credentialErrorAt || new Date(now).toISOString()
+      };
+      account.updatedAt = new Date(now).toISOString();
+    } else if (
+      account.status === 'error'
+      && account.metadata?.credentialError === 'missing_refresh_token'
+      && refreshBackedAccountIds.has(account.brokerAccountId)
+    ) {
+      account.status = 'linked';
+      account.metadata = {
+        ...(account.metadata || {}),
+        credentialError: '',
+        credentialRecoveredAt: new Date(now).toISOString()
+      };
+      account.updatedAt = new Date(now).toISOString();
     }
   });
 
-  state.eventQueue = (Array.isArray(state.eventQueue) ? state.eventQueue : []).slice(-MAX_EVENT_QUEUE);
+  // Keep revoked and errored permission grants as durable diagnostics. Removing
+  // them made a failed relink look as though AcceptGrant had never arrived.
+  compactEventQueue(state);
   state.auditLog = (Array.isArray(state.auditLog) ? state.auditLog : []).slice(-MAX_AUDIT_LOG);
+}
+
+function normalizeAccountStatus(value, fallback = 'linked') {
+  const normalized = trimString(value);
+  return ['pending', 'linked', 'revoked', 'error'].includes(normalized) ? normalized : fallback;
+}
+
+function upsertAccountLinkRecord(state, payload = {}) {
+  const timestamp = new Date().toISOString();
+  const hub = ensureHubRecord(state, payload.hubId);
+  const brokerAccountId = trimString(payload.brokerAccountId) || randomIdentifier('hbacct');
+  const existing = state.accountLinks[brokerAccountId] || {};
+  const status = normalizeAccountStatus(payload.status, normalizeAccountStatus(existing.status, 'linked'));
+  const has = (key) => Object.prototype.hasOwnProperty.call(payload, key);
+
+  const next = {
+    brokerAccountId,
+    hubId: hub.hubId,
+    alexaUserId: has('alexaUserId') ? trimString(payload.alexaUserId) : trimString(existing.alexaUserId),
+    alexaAccountId: has('alexaAccountId') ? trimString(payload.alexaAccountId) : trimString(existing.alexaAccountId),
+    alexaHouseholdId: has('alexaHouseholdId') ? trimString(payload.alexaHouseholdId) : trimString(existing.alexaHouseholdId),
+    locale: has('locale') ? (trimString(payload.locale) || 'en-US') : (trimString(existing.locale) || 'en-US'),
+    status,
+    permissions: uniqueStrings(has('permissions') ? payload.permissions : existing.permissions || []),
+    acceptedGrantAt: has('acceptedGrantAt') ? payload.acceptedGrantAt : (existing.acceptedGrantAt || null),
+    linkedAt: status === 'linked'
+      ? (has('linkedAt') ? (payload.linkedAt || existing.linkedAt || timestamp) : (existing.linkedAt || timestamp))
+      : (has('linkedAt') ? payload.linkedAt : (existing.linkedAt || null)),
+    lastDiscoveryAt: has('lastDiscoveryAt') ? payload.lastDiscoveryAt : (existing.lastDiscoveryAt || null),
+    lastSeenAt: has('lastSeenAt') ? payload.lastSeenAt : (existing.lastSeenAt || timestamp),
+    metadata: payload.metadata && typeof payload.metadata === 'object'
+      ? { ...(existing.metadata || {}), ...payload.metadata }
+      : (existing.metadata || {}),
+    createdAt: existing.createdAt || timestamp,
+    updatedAt: timestamp
+  };
+
+  state.accountLinks[brokerAccountId] = next;
+  hub.updatedAt = timestamp;
+  return next;
+}
+
+function createAuthorizationCodeRecord(state, payload = {}) {
+  const brokerAccountId = trimString(payload.brokerAccountId);
+  const accountLink = state.accountLinks[brokerAccountId];
+  if (!accountLink) {
+    throw new Error('Alexa account authorization was not found');
+  }
+
+  const code = randomToken(24);
+  const codeHash = sha256(code);
+  const timestamp = new Date();
+  const codeChallenge = trimString(payload.codeChallenge);
+  const codeChallengeMethod = trimString(payload.codeChallengeMethod);
+  state.authCodes[codeHash] = {
+    codeHash,
+    brokerAccountId,
+    hubId: accountLink.hubId,
+    clientId: trimString(payload.clientId),
+    redirectUri: trimString(payload.redirectUri),
+    scopes: uniqueStrings(payload.scopes || ['smart_home']),
+    locale: trimString(payload.locale) || accountLink.locale || 'en-US',
+    codeChallenge,
+    codeChallengeMethod: codeChallenge ? codeChallengeMethod : '',
+    createdAt: timestamp.toISOString(),
+    expiresAt: new Date(timestamp.getTime() + DEFAULT_AUTH_CODE_TTL_MS).toISOString(),
+    consumedAt: null,
+    metadata: payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}
+  };
+
+  return {
+    code,
+    expiresAt: state.authCodes[codeHash].expiresAt,
+    record: state.authCodes[codeHash]
+  };
+}
+
+function validateAuthorizationCodeRecord(state, code, meta = {}, options = {}) {
+  const codeHash = sha256(trimString(code));
+  const record = state.authCodes[codeHash];
+  if (!record) {
+    throw new BrokerOAuthGrantError('Authorization code is invalid or expired', record || {});
+  }
+  const replayExpiresAt = safeDateMs(record.replayExpiresAt)
+    || (safeDateMs(record.consumedAt) + DEFAULT_AUTH_CODE_REPLAY_TTL_MS);
+  if ((!record.consumedAt && safeDateMs(record.expiresAt) <= Date.now())
+    || (record.consumedAt && replayExpiresAt <= Date.now())) {
+    throw new BrokerOAuthGrantError('Authorization code is invalid or expired', record);
+  }
+  if (meta.clientId && trimString(meta.clientId) !== record.clientId) {
+    throw new BrokerOAuthGrantError('Authorization code client mismatch', record);
+  }
+  if (meta.redirectUri && trimString(meta.redirectUri) !== record.redirectUri) {
+    throw new BrokerOAuthGrantError('Authorization code redirect URI mismatch', record);
+  }
+
+  const codeChallenge = trimString(record.codeChallenge);
+  if (codeChallenge) {
+    const verifier = trimString(meta.codeVerifier);
+    if (!verifier) {
+      throw new BrokerOAuthGrantError('PKCE code_verifier is required', record);
+    }
+    if (!/^[A-Za-z0-9._~-]{43,128}$/.test(verifier)) {
+      throw new BrokerOAuthGrantError('PKCE code_verifier is invalid', record);
+    }
+    if (record.codeChallengeMethod !== 'S256' || !secureEqual(pkceS256(verifier), codeChallenge)) {
+      throw new BrokerOAuthGrantError('PKCE code_verifier is invalid', record);
+    }
+  }
+
+  if (record.consumedAt && options.allowConsumed !== true) {
+    throw new BrokerOAuthGrantError('Authorization code has already been used', record);
+  }
+
+  return record;
+}
+
+function issueTokensInState(state, payload = {}) {
+  const brokerAccountId = trimString(payload.brokerAccountId);
+  const accountLink = state.accountLinks[brokerAccountId];
+  if (!accountLink || accountLink.status === 'revoked') {
+    throw new BrokerOAuthGrantError('Linked account is no longer active', {
+      brokerAccountId,
+      hubId: accountLink?.hubId
+    });
+  }
+
+  const accessToken = randomToken(32);
+  const refreshToken = randomToken(32);
+  const accessTokenHash = sha256(accessToken);
+  const refreshTokenHash = sha256(refreshToken);
+  const now = Date.now();
+  const scopes = uniqueStrings(payload.scopes || ['smart_home']);
+  const timestamp = new Date(now).toISOString();
+
+  state.accessTokens[accessTokenHash] = {
+    tokenHash: accessTokenHash,
+    brokerAccountId,
+    hubId: accountLink.hubId,
+    clientId: trimString(payload.clientId),
+    scopes,
+    locale: trimString(payload.locale) || accountLink.locale || 'en-US',
+    createdAt: timestamp,
+    lastUsedAt: timestamp,
+    expiresAt: new Date(now + DEFAULT_ACCESS_TOKEN_TTL_SECONDS * 1000).toISOString(),
+    revokedAt: null
+  };
+
+  state.refreshTokens[refreshTokenHash] = {
+    tokenHash: refreshTokenHash,
+    brokerAccountId,
+    hubId: accountLink.hubId,
+    clientId: trimString(payload.clientId),
+    scopes,
+    locale: trimString(payload.locale) || accountLink.locale || 'en-US',
+    createdAt: timestamp,
+    lastUsedAt: timestamp,
+    expiresAt: getRefreshTokenExpiresAt(now),
+    revokedAt: null
+  };
+
+  accountLink.status = 'linked';
+  accountLink.linkedAt = accountLink.linkedAt || timestamp;
+  accountLink.lastSeenAt = timestamp;
+  accountLink.updatedAt = timestamp;
+
+  return {
+    accessToken,
+    refreshToken,
+    tokenType: 'bearer',
+    expiresIn: DEFAULT_ACCESS_TOKEN_TTL_SECONDS,
+    scope: scopes.join(' '),
+    brokerAccountId,
+    hubId: accountLink.hubId
+  };
 }
 
 class BrokerStore {
@@ -229,6 +475,12 @@ class BrokerStore {
     this.initialized = Boolean(options.state);
     this.initializing = null;
     this.pending = Promise.resolve();
+    this.lastPersistence = {
+      lastSuccessAt: null,
+      lastErrorAt: null,
+      lastError: '',
+      backupError: ''
+    };
   }
 
   getBackupFilePath() {
@@ -269,6 +521,7 @@ class BrokerStore {
       try {
         this.state = await this.readStateFile(this.getBackupFilePath());
         await this.persist({
+          state: this.state,
           skipBackupRefresh: true
         });
       } catch (backupError) {
@@ -281,6 +534,7 @@ class BrokerStore {
 
         this.state = defaultState();
         await this.persist({
+          state: this.state,
           allowEmptyOverwrite: true,
           skipBackupRefresh: true
         });
@@ -292,7 +546,8 @@ class BrokerStore {
   }
 
   async persist(options = {}) {
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
+    const stateToPersist = normalizeStoreState(clone(options.state || this.state));
+    await fs.mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
 
     let existingState = null;
     try {
@@ -307,16 +562,53 @@ class BrokerStore {
       }
     }
 
-    if (options.allowEmptyOverwrite !== true && shouldRefuseEmptyOverwrite(existingState, this.state)) {
+    if (options.allowEmptyOverwrite !== true && shouldRefuseEmptyOverwrite(existingState, stateToPersist)) {
       throw new Error('Refusing to overwrite non-empty Alexa broker store with an empty hub state');
     }
 
-    const temporaryPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
-    await fs.writeFile(temporaryPath, JSON.stringify(normalizeStoreState(this.state), null, 2), 'utf8');
-    await fs.rename(temporaryPath, this.filePath);
+    const serialized = JSON.stringify(stateToPersist, null, 2);
+    let persisted = false;
+    let lastError = null;
+    for (let attempt = 1; attempt <= DEFAULT_PERSIST_ATTEMPTS; attempt += 1) {
+      const temporaryPath = `${this.filePath}.${process.pid}.${Date.now()}.${attempt}.tmp`;
+      try {
+        const handle = await fs.open(temporaryPath, 'w', 0o600);
+        try {
+          await handle.writeFile(serialized, 'utf8');
+          await handle.sync();
+        } finally {
+          await handle.close();
+        }
+        await fs.rename(temporaryPath, this.filePath);
+        await fs.chmod(this.filePath, 0o600).catch(() => {});
+        persisted = true;
+        break;
+      } catch (error) {
+        lastError = error;
+        await fs.unlink(temporaryPath).catch(() => {});
+        if (attempt < DEFAULT_PERSIST_ATTEMPTS) {
+          await new Promise((resolve) => setTimeout(resolve, attempt * 25));
+        }
+      }
+    }
+
+    if (!persisted) {
+      this.lastPersistence.lastErrorAt = new Date().toISOString();
+      this.lastPersistence.lastError = lastError?.message || 'Unknown broker store persistence failure';
+      throw lastError || new Error(this.lastPersistence.lastError);
+    }
+
+    this.lastPersistence.lastSuccessAt = new Date().toISOString();
+    this.lastPersistence.lastError = '';
 
     if (options.skipBackupRefresh !== true) {
-      await fs.copyFile(this.filePath, this.getBackupFilePath()).catch(() => {});
+      try {
+        await fs.copyFile(this.filePath, this.getBackupFilePath());
+        await fs.chmod(this.getBackupFilePath(), 0o600).catch(() => {});
+        this.lastPersistence.backupError = '';
+      } catch (error) {
+        this.lastPersistence.backupError = error.message;
+      }
     }
   }
 
@@ -328,19 +620,61 @@ class BrokerStore {
 
   async read(task) {
     await this.init();
-    pruneExpiredEntries(this.state);
-    return clone(await task(this.state));
+    const snapshot = normalizeStoreState(clone(this.state));
+    pruneExpiredEntries(snapshot);
+    return clone(await task(snapshot));
   }
 
   async write(task) {
     return this.runExclusive(async () => {
       await this.init();
-      pruneExpiredEntries(this.state);
-      const result = await task(this.state);
-      pruneExpiredEntries(this.state);
-      await this.persist();
+      const workingState = normalizeStoreState(clone(this.state));
+      pruneExpiredEntries(workingState);
+      const result = await task(workingState);
+      pruneExpiredEntries(workingState);
+      await this.persist({ state: workingState });
+      this.state = workingState;
       return clone(result);
     });
+  }
+
+  async getStorageHealth() {
+    await this.init();
+    const inspect = async (filePath) => {
+      try {
+        const [state, stat] = await Promise.all([
+          this.readStateFile(filePath),
+          fs.stat(filePath)
+        ]);
+        return {
+          available: true,
+          valid: true,
+          bytes: stat.size,
+          modifiedAt: stat.mtime.toISOString(),
+          records: persistentRecordCounts(state),
+          error: ''
+        };
+      } catch (error) {
+        return {
+          available: error.code !== 'ENOENT',
+          valid: false,
+          bytes: 0,
+          modifiedAt: null,
+          records: persistentRecordCounts(),
+          error: error.code === 'ENOENT' ? 'missing' : error.message
+        };
+      }
+    };
+
+    const [primary, backup] = await Promise.all([
+      inspect(this.filePath),
+      inspect(this.getBackupFilePath())
+    ]);
+    return {
+      primary,
+      backup,
+      ...clone(this.lastPersistence)
+    };
   }
 
   buildHubView(state, hubId) {
@@ -431,40 +765,7 @@ class BrokerStore {
   }
 
   async createAccountLink(payload = {}) {
-    return this.write((state) => {
-      const timestamp = new Date().toISOString();
-      const hub = ensureHubRecord(state, payload.hubId);
-      const brokerAccountId = trimString(payload.brokerAccountId) || randomIdentifier('hbacct');
-      const existing = state.accountLinks[brokerAccountId] || {};
-
-      const next = {
-        brokerAccountId,
-        hubId: hub.hubId,
-        alexaUserId: trimString(payload.alexaUserId),
-        alexaAccountId: trimString(payload.alexaAccountId),
-        alexaHouseholdId: trimString(payload.alexaHouseholdId),
-        locale: trimString(payload.locale) || 'en-US',
-        status: trimString(payload.status) === 'revoked'
-          ? 'revoked'
-          : trimString(payload.status) === 'pending'
-            ? 'pending'
-            : 'linked',
-        permissions: uniqueStrings(payload.permissions || existing.permissions || []),
-        acceptedGrantAt: payload.acceptedGrantAt || existing.acceptedGrantAt || null,
-        linkedAt: existing.linkedAt || timestamp,
-        lastDiscoveryAt: payload.lastDiscoveryAt || existing.lastDiscoveryAt || null,
-        lastSeenAt: payload.lastSeenAt || existing.lastSeenAt || timestamp,
-        metadata: payload.metadata && typeof payload.metadata === 'object'
-          ? { ...(existing.metadata || {}), ...payload.metadata }
-          : (existing.metadata || {}),
-        createdAt: existing.createdAt || timestamp,
-        updatedAt: timestamp
-      };
-
-      state.accountLinks[brokerAccountId] = next;
-      hub.updatedAt = timestamp;
-      return next;
-    });
+    return this.write((state) => upsertAccountLinkRecord(state, payload));
   }
 
   async updateAccountLink(brokerAccountId, updates = {}) {
@@ -493,6 +794,10 @@ class BrokerStore {
         updatedAt: timestamp
       });
 
+      if (account.status === 'linked' && !account.linkedAt) {
+        account.linkedAt = timestamp;
+      }
+
       return account;
     });
   }
@@ -510,115 +815,111 @@ class BrokerStore {
 
   async createAuthorizationCode(payload = {}) {
     return this.write((state) => {
-      const brokerAccountId = trimString(payload.brokerAccountId);
-      const accountLink = state.accountLinks[brokerAccountId];
-      if (!accountLink) {
-        throw new Error('Linked account not found');
-      }
-
-      const code = randomToken(24);
-      const codeHash = sha256(code);
-      const timestamp = new Date();
-      state.authCodes[codeHash] = {
-        codeHash,
-        brokerAccountId,
-        hubId: accountLink.hubId,
-        clientId: trimString(payload.clientId),
-        redirectUri: trimString(payload.redirectUri),
-        scopes: uniqueStrings(payload.scopes || ['smart_home']),
-        locale: trimString(payload.locale) || accountLink.locale || 'en-US',
-        createdAt: timestamp.toISOString(),
-        expiresAt: new Date(timestamp.getTime() + DEFAULT_AUTH_CODE_TTL_MS).toISOString(),
-        consumedAt: null,
-        metadata: payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}
+      const authorizationCode = createAuthorizationCodeRecord(state, payload);
+      return {
+        code: authorizationCode.code,
+        expiresAt: authorizationCode.expiresAt
       };
+    });
+  }
+
+  async createAuthorizationGrant(payload = {}) {
+    return this.write((state) => {
+      const accountLink = upsertAccountLinkRecord(state, {
+        brokerAccountId: payload.brokerAccountId,
+        hubId: payload.hubId,
+        locale: payload.locale,
+        status: 'pending',
+        metadata: payload.accountMetadata
+      });
+      const authorizationCode = createAuthorizationCodeRecord(state, {
+        brokerAccountId: accountLink.brokerAccountId,
+        clientId: payload.clientId,
+        redirectUri: payload.redirectUri,
+        scopes: payload.scopes,
+        locale: accountLink.locale,
+        codeChallenge: payload.codeChallenge,
+        codeChallengeMethod: payload.codeChallengeMethod,
+        metadata: payload.codeMetadata
+      });
+
+      appendAuditRecord(state, {
+        type: 'oauth_authorize_success',
+        hubId: accountLink.hubId,
+        brokerAccountId: accountLink.brokerAccountId,
+        message: 'Alexa account-link authorization code issued',
+        details: {
+          clientId: trimString(payload.clientId),
+          redirectUri: trimString(payload.redirectUri),
+          pkce: Boolean(trimString(payload.codeChallenge))
+        }
+      });
 
       return {
-        code,
-        expiresAt: state.authCodes[codeHash].expiresAt
+        accountLink,
+        authorizationCode: {
+          code: authorizationCode.code,
+          expiresAt: authorizationCode.expiresAt
+        }
       };
     });
   }
 
   async consumeAuthorizationCode(code, meta = {}) {
     return this.write((state) => {
-      const codeHash = sha256(trimString(code));
-      const record = state.authCodes[codeHash];
-      if (!record) {
-        throw new BrokerOAuthGrantError('Authorization code is invalid or expired');
-      }
-
-      if (record.consumedAt) {
-        throw new BrokerOAuthGrantError('Authorization code has already been used', record);
-      }
-
-      if (meta.clientId && trimString(meta.clientId) !== record.clientId) {
-        throw new BrokerOAuthGrantError('Authorization code client mismatch', record);
-      }
-
-      if (meta.redirectUri && trimString(meta.redirectUri) !== record.redirectUri) {
-        throw new BrokerOAuthGrantError('Authorization code redirect URI mismatch', record);
-      }
-
+      const record = validateAuthorizationCodeRecord(state, code, meta);
       record.consumedAt = new Date().toISOString();
+      record.replayExpiresAt = new Date(Date.now() + DEFAULT_AUTH_CODE_REPLAY_TTL_MS).toISOString();
       return record;
     });
   }
 
   async issueTokens(payload = {}) {
+    return this.write((state) => issueTokensInState(state, payload));
+  }
+
+  async exchangeAuthorizationCode(code, meta = {}) {
     return this.write((state) => {
-      const brokerAccountId = trimString(payload.brokerAccountId);
-      const accountLink = state.accountLinks[brokerAccountId];
-      if (!accountLink) {
-        throw new Error('Linked account not found');
+      const record = validateAuthorizationCodeRecord(state, code, meta, { allowConsumed: true });
+      if (record.consumedAt) {
+        if (!record.exchangeResult?.accessToken || !record.exchangeResult?.refreshToken) {
+          throw new BrokerOAuthGrantError('Authorization code has already been used', record);
+        }
+        appendAuditRecord(state, {
+          type: 'oauth_token_exchange_replayed',
+          hubId: record.hubId,
+          brokerAccountId: record.brokerAccountId,
+          message: 'Alexa retried a completed authorization-code exchange; the original durable token response was replayed',
+          details: {
+            clientId: record.clientId,
+            requestId: trimString(meta.requestId),
+            pkce: Boolean(trimString(record.codeChallenge))
+          }
+        });
+        return record.exchangeResult;
       }
 
-      const accessToken = randomToken(32);
-      const refreshToken = randomToken(32);
-      const accessTokenHash = sha256(accessToken);
-      const refreshTokenHash = sha256(refreshToken);
-      const now = Date.now();
-      const scopes = uniqueStrings(payload.scopes || ['smart_home']);
-      const timestamp = new Date().toISOString();
-
-      state.accessTokens[accessTokenHash] = {
-        tokenHash: accessTokenHash,
-        brokerAccountId,
-        hubId: accountLink.hubId,
-        clientId: trimString(payload.clientId),
-        scopes,
-        locale: trimString(payload.locale) || accountLink.locale || 'en-US',
-        createdAt: timestamp,
-        lastUsedAt: timestamp,
-        expiresAt: new Date(now + DEFAULT_ACCESS_TOKEN_TTL_SECONDS * 1000).toISOString(),
-        revokedAt: null
-      };
-
-      state.refreshTokens[refreshTokenHash] = {
-        tokenHash: refreshTokenHash,
-        brokerAccountId,
-        hubId: accountLink.hubId,
-        clientId: trimString(payload.clientId),
-        scopes,
-        locale: trimString(payload.locale) || accountLink.locale || 'en-US',
-        createdAt: timestamp,
-        lastUsedAt: timestamp,
-        expiresAt: getRefreshTokenExpiresAt(now),
-        revokedAt: null
-      };
-
-      accountLink.lastSeenAt = timestamp;
-      accountLink.updatedAt = timestamp;
-
-      return {
-        accessToken,
-        refreshToken,
-        tokenType: 'bearer',
-        expiresIn: DEFAULT_ACCESS_TOKEN_TTL_SECONDS,
-        scope: scopes.join(' '),
-        brokerAccountId,
-        hubId: accountLink.hubId
-      };
+      const tokens = issueTokensInState(state, {
+        brokerAccountId: record.brokerAccountId,
+        clientId: record.clientId,
+        scopes: record.scopes,
+        locale: record.locale
+      });
+      record.consumedAt = new Date().toISOString();
+      record.replayExpiresAt = new Date(Date.now() + DEFAULT_AUTH_CODE_REPLAY_TTL_MS).toISOString();
+      record.exchangeResult = tokens;
+      appendAuditRecord(state, {
+        type: 'oauth_token_exchange_succeeded',
+        hubId: record.hubId,
+        brokerAccountId: record.brokerAccountId,
+        message: 'Alexa exchanged its authorization code for durable account tokens',
+        details: {
+          clientId: record.clientId,
+          requestId: trimString(meta.requestId),
+          pkce: Boolean(trimString(record.codeChallenge))
+        }
+      });
+      return tokens;
     });
   }
 
@@ -640,7 +941,7 @@ class BrokerStore {
       }
 
       const accountLink = state.accountLinks[refreshRecord.brokerAccountId];
-      if (!accountLink || accountLink.status === 'revoked') {
+      if (!accountLink || accountLink.status !== 'linked') {
         throw new BrokerOAuthGrantError('Linked account is no longer active', refreshRecord);
       }
 
@@ -710,7 +1011,7 @@ class BrokerStore {
       }
 
       const accountLink = state.accountLinks[accessToken.brokerAccountId];
-      if (!accountLink || accountLink.status === 'revoked') {
+      if (!accountLink || accountLink.status !== 'linked') {
         throw new Error('Linked account is no longer active');
       }
 
@@ -746,8 +1047,8 @@ class BrokerStore {
     return this.write((state) => {
       const brokerAccountId = trimString(payload.brokerAccountId);
       const accountLink = state.accountLinks[brokerAccountId];
-      if (!accountLink) {
-        throw new Error('Linked account not found');
+      if (!accountLink || accountLink.status !== 'linked') {
+        throw new Error('Linked account is not active');
       }
 
       const eventRegion = trimString(payload.eventRegion || 'NA').toUpperCase() || 'NA';
@@ -773,8 +1074,9 @@ class BrokerStore {
         lastError: trimString(payload.lastError || ''),
         status: trimString(payload.status || existing.status || 'active') || 'active',
         createdAt: existing.createdAt || timestamp,
+        acceptedAt: timestamp,
         updatedAt: timestamp,
-        revokedAt: payload.status === 'revoked' ? (payload.revokedAt || timestamp) : (existing.revokedAt || null),
+        revokedAt: payload.status === 'revoked' ? (payload.revokedAt || timestamp) : null,
         metadata: payload.metadata && typeof payload.metadata === 'object'
           ? { ...(existing.metadata || {}), ...payload.metadata }
           : (existing.metadata || {})
@@ -807,6 +1109,7 @@ class BrokerStore {
         tokenType: Object.prototype.hasOwnProperty.call(updates, 'tokenType') ? (trimString(updates.tokenType) || record.tokenType) : record.tokenType,
         tokenExpiresAt: Object.prototype.hasOwnProperty.call(updates, 'tokenExpiresAt') ? updates.tokenExpiresAt : record.tokenExpiresAt,
         lastRefreshedAt: Object.prototype.hasOwnProperty.call(updates, 'lastRefreshedAt') ? updates.lastRefreshedAt : record.lastRefreshedAt,
+        acceptedAt: Object.prototype.hasOwnProperty.call(updates, 'acceptedAt') ? updates.acceptedAt : record.acceptedAt,
         lastUsedAt: Object.prototype.hasOwnProperty.call(updates, 'lastUsedAt') ? updates.lastUsedAt : record.lastUsedAt,
         lastError: Object.prototype.hasOwnProperty.call(updates, 'lastError') ? trimString(updates.lastError) : record.lastError,
         status: Object.prototype.hasOwnProperty.call(updates, 'status') ? (trimString(updates.status) || record.status) : record.status,
@@ -816,6 +1119,10 @@ class BrokerStore {
           : record.metadata,
         updatedAt: timestamp
       });
+
+      if (record.status === 'active' && !Object.prototype.hasOwnProperty.call(updates, 'revokedAt')) {
+        record.revokedAt = null;
+      }
 
       return record;
     });
@@ -836,6 +1143,14 @@ class BrokerStore {
 
   async getPermissionGrant(permissionGrantId) {
     return this.read((state) => state.permissionGrants[trimString(permissionGrantId)] || null);
+  }
+
+  async findPermissionGrantByGrantCode(grantCode, filters = {}) {
+    const grantCodeHash = sha256(trimString(grantCode));
+    return this.read((state) => Object.values(state.permissionGrants || {})
+      .find((entry) => entry.grantCodeHash === grantCodeHash
+        && (!filters.brokerAccountId || entry.brokerAccountId === filters.brokerAccountId)
+        && (!filters.hubId || entry.hubId === filters.hubId)) || null);
   }
 
   async revokePermissionGrant(permissionGrantId, options = {}) {
@@ -934,6 +1249,8 @@ class BrokerStore {
           attempts: Math.max(0, Number(payload.attempts || 0)),
           maxAttempts: Math.max(1, Number(payload.maxAttempts || 3)),
           lastAttemptAt: payload.lastAttemptAt || null,
+          processingStartedAt: payload.processingStartedAt || null,
+          leaseExpiresAt: payload.leaseExpiresAt || null,
           nextAttemptAt: payload.nextAttemptAt || timestamp,
           deliveredAt: payload.deliveredAt || null,
           lastError: trimString(payload.lastError || ''),
@@ -941,7 +1258,7 @@ class BrokerStore {
           metadata: payload.metadata && typeof payload.metadata === 'object' ? payload.metadata : {}
         }));
       state.eventQueue.push(...records);
-      state.eventQueue = state.eventQueue.slice(-MAX_EVENT_QUEUE);
+      compactEventQueue(state, { enforceLimit: true });
       return records;
     });
   }
@@ -962,6 +1279,22 @@ class BrokerStore {
       const selected = [];
 
       for (const entry of Array.isArray(state.eventQueue) ? state.eventQueue : []) {
+        if (entry.status !== 'processing') {
+          continue;
+        }
+        const leaseExpiresAt = safeDateMs(entry.leaseExpiresAt)
+          || (safeDateMs(entry.processingStartedAt || entry.lastAttemptAt) + DEFAULT_EVENT_PROCESSING_LEASE_MS);
+        if (!leaseExpiresAt || leaseExpiresAt <= now) {
+          entry.status = 'queued';
+          entry.processingStartedAt = null;
+          entry.leaseExpiresAt = null;
+          entry.nextAttemptAt = new Date(now).toISOString();
+          entry.lastError = trimString(entry.lastError) || 'Recovered after an interrupted Alexa event dispatch';
+          entry.updatedAt = new Date(now).toISOString();
+        }
+      }
+
+      for (const entry of Array.isArray(state.eventQueue) ? state.eventQueue : []) {
         if (selected.length >= limit) {
           break;
         }
@@ -978,6 +1311,8 @@ class BrokerStore {
         entry.status = 'processing';
         entry.attempts = Math.max(0, Number(entry.attempts || 0)) + 1;
         entry.lastAttemptAt = new Date(now).toISOString();
+        entry.processingStartedAt = new Date(now).toISOString();
+        entry.leaseExpiresAt = new Date(now + DEFAULT_EVENT_PROCESSING_LEASE_MS).toISOString();
         selected.push(entry);
       }
 
@@ -998,7 +1333,12 @@ class BrokerStore {
         status: Object.prototype.hasOwnProperty.call(updates, 'status') ? trimString(updates.status) : entry.status,
         deliveredAt: Object.prototype.hasOwnProperty.call(updates, 'deliveredAt') ? updates.deliveredAt : entry.deliveredAt,
         nextAttemptAt: Object.prototype.hasOwnProperty.call(updates, 'nextAttemptAt') ? updates.nextAttemptAt : entry.nextAttemptAt,
+        maxAttempts: Object.prototype.hasOwnProperty.call(updates, 'maxAttempts')
+          ? Math.max(1, Number(updates.maxAttempts || entry.maxAttempts || 3))
+          : entry.maxAttempts,
         lastError: Object.prototype.hasOwnProperty.call(updates, 'lastError') ? trimString(updates.lastError) : entry.lastError,
+        processingStartedAt: null,
+        leaseExpiresAt: null,
         metadata: updates.metadata && typeof updates.metadata === 'object'
           ? { ...(entry.metadata || {}), ...updates.metadata }
           : entry.metadata,
@@ -1035,7 +1375,8 @@ class BrokerStore {
       const refreshTokens = Object.values(state.refreshTokens || {})
         .filter((entry) => (!hubId || entry.hubId === hubId));
       const authCodes = Object.values(state.authCodes || {})
-        .filter((entry) => (!hubId || entry.hubId === hubId));
+        .filter((entry) => (!hubId || entry.hubId === hubId))
+        .filter((entry) => !entry.consumedAt);
       const permissionGrants = Object.values(state.permissionGrants || {})
         .filter((entry) => (!hubId || entry.hubId === hubId));
       const events = (Array.isArray(state.eventQueue) ? state.eventQueue : [])
@@ -1057,6 +1398,22 @@ class BrokerStore {
         return oldest;
       }, null);
       const grantRefreshErrors = permissionGrants.filter((entry) => trimString(entry.lastError));
+      const activeRefreshTokens = refreshTokens.filter((entry) => !entry.revokedAt);
+      const refreshBackedAccountIds = new Set(activeRefreshTokens.map((entry) => entry.brokerAccountId));
+      const linkedAccounts = accounts.filter((entry) => entry.status === 'linked');
+      const staleProcessingEvents = processingEvents.filter((entry) => {
+        const leaseExpiresAt = safeDateMs(entry.leaseExpiresAt)
+          || (safeDateMs(entry.processingStartedAt || entry.lastAttemptAt) + DEFAULT_EVENT_PROCESSING_LEASE_MS);
+        return !leaseExpiresAt || leaseExpiresAt <= Date.now();
+      });
+      const latestDeliveredAtMs = deliveredEvents.reduce(
+        (latest, entry) => Math.max(latest, safeDateMs(entry.deliveredAt || entry.updatedAt)),
+        0
+      );
+      const unresolvedFailedEvents = failedEvents.filter((entry) => (
+        latestDeliveredAtMs === 0
+        || safeDateMs(entry.lastAttemptAt || entry.updatedAt || entry.createdAt) > latestDeliveredAtMs
+      ));
       const oauthRefreshSuccesses = auditLog.filter((entry) => entry.type === 'oauth_token_refresh_succeeded');
       const oauthRefreshFailures = auditLog.filter((entry) => entry.type === 'oauth_token_refresh_failed');
       const lastOauthRefreshSuccess = oauthRefreshSuccesses
@@ -1082,14 +1439,18 @@ class BrokerStore {
         },
         linkedAccounts: {
           total: accounts.length,
-          linked: accounts.filter((entry) => entry.status === 'linked').length,
+          linked: linkedAccounts.length,
+          pending: accounts.filter((entry) => entry.status === 'pending').length,
+          error: accounts.filter((entry) => entry.status === 'error').length,
           revoked: accounts.filter((entry) => entry.status === 'revoked').length,
+          tokenBacked: linkedAccounts.filter((entry) => refreshBackedAccountIds.has(entry.brokerAccountId)).length,
+          missingRefreshToken: accounts.filter((entry) => entry.metadata?.credentialError === 'missing_refresh_token').length,
           activeLocales: Array.from(new Set(accounts.map((entry) => trimString(entry.locale)).filter(Boolean))).sort()
         },
         oauth: {
           authCodesActive: authCodes.length,
           accessTokensActive: accessTokens.filter((entry) => !entry.revokedAt).length,
-          refreshTokensActive: refreshTokens.filter((entry) => !entry.revokedAt).length,
+          refreshTokensActive: activeRefreshTokens.length,
           clientIds: Array.from(new Set(accessTokens.map((entry) => trimString(entry.clientId)).filter(Boolean))).sort(),
           refreshSuccesses: oauthRefreshSuccesses.length,
           refreshFailures: oauthRefreshFailures.length,
@@ -1109,7 +1470,9 @@ class BrokerStore {
           total: events.length,
           queued: queuedEvents.length,
           processing: processingEvents.length,
+          staleProcessing: staleProcessingEvents.length,
           failed: failedEvents.length,
+          unresolvedFailed: unresolvedFailedEvents.length,
           delivered: deliveredEvents.length,
           skipped: skippedEvents.length,
           retryBacklog: retryBacklog.length,
@@ -1144,6 +1507,7 @@ class BrokerStore {
 module.exports = new BrokerStore();
 module.exports.BrokerStore = BrokerStore;
 module.exports.sha256 = sha256;
+module.exports.pkceS256 = pkceS256;
 module.exports.randomIdentifier = randomIdentifier;
 module.exports.permissionGrantKey = permissionGrantKey;
 module.exports.getRefreshTokenTtlSeconds = getRefreshTokenTtlSeconds;

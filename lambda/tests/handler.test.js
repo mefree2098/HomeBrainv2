@@ -64,6 +64,14 @@ test('lambda handler resolves Discover, AcceptGrant, ReportState, and control di
     }
 
     if (req.url === '/api/alexa/grants/accept' && req.method === 'POST') {
+      if (body.grantCode === 'grant-fail') {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: false,
+          error: 'simulated durable grant storage failure'
+        }));
+        return;
+      }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         success: true
@@ -164,6 +172,32 @@ test('lambda handler resolves Discover, AcceptGrant, ReportState, and control di
   });
 
   assert.equal(acceptGrantResponse.event.header.name, 'AcceptGrant.Response');
+  assert.notEqual(acceptGrantResponse.event.header.messageId, 'msg-1');
+
+  const acceptGrantFailure = await handler({
+    directive: {
+      header: {
+        namespace: 'Alexa.Authorization',
+        name: 'AcceptGrant',
+        payloadVersion: '3',
+        messageId: 'msg-grant-fail'
+      },
+      payload: {
+        grant: {
+          type: 'OAuth2.AuthorizationCode',
+          code: 'grant-fail'
+        },
+        grantee: {
+          type: 'BearerToken',
+          token: 'access-123'
+        }
+      }
+    }
+  });
+  assert.equal(acceptGrantFailure.event.header.namespace, 'Alexa.Authorization');
+  assert.equal(acceptGrantFailure.event.header.name, 'ErrorResponse');
+  assert.equal(acceptGrantFailure.event.payload.type, 'ACCEPT_GRANT_FAILED');
+  assert.notEqual(acceptGrantFailure.event.header.messageId, 'msg-grant-fail');
 
   const discoverResponse = await handler({
     directive: {

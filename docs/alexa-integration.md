@@ -85,7 +85,7 @@ The broker exposes `GET /api/alexa/devices` to the HomeBrain hub for workflow ta
 
 Important platform boundary: Smart Home account linking and `AcceptGrant` credentials are for Alexa event-gateway work such as discovery updates and change reports. Consumer Echo enumeration and announcements are not the same official Smart Home surface. HomeBrain Native is the practical personal-deployment path and may require re-authentication if Amazon invalidates the stored session. [Alexa Smart Properties](https://developer.amazon.com/en-US/docs/alexa/alexa-smart-properties/about-asp-core.html) remains the future enterprise route. For the Smart Home side, Amazon documents the event-gateway grant flow separately in the [`Alexa.Authorization` interface](https://developer.amazon.com/en-US/docs/alexa/device-apis/alexa-authorization.html).
 
-For production, keep Alexa account-linking refresh tokens long-lived and leave the Alexa console PKCE toggle off until the broker OAuth flow is upgraded to support it.
+For production, keep Alexa account-linking refresh tokens long-lived and enable Alexa PKCE. The broker verifies the `S256` challenge during the authorization-code exchange.
 
 HomeBrain manages these broker values through the `Alexa Broker` admin page. The preferred deploy flow there also creates or updates the broker reverse-proxy route and applies the managed Caddy config before restarting the broker.
 
