@@ -194,7 +194,10 @@ class DeviceEnergySampleService {
     const deviceIds = candidates.map(({ device }) => device._id);
     const latestEntries = await DeviceEnergySample.aggregate([
       { $match: { deviceId: { $in: deviceIds } } },
-      { $sort: { recordedAt: -1, createdAt: -1 } },
+      // Keep the sort aligned with the { deviceId: 1, recordedAt: -1 }
+      // index. Sorting only by recordedAt forces MongoDB to scan and sort the
+      // complete history for every matched device before grouping.
+      { $sort: { deviceId: 1, recordedAt: -1 } },
       { $group: { _id: '$deviceId', sample: { $first: '$$ROOT' } } }
     ]);
 

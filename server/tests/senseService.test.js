@@ -345,6 +345,52 @@ test('updateRealtimeState persists important websocket state transitions with up
   }
 });
 
+test('ingestRealtimePayload suppresses overlapping websocket persistence', async () => {
+  const service = new senseService.SenseService();
+  let persistCalls = 0;
+  let releasePersistence;
+  let markPersistenceStarted;
+  const persistenceStarted = new Promise((resolve) => {
+    markPersistenceStarted = resolve;
+  });
+  const persistenceReleased = new Promise((resolve) => {
+    releasePersistence = resolve;
+  });
+
+  service.fetchAlwaysOnInfo = async () => null;
+  service.persistRealtimeSummary = async () => {
+    persistCalls += 1;
+    markPersistenceStarted();
+    await persistenceReleased;
+  };
+
+  const integration = {
+    monitorId: 'monitor-1',
+    monitorName: 'Main Panel',
+    pollIntervalSeconds: 5
+  };
+  const firstIngest = service.ingestRealtimePayload(integration, {
+    time: '2026-08-10T13:00:00.000Z',
+    w: 1200,
+    devices: []
+  }, { source: 'ws' });
+
+  await persistenceStarted;
+
+  const secondSummary = await service.ingestRealtimePayload(integration, {
+    time: '2026-08-10T13:00:01.000Z',
+    w: 1210,
+    devices: []
+  }, { source: 'ws' });
+
+  assert.equal(persistCalls, 1);
+  assert.equal(secondSummary.powerW, 1210);
+
+  releasePersistence();
+  await firstIngest;
+  assert.equal(service.realtimePersistPromise, null);
+});
+
 const buildSenseTestDevice = ({
   id,
   name,
