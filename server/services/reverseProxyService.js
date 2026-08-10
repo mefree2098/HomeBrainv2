@@ -576,6 +576,10 @@ function buildSiteBlock(route, settings) {
   }
   lines.push(`    reverse_proxy ${quoteCaddy(buildUpstreamUrl(route))} {`);
   lines.push(`      health_uri ${quoteCaddy(normalizePath(route.healthCheckPath || '/', '/'))}`);
+  if (route.platformKey === 'alexa-broker') {
+    lines.push('      health_interval 5s');
+    lines.push('      health_timeout 2s');
+  }
   if (route.upstreamProtocol === 'https') {
     lines.push('      transport http {');
     lines.push(`        tls_server_name ${quoteCaddy(route.upstreamHost)}`);

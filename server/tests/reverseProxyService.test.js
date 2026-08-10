@@ -61,6 +61,7 @@ test('buildDesiredConfig renders Caddy global options and enabled routes', async
       lean: async () => ([
         {
           hostname: 'example.com',
+          platformKey: 'homebrain',
           upstreamProtocol: 'http',
           upstreamHost: '127.0.0.1',
           upstreamPort: 3000,
@@ -71,6 +72,7 @@ test('buildDesiredConfig renders Caddy global options and enabled routes', async
         },
         {
           hostname: 'mail.example.com',
+          platformKey: 'axiom',
           upstreamProtocol: 'http',
           upstreamHost: '127.0.0.1',
           upstreamPort: 3001,
@@ -92,6 +94,42 @@ test('buildDesiredConfig renders Caddy global options and enabled routes', async
   assert.match(result.caddyfile, /reverse_proxy "http:\/\/127\.0\.0\.1:3000"/);
   assert.match(result.caddyfile, /mail\.example\.com \{/);
   assert.match(result.caddyfile, /tls \{\n    on_demand\n  \}/);
+  assert.doesNotMatch(result.caddyfile, /health_interval 5s/);
+});
+
+test('buildDesiredConfig gives the managed Alexa broker a fast health recovery cadence', async (t) => {
+  const originalGetSettings = ReverseProxySettings.getSettings;
+  const originalFind = ReverseProxyRoute.find;
+
+  t.after(() => {
+    ReverseProxySettings.getSettings = originalGetSettings;
+    ReverseProxyRoute.find = originalFind;
+  });
+
+  ReverseProxySettings.getSettings = async () => createSettings({
+    acmeEnv: 'production'
+  });
+  ReverseProxyRoute.find = () => ({
+    sort: () => ({
+      lean: async () => ([{
+        hostname: 'alexa-broker.example.com',
+        platformKey: 'alexa-broker',
+        upstreamProtocol: 'http',
+        upstreamHost: '127.0.0.1',
+        upstreamPort: 4301,
+        healthCheckPath: '/health',
+        stripPrefix: '',
+        tlsMode: 'automatic',
+        websocketSupport: false
+      }])
+    })
+  });
+
+  const result = await reverseProxyService.buildDesiredConfig();
+
+  assert.match(result.caddyfile, /health_uri "\/health"/);
+  assert.match(result.caddyfile, /health_interval 5s/);
+  assert.match(result.caddyfile, /health_timeout 2s/);
 });
 
 test('buildDesiredConfig pins production ACME to Let\'s Encrypt', async (t) => {
