@@ -107,6 +107,12 @@ test('recordSamplesForDevices inserts new SmartThings power samples and skips un
       }
     }
   });
+  assert.deepEqual(aggregatePipeline[1], {
+    $sort: {
+      deviceId: 1,
+      recordedAt: -1
+    }
+  });
   assert.equal(result.insertedCount, 1);
   assert.equal(result.skippedCount, 1);
   assert.equal(Array.isArray(insertedDocs), true);

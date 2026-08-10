@@ -614,6 +614,7 @@ class SenseService {
       devices: new Map()
     };
     this.lastPersistedRealtimeAt = 0;
+    this.realtimePersistPromise = null;
     this.lastRealtimeStatePersistAt = 0;
     this.lastCatalogSyncAt = 0;
     this.lastAlwaysOnFetchAt = 0;
@@ -1505,7 +1506,40 @@ class SenseService {
       return summary;
     }
 
-    await this.persistRealtimeSummary(integration, summary, { source });
+    // Sense can deliver several websocket messages while one persistence pass
+    // is still awaiting MongoDB. Without an in-flight guard, every message
+    // observes the old throttle timestamp and starts another full device and
+    // energy-sample write concurrently.
+    while (this.realtimePersistPromise) {
+      if (!forcePersist) {
+        return summary;
+      }
+
+      try {
+        await this.realtimePersistPromise;
+      } catch (_error) {
+        // The caller that started the failed write reports its error. A forced
+        // refresh should still get its own opportunity to persist.
+      }
+    }
+
+    const previousPersistedRealtimeAt = this.lastPersistedRealtimeAt;
+    this.lastPersistedRealtimeAt = Math.max(previousPersistedRealtimeAt, now);
+
+    const persistPromise = this.persistRealtimeSummary(integration, summary, { source });
+    this.realtimePersistPromise = persistPromise;
+
+    try {
+      await persistPromise;
+    } catch (error) {
+      this.lastPersistedRealtimeAt = previousPersistedRealtimeAt;
+      throw error;
+    } finally {
+      if (this.realtimePersistPromise === persistPromise) {
+        this.realtimePersistPromise = null;
+      }
+    }
+
     return summary;
   }
 
@@ -1546,7 +1580,7 @@ class SenseService {
       }
     }
 
-    this.lastPersistedRealtimeAt = observedAt.getTime();
+    this.lastPersistedRealtimeAt = Math.max(this.lastPersistedRealtimeAt, observedAt.getTime());
     integration.isConnected = true;
     integration.lastRealtimeAt = observedAt;
     integration.lastSyncAt = new Date();
