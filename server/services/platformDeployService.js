@@ -1919,9 +1919,16 @@ class PlatformDeployService {
         );
       });
 
-      await runCustomStep('Apply reverse proxy config', async () => {
-        await this.applyReverseProxyConfigForDeploy(job, jobId);
-      });
+      await runStep(
+        'Apply reverse proxy config',
+        'node',
+        [
+          'server/scripts/bootstrapReverseProxyState.js',
+          '--actor',
+          `platform-deploy:${job.actor || 'unknown'}`,
+          '--apply-if-changed'
+        ]
+      );
 
       await runCustomStep('Bootstrap identity state', async () => {
         const bootstrapSummary = await oidcService.ensureBootstrapState({
@@ -2157,52 +2164,6 @@ class PlatformDeployService {
     }
   }
 
-  async applyReverseProxyConfigForDeploy(job, jobId) {
-    const actor = `platform-deploy:${job?.actor || 'unknown'}`;
-    let status = null;
-    try {
-      status = await reverseProxyService.getStatus();
-    } catch (error) {
-      await this.appendJobLog(
-        jobId,
-        `[${new Date().toISOString()}] [Apply reverse proxy config] `
-        + `Unable to precheck current Caddy config (${error.message}); applying normally.\n`
-      );
-    }
-
-    if (status?.config?.changed === false) {
-      const desiredHash = status.config.desiredHash || 'unknown';
-      await this.appendJobLog(
-        jobId,
-        `[${new Date().toISOString()}] [Apply reverse proxy config] `
-        + `success=yes skipped=yes reason=unchanged desiredHash=${desiredHash}\n`
-      );
-      return {
-        success: true,
-        skipped: true,
-        reason: 'unchanged',
-        desiredHash,
-        appliedRoutes: []
-      };
-    }
-
-    const applySummary = await reverseProxyService.applyConfig(actor);
-    const appliedRoutes = Array.isArray(applySummary.appliedRoutes)
-      ? applySummary.appliedRoutes.join(',')
-      : 'none';
-
-    await this.appendJobLog(
-      jobId,
-      `[${new Date().toISOString()}] [Apply reverse proxy config] `
-      + `success=${applySummary.success ? 'yes' : 'no'} `
-      + `appliedRoutes=${appliedRoutes || 'none'}\n`
-    );
-
-    return {
-      ...applySummary,
-      skipped: false
-    };
-  }
 }
 
 module.exports = new PlatformDeployService();

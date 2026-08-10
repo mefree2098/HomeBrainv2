@@ -85,6 +85,33 @@ test('install and update paths apply Caddy config after bootstrapping reverse pr
   assert.match(bootstrapScript, /reverseProxyService\.applyConfig\(actor\)/);
 });
 
+test('reverse proxy bootstrap can apply only when generated Caddy config changed', () => {
+  const bootstrapScriptPath = path.join(repoRoot, 'server', 'scripts', 'bootstrapReverseProxyState.js');
+  const { parseOptions, shouldApplyConfig } = require(bootstrapScriptPath);
+  const bootstrapScript = fs.readFileSync(bootstrapScriptPath, 'utf8');
+
+  assert.deepEqual(parseOptions([
+    '--actor',
+    'platform-deploy:admin@example.com',
+    '--apply-if-changed'
+  ]), {
+    actor: 'platform-deploy:admin@example.com',
+    apply: false,
+    applyIfChanged: true
+  });
+  assert.equal(shouldApplyConfig({ apply: false, applyIfChanged: false }), false);
+  assert.equal(shouldApplyConfig({ apply: true, applyIfChanged: false }), true);
+  assert.equal(shouldApplyConfig({ apply: false, applyIfChanged: true }, {
+    config: { changed: false }
+  }), false);
+  assert.equal(shouldApplyConfig({ apply: false, applyIfChanged: true }, {
+    config: { changed: true }
+  }), true);
+  assert.equal(shouldApplyConfig({ apply: false, applyIfChanged: true }), true);
+  assert.match(bootstrapScript, /Caddy config unchanged/);
+  assert.match(bootstrapScript, /Unable to compare Caddy config before apply; applying normally/);
+});
+
 test('Pi-hole installer download retries transient failures and uses the official GitHub fallback', (t) => {
   const setupScript = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'homebrain-pihole-download-test-'));
