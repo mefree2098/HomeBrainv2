@@ -199,6 +199,29 @@ test('buildManagedReverseProxyRoutePayload derives the managed broker ingress ro
   });
 });
 
+test('managedReverseProxyRouteMatchesConfig detects restart-sensitive route drift', () => {
+  const service = new AlexaBrokerService({
+    projectRoot: '/tmp/homebrain-test'
+  });
+  const config = {
+    publicBaseUrl: 'https://alexa-broker.example.com',
+    bindHost: '127.0.0.1',
+    servicePort: 4301,
+    displayName: 'Managed Alexa Broker'
+  };
+  const route = service.buildManagedReverseProxyRoutePayload(config);
+
+  assert.equal(service.managedReverseProxyRouteMatchesConfig(config, route), true);
+  assert.equal(service.managedReverseProxyRouteMatchesConfig(config, {
+    ...route,
+    allowOnDemandTls: true
+  }), false);
+  assert.equal(service.managedReverseProxyRouteMatchesConfig(config, {
+    ...route,
+    upstreamPort: 4302
+  }), false);
+});
+
 test('prepareForHostRestart preserves managed broker runtime state across host restarts', async () => {
   const config = {
     resumeAfterHostRestart: false,
@@ -334,6 +357,48 @@ test('startService reconciles the managed reverse-proxy route after broker healt
     actor: 'system:auto-recovery',
     applyConfig: true
   });
+});
+
+test('startup route reconciliation validates a matching route without reloading Caddy', async () => {
+  const config = {
+    publicBaseUrl: 'https://alexa-broker.example.com',
+    bindHost: '127.0.0.1',
+    servicePort: 4301,
+    displayName: 'Managed Alexa Broker'
+  };
+  const service = new AlexaBrokerService({
+    projectRoot: '/tmp/homebrain-test'
+  });
+  const route = service.buildManagedReverseProxyRoutePayload(config);
+  route.validationStatus = 'invalid';
+  let validationCalls = 0;
+  let ensureCalls = 0;
+
+  service.getConfig = async () => config;
+  service.findManagedReverseProxyRoute = async () => route;
+  service.reverseProxyService = {
+    async validateRoute(receivedRoute, _settings, options) {
+      validationCalls += 1;
+      assert.equal(receivedRoute, route);
+      assert.equal(options.persist, true);
+      return { validationStatus: 'valid' };
+    }
+  };
+  service.ensureManagedReverseProxyRoute = async () => {
+    ensureCalls += 1;
+    return { success: true };
+  };
+
+  const result = await service.reconcileManagedReverseProxyRouteAfterStartup({
+    actor: 'system:auto-recovery',
+    applyConfig: true
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.action, 'validated');
+  assert.equal(result.appliedConfig, false);
+  assert.equal(validationCalls, 1);
+  assert.equal(ensureCalls, 0);
 });
 
 test('getStatus clears stale lastError once the broker is healthy again', async () => {
