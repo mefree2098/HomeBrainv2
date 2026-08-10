@@ -27,12 +27,21 @@ function parseOptions(argv) {
 
   return {
     actor,
-    apply: argv.includes('--apply')
+    apply: argv.includes('--apply'),
+    applyIfChanged: argv.includes('--apply-if-changed')
   };
 }
 
+function shouldApplyConfig(options, status = null) {
+  if (!options.apply && !options.applyIfChanged) {
+    return false;
+  }
+  return !(options.applyIfChanged && status?.config?.changed === false);
+}
+
 async function main() {
-  const { actor, apply } = parseOptions(process.argv.slice(2));
+  const options = parseOptions(process.argv.slice(2));
+  const { actor, applyIfChanged } = options;
   console.log(`Bootstrapping reverse proxy state as ${actor}...`);
 
   await initDb();
@@ -49,7 +58,19 @@ async function main() {
     console.log(`Routes already present: ${result.existingRoutes.length > 0 ? result.existingRoutes.join(', ') : 'none'}`);
     console.log(`Routes revalidated: ${result.revalidatedRoutes.length > 0 ? result.revalidatedRoutes.join(', ') : 'none'}`);
 
-    if (apply) {
+    let status = null;
+    if (applyIfChanged) {
+      try {
+        status = await reverseProxyService.getStatus();
+        if (status?.config?.changed === false) {
+          console.log(`Caddy config unchanged: ${status.config.desiredHash || 'unknown'}`);
+        }
+      } catch (error) {
+        console.warn(`Unable to compare Caddy config before apply; applying normally: ${error.message}`);
+      }
+    }
+
+    if (shouldApplyConfig(options, status)) {
       const applyResult = await reverseProxyService.applyConfig(actor);
       const appliedRoutes = Array.isArray(applyResult.appliedRoutes)
         ? applyResult.appliedRoutes.join(', ')
@@ -62,7 +83,14 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(`Reverse proxy bootstrap failed: ${error.message}`);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(`Reverse proxy bootstrap failed: ${error.message}`);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  parseOptions,
+  shouldApplyConfig
+};

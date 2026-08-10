@@ -8,7 +8,6 @@ const { EventEmitter } = require('events');
 
 const platformDeployServiceModule = require('../services/platformDeployService');
 const eventStreamService = require('../services/eventStreamService');
-const reverseProxyService = require('../services/reverseProxyService');
 
 const { PlatformDeployService } = platformDeployServiceModule;
 
@@ -665,98 +664,19 @@ test('platform deploy applies the reverse proxy config after bootstrapping route
 
   assert.match(source, /runCustomStep\('Bootstrap reverse proxy state'/);
   assert.match(source, /runCustomStep\('Bootstrap platform service routes'/);
-  assert.match(source, /runCustomStep\('Apply reverse proxy config'/);
+  assert.match(source, /'Apply reverse proxy config',\s*'node'/);
   assert.match(source, /platformManagedService\.ensureManagedRoutes/);
-  assert.match(source, /this\.applyReverseProxyConfigForDeploy\(job, jobId\)/);
+  assert.match(source, /server\/scripts\/bootstrapReverseProxyState\.js/);
+  assert.match(source, /--apply-if-changed/);
+  assert.doesNotMatch(source, /this\.applyReverseProxyConfigForDeploy\(job, jobId\)/);
   assert.ok(
-    source.indexOf("runCustomStep('Bootstrap reverse proxy state'") < source.indexOf("runCustomStep('Apply reverse proxy config'"),
+    source.indexOf("runCustomStep('Bootstrap reverse proxy state'") < source.indexOf("'Apply reverse proxy config'"),
     'apply step should run after bootstrap step'
   );
   assert.ok(
-    source.indexOf("runCustomStep('Bootstrap platform service routes'") < source.indexOf("runCustomStep('Apply reverse proxy config'"),
+    source.indexOf("runCustomStep('Bootstrap platform service routes'") < source.indexOf("'Apply reverse proxy config'"),
     'apply step should run after platform service routes are bootstrapped'
   );
-});
-
-test('applyReverseProxyConfigForDeploy skips Caddy apply when config is unchanged', { concurrency: false }, async (t) => {
-  const service = await createTempService(t);
-  const originalGetStatus = reverseProxyService.getStatus;
-  const originalApplyConfig = reverseProxyService.applyConfig;
-  const logs = [];
-  let applyCalled = false;
-
-  t.after(() => {
-    reverseProxyService.getStatus = originalGetStatus;
-    reverseProxyService.applyConfig = originalApplyConfig;
-  });
-
-  service.appendJobLog = async (_jobId, message) => {
-    logs.push(message);
-  };
-  reverseProxyService.getStatus = async () => ({
-    config: {
-      changed: false,
-      desiredHash: 'abc123',
-      lastAppliedHash: 'abc123'
-    },
-    summary: {
-      invalidRoutes: 1
-    }
-  });
-  reverseProxyService.applyConfig = async () => {
-    applyCalled = true;
-    return { success: true, appliedRoutes: ['ai.ntechr.com'] };
-  };
-
-  const result = await service.applyReverseProxyConfigForDeploy({ actor: 'admin@homebrain.test' }, 'job-caddy-skip');
-
-  assert.equal(applyCalled, false);
-  assert.deepEqual(result, {
-    success: true,
-    skipped: true,
-    reason: 'unchanged',
-    desiredHash: 'abc123',
-    appliedRoutes: []
-  });
-  assert.match(logs.join(''), /skipped=yes reason=unchanged desiredHash=abc123/);
-});
-
-test('applyReverseProxyConfigForDeploy applies Caddy config when desired state changed', { concurrency: false }, async (t) => {
-  const service = await createTempService(t);
-  const originalGetStatus = reverseProxyService.getStatus;
-  const originalApplyConfig = reverseProxyService.applyConfig;
-  const logs = [];
-  let observedActor = null;
-
-  t.after(() => {
-    reverseProxyService.getStatus = originalGetStatus;
-    reverseProxyService.applyConfig = originalApplyConfig;
-  });
-
-  service.appendJobLog = async (_jobId, message) => {
-    logs.push(message);
-  };
-  reverseProxyService.getStatus = async () => ({
-    config: {
-      changed: true,
-      desiredHash: 'new-hash',
-      lastAppliedHash: 'old-hash'
-    }
-  });
-  reverseProxyService.applyConfig = async (actor) => {
-    observedActor = actor;
-    return { success: true, appliedRoutes: ['freestonefamily.com'] };
-  };
-
-  const result = await service.applyReverseProxyConfigForDeploy({ actor: 'admin@homebrain.test' }, 'job-caddy-apply');
-
-  assert.equal(observedActor, 'platform-deploy:admin@homebrain.test');
-  assert.deepEqual(result, {
-    success: true,
-    appliedRoutes: ['freestonefamily.com'],
-    skipped: false
-  });
-  assert.match(logs.join(''), /success=yes appliedRoutes=freestonefamily\.com/);
 });
 
 test('setup-services keeps HomeBrain-managed child services alive across restarts', async () => {
