@@ -295,6 +295,47 @@ test('manual start restarts a managed broker process that is alive but unhealthy
   assert.match(restartOptions.reason, /timeout of 2000ms/);
 });
 
+test('startService reconciles the managed reverse-proxy route after broker health is established', async () => {
+  const config = {
+    isInstalled: true,
+    serviceStatus: 'running',
+    lastError: null,
+    manualStopRequested: false,
+    async save() {}
+  };
+  const service = new AlexaBrokerService({
+    projectRoot: '/tmp/homebrain-test'
+  });
+  let reconciliationOptions = null;
+
+  service.getConfig = async () => config;
+  service.isManagedRuntimeAlive = () => true;
+  service.isChildAlive = () => false;
+  service.probeHealth = async () => ({
+    available: true,
+    portOccupied: true,
+    health: { success: true },
+    message: ''
+  });
+  service.reconcileManagedReverseProxyRouteAfterStartup = async (options = {}) => {
+    reconciliationOptions = options;
+    return { success: true };
+  };
+  service.getStatus = async () => ({ serviceStatus: 'running' });
+
+  const result = await service.startService({
+    actor: 'system:auto-recovery',
+    automatic: true,
+    source: 'watchdog_interval'
+  });
+
+  assert.equal(result.success, true);
+  assert.deepEqual(reconciliationOptions, {
+    actor: 'system:auto-recovery',
+    applyConfig: true
+  });
+});
+
 test('getStatus clears stale lastError once the broker is healthy again', async () => {
   const config = {
     isInstalled: true,

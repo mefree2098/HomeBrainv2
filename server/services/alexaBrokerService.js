@@ -1008,6 +1008,34 @@ class AlexaBrokerService {
     };
   }
 
+  async reconcileManagedReverseProxyRouteAfterStartup(options = {}) {
+    const actor = trimString(options.actor) || 'system:alexa-broker-startup';
+
+    try {
+      const result = await this.ensureManagedReverseProxyRoute({
+        actor,
+        applyConfig: options.applyConfig !== false
+      });
+      const validationStatus = result?.route?.validationStatus || 'unknown';
+      if (validationStatus !== 'valid') {
+        this.pushLog(
+          `Alexa broker is healthy, but its managed reverse-proxy route still validates as ${validationStatus}.`,
+          'broker-warning'
+        );
+      }
+      return result;
+    } catch (error) {
+      this.pushLog(
+        `Alexa broker started, but its managed reverse-proxy route could not be reconciled: ${error.message}`,
+        'broker-warning'
+      );
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
   async prepareForHostRestart() {
     const config = await this.getConfig();
     const shouldResume = this.isManagedRuntimeAlive(config);
@@ -1395,6 +1423,12 @@ class AlexaBrokerService {
       }
       config.manualStopRequested = false;
       await config.save();
+      if (existingProbe.available) {
+        await this.reconcileManagedReverseProxyRouteAfterStartup({
+          actor,
+          applyConfig: source !== 'deploy'
+        });
+      }
       return {
         success: true,
         message: 'Alexa broker is already running',
@@ -1430,6 +1464,12 @@ class AlexaBrokerService {
       });
       await config.save();
       this.clearRecoveryTimer();
+      if (existingProbe.available) {
+        await this.reconcileManagedReverseProxyRouteAfterStartup({
+          actor,
+          applyConfig: source !== 'deploy'
+        });
+      }
       return {
         success: true,
         message: options.quietIfRunning
@@ -1491,6 +1531,10 @@ class AlexaBrokerService {
       await config.save();
       this.consecutiveHealthFailures = 0;
       this.clearRecoveryTimer();
+      await this.reconcileManagedReverseProxyRouteAfterStartup({
+        actor,
+        applyConfig: source !== 'deploy'
+      });
 
       return {
         success: true,
