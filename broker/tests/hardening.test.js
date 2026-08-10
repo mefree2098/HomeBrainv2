@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('http');
 
-const { createApp, renderAuthorizePage } = require('../src/app');
+const { createApp, reconcileLinkedAccountsToHubs, renderAuthorizePage } = require('../src/app');
 const { AlexaEventGatewayService } = require('../src/eventGatewayService');
 const { BrokerStore, pkceS256 } = require('../src/store');
 
@@ -82,6 +82,52 @@ async function createLinkedGrant(store, options = {}) {
   });
   return { account, grant: acceptedGrant };
 }
+
+test('startup reconciliation pushes broker-authoritative account status back to every hub', async (t) => {
+  let received = null;
+  const hub = await listen(http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      received = {
+        authorization: req.headers.authorization,
+        hubId: req.headers['x-homebrain-hub-id'],
+        body: JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
+      };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true }));
+    });
+  }));
+  t.after(() => close(hub.server));
+
+  const store = createMemoryStore();
+  await store.registerHub({
+    hubId: 'hub-reconcile',
+    relayToken: 'relay-reconcile',
+    accountsUrl: `${hub.baseUrl}/api/alexa/broker/accounts`,
+    mode: 'public'
+  });
+  const account = await store.createAccountLink({
+    brokerAccountId: 'acct-stale',
+    hubId: 'hub-reconcile',
+    status: 'linked'
+  });
+  assert.equal(account.status, 'error');
+
+  const result = await reconcileLinkedAccountsToHubs(store, {
+    maxAttempts: 1,
+    retryDelayMs: 0
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.syncedHubs, 1);
+  assert.equal(result.syncedAccounts, 1);
+  assert.equal(received.authorization, 'Bearer relay-reconcile');
+  assert.equal(received.hubId, 'hub-reconcile');
+  assert.equal(received.body.accounts[0].brokerAccountId, 'acct-stale');
+  assert.equal(received.body.accounts[0].status, 'error');
+  assert.equal(received.body.accounts[0].metadata.credentialError, 'missing_refresh_token');
+});
 
 test('authorization-code exchange is atomic, retryable after persistence failure, and verifies PKCE', async () => {
   const store = createMemoryStore();

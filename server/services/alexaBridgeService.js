@@ -374,11 +374,11 @@ class AlexaBridgeService {
   }
 
   async getSummary() {
-    const [registration, catalog, exposures, linkedAccounts, brokerDelivery, brokerMetrics, brokerAudit, customSkill] = await Promise.all([
-      this.ensureRegistration(),
+    const registration = await this.ensureRegistration();
+    const [catalog, exposures, linkedAccounts, brokerDelivery, brokerMetrics, brokerAudit, customSkill] = await Promise.all([
       alexaProjectionService.buildCatalog(),
       alexaProjectionService.listExposureSummaries(),
-      AlexaLinkedAccount.find().sort({ linkedAt: -1 }).lean(),
+      AlexaLinkedAccount.find({ hubId: registration.hubId }).sort({ linkedAt: -1 }).lean(),
       this.getBrokerDeliveryStatus(),
       this.getBrokerMetricsStatus(),
       this.getBrokerAuditLog(),
@@ -387,7 +387,8 @@ class AlexaBridgeService {
     const readiness = await this.getCertificationReadiness({
       registration,
       linkedAccounts,
-      brokerDelivery
+      brokerDelivery,
+      brokerMetrics
     });
 
     return {
@@ -427,8 +428,11 @@ class AlexaBridgeService {
     const registration = context.registration || await this.ensureRegistration();
     const linkedAccounts = Array.isArray(context.linkedAccounts)
       ? context.linkedAccounts
-      : await AlexaLinkedAccount.find().lean();
+      : await AlexaLinkedAccount.find({ hubId: registration.hubId }).lean();
     const brokerDelivery = context.brokerDelivery || await this.getBrokerDeliveryStatus();
+    const brokerMetrics = Object.prototype.hasOwnProperty.call(context, 'brokerMetrics')
+      ? context.brokerMetrics
+      : await this.getBrokerMetricsStatus();
     const publicOrigin = registration.publicOrigin || getConfiguredPublicOrigin();
 
     let parsedOrigin = null;
@@ -449,8 +453,19 @@ class AlexaBridgeService {
     const certificateStatus = reverseProxyRoute?.certificateStatus || {};
     const validationStatus = reverseProxyRoute?.validation || {};
     const activeGrantCount = Number(brokerDelivery?.activeGrantCount || 0);
-    const linkedHouseholdCount = linkedAccounts.filter((entry) => entry?.status === 'linked').length;
-    const incompleteHouseholdCount = linkedAccounts.filter((entry) => entry?.status === 'pending' || entry?.status === 'error').length;
+    const brokerAccountMetrics = brokerMetrics?.available && brokerMetrics?.metrics?.linkedAccounts
+      ? brokerMetrics.metrics.linkedAccounts
+      : null;
+    const brokerLinkedCount = Math.max(0, Number(brokerAccountMetrics?.linked || 0));
+    const brokerTokenBackedCount = Math.max(0, Number(brokerAccountMetrics?.tokenBacked || 0));
+    const linkedHouseholdCount = brokerAccountMetrics
+      ? brokerTokenBackedCount
+      : linkedAccounts.filter((entry) => entry?.status === 'linked').length;
+    const incompleteHouseholdCount = brokerAccountMetrics
+      ? Math.max(0, Number(brokerAccountMetrics.pending || 0))
+        + Math.max(0, Number(brokerAccountMetrics.error || 0))
+        + Math.max(0, brokerLinkedCount - brokerTokenBackedCount)
+      : linkedAccounts.filter((entry) => entry?.status === 'pending' || entry?.status === 'error').length;
     const checks = [];
 
     checks.push(

@@ -673,6 +673,65 @@ async function syncLinkedAccountsToHub(store, hubId) {
   };
 }
 
+async function reconcileLinkedAccountsToHubs(store, options = {}) {
+  const maxAttempts = Math.max(1, Number(options.maxAttempts || 4));
+  const retryDelayMs = Math.max(0, Number(options.retryDelayMs || 5000));
+  let pendingHubIds = null;
+  let lastErrors = [];
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const hubs = (await store.listHubs())
+        .filter((hub) => hub?.registration?.accountsUrl)
+        .filter((hub) => !pendingHubIds || pendingHubIds.has(hub.hubId));
+
+      if (hubs.length === 0) {
+        return {
+          success: true,
+          attempts: attempt,
+          syncedHubs: 0,
+          failedHubs: []
+        };
+      }
+
+      const results = await Promise.all(hubs.map(async (hub) => {
+        try {
+          const result = await syncLinkedAccountsToHub(store, hub.hubId);
+          return { hubId: hub.hubId, success: true, count: Number(result?.count || 0) };
+        } catch (error) {
+          return { hubId: hub.hubId, success: false, error: error.message };
+        }
+      }));
+      const failures = results.filter((entry) => !entry.success);
+      if (failures.length === 0) {
+        return {
+          success: true,
+          attempts: attempt,
+          syncedHubs: results.length,
+          syncedAccounts: results.reduce((total, entry) => total + entry.count, 0),
+          failedHubs: []
+        };
+      }
+
+      lastErrors = failures;
+      pendingHubIds = new Set(failures.map((entry) => entry.hubId));
+    } catch (error) {
+      lastErrors = [{ hubId: '', success: false, error: error.message }];
+    }
+
+    if (attempt < maxAttempts && retryDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+  }
+
+  return {
+    success: false,
+    attempts: maxAttempts,
+    syncedHubs: 0,
+    failedHubs: lastErrors
+  };
+}
+
 async function queueEventsForActivePermissionGrants(store, hubId, buildPayloadsForGrant) {
   const grants = await store.listActivePermissionGrants({ hubId });
   if (!Array.isArray(grants) || grants.length === 0) {
@@ -1919,6 +1978,7 @@ module.exports = {
   buildBrokerBaseUrl,
   closeServerAndExit,
   extractBearerToken,
+  reconcileLinkedAccountsToHubs,
   renderAuthorizePage
 };
 
@@ -1928,6 +1988,15 @@ if (require.main === module) {
   const bindHost = trimString(process.env.HOMEBRAIN_BROKER_BIND_HOST) || '0.0.0.0';
   const server = app.listen(port, bindHost, () => {
     console.log(`HomeBrain Alexa broker listening on ${bindHost}:${port}`);
+    void reconcileLinkedAccountsToHubs(brokerStore).then((result) => {
+      if (result.success && result.syncedHubs > 0) {
+        console.log(`[broker] Reconciled ${result.syncedAccounts} linked-account record(s) with ${result.syncedHubs} HomeBrain hub(s)`);
+      } else if (!result.success) {
+        console.warn(`[broker] Unable to reconcile linked accounts with HomeBrain after ${result.attempts} attempt(s): ${result.failedHubs.map((entry) => `${entry.hubId || 'unknown'}: ${entry.error}`).join('; ')}`);
+      }
+    }).catch((error) => {
+      console.warn(`[broker] Unable to reconcile linked accounts with HomeBrain: ${error.message}`);
+    });
   });
 
   server.on('error', (error) => {
