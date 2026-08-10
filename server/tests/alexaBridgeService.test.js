@@ -936,6 +936,65 @@ test('getCertificationReadiness summarizes public-release blockers and passes', 
   assert.ok(readiness.checks.some((entry) => entry.key === 'tls_certificate' && entry.status === 'pass'));
 });
 
+test('getCertificationReadiness trusts broker token integrity over stale hub account rows', async (t) => {
+  const bridge = new AlexaBridgeService();
+  const registration = {
+    hubId: 'hub-token-truth',
+    status: 'paired',
+    mode: 'public',
+    brokerBaseUrl: 'https://broker.example.com',
+    proactiveEventsEnabled: true,
+    publicOrigin: 'https://hub.example.com'
+  };
+  const originalGetSettings = ReverseProxySettings.getSettings;
+  const originalFindOne = ReverseProxyRoute.findOne;
+
+  ReverseProxySettings.getSettings = async () => ({ acmeEnv: 'production' });
+  ReverseProxyRoute.findOne = () => ({
+    lean: async () => ({
+      hostname: 'hub.example.com',
+      enabled: true,
+      validationStatus: 'valid',
+      validation: { blockingErrors: [], warnings: [] },
+      certificateStatus: { status: 'issued' }
+    })
+  });
+  t.after(() => {
+    ReverseProxySettings.getSettings = originalGetSettings;
+    ReverseProxyRoute.findOne = originalFindOne;
+  });
+
+  const readiness = await bridge.getCertificationReadiness({
+    registration,
+    linkedAccounts: Array.from({ length: 8 }, (_entry, index) => ({
+      brokerAccountId: `stale-${index}`,
+      status: 'linked'
+    })),
+    brokerDelivery: { activeGrantCount: 0 },
+    brokerMetrics: {
+      available: true,
+      metrics: {
+        linkedAccounts: {
+          total: 8,
+          linked: 3,
+          tokenBacked: 3,
+          pending: 0,
+          error: 5,
+          revoked: 0
+        }
+      }
+    }
+  });
+
+  assert.equal(readiness.linkedHouseholdCount, 3);
+  assert.equal(readiness.incompleteHouseholdCount, 5);
+  assert.ok(readiness.checks.some((entry) => (
+    entry.key === 'linked_households'
+    && entry.status === 'warn'
+    && entry.message.includes('5 stale or incomplete record(s) are excluded')
+  )));
+});
+
 test('pairWithBroker preserves the requested broker control URL after registration', async (t) => {
   const bridge = new AlexaBridgeService();
   const originalGetSummary = bridge.getSummary.bind(bridge);
