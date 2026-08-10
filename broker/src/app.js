@@ -927,7 +927,7 @@ async function buildReadinessSnapshot(store, options = {}) {
     status: metrics.linkedAccounts.missingRefreshToken === 0 ? 'ok' : 'warning',
     message: metrics.linkedAccounts.missingRefreshToken === 0
       ? `${metrics.linkedAccounts.tokenBacked} linked account(s) have durable refresh tokens.`
-      : `${metrics.linkedAccounts.missingRefreshToken} account record(s) are marked linked without a durable refresh token; they are stale and cannot serve Alexa.`
+      : `${metrics.linkedAccounts.missingRefreshToken} legacy account record(s) have no durable refresh token and are quarantined as stale.`
   });
 
   checks.push({
