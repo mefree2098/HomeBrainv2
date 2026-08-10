@@ -118,6 +118,23 @@ test('link codes are consumed case-insensitively for mobile account-link flows',
   assert.equal(consumed.success, true);
   assert.equal(consumed.mode, 'public');
   assert.equal(registration.pendingLinkCodes.length, 0);
+
+  const replayed = await bridge.consumeLinkCodeForAccountLinking(issued.code, {
+    brokerClientId: 'homebrain-alexa-skill',
+    actor: 'alexa_oauth_retry'
+  });
+  assert.equal(replayed.success, true);
+  assert.equal(replayed.idempotentReplay, true);
+  assert.equal(replayed.consumedAt, consumed.consumedAt);
+  assert.equal(replayed.brokerAccountId, consumed.brokerAccountId);
+
+  await assert.rejects(
+    () => bridge.consumeLinkCodeForAccountLinking(issued.code, {
+      brokerClientId: 'different-alexa-skill',
+      actor: 'unrelated_oauth_retry'
+    }),
+    /invalid or expired/i
+  );
 });
 
 test('link codes are consumed when separators are omitted', async (t) => {
@@ -909,7 +926,7 @@ test('getCertificationReadiness summarizes public-release blockers and passes', 
 
   const readiness = await bridge.getCertificationReadiness({
     registration,
-    linkedAccounts: [{ brokerAccountId: 'acct-1' }],
+    linkedAccounts: [{ brokerAccountId: 'acct-1', status: 'linked' }],
     brokerDelivery: { activeGrantCount: 1 }
   });
 

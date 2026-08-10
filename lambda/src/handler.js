@@ -1,6 +1,7 @@
 const axios = require('axios');
 const {
   buildAcceptGrantResponse,
+  buildAcceptGrantErrorResponse,
   buildControlResponse,
   buildDiscoveryResponse,
   buildErrorResponse,
@@ -25,6 +26,11 @@ function getBrokerBaseUrl() {
 
 function getDefaultHubId() {
   return trimString(process.env.HOMEBRAIN_BROKER_HUB_ID);
+}
+
+function getBrokerTimeoutMs() {
+  const configured = Number(process.env.HOMEBRAIN_BROKER_TIMEOUT_MS || 7000);
+  return Number.isFinite(configured) ? Math.min(7500, Math.max(1000, configured)) : 7000;
 }
 
 function getDirectiveEnvelope(event = {}) {
@@ -63,7 +69,7 @@ function getDirectiveMetadata(event = {}) {
 
 async function postToBroker(pathname, payload, options = {}) {
   const response = await axios.post(`${getBrokerBaseUrl()}${pathname}`, payload, {
-    timeout: 10000,
+    timeout: getBrokerTimeoutMs(),
     headers: {
       'Content-Type': 'application/json',
       ...(options.bearerToken ? { Authorization: `Bearer ${options.bearerToken}` } : {})
@@ -74,7 +80,7 @@ async function postToBroker(pathname, payload, options = {}) {
 
 async function getFromBroker(pathname, options = {}) {
   const response = await axios.get(`${getBrokerBaseUrl()}${pathname}`, {
-    timeout: 10000,
+    timeout: getBrokerTimeoutMs(),
     headers: {
       ...(options.bearerToken ? { Authorization: `Bearer ${options.bearerToken}` } : {})
     }
@@ -223,6 +229,11 @@ async function handler(event) {
     });
   } catch (error) {
     const message = error.response?.data?.error || error.message || 'Alexa request failed';
+    if (directive.namespace === 'Alexa.Authorization' && directive.name === 'AcceptGrant') {
+      return buildAcceptGrantErrorResponse({
+        message: `Failed to handle AcceptGrant: ${message}`
+      });
+    }
     const errorType = inferAlexaErrorType(error);
 
     return buildErrorResponse({

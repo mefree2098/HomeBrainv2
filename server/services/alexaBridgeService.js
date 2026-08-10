@@ -16,6 +16,7 @@ const { normalizeAlexaName, parseEndpointId } = require('../../shared/alexa/cont
 
 const DEFAULT_LINK_CODE_TTL_MINUTES = 15;
 const MAX_LINK_CODES = 10;
+const ACCOUNT_LINK_REPLAY_TTL_MS = 15 * 60 * 1000;
 const BROKER_TIMEOUT_MS = 10000;
 const DEFAULT_DEVICE_UPDATE_SYNC_DEBOUNCE_MS = sanitizeDeviceUpdateSyncDebounceMs(
   process.env.HOMEBRAIN_ALEXA_DEVICE_UPDATE_SYNC_DEBOUNCE_MS,
@@ -89,6 +90,10 @@ function generateReadableLinkCode() {
   return `HBAX-${randomCodeSegment()}-${randomCodeSegment()}-${randomCodeSegment()}`;
 }
 
+function generateBrokerAccountId() {
+  return `hbacct_${crypto.randomBytes(12).toString('hex')}`;
+}
+
 function normalizeLinkCode(value) {
   return String(value || '')
     .trim()
@@ -104,6 +109,13 @@ function pruneLinkCodes(codes = []) {
       const expiresAt = new Date(entry?.expiresAt || 0).getTime();
       return Number.isFinite(expiresAt) && expiresAt > now;
     })
+    .slice(-MAX_LINK_CODES);
+}
+
+function pruneConsumedAccountLinkCodes(codes = []) {
+  const now = Date.now();
+  return (Array.isArray(codes) ? codes : [])
+    .filter((entry) => new Date(entry?.expiresAt || 0).getTime() > now)
     .slice(-MAX_LINK_CODES);
 }
 
@@ -437,7 +449,8 @@ class AlexaBridgeService {
     const certificateStatus = reverseProxyRoute?.certificateStatus || {};
     const validationStatus = reverseProxyRoute?.validation || {};
     const activeGrantCount = Number(brokerDelivery?.activeGrantCount || 0);
-    const linkedHouseholdCount = Array.isArray(linkedAccounts) ? linkedAccounts.length : 0;
+    const linkedHouseholdCount = linkedAccounts.filter((entry) => entry?.status === 'linked').length;
+    const incompleteHouseholdCount = linkedAccounts.filter((entry) => entry?.status === 'pending' || entry?.status === 'error').length;
     const checks = [];
 
     checks.push(
@@ -528,7 +541,7 @@ class AlexaBridgeService {
         ? buildReadinessCheck(
           'proactive_events',
           'Proactive Events',
-          activeGrantCount > 0 ? 'pass' : 'warn',
+          activeGrantCount > 0 ? 'pass' : linkedHouseholdCount > 0 ? 'fail' : 'warn',
           activeGrantCount > 0
             ? `Alexa proactive event delivery is enabled with ${activeGrantCount} active grant(s).`
             : linkedHouseholdCount > 0
@@ -540,8 +553,13 @@ class AlexaBridgeService {
 
     checks.push(
       linkedHouseholdCount > 0
-        ? buildReadinessCheck('linked_households', 'Linked Households', 'pass', `${linkedHouseholdCount} Alexa household(s) are linked to this hub.`)
-        : buildReadinessCheck('linked_households', 'Linked Households', 'warn', 'No Alexa households have been linked yet.')
+        ? buildReadinessCheck(
+          'linked_households',
+          'Linked Households',
+          incompleteHouseholdCount > 0 ? 'warn' : 'pass',
+          `${linkedHouseholdCount} Alexa household(s) have durable links.${incompleteHouseholdCount > 0 ? ` ${incompleteHouseholdCount} stale or incomplete record(s) are excluded.` : ''}`
+        )
+        : buildReadinessCheck('linked_households', 'Linked Households', 'warn', 'No durable Alexa household links are active.')
     );
 
     return {
@@ -552,6 +570,7 @@ class AlexaBridgeService {
       brokerStatus: registration.status,
       activeGrantCount,
       linkedHouseholdCount,
+      incompleteHouseholdCount,
       reverseProxy: {
         hostname: reverseProxyRoute?.hostname || publicHostname || '',
         enabled: Boolean(reverseProxyRoute?.enabled),
@@ -852,12 +871,51 @@ class AlexaBridgeService {
       throw new Error('Pairing link code is required');
     }
 
+    const normalizedCodeHash = sha256(normalizeLinkCode(providedLinkCode));
+    const normalizedBrokerClientId = trimString(meta.brokerClientId);
+    const recentlyConsumed = pruneConsumedAccountLinkCodes(registration.recentlyConsumedAccountLinkCodes);
+    const replay = recentlyConsumed.find((entry) => (
+      secureEqual(entry.codeHash, normalizedCodeHash)
+      && (!trimString(entry.brokerClientId) || secureEqual(entry.brokerClientId, normalizedBrokerClientId))
+    ));
+    if (replay) {
+      replay.brokerAccountId = trimString(replay.brokerAccountId) || generateBrokerAccountId();
+      registration.recentlyConsumedAccountLinkCodes = recentlyConsumed;
+      registration.lastSeenAt = new Date();
+      await registration.save();
+      return {
+        success: true,
+        hubId: registration.hubId,
+        codePreview: replay.codePreview,
+        mode: replay.mode,
+        publicOrigin: registration.publicOrigin || getConfiguredPublicOrigin(),
+        brokerClientId: replay.brokerClientId || registration.brokerClientId,
+        brokerAccountId: replay.brokerAccountId,
+        consumedAt: new Date(replay.consumedAt).toISOString(),
+        idempotentReplay: true
+      };
+    }
+
     const { matchingCode, remainingCodes } = consumePendingLinkCode(registration.pendingLinkCodes, providedLinkCode);
     if (!matchingCode) {
       throw new Error('Pairing link code is invalid or expired');
     }
 
+    const consumedAt = new Date();
+    const brokerAccountId = generateBrokerAccountId();
     registration.pendingLinkCodes = remainingCodes;
+    registration.recentlyConsumedAccountLinkCodes = pruneConsumedAccountLinkCodes([
+      ...recentlyConsumed,
+      {
+        codeHash: normalizedCodeHash,
+        codePreview: matchingCode.codePreview,
+        mode: matchingCode.mode,
+        brokerClientId: normalizedBrokerClientId,
+        brokerAccountId,
+        consumedAt,
+        expiresAt: new Date(consumedAt.getTime() + ACCOUNT_LINK_REPLAY_TTL_MS)
+      }
+    ]);
     registration.lastSeenAt = new Date();
     await registration.save();
 
@@ -881,7 +939,9 @@ class AlexaBridgeService {
       mode: matchingCode.mode,
       publicOrigin: registration.publicOrigin || getConfiguredPublicOrigin(),
       brokerClientId: registration.brokerClientId,
-      consumedAt: new Date().toISOString()
+      brokerAccountId,
+      consumedAt: consumedAt.toISOString(),
+      idempotentReplay: false
     };
   }
 
@@ -1246,7 +1306,14 @@ class AlexaBridgeService {
       linkedAccount.alexaAccountId = String(account?.alexaAccountId || '').trim();
       linkedAccount.alexaHouseholdId = String(account?.alexaHouseholdId || '').trim();
       linkedAccount.locale = String(account?.locale || linkedAccount.locale || 'en-US').trim() || 'en-US';
-      linkedAccount.status = account?.status === 'revoked' ? 'revoked' : account?.status === 'pending' ? 'pending' : 'linked';
+      linkedAccount.status = ['linked', 'revoked', 'pending', 'error'].includes(account?.status)
+        ? account.status
+        : 'error';
+      if (linkedAccount.status === 'linked') {
+        linkedAccount.linkedAt = account?.linkedAt ? new Date(account.linkedAt) : (linkedAccount.linkedAt || new Date());
+      } else if (!linkedAccount.linkedAt && account?.linkedAt) {
+        linkedAccount.linkedAt = new Date(account.linkedAt);
+      }
       linkedAccount.permissions = Array.isArray(account?.permissions) ? account.permissions.filter(Boolean) : [];
       linkedAccount.acceptedGrantAt = account?.acceptedGrantAt ? new Date(account.acceptedGrantAt) : linkedAccount.acceptedGrantAt;
       linkedAccount.lastDiscoveryAt = account?.lastDiscoveryAt ? new Date(account.lastDiscoveryAt) : linkedAccount.lastDiscoveryAt;
@@ -1282,6 +1349,7 @@ class AlexaBridgeService {
         alexaHouseholdId: account.alexaHouseholdId || '',
         locale: account.locale || 'en-US',
         status: account.status || 'linked',
+        linkedAt: account.linkedAt || null,
         permissions: Array.isArray(account.permissions) ? account.permissions : [],
         acceptedGrantAt: account.acceptedGrantAt || null,
         lastDiscoveryAt: account.lastDiscoveryAt || null,
@@ -1473,9 +1541,12 @@ class AlexaBridgeService {
           brokerAccountId: entry?.brokerAccountId || '',
           status: entry?.status || 'unknown',
           eventRegion: entry?.eventRegion || '',
+          acceptedAt: entry?.acceptedAt || null,
           lastUsedAt: entry?.lastUsedAt || null,
           lastRefreshedAt: entry?.lastRefreshedAt || null,
           lastError: entry?.lastError || '',
+          lastErrorCode: entry?.metadata?.lastErrorCode || '',
+          lastErrorStatus: Number(entry?.metadata?.lastErrorStatus || 0),
           updatedAt: entry?.updatedAt || null
         })),
         recentEvents: events.slice(0, 6).map((entry) => ({
@@ -1487,6 +1558,7 @@ class AlexaBridgeService {
           createdAt: entry?.createdAt || null,
           deliveredAt: entry?.deliveredAt || null,
           lastAttemptAt: entry?.lastAttemptAt || null,
+          nextAttemptAt: entry?.nextAttemptAt || null,
           lastError: entry?.lastError || '',
           metadata: entry?.metadata && typeof entry.metadata === 'object' ? entry.metadata : {}
         }))

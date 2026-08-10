@@ -1083,7 +1083,7 @@ class AlexaBrokerService {
       'allowManualRegistration'
     ]);
     const providedKeys = Object.keys(updates || {});
-    const requiresRestart = this.isChildAlive() && providedKeys.some((key) => runtimeFields.has(key));
+    const requiresRestart = this.isManagedRuntimeAlive(config) && providedKeys.some((key) => runtimeFields.has(key));
 
     if (Object.prototype.hasOwnProperty.call(updates, 'servicePort')) {
       config.servicePort = sanitizePositiveInteger(updates.servicePort, config.servicePort || DEFAULT_PORT, {

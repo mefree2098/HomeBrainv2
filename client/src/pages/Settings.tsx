@@ -6061,7 +6061,7 @@ export function Settings() {
                   </div>
                   <div className="rounded-lg border border-border/60 bg-background/60 p-3">
                     <p className="text-xs uppercase tracking-wide text-muted-foreground">Linked Households</p>
-                    <p className="mt-1 text-lg font-semibold">{alexaSummary?.linkedAccounts?.length ?? 0}</p>
+                    <p className="mt-1 text-lg font-semibold">{Array.isArray(alexaSummary?.linkedAccounts) ? alexaSummary.linkedAccounts.filter((account: any) => account?.status === 'linked').length : 0}</p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {alexaSummary?.brokerBaseUrl
                         ? `Broker: ${alexaSummary.brokerBaseUrl}`

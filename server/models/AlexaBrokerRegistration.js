@@ -37,6 +37,38 @@ const pendingLinkCodeSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const consumedLinkCodeSchema = new mongoose.Schema({
+  codeHash: {
+    type: String,
+    required: true
+  },
+  codePreview: {
+    type: String,
+    default: ''
+  },
+  mode: {
+    type: String,
+    enum: ['private', 'public'],
+    default: 'private'
+  },
+  brokerClientId: {
+    type: String,
+    default: ''
+  },
+  brokerAccountId: {
+    type: String,
+    default: ''
+  },
+  consumedAt: {
+    type: Date,
+    default: Date.now
+  },
+  expiresAt: {
+    type: Date,
+    required: true
+  }
+}, { _id: false });
+
 const recentActivitySchema = new mongoose.Schema({
   direction: {
     type: String,
@@ -111,6 +143,10 @@ const alexaBrokerRegistrationSchema = new mongoose.Schema({
     type: [pendingLinkCodeSchema],
     default: []
   },
+  recentlyConsumedAccountLinkCodes: {
+    type: [consumedLinkCodeSchema],
+    default: []
+  },
   recentActivity: {
     type: [recentActivitySchema],
     default: []
@@ -179,6 +215,11 @@ alexaBrokerRegistrationSchema.pre('validate', function preValidate() {
   this.relayToken = String(this.relayToken || '').trim();
   this.publicOrigin = String(this.publicOrigin || '').trim().replace(/\/+$/, '');
   this.pendingLinkCodes = Array.isArray(this.pendingLinkCodes) ? this.pendingLinkCodes : [];
+  this.recentlyConsumedAccountLinkCodes = Array.isArray(this.recentlyConsumedAccountLinkCodes)
+    ? this.recentlyConsumedAccountLinkCodes
+      .filter((entry) => new Date(entry?.expiresAt || 0).getTime() > Date.now())
+      .slice(-10)
+    : [];
   this.recentActivity = Array.isArray(this.recentActivity)
     ? this.recentActivity.slice(-50)
     : [];

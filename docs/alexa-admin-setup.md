@@ -105,10 +105,10 @@ These details matter and are easy to miss:
    - Household linking connects an Alexa user/household to the broker and therefore to the hub.
    - Both steps consume a one-time `HBAX-...` code from HomeBrain.
 
-5. The current broker does not implement PKCE verification.
-   - Amazon's current account-linking docs support a PKCE toggle.
-   - Leave `PKCE Authorization` disabled in the Alexa developer console for HomeBrain right now.
-   - If PKCE is turned on, the current broker will not verify `code_verifier` and can break account linking.
+5. The broker implements PKCE with the required `S256` method.
+   - Enable `PKCE Authorization` in the Alexa developer console.
+   - The broker persists the challenge with the one-time authorization code and verifies Alexa's `code_verifier` during token exchange.
+   - A missing, malformed, or mismatched verifier is rejected without consuming the authorization code.
 
 6. Alexa account-link refresh tokens should not expire by default.
    - Older broker builds used a 30-day default, which can force an unexpected relink after inactivity.
@@ -454,7 +454,7 @@ On the Alexa developer console Account Linking page:
 - Authorization Grant Type:
   - `Auth Code Grant`
 - PKCE Authorization:
-  - `Disabled`
+  - `Enabled` (`S256`)
 - Your Web Authorization URI:
   - `https://alexa-broker.example.com/api/oauth/alexa/authorize`
 - Access Token URI:
@@ -479,7 +479,7 @@ On the Alexa developer console Account Linking page:
 - Smart home skills require account linking.
 - Do not enable mobile-app account linking unless you also build app-to-app authorization URIs.
 - Do not enable voice-forward account linking unless you explicitly implement it.
-- Do not enable PKCE for HomeBrain's current broker.
+- Enable PKCE. Current HomeBrain broker builds verify Alexa's `S256` challenge and verifier.
 
 ### Alexa-generated redirect URLs
 
@@ -604,6 +604,8 @@ Generate a new public HomeBrain link code before doing this.
 
 Do not reuse the code that was already consumed during broker pairing.
 
+Amazon platform boundary: for a development-stage Smart Home skill, Amazon currently requires the Alexa iOS or Android app to start skill enablement. The HomeBrain authorization form itself is a browser page, but `alexa.amazon.com` does not expose the development-skill `Your Skills > Dev` enable flow. A genuinely browser-initiated flow requires separately configuring and implementing Amazon's app-initiated account-linking / Skill Enablement API flow; standard HomeBrain linking does not currently claim to provide that.
+
 ### Household-linking flow
 
 1. In HomeBrain, open `Alexa Broker`.
@@ -613,19 +615,21 @@ Do not reuse the code that was already consumed during broker pairing.
 5. In the Alexa mobile app, go to `Skills & Games > Your Skills > Dev` and enable the Smart Home skill.
 6. Alexa opens the broker's account-linking page.
 7. On that page, enter:
-   - the HomeBrain public origin, for example `https://homebrain.example.com`, or the HomeBrain hub ID
+   - the HomeBrain public origin, for example `https://homebrain.example.com` (use the public origin, never the private/LAN URL)
    - the one-time HomeBrain link code
    - locale if needed
-8. Submit the form.
+8. Click `Link Account` once. The page disables the button while the request is running.
 
 What should happen:
 
 - the broker consumes the one-time HomeBrain link code
 - the broker creates an account link
 - Alexa exchanges the authorization code for a HomeBrain access token and refresh token
+- a retried form submission, hub-code consumption, or authorization-code exchange replays the same durable result instead of creating a second broken link
 - Alexa sends `Discover`
 - if `Send Alexa Events` is enabled, Alexa sends `AcceptGrant`
 - the broker stores the permission grant for proactive events
+- proactive events wait briefly for Amazon's new grant to propagate; transient `403` or LWA failures are retried without revoking the household
 
 Current builds try to prefill the public HomeBrain origin on the broker account-linking page when only one paired hub exists.
 
@@ -633,10 +637,11 @@ Current builds try to prefill the public HomeBrain origin on the broker account-
 
 Back in HomeBrain `Alexa Broker`, confirm:
 
-- `Linked Households` is greater than `0`
+- the newly linked household has status `linked` and is backed by a durable refresh token
 - `Permission Grants` shows at least `1 active`
 - the household appears under `Linked Alexa Households`
-- broker queue is not filling with failures
+- a new proactive event is delivered after the short grant-activation delay
+- broker readiness reports no unresolved failed events; older retained failures may remain visible as diagnostics
 
 If account linking succeeds but `Permission Grants` stays at `0 active`, the usual problem is `AcceptGrant` handling or missing `HOMEBRAIN_ALEXA_EVENT_CLIENT_ID` / `HOMEBRAIN_ALEXA_EVENT_CLIENT_SECRET`.
 
@@ -783,7 +788,7 @@ Check:
 - both are HTTPS on port `443`
 - broker OAuth client ID and secret match the values saved in the Alexa console
 - every Alexa redirect URL shown in the console is present in `HOMEBRAIN_ALEXA_ALLOWED_REDIRECT_URIS`
-- `PKCE Authorization` is disabled
+- `PKCE Authorization` is enabled and set to `S256`
 - the broker login page is reachable on mobile
 
 If the Alexa mobile app says it cannot find the broker hostname, fix public DNS for the broker hostname first.
@@ -876,11 +881,12 @@ Check:
 
 These are current implementation realities, not guesswork:
 
-1. PKCE is not implemented in the HomeBrain broker.
-   - Leave the Alexa console PKCE toggle off.
-
-2. The broker and hub expect separate origins.
+1. The broker and hub expect separate origins.
    - Do not deploy the broker under a subpath of the HomeBrain origin.
+
+2. Standard development-skill enablement starts in the Alexa mobile app.
+   - The authorization form is browser-based, but Amazon does not provide the development `Your Skills > Dev` enable entry point on `alexa.amazon.com`.
+   - Browser-initiated linking requires the separate Skill Enablement API/app-initiated account-linking integration.
 
 3. The custom skill Lambda only requires `HOMEBRAIN_BROKER_BASE_URL`.
    - Older internal notes that mention `HOMEBRAIN_ALEXA_CUSTOM_DEFAULT_LOCALE` are stale.

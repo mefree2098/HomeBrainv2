@@ -1,6 +1,7 @@
 const express = require('express');
 const axios = require('axios');
 const rateLimit = require('express-rate-limit');
+const crypto = require('crypto');
 const brokerStore = require('./store');
 const { sha256 } = brokerStore;
 const {
@@ -206,7 +207,16 @@ function validateClientId(clientId) {
 
 function validateClientSecret(client, clientSecret) {
   const expectedSecret = trimString(client?.clientSecret || getConfiguredBrokerClientSecret());
-  if (expectedSecret && clientSecret !== expectedSecret) {
+  const actualSecret = trimString(clientSecret);
+  if (!expectedSecret) {
+    throw new Error('client_secret is not configured');
+  }
+  const expectedBuffer = Buffer.from(expectedSecret, 'utf8');
+  const actualBuffer = Buffer.from(actualSecret, 'utf8');
+  if (expectedSecret && (
+    expectedBuffer.length !== actualBuffer.length
+    || !crypto.timingSafeEqual(expectedBuffer, actualBuffer)
+  )) {
     throw new Error('client_secret is invalid');
   }
 }
@@ -236,8 +246,35 @@ function validateRedirectUri(client, redirectUri) {
   if (allowedRedirectUris.length > 0 && !allowedRedirectUris.includes(normalizedRedirectUri)) {
     throw new Error('redirect_uri is not allowed');
   }
+  if (allowedRedirectUris.length === 0 && client?.allowAnyRedirectUri !== true) {
+    throw new Error('OAuth client does not have any allowed redirect URIs configured');
+  }
 
   return normalizedRedirectUri;
+}
+
+function validatePkceParameters(codeChallenge, codeChallengeMethod) {
+  const challenge = trimString(codeChallenge);
+  const method = trimString(codeChallengeMethod);
+  if (!challenge && !method) {
+    return {
+      codeChallenge: '',
+      codeChallengeMethod: ''
+    };
+  }
+  if (!challenge) {
+    throw new Error('code_challenge is required when code_challenge_method is provided');
+  }
+  if (method !== 'S256') {
+    throw new Error('code_challenge_method must be S256');
+  }
+  if (!/^[A-Za-z0-9_-]{43}$/.test(challenge)) {
+    throw new Error('code_challenge must be a valid S256 PKCE challenge');
+  }
+  return {
+    codeChallenge: challenge,
+    codeChallengeMethod: method
+  };
 }
 
 function sanitizeBaseUrl(value) {
@@ -434,6 +471,11 @@ function createRateLimitMiddleware() {
     limit: maxRequests,
     standardHeaders: true,
     legacyHeaders: false,
+    skip(req) {
+      // Alexa's token endpoint has its own authenticated protocol contract. A
+      // generic HTML/JSON 429 here can be interpreted as a broken account link.
+      return req.path === '/api/oauth/alexa/token';
+    },
     keyGenerator(req) {
       return typeof ipKeyGenerator === 'function'
         ? ipKeyGenerator(req.ip)
@@ -560,6 +602,8 @@ function renderAuthorizePage({ oauth = {}, error = '', brokerDisplayName = getBr
         <input type="hidden" name="redirect_uri" value="${htmlEscape(oauth.redirectUri)}" />
         <input type="hidden" name="scope" value="${htmlEscape(oauth.scope)}" />
         <input type="hidden" name="state" value="${htmlEscape(oauth.state)}" />
+        <input type="hidden" name="code_challenge" value="${htmlEscape(oauth.codeChallenge)}" />
+        <input type="hidden" name="code_challenge_method" value="${htmlEscape(oauth.codeChallengeMethod)}" />
         <label for="hubRef">HomeBrain Hub ID or Public Origin</label>
         <input id="hubRef" name="hubRef" value="${htmlEscape(defaultHubReference)}" placeholder="hub-123 or https://home.example.com" />
         <label for="linkCode">Alexa Pairing Code</label>
@@ -567,11 +611,48 @@ function renderAuthorizePage({ oauth = {}, error = '', brokerDisplayName = getBr
         <label for="locale">Locale</label>
         <input id="locale" name="locale" value="${htmlEscape(oauth.locale || 'en-US')}" placeholder="en-US" />
         ${resolvedHub ? `<p class="hint">Resolved hub: ${htmlEscape(resolvedHub.hubId)}${resolvedHub.registration?.publicOrigin ? ` (${htmlEscape(resolvedHub.registration.publicOrigin)})` : ''}</p>` : ''}
-        <button type="submit">Link Account</button>
+        <button id="linkAccountButton" type="submit">Link Account</button>
       </form>
     </main>
+    <script>
+      const form = document.querySelector('form');
+      const button = document.getElementById('linkAccountButton');
+      form.addEventListener('submit', (event) => {
+        if (form.dataset.submitted === 'true') {
+          event.preventDefault();
+          return;
+        }
+        form.dataset.submitted = 'true';
+        button.disabled = true;
+        button.textContent = 'Linking…';
+      });
+    </script>
   </body>
 </html>`;
+}
+
+function setAuthorizePageHeaders(res) {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'");
+  res.setHeader('Referrer-Policy', 'no-referrer');
+}
+
+function sanitizePermissionGrant(record = {}) {
+  const {
+    accessToken,
+    refreshToken,
+    granteeTokenHash,
+    grantCodeHash,
+    ...safeRecord
+  } = record || {};
+  return {
+    ...safeRecord,
+    hasAccessToken: Boolean(trimString(accessToken)),
+    hasRefreshToken: Boolean(trimString(refreshToken)),
+    grantCodeFingerprint: trimString(grantCodeHash).slice(0, 12),
+    granteeTokenFingerprint: trimString(granteeTokenHash).slice(0, 12)
+  };
 }
 
 async function syncLinkedAccountsToHub(store, hubId) {
@@ -699,6 +780,15 @@ async function buildReadinessSnapshot(store, options = {}) {
   const publicHubs = scopedHubs.filter((entry) => entry.registration?.mode === 'public');
   const brokerBaseUrl = safeOrigin(process.env.HOMEBRAIN_BROKER_PUBLIC_BASE_URL);
   const clientRegistry = getClientRegistry();
+  const storageHealth = typeof store.getStorageHealth === 'function'
+    ? await store.getStorageHealth().catch((error) => ({
+      primary: { valid: false, error: error.message },
+      backup: { valid: false, error: error.message }
+    }))
+    : null;
+  const redirectConfigurationUsable = clientRegistry.every((entry) => entry.redirectUris.length > 0 || entry.allowAnyRedirectUri === true);
+  const redirectsExplicitlyRestricted = clientRegistry.every((entry) => entry.redirectUris.length > 0 && entry.allowAnyRedirectUri !== true);
+  const oauthClientSecretsConfigured = clientRegistry.length > 0 && clientRegistry.every((entry) => Boolean(trimString(entry.clientSecret)));
   const checks = [];
 
   checks.push({
@@ -713,21 +803,28 @@ async function buildReadinessSnapshot(store, options = {}) {
   checks.push({
     id: 'oauth_clients',
     label: 'OAuth client registry',
-    status: clientRegistry.length > 0 ? 'ok' : 'blocked',
-    message: clientRegistry.length > 0
-      ? `${clientRegistry.length} Alexa OAuth client configuration(s) loaded.`
-      : 'Configure at least one Alexa OAuth client.'
+    status: oauthClientSecretsConfigured ? 'ok' : 'blocked',
+    message: oauthClientSecretsConfigured
+      ? `${clientRegistry.length} Alexa OAuth client configuration(s) loaded with confidential client credentials.`
+      : 'Configure at least one Alexa OAuth client with a non-empty client secret.'
   });
 
   checks.push({
     id: 'redirect_uri_allowlist',
     label: 'Redirect URI allowlist',
-    status: clientRegistry.every((entry) => entry.allowAnyRedirectUri !== true || entry.redirectUris.length > 0)
-      ? 'ok'
-      : 'warning',
-    message: clientRegistry.every((entry) => entry.allowAnyRedirectUri !== true || entry.redirectUris.length > 0)
+    status: !redirectConfigurationUsable ? 'blocked' : redirectsExplicitlyRestricted ? 'ok' : 'warning',
+    message: !redirectConfigurationUsable
+      ? 'One or more OAuth clients have no usable redirect URI configuration.'
+      : redirectsExplicitlyRestricted
       ? 'OAuth clients are using explicit redirect URI allowlists.'
-      : 'One or more OAuth clients allow arbitrary redirect URIs. Configure HOMEBRAIN_ALEXA_ALLOWED_REDIRECT_URIS or HOMEBRAIN_ALEXA_OAUTH_CLIENTS before public release.'
+      : 'One or more OAuth clients allow arbitrary redirect URIs. Configure an explicit redirect URI allowlist before public release.'
+  });
+
+  checks.push({
+    id: 'pkce_s256',
+    label: 'OAuth PKCE S256',
+    status: 'ok',
+    message: 'The authorization and token endpoints support Alexa PKCE S256 verification.'
   });
 
   checks.push({
@@ -766,17 +863,54 @@ async function buildReadinessSnapshot(store, options = {}) {
   });
 
   checks.push({
+    id: 'oauth_account_tokens',
+    label: 'Linked-account token integrity',
+    status: metrics.linkedAccounts.missingRefreshToken === 0 ? 'ok' : 'warning',
+    message: metrics.linkedAccounts.missingRefreshToken === 0
+      ? `${metrics.linkedAccounts.tokenBacked} linked account(s) have durable refresh tokens.`
+      : `${metrics.linkedAccounts.missingRefreshToken} account record(s) are marked linked without a durable refresh token; they are stale and cannot serve Alexa.`
+  });
+
+  checks.push({
+    id: 'proactive_event_grants',
+    label: 'Proactive-event grants',
+    status: metrics.linkedAccounts.tokenBacked === 0 || metrics.permissionGrants.active > 0
+      ? 'ok'
+      : 'blocked',
+    message: metrics.linkedAccounts.tokenBacked === 0 || metrics.permissionGrants.active > 0
+      ? `${metrics.permissionGrants.active} active Alexa event-gateway grant(s) are available.`
+      : 'A token-backed Alexa account exists, but no active event-gateway grant is available.'
+  });
+
+  checks.push({
     id: 'event_queue_health',
     label: 'Broker event queue health',
-    status: metrics.queue.failed === 0 && metrics.queue.oldestQueuedAgeMs < 15 * 60 * 1000
+    status: metrics.queue.unresolvedFailed === 0 && metrics.queue.staleProcessing === 0 && metrics.queue.oldestQueuedAgeMs < 15 * 60 * 1000
       ? 'ok'
-      : metrics.queue.failed > 0
+      : metrics.queue.unresolvedFailed > 0
         ? 'warning'
         : 'warning',
-    message: metrics.queue.failed === 0 && metrics.queue.oldestQueuedAgeMs < 15 * 60 * 1000
-      ? 'Alexa event queue is healthy.'
-      : `Broker queue has ${metrics.queue.failed} failed event(s) and an oldest queued age of ${metrics.queue.oldestQueuedAgeMs}ms.`
+    message: metrics.queue.unresolvedFailed === 0 && metrics.queue.staleProcessing === 0 && metrics.queue.oldestQueuedAgeMs < 15 * 60 * 1000
+      ? `Alexa event queue is healthy${metrics.queue.failed > 0 ? `; ${metrics.queue.failed} older failed event(s) remain retained for diagnostics` : ''}.`
+      : `Broker queue has ${metrics.queue.unresolvedFailed} unresolved failed event(s), ${metrics.queue.staleProcessing} stale processing event(s), and an oldest queued age of ${metrics.queue.oldestQueuedAgeMs}ms.`
   });
+
+  if (storageHealth) {
+    checks.push({
+      id: 'durable_store',
+      label: 'Durable broker credential store',
+      status: storageHealth.primary?.valid && storageHealth.backup?.valid
+        ? 'ok'
+        : storageHealth.primary?.valid
+          ? 'warning'
+          : 'blocked',
+      message: storageHealth.primary?.valid && storageHealth.backup?.valid
+        ? 'The primary and backup Alexa credential stores are readable.'
+        : storageHealth.primary?.valid
+          ? `The primary credential store is readable, but the backup is not healthy (${storageHealth.backup?.error || 'unknown error'}).`
+          : `The primary Alexa credential store is not healthy (${storageHealth.primary?.error || 'unknown error'}).`
+    });
+  }
 
   checks.push({
     id: 'manual_certificate_review',
@@ -808,6 +942,7 @@ function createApp(options = {}) {
     store,
     eventGatewayService
   });
+  const authorizeSubmissions = new Map();
 
   if (options.startDispatcher !== false) {
     eventGatewayService.start();
@@ -831,7 +966,8 @@ function createApp(options = {}) {
       hubs: metrics.hubs.total,
       queuedEvents: metrics.queue.queued,
       activePermissionGrants: metrics.permissionGrants.active,
-      failedEvents: metrics.queue.failed,
+      failedEvents: metrics.queue.unresolvedFailed,
+      retainedFailedEvents: metrics.queue.failed,
       oldestQueuedAgeMs: metrics.queue.oldestQueuedAgeMs,
       generatedAt: metrics.generatedAt
     });
@@ -842,6 +978,7 @@ function createApp(options = {}) {
     const redirectUri = trimString(req.query.redirect_uri);
     const state = trimString(req.query.state);
     let safeRedirectUri = '';
+    setAuthorizePageHeaders(res);
 
     try {
       const client = validateClientId(clientId);
@@ -849,6 +986,7 @@ function createApp(options = {}) {
         throw new Error('response_type must be code');
       }
       const validatedRedirectUri = validateRedirectUri(client, redirectUri);
+      const pkce = validatePkceParameters(req.query.code_challenge, req.query.code_challenge_method);
       safeRedirectUri = validatedRedirectUri;
 
       const hubs = (await store.listHubs()).filter((hub) => hub.registration);
@@ -875,6 +1013,7 @@ function createApp(options = {}) {
           redirectUri: validatedRedirectUri,
           scope: trimString(req.query.scope) || 'smart_home',
           state,
+          ...pkce,
           locale: trimString(req.query.locale) || 'en-US',
           hubRef: getDefaultHubReference(resolvedHub, requestedHubRef)
         }
@@ -892,6 +1031,8 @@ function createApp(options = {}) {
           redirectUri,
           scope: trimString(req.query.scope),
           state,
+          codeChallenge: trimString(req.query.code_challenge),
+          codeChallengeMethod: trimString(req.query.code_challenge_method),
           hubRef: trimString(req.query.hubRef || req.query.hubId)
         },
         error: error.message
@@ -904,6 +1045,7 @@ function createApp(options = {}) {
     const redirectUri = trimString(req.body.redirect_uri);
     const state = trimString(req.body.state);
     let safeRedirectUri = '';
+    setAuthorizePageHeaders(res);
 
     try {
       const client = validateClientId(clientId);
@@ -911,6 +1053,7 @@ function createApp(options = {}) {
         throw new Error('response_type must be code');
       }
       const validatedRedirectUri = validateRedirectUri(client, redirectUri);
+      const pkce = validatePkceParameters(req.body.code_challenge, req.body.code_challenge_method);
       safeRedirectUri = validatedRedirectUri;
 
       const hubRef = trimString(req.body.hubRef || req.body.hubId);
@@ -926,53 +1069,59 @@ function createApp(options = {}) {
         throw new Error('Selected hub does not support Alexa account linking yet');
       }
 
-      const linkResponse = await proxyToHub(store, hubId, 'linkAccount', 'post', {
+      const submissionKey = sha256([
+        client.clientId,
+        validatedRedirectUri,
+        state,
+        hubId,
         linkCode,
-        brokerClientId: clientId,
-        actor: 'alexa_oauth'
-      });
-
-      const accountLink = await store.createAccountLink({
-        hubId,
-        locale: trimString(req.body.locale) || 'en-US',
-        status: 'linked',
-        metadata: {
-          linkCodePreview: linkResponse.codePreview || '',
-          linkedVia: 'link_code',
-          clientId
-        }
-      });
-
-      const authorizationCode = await store.createAuthorizationCode({
-        brokerAccountId: accountLink.brokerAccountId,
-        clientId: client.clientId,
-        redirectUri: validatedRedirectUri,
-        scopes: trimString(req.body.scope || 'smart_home').split(/\s+/).filter(Boolean),
-        locale: accountLink.locale,
-        metadata: {
-          linkCodePreview: linkResponse.codePreview || ''
-        }
-      });
-
-      await store.appendAudit({
-        type: 'oauth_authorize_success',
-        hubId,
-        brokerAccountId: accountLink.brokerAccountId,
-        message: 'Alexa account linking authorization issued',
-        details: {
-          clientId: client.clientId,
-          redirectUri: validatedRedirectUri
-        }
-      });
-
-      await syncLinkedAccountsToHub(store, hubId).catch(() => {});
-
-      const target = new URL(validatedRedirectUri);
-      target.searchParams.set('code', authorizationCode.code);
-      if (state) {
-        target.searchParams.set('state', state);
+        pkce.codeChallenge
+      ].join('\u0000'));
+      let submission = authorizeSubmissions.get(submissionKey);
+      if (!submission) {
+        const promise = (async () => {
+          const linkResponse = await proxyToHub(store, hubId, 'linkAccount', 'post', {
+            linkCode,
+            brokerClientId: clientId,
+            actor: 'alexa_oauth'
+          });
+          const grant = await store.createAuthorizationGrant({
+            brokerAccountId: linkResponse.brokerAccountId,
+            hubId,
+            locale: trimString(req.body.locale) || 'en-US',
+            clientId: client.clientId,
+            redirectUri: validatedRedirectUri,
+            scopes: trimString(req.body.scope || 'smart_home').split(/\s+/).filter(Boolean),
+            codeChallenge: pkce.codeChallenge,
+            codeChallengeMethod: pkce.codeChallengeMethod,
+            accountMetadata: {
+              linkCodePreview: linkResponse.codePreview || '',
+              linkedVia: 'link_code',
+              clientId
+            },
+            codeMetadata: {
+              linkCodePreview: linkResponse.codePreview || ''
+            }
+          });
+          const target = new URL(validatedRedirectUri);
+          target.searchParams.set('code', grant.authorizationCode.code);
+          if (state) {
+            target.searchParams.set('state', state);
+          }
+          return target.toString();
+        })();
+        submission = { promise };
+        authorizeSubmissions.set(submissionKey, submission);
+        promise.catch(() => {
+          authorizeSubmissions.delete(submissionKey);
+        });
+        const timer = setTimeout(() => {
+          authorizeSubmissions.delete(submissionKey);
+        }, 5 * 60 * 1000);
+        timer.unref?.();
       }
-      return res.redirect(target.toString());
+
+      return res.redirect(await submission.promise);
     } catch (error) {
       console.warn(`[broker] Alexa authorize form submit failed: ${error.message}`);
       if (safeRedirectUri) {
@@ -986,6 +1135,8 @@ function createApp(options = {}) {
           redirectUri,
           scope: trimString(req.body.scope),
           state,
+          codeChallenge: trimString(req.body.code_challenge),
+          codeChallengeMethod: trimString(req.body.code_challenge_method),
           locale: trimString(req.body.locale),
           hubRef: trimString(req.body.hubRef || req.body.hubId)
         },
@@ -1024,17 +1175,14 @@ function createApp(options = {}) {
           throw createOAuthTokenError('invalid_grant', error.message);
         }
 
-        const codeRecord = await store.consumeAuthorizationCode(req.body.code, {
+        const tokens = await store.exchangeAuthorizationCode(req.body.code, {
           clientId: client.clientId,
-          redirectUri
+          redirectUri,
+          codeVerifier: req.body.code_verifier,
+          requestId: req.requestId
         });
-
-        const tokens = await store.issueTokens({
-          brokerAccountId: codeRecord.brokerAccountId,
-          hubId: codeRecord.hubId,
-          clientId: client.clientId,
-          scopes: codeRecord.scopes,
-          locale: codeRecord.locale
+        void syncLinkedAccountsToHub(store, tokens.hubId).catch((syncError) => {
+          console.warn(`[broker] Unable to sync linked Alexa account after token exchange: ${syncError.message}`);
         });
 
         return res.status(200).json({
@@ -1236,7 +1384,7 @@ function createApp(options = {}) {
         success: true,
         hubId: hub.hubId,
         events,
-        permissionGrants: grants,
+        permissionGrants: grants.map((entry) => sanitizePermissionGrant(entry)),
         count: events.length
       });
     } catch (error) {
@@ -1563,6 +1711,7 @@ function createApp(options = {}) {
           alexaHouseholdId: account?.alexaHouseholdId,
           locale: account?.locale,
           status: account?.status,
+          linkedAt: account?.linkedAt,
           permissions: account?.permissions,
           acceptedGrantAt: account?.acceptedGrantAt,
           lastDiscoveryAt: account?.lastDiscoveryAt,
@@ -1613,7 +1762,13 @@ function createApp(options = {}) {
 
   app.get('/api/alexa/hubs/:hubId/events', async (req, res) => {
     try {
-      await requireHubAuth(store, req);
+      const hub = await requireHubAuth(store, req);
+      if (hub.hubId !== req.params.hubId) {
+        return res.status(403).json({
+          success: false,
+          error: 'Broker hub ID does not match the requested event queue'
+        });
+      }
       const events = await store.listQueuedEvents({ hubId: req.params.hubId });
       return res.status(200).json({
         success: true,
@@ -1621,7 +1776,7 @@ function createApp(options = {}) {
         count: events.length
       });
     } catch (error) {
-      return res.status(500).json({
+      return res.status(error.status || 500).json({
         success: false,
         error: error.message
       });
@@ -1734,7 +1889,13 @@ function createApp(options = {}) {
   app.post('/api/alexa/custom-skill/dispatch', handleCustomSkillDispatch);
 
   app.get('/api/alexa/hubs/:hubId', async (req, res) => {
-    await requireHubAuth(store, req);
+    const authenticatedHub = await requireHubAuth(store, req);
+    if (authenticatedHub.hubId !== req.params.hubId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Broker hub ID does not match the requested hub'
+      });
+    }
     const hub = await store.getHub(req.params.hubId);
     if (!hub) {
       return res.status(404).json({

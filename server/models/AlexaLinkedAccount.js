@@ -33,7 +33,7 @@ const alexaLinkedAccountSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['linked', 'revoked', 'pending'],
+    enum: ['linked', 'revoked', 'pending', 'error'],
     default: 'linked'
   },
   permissions: {
@@ -46,7 +46,7 @@ const alexaLinkedAccountSchema = new mongoose.Schema({
   },
   linkedAt: {
     type: Date,
-    default: Date.now
+    default: null
   },
   lastDiscoveryAt: {
     type: Date,

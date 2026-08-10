@@ -866,7 +866,7 @@ export default function AlexaBrokerManagement() {
           </CardHeader>
           <CardContent className="text-sm text-muted-foreground">
             <p>Hub ID: {alexaSummary?.hubId || 'Unavailable'}</p>
-            <p>Linked households: {alexaSummary?.linkedAccounts?.length ?? 0}</p>
+            <p>Linked households: {Array.isArray(alexaSummary?.linkedAccounts) ? alexaSummary.linkedAccounts.filter((account: any) => account?.status === 'linked').length : 0}</p>
           </CardContent>
         </Card>
 

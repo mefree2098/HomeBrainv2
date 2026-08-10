@@ -422,6 +422,7 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
         success: true,
         hubId: 'hub-test',
         codePreview: 'LINK',
+        brokerAccountId: 'hbacct_test_account',
         mode: 'private'
       }));
       return;
@@ -521,12 +522,14 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
   const previousEventGatewayUrl = process.env.HOMEBRAIN_ALEXA_EVENT_GATEWAY_URL;
   const previousAllowedRedirectUris = process.env.HOMEBRAIN_ALEXA_ALLOWED_REDIRECT_URIS;
   const previousAllowedClientIds = process.env.HOMEBRAIN_ALEXA_ALLOWED_CLIENT_IDS;
+  const previousOauthClientSecret = process.env.HOMEBRAIN_ALEXA_OAUTH_CLIENT_SECRET;
   process.env.HOMEBRAIN_ALEXA_EVENT_CLIENT_ID = 'event-client-id';
   process.env.HOMEBRAIN_ALEXA_EVENT_CLIENT_SECRET = 'event-client-secret';
   process.env.HOMEBRAIN_ALEXA_LWA_TOKEN_URL = `${amazon.baseUrl}/auth/o2/token`;
   process.env.HOMEBRAIN_ALEXA_EVENT_GATEWAY_URL = `${amazon.baseUrl}/v3/events`;
   process.env.HOMEBRAIN_ALEXA_ALLOWED_REDIRECT_URIS = 'http://127.0.0.1/callback';
   process.env.HOMEBRAIN_ALEXA_ALLOWED_CLIENT_IDS = 'client-test';
+  process.env.HOMEBRAIN_ALEXA_OAUTH_CLIENT_SECRET = 'client-test-secret';
 
   const brokerServer = http.createServer(createApp({
     store: brokerStore,
@@ -544,6 +547,7 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
     process.env.HOMEBRAIN_ALEXA_EVENT_GATEWAY_URL = previousEventGatewayUrl;
     process.env.HOMEBRAIN_ALEXA_ALLOWED_REDIRECT_URIS = previousAllowedRedirectUris;
     process.env.HOMEBRAIN_ALEXA_ALLOWED_CLIENT_IDS = previousAllowedClientIds;
+    restoreEnv('HOMEBRAIN_ALEXA_OAUTH_CLIENT_SECRET', previousOauthClientSecret);
     await Promise.all([
       close(broker.server),
       close(hub.server),
@@ -604,6 +608,7 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
     body: new URLSearchParams({
       grant_type: 'authorization_code',
       client_id: 'client-test',
+      client_secret: 'client-test-secret',
       redirect_uri: 'http://127.0.0.1/callback',
       code: authorizationCode
     })
@@ -622,6 +627,7 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
     body: new URLSearchParams({
       grant_type: 'refresh_token',
       client_id: 'client-test',
+      client_secret: 'client-test-secret',
       refresh_token: tokens.refresh_token
     })
   });
@@ -640,6 +646,7 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
     body: new URLSearchParams({
       grant_type: 'refresh_token',
       client_id: 'client-test',
+      client_secret: 'client-test-secret',
       refresh_token: tokens.refresh_token
     })
   });
@@ -686,12 +693,16 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
   assert.equal(grantResponse.status, 200);
   const grantPayload = await grantResponse.json();
   assert.equal(grantPayload.success, true);
+  await brokerStore.updatePermissionGrant(grantPayload.permissionGrantId, {
+    acceptedAt: new Date(Date.now() - 60 * 1000).toISOString()
+  });
 
   assert.ok(linkedAccountsPayloads.length >= 2);
   const finalSyncPayload = linkedAccountsPayloads.at(-1);
   assert.equal(finalSyncPayload.length, 1);
   assert.equal(finalSyncPayload[0].permissions.includes('alexa::async_event:write'), true);
   const brokerAccountId = finalSyncPayload[0].brokerAccountId;
+  assert.equal(brokerAccountId, 'hbacct_test_account');
 
   const catalogSyncResponse = await fetch(`${broker.baseUrl}/api/alexa/hubs/catalog`, {
     method: 'POST',
