@@ -951,16 +951,7 @@ class AlexaBrokerService {
     const expectedHostname = this.getDesiredPublicHostname(config);
     const expectedUpstreamHost = buildReverseProxyUpstreamHost(config.bindHost);
     const expectedUpstreamPort = sanitizePositiveInteger(config.servicePort, DEFAULT_PORT, { min: 1, max: 65535 });
-    const matchesConfig = Boolean(
-      route
-      && (!expectedHostname || route.hostname === expectedHostname)
-      && route.upstreamProtocol === 'http'
-      && route.upstreamHost === expectedUpstreamHost
-      && route.upstreamPort === expectedUpstreamPort
-      && route.healthCheckPath === '/health'
-      && route.websocketSupport === false
-      && route.enabled === true
-    );
+    const matchesConfig = this.managedReverseProxyRouteMatchesConfig(config, route);
 
     return {
       routeId: route?._id ? String(route._id) : null,
@@ -976,6 +967,32 @@ class AlexaBrokerService {
       healthCheckPath: route?.healthCheckPath || '/health',
       matchesConfig
     };
+  }
+
+  managedReverseProxyRouteMatchesConfig(config, route) {
+    if (!route) {
+      return false;
+    }
+
+    let desired;
+    try {
+      desired = this.buildManagedReverseProxyRoutePayload(config);
+    } catch (_error) {
+      return false;
+    }
+    return (
+      route.hostname === desired.hostname
+      && route.platformKey === desired.platformKey
+      && route.displayName === desired.displayName
+      && route.upstreamProtocol === desired.upstreamProtocol
+      && route.upstreamHost === desired.upstreamHost
+      && Number(route.upstreamPort) === Number(desired.upstreamPort)
+      && route.enabled === desired.enabled
+      && route.tlsMode === desired.tlsMode
+      && route.allowOnDemandTls === desired.allowOnDemandTls
+      && route.healthCheckPath === desired.healthCheckPath
+      && route.websocketSupport === desired.websocketSupport
+    );
   }
 
   async ensureManagedReverseProxyRoute(options = {}) {
@@ -1012,11 +1029,32 @@ class AlexaBrokerService {
     const actor = trimString(options.actor) || 'system:alexa-broker-startup';
 
     try {
-      const result = await this.ensureManagedReverseProxyRoute({
-        actor,
-        applyConfig: options.applyConfig !== false
-      });
-      const validationStatus = result?.route?.validationStatus || 'unknown';
+      const config = await this.getConfig();
+      const route = await this.findManagedReverseProxyRoute(config);
+      let result;
+
+      if (this.managedReverseProxyRouteMatchesConfig(config, route)) {
+        const validation = await this.reverseProxyService.validateRoute(route, null, {
+          persist: true,
+          actor
+        });
+        result = {
+          success: true,
+          action: 'validated',
+          route,
+          validation,
+          appliedConfig: false
+        };
+      } else {
+        result = await this.ensureManagedReverseProxyRoute({
+          actor,
+          applyConfig: options.applyConfig !== false
+        });
+      }
+
+      const validationStatus = result?.validation?.validationStatus
+        || result?.route?.validationStatus
+        || 'unknown';
       if (validationStatus !== 'valid') {
         this.pushLog(
           `Alexa broker is healthy, but its managed reverse-proxy route still validates as ${validationStatus}.`,
