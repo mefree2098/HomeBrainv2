@@ -785,6 +785,57 @@ private struct WeatherDashboardSnapshot {
             indoorAirSamples: JSON.array(indoorAir["samples"]).compactMap { GoveeIndoorAirSnapshot.from($0) }
         )
     }
+
+    static func previewSavedLocationFallback() -> WeatherDashboardSnapshot {
+        let timestamp = "2026-08-10T17:08:24.741Z"
+        let payload: [String: Any] = [
+            "fetchedAt": timestamp,
+            "forecast": [
+                "fetchedAt": timestamp,
+                "location": [
+                    "name": "Lehi, Utah, United States",
+                    "source": DashboardWeatherLocationMode.saved.rawValue,
+                    "timezone": "America/Denver"
+                ],
+                "current": [
+                    "temperatureF": 88,
+                    "apparentTemperatureF": 86,
+                    "humidity": 25,
+                    "windSpeedMph": 8,
+                    "precipitationIn": 0,
+                    "isDay": true,
+                    "condition": "Clear",
+                    "icon": "sunny"
+                ],
+                "today": [
+                    "highF": 98,
+                    "lowF": 67,
+                    "precipitationChance": 14,
+                    "sunrise": "2026-08-10T06:33:00-06:00",
+                    "sunset": "2026-08-10T20:31:00-06:00",
+                    "condition": "Mostly Clear"
+                ],
+                "hourlyForecast": [],
+                "tempest": ["available": false],
+                "indoorAir": ["available": false]
+            ],
+            "hourlyForecast": [],
+            "tempest": [
+                "available": false,
+                "observations": [],
+                "events": []
+            ],
+            "indoorAir": [
+                "available": false,
+                "samples": []
+            ]
+        ]
+
+        guard let snapshot = WeatherDashboardSnapshot.from(payload) else {
+            preconditionFailure("Invalid Weather preview payload")
+        }
+        return snapshot
+    }
 }
 
 private struct TempestIntegrationSnapshot {
@@ -1211,6 +1262,19 @@ private final class WeatherLocationManager: NSObject, ObservableObject, CLLocati
         handleAuthorizationStatus(manager.authorizationStatus)
     }
 
+    func refreshLocationIfAuthorized() {
+        switch manager.authorizationStatus {
+        case .authorizedAlways, .authorizedWhenInUse:
+            errorMessage = nil
+            isRequesting = true
+            manager.requestLocation()
+        case .notDetermined, .denied, .restricted:
+            break
+        @unknown default:
+            break
+        }
+    }
+
     private func handleAuthorizationStatus(_ status: CLAuthorizationStatus) {
         switch status {
         case .authorizedAlways, .authorizedWhenInUse:
@@ -1321,6 +1385,8 @@ struct WeatherView: View {
     @EnvironmentObject private var session: SessionStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
+    private let previewMode: Bool
+
     @StateObject private var locationManager = WeatherLocationManager()
 
     @State private var weatherLocationModeRaw = DashboardWeatherLocationMode.saved.rawValue
@@ -1357,8 +1423,17 @@ struct WeatherView: View {
     @State private var windRangeIndex = defaultWeatherChartRangeIndex
     @State private var environmentalRangeIndex = defaultWeatherChartRangeIndex
 
+    init(previewMode: Bool = false) {
+        self.previewMode = previewMode
+        if previewMode {
+            _weatherLocationModeRaw = State(initialValue: DashboardWeatherLocationMode.auto.rawValue)
+            _dashboard = State(initialValue: WeatherDashboardSnapshot.previewSavedLocationFallback())
+            _isLoading = State(initialValue: false)
+        }
+    }
+
     private var isAdmin: Bool {
-        session.currentUser?.role == "admin"
+        !previewMode && session.currentUser?.role == "admin"
     }
 
     private var weatherLocationMode: DashboardWeatherLocationMode {
@@ -1422,6 +1497,39 @@ struct WeatherView: View {
             return "none"
         }
         return String(format: "%.4f:%.4f", coordinate.latitude, coordinate.longitude)
+    }
+
+    private var weatherLocationStatusTitle: String {
+        guard weatherLocationMode == .auto else {
+            return weatherLocationMode.title
+        }
+
+        if locationManager.isRequesting {
+            return "Locating"
+        }
+
+        switch dashboard?.forecast.locationSource {
+        case .auto:
+            return "Device Location"
+        case .saved:
+            return "Saved Fallback"
+        case .custom, .none:
+            return weatherLocationMode.title
+        }
+    }
+
+    private var autoLocationNotice: String? {
+        guard weatherLocationMode == .auto else { return nil }
+
+        if let locationError = locationManager.errorMessage {
+            return "Showing saved home weather. \(locationError)"
+        }
+
+        if dashboard?.forecast.locationSource == .saved {
+            return "Showing saved home weather until device location is available."
+        }
+
+        return nil
     }
 
     private var activeForecast: WeatherForecastSnapshot? {
@@ -1733,10 +1841,15 @@ struct WeatherView: View {
             await refreshAll(silent: false, includeTempestStatus: isAdmin, forceTempestSync: true, forceIndoorAirSync: true)
         }
         .task {
+            guard !previewMode else { return }
             loadLocationPreferences()
+            if weatherLocationMode == .auto {
+                locationManager.refreshLocationIfAuthorized()
+            }
             await refreshAll(silent: false, includeTempestStatus: isAdmin)
         }
         .task {
+            guard !previewMode else { return }
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(60))
                 guard !Task.isCancelled else { break }
@@ -1745,6 +1858,9 @@ struct WeatherView: View {
         }
         .onChange(of: weatherLocationModeRaw) { _, _ in
             persistLocationPreferences()
+            if weatherLocationMode == .auto {
+                locationManager.refreshLocationIfAuthorized()
+            }
             Task { await loadWeatherDashboard(silent: dashboard != nil) }
         }
         .onChange(of: weatherLocationQuery) { _, _ in
@@ -1812,7 +1928,7 @@ struct WeatherView: View {
 
                     Spacer()
 
-                    HBBadge(text: weatherLocationMode.title)
+                    HBBadge(text: weatherLocationStatusTitle)
                 }
 
                 Picker("Location Source", selection: weatherLocationModeBinding) {
@@ -1831,6 +1947,13 @@ struct WeatherView: View {
                         .onSubmit {
                             Task { await loadWeatherDashboard(silent: false, forceTempestSync: true, forceIndoorAirSync: true) }
                         }
+                }
+
+                if let autoLocationNotice {
+                    Label(autoLocationNotice, systemImage: "location.slash")
+                        .font(HBTypography.body(size: 13, weight: .medium))
+                        .foregroundStyle(HBPalette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Group {
@@ -3226,6 +3349,8 @@ struct WeatherView: View {
         forceIndoorAirSync: Bool = false,
         refreshIndoorAir: Bool = true
     ) async {
+        guard !previewMode else { return }
+
         if silent {
             isRefreshing = true
         } else if dashboard == nil {
@@ -3288,19 +3413,13 @@ struct WeatherView: View {
             }
             query.append(URLQueryItem(name: "address", value: trimmed))
         case .auto:
-            guard let coordinate = locationManager.coordinate else {
-                if let message = locationManager.errorMessage {
-                    errorMessage = message
-                } else {
-                    errorMessage = "Tap Use Device Location to load weather for your approximate location."
-                }
-                return nil
+            if let coordinate = locationManager.coordinate {
+                let approximateLatitude = (coordinate.latitude * 100).rounded() / 100
+                let approximateLongitude = (coordinate.longitude * 100).rounded() / 100
+                query.append(URLQueryItem(name: "latitude", value: String(approximateLatitude)))
+                query.append(URLQueryItem(name: "longitude", value: String(approximateLongitude)))
+                query.append(URLQueryItem(name: "label", value: "Current location"))
             }
-            let approximateLatitude = (coordinate.latitude * 100).rounded() / 100
-            let approximateLongitude = (coordinate.longitude * 100).rounded() / 100
-            query.append(URLQueryItem(name: "latitude", value: String(approximateLatitude)))
-            query.append(URLQueryItem(name: "longitude", value: String(approximateLongitude)))
-            query.append(URLQueryItem(name: "label", value: "Current location"))
         }
 
         return query

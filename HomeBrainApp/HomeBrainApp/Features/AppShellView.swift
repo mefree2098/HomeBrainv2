@@ -1675,7 +1675,7 @@ struct AppShellView: View {
             )
         case .weather:
             if previewMode {
-                return AnyView(UIPreviewModuleView(section: section))
+                return AnyView(WeatherView(previewMode: true))
             }
             return AnyView(WeatherView())
         case .senseEnergy:
