@@ -92,6 +92,10 @@ private struct GeneratedRemoteToken: Equatable {
 struct NotificationsView: View {
     @EnvironmentObject var session: SessionStore
     @EnvironmentObject var pushNotificationManager: PushNotificationManager
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private let previewMode: Bool
 
     @State private var selectedChannel: NotificationChannelFilter = .all
     @State private var includeCleared = false
@@ -111,8 +115,66 @@ struct NotificationsView: View {
     @State private var outboundToken = ""
     @State private var generatedToken: GeneratedRemoteToken?
 
+    init(previewMode: Bool = false) {
+        self.previewMode = previewMode
+
+        if previewMode {
+            _notifications = State(initialValue: [
+                HomeBrainNotificationItem(
+                    id: "preview-critical-alert",
+                    channel: "securityCritical",
+                    severity: "critical",
+                    category: "security",
+                    title: "Front door alert",
+                    message: "A security event needs your attention.",
+                    occurredAt: Date().addingTimeInterval(-300),
+                    clearedAt: nil,
+                    resolvedAt: nil,
+                    resolvedReason: ""
+                )
+            ])
+            _inboundRemotes = State(initialValue: [
+                RemoteHomeBrainPeer(
+                    id: "preview-selene",
+                    direction: "inbound",
+                    name: "Selene's Apartment",
+                    enabled: true,
+                    remoteUrl: "",
+                    tokenPreview: "…DI8r64",
+                    lastHandshakeAt: nil,
+                    lastReceivedAt: Date().addingTimeInterval(-172_800),
+                    lastForwardedAt: nil,
+                    lastDeliveryAt: Date().addingTimeInterval(-172_800),
+                    lastDeliveryStatus: "ok",
+                    lastDeliveryMessage: "Security alert received",
+                    lastAlertTitle: "Security alert"
+                )
+            ])
+        }
+    }
+
     private var isAdmin: Bool {
-        session.currentUser?.role == "admin"
+        previewMode || session.currentUser?.role == "admin"
+    }
+
+    private var usesCompactLayout: Bool {
+        horizontalSizeClass == .compact
+    }
+
+    private var usesAccessibilityLayout: Bool {
+        dynamicTypeSize.isAccessibilitySize
+    }
+
+    private var canAddInboundRemote: Bool {
+        !inboundName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && remoteActionId != "add-inbound"
+    }
+
+    private var canEnableForwarding: Bool {
+        !outboundName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !outboundURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !outboundToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && remoteActionId != "add-outbound"
     }
 
     var body: some View {
@@ -133,10 +195,11 @@ struct NotificationsView: View {
 
                 notificationList
             }
-            .padding(20)
+            .padding(usesCompactLayout ? 16 : 20)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .task {
+            guard !previewMode else { return }
             await loadNotifications()
             if isAdmin {
                 await loadRemoteHomeBrains()
@@ -151,37 +214,79 @@ struct NotificationsView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Notifications")
-                    .font(.largeTitle.bold())
-                Text("Security critical alerts and HomeBrain device notices.")
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 16) {
+            HBSectionHeader(
+                title: "Notifications",
+                subtitle: "Security-critical alerts and HomeBrain device notices.",
+                eyebrow: "Alert Ledger"
+            )
+
+            notificationActions
+        }
+    }
+
+    @ViewBuilder
+    private var notificationActions: some View {
+        if usesAccessibilityLayout {
+            VStack(spacing: 10) {
+                refreshNotificationsButton
+                clearNotificationsButton
             }
-
-            Spacer()
-
+        } else {
             HStack(spacing: 10) {
-                Button {
-                    Task { await loadNotifications() }
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.bordered)
-                .disabled(isLoading)
-
-                Button(role: .destructive) {
-                    Task { await clearSelectedNotifications() }
-                } label: {
-                    Label(clearButtonTitle, systemImage: "checkmark.circle")
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(notifications.filter(\.isActive).isEmpty || isLoading)
+                refreshNotificationsButton
+                clearNotificationsButton
             }
         }
     }
 
+    private var refreshNotificationsButton: some View {
+        Button {
+            Task { await loadNotifications() }
+        } label: {
+            Label("Refresh", systemImage: "arrow.clockwise")
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .disabled(isLoading)
+    }
+
+    private var clearNotificationsButton: some View {
+        Button(role: .destructive) {
+            Task { await clearSelectedNotifications() }
+        } label: {
+            Label(clearButtonTitle, systemImage: "checkmark.circle")
+                .lineLimit(1)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .tint(HBPalette.accentRed)
+        .disabled(notifications.filter(\.isActive).isEmpty || isLoading)
+    }
+
     private var pushControls: some View {
+        Group {
+            if usesAccessibilityLayout {
+                VStack(alignment: .leading, spacing: 14) {
+                    pushStatusBlock
+                    criticalPushToggle(showsLabel: true)
+                }
+            } else {
+                HStack(spacing: 14) {
+                    pushStatusBlock
+                    Spacer(minLength: 12)
+                    criticalPushToggle(showsLabel: false)
+                }
+            }
+        }
+        .padding(16)
+        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var pushStatusBlock: some View {
         HStack(spacing: 14) {
             Image(systemName: "iphone.radiowaves.left.and.right")
                 .font(.title2)
@@ -194,37 +299,161 @@ struct NotificationsView: View {
                 Text(pushStatusText)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-
-            Spacer()
-
-            Toggle("", isOn: Binding(
-                get: { pushNotificationManager.securityCriticalPushEnabled },
-                set: { enabled in
-                    Task { await updateCriticalPush(enabled) }
-                }
-            ))
-            .labelsHidden()
-            .disabled(isUpdatingPushSetting)
         }
-        .padding(16)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private func criticalPushToggle(showsLabel: Bool) -> some View {
+        let binding = Binding(
+            get: { pushNotificationManager.securityCriticalPushEnabled },
+            set: { enabled in
+                Task { await updateCriticalPush(enabled) }
+            }
+        )
+
+        if showsLabel {
+            Toggle("Enabled", isOn: binding)
+                .font(.subheadline.weight(.semibold))
+                .disabled(isUpdatingPushSetting)
+                .accessibilityLabel("Critical push notifications")
+                .accessibilityValue(pushNotificationManager.securityCriticalPushEnabled ? "On" : "Off")
+        } else {
+            Toggle("Critical push notifications", isOn: binding)
+                .labelsHidden()
+                .disabled(isUpdatingPushSetting)
+                .accessibilityLabel("Critical push notifications")
+                .accessibilityValue(pushNotificationManager.securityCriticalPushEnabled ? "On" : "Off")
+        }
+    }
+
+    private var remoteHomeBrainHeader: some View {
+        Group {
+            if usesCompactLayout || usesAccessibilityLayout {
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("Remote HomeBrain Alerts", systemImage: "bell.badge")
+                        .font(.headline)
+                        .fixedSize(horizontal: false, vertical: true)
+                    refreshRemoteHomeBrainsButton
+                }
+            } else {
+                HStack {
+                    Label("Remote HomeBrain Alerts", systemImage: "bell.badge")
+                        .font(.headline)
+                    Spacer()
+                    refreshRemoteHomeBrainsButton
+                }
+            }
+        }
+    }
+
+    private var refreshRemoteHomeBrainsButton: some View {
+        Button {
+            Task { await loadRemoteHomeBrains() }
+        } label: {
+            Label("Refresh remotes", systemImage: "arrow.clockwise")
+                .lineLimit(1)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(remoteIsLoading)
+    }
+
+    private var inboundNameField: some View {
+        TextField(
+            "Inbound remote HomeBrain name",
+            text: $inboundName,
+            prompt: Text("e.g. Selene's apartment").foregroundStyle(HBPalette.textMuted)
+        )
+        .textInputAutocapitalization(.words)
+        .textFieldStyle(.plain)
+        .hbPanelTextField()
+    }
+
+    private var addInboundRemoteButton: some View {
+        Button {
+            Task { await addInboundRemote() }
+        } label: {
+            Label("Add Remote", systemImage: "plus")
+                .lineLimit(1)
+                .frame(maxWidth: usesCompactLayout ? .infinity : nil)
+        }
+        .buttonStyle(HBPrimaryButtonStyle(compact: true))
+        .opacity(canAddInboundRemote ? 1 : 0.44)
+        .disabled(!canAddInboundRemote)
+    }
+
+    @ViewBuilder
+    private var inboundRemoteForm: some View {
+        if usesCompactLayout || usesAccessibilityLayout {
+            VStack(spacing: 10) {
+                inboundNameField
+                addInboundRemoteButton
+            }
+        } else {
+            HStack(spacing: 10) {
+                inboundNameField
+                addInboundRemoteButton
+            }
+        }
+    }
+
+    private var outboundNameField: some View {
+        TextField(
+            "Outbound remote HomeBrain name",
+            text: $outboundName,
+            prompt: Text("e.g. Freestone family").foregroundStyle(HBPalette.textMuted)
+        )
+        .textInputAutocapitalization(.words)
+        .textFieldStyle(.plain)
+        .hbPanelTextField()
+    }
+
+    private var outboundURLField: some View {
+        TextField(
+            "Outbound remote HomeBrain URL",
+            text: $outboundURL,
+            prompt: Text("https://example.com").foregroundStyle(HBPalette.textMuted)
+        )
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        .keyboardType(.URL)
+        .textContentType(.URL)
+        .textFieldStyle(.plain)
+        .hbPanelTextField()
+    }
+
+    private var outboundTokenField: some View {
+        SecureField(
+            "Remote token",
+            text: $outboundToken,
+            prompt: Text("Remote token").foregroundStyle(HBPalette.textMuted)
+        )
+        .textInputAutocapitalization(.never)
+        .autocorrectionDisabled()
+        .textFieldStyle(.plain)
+        .hbPanelTextField()
+    }
+
+    private var enableForwardingButton: some View {
+        Button {
+            Task { await addOutboundTarget() }
+        } label: {
+            Label("Enable Forwarding", systemImage: "paperplane")
+                .lineLimit(1)
+                .frame(maxWidth: usesCompactLayout ? .infinity : nil)
+        }
+        .buttonStyle(HBPrimaryButtonStyle(compact: true))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .opacity(canEnableForwarding ? 1 : 0.44)
+        .disabled(!canEnableForwarding)
     }
 
     private var remoteHomeBrainControls: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Label("Remote HomeBrain Alerts", systemImage: "bell.badge")
-                    .font(.headline)
-                Spacer()
-                Button {
-                    Task { await loadRemoteHomeBrains() }
-                } label: {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                }
-                .buttonStyle(.bordered)
-                .disabled(remoteIsLoading)
-            }
+            remoteHomeBrainHeader
 
             if let remoteErrorMessage {
                 Text(remoteErrorMessage)
@@ -258,18 +487,7 @@ struct NotificationsView: View {
                 Label("Receive from Remote Homes", systemImage: "shield.checkered")
                     .font(.subheadline.weight(.semibold))
 
-                HStack {
-                    TextField("Selene's apartment", text: $inboundName)
-                        .textInputAutocapitalization(.words)
-                        .textFieldStyle(.roundedBorder)
-                    Button {
-                        Task { await addInboundRemote() }
-                    } label: {
-                        Label("Add", systemImage: "plus")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(inboundName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || remoteActionId == "add-inbound")
-                }
+                inboundRemoteForm
 
                 if inboundRemotes.isEmpty {
                     Text("No inbound remotes configured.")
@@ -291,26 +509,10 @@ struct NotificationsView: View {
                     .font(.subheadline.weight(.semibold))
 
                 VStack(spacing: 8) {
-                    TextField("Freestone family", text: $outboundName)
-                        .textInputAutocapitalization(.words)
-                        .textFieldStyle(.roundedBorder)
-                    TextField("https://freestonefamily.com", text: $outboundURL)
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(.URL)
-                        .textFieldStyle(.roundedBorder)
-                    SecureField("Remote token", text: $outboundToken)
-                        .textFieldStyle(.roundedBorder)
-                    Button {
-                        Task { await addOutboundTarget() }
-                    } label: {
-                        Label("Enable Forwarding", systemImage: "paperplane")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .disabled(outboundName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                              || outboundURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                              || outboundToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                              || remoteActionId == "add-outbound")
+                    outboundNameField
+                    outboundURLField
+                    outboundTokenField
+                    enableForwardingButton
                 }
 
                 if outboundTargets.isEmpty {
@@ -332,15 +534,29 @@ struct NotificationsView: View {
 
     private var filterControls: some View {
         VStack(alignment: .leading, spacing: 12) {
+            notificationChannelPicker
+
+            Toggle("Show history", isOn: $includeCleared)
+                .toggleStyle(.switch)
+        }
+    }
+
+    @ViewBuilder
+    private var notificationChannelPicker: some View {
+        if usesAccessibilityLayout {
+            Picker("Notification type", selection: $selectedChannel) {
+                ForEach(NotificationChannelFilter.allCases) { filter in
+                    Text(filter.title).tag(filter)
+                }
+            }
+            .pickerStyle(.menu)
+        } else {
             Picker("Notification type", selection: $selectedChannel) {
                 ForEach(NotificationChannelFilter.allCases) { filter in
                     Text(filter.title).tag(filter)
                 }
             }
             .pickerStyle(.segmented)
-
-            Toggle("Show history", isOn: $includeCleared)
-                .toggleStyle(.switch)
         }
     }
 
@@ -389,41 +605,33 @@ struct NotificationsView: View {
 
     private func inboundRemoteRow(_ remote: RemoteHomeBrainPeer) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(remote.name)
-                        .font(.subheadline.weight(.semibold))
-                    Text("Token \(remote.tokenPreview.isEmpty ? "created" : remote.tokenPreview) / Last received \(formatDate(remote.lastReceivedAt))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    if !remote.lastDeliveryMessage.isEmpty {
-                        Text(remote.lastDeliveryMessage)
-                            .font(.caption)
-                            .foregroundStyle(statusColor(remote.lastDeliveryStatus))
+            Group {
+                if usesAccessibilityLayout {
+                    VStack(alignment: .leading, spacing: 10) {
+                        inboundRemoteSummary(remote)
+                        inboundRemoteToggle(remote)
+                    }
+                } else {
+                    HStack(alignment: .top, spacing: 12) {
+                        inboundRemoteSummary(remote)
+                        Spacer(minLength: 8)
+                        inboundRemoteToggle(remote)
                     }
                 }
-                Spacer()
-                Toggle("", isOn: Binding(
-                    get: { remote.enabled },
-                    set: { enabled in Task { await setInboundRemote(remote, enabled: enabled) } }
-                ))
-                .labelsHidden()
             }
 
-            HStack {
-                Button {
-                    Task { await rotateInboundToken(remote) }
-                } label: {
-                    Label("Rotate", systemImage: "key")
+            Group {
+                if usesAccessibilityLayout {
+                    VStack(spacing: 8) {
+                        inboundRotateButton(remote)
+                        inboundRemoveButton(remote)
+                    }
+                } else {
+                    HStack {
+                        inboundRotateButton(remote)
+                        inboundRemoveButton(remote)
+                    }
                 }
-                .buttonStyle(.bordered)
-
-                Button(role: .destructive) {
-                    Task { await removeInboundRemote(remote) }
-                } label: {
-                    Label("Remove", systemImage: "trash")
-                }
-                .buttonStyle(.bordered)
             }
             .font(.footnote)
         }
@@ -431,48 +639,142 @@ struct NotificationsView: View {
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
+    private func inboundRemoteSummary(_ remote: RemoteHomeBrainPeer) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(remote.name)
+                .font(.subheadline.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Token \(remote.tokenPreview.isEmpty ? "created" : remote.tokenPreview)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("Last received \(formatDate(remote.lastReceivedAt))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if !remote.lastDeliveryMessage.isEmpty {
+                Text(remote.lastDeliveryMessage)
+                    .font(.caption)
+                    .foregroundStyle(statusColor(remote.lastDeliveryStatus))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func inboundRemoteToggle(_ remote: RemoteHomeBrainPeer) -> some View {
+        Toggle("Enable \(remote.name) inbound alerts", isOn: Binding(
+            get: { remote.enabled },
+            set: { enabled in Task { await setInboundRemote(remote, enabled: enabled) } }
+        ))
+        .labelsHidden()
+        .accessibilityLabel("Enable \(remote.name) inbound alerts")
+    }
+
+    private func inboundRotateButton(_ remote: RemoteHomeBrainPeer) -> some View {
+        Button {
+            Task { await rotateInboundToken(remote) }
+        } label: {
+            Label("Rotate", systemImage: "key")
+                .frame(maxWidth: usesAccessibilityLayout ? .infinity : nil)
+        }
+        .buttonStyle(.bordered)
+        .tint(HBPalette.accentBlue)
+    }
+
+    private func inboundRemoveButton(_ remote: RemoteHomeBrainPeer) -> some View {
+        Button(role: .destructive) {
+            Task { await removeInboundRemote(remote) }
+        } label: {
+            Label("Remove", systemImage: "trash")
+                .frame(maxWidth: usesAccessibilityLayout ? .infinity : nil)
+        }
+        .buttonStyle(.bordered)
+        .tint(HBPalette.accentRed)
+    }
+
     private func outboundTargetRow(_ target: RemoteHomeBrainPeer) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(target.name)
-                        .font(.subheadline.weight(.semibold))
-                    Text(target.remoteUrl)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text("\(target.lastDeliveryMessage.isEmpty ? "Not tested" : target.lastDeliveryMessage) / Last sent \(formatDate(target.lastForwardedAt))")
-                        .font(.caption)
-                        .foregroundStyle(statusColor(target.lastDeliveryStatus))
+            Group {
+                if usesAccessibilityLayout {
+                    VStack(alignment: .leading, spacing: 10) {
+                        outboundTargetSummary(target)
+                        outboundTargetToggle(target)
+                    }
+                } else {
+                    HStack(alignment: .top, spacing: 12) {
+                        outboundTargetSummary(target)
+                        Spacer(minLength: 8)
+                        outboundTargetToggle(target)
+                    }
                 }
-                Spacer()
-                Toggle("", isOn: Binding(
-                    get: { target.enabled },
-                    set: { enabled in Task { await setOutboundTarget(target, enabled: enabled) } }
-                ))
-                .labelsHidden()
             }
 
-            HStack {
-                Button {
-                    Task { await testOutboundTarget(target) }
-                } label: {
-                    Label("Test", systemImage: "antenna.radiowaves.left.and.right")
+            Group {
+                if usesAccessibilityLayout {
+                    VStack(spacing: 8) {
+                        outboundTestButton(target)
+                        outboundRemoveButton(target)
+                    }
+                } else {
+                    HStack {
+                        outboundTestButton(target)
+                        outboundRemoveButton(target)
+                    }
                 }
-                .buttonStyle(.bordered)
-
-                Button(role: .destructive) {
-                    Task { await removeOutboundTarget(target) }
-                } label: {
-                    Label("Remove", systemImage: "trash")
-                }
-                .buttonStyle(.bordered)
             }
             .font(.footnote)
         }
         .padding(12)
         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func outboundTargetSummary(_ target: RemoteHomeBrainPeer) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(target.name)
+                .font(.subheadline.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+            Text(target.remoteUrl)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text(target.lastDeliveryMessage.isEmpty ? "Not tested" : target.lastDeliveryMessage)
+                .font(.caption)
+                .foregroundStyle(statusColor(target.lastDeliveryStatus))
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Last sent \(formatDate(target.lastForwardedAt))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func outboundTargetToggle(_ target: RemoteHomeBrainPeer) -> some View {
+        Toggle("Enable forwarding to \(target.name)", isOn: Binding(
+            get: { target.enabled },
+            set: { enabled in Task { await setOutboundTarget(target, enabled: enabled) } }
+        ))
+        .labelsHidden()
+        .accessibilityLabel("Enable forwarding to \(target.name)")
+    }
+
+    private func outboundTestButton(_ target: RemoteHomeBrainPeer) -> some View {
+        Button {
+            Task { await testOutboundTarget(target) }
+        } label: {
+            Label("Test", systemImage: "antenna.radiowaves.left.and.right")
+                .frame(maxWidth: usesAccessibilityLayout ? .infinity : nil)
+        }
+        .buttonStyle(.bordered)
+        .tint(HBPalette.accentBlue)
+    }
+
+    private func outboundRemoveButton(_ target: RemoteHomeBrainPeer) -> some View {
+        Button(role: .destructive) {
+            Task { await removeOutboundTarget(target) }
+        } label: {
+            Label("Remove", systemImage: "trash")
+                .frame(maxWidth: usesAccessibilityLayout ? .infinity : nil)
+        }
+        .buttonStyle(.bordered)
+        .tint(HBPalette.accentRed)
     }
 
     private func notificationRow(_ notification: HomeBrainNotificationItem) -> some View {
@@ -483,9 +785,11 @@ struct NotificationsView: View {
                 .frame(width: 28)
 
             VStack(alignment: .leading, spacing: 6) {
+                Text(notification.title)
+                    .font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 HStack(spacing: 8) {
-                    Text(notification.title)
-                        .font(.headline)
                     if notification.isSecurityCritical {
                         Text("Critical")
                             .font(.caption.bold())
@@ -537,6 +841,7 @@ struct NotificationsView: View {
     }
 
     private func loadNotifications() async {
+        guard !previewMode else { return }
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
@@ -560,6 +865,7 @@ struct NotificationsView: View {
     }
 
     private func loadRemoteHomeBrains() async {
+        guard !previewMode else { return }
         remoteIsLoading = true
         remoteErrorMessage = nil
         defer { remoteIsLoading = false }
@@ -575,6 +881,7 @@ struct NotificationsView: View {
     }
 
     private func clearSelectedNotifications() async {
+        guard !previewMode else { return }
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
@@ -595,6 +902,7 @@ struct NotificationsView: View {
     }
 
     private func clearNotification(_ notification: HomeBrainNotificationItem) async {
+        guard !previewMode else { return }
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
@@ -608,12 +916,14 @@ struct NotificationsView: View {
     }
 
     private func updateCriticalPush(_ enabled: Bool) async {
+        guard !previewMode else { return }
         isUpdatingPushSetting = true
         defer { isUpdatingPushSetting = false }
         await pushNotificationManager.setSecurityCriticalPushEnabled(enabled)
     }
 
     private func addInboundRemote() async {
+        guard !previewMode else { return }
         let name = inboundName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return }
         remoteActionId = "add-inbound"
@@ -637,6 +947,7 @@ struct NotificationsView: View {
     }
 
     private func rotateInboundToken(_ remote: RemoteHomeBrainPeer) async {
+        guard !previewMode else { return }
         remoteActionId = "rotate-\(remote.id)"
         remoteErrorMessage = nil
         defer { remoteActionId = nil }
@@ -654,6 +965,7 @@ struct NotificationsView: View {
     }
 
     private func setInboundRemote(_ remote: RemoteHomeBrainPeer, enabled: Bool) async {
+        guard !previewMode else { return }
         remoteActionId = "inbound-\(remote.id)"
         remoteErrorMessage = nil
         defer { remoteActionId = nil }
@@ -669,6 +981,7 @@ struct NotificationsView: View {
     }
 
     private func removeInboundRemote(_ remote: RemoteHomeBrainPeer) async {
+        guard !previewMode else { return }
         remoteActionId = "delete-inbound-\(remote.id)"
         remoteErrorMessage = nil
         defer { remoteActionId = nil }
@@ -682,6 +995,7 @@ struct NotificationsView: View {
     }
 
     private func addOutboundTarget() async {
+        guard !previewMode else { return }
         let name = outboundName.trimmingCharacters(in: .whitespacesAndNewlines)
         let remoteUrl = outboundURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let token = outboundToken.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -707,6 +1021,7 @@ struct NotificationsView: View {
     }
 
     private func setOutboundTarget(_ target: RemoteHomeBrainPeer, enabled: Bool) async {
+        guard !previewMode else { return }
         remoteActionId = "outbound-\(target.id)"
         remoteErrorMessage = nil
         defer { remoteActionId = nil }
@@ -722,6 +1037,7 @@ struct NotificationsView: View {
     }
 
     private func testOutboundTarget(_ target: RemoteHomeBrainPeer) async {
+        guard !previewMode else { return }
         remoteActionId = "test-\(target.id)"
         remoteErrorMessage = nil
         defer { remoteActionId = nil }
@@ -736,6 +1052,7 @@ struct NotificationsView: View {
     }
 
     private func removeOutboundTarget(_ target: RemoteHomeBrainPeer) async {
+        guard !previewMode else { return }
         remoteActionId = "delete-outbound-\(target.id)"
         remoteErrorMessage = nil
         defer { remoteActionId = nil }
