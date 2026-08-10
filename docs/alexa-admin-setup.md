@@ -115,6 +115,8 @@ These details matter and are easy to miss:
    - Amazon currently recommends a refresh-token TTL of at least 180 days or no expiration.
    - Set `HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS=0` in production for no expiration.
    - HomeBrain reuses the durable refresh token when issuing a new access token. Alexa can retry a refresh from another edge, so immediately revoking the prior refresh token can break account linking.
+   - Current builds return HTTP `500` with `server_error` for transient token-service failures and reserve `invalid_grant` for credentials that are actually invalid, expired, revoked, or mismatched.
+   - Successful and failed refreshes appear in the broker audit trail as `oauth_token_refresh_succeeded` and `oauth_token_refresh_failed`; only a short one-way token fingerprint is recorded.
 
 ## 4. What you need before you touch Alexa
 
@@ -865,6 +867,8 @@ Check:
 - `HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS` is `0` or otherwise long enough
 - refresh tokens are not being expired too aggressively
 - refresh-token retries return a new access token without invalidating the durable refresh token
+- transient token-service failures return HTTP `500` with `server_error`, not `invalid_grant`
+- the broker audit trail records successful refreshes after the household is linked
 - the broker store file is persistent and not being wiped
 - the broker secret has not changed without updating the Alexa console
 

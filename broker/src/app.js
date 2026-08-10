@@ -2,6 +2,7 @@ const express = require('express');
 const axios = require('axios');
 const rateLimit = require('express-rate-limit');
 const brokerStore = require('./store');
+const { sha256 } = brokerStore;
 const {
   buildAddOrUpdateReport,
   buildChangeReport,
@@ -13,6 +14,75 @@ const { AlexaDeviceService } = require('./alexaDeviceService');
 
 function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function createOAuthTokenError(oauthError, message, status = 400) {
+  const error = new Error(message);
+  error.name = 'OAuthTokenError';
+  error.oauthError = oauthError;
+  error.oauthStatus = status;
+  return error;
+}
+
+function classifyOAuthTokenError(error) {
+  if (trimString(error?.oauthError)) {
+    return {
+      oauthError: trimString(error.oauthError),
+      description: trimString(error.message) || 'Token exchange failed',
+      status: Math.max(400, Number(error.oauthStatus || 400))
+    };
+  }
+
+  return {
+    oauthError: 'server_error',
+    description: 'Token exchange is temporarily unavailable',
+    status: 500
+  };
+}
+
+function setOAuthTokenResponseHeaders(res) {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Pragma', 'no-cache');
+}
+
+function getTokenFingerprint(value) {
+  const token = trimString(value);
+  return token ? sha256(token).slice(0, 12) : '';
+}
+
+function appendOAuthRefreshFailureAudit(store, payload = {}) {
+  Promise.resolve().then(async () => {
+    if (typeof store.appendAudit !== 'function') {
+      return;
+    }
+
+    let hubId = trimString(payload.hubId);
+    if (!hubId && typeof store.listHubs === 'function') {
+      const registeredHubs = (await store.listHubs()).filter((hub) => hub?.registration);
+      if (registeredHubs.length === 1) {
+        hubId = registeredHubs[0].hubId;
+      }
+    }
+
+    await store.appendAudit({
+      type: 'oauth_token_refresh_failed',
+      hubId,
+      brokerAccountId: trimString(payload.brokerAccountId),
+      severity: payload.oauthError === 'server_error' ? 'error' : 'warning',
+      message: `Alexa access-token refresh failed with ${payload.oauthError}`,
+      details: {
+        clientId: trimString(payload.clientId),
+        requestId: trimString(payload.requestId),
+        refreshTokenFingerprint: trimString(payload.refreshTokenFingerprint),
+        oauthError: trimString(payload.oauthError),
+        reason: trimString(payload.reason),
+        transient: payload.oauthError === 'server_error',
+        latencyMs: Math.max(0, Number(payload.latencyMs || 0))
+      }
+    });
+  }).catch((auditError) => {
+    console.warn(`[broker] Unable to persist Alexa refresh failure audit: ${auditError.message}`);
+  });
 }
 
 function getBrokerClientId() {
@@ -925,16 +995,38 @@ function createApp(options = {}) {
   });
 
   app.post('/api/oauth/alexa/token', async (req, res) => {
+    const startedAt = Date.now();
+    const grantType = trimString(req.body.grant_type);
+    const refreshTokenFingerprint = grantType === 'refresh_token'
+      ? getTokenFingerprint(req.body.refresh_token)
+      : '';
+    let resolvedClientId = '';
+    let clientAuthenticated = false;
+    setOAuthTokenResponseHeaders(res);
+
     try {
       const { clientId, clientSecret } = resolveClientCredentials(req);
-      const client = validateClientId(clientId);
-      validateClientSecret(client, clientSecret);
+      resolvedClientId = trimString(clientId);
+      let client;
+      try {
+        client = validateClientId(clientId);
+        validateClientSecret(client, clientSecret);
+        clientAuthenticated = true;
+      } catch (error) {
+        throw createOAuthTokenError('invalid_client', error.message, 401);
+      }
 
-      const grantType = trimString(req.body.grant_type);
       if (grantType === 'authorization_code') {
+        let redirectUri;
+        try {
+          redirectUri = validateRedirectUri(client, req.body.redirect_uri);
+        } catch (error) {
+          throw createOAuthTokenError('invalid_grant', error.message);
+        }
+
         const codeRecord = await store.consumeAuthorizationCode(req.body.code, {
           clientId: client.clientId,
-          redirectUri: validateRedirectUri(client, req.body.redirect_uri)
+          redirectUri
         });
 
         const tokens = await store.issueTokens({
@@ -955,7 +1047,10 @@ function createApp(options = {}) {
       }
 
       if (grantType === 'refresh_token') {
-        const tokens = await store.refreshAccessToken(req.body.refresh_token, { clientId: client.clientId });
+        const tokens = await store.refreshAccessToken(req.body.refresh_token, {
+          clientId: client.clientId,
+          requestId: req.requestId
+        });
         return res.status(200).json({
           token_type: tokens.tokenType,
           access_token: tokens.accessToken,
@@ -970,10 +1065,29 @@ function createApp(options = {}) {
         error_description: `Unsupported grant_type ${grantType || '(empty)'}`
       });
     } catch (error) {
-      console.warn(`[broker] Alexa token exchange failed: ${error.message}`);
-      return res.status(400).json({
-        error: 'invalid_grant',
-        error_description: error.message
+      const failure = classifyOAuthTokenError(error);
+      console.warn(`[broker] Alexa token exchange failed (${failure.oauthError}): ${error.message}`);
+
+      if (grantType === 'refresh_token' && clientAuthenticated) {
+        appendOAuthRefreshFailureAudit(store, {
+          hubId: error.hubId,
+          brokerAccountId: error.brokerAccountId,
+          clientId: resolvedClientId,
+          requestId: req.requestId,
+          refreshTokenFingerprint,
+          oauthError: failure.oauthError,
+          reason: failure.description,
+          latencyMs: Date.now() - startedAt
+        });
+      }
+
+      if (failure.oauthError === 'invalid_client') {
+        res.setHeader('WWW-Authenticate', 'Basic realm="HomeBrain Alexa Broker"');
+      }
+
+      return res.status(failure.status).json({
+        error: failure.oauthError,
+        error_description: failure.description
       });
     }
   });
