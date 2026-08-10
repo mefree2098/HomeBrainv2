@@ -631,10 +631,27 @@ function renderAuthorizePage({ oauth = {}, error = '', brokerDisplayName = getBr
 </html>`;
 }
 
-function setAuthorizePageHeaders(res) {
+function getAuthorizeRedirectOrigin(redirectUri = '') {
+  try {
+    const parsed = new URL(trimString(redirectUri));
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.origin === 'null') {
+      return '';
+    }
+    return parsed.origin;
+  } catch (_error) {
+    return '';
+  }
+}
+
+function setAuthorizePageHeaders(res, options = {}) {
+  const redirectOrigin = getAuthorizeRedirectOrigin(options.redirectUri);
+  const formActionSources = ["'self'", ...(redirectOrigin ? [redirectOrigin] : [])];
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action 'self'; base-uri 'none'");
+  res.setHeader(
+    'Content-Security-Policy',
+    `default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; form-action ${formActionSources.join(' ')}; base-uri 'none'`
+  );
   res.setHeader('Referrer-Policy', 'no-referrer');
 }
 
@@ -1047,6 +1064,10 @@ function createApp(options = {}) {
       const validatedRedirectUri = validateRedirectUri(client, redirectUri);
       const pkce = validatePkceParameters(req.query.code_challenge, req.query.code_challenge_method);
       safeRedirectUri = validatedRedirectUri;
+      // Chromium and WebKit can apply form-action to redirects after a form
+      // submission. Allow only the origin that already passed the OAuth
+      // client's exact redirect-URI allowlist so Alexa can receive the code.
+      setAuthorizePageHeaders(res, { redirectUri: validatedRedirectUri });
 
       const hubs = (await store.listHubs()).filter((hub) => hub.registration);
       const requestedHubRef = trimString(req.query.hubRef || req.query.hubId);
@@ -1114,6 +1135,7 @@ function createApp(options = {}) {
       const validatedRedirectUri = validateRedirectUri(client, redirectUri);
       const pkce = validatePkceParameters(req.body.code_challenge, req.body.code_challenge_method);
       safeRedirectUri = validatedRedirectUri;
+      setAuthorizePageHeaders(res, { redirectUri: validatedRedirectUri });
 
       const hubRef = trimString(req.body.hubRef || req.body.hubId);
       const linkCode = trimString(req.body.linkCode);
