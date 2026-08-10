@@ -1,40 +1,47 @@
-const axios = require('axios');
-
 const {
   buildResponse,
   buildLinkAccountResponse,
   extractCustomSkillIdentity,
   trimString
 } = require('../../shared/alexa/customSkill');
+const { createBrokerClient } = require('./brokerClient');
 
-function getBrokerBaseUrl() {
-  const value = trimString(process.env.HOMEBRAIN_BROKER_BASE_URL).replace(/\/+$/, '');
-  if (!value) {
-    throw new Error('HOMEBRAIN_BROKER_BASE_URL is required');
-  }
-  return value;
+function buildSessionEndedResponse() {
+  return {
+    version: '1.0',
+    response: {}
+  };
 }
 
-async function postToBroker(pathname, payload, options = {}) {
-  const response = await axios.post(`${getBrokerBaseUrl()}${pathname}`, payload, {
-    timeout: 10000,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.bearerToken ? { Authorization: `Bearer ${options.bearerToken}` } : {})
-    }
-  });
-  return response.data;
+function logFailure(error, identity, context, startedAt) {
+  const statusCode = Number(error?.response?.status || error?.statusCode || error?.status || 0);
+  console.error(JSON.stringify({
+    event: 'homebrain_alexa_custom_lambda_failure',
+    awsRequestId: trimString(context?.awsRequestId),
+    requestType: identity.requestType || 'unknown',
+    intentName: identity.intentName || undefined,
+    requestId: identity.requestId || undefined,
+    statusCode: statusCode || undefined,
+    errorCode: trimString(error?.code) || undefined,
+    durationMs: Date.now() - startedAt
+  }));
 }
 
-async function handler(event) {
+async function handler(event, context = {}) {
   const identity = extractCustomSkillIdentity(event);
+  const startedAt = Date.now();
 
-  if (!identity.accessToken && identity.requestType !== 'SessionEndedRequest') {
+  if (identity.requestType === 'SessionEndedRequest') {
+    return buildSessionEndedResponse();
+  }
+
+  if (!identity.accessToken) {
     return buildLinkAccountResponse();
   }
 
   try {
-    const result = await postToBroker('/api/alexa/custom/dispatch', {
+    const brokerClient = createBrokerClient(context);
+    const result = await brokerClient.post('/api/alexa/custom/dispatch', {
       envelope: event,
       requestType: identity.requestType,
       intentName: identity.intentName,
@@ -62,22 +69,12 @@ async function handler(event) {
       return buildLinkAccountResponse();
     }
 
-    const message = trimString(error.response?.data?.error || error.message) || 'HomeBrain could not process the Alexa custom skill request.';
-    return {
-      version: '1.0',
-      response: {
-        outputSpeech: {
-          type: 'PlainText',
-          text: message
-        },
-        card: {
-          type: 'Simple',
-          title: 'HomeBrain',
-          content: message
-        },
-        shouldEndSession: true
-      }
-    };
+    logFailure(error, identity, context, startedAt);
+    return buildResponse({
+      text: 'HomeBrain could not process that Alexa request. Please try again.',
+      shouldEndSession: true,
+      cardTitle: 'HomeBrain'
+    });
   }
 }
 

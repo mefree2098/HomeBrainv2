@@ -4,6 +4,9 @@ const {
   normalizeAlexaErrorType
 } = require('./contracts');
 
+const MAX_DISCOVERY_ENDPOINTS = 300;
+const MAX_ENDPOINT_CAPABILITIES = 100;
+
 function responseHeader({
   namespace = 'Alexa',
   name = 'Response',
@@ -44,6 +47,41 @@ function buildContext(properties = []) {
   };
 }
 
+function sanitizeResponseEndpoint(endpoint = null) {
+  const endpointId = typeof endpoint?.endpointId === 'string'
+    ? endpoint.endpointId.trim()
+    : '';
+  return endpointId ? { endpointId } : null;
+}
+
+function sanitizeDiscoveryEndpoints(endpoints = []) {
+  const list = Array.isArray(endpoints) ? endpoints : [];
+  if (list.length > MAX_DISCOVERY_ENDPOINTS) {
+    const error = new Error(`Alexa discovery supports at most ${MAX_DISCOVERY_ENDPOINTS} endpoints`);
+    error.alexaErrorType = ALEXA_ERROR_TYPES.INTERNAL_ERROR;
+    throw error;
+  }
+
+  return list.map((endpoint, index) => {
+    const source = endpoint && typeof endpoint === 'object' && !Array.isArray(endpoint)
+      ? endpoint
+      : {};
+    const capabilities = Array.isArray(source.capabilities) ? source.capabilities : [];
+    if (capabilities.length > MAX_ENDPOINT_CAPABILITIES) {
+      const error = new Error(
+        `Alexa endpoint ${source.endpointId || index} supports at most ${MAX_ENDPOINT_CAPABILITIES} capabilities`
+      );
+      error.alexaErrorType = ALEXA_ERROR_TYPES.INTERNAL_ERROR;
+      throw error;
+    }
+
+    // HomeBrain keeps current state beside each internal catalog record. Alexa's
+    // discovery schema does not accept that internal field or a bearer scope.
+    const { state, scope, ...sanitized } = source;
+    return sanitized;
+  });
+}
+
 function buildAcceptGrantResponse(directive = {}) {
   return buildEventEnvelope({
     header: responseHeader({
@@ -74,7 +112,7 @@ function buildDiscoveryResponse({ directive = {}, endpoints = [] } = {}) {
       name: 'Discover.Response'
     }),
     payload: {
-      endpoints: Array.isArray(endpoints) ? endpoints : []
+      endpoints: sanitizeDiscoveryEndpoints(endpoints)
     }
   });
 }
@@ -88,7 +126,7 @@ function buildStateReportResponse({ directive = {}, endpoint = null, properties 
         name: 'StateReport',
         correlationToken: directive?.directive?.header?.correlationToken
       }),
-      endpoint,
+      endpoint: sanitizeResponseEndpoint(endpoint),
       payload: {}
     }
   };
@@ -103,7 +141,7 @@ function buildControlResponse({ directive = {}, endpoint = null, properties = []
         name: 'Response',
         correlationToken: directive?.directive?.header?.correlationToken
       }),
-      endpoint,
+      endpoint: sanitizeResponseEndpoint(endpoint),
       payload: {}
     }
   };
@@ -124,7 +162,7 @@ function buildSceneLifecycleResponse({
         name: lifecycleName,
         correlationToken: directive?.directive?.header?.correlationToken
       }),
-      endpoint,
+      endpoint: sanitizeResponseEndpoint(endpoint),
       payload: {
         cause: {
           type: causeType
@@ -156,7 +194,7 @@ function buildErrorResponse({ directive = {}, type = 'INTERNAL_ERROR', message =
       name: 'ErrorResponse',
       correlationToken: directive?.directive?.header?.correlationToken
     }),
-    endpoint: directive?.directive?.endpoint || null,
+    endpoint: sanitizeResponseEndpoint(directive?.directive?.endpoint),
     payload: {
       type: normalizeAlexaErrorType(type),
       message
@@ -175,11 +213,18 @@ function inferAlexaErrorType(errorLike = {}, fallback = ALEXA_ERROR_TYPES.INTERN
     || errorLike?.response?.status
     || 0
   );
+  const explicitType = String(
+    errorLike?.alexaErrorType || errorLike?.response?.data?.alexaErrorType || ''
+  ).trim();
+  if (explicitType) {
+    return normalizeAlexaErrorType(explicitType);
+  }
+  const errorCode = String(errorLike?.code || errorLike?.cause?.code || '').trim().toUpperCase();
   const message = String(
-    errorLike?.message
-    || errorLike?.error
-    || errorLike?.response?.data?.error
+    errorLike?.response?.data?.error
     || errorLike?.response?.data?.message
+    || errorLike?.message
+    || errorLike?.error
     || ''
   ).trim();
   const lowerMessage = message.toLowerCase();
@@ -188,10 +233,26 @@ function inferAlexaErrorType(errorLike = {}, fallback = ALEXA_ERROR_TYPES.INTERN
     return ALEXA_ERROR_TYPES.EXPIRED_AUTHORIZATION_CREDENTIAL;
   }
 
-  if (statusCode === 401 || lowerMessage.includes('authorization failed') || lowerMessage.includes('access token')) {
+  if (
+    statusCode === 403
+    && (lowerMessage.includes('permission') || lowerMessage.includes('scope'))
+  ) {
+    return ALEXA_ERROR_TYPES.INSUFFICIENT_PERMISSIONS;
+  }
+
+  if (
+    statusCode === 401
+    || statusCode === 403
+    || lowerMessage.includes('authorization failed')
+    || lowerMessage.includes('access token')
+  ) {
     return lowerMessage.includes('expired')
       ? ALEXA_ERROR_TYPES.EXPIRED_AUTHORIZATION_CREDENTIAL
       : ALEXA_ERROR_TYPES.INVALID_AUTHORIZATION_CREDENTIAL;
+  }
+
+  if (['ETIMEDOUT', 'ECONNABORTED', 'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'HOMEBRAIN_LAMBDA_DEADLINE'].includes(errorCode)) {
+    return ALEXA_ERROR_TYPES.BRIDGE_UNREACHABLE;
   }
 
   if (statusCode === 404 || lowerMessage.includes('no such endpoint') || lowerMessage.includes('endpoint not found')) {
@@ -205,13 +266,11 @@ function inferAlexaErrorType(errorLike = {}, fallback = ALEXA_ERROR_TYPES.INTERN
     || lowerMessage.includes('hub is offline')
     || lowerMessage.includes('bridge unreachable')
   ) {
-    return lowerMessage.includes('bridge')
-      ? ALEXA_ERROR_TYPES.BRIDGE_UNREACHABLE
-      : ALEXA_ERROR_TYPES.ENDPOINT_UNREACHABLE;
+    return ALEXA_ERROR_TYPES.BRIDGE_UNREACHABLE;
   }
 
   if (lowerMessage.includes('unreachable') || lowerMessage.includes('timed out') || lowerMessage.includes('timeout') || lowerMessage.includes('offline')) {
-    return lowerMessage.includes('bridge')
+    return lowerMessage.includes('bridge') || lowerMessage.includes('hub') || lowerMessage.includes('broker')
       ? ALEXA_ERROR_TYPES.BRIDGE_UNREACHABLE
       : ALEXA_ERROR_TYPES.ENDPOINT_UNREACHABLE;
   }
@@ -254,7 +313,7 @@ function buildAddOrUpdateReport({ endpoints = [], scope = null } = {}) {
       name: 'AddOrUpdateReport'
     }),
     payload: {
-      endpoints,
+      endpoints: sanitizeDiscoveryEndpoints(endpoints),
       scope: scope || undefined
     }
   });
@@ -309,5 +368,7 @@ module.exports = {
   buildContext,
   buildEventEnvelope,
   inferAlexaErrorType,
-  responseHeader
+  responseHeader,
+  sanitizeDiscoveryEndpoints,
+  sanitizeResponseEndpoint
 };

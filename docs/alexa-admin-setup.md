@@ -320,25 +320,17 @@ This repo's Lambda code imports shared files from `shared/alexa`, so the artifac
 
 Do not zip only the contents of the `lambda/` directory.
 
-### Install Lambda dependencies
+### Build and verify the Lambda release ZIP
 
 ```bash
 cd ~/HomeBrainv2
-npm run lambda-install
+npm run lambda-release
 ```
 
-### Build the Lambda ZIP from the repo root
-
-```bash
-cd ~/HomeBrainv2
-rm -f /tmp/homebrain-alexa-lambda.zip
-zip -r /tmp/homebrain-alexa-lambda.zip \
-  lambda/package.json \
-  lambda/package-lock.json \
-  lambda/node_modules \
-  lambda/src \
-  shared/alexa
-```
+That command installs the exact locked dependencies, runs the Lambda regression
+suite, builds `/tmp/homebrain-alexa-lambda.zip`, verifies the required handler
+and shared files, enforces Lambda's direct-upload size limit, and prints the
+artifact's SHA-256 checksum.
 
 Use that same ZIP for both Lambda functions.
 
@@ -372,7 +364,8 @@ After creating the function:
 
 1. Upload `/tmp/homebrain-alexa-lambda.zip`.
 2. Set the handler to `lambda/src/handler.handler`.
-3. Add environment variables:
+3. Set memory to at least `256 MB` and timeout to `8 seconds`.
+4. Add environment variables:
 
 ```dotenv
 HOMEBRAIN_BROKER_BASE_URL=https://alexa-broker.example.com
@@ -393,6 +386,11 @@ HOMEBRAIN_ALEXA_EVENT_REGION=NA
 ```
 
 You usually do not need to set this if the function is deployed in the correct AWS region, because the code falls back to `AWS_REGION`.
+
+`HOMEBRAIN_BROKER_TIMEOUT_MS` is also optional. Leave it unset unless you are
+diagnosing a specific latency problem. The handler defaults to 7 seconds,
+caps the value at 7.5 seconds, and automatically shortens each broker request
+to preserve enough of the Lambda deadline to return a valid Alexa response.
 
 ### Add the Alexa trigger permission in Lambda
 

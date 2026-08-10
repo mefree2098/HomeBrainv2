@@ -218,6 +218,7 @@ test('lambda handler resolves Discover, AcceptGrant, ReportState, and control di
 
   assert.equal(discoverResponse.event.header.name, 'Discover.Response');
   assert.equal(discoverResponse.event.payload.endpoints.length, 1);
+  assert.equal('state' in discoverResponse.event.payload.endpoints[0], false);
 
   const stateResponse = await handler({
     directive: {
@@ -241,6 +242,31 @@ test('lambda handler resolves Discover, AcceptGrant, ReportState, and control di
 
   assert.equal(stateResponse.event.header.name, 'StateReport');
   assert.equal(stateResponse.context.properties[0].value, 'ON');
+  assert.deepEqual(stateResponse.event.endpoint, {
+    endpointId: 'hb:hub-test:device:lamp-1'
+  });
+
+  const mismatchedStateResponse = await handler({
+    directive: {
+      header: {
+        namespace: 'Alexa',
+        name: 'ReportState',
+        payloadVersion: '3',
+        messageId: 'msg-state-missing',
+        correlationToken: 'corr-state-missing'
+      },
+      endpoint: {
+        endpointId: 'hb:hub-test:device:missing-state',
+        scope: {
+          type: 'BearerToken',
+          token: 'access-123'
+        }
+      },
+      payload: {}
+    }
+  });
+
+  assert.equal(mismatchedStateResponse.event.payload.type, 'NO_SUCH_ENDPOINT');
 
   const controlResponse = await handler({
     directive: {
@@ -264,6 +290,9 @@ test('lambda handler resolves Discover, AcceptGrant, ReportState, and control di
 
   assert.equal(controlResponse.event.header.name, 'Response');
   assert.equal(controlResponse.context.properties[0].value, 'ON');
+  assert.deepEqual(controlResponse.event.endpoint, {
+    endpointId: 'hb:hub-test:device:lamp-1'
+  });
 
   const sceneResponse = await handler({
     directive: {
@@ -290,11 +319,28 @@ test('lambda handler resolves Discover, AcceptGrant, ReportState, and control di
   assert.equal(sceneResponse.event.header.correlationToken, 'corr-3');
   assert.equal(sceneResponse.event.payload.cause.type, 'VOICE_INTERACTION');
   assert.equal(sceneResponse.event.endpoint.endpointId, 'hb:hub-test:workflow:night-tv');
+  assert.equal('scope' in sceneResponse.event.endpoint, false);
   assert.deepEqual(sceneResponse.context.properties, []);
 
   assert.ok(calls.some((entry) => entry.url === '/api/alexa/grants/accept'));
   assert.ok(calls.some((entry) => entry.url === '/api/oauth/alexa/resolve'));
   assert.ok(calls.some((entry) => entry.url === '/api/alexa/directives/execute'));
+  assert.equal(calls.filter((entry) => entry.url === '/api/oauth/alexa/resolve').length, 1);
+  assert.deepEqual(
+    calls.filter((entry) => entry.url === '/api/oauth/alexa/resolve')[0]?.body,
+    {}
+  );
+  assert.deepEqual(
+    calls.filter((entry) => entry.url === '/api/alexa/grants/accept')[0]?.body,
+    {
+      grantCode: 'grant-123',
+      eventRegion: 'NA'
+    }
+  );
+  assert.equal(
+    calls.filter((entry) => entry.url === '/api/alexa/grants/accept')[0]?.authorization,
+    'Bearer access-123'
+  );
   assert.equal(
     calls.filter((entry) => entry.url === '/api/alexa/hubs/hub-test/catalog')[0]?.authorization,
     'Bearer access-123'
@@ -320,11 +366,7 @@ test('lambda handler resolves Discover, AcceptGrant, ReportState, and control di
           correlationToken: 'corr-2'
         },
         endpoint: {
-          endpointId: 'hb:hub-test:device:lamp-1',
-          scope: {
-            type: 'BearerToken',
-            token: 'access-123'
-          }
+          endpointId: 'hb:hub-test:device:lamp-1'
         },
         payload: {}
       }
@@ -398,6 +440,9 @@ test('lambda maps broker authorization and endpoint failures into Alexa error re
   });
 
   assert.equal(endpointMissingResponse.event.payload.type, 'NO_SUCH_ENDPOINT');
+  assert.deepEqual(endpointMissingResponse.event.endpoint, {
+    endpointId: 'hb:hub-test:device:missing-1'
+  });
 
   const unauthorizedResponse = await handler({
     directive: {

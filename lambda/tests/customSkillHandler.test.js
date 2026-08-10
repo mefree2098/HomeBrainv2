@@ -113,3 +113,68 @@ test('custom skill handler asks the user to link HomeBrain when no access token 
   assert.equal(response.response.card.type, 'LinkAccount');
   assert.equal(response.response.shouldEndSession, true);
 });
+
+test('custom skill handler acknowledges SessionEndedRequest without contacting the broker', async (t) => {
+  const previousBrokerUrl = process.env.HOMEBRAIN_BROKER_BASE_URL;
+  delete process.env.HOMEBRAIN_BROKER_BASE_URL;
+  t.after(() => {
+    process.env.HOMEBRAIN_BROKER_BASE_URL = previousBrokerUrl;
+  });
+
+  const response = await handler({
+    request: {
+      type: 'SessionEndedRequest',
+      requestId: 'req-ended',
+      locale: 'en-US',
+      reason: 'USER_INITIATED'
+    }
+  });
+
+  assert.deepEqual(response, {
+    version: '1.0',
+    response: {}
+  });
+});
+
+test('custom skill handler does not expose broker errors in speech or cards', async (t) => {
+  const brokerServer = http.createServer(async (req, res) => {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      success: false,
+      error: 'internal database hostname and secret details'
+    }));
+  });
+  const broker = await listen(brokerServer);
+  const previousBrokerUrl = process.env.HOMEBRAIN_BROKER_BASE_URL;
+  const previousConsoleError = console.error;
+  process.env.HOMEBRAIN_BROKER_BASE_URL = broker.baseUrl;
+  console.error = () => {};
+
+  t.after(async () => {
+    process.env.HOMEBRAIN_BROKER_BASE_URL = previousBrokerUrl;
+    console.error = previousConsoleError;
+    await close(broker.server);
+  });
+
+  const response = await handler({
+    session: {
+      user: {
+        accessToken: 'skill-access-token'
+      }
+    },
+    request: {
+      type: 'IntentRequest',
+      requestId: 'req-error',
+      locale: 'en-US',
+      intent: {
+        name: 'HomeBrainStatusIntent'
+      }
+    }
+  });
+
+  assert.equal(
+    response.response.outputSpeech.text,
+    'HomeBrain could not process that Alexa request. Please try again.'
+  );
+  assert.equal(response.response.card.content.includes('database hostname'), false);
+});
