@@ -86,7 +86,6 @@ const platformManagedServiceSchema = new mongoose.Schema({
   timestamps: true
 });
 
-platformManagedServiceSchema.index({ serviceId: 1 }, { unique: true });
 platformManagedServiceSchema.index({ lastCheckedAt: 1 });
 platformManagedServiceSchema.index({ eligibleForAutoUpdateAt: 1 });
 
