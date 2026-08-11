@@ -25,7 +25,7 @@
     "node-wav": "^0.0.2",
     "onnxruntime-node": "1.21.1",
     "tflite-node": "1.0.0",
-    "ws": "^8.21.1",
+    "ws": "^8.21.3",
     "yargs": "^17.7.2"
   },
   "engines": {
