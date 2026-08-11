@@ -330,6 +330,45 @@ test('platform service update checks tolerate apt warnings and parse Pi-hole lat
   assert.match(script, /latest="\$\{version_pair#\*\|\}"/);
 });
 
+test('platform service setup migrates legacy MongoDB apt trust before refreshing packages', () => {
+  const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
+
+  assert.match(script, /migrate_legacy_mongodb_apt_sources\(\)/);
+  assert.match(script, /https:\/\/pgp[.]mongodb[.]com\/server-\$\{version\}[.]asc/);
+  assert.match(script, /signed-by=" keyring/);
+  assert.match(script, /setup_platform_services\(\) \{\s+migrate_legacy_mongodb_apt_sources\s+setup_caddy/);
+});
+
+test('MongoDB apt source migration preserves repository details and adds exact keyring trust', (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'homebrain-mongodb-source-'));
+  const sourcePath = path.join(tempDir, 'mongodb.list');
+  const scriptPath = path.join(repoRoot, 'scripts', 'setup-services.sh');
+  const keyring = '/usr/share/keyrings/mongodb-server-6.0.gpg';
+  fs.writeFileSync(sourcePath, [
+    '# MongoDB repository',
+    'deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/6.0 multiverse',
+    'deb https://example.com/ubuntu jammy main'
+  ].join('\n'));
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+
+  const result = spawnSync('bash', [
+    '-c',
+    'source "$1"; rewrite_mongodb_apt_source "$2" "$3"',
+    'bash',
+    scriptPath,
+    sourcePath,
+    keyring
+  ], { encoding: 'utf8' });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, [
+    '# MongoDB repository',
+    `deb [ arch=amd64,arm64 signed-by=${keyring} ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/6.0 multiverse`,
+    'deb https://example.com/ubuntu jammy main',
+    ''
+  ].join('\n'));
+});
+
 test('setup-services manages Codex CLI installation and npm update discovery', () => {
   const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
 

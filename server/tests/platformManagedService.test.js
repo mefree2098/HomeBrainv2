@@ -9,6 +9,14 @@ const reachyMiniService = require('../services/reachyMiniService');
 
 const projectRoot = path.resolve(__dirname, '..', '..');
 
+test('managed services declare the unique serviceId index exactly once', () => {
+  const serviceIdIndexes = PlatformManagedService.schema.indexes()
+    .filter(([fields]) => fields.serviceId === 1);
+
+  assert.equal(serviceIdIndexes.length, 1);
+  assert.equal(serviceIdIndexes[0][1].unique, true);
+});
+
 function createSpawnStub(calls, handlers = {}) {
   return (command, args) => {
     calls.push({ command, args });

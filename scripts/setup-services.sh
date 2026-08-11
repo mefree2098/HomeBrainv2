@@ -61,6 +61,71 @@ print_success() { echo -e "${GREEN}[OK]${NC} $1"; }
 print_warning() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
+rewrite_mongodb_apt_source() {
+  local source_file="$1"
+  local keyring="$2"
+
+  awk -v keyring="${keyring}" '
+    /^[[:space:]]*deb[[:space:]]/ && /repo[.]mongodb[.]org/ && $0 !~ /signed-by=/ {
+      if ($0 ~ /^[[:space:]]*deb[[:space:]]+\[/) {
+        sub(/[[:space:]]*\]/, " signed-by=" keyring " ]")
+      } else {
+        sub(/deb[[:space:]]+/, "deb [signed-by=" keyring "] ")
+      }
+    }
+    { print }
+  ' "${source_file}"
+}
+
+migrate_legacy_mongodb_apt_sources() {
+  local source_file version keyring source_temp key_source_temp keyring_temp
+  local source_files=()
+
+  [[ -d /etc/apt/sources.list.d ]] || return 0
+
+  shopt -s nullglob
+  source_files=(/etc/apt/sources.list.d/*.list)
+  shopt -u nullglob
+
+  for source_file in "${source_files[@]}"; do
+    if ! awk '
+      /^[[:space:]]*deb[[:space:]]/ && /repo[.]mongodb[.]org/ && $0 !~ /signed-by=/ { found = 1 }
+      END { exit(found ? 0 : 1) }
+    ' "${source_file}"; then
+      continue
+    fi
+
+    version="$(sed -nE '/repo[.]mongodb[.]org/ { s#.*mongodb-org/([0-9]+([.][0-9]+)?).*#\1#; p; q; }' "${source_file}")"
+    if [[ ! "${version}" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+      print_warning "Unable to determine the MongoDB repository version in ${source_file}; leaving it unchanged."
+      continue
+    fi
+
+    keyring="/usr/share/keyrings/mongodb-server-${version}.gpg"
+    sudo install -d -m 0755 "$(dirname "${keyring}")"
+    if ! sudo test -s "${keyring}"; then
+      key_source_temp="$(mktemp /tmp/homebrain-mongodb-key.XXXXXX)"
+      keyring_temp="$(mktemp /tmp/homebrain-mongodb-keyring.XXXXXX)"
+      if ! curl -fsSL --output "${key_source_temp}" "https://pgp.mongodb.com/server-${version}.asc" \
+        || ! gpg --batch --dearmor --yes --output "${keyring_temp}" "${key_source_temp}" \
+        || ! sudo install -o root -g root -m 0644 "${keyring_temp}" "${keyring}"; then
+        rm -f "${key_source_temp}" "${keyring_temp}"
+        return 1
+      fi
+      rm -f "${key_source_temp}" "${keyring_temp}"
+    fi
+
+    source_temp="$(mktemp /tmp/homebrain-mongodb-source.XXXXXX)"
+    if ! rewrite_mongodb_apt_source "${source_file}" "${keyring}" > "${source_temp}" \
+      || ! sudo install -o root -g root -m 0644 "${source_temp}" "${source_file}"; then
+      rm -f "${source_temp}"
+      return 1
+    fi
+    rm -f "${source_temp}"
+    print_success "Migrated the MongoDB ${version} apt source to ${keyring}."
+  done
+}
+
 is_linux_arm64_host() {
   local os_name arch_name
   os_name="$(uname -s)"
@@ -1311,6 +1376,7 @@ setup_codex_cli() {
 }
 
 setup_platform_services() {
+  migrate_legacy_mongodb_apt_sources
   setup_caddy
   setup_mqtt
   setup_pihole
