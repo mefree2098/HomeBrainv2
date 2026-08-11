@@ -69,6 +69,32 @@ function formatSpawnError(command, args, error) {
   return new Error(`Failed to execute ${command} ${args.join(' ')}: ${error.message || error}`);
 }
 
+function normalizeExecutable(command) {
+  const executable = typeof command === 'string' ? command.trim() : '';
+  if (!executable || executable.length > 4096 || executable.includes('\0') || executable.includes('\n') || executable.includes('\r')) {
+    throw new Error('Command executable is invalid');
+  }
+  if (!executable.includes('/') && !executable.includes('\\')) {
+    for (const character of executable) {
+      const allowed = (character >= 'a' && character <= 'z')
+        || (character >= 'A' && character <= 'Z')
+        || (character >= '0' && character <= '9')
+        || ['-', '_', '.', '+'].includes(character);
+      if (!allowed) throw new Error('Command executable is invalid');
+    }
+  }
+  return executable;
+}
+
+function normalizeCommandArguments(args) {
+  if (!Array.isArray(args) || args.length > 256) throw new Error('Command arguments are invalid');
+  return args.map((argument) => {
+    const value = String(argument);
+    if (value.length > 64 * 1024 || value.includes('\0')) throw new Error('Command argument is invalid');
+    return value;
+  });
+}
+
 function createBoundedTextBuffer(limitBytes = COMMAND_OUTPUT_LIMIT_BYTES) {
   const maxBytes = Math.max(1024, Number.parseInt(limitBytes, 10) || COMMAND_OUTPUT_LIMIT_BYTES);
   const chunks = [];
@@ -1257,6 +1283,8 @@ class WhisperService {
   }
 
   async _runCommand(command, args, options = {}) {
+    const executable = normalizeExecutable(command);
+    const normalizedArgs = normalizeCommandArguments(args);
     const {
       streamOutput = false,
       streamPrefix = '',
@@ -1277,7 +1305,13 @@ class WhisperService {
     };
 
     return new Promise((resolve, reject) => {
-      const child = spawn(command, args, { ...spawnOptions, stdio: ['ignore', 'pipe', 'pipe'] });
+      // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- executable and argv are normalized above; shell execution is explicitly disabled.
+      const child = spawn(executable, normalizedArgs, {
+        ...spawnOptions,
+        shell: false,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
       const stdout = createBoundedTextBuffer(maxOutputBytes);
       const stderr = createBoundedTextBuffer(maxOutputBytes);
       child.stdout.on('data', (d) => {
@@ -1288,14 +1322,14 @@ class WhisperService {
         stderr.append(d);
         if (streamOutput) emitChunk(d, true);
       });
-      child.on('error', (error) => reject(formatSpawnError(command, args, error)));
+      child.on('error', (error) => reject(formatSpawnError(executable, normalizedArgs, error)));
       child.on('close', (code) => {
         const stdoutText = stdout.value();
         const stderrText = stderr.value();
 
         if (code === 0) resolve({ stdout: stdoutText, stderr: stderrText });
         else {
-          const error = new Error(`${command} ${args.join(' ')} exited with code ${code}\n${stderrText}`);
+          const error = new Error(`${executable} ${normalizedArgs.join(' ')} exited with code ${code}\n${stderrText}`);
           error.stdout = stdoutText;
           error.stderr = stderrText;
           reject(error);

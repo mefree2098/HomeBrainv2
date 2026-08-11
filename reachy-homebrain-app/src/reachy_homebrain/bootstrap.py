@@ -129,7 +129,8 @@ def activate_device(
         device_id=device_id,
         device_token=token,
         registration_code="",
-        claim_token="",
+        # Empty values deliberately erase one-time bootstrap credentials.
+        claim_token="",  # nosec B106
     )
     try:
         activated.validate()

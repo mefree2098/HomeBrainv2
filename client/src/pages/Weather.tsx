@@ -1027,7 +1027,7 @@ export function Weather() {
                 <ChartLegend content={<ChartLegendContent className="flex-wrap gap-x-4 gap-y-2" />} />
                 <Bar dataKey="rainRateInPerHr" fill="var(--color-rainRateInPerHr)" radius={[4, 4, 0, 0]} />
                 <Line type="monotone" dataKey="pressureInHg" stroke="var(--color-pressureInHg)" strokeWidth={2.5} dot={false} />
-                <Line type="monotone" dataKey="solarRadiationWm2" stroke="var(--color-solarRadiationWm2)" strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="solarRadiationWm2" stroke="var(--color-solarRadiationWm2)" strokeWidth={2} dot={false} /> {/* gitleaks:allow */}
               </ComposedChart>
             </ChartContainer>
           </CardContent>

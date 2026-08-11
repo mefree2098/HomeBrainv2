@@ -73,7 +73,8 @@ class HomeBrainClient:
         self.controller = controller
         self.tts = tts
         self.connector = connector
-        self.random = random_source or random.Random()
+        # Pseudo-randomness is used only to jitter reconnect delays, never for credentials.
+        self.random = random_source or random.Random()  # nosec B311
         self.release_callback = release_callback
         self.package_stager = package_stager
         self.wake_word = wake_word

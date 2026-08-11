@@ -8,6 +8,26 @@ function escapeRegexLiteral(value = '') {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+const PROFILE_MUTATION_FIELDS = new Set([
+  'name', 'wakeWords', 'voiceId', 'voiceName', 'systemPrompt', 'personality',
+  'responseStyle', 'preferredLanguage', 'timezone', 'speechRate', 'speechPitch',
+  'active', 'permissions', 'avatar', 'birthDate', 'favorites', 'dashboardViews',
+  'alexaMappings', 'securityPreferences', 'alexaPreferences', 'contextMemory',
+  'learningMode', 'privacyMode'
+]);
+
+function sanitizeProfileMutation(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  return Object.fromEntries(Object.entries(source).filter(([key]) => PROFILE_MUTATION_FIELDS.has(key)));
+}
+
+function normalizeProfileName(value) {
+  if (typeof value !== 'string' || !value.trim()) throw new Error('Profile name is required');
+  const name = value.trim();
+  if (name.length > 100) throw new Error('Profile name must be 100 characters or fewer');
+  return name;
+}
+
 const normalizeVisibleSensorIds = (sensorIds) => {
   if (sensorIds === undefined || sensorIds === null) {
     return null;
@@ -276,6 +296,8 @@ class UserProfileService {
    */
   async createProfile(profileData) {
     try {
+      profileData = sanitizeProfileMutation(profileData);
+      profileData.name = normalizeProfileName(profileData.name);
       console.log('Creating new user profile:', profileData.name);
       
       // Validate required fields
@@ -307,7 +329,8 @@ class UserProfileService {
       }
 
       // Check if profile name already exists
-      const existingProfile = await UserProfile.findOne({ name: { $regex: new RegExp(`^${profileData.name}$`, 'i') } });
+      const existingProfile = await UserProfile.findOne({ name: profileData.name })
+        .collation({ locale: 'en', strength: 2 });
       if (existingProfile) {
         throw new Error(`Profile with name "${profileData.name}" already exists`);
       }
@@ -348,6 +371,10 @@ class UserProfileService {
    */
   async updateProfile(profileId, updateData) {
     try {
+      updateData = sanitizeProfileMutation(updateData);
+      if (Object.prototype.hasOwnProperty.call(updateData, 'name')) {
+        updateData.name = normalizeProfileName(updateData.name);
+      }
       console.log(`Updating user profile ${profileId} with data:`, Object.keys(updateData));
       
       const existingProfile = await UserProfile.findById(profileId);
@@ -366,10 +393,10 @@ class UserProfileService {
 
       // If updating name, check for duplicates
       if (updateData.name && updateData.name !== existingProfile.name) {
-        const duplicateProfile = await UserProfile.findOne({ 
-          name: { $regex: new RegExp(`^${updateData.name}$`, 'i') },
+        const duplicateProfile = await UserProfile.findOne({
+          name: updateData.name,
           _id: { $ne: profileId }
-        });
+        }).collation({ locale: 'en', strength: 2 });
         if (duplicateProfile) {
           throw new Error(`Profile with name "${updateData.name}" already exists`);
         }

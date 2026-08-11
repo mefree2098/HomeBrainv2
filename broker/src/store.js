@@ -26,6 +26,30 @@ function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function safeRecordKey(value, label = 'identifier') {
+  const key = trimString(value);
+  if (!key) {
+    throw new Error(`${label} is required`);
+  }
+  if (key.length > 256 || key === '__proto__' || key === 'prototype' || key === 'constructor' || key.startsWith('$') || key.includes('\0')) {
+    throw new Error(`${label} is invalid`);
+  }
+  return key;
+}
+
+function safeDictionary(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const output = {};
+  for (const [rawKey, entry] of Object.entries(source)) {
+    try {
+      output[safeRecordKey(rawKey)] = entry;
+    } catch (_error) {
+      // Ignore unsafe persisted keys instead of hydrating them into live state.
+    }
+  }
+  return output;
+}
+
 function uniqueStrings(values = []) {
   return Array.from(new Set((Array.isArray(values) ? values : [])
     .map((value) => trimString(value))
@@ -126,12 +150,12 @@ function normalizeStoreState(value) {
     ...parsed
   };
 
-  state.hubs = state.hubs && typeof state.hubs === 'object' && !Array.isArray(state.hubs) ? state.hubs : {};
-  state.accountLinks = state.accountLinks && typeof state.accountLinks === 'object' && !Array.isArray(state.accountLinks) ? state.accountLinks : {};
-  state.authCodes = state.authCodes && typeof state.authCodes === 'object' && !Array.isArray(state.authCodes) ? state.authCodes : {};
-  state.accessTokens = state.accessTokens && typeof state.accessTokens === 'object' && !Array.isArray(state.accessTokens) ? state.accessTokens : {};
-  state.refreshTokens = state.refreshTokens && typeof state.refreshTokens === 'object' && !Array.isArray(state.refreshTokens) ? state.refreshTokens : {};
-  state.permissionGrants = state.permissionGrants && typeof state.permissionGrants === 'object' && !Array.isArray(state.permissionGrants) ? state.permissionGrants : {};
+  state.hubs = safeDictionary(state.hubs);
+  state.accountLinks = safeDictionary(state.accountLinks);
+  state.authCodes = safeDictionary(state.authCodes);
+  state.accessTokens = safeDictionary(state.accessTokens);
+  state.refreshTokens = safeDictionary(state.refreshTokens);
+  state.permissionGrants = safeDictionary(state.permissionGrants);
   state.eventQueue = Array.isArray(state.eventQueue) ? state.eventQueue : [];
   state.auditLog = Array.isArray(state.auditLog) ? state.auditLog : [];
   state.version = Math.max(3, Number(state.version || 0));
@@ -165,10 +189,7 @@ function shouldRefuseEmptyOverwrite(existingState, nextState) {
 }
 
 function ensureHubRecord(state, hubId) {
-  const key = trimString(hubId);
-  if (!key) {
-    throw new Error('hubId is required');
-  }
+  const key = safeRecordKey(hubId, 'hubId');
 
   if (!state.hubs[key]) {
     const timestamp = new Date().toISOString();
@@ -299,7 +320,9 @@ function normalizeAccountStatus(value, fallback = 'linked') {
 function upsertAccountLinkRecord(state, payload = {}) {
   const timestamp = new Date().toISOString();
   const hub = ensureHubRecord(state, payload.hubId);
-  const brokerAccountId = trimString(payload.brokerAccountId) || randomIdentifier('hbacct');
+  const brokerAccountId = payload.brokerAccountId
+    ? safeRecordKey(payload.brokerAccountId, 'brokerAccountId')
+    : randomIdentifier('hbacct');
   const existing = state.accountLinks[brokerAccountId] || {};
   const status = normalizeAccountStatus(payload.status, normalizeAccountStatus(existing.status, 'linked'));
   const has = (key) => Object.prototype.hasOwnProperty.call(payload, key);
@@ -332,7 +355,7 @@ function upsertAccountLinkRecord(state, payload = {}) {
 }
 
 function createAuthorizationCodeRecord(state, payload = {}) {
-  const brokerAccountId = trimString(payload.brokerAccountId);
+  const brokerAccountId = safeRecordKey(payload.brokerAccountId, 'brokerAccountId');
   const accountLink = state.accountLinks[brokerAccountId];
   if (!accountLink) {
     throw new Error('Alexa account authorization was not found');
@@ -407,7 +430,7 @@ function validateAuthorizationCodeRecord(state, code, meta = {}, options = {}) {
 }
 
 function issueTokensInState(state, payload = {}) {
-  const brokerAccountId = trimString(payload.brokerAccountId);
+  const brokerAccountId = safeRecordKey(payload.brokerAccountId, 'brokerAccountId');
   const accountLink = state.accountLinks[brokerAccountId];
   if (!accountLink || accountLink.status === 'revoked') {
     throw new BrokerOAuthGrantError('Linked account is no longer active', {
@@ -678,7 +701,13 @@ class BrokerStore {
   }
 
   buildHubView(state, hubId) {
-    const hub = state.hubs[trimString(hubId)];
+    let hubKey;
+    try {
+      hubKey = safeRecordKey(hubId, 'hubId');
+    } catch (_error) {
+      return null;
+    }
+    const hub = state.hubs[hubKey];
     if (!hub) {
       return null;
     }
@@ -770,7 +799,7 @@ class BrokerStore {
 
   async updateAccountLink(brokerAccountId, updates = {}) {
     return this.write((state) => {
-      const account = state.accountLinks[trimString(brokerAccountId)];
+      const account = state.accountLinks[safeRecordKey(brokerAccountId, 'brokerAccountId')];
       if (!account) {
         throw new Error('Linked account not found');
       }
@@ -803,7 +832,13 @@ class BrokerStore {
   }
 
   async getAccountLink(brokerAccountId) {
-    return this.read((state) => state.accountLinks[trimString(brokerAccountId)] || null);
+    let key;
+    try {
+      key = safeRecordKey(brokerAccountId, 'brokerAccountId');
+    } catch (_error) {
+      return null;
+    }
+    return this.read((state) => state.accountLinks[key] || null);
   }
 
   async touchAccountDiscovery(brokerAccountId, metadata = {}) {
@@ -1045,7 +1080,7 @@ class BrokerStore {
 
   async recordPermissionGrant(payload = {}) {
     return this.write((state) => {
-      const brokerAccountId = trimString(payload.brokerAccountId);
+      const brokerAccountId = safeRecordKey(payload.brokerAccountId, 'brokerAccountId');
       const accountLink = state.accountLinks[brokerAccountId];
       if (!accountLink || accountLink.status !== 'linked') {
         throw new Error('Linked account is not active');
@@ -1092,7 +1127,7 @@ class BrokerStore {
 
   async updatePermissionGrant(permissionGrantId, updates = {}) {
     return this.write((state) => {
-      const record = state.permissionGrants[trimString(permissionGrantId)];
+      const record = state.permissionGrants[safeRecordKey(permissionGrantId, 'permissionGrantId')];
       if (!record) {
         throw new Error('Permission grant not found');
       }
@@ -1142,7 +1177,13 @@ class BrokerStore {
   }
 
   async getPermissionGrant(permissionGrantId) {
-    return this.read((state) => state.permissionGrants[trimString(permissionGrantId)] || null);
+    let key;
+    try {
+      key = safeRecordKey(permissionGrantId, 'permissionGrantId');
+    } catch (_error) {
+      return null;
+    }
+    return this.read((state) => state.permissionGrants[key] || null);
   }
 
   async findPermissionGrantByGrantCode(grantCode, filters = {}) {
@@ -1155,7 +1196,7 @@ class BrokerStore {
 
   async revokePermissionGrant(permissionGrantId, options = {}) {
     return this.write((state) => {
-      const record = state.permissionGrants[trimString(permissionGrantId)];
+      const record = state.permissionGrants[safeRecordKey(permissionGrantId, 'permissionGrantId')];
       if (!record) {
         throw new Error('Permission grant not found');
       }
@@ -1180,7 +1221,7 @@ class BrokerStore {
 
   async revokeAccountLink(brokerAccountId, options = {}) {
     return this.write((state) => {
-      const account = state.accountLinks[trimString(brokerAccountId)];
+      const account = state.accountLinks[safeRecordKey(brokerAccountId, 'brokerAccountId')];
       if (!account) {
         throw new Error('Linked account not found');
       }
@@ -1510,5 +1551,6 @@ module.exports.sha256 = sha256;
 module.exports.pkceS256 = pkceS256;
 module.exports.randomIdentifier = randomIdentifier;
 module.exports.permissionGrantKey = permissionGrantKey;
+module.exports.safeRecordKey = safeRecordKey;
 module.exports.getRefreshTokenTtlSeconds = getRefreshTokenTtlSeconds;
 module.exports.BrokerOAuthGrantError = BrokerOAuthGrantError;

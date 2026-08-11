@@ -270,7 +270,7 @@ router.post('/logout', sessionMutationRateLimit, async (req, res) => {
   if (accessToken) {
     try {
       user = await verifyAccessToken(accessToken, ALL_ROLES, req, { platform: null });
-      currentSessionId = authSessionService.getSessionIdFromAccessToken(accessToken);
+      currentSessionId = authSessionService.getSessionIdFromVerifiedClaims(req.authTokenClaims);
     } catch (_error) {
       user = null;
     }
@@ -381,7 +381,7 @@ router.delete('/account', accountDeletionRateLimit, requireUser(ALL_ROLES, {
 
 router.get('/sessions', requireUser(ALL_ROLES, { platform: null }), async (req, res) => {
   try {
-    const currentSessionId = authSessionService.getSessionIdFromAccessToken(extractToken(req));
+    const currentSessionId = authSessionService.getSessionIdFromVerifiedClaims(req.authTokenClaims);
     const sessions = await authSessionService.listSessionsForUser(req.user._id, currentSessionId);
     const sessionMetadata = authSessionService.extractSessionMetadata(req);
     const lifetimeDays = await authSessionService.getSessionLifetimeDays(sessionMetadata.clientType);
@@ -419,7 +419,7 @@ router.delete(
         });
       }
 
-      const currentSessionId = authSessionService.getSessionIdFromAccessToken(extractToken(req));
+      const currentSessionId = authSessionService.getSessionIdFromVerifiedClaims(req.authTokenClaims);
       const signedOutCurrentSession = currentSessionId === session.sessionId;
 
       if (signedOutCurrentSession) {

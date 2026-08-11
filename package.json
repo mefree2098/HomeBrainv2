@@ -4,7 +4,12 @@
   "main": "index.js",
   "scripts": {
     "install:all": "concurrently -n \"client,server,broker,lambda\" \"npm run client-install\" \"npm run server-install\" \"npm run broker-install\" \"npm run lambda-install\"",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "npm run test:server && npm run test:broker && npm run test:lambda && npm run test:remote && npm run test:client",
+    "test:server": "node scripts/run-with-modern-node.js npm --prefix server test",
+    "test:broker": "node scripts/run-with-modern-node.js npm --prefix broker test",
+    "test:lambda": "node scripts/run-with-modern-node.js npm --prefix lambda test",
+    "test:remote": "node scripts/run-with-modern-node.js npm --prefix remote-device test",
+    "test:client": "node scripts/run-with-modern-node.js npm --prefix client run lint && node scripts/run-with-modern-node.js npm --prefix client run build",
     "client": "node scripts/run-with-modern-node.js npm --prefix client run dev",
     "client-install": "node scripts/run-with-modern-node.js npm --prefix client ci --no-audit --no-fund",
     "server": "node scripts/run-with-modern-node.js cross-env WAKEWORD_PIPER_EXEC=./server/.wakeword-venv/bin/piper npm run dev --prefix server",

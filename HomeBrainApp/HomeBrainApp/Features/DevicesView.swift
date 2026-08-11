@@ -306,7 +306,7 @@ struct DevicesView: View {
         [
             String(describing: scenePhase),
             session.serverURLString,
-            session.accessToken ?? "none"
+            String(session.credentialTaskIdentity)
         ].joined(separator: "||")
     }
 
@@ -314,7 +314,7 @@ struct DevicesView: View {
         [
             String(describing: scenePhase),
             session.serverURLString,
-            session.accessToken ?? "none",
+            String(session.credentialTaskIdentity),
             isEmbeddedFocusMode ? "focused" : "list"
         ].joined(separator: "||")
     }

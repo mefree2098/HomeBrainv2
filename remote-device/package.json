@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "node test-audio.js",
+    "test": "node --test *.test.js",
+    "test:audio": "node test-audio.js",
     "install-deps": "npm ci --no-audit --no-fund && sudo apt-get update && sudo apt-get install -y alsa-utils pulseaudio",
     "setup-audio": "node setup-audio.js"
   },
@@ -19,14 +20,15 @@
   "author": "HomeBrain",
   "license": "Apache-2.0",
   "dependencies": {
-    "audio-buffer-utils": "^5.1.2",
-    "node-fetch": "^2.7.0",
     "node-record-lpcm16": "^1.0.1",
     "node-wav": "^0.0.2",
-    "onnxruntime-node": "1.21.1",
+    "onnxruntime-node": "1.27.0",
     "tflite-node": "1.0.0",
     "ws": "^8.21.1",
     "yargs": "^17.7.2"
+  },
+  "overrides": {
+    "adm-zip": "0.6.0"
   },
   "engines": {
     "node": ">=20.0.0"

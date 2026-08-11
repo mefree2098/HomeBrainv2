@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 
 const AutomationHistory = require('../models/AutomationHistory');
 
-test('AutomationHistory accepts security_alarm_status as a trigger type', () => {
+test('AutomationHistory accepts security_alarm_status as a trigger type', async () => {
   const history = new AutomationHistory({
     automationId: new mongoose.Types.ObjectId(),
     automationName: 'Alarm-driven automation',
@@ -12,6 +12,5 @@ test('AutomationHistory accepts security_alarm_status as a trigger type', () => 
     totalActions: 1
   });
 
-  const validationError = history.validateSync();
-  assert.equal(validationError, undefined);
+  await assert.doesNotReject(history.validate());
 });

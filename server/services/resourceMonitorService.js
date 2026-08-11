@@ -379,7 +379,11 @@ class ResourceMonitorService {
       const totalBytes = (Number.parseInt(parts[1], 10) || 0) * 1024;
       const usedBytes = (Number.parseInt(parts[2], 10) || 0) * 1024;
       const availableBytes = (Number.parseInt(parts[3], 10) || 0) * 1024;
-      const usagePercent = Number.parseInt(String(parts[4] || '0').replace('%', ''), 10) || 0;
+      const rawUsagePercent = String(parts[4] || '0');
+      const usagePercent = Number.parseInt(
+        rawUsagePercent.endsWith('%') ? rawUsagePercent.slice(0, -1) : rawUsagePercent,
+        10
+      ) || 0;
       const mountedOn = parts.slice(5).join(' ') || '';
 
       return {

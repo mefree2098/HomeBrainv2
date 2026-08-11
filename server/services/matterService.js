@@ -42,6 +42,10 @@ const THREAD_FLASH_MAX_FIRMWARE_BYTES = Math.max(
   Number(process.env.HOMEBRAIN_THREAD_FLASH_MAX_BYTES || 6 * 1024 * 1024)
 );
 const THREAD_FLASH_LOG_LIMIT = Math.max(50, Number(process.env.HOMEBRAIN_THREAD_FLASH_LOG_LIMIT || 250));
+const THREAD_FLASH_COMMAND_TIMEOUT_MS = Math.min(
+  30 * 60_000,
+  Math.max(60_000, Number(process.env.HOMEBRAIN_THREAD_FLASH_COMMAND_TIMEOUT_MS || 15 * 60_000))
+);
 const THREAD_OTBR_LOG_LIMIT = Math.max(50, Number(process.env.HOMEBRAIN_THREAD_OTBR_LOG_LIMIT || 250));
 const THREAD_OTBR_START_TIMEOUT_MS = Math.max(60_000, Number(process.env.HOMEBRAIN_THREAD_OTBR_START_TIMEOUT_MS || 60 * 60_000));
 const THREAD_OTBR_HELPER_PATH = process.env.HOMEBRAIN_OTBR_HELPER_PATH || '/usr/local/lib/homebrain/homebrain-otbr-control.sh';
@@ -99,6 +103,75 @@ function normalizeString(value) {
 
 function normalizeLower(value) {
   return normalizeString(value).toLowerCase();
+}
+
+function normalizeChildProcessInvocation(command, args = []) {
+  const executable = normalizeString(command);
+  const isSafeBasename = /^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,127}$/.test(executable);
+  const isSafeAbsolutePath = path.isAbsolute(executable)
+    && executable.length <= 4096
+    && !executable.includes('\0')
+    && !executable.includes('\n')
+    && !executable.includes('\r');
+  if (!isSafeBasename && !isSafeAbsolutePath) {
+    throw new Error('Invalid child-process executable');
+  }
+  if (!Array.isArray(args) || args.length > 128) {
+    throw new Error('Invalid child-process argument list');
+  }
+  const normalizedArgs = args.map((arg) => {
+    if (typeof arg !== 'string' || arg.length > 8192 || arg.includes('\0')) {
+      throw new Error('Invalid child-process argument');
+    }
+    return arg;
+  });
+  return { command: executable, args: normalizedArgs };
+}
+
+function isExecutableFile(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    fs.accessSync(filePath, fs.constants.X_OK);
+    return stat.isFile();
+  } catch (_error) {
+    return false;
+  }
+}
+
+function findExecutableOnPath(command) {
+  const name = normalizeString(command);
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,127}$/.test(name)) {
+    return '';
+  }
+  const extensions = process.platform === 'win32'
+    ? normalizeString(process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean)
+    : [''];
+  for (const directory of normalizeString(process.env.PATH).split(path.delimiter)) {
+    if (!path.isAbsolute(directory)) {
+      continue;
+    }
+    for (const extension of extensions) {
+      const candidate = path.join(directory, process.platform === 'win32' ? `${name}${extension}` : name);
+      if (isExecutableFile(candidate)) {
+        return candidate;
+      }
+    }
+  }
+  return '';
+}
+
+function normalizeThreadSerialDevicePath(value, errorMessage = 'Thread serial device must be a local /dev path') {
+  const devicePath = normalizeString(value);
+  if (
+    devicePath.length === 0
+    || devicePath.length > 512
+    || devicePath.includes('\0')
+    || !path.isAbsolute(devicePath)
+    || !path.resolve(devicePath).startsWith(`${path.parse(devicePath).root}dev${path.sep}`)
+  ) {
+    throw new Error(errorMessage);
+  }
+  return devicePath;
 }
 
 function envFlagEnabled(value) {
@@ -744,16 +817,18 @@ function buildThreadFirmwareFlashToolCandidates() {
 
 function probeThreadFirmwareFlashTool(candidate) {
   const args = [...candidate.baseArgs, '--help'];
-  const result = spawnSync(candidate.command, args, {
-    encoding: 'utf8',
-    timeout: 5000
-  });
+  let result;
+  try {
+    result = runSync(candidate.command, args, { timeout: 5000 });
+  } catch (error) {
+    result = { ok: false, status: null, stdout: '', stderr: '', error: error.message };
+  }
   const output = `${result.stdout || ''}\n${result.stderr || ''}`.trim();
-  const available = result.status === 0 && /universal-silabs-flasher|silicon labs flasher/i.test(output);
+  const available = result.ok && /universal-silabs-flasher|silicon labs flasher/i.test(output);
   return {
     ...candidate,
     available,
-    error: available ? null : (result.error?.message || output.split('\n').find(Boolean) || `Exited with ${result.status}`),
+    error: available ? null : (result.error || output.split('\n').find(Boolean) || `Exited with ${result.status}`),
     versionText: available ? output.split('\n').slice(0, 3).join('\n') : ''
   };
 }
@@ -780,30 +855,32 @@ function resolveThreadFirmwareFlashTool() {
 }
 
 function buildUniversalSilabsFlasherArgs({ devicePath, firmwarePath, verbose = false }) {
+  const safeDevicePath = normalizeThreadSerialDevicePath(devicePath);
+  const safeFirmwarePath = normalizeString(firmwarePath);
+  if (!path.isAbsolute(safeFirmwarePath) || safeFirmwarePath.length > 4096 || safeFirmwarePath.includes('\0')) {
+    throw new Error('Thread firmware image must use a valid absolute path');
+  }
   const args = [];
   if (verbose) {
     args.push('--verbose');
   }
   args.push(
     '--device',
-    devicePath,
+    safeDevicePath,
     '--bootloader-reset',
     'rts_dtr',
     'flash',
     '--firmware',
-    firmwarePath
+    safeFirmwarePath
   );
   return args;
 }
 
 function buildThreadFirmwareFlashCommand(tool, options) {
-  return {
-    command: tool.command,
-    args: [
-      ...(tool.baseArgs || []),
-      ...buildUniversalSilabsFlasherArgs(options)
-    ]
-  };
+  return normalizeChildProcessInvocation(tool.command, [
+    ...(tool.baseArgs || []),
+    ...buildUniversalSilabsFlasherArgs(options)
+  ]);
 }
 
 function normalizeThreadOtbrConfirmation(value) {
@@ -835,10 +912,10 @@ function normalizeThreadBaudRate(value, fallback = '460800') {
 }
 
 function buildOtbrRadioUrl(devicePath, baudRate = '460800') {
-  const pathValue = normalizeString(devicePath);
-  if (!pathValue.startsWith('/dev/')) {
-    throw new Error('OTBR radio device must be a local /dev serial path');
-  }
+  const pathValue = normalizeThreadSerialDevicePath(
+    devicePath,
+    'OTBR radio device must be a local /dev serial path'
+  );
   return `spinel+hdlc+uart://${pathValue}?uart-baudrate=${normalizeThreadBaudRate(baudRate)}`;
 }
 
@@ -965,10 +1042,15 @@ function matterControllerStoreMayContainPairedNodes(entries = []) {
 }
 
 function runSync(command, args = [], options = {}) {
-  const result = spawnSync(command, args, {
+  const invocation = normalizeChildProcessInvocation(command, args);
+  const timeout = Math.min(5 * 60_000, Math.max(250, Number(options.timeout) || 5000));
+  // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- executable and argv are validated above; shell execution is explicitly disabled.
+  const result = spawnSync(invocation.command, invocation.args, {
     encoding: 'utf8',
-    timeout: options.timeout || 5000,
-    ...options
+    timeout,
+    maxBuffer: 1024 * 1024,
+    shell: false,
+    windowsHide: true
   });
   return {
     ok: result.status === 0,
@@ -981,8 +1063,7 @@ function runSync(command, args = [], options = {}) {
 }
 
 function commandExists(command) {
-  const result = runSync('bash', ['-lc', `command -v ${command} 2>/dev/null`]);
-  return result.ok && Boolean(result.stdout);
+  return Boolean(findExecutableOnPath(command));
 }
 
 function systemctlValue(args = []) {
@@ -1725,8 +1806,8 @@ class MatterService {
     const mainPid = normalizeString(helperStatus?.mainPid) || systemctlValue(['show', '-p', 'MainPID', '--value', 'otbr-agent']);
     const otbrAgentInstalled = commandExists('otbr-agent') || fs.existsSync('/usr/sbin/otbr-agent') || fs.existsSync('/usr/local/sbin/otbr-agent');
     const otCtlInstalled = commandExists('ot-ctl') || fs.existsSync('/usr/sbin/ot-ctl') || fs.existsSync('/usr/local/bin/ot-ctl');
-    const datasetProbe = (!helperStatus && otCtlInstalled) ? runSync('bash', ['-lc', 'ot-ctl dataset active -x 2>/dev/null || true'], { timeout: 7000 }) : null;
-    const stateProbe = (!helperStatus && otCtlInstalled) ? runSync('bash', ['-lc', 'ot-ctl state 2>/dev/null || true'], { timeout: 7000 }) : null;
+    const datasetProbe = (!helperStatus && otCtlInstalled) ? runSync('ot-ctl', ['dataset', 'active', '-x'], { timeout: 7000 }) : null;
+    const stateProbe = (!helperStatus && otCtlInstalled) ? runSync('ot-ctl', ['state'], { timeout: 7000 }) : null;
     const state = normalizeThreadOtbrState(helperStatus?.state || stateProbe?.stdout || '');
     const dataset = parseHexDatasetFromText(helperStatus?.dataset || datasetProbe?.stdout || '');
     const mode = normalizeString(helperStatus?.mode || '');
@@ -2036,9 +2117,12 @@ class MatterService {
           });
 
           if (update) {
-            Object.assign(job, update, {
-              updatedAt: new Date().toISOString()
-            });
+            job.status = update.status;
+            job.phase = update.phase;
+            job.finishedAt = update.finishedAt;
+            job.error = update.error;
+            job.result = update.result;
+            job.updatedAt = new Date().toISOString();
             await this.refreshThreadKernelJobLogsFromHelper(job);
             reconciledJobs.push(job);
             if (THREAD_KERNEL_ACTIVE_STATUSES.has(job.status)) {
@@ -2948,26 +3032,46 @@ class MatterService {
   }
 
   async runThreadFirmwareFlashCommand(job, command, args, options = {}) {
-    this.appendThreadFirmwareFlashLog(job, 'system', `$ ${[command, ...args].join(' ')}`);
+    const invocation = normalizeChildProcessInvocation(command, args);
+    const timeoutMs = Math.min(
+      THREAD_FLASH_COMMAND_TIMEOUT_MS,
+      Math.max(60_000, Number(options.timeoutMs) || THREAD_FLASH_COMMAND_TIMEOUT_MS)
+    );
+    this.appendThreadFirmwareFlashLog(job, 'system', `$ ${[invocation.command, ...invocation.args].join(' ')}`);
     await new Promise((resolve, reject) => {
-      const child = spawn(command, args, {
+      // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- executable and argv are validated above; shell execution is explicitly disabled.
+      const child = spawn(invocation.command, invocation.args, {
         cwd: options.cwd || MATTER_DATA_DIR,
         stdio: ['ignore', 'pipe', 'pipe'],
+        shell: false,
+        windowsHide: true,
         env: {
           ...process.env,
           PIP_DISABLE_PIP_VERSION_CHECK: '1'
         }
       });
 
+      let settled = false;
+      const finish = (handler, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        handler(value);
+      };
+      const timer = setTimeout(() => {
+        child.kill('SIGTERM');
+        finish(reject, new Error(`${invocation.command} timed out after ${Math.round(timeoutMs / 1000)} seconds`));
+      }, timeoutMs);
+
       child.stdout.on('data', (chunk) => this.appendThreadFirmwareFlashLog(job, 'stdout', chunk));
       child.stderr.on('data', (chunk) => this.appendThreadFirmwareFlashLog(job, 'stderr', chunk));
-      child.on('error', reject);
+      child.on('error', (error) => finish(reject, error));
       child.on('close', (code, signal) => {
         if (code === 0) {
-          resolve();
+          finish(resolve);
           return;
         }
-        reject(new Error(`${command} exited with ${signal || `code ${code}`}`));
+        finish(reject, new Error(`${invocation.command} exited with ${signal || `code ${code}`}`));
       });
     });
   }
@@ -3158,22 +3262,8 @@ class MatterService {
       ].join(' ')
     });
 
-    await new Promise((resolve, reject) => {
-      const child = spawn(flashCommand.command, flashCommand.args, {
-        cwd: jobDir,
-        stdio: ['ignore', 'pipe', 'pipe']
-      });
-
-      child.stdout.on('data', (chunk) => this.appendThreadFirmwareFlashLog(job, 'stdout', chunk));
-      child.stderr.on('data', (chunk) => this.appendThreadFirmwareFlashLog(job, 'stderr', chunk));
-      child.on('error', reject);
-      child.on('close', (code, signal) => {
-        if (code === 0) {
-          resolve();
-          return;
-        }
-        reject(new Error(`universal-silabs-flasher exited with ${signal || `code ${code}`}`));
-      });
+    await this.runThreadFirmwareFlashCommand(job, flashCommand.command, flashCommand.args, {
+      cwd: jobDir
     });
 
     await this.updateThreadFirmwareFlashJob(job, {
@@ -4274,6 +4364,8 @@ matterService._test = {
   parseHexDatasetFromText,
   parseKnownAddress,
   resolveThreadActiveDataset,
+  normalizeChildProcessInvocation,
+  normalizeThreadSerialDevicePath,
   matterControllerStoreMayContainPairedNodes,
   serializeMatterControllerError,
   sanitizeFirmwareFileName,

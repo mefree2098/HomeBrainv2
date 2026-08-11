@@ -43,7 +43,8 @@
     "mqtt": "^5.15.2",
     "node-forge": "^1.4.0",
     "openai": "^6.25.0",
-    "serialport": "^8.0.8",
+    "q": "file:vendor/q-native-compat/q-1.5.2.tgz",
+    "serialport": "^13.0.0",
     "tough-cookie": "^6.0.1",
     "ws": "^8.21.0",
     "yazl": "^3.3.1",
@@ -55,7 +56,9 @@
   "overrides": {
     "brace-expansion": "5.0.9",
     "minimatch": "10.2.5",
+    "q": "$q",
     "home-controller": {
+      "serialport": "13.0.0",
       "spark": "file:vendor/spark-stub"
     }
   }

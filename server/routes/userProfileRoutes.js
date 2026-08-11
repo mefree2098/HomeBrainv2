@@ -292,7 +292,7 @@ router.post('/', admin, async (req, res) => {
 router.put('/:id', admin, async (req, res) => {
   try {
     console.log(`PUT /api/profiles/${req.params.id} - Updating user profile`);
-    console.log('Request body:', JSON.stringify(req.body, null, 2));
+    console.log('Profile fields received:', Object.keys(req.body || {}));
     
     const updateData = { ...req.body };
     delete updateData._id; // Remove _id from update data

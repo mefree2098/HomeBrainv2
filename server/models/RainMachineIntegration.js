@@ -78,6 +78,14 @@ const RainMachineIntegrationSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  tlsCertificateFingerprintSha256: {
+    type: String,
+    default: ''
+  },
+  tlsCertificateTrustedAt: {
+    type: Date,
+    default: null
+  },
   isConnected: {
     type: Boolean,
     default: false
@@ -147,6 +155,8 @@ RainMachineIntegrationSchema.statics.getDefaultIntegration = function() {
     apiVersion: '',
     hardwareVersion: null,
     softwareVersion: '',
+    tlsCertificateFingerprintSha256: '',
+    tlsCertificateTrustedAt: null,
     isConnected: false,
     lastDiscoveredAt: null,
     lastAuthenticatedAt: null,

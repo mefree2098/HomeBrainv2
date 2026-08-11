@@ -33,6 +33,7 @@ function isProjectSupported(version) {
 
 function isExecutable(filePath) {
   try {
+    if (!path.isAbsolute(filePath) || !fs.statSync(filePath).isFile()) return false;
     fs.accessSync(filePath, fs.constants.X_OK);
     return true;
   } catch {
@@ -49,9 +50,15 @@ function resolveReal(filePath) {
 }
 
 function getNodeVersion(nodeBin) {
+  if (!isExecutable(nodeBin)) return null;
+  // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- nodeBin is an absolute executable file validated immediately above.
   const result = spawnSync(nodeBin, ['-p', 'process.versions.node'], {
     encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe']
+    stdio: ['ignore', 'pipe', 'pipe'],
+    shell: false,
+    windowsHide: true,
+    timeout: 10_000,
+    maxBuffer: 1024 * 1024
   });
 
   if (result.status !== 0) return null;
@@ -155,6 +162,29 @@ function resolveCommand(command, selectedBin) {
   return command;
 }
 
+function normalizeLaunchInvocation(command, args = []) {
+  const executable = String(command || '').trim();
+  const safeBasename = /^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,127}$/.test(executable);
+  const safeAbsolutePath = path.isAbsolute(executable)
+    && executable.length <= 4096
+    && !executable.includes('\0')
+    && !executable.includes('\r')
+    && !executable.includes('\n');
+  if (!safeBasename && !safeAbsolutePath) {
+    throw new Error('Invalid command executable');
+  }
+  if (!Array.isArray(args) || args.length > 512) {
+    throw new Error('Invalid command argument list');
+  }
+  const commandArgs = args.map((arg) => {
+    if (typeof arg !== 'string' || arg.length > 16_384 || arg.includes('\0')) {
+      throw new Error('Invalid command argument');
+    }
+    return arg;
+  });
+  return { command: executable, args: commandArgs };
+}
+
 function main() {
   const args = process.argv.slice(2);
   if (args.length === 0) {
@@ -180,25 +210,29 @@ function main() {
     return;
   }
 
-  const command = resolveCommand(args[0], selected.bin);
-  const commandArgs = args.slice(1);
+  const invocation = normalizeLaunchInvocation(resolveCommand(args[0], selected.bin), args.slice(1));
   const nodeDir = path.dirname(selected.bin);
   const env = {
     ...process.env,
     PATH: `${nodeDir}${path.delimiter}${process.env.PATH || ''}`
   };
 
-  const child = spawn(command, commandArgs, {
+  const child = spawn(invocation.command, invocation.args, {
     stdio: 'inherit',
-    env
+    env,
+    shell: false,
+    windowsHide: true
   });
 
   let childExited = false;
   let terminationTimer = null;
   const forwardedSignals = new Set();
-  const terminationGraceMs = Math.max(
-    1000,
-    Number.parseInt(String(process.env.HOMEBRAIN_CHILD_TERMINATION_GRACE_MS || '10000'), 10) || 10000
+  const terminationGraceMs = Math.min(
+    60_000,
+    Math.max(
+      1000,
+      Number.parseInt(String(process.env.HOMEBRAIN_CHILD_TERMINATION_GRACE_MS || '10000'), 10) || 10000
+    )
   );
 
   const forwardTerminationSignal = (signal) => {
@@ -253,5 +287,6 @@ if (require.main === module) {
 
 module.exports = {
   isProjectSupported,
+  normalizeLaunchInvocation,
   parseVersion
 };

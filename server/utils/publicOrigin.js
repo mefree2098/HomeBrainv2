@@ -1,15 +1,21 @@
+const {
+  isAllowedLocalHostname,
+  parseHttpUrl,
+  trimTrailingSlashes
+} = require('./networkSafety');
+
 function normalizeOrigin(value) {
   if (typeof value !== 'string') {
     return '';
   }
 
-  const trimmed = value.trim().replace(/\/+$/, '');
+  const trimmed = trimTrailingSlashes(value.trim());
   if (!trimmed) {
     return '';
   }
 
   try {
-    const parsed = new URL(trimmed);
+    const parsed = parseHttpUrl(trimmed, 'Public origin');
     return parsed.origin;
   } catch (_error) {
     return '';
@@ -18,6 +24,10 @@ function normalizeOrigin(value) {
 
 function getConfiguredPublicOrigin() {
   return normalizeOrigin(process.env.HOMEBRAIN_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || '');
+}
+
+function getClientOrigin(req) {
+  return normalizeOrigin(process.env.CLIENT_URL || '') || getRequestOrigin(req);
 }
 
 function getRequestOrigin(req) {
@@ -32,7 +42,17 @@ function getRequestOrigin(req) {
   }
 
   const protocol = req.protocol || (req.secure ? 'https' : 'http');
-  return `${protocol}://${host}`;
+  try {
+    const parsed = parseHttpUrl(`${protocol}://${host}`, 'Request origin');
+    const allowUnconfiguredPublicHost = process.env.NODE_ENV !== 'production'
+      || String(process.env.HOMEBRAIN_ALLOW_HOST_HEADER_ORIGIN || '').toLowerCase() === 'true';
+    if (!allowUnconfiguredPublicHost && !isAllowedLocalHostname(parsed.hostname)) {
+      return '';
+    }
+    return parsed.origin;
+  } catch (_error) {
+    return '';
+  }
 }
 
 function toWebSocketOrigin(origin) {
@@ -45,8 +65,22 @@ function toWebSocketOrigin(origin) {
   }
 }
 
+function buildClientRedirectUrl(req, pathname, parameters = {}) {
+  const origin = getClientOrigin(req);
+  const target = new URL(pathname || '/', origin || 'http://homebrain.invalid');
+  for (const [key, value] of Object.entries(parameters)) {
+    if (value !== undefined && value !== null) {
+      target.searchParams.set(key, String(value));
+    }
+  }
+  return origin ? target.toString() : `${target.pathname}${target.search}`;
+}
+
 module.exports = {
+  buildClientRedirectUrl,
+  getClientOrigin,
   getConfiguredPublicOrigin,
   getRequestOrigin,
+  normalizeOrigin,
   toWebSocketOrigin
 };

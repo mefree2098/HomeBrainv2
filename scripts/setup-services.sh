@@ -48,7 +48,6 @@ MQTT_DATA_DIR="${HOMEBRAIN_MQTT_DATA_DIR:-/var/lib/homebrain/mqtt}"
 MQTT_LOG_DIR="${HOMEBRAIN_MQTT_LOG_DIR:-/var/log/homebrain/mqtt}"
 PIHOLE_WEB_PORT="${HOMEBRAIN_PIHOLE_WEB_PORT:-8081}"
 PIHOLE_WEB_TLS_PORT="${HOMEBRAIN_PIHOLE_WEB_TLS_PORT:-8444}"
-PIHOLE_ADMIN_ROUTE_HOST="${HOMEBRAIN_PIHOLE_ADMIN_ROUTE_HOST:-}"
 PIHOLE_INSTALLER_URL="${HOMEBRAIN_PIHOLE_INSTALLER_URL:-https://install.pi-hole.net}"
 PIHOLE_INSTALLER_FALLBACK_URL="${HOMEBRAIN_PIHOLE_INSTALLER_FALLBACK_URL:-https://raw.githubusercontent.com/pi-hole/pi-hole/master/automated%20install/basic-install.sh}"
 OLLAMA_HELPER_SOURCE_PATH="${HOMEBRAIN_DIR}/scripts/ollama-host-control.sh"
@@ -833,7 +832,7 @@ configure_deploy_sudoers() {
     deploy_commands+=("/bin/bash ${setup_services_path} update-platform-service *")
   fi
 
-  if [[ -x /usr/bin/bash && /usr/bin/bash != /bin/bash ]]; then
+  if [[ -x /usr/bin/bash && ! /usr/bin/bash -ef /bin/bash ]]; then
     deploy_commands+=("/usr/bin/bash ${setup_services_path} install-service")
     deploy_commands+=("/usr/bin/bash ${setup_services_path} refresh-privileges")
     deploy_commands+=("/usr/bin/bash ${setup_services_path} configure-mongodb")

@@ -10,7 +10,7 @@ function loadAuthModule() {
 }
 
 function refreshLifetimeInSeconds(token) {
-  const decoded = jwt.decode(token);
+  const decoded = jwt.verify(token, process.env.REFRESH_TOKEN_SECRET);
   return Number(decoded?.exp || 0) - Number(decoded?.iat || 0);
 }
 

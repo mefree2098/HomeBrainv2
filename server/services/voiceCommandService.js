@@ -781,13 +781,45 @@ RULES
   }
 
   extractNumber(commandText) {
-    const percentMatch = commandText.match(/(\d+)\s*%/);
-    if (percentMatch) {
-      return Number(percentMatch[1]);
+    const text = String(commandText || '').slice(0, 1024).toLowerCase();
+    for (let percentIndex = text.indexOf('%'); percentIndex !== -1; percentIndex = text.indexOf('%', percentIndex + 1)) {
+      let end = percentIndex;
+      while (end > 0 && text[end - 1] === ' ') end -= 1;
+      let start = end;
+      while (start > 0 && text[start - 1] >= '0' && text[start - 1] <= '9') start -= 1;
+      if (start < end) return Number(text.slice(start, end));
     }
-    const numberMatch = commandText.match(/(?:to|at|set|bright(?:ness)?|level|temperature|heat|cool)\s*(\d{1,3})/i);
-    if (numberMatch) {
-      return Number(numberMatch[1]);
+
+    const tokens = [];
+    let token = '';
+    let tokenType = '';
+    for (const character of text) {
+      const nextType = character >= '0' && character <= '9'
+        ? 'number'
+        : (character >= 'a' && character <= 'z' ? 'word' : 'separator');
+      if (nextType === 'separator') {
+        if (token) tokens.push({ type: tokenType, value: token });
+        token = '';
+        tokenType = '';
+      } else if (tokenType && tokenType !== nextType) {
+        tokens.push({ type: tokenType, value: token });
+        token = character;
+        tokenType = nextType;
+      } else {
+        token += character;
+        tokenType = nextType;
+      }
+    }
+    if (token) tokens.push({ type: tokenType, value: token });
+
+    const contexts = new Set(['to', 'at', 'set', 'bright', 'brightness', 'level', 'temperature', 'heat', 'cool']);
+    for (let index = 0; index < tokens.length - 1; index += 1) {
+      if (tokens[index].type === 'word'
+        && contexts.has(tokens[index].value)
+        && tokens[index + 1].type === 'number'
+        && tokens[index + 1].value.length <= 3) {
+        return Number(tokens[index + 1].value);
+      }
     }
     return null;
   }

@@ -32,6 +32,9 @@ test('server shutdown explicitly stops both websocket servers before HTTP close'
 test('direct radio shutdown has its own larger budget inside the graceful stop path', () => {
   const serverScript = fs.readFileSync(path.join(repoRoot, 'server', 'server.js'), 'utf8');
 
-  assert.match(serverScript, /HOMEBRAIN_DIRECT_RADIO_SHUTDOWN_TIMEOUT_MS \|\| 70000/);
+  assert.match(
+    serverScript,
+    /clampDurationMs\(process\.env\.HOMEBRAIN_DIRECT_RADIO_SHUTDOWN_TIMEOUT_MS, 70_000, 5000, 5 \* 60_000\)/
+  );
   assert.match(serverScript, /directRadioService\.shutdown\(\), DIRECT_RADIO_SHUTDOWN_TIMEOUT_MS/);
 });

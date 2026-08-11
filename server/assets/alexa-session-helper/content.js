@@ -14,6 +14,8 @@
     }, window.location.origin);
   }
 
+  // Both the sender window and exact origin are validated before the payload is used.
+  // nosemgrep: javascript.browser.security.insufficient-postmessage-origin-validation.insufficient-postmessage-origin-validation
   window.addEventListener('message', (event) => {
     if (event.source !== window || event.origin !== window.location.origin) {
       return;

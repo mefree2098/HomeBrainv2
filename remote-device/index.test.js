@@ -9,7 +9,8 @@ const test = require('node:test');
 const {
   HomeBrainRemoteDevice,
   detectAudioFileExtension,
-  getAudioPlaybackCommands
+  getAudioPlaybackCommands,
+  normalizeAudioCommand
 } = require('./index');
 
 function createFakeSidecar() {
@@ -55,6 +56,39 @@ test('getAudioPlaybackCommands never sends compressed or unknown bytes to aplay'
   });
   assert.equal(wavCommands.some(([command]) => command === 'aplay'), true);
   assert.deepEqual(wavCommands.at(-1), ['aplay', ['-q', '-D', 'sysdefault:CARD=MS', '/tmp/tts.wav']]);
+});
+
+test('audio process launches accept only supported executables and bounded argv', () => {
+  assert.deepEqual(normalizeAudioCommand('aplay', ['-q', '/tmp/test.wav']), {
+    command: 'aplay',
+    args: ['-q', '/tmp/test.wav']
+  });
+  assert.throws(() => normalizeAudioCommand('sh', ['-c', 'id']), /Unsupported audio executable/);
+  assert.throws(() => normalizeAudioCommand('aplay', ['bad\0arg']), /Invalid audio command argument/);
+});
+
+test('hub resource and websocket URLs remain on the configured origin', () => {
+  const device = new HomeBrainRemoteDevice({
+    hubUrl: 'https://hub.example.test',
+    audio: {},
+    wakeWord: {}
+  });
+  device.deviceId = 'device with spaces';
+
+  assert.equal(
+    device.buildAbsoluteHubUrl('/api/wake-word/model.bin'),
+    'https://hub.example.test/api/wake-word/model.bin'
+  );
+  assert.throws(
+    () => device.buildAbsoluteHubUrl('https://attacker.example/model.bin'),
+    /configured HomeBrain origin/
+  );
+  assert.equal(
+    device.buildWebSocketUrl('https://hub.example.test'),
+    'wss://hub.example.test/ws/voice-device?deviceId=device+with+spaces'
+  );
+  assert.equal(device.normaliseHubBaseUrl('https://user:secret@hub.example.test'), null);
+  assert.equal(device.normaliseHubBaseUrl('http://public.example.test'), null);
 });
 
 test('buildRecordingOptions passes the configured ALSA recorder and capture device', () => {

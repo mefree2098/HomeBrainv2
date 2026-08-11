@@ -1416,6 +1416,7 @@ function buildSourceTimelineEvents(samples = [], descriptors = []) {
 
 function normalizePromptText(value) {
   return String(value || '')
+    .slice(0, 2048)
     .trim()
     .toLowerCase();
 }
@@ -1430,42 +1431,42 @@ function extractPromptKeywords(value) {
 
 function inferRequestedHoursFromPrompt(prompt) {
   const text = normalizePromptText(prompt);
-  const directMatch = text.match(/(\d+)\s*(hour|hours|hr|hrs|day|days|week|weeks|month|months|year|years)\b/);
-
-  if (directMatch) {
-    const count = clampInteger(directMatch[1], DEFAULT_CHART_BUILDER_HOURS, 1, MAX_QUERY_HOURS);
-    const unit = directMatch[2];
-
-    if (/hour|hr/.test(unit)) {
-      return count;
-    }
-    if (/day/.test(unit)) {
-      return count * 24;
-    }
-    if (/week/.test(unit)) {
-      return count * 24 * 7;
-    }
-    if (/month/.test(unit)) {
-      return count * 24 * 30;
-    }
-    if (/year/.test(unit)) {
-      return count * 24 * 365;
+  const unitMultipliers = new Map([
+    ['hour', 1], ['hours', 1], ['hr', 1], ['hrs', 1],
+    ['day', 24], ['days', 24],
+    ['week', 24 * 7], ['weeks', 24 * 7],
+    ['month', 24 * 30], ['months', 24 * 30],
+    ['year', 24 * 365], ['years', 24 * 365]
+  ]);
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] < '0' || text[index] > '9') continue;
+    const numberStart = index;
+    while (index < text.length && text[index] >= '0' && text[index] <= '9') index += 1;
+    const numberEnd = index;
+    while (index < text.length && text[index] === ' ') index += 1;
+    const unitStart = index;
+    while (index < text.length && text[index] >= 'a' && text[index] <= 'z') index += 1;
+    const unit = text.slice(unitStart, index);
+    if (unitMultipliers.has(unit)) {
+      const count = clampInteger(text.slice(numberStart, numberEnd), DEFAULT_CHART_BUILDER_HOURS, 1, MAX_QUERY_HOURS);
+      return Math.min(MAX_QUERY_HOURS, count * unitMultipliers.get(unit));
     }
   }
 
-  if (/\b24h\b|\blast 24\b|\btoday\b|\bdaily\b/.test(text)) {
+  const padded = ` ${text} `;
+  if (padded.includes(' 24h ') || padded.includes(' last 24 ') || padded.includes(' today ') || padded.includes(' daily ')) {
     return 24;
   }
-  if (/\b7d\b|\bweekly\b|\blast week\b/.test(text)) {
+  if (padded.includes(' 7d ') || padded.includes(' weekly ') || padded.includes(' last week ')) {
     return 24 * 7;
   }
-  if (/\b30d\b|\bmonthly\b|\blast month\b/.test(text)) {
+  if (padded.includes(' 30d ') || padded.includes(' monthly ') || padded.includes(' last month ')) {
     return 24 * 30;
   }
-  if (/\b90d\b|\bquarter\b/.test(text)) {
+  if (padded.includes(' 90d ') || padded.includes(' quarter ')) {
     return 24 * 90;
   }
-  if (/\b1y\b|\byearly\b|\blast year\b/.test(text)) {
+  if (padded.includes(' 1y ') || padded.includes(' yearly ') || padded.includes(' last year ')) {
     return 24 * 365;
   }
 
@@ -3227,6 +3228,7 @@ module.exports.__private__ = {
   extractDeviceMetrics,
   extractTempestMetrics,
   flattenMetricKeySets,
+  inferRequestedHoursFromPrompt,
   inferMetricLabel,
   inferMetricUnit,
   isBinaryMetric,

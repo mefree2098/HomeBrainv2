@@ -82,6 +82,9 @@ function assertResolvedUser(user, allowedRoles = ALL_ROLES, options = {}) {
 }
 
 async function verifyAccessToken(token, allowedRoles = ALL_ROLES, req = null, options = {}) {
+  if (req && typeof req === 'object') {
+    req.authTokenClaims = null;
+  }
   if (!token) {
     const error = new Error('Unauthorized');
     error.status = 401;
@@ -101,6 +104,9 @@ async function verifyAccessToken(token, allowedRoles = ALL_ROLES, req = null, op
       });
       if (decoded?.sid) {
         await authSessionService.assertSessionActive(decoded.sub, decoded.sid);
+      }
+      if (req && typeof req === 'object') {
+        req.authTokenClaims = decoded;
       }
       return await resolveUserFromSubject(decoded.sub, allowedRoles, options);
     } catch (err) {
@@ -123,6 +129,9 @@ async function verifyAccessToken(token, allowedRoles = ALL_ROLES, req = null, op
       secure: true
     };
     const decoded = await oidcService.verifyIssuedAccessToken(requestForOidc, `Bearer ${token}`);
+    if (req && typeof req === 'object') {
+      req.authTokenClaims = decoded;
+    }
     return await resolveUserFromSubject(decoded.sub, allowedRoles, options);
   } catch (oidcError) {
     const shouldPreferJwtError = Boolean(

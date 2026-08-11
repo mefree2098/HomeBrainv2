@@ -74,6 +74,12 @@ router.get('/jobs/:jobId', async (req, res) => {
       job
     });
   } catch (error) {
+    if (error.code === 'INVALID_JOB_ID') {
+      return res.status(400).json({
+        success: false,
+        message: error.message
+      });
+    }
     const notFound = error.code === 'ENOENT';
     if (notFound) {
       return res.status(404).json({
@@ -82,7 +88,7 @@ router.get('/jobs/:jobId', async (req, res) => {
       });
     }
 
-    console.error(`GET /api/platform-deploy/jobs/${req.params.jobId} - Error:`, error.message);
+    console.error('GET /api/platform-deploy/jobs/:jobId - Error:', error.message);
     return res.status(500).json({
       success: false,
       message: error.message || 'Failed to fetch deployment job'

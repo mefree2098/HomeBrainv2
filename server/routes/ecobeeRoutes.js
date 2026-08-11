@@ -4,6 +4,7 @@ const router = express.Router();
 const { requireAdmin } = require('./middlewares/auth');
 const ecobeeService = require('../services/ecobeeService');
 const EcobeeIntegration = require('../models/EcobeeIntegration');
+const { buildClientRedirectUrl } = require('../utils/publicOrigin');
 
 const auth = requireAdmin();
 const { ipKeyGenerator } = rateLimit;
@@ -162,29 +163,30 @@ router.get('/auth/url', auth, async (req, res) => {
 });
 
 router.get('/callback', async (req, res) => {
-  const resolvedClientUrl = (process.env.CLIENT_URL && process.env.CLIENT_URL.trim())
-    ? process.env.CLIENT_URL.trim()
-    : `${req.secure ? 'https' : 'http'}://${req.get('host')}`;
-  const redirectBase = resolvedClientUrl.replace(/\/+$/, '');
-
   try {
     const { code, state, error, error_description: errorDescription } = req.query;
 
     if (error) {
       const message = errorDescription || error;
-      return res.redirect(`${redirectBase}/settings?ecobee=error&message=${encodeURIComponent(message)}`);
+      return res.redirect(buildClientRedirectUrl(req, '/settings', { ecobee: 'error', message }));
     }
 
     if (!code) {
-      return res.redirect(`${redirectBase}/settings?ecobee=error&message=${encodeURIComponent('No authorization code received')}`);
+      return res.redirect(buildClientRedirectUrl(req, '/settings', {
+        ecobee: 'error',
+        message: 'No authorization code received'
+      }));
     }
 
     await ecobeeService.exchangeCodeForToken(code, state);
 
-    return res.redirect(`${redirectBase}/settings?ecobee=success`);
+    return res.redirect(buildClientRedirectUrl(req, '/settings', { ecobee: 'success' }));
   } catch (error) {
     console.error('EcobeeRoutes: Failed to handle callback:', error.message);
-    return res.redirect(`${redirectBase}/settings?ecobee=error&message=${encodeURIComponent(error.message || 'Callback failed')}`);
+    return res.redirect(buildClientRedirectUrl(req, '/settings', {
+      ecobee: 'error',
+      message: error.message || 'Callback failed'
+    }));
   }
 });
 

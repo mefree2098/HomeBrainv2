@@ -1,9 +1,11 @@
 const http = require('http');
+const net = require('net');
 const { EventEmitter } = require('events');
 const WebSocket = require('ws');
 
 const HEARTBEAT_INTERVAL_MS = 55_000;
 const REQUEST_TIMEOUT_MS = 10_000;
+const MAX_PROVISION_RESPONSE_BYTES = 1024 * 1024;
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -19,25 +21,49 @@ function normalizeHost(value) {
     return '';
   }
 
-  const withoutProtocol = trimmed
-    .replace(/^https?:\/\//i, '')
-    .replace(/^wss?:\/\//i, '');
-
-  const [hostWithPort] = withoutProtocol.split('/');
-  const bracketedIpv6 = hostWithPort.match(/^\[([^\]]+)\](?::\d+)?$/);
-  if (bracketedIpv6) {
-    return bracketedIpv6[1].trim().toLowerCase();
-  }
-
-  const colonCount = (hostWithPort.match(/:/g) || []).length;
-  if (colonCount === 1) {
-    const [host, port] = hostWithPort.split(':');
-    if (host && /^\d+$/.test(port || '')) {
-      return host.trim().toLowerCase();
+  const candidate = trimmed.includes('://') ? trimmed : `http://${trimmed}`;
+  try {
+    const parsed = new URL(candidate);
+    if (!['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+      return '';
     }
+    if (parsed.pathname !== '/' || parsed.search || parsed.hash) {
+      return '';
+    }
+    const hostname = parsed.hostname.startsWith('[') && parsed.hostname.endsWith(']')
+      ? parsed.hostname.slice(1, -1)
+      : parsed.hostname;
+    return hostname.toLowerCase();
+  } catch (_error) {
+    return '';
   }
+}
 
-  return hostWithPort.trim().toLowerCase();
+function isAllowedHubHost(hostname) {
+  if (String(process.env.HOMEBRAIN_ALLOW_PUBLIC_HARMONY_HOSTS || '').toLowerCase() === 'true') {
+    return true;
+  }
+  if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')) {
+    return true;
+  }
+  if (!hostname.includes('.') && !hostname.includes(':')) {
+    return true;
+  }
+  if (net.isIPv4(hostname)) {
+    const octets = hostname.split('.').map(Number);
+    return octets[0] === 10
+      || octets[0] === 127
+      || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+      || (octets[0] === 192 && octets[1] === 168)
+      || (octets[0] === 169 && octets[1] === 254);
+  }
+  if (net.isIPv6(hostname)) {
+    return hostname === '::1'
+      || hostname.startsWith('fc')
+      || hostname.startsWith('fd')
+      || hostname.startsWith('fe80:');
+  }
+  return false;
 }
 
 function requestProvisionInfo(hubHost) {
@@ -65,9 +91,15 @@ function requestProvisionInfo(hubHost) {
       },
       (res) => {
         let raw = '';
+        let receivedBytes = 0;
 
         res.setEncoding('utf8');
         res.on('data', (chunk) => {
+          receivedBytes += Buffer.byteLength(chunk, 'utf8');
+          if (receivedBytes > MAX_PROVISION_RESPONSE_BYTES) {
+            req.destroy(new Error('Harmony provisioning response exceeded the size limit'));
+            return;
+          }
           raw += chunk;
         });
 
@@ -111,6 +143,9 @@ class HarmonyClient extends EventEmitter {
     if (!normalizedHost) {
       throw new Error('Harmony hub host is required');
     }
+    if (!isAllowedHubHost(normalizedHost)) {
+      throw new Error('Harmony hub host must be on the local or private network');
+    }
 
     this.hubHost = normalizedHost;
     if (remoteId != null && `${remoteId}`.trim() !== '') {
@@ -133,8 +168,14 @@ class HarmonyClient extends EventEmitter {
       throw new Error('Harmony remoteId is required before opening websocket');
     }
 
-    const wsUrl = `ws://${this.hubHost}:8088/?domain=svcs.myharmony.com&hubId=${this.remoteId}`;
-    const wsClient = new WebSocket(wsUrl);
+    const urlHost = net.isIPv6(this.hubHost) ? `[${this.hubHost}]` : this.hubHost;
+    // Harmony hubs expose this local/private-network endpoint over ws only; connect() rejects public hosts.
+    // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
+    const wsUrl = new URL(`ws://${urlHost}:8088/`);
+    wsUrl.searchParams.set('domain', 'svcs.myharmony.com');
+    wsUrl.searchParams.set('hubId', this.remoteId);
+    // codeql[js/request-forgery] connect() accepts only normalized local/private Harmony hub hosts unless an administrator explicitly opts in to public hosts.
+    const wsClient = new WebSocket(wsUrl.toString());
 
     await new Promise((resolve, reject) => {
       let settled = false;
@@ -437,6 +478,7 @@ async function getHarmonyClient(hubhost, options = {}) {
 
 module.exports = {
   HarmonyClient,
+  __private__: { isAllowedHubHost, normalizeHost },
   getHarmonyClient,
   default: getHarmonyClient
 };

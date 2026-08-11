@@ -227,7 +227,7 @@ const SettingsSchema = new mongoose.Schema({
   },
   isyIgnoreTlsErrors: {
     type: Boolean,
-    default: true
+    default: false
   },
   smartthingsToken: {
     type: String,

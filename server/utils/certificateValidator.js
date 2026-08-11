@@ -1,4 +1,32 @@
 const forge = require('node-forge');
+const MAX_PEM_BYTES = 512 * 1024;
+const MAX_CHAIN_CERTIFICATES = 10;
+const CERTIFICATE_BEGIN = '-----BEGIN CERTIFICATE-----';
+const CERTIFICATE_END = '-----END CERTIFICATE-----';
+
+function validatePemSize(value, label) {
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} is required`);
+  if (Buffer.byteLength(value, 'utf8') > MAX_PEM_BYTES) throw new Error(`${label} is too large`);
+}
+
+function extractCertificateBlocks(chainPem) {
+  validatePemSize(chainPem, 'Certificate chain');
+  const blocks = [];
+  let cursor = 0;
+  while (cursor < chainPem.length && blocks.length <= MAX_CHAIN_CERTIFICATES) {
+    const begin = chainPem.indexOf(CERTIFICATE_BEGIN, cursor);
+    if (begin === -1) break;
+    const endMarker = chainPem.indexOf(CERTIFICATE_END, begin + CERTIFICATE_BEGIN.length);
+    if (endMarker === -1) throw new Error('Certificate chain contains an incomplete PEM block');
+    const end = endMarker + CERTIFICATE_END.length;
+    blocks.push(`${chainPem.slice(begin, end)}\n`);
+    cursor = end;
+  }
+  if (blocks.length > MAX_CHAIN_CERTIFICATES) {
+    throw new Error(`Certificate chain exceeds ${MAX_CHAIN_CERTIFICATES} certificates`);
+  }
+  return blocks;
+}
 
 /**
  * Parse and validate a PEM certificate
@@ -7,6 +35,7 @@ const forge = require('node-forge');
  */
 function parseCertificate(certPem) {
   try {
+    validatePemSize(certPem, 'Certificate');
     const cert = forge.pki.certificateFromPem(certPem);
 
     const notBefore = cert.validity.notBefore;
@@ -69,6 +98,7 @@ function parseCertificate(certPem) {
  */
 function validatePrivateKey(keyPem) {
   try {
+    validatePemSize(keyPem, 'Private key');
     // Try to parse as RSA key
     try {
       const key = forge.pki.privateKeyFromPem(keyPem);
@@ -102,6 +132,8 @@ function validatePrivateKey(keyPem) {
  */
 function verifyCertificateKeyPair(certPem, keyPem) {
   try {
+    validatePemSize(certPem, 'Certificate');
+    validatePemSize(keyPem, 'Private key');
     const cert = forge.pki.certificateFromPem(certPem);
     const privateKey = forge.pki.privateKeyFromPem(keyPem);
     const publicKey = cert.publicKey;
@@ -144,9 +176,11 @@ function generateCSR(options) {
       keySize = 2048
     } = options;
 
+    const normalizedKeySize = [2048, 3072, 4096].includes(Number(keySize)) ? Number(keySize) : 2048;
+
     // Generate key pair
-    console.log(`Generating ${keySize}-bit RSA key pair for CSR...`);
-    const keys = forge.pki.rsa.generateKeyPair(keySize);
+    console.log(`Generating ${normalizedKeySize}-bit RSA key pair for CSR...`);
+    const keys = forge.pki.rsa.generateKeyPair(normalizedKeySize);
 
     // Create CSR
     const csr = forge.pki.createCertificationRequest();
@@ -196,39 +230,47 @@ function generateCSR(options) {
  */
 function validateCertificateChain(certPem, chainPem) {
   try {
+    validatePemSize(certPem, 'Certificate');
     const cert = forge.pki.certificateFromPem(certPem);
 
     if (!chainPem) {
       return { valid: true, warning: 'No chain provided' };
     }
 
-    // Parse chain certificates
-    const chainCerts = [];
-    const chainPemBlocks = chainPem.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g);
-
-    if (chainPemBlocks) {
-      chainPemBlocks.forEach(block => {
-        try {
-          chainCerts.push(forge.pki.certificateFromPem(block));
-        } catch (e) {
-          console.error('Error parsing chain certificate:', e);
-        }
-      });
-    }
+    const chainCerts = extractCertificateBlocks(chainPem)
+      .map((block) => forge.pki.certificateFromPem(block));
 
     if (chainCerts.length === 0) {
       return { valid: false, error: 'Invalid certificate chain format' };
     }
 
-    // Basic validation - check if issuer of cert matches subject of first chain cert
-    const certIssuerCN = cert.issuer.getField('CN');
-    const chainSubjectCN = chainCerts[0].subject.getField('CN');
-
-    if (certIssuerCN && chainSubjectCN && certIssuerCN.value === chainSubjectCN.value) {
-      return { valid: true, chainLength: chainCerts.length };
+    const certificates = [cert, ...chainCerts];
+    const now = new Date();
+    for (const certificate of certificates) {
+      if (certificate.validity.notBefore > now || certificate.validity.notAfter < now) {
+        return { valid: false, error: 'Certificate chain contains a certificate outside its validity period' };
+      }
+    }
+    for (let index = 0; index < certificates.length - 1; index += 1) {
+      const child = certificates[index];
+      const issuer = certificates[index + 1];
+      if (!issuer.verify(child)) {
+        return { valid: false, error: `Certificate chain signature verification failed at position ${index + 1}` };
+      }
     }
 
-    return { valid: true, warning: 'Chain validation incomplete', chainLength: chainCerts.length };
+    const root = certificates.at(-1);
+    let rootIsSelfSigned = false;
+    try {
+      rootIsSelfSigned = root.isIssuer(root) && root.verify(root);
+    } catch (_error) {
+      rootIsSelfSigned = false;
+    }
+    return {
+      valid: true,
+      chainLength: chainCerts.length,
+      ...(rootIsSelfSigned ? {} : { warning: 'Chain is internally valid but does not include a self-signed root' })
+    };
   } catch (error) {
     console.error('Certificate chain validation error:', error);
     return {
@@ -273,3 +315,4 @@ module.exports = {
   validateCertificateChain,
   checkCertificateExpiry
 };
+module.exports.__private__ = { extractCertificateBlocks, validatePemSize };

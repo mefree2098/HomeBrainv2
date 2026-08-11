@@ -3,7 +3,7 @@
 set -eu
 umask 077
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 HUB_URL=${HOMEBRAIN_HUB_URL:-}
 DEVICE_ID=${HOMEBRAIN_DEVICE_ID:-}
 CLAIM_TOKEN=${HOMEBRAIN_CLAIM_TOKEN:-}
@@ -102,7 +102,7 @@ if ! "$PYTHON_BIN" -m pip install \
   --disable-pip-version-check \
   --no-input \
   --upgrade \
-  "$SCRIPT_DIR[wakeword]"; then
+  "${SCRIPT_DIR}[wakeword]"; then
   command echo "WARNING: wake-word dependencies were unavailable; app will report detector error until installed" >&2
 fi
 
@@ -164,12 +164,12 @@ if [ "$UPDATE_ONLY" = true ]; then
   exit 0
 fi
 
-export HB_INSTALL_HUB_URL=$HUB_URL
-export HB_INSTALL_DEVICE_ID=$DEVICE_ID
-export HB_INSTALL_CLAIM_TOKEN=$CLAIM_TOKEN
-export HB_INSTALL_REGISTRATION_CODE=$REGISTRATION_CODE
-export HB_INSTALL_ALLOW_INSECURE=$ALLOW_INSECURE
-export HB_INSTALL_ACTIVATE=$ACTIVATE
+export HB_INSTALL_HUB_URL="$HUB_URL"
+export HB_INSTALL_DEVICE_ID="$DEVICE_ID"
+export HB_INSTALL_CLAIM_TOKEN="$CLAIM_TOKEN"
+export HB_INSTALL_REGISTRATION_CODE="$REGISTRATION_CODE"
+export HB_INSTALL_ALLOW_INSECURE="$ALLOW_INSECURE"
+export HB_INSTALL_ACTIVATE="$ACTIVATE"
 
 "$PYTHON_BIN" - "$CONFIG_PATH" <<'PY'
 import json

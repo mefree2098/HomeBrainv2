@@ -1,0 +1,11 @@
+{
+  "name": "q",
+  "version": "1.5.2",
+  "description": "Minimal native-Promise compatibility surface for home-controller",
+  "main": "index.js",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "private": true
+}

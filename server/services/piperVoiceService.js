@@ -13,6 +13,10 @@ const HUGGING_FACE_VOICES_URL = `${HUGGING_FACE_BASE_URL}/voices.json`;
 const DEFAULT_VOICE_ID = 'en_US-amy-medium';
 const CATALOG_TTL_MS = 1000 * 60 * 60; // 1 hour
 const VOICE_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+const MAX_CATALOG_BYTES = 32 * 1024 * 1024;
+const MAX_CATALOG_ENTRIES = 5000;
+const MAX_VOICE_FILE_BYTES = 512 * 1024 * 1024;
+const HTTP_TIMEOUT_MS = 30_000;
 
 let cachedCatalog = null;
 let catalogFetchedAt = 0;
@@ -57,16 +61,41 @@ function titleCase(value) {
 }
 
 function normaliseVoiceEntry(id, entry) {
-  if (!entry || typeof entry !== 'object') {
+  const normalizedId = typeof id === 'string' ? id.trim() : '';
+  if (!normalizedId
+    || normalizedId === '.'
+    || normalizedId === '..'
+    || normalizedId.includes('..')
+    || !VOICE_ID_PATTERN.test(normalizedId)
+    || !entry
+    || typeof entry !== 'object') {
     return null;
   }
 
-  const files = Object.entries(entry.files || {}).map(([relPath, fileInfo = {}]) => ({
-    relPath,
-    fileName: path.basename(relPath),
-    sizeBytes: typeof fileInfo.size_bytes === 'number' ? fileInfo.size_bytes : null,
-    md5: fileInfo.md5_digest || null
-  }));
+  const files = Object.entries(entry.files || {}).slice(0, 20).map(([relPath, fileInfo = {}]) => {
+    const normalizedPath = typeof relPath === 'string' ? path.posix.normalize(relPath.trim()) : '';
+    if (!normalizedPath
+      || normalizedPath === '..'
+      || normalizedPath.startsWith('../')
+      || normalizedPath.startsWith('/')
+      || normalizedPath.includes('\\')
+      || normalizedPath.includes('\0')) {
+      return null;
+    }
+    const fileName = path.posix.basename(normalizedPath);
+    const sizeBytes = Number(fileInfo.size_bytes);
+    const md5 = typeof fileInfo.md5_digest === 'string' && /^[a-f0-9]{32}$/i.test(fileInfo.md5_digest)
+      ? fileInfo.md5_digest.toLowerCase()
+      : null;
+    return {
+      relPath: normalizedPath,
+      fileName,
+      sizeBytes: Number.isSafeInteger(sizeBytes) && sizeBytes > 0 && sizeBytes <= MAX_VOICE_FILE_BYTES
+        ? sizeBytes
+        : null,
+      md5
+    };
+  }).filter(Boolean);
 
   const modelFile = files.find((file) => file.fileName.endsWith('.onnx'));
   const configFile = files.find((file) => file.fileName.endsWith('.onnx.json'));
@@ -87,8 +116,8 @@ function normaliseVoiceEntry(id, entry) {
   }
 
   return {
-    id,
-    name: titleCase(entry.name || id),
+    id: normalizedId,
+    name: titleCase(entry.name || normalizedId),
     quality: entry.quality || 'standard',
     language: entry.language || {},
     languageLabel: formatLanguageLabel(entry.language),
@@ -109,12 +138,14 @@ async function loadVoiceCatalog(force = false) {
     const response = await axios.get(HUGGING_FACE_VOICES_URL, {
       responseType: 'json',
       headers: { Accept: 'application/json' },
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity
+      timeout: HTTP_TIMEOUT_MS,
+      maxRedirects: 5,
+      maxContentLength: MAX_CATALOG_BYTES,
+      maxBodyLength: MAX_CATALOG_BYTES
     });
     const rawCatalog = response.data || {};
     const catalogueMap = new Map();
-    Object.entries(rawCatalog).forEach(([id, entry]) => {
+    Object.entries(rawCatalog).slice(0, MAX_CATALOG_ENTRIES).forEach(([id, entry]) => {
       const normalised = normaliseVoiceEntry(id, entry);
       if (normalised) {
         catalogueMap.set(id, normalised);
@@ -130,7 +161,11 @@ async function loadVoiceCatalog(force = false) {
 
 async function getVoiceMetadataById(id) {
   const catalog = await loadVoiceCatalog();
-  const meta = catalog.get(id);
+  const voiceId = typeof id === 'string' ? id.trim() : '';
+  if (!VOICE_ID_PATTERN.test(voiceId) || voiceId.includes('..')) {
+    throw new Error('Invalid Piper voice id');
+  }
+  const meta = catalog.get(voiceId);
   if (!meta) {
     throw new Error(`Unknown Piper voice id: ${id}`);
   }
@@ -246,21 +281,34 @@ async function listInstalledVoices() {
   return installed;
 }
 
-async function downloadFile(url, destination, expectedMd5 = null) {
+async function downloadFile(url, destination, expectedMd5 = null, expectedSizeBytes = null) {
+  const sizeLimit = Number.isSafeInteger(expectedSizeBytes) && expectedSizeBytes > 0
+    ? Math.min(MAX_VOICE_FILE_BYTES, Math.max(1024 * 1024, Math.ceil(expectedSizeBytes * 1.05)))
+    : MAX_VOICE_FILE_BYTES;
   const response = await axios({
     method: 'GET',
     url,
-    responseType: 'stream'
+    responseType: 'stream',
+    timeout: HTTP_TIMEOUT_MS,
+    maxRedirects: 5,
+    maxContentLength: sizeLimit,
+    maxBodyLength: sizeLimit
   });
 
   await fsExtra.ensureDir(path.dirname(destination));
   const tempPath = `${destination}.download`;
   const hash = expectedMd5 ? crypto.createHash('md5') : null;
+  let receivedBytes = 0;
 
   return new Promise((resolve, reject) => {
     const writer = fs.createWriteStream(tempPath);
 
     response.data.on('data', (chunk) => {
+      receivedBytes += chunk.length;
+      if (receivedBytes > sizeLimit) {
+        response.data.destroy(new Error('Piper voice file exceeds the size limit'));
+        return;
+      }
       if (hash) {
         hash.update(chunk);
       }
@@ -315,7 +363,7 @@ async function downloadVoice(id) {
       const url = resolveVoiceUrl(file.relPath);
       const tempPath = path.join(tempDir, file.fileName);
       const destinationPath = path.join(voiceDir, file.fileName);
-      await downloadFile(url, tempPath, file.md5);
+      await downloadFile(url, tempPath, file.md5, file.sizeBytes);
       await fsExtra.move(tempPath, destinationPath, { overwrite: true });
     }
   } catch (error) {

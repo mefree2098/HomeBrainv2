@@ -8,6 +8,16 @@ const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const Settings = require('../models/Settings');
 const smartThingsService = require('../services/smartThingsService');
 
+test('setNestedSmartThingsValue rejects prototype-polluting capability paths', () => {
+  const values = {};
+  smartThingsService.setNestedSmartThingsValue(values, ['__proto__', 'polluted'], true);
+  smartThingsService.setNestedSmartThingsValue(values, ['constructor', 'prototype', 'polluted'], true);
+  smartThingsService.setNestedSmartThingsValue(values, ['switch', 'switch'], 'on');
+
+  assert.equal(Object.prototype.polluted, undefined);
+  assert.deepEqual(values, { switch: { switch: 'on' } });
+});
+
 test('getAuthorizationUrl requests SmartThings device delete scope', async (t) => {
   const originalGetIntegration = SmartThingsIntegration.getIntegration;
 

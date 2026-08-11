@@ -1928,7 +1928,7 @@ test('getPanelOtaArtifact hides a targeted package from a different delivery pat
   });
 
   WallPanel.findById = async () => panelDoc;
-  const service = new WallPanelService();
+  const service = new WallPanelService({ panelOtaArtifactsDir: tempRoot });
 
   await assert.rejects(
     () => service.getPanelOtaArtifact(
@@ -1948,7 +1948,70 @@ test('getPanelOtaArtifact hides a targeted package from a different delivery pat
     '203.0.113.10',
     'https://freestonefamily.com'
   );
-  assert.equal(artifact.artifactPath, artifactPath);
+  assert.equal(artifact.artifactPath, await fs.promises.realpath(artifactPath));
+});
+
+test('getPanelOtaArtifact rejects files outside the managed OTA directory', async (t) => {
+  const originalFindById = WallPanel.findById;
+  const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'wall-panel-ota-boundary-'));
+  const managedDir = path.join(tempRoot, 'managed');
+  const outsideArtifactPath = path.join(tempRoot, 'outside.bin');
+  const linkedArtifactPath = path.join(managedDir, 'linked.bin');
+  await fs.promises.mkdir(managedDir, { recursive: true });
+  await fs.promises.writeFile(outsideArtifactPath, Buffer.from('unmanaged firmware'));
+  await fs.promises.symlink(outsideArtifactPath, linkedArtifactPath);
+
+  const panelDoc = {
+    _id: 'panel-unmanaged-download',
+    name: 'Unmanaged Orb',
+    room: 'Office',
+    hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
+    firmwareVersion: 'panel-old',
+    ota: {
+      jobId: 'job-unmanaged',
+      status: 'ready',
+      targetVersion: 'panel-new',
+      artifactPath: outsideArtifactPath
+    },
+    settings: {
+      registered: true,
+      registrationCode: 'HBWP-OFFICE-1234'
+    },
+    toObject() {
+      return { ...this };
+    }
+  };
+
+  t.after(async () => {
+    WallPanel.findById = originalFindById;
+    await fs.promises.rm(tempRoot, { recursive: true, force: true });
+  });
+
+  WallPanel.findById = async () => panelDoc;
+  const service = new WallPanelService({ panelOtaArtifactsDir: managedDir });
+
+  await assert.rejects(
+    () => service.getPanelOtaArtifact(
+      'panel-unmanaged-download',
+      { registrationCode: 'HBWP-OFFICE-1234' },
+      'https://freestonefamily.com',
+      '203.0.113.10',
+      'https://freestonefamily.com'
+    ),
+    /no longer available/i
+  );
+
+  panelDoc.ota.artifactPath = linkedArtifactPath;
+  await assert.rejects(
+    () => service.getPanelOtaArtifact(
+      'panel-unmanaged-download',
+      { registrationCode: 'HBWP-OFFICE-1234' },
+      'https://freestonefamily.com',
+      '203.0.113.10',
+      'https://freestonefamily.com'
+    ),
+    /no longer available/i
+  );
 });
 
 test('createPanelFirmwareBuildEnv injects per-orb firmware credentials', async (t) => {

@@ -445,7 +445,8 @@ router.post('/generate', auth, async (req, res) => {
 
     console.log(`POST /api/ollama/generate - Generating text with model: ${modelName}`);
 
-    const result = await ollamaService.generate(modelName, prompt);
+    // This invokes the local Ollama text API; it is unrelated to HTML/PDF renderers.
+    const result = await ollamaService.generate(modelName, prompt); // nosemgrep
 
     res.status(200).json(result);
   } catch (error) {

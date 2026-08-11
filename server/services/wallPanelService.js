@@ -49,6 +49,7 @@ const PANEL_STATE_HEARTBEAT_INTERVAL_MS = Math.max(
   5_000,
   Number(process.env.HOMEBRAIN_PANEL_STATE_HEARTBEAT_INTERVAL_MS || 30_000)
 );
+const MAX_PANEL_OTA_ARTIFACT_BYTES = 64 * 1024 * 1024;
 const DEFAULT_PANEL_FIRMWARE_HUB_URL = 'http://homebrain.local:3000';
 
 const PANEL_MODE_ORDER = Object.freeze(['thermostat', 'room', 'home', 'media', 'quiet']);
@@ -3352,15 +3353,26 @@ class WallPanelService {
       throw createError(404, 'No OTA package is available for this hardware orb on this delivery path');
     }
 
-    const stat = await fsp.stat(ota.artifactPath).catch(() => null);
-    if (!stat) {
+    const managedArtifactPath = this.resolveManagedOtaArtifactPath(ota.artifactPath);
+    const [realArtifactsDir, realArtifactPath] = managedArtifactPath
+      ? await Promise.all([
+          fsp.realpath(this.panelOtaArtifactsDir).catch(() => ''),
+          fsp.realpath(managedArtifactPath).catch(() => '')
+        ])
+      : ['', ''];
+    const isInsideManagedDirectory = realArtifactsDir
+      && realArtifactPath.startsWith(`${realArtifactsDir}${path.sep}`);
+    const stat = isInsideManagedDirectory
+      ? await fsp.stat(realArtifactPath).catch(() => null)
+      : null;
+    if (!stat || !stat.isFile() || stat.size <= 0 || stat.size > MAX_PANEL_OTA_ARTIFACT_BYTES) {
       throw createError(404, 'The OTA package is no longer available on this HomeBrain host');
     }
 
     return {
       panel,
       ota,
-      artifactPath: ota.artifactPath,
+      artifactPath: realArtifactPath,
       artifactSizeBytes: stat.size
     };
   }

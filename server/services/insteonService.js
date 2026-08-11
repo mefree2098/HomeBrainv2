@@ -13,6 +13,11 @@ const Workflow = require('../models/Workflow');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const directRadioProtocolCatalogService = require('./directRadioProtocolCatalogService');
 const insteonEngineLogService = require('./insteonEngineLogService');
+const {
+  buildSameOriginUrl,
+  parseLocalHttpUrl,
+  trimTrailingSlashes
+} = require('../utils/networkSafety');
 
 let cachedWorkflowService = null;
 const getWorkflowService = () => {
@@ -80,6 +85,12 @@ const INSTEON_SERIAL_OPTIONS = Object.freeze({
   parity: 'none',
   stopBits: 1
 });
+
+function clampInsteonTimeoutMs(value, fallback, minimum = 0, maximum = 5 * 60_000) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(minimum, Math.min(maximum, Math.round(numeric)));
+}
 
 /**
  * Insteon PLM Service
@@ -455,13 +466,13 @@ class InsteonService {
     const nakTimeoutMs = Number(config.nakTimeoutMs);
 
     if (Number.isFinite(commandTimeoutMs)) {
-      hub.commandTimeout = Math.max(100, Math.round(commandTimeoutMs));
+      hub.commandTimeout = clampInsteonTimeoutMs(commandTimeoutMs, 1000, 100, 60_000);
     }
     if (Number.isFinite(commandRetries)) {
       hub.commandRetries = Math.max(0, Math.min(5, Math.round(commandRetries)));
     }
     if (Number.isFinite(nakTimeoutMs)) {
-      hub.nakTimeout = Math.max(5, Math.round(nakTimeoutMs));
+      hub.nakTimeout = clampInsteonTimeoutMs(nakTimeoutMs, 50, 5, 60_000);
     }
 
     try {
@@ -476,9 +487,7 @@ class InsteonService {
   }
 
   async _executeQueuedPlmCallbackOperation(invoke, options = {}) {
-    const timeoutMs = Number.isFinite(Number(options.timeoutMs))
-      ? Math.max(250, Math.round(Number(options.timeoutMs)))
-      : 5000;
+    const timeoutMs = clampInsteonTimeoutMs(options.timeoutMs, 5000, 250);
     const timeoutMessage = String(options.timeoutMessage || `Timeout ${String(options.label || 'PLM operation').toLowerCase()}`);
     const operationLabel = String(options.label || 'PLM callback operation');
     const operationKind = options.kind || 'callback_operation';
@@ -1062,6 +1071,32 @@ class InsteonService {
     return this._serialPortModule;
   }
 
+  _getSerialPortClass(serialPortModule = this._loadSerialPortModule()) {
+    if (typeof serialPortModule?.SerialPort === 'function') {
+      return serialPortModule.SerialPort;
+    }
+    return typeof serialPortModule === 'function' ? serialPortModule : null;
+  }
+
+  _createHomeControllerSerialPortConstructor(serialPortModule = this._loadSerialPortModule()) {
+    const SerialPortClass = this._getSerialPortClass(serialPortModule);
+    if (!SerialPortClass) {
+      return null;
+    }
+
+    // serialport 9+ accepts one options object, while home-controller still
+    // invokes the serialport 8 constructor as (path, options).
+    if (serialPortModule?.SerialPort === SerialPortClass) {
+      return class HomeControllerSerialPortAdapter extends SerialPortClass {
+        constructor(serialPath, options = {}) {
+          super({ ...options, path: serialPath });
+        }
+      };
+    }
+
+    return SerialPortClass;
+  }
+
   _buildSerialTransportUnavailableMessage(serialPath = '', bridgeError = null) {
     const endpoint = typeof serialPath === 'string' && serialPath.trim()
       ? ` Endpoint: "${serialPath.trim()}".`
@@ -1084,10 +1119,11 @@ class InsteonService {
 
   getSerialTransportDiagnostics() {
     const serialPortModule = this._loadSerialPortModule();
+    const SerialPortClass = this._getSerialPortClass(serialPortModule);
     return {
-      supported: Boolean(serialPortModule),
-      module: serialPortModule ? 'serialport' : null,
-      error: serialPortModule ? null : (this._serialPortLoadError?.message || 'serialport module not available')
+      supported: Boolean(SerialPortClass),
+      module: SerialPortClass ? 'serialport' : null,
+      error: SerialPortClass ? null : (this._serialPortLoadError?.message || 'serialport module not available')
     };
   }
 
@@ -2585,7 +2621,7 @@ class InsteonService {
   }
 
   async listLocalSerialPorts() {
-    const SerialPort = this._loadSerialPortModule();
+    const SerialPort = this._getSerialPortClass();
     let listedPorts = [];
 
     if (SerialPort && typeof SerialPort.list === 'function') {
@@ -3290,24 +3326,22 @@ class InsteonService {
     }
     useHttps = Boolean(useHttps);
 
-    let parsedHost = rawHost;
-    const schemeMatch = rawHost.match(/^(https?):\/\//i);
-    if (schemeMatch) {
-      useHttps = schemeMatch[1].toLowerCase() === 'https';
-      try {
-        const parsedUrl = new URL(rawHost);
-        parsedHost = parsedUrl.hostname;
-        if (connectionInput.isyPort === undefined && connectionInput.port === undefined && parsedUrl.port) {
-          connectionInput.port = Number(parsedUrl.port);
-        }
-      } catch (error) {
-        throw new Error(`Invalid ISY host URL: ${rawHost}`);
-      }
-    } else {
-      parsedHost = rawHost.replace(/\/+$/, '');
-      if (parsedHost.includes('/')) {
-        parsedHost = parsedHost.split('/')[0];
-      }
+    let parsedUrl;
+    try {
+      parsedUrl = parseLocalHttpUrl(
+        rawHost.includes('://') ? rawHost : `${useHttps ? 'https' : 'http'}://${trimTrailingSlashes(rawHost)}`,
+        'ISY host'
+      );
+    } catch (error) {
+      throw new Error(`Invalid ISY host: ${error.message}`);
+    }
+    if (parsedUrl.pathname !== '/' || parsedUrl.search) {
+      throw new Error('Invalid ISY host: paths and query parameters are not allowed');
+    }
+    useHttps = parsedUrl.protocol === 'https:';
+    const parsedHost = parsedUrl.hostname;
+    if (connectionInput.isyPort === undefined && connectionInput.port === undefined && parsedUrl.port) {
+      connectionInput.port = Number(parsedUrl.port);
     }
 
     const portRaw = connectionInput.isyPort ?? connectionInput.port ?? settingsConnection.port;
@@ -3342,7 +3376,7 @@ class InsteonService {
       ignoreTlsErrors = settingsConnection.ignoreTlsErrors;
     }
     if (ignoreTlsErrors === undefined) {
-      ignoreTlsErrors = true;
+      ignoreTlsErrors = false;
     }
     ignoreTlsErrors = Boolean(ignoreTlsErrors);
 
@@ -3385,28 +3419,71 @@ class InsteonService {
     if (typeof attributesRaw !== 'string') {
       return fallback;
     }
-
-    const regex = new RegExp(`\\b${attrName}\\s*=\\s*"([^"]*)"`, 'i');
-    const match = attributesRaw.match(regex);
-    return match ? match[1] : fallback;
+    const name = typeof attrName === 'string' ? attrName.trim().toLowerCase() : '';
+    if (!/^[a-z][a-z0-9:_-]{0,63}$/.test(name)) return fallback;
+    const source = attributesRaw.slice(0, 64 * 1024);
+    const lower = source.toLowerCase();
+    let cursor = 0;
+    while (cursor < lower.length) {
+      const index = lower.indexOf(name, cursor);
+      if (index < 0) return fallback;
+      const before = index === 0 ? ' ' : lower[index - 1];
+      const after = lower[index + name.length] || '';
+      const boundaryBefore = before === ' ' || before === '\t' || before === '\r' || before === '\n';
+      const boundaryAfter = after === '=' || after === ' ' || after === '\t' || after === '\r' || after === '\n';
+      if (!boundaryBefore || !boundaryAfter) {
+        cursor = index + name.length;
+        continue;
+      }
+      let valueStart = index + name.length;
+      while (/\s/.test(source[valueStart] || '')) valueStart += 1;
+      if (source[valueStart] !== '=') {
+        cursor = valueStart + 1;
+        continue;
+      }
+      valueStart += 1;
+      while (/\s/.test(source[valueStart] || '')) valueStart += 1;
+      const quote = source[valueStart];
+      if (quote !== '"' && quote !== "'") return fallback;
+      const valueEnd = source.indexOf(quote, valueStart + 1);
+      return valueEnd >= 0 ? source.slice(valueStart + 1, valueEnd) : fallback;
+    }
+    return fallback;
   }
 
   _extractXmlTagValue(xmlFragment, tagName, fallback = '') {
     if (typeof xmlFragment !== 'string') {
       return fallback;
     }
-    const regex = new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}>`, 'i');
-    const match = xmlFragment.match(regex);
-    if (!match) {
+    const name = typeof tagName === 'string' ? tagName.trim().toLowerCase() : '';
+    if (!/^[a-z][a-z0-9:_-]{0,63}$/.test(name)) return fallback;
+    const source = xmlFragment.slice(0, 4 * 1024 * 1024);
+    const lower = source.toLowerCase();
+    const openPrefix = `<${name}`;
+    let openIndex = lower.indexOf(openPrefix);
+    while (openIndex >= 0) {
+      const boundary = lower[openIndex + openPrefix.length];
+      if (boundary === '>' || boundary === ' ' || boundary === '\t' || boundary === '\r' || boundary === '\n') break;
+      openIndex = lower.indexOf(openPrefix, openIndex + openPrefix.length);
+    }
+    if (openIndex < 0) {
       return fallback;
     }
-    return match[1]
-      .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    const valueStart = source.indexOf('>', openIndex + openPrefix.length);
+    if (valueStart < 0) return fallback;
+    const closeToken = `</${name}>`;
+    const valueEnd = lower.indexOf(closeToken, valueStart + 1);
+    if (valueEnd < 0) return fallback;
+    let value = source.slice(valueStart + 1, valueEnd).trim();
+    if (value.startsWith('<![CDATA[') && value.endsWith(']]>')) {
+      value = value.slice(9, -3);
+    }
+    return value
       .replace(/&lt;/g, '<')
       .replace(/&gt;/g, '>')
-      .replace(/&amp;/g, '&')
       .replace(/&quot;/g, '"')
       .replace(/&#39;/g, '\'')
+      .replace(/&amp;/g, '&')
       .trim();
   }
 
@@ -3865,17 +3942,40 @@ class InsteonService {
       return [];
     }
 
-    const normalized = section
-      .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<\/(li|p|div|tr|td|th)>/gi, '\n')
-      .replace(/<[^>]+>/g, ' ')
+    const boundedSection = section.slice(0, 4 * 1024 * 1024);
+    let normalized = '';
+    let cursor = 0;
+    while (cursor < boundedSection.length) {
+      const open = boundedSection.indexOf('<', cursor);
+      if (open < 0) {
+        normalized += boundedSection.slice(cursor);
+        break;
+      }
+      normalized += boundedSection.slice(cursor, open);
+      if (boundedSection.startsWith('<![CDATA[', open)) {
+        const cdataEnd = boundedSection.indexOf(']]>', open + 9);
+        if (cdataEnd < 0) break;
+        normalized += boundedSection.slice(open + 9, cdataEnd);
+        cursor = cdataEnd + 3;
+        continue;
+      }
+      const close = boundedSection.indexOf('>', open + 1);
+      if (close < 0) break;
+      const tag = boundedSection.slice(open + 1, close).trim().toLowerCase();
+      if (tag.startsWith('br') || ['/li', '/p', '/div', '/tr', '/td', '/th'].includes(tag.split(/\s/, 1)[0])) {
+        normalized += '\n';
+      } else {
+        normalized += ' ';
+      }
+      cursor = close + 1;
+    }
+    normalized = normalized
       .replace(/&nbsp;/gi, ' ')
       .replace(/&lt;/gi, '<')
       .replace(/&gt;/gi, '>')
-      .replace(/&amp;/gi, '&')
       .replace(/&quot;/gi, '"')
-      .replace(/&#39;/gi, '\'');
+      .replace(/&#39;/gi, '\'')
+      .replace(/&amp;/gi, '&');
 
     return normalized
       .split(/\r?\n+/)
@@ -3933,10 +4033,12 @@ class InsteonService {
 
   async _requestISYResource(connection, resourcePath) {
     const sanitizedPath = resourcePath.startsWith('/') ? resourcePath : `/${resourcePath}`;
-    const url = `${this._isyBaseUrl(connection)}${sanitizedPath}`;
+    const url = buildSameOriginUrl(sanitizedPath, this._isyBaseUrl(connection), 'ISY resource URL').toString();
 
     const requestConfig = {
       timeout: 15000,
+      maxRedirects: 0,
+      maxContentLength: 8 * 1024 * 1024,
       responseType: 'text',
       auth: {
         username: connection.username,
@@ -4766,7 +4868,7 @@ class InsteonService {
     }
 
     if (/%$/.test(stateRaw)) {
-      const level = Number(stateRaw.replace('%', ''));
+      const level = Number(stateRaw.slice(0, -1));
       if (Number.isFinite(level)) {
         return {
           trigger: {
@@ -5904,12 +6006,12 @@ class InsteonService {
           results.placeholderPrograms += 1;
         }
 
-        const markerRegex = new RegExp(this._escapeRegexLiteral(translation.marker));
-        const elsePathRegex = new RegExp(this._escapeRegexLiteral('[ISY_PROGRAM_PATH:ELSE]'));
+        const markerPattern = this._escapeRegexLiteral(translation.marker);
+        const elsePathPattern = this._escapeRegexLiteral('[ISY_PROGRAM_PATH:ELSE]');
         const existingMain = await Workflow.findOne({
           $and: [
-            { description: { $regex: markerRegex } },
-            { description: { $not: elsePathRegex } }
+            { description: { $regex: markerPattern } },
+            { description: { $not: { $regex: elsePathPattern } } }
           ]
         }).lean();
 
@@ -5928,7 +6030,7 @@ class InsteonService {
 
           if (translation.elsePayload) {
             const existingElse = await Workflow.findOne({
-              description: { $regex: new RegExp(this._escapeRegexLiteral(translation.elseMarker)) }
+              description: { $regex: this._escapeRegexLiteral(translation.elseMarker) }
             }).lean();
 
             results.workflows.push({
@@ -6000,7 +6102,7 @@ class InsteonService {
         }
 
         const existingElse = await Workflow.findOne({
-          description: { $regex: new RegExp(this._escapeRegexLiteral(translation.elseMarker)) }
+          description: { $regex: this._escapeRegexLiteral(translation.elseMarker) }
         }).lean();
 
         if (existingElse) {
@@ -7288,8 +7390,10 @@ class InsteonService {
   }
 
   async _sleep(ms) {
+    const boundedMs = clampInsteonTimeoutMs(ms, 0, 0);
     return new Promise((resolve) => {
-      setTimeout(resolve, ms);
+      // lgtm[js/resource-exhaustion] clampInsteonTimeoutMs applies the service's bounded timeout range before scheduling.
+      setTimeout(resolve, boundedMs);
     });
   }
 
@@ -9492,8 +9596,7 @@ class InsteonService {
 
         this.hub = new Insteon();
         if (runtimeTransport === 'serial' && serialPortModule) {
-          // serialport v9+ exports { SerialPort }; v8 exported the class directly.
-          this.hub.SerialPort = serialPortModule.SerialPort || serialPortModule;
+          this.hub.SerialPort = this._createHomeControllerSerialPortConstructor(serialPortModule);
         }
         this._attachRuntimeListeners();
         this.lastConnectionError = null;
@@ -9601,7 +9704,12 @@ class InsteonService {
             error: error.message
           }
         });
-        console.error(`InsteonService: Connection failed (attempt ${this.connectionAttempts}/${this.maxConnectionAttempts}):`, error.message);
+        console.error(
+          'InsteonService: Connection failed (attempt %d/%d): %s',
+          this.connectionAttempts,
+          this.maxConnectionAttempts,
+          error.message
+        );
         console.error(error.stack);
 
         this.isConnected = false;
@@ -10038,7 +10146,11 @@ class InsteonService {
             }
           );
         } catch (error) {
-          console.error(`InsteonService: Error syncing linked device ${linkedDevice?.address || 'unknown'}:`, error.message);
+          console.error(
+            'InsteonService: Error syncing linked device %s: %s',
+            linkedDevice?.address || 'unknown',
+            error.message
+          );
           if (error?.code === 'INSTEON_SYNC_CANCELLED' || error?.isCancelled === true) {
             throw error;
           }
@@ -10680,7 +10792,7 @@ class InsteonService {
       console.log(`InsteonService: Device ${address} info retrieved`);
       return info;
     } catch (error) {
-      console.error(`InsteonService: Failed to get device info for ${address}:`, error.message);
+      console.error('InsteonService: Failed to get device info for %s: %s', address, error.message);
       // Return basic info instead of throwing
       return {
         deviceId: this._normalizePossibleInsteonAddress(address),
@@ -10697,7 +10809,7 @@ class InsteonService {
     }
 
     const normalizedAddress = this._normalizeInsteonAddress(address);
-    const timeoutValue = Number.isFinite(Number(timeoutMs)) ? Math.max(500, Number(timeoutMs)) : 5000;
+    const timeoutValue = clampInsteonTimeoutMs(timeoutMs, 5000, 500, 60_000);
 
     const level = await this._executeQueuedPlmCallbackOperation(
       (callback) => this._getHubLightController(normalizedAddress).level(callback),
@@ -10771,9 +10883,7 @@ class InsteonService {
     const attempts = Number.isFinite(Number(options.attempts))
       ? Math.max(1, Math.min(5, Number(options.attempts)))
       : 2;
-    const timeoutMs = Number.isFinite(Number(options.timeoutMs))
-      ? Math.max(500, Number(options.timeoutMs))
-      : 4000;
+    const timeoutMs = clampInsteonTimeoutMs(options.timeoutMs, 4000, 500, 60_000);
     const pauseBetweenMs = Number.isFinite(Number(options.pauseBetweenMs))
       ? Math.max(0, Number(options.pauseBetweenMs))
       : 150;
@@ -10824,9 +10934,7 @@ class InsteonService {
     const attempts = Number.isFinite(Number(options.attempts))
       ? Math.max(1, Math.min(8, Number(options.attempts)))
       : 4;
-    const timeoutMs = Number.isFinite(Number(options.timeoutMs))
-      ? Math.max(500, Number(options.timeoutMs))
-      : 4000;
+    const timeoutMs = clampInsteonTimeoutMs(options.timeoutMs, 4000, 500, 60_000);
     const pauseBetweenMs = Number.isFinite(Number(options.pauseBetweenMs))
       ? Math.max(0, Number(options.pauseBetweenMs))
       : 200;
@@ -11174,13 +11282,15 @@ class InsteonService {
   }
 
   async _executeHubCommandWithTimeout(invoke, timeoutMessage, timeoutMs = 5000, options = {}) {
-    const boundedTimeoutMs = Number.isFinite(Number(timeoutMs))
-      ? Math.max(500, Number(timeoutMs))
-      : 5000;
+    const boundedTimeoutMs = clampInsteonTimeoutMs(timeoutMs, 5000, 500, 60_000);
     const commandRetries = Number.isFinite(Number(options.commandRetries))
       ? Math.max(0, Math.min(5, Math.round(Number(options.commandRetries))))
       : 0;
-    const totalCommandWindowMs = boundedTimeoutMs * Math.max(1, commandRetries + 1);
+    const totalCommandWindowMs = clampInsteonTimeoutMs(
+      boundedTimeoutMs * Math.max(1, commandRetries + 1),
+      boundedTimeoutMs,
+      500
+    );
     const pendingRuntimeAckWaiter = options.requireDeviceResponse === true
       ? this._createPendingRuntimeCommandAckWaiter(
         options.runtimeAckAddress,
@@ -11365,7 +11475,7 @@ class InsteonService {
     }
 
     const normalizedAddress = this._normalizeInsteonAddress(address);
-    const timeoutValue = Number.isFinite(Number(timeoutMs)) ? Math.max(500, Number(timeoutMs)) : 5000;
+    const timeoutValue = clampInsteonTimeoutMs(timeoutMs, 5000, 500, 60_000);
 
     const info = await this._executeQueuedPlmCallbackOperation(
       (callback) => this.hub.info(normalizedAddress, callback),
@@ -11395,7 +11505,7 @@ class InsteonService {
     }
 
     const normalizedAddress = this._normalizeInsteonAddress(address);
-    const timeoutValue = Number.isFinite(Number(timeoutMs)) ? Math.max(500, Number(timeoutMs)) : 3000;
+    const timeoutValue = clampInsteonTimeoutMs(timeoutMs, 3000, 500, 60_000);
 
     const response = await this._executeQueuedPlmCallbackOperation(
       (callback) => this.hub.ping(normalizedAddress, callback),
@@ -13005,7 +13115,7 @@ class InsteonService {
 
           results.online++;
         } catch (error) {
-          console.error(`InsteonService: Error scanning device ${device._id}:`, error.message);
+          console.error('InsteonService: Error scanning device %s: %s', device._id, error.message);
           device.isOnline = false;
           await device.save();
 

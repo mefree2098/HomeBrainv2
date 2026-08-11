@@ -13,6 +13,7 @@
 #include <Preferences.h>
 #include <math.h>
 #include <memory>
+#include <time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "driver/gpio.h"
@@ -23,6 +24,8 @@
 #include "HomeBrainPanelConfig.h"
 #include "HomeBrainPanelAssets.h"
 #include "HomeBrainPalette.h"
+
+extern const uint8_t rootca_crt_bundle_start[] asm("_binary_data_cert_x509_crt_bundle_bin_start");
 
 SET_LOOP_TASK_STACK_SIZE(16 * 1024);
 
@@ -87,6 +90,8 @@ constexpr unsigned long kEncoderAccelerationFastestMs = 28;
 constexpr uint8_t kEncoderAccelerationScalePercent = 50;
 constexpr int kPanelHttpConnectTimeoutMs = 3000;
 constexpr int kPanelHttpTimeoutMs = 5000;
+constexpr time_t kMinimumTlsEpoch = 1704067200;  // 2024-01-01 UTC
+constexpr unsigned long kTlsClockSyncTimeoutMs = 5000;
 constexpr int kOtaHttpConnectTimeoutMs = 4000;
 constexpr int kOtaHttpTimeoutMs = 15000;
 constexpr int kOtaProgressReportStepPercent = 5;
@@ -306,6 +311,7 @@ bool gHaveCachedStateChecksum = false;
 uint32_t gCachedStateChecksum = 0;
 unsigned long gLastCachedStatePersistAt = 0;
 std::unique_ptr<WiFiClientSecure> gSecureHttpClients[2];
+bool gTlsClockSyncConfigured = false;
 std::unique_ptr<WiFiClient> gPlainHttpClients[2];
 
 String gStatusLine = "Booting HomeBrain panel...";
@@ -774,6 +780,28 @@ enum class HttpRequestChannel : uint8_t {
   OtaDownload = 1
 };
 
+bool ensureTlsClockReady() {
+  if (time(nullptr) >= kMinimumTlsEpoch) {
+    return true;
+  }
+
+  if (!gTlsClockSyncConfigured) {
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+    gTlsClockSyncConfigured = true;
+
+    const unsigned long startedAt = millis();
+    while (
+      WiFi.status() == WL_CONNECTED
+      && time(nullptr) < kMinimumTlsEpoch
+      && millis() - startedAt < kTlsClockSyncTimeoutMs
+    ) {
+      delay(50);
+    }
+  }
+
+  return time(nullptr) >= kMinimumTlsEpoch;
+}
+
 bool beginHttpRequest(
   HTTPClient& http,
   const String& url,
@@ -787,10 +815,15 @@ bool beginHttpRequest(
   http.setTimeout(otaChannel ? kOtaHttpTimeoutMs : kPanelHttpTimeoutMs);
 
   if (url.startsWith("https://")) {
+    if (!ensureTlsClockReady()) {
+      Serial.println("[panel] HTTPS unavailable until the system clock is synchronized");
+      return false;
+    }
+
     gPlainHttpClients[channelIndex].reset();
     gSecureHttpClients[channelIndex].reset(new WiFiClientSecure());
     WiFiClientSecure& secureClient = *gSecureHttpClients[channelIndex];
-    secureClient.setInsecure();
+    secureClient.setCACertBundle(rootca_crt_bundle_start);
     return http.begin(secureClient, url);
   }
 

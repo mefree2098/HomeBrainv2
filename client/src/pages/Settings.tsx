@@ -816,7 +816,7 @@ export function Settings() {
       isyUsername: "",
       isyPassword: "",
       isyUseHttps: true,
-      isyIgnoreTlsErrors: true,
+      isyIgnoreTlsErrors: false,
       smartthingsToken: "",
       smartthingsClientId: "",
       smartthingsClientSecret: "",

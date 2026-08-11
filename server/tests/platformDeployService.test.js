@@ -11,6 +11,15 @@ const eventStreamService = require('../services/eventStreamService');
 
 const { PlatformDeployService } = platformDeployServiceModule;
 
+test('deployment job paths only accept safe identifiers without traversal segments', () => {
+  const service = new PlatformDeployService({ dataDir: '/tmp/homebrain-platform-deploy-test' });
+  assert.throws(() => service.getJobPath('../../etc/passwd'), /job id is invalid/);
+  assert.equal(
+    service.getJobPath('123e4567-e89b-42d3-a456-426614174000'),
+    '/tmp/homebrain-platform-deploy-test/jobs/123e4567-e89b-42d3-a456-426614174000.json'
+  );
+});
+
 function createRepoStatus(commit, shortCommit = commit.slice(0, 7)) {
   return {
     branch: 'main',

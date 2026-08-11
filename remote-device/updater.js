@@ -9,18 +9,97 @@ const https = require('https');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const net = require('net');
 const crypto = require('crypto');
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 const { promisify } = require('util');
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+const DEFAULT_MAX_UPDATE_BYTES = 256 * 1024 * 1024;
+const MAX_ARCHIVE_ENTRIES = 500;
+const MAX_ARCHIVE_LIST_BYTES = 4 * 1024 * 1024;
+const DOWNLOAD_TIMEOUT_MS = 30_000;
+const MANAGED_FILES = Object.freeze([
+  'index.js',
+  'package.json',
+  'package-lock.json',
+  'README.md',
+  'updater.js',
+  'feature_infer.py'
+]);
+
+function isLocalOrPrivateHostname(hostname) {
+  let value = String(hostname || '').trim().toLowerCase();
+  if (value.startsWith('[') && value.endsWith(']')) value = value.slice(1, -1);
+  if (value === 'localhost' || value.endsWith('.localhost') || value.endsWith('.local')) return true;
+  if (!value.includes('.') && !value.includes(':')) return true;
+  if (net.isIPv4(value)) {
+    const octets = value.split('.').map(Number);
+    return octets[0] === 10
+      || octets[0] === 127
+      || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+      || (octets[0] === 192 && octets[1] === 168)
+      || (octets[0] === 169 && octets[1] === 254);
+  }
+  if (net.isIPv6(value)) {
+    return value === '::1' || value.startsWith('fc') || value.startsWith('fd') || value.startsWith('fe80:');
+  }
+  return false;
+}
+
+function normalizeSha256(value) {
+  const checksum = String(value || '').trim().toLowerCase();
+  if (checksum.length !== 64) return '';
+  for (const character of checksum) {
+    const isDigit = character >= '0' && character <= '9';
+    const isHexLetter = character >= 'a' && character <= 'f';
+    if (!isDigit && !isHexLetter) return '';
+  }
+  return checksum;
+}
+
+function normalizeArchiveEntry(value) {
+  const entry = String(value || '').trim();
+  if (!entry || entry.length > 512 || entry.includes('\0') || entry.includes('\\')) return '';
+  if (path.posix.isAbsolute(entry)) return '';
+  const normalized = path.posix.normalize(entry);
+  if (normalized === '..' || normalized.startsWith('../')) return '';
+  return normalized;
+}
 
 class RemoteDeviceUpdater {
-  constructor() {
-    this.installDir = process.cwd();
+  constructor(options = {}) {
+    this.installDir = path.resolve(options.installDir || process.cwd());
     this.backupDir = path.join(this.installDir, '.backup');
     this.tempDir = path.join(this.installDir, '.temp');
+    this.allowedOrigin = options.allowedOrigin ? new URL(options.allowedOrigin).origin : '';
+    this.maxDownloadBytes = Number.isFinite(Number(options.maxDownloadBytes))
+      ? Math.max(1024, Math.min(DEFAULT_MAX_UPDATE_BYTES, Math.round(Number(options.maxDownloadBytes))))
+      : DEFAULT_MAX_UPDATE_BYTES;
     this.currentVersion = null;
+  }
+
+  parseDownloadUrl(downloadUrl) {
+    let parsed;
+    try {
+      parsed = new URL(String(downloadUrl || '').trim());
+    } catch (_error) {
+      throw new Error('Update download URL is invalid');
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new Error('Update download URL must use http or https');
+    }
+    if (parsed.username || parsed.password) {
+      throw new Error('Update download URL must not include credentials');
+    }
+    if (this.allowedOrigin && parsed.origin !== this.allowedOrigin) {
+      throw new Error('Update download URL must use the configured HomeBrain origin');
+    }
+    if (!this.allowedOrigin && parsed.protocol !== 'https:' && !isLocalOrPrivateHostname(parsed.hostname)) {
+      throw new Error('Public update download URLs must use HTTPS');
+    }
+    parsed.hash = '';
+    return parsed;
   }
 
   /**
@@ -53,47 +132,84 @@ class RemoteDeviceUpdater {
    * Download update package
    */
   async downloadUpdate(downloadUrl, expectedChecksum) {
-    console.log(`Downloading update from: ${downloadUrl}`);
+    const parsedUrl = this.parseDownloadUrl(downloadUrl);
+    const normalizedChecksum = normalizeSha256(expectedChecksum);
+    if (!normalizedChecksum) {
+      throw new Error('A valid SHA-256 checksum is required for updates');
+    }
+    console.log(`Downloading update from: ${parsedUrl.origin}${parsedUrl.pathname}`);
 
     const updateFilePath = path.join(this.tempDir, 'update.zip');
+    await fs.promises.mkdir(this.tempDir, { recursive: true, mode: 0o700 });
+    await fs.promises.rm(updateFilePath, { force: true });
 
     return new Promise((resolve, reject) => {
-      const protocol = downloadUrl.startsWith('https') ? https : http;
+      const protocol = parsedUrl.protocol === 'https:' ? https : http;
+      const file = fs.createWriteStream(updateFilePath, { flags: 'wx', mode: 0o600 });
+      let receivedBytes = 0;
+      let settled = false;
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        file.destroy();
+        fs.promises.rm(updateFilePath, { force: true }).finally(() => reject(error));
+      };
 
-      const file = fs.createWriteStream(updateFilePath);
+      file.on('error', fail);
 
-      protocol.get(downloadUrl, (response) => {
+      // codeql[js/request-forgery] parseDownloadUrl requires the configured HomeBrain origin (or HTTPS/LAN-only standalone use), and redirects are not followed.
+      const request = protocol.get(parsedUrl, (response) => {
         if (response.statusCode !== 200) {
-          reject(new Error(`Failed to download: HTTP ${response.statusCode}`));
+          response.resume();
+          fail(new Error(`Failed to download: HTTP ${response.statusCode}`));
           return;
         }
 
+        const declaredLength = Number(response.headers['content-length']);
+        if (Number.isFinite(declaredLength) && declaredLength > this.maxDownloadBytes) {
+          response.destroy();
+          fail(new Error('Update package exceeds the download size limit'));
+          return;
+        }
+
+        response.on('data', (chunk) => {
+          receivedBytes += chunk.length;
+          if (receivedBytes > this.maxDownloadBytes) {
+            response.destroy(new Error('Update package exceeds the download size limit'));
+          }
+        });
+        response.on('error', fail);
         response.pipe(file);
 
         file.on('finish', async () => {
-          file.close();
+          if (settled) return;
 
           try {
+            if (!file.closed) {
+              await new Promise((closeResolve) => file.once('close', closeResolve));
+            }
             // Verify checksum
             const actualChecksum = await this.calculateChecksum(updateFilePath);
 
-            if (expectedChecksum && actualChecksum !== expectedChecksum) {
-              fs.unlinkSync(updateFilePath);
-              reject(new Error('Checksum verification failed'));
-              return;
+            const expectedBuffer = Buffer.from(normalizedChecksum, 'hex');
+            const actualBuffer = Buffer.from(actualChecksum, 'hex');
+            if (actualBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(actualBuffer, expectedBuffer)) {
+              throw new Error('Checksum verification failed');
             }
 
+            settled = true;
             console.log('Download completed and verified successfully');
             resolve(updateFilePath);
           } catch (error) {
-            reject(error);
+            fail(error);
           }
         });
-
-      }).on('error', (error) => {
-        fs.unlinkSync(updateFilePath);
-        reject(error);
       });
+
+      request.setTimeout(DOWNLOAD_TIMEOUT_MS, () => {
+        request.destroy(new Error('Update download timed out'));
+      });
+      request.on('error', fail);
     });
   }
 
@@ -120,20 +236,14 @@ class RemoteDeviceUpdater {
     try {
       // Remove old backup if exists
       if (fs.existsSync(this.backupDir)) {
-        await execAsync(`rm -rf "${this.backupDir}"`);
+        await fs.promises.rm(this.backupDir, { recursive: true, force: true });
       }
 
       // Create new backup directory
       fs.mkdirSync(this.backupDir, { recursive: true });
 
       // Files to backup
-      const filesToBackup = [
-        'index.js',
-        'package.json',
-        'package-lock.json',
-        'config.json',
-        'README.md'
-      ];
+      const filesToBackup = [...MANAGED_FILES, 'config.json'];
 
       // Copy files
       for (const file of filesToBackup) {
@@ -146,7 +256,11 @@ class RemoteDeviceUpdater {
       }
 
       // Backup node_modules package list
-      const { stdout } = await execAsync('npm list --json --depth=0', { cwd: this.installDir });
+      const { stdout } = await execFileAsync('npm', ['list', '--json', '--depth=0'], {
+        cwd: this.installDir,
+        timeout: 60_000,
+        maxBuffer: 4 * 1024 * 1024
+      });
       fs.writeFileSync(
         path.join(this.backupDir, 'package-list.json'),
         stdout
@@ -170,14 +284,51 @@ class RemoteDeviceUpdater {
 
       // Remove old extract directory
       if (fs.existsSync(extractDir)) {
-        await execAsync(`rm -rf "${extractDir}"`);
+        await fs.promises.rm(extractDir, { recursive: true, force: true });
       }
 
       // Create extract directory
       fs.mkdirSync(extractDir, { recursive: true });
 
-      // Extract zip file
-      await execAsync(`unzip -o "${updateFilePath}" -d "${extractDir}"`);
+      const listOptions = {
+        timeout: 30_000,
+        maxBuffer: MAX_ARCHIVE_LIST_BYTES
+      };
+      const [{ stdout: namesOutput }, { stdout: detailsOutput }, { stdout: sizesOutput }] = await Promise.all([
+        execFileAsync('unzip', ['-Z1', updateFilePath], listOptions),
+        execFileAsync('unzip', ['-Z', '-l', updateFilePath], listOptions),
+        execFileAsync('unzip', ['-l', updateFilePath], listOptions)
+      ]);
+      const entries = namesOutput.split('\n').map((entry) => entry.trim()).filter(Boolean);
+      if (entries.length === 0 || entries.length > MAX_ARCHIVE_ENTRIES) {
+        throw new Error('Update archive has an invalid number of entries');
+      }
+      for (const entry of entries) {
+        if (!normalizeArchiveEntry(entry)) {
+          throw new Error(`Update archive contains an unsafe path: ${entry}`);
+        }
+      }
+      if (detailsOutput.split('\n').some((line) => line.trimStart().startsWith('l'))) {
+        throw new Error('Update archive must not contain symbolic links');
+      }
+
+      let totalUncompressedBytes = 0;
+      for (const line of sizesOutput.split('\n')) {
+        const firstField = line.trim().split(' ', 1)[0];
+        if (firstField && [...firstField].every((character) => character >= '0' && character <= '9')) {
+          totalUncompressedBytes += Number(firstField);
+        }
+      }
+      const maxUncompressedBytes = Math.min(512 * 1024 * 1024, this.maxDownloadBytes * 4);
+      if (!Number.isSafeInteger(totalUncompressedBytes) || totalUncompressedBytes > maxUncompressedBytes) {
+        throw new Error('Update archive exceeds the extracted size limit');
+      }
+
+      // Extract only after validating paths, entry types, and expanded size.
+      await execFileAsync('unzip', ['-o', updateFilePath, '-d', extractDir], {
+        timeout: 120_000,
+        maxBuffer: MAX_ARCHIVE_LIST_BYTES
+      });
 
       console.log('Update package extracted successfully');
       return extractDir;
@@ -195,14 +346,7 @@ class RemoteDeviceUpdater {
 
     try {
       // Files to update
-      const filesToUpdate = [
-        'index.js',
-        'package.json',
-        'package-lock.json',
-        'README.md',
-        'updater.js',
-        'feature_infer.py'
-      ];
+      const filesToUpdate = MANAGED_FILES;
 
       // Determine if dependencies changed by comparing package.json
       let depsChanged = false;
@@ -224,7 +368,14 @@ class RemoteDeviceUpdater {
         const destPath = path.join(this.installDir, file);
 
         if (fs.existsSync(srcPath)) {
-          fs.copyFileSync(srcPath, destPath);
+          const sourceStats = await fs.promises.lstat(srcPath);
+          if (!sourceStats.isFile() || sourceStats.isSymbolicLink()) {
+            throw new Error(`Update entry is not a regular file: ${file}`);
+          }
+          const stagingPath = `${destPath}.update`;
+          await fs.promises.copyFile(srcPath, stagingPath);
+          await fs.promises.chmod(stagingPath, sourceStats.mode & 0o777);
+          await fs.promises.rename(stagingPath, destPath);
           console.log(`Updated: ${file}`);
         }
       }
@@ -232,11 +383,15 @@ class RemoteDeviceUpdater {
       // Update dependencies only if necessary
       if (depsChanged) {
         const hasLockfile = fs.existsSync(path.join(this.installDir, 'package-lock.json'));
-        const installCommand = hasLockfile
-          ? 'npm ci --no-audit --no-fund'
-          : 'npm install --no-audit --no-fund';
-        console.log(`Dependencies changed; running ${installCommand}...`);
-        await execAsync(installCommand, { cwd: this.installDir });
+        const installArgs = hasLockfile
+          ? ['ci', '--no-audit', '--no-fund']
+          : ['install', '--no-audit', '--no-fund'];
+        console.log(`Dependencies changed; running npm ${installArgs.join(' ')}...`);
+        await execFileAsync('npm', installArgs, {
+          cwd: this.installDir,
+          timeout: 10 * 60_000,
+          maxBuffer: 16 * 1024 * 1024
+        });
       } else {
         console.log('Dependencies unchanged; skipping dependency install');
       }
@@ -260,12 +415,7 @@ class RemoteDeviceUpdater {
       }
 
       // Files to restore
-      const filesToRestore = [
-        'index.js',
-        'package.json',
-        'package-lock.json',
-        'README.md'
-      ];
+      const filesToRestore = [...MANAGED_FILES, 'config.json'];
 
       // Restore files
       for (const file of filesToRestore) {
@@ -279,10 +429,14 @@ class RemoteDeviceUpdater {
 
       // Restore dependencies
       const hasLockfile = fs.existsSync(path.join(this.installDir, 'package-lock.json'));
-      const installCommand = hasLockfile
-        ? 'npm ci --no-audit --no-fund'
-        : 'npm install --no-audit --no-fund';
-      await execAsync(installCommand, { cwd: this.installDir });
+      const installArgs = hasLockfile
+        ? ['ci', '--no-audit', '--no-fund']
+        : ['install', '--no-audit', '--no-fund'];
+      await execFileAsync('npm', installArgs, {
+        cwd: this.installDir,
+        timeout: 10 * 60_000,
+        maxBuffer: 16 * 1024 * 1024
+      });
 
       console.log('Backup restored successfully');
     } catch (error) {
@@ -299,7 +453,7 @@ class RemoteDeviceUpdater {
 
     try {
       if (fs.existsSync(this.tempDir)) {
-        await execAsync(`rm -rf "${this.tempDir}"`);
+        await fs.promises.rm(this.tempDir, { recursive: true, force: true });
       }
 
       console.log('Cleanup completed');
@@ -391,6 +545,11 @@ class RemoteDeviceUpdater {
 
 // Export for use as a module
 module.exports = RemoteDeviceUpdater;
+module.exports.__private__ = {
+  isLocalOrPrivateHostname,
+  normalizeArchiveEntry,
+  normalizeSha256
+};
 
 // Allow running as standalone script
 if (require.main === module) {

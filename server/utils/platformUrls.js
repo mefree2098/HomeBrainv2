@@ -1,20 +1,7 @@
-const { getConfiguredPublicOrigin, getRequestOrigin } = require('./publicOrigin');
+const { getConfiguredPublicOrigin, getRequestOrigin, normalizeOrigin } = require('./publicOrigin');
 
 function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
-}
-
-function normalizeOrigin(value) {
-  const candidate = trimString(value).replace(/\/+$/, '');
-  if (!candidate) {
-    return '';
-  }
-
-  try {
-    return new URL(candidate).origin;
-  } catch (_error) {
-    return '';
-  }
 }
 
 function getHomeBrainPublicOrigin(req = null) {

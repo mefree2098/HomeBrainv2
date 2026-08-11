@@ -1,12 +1,16 @@
 const axios = require('axios');
+const crypto = require('crypto');
 const dgram = require('dgram');
 const https = require('https');
+const net = require('net');
+const tls = require('tls');
 const Device = require('../models/Device');
 const RainMachineIntegration = require('../models/RainMachineIntegration');
 const RainMachineDailyStat = require('../models/RainMachineDailyStat');
 const RainMachineWateringDay = require('../models/RainMachineWateringDay');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const telemetryService = require('./telemetryService');
+const { isAllowedLocalHostname, isCloudMetadataHostname } = require('../utils/networkSafety');
 const {
   buildRainMachineControllerIdentityQuery,
   buildRainMachineZoneIdentityQuery,
@@ -15,14 +19,16 @@ const {
   describeDevices
 } = require('./deviceIdentityService');
 
-const DEFAULT_HTTP_TIMEOUT_MS = Math.max(4000, Number(process.env.RAINMACHINE_HTTP_TIMEOUT_MS || 12000));
-const DEFAULT_POLL_INTERVAL_MINUTES = Math.max(1, Number(process.env.RAINMACHINE_POLL_INTERVAL_MINUTES || 5));
-const DEFAULT_REPORT_SYNC_INTERVAL_MS = Math.max(
+const DEFAULT_HTTP_TIMEOUT_MS = clampEnvInteger(process.env.RAINMACHINE_HTTP_TIMEOUT_MS, 12_000, 4000, 60_000);
+const DEFAULT_POLL_INTERVAL_MINUTES = clampEnvInteger(process.env.RAINMACHINE_POLL_INTERVAL_MINUTES, 5, 1, 1440);
+const DEFAULT_REPORT_SYNC_INTERVAL_MS = clampEnvInteger(
+  process.env.RAINMACHINE_REPORT_SYNC_INTERVAL_MS,
+  12 * 60 * 60 * 1000,
   15 * 60 * 1000,
-  Number(process.env.RAINMACHINE_REPORT_SYNC_INTERVAL_MS || 12 * 60 * 60 * 1000)
+  7 * 24 * 60 * 60 * 1000
 );
-const DEFAULT_WATERING_LOG_DAYS = Math.max(1, Number(process.env.RAINMACHINE_WATERING_LOG_DAYS || 30));
-const DEFAULT_DISCOVERY_TIMEOUT_MS = Math.max(1000, Number(process.env.RAINMACHINE_DISCOVERY_TIMEOUT_MS || 2500));
+const DEFAULT_WATERING_LOG_DAYS = clampEnvInteger(process.env.RAINMACHINE_WATERING_LOG_DAYS, 30, 1, 366);
+const DEFAULT_DISCOVERY_TIMEOUT_MS = clampEnvInteger(process.env.RAINMACHINE_DISCOVERY_TIMEOUT_MS, 2500, 1000, 30_000);
 const DISCOVERY_PORT = 15800;
 const DISCOVERY_RESPONSE_PORT = 15900;
 const MAX_ZONE_DURATION_SECONDS = 6 * 60 * 60;
@@ -37,6 +43,141 @@ const PROGRAM_STATUS = Object.freeze({
   running: 1,
   pending: 2
 });
+
+function clampEnvInteger(value, fallback, minimum, maximum) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(minimum, Math.min(maximum, Math.round(numeric)));
+}
+
+function isSelfSignedCertificateError(error) {
+  return new Set([
+    'DEPTH_ZERO_SELF_SIGNED_CERT',
+    'SELF_SIGNED_CERT_IN_CHAIN',
+    'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+    'UNABLE_TO_GET_ISSUER_CERT_LOCALLY'
+  ]).has(error?.code);
+}
+
+function normalizeCertificateFingerprintSha256(value) {
+  const normalized = String(value || '').replace(/[^a-fA-F0-9]/g, '').toLowerCase();
+  return normalized.length === 64 ? normalized : '';
+}
+
+function certificateFingerprintSha256(rawCertificate) {
+  if (!Buffer.isBuffer(rawCertificate) || rawCertificate.length === 0) {
+    return '';
+  }
+  return crypto.createHash('sha256').update(rawCertificate).digest('hex');
+}
+
+function certificateFingerprintsMatch(left, right) {
+  const normalizedLeft = normalizeCertificateFingerprintSha256(left);
+  const normalizedRight = normalizeCertificateFingerprintSha256(right);
+  if (!normalizedLeft || !normalizedRight) {
+    return false;
+  }
+  return crypto.timingSafeEqual(
+    Buffer.from(normalizedLeft, 'hex'),
+    Buffer.from(normalizedRight, 'hex')
+  );
+}
+
+function derCertificateToPem(rawCertificate) {
+  const base64 = rawCertificate.toString('base64');
+  const lines = [];
+  for (let offset = 0; offset < base64.length; offset += 64) {
+    lines.push(base64.slice(offset, offset + 64));
+  }
+  return `-----BEGIN CERTIFICATE-----\n${lines.join('\n')}\n-----END CERTIFICATE-----\n`;
+}
+
+function collectPeerCertificateChain(peerCertificate) {
+  const certificates = [];
+  const fingerprints = new Set();
+  let current = peerCertificate;
+
+  while (current?.raw && certificates.length < 8) {
+    const fingerprint = certificateFingerprintSha256(current.raw);
+    if (!fingerprint || fingerprints.has(fingerprint)) {
+      break;
+    }
+    fingerprints.add(fingerprint);
+    certificates.push(current.raw);
+    current = current.issuerCertificate;
+  }
+
+  return certificates;
+}
+
+function createPinnedHttpsAgent(peerCertificate, expectedFingerprint = '') {
+  const chain = collectPeerCertificateChain(peerCertificate);
+  if (chain.length === 0) {
+    throw new Error('RainMachine did not provide a TLS certificate.');
+  }
+
+  const fingerprintSha256 = certificateFingerprintSha256(chain[0]);
+  const normalizedExpected = normalizeCertificateFingerprintSha256(expectedFingerprint);
+  if (normalizedExpected && !certificateFingerprintsMatch(fingerprintSha256, normalizedExpected)) {
+    throw new Error('RainMachine TLS certificate changed. Re-save the controller settings to trust the new certificate.');
+  }
+
+  const checkServerIdentity = (_hostname, certificate) => {
+    const presentedFingerprint = certificateFingerprintSha256(certificate?.raw);
+    if (certificateFingerprintsMatch(presentedFingerprint, fingerprintSha256)) {
+      return undefined;
+    }
+    return new Error('RainMachine TLS certificate did not match the trusted certificate.');
+  };
+
+  return {
+    fingerprintSha256,
+    agent: new https.Agent({
+      rejectUnauthorized: true,
+      ca: chain.map(derCertificateToPem),
+      checkServerIdentity
+    })
+  };
+}
+
+function capturePeerCertificate({ host, port, timeoutMs }) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (error, certificate) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      socket.destroy();
+      if (error) {
+        reject(error);
+      } else {
+        resolve(certificate);
+      }
+    };
+
+    const socket = tls.connect({
+      host,
+      port,
+      servername: net.isIP(host) ? undefined : host,
+      // codeql[js/disabling-certificate-validation] This credential-free handshake only enrolls a certificate; every HTTP request uses the exact pinned certificate with validation enabled.
+      // nosemgrep: problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification
+      rejectUnauthorized: false
+    });
+
+    socket.setTimeout(clampInteger(timeoutMs, DEFAULT_HTTP_TIMEOUT_MS, 1000, 60_000));
+    socket.once('secureConnect', () => {
+      const certificate = socket.getPeerCertificate(true);
+      if (!certificate?.raw) {
+        finish(new Error('RainMachine did not provide a TLS certificate.'));
+        return;
+      }
+      finish(null, certificate);
+    });
+    socket.once('timeout', () => finish(new Error('Timed out while reading the RainMachine TLS certificate.')));
+    socket.once('error', (error) => finish(error));
+  });
+}
 
 const trimString = (value, fallback = '') => {
   if (typeof value === 'string') {
@@ -1392,10 +1533,13 @@ class RainMachineService {
     }
   }
 
-  async resolveEndpoint(integration) {
+  async resolveEndpoint(integration, { persistCertificateTrust = true } = {}) {
     const normalizedHost = normalizeHost(integration?.host);
     if (!normalizedHost) {
       throw new Error('RainMachine host is required.');
+    }
+    if (isCloudMetadataHostname(normalizedHost) || !isAllowedLocalHostname(normalizedHost)) {
+      throw new Error('RainMachine host must be on the local or private network.');
     }
 
     const configuredProtocol = normalizeProtocol(integration?.protocol, 'https');
@@ -1428,18 +1572,18 @@ class RainMachineService {
     };
 
     addCandidate(configuredProtocol, configuredPort);
-    addCandidate('https', 8080);
-    addCandidate('http', 8081);
     if (configuredProtocol === 'http') {
+      addCandidate('http', 8081);
       addCandidate('http', 8080);
     } else {
+      addCandidate('https', 8080);
       addCandidate('https', 8081);
     }
 
     let lastError = null;
     for (const candidate of candidates) {
       try {
-        const apiVer = await this.probeEndpoint(candidate);
+        const apiVer = await this.probeEndpoint(candidate, integration, { persistCertificateTrust });
         const endpoint = {
           ...candidate,
           apiVersion: pickFirstString(apiVer?.apiVer)
@@ -1457,20 +1601,94 @@ class RainMachineService {
     throw new Error(lastError?.message || `Unable to reach RainMachine at ${normalizedHost}.`);
   }
 
-  async probeEndpoint(endpoint) {
-    const response = await axios.get(`${endpoint.baseUrl}/apiVer`, {
-      timeout: this.defaultTimeoutMs,
-      httpsAgent: endpoint.protocol === 'https'
-        ? new https.Agent({ rejectUnauthorized: false })
-        : undefined,
-      validateStatus: () => true
+  async buildSelfSignedHttpsTrust(endpoint, expectedFingerprint) {
+    const peerCertificate = await capturePeerCertificate({
+      host: endpoint.host,
+      port: endpoint.port,
+      timeoutMs: this.defaultTimeoutMs
     });
+    return createPinnedHttpsAgent(peerCertificate, expectedFingerprint);
+  }
+
+  async persistTlsCertificateTrust(integration, fingerprintSha256) {
+    const normalizedFingerprint = normalizeCertificateFingerprintSha256(fingerprintSha256);
+    if (!normalizedFingerprint || !integration?._id) {
+      return;
+    }
+
+    const trustedAt = new Date();
+    integration.tlsCertificateFingerprintSha256 = normalizedFingerprint;
+    integration.tlsCertificateTrustedAt = trustedAt;
+    await RainMachineIntegration.updateOne(
+      { _id: integration._id },
+      {
+        $set: {
+          tlsCertificateFingerprintSha256: normalizedFingerprint,
+          tlsCertificateTrustedAt: trustedAt
+        }
+      }
+    );
+  }
+
+  async probeEndpoint(endpoint, integration = {}, { persistCertificateTrust = true } = {}) {
+    const requestOptions = {
+      timeout: this.defaultTimeoutMs,
+      maxRedirects: 0,
+      maxContentLength: 1024 * 1024,
+      maxBodyLength: 1024 * 1024,
+      validateStatus: () => true
+    };
+    let response;
+    let certificateFingerprintToPersist = '';
+    const storedFingerprint = normalizeCertificateFingerprintSha256(
+      integration?.tlsCertificateFingerprintSha256
+    );
+
+    if (endpoint.protocol === 'https' && storedFingerprint) {
+      const trust = await this.buildSelfSignedHttpsTrust(endpoint, storedFingerprint);
+      endpoint.httpsAgent = trust.agent;
+      endpoint.tlsCertificateFingerprintSha256 = trust.fingerprintSha256;
+      response = await axios.get(`${endpoint.baseUrl}/apiVer`, {
+        ...requestOptions,
+        httpsAgent: trust.agent
+      });
+    } else {
+      try {
+        const trustedAgent = endpoint.protocol === 'https'
+          ? new https.Agent({ rejectUnauthorized: true })
+          : undefined;
+        response = await axios.get(`${endpoint.baseUrl}/apiVer`, {
+          ...requestOptions,
+          httpsAgent: trustedAgent
+        });
+        endpoint.httpsAgent = trustedAgent;
+      } catch (error) {
+        if (endpoint.protocol !== 'https' || !isSelfSignedCertificateError(error)) throw error;
+
+        const trust = await this.buildSelfSignedHttpsTrust(endpoint, '');
+        endpoint.httpsAgent = trust.agent;
+        endpoint.tlsCertificateFingerprintSha256 = trust.fingerprintSha256;
+        response = await axios.get(`${endpoint.baseUrl}/apiVer`, {
+          ...requestOptions,
+          httpsAgent: trust.agent
+        });
+
+        if (persistCertificateTrust) {
+          certificateFingerprintToPersist = trust.fingerprintSha256;
+        }
+      }
+    }
 
     if (response.status >= 400) {
       throw new Error(`RainMachine probe failed for ${endpoint.protocol}://${endpoint.host}:${endpoint.port}`);
     }
 
-    return ensureApiSuccess(response.data, 'apiVer');
+    const apiVersion = ensureApiSuccess(response.data, 'apiVer');
+    if (certificateFingerprintToPersist) {
+      await this.persistTlsCertificateTrust(integration, certificateFingerprintToPersist);
+    }
+
+    return apiVersion;
   }
 
   async authenticate(endpoint, integration) {
@@ -1491,8 +1709,11 @@ class RainMachineService {
       {
         timeout: this.defaultTimeoutMs,
         headers: loginPayload.headers,
+        maxRedirects: 0,
+        maxContentLength: 1024 * 1024,
+        maxBodyLength: 1024 * 1024,
         httpsAgent: endpoint.protocol === 'https'
-          ? new https.Agent({ rejectUnauthorized: false })
+          ? endpoint.httpsAgent || new https.Agent({ rejectUnauthorized: true })
           : undefined,
         validateStatus: () => true
       }
@@ -1553,10 +1774,13 @@ class RainMachineService {
       method,
       url,
       data: requestPayload.payload,
-      timeout,
+      timeout: clampInteger(timeout, this.defaultTimeoutMs, 1000, 60_000),
       headers: requestPayload.headers,
+      maxRedirects: 0,
+      maxContentLength: 4 * 1024 * 1024,
+      maxBodyLength: 4 * 1024 * 1024,
       httpsAgent: endpoint.protocol === 'https'
-        ? new https.Agent({ rejectUnauthorized: false })
+        ? endpoint.httpsAgent || new https.Agent({ rejectUnauthorized: true })
         : undefined,
       validateStatus: () => true
     });
@@ -1650,7 +1874,8 @@ class RainMachineService {
           return;
         }
 
-        setTimeout(finish, timeoutMs);
+        // lgtm[js/resource-exhaustion] The caller-provided discovery timeout is clamped to 1-30 seconds before scheduling.
+        setTimeout(finish, clampInteger(timeoutMs, DEFAULT_DISCOVERY_TIMEOUT_MS, 1000, 30_000));
       });
     });
   }
@@ -1675,6 +1900,21 @@ class RainMachineService {
       password: trimString(password, trimString(integration.password))
     };
 
+    const storedProtocol = normalizeProtocol(integration.protocol, 'https');
+    const storedPort = clampInteger(
+      integration.port,
+      storedProtocol === 'http' ? 8081 : 8080,
+      1,
+      65535
+    );
+    const targetsStoredController = normalizeHost(integration.host) === probeIntegration.host
+      && storedProtocol === probeIntegration.protocol
+      && storedPort === probeIntegration.port;
+    if (!targetsStoredController) {
+      probeIntegration.tlsCertificateFingerprintSha256 = '';
+      probeIntegration.tlsCertificateTrustedAt = null;
+    }
+
     if (!probeIntegration.host) {
       throw new Error('RainMachine host is required.');
     }
@@ -1682,7 +1922,7 @@ class RainMachineService {
       throw new Error('RainMachine password is required.');
     }
 
-    const endpoint = await this.resolveEndpoint(probeIntegration);
+    const endpoint = await this.resolveEndpoint(probeIntegration, { persistCertificateTrust: false });
     const [apiVer, provision, wifi, diag] = await Promise.all([
       this.request(endpoint, { integration: probeIntegration, path: 'apiVer', authenticated: false }),
       this.request(endpoint, { integration: probeIntegration, path: 'provision' }),
@@ -1697,7 +1937,8 @@ class RainMachineService {
       endpoint: {
         host: endpoint.host,
         protocol: endpoint.protocol,
-        port: endpoint.port
+        port: endpoint.port,
+        tlsCertificateFingerprintSha256: endpoint.tlsCertificateFingerprintSha256 || ''
       },
       controller: {
         name: pickFirstString(system.netName, provision?.location?.name, 'RainMachine'),
@@ -1718,6 +1959,8 @@ class RainMachineService {
     const currentHost = normalizeHost(integration.host);
     const currentProtocol = normalizeProtocol(integration.protocol, 'https');
     const currentPort = clampInteger(integration.port, currentProtocol === 'http' ? 8081 : 8080, 1, 65535);
+    const endpointTrustResetRequested = ['host', 'protocol', 'port']
+      .some((key) => Object.prototype.hasOwnProperty.call(configuration, key));
 
     if (Object.prototype.hasOwnProperty.call(configuration, 'host')) {
       const parsed = parseHostInput(
@@ -1777,10 +2020,19 @@ class RainMachineService {
       );
     }
 
+    // Saving endpoint settings is the explicit trust-reset action for a replaced controller certificate.
+    if (endpointTrustResetRequested) {
+      integration.tlsCertificateFingerprintSha256 = '';
+      integration.tlsCertificateTrustedAt = null;
+    }
+
     const nextHost = normalizeHost(integration.host);
     const nextProtocol = normalizeProtocol(integration.protocol, 'https');
     const nextPort = clampInteger(integration.port, nextProtocol === 'http' ? 8081 : 8080, 1, 65535);
-    if (currentHost !== nextHost || currentProtocol !== nextProtocol || currentPort !== nextPort) {
+    if (endpointTrustResetRequested
+      || currentHost !== nextHost
+      || currentProtocol !== nextProtocol
+      || currentPort !== nextPort) {
       this.endpointCache = null;
       this.clearAuthSession();
     }
@@ -2495,9 +2747,13 @@ module.exports = rainMachineService;
 module.exports.RainMachineService = RainMachineService;
 module.exports.__private__ = {
   buildRequestPayload,
+  certificateFingerprintSha256,
+  certificateFingerprintsMatch,
+  collectPeerCertificateChain,
   compactRainMachineProgram,
   compactRainMachineSnapshot,
   compactRainMachineZone,
+  createPinnedHttpsAgent,
   buildProgramNextRunMap,
   buildZoneNextRunMap,
   normalizeDailyStats,
@@ -2506,6 +2762,7 @@ module.exports.__private__ = {
   normalizeRestrictions,
   normalizeWateringLogDays,
   normalizeZones,
+  normalizeCertificateFingerprintSha256,
   parseDiscoveryResponse,
   parseHostInput,
   snapshotShowsActiveZone,

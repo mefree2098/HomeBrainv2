@@ -1,5 +1,6 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
+const axios = require('axios');
 const router = express.Router();
 const settingsService = require('../services/settingsService');
 const deviceRestartService = require('../services/deviceRestartService');
@@ -13,6 +14,12 @@ const {
   getCodexModels
 } = require('../services/codexCliService');
 const { requireAdmin } = require('./middlewares/auth');
+const {
+  appendUrlPath,
+  createLocalHttpAgents,
+  parseLocalHttpUrl,
+  trimTrailingSlashes
+} = require('../utils/networkSafety');
 
 // Create auth middleware instance
 const auth = requireAdmin();
@@ -413,30 +420,37 @@ router.post('/test-local-llm', auth, async (req, res) => {
       });
     }
     
-    // Test the endpoint by making a health check or simple request
-    const axios = require('axios');
-    
     try {
       console.log('Testing local LLM endpoint connectivity...');
-      
-      // First try a health check endpoint
-      let testUrl = endpoint.trim();
-      if (!testUrl.startsWith('http://') && !testUrl.startsWith('https://')) {
-        testUrl = 'http://' + testUrl;
-      }
+
+      const parsedEndpoint = parseLocalHttpUrl(endpoint, 'Local LLM endpoint');
+      const testUrl = trimTrailingSlashes(parsedEndpoint.toString());
+      const localAgents = createLocalHttpAgents(parsedEndpoint);
+      const requestOptions = {
+        maxRedirects: 0,
+        maxContentLength: 1024 * 1024,
+        maxBodyLength: 64 * 1024,
+        ...localAgents
+      };
       
       // Try common LLM server endpoints for health check
       let response;
       try {
-        response = await axios.get(`${testUrl}/health`, { timeout: 5000 });
+        // codeql[js/request-forgery] The URL is local-only and its DNS result is revalidated and pinned by the request agents.
+        response = await axios.get(appendUrlPath(parsedEndpoint, 'health').toString(), {
+          ...requestOptions,
+          timeout: 5000
+        });
       } catch (healthError) {
         console.log('Health endpoint not available, trying completions endpoint...');
         // Try a simple completion request instead
-        response = await axios.post(`${testUrl}/v1/completions`, {
+        // codeql[js/request-forgery] The URL is local-only and its DNS result is revalidated and pinned by the request agents.
+        response = await axios.post(appendUrlPath(parsedEndpoint, 'v1/completions').toString(), {
           model: model || 'default',
           prompt: 'Test',
           max_tokens: 1
         }, { 
+          ...requestOptions,
           timeout: 10000,
           headers: { 'Content-Type': 'application/json' }
         });

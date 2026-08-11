@@ -1,13 +1,17 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
+const mongoose = require('mongoose');
 const router = express.Router();
 const fs = require('fs');
 const fsp = fs.promises;
+const path = require('path');
 const WakeWordModel = require('../models/WakeWordModel');
 const wakeWordTrainingService = require('../services/wakeWordTrainingService');
+const { resolveAssetPath, slugify } = require('../utils/wakeWordAssets');
 const { requireAdmin } = require('./middlewares/auth');
 
 const admin = requireAdmin();
+const WAKE_WORD_STATUSES = new Set(['pending', 'queued', 'generating', 'training', 'exporting', 'ready', 'error']);
 const wakeWordMutationRateLimit = rateLimit({
   windowMs: Math.max(60_000, Number(process.env.HOMEBRAIN_WAKE_WORD_MUTATION_RATE_LIMIT_WINDOW_MS || 5 * 60 * 1000)),
   limit: Math.max(1, Number(process.env.HOMEBRAIN_WAKE_WORD_MUTATION_RATE_LIMIT_MAX || 20)),
@@ -43,10 +47,18 @@ router.get('/', admin, async (req, res) => {
   try {
     const query = {};
     if (req.query.status) {
-      query.status = req.query.status;
+      const status = String(req.query.status).trim().toLowerCase();
+      if (!WAKE_WORD_STATUSES.has(status)) {
+        return res.status(400).json({ success: false, message: 'Invalid wake word status' });
+      }
+      query.status = status;
     }
     if (req.query.slug) {
-      query.slug = req.query.slug.toLowerCase();
+      const slug = slugify(req.query.slug);
+      if (!slug) {
+        return res.status(400).json({ success: false, message: 'Invalid wake word slug' });
+      }
+      query.slug = slug;
     }
     const models = await WakeWordModel.find(query).sort({ updatedAt: -1 });
     res.status(200).json({
@@ -131,6 +143,9 @@ router.post('/resume', wakeWordMutationRateLimit, admin, async (req, res) => {
 
 router.get('/:id', admin, async (req, res) => {
   try {
+    if (!mongoose.isObjectIdOrHexString(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid wake word model id' });
+    }
     const model = await WakeWordModel.findById(req.params.id);
     if (!model) {
       return res.status(404).json({
@@ -181,6 +196,9 @@ router.post('/', wakeWordMutationRateLimit, admin, async (req, res) => {
 
 router.post('/:id/retrain', wakeWordMutationRateLimit, admin, async (req, res) => {
   try {
+    if (!mongoose.isObjectIdOrHexString(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid wake word model id' });
+    }
     const model = await WakeWordModel.findById(req.params.id);
     if (!model) {
       return res.status(404).json({
@@ -209,6 +227,9 @@ router.post('/:id/retrain', wakeWordMutationRateLimit, admin, async (req, res) =
 
 router.delete('/:id', wakeWordMutationRateLimit, admin, async (req, res) => {
   try {
+    if (!mongoose.isObjectIdOrHexString(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid wake word model id' });
+    }
     const model = await WakeWordModel.findById(req.params.id);
     if (!model) {
       return res.status(404).json({
@@ -220,9 +241,12 @@ router.delete('/:id', wakeWordMutationRateLimit, admin, async (req, res) => {
     const filePath = model.modelPath;
     await model.deleteOne();
 
-    if (filePath && fs.existsSync(filePath)) {
+    // resolveAssetPath and the canonical-path equality check constrain deletion to the model asset root.
+    // nosemgrep: javascript.express.security.audit.express-path-join-resolve-traversal.express-path-join-resolve-traversal
+    const safeFilePath = filePath ? resolveAssetPath(path.basename(filePath)) : null;
+    if (safeFilePath && path.resolve(filePath) === safeFilePath && fs.existsSync(safeFilePath)) {
       try {
-        await fsp.unlink(filePath);
+        await fsp.unlink(safeFilePath);
       } catch (error) {
         console.warn(`Failed to remove wake word file ${filePath}:`, error.message);
       }

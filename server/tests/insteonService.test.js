@@ -113,6 +113,39 @@ test('getSerialTransportDiagnostics reports serialport load errors clearly', (t)
   assert.match(diagnostics.error, /native bindings mismatch/i);
 });
 
+test('_createHomeControllerSerialPortConstructor adapts the modern serialport options API', () => {
+  class ModernSerialPort {
+    constructor(options) {
+      this.options = options;
+    }
+  }
+
+  const Adapter = insteonService._createHomeControllerSerialPortConstructor({
+    SerialPort: ModernSerialPort
+  });
+  const port = new Adapter('/dev/ttyUSB0', {
+    autoOpen: false,
+    baudRate: 19200,
+    path: '/dev/untrusted-override'
+  });
+
+  assert.ok(port instanceof ModernSerialPort);
+  assert.deepEqual(port.options, {
+    autoOpen: false,
+    baudRate: 19200,
+    path: '/dev/ttyUSB0'
+  });
+});
+
+test('_createHomeControllerSerialPortConstructor preserves the legacy serialport constructor', () => {
+  class LegacySerialPort {}
+
+  assert.equal(
+    insteonService._createHomeControllerSerialPortConstructor(LegacySerialPort),
+    LegacySerialPort
+  );
+});
+
 test('_buildSerialTransportUnavailableMessage includes endpoint and load details', (t) => {
   const originalSerialPortLoadError = insteonService._serialPortLoadError;
 

@@ -15,6 +15,10 @@ const mqttPlatformService = require('./mqttPlatformService');
 const platformManagedService = require('./platformManagedService');
 
 const MAX_LOG_TAIL_BYTES = 64 * 1024;
+const MAX_CAPTURED_COMMAND_OUTPUT_BYTES = 4 * 1024 * 1024;
+const DEFAULT_COMMAND_TIMEOUT_MS = 15 * 60_000;
+const DEFAULT_LOGGED_COMMAND_TIMEOUT_MS = 4 * 60 * 60_000;
+const DEPLOY_JOB_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const INTERRUPTED_JOB_RECONCILE_GRACE_MS = Math.max(
   30 * 1000,
   Number(process.env.HOMEBRAIN_DEPLOY_INTERRUPTED_JOB_GRACE_MS || 5 * 60 * 1000)
@@ -91,6 +95,55 @@ function parseTimestampMs(value) {
 
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeDeployJobId(value) {
+  const jobId = typeof value === 'string' ? value.trim() : '';
+  if (!DEPLOY_JOB_ID_PATTERN.test(jobId) || jobId.includes('..')) {
+    const error = new Error('Deployment job id is invalid');
+    error.code = 'INVALID_JOB_ID';
+    throw error;
+  }
+  return jobId;
+}
+
+function normalizeProcessInvocation(command, args = []) {
+  const executable = typeof command === 'string' ? command.trim() : '';
+  const safeBasename = /^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,127}$/.test(executable);
+  const safeAbsolutePath = path.isAbsolute(executable)
+    && executable.length <= 4096
+    && !executable.includes('\0')
+    && !executable.includes('\r')
+    && !executable.includes('\n');
+  if (!safeBasename && !safeAbsolutePath) {
+    throw new Error('Invalid deployment command executable');
+  }
+  if (!Array.isArray(args) || args.length > 512) {
+    throw new Error('Invalid deployment command argument list');
+  }
+  return {
+    command: executable,
+    args: args.map((arg) => {
+      if (typeof arg !== 'string' || arg.length > 65_536 || arg.includes('\0')) {
+        throw new Error('Invalid deployment command argument');
+      }
+      return arg;
+    })
+  };
+}
+
+function appendBoundedOutput(current, chunk, maxBytes = MAX_CAPTURED_COMMAND_OUTPUT_BYTES) {
+  const value = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk || '');
+  if (!value || Buffer.byteLength(current, 'utf8') >= maxBytes) {
+    return current;
+  }
+  const remaining = maxBytes - Buffer.byteLength(current, 'utf8');
+  return current + Buffer.from(value).subarray(0, remaining).toString('utf8');
+}
+
+function normalizeCommandTimeout(value, fallback) {
+  const parsed = Number(value);
+  return Math.min(8 * 60 * 60_000, Math.max(1000, Number.isFinite(parsed) ? parsed : fallback));
 }
 
 class PlatformDeployService {
@@ -315,11 +368,11 @@ class PlatformDeployService {
   }
 
   getJobPath(jobId) {
-    return path.join(this.jobsDir, `${jobId}.json`);
+    return path.join(this.jobsDir, `${normalizeDeployJobId(jobId)}.json`);
   }
 
   getLogPath(jobId) {
-    return path.join(this.jobsDir, `${jobId}.log`);
+    return path.join(this.jobsDir, `${normalizeDeployJobId(jobId)}.log`);
   }
 
   async writePendingRestart(payload) {
@@ -344,39 +397,53 @@ class PlatformDeployService {
   }
 
   async runCommand(command, args, options = {}) {
+    const invocation = normalizeProcessInvocation(command, args);
     const cwd = options.cwd || this.projectRoot;
     const env = { ...process.env, ...(options.env || {}) };
     const captureStdout = options.captureStdout !== false;
+    const timeoutMs = normalizeCommandTimeout(options.timeoutMs, DEFAULT_COMMAND_TIMEOUT_MS);
 
     return new Promise((resolve, reject) => {
-      // codeql[js/shell-command-injection-from-environment] Deploy commands are built by HomeBrain internals from fixed binaries and normalized restart segments before reaching this runner.
-      const child = spawn(command, args, {
+      // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- executable and argv are validated above; shell execution is explicitly disabled.
+      const child = spawn(invocation.command, invocation.args, {
         cwd,
         env,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: false,
+        windowsHide: true
       });
 
       let stdout = '';
       let stderr = '';
+      let settled = false;
+      const finish = (handler, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        handler(value);
+      };
+      const timer = setTimeout(() => {
+        child.kill('SIGTERM');
+        finish(reject, new Error(`Command timed out after ${Math.round(timeoutMs / 1000)} seconds`));
+      }, timeoutMs);
 
       child.stdout.on('data', (chunk) => {
-        const value = chunk.toString();
         if (captureStdout) {
-          stdout += value;
+          stdout = appendBoundedOutput(stdout, chunk);
         }
       });
 
       child.stderr.on('data', (chunk) => {
-        stderr += chunk.toString();
+        stderr = appendBoundedOutput(stderr, chunk);
       });
 
       child.on('error', (error) => {
-        reject(error);
+        finish(reject, error);
       });
 
       child.on('close', (code) => {
         if (code === 0) {
-          resolve({
+          finish(resolve, {
             code,
             stdout: trimStdout(stdout),
             stderr: trimStdout(stderr)
@@ -385,19 +452,21 @@ class PlatformDeployService {
         }
 
         const err = new Error(
-          `Command failed (${command} ${args.join(' ')}): ${trimStdout(stderr) || `exit ${code}`}`
+          `Command failed (${invocation.command} ${invocation.args.join(' ')}): ${trimStdout(stderr) || `exit ${code}`}`
         );
         err.code = code;
         err.stderr = trimStdout(stderr);
         err.stdout = trimStdout(stdout);
-        reject(err);
+        finish(reject, err);
       });
     });
   }
 
   async runLoggedCommand(jobId, stepName, command, args, options = {}) {
+    const invocation = normalizeProcessInvocation(command, args);
     const cwd = options.cwd || this.projectRoot;
     const env = { ...process.env, ...(options.env || {}) };
+    const timeoutMs = normalizeCommandTimeout(options.timeoutMs, DEFAULT_LOGGED_COMMAND_TIMEOUT_MS);
     const appendChunk = async (prefix, chunk) => {
       const text = chunk.toString();
       if (!text) return;
@@ -407,15 +476,29 @@ class PlatformDeployService {
 
     await this.appendJobLog(
       jobId,
-      `\n[${new Date().toISOString()}] [${stepName}] Running: ${command} ${args.join(' ')}\n`
+      `\n[${new Date().toISOString()}] [${stepName}] Running: ${invocation.command} ${invocation.args.join(' ')}\n`
     );
 
     return new Promise((resolve, reject) => {
-      const child = spawn(command, args, {
+      // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- executable and argv are validated above; shell execution is explicitly disabled.
+      const child = spawn(invocation.command, invocation.args, {
         cwd,
         env,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: false,
+        windowsHide: true
       });
+      let settled = false;
+      const finish = (handler, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        handler(value);
+      };
+      const timer = setTimeout(() => {
+        child.kill('SIGTERM');
+        finish(reject, new Error(`Step "${stepName}" timed out after ${Math.round(timeoutMs / 1000)} seconds`));
+      }, timeoutMs);
 
       child.stdout.on('data', (chunk) => {
         void appendChunk('', chunk).catch(() => {});
@@ -425,15 +508,15 @@ class PlatformDeployService {
       });
 
       child.on('error', (error) => {
-        reject(error);
+        finish(reject, error);
       });
 
       child.on('close', (code) => {
         if (code === 0) {
-          resolve({ code });
+          finish(resolve, { code });
           return;
         }
-        reject(new Error(`Step "${stepName}" failed with exit code ${code}`));
+        finish(reject, new Error(`Step "${stepName}" failed with exit code ${code}`));
       });
     });
   }
@@ -542,9 +625,17 @@ class PlatformDeployService {
     const relativePaths = nonWritablePaths.map((target) => path.relative(this.projectRoot, target) || target);
     await log(`Detected non-writable path(s): ${relativePaths.join(', ')}. Attempting repair.`);
 
-    const repairCommand = 'sudo -n chown -R "$(id -un):$(id -gn)" client/dist && sudo -n chmod -R u+rwX client/dist';
     try {
-      await this.runCommand('bash', ['-lc', repairCommand], {
+      const user = trimStdout((await this.runCommand('id', ['-un'])).stdout);
+      const group = trimStdout((await this.runCommand('id', ['-gn'])).stdout);
+      if (!/^[a-z_][a-z0-9_.-]{0,127}$/i.test(user) || !/^[a-z_][a-z0-9_.-]{0,127}$/i.test(group)) {
+        throw new Error('Unable to determine a safe deploy user and group');
+      }
+      await this.runCommand('sudo', ['-n', 'chown', '-R', `${user}:${group}`, 'client/dist'], {
+        cwd: this.projectRoot,
+        captureStdout: false
+      });
+      await this.runCommand('sudo', ['-n', 'chmod', '-R', 'u+rwX', 'client/dist'], {
         cwd: this.projectRoot,
         captureStdout: false
       });
@@ -2168,3 +2259,8 @@ class PlatformDeployService {
 
 module.exports = new PlatformDeployService();
 module.exports.PlatformDeployService = PlatformDeployService;
+module.exports._test = {
+  appendBoundedOutput,
+  normalizeDeployJobId,
+  normalizeProcessInvocation
+};

@@ -13,10 +13,25 @@ const { OllamaService, _private } = ollamaServiceModule;
 test('buildInstallScriptCommand disables Ollama auto-start when requested', () => {
   const service = new OllamaService();
 
-  const command = service.buildInstallScriptCommand({ disableAutoStart: true });
+  const invocation = service.buildInstallScriptCommand({ disableAutoStart: true });
 
-  assert.equal(command.includes('export OLLAMA_NO_START=1'), true);
-  assert.equal(command.endsWith('curl -fsSL https://ollama.com/install.sh | sh'), true);
+  assert.equal(invocation.command, '/bin/sh');
+  assert.deepEqual(invocation.args.slice(0, 1), ['-c']);
+  assert.equal(invocation.args[1].includes('export OLLAMA_NO_START=1'), true);
+  assert.equal(invocation.args[1].endsWith('curl -fsSL https://ollama.com/install.sh | sh'), true);
+});
+
+test('runCommand rejects arbitrary shell programs and helper actions', () => {
+  const service = new OllamaService();
+
+  assert.throws(
+    () => service.runCommand({ command: '/bin/sh', args: ['-c', 'echo unsafe'] }),
+    /limited to the built-in Ollama installer/
+  );
+  assert.throws(
+    () => service.buildPrivilegedHelperCommand('/usr/local/lib/homebrain/ollama-host-control.sh', 'anything'),
+    /Unsupported Ollama helper action/
+  );
 });
 
 test('privileged helper candidates prefer the installed system helper path', () => {
@@ -72,7 +87,7 @@ test('buildOllamaProcessEnv supplies HOME and preserves the discovered model sto
 
 test('listOllamaProcesses detects HomeBrain-managed serve processes and macOS app processes', async () => {
   const service = new OllamaService();
-  service.runShellCommand = async () => ({
+  service.runCommand = async () => ({
     stdout: [
       '101 matt /usr/local/bin/ollama serve',
       '102 matt /Applications/Ollama.app/Contents/MacOS/Ollama',
@@ -92,20 +107,20 @@ test('listOllamaProcesses falls back to the Ollama API port listener', async () 
   const service = new OllamaService();
   const commands = [];
 
-  service.runShellCommand = async (command) => {
-    commands.push(command);
-    if (command === 'ps -eo pid=,user=,command=') {
+  service.runCommand = async (invocation) => {
+    commands.push(invocation);
+    if (invocation.command === 'ps' && invocation.args.join(' ') === '-eo pid=,user=,command=') {
       return { stdout: '301 homebrain node server.js\n' };
     }
-    if (command === "ss -H -ltnp 'sport = :11434'") {
+    if (invocation.command === 'ss' && invocation.args.join(' ') === '-H -ltnp sport = :11434') {
       return {
         stdout: 'LISTEN 0 4096 127.0.0.1:11434 0.0.0.0:* users:(("ollama",pid=4242,fd=3))'
       };
     }
-    if (command === 'ps -p 4242 -o pid=,user=,command=') {
+    if (invocation.command === 'ps' && invocation.args.join(' ') === '-p 4242 -o pid=,user=,command=') {
       return { stdout: '4242 homebrain /usr/local/bin/ollama\n' };
     }
-    throw new Error(`unexpected command: ${command}`);
+    throw new Error(`unexpected command: ${JSON.stringify(invocation)}`);
   };
 
   const processes = await service.listOllamaProcesses();
@@ -117,7 +132,7 @@ test('listOllamaProcesses falls back to the Ollama API port listener', async () 
       command: '/usr/local/bin/ollama'
     }
   ]);
-  assert.equal(commands.includes("ss -H -ltnp 'sport = :11434'"), true);
+  assert.equal(commands.some((invocation) => invocation.command === 'ss'), true);
 });
 
 test('startService does not spawn a second process when an owned Ollama process already exists', async (t) => {
@@ -321,15 +336,15 @@ test('install prefers the privileged helper flow when it is available', async (t
   service.startService = async () => ({ success: true });
 
   let usedHelperCommand = null;
-  service.runNonInteractiveSudoCommand = async (command) => {
-    usedHelperCommand = command;
+  service.runNonInteractiveSudoCommand = async (invocation) => {
+    usedHelperCommand = invocation;
     return { stdout: 'ok', stderr: '' };
   };
 
   const result = await service.install();
 
   assert.equal(result.success, true);
-  assert.equal(
+  assert.deepEqual(
     usedHelperCommand,
     service.buildPrivilegedHelperCommand('/usr/local/lib/homebrain/ollama-host-control.sh', 'install')
   );
@@ -341,18 +356,18 @@ test('stopSystemService prefers the privileged helper command when it is availab
 
   service.getCurrentUser = () => 'homebrain';
   service.resolveOllamaPrivilegedHelper = async () => '/usr/local/lib/homebrain/ollama-host-control.sh';
-  service.runShellCommand = async (command) => {
-    commands.push(command);
-    if (command === "sudo -n '/usr/local/lib/homebrain/ollama-host-control.sh' 'stop-system'") {
-      return { stdout: '', stderr: '' };
-    }
-    throw new Error(`unexpected command: ${command}`);
+  service.runNonInteractiveSudoCommand = async (invocation) => {
+    commands.push(invocation);
+    return { stdout: '', stderr: '' };
   };
 
   const result = await service.stopSystemService();
 
   assert.equal(result.success, true);
-  assert.equal(commands[0], "sudo -n '/usr/local/lib/homebrain/ollama-host-control.sh' 'stop-system'");
+  assert.deepEqual(commands[0], {
+    command: '/usr/local/lib/homebrain/ollama-host-control.sh',
+    args: ['stop-system']
+  });
 });
 
 test('stopService falls back to the external system stop when the tracked pid is stale', async (t) => {
@@ -437,7 +452,7 @@ test('stopService uses pkill fallback when the API is up but process discovery i
 
 test('runNonInteractiveSudoCommand reports NoNewPrivileges with a repair hint', async () => {
   const service = new OllamaService();
-  service.runShellCommand = async () => {
+  service.runCommand = async () => {
     const error = new Error('sudo failed');
     error.code = 1;
     error.stderr = 'sudo: The "no new privileges" flag is set, which prevents sudo from running as root.';
@@ -445,7 +460,10 @@ test('runNonInteractiveSudoCommand reports NoNewPrivileges with a repair hint', 
   };
 
   await assert.rejects(
-    () => service.runNonInteractiveSudoCommand("'/usr/local/lib/homebrain/ollama-host-control.sh' 'probe'", 'test', 1000),
+    () => service.runNonInteractiveSudoCommand({
+      command: '/usr/local/lib/homebrain/ollama-host-control.sh',
+      args: ['probe']
+    }, 'test', 1000),
     /NoNewPrivileges=true/
   );
 });

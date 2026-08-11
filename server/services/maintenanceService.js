@@ -26,6 +26,7 @@ const {
 } = require('./deviceIdentityService');
 const { mapSmartThingsDeviceType } = require('./deviceTypeClassification');
 const { getDeviceSource } = require('./deviceSourceCatalog');
+const { isSafeObjectKey } = require('../utils/stringSafety');
 
 // A device migrated to a native radio source (homebrain-zigbee/zwave/etc.) must
 // never be overwritten or deleted by the SmartThings sync.
@@ -656,11 +657,16 @@ class MaintenanceService {
       let found = true;
 
       for (const key of path) {
-        if (current == null) {
+        if (
+          current == null
+          || typeof current !== 'object'
+          || !isSafeObjectKey(key)
+          || !Object.prototype.hasOwnProperty.call(current, key)
+        ) {
           found = false;
           break;
         }
-        current = current[key];
+        current = Reflect.get(current, key);
       }
 
       if (!found || current == null) {

@@ -12,14 +12,16 @@ const {
   describeDevices
 } = require('./deviceIdentityService');
 
-const DEFAULT_DISCOVERY_TIMEOUT_MS = Number(process.env.HARMONY_DISCOVERY_TIMEOUT_MS || 4500);
-const DEFAULT_DISCOVERY_CACHE_MS = Number(process.env.HARMONY_DISCOVERY_CACHE_MS || 15000);
-const DEFAULT_DISCOVERY_INCOMING_PORT = Number(process.env.HARMONY_DISCOVERY_INCOMING_PORT || 61991);
-const DEFAULT_DISCOVERY_TARGET_PORT = Number(process.env.HARMONY_DISCOVERY_TARGET_PORT || 5224);
-const DEFAULT_DISCOVERY_INTERVAL_MS = Number(process.env.HARMONY_DISCOVERY_INTERVAL_MS || 1000);
-const DEFAULT_CLIENT_OPERATION_TIMEOUT_MS = Math.max(
+const DEFAULT_DISCOVERY_TIMEOUT_MS = clampNumber(process.env.HARMONY_DISCOVERY_TIMEOUT_MS, 4500, 500, 30_000);
+const DEFAULT_DISCOVERY_CACHE_MS = clampNumber(process.env.HARMONY_DISCOVERY_CACHE_MS, 15_000, 1_000, 10 * 60_000);
+const DEFAULT_DISCOVERY_INCOMING_PORT = clampNumber(process.env.HARMONY_DISCOVERY_INCOMING_PORT, 61_991, 1, 65_535);
+const DEFAULT_DISCOVERY_TARGET_PORT = clampNumber(process.env.HARMONY_DISCOVERY_TARGET_PORT, 5224, 1, 65_535);
+const DEFAULT_DISCOVERY_INTERVAL_MS = clampNumber(process.env.HARMONY_DISCOVERY_INTERVAL_MS, 1000, 100, 60_000);
+const DEFAULT_CLIENT_OPERATION_TIMEOUT_MS = clampNumber(
+  process.env.HARMONY_CLIENT_OPERATION_TIMEOUT_MS,
+  12_000,
   1000,
-  Number(process.env.HARMONY_CLIENT_OPERATION_TIMEOUT_MS) || 12000
+  5 * 60_000
 );
 const MAX_HOLD_COMMAND_MS = 5000;
 const HARMONY_ENTITY_TYPES = {
@@ -202,15 +204,19 @@ const HARMONY_CONTROL_MATCHERS = Object.freeze([
 ]);
 
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  const boundedMs = clampNumber(ms, 0, 0, 60_000);
+  // lgtm[js/resource-exhaustion] The delay is clamped to at most 60 seconds immediately above.
+  return new Promise((resolve) => setTimeout(resolve, boundedMs));
+}
+
+function clampNumber(value, fallback, minimum, maximum) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(minimum, Math.min(maximum, Math.round(numeric)));
 }
 
 function normalizeTimeoutMs(value, fallback = DEFAULT_CLIENT_OPERATION_TIMEOUT_MS) {
-  const numeric = Number(value);
-  if (Number.isFinite(numeric) && numeric > 0) {
-    return Math.max(1, Math.round(numeric));
-  }
-  return fallback;
+  return clampNumber(value, fallback, 1, 5 * 60_000);
 }
 
 function withTimeout(promise, timeoutMs, message) {

@@ -37,6 +37,12 @@ final class SessionStore: ObservableObject {
         accessToken != nil && currentUser?.hasHomeBrainAccess == true
     }
 
+    /// Opaque, process-local identity for restarting credential-bound tasks
+    /// without embedding the bearer token in SwiftUI task identifiers.
+    var credentialTaskIdentity: Int {
+        accessToken?.hashValue ?? 0
+    }
+
     var activeInstance: HomeBrainInstance? {
         guard let activeInstanceID else { return nil }
         return savedInstances.first { $0.id == activeInstanceID }
@@ -904,7 +910,7 @@ final class SessionStore: ObservableObject {
         }
 
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+        guard !trimmed.isEmpty, trimmed.count <= 2_048 else {
             return nil
         }
 
@@ -918,7 +924,12 @@ final class SessionStore: ObservableObject {
         guard var components = URLComponents(string: candidate),
               let scheme = components.scheme?.lowercased(),
               let host = components.host?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !host.isEmpty else {
+              !host.isEmpty,
+              ["http", "https"].contains(scheme),
+              components.user == nil,
+              components.password == nil,
+              components.port.map({ (1...65_535).contains($0) }) ?? true,
+              scheme != "http" || isLocalNetworkHost(host) else {
             return nil
         }
 
@@ -943,7 +954,17 @@ final class SessionStore: ObservableObject {
             return false
         }
 
+        return isLocalNetworkHost(host)
+    }
+
+    private static func isLocalNetworkHost(_ rawHost: String) -> Bool {
+        let host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
         if host == "localhost" || host == "::1" || host.hasSuffix(".local") || !host.contains(".") {
+            return true
+        }
+
+        if host.hasPrefix("fc") || host.hasPrefix("fd") || host.hasPrefix("fe80:") {
             return true
         }
 

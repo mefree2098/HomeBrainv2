@@ -8,9 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-PIP_FLAGS="${PIP_FLAGS:-}"
 VENV_DIR="${PROJECT_ROOT}/.wakeword-venv"
-PYTHON_BIN_NAME="$(basename "${PYTHON_BIN}")"
+read -r -a PIP_ARGS <<< "${PIP_FLAGS:-}"
 
 echo "[wakeword] Project root: ${PROJECT_ROOT}"
 echo "[wakeword] Requested Python: ${PYTHON_BIN}"
@@ -20,7 +19,7 @@ if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   exit 1
 fi
 
-PYTHON_VERSION="$(${PYTHON_BIN} - <<'PYCODE'
+PYTHON_VERSION="$("${PYTHON_BIN}" - <<'PYCODE'
 import sys
 print(f"{sys.version_info.major}.{sys.version_info.minor}")
 PYCODE
@@ -45,10 +44,10 @@ fi
 
 echo "[wakeword] Using Python interpreter: ${VIRTUAL_ENV}/bin/python"
 
-python -m pip install --upgrade pip setuptools wheel ${PIP_FLAGS}
+python -m pip install --upgrade pip setuptools wheel "${PIP_ARGS[@]}"
 
 # Use versions compatible with the system SciPy/SKLearn stack.
-python -m pip install "numpy<2.0" "scipy<1.11" ${PIP_FLAGS}
+python -m pip install "numpy<2.0" "scipy<1.11" "${PIP_ARGS[@]}"
 # If JETSON_TORCH_INDEX_URL is provided, use NVIDIA's Jetson wheels for torch.*
 # Example:
 #   export JETSON_TORCH_INDEX_URL=https://developer.download.nvidia.com/compute/redist/jp/v62/pytorch/
@@ -70,7 +69,7 @@ if [ -n "${JETSON_TORCH_INDEX_URL:-}" ]; then
     torch=="${JETSON_TORCH_VERSION}" \
     torchvision=="${JETSON_TORCHVISION_VERSION}" \
     torchaudio=="${JETSON_TORCHAUDIO_VERSION}" \
-    ${PIP_FLAGS}
+    "${PIP_ARGS[@]}"
   TORCH_DONE=1
   echo "[wakeword] Verifying CUDA availability in torch..."
   python - <<'PYCODE'
@@ -95,7 +94,7 @@ if [ "${TORCH_DONE}" -eq 1 ]; then
     "speechbrain" \
     "mutagen" \
     "acoustics" \
-    ${PIP_FLAGS}
+    "${PIP_ARGS[@]}"
 else
   python -m pip install \
     "torch" \
@@ -111,15 +110,15 @@ else
     "speechbrain" \
     "mutagen" \
     "acoustics" \
-    ${PIP_FLAGS}
+    "${PIP_ARGS[@]}"
 fi
 # TensorFlow Lite export is optional on Jetson; install the NVIDIA wheel manually if needed.
-python -m pip install "onnxruntime" "onnx" "onnxscript" "onnx-tf" ${PIP_FLAGS}
-python -m pip install "openwakeword[train]" ${PIP_FLAGS}
+python -m pip install "onnxruntime" "onnx" "onnxscript" "onnx-tf" "${PIP_ARGS[@]}"
+python -m pip install "openwakeword[train]" "${PIP_ARGS[@]}"
 # Install Piper CLI for local TTS synthesis during dataset generation
-python -m pip install "piper-tts" ${PIP_FLAGS}
+python -m pip install "piper-tts" "${PIP_ARGS[@]}"
 # Some arm64 wheel combinations omit this transitive requirement; install explicitly.
-python -m pip install "pathvalidate" ${PIP_FLAGS}
+python -m pip install "pathvalidate" "${PIP_ARGS[@]}"
 
 # Quick sanity checks so runtime failures are caught at install-time.
 python - <<'PYCODE'

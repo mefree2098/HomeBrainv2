@@ -12,6 +12,7 @@ const workflowService = require('./workflowService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const { executeActionSequence } = require('./workflowExecutionService');
 const { getConfiguredPublicOrigin } = require('../utils/publicOrigin');
+const { buildSameOriginUrl, parseServiceOrigin } = require('../utils/networkSafety');
 const { normalizeAlexaName, parseEndpointId } = require('../../shared/alexa/contracts');
 
 const DEFAULT_LINK_CODE_TTL_MINUTES = 15;
@@ -132,18 +133,24 @@ function consumePendingLinkCode(codes = [], providedCode) {
 }
 
 function sanitizeBrokerBaseUrl(value) {
-  const normalized = String(value || '').trim().replace(/\/+$/, '');
+  const normalized = String(value || '').trim();
   if (!normalized) {
     return '';
   }
-
-  const parsed = new URL(normalized);
-  return parsed.origin;
+  return parseServiceOrigin(normalized, 'Broker base URL');
 }
 
 function extractBearerToken(headerValue) {
-  const match = String(headerValue || '').match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : '';
+  const header = String(headerValue || '').trim();
+  if (header.length < 8 || header.slice(0, 7).toLowerCase() !== 'bearer ') {
+    return '';
+  }
+  return header.slice(7).trim();
+}
+
+function buildBrokerUrl(baseUrl, pathname) {
+  const origin = sanitizeBrokerBaseUrl(baseUrl);
+  return buildSameOriginUrl(pathname, `${origin}/`, 'Broker request URL').toString();
 }
 
 function normalizeDirectivePayload(requestBody = {}) {
@@ -744,6 +751,9 @@ class AlexaBridgeService {
       brokerDisplayName: normalizeAlexaName(payload.brokerDisplayName, registration.brokerDisplayName || 'HomeBrain Alexa Broker')
     }, {
       timeout: BROKER_TIMEOUT_MS,
+      maxRedirects: 0,
+      maxContentLength: 1024 * 1024,
+      maxBodyLength: 256 * 1024,
       headers: {
         'Content-Type': 'application/json'
       }
@@ -1389,8 +1399,11 @@ class AlexaBridgeService {
     }
 
     try {
-      const response = await axios.post(`${registration.brokerBaseUrl}${pathname}`, payload, {
+      const response = await axios.post(buildBrokerUrl(registration.brokerBaseUrl, pathname), payload, {
         timeout: BROKER_TIMEOUT_MS,
+        maxRedirects: 0,
+        maxContentLength: 2 * 1024 * 1024,
+        maxBodyLength: 2 * 1024 * 1024,
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${registration.relayToken}`,
@@ -1491,10 +1504,13 @@ class AlexaBridgeService {
 
     try {
       const response = await axios({
-        url: `${registration.brokerBaseUrl}${pathname}`,
+        url: buildBrokerUrl(registration.brokerBaseUrl, pathname),
         method,
         data: body,
         timeout: BROKER_TIMEOUT_MS,
+        maxRedirects: 0,
+        maxContentLength: 2 * 1024 * 1024,
+        maxBodyLength: 2 * 1024 * 1024,
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${registration.relayToken}`,

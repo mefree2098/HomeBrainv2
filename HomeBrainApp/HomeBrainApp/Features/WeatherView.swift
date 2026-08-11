@@ -3379,7 +3379,12 @@ struct WeatherView: View {
         }
 
         do {
-            let response = try await session.apiClient.get("/api/weather/dashboard", query: query)
+            let requestBody = Dictionary(
+                uniqueKeysWithValues: query.compactMap { item in
+                    item.value.map { (item.name, $0) }
+                }
+            )
+            let response = try await session.apiClient.post("/api/weather/dashboard", body: requestBody)
             let root = JSON.object(response)
             let payload = JSON.object(root["dashboard"])
             guard let nextDashboard = WeatherDashboardSnapshot.from(payload) else {

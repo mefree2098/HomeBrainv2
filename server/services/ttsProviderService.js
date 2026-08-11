@@ -1,6 +1,10 @@
-const net = require('net');
 const Settings = require('../models/Settings');
 const elevenLabsService = require('./elevenLabsService');
+const {
+  parseLocalHttpUrl,
+  trimLeadingSlashes,
+  trimTrailingSlashes
+} = require('../utils/networkSafety');
 
 const DEFAULT_TEST_TEXT = 'HomeBrain local voice generation test.';
 const DEFAULT_TTS_TIMEOUT_MS = 30000;
@@ -11,112 +15,8 @@ function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function trimTrailingSlashes(value) {
-  const text = String(value || '');
-  let end = text.length;
-  while (end > 0 && text[end - 1] === '/') {
-    end -= 1;
-  }
-  return text.slice(0, end);
-}
-
-function trimLeadingSlashes(value) {
-  const text = String(value || '');
-  let start = 0;
-  while (start < text.length && text[start] === '/') {
-    start += 1;
-  }
-  return text.slice(start);
-}
-
-function normalizeHostname(hostname) {
-  let normalized = String(hostname || '').trim().toLowerCase();
-  if (normalized.startsWith('[') && normalized.endsWith(']')) {
-    normalized = normalized.slice(1, -1);
-  }
-  return normalized;
-}
-
-function isPrivateIpv4(hostname) {
-  const parts = hostname.split('.').map((part) => Number(part));
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return false;
-  }
-  return (
-    parts[0] === 10 ||
-    parts[0] === 127 ||
-    (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
-    (parts[0] === 192 && parts[1] === 168) ||
-    (parts[0] === 169 && parts[1] === 254)
-  );
-}
-
-function isPrivateIpv6(hostname) {
-  return (
-    hostname === '::1' ||
-    hostname.startsWith('fc') ||
-    hostname.startsWith('fd') ||
-    hostname.startsWith('fe80:')
-  );
-}
-
-function isAllowedLocalProviderHost(hostname) {
-  if (String(process.env.HOMEBRAIN_ALLOW_PUBLIC_LOCAL_PROVIDERS || '').toLowerCase() === 'true') {
-    return true;
-  }
-
-  const normalized = normalizeHostname(hostname);
-  if (!normalized) {
-    return false;
-  }
-  if (normalized === 'localhost' || normalized.endsWith('.localhost') || normalized.endsWith('.local')) {
-    return true;
-  }
-  if (!normalized.includes('.') && !normalized.includes(':')) {
-    return true;
-  }
-
-  const ipVersion = net.isIP(normalized);
-  if (ipVersion === 4) {
-    return isPrivateIpv4(normalized);
-  }
-  if (ipVersion === 6) {
-    return isPrivateIpv6(normalized);
-  }
-  return false;
-}
-
 function parseLocalHttpProviderUrl(endpoint, label) {
-  const trimmed = trimString(endpoint);
-  if (!trimmed) {
-    throw new Error(`${label} is required`);
-  }
-  if (trimmed.length > 2048) {
-    throw new Error(`${label} is too long`);
-  }
-
-  const withProtocol = trimmed.startsWith('http://') || trimmed.startsWith('https://')
-    ? trimmed
-    : `http://${trimmed}`;
-  let parsed;
-  try {
-    parsed = new URL(withProtocol);
-  } catch (_error) {
-    throw new Error(`${label} must be a valid HTTP URL`);
-  }
-
-  if (!['http:', 'https:'].includes(parsed.protocol)) {
-    throw new Error(`${label} must use http or https`);
-  }
-  if (parsed.username || parsed.password) {
-    throw new Error(`${label} must not include credentials in the URL`);
-  }
-  if (!isAllowedLocalProviderHost(parsed.hostname)) {
-    throw new Error(`${label} must target a local or private network host`);
-  }
-
-  parsed.hash = '';
-  return parsed;
+  return parseLocalHttpUrl(endpoint, label);
 }
 
 function providerPathname(url) {
