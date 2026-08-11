@@ -205,6 +205,7 @@ const HARMONY_CONTROL_MATCHERS = Object.freeze([
 
 function sleep(ms) {
   const boundedMs = clampNumber(ms, 0, 0, 60_000);
+  // lgtm[js/resource-exhaustion] The delay is clamped to at most 60 seconds immediately above.
   return new Promise((resolve) => setTimeout(resolve, boundedMs));
 }
 

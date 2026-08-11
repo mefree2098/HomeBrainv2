@@ -1,4 +1,7 @@
 const net = require('net');
+const dns = require('dns');
+const http = require('http');
+const https = require('https');
 
 const DEFAULT_MAX_URL_LENGTH = 2048;
 
@@ -144,6 +147,90 @@ function parseLocalHttpUrl(value, label = 'URL', options = {}) {
   return parsed;
 }
 
+function isAllowedResolvedAddress(address, { allowPublic = false } = {}) {
+  const normalized = normalizeHostname(String(address || '').split('%')[0]);
+  if (!net.isIP(normalized) || isCloudMetadataHostname(normalized)) {
+    return false;
+  }
+  return allowPublic || isAllowedLocalHostname(normalized);
+}
+
+function createLocalAddressLookup(hostname, options = {}) {
+  const expectedHostname = normalizeHostname(hostname);
+  const allowPublic = options.allowPublic === true
+    || String(process.env.HOMEBRAIN_ALLOW_PUBLIC_LOCAL_PROVIDERS || '').toLowerCase() === 'true';
+  const resolver = options.lookup || dns.lookup;
+
+  return (requestedHostname, lookupOptions, callback) => {
+    const normalizedRequestedHostname = normalizeHostname(requestedHostname);
+    if (!expectedHostname || normalizedRequestedHostname !== expectedHostname) {
+      callback(new Error('Network request hostname changed after validation'));
+      return;
+    }
+
+    const finish = (error, records) => {
+      if (error) {
+        callback(error);
+        return;
+      }
+
+      const addresses = (Array.isArray(records) ? records : [])
+        .map((record) => ({
+          address: String(record?.address || ''),
+          family: Number(record?.family || net.isIP(String(record?.address || '')))
+        }))
+        .filter((record) => record.address && (record.family === 4 || record.family === 6));
+
+      if (addresses.length === 0) {
+        callback(new Error(`No IP addresses resolved for ${expectedHostname}`));
+        return;
+      }
+      if (addresses.some((record) => !isAllowedResolvedAddress(record.address, { allowPublic }))) {
+        callback(new Error(`${expectedHostname} resolved outside the permitted network`));
+        return;
+      }
+
+      const requestedFamily = Number(lookupOptions?.family || 0);
+      const compatible = requestedFamily === 4 || requestedFamily === 6
+        ? addresses.filter((record) => record.family === requestedFamily)
+        : addresses;
+      if (compatible.length === 0) {
+        callback(new Error(`No compatible IP addresses resolved for ${expectedHostname}`));
+        return;
+      }
+
+      if (lookupOptions?.all === true) {
+        callback(null, compatible);
+        return;
+      }
+      callback(null, compatible[0].address, compatible[0].family);
+    };
+
+    if (net.isIP(expectedHostname)) {
+      queueMicrotask(() => finish(null, [{
+        address: expectedHostname,
+        family: net.isIP(expectedHostname)
+      }]));
+      return;
+    }
+
+    resolver(expectedHostname, { all: true, verbatim: true }, finish);
+  };
+}
+
+function createLocalHttpAgents(url, options = {}) {
+  const parsed = parseLocalHttpUrl(
+    url instanceof URL ? url.toString() : url,
+    options.label || 'URL',
+    options
+  );
+  const lookup = createLocalAddressLookup(parsed.hostname, options);
+  return {
+    httpAgent: new http.Agent({ lookup }),
+    httpsAgent: new https.Agent({ lookup, rejectUnauthorized: true })
+  };
+}
+
 function appendUrlPath(baseUrl, suffix) {
   const parsed = baseUrl instanceof URL ? new URL(baseUrl.toString()) : parseHttpUrl(baseUrl);
   const basePath = trimTrailingSlashes(parsed.pathname || '/');
@@ -177,7 +264,10 @@ function buildSameOriginUrl(pathOrUrl, baseUrl, label = 'URL') {
 module.exports = {
   appendUrlPath,
   buildSameOriginUrl,
+  createLocalAddressLookup,
+  createLocalHttpAgents,
   isAllowedLocalHostname,
+  isAllowedResolvedAddress,
   isCloudMetadataHostname,
   isLoopbackHostname,
   isPrivateIpv4,

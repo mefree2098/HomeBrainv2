@@ -1048,6 +1048,7 @@ class CodexAppServerSession {
     return new Promise((resolve, reject) => {
       state.resolve = resolve;
       state.reject = reject;
+      // lgtm[js/resource-exhaustion] The caller-provided turn timeout is clamped to 1 second-2 hours before scheduling.
       state.timeout = setTimeout(() => {
         const timeoutText = extractCodexTurnText(state);
         this.turnStates.delete(turnId);

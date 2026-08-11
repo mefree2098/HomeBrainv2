@@ -7392,6 +7392,7 @@ class InsteonService {
   async _sleep(ms) {
     const boundedMs = clampInsteonTimeoutMs(ms, 0, 0);
     return new Promise((resolve) => {
+      // lgtm[js/resource-exhaustion] clampInsteonTimeoutMs applies the service's bounded timeout range before scheduling.
       setTimeout(resolve, boundedMs);
     });
   }

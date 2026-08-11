@@ -148,6 +148,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 15_000) {
     throw new Error('This HomeBrain remote requires Node.js 20 or newer');
   }
   const signal = options.signal || globalThis.AbortSignal.timeout(timeoutMs);
+  // codeql[js/request-forgery] Callers resolve resources against the validated configured HomeBrain origin and reject redirects.
   return globalThis.fetch(url, { ...options, signal });
 }
 
@@ -806,6 +807,7 @@ class HomeBrainRemoteDevice {
             this.startVoiceRecording(timeoutMs, true);
 
             if (this.recordStopTimer) clearTimeout(this.recordStopTimer);
+            // lgtm[js/resource-exhaustion] The hub-provided timeout is clamped to 250-30,000 ms immediately above.
             this.recordStopTimer = setTimeout(() => {
               if (this.isRecording) {
                 this.stopVoiceRecording();

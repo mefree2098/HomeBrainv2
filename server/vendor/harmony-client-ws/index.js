@@ -174,6 +174,7 @@ class HarmonyClient extends EventEmitter {
     const wsUrl = new URL(`ws://${urlHost}:8088/`);
     wsUrl.searchParams.set('domain', 'svcs.myharmony.com');
     wsUrl.searchParams.set('hubId', this.remoteId);
+    // codeql[js/request-forgery] connect() accepts only normalized local/private Harmony hub hosts unless an administrator explicitly opts in to public hosts.
     const wsClient = new WebSocket(wsUrl.toString());
 
     await new Promise((resolve, reject) => {

@@ -1,12 +1,17 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const https = require('node:https');
+const axios = require('axios');
 
 const rainMachineService = require('../services/rainMachineService');
 const RainMachineIntegration = require('../models/RainMachineIntegration');
 
 const {
   buildRequestPayload,
+  certificateFingerprintSha256,
+  certificateFingerprintsMatch,
   compactRainMachineSnapshot,
+  createPinnedHttpsAgent,
   normalizeDailyStats,
   normalizeWateringLogDays,
   parseDiscoveryResponse,
@@ -14,6 +19,110 @@ const {
   summarizeRainMachineDailyStat,
   summarizeRainMachineWateringDay
 } = rainMachineService.__private__;
+
+test('self-signed RainMachine trust pins the exact certificate with validation enabled', () => {
+  const leaf = Buffer.from('test-rainmachine-leaf-certificate', 'utf8');
+  const issuer = Buffer.from('test-rainmachine-issuer-certificate', 'utf8');
+  const peerCertificate = {
+    raw: leaf,
+    issuerCertificate: {
+      raw: issuer
+    }
+  };
+  const expectedFingerprint = certificateFingerprintSha256(leaf);
+  const trust = createPinnedHttpsAgent(
+    peerCertificate,
+    expectedFingerprint.toUpperCase().match(/.{1,2}/g).join(':')
+  );
+
+  assert.equal(trust.fingerprintSha256, expectedFingerprint);
+  assert.equal(trust.agent.options.rejectUnauthorized, true);
+  assert.equal(
+    trust.agent.options.checkServerIdentity('rainmachine.local', { raw: leaf }),
+    undefined
+  );
+  assert.match(
+    trust.agent.options.checkServerIdentity('rainmachine.local', { raw: Buffer.from('different') }).message,
+    /did not match/
+  );
+  assert.equal(certificateFingerprintsMatch(expectedFingerprint, expectedFingerprint.toUpperCase()), true);
+  assert.throws(
+    () => createPinnedHttpsAgent(peerCertificate, 'f'.repeat(64)),
+    /certificate changed/
+  );
+});
+
+test('self-signed endpoint enrollment persists trust only after a validated probe', async () => {
+  const service = new rainMachineService.RainMachineService();
+  const originalGet = axios.get;
+  const originalUpdateOne = RainMachineIntegration.updateOne;
+  const safeAgent = new https.Agent({ rejectUnauthorized: true });
+  const fingerprint = 'a'.repeat(64);
+  const calls = [];
+  let persistedUpdate = null;
+
+  axios.get = async (_url, options) => {
+    calls.push(options);
+    if (calls.length === 1) {
+      const error = new Error('self signed');
+      error.code = 'DEPTH_ZERO_SELF_SIGNED_CERT';
+      throw error;
+    }
+    return {
+      status: 200,
+      data: { statusCode: 0, apiVer: '4.6.1' }
+    };
+  };
+  RainMachineIntegration.updateOne = async (query, update) => {
+    persistedUpdate = { query, update };
+  };
+  service.buildSelfSignedHttpsTrust = async () => ({
+    agent: safeAgent,
+    fingerprintSha256: fingerprint
+  });
+
+  try {
+    const endpoint = {
+      host: 'rainmachine.local',
+      port: 8080,
+      protocol: 'https',
+      baseUrl: 'https://rainmachine.local:8080/api/4'
+    };
+    const integration = { _id: 'rainmachine-integration' };
+    const apiVersion = await service.probeEndpoint(endpoint, integration);
+
+    assert.equal(apiVersion.apiVer, '4.6.1');
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].httpsAgent, safeAgent);
+    assert.equal(endpoint.httpsAgent, safeAgent);
+    assert.equal(integration.tlsCertificateFingerprintSha256, fingerprint);
+    assert.deepEqual(persistedUpdate.query, { _id: 'rainmachine-integration' });
+    assert.equal(persistedUpdate.update.$set.tlsCertificateFingerprintSha256, fingerprint);
+  } finally {
+    axios.get = originalGet;
+    RainMachineIntegration.updateOne = originalUpdateOne;
+  }
+});
+
+test('endpoint probing never silently downgrades HTTPS configurations to HTTP', async () => {
+  const service = new rainMachineService.RainMachineService();
+  const candidates = [];
+  service.probeEndpoint = async (endpoint) => {
+    candidates.push(endpoint);
+    throw new Error('unavailable');
+  };
+
+  await assert.rejects(
+    () => service.resolveEndpoint({
+      host: 'rainmachine.local',
+      protocol: 'https',
+      port: 8443
+    }),
+    /unavailable/
+  );
+  assert.ok(candidates.length > 0);
+  assert.equal(candidates.every((candidate) => candidate.protocol === 'https'), true);
+});
 
 test('parseDiscoveryResponse extracts controller discovery details from broadcast payloads', () => {
   const parsed = parseDiscoveryResponse(

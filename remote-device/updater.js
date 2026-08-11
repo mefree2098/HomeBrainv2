@@ -157,6 +157,7 @@ class RemoteDeviceUpdater {
 
       file.on('error', fail);
 
+      // codeql[js/request-forgery] parseDownloadUrl requires the configured HomeBrain origin (or HTTPS/LAN-only standalone use), and redirects are not followed.
       const request = protocol.get(parsedUrl, (response) => {
         if (response.statusCode !== 200) {
           response.resume();

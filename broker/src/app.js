@@ -53,6 +53,7 @@ function getTokenFingerprint(value) {
 }
 
 function getAuthorizationSubmissionKey(values) {
+  // codeql[js/insufficient-password-hash] This process-random HMAC is an authorization-submission deduplication key, not a password hash or stored credential.
   return crypto.createHmac('sha256', AUTHORIZE_SUBMISSION_HMAC_KEY)
     .update((Array.isArray(values) ? values : [values]).map((value) => trimString(value)).join('\0'), 'utf8')
     .digest('hex');

@@ -4,7 +4,10 @@ const test = require('node:test');
 const {
   appendUrlPath,
   buildSameOriginUrl,
+  createLocalAddressLookup,
+  createLocalHttpAgents,
   isAllowedLocalHostname,
+  isAllowedResolvedAddress,
   parseHttpUrl,
   parseLocalHttpUrl,
   parseServiceOrigin,
@@ -37,6 +40,54 @@ test('local HTTP URL parsing supplies a protocol and rejects public hosts', () =
   assert.equal(parseLocalHttpUrl('ollama.local:11434').origin, 'http://ollama.local:11434');
   assert.throws(() => parseLocalHttpUrl('https://example.com'), /local or private/);
   assert.throws(() => parseLocalHttpUrl('http://169.254.169.254/latest/meta-data'), /metadata service/);
+});
+
+function runLookup(lookup, hostname, options = {}) {
+  return new Promise((resolve, reject) => {
+    lookup(hostname, options, (error, address, family) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve({ address, family });
+    });
+  });
+}
+
+test('local request lookup pins private DNS results and rejects rebinding targets', async () => {
+  const privateLookup = createLocalAddressLookup('ollama.local', {
+    lookup: (_hostname, _options, callback) => callback(null, [
+      { address: '192.168.1.25', family: 4 }
+    ])
+  });
+  assert.deepEqual(await runLookup(privateLookup, 'ollama.local'), {
+    address: '192.168.1.25',
+    family: 4
+  });
+
+  const publicLookup = createLocalAddressLookup('ollama.local', {
+    lookup: (_hostname, _options, callback) => callback(null, [
+      { address: '203.0.113.10', family: 4 }
+    ])
+  });
+  await assert.rejects(() => runLookup(publicLookup, 'ollama.local'), /outside the permitted network/);
+
+  const metadataLookup = createLocalAddressLookup('ollama.local', {
+    lookup: (_hostname, _options, callback) => callback(null, [
+      { address: '169.254.169.254', family: 4 }
+    ])
+  });
+  await assert.rejects(() => runLookup(metadataLookup, 'ollama.local'), /outside the permitted network/);
+  await assert.rejects(() => runLookup(privateLookup, 'different.local'), /hostname changed/);
+});
+
+test('local HTTP agents enforce certificate validation and restricted address resolution', () => {
+  const agents = createLocalHttpAgents(new URL('https://ollama.local:11434'));
+  assert.equal(agents.httpsAgent.options.rejectUnauthorized, true);
+  assert.equal(typeof agents.httpsAgent.options.lookup, 'function');
+  assert.equal(isAllowedResolvedAddress('192.168.1.25'), true);
+  assert.equal(isAllowedResolvedAddress('203.0.113.10'), false);
+  assert.equal(isAllowedResolvedAddress('169.254.169.254'), false);
 });
 
 test('URL paths are appended without changing the configured base path', () => {
