@@ -14,11 +14,11 @@ try {
 const DEFAULT_CODEX_MODEL = process.env.CODEX_DEFAULT_MODEL || 'gpt-5.4';
 const DEFAULT_CODEX_PATH = process.env.CODEX_PATH || '';
 const DEFAULT_AWS_VOLUME_ROOT = '/mnt/efs';
-const DEFAULT_RPC_TIMEOUT_MS = Math.max(5_000, Number(process.env.CODEX_RPC_TIMEOUT_MS || 45_000));
-const DEFAULT_TURN_TIMEOUT_MS = Math.max(DEFAULT_RPC_TIMEOUT_MS, Number(process.env.CODEX_TURN_TIMEOUT_MS || 180_000));
-const DEFAULT_LOGIN_TTL_MS = Math.max(30_000, Number(process.env.CODEX_LOGIN_TTL_MS || 600_000));
-const DEFAULT_LOGIN_COMPLETE_TIMEOUT_MS = Math.max(5_000, Number(process.env.CODEX_LOGIN_COMPLETE_TIMEOUT_MS || 30_000));
-const DEFAULT_LOGIN_HTTP_WAIT_MS = Math.max(2_000, Number(process.env.CODEX_LOGIN_HTTP_WAIT_MS || 12_000));
+const DEFAULT_RPC_TIMEOUT_MS = clampTimeoutMs(process.env.CODEX_RPC_TIMEOUT_MS, 45_000, 5_000, 5 * 60_000);
+const DEFAULT_TURN_TIMEOUT_MS = clampTimeoutMs(process.env.CODEX_TURN_TIMEOUT_MS, 180_000, DEFAULT_RPC_TIMEOUT_MS, 2 * 60 * 60_000);
+const DEFAULT_LOGIN_TTL_MS = clampTimeoutMs(process.env.CODEX_LOGIN_TTL_MS, 600_000, 30_000, 60 * 60_000);
+const DEFAULT_LOGIN_COMPLETE_TIMEOUT_MS = clampTimeoutMs(process.env.CODEX_LOGIN_COMPLETE_TIMEOUT_MS, 30_000, 5_000, 10 * 60_000);
+const DEFAULT_LOGIN_HTTP_WAIT_MS = clampTimeoutMs(process.env.CODEX_LOGIN_HTTP_WAIT_MS, 12_000, 2_000, 2 * 60_000);
 const DEFAULT_CODEX_HOME_SLUG = 'homebrain';
 const DEFAULT_TEMP_HOME_SLUG = 'homebrain-codex-home';
 const LOGIN_CALLBACK_HINT = 'If login lands on localhost and fails, paste that full URL into Complete login.';
@@ -37,6 +37,12 @@ const VALID_CODEX_HOME_PROFILES = new Set(['auto', 'azure', 'aws', 'local', 'cus
 const TURN_RESULT_PHASE = 'final_answer';
 
 const pendingCodexLogins = new Map();
+
+function clampTimeoutMs(value, fallback, minimum = 1_000, maximum = 2 * 60 * 60_000) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(minimum, Math.min(maximum, Math.round(numeric)));
+}
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -445,6 +451,10 @@ function ensureLoopbackCallbackUrl(callbackUrl) {
     throw new Error('Callback URL must use http or https');
   }
 
+  if (parsed.username || parsed.password) {
+    throw new Error('Callback URL must not include credentials');
+  }
+
   if (!LOOPBACK_HOSTS.has(parsed.hostname)) {
     throw new Error('Callback URL must target localhost or another loopback host');
   }
@@ -584,8 +594,8 @@ class CodexAppServerSession {
   }) {
     this.requestedCodexPath = sanitizeString(codexPath);
     this.codexHome = codexHome;
-    this.rpcTimeoutMs = rpcTimeoutMs;
-    this.turnTimeoutMs = turnTimeoutMs;
+    this.rpcTimeoutMs = clampTimeoutMs(rpcTimeoutMs, DEFAULT_RPC_TIMEOUT_MS, 1_000, 5 * 60_000);
+    this.turnTimeoutMs = clampTimeoutMs(turnTimeoutMs, DEFAULT_TURN_TIMEOUT_MS, 1_000, 2 * 60 * 60_000);
     this.cwd = cwd;
     this.launchSpec = null;
     this.child = null;
@@ -937,12 +947,13 @@ class CodexAppServerSession {
       return Promise.reject(new Error('Codex app-server is not running'));
     }
 
+    const boundedTimeoutMs = clampTimeoutMs(timeoutMs, this.rpcTimeoutMs, 1_000, 2 * 60 * 60_000);
     return new Promise((resolve, reject) => {
       const requestId = this.nextRequestId++;
       const timeout = setTimeout(() => {
         this.pendingRequests.delete(requestId);
         reject(new Error(`Codex request timed out: ${method}`));
-      }, timeoutMs);
+      }, boundedTimeoutMs);
 
       if (typeof timeout.unref === 'function') {
         timeout.unref();
@@ -972,15 +983,22 @@ class CodexAppServerSession {
   async listModels({ includeHidden = false } = {}) {
     const models = [];
     let cursor = null;
+    const seenCursors = new Set();
+    let pageCount = 0;
 
     do {
+      if (pageCount >= 100 || models.length >= 5000 || (cursor && seenCursors.has(cursor))) {
+        break;
+      }
+      if (cursor) seenCursors.add(cursor);
+      pageCount += 1;
       const response = await this.request('model/list', {
         includeHidden: Boolean(includeHidden),
         cursor
       });
 
       if (Array.isArray(response?.data)) {
-        models.push(...response.data);
+        models.push(...response.data.slice(0, Math.max(0, 5000 - models.length)));
       }
       cursor = response?.nextCursor || null;
     } while (cursor);
@@ -989,6 +1007,12 @@ class CodexAppServerSession {
   }
 
   waitForLoginCompletion(loginId, timeoutMs = DEFAULT_LOGIN_COMPLETE_TIMEOUT_MS) {
+    const boundedTimeoutMs = clampTimeoutMs(
+      timeoutMs,
+      DEFAULT_LOGIN_COMPLETE_TIMEOUT_MS,
+      1_000,
+      10 * 60_000
+    );
     return new Promise((resolve, reject) => {
       const key = sanitizeString(loginId) || '*';
       const timeout = setTimeout(() => {
@@ -998,7 +1022,7 @@ class CodexAppServerSession {
           waiters.filter((waiter) => waiter.resolve !== resolve)
         );
         reject(new Error('Timed out waiting for Codex login completion'));
-      }, timeoutMs);
+      }, boundedTimeoutMs);
 
       if (typeof timeout.unref === 'function') {
         timeout.unref();
@@ -1020,6 +1044,7 @@ class CodexAppServerSession {
       });
     }
 
+    const boundedTimeoutMs = clampTimeoutMs(timeoutMs, this.turnTimeoutMs, 1_000, 2 * 60 * 60_000);
     return new Promise((resolve, reject) => {
       state.resolve = resolve;
       state.reject = reject;
@@ -1037,7 +1062,7 @@ class CodexAppServerSession {
         }
 
         reject(new Error('Timed out waiting for Codex turn completion'));
-      }, timeoutMs);
+      }, boundedTimeoutMs);
 
       if (typeof state.timeout.unref === 'function') {
         state.timeout.unref();
@@ -1365,7 +1390,8 @@ async function completeCodexLogin({
   let forwardResponse = null;
   try {
     forwardResponse = await axios.get(normalizedCallbackUrl, {
-      maxRedirects: 5,
+      maxRedirects: 0,
+      maxContentLength: 256 * 1024,
       timeout: DEFAULT_LOGIN_HTTP_WAIT_MS,
       validateStatus: () => true
     });
@@ -1433,9 +1459,11 @@ async function completeCodexLogin({
 
 async function sendRequestToCodex(message, settings, requestConfig = {}) {
   const outputSchema = buildCodexOutputSchema(requestConfig);
-  const codexTimeoutMs = Math.max(
+  const codexTimeoutMs = clampTimeoutMs(
+    requestConfig?.timeoutMs || process.env.CODEX_TIMEOUT_MS || process.env.OPENAI_TIMEOUT_MS,
+    DEFAULT_TURN_TIMEOUT_MS,
     DEFAULT_RPC_TIMEOUT_MS,
-    Number(requestConfig?.timeoutMs || process.env.CODEX_TIMEOUT_MS || process.env.OPENAI_TIMEOUT_MS || DEFAULT_TURN_TIMEOUT_MS)
+    2 * 60 * 60_000
   );
 
   return withCodexSession({

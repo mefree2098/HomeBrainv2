@@ -18,6 +18,8 @@ if (!homebrainServerLock.acquired) {
 const mongoose = require("mongoose");
 const { connectDB } = require("./config/database");
 const { databaseAvailabilityGuard } = require("./middleware/databaseAvailability");
+const { createApiRateLimit } = require('./middleware/apiRateLimit');
+const { rejectUnsafeRequestKeys } = require('./middleware/requestSafety');
 const express = require("express");
 const basicRoutes = require("./routes/index");
 const authRoutes = require("./routes/authRoutes");
@@ -124,12 +126,17 @@ const cors = require("cors");
 const { buildCorsOptions } = require("./config/corsOptions");
 const http = require("http");
 const fs = require("fs");
-const SMARTTHINGS_STARTUP_BOOTSTRAP_DELAY_MS = Math.max(0, Number(process.env.SMARTTHINGS_STARTUP_BOOTSTRAP_DELAY_MS || 5000));
-const AXIOM_STARTUP_SYNC_DELAY_MS = Math.max(0, Number(process.env.AXIOM_STARTUP_SYNC_DELAY_MS || 7000));
-const SHUTDOWN_STEP_TIMEOUT_MS = Math.max(1000, Number(process.env.HOMEBRAIN_SHUTDOWN_STEP_TIMEOUT_MS || 15000));
-const DIRECT_RADIO_SHUTDOWN_TIMEOUT_MS = Math.max(5000, Number(process.env.HOMEBRAIN_DIRECT_RADIO_SHUTDOWN_TIMEOUT_MS || 70000));
-const HTTP_CLOSE_GRACE_MS = Math.max(250, Number(process.env.HOMEBRAIN_HTTP_CLOSE_GRACE_MS || 3000));
-const HTTP_CLOSE_TIMEOUT_MS = Math.max(1000, Number(process.env.HOMEBRAIN_HTTP_CLOSE_TIMEOUT_MS || 8000));
+const clampDurationMs = (value, fallback, minimum, maximum) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(minimum, Math.min(maximum, Math.round(numeric)));
+};
+const SMARTTHINGS_STARTUP_BOOTSTRAP_DELAY_MS = clampDurationMs(process.env.SMARTTHINGS_STARTUP_BOOTSTRAP_DELAY_MS, 5000, 0, 10 * 60_000);
+const AXIOM_STARTUP_SYNC_DELAY_MS = clampDurationMs(process.env.AXIOM_STARTUP_SYNC_DELAY_MS, 7000, 0, 10 * 60_000);
+const SHUTDOWN_STEP_TIMEOUT_MS = clampDurationMs(process.env.HOMEBRAIN_SHUTDOWN_STEP_TIMEOUT_MS, 15_000, 1000, 5 * 60_000);
+const DIRECT_RADIO_SHUTDOWN_TIMEOUT_MS = clampDurationMs(process.env.HOMEBRAIN_DIRECT_RADIO_SHUTDOWN_TIMEOUT_MS, 70_000, 5000, 5 * 60_000);
+const HTTP_CLOSE_GRACE_MS = clampDurationMs(process.env.HOMEBRAIN_HTTP_CLOSE_GRACE_MS, 3000, 250, 60_000);
+const HTTP_CLOSE_TIMEOUT_MS = clampDurationMs(process.env.HOMEBRAIN_HTTP_CLOSE_TIMEOUT_MS, 8000, 1000, 2 * 60_000);
 let isShuttingDown = false;
 
 function envFlagEnabled(value, fallback = true) {
@@ -153,8 +160,9 @@ function buildConnectSrc(req = null) {
   const sources = new Set(["'self'"]);
   const host = req?.get?.('host');
 
-  if (host) {
-    sources.add(`ws://${host}`);
+  if (host && /^[A-Za-z0-9.:[\]-]+$/.test(host)) {
+    // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
+    sources.add(`ws://${host}`); // LAN HTTP clients intentionally use same-host WebSockets.
     sources.add(`wss://${host}`);
   }
 
@@ -307,6 +315,7 @@ if (process.env.NODE_ENV !== 'production') {
 app.enable('strict routing');
 app.disable('x-powered-by');
 app.set('trust proxy', 'loopback, linklocal, uniquelocal');
+app.set('query parser', 'simple');
 
 app.use(cors((req, callback) => {
   callback(null, buildCorsOptions(req));
@@ -316,9 +325,15 @@ app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Permissions-Policy', 'camera=(), geolocation=(self), microphone=(self)');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  if (process.env.NODE_ENV === 'production' && req.secure) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+  }
   res.setHeader('Content-Security-Policy', getContentSecurityPolicy(req));
   next();
 });
+// Apply request-count limits before parsing potentially large JSON bodies.
+app.use('/api', createApiRateLimit());
 app.use(express.json({
   limit: '8mb',
   verify: (req, res, buf) => {
@@ -328,6 +343,7 @@ app.use(express.json({
   }
 }));
 app.use(express.urlencoded({ extended: true, limit: '8mb' }));
+app.use('/api', rejectUnsafeRequestKeys);
 app.use('/api', databaseAvailabilityGuard);
 
 // Database connection

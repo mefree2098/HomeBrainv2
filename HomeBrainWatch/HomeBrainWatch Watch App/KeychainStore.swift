@@ -12,7 +12,8 @@ enum KeychainStore {
             kSecAttrAccount as String: account
         ]
         let attributes: [String: Any] = [
-            kSecValueData as String: data
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
 
         let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
@@ -25,7 +26,7 @@ enum KeychainStore {
         }
 
         var addQuery = query
-        addQuery[kSecValueData as String] = data
+        attributes.forEach { addQuery[$0.key] = $0.value }
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
         guard addStatus == errSecSuccess else {
             throw KeychainError.unhandledStatus(addStatus)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "reachy-homebrain-app"
-version = "0.1.0"
+version = "0.1.1"
 description = "Secure Reachy Mini Wireless companion app for HomeBrain"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,6 +12,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "HomeBrain" }]
 dependencies = [
+  "aiohttp>=3.14.3,<4",
   "numpy>=1.26,<3",
   "reachy-mini>=1.9,<2",
   "websockets>=12,<17",

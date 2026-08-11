@@ -6,13 +6,15 @@ Uses only Python stdlib so HomeBrain can bridge without node-serialport.
 
 import argparse
 import fcntl
+import ipaddress
 import os
 import selectors
 import signal
 import socket
+import stat
 import sys
 import termios
-
+from contextlib import suppress
 
 BAUD_MAP = {
     1200: termios.B1200,
@@ -24,6 +26,27 @@ BAUD_MAP = {
     57600: termios.B57600,
     115200: termios.B115200,
 }
+MAX_PENDING_BYTES = 1024 * 1024
+
+
+def loopback_ipv4(value: str) -> str:
+    try:
+        address = ipaddress.IPv4Address(value)
+    except ipaddress.AddressValueError as error:
+        raise argparse.ArgumentTypeError("host must be a numeric IPv4 loopback address") from error
+    if not address.is_loopback:
+        raise argparse.ArgumentTypeError("host must be an IPv4 loopback address")
+    return str(address)
+
+
+def tcp_port(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("port must be an integer") from error
+    if port < 0 or port > 65535:
+        raise argparse.ArgumentTypeError("port must be between 0 and 65535")
+    return port
 
 
 class SerialTcpBridge:
@@ -48,7 +71,19 @@ class SerialTcpBridge:
         if self.baud not in BAUD_MAP:
             raise RuntimeError(f"Unsupported baud rate: {self.baud}")
 
-        self.serial_fd = os.open(self.serial_path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        resolved_serial_path = os.path.realpath(self.serial_path)
+        if os.path.commonpath((resolved_serial_path, "/dev")) != "/dev":
+            raise RuntimeError("Serial device must resolve beneath /dev")
+
+        open_flags = os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK
+        open_flags |= getattr(os, "O_CLOEXEC", 0)
+        open_flags |= getattr(os, "O_NOFOLLOW", 0)
+        self.serial_fd = os.open(resolved_serial_path, open_flags)
+        if not stat.S_ISCHR(os.fstat(self.serial_fd).st_mode):
+            os.close(self.serial_fd)
+            self.serial_fd = None
+            raise RuntimeError("Serial endpoint must be a character device")
+        self.serial_path = resolved_serial_path
         attrs = termios.tcgetattr(self.serial_fd)
 
         # iflag, oflag, cflag, lflag
@@ -77,14 +112,10 @@ class SerialTcpBridge:
     def _close_client(self) -> None:
         if not self.client_socket:
             return
-        try:
+        with suppress(KeyError, OSError, ValueError):
             self.selector.unregister(self.client_socket)
-        except Exception:
-            pass
-        try:
+        with suppress(OSError):
             self.client_socket.close()
-        except Exception:
-            pass
         self.client_socket = None
         self.serial_to_client.clear()
         self.client_to_serial.clear()
@@ -96,10 +127,8 @@ class SerialTcpBridge:
         events = selectors.EVENT_READ
         if self.client_to_serial:
             events |= selectors.EVENT_WRITE
-        try:
+        with suppress(KeyError, OSError, ValueError):
             self.selector.modify(self.serial_fd, events, "serial")
-        except Exception:
-            pass
 
     def _update_client_events(self) -> None:
         if not self.client_socket:
@@ -107,18 +136,14 @@ class SerialTcpBridge:
         events = selectors.EVENT_READ
         if self.serial_to_client:
             events |= selectors.EVENT_WRITE
-        try:
+        with suppress(KeyError, OSError, ValueError):
             self.selector.modify(self.client_socket, events, "client")
-        except Exception:
-            pass
 
     def _accept_client(self) -> None:
         client, addr = self.server_socket.accept()
         client.setblocking(False)
-        try:
+        with suppress(OSError):
             client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        except Exception:
-            pass
 
         if self.client_socket:
             self._close_client()
@@ -140,6 +165,10 @@ class SerialTcpBridge:
         if not data:
             return
         if not self.client_socket:
+            return
+        if len(self.serial_to_client) + len(data) > MAX_PENDING_BYTES:
+            self._log("Closing slow client after serial output exceeded the pending-byte limit")
+            self._close_client()
             return
         self.serial_to_client.extend(data)
         self._update_client_events()
@@ -173,6 +202,10 @@ class SerialTcpBridge:
             self._close_client()
             return
 
+        if len(self.client_to_serial) + len(data) > MAX_PENDING_BYTES:
+            self._log("Closing client after serial input exceeded the pending-byte limit")
+            self._close_client()
+            return
         self.client_to_serial.extend(data)
         self._update_serial_events()
 
@@ -233,45 +266,33 @@ class SerialTcpBridge:
                     continue
 
     def cleanup(self) -> None:
-        try:
+        with suppress(KeyError, OSError, ValueError):
             self._close_client()
-        except Exception:
-            pass
 
         if self.server_socket:
-            try:
+            with suppress(KeyError, OSError, ValueError):
                 self.selector.unregister(self.server_socket)
-            except Exception:
-                pass
-            try:
+            with suppress(OSError):
                 self.server_socket.close()
-            except Exception:
-                pass
             self.server_socket = None
 
         if self.serial_fd is not None:
-            try:
+            with suppress(KeyError, OSError, ValueError):
                 self.selector.unregister(self.serial_fd)
-            except Exception:
-                pass
-            try:
+            with suppress(OSError):
                 os.close(self.serial_fd)
-            except Exception:
-                pass
             self.serial_fd = None
 
-        try:
+        with suppress(OSError):
             self.selector.close()
-        except Exception:
-            pass
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="INSTEON local serial TCP bridge")
     parser.add_argument("--serial", required=True, help="Serial device path, e.g. /dev/serial/by-id/...")
-    parser.add_argument("--host", default="127.0.0.1", help="TCP listen host")
-    parser.add_argument("--port", type=int, default=0, help="TCP listen port (0 = auto)")
-    parser.add_argument("--baud", type=int, default=19200, help="Serial baud rate")
+    parser.add_argument("--host", type=loopback_ipv4, default="127.0.0.1", help="IPv4 loopback listen host")
+    parser.add_argument("--port", type=tcp_port, default=0, help="TCP listen port (0 = auto)")
+    parser.add_argument("--baud", type=int, choices=sorted(BAUD_MAP), default=19200, help="Serial baud rate")
     return parser.parse_args()
 
 

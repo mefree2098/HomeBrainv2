@@ -86,7 +86,7 @@ class SettingsService {
         'hardwareOrbWifiSsid', 'hardwareOrbWifiPassword',
         'sttProvider', 'sttModel', 'sttLanguage', 'lanWhisperEndpoint', 'lanWhisperApiKey',
         'lanWhisperTimeoutMs', 'ttsProvider', 'ttsProviderPriorityList', 's2ProEndpoint',
-        's2ProApiKey', 's2ProDefaultVoiceId', 's2ProModel', 's2ProOutputFormat',
+        's2ProApiKey', 's2ProDefaultVoiceId', 's2ProModel', 's2ProOutputFormat', // gitleaks:allow
         's2ProTimeoutMs', 'enableSecurityMode',
         // AI Provider Settings
         'llmProvider', 'openaiApiKey', 'openaiModel',

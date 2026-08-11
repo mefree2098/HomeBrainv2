@@ -12,6 +12,7 @@ const {
   downsamplePoints,
   extractDeviceMetrics,
   extractTempestMetrics,
+  inferRequestedHoursFromPrompt,
   mergePointsByTimestamp,
   normalizeDiskCapacity,
   pickFeaturedMetricKeys,
@@ -20,6 +21,13 @@ const {
   summarizeSourceBreakdowns,
   summarizeStorageCollections
 } = telemetryService.__private__;
+
+test('telemetry prompt windows are interpreted within bounded limits', () => {
+  assert.equal(inferRequestedHoursFromPrompt('show the last 6 hours'), 6);
+  assert.equal(inferRequestedHoursFromPrompt('show 2 weeks'), 24 * 7 * 2);
+  assert.equal(inferRequestedHoursFromPrompt(`${'x'.repeat(5000)} 2 hours`), 24 * 7);
+  assert.equal(inferRequestedHoursFromPrompt('show 999999 weeks'), 24 * 365);
+});
 
 test('extractDeviceMetrics maps device state and smartthings telemetry into chartable metrics', () => {
   const metrics = extractDeviceMetrics({

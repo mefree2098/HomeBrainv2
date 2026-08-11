@@ -310,13 +310,11 @@ interface GetDashboardWeatherOptions {
 
 export const getDashboardWeather = async (options: GetDashboardWeatherOptions = {}) => {
   try {
-    const response = await api.get("/api/weather/current", {
-      params: {
-        ...options,
-        forceTempestSync: options.forceTempestSync === true ? "true" : undefined,
-        forceIndoorAirSync: options.forceIndoorAirSync === true ? "true" : undefined,
-        refreshIndoorAir: options.refreshIndoorAir === true ? "true" : undefined
-      }
+    const response = await api.post("/api/weather/current", {
+      ...options,
+      forceTempestSync: options.forceTempestSync === true,
+      forceIndoorAirSync: options.forceIndoorAirSync === true,
+      refreshIndoorAir: options.refreshIndoorAir === true
     })
 
     return response.data as { success: boolean; weather: DashboardWeatherPayload }
@@ -328,13 +326,11 @@ export const getDashboardWeather = async (options: GetDashboardWeatherOptions = 
 
 export const getWeatherDashboard = async (options: GetDashboardWeatherOptions & { tempestHistoryHours?: number; indoorAirHistoryHours?: number } = {}) => {
   try {
-    const response = await api.get("/api/weather/dashboard", {
-      params: {
-        ...options,
-        forceTempestSync: options.forceTempestSync === true ? "true" : undefined,
-        forceIndoorAirSync: options.forceIndoorAirSync === true ? "true" : undefined,
-        refreshIndoorAir: options.refreshIndoorAir === true ? "true" : undefined
-      }
+    const response = await api.post("/api/weather/dashboard", {
+      ...options,
+      forceTempestSync: options.forceTempestSync === true,
+      forceIndoorAirSync: options.forceIndoorAirSync === true,
+      refreshIndoorAir: options.refreshIndoorAir === true
     })
 
     return response.data as { success: boolean; dashboard: WeatherDashboardPayload }

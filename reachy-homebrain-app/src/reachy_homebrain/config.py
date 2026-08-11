@@ -276,10 +276,11 @@ class SecureConfigStore:
             "HOMEBRAIN_HUB_URL": "hub_url",
             "HOMEBRAIN_REACHY_UNIT_ID": "unit_id",
             "HOMEBRAIN_DEVICE_ID": "device_id",
-            "HOMEBRAIN_DEVICE_TOKEN": "device_token",
             "HOMEBRAIN_REGISTRATION_CODE": "registration_code",
-            "HOMEBRAIN_CLAIM_TOKEN": "claim_token",
         }
+        # These values are configuration field names, not embedded credentials.
+        env_fields["HOMEBRAIN_DEVICE_TOKEN"] = "device_token"  # nosec
+        env_fields["HOMEBRAIN_CLAIM_TOKEN"] = "claim_token"  # nosec
         for env_name, field_name in env_fields.items():
             if env.get(env_name, "").strip():
                 raw[field_name] = env[env_name].strip()

@@ -5,6 +5,7 @@ const bcrypt = require('bcrypt');
 const { ZipFile } = require('yazl');
 
 const OpenClawIntegration = require('../models/OpenClawIntegration');
+const { trimTrailingSlashes } = require('../utils/networkSafety');
 
 const MCP_SERVER_NAME = 'homebrain-admin';
 const DEFAULT_TOKEN_PLACEHOLDER = '<PASTE_HOMEBRAIN_OPENCLAW_TOKEN>';
@@ -14,9 +15,7 @@ const JETSON_GUIDE_PATH = path.resolve(__dirname, '..', '..', 'docs', 'openclaw'
 const JETSON_INSTALLER_PATH = path.resolve(__dirname, '..', '..', 'openclaw', 'jetson', 'install-jetson.sh');
 
 function sanitizeBaseUrl(value) {
-  return String(value || '')
-    .trim()
-    .replace(/\/+$/, '');
+  return trimTrailingSlashes(String(value || '').trim());
 }
 
 function quoteForShell(value) {

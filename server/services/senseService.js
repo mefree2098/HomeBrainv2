@@ -14,6 +14,8 @@ const {
 } = require('./deviceIdentityService');
 
 const SENSE_API_BASE = 'https://api.sense.com/apiservice/api/v1/';
+const SENSE_API_ORIGIN = new URL(SENSE_API_BASE).origin;
+const SENSE_API_PATH_PREFIX = new URL(SENSE_API_BASE).pathname;
 const SENSE_WS_BASE = 'wss://clientrt.sense.com/monitors';
 const DEFAULT_HTTP_TIMEOUT_MS = Math.max(5000, Number(process.env.SENSE_HTTP_TIMEOUT_MS || 12000));
 const DEFAULT_POLL_INTERVAL_SECONDS = Math.max(5, Number(process.env.SENSE_POLL_INTERVAL_SECONDS || 10));
@@ -59,6 +61,20 @@ const trimString = (value, fallback = '') => {
 
   const trimmed = String(value).trim();
   return trimmed || fallback;
+};
+
+const buildSenseApiUrl = (apiPath) => {
+  const normalizedPath = trimString(apiPath);
+  if (!normalizedPath || normalizedPath.length > 512 || normalizedPath.includes('\\')) {
+    throw new Error('Sense API path is invalid');
+  }
+
+  const resolved = new URL(normalizedPath, SENSE_API_BASE);
+  if (resolved.origin !== SENSE_API_ORIGIN || !resolved.pathname.startsWith(SENSE_API_PATH_PREFIX)) {
+    throw new Error('Sense API path must remain within the Sense API');
+  }
+  resolved.hash = '';
+  return resolved.toString();
 };
 
 const clampInteger = (value, fallback, minimum, maximum) => {
@@ -1026,7 +1042,7 @@ class SenseService {
     });
 
     const response = await axios.post(
-      `${SENSE_API_BASE}${path}`,
+      buildSenseApiUrl(path),
       payload.toString(),
       {
         headers: {
@@ -1064,7 +1080,7 @@ class SenseService {
 
   async requestApi(path, { integration, params, timeout = DEFAULT_HTTP_TIMEOUT_MS, retryAuth = true } = {}) {
     const response = await axios.get(
-      `${SENSE_API_BASE}${path}`,
+      buildSenseApiUrl(path),
       {
         headers: this.buildHeaders({ integration, includeAuth: true }),
         params,
@@ -1125,7 +1141,7 @@ class SenseService {
     }
 
     const overviewPayload = await this.requestApi(
-      `app/monitors/${integration.monitorId}/overview`,
+      `app/monitors/${encodeURIComponent(integration.monitorId)}/overview`,
       { integration }
     );
     const overview = normalizeMonitorOverview(overviewPayload);
@@ -1157,9 +1173,9 @@ class SenseService {
 
     let rawDevices = null;
     try {
-      rawDevices = await this.requestApi(`monitors/${integration.monitorId}/devices`, { integration });
+      rawDevices = await this.requestApi(`monitors/${encodeURIComponent(integration.monitorId)}/devices`, { integration });
     } catch (error) {
-      rawDevices = await this.requestApi(`app/monitors/${integration.monitorId}/devices`, { integration });
+      rawDevices = await this.requestApi(`app/monitors/${encodeURIComponent(integration.monitorId)}/devices`, { integration });
     }
 
     const catalog = safeArray(rawDevices)
@@ -1185,7 +1201,7 @@ class SenseService {
     }
 
     try {
-      this.cachedAlwaysOnInfo = await this.requestApi(`app/monitors/${integration.monitorId}/devices/always_on`, { integration });
+      this.cachedAlwaysOnInfo = await this.requestApi(`app/monitors/${encodeURIComponent(integration.monitorId)}/devices/always_on`, { integration });
       this.lastAlwaysOnFetchAt = Date.now();
     } catch (error) {
       if (!this.cachedAlwaysOnInfo) {
@@ -1197,7 +1213,7 @@ class SenseService {
   }
 
   async requestRealtimeUpdate(integration) {
-    return this.requestApi(`app/${integration.monitorId}/realtime_update`, { integration });
+    return this.requestApi(`app/${encodeURIComponent(integration.monitorId)}/realtime_update`, { integration });
   }
 
   runBackgroundTask(label, task) {
@@ -1221,7 +1237,7 @@ class SenseService {
     this.stopWebSocket({ resetMonitor: false });
     this.websocketMonitorId = monitorId;
 
-    const socket = new WebSocket(`${SENSE_WS_BASE}/${monitorId}/realtimefeed?access_token=${encodeURIComponent(integration.accessToken)}`);
+    const socket = new WebSocket(`${SENSE_WS_BASE}/${encodeURIComponent(monitorId)}/realtimefeed?access_token=${encodeURIComponent(integration.accessToken)}`);
     this.websocket = socket;
 
     socket.on('open', () => {
@@ -1887,7 +1903,7 @@ class SenseService {
     for (const scale of SCALE_ORDER) {
       const startAt = new Date();
       const usagePayload = await this.requestApi(
-        `app/monitors/${integration.monitorId}/history/usage`,
+        `app/monitors/${encodeURIComponent(integration.monitorId)}/history/usage`,
         {
           integration,
           params: {
@@ -1901,7 +1917,7 @@ class SenseService {
       if (integration.solarConfigured === true) {
         try {
           solarPayload = await this.requestApi(
-            `app/monitors/${integration.monitorId}/history/usage/solar`,
+            `app/monitors/${encodeURIComponent(integration.monitorId)}/history/usage/solar`,
             {
               integration,
               params: {
@@ -1997,7 +2013,7 @@ class SenseService {
       persist: false
     });
     const overview = await this.requestApi(
-      `app/monitors/${integration.monitorId}/overview`,
+      `app/monitors/${encodeURIComponent(integration.monitorId)}/overview`,
       { integration }
     );
     const normalizedOverview = normalizeMonitorOverview(overview);
@@ -2369,6 +2385,7 @@ module.exports = senseService;
 module.exports.SenseService = SenseService;
 module.exports.__private__ = {
   buildTrendSummaryMap,
+  buildSenseApiUrl,
   calculateCostUsd,
   calculateCurrentCostRateUsdPerHour,
   decorateDeviceUsageWindowWithCost,

@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { collapseWhitespace } = require('../utils/stringSafety');
 const settingsService = require('./settingsService');
 const goveeAirQualityService = require('./goveeAirQualityService');
 const tempestService = require('./tempestService');
@@ -777,12 +778,13 @@ function buildLocationName(result, fallback = 'Saved location') {
 }
 
 function normalizeLocationQuery(query) {
-  return typeof query === 'string'
-    ? query
-      .trim()
-      .replace(/\s*,\s*/g, ', ')
-      .replace(/\s{2,}/g, ' ')
-    : '';
+  if (typeof query !== 'string') return '';
+  return query
+    .slice(0, 256)
+    .split(',')
+    .map((part) => collapseWhitespace(part, 256).trim())
+    .join(', ')
+    .trim();
 }
 
 function parseUsCityStateQuery(query) {

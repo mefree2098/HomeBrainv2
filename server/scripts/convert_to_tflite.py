@@ -34,8 +34,8 @@ def convert_with_oww(onnx_path: str, out_path: str) -> bool:
 def convert_with_tf(onnx_path: str, out_path: str) -> bool:
     try:
         import onnx
-        from onnx_tf.backend import prepare  # type: ignore
         import tensorflow as tf  # type: ignore
+        from onnx_tf.backend import prepare  # type: ignore
     except Exception as e:
         sys.stderr.write("[tflite] Missing deps. Install: pip install onnx onnx-tf tensorflow\n")
         sys.stderr.write(str(e) + "\n")

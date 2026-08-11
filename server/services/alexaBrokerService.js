@@ -4,6 +4,7 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 const axios = require('axios');
+const { parseServiceOrigin } = require('../utils/networkSafety');
 const AlexaBrokerConfig = require('../models/AlexaBrokerConfig');
 const ReverseProxyRoute = require('../models/ReverseProxyRoute');
 const reverseProxyService = require('./reverseProxyService');
@@ -73,13 +74,11 @@ function maskSecret(value) {
 }
 
 function sanitizeBaseUrl(value) {
-  const normalized = trimString(value).replace(/\/+$/, '');
+  const normalized = trimString(value);
   if (!normalized) {
     return '';
   }
-
-  const parsed = new URL(normalized);
-  return parsed.origin;
+  return parseServiceOrigin(normalized, 'Alexa broker base URL');
 }
 
 function sanitizeUrl(value, fallback = '') {

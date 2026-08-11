@@ -36,7 +36,7 @@ async function testElevenLabsIntegration() {
     if (!hasApiKey) {
       console.log('   ⚠️  No API key found. Using mock data.\n');
     } else {
-      console.log(`   ✅ API key found (${process.env.ELEVENLABS_API_KEY.substring(0, 8)}...)\n`);
+      console.log('   ✅ API key found (value redacted)\n');
     }
     
     // Test 2: Fetch available voices

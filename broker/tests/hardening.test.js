@@ -2,9 +2,17 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('http');
 
-const { createApp, reconcileLinkedAccountsToHubs, renderAuthorizePage } = require('../src/app');
+const {
+  buildAbsoluteUrl,
+  createApp,
+  findUnsafeRequestKey,
+  reconcileLinkedAccountsToHubs,
+  renderAuthorizePage,
+  sanitizeBaseUrl,
+  validateHubBaseUrl
+} = require('../src/app');
 const { AlexaEventGatewayService } = require('../src/eventGatewayService');
-const { BrokerStore, pkceS256 } = require('../src/store');
+const { BrokerStore, pkceS256, safeRecordKey } = require('../src/store');
 
 function createMemoryStore() {
   const store = new BrokerStore({
@@ -48,6 +56,35 @@ function restoreEnv(name, value) {
     process.env[name] = value;
   }
 }
+
+test('broker URL validation rejects credentials, unsafe schemes, and cross-origin endpoints', () => {
+  assert.equal(sanitizeBaseUrl('https://broker.example.test/path'), 'https://broker.example.test');
+  assert.throws(() => sanitizeBaseUrl('https://user:secret@broker.example.test'), /credentials/);
+  assert.throws(() => sanitizeBaseUrl('file:///tmp/test'), /http or https/);
+  assert.equal(
+    buildAbsoluteUrl('https://hub.example.test', '/api/alexa/catalog'),
+    'https://hub.example.test/api/alexa/catalog'
+  );
+  assert.throws(
+    () => buildAbsoluteUrl('https://hub.example.test', 'https://attacker.example/catalog'),
+    /configured origin/
+  );
+  assert.equal(validateHubBaseUrl('https://hub.example.test', { mode: 'public' }), 'https://hub.example.test');
+  assert.throws(() => validateHubBaseUrl('https://hub.example.test/path', { mode: 'public' }), /without a path/);
+});
+
+test('broker request safety finds prototype and query-operator keys', () => {
+  assert.equal(findUnsafeRequestKey(JSON.parse('{"nested":{"__proto__":{"polluted":true}}}')), '__proto__');
+  assert.equal(findUnsafeRequestKey({ nested: { $where: 'sleep(1)' } }), '$where');
+  assert.equal(findUnsafeRequestKey({ nested: { safe: true } }), '');
+});
+
+test('broker store rejects identifiers that could address object prototypes', async () => {
+  const store = createMemoryStore();
+  assert.throws(() => safeRecordKey('__proto__', 'hubId'), /invalid/);
+  await assert.rejects(() => store.registerHub({ hubId: '__proto__' }), /hubId is invalid/);
+  assert.equal({}.polluted, undefined);
+});
 
 async function createLinkedGrant(store, options = {}) {
   await store.registerHub({

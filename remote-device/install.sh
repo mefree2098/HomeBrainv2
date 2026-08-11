@@ -42,6 +42,7 @@ fi
 
 # Resolve the directory containing this script before changing directories
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NODESOURCE_SETUP_22_SHA256="575583bbac2fccc0b5edd0dbc03e222d9f9dc8d724da996d22754d6411104fd1"
 
 # Detect system
 print_status "Detecting system..."
@@ -85,10 +86,33 @@ sudo apt-get install -y \
     espeak \
     libttspico-utils
 
+run_verified_nodesource_setup() (
+    local setup_script
+    setup_script="$(mktemp /tmp/homebrain-nodesource-setup.XXXXXX)"
+    trap 'rm -f "${setup_script}"' EXIT
+
+    curl \
+        --proto '=https' \
+        --tlsv1.2 \
+        --fail \
+        --location \
+        --silent \
+        --show-error \
+        https://deb.nodesource.com/setup_22.x \
+        --output "${setup_script}"
+
+    if ! printf '%s  %s\n' "${NODESOURCE_SETUP_22_SHA256}" "${setup_script}" | sha256sum --check --status; then
+        print_error "NodeSource setup script integrity check failed; refusing to execute it."
+        exit 1
+    fi
+
+    sudo -E bash "${setup_script}"
+)
+
 # Install or upgrade Node.js
 install_nodejs() {
     print_status "Installing Node.js 22..."
-    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+    run_verified_nodesource_setup
     sudo apt-get install -y nodejs
     hash -r
 }
@@ -151,11 +175,9 @@ cat > package.json << 'EOF'
   "dependencies": {
     "ws": "^8.21.1",
     "node-record-lpcm16": "^1.0.1",
-    "node-fetch": "^2.7.0",
     "yargs": "^17.7.2",
     "node-wav": "^0.0.2",
-    "audio-buffer-utils": "^5.1.2",
-    "onnxruntime-node": "1.21.1",
+    "onnxruntime-node": "1.27.0",
     "tflite-node": "1.0.0"
   },
   "engines": {

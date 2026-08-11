@@ -1,10 +1,12 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { toAsciiSlug } = require('./stringSafety');
 
 const WAKE_WORD_ROOT = path.join(__dirname, '..', 'public', 'wake-words');
 const SUPPORTED_EXTENSIONS = ['.tflite', '.onnx', '.ppn'];
 const SUPPORTED_DEPENDENCY_SUFFIXES = ['.data'];
+const MAX_WAKE_WORD_SLUG_LENGTH = 100;
 
 const ensureDirectory = () => {
   try {
@@ -17,12 +19,17 @@ const ensureDirectory = () => {
 };
 
 const slugify = (value) => {
-  if (!value) return '';
-  return value
-    .toString()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
+  return value ? toAsciiSlug(value, { maxLength: MAX_WAKE_WORD_SLUG_LENGTH }) : '';
+};
+
+const resolveAssetPath = (fileName) => {
+  const normalizedName = typeof fileName === 'string' ? fileName.trim() : '';
+  if (!normalizedName || normalizedName !== path.basename(normalizedName) || normalizedName.includes('\0')) {
+    return null;
+  }
+  const root = path.resolve(WAKE_WORD_ROOT);
+  const resolved = path.resolve(root, normalizedName);
+  return resolved.startsWith(`${root}${path.sep}`) ? resolved : null;
 };
 
 const listWakeWordFiles = () => {
@@ -56,7 +63,10 @@ const computeFileHash = (absolutePath) => {
 };
 
 const getFileDescriptor = (fileName) => {
-  const absolutePath = path.join(WAKE_WORD_ROOT, fileName);
+  const absolutePath = resolveAssetPath(fileName);
+  if (!absolutePath) {
+    return null;
+  }
   if (!fs.existsSync(absolutePath)) {
     return null;
   }
@@ -73,36 +83,40 @@ const getFileDescriptor = (fileName) => {
 
 const normalisePlatform = (platform) => {
   if (!platform) return null;
-  return platform.toString().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  return toAsciiSlug(platform) || null;
 };
 
 const normaliseArch = (arch) => {
   if (!arch) return null;
-  return arch.toString().toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  return toAsciiSlug(arch) || null;
 };
 
 const buildCandidateFileNames = (slug, platform, arch) => {
   const candidates = new Set();
+  const normalisedSlug = slugify(slug);
+  if (!normalisedSlug) return [];
   const normalisedPlatform = normalisePlatform(platform);
   const normalisedArch = normaliseArch(arch);
 
   for (const extension of SUPPORTED_EXTENSIONS) {
     if (normalisedPlatform && normalisedArch) {
-      candidates.add(`${slug}_${normalisedPlatform}_${normalisedArch}${extension}`);
+      candidates.add(`${normalisedSlug}_${normalisedPlatform}_${normalisedArch}${extension}`);
     }
     if (normalisedPlatform) {
-      candidates.add(`${slug}_${normalisedPlatform}${extension}`);
+      candidates.add(`${normalisedSlug}_${normalisedPlatform}${extension}`);
     }
     if (normalisedArch) {
-      candidates.add(`${slug}_${normalisedArch}${extension}`);
+      candidates.add(`${normalisedSlug}_${normalisedArch}${extension}`);
     }
-    candidates.add(`${slug}${extension}`);
+    candidates.add(`${normalisedSlug}${extension}`);
   }
 
   return Array.from(candidates);
 };
 
 const findFileForWakeWord = (slug, platform, arch) => {
+  const normalisedSlug = slugify(slug);
+  if (!normalisedSlug) return null;
   const files = listWakeWordFiles();
   if (files.length === 0) {
     return null;
@@ -114,10 +128,10 @@ const findFileForWakeWord = (slug, platform, arch) => {
     const c = new Set();
     const p = normalisePlatform(platform);
     const a = normaliseArch(arch);
-    if (p && a) c.add(`${slug}_${p}_${a}${ext}`);
-    if (p) c.add(`${slug}_${p}${ext}`);
-    if (a) c.add(`${slug}_${a}${ext}`);
-    c.add(`${slug}${ext}`);
+    if (p && a) c.add(`${normalisedSlug}_${p}_${a}${ext}`);
+    if (p) c.add(`${normalisedSlug}_${p}${ext}`);
+    if (a) c.add(`${normalisedSlug}_${a}${ext}`);
+    c.add(`${normalisedSlug}${ext}`);
     return Array.from(c);
   };
 
@@ -132,7 +146,7 @@ const findFileForWakeWord = (slug, platform, arch) => {
   }
 
   // Fallback: any file starting with slug (any extension)
-  const fallback = files.find((file) => file.toLowerCase().startsWith(`${slug}_`));
+  const fallback = files.find((file) => file.toLowerCase().startsWith(`${normalisedSlug}_`));
   if (fallback) {
     return fallback;
   }
@@ -157,7 +171,7 @@ const getDependenciesForWakeWordFile = (fileName) => {
 };
 
 const getAssetForWakeWord = (label, options = {}) => {
-  const slug = options.slug || slugify(label);
+  const slug = slugify(options.slug || label);
   if (!slug) return null;
 
   const fileName = findFileForWakeWord(slug, options.platform, options.arch) ||
@@ -211,7 +225,8 @@ const getAssetsForWakeWords = (wakeWords = [], options = {}) => {
 const listAllAssets = (options = {}) => {
   const files = listWakeWordFiles();
   return files.map((fileName) => {
-    const absolutePath = path.join(WAKE_WORD_ROOT, fileName);
+    const absolutePath = resolveAssetPath(fileName);
+    if (!absolutePath) return null;
     const stats = fs.statSync(absolutePath);
     return {
       fileName,
@@ -224,7 +239,7 @@ const listAllAssets = (options = {}) => {
       format: path.extname(fileName).slice(1),
       engine: path.extname(fileName).toLowerCase() === '.ppn' ? 'porcupine' : 'openwakeword'
     };
-  });
+  }).filter(Boolean);
 };
 
 module.exports = {
@@ -233,5 +248,6 @@ module.exports = {
   getAssetsForWakeWords,
   listAllAssets,
   getDependenciesForWakeWordFile,
+  resolveAssetPath,
   WAKE_WORD_ROOT
 };

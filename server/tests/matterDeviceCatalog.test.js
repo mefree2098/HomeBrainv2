@@ -311,6 +311,18 @@ test('Matter service guards Thread firmware flashing inputs and command construc
     matterService._test.splitCommandSpec('python3 -m universal_silabs_flasher'),
     ['python3', '-m', 'universal_silabs_flasher']
   );
+  assert.deepEqual(
+    matterService._test.normalizeChildProcessInvocation('python3', ['-m', 'universal_silabs_flasher']),
+    { command: 'python3', args: ['-m', 'universal_silabs_flasher'] }
+  );
+  assert.throws(
+    () => matterService._test.normalizeChildProcessInvocation('python3 -c', ['print(1)']),
+    /Invalid child-process executable/
+  );
+  assert.throws(
+    () => matterService._test.normalizeThreadSerialDevicePath('/dev/../tmp/ttyUSB2'),
+    /local \/dev path/
+  );
 
   assert.deepEqual(
     matterService._test.buildUniversalSilabsFlasherArgs({

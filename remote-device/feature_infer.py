@@ -20,14 +20,13 @@ Protocol (stdin -> stdout):
 
 This sidecar intentionally keeps a simple protocol to avoid large dependencies in Node.
 """
-import sys
-import os
-import time
-import json
-import struct
 import inspect
+import json
+import os
+import struct
+import sys
 import threading
-from pathlib import Path
+import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -40,16 +39,10 @@ except Exception as exc:  # pragma: no cover
     sys.exit(1)
 
 OWW_UTILS = None
-# Ensure OpenWakeWord resources are present (if supported by installed version)
 try:
     from openwakeword import utils as oww_utils  # type: ignore
+
     OWW_UTILS = oww_utils
-    if hasattr(OWW_UTILS, "download_models"):
-        try:
-            OWW_UTILS.download_models()
-        except Exception as _download_err:
-            # Non-fatal; AudioFeatures init will fail if truly missing
-            pass
 except Exception:
     OWW_UTILS = None
 
@@ -63,8 +56,16 @@ MAGIC = b"AUD0"
 DEFAULT_SAMPLE_RATE = 16000
 DEFAULT_MIN_RMS = 0.004
 MAX_MIN_RMS = 0.2
+DEFAULT_COOLDOWN_MS = 1500
 WINDOW_FRAMES = 16
 FEATURE_DIM = 96
+MIN_SAMPLE_RATE = 8_000
+MAX_SAMPLE_RATE = 48_000
+MIN_FRAME_SAMPLES = 160
+MAX_FRAME_SAMPLES = 160_000
+MAX_CONTROL_MESSAGE_BYTES = 64 * 1024
+MAX_MODELS = 32
+MAX_LABEL_LENGTH = 128
 
 @dataclass
 class ModelSpec:
@@ -82,7 +83,7 @@ class FeatureInfer:
         self.sample_rate = DEFAULT_SAMPLE_RATE
         self.frame_samples = DEFAULT_SAMPLE_RATE  # 1 second by default
         self.min_rms = DEFAULT_MIN_RMS  # energy gate to reduce false positives on silence
-        self.cooldown_ms = 1500  # per-model cooldown between detects
+        self.cooldown_ms = DEFAULT_COOLDOWN_MS  # per-model cooldown between detects
         self.last_detect_ts: Dict[str, float] = {}
         # Initialize AudioFeatures; if resources missing, attempt one more download, then retry once
         try:
@@ -92,7 +93,12 @@ class FeatureInfer:
                 if OWW_UTILS and hasattr(OWW_UTILS, "download_models"):
                     OWW_UTILS.download_models()
                 self.features = self._init_features()
-            except Exception:
+            except Exception as retry_error:
+                self.log(
+                    level="error",
+                    msg="Unable to initialize OpenWakeWord features",
+                    error=str(retry_error),
+                )
                 raise init_err
         self.lock = threading.Lock()
 
@@ -101,8 +107,8 @@ class FeatureInfer:
             sig = inspect.signature(AudioFeatures.__init__)
             if "device" in sig.parameters:
                 return AudioFeatures(device="cpu")
-        except Exception:
-            pass
+        except (TypeError, ValueError):
+            self.log(level="debug", msg="AudioFeatures signature could not be inspected")
         return AudioFeatures()
 
     def log(self, **kwargs):
@@ -110,27 +116,53 @@ class FeatureInfer:
         sys.stderr.flush()
 
     def configure(self, payload: Dict) -> None:
+        if not isinstance(payload, dict):
+            raise ValueError("Configuration must be a JSON object")
+
         models_cfg = payload.get("models") or []
-        self.sample_rate = int(payload.get("sampleRate") or DEFAULT_SAMPLE_RATE)
-        self.frame_samples = int(payload.get("frameSamples") or self.sample_rate)
+        if not isinstance(models_cfg, list):
+            raise ValueError("Configuration models must be a list")
+
+        try:
+            sample_rate = int(payload.get("sampleRate") or DEFAULT_SAMPLE_RATE)
+        except (TypeError, ValueError):
+            sample_rate = DEFAULT_SAMPLE_RATE
+        self.sample_rate = max(MIN_SAMPLE_RATE, min(MAX_SAMPLE_RATE, sample_rate))
+
+        try:
+            frame_samples = int(payload.get("frameSamples") or self.sample_rate)
+        except (TypeError, ValueError):
+            frame_samples = self.sample_rate
+        self.frame_samples = max(MIN_FRAME_SAMPLES, min(MAX_FRAME_SAMPLES, frame_samples))
+
         vad = payload.get("vad") or {}
+        if not isinstance(vad, dict):
+            vad = {}
         try:
             if vad.get("minRms") is not None:
                 min_rms = float(vad.get("minRms"))
                 self.min_rms = max(DEFAULT_MIN_RMS, min(MAX_MIN_RMS, min_rms)) if min_rms > 0 else DEFAULT_MIN_RMS
-        except Exception:
-            pass
+        except (TypeError, ValueError):
+            self.min_rms = DEFAULT_MIN_RMS
         try:
-            self.cooldown_ms = int(payload.get("cooldownMs")) if payload.get("cooldownMs") is not None else self.cooldown_ms
-        except Exception:
-            pass
+            cooldown_ms = int(payload.get("cooldownMs")) if payload.get("cooldownMs") is not None else self.cooldown_ms
+        except (TypeError, ValueError):
+            cooldown_ms = DEFAULT_COOLDOWN_MS
+        self.cooldown_ms = max(0, min(300_000, cooldown_ms))
 
         providers = ["CPUExecutionProvider"]
         configured: List[ModelSpec] = []
-        for entry in models_cfg:
-            label = str(entry.get("label") or entry.get("slug") or "wake_word")
+        for entry in models_cfg[:MAX_MODELS]:
+            if not isinstance(entry, dict):
+                self.log(level="warn", msg="Ignoring non-object model entry")
+                continue
+            label = str(entry.get("label") or entry.get("slug") or "wake_word")[:MAX_LABEL_LENGTH]
             path = str(entry.get("path") or entry.get("model") or "").strip()
-            threshold = float(entry.get("threshold") or 0.55)
+            try:
+                threshold = float(entry.get("threshold") if entry.get("threshold") is not None else 0.55)
+            except (TypeError, ValueError):
+                threshold = 0.55
+            threshold = max(0.0, min(1.0, threshold))
             if not path:
                 self.log(level="warn", msg="Model entry missing path", label=label)
                 continue
@@ -188,7 +220,7 @@ class FeatureInfer:
             try:
                 inputs = {m.input_name: tensor}
                 outputs = m.session.run(m.output_names, inputs)
-            except Exception as e1:
+            except Exception:
                 # Try NHW (1, 96, 16)
                 try:
                     inputs = {m.input_name: np.transpose(tensor, (0, 2, 1))}
@@ -234,11 +266,15 @@ def main():
             pos = bin_in.peek(4) if hasattr(bin_in, 'peek') else None
             if pos and len(pos) >= 4 and pos[:4] == MAGIC:
                 break
-        except Exception:
-            pass
-        line_bytes = bin_in.readline()
+        except (OSError, ValueError) as error:
+            fi.log(level="error", msg="Unable to inspect sidecar input", error=str(error))
+            return
+        line_bytes = bin_in.readline(MAX_CONTROL_MESSAGE_BYTES + 1)
         if not line_bytes:
             break
+        if len(line_bytes) > MAX_CONTROL_MESSAGE_BYTES:
+            fi.log(level="error", msg="Control message exceeds size limit")
+            return
         try:
             text = line_bytes.decode('utf-8', errors='ignore')
             payload = json.loads(text)
@@ -247,10 +283,9 @@ def main():
                 sys.stdout.write(json.dumps({"type": "ready", "models": [m.label for m in fi.models]}) + "\n")
                 sys.stdout.flush()
             else:
-                fi.log(level="warn", msg="Unknown control message", payload=payload)
-        except Exception as e:
-            # Ignore non-JSON or partial lines quietly
-            fi.log(level="debug", msg="Skipping non-JSON control line")
+                fi.log(level="warn", msg="Unknown control message")
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            fi.log(level="debug", msg="Skipping invalid control line", error=str(error))
             continue
 
     # Audio loop
@@ -261,6 +296,15 @@ def main():
         magic, length = header[:4], struct.unpack('<I', header[4:])[0]
         if magic != MAGIC:
             continue
+        expected_length = fi.frame_samples * 2
+        if length != expected_length or length > MAX_FRAME_SAMPLES * 2:
+            fi.log(
+                level="error",
+                msg="Audio frame length is invalid",
+                expected=expected_length,
+                received=length,
+            )
+            return
         data = read_exact(sys.stdin.buffer, length)
         if data is None:
             break

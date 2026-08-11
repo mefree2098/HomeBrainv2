@@ -169,12 +169,6 @@ function buildExpiryForDays(days) {
   return new Date(Date.now() + (days * 24 * 60 * 60 * 1000));
 }
 
-function decodeTokenExpiration(token) {
-  const decoded = jwt.decode(token);
-  const exp = Number(decoded?.exp || 0);
-  return Number.isFinite(exp) && exp > 0 ? new Date(exp * 1000) : null;
-}
-
 function isValidDate(value) {
   return value instanceof Date && Number.isFinite(value.getTime());
 }
@@ -242,14 +236,15 @@ async function buildTokensForSession(user, sessionId, clientType = 'unknown') {
   return {
     accessToken,
     refreshToken,
-    refreshExpiresAt: decodeTokenExpiration(refreshToken) || refreshExpiresAt,
+    refreshExpiresAt,
     refreshMaxAgeMs: Math.max(refreshExpiresAt.getTime() - Date.now(), 0)
   };
 }
 
 function buildTokensWithExistingRefreshToken(user, session, refreshToken) {
-  const refreshExpiresAt = decodeTokenExpiration(refreshToken)
-    || (isValidDate(session.expiresAt) ? session.expiresAt : buildExpiryForDays(DEFAULT_SESSION_MAX_AGE_DAYS));
+  const refreshExpiresAt = isValidDate(session.expiresAt)
+    ? session.expiresAt
+    : buildExpiryForDays(DEFAULT_SESSION_MAX_AGE_DAYS);
 
   return {
     accessToken: generateAccessToken(user, { sessionId: session.sessionId }),
@@ -551,9 +546,8 @@ async function revokeSessionByRefreshToken(refreshToken, userId = null, reason =
   return null;
 }
 
-function getSessionIdFromAccessToken(token) {
-  const decoded = jwt.decode(trimString(token));
-  return trimString(decoded?.sid);
+function getSessionIdFromVerifiedClaims(claims) {
+  return claims && typeof claims === 'object' ? trimString(claims.sid) : '';
 }
 
 module.exports = {
@@ -571,5 +565,5 @@ module.exports = {
   listSessionsForUser,
   revokeSessionById,
   revokeSessionByRefreshToken,
-  getSessionIdFromAccessToken
+  getSessionIdFromVerifiedClaims
 };

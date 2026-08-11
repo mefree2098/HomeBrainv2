@@ -12,6 +12,7 @@ const {
 const { extractCustomSkillIdentity } = require('../../shared/alexa/customSkill');
 const { AlexaEventGatewayService, resolveEventRegion } = require('./eventGatewayService');
 const { AlexaDeviceService } = require('./alexaDeviceService');
+const AUTHORIZE_SUBMISSION_HMAC_KEY = crypto.randomBytes(32);
 
 function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -49,6 +50,12 @@ function setOAuthTokenResponseHeaders(res) {
 function getTokenFingerprint(value) {
   const token = trimString(value);
   return token ? sha256(token).slice(0, 12) : '';
+}
+
+function getAuthorizationSubmissionKey(values) {
+  return crypto.createHmac('sha256', AUTHORIZE_SUBMISSION_HMAC_KEY)
+    .update((Array.isArray(values) ? values : [values]).map((value) => trimString(value)).join('\0'), 'utf8')
+    .digest('hex');
 }
 
 function appendOAuthRefreshFailureAudit(store, payload = {}) {
@@ -278,12 +285,21 @@ function validatePkceParameters(codeChallenge, codeChallengeMethod) {
 }
 
 function sanitizeBaseUrl(value) {
-  const normalized = trimString(value).replace(/\/+$/, '');
+  const normalized = trimString(value);
   if (!normalized) {
     return '';
   }
-
-  return new URL(normalized).origin;
+  if (normalized.length > 2048) {
+    throw new Error('Base URL is too long');
+  }
+  const parsed = new URL(normalized);
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('Base URL must use http or https');
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error('Base URL must not include credentials');
+  }
+  return parsed.origin;
 }
 
 function buildAbsoluteUrl(baseUrl, value, fallbackPath = '') {
@@ -295,12 +311,42 @@ function buildAbsoluteUrl(baseUrl, value, fallbackPath = '') {
   if (!candidate) {
     return normalizedBaseUrl;
   }
-  return new URL(candidate, normalizedBaseUrl).toString();
+  const resolved = new URL(candidate, `${normalizedBaseUrl}/`);
+  if (resolved.origin !== normalizedBaseUrl || resolved.username || resolved.password) {
+    throw new Error('Resolved URL must remain on the configured origin');
+  }
+  resolved.hash = '';
+  return resolved.toString();
 }
 
 function extractBearerToken(value) {
-  const match = trimString(value).match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : '';
+  const header = trimString(value);
+  if (header.length < 8 || header.slice(0, 7).toLowerCase() !== 'bearer ') {
+    return '';
+  }
+  return header.slice(7).trim();
+}
+
+function findUnsafeRequestKey(value, depth = 0, budget = { remaining: 20_000 }) {
+  if (!value || typeof value !== 'object' || depth > 20) return '';
+  if (budget.remaining <= 0) return '[request too complex]';
+  budget.remaining -= 1;
+  for (const key of Object.keys(value)) {
+    if (key === '__proto__' || key === 'prototype' || key === 'constructor' || key.startsWith('$')) {
+      return key;
+    }
+    const nested = findUnsafeRequestKey(value[key], depth + 1, budget);
+    if (nested) return nested;
+  }
+  return '';
+}
+
+function rejectUnsafeRequestKeys(req, res, next) {
+  const unsafeKey = findUnsafeRequestKey(req.body) || findUnsafeRequestKey(req.query);
+  if (unsafeKey) {
+    return res.status(400).json({ success: false, error: 'Request contains an unsupported field name' });
+  }
+  return next();
 }
 
 function htmlEscape(value) {
@@ -347,7 +393,10 @@ function safeOrigin(value) {
 }
 
 function closeServerAndExit(server, exitCode = 0, options = {}) {
-  const timeoutMs = Number(options.timeoutMs) || 5000;
+  const requestedTimeoutMs = Number(options.timeoutMs);
+  const timeoutMs = Number.isFinite(requestedTimeoutMs)
+    ? Math.max(250, Math.min(60_000, Math.round(requestedTimeoutMs)))
+    : 5000;
   const exitProcess = typeof options.exitProcess === 'function'
     ? options.exitProcess
     : process.exit.bind(process);
@@ -382,13 +431,17 @@ function buildBrokerBaseUrl(req) {
     return configured;
   }
 
-  const forwardedProto = trimString(req.headers['x-forwarded-proto']) || req.protocol;
-  const forwardedHost = trimString(req.headers['x-forwarded-host']) || trimString(req.headers.host);
-  if (!forwardedHost) {
+  const protocol = trimString(req.protocol).toLowerCase();
+  const host = trimString(req.get?.('host') || req.headers.host);
+  if (!host || !['http', 'https'].includes(protocol)) {
     return '';
   }
 
-  return `${forwardedProto}://${forwardedHost}`.replace(/\/+$/, '');
+  try {
+    return sanitizeBaseUrl(`${protocol}://${host}`);
+  } catch (_error) {
+    return '';
+  }
 }
 
 function isLoopbackHostname(hostname) {
@@ -418,9 +471,15 @@ function validateHubBaseUrl(value, { mode = 'private' } = {}) {
     throw new Error('hubBaseUrl must use http or https');
   }
 
-  parsed.hash = '';
-  parsed.search = '';
-  return parsed.toString().replace(/\/+$/, '');
+  if (parsed.username || parsed.password) {
+    throw new Error('hubBaseUrl must not include credentials');
+  }
+
+  if (parsed.pathname !== '/' || parsed.search || parsed.hash) {
+    throw new Error('hubBaseUrl must be an origin without a path, query, or fragment');
+  }
+
+  return parsed.origin;
 }
 
 function resolveHubReference(hubs = [], reference = '', allowedHubIds = []) {
@@ -452,14 +511,36 @@ function resolveHubReference(hubs = [], reference = '', allowedHubIds = []) {
 }
 
 function buildRequestId() {
-  return `hbr_${Math.random().toString(16).slice(2)}${Date.now().toString(16)}`;
+  return `hbr_${crypto.randomBytes(12).toString('hex')}`;
+}
+
+function clampNumber(value, fallback, minimum, maximum) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(minimum, Math.min(maximum, Math.round(numeric)));
 }
 
 function getRateLimitConfig() {
   return {
-    windowMs: Math.max(1000, Number(process.env.HOMEBRAIN_ALEXA_RATE_LIMIT_WINDOW_MS || 60 * 1000)),
-    maxRequests: Math.max(1, Number(process.env.HOMEBRAIN_ALEXA_RATE_LIMIT_MAX || 120))
+    windowMs: clampNumber(process.env.HOMEBRAIN_ALEXA_RATE_LIMIT_WINDOW_MS, 60 * 1000, 1000, 60 * 60 * 1000),
+    maxRequests: clampNumber(process.env.HOMEBRAIN_ALEXA_RATE_LIMIT_MAX, 120, 1, 100_000)
   };
+}
+
+function createOAuthTokenRateLimitMiddleware() {
+  return rateLimit({
+    windowMs: clampNumber(process.env.HOMEBRAIN_ALEXA_TOKEN_RATE_LIMIT_WINDOW_MS, 60 * 1000, 1000, 60 * 60 * 1000),
+    limit: clampNumber(process.env.HOMEBRAIN_ALEXA_TOKEN_RATE_LIMIT_MAX, 60, 1, 10_000),
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler(_req, res) {
+      setOAuthTokenResponseHeaders(res);
+      return res.status(429).json({
+        error: 'temporarily_unavailable',
+        error_description: 'Too many token requests; retry shortly'
+      });
+    }
+  });
 }
 
 function createRateLimitMiddleware() {
@@ -1024,9 +1105,10 @@ function createApp(options = {}) {
     eventGatewayService.start();
   }
 
-  app.set('trust proxy', true);
+  app.set('trust proxy', 'loopback, linklocal, uniquelocal');
   app.use(express.json({ limit: '4mb' }));
   app.use(express.urlencoded({ extended: false }));
+  app.use(rejectUnsafeRequestKeys);
   app.use((req, res, next) => {
     req.requestId = trimString(req.headers['x-request-id']) || buildRequestId();
     res.setHeader('X-Request-Id', req.requestId);
@@ -1150,14 +1232,14 @@ function createApp(options = {}) {
         throw new Error('Selected hub does not support Alexa account linking yet');
       }
 
-      const submissionKey = sha256([
+      const submissionKey = getAuthorizationSubmissionKey([
         client.clientId,
         validatedRedirectUri,
         state,
         hubId,
         linkCode,
         pkce.codeChallenge
-      ].join('\u0000'));
+      ]);
       let submission = authorizeSubmissions.get(submissionKey);
       if (!submission) {
         const promise = (async () => {
@@ -1226,7 +1308,7 @@ function createApp(options = {}) {
     }
   });
 
-  app.post('/api/oauth/alexa/token', async (req, res) => {
+  app.post('/api/oauth/alexa/token', createOAuthTokenRateLimitMiddleware(), async (req, res) => {
     const startedAt = Date.now();
     const grantType = trimString(req.body.grant_type);
     const refreshTokenFingerprint = grantType === 'refresh_token'
@@ -1648,6 +1730,9 @@ function createApp(options = {}) {
           brokerDisplayName: trimString(requestPayload.brokerDisplayName) || getBrokerDisplayName()
         }, {
           timeout: 10000,
+          maxRedirects: 0,
+          maxContentLength: 2 * 1024 * 1024,
+          maxBodyLength: 2 * 1024 * 1024,
           headers: {
             'Content-Type': 'application/json'
           }
@@ -2000,8 +2085,11 @@ module.exports = {
   buildBrokerBaseUrl,
   closeServerAndExit,
   extractBearerToken,
+  findUnsafeRequestKey,
   reconcileLinkedAccountsToHubs,
-  renderAuthorizePage
+  renderAuthorizePage,
+  sanitizeBaseUrl,
+  validateHubBaseUrl
 };
 
 if (require.main === module) {

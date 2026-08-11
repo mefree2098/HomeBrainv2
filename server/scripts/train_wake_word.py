@@ -6,23 +6,26 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import math
 import os
 import random
 import shutil
-import subprocess
+
+# All subprocesses below use argument arrays with shell execution disabled.
+import subprocess  # nosec B404
 import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 
 try:
     import soundfile as sf  # type: ignore
-except ImportError as exc:  # pragma: no cover
+except ImportError:  # pragma: no cover
     sys.stderr.write("soundfile is required. Install with `pip install soundfile`.\n")
     raise
 
@@ -34,13 +37,13 @@ except Exception:  # pragma: no cover
 try:
     import torch  # type: ignore
     from torch.utils.data import DataLoader, Dataset  # type: ignore
-except ImportError as exc:  # pragma: no cover
+except ImportError:  # pragma: no cover
     sys.stderr.write("PyTorch is required. Install with `pip install torch`.\n")
     raise
 
 try:
     from openwakeword.utils import AudioFeatures  # type: ignore
-except ImportError as exc:  # pragma: no cover
+except ImportError:  # pragma: no cover
     sys.stderr.write("openwakeword is required. Install with `pip install openwakeword`.\n")
     raise
 
@@ -66,6 +69,16 @@ def progress(stage: str, amount: float, message: str, **extra: object) -> None:
     if extra:
         payload["data"] = extra
     print(json.dumps(payload), flush=True)
+
+
+def clamp_number(value: object, fallback: float, minimum: float, maximum: float) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    if not math.isfinite(numeric):
+        return fallback
+    return max(minimum, min(maximum, numeric))
 
 
 def ensure_dir(path: Path) -> Path:
@@ -115,13 +128,15 @@ def piper_synthesize(executable: str, voice: Dict[str, object], text: str, outpu
         if isinstance(speaker_value, int):
             cmd.extend(["--speaker", str(speaker_value)])
     try:
-        result = subprocess.run(
+        # The executable is resolved and required to be executable before this helper is called.
+        result = subprocess.run(  # nosec B603
             cmd,
             input=(text + "\n").encode("utf-8"),
             check=False,
             capture_output=True,
             timeout=60,
-            env=env
+            env=env,
+            shell=False,
         )
         stderr = result.stderr.decode("utf-8", errors="ignore")
         stdout = result.stdout.decode("utf-8", errors="ignore")
@@ -147,11 +162,7 @@ def resolve_piper_executable(executable_opt: Optional[str]) -> Optional[str]:
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate.resolve())
         # Try relative to CWD and repo root
-        try_paths = []
-        try:
-            try_paths.append((Path.cwd() / candidate))
-        except Exception:
-            pass
+        try_paths = [Path.cwd() / candidate]
         root = Path(__file__).resolve().parent.parent
         try_paths.append(root / candidate)
         for p in try_paths:
@@ -228,7 +239,12 @@ def generate_positive_samples(
 ) -> Tuple[List[np.ndarray], Dict[str, object]]:
     samples: List[np.ndarray] = []
     tts_cfg = options.get("tts", {})
-    synthetic_total = int(options.get("syntheticSamples", DEFAULT_POSITIVE_SYNTHETIC))
+    synthetic_total = round(clamp_number(
+        options.get("syntheticSamples"),
+        DEFAULT_POSITIVE_SYNTHETIC,
+        1,
+        5_000,
+    ))
     voices = [voice for voice in tts_cfg.get("voices", []) if Path(str(voice.get("modelPath", ""))).is_file()]
     p_exec_cfg = tts_cfg.get("executable")
     piper_exec = resolve_piper_executable(str(p_exec_cfg) if p_exec_cfg else None)
@@ -240,6 +256,7 @@ def generate_positive_samples(
         "syntheticRequested": synthetic_total,
         "syntheticGenerated": 0,
         "userRecordings": 0,
+        "userRecordingsSkipped": 0,
         "silenceBackfill": 0,
         "voiceUsage": {},
         "piperAttempts": 0,
@@ -399,6 +416,7 @@ def generate_positive_samples(
             samples.append(pad_audio(audio, target_samples, rng))
             stats["userRecordings"] += 1
         except Exception:
+            stats["userRecordingsSkipped"] += 1
             continue
 
     if not samples:
@@ -422,6 +440,7 @@ def generate_negative_samples(
     backgrounds = list_audio_files(map(Path, options.get("backgroundDirs", [])))
     stats = {
         "backgroundClips": 0,
+        "backgroundClipsSkipped": 0,
         "syntheticRequested": 0,
         "syntheticGenerated": 0,
         "noiseSamples": 0,
@@ -437,6 +456,7 @@ def generate_negative_samples(
             samples.append(pad_audio(audio, target_samples, rng))
             stats["backgroundClips"] += 1
         except Exception:
+            stats["backgroundClipsSkipped"] += 1
             continue
 
     piper_cfg = options.get("syntheticSpeech", {})
@@ -446,7 +466,12 @@ def generate_negative_samples(
         "Turn on the lights",
         "Cancel the alarm"
     ]
-    synthetic_count = int(piper_cfg.get("samples", DEFAULT_NEGATIVE_SYNTHETIC))
+    synthetic_count = round(clamp_number(
+        piper_cfg.get("samples"),
+        DEFAULT_NEGATIVE_SYNTHETIC,
+        0,
+        5_000,
+    ))
     voices = [voice for voice in piper_cfg.get("voices", []) if Path(str(voice.get("modelPath", ""))).is_file()]
     piper_exec = shutil.which(str(piper_cfg.get("executable") or "piper"))
     stats["syntheticRequested"] = synthetic_count
@@ -579,7 +604,13 @@ def generate_negative_samples(
                     }
                 )
 
-    for _ in range(int(options.get("randomSilence", DEFAULT_RANDOM_SILENCE))):
+    random_silence_count = round(clamp_number(
+        options.get("randomSilence"),
+        DEFAULT_RANDOM_SILENCE,
+        0,
+        5_000,
+    ))
+    for _ in range(random_silence_count):
         noise = np.random.normal(0, rng.uniform(0.002, 0.01), size=target_samples).astype(np.float32)
         samples.append(noise)
         stats["noiseSamples"] += 1
@@ -799,8 +830,14 @@ def export_artifacts(trainer: WakeWordTrainer, output_path: Path) -> List[Dict[s
         try:
             conv_script = Path(__file__).resolve().parent / "convert_to_tflite.py"
             if conv_script.is_file():
-                result = subprocess.run([sys.executable, str(conv_script), "--onnx", str(onnx_path), "--out", str(output_path)],
-                                        check=False, capture_output=True)
+                # The interpreter and conversion script are fixed local paths.
+                result = subprocess.run(  # nosec B603
+                    [sys.executable, str(conv_script), "--onnx", str(onnx_path), "--out", str(output_path)],
+                    check=False,
+                    capture_output=True,
+                    shell=False,
+                    timeout=300,
+                )
                 if result.returncode == 0 and output_path.exists():
                     converted = True
         except Exception:
@@ -823,8 +860,14 @@ def export_artifacts(trainer: WakeWordTrainer, output_path: Path) -> List[Dict[s
 # ---------------------------------------------------------------------------
 
 def run_pipeline(args: argparse.Namespace, options: Dict[str, object]) -> Dict[str, object]:
-    rng = random.Random(1337)
+    # Reproducible pseudo-randomness is intentional for data augmentation, not security.
+    rng = random.Random(1337)  # nosec B311
     dataset_cfg = options.get("dataset", {})
+    if not isinstance(dataset_cfg, dict):
+        raise ValueError("dataset configuration must be an object")
+    training_cfg = options.get("training", {})
+    if not isinstance(training_cfg, dict):
+        raise ValueError("training configuration must be an object")
 
     # Allow window size override from options
     override_window_frames = dataset_cfg.get("windowFrames")
@@ -834,10 +877,10 @@ def run_pipeline(args: argparse.Namespace, options: Dict[str, object]) -> Dict[s
             if override_val >= 4:  # basic sanity
                 global WINDOW_FRAMES
                 WINDOW_FRAMES = override_val
-        except Exception:
-            pass
+        except (TypeError, ValueError):
+            progress("generating", 0.01, "Ignoring invalid windowFrames configuration")
 
-    target_seconds_config = float(dataset_cfg.get("clipDurationSeconds", 1.5))
+    target_seconds_config = clamp_number(dataset_cfg.get("clipDurationSeconds"), 1.5, 0.5, 5.0)
     # Ensure clips are long enough to produce at least one training window
     # openWakeWord embedding uses 10 ms mel frames, 76-frame window, 8-frame (80 ms) stride.
     # To get WINDOW_FRAMES windows, mel frames needed = 76 + (WINDOW_FRAMES-1)*8
@@ -848,8 +891,8 @@ def run_pipeline(args: argparse.Namespace, options: Dict[str, object]) -> Dict[s
         progress("generating", 0.02, f"clipDurationSeconds too short ({target_seconds_config:.2f}s). Using {min_required_seconds:.2f}s to satisfy windowing.")
     target_seconds = max(target_seconds_config, min_required_seconds)
     target_samples = int(target_seconds * SAMPLE_RATE)
-    augment_copies = int(dataset_cfg.get("augmentCopies", 2))
-    train_ratio = float(dataset_cfg.get("trainSplit", 0.85))
+    augment_copies = round(clamp_number(dataset_cfg.get("augmentCopies"), 2, 0, 10))
+    train_ratio = clamp_number(dataset_cfg.get("trainSplit"), 0.85, 0.5, 0.95)
 
     try:
         from openwakeword import utils as oww_utils  # type: ignore
@@ -857,7 +900,8 @@ def run_pipeline(args: argparse.Namespace, options: Dict[str, object]) -> Dict[s
     except Exception as download_error:  # pragma: no cover
         progress("generating", 0.01, f"Warning: failed to verify OpenWakeWord resources ({download_error}); proceeding with existing files.")
 
-    work_dir = Path(tempfile.mkdtemp(prefix=f"wakeword-{args.slug}-"))
+    work_dir = Path(tempfile.mkdtemp(prefix="homebrain-wakeword-"))
+    atexit.register(shutil.rmtree, work_dir, ignore_errors=True)
     ensure_dir(work_dir)
 
     progress("generating", 0.05, "Generating positive samples")
@@ -979,24 +1023,36 @@ def run_pipeline(args: argparse.Namespace, options: Dict[str, object]) -> Dict[s
     train_features, train_labels = train_features[train_idx], train_labels[train_idx]
     val_features, val_labels = val_features[val_idx], val_labels[val_idx]
 
+    batch_size = round(clamp_number(training_cfg.get("batchSize"), 128, 1, 1_024))
+    learning_rate = clamp_number(training_cfg.get("learningRate"), 1e-4, 1e-7, 0.1)
+    epochs = round(clamp_number(training_cfg.get("epochs"), 6, 1, 100))
+    target_false_activations = clamp_number(
+        training_cfg.get("targetFalseActivationsPerHour"),
+        0.2,
+        0,
+        100,
+    )
+
     train_loader = DataLoader(WakeWordDataset(train_features, train_labels),
-                              batch_size=int(options.get("training", {}).get("batchSize", 128)),
-                              shuffle=True, num_workers=min(4, os.cpu_count() or 1))
+                              batch_size=batch_size,
+                              shuffle=True, num_workers=min(4, os.cpu_count() or 1),
+                              pin_memory=torch.cuda.is_available())
     val_loader = DataLoader(WakeWordDataset(val_features, val_labels),
-                            batch_size=int(options.get("training", {}).get("batchSize", 128)),
-                            shuffle=False, num_workers=min(4, os.cpu_count() or 1))
+                            batch_size=batch_size,
+                            shuffle=False, num_workers=min(4, os.cpu_count() or 1),
+                            pin_memory=torch.cuda.is_available())
 
     trainer = WakeWordTrainer(input_shape=train_features.shape[1:],
-                              batch_size=int(options.get("training", {}).get("batchSize", 128)),
-                              learning_rate=float(options.get("training", {}).get("learningRate", 1e-4)))
+                              batch_size=batch_size,
+                              learning_rate=learning_rate)
 
-    metrics = trainer.fit(train_loader, val_loader, epochs=int(options.get("training", {}).get("epochs", 6)))
+    metrics = trainer.fit(train_loader, val_loader, epochs=epochs)
 
     progress("training", 0.74, "Evaluating thresholds")
     pos_scores = trainer.scores(pos_val_windows)
     neg_scores = trainer.scores(neg_val_windows)
     threshold = determine_threshold(pos_scores, neg_scores,
-                                    target_fp_per_hour=float(options.get("training", {}).get("targetFalseActivationsPerHour", 0.2)))
+                                    target_fp_per_hour=target_false_activations)
     sensitivity = max(0.05, min(0.95, 1.0 - threshold))
 
     progress("exporting", 0.82, "Exporting artifacts")
@@ -1050,8 +1106,12 @@ def load_options(args: argparse.Namespace) -> Dict[str, object]:
     if args.config:
         config_path = Path(args.config)
         if config_path.is_file():
-            with config_path.open("r", encoding="utf-8") as handle:
-                options = json.load(handle)
+            if config_path.stat().st_size > 1024 * 1024:
+                raise ValueError("Training configuration exceeds the 1 MiB size limit")
+            loaded = json.loads(config_path.read_text(encoding="utf-8"))
+            if not isinstance(loaded, dict):
+                raise ValueError("Training configuration must contain a JSON object")
+            options = loaded
     if args.samples is not None:
         options.setdefault("dataset", {}).setdefault("positive", {})["syntheticSamples"] = args.samples
     if args.language:

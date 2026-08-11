@@ -169,8 +169,8 @@ class WakeWordTrainingService extends EventEmitter {
   }
 
   async requestTraining({ phrase, slug, options = {}, profiles = [] }) {
-    const normalisedPhrase = (phrase || '').trim();
-    const resolvedSlug = slug || slugify(normalisedPhrase);
+    const normalisedPhrase = String(phrase || '').trim().slice(0, 200);
+    const resolvedSlug = slugify(slug || normalisedPhrase);
     if (!normalisedPhrase || !resolvedSlug) {
       throw new Error('Wake word phrase is required');
     }
@@ -210,7 +210,9 @@ class WakeWordTrainingService extends EventEmitter {
   }
 
   async enqueueTraining(slug, { options = {} } = {}) {
-    if (!slug) return;
+    const normalizedSlug = slugify(slug);
+    if (!normalizedSlug) return;
+    slug = normalizedSlug;
 
     this.trainingOptions.set(slug, this.mergeOptions(options));
 
@@ -243,6 +245,8 @@ class WakeWordTrainingService extends EventEmitter {
   }
 
   async executeTraining(slug) {
+    slug = slugify(slug);
+    if (!slug) return;
     const model = await WakeWordModel.findOne({ slug });
     if (!model) {
       console.warn(`No wake word model found for slug ${slug}; skipping training`);
@@ -328,21 +332,44 @@ class WakeWordTrainingService extends EventEmitter {
   }
 
   mergeOptions(options) {
-    const merged = JSON.parse(JSON.stringify(DEFAULT_OPTIONS));
+    const merged = structuredClone(DEFAULT_OPTIONS);
 
-    const recursiveMerge = (target, source) => {
+    const recursiveMerge = (target, source, depth = 0) => {
       const output = target;
+      if (!source || typeof source !== 'object' || Array.isArray(source) || depth > 8) return output;
       Object.entries(source || {}).forEach(([key, value]) => {
+        if (!Object.prototype.hasOwnProperty.call(output, key)
+          || key === '__proto__'
+          || key === 'prototype'
+          || key === 'constructor') {
+          return;
+        }
         if (value && typeof value === 'object' && !Array.isArray(value)) {
-          output[key] = recursiveMerge(output[key] || {}, value);
+          if (output[key] && typeof output[key] === 'object' && !Array.isArray(output[key])) {
+            output[key] = recursiveMerge(output[key], value, depth + 1);
+          }
         } else {
-          output[key] = value;
+          output[key] = Array.isArray(value) ? value.slice(0, 1000) : value;
         }
       });
       return output;
     };
 
     const result = recursiveMerge(merged, options || {});
+    const clampNumber = (value, fallback, minimum, maximum) => {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? Math.max(minimum, Math.min(maximum, numeric)) : fallback;
+    };
+    result.dataset.clipDurationSeconds = clampNumber(result.dataset.clipDurationSeconds, 1.5, 0.5, 5);
+    result.dataset.trainSplit = clampNumber(result.dataset.trainSplit, 0.85, 0.5, 0.95);
+    result.dataset.augmentCopies = Math.round(clampNumber(result.dataset.augmentCopies, 2, 0, 10));
+    result.dataset.positive.syntheticSamples = Math.round(clampNumber(result.dataset.positive.syntheticSamples, 400, 1, 5000));
+    result.dataset.negative.syntheticSpeech.samples = Math.round(clampNumber(result.dataset.negative.syntheticSpeech.samples, 150, 0, 5000));
+    result.dataset.negative.randomSilence = Math.round(clampNumber(result.dataset.negative.randomSilence, 200, 0, 5000));
+    result.training.epochs = Math.round(clampNumber(result.training.epochs, 6, 1, 100));
+    result.training.batchSize = Math.round(clampNumber(result.training.batchSize, 128, 1, 1024));
+    result.training.learningRate = clampNumber(result.training.learningRate, 1e-4, 1e-7, 0.1);
+    result.training.targetFalseActivationsPerHour = clampNumber(result.training.targetFalseActivationsPerHour, 0.2, 0, 100);
 
     const envBackgrounds = (process.env.WAKEWORD_BACKGROUND_DIRS || '')
       .split(',')
@@ -352,8 +379,7 @@ class WakeWordTrainingService extends EventEmitter {
     const defaultBackgrounds = [DEFAULT_BACKGROUND_DIR];
     const backgroundDirs = new Set([
       ...defaultBackgrounds,
-      ...envBackgrounds,
-      ...(result.dataset.negative.backgroundDirs || [])
+      ...envBackgrounds
     ].filter(Boolean));
 
     result.dataset.negative.backgroundDirs = Array.from(backgroundDirs);
@@ -398,7 +424,7 @@ class WakeWordTrainingService extends EventEmitter {
       return null;
     };
 
-    const piperExec = options.dataset?.positive?.tts?.executable || resolvePiperExec();
+    const piperExec = resolvePiperExec();
     if (piperExec) {
       let absExec = piperExec;
       if (!path.isAbsolute(absExec)) {
@@ -426,23 +452,6 @@ class WakeWordTrainingService extends EventEmitter {
     };
 
     const resolveVoice = (voice) => {
-      const modelPath = voice.modelPath ? path.resolve(String(voice.modelPath)) : null;
-      const configPath = voice.configPath ? path.resolve(String(voice.configPath)) : null;
-      const hasExistingPaths =
-        modelPath &&
-        configPath &&
-        fs.existsSync(modelPath) &&
-        fs.existsSync(configPath);
-
-      if (hasExistingPaths) {
-        return {
-          ...voice,
-          modelPath,
-          configPath,
-          speakerId: normaliseSpeakerId(voice.speakerId)
-        };
-      }
-
       const fallback = installedMap.get(voice.id);
       if (!fallback) {
         return null;
@@ -484,19 +493,13 @@ class WakeWordTrainingService extends EventEmitter {
 
     options.dataset.negative = options.dataset.negative || {};
     options.dataset.negative.syntheticSpeech = options.dataset.negative.syntheticSpeech || {};
-    if (!options.dataset.negative.syntheticSpeech.executable) {
-      const negPiperExec = resolvePiperExec();
-      if (negPiperExec) {
-        let absNeg = negPiperExec;
-        if (!path.isAbsolute(absNeg)) {
-          const PROJECT_ROOT = path.resolve(SERVER_ROOT, '..');
-          absNeg = absNeg.startsWith('./server') ? path.resolve(PROJECT_ROOT, absNeg) : path.resolve(SERVER_ROOT, absNeg);
-        }
-        options.dataset.negative.syntheticSpeech.executable = absNeg;
-      }
-    } else if (options.dataset.negative.syntheticSpeech.executable) {
-      const cur = options.dataset.negative.syntheticSpeech.executable;
-      options.dataset.negative.syntheticSpeech.executable = path.isAbsolute(cur) ? cur : path.resolve(SERVER_ROOT, cur);
+    const negPiperExec = resolvePiperExec();
+    if (negPiperExec) {
+      options.dataset.negative.syntheticSpeech.executable = path.isAbsolute(negPiperExec)
+        ? negPiperExec
+        : path.resolve(SERVER_ROOT, negPiperExec);
+    } else {
+      delete options.dataset.negative.syntheticSpeech.executable;
     }
     const requestedNegativeVoices = Array.isArray(options.dataset.negative.syntheticSpeech.voices)
       ? options.dataset.negative.syntheticSpeech.voices
@@ -667,6 +670,8 @@ class WakeWordTrainingService extends EventEmitter {
   }
 
   async updateModelStatus(slug, { status, progress, message, data = null }) {
+    slug = slugify(slug);
+    if (!slug) return null;
     // Build update document. Use dot-notation to merge metadata fields without clobbering the whole object.
     const update = {};
     if (status) update.status = status;
@@ -752,7 +757,7 @@ class WakeWordTrainingService extends EventEmitter {
   }
 
   getArtifactCandidates(model) {
-    const slug = model?.slug;
+    const slug = slugify(model?.slug);
     if (!slug) return [];
 
     const candidates = [];
@@ -763,12 +768,14 @@ class WakeWordTrainingService extends EventEmitter {
         ? candidatePath
         : path.resolve(WAKE_WORD_ROOT, candidatePath);
       const addPath = (resolvedPath) => {
-        if (!resolvedPath || seen.has(resolvedPath)) return;
-        seen.add(resolvedPath);
-        const extension = path.extname(resolvedPath).slice(1).toLowerCase();
+        const rootPath = path.resolve(WAKE_WORD_ROOT);
+        const safePath = path.resolve(resolvedPath || '');
+        if (!safePath.startsWith(`${rootPath}${path.sep}`) || seen.has(safePath)) return;
+        seen.add(safePath);
+        const extension = path.extname(safePath).slice(1).toLowerCase();
         candidates.push({
           ...metadata,
-          path: resolvedPath,
+          path: safePath,
           format: metadata.format || extension
         });
       };

@@ -2,13 +2,13 @@
 
 const WebSocket = require('ws');
 const recorder = require('node-record-lpcm16');
-const fetch = require('node-fetch');
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const yargs = require('yargs');
 const { hideBin } = require('yargs/helpers');
 const dgram = require('dgram');
+const net = require('net');
 const os = require('os');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
@@ -36,6 +36,18 @@ const WAKE_WORD_USER_AGENT = `HomeBrain-Remote/${PACKAGE_VERSION}`;
 const VAD_BASE_SAMPLE_RATE = 16000;
 const VAD_FRAME_SAMPLES = Math.round((DEFAULT_VAD_WINDOW_MS / 1000) * VAD_BASE_SAMPLE_RATE);
 const VAD_FRAME_BYTES = VAD_FRAME_SAMPLES * PCM_SAMPLE_WIDTH_BYTES;
+const MAX_WAKE_WORD_ASSET_BYTES = 64 * 1024 * 1024;
+const MAX_REGISTRATION_RESPONSE_BYTES = 1024 * 1024;
+const MAX_TTS_AUDIO_BYTES = 32 * 1024 * 1024;
+const ALLOWED_AUDIO_EXECUTABLES = new Set([
+  'aplay',
+  'arecord',
+  'espeak',
+  'ffplay',
+  'mpg123',
+  'pico2wave',
+  'play'
+]);
 const FEATURE_SIDECAR_LAUNCH_COMMAND = [
   'set -eu',
   'feature_script="$1"',
@@ -107,12 +119,140 @@ const normalizeWakeWordMinRms = (value) => {
 };
 const slugify = (value) => {
   if (!value) return '';
-  return value.toString().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const input = value.toString().toLowerCase();
+  let result = '';
+  let pendingSeparator = false;
+  for (const character of input) {
+    const isAsciiLetter = character >= 'a' && character <= 'z';
+    const isDigit = character >= '0' && character <= '9';
+    if (isAsciiLetter || isDigit) {
+      if (pendingSeparator && result) result += '-';
+      result += character;
+      pendingSeparator = false;
+    } else if (result) {
+      pendingSeparator = true;
+    }
+  }
+  return result;
 };
 
+function trimTrailingSlashes(value) {
+  const text = String(value || '');
+  let end = text.length;
+  while (end > 0 && text[end - 1] === '/') end -= 1;
+  return text.slice(0, end);
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 15_000) {
+  if (typeof globalThis.fetch !== 'function') {
+    throw new Error('This HomeBrain remote requires Node.js 20 or newer');
+  }
+  const signal = options.signal || globalThis.AbortSignal.timeout(timeoutMs);
+  return globalThis.fetch(url, { ...options, signal });
+}
+
+async function readResponseBuffer(response, maxBytes) {
+  const declaredLength = Number(response.headers?.get?.('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new Error('Response exceeded the allowed size');
+  }
+  if (!response.body || typeof response.body.getReader !== 'function') {
+    const fallback = Buffer.from(await response.arrayBuffer());
+    if (fallback.length > maxBytes) throw new Error('Response exceeded the allowed size');
+    return fallback;
+  }
+
+  const reader = response.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel('Response exceeded the allowed size');
+        throw new Error('Response exceeded the allowed size');
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, totalBytes);
+}
+
+function isAllowedHubHostname(hostname) {
+  let value = String(hostname || '').toLowerCase();
+  if (value.startsWith('[') && value.endsWith(']')) value = value.slice(1, -1);
+  if (value === 'localhost' || value.endsWith('.localhost') || value.endsWith('.local')) return true;
+  if (!value.includes('.') && !value.includes(':')) return true;
+  if (net.isIPv4(value)) {
+    const octets = value.split('.').map(Number);
+    return octets[0] === 10
+      || octets[0] === 127
+      || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
+      || (octets[0] === 192 && octets[1] === 168)
+      || (octets[0] === 169 && octets[1] === 254);
+  }
+  if (net.isIPv6(value)) {
+    return value === '::1' || value.startsWith('fc') || value.startsWith('fd') || value.startsWith('fe80:');
+  }
+  return false;
+}
+
+function normalizeAudioCommand(command, args = []) {
+  if (!ALLOWED_AUDIO_EXECUTABLES.has(command)) {
+    throw new Error(`Unsupported audio executable: ${String(command || '')}`);
+  }
+  if (!Array.isArray(args) || args.length > 64) {
+    throw new Error('Invalid audio command argument list');
+  }
+  return {
+    command,
+    args: args.map((arg) => {
+      if (typeof arg !== 'string' || arg.length > 16_384 || arg.includes('\0')) {
+        throw new Error('Invalid audio command argument');
+      }
+      return arg;
+    })
+  };
+}
+
+function findAllowedAudioExecutable(command) {
+  if (!ALLOWED_AUDIO_EXECUTABLES.has(command)) {
+    return '';
+  }
+  for (const directory of String(process.env.PATH || '').split(path.delimiter)) {
+    if (!path.isAbsolute(directory)) continue;
+    const candidate = path.join(directory, command);
+    try {
+      if (fs.statSync(candidate).isFile()) {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return candidate;
+      }
+    } catch (_error) {
+      // Try the next PATH entry.
+    }
+  }
+  return '';
+}
+
 function runCommand(command, args = []) {
+  let invocation;
+  try {
+    invocation = normalizeAudioCommand(command, args);
+  } catch (_error) {
+    return Promise.resolve(false);
+  }
   return new Promise((resolve) => {
-    const child = spawn(command, args, { stdio: 'ignore' });
+    // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- executable is allowlisted, argv is bounded, and no shell is used.
+    const child = spawn(invocation.command, invocation.args, {
+      stdio: 'ignore',
+      shell: false,
+      windowsHide: true,
+      timeout: 120_000
+    });
     child.on('error', () => resolve(false));
     child.on('close', (code) => resolve(code === 0));
   });
@@ -443,7 +583,11 @@ class HomeBrainRemoteDevice {
 
     console.log(normalizedClaimToken ? 'Registering device with claim token' : `Registering device with code: ${normalizedRegistrationCode}`);
 
-    const hubUrl = argv.hub || this.config.hubUrl || process.env.HUB_URL || 'http://localhost:3000';
+    const requestedHubUrl = argv.hub || this.config.hubUrl || process.env.HUB_URL || 'http://localhost:3000';
+    const hubUrl = this.setHubHttpBase(requestedHubUrl);
+    if (!hubUrl) {
+      throw new Error('A valid HomeBrain hub URL is required for registration');
+    }
     console.log(`Using Hub URL: ${hubUrl}`);
     this.config.hubUrl = hubUrl;
     this.config.registrationCode = normalizedRegistrationCode || null;
@@ -452,14 +596,14 @@ class HomeBrainRemoteDevice {
       this.config.deviceId = normalizedDeviceId;
       this.deviceId = normalizedDeviceId;
     }
-    this.setHubHttpBase(hubUrl);
-
     try {
       // Get network information
       const networkInfo = await this.getNetworkInfo();
 
-      const response = await fetch(`${hubUrl}/api/remote-devices/activate`, {
+      const activationUrl = this.buildAbsoluteHubUrl('/api/remote-devices/activate');
+      const response = await fetchWithTimeout(activationUrl, {
         method: 'POST',
+        redirect: 'error',
         headers: {
           'Content-Type': 'application/json'
         },
@@ -470,9 +614,9 @@ class HomeBrainRemoteDevice {
           ipAddress: networkInfo.ipAddress,
           firmwareVersion: PACKAGE_VERSION
         })
-      });
+      }, 15_000);
 
-      const data = await response.json();
+      const data = JSON.parse((await readResponseBuffer(response, MAX_REGISTRATION_RESPONSE_BYTES)).toString('utf8'));
 
       if (!data.success) {
         throw new Error(data.message || 'Registration failed');
@@ -654,14 +798,20 @@ class HomeBrainRemoteDevice {
 
         case 'wake_word_ack':
           console.log('Wake word acknowledged, listening for command...');
-          this.startVoiceRecording(message.timeout || 5000, true);
+          {
+            const requestedTimeout = Number(message.timeout);
+            const timeoutMs = Number.isFinite(requestedTimeout)
+              ? Math.max(250, Math.min(30_000, Math.round(requestedTimeout)))
+              : 5000;
+            this.startVoiceRecording(timeoutMs, true);
 
-          if (this.recordStopTimer) clearTimeout(this.recordStopTimer);
-          this.recordStopTimer = setTimeout(() => {
-            if (this.isRecording) {
-              this.stopVoiceRecording();
-            }
-          }, message.timeout || 5000);
+            if (this.recordStopTimer) clearTimeout(this.recordStopTimer);
+            this.recordStopTimer = setTimeout(() => {
+              if (this.isRecording) {
+                this.stopVoiceRecording();
+              }
+            }, timeoutMs);
+          }
           break;
 
         case 'command_processing':
@@ -1591,21 +1741,22 @@ class HomeBrainRemoteDevice {
   }
 
   async downloadWakeWordAsset(url) {
-    const response = await fetch(url, {
+    const downloadUrl = this.buildAbsoluteHubUrl(url);
+    const response = await fetchWithTimeout(downloadUrl, {
       method: 'GET',
+      redirect: 'error',
       headers: {
         'User-Agent': WAKE_WORD_USER_AGENT,
         'Accept': 'application/octet-stream',
         ...this.getDeviceAuthHeaders()
       }
-    });
+    }, 15_000);
 
     if (!response.ok) {
       throw new Error(`Failed to download wake word asset (${response.status} ${response.statusText})`);
     }
 
-    const arrayBuffer = await response.arrayBuffer();
-    return Buffer.from(arrayBuffer);
+    return readResponseBuffer(response, MAX_WAKE_WORD_ASSET_BYTES);
   }
 
   async syncWakeWordAssetsFromConfig(config) {
@@ -2975,12 +3126,12 @@ class HomeBrainRemoteDevice {
         params.set('voiceId', voiceId);
       }
       const url = `${base}/api/remote-devices/${this.deviceId}/tts?${params.toString()}`;
-      const res = await fetch(url, {
+      const res = await fetchWithTimeout(url, {
+        redirect: 'error',
         headers: this.getDeviceAuthHeaders()
-      });
+      }, 30_000);
       if (res.ok) {
-        const arrayBuf = await res.arrayBuffer();
-        const buf = Buffer.from(arrayBuf);
+        const buf = await readResponseBuffer(res, MAX_TTS_AUDIO_BYTES);
         const contentType = typeof res.headers?.get === 'function' ? res.headers.get('content-type') : '';
         const extension = detectAudioFileExtension(buf, contentType);
         const tmpPath = path.join(os.tmpdir(), `hb_tts_${Date.now()}${extension}`);
@@ -3048,26 +3199,21 @@ class HomeBrainRemoteDevice {
   }
 
   verifyCommand(command) {
-    return new Promise((resolve, reject) => {
-      const child = spawn('which', [command], { stdio: 'ignore' });
-      child.on('error', () => {
-        reject(new Error(`"${command}" executable not found in PATH`));
-      });
-      child.on('close', (code) => {
-        if (code !== 0) {
-          reject(new Error(`"${command}" executable not found in PATH`));
-        } else {
-          resolve();
-        }
-      });
-    });
+    if (!findAllowedAudioExecutable(command)) {
+      return Promise.reject(new Error(`"${command}" executable not found in PATH`));
+    }
+    return Promise.resolve();
   }
 
   normaliseHubBaseUrl(value) {
     if (!value) return null;
     let candidate = value.toString().trim();
     if (!candidate) return null;
-    if (!/^https?:\/\//i.test(candidate) && !/^wss?:\/\//i.test(candidate)) {
+    if (!candidate.toLowerCase().startsWith('http://')
+      && !candidate.toLowerCase().startsWith('https://')
+      // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
+      && !candidate.toLowerCase().startsWith('ws://') // Private/loopback LAN hubs may use HTTP.
+      && !candidate.toLowerCase().startsWith('wss://')) {
       candidate = `http://${candidate}`;
     }
 
@@ -3077,12 +3223,19 @@ class HomeBrainRemoteDevice {
         parsed.protocol = parsed.protocol === 'wss:' ? 'https:' : 'http:';
       }
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        parsed.protocol = 'http:';
+        return null;
+      }
+      if (parsed.username || parsed.password) {
+        return null;
+      }
+      if (parsed.protocol === 'http:' && !isAllowedHubHostname(parsed.hostname)) {
+        console.warn('Public HomeBrain hub URLs must use HTTPS');
+        return null;
       }
       parsed.pathname = '/';
       parsed.search = '';
       parsed.hash = '';
-      const normalized = parsed.toString().replace(/\/+$/, '');
+      const normalized = parsed.origin;
       return normalized || null;
     } catch (error) {
       console.warn(`Invalid hub URL "${value}": ${error.message}`);
@@ -3148,29 +3301,26 @@ class HomeBrainRemoteDevice {
   buildAbsoluteHubUrl(pathOrUrl) {
     const base = `${this.getHubHttpBase()}/`;
     if (!pathOrUrl) {
-      return base.replace(/\/+$/, '');
+      return trimTrailingSlashes(base);
     }
 
-    try {
-      return new URL(pathOrUrl, base).toString();
-    } catch (error) {
-      console.warn(`Failed to resolve hub URL for ${pathOrUrl}: ${error.message}`);
-      const suffix = pathOrUrl.startsWith('/') ? pathOrUrl : `/${pathOrUrl}`;
-      return `${this.getHubHttpBase()}${suffix}`;
+    const baseUrl = new URL(base);
+    const resolved = new URL(pathOrUrl, baseUrl);
+    if (resolved.origin !== baseUrl.origin || resolved.username || resolved.password) {
+      throw new Error('Hub resource URL must use the configured HomeBrain origin');
     }
+    resolved.hash = '';
+    return resolved.toString();
   }
 
   buildWebSocketUrl(baseUrl) {
-    try {
-      const url = new URL(baseUrl);
-      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-      url.pathname = '/ws/voice-device';
-      url.searchParams.set('deviceId', this.deviceId);
-      return url.toString();
-    } catch (error) {
-      const normalized = baseUrl.replace(/^http/, 'ws').replace(/\/+$/, '');
-      return `${normalized}/ws/voice-device?deviceId=${this.deviceId}`;
-    }
+    const normalizedBaseUrl = this.normaliseHubBaseUrl(baseUrl);
+    if (!normalizedBaseUrl) throw new Error('A valid HomeBrain hub URL is required');
+    const url = new URL(normalizedBaseUrl);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    url.pathname = '/ws/voice-device';
+    url.searchParams.set('deviceId', this.deviceId);
+    return url.toString();
   }
 
   startHeartbeat() {
@@ -3481,7 +3631,8 @@ class HomeBrainRemoteDevice {
     const checkApproval = async () => {
       try {
         // Try to connect with WebSocket to see if approved
-        const wsUrl = `ws://${hubInfo.address}:${hubInfo.port}/ws/voice-device/${this.deviceId}`;
+        // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
+        const wsUrl = `ws://${hubInfo.address}:${hubInfo.port}/ws/voice-device/${this.deviceId}`; // UDP discovery yields a local-LAN address.
 
         const testWs = new WebSocket(wsUrl);
 
@@ -3631,7 +3782,12 @@ class HomeBrainRemoteDevice {
 
       // Load updater module
       const RemoteDeviceUpdater = require('./updater.js');
-      const updater = new RemoteDeviceUpdater();
+      const updater = new RemoteDeviceUpdater({
+        allowedOrigin: this.getHubHttpBase(),
+        maxDownloadBytes: Number.isFinite(Number(size)) && Number(size) > 0
+          ? Math.min(Math.ceil(Number(size) * 1.1), 256 * 1024 * 1024)
+          : undefined
+      });
 
       await updater.initialize();
 
@@ -3753,7 +3909,8 @@ module.exports = {
   HomeBrainRemoteDevice,
   loadConfig,
   detectAudioFileExtension,
-  getAudioPlaybackCommands
+  getAudioPlaybackCommands,
+  normalizeAudioCommand
 };
 
 // Start the application

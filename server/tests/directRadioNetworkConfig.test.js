@@ -29,7 +29,7 @@ const SAMPLE_BACKUP = {
   pan_id: '1a62',
   extended_pan_id: 'dddddddddddddddd',
   channel: 20,
-  network_key: { key: '0123456789abcdef0123456789abcdef', frame_counter: 100, sequence_number: 0 }
+  network_key: { key: '0123456789abcdef0123456789abcdef', frame_counter: 100, sequence_number: 0 } // gitleaks:allow
 };
 
 function clearState() {

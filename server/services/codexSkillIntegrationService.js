@@ -6,6 +6,7 @@ const { ZipFile } = require('yazl');
 
 const CodexSkillIntegration = require('../models/CodexSkillIntegration');
 const UserService = require('./userService');
+const { trimTrailingSlashes } = require('../utils/networkSafety');
 
 const CODEX_TOKEN_PREFIX = 'hbcdx_live_';
 const DEFAULT_TOKEN_PLACEHOLDER = '<PASTE_HOMEBRAIN_CODEX_TOKEN>';
@@ -17,9 +18,7 @@ const OPENAI_YAML_PATH = path.join(SKILL_DIR, 'agents', 'openai.yaml');
 const HELPER_SCRIPT_PATH = path.join(SKILL_DIR, 'scripts', 'homebrain-live.js');
 
 function sanitizeBaseUrl(value) {
-  return String(value || '')
-    .trim()
-    .replace(/\/+$/, '');
+  return trimTrailingSlashes(String(value || '').trim());
 }
 
 function resolveRequestIp(req) {

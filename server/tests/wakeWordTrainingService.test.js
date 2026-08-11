@@ -4,6 +4,15 @@ const assert = require('node:assert/strict');
 const WakeWordModel = require('../models/WakeWordModel');
 const wakeWordTrainingService = require('../services/wakeWordTrainingService');
 
+test('training options ignore prototype keys and clamp resource-heavy values', () => {
+  const options = JSON.parse('{"__proto__":{"polluted":true},"training":{"epochs":999999,"batchSize":999999},"dataset":{"positive":{"syntheticSamples":999999}}}');
+  const merged = wakeWordTrainingService.mergeOptions(options);
+  assert.equal({}.polluted, undefined);
+  assert.equal(merged.training.epochs, 100);
+  assert.equal(merged.training.batchSize, 1024);
+  assert.equal(merged.dataset.positive.syntheticSamples, 5000);
+});
+
 test('resumePendingTraining requeues interrupted wake-word training jobs', async (t) => {
   const originalFind = WakeWordModel.find;
   const originalFindExistingArtifact = wakeWordTrainingService.findExistingArtifact;

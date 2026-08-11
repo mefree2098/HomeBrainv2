@@ -477,7 +477,7 @@ start_thread_network() {
   ot_ctl thread start >/dev/null
 
   local attempt state
-  for attempt in $(seq 1 90); do
+  for ((attempt = 0; attempt < 90; attempt += 1)); do
     state="$(read_state)"
     case "${state}" in
       leader|router|child)

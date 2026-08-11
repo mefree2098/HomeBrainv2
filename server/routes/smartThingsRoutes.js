@@ -4,6 +4,7 @@ const { requireAdmin } = require('./middlewares/auth');
 const smartThingsService = require('../services/smartThingsService');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
 const Settings = require('../models/Settings');
+const { buildClientRedirectUrl } = require('../utils/publicOrigin');
 
 // Create auth middleware instance
 const auth = requireAdmin();
@@ -102,36 +103,31 @@ router.get('/callback', async (req, res) => {
   try {
     const { code, state, error, error_description: errorDescription } = req.query;
 
-    console.log('SmartThings Routes: OAuth callback query params', req.query);
-
     console.log('SmartThings Routes: Handling OAuth callback');
-
-    const resolvedClientUrl = (process.env.CLIENT_URL && process.env.CLIENT_URL.trim())
-      ? process.env.CLIENT_URL.trim()
-      : `${req.secure ? 'https' : 'http'}://${req.get('host')}`;
-    const redirectBase = resolvedClientUrl.replace(/\/+$/, '');
 
     if (error) {
       const message = errorDescription || error;
       console.error('SmartThings Routes: OAuth error:', message);
-      return res.redirect(`${redirectBase}/settings?smartthings=error&message=${encodeURIComponent(message)}`);
+      return res.redirect(buildClientRedirectUrl(req, '/settings', { smartthings: 'error', message }));
     }
 
     if (!code) {
-      return res.redirect(`${redirectBase}/settings?smartthings=error&message=${encodeURIComponent('No authorization code received')}`);
+      return res.redirect(buildClientRedirectUrl(req, '/settings', {
+        smartthings: 'error',
+        message: 'No authorization code received'
+      }));
     }
 
     await smartThingsService.exchangeCodeForToken(code, state);
 
     console.log('SmartThings Routes: OAuth callback handled successfully');
-    res.redirect(`${redirectBase}/settings?smartthings=success`);
+    res.redirect(buildClientRedirectUrl(req, '/settings', { smartthings: 'success' }));
   } catch (error) {
     console.error('SmartThings Routes: Error handling OAuth callback:', error.message);
-    const resolvedClientUrl = (process.env.CLIENT_URL && process.env.CLIENT_URL.trim())
-      ? process.env.CLIENT_URL.trim()
-      : `${req.secure ? 'https' : 'http'}://${req.get('host')}`;
-    const redirectBase = resolvedClientUrl.replace(/\/+$/, '');
-    res.redirect(`${redirectBase}/settings?smartthings=error&message=${encodeURIComponent(error.message)}`);
+    res.redirect(buildClientRedirectUrl(req, '/settings', {
+      smartthings: 'error',
+      message: error.message || 'Callback failed'
+    }));
   }
 });
 

@@ -1324,10 +1324,10 @@ async function handleRequest(req, res) {
         : res.status(404).json({ success: false, message: 'Virtual profile not found' });
     }
 
-    if (method === 'GET' && path === '/weather/current') {
+    if (['GET', 'POST'].includes(method) && path === '/weather/current') {
       return res.status(200).json({ success: true, weather: buildWeather() });
     }
-    if (method === 'GET' && path === '/weather/dashboard') {
+    if (['GET', 'POST'].includes(method) && path === '/weather/dashboard') {
       const forecast = buildWeather();
       return res.status(200).json({ success: true, dashboard: { fetchedAt: forecast.fetchedAt, forecast, hourlyForecast: forecast.hourlyForecast, tempest: { available: false, observations: [], events: [] }, indoorAir: { available: false, samples: [] } } });
     }

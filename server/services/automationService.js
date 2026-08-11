@@ -1168,7 +1168,7 @@ async function ensureUniqueAutomationName(name, reservedNames = new Set()) {
   while (true) {
     const reserved = reservedNames.has(candidate.toLowerCase());
     const existing = await Automation.findOne({
-      name: { $regex: new RegExp(`^${escapeRegexLiteral(candidate)}$`, 'i') }
+      name: { $regex: `^${escapeRegexLiteral(candidate)}$`, $options: 'i' }
     }).select('_id');
 
     if (!reserved && !existing) {
@@ -1202,8 +1202,9 @@ async function createAutomation(automationData) {
     }
 
     // Check for duplicate names
+    const normalizedName = automationData.name.trim();
     const existingAutomation = await Automation.findOne({
-      name: { $regex: new RegExp(`^${automationData.name.trim()}$`, 'i') }
+      name: { $regex: `^${escapeRegexLiteral(normalizedName)}$`, $options: 'i' }
     });
 
     if (existingAutomation) {
@@ -1212,7 +1213,7 @@ async function createAutomation(automationData) {
 
     // Create automation with proper data structure
     const newAutomation = new Automation({
-      name: automationData.name.trim(),
+      name: normalizedName,
       description: automationData.description || '',
       trigger: automationData.trigger,
       actions: automationData.actions,
@@ -1264,9 +1265,10 @@ async function updateAutomation(id, updateData) {
       }
 
       // Check for duplicate names (excluding current automation)
+      const normalizedName = updateData.name.trim();
       const duplicateAutomation = await Automation.findOne({
         _id: { $ne: id },
-        name: { $regex: new RegExp(`^${updateData.name.trim()}$`, 'i') }
+        name: { $regex: `^${escapeRegexLiteral(normalizedName)}$`, $options: 'i' }
       });
 
       if (duplicateAutomation) {

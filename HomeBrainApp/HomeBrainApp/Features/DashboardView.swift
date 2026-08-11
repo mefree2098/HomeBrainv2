@@ -1326,7 +1326,7 @@ struct DashboardView: View {
         [
             String(describing: scenePhase),
             session.serverURLString,
-            session.accessToken ?? "none"
+            String(session.credentialTaskIdentity)
         ].joined(separator: "||")
     }
 
@@ -1334,7 +1334,7 @@ struct DashboardView: View {
         [
             String(describing: scenePhase),
             session.serverURLString,
-            session.accessToken ?? "none",
+            String(session.credentialTaskIdentity),
             selectedDashboardViewID,
             visibleDevicesWidgetDeviceIDs.joined(separator: "|")
         ].joined(separator: "||")
@@ -1344,7 +1344,7 @@ struct DashboardView: View {
         [
             String(describing: scenePhase),
             session.serverURLString,
-            session.accessToken ?? "none"
+            String(session.credentialTaskIdentity)
         ].joined(separator: "||")
     }
 
@@ -2314,7 +2314,12 @@ struct DashboardView: View {
                 query.append(URLQueryItem(name: "refreshIndoorAir", value: "true"))
             }
 
-            let response = try await session.apiClient.get("/api/weather/current", query: query)
+            let requestBody = Dictionary(
+                uniqueKeysWithValues: query.compactMap { item in
+                    item.value.map { (item.name, $0) }
+                }
+            )
+            let response = try await session.apiClient.post("/api/weather/current", body: requestBody)
             let root = JSON.object(response)
             let weatherPayload = root["weather"] ?? JSON.object(root["data"])["weather"]
 

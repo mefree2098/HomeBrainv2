@@ -15,6 +15,8 @@ from reachy_homebrain.main import ReachyHomebrain
 def test_wireless_entrypoints_request_supported_auto_detected_media_backend() -> None:
     assert ReachyHomebrain.request_media_backend == "default"
     assert HomeBrainReachyApp.request_media_backend == "default"
+    assert ReachyHomebrain.dont_start_webserver is True
+    assert HomeBrainReachyApp.dont_start_webserver is True
 
 
 def test_rejects_insecure_transport_without_explicit_opt_in() -> None:

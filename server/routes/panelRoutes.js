@@ -341,6 +341,8 @@ router.get('/:panelId/ota/download', async (req, res) => {
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Length', String(artifact.artifactSizeBytes));
     res.setHeader('Cache-Control', 'no-store');
+    // The service resolves the real path and requires a regular file within the managed OTA directory.
+    // nosemgrep: javascript.express.security.audit.express-res-sendfile.express-res-sendfile
     return res.sendFile(artifact.artifactPath);
   } catch (error) {
     console.error(`GET /api/panels/${req.params.panelId}/ota/download - Error:`, error.message);

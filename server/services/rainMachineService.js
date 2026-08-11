@@ -7,6 +7,7 @@ const RainMachineDailyStat = require('../models/RainMachineDailyStat');
 const RainMachineWateringDay = require('../models/RainMachineWateringDay');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const telemetryService = require('./telemetryService');
+const { isAllowedLocalHostname, isCloudMetadataHostname } = require('../utils/networkSafety');
 const {
   buildRainMachineControllerIdentityQuery,
   buildRainMachineZoneIdentityQuery,
@@ -15,14 +16,16 @@ const {
   describeDevices
 } = require('./deviceIdentityService');
 
-const DEFAULT_HTTP_TIMEOUT_MS = Math.max(4000, Number(process.env.RAINMACHINE_HTTP_TIMEOUT_MS || 12000));
-const DEFAULT_POLL_INTERVAL_MINUTES = Math.max(1, Number(process.env.RAINMACHINE_POLL_INTERVAL_MINUTES || 5));
-const DEFAULT_REPORT_SYNC_INTERVAL_MS = Math.max(
+const DEFAULT_HTTP_TIMEOUT_MS = clampEnvInteger(process.env.RAINMACHINE_HTTP_TIMEOUT_MS, 12_000, 4000, 60_000);
+const DEFAULT_POLL_INTERVAL_MINUTES = clampEnvInteger(process.env.RAINMACHINE_POLL_INTERVAL_MINUTES, 5, 1, 1440);
+const DEFAULT_REPORT_SYNC_INTERVAL_MS = clampEnvInteger(
+  process.env.RAINMACHINE_REPORT_SYNC_INTERVAL_MS,
+  12 * 60 * 60 * 1000,
   15 * 60 * 1000,
-  Number(process.env.RAINMACHINE_REPORT_SYNC_INTERVAL_MS || 12 * 60 * 60 * 1000)
+  7 * 24 * 60 * 60 * 1000
 );
-const DEFAULT_WATERING_LOG_DAYS = Math.max(1, Number(process.env.RAINMACHINE_WATERING_LOG_DAYS || 30));
-const DEFAULT_DISCOVERY_TIMEOUT_MS = Math.max(1000, Number(process.env.RAINMACHINE_DISCOVERY_TIMEOUT_MS || 2500));
+const DEFAULT_WATERING_LOG_DAYS = clampEnvInteger(process.env.RAINMACHINE_WATERING_LOG_DAYS, 30, 1, 366);
+const DEFAULT_DISCOVERY_TIMEOUT_MS = clampEnvInteger(process.env.RAINMACHINE_DISCOVERY_TIMEOUT_MS, 2500, 1000, 30_000);
 const DISCOVERY_PORT = 15800;
 const DISCOVERY_RESPONSE_PORT = 15900;
 const MAX_ZONE_DURATION_SECONDS = 6 * 60 * 60;
@@ -37,6 +40,21 @@ const PROGRAM_STATUS = Object.freeze({
   running: 1,
   pending: 2
 });
+
+function clampEnvInteger(value, fallback, minimum, maximum) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(minimum, Math.min(maximum, Math.round(numeric)));
+}
+
+function isSelfSignedCertificateError(error) {
+  return new Set([
+    'DEPTH_ZERO_SELF_SIGNED_CERT',
+    'SELF_SIGNED_CERT_IN_CHAIN',
+    'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+    'UNABLE_TO_GET_ISSUER_CERT_LOCALLY'
+  ]).has(error?.code);
+}
 
 const trimString = (value, fallback = '') => {
   if (typeof value === 'string') {
@@ -1397,6 +1415,9 @@ class RainMachineService {
     if (!normalizedHost) {
       throw new Error('RainMachine host is required.');
     }
+    if (isCloudMetadataHostname(normalizedHost) || !isAllowedLocalHostname(normalizedHost)) {
+      throw new Error('RainMachine host must be on the local or private network.');
+    }
 
     const configuredProtocol = normalizeProtocol(integration?.protocol, 'https');
     const configuredPort = clampInteger(
@@ -1458,13 +1479,32 @@ class RainMachineService {
   }
 
   async probeEndpoint(endpoint) {
-    const response = await axios.get(`${endpoint.baseUrl}/apiVer`, {
+    const requestOptions = {
       timeout: this.defaultTimeoutMs,
-      httpsAgent: endpoint.protocol === 'https'
-        ? new https.Agent({ rejectUnauthorized: false })
-        : undefined,
+      maxRedirects: 0,
+      maxContentLength: 1024 * 1024,
+      maxBodyLength: 1024 * 1024,
       validateStatus: () => true
-    });
+    };
+    let response;
+    try {
+      response = await axios.get(`${endpoint.baseUrl}/apiVer`, {
+        ...requestOptions,
+        httpsAgent: endpoint.protocol === 'https'
+          ? new https.Agent({ rejectUnauthorized: true })
+          : undefined
+      });
+    } catch (error) {
+      if (endpoint.protocol !== 'https' || !isSelfSignedCertificateError(error)) throw error;
+      // RainMachine controllers commonly use a factory self-signed certificate.
+      // The host is restricted to the LAN above, and this fallback is never used for public hosts.
+      response = await axios.get(`${endpoint.baseUrl}/apiVer`, {
+        ...requestOptions,
+        // nosemgrep: problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification
+        httpsAgent: new https.Agent({ rejectUnauthorized: false })
+      });
+      endpoint.usesSelfSignedCertificate = true;
+    }
 
     if (response.status >= 400) {
       throw new Error(`RainMachine probe failed for ${endpoint.protocol}://${endpoint.host}:${endpoint.port}`);
@@ -1491,8 +1531,11 @@ class RainMachineService {
       {
         timeout: this.defaultTimeoutMs,
         headers: loginPayload.headers,
+        maxRedirects: 0,
+        maxContentLength: 1024 * 1024,
+        maxBodyLength: 1024 * 1024,
         httpsAgent: endpoint.protocol === 'https'
-          ? new https.Agent({ rejectUnauthorized: false })
+          ? new https.Agent({ rejectUnauthorized: endpoint.usesSelfSignedCertificate !== true })
           : undefined,
         validateStatus: () => true
       }
@@ -1553,10 +1596,13 @@ class RainMachineService {
       method,
       url,
       data: requestPayload.payload,
-      timeout,
+      timeout: clampInteger(timeout, this.defaultTimeoutMs, 1000, 60_000),
       headers: requestPayload.headers,
+      maxRedirects: 0,
+      maxContentLength: 4 * 1024 * 1024,
+      maxBodyLength: 4 * 1024 * 1024,
       httpsAgent: endpoint.protocol === 'https'
-        ? new https.Agent({ rejectUnauthorized: false })
+        ? new https.Agent({ rejectUnauthorized: endpoint.usesSelfSignedCertificate !== true })
         : undefined,
       validateStatus: () => true
     });
@@ -1650,7 +1696,7 @@ class RainMachineService {
           return;
         }
 
-        setTimeout(finish, timeoutMs);
+        setTimeout(finish, clampInteger(timeoutMs, DEFAULT_DISCOVERY_TIMEOUT_MS, 1000, 30_000));
       });
     });
   }

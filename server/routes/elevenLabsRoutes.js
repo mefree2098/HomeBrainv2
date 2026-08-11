@@ -299,7 +299,6 @@ router.get('/status', auth, async (req, res) => {
       cache
     };
     
-    console.log('ElevenLabs integration status:', status);
     res.status(200).json({
       success: true,
       status: status

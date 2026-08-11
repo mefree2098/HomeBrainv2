@@ -5,6 +5,7 @@ const Device = require('../models/Device');
 const deviceEnergySampleService = require('./deviceEnergySampleService');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const { mapSmartThingsDeviceType } = require('./deviceTypeClassification');
+const { isSafeObjectKey } = require('../utils/stringSafety');
 
 function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -139,20 +140,29 @@ class SmartThingsService {
   }
 
   setNestedSmartThingsValue(target, path, value) {
-    if (!target || typeof target !== 'object' || !Array.isArray(path) || path.length === 0) {
+    if (
+      !target
+      || typeof target !== 'object'
+      || !Array.isArray(path)
+      || path.length === 0
+      || !path.every((key) => isSafeObjectKey(key))
+    ) {
       return;
     }
 
     let current = target;
     for (let index = 0; index < path.length - 1; index += 1) {
       const key = path[index];
-      if (!current[key] || typeof current[key] !== 'object' || Array.isArray(current[key])) {
-        current[key] = {};
+      const existing = Object.prototype.hasOwnProperty.call(current, key)
+        ? Reflect.get(current, key)
+        : null;
+      if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
+        Reflect.set(current, key, {});
       }
-      current = current[key];
+      current = Reflect.get(current, key);
     }
 
-    current[path[path.length - 1]] = value;
+    Reflect.set(current, path[path.length - 1], value);
   }
 
   buildSmartThingsAttributeSnapshots(statusPayload) {
@@ -1839,11 +1849,16 @@ class SmartThingsService {
       let found = true;
 
       for (const key of path) {
-        if (current == null) {
+        if (
+          current == null
+          || typeof current !== 'object'
+          || !isSafeObjectKey(key)
+          || !Object.prototype.hasOwnProperty.call(current, key)
+        ) {
           found = false;
           break;
         }
-        current = current[key];
+        current = Reflect.get(current, key);
       }
 
       if (!found || current == null) {

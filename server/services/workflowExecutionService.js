@@ -9,6 +9,11 @@ const insteonService = require('./insteonService');
 const deviceCommandCoordinatorService = require('./deviceCommandCoordinatorService');
 const reachyMiniService = require('./reachyMiniService');
 const { resolveDeviceProperty } = require('../utils/devicePropertyResolver');
+const {
+  isAllowedLocalHostname,
+  isCloudMetadataHostname,
+  parseHttpUrl
+} = require('../utils/networkSafety');
 
 function parseBoundedMs(value, fallback, min, max) {
   const parsed = Number(value);
@@ -1741,14 +1746,14 @@ async function resolveWorkflowReference(parameters = {}, options = {}) {
 
   const isyProgramId = parameters.targetIsyProgramId || parameters.isyProgramId || parameters.programId;
   if (isyProgramId) {
-    const markerRegex = new RegExp(escapeRegexLiteral(isyProgramMarker(isyProgramId)));
-    const elsePathRegex = new RegExp(escapeRegexLiteral('[ISY_PROGRAM_PATH:ELSE]'));
+    const markerPattern = escapeRegexLiteral(isyProgramMarker(isyProgramId));
+    const elsePathPattern = escapeRegexLiteral('[ISY_PROGRAM_PATH:ELSE]');
     const query = preferElsePath
-      ? { description: { $regex: new RegExp(`${markerRegex.source}.*${elsePathRegex.source}`) } }
+      ? { description: { $regex: `${markerPattern}.*${elsePathPattern}` } }
       : {
           $and: [
-            { description: { $regex: markerRegex } },
-            { description: { $not: elsePathRegex } }
+            { description: { $regex: markerPattern } },
+            { description: { $not: { $regex: elsePathPattern } } }
           ]
         };
 
@@ -1760,14 +1765,14 @@ async function resolveWorkflowReference(parameters = {}, options = {}) {
 
   const name = parameters.programName || parameters.workflowName || parameters.name;
   if (typeof name === 'string' && name.trim()) {
-    const exactPattern = new RegExp(`^ISY Program\\s+[^:]+:\\s*${escapeRegexLiteral(name.trim())}(?:\\s*\\(Else Path\\))?$`, 'i');
-    const byName = await Workflow.findOne({ name: { $regex: exactPattern } });
+    const exactPattern = `^ISY Program\\s+[^:]+:\\s*${escapeRegexLiteral(name.trim())}(?:\\s*\\(Else Path\\))?$`;
+    const byName = await Workflow.findOne({ name: { $regex: exactPattern, $options: 'i' } });
     if (byName) {
       return byName;
     }
 
     const fallback = await Workflow.findOne({
-      name: { $regex: new RegExp(`^${escapeRegexLiteral(name.trim())}$`, 'i') }
+      name: { $regex: `^${escapeRegexLiteral(name.trim())}$`, $options: 'i' }
     });
     if (fallback) {
       return fallback;
@@ -2431,10 +2436,24 @@ async function executeAlexaSpeak(action, context = {}) {
 async function executeHttpRequest(action) {
   const parameters = action?.parameters || {};
   const method = String(parameters.method || 'GET').trim().toUpperCase();
-  const url = String(parameters.url || action?.target || '').trim();
-  if (!url) {
-    throw new Error('HTTP request URL is required');
-  }
+  const allowedMethods = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
+  if (!allowedMethods.has(method)) throw new Error('HTTP request method is not supported');
+  const parsedUrl = parseHttpUrl(
+    String(parameters.url || action?.target || '').trim(),
+    'HTTP request URL',
+    { maxLength: 4096 }
+  );
+  const validateDestination = (destination) => {
+    if (isCloudMetadataHostname(destination.hostname)) {
+      throw new Error('HTTP workflow requests must not target cloud metadata services');
+    }
+    if (destination.protocol !== 'https:' && !isAllowedLocalHostname(destination.hostname)) {
+      throw new Error('Public HTTP workflow requests must use HTTPS');
+    }
+    return destination;
+  };
+  validateDestination(parsedUrl);
+  const url = parsedUrl.toString();
 
   const timeoutRaw = Number(parameters.timeoutMs ?? parameters.timeout ?? DEFAULT_HTTP_TIMEOUT_MS);
   const timeout = Number.isFinite(timeoutRaw)
@@ -2445,19 +2464,39 @@ async function executeHttpRequest(action) {
     ? { ...parameters.headers }
     : {};
 
+  const responseType = ['text', 'json', 'arraybuffer'].includes(parameters.responseType)
+    ? parameters.responseType
+    : 'text';
+  const requestedRedirects = Number(parameters.maxRedirects);
+  const maxRedirects = Number.isInteger(requestedRedirects)
+    ? Math.max(0, Math.min(5, requestedRedirects))
+    : 0;
   const requestConfig = {
     url,
     method,
     timeout,
     headers,
     params: parameters.query && typeof parameters.query === 'object' ? parameters.query : undefined,
-    responseType: typeof parameters.responseType === 'string' ? parameters.responseType : 'text',
-    maxRedirects: Number.isInteger(parameters.maxRedirects) ? parameters.maxRedirects : 5,
+    responseType,
+    maxRedirects,
+    maxContentLength: 8 * 1024 * 1024,
+    maxBodyLength: 8 * 1024 * 1024,
+    beforeRedirect: maxRedirects > 0
+      ? (redirectOptions) => {
+          const redirectUrl = parseHttpUrl(redirectOptions.href, 'HTTP redirect URL', { maxLength: 4096 });
+          validateDestination(redirectUrl);
+        }
+      : undefined,
     validateStatus: () => true
   };
 
   const insecureTls = parameters.insecureTls === true || parameters.rejectUnauthorized === false;
-  if (insecureTls && /^https:\/\//i.test(url)) {
+  if (insecureTls && parsedUrl.protocol === 'https:') {
+    if (!isAllowedLocalHostname(parsedUrl.hostname)) {
+      throw new Error('Disabled TLS verification is only allowed for local or private workflow targets');
+    }
+    // This explicit compatibility option is limited to local/private devices with self-signed certificates.
+    // nosemgrep: problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification
     requestConfig.httpsAgent = new https.Agent({ rejectUnauthorized: false });
   }
 

@@ -66,15 +66,32 @@ final class HomeBrainAPIClient {
 
     init(baseURLString: String, deviceID: String) throws {
         let trimmed = baseURLString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+        guard !trimmed.isEmpty, trimmed.count <= 2_048 else {
             throw HomeBrainAPIError.invalidServerURL
         }
 
         let withScheme = trimmed.contains("://") ? trimmed : "\(Self.defaultScheme(for: trimmed))://\(trimmed)"
-        guard let url = URL(string: withScheme) else {
+        guard var components = URLComponents(string: withScheme),
+              let scheme = components.scheme?.lowercased(),
+              let host = components.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !host.isEmpty,
+              ["http", "https"].contains(scheme),
+              components.user == nil,
+              components.password == nil,
+              components.port.map({ (1...65_535).contains($0) }) ?? true,
+              scheme != "http" || Self.isLocalNetworkHost(host) else {
             throw HomeBrainAPIError.invalidServerURL
         }
 
+        components.scheme = scheme
+        components.host = host.lowercased()
+        components.query = nil
+        components.fragment = nil
+        let trimmedPath = components.percentEncodedPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        components.percentEncodedPath = trimmedPath.isEmpty ? "" : "/\(trimmedPath)"
+        guard let url = components.url else {
+            throw HomeBrainAPIError.invalidServerURL
+        }
         self.baseURL = url
         self.deviceID = deviceID
     }
@@ -209,7 +226,17 @@ final class HomeBrainAPIClient {
             return false
         }
 
+        return isLocalNetworkHost(host)
+    }
+
+    private static func isLocalNetworkHost(_ rawHost: String) -> Bool {
+        let host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
         if host == "localhost" || host == "::1" || host.hasSuffix(".local") || !host.contains(".") {
+            return true
+        }
+
+        if host.hasPrefix("fc") || host.hasPrefix("fd") || host.hasPrefix("fe80:") {
             return true
         }
 

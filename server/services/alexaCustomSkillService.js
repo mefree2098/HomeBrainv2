@@ -79,7 +79,11 @@ class AlexaCustomSkillService {
   }
 
   getAudioPath(clipId) {
-    return path.join(AUDIO_ROOT, `${clipId}.mp3`);
+    const normalizedClipId = trimString(clipId);
+    if (!AUDIO_CLIP_ID_PATTERN.test(normalizedClipId)) {
+      throw new Error('Alexa audio clip id is invalid');
+    }
+    return path.join(AUDIO_ROOT, `${normalizedClipId}.mp3`);
   }
 
   getSigningSecret() {

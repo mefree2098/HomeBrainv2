@@ -1,12 +1,15 @@
+const { isSafeObjectKey } = require('./stringSafety');
+
 function getPathSegments(path) {
   if (typeof path !== 'string') {
     return [];
   }
 
-  return path
+  const segments = path
     .split('.')
     .map((segment) => segment.trim())
     .filter(Boolean);
+  return segments.every((segment) => isSafeObjectKey(segment)) ? segments : [];
 }
 
 function getNestedValue(source, path) {
@@ -20,7 +23,7 @@ function getNestedValue(source, path) {
     if (current == null || typeof current !== 'object' || !Object.prototype.hasOwnProperty.call(current, segment)) {
       return undefined;
     }
-    current = current[segment];
+    current = Reflect.get(current, segment);
   }
 
   return current;
@@ -39,12 +42,12 @@ function resolveDeviceProperty(device, property, fallbackValue = undefined) {
     return device.isOnline;
   }
 
-  if (Object.prototype.hasOwnProperty.call(device, property)) {
-    return device[property];
+  if (isSafeObjectKey(property) && Object.prototype.hasOwnProperty.call(device, property)) {
+    return Reflect.get(device, property);
   }
 
-  if (device.properties && Object.prototype.hasOwnProperty.call(device.properties, property)) {
-    return device.properties[property];
+  if (isSafeObjectKey(property) && device.properties && Object.prototype.hasOwnProperty.call(device.properties, property)) {
+    return Reflect.get(device.properties, property);
   }
 
   const nestedFromDevice = getNestedValue(device, property);
@@ -71,13 +74,16 @@ function setNestedValue(target, path, value) {
   let current = target;
   for (let index = 0; index < segments.length - 1; index += 1) {
     const segment = segments[index];
-    if (!current[segment] || typeof current[segment] !== 'object' || Array.isArray(current[segment])) {
-      current[segment] = {};
+    const existing = Object.prototype.hasOwnProperty.call(current, segment)
+      ? Reflect.get(current, segment)
+      : null;
+    if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
+      Reflect.set(current, segment, {});
     }
-    current = current[segment];
+    current = Reflect.get(current, segment);
   }
 
-  current[segments[segments.length - 1]] = value;
+  Reflect.set(current, segments[segments.length - 1], value);
   return target;
 }
 
@@ -89,8 +95,8 @@ function applyFlattenedUpdates(document, updates = {}) {
   Object.entries(updates || {}).forEach(([key, value]) => {
     if (key.includes('.')) {
       setNestedValue(next, key, value);
-    } else {
-      next[key] = value;
+    } else if (isSafeObjectKey(key)) {
+      Reflect.set(next, key, value);
     }
   });
 

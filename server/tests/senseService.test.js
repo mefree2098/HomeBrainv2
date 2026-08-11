@@ -7,12 +7,22 @@ const Device = require('../models/Device');
 const SenseIntegration = require('../models/SenseIntegration');
 
 const {
+  buildSenseApiUrl,
   buildTrendSummaryMap,
   calculateCostUsd,
   normalizeRealtimePayload,
   normalizeTrendSnapshot,
   projectMonthlyEnergyWindow
 } = senseService.__private__;
+
+test('Sense API URL construction cannot escape the configured API origin or path', () => {
+  assert.equal(
+    buildSenseApiUrl('app/monitors/monitor-1/overview'),
+    'https://api.sense.com/apiservice/api/v1/app/monitors/monitor-1/overview'
+  );
+  assert.throws(() => buildSenseApiUrl('https://attacker.example/data'), /must remain/);
+  assert.throws(() => buildSenseApiUrl('/outside-api'), /must remain/);
+});
 
 test('normalizeRealtimePayload builds load shares and synthetic residual usage for the Sense dashboard', () => {
   const catalog = new Map([

@@ -457,12 +457,19 @@ function inferTriggerPropertyKind(value: unknown): TriggerPropertyKind {
 }
 
 function getNestedRecordValue(source: unknown, path: string[]): unknown {
+  const unsafeKeys = new Set(["__proto__", "constructor", "prototype"]);
   let current = source;
   for (const segment of path) {
-    if (!current || typeof current !== "object" || Array.isArray(current) || !(segment in current)) {
+    if (
+      !current
+      || typeof current !== "object"
+      || Array.isArray(current)
+      || unsafeKeys.has(segment.toLowerCase())
+      || !Object.prototype.hasOwnProperty.call(current, segment)
+    ) {
       return undefined;
     }
-    current = (current as Record<string, unknown>)[segment];
+    current = Reflect.get(current, segment);
   }
   return current;
 }

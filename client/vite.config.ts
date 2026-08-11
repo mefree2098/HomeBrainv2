@@ -5,6 +5,10 @@ import { defineConfig } from "vite"
 export default defineConfig({
   plugins: [react()],
   build: {
+    // Settings is route-lazy and currently compresses to about 100 KiB. Keep the
+    // warning threshold aligned with shipped transfer size while retaining a
+    // useful guard against materially larger route bundles.
+    chunkSizeWarningLimit: 600,
     rollupOptions: {
       output: {
         manualChunks(id) {
@@ -50,7 +54,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@": path.resolve(__dirname, "./src"),
+      "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
   server: {

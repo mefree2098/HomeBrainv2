@@ -4,13 +4,15 @@ const schema = new mongoose.Schema({
   phrase: {
     type: String,
     required: true,
-    trim: true
+    trim: true,
+    maxlength: 200
   },
   slug: {
     type: String,
     required: true,
     unique: true,
     lowercase: true,
+    maxlength: 100,
     index: true
   },
   status: {

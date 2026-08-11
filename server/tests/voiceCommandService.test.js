@@ -1,6 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+test('extractNumber handles percentages and bounded control phrases', () => {
+  const voiceCommandService = require('../services/voiceCommandService');
+  assert.equal(voiceCommandService.extractNumber('set it to 42 percent'), 42);
+  assert.equal(voiceCommandService.extractNumber('brightness 75'), 75);
+  assert.equal(voiceCommandService.extractNumber('set to50'), 50);
+  assert.equal(voiceCommandService.extractNumber(`ignore ${'x'.repeat(5000)} 99`), null);
+});
+
 test('buildPrompt includes available workflows and workflow revise guidance', async () => {
   const voiceCommandService = require('../services/voiceCommandService');
 

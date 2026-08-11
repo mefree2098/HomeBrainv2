@@ -1,5 +1,6 @@
 const Settings = require('../models/Settings');
 const { sendLLMRequestWithFallbackDetailed } = require('./llmService');
+const { collapseWhitespace } = require('../utils/stringSafety');
 
 const MAX_EMAIL_ADDRESS_LENGTH = 320;
 const MAX_SUBJECT_LENGTH = 300;
@@ -54,16 +55,77 @@ function stripHtml(html = '') {
     return '';
   }
 
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const source = html.slice(0, MAX_BODY_LENGTH * 4);
+  const lower = source.toLowerCase();
+  let text = '';
+  let index = 0;
+
+  while (index < source.length) {
+    if (source[index] !== '<') {
+      text += source[index];
+      index += 1;
+      continue;
+    }
+
+    const tagEnd = source.indexOf('>', index + 1);
+    if (tagEnd === -1) {
+      text += ' ';
+      break;
+    }
+    const tag = lower.slice(index + 1, tagEnd).trimStart();
+    const tagName = tag.startsWith('/') ? tag.slice(1).trimStart() : tag;
+    const blockedName = ['script', 'style'].find((name) => (
+      tagName === name
+      || tagName.startsWith(`${name} `)
+      || tagName.startsWith(`${name}\t`)
+      || tagName.startsWith(`${name}\n`)
+      || tagName.startsWith(`${name}\r`)
+    ));
+    if (blockedName && !tag.startsWith('/')) {
+      const closingTag = lower.indexOf(`</${blockedName}`, tagEnd + 1);
+      if (closingTag === -1) break;
+      const closingEnd = source.indexOf('>', closingTag + blockedName.length + 2);
+      index = closingEnd === -1 ? source.length : closingEnd + 1;
+      text += ' ';
+      continue;
+    }
+
+    text += ' ';
+    index = tagEnd + 1;
+  }
+
+  const entities = new Map([
+    ['nbsp', ' '],
+    ['lt', '<'],
+    ['gt', '>'],
+    ['quot', '"'],
+    ['apos', '\''],
+    ['#39', '\''],
+    ['amp', '&']
+  ]);
+  let decoded = '';
+  for (let cursor = 0; cursor < text.length;) {
+    if (text[cursor] !== '&') {
+      decoded += text[cursor];
+      cursor += 1;
+      continue;
+    }
+    const semicolon = text.indexOf(';', cursor + 1);
+    if (semicolon === -1 || semicolon - cursor > 8) {
+      decoded += '&';
+      cursor += 1;
+      continue;
+    }
+    const entity = text.slice(cursor + 1, semicolon).toLowerCase();
+    if (!entities.has(entity)) {
+      decoded += text.slice(cursor, semicolon + 1);
+    } else {
+      decoded += entities.get(entity);
+    }
+    cursor = semicolon + 1;
+  }
+
+  return collapseWhitespace(decoded, MAX_BODY_LENGTH * 4).trim();
 }
 
 function clampConfidence(value) {
@@ -254,3 +316,4 @@ class SpamFilterService {
 }
 
 module.exports = new SpamFilterService();
+module.exports.__private__ = { normalizeEmailPayload, parseJsonObject, stripHtml };

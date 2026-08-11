@@ -14,6 +14,8 @@ const ReverseProxyRoute = require('../models/ReverseProxyRoute');
 const ReverseProxyAuditLog = require('../models/ReverseProxyAuditLog');
 const ReverseProxySettings = require('../models/ReverseProxySettings');
 const caddyAdminService = require('./caddyAdminService');
+const { parseLocalHttpUrl, trimTrailingSlashes } = require('../utils/networkSafety');
+const { toAsciiSlug, trimTrailingCharacter } = require('../utils/stringSafety');
 
 const CADDY_LETSENCRYPT_PRODUCTION_DIRECTORY = 'https://acme-v02.api.letsencrypt.org/directory';
 const CADDY_STAGING_DIRECTORY = 'https://acme-staging-v02.api.letsencrypt.org/directory';
@@ -70,16 +72,11 @@ function trimString(value, fallback = '') {
 }
 
 function normalizePlatformKey(value) {
-  const normalized = trimString(value, 'custom')
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-
-  return normalized || 'custom';
+  return toAsciiSlug(trimString(value, 'custom'), { fallback: 'custom', allowUnderscore: true });
 }
 
 function normalizeHostname(value) {
-  const candidate = trimString(value).toLowerCase().replace(/\.+$/, '');
+  const candidate = trimTrailingCharacter(trimString(value).toLowerCase(), '.');
   if (!candidate) {
     throw new Error('Hostname is required');
   }
@@ -508,6 +505,8 @@ async function probeUpstream(route) {
 
 async function probeServedCertificate(hostname) {
   return new Promise((resolve) => {
+    // This diagnostic reads the certificate from the configured edge without sending credentials or HTTP data.
+    // nosemgrep: problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification
     const socket = tls.connect({
       host: DEFAULT_EDGE_PROBE_HOST,
       port: DEFAULT_EDGE_HTTPS_PORT,
@@ -656,8 +655,11 @@ function sanitizeSettingsPayload(input = {}) {
   const updates = {};
 
   if (typeof input.caddyAdminUrl === 'string' && trimString(input.caddyAdminUrl)) {
-    new URL(trimString(input.caddyAdminUrl));
-    updates.caddyAdminUrl = trimString(input.caddyAdminUrl).replace(/\/+$/, '');
+    const parsedAdminUrl = parseLocalHttpUrl(trimString(input.caddyAdminUrl), 'Caddy admin URL');
+    if (parsedAdminUrl.pathname !== '/' || parsedAdminUrl.search) {
+      throw new Error('Caddy admin URL must be an origin without a path or query');
+    }
+    updates.caddyAdminUrl = trimTrailingSlashes(parsedAdminUrl.toString());
   }
 
   if (typeof input.caddyStorageRoot === 'string' && trimString(input.caddyStorageRoot)) {

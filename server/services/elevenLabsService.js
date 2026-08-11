@@ -7,6 +7,11 @@ const path = require('path');
 const Settings = require('../models/Settings');
 const settingsService = require('./settingsService');
 const { sendRequestToCodex } = require('./codexCliService');
+const {
+  isAllowedLocalHostname,
+  parseHttpUrl,
+  trimTrailingSlashes
+} = require('../utils/networkSafety');
 
 const DEFAULT_MODEL_ID = 'eleven_v3';
 const MAX_TEXT_LENGTH = 5000;
@@ -129,9 +134,21 @@ function hasSsml(value) {
   return /<\/?speak\b/i.test(value) || /<break\b/i.test(value);
 }
 
+function normalizeElevenLabsBaseUrl(value) {
+  const parsed = parseHttpUrl(value, 'ElevenLabs base URL');
+  if (parsed.protocol !== 'https:' && !isAllowedLocalHostname(parsed.hostname)) {
+    throw new Error('ElevenLabs base URL must use https unless it targets a local test service');
+  }
+  parsed.search = '';
+  parsed.hash = '';
+  return trimTrailingSlashes(parsed.toString());
+}
+
 class ElevenLabsService {
   constructor() {
-    this.baseUrl = process.env.ELEVENLABS_BASE_URL || 'https://api.elevenlabs.io/v1';
+    this.baseUrl = normalizeElevenLabsBaseUrl(
+      process.env.ELEVENLABS_BASE_URL || 'https://api.elevenlabs.io/v1'
+    );
     this.cacheRoot = process.env.HOMEBRAIN_ELEVENLABS_CACHE_DIR || DEFAULT_CACHE_ROOT;
     this.cacheInFlight = new Map();
     console.log('ElevenLabs Service initialized - API key will be retrieved from settings');
@@ -355,7 +372,9 @@ class ElevenLabsService {
         return mockVoices.find(voice => voice.id === voiceId) || null;
       }
 
-      const response = await axios.get(`${this.baseUrl}/voices/${voiceId}`, {
+      const response = await axios.get(`${this.baseUrl}/voices/${encodeURIComponent(voiceId)}`, {
+        maxRedirects: 0,
+        maxContentLength: 2 * 1024 * 1024,
         headers: {
           'xi-api-key': apiKey,
           'Content-Type': 'application/json'

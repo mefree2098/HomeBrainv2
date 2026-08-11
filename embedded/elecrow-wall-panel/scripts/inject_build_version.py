@@ -1,3 +1,5 @@
+# PlatformIO injects both Import and env into SCons extra scripts.
+# ruff: noqa: E402, F821
 Import("env")
 
 import os
@@ -6,7 +8,7 @@ from datetime import datetime, timezone
 
 def cpp_string_literal(value):
     escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
-    return '\\"%s\\"' % escaped
+    return f'\\"{escaped}\\"'
 
 
 def append_optional_string_define(name):

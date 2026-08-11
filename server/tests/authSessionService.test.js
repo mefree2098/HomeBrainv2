@@ -85,11 +85,17 @@ function buildWebRequest(deviceId, clientName = 'Safari on Mac') {
 }
 
 function refreshLifetimeInDays(token) {
-  const decoded = jwt.decode(token);
+  const decoded = jwt.verify(token, process.env.REFRESH_TOKEN_SECRET);
   const issuedAt = Number(decoded?.iat || 0);
   const expiresAt = Number(decoded?.exp || 0);
   return Math.round((expiresAt - issuedAt) / (24 * 60 * 60));
 }
+
+test('getSessionIdFromVerifiedClaims only reads previously verified claim objects', () => {
+  assert.equal(authSessionService.getSessionIdFromVerifiedClaims({ sid: 'session-123' }), 'session-123');
+  assert.equal(authSessionService.getSessionIdFromVerifiedClaims(null), '');
+  assert.equal(authSessionService.getSessionIdFromVerifiedClaims('unverified.jwt.value'), '');
+});
 
 function restoreEnvValue(key, value) {
   if (value === undefined) {

@@ -20,6 +20,11 @@ const DEFAULT_PERMISSIONS = [
 ];
 
 const trim = (value) => (typeof value === 'string' ? value.trim() : '');
+const clampInteger = (value, fallback, minimum, maximum) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(minimum, Math.min(maximum, Math.floor(numeric)));
+};
 const toDateOrNull = (value) => {
   if (!value) {
     return null;
@@ -49,16 +54,33 @@ class SmartThingsWebhookService {
   constructor() {
     this.configurationPageId = 'homebrain-main';
     this.metrics = this.createEmptyMetrics();
-    this.eventStallThresholdMs = Number(process.env.SMARTTHINGS_EVENT_STALL_ALERT_MS || 5 * 60 * 1000);
-    this.signatureFailureAlertThreshold = Number(process.env.SMARTTHINGS_SIGNATURE_FAILURE_ALERT_THRESHOLD || 3);
+    this.eventStallThresholdMs = clampInteger(
+      process.env.SMARTTHINGS_EVENT_STALL_ALERT_MS,
+      5 * 60 * 1000,
+      10_000,
+      24 * 60 * 60_000
+    );
+    this.signatureFailureAlertThreshold = clampInteger(
+      process.env.SMARTTHINGS_SIGNATURE_FAILURE_ALERT_THRESHOLD,
+      3,
+      1,
+      10_000
+    );
     this.signatureFailureAlerted = false;
     this.eventStallAlerted = false;
     this.metricsHistory = [];
-    this.metricsHistorySize = Math.max(
+    this.metricsHistorySize = clampInteger(
+      process.env.SMARTTHINGS_WEBHOOK_METRICS_HISTORY,
+      1440,
       1,
-      Number(process.env.SMARTTHINGS_WEBHOOK_METRICS_HISTORY || 1440)
+      100_000
     );
-    this.metricsSnapshotIntervalMs = Number(process.env.SMARTTHINGS_WEBHOOK_METRICS_INTERVAL_MS || 60 * 1000);
+    this.metricsSnapshotIntervalMs = clampInteger(
+      process.env.SMARTTHINGS_WEBHOOK_METRICS_INTERVAL_MS,
+      60 * 1000,
+      0,
+      24 * 60 * 60_000
+    );
     this.metricsSamplerTimer = null;
     if (this.metricsSnapshotIntervalMs > 0) {
       this.startMetricsSampler();
@@ -179,7 +201,9 @@ class SmartThingsWebhookService {
       if (!Number.isFinite(numericInterval) || numericInterval < 0) {
         throw new Error('metrics interval must be a non-negative number');
       }
-      const normalizedInterval = Math.floor(numericInterval);
+      const normalizedInterval = numericInterval === 0
+        ? 0
+        : clampInteger(numericInterval, 60_000, 1000, 24 * 60 * 60_000);
       if (normalizedInterval !== this.metricsSnapshotIntervalMs) {
         this.metricsSnapshotIntervalMs = normalizedInterval;
         restartSampler = true;
@@ -194,7 +218,7 @@ class SmartThingsWebhookService {
       if (!Number.isFinite(numericHistory) || numericHistory <= 0) {
         throw new Error('metrics history size must be a positive number');
       }
-      const normalizedHistory = Math.floor(numericHistory);
+      const normalizedHistory = clampInteger(numericHistory, 1440, 1, 100_000);
       if (normalizedHistory !== this.metricsHistorySize) {
         this.metricsHistorySize = normalizedHistory;
         if (this.metricsHistory.length > this.metricsHistorySize) {

@@ -36,8 +36,8 @@ def _default_config_path(app: ReachyMiniApp | None = None) -> Path:
             instance_config = app._get_instance_path().parent / "config.json"
             if instance_config.exists():
                 return instance_config
-        except Exception:
-            pass
+        except (AttributeError, OSError, RuntimeError) as exc:
+            LOGGER.debug("Reachy instance config path is unavailable: %s", exc)
     return Path.home() / ".config" / "homebrain-reachy" / "config.json"
 
 

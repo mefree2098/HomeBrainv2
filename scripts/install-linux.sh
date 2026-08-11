@@ -27,6 +27,8 @@ INSTALL_WAKEWORD_DEPS="${INSTALL_WAKEWORD_DEPS:-1}"
 ENABLE_FIREWALL="${ENABLE_FIREWALL:-0}"
 MONGODB_SERVICE_DROPIN_DIR="/etc/systemd/system/mongod.service.d"
 MONGODB_RESOURCE_GUARD_PATH="${MONGODB_SERVICE_DROPIN_DIR}/10-homebrain-resource-guard.conf"
+NODESOURCE_SETUP_20_SHA256="2c4c6683a17b6f4128898a7b521e3c8bb725a99ffaf1b5e32ac97c6fa7d381be"
+NODESOURCE_SETUP_22_SHA256="575583bbac2fccc0b5edd0dbc03e222d9f9dc8d724da996d22754d6411104fd1"
 
 print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
 print_success() { echo -e "${GREEN}[OK]${NC} $1"; }
@@ -179,6 +181,43 @@ version_ge() {
   [[ "$(printf '%s\n%s\n' "${required}" "${current}" | sort -V | head -n 1)" == "${required}" ]]
 }
 
+run_verified_nodesource_setup() (
+  local expected_sha setup_script setup_url
+  case "${NODE_MAJOR}" in
+    20)
+      expected_sha="${NODESOURCE_SETUP_20_SHA256}"
+      ;;
+    22)
+      expected_sha="${NODESOURCE_SETUP_22_SHA256}"
+      ;;
+    *)
+      print_error "Unsupported NodeSource major version ${NODE_MAJOR}; supported versions are 20 and 22."
+      exit 1
+      ;;
+  esac
+
+  setup_url="https://deb.nodesource.com/setup_${NODE_MAJOR}.x"
+  setup_script="$(mktemp /tmp/homebrain-nodesource-setup.XXXXXX)"
+  trap 'rm -f "${setup_script}"' EXIT
+
+  curl \
+    --proto '=https' \
+    --tlsv1.2 \
+    --fail \
+    --location \
+    --silent \
+    --show-error \
+    "${setup_url}" \
+    --output "${setup_script}"
+
+  if ! printf '%s  %s\n' "${expected_sha}" "${setup_script}" | sha256sum --check --status; then
+    print_error "NodeSource setup script integrity check failed; refusing to execute it."
+    exit 1
+  fi
+
+  sudo -E bash "${setup_script}"
+)
+
 install_node() {
   print_status "Ensuring Node.js ${NODE_MAJOR}.x or newer, minimum ${NODE_MIN_VERSION}..."
 
@@ -193,7 +232,7 @@ install_node() {
     print_warning "Node.js v${current_version} is installed, but HomeBrain now requires ${NODE_MIN_VERSION}+ for the selected ${NODE_MAJOR}.x track."
   fi
 
-  curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | sudo -E bash -
+  run_verified_nodesource_setup
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
   hash -r 2>/dev/null || true
 
