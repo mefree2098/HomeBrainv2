@@ -207,8 +207,10 @@ const setupInterceptors = (apiInstance: typeof axios) => {
           await refreshAccessToken();
           return getApiInstance(originalRequest.url || '')(originalRequest);
         } catch (err) {
-          console.error('Token refresh failed:', err);
-          console.log('Clearing invalid tokens and redirecting to login');
+          const refreshStatus = axios.isAxiosError(err) ? err.response?.status : undefined;
+          if (refreshStatus !== 401 && refreshStatus !== 403) {
+            console.error('Token refresh failed:', err);
+          }
           clearClientAuthState();
           const currentPath = window.location.pathname;
           const isPublicAuthPage = currentPath === '/login' || currentPath === '/register';
