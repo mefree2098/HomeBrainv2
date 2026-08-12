@@ -62,11 +62,11 @@ test('run-with-modern-node forwards termination signals to the spawned command',
   const childScriptPath = path.join(tempDir, 'child.js');
   fs.writeFileSync(childScriptPath, `
     const fs = require('node:fs');
-    fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');
     process.on('SIGTERM', () => {
       fs.writeFileSync(${JSON.stringify(signalPath)}, 'SIGTERM');
       setTimeout(() => process.exit(0), 20);
     });
+    fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');
     setInterval(() => {}, 1000);
   `);
 
