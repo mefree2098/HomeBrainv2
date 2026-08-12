@@ -19,7 +19,7 @@ export type AlexaProfileMapping = {
 
 // Debug function to monitor cache usage
 const logCacheStats = (operation: string) => {
-  console.log(`Profiles API Cache Stats (${operation}):`, {
+  console.log('%s', `Profiles API Cache Stats (${operation}):`, {
     cached: requestCache.size,
     inFlight: IN_FLIGHT_REQUESTS.size,
     keys: Array.from(requestCache.keys()),

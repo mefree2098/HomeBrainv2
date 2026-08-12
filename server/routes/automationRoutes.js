@@ -154,7 +154,7 @@ router.get('/:id', async (req, res) => {
       automation: automation
     });
   } catch (error) {
-    console.error(`AutomationRoutes: Error fetching automation ${req.params.id}:`, error.message);
+    console.error('%s', `AutomationRoutes: Error fetching automation ${req.params.id}:`, error.message);
     console.error('AutomationRoutes: Full error:', error);
     
     if (error.message.includes('not found') || error.message.includes('Invalid')) {
@@ -336,7 +336,7 @@ router.put('/:id', admin, async (req, res) => {
       automation: updatedAutomation
     });
   } catch (error) {
-    console.error(`AutomationRoutes: Error updating automation ${req.params.id}:`, error.message);
+    console.error('%s', `AutomationRoutes: Error updating automation ${req.params.id}:`, error.message);
     console.error('AutomationRoutes: Full error:', error);
     
     if (error.message.includes('not found') || error.message.includes('Invalid')) {
@@ -399,7 +399,7 @@ router.put('/:id/toggle', admin, async (req, res) => {
       automation: result.automation
     });
   } catch (error) {
-    console.error(`AutomationRoutes: Error toggling automation ${req.params.id}:`, error.message);
+    console.error('%s', `AutomationRoutes: Error toggling automation ${req.params.id}:`, error.message);
     console.error('AutomationRoutes: Full error:', error);
     
     if (error.message.includes('not found') || error.message.includes('Invalid')) {
@@ -447,7 +447,7 @@ router.post('/:id/execute', async (req, res) => {
     console.log(`AutomationRoutes: Automation executed successfully: ${result.automation.name}`);
     res.status(200).json(result);
   } catch (error) {
-    console.error(`AutomationRoutes: Error executing automation ${req.params.id}:`, error.message);
+    console.error('%s', `AutomationRoutes: Error executing automation ${req.params.id}:`, error.message);
     console.error('AutomationRoutes: Full error:', error);
     
     if (error.message.includes('not found') || error.message.includes('Invalid')) {
@@ -494,7 +494,7 @@ router.delete('/:id', admin, async (req, res) => {
       deletedAutomation: result.deletedAutomation
     });
   } catch (error) {
-    console.error(`AutomationRoutes: Error deleting automation ${req.params.id}:`, error.message);
+    console.error('%s', `AutomationRoutes: Error deleting automation ${req.params.id}:`, error.message);
     console.error('AutomationRoutes: Full error:', error);
     
     if (error.message.includes('not found') || error.message.includes('Invalid')) {

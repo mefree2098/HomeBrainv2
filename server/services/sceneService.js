@@ -362,7 +362,7 @@ class SceneService {
       console.log(`SceneService: Found scene: ${scene.name}`);
       return scene;
     } catch (error) {
-      console.error(`SceneService: Error fetching scene ${sceneId}:`, error);
+      console.error('%s', `SceneService: Error fetching scene ${sceneId}:`, error);
       throw new Error(`Failed to fetch scene: ${error.message}`);
     }
   }
@@ -468,7 +468,7 @@ class SceneService {
 
       if (options.waitForCompletion === false) {
         void runSceneActions().catch((error) => {
-          console.error(`SceneService: Background scene trigger failed for ${normalizedSceneId}:`, error);
+          console.error('%s', `SceneService: Background scene trigger failed for ${normalizedSceneId}:`, error);
         });
         await this._populateSceneDocument(updatedScene);
         return {
@@ -613,7 +613,7 @@ class SceneService {
       
       return updatedScene;
     } catch (error) {
-      console.error(`SceneService: Error updating scene ${sceneId}:`, error);
+      console.error('%s', `SceneService: Error updating scene ${sceneId}:`, error);
       throw new Error(`Failed to update scene: ${error.message}`);
     }
   }
@@ -646,7 +646,7 @@ class SceneService {
         deletedScene: { _id: sceneId, name: sceneName }
       };
     } catch (error) {
-      console.error(`SceneService: Error deleting scene ${sceneId}:`, error);
+      console.error('%s', `SceneService: Error deleting scene ${sceneId}:`, error);
       throw new Error(`Failed to delete scene: ${error.message}`);
     }
   }

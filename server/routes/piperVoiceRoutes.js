@@ -30,7 +30,7 @@ router.post('/:voiceId', admin, async (req, res) => {
       message: `${voice.name} voice downloaded`
     });
   } catch (error) {
-    console.error(`POST /api/wake-words/voices/${req.params.voiceId} - Error:`, error.message);
+    console.error('%s', `POST /api/wake-words/voices/${req.params.voiceId} - Error:`, error.message);
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to download Piper voice'
@@ -46,7 +46,7 @@ router.delete('/:voiceId', admin, async (req, res) => {
       message: 'Voice removed'
     });
   } catch (error) {
-    console.error(`DELETE /api/wake-words/voices/${req.params.voiceId} - Error:`, error.message);
+    console.error('%s', `DELETE /api/wake-words/voices/${req.params.voiceId} - Error:`, error.message);
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to remove Piper voice'

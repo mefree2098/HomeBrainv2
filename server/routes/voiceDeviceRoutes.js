@@ -37,7 +37,7 @@ function collectVoiceWebSocketStats(app) {
       try {
         return typeof ws.getStats === 'function' ? ws.getStats() : null;
       } catch (error) {
-        console.warn(`Failed to collect ${ws?.constructor?.name || 'voice websocket'} stats:`, error.message);
+        console.warn('%s', `Failed to collect ${ws?.constructor?.name || 'voice websocket'} stats:`, error.message);
         return null;
       }
     })
@@ -88,7 +88,7 @@ router.get('/devices/:id', requireUser(), async (req, res) => {
       device: device
     });
   } catch (error) {
-    console.error(`GET /api/voice/devices/${id} - Error:`, error.message);
+    console.error('%s', `GET /api/voice/devices/${id} - Error:`, error.message);
     console.error(error.stack);
     
     const statusCode = error.message === 'Voice device not found' ? 404 : 500;
@@ -468,7 +468,7 @@ router.post('/test', voiceDiagnosticsRateLimit, admin, async (req, res) => {
       websocketStats: collectVoiceWebSocketStats(req.app)
     });
     
-    console.log(`POST /api/voice/test - Test completed for device ${deviceId}:`, testResult.success ? 'PASSED' : 'FAILED');
+    console.log('%s', `POST /api/voice/test - Test completed for device ${deviceId}:`, testResult.success ? 'PASSED' : 'FAILED');
     res.status(200).json({
       success: testResult.success,
       message: testResult.message,
@@ -559,7 +559,7 @@ router.put('/devices/:id/status', admin, async (req, res) => {
       device: device
     });
   } catch (error) {
-    console.error(`PUT /api/voice/devices/${id}/status - Error:`, error.message);
+    console.error('%s', `PUT /api/voice/devices/${id}/status - Error:`, error.message);
     console.error(error.stack);
     
     const statusCode = error.message === 'Voice device not found' ? 404 : 500;
@@ -590,7 +590,7 @@ router.get('/devices/room/:room', requireUser(), async (req, res) => {
       count: devices.length
     });
   } catch (error) {
-    console.error(`GET /api/voice/devices/room/${room} - Error:`, error.message);
+    console.error('%s', `GET /api/voice/devices/room/${room} - Error:`, error.message);
     console.error(error.stack);
     res.status(500).json({
       success: false,
@@ -628,7 +628,7 @@ router.get('/devices/status/:status', requireUser(), async (req, res) => {
       count: devices.length
     });
   } catch (error) {
-    console.error(`GET /api/voice/devices/status/${status} - Error:`, error.message);
+    console.error('%s', `GET /api/voice/devices/status/${status} - Error:`, error.message);
     console.error(error.stack);
     res.status(500).json({
       success: false,

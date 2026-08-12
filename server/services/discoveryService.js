@@ -110,7 +110,7 @@ class DiscoveryService {
       broadcastAddresses.forEach(address => {
         this.server.send(message, 0, message.length, this.discoveryPort, address, (err) => {
           if (err && err.code !== 'ENETUNREACH') {
-            console.warn(`DiscoveryService: Broadcast failed to ${address}:`, err.message);
+            console.warn('%s', `DiscoveryService: Broadcast failed to ${address}:`, err.message);
           }
         });
       });
@@ -125,7 +125,7 @@ class DiscoveryService {
   handleDiscoveryRequest(msg, rinfo) {
     try {
       const request = JSON.parse(msg.toString());
-      console.log(`DiscoveryService: Received request from ${rinfo.address}:${rinfo.port}`, request);
+      console.log('%s', `DiscoveryService: Received request from ${rinfo.address}:${rinfo.port}`, request);
 
       if (request.type === 'homebrain_device_discovery') {
         this.handleDeviceDiscovery(request, rinfo);
@@ -160,7 +160,7 @@ class DiscoveryService {
     // Send direct response to the requesting device
     this.server.send(responseMessage, 0, responseMessage.length, rinfo.port, rinfo.address, (err) => {
       if (err) {
-        console.error(`DiscoveryService: Failed to respond to ${rinfo.address}:`, err.message);
+        console.error('%s', `DiscoveryService: Failed to respond to ${rinfo.address}:`, err.message);
       } else {
         console.log(`DiscoveryService: Sent hub info to ${rinfo.address}:${rinfo.port}`);
       }

@@ -251,7 +251,10 @@ class SmartThingsWebhookService {
       }
 
       const labelString = labels && Object.keys(labels).length > 0
-        ? `{${Object.entries(labels).map(([key, val]) => `${key}="${String(val).replace(/"/g, '\\"')}"`).join(',')}}`
+        ? `{${Object.entries(labels).map(([key, val]) => `${key}="${String(val)
+            .replace(/\\/g, '\\\\')
+            .replace(/\n/g, '\\n')
+            .replace(/"/g, '\\"')}"`).join(',')}}`
         : '';
 
       if (!emittedMeta.has(metadata.name)) {

@@ -235,7 +235,7 @@ class WakeWordTrainingService extends EventEmitter {
     this.queue = this.queue
       .then(() => this.executeTraining(slug))
       .catch((error) => {
-        console.error(`Wake word training queue error for ${slug}:`, error);
+        console.error('%s', `Wake word training queue error for ${slug}:`, error);
       })
       .finally(() => {
         this.pendingSlugs.delete(slug);
@@ -319,7 +319,7 @@ class WakeWordTrainingService extends EventEmitter {
       await this.applyTrainingResult(model, result);
       await this.notifyDevices(model);
     } catch (error) {
-      console.error(`Error during wake word training for ${slug}:`, error);
+      console.error('%s', `Error during wake word training for ${slug}:`, error);
       await this.updateModelStatus(slug, {
         status: 'error',
         progress: 0,

@@ -81,7 +81,7 @@ router.get('/check/:deviceId', admin, async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`GET /api/remote-updates/check/${deviceId} - Error:`, error.message);
+    console.error('%s', `GET /api/remote-updates/check/${deviceId} - Error:`, error.message);
     console.error(error.stack);
     res.status(500).json({
       success: false,
@@ -167,7 +167,7 @@ router.post('/initiate/:deviceId', admin, async (req, res) => {
     res.status(200).json(result);
 
   } catch (error) {
-    console.error(`POST /api/remote-updates/initiate/${deviceId} - Error:`, error.message);
+    console.error('%s', `POST /api/remote-updates/initiate/${deviceId} - Error:`, error.message);
     console.error(error.stack);
     res.status(500).json({
       success: false,

@@ -87,7 +87,7 @@ router.get('/:id', async (req, res) => {
       scene: scene
     });
   } catch (error) {
-    console.error(`SceneRoutes: Error fetching scene ${req.params.id}:`, error.message);
+    console.error('%s', `SceneRoutes: Error fetching scene ${req.params.id}:`, error.message);
     console.error('SceneRoutes: Full error:', error);
     
     if (error.message.includes('not found')) {
@@ -364,7 +364,7 @@ router.put('/:id', admin, async (req, res) => {
       scene: updatedScene
     });
   } catch (error) {
-    console.error(`SceneRoutes: Error updating scene ${req.params.id}:`, error.message);
+    console.error('%s', `SceneRoutes: Error updating scene ${req.params.id}:`, error.message);
     console.error('SceneRoutes: Full error:', error);
     
     if (error.message.includes('not found')) {
@@ -411,7 +411,7 @@ router.delete('/:id', admin, async (req, res) => {
       deletedScene: result.deletedScene
     });
   } catch (error) {
-    console.error(`SceneRoutes: Error deleting scene ${req.params.id}:`, error.message);
+    console.error('%s', `SceneRoutes: Error deleting scene ${req.params.id}:`, error.message);
     console.error('SceneRoutes: Full error:', error);
     
     if (error.message.includes('not found')) {

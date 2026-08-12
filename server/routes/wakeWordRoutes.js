@@ -158,7 +158,7 @@ router.get('/:id', admin, async (req, res) => {
       model: serializeModel(model)
     });
   } catch (error) {
-    console.error(`GET /api/wake-words/${req.params.id} - Error:`, error.message);
+    console.error('%s', `GET /api/wake-words/${req.params.id} - Error:`, error.message);
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to fetch wake word model'
@@ -217,7 +217,7 @@ router.post('/:id/retrain', wakeWordMutationRateLimit, admin, async (req, res) =
       model: serializeModel(updated)
     });
   } catch (error) {
-    console.error(`POST /api/wake-words/${req.params.id}/retrain - Error:`, error.message);
+    console.error('%s', `POST /api/wake-words/${req.params.id}/retrain - Error:`, error.message);
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to queue retraining'
@@ -248,7 +248,7 @@ router.delete('/:id', wakeWordMutationRateLimit, admin, async (req, res) => {
       try {
         await fsp.unlink(safeFilePath);
       } catch (error) {
-        console.warn(`Failed to remove wake word file ${filePath}:`, error.message);
+        console.warn('%s', `Failed to remove wake word file ${filePath}:`, error.message);
       }
     }
 
@@ -257,7 +257,7 @@ router.delete('/:id', wakeWordMutationRateLimit, admin, async (req, res) => {
       message: 'Wake word model deleted'
     });
   } catch (error) {
-    console.error(`DELETE /api/wake-words/${req.params.id} - Error:`, error.message);
+    console.error('%s', `DELETE /api/wake-words/${req.params.id} - Error:`, error.message);
     res.status(500).json({
       success: false,
       message: error.message || 'Failed to delete wake word model'

@@ -881,7 +881,7 @@ export function SecurityAlarmWidget({
       })
       await fetchAlarmStatus()
     } catch (error: any) {
-      console.error(`Failed to ${action} door:`, error)
+      console.error('%s', `Failed to ${action} door:`, error)
       toast({
         title: `${action === "unlock" ? "Unlock" : "Lock"} failed`,
         description: error.message || `Failed to ${action} ${doorLock.name}`,

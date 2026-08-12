@@ -245,6 +245,11 @@ HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS=0
 HOMEBRAIN_ALEXA_AUTH_CODE_TTL_MS=300000
 ```
 
+The broker only calls back to publicly routed hub addresses by default. If a
+private, self-managed broker intentionally pairs directly to a LAN hub, set
+`HOMEBRAIN_ALEXA_ALLOW_PRIVATE_HUB_URLS=true` on that broker. Cloud metadata
+targets remain blocked even with this compatibility option enabled.
+
 ### Recommended managed-broker field values
 
 If you are using the HomeBrain `Alexa Broker` form instead of shell environment variables, the normal same-host managed values are:

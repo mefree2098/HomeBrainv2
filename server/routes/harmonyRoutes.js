@@ -78,7 +78,7 @@ router.get('/hubs/:hubIp', async (req, res) => {
       hub
     });
   } catch (error) {
-    console.error(`HarmonyRoutes: Failed to fetch hub ${req.params.hubIp}:`, error.message);
+    console.error('%s', `HarmonyRoutes: Failed to fetch hub ${req.params.hubIp}:`, error.message);
     return res.status(400).json({
       success: false,
       message: error.message || 'Failed to fetch Harmony hub'

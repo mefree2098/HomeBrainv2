@@ -394,7 +394,7 @@ class ElevenLabsService {
       };
 
     } catch (error) {
-      console.error(`Error fetching voice ${voiceId} from ElevenLabs:`, error.response?.data || error.message);
+      console.error('%s', `Error fetching voice ${voiceId} from ElevenLabs:`, error.response?.data || error.message);
       console.error('Full error:', error);
 
       // Fallback to mock data if API fails
@@ -651,7 +651,7 @@ class ElevenLabsService {
 
       } catch (retryError) {
         lastError = retryError;
-        console.log(`Attempt ${attempt} failed:`, retryError.code || retryError.message);
+        console.log('%s', `Attempt ${attempt} failed:`, retryError.code || retryError.message);
 
         if (retryError.response?.status === 401 || retryError.response?.status === 403) {
           console.log('Authentication error - not retrying');
@@ -699,7 +699,7 @@ class ElevenLabsService {
       return isValid;
 
     } catch (error) {
-      console.error(`Error validating voice ID ${voiceId}:`, error.response?.data || error.message);
+      console.error('%s', `Error validating voice ID ${voiceId}:`, error.response?.data || error.message);
       return false;
     }
   }

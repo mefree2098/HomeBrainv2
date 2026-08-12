@@ -86,7 +86,7 @@ class RemoteUpdateService {
         deviceName: device.name
       };
     } catch (error) {
-      console.error(`Error checking for updates for device ${deviceId}:`, error);
+      console.error('%s', `Error checking for updates for device ${deviceId}:`, error);
       throw error;
     }
   }
@@ -378,7 +378,7 @@ class RemoteUpdateService {
         message: 'Update initiated successfully'
       };
     } catch (error) {
-      console.error(`Error initiating update for device ${deviceId}:`, error);
+      console.error('%s', `Error initiating update for device ${deviceId}:`, error);
 
       // Preserve the last known device status; a failed send should not mark an offline device online.
       try {
@@ -446,7 +446,7 @@ class RemoteUpdateService {
           });
           results.push(result);
         } catch (error) {
-          console.error(`Failed to initiate update for device ${device.name}:`, error.message);
+          console.error('%s', `Failed to initiate update for device ${device.name}:`, error.message);
           results.push({
             success: false,
             deviceId: device._id.toString(),
@@ -565,7 +565,7 @@ class RemoteUpdateService {
 
       console.log(`Device ${deviceId} status updated to: ${status}`);
     } catch (error) {
-      console.error(`Error updating device status for ${deviceId}:`, error);
+      console.error('%s', `Error updating device status for ${deviceId}:`, error);
       throw error;
     }
   }

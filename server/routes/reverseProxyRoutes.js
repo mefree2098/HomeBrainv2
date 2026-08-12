@@ -48,7 +48,7 @@ router.put('/routes/:id', async (req, res) => {
       route
     });
   } catch (error) {
-    console.error(`PUT /api/admin/reverse-proxy/routes/${req.params.id} - Error:`, error.message);
+    console.error('%s', `PUT /api/admin/reverse-proxy/routes/${req.params.id} - Error:`, error.message);
     return res.status(400).json({
       success: false,
       message: error.message || 'Failed to update reverse-proxy route'
@@ -64,7 +64,7 @@ router.delete('/routes/:id', async (req, res) => {
       ...result
     });
   } catch (error) {
-    console.error(`DELETE /api/admin/reverse-proxy/routes/${req.params.id} - Error:`, error.message);
+    console.error('%s', `DELETE /api/admin/reverse-proxy/routes/${req.params.id} - Error:`, error.message);
     return res.status(400).json({
       success: false,
       message: error.message || 'Failed to delete reverse-proxy route'

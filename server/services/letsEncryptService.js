@@ -395,7 +395,7 @@ class LetsEncryptService {
               console.log(`Certificate for ${cert.domain} renewed successfully`);
             }
           } catch (error) {
-            console.error(`Failed to renew certificate for ${cert.domain}:`, error);
+            console.error('%s', `Failed to renew certificate for ${cert.domain}:`, error);
             failed++;
           }
         }

@@ -22,7 +22,7 @@ function getActor(req) {
 }
 
 function logRouteError(routeLabel, error) {
-  console.error(`${routeLabel} - Error:`, error.message);
+  console.error('%s', `${routeLabel} - Error:`, error.message);
 }
 
 router.get('/', async (req, res) => {

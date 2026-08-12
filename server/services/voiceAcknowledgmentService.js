@@ -7,6 +7,23 @@ const elevenLabsService = require('./elevenLabsService');
 
 const ACK_ROOT = path.join(__dirname, '..', 'data', 'voice-acknowledgments');
 const MANIFEST_VERSION = 1;
+const PROFILE_ID_PATTERN = /^[a-f0-9]{24}$/i;
+const AUDIO_FILE_PATTERN = /^[a-f0-9]{24}-[a-f0-9]{16}\.mp3$/i;
+
+function resolveAcknowledgmentPath(fileName, pattern, label) {
+  const normalized = typeof fileName === 'string' ? fileName.trim() : '';
+  if (!pattern.test(normalized) || path.basename(normalized) !== normalized) {
+    throw new Error(`${label} is invalid`);
+  }
+
+  const resolvedRoot = path.resolve(ACK_ROOT);
+  // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal -- the strict filename allowlist and root containment check reject traversal.
+  const resolvedPath = path.resolve(resolvedRoot, normalized);
+  if (!resolvedPath.startsWith(`${resolvedRoot}${path.sep}`)) {
+    throw new Error(`${label} escaped the acknowledgment directory`);
+  }
+  return resolvedPath;
+}
 
 class VoiceAcknowledgmentService {
   constructor() {
@@ -25,11 +42,15 @@ class VoiceAcknowledgmentService {
   }
 
   getManifestPath(profileId) {
-    return path.join(ACK_ROOT, `${profileId}.json`);
+    const normalizedProfileId = typeof profileId === 'string' ? profileId.trim() : '';
+    if (!PROFILE_ID_PATTERN.test(normalizedProfileId)) {
+      throw new Error('Voice profile ID is invalid');
+    }
+    return resolveAcknowledgmentPath(`${normalizedProfileId}.json`, /^[a-f0-9]{24}\.json$/i, 'Acknowledgment manifest name');
   }
 
   getAudioPath(fileName) {
-    return path.join(ACK_ROOT, fileName);
+    return resolveAcknowledgmentPath(fileName, AUDIO_FILE_PATTERN, 'Acknowledgment audio file name');
   }
 
   buildTemplates(profile) {
@@ -103,8 +124,8 @@ class VoiceAcknowledgmentService {
         if (!entry?.fileName || !entry?.text || entry.error) {
           continue;
         }
-        const filePath = this.getAudioPath(entry.fileName);
         try {
+          const filePath = this.getAudioPath(entry.fileName);
           await fsp.access(filePath, fs.constants.R_OK);
           this.lookup.set(this.normalizeLookupKey(voiceId, entry.text), filePath);
         } catch (error) {
@@ -141,9 +162,15 @@ class VoiceAcknowledgmentService {
 
     for (const text of templates) {
       const existingEntry = existingByText.get(text);
-      const fileName = existingEntry?.fileName
+      let fileName = existingEntry?.fileName
         || this.makeAudioFileName(profileId, voiceId, text);
-      const filePath = this.getAudioPath(fileName);
+      let filePath;
+      try {
+        filePath = this.getAudioPath(fileName);
+      } catch (_error) {
+        fileName = this.makeAudioFileName(profileId, voiceId, text);
+        filePath = this.getAudioPath(fileName);
+      }
 
       if (
         !force
@@ -207,7 +234,7 @@ class VoiceAcknowledgmentService {
     this.generationInFlight.add(profileId);
     void this.generateForProfile(profile, options)
       .catch((error) => {
-        console.warn(`Failed to generate acknowledgments for profile ${profileId}:`, error.message);
+        console.warn('%s', `Failed to generate acknowledgments for profile ${profileId}:`, error.message);
       })
       .finally(() => {
         this.generationInFlight.delete(profileId);
@@ -266,6 +293,7 @@ class VoiceAcknowledgmentService {
       candidates.add(`hey ${normalized}`);
     }
 
+    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- every metacharacter is escaped before constructing these anchored exact-match patterns.
     const patterns = [...candidates].map((candidate) => new RegExp(`^${escapeRegex(candidate)}$`, 'i'));
     return UserProfile.findOne({
       active: true,

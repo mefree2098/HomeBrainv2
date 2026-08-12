@@ -408,6 +408,7 @@ test('getPrometheusMetrics exposes counters and gauges', async (t) => {
   smartThingsWebhookService.recordSignatureSuccess();
   smartThingsWebhookService.incrementCapabilityMetric('switch');
   smartThingsWebhookService.incrementCapabilityMetric('switch');
+  smartThingsWebhookService.incrementCapabilityMetric('switch\\danger"\nnext');
 
   smartThingsWebhookService.metrics.events.received = 3;
   smartThingsWebhookService.metrics.events.processedDevices = 2;
@@ -425,6 +426,7 @@ test('getPrometheusMetrics exposes counters and gauges', async (t) => {
   assert.match(body, /smartthings_webhook_signature_failures_total 1/);
   assert.match(body, /smartthings_webhook_events_total 3/);
   assert.match(body, /smartthings_webhook_events_by_capability_total{capability="switch"} 2/);
+  assert.ok(body.includes('capability="switch\\\\danger\\"\\nnext"'));
   assert.match(body, /smartthings_webhook_events_processed_devices_total 2/);
   assert.match(body, /smartthings_webhook_events_ignored_devices_total 1/);
   assert.match(body, /smartthings_webhook_last_event_timestamp \d+/);
@@ -493,4 +495,3 @@ test('updateMetricsConfig validates and applies production cadence', async (t) =
   assert.throws(() => smartThingsWebhookService.updateMetricsConfig({ intervalMs: -1 }), /metrics interval must be a non-negative number/);
   assert.throws(() => smartThingsWebhookService.updateMetricsConfig({ historySize: 0 }), /metrics history size must be a positive number/);
 });
-

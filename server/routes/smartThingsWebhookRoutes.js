@@ -1,12 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const { requireUser } = require('./middlewares/auth');
+const { createApiRateLimit } = require('../middleware/apiRateLimit');
 const smartThingsWebhookService = require('../services/smartThingsWebhookService');
 
 const auth = requireUser();
+const webhookRateLimit = createApiRateLimit({ limit: 600 });
+const metricsRateLimit = createApiRateLimit({ limit: 120 });
 
 // SmartThings webhook endpoint (no authentication; SmartThings signs requests)
-router.post('/', async (req, res) => {
+router.post('/', webhookRateLimit, async (req, res) => {
   smartThingsWebhookService.log('debug', 'Incoming SmartThings webhook request', {
     headers: {
       userAgent: req.headers['user-agent'],
@@ -50,7 +53,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.get('/metrics', auth, (req, res) => {
+router.get('/metrics', metricsRateLimit, auth, (req, res) => {
   const metrics = smartThingsWebhookService.getMetricsSnapshot();
   res.json({
     success: true,
@@ -58,7 +61,7 @@ router.get('/metrics', auth, (req, res) => {
   });
 });
 
-router.get('/metrics/history', auth, (req, res) => {
+router.get('/metrics/history', metricsRateLimit, auth, (req, res) => {
   const limit = Number(req.query.limit);
   const history = smartThingsWebhookService.getMetricsHistory(Number.isNaN(limit) ? undefined : limit);
   res.json({
@@ -68,7 +71,7 @@ router.get('/metrics/history', auth, (req, res) => {
   });
 });
 
-router.post('/metrics/config', auth, (req, res) => {
+router.post('/metrics/config', metricsRateLimit, auth, (req, res) => {
   try {
     const { intervalMs, historySize } = req.body || {};
     const updated = smartThingsWebhookService.updateMetricsConfig({ intervalMs, historySize });
@@ -84,7 +87,7 @@ router.post('/metrics/config', auth, (req, res) => {
   }
 });
 
-router.get('/metrics/prometheus', auth, (req, res) => {
+router.get('/metrics/prometheus', metricsRateLimit, auth, (req, res) => {
   const body = smartThingsWebhookService.getPrometheusMetrics();
   res.set('Content-Type', 'text/plain; charset=utf-8');
   res.send(body);

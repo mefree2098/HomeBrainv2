@@ -1071,7 +1071,7 @@ class WhisperService {
           };
         } catch (error) {
           startError = error;
-          console.warn(`Whisper Service: failed to start with device=${device} computeType=${computeType}:`, error.message);
+          console.warn('%s', `Whisper Service: failed to start with device=${device} computeType=${computeType}:`, error.message);
           const startupLogs = runtime?.logBuffer?.slice(-40).join('\n');
           if (startupLogs && startupLogs.trim()) {
             console.warn(

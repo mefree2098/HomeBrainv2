@@ -538,7 +538,7 @@ echo "[HomeBrain] Follow logs: sudo journalctl -u homebrain-remote -f"
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).send(script);
   } catch (error) {
-    console.error(`GET /api/remote-devices/${deviceId}/bootstrap.sh - Error:`, error.message);
+    console.error('%s', `GET /api/remote-devices/${deviceId}/bootstrap.sh - Error:`, error.message);
     console.error(error.stack);
     return res.status(500).type('text/plain').send('Failed to generate bootstrap script');
   }
@@ -633,7 +633,7 @@ final_message: "HomeBrain listener bootstrap completed."
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).send(cloudInit);
   } catch (error) {
-    console.error(`GET /api/remote-devices/${deviceId}/cloud-init.yaml - Error:`, error.message);
+    console.error('%s', `GET /api/remote-devices/${deviceId}/cloud-init.yaml - Error:`, error.message);
     return res.status(500).type('text/plain').send('Failed to generate cloud-init user-data');
   }
 });
@@ -668,7 +668,7 @@ router.get('/:deviceId/wake-words', wakeWordAssetRateLimit, async (req, res) => 
         });
       }
     } catch (error) {
-      console.warn(`Failed to load wake word metadata for device ${device.name}:`, error.message);
+      console.warn('%s', `Failed to load wake word metadata for device ${device.name}:`, error.message);
     }
 
     res.status(200).json({
@@ -708,7 +708,7 @@ router.get('/:deviceId/wake-words', wakeWordAssetRateLimit, async (req, res) => 
     });
 
   } catch (error) {
-    console.error(`GET /api/remote-devices/${deviceId}/wake-words - Error:`, error.message);
+    console.error('%s', `GET /api/remote-devices/${deviceId}/wake-words - Error:`, error.message);
     console.error(error.stack);
     res.status(500).json({
       success: false,
@@ -847,14 +847,14 @@ router.get('/:deviceId/wake-words/:slug', wakeWordAssetRateLimit, async (req, re
 
     const readStream = fs.createReadStream(selectedAsset.absolutePath);
     readStream.on('error', (streamError) => {
-      console.error(`Failed to stream wake word asset ${selectedAsset.fileName}:`, streamError.message);
+      console.error('%s', `Failed to stream wake word asset ${selectedAsset.fileName}:`, streamError.message);
       res.status(500).end();
     });
 
     readStream.pipe(res);
 
   } catch (error) {
-    console.error(`GET /api/remote-devices/${deviceId}/wake-words/${slug} - Error:`, error.message);
+    console.error('%s', `GET /api/remote-devices/${deviceId}/wake-words/${slug} - Error:`, error.message);
     console.error(error.stack);
     res.status(500).json({
       success: false,
@@ -1105,7 +1105,7 @@ router.get('/:deviceId/config', async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`GET /api/remote-devices/${deviceId}/config - Error:`, error.message);
+    console.error('%s', `GET /api/remote-devices/${deviceId}/config - Error:`, error.message);
     console.error(error.stack);
     res.status(500).json({
       success: false,
@@ -1163,7 +1163,7 @@ router.post('/:deviceId/heartbeat', async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`POST /api/remote-devices/${deviceId}/heartbeat - Error:`, error.message);
+    console.error('%s', `POST /api/remote-devices/${deviceId}/heartbeat - Error:`, error.message);
     console.error(error.stack);
     res.status(500).json({
       success: false,
@@ -1288,7 +1288,7 @@ router.delete('/:deviceId', admin, async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`DELETE /api/remote-devices/${deviceId} - Error:`, error.message);
+    console.error('%s', `DELETE /api/remote-devices/${deviceId} - Error:`, error.message);
     console.error(error.stack);
     res.status(500).json({
       success: false,
