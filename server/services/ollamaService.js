@@ -1908,7 +1908,7 @@ class OllamaService {
           console.log(`Ollama is installed, version: ${version}`);
           return { isInstalled: true, version };
         } catch (error) {
-          console.error(`Error getting Ollama version with arguments "${args.join(' ')}":`, error.message || error);
+          console.error('%s', `Error getting Ollama version with arguments "${args.join(' ')}":`, error.message || error);
         }
       }
 
@@ -3542,7 +3542,7 @@ class OllamaService {
         wasInstalled: Boolean(modelBefore)
       };
     } catch (error) {
-      console.error(`Error pulling model ${modelName}:`, error);
+      console.error('%s', `Error pulling model ${modelName}:`, error);
       const detail =
         error?.response?.data?.error ||
         error?.response?.data?.message ||
@@ -3651,7 +3651,7 @@ class OllamaService {
 
       return { success: true, message: `Model ${modelName} deleted successfully` };
     } catch (error) {
-      console.error(`Error deleting model ${modelName}:`, error);
+      console.error('%s', `Error deleting model ${modelName}:`, error);
       throw new Error(`Failed to delete model: ${error.message}`);
     }
   }
@@ -3733,7 +3733,7 @@ class OllamaService {
         evalDuration: response.data.eval_duration,
       };
     } catch (error) {
-      console.error(`Error during chat with ${modelName}:`, error);
+      console.error('%s', `Error during chat with ${modelName}:`, error);
       throw await this.buildOllamaApiRequestError('Chat', modelName, error);
     }
   }
@@ -3768,7 +3768,7 @@ class OllamaService {
         totalDuration: response.data.total_duration
       };
     } catch (error) {
-      console.error(`Error during generation with ${modelName}:`, error);
+      console.error('%s', `Error during generation with ${modelName}:`, error);
       throw await this.buildOllamaApiRequestError('Generation', modelName, error);
     }
   }

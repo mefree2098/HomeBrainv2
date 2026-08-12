@@ -283,7 +283,7 @@ class UserProfileService {
       return profile;
 
     } catch (error) {
-      console.error(`Error fetching user profile ${profileId}:`, error.message);
+      console.error('%s', `Error fetching user profile ${profileId}:`, error.message);
       console.error('Full error:', error);
       throw error;
     }
@@ -375,7 +375,7 @@ class UserProfileService {
       if (Object.prototype.hasOwnProperty.call(updateData, 'name')) {
         updateData.name = normalizeProfileName(updateData.name);
       }
-      console.log(`Updating user profile ${profileId} with data:`, Object.keys(updateData));
+      console.log('%s', `Updating user profile ${profileId} with data:`, Object.keys(updateData));
       
       const existingProfile = await UserProfile.findById(profileId);
       if (!existingProfile) {
@@ -440,7 +440,7 @@ class UserProfileService {
       return refreshedProfile;
 
     } catch (error) {
-      console.error(`Error updating user profile ${profileId}:`, error.message);
+      console.error('%s', `Error updating user profile ${profileId}:`, error.message);
       console.error('Full error:', error);
       throw error;
     }
@@ -528,7 +528,7 @@ class UserProfileService {
       return true;
 
     } catch (error) {
-      console.error(`Error deleting user profile ${profileId}:`, error.message);
+      console.error('%s', `Error deleting user profile ${profileId}:`, error.message);
       console.error('Full error:', error);
       throw error;
     }
@@ -556,7 +556,7 @@ class UserProfileService {
       return profile;
 
     } catch (error) {
-      console.error(`Error toggling profile status ${profileId}:`, error.message);
+      console.error('%s', `Error toggling profile status ${profileId}:`, error.message);
       console.error('Full error:', error);
       throw error;
     }
@@ -589,7 +589,7 @@ class UserProfileService {
       return profile;
 
     } catch (error) {
-      console.error(`Error updating profile usage ${profileId}:`, error.message);
+      console.error('%s', `Error updating profile usage ${profileId}:`, error.message);
       console.error('Full error:', error);
       throw error;
     }
@@ -625,7 +625,7 @@ class UserProfileService {
       return profile;
 
     } catch (error) {
-      console.error(`Error adding favorite device ${deviceId} to profile ${profileId}:`, error.message);
+      console.error('%s', `Error adding favorite device ${deviceId} to profile ${profileId}:`, error.message);
       console.error('Full error:', error);
       throw error;
     }
@@ -661,7 +661,7 @@ class UserProfileService {
       return profile;
 
     } catch (error) {
-      console.error(`Error removing favorite device ${deviceId} from profile ${profileId}:`, error.message);
+      console.error('%s', `Error removing favorite device ${deviceId} from profile ${profileId}:`, error.message);
       console.error('Full error:', error);
       throw error;
     }
@@ -696,7 +696,7 @@ class UserProfileService {
       console.log(`Added scene to favorites for profile: ${profile.name}`);
       return profile;
     } catch (error) {
-      console.error(`Error adding favorite scene ${sceneId} to profile ${profileId}:`, error.message);
+      console.error('%s', `Error adding favorite scene ${sceneId} to profile ${profileId}:`, error.message);
       console.error('Full error:', error);
       throw error;
     }
@@ -731,7 +731,7 @@ class UserProfileService {
       console.log(`Removed scene from favorites for profile: ${profile.name}`);
       return profile;
     } catch (error) {
-      console.error(`Error removing favorite scene ${sceneId} from profile ${profileId}:`, error.message);
+      console.error('%s', `Error removing favorite scene ${sceneId} from profile ${profileId}:`, error.message);
       console.error('Full error:', error);
       throw error;
     }
@@ -762,7 +762,7 @@ class UserProfileService {
 
       return normalizedViews;
     } catch (error) {
-      console.error(`Error fetching dashboard views for profile ${profileId}:`, error.message);
+      console.error('%s', `Error fetching dashboard views for profile ${profileId}:`, error.message);
       console.error('Full error:', error);
       throw error;
     }
@@ -789,7 +789,7 @@ class UserProfileService {
 
       return profile.dashboardViews;
     } catch (error) {
-      console.error(`Error replacing dashboard views for profile ${profileId}:`, error.message);
+      console.error('%s', `Error replacing dashboard views for profile ${profileId}:`, error.message);
       console.error('Full error:', error);
       throw error;
     }
@@ -829,7 +829,7 @@ class UserProfileService {
 
       return storedSensorIds;
     } catch (error) {
-      console.error(`Error fetching security visible sensor IDs for profile ${profileId}:`, error.message);
+      console.error('%s', `Error fetching security visible sensor IDs for profile ${profileId}:`, error.message);
       console.error('Full error:', error);
       throw error;
     }
@@ -863,7 +863,7 @@ class UserProfileService {
 
       return normalizedSensorIds;
     } catch (error) {
-      console.error(`Error replacing security visible sensor IDs for profile ${profileId}:`, error.message);
+      console.error('%s', `Error replacing security visible sensor IDs for profile ${profileId}:`, error.message);
       console.error('Full error:', error);
       throw error;
     }
@@ -887,7 +887,7 @@ class UserProfileService {
       return profiles;
 
     } catch (error) {
-      console.error(`Error finding profiles with wake word ${wakeWord}:`, error.message);
+      console.error('%s', `Error finding profiles with wake word ${wakeWord}:`, error.message);
       console.error('Full error:', error);
       throw error;
     }

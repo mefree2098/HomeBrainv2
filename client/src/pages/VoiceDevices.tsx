@@ -105,7 +105,7 @@ export function VoiceDevices() {
         ])
         setDevices(data.devices || [])
       } catch (error) {
-        console.error(`VoiceDevices ${componentId}: Periodic refresh failed:`, error)
+        console.error('%s', `VoiceDevices ${componentId}: Periodic refresh failed:`, error)
         // Don't show toast for periodic failures to avoid spam
       }
     }, 120000) // 2 minutes - longer interval due to 10s cache

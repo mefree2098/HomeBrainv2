@@ -128,7 +128,7 @@ router.get('/:panelId', admin, async (req, res) => {
       panel
     });
   } catch (error) {
-    console.error(`GET /api/panels/${req.params.panelId} - Error:`, error.message);
+    console.error('%s', `GET /api/panels/${req.params.panelId} - Error:`, error.message);
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || 'Failed to load wall panel'
@@ -144,7 +144,7 @@ router.put('/:panelId', admin, async (req, res) => {
       panel
     });
   } catch (error) {
-    console.error(`PUT /api/panels/${req.params.panelId} - Error:`, error.message);
+    console.error('%s', `PUT /api/panels/${req.params.panelId} - Error:`, error.message);
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || 'Failed to update wall panel'
@@ -160,7 +160,7 @@ router.post('/:panelId/claim-token/rotate', admin, async (req, res) => {
       panel
     });
   } catch (error) {
-    console.error(`POST /api/panels/${req.params.panelId}/claim-token/rotate - Error:`, error.message);
+    console.error('%s', `POST /api/panels/${req.params.panelId}/claim-token/rotate - Error:`, error.message);
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || 'Failed to rotate wall panel claim token'
@@ -179,7 +179,7 @@ router.get('/:panelId/provisioning', admin, async (req, res) => {
       ...result
     });
   } catch (error) {
-    console.error(`GET /api/panels/${req.params.panelId}/provisioning - Error:`, error.message);
+    console.error('%s', `GET /api/panels/${req.params.panelId}/provisioning - Error:`, error.message);
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || 'Failed to fetch wall panel provisioning bundle'
@@ -198,7 +198,7 @@ router.post('/:panelId/registration-code/rotate', admin, async (req, res) => {
       ...result
     });
   } catch (error) {
-    console.error(`POST /api/panels/${req.params.panelId}/registration-code/rotate - Error:`, error.message);
+    console.error('%s', `POST /api/panels/${req.params.panelId}/registration-code/rotate - Error:`, error.message);
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || 'Failed to rotate wall panel registration code'
@@ -219,7 +219,7 @@ router.get('/:panelId/bootstrap', async (req, res) => {
       ...result
     });
   } catch (error) {
-    console.error(`GET /api/panels/${req.params.panelId}/bootstrap - Error:`, error.message);
+    console.error('%s', `GET /api/panels/${req.params.panelId}/bootstrap - Error:`, error.message);
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || 'Failed to bootstrap wall panel'
@@ -239,7 +239,7 @@ router.post('/:panelId/activate', async (req, res) => {
       panel
     });
   } catch (error) {
-    console.error(`POST /api/panels/${req.params.panelId}/activate - Error:`, error.message);
+    console.error('%s', `POST /api/panels/${req.params.panelId}/activate - Error:`, error.message);
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || 'Failed to activate wall panel'
@@ -262,7 +262,7 @@ router.get('/:panelId/state', async (req, res) => {
       state
     });
   } catch (error) {
-    console.error(`GET /api/panels/${req.params.panelId}/state - Error:`, error.message);
+    console.error('%s', `GET /api/panels/${req.params.panelId}/state - Error:`, error.message);
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || 'Failed to fetch wall panel state'
@@ -282,7 +282,7 @@ router.post('/:panelId/ota/push', panelFirmwareMutationRateLimit, admin, async (
       panel
     });
   } catch (error) {
-    console.error(`POST /api/panels/${req.params.panelId}/ota/push - Error:`, error.message);
+    console.error('%s', `POST /api/panels/${req.params.panelId}/ota/push - Error:`, error.message);
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || 'Failed to start the wall panel OTA update'
@@ -345,7 +345,7 @@ router.get('/:panelId/ota/download', async (req, res) => {
     // nosemgrep: javascript.express.security.audit.express-res-sendfile.express-res-sendfile
     return res.sendFile(artifact.artifactPath);
   } catch (error) {
-    console.error(`GET /api/panels/${req.params.panelId}/ota/download - Error:`, error.message);
+    console.error('%s', `GET /api/panels/${req.params.panelId}/ota/download - Error:`, error.message);
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || 'Failed to stream the wall panel OTA package'
@@ -365,7 +365,7 @@ router.post('/:panelId/ota/status', async (req, res) => {
       panel
     });
   } catch (error) {
-    console.error(`POST /api/panels/${req.params.panelId}/ota/status - Error:`, error.message);
+    console.error('%s', `POST /api/panels/${req.params.panelId}/ota/status - Error:`, error.message);
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || 'Failed to record wall panel OTA status'
@@ -385,7 +385,7 @@ router.post('/:panelId/actions', async (req, res) => {
       ...result
     });
   } catch (error) {
-    console.error(`POST /api/panels/${req.params.panelId}/actions - Error:`, error.message);
+    console.error('%s', `POST /api/panels/${req.params.panelId}/actions - Error:`, error.message);
     return res.status(error.status || 500).json({
       success: false,
       message: error.message || 'Failed to execute wall panel action'

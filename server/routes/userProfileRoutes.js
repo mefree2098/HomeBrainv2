@@ -103,7 +103,7 @@ router.get('/voices/:voiceId', auth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`Error in GET /api/profiles/voices/${req.params.voiceId}:`, error.message);
+    console.error('%s', `Error in GET /api/profiles/voices/${req.params.voiceId}:`, error.message);
     console.error('Full error:', error);
     res.status(500).json({
       success: false,
@@ -130,7 +130,7 @@ router.get('/wake-word/:wakeWord', auth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`Error in GET /api/profiles/wake-word/${req.params.wakeWord}:`, error.message);
+    console.error('%s', `Error in GET /api/profiles/wake-word/${req.params.wakeWord}:`, error.message);
     console.error('Full error:', error);
     res.status(500).json({
       success: false,
@@ -165,7 +165,7 @@ router.get('/:id', auth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`Error in GET /api/profiles/${req.params.id}:`, error.message);
+    console.error('%s', `Error in GET /api/profiles/${req.params.id}:`, error.message);
     console.error('Full error:', error);
     res.status(500).json({
       success: false,
@@ -307,7 +307,7 @@ router.put('/:id', admin, async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`Error in PUT /api/profiles/${req.params.id}:`, error.message);
+    console.error('%s', `Error in PUT /api/profiles/${req.params.id}:`, error.message);
     console.error('Full error:', error);
     
     if (error.message.includes('not found')) {
@@ -347,7 +347,7 @@ router.delete('/:id', admin, async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`Error in DELETE /api/profiles/${req.params.id}:`, error.message);
+    console.error('%s', `Error in DELETE /api/profiles/${req.params.id}:`, error.message);
     console.error('Full error:', error);
     
     if (error.message.includes('not found')) {
@@ -383,7 +383,7 @@ router.patch('/:id/toggle', admin, async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`Error in PATCH /api/profiles/${req.params.id}/toggle:`, error.message);
+    console.error('%s', `Error in PATCH /api/profiles/${req.params.id}/toggle:`, error.message);
     console.error('Full error:', error);
     
     if (error.message.includes('not found')) {
@@ -419,7 +419,7 @@ router.patch('/:id/usage', auth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`Error in PATCH /api/profiles/${req.params.id}/usage:`, error.message);
+    console.error('%s', `Error in PATCH /api/profiles/${req.params.id}/usage:`, error.message);
     console.error('Full error:', error);
     
     if (error.message.includes('not found')) {
@@ -452,7 +452,7 @@ router.get('/:id/dashboard-views', auth, async (req, res) => {
       views
     });
   } catch (error) {
-    console.error(`Error in GET /api/profiles/${req.params.id}/dashboard-views:`, error.message);
+    console.error('%s', `Error in GET /api/profiles/${req.params.id}/dashboard-views:`, error.message);
     console.error('Full error:', error);
 
     if (error.message.includes('not found')) {
@@ -494,7 +494,7 @@ router.put('/:id/dashboard-views', auth, async (req, res) => {
       views: savedViews
     });
   } catch (error) {
-    console.error(`Error in PUT /api/profiles/${req.params.id}/dashboard-views:`, error.message);
+    console.error('%s', `Error in PUT /api/profiles/${req.params.id}/dashboard-views:`, error.message);
     console.error('Full error:', error);
 
     if (error.message.includes('not found')) {
@@ -527,7 +527,7 @@ router.get('/:id/security-visible-sensors', auth, async (req, res) => {
       sensorIds
     });
   } catch (error) {
-    console.error(`Error in GET /api/profiles/${req.params.id}/security-visible-sensors:`, error.message);
+    console.error('%s', `Error in GET /api/profiles/${req.params.id}/security-visible-sensors:`, error.message);
     console.error('Full error:', error);
 
     if (error.message.includes('not found')) {
@@ -576,7 +576,7 @@ router.put('/:id/security-visible-sensors', auth, async (req, res) => {
       sensorIds: savedSensorIds
     });
   } catch (error) {
-    console.error(`Error in PUT /api/profiles/${req.params.id}/security-visible-sensors:`, error.message);
+    console.error('%s', `Error in PUT /api/profiles/${req.params.id}/security-visible-sensors:`, error.message);
     console.error('Full error:', error);
 
     if (error.message.includes('not found')) {
@@ -625,7 +625,7 @@ router.post('/:id/favorites/devices', auth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`Error in POST /api/profiles/${req.params.id}/favorites/devices:`, error.message);
+    console.error('%s', `Error in POST /api/profiles/${req.params.id}/favorites/devices:`, error.message);
     console.error('Full error:', error);
     
     if (error.message.includes('not found')) {
@@ -661,7 +661,7 @@ router.delete('/:id/favorites/devices/:deviceId', auth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`Error in DELETE /api/profiles/${req.params.id}/favorites/devices/${req.params.deviceId}:`, error.message);
+    console.error('%s', `Error in DELETE /api/profiles/${req.params.id}/favorites/devices/${req.params.deviceId}:`, error.message);
     console.error('Full error:', error);
     
     if (error.message.includes('not found')) {
@@ -704,7 +704,7 @@ router.post('/:id/favorites/scenes', auth, async (req, res) => {
       profile: profile
     });
   } catch (error) {
-    console.error(`Error in POST /api/profiles/${req.params.id}/favorites/scenes:`, error.message);
+    console.error('%s', `Error in POST /api/profiles/${req.params.id}/favorites/scenes:`, error.message);
     console.error('Full error:', error);
 
     if (error.message.includes('not found')) {
@@ -739,7 +739,7 @@ router.delete('/:id/favorites/scenes/:sceneId', auth, async (req, res) => {
       profile: profile
     });
   } catch (error) {
-    console.error(`Error in DELETE /api/profiles/${req.params.id}/favorites/scenes/${req.params.sceneId}:`, error.message);
+    console.error('%s', `Error in DELETE /api/profiles/${req.params.id}/favorites/scenes/${req.params.sceneId}:`, error.message);
     console.error('Full error:', error);
 
     if (error.message.includes('not found')) {

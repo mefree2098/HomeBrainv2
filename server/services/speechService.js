@@ -755,7 +755,7 @@ class SpeechService {
           await whisperService.downloadModel(activeModel);
           await whisperService.setActiveModel(activeModel);
         } catch (downloadError) {
-          console.warn(`Whisper local: failed to download model ${activeModel}:`, downloadError.message);
+          console.warn('%s', `Whisper local: failed to download model ${activeModel}:`, downloadError.message);
         }
       }
     } catch (error) {
@@ -822,7 +822,7 @@ class SpeechService {
           await whisperService.downloadModel(activeModel);
           await whisperService.setActiveModel(activeModel);
         } catch (downloadError) {
-          console.warn(`Whisper local: failed to download model ${activeModel}:`, downloadError.message);
+          console.warn('%s', `Whisper local: failed to download model ${activeModel}:`, downloadError.message);
         }
       }
     } catch (error) {

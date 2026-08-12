@@ -310,7 +310,7 @@ class AutomationSchedulerService {
         console.log(`AutomationSchedulerService: executed automation ${automation.name} (${automation._id})`);
       })
       .catch((error) => {
-        console.error(`AutomationSchedulerService: failed executing ${automation._id}:`, error.message);
+        console.error('%s', `AutomationSchedulerService: failed executing ${automation._id}:`, error.message);
       });
   }
 

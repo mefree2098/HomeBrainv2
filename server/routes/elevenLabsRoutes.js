@@ -59,7 +59,7 @@ router.get('/voices/:voiceId', auth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`Error in GET /api/elevenlabs/voices/${req.params.voiceId}:`, error.message);
+    console.error('%s', `Error in GET /api/elevenlabs/voices/${req.params.voiceId}:`, error.message);
     console.error('Full error:', error);
     res.status(500).json({
       success: false,
@@ -87,7 +87,7 @@ router.post('/voices/:voiceId/validate', auth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`Error in POST /api/elevenlabs/voices/${req.params.voiceId}/validate:`, error.message);
+    console.error('%s', `Error in POST /api/elevenlabs/voices/${req.params.voiceId}/validate:`, error.message);
     console.error('Full error:', error);
     res.status(500).json({
       success: false,

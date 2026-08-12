@@ -880,7 +880,7 @@ class HomeBrainRemoteDevice {
       console.log(`Sending message to hub (${summary}) [readyState=${this.ws.readyState}]`);
       this.ws.send(JSON.stringify(payload), (error) => {
         if (error) {
-          console.error(`Failed to send message to hub (${summary}):`, error.message);
+          console.error('%s', `Failed to send message to hub (${summary}):`, error.message);
         } else {
           console.log(`Message delivered to hub (${summary})`);
         }
@@ -3498,7 +3498,7 @@ class HomeBrainRemoteDevice {
     broadcastAddresses.forEach(address => {
       this.discoverySocket.send(message, 0, message.length, this.discoveryPort, address, (err) => {
         if (err && err.code !== 'ENETUNREACH') {
-          console.warn(`Auto-discovery: Failed to send to ${address}:`, err.message);
+          console.warn('%s', `Auto-discovery: Failed to send to ${address}:`, err.message);
         }
       });
     });

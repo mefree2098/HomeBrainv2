@@ -10,6 +10,8 @@
     "test:lambda": "node scripts/run-with-modern-node.js npm --prefix lambda test",
     "test:remote": "node scripts/run-with-modern-node.js npm --prefix remote-device test",
     "test:client": "node scripts/run-with-modern-node.js npm --prefix client run lint && node scripts/run-with-modern-node.js npm --prefix client run build",
+    "check:console-format": "node scripts/harden-console-format-strings.js",
+    "fix:console-format": "node scripts/harden-console-format-strings.js --write",
     "client": "node scripts/run-with-modern-node.js npm --prefix client run dev",
     "client-install": "node scripts/run-with-modern-node.js npm --prefix client ci --no-audit --no-fund",
     "server": "node scripts/run-with-modern-node.js cross-env WAKEWORD_PIPER_EXEC=./server/.wakeword-venv/bin/piper npm run dev --prefix server",

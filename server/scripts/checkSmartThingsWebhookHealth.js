@@ -7,9 +7,18 @@
  *   node scripts/checkSmartThingsWebhookHealth.js --url https://example.com/api/smartthings/webhook/metrics --token <JWT>
  */
 
-const { URL } = require('url');
+const http = require('node:http');
+const https = require('node:https');
+const axios = require('axios');
 const mongoose = require('mongoose');
 const { connectDB } = require('../config/database');
+const {
+  createLocalAddressLookup,
+  isAllowedLocalHostname,
+  isCloudMetadataHostname,
+  parseHttpUrl,
+  parseLocalHttpUrl
+} = require('../utils/networkSafety');
 
 const DEFAULTS = {
   url: 'http://localhost:3000/api/smartthings/webhook/metrics',
@@ -58,16 +67,13 @@ function parseArgs(argv) {
         break;
       case '--insecure':
         options.insecure = true;
-        i -= 1;
         break;
       case '--help':
       case '-h':
         options.help = true;
-        i -= 1;
         break;
       default:
         console.warn(`Unknown argument "${arg}" ignored`);
-        i -= 1;
         break;
     }
   }
@@ -94,11 +100,15 @@ Options:
 `);
 }
 
-async function fetchMetrics(options) {
-  const url = new URL(options.url);
-
-  if (options.insecure && url.protocol === 'https:') {
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+function buildMetricsRequest(options) {
+  const url = parseHttpUrl(options.url, 'Metrics URL');
+  const targetsLocalNetwork = isAllowedLocalHostname(url.hostname)
+    && !isCloudMetadataHostname(url.hostname);
+  if (url.protocol !== 'https:' && !targetsLocalNetwork) {
+    throw new Error('Metrics URL must use https unless it targets a local or private host');
+  }
+  if (options.insecure && !targetsLocalNetwork) {
+    throw new Error('Disabled TLS verification is only allowed for local or private metrics targets');
   }
 
   const headers = { Accept: 'application/json' };
@@ -106,12 +116,35 @@ async function fetchMetrics(options) {
     headers.Authorization = `Bearer ${options.token}`;
   }
 
-  const response = await fetch(url, { headers });
-  if (!response.ok) {
+  const requestConfig = {
+    headers,
+    timeout: 10_000,
+    maxRedirects: 0,
+    maxContentLength: 2 * 1024 * 1024,
+    validateStatus: () => true
+  };
+
+  if (targetsLocalNetwork) {
+    parseLocalHttpUrl(url.toString(), 'Metrics URL');
+    const lookup = createLocalAddressLookup(url.hostname);
+    requestConfig.httpAgent = new http.Agent({ lookup });
+    requestConfig.httpsAgent = new https.Agent({
+      lookup,
+      rejectUnauthorized: options.insecure !== true
+    });
+  }
+
+  return { url, requestConfig };
+}
+
+async function fetchMetrics(options) {
+  const { url, requestConfig } = buildMetricsRequest(options);
+  const response = await axios.get(url.toString(), requestConfig);
+  if (response.status < 200 || response.status >= 300) {
     throw new Error(`Metrics request failed with status ${response.status}`);
   }
 
-  const body = await response.json();
+  const body = response.data;
   if (!body || typeof body !== 'object') {
     throw new Error('Metrics response missing JSON body');
   }
@@ -189,17 +222,17 @@ function evaluate(metrics, options) {
 }
 
 async function main() {
+  const options = parseArgs(process.argv);
+  if (options.help) {
+    printHelp();
+    return;
+  }
+
   if (!process.env.DATABASE_URL || process.env.DATABASE_URL.trim().length === 0) {
     process.env.DATABASE_URL = 'mongodb://localhost:27017/HomeBrain';
   }
   if (mongoose.connection.readyState === 0) {
     await connectDB();
-  }
-
-  const options = parseArgs(process.argv);
-  if (options.help) {
-    printHelp();
-    return;
   }
 
   try {
@@ -229,4 +262,13 @@ async function main() {
   }
 }
 
-main();
+if (require.main === module) {
+  main();
+}
+
+module.exports = {
+  buildMetricsRequest,
+  evaluate,
+  fetchMetrics,
+  parseArgs
+};

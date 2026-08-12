@@ -12,6 +12,7 @@ const {
 const { extractCustomSkillIdentity } = require('../../shared/alexa/customSkill');
 const { AlexaEventGatewayService, resolveEventRegion } = require('./eventGatewayService');
 const { AlexaDeviceService } = require('./alexaDeviceService');
+const { createOutboundAgents } = require('./outboundNetworkSafety');
 const AUTHORIZE_SUBMISSION_HMAC_KEY = crypto.randomBytes(32);
 
 function trimString(value) {
@@ -1089,6 +1090,7 @@ async function buildReadinessSnapshot(store, options = {}) {
 }
 
 function createApp(options = {}) {
+  // nosemgrep: javascript.express.security.audit.express-check-csurf-middleware-usage.express-check-csurf-middleware-usage -- the broker has no cookie-authenticated mutations; routes use bearer/relay credentials or one-time pairing codes.
   const app = express();
   const store = options.store || brokerStore;
   const autoKickDispatcher = options.autoKickDispatcher !== false;
@@ -1101,6 +1103,9 @@ function createApp(options = {}) {
     eventGatewayService
   });
   const authorizeSubmissions = new Map();
+  const allowPrivateHubUrls = options.allowPrivateHubUrls === undefined
+    ? trimString(process.env.HOMEBRAIN_ALEXA_ALLOW_PRIVATE_HUB_URLS).toLowerCase() === 'true'
+    : options.allowPrivateHubUrls === true;
 
   if (options.startDispatcher !== false) {
     eventGatewayService.start();
@@ -1718,6 +1723,10 @@ function createApp(options = {}) {
 
       if (trimString(requestPayload.hubBaseUrl) && trimString(requestPayload.linkCode)) {
         const hubBaseUrl = validateHubBaseUrl(requestPayload.hubBaseUrl, { mode: requestedMode });
+        const hubAgents = createOutboundAgents(hubBaseUrl, {
+          allowPrivate: allowPrivateHubUrls,
+          lookup: options.hubDnsLookup
+        });
         const brokerBaseUrl = buildBrokerBaseUrl(req);
         if (!brokerBaseUrl) {
           throw new Error('Unable to determine broker public base URL');
@@ -1734,6 +1743,8 @@ function createApp(options = {}) {
           maxRedirects: 0,
           maxContentLength: 2 * 1024 * 1024,
           maxBodyLength: 2 * 1024 * 1024,
+          httpAgent: hubAgents.httpAgent,
+          httpsAgent: hubAgents.httpsAgent,
           headers: {
             'Content-Type': 'application/json'
           }

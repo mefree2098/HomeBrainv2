@@ -384,7 +384,7 @@ router.delete('/zones/:deviceId', auth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`Error in DELETE /api/security-alarm/zones/${req.params.deviceId}:`, error.message);
+    console.error('%s', `Error in DELETE /api/security-alarm/zones/${req.params.deviceId}:`, error.message);
     console.error('Full error:', error);
     res.status(500).json({
       success: false,
@@ -426,7 +426,7 @@ router.put('/zones/:deviceId/bypass', auth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`Error in PUT /api/security-alarm/zones/${req.params.deviceId}/bypass:`, error.message);
+    console.error('%s', `Error in PUT /api/security-alarm/zones/${req.params.deviceId}/bypass:`, error.message);
     console.error('Full error:', error);
     res.status(500).json({
       success: false,

@@ -472,7 +472,7 @@ router.put('/exposures/:entityType/:entityId', admin, async (req, res) => {
     });
   } catch (error) {
     const statusCode = error.message.includes('Unable to find') ? 404 : 400;
-    console.error(`PUT /api/alexa/exposures/${req.params.entityType}/${req.params.entityId} - Error:`, error.message);
+    console.error('%s', `PUT /api/alexa/exposures/${req.params.entityType}/${req.params.entityId} - Error:`, error.message);
     return res.status(statusCode).json({
       success: false,
       error: error.message || 'Failed to update Alexa exposure'
@@ -658,7 +658,7 @@ router.put('/voice-users/:voiceUserId', admin, async (req, res) => {
       voiceUser
     });
   } catch (error) {
-    console.error(`PUT /api/alexa/voice-users/${req.params.voiceUserId} - Error:`, error.message);
+    console.error('%s', `PUT /api/alexa/voice-users/${req.params.voiceUserId} - Error:`, error.message);
     return res.status(error.message.includes('not found') ? 404 : 400).json({
       success: false,
       error: error.message || 'Failed to update Alexa voice user'
@@ -674,7 +674,7 @@ router.delete('/voice-users/:voiceUserId', admin, async (req, res) => {
       result
     });
   } catch (error) {
-    console.error(`DELETE /api/alexa/voice-users/${req.params.voiceUserId} - Error:`, error.message);
+    console.error('%s', `DELETE /api/alexa/voice-users/${req.params.voiceUserId} - Error:`, error.message);
     return res.status(error.message.includes('not found') ? 404 : 400).json({
       success: false,
       error: error.message || 'Failed to delete Alexa voice user'
@@ -706,7 +706,7 @@ router.post('/accounts/:brokerAccountId/discovery-sync', admin, async (req, res)
       result
     });
   } catch (error) {
-    console.error(`POST /api/alexa/accounts/${req.params.brokerAccountId}/discovery-sync - Error:`, error.message);
+    console.error('%s', `POST /api/alexa/accounts/${req.params.brokerAccountId}/discovery-sync - Error:`, error.message);
     return res.status(error.response?.status || 500).json({
       success: false,
       error: error.message || 'Failed to request Alexa household rediscovery'
@@ -722,7 +722,7 @@ router.post('/accounts/:brokerAccountId/revoke', admin, async (req, res) => {
       result
     });
   } catch (error) {
-    console.error(`POST /api/alexa/accounts/${req.params.brokerAccountId}/revoke - Error:`, error.message);
+    console.error('%s', `POST /api/alexa/accounts/${req.params.brokerAccountId}/revoke - Error:`, error.message);
     return res.status(error.response?.status || 500).json({
       success: false,
       error: error.message || 'Failed to revoke Alexa household'

@@ -88,7 +88,7 @@ const dbInit = async (options = {}) => {
     console.log('All models registered successfully');
     await ensureDeviceIdentityIndexes();
   } catch (err) {
-    console.error(`Error connecting to database ${mongoUrl}:`, err);
+    console.error('%s', `Error connecting to database ${mongoUrl}:`, err);
     throw err;
   }
 };

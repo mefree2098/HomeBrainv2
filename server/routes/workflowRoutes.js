@@ -115,7 +115,7 @@ router.get('/runtime-history/:id', async (req, res) => {
     });
   } catch (error) {
     const statusCode = error.message.includes('Invalid') ? 400 : error.message.includes('not found') ? 404 : 500;
-    console.error(`GET /api/workflows/runtime-history/${req.params.id} - Error:`, error.message);
+    console.error('%s', `GET /api/workflows/runtime-history/${req.params.id} - Error:`, error.message);
     return res.status(statusCode).json({
       success: false,
       message: error.message || 'Failed to fetch workflow runtime history'
@@ -153,7 +153,7 @@ router.post('/executions/:historyId/stop', async (req, res) => {
     return res.status(200).json(result);
   } catch (error) {
     const statusCode = error.message.includes('Invalid') ? 400 : error.message.includes('not found') ? 404 : 500;
-    console.error(`POST /api/workflows/executions/${req.params.historyId}/stop - Error:`, error.message);
+    console.error('%s', `POST /api/workflows/executions/${req.params.historyId}/stop - Error:`, error.message);
     return res.status(statusCode).json({
       success: false,
       message: error.message || 'Failed to stop workflow execution'
@@ -216,7 +216,7 @@ router.post('/:id/revise-from-text', admin, async (req, res) => {
     const result = await workflowService.reviseWorkflowFromText(req.params.id, text.trim(), roomContext, source);
     return res.status(200).json(result);
   } catch (error) {
-    console.error(`POST /api/workflows/${req.params.id}/revise-from-text - Error:`, error.message);
+    console.error('%s', `POST /api/workflows/${req.params.id}/revise-from-text - Error:`, error.message);
     const statusCode = error.message.includes('Invalid') || error.message.includes('required')
       ? 400
       : error.message.includes('not found')
@@ -238,7 +238,7 @@ router.get('/:id', async (req, res) => {
     });
   } catch (error) {
     const statusCode = error.message.includes('Invalid') ? 400 : error.message.includes('not found') ? 404 : 500;
-    console.error(`GET /api/workflows/${req.params.id} - Error:`, error.message);
+    console.error('%s', `GET /api/workflows/${req.params.id} - Error:`, error.message);
     return res.status(statusCode).json({
       success: false,
       message: error.message || 'Failed to fetch workflow'
@@ -256,7 +256,7 @@ router.put('/:id', admin, async (req, res) => {
     });
   } catch (error) {
     const statusCode = error.message.includes('Invalid') || error.message.includes('required') ? 400 : error.message.includes('not found') ? 404 : 500;
-    console.error(`PUT /api/workflows/${req.params.id} - Error:`, error.message);
+    console.error('%s', `PUT /api/workflows/${req.params.id} - Error:`, error.message);
     return res.status(statusCode).json({
       success: false,
       message: error.message || 'Failed to update workflow'
@@ -275,7 +275,7 @@ router.put('/:id/toggle', admin, async (req, res) => {
     });
   } catch (error) {
     const statusCode = error.message.includes('boolean') || error.message.includes('Invalid') ? 400 : error.message.includes('not found') ? 404 : 500;
-    console.error(`PUT /api/workflows/${req.params.id}/toggle - Error:`, error.message);
+    console.error('%s', `PUT /api/workflows/${req.params.id}/toggle - Error:`, error.message);
     return res.status(statusCode).json({
       success: false,
       message: error.message || 'Failed to toggle workflow'
@@ -296,7 +296,7 @@ router.post('/:id/execute', async (req, res) => {
     });
   } catch (error) {
     const statusCode = error.message.includes('disabled') ? 400 : error.message.includes('Invalid') ? 400 : error.message.includes('not found') ? 404 : 500;
-    console.error(`POST /api/workflows/${req.params.id}/execute - Error:`, error.message);
+    console.error('%s', `POST /api/workflows/${req.params.id}/execute - Error:`, error.message);
     return res.status(statusCode).json({
       success: false,
       message: error.message || 'Failed to execute workflow'
@@ -310,7 +310,7 @@ router.delete('/:id', admin, async (req, res) => {
     return res.status(200).json(result);
   } catch (error) {
     const statusCode = error.message.includes('Invalid') ? 400 : error.message.includes('not found') ? 404 : 500;
-    console.error(`DELETE /api/workflows/${req.params.id} - Error:`, error.message);
+    console.error('%s', `DELETE /api/workflows/${req.params.id} - Error:`, error.message);
     return res.status(statusCode).json({
       success: false,
       message: error.message || 'Failed to delete workflow'

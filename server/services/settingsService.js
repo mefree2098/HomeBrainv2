@@ -384,10 +384,10 @@ class SettingsService {
       console.log(`SettingsService: Getting specific setting: ${key}`);
       const settings = await this.getSettings();
       const value = settings[key];
-      console.log(`SettingsService: Retrieved setting ${key}:`, value ? '[SET]' : '[NOT_SET]');
+      console.log('%s', `SettingsService: Retrieved setting ${key}:`, value ? '[SET]' : '[NOT_SET]');
       return value;
     } catch (error) {
-      console.error(`SettingsService: Error getting setting ${key}:`, error.message);
+      console.error('%s', `SettingsService: Error getting setting ${key}:`, error.message);
       throw new Error(`Failed to get setting: ${key}`);
     }
   }

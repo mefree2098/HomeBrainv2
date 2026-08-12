@@ -535,7 +535,8 @@ test('broker pairing and Alexa OAuth flow persist linked accounts and tokens', a
   const brokerServer = http.createServer(createApp({
     store: brokerStore,
     startDispatcher: false,
-    autoKickDispatcher: false
+    autoKickDispatcher: false,
+    allowPrivateHubUrls: true
   }));
 
   const hub = await listen(hubServer);
@@ -1104,7 +1105,8 @@ test('authorize page prefers the paired public origin over the hub id when pre-f
   const brokerServer = http.createServer(createApp({
     store: brokerStore,
     startDispatcher: false,
-    autoKickDispatcher: false
+    autoKickDispatcher: false,
+    allowPrivateHubUrls: true
   }));
 
   const hub = await listen(hubServer);

@@ -1,0 +1,6 @@
+f3b5e37d9415e766c1d1fd5b5672c8dedb0fcc8d:server/services/settingsService.js:generic-api-key:89
+32fe6e4e78cb4c3824ce384842518a871219b149:server/tests/directRadioNetworkConfig.test.js:generic-api-key:32
+53746eb78c2f39c36ca0024a55b8cd2912c498b1:client/src/pages/Weather.tsx:generic-api-key:510
+c0dc6b4d612b5b2c9fb0daca8db399479bcc8b82:docs/configuration.md:curl-auth-header:66
+c0dc6b4d612b5b2c9fb0daca8db399479bcc8b82:docs/troubleshooting.md:curl-auth-header:450
+47bb120ad029ba8d8c80f5ed65b9854777ee4c79:server/.env.example:generic-api-key:8

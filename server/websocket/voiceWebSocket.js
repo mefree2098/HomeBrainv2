@@ -321,7 +321,7 @@ class VoiceWebSocketServer {
       console.log(`Voice device ${device.name} connected; waiting for authentication`);
 
     } catch (error) {
-      console.error(`Error handling WebSocket connection for ${deviceId}:`, error);
+      console.error('%s', `Error handling WebSocket connection for ${deviceId}:`, error);
       ws.close(1011, 'Server error');
     }
   }
@@ -385,7 +385,7 @@ class VoiceWebSocketServer {
         }
       }
     } catch (error) {
-      console.warn(`Failed to load wake word metadata for device ${device.name}:`, error.message);
+      console.warn('%s', `Failed to load wake word metadata for device ${device.name}:`, error.message);
     }
 
     const wakeWordAssetPayload = assets.map((asset) => {
@@ -508,7 +508,7 @@ class VoiceWebSocketServer {
         return;
       }
 
-      console.log(`WebSocket message from ${deviceId}:`, message.type);
+      console.log('%s', `WebSocket message from ${deviceId}:`, message.type);
 
       if (message.type !== 'authenticate' && !connection.authenticated) {
         console.warn(`Rejected unauthenticated ${message.type || 'unknown'} message from device ${deviceId}`);
@@ -581,7 +581,7 @@ class VoiceWebSocketServer {
       }
 
     } catch (error) {
-      console.error(`Error processing message from device ${deviceId}:`, error);
+      console.error('%s', `Error processing message from device ${deviceId}:`, error);
       console.error('Failed message type could not be processed safely');
       this.sendToConnection(connection, {
         type: 'error',
@@ -646,7 +646,7 @@ class VoiceWebSocketServer {
           connection.pendingWakeWord = null;
           connection.captureGrant = null;
           this.audioSessions.delete(deviceId);
-          console.error(`Rejected Reachy identity during authentication for ${deviceId}:`, reachyError.message);
+          console.error('%s', `Rejected Reachy identity during authentication for ${deviceId}:`, reachyError.message);
           this.sendToConnection(connection, {
             type: 'auth_failed',
             code: reachyError.code || 'REACHY_IDENTITY_REJECTED',
@@ -753,7 +753,7 @@ class VoiceWebSocketServer {
       console.log(`Device ${device.name} authenticated successfully`);
 
     } catch (error) {
-      console.error(`Authentication error for device ${deviceId}:`, error);
+      console.error('%s', `Authentication error for device ${deviceId}:`, error);
       connection.authenticated = false;
       connection.credentials = null;
       connection.deviceInfo = null;
@@ -802,7 +802,7 @@ class VoiceWebSocketServer {
             config
           });
         } catch (configError) {
-          console.error(`Failed to build wake word config for device ${deviceId}:`, configError);
+          console.error('%s', `Failed to build wake word config for device ${deviceId}:`, configError);
         }
       }
     } catch (error) {
@@ -839,7 +839,7 @@ class VoiceWebSocketServer {
       });
 
     } catch (error) {
-      console.error(`Heartbeat error for device ${deviceId}:`, error);
+      console.error('%s', `Heartbeat error for device ${deviceId}:`, error);
     }
   }
 
@@ -995,7 +995,7 @@ class VoiceWebSocketServer {
 
     } catch (error) {
       if (isReachy) this.clearRejectedReachyAudio(deviceId, connection);
-      console.error(`Wake word handling error for device ${deviceId}:`, error);
+      console.error('%s', `Wake word handling error for device ${deviceId}:`, error);
     }
   }
 
@@ -1087,7 +1087,7 @@ class VoiceWebSocketServer {
     try {
       await VoiceDevice.findByIdAndUpdate(deviceId, updates);
     } catch (error) {
-      console.warn(`Failed to update audio state for device ${deviceId}:`, error.message);
+      console.warn('%s', `Failed to update audio state for device ${deviceId}:`, error.message);
     }
   }
 
@@ -1246,7 +1246,7 @@ class VoiceWebSocketServer {
           preferredVoiceId
         );
       } catch (ackError) {
-        console.warn(`Failed to fetch acknowledgment for ${deviceId}:`, ackError.message);
+        console.warn('%s', `Failed to fetch acknowledgment for ${deviceId}:`, ackError.message);
       }
 
       if (!authorizeExecution()) return;
@@ -1345,7 +1345,7 @@ class VoiceWebSocketServer {
       });
 
     } catch (error) {
-      console.error(`Voice command handling error for device ${deviceId}:`, error);
+      console.error('%s', `Voice command handling error for device ${deviceId}:`, error);
       console.error('Full error:', error.stack);
       if (connection) {
         connection.pendingWakeWord = null;
@@ -1549,7 +1549,7 @@ class VoiceWebSocketServer {
         session.chunks.push(chunk);
         session.totalBytes += chunk.length;
       } catch (error) {
-        console.error(`Failed to decode audio chunk for device ${deviceId}:`, error.message);
+        console.error('%s', `Failed to decode audio chunk for device ${deviceId}:`, error.message);
       }
     }
 
@@ -1782,7 +1782,7 @@ class VoiceWebSocketServer {
       });
       if (!this.isCurrentAuthenticatedConnection(deviceId, connection)) return;
     } catch (error) {
-      console.error(`Speech-to-text failed for device ${deviceId}:`, error.message);
+      console.error('%s', `Speech-to-text failed for device ${deviceId}:`, error.message);
       await markInactive({
         lastTranscriptText: null,
         lastTranscriptConfidence: null,
@@ -1882,7 +1882,7 @@ class VoiceWebSocketServer {
       console.log(`Status updated for device ${deviceId}: ${status}`);
 
     } catch (error) {
-      console.error(`Status update error for device ${deviceId}:`, error);
+      console.error('%s', `Status update error for device ${deviceId}:`, error);
     }
   }
 
@@ -1905,7 +1905,7 @@ class VoiceWebSocketServer {
       console.log(`Update status for device ${deviceId} updated to: ${status}`);
 
     } catch (updateError) {
-      console.error(`Error updating device update status for ${deviceId}:`, updateError);
+      console.error('%s', `Error updating device update status for ${deviceId}:`, updateError);
     }
   }
 
@@ -1916,7 +1916,7 @@ class VoiceWebSocketServer {
 
     const { error, details } = message;
 
-    console.error(`Device error reported by ${connection.device.name}: ${error}`, details);
+    console.error('%s', `Device error reported by ${connection.device.name}: ${error}`, details);
 
     try {
       // Update device status to error
@@ -1926,7 +1926,7 @@ class VoiceWebSocketServer {
       });
 
     } catch (dbError) {
-      console.error(`Failed to update device error status for ${deviceId}:`, dbError);
+      console.error('%s', `Failed to update device error status for ${deviceId}:`, dbError);
     }
   }
 
@@ -1957,7 +1957,7 @@ class VoiceWebSocketServer {
         await reachyMiniService.handleDisconnected(deviceId);
       }
     } catch (error) {
-      console.error(`Error handling disconnection for device ${deviceId}:`, error);
+      console.error('%s', `Error handling disconnection for device ${deviceId}:`, error);
     }
   }
 

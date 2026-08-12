@@ -142,7 +142,7 @@ const cleanCollections = async (collectionsToClean) => {
       console.log(`   ✅ Deleted ${result.deletedCount} documents from ${collectionName}`);
       
     } catch (error) {
-      console.error(`   ❌ Error cleaning ${collectionName}:`, error.message);
+      console.error('%s', `   ❌ Error cleaning ${collectionName}:`, error.message);
       results[collectionName] = 'error';
     }
   }

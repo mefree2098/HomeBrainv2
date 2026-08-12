@@ -509,7 +509,7 @@ async function sendRequestToOpenAI(model, message, apiKey = null) {
       lastError = responsesError;
       const errorMessage = buildOpenAIErrorMessage(responsesError);
       const attemptNumber = attempt + 1;
-      console.error(`Error sending request to OpenAI Responses API (attempt ${attemptNumber}):`, responsesError.message);
+      console.error('%s', `Error sending request to OpenAI Responses API (attempt ${attemptNumber}):`, responsesError.message);
       if (responsesError.response) {
         console.error('OpenAI Responses API Error Response:', JSON.stringify(responsesError.response.data, null, 2));
       }
@@ -527,7 +527,7 @@ async function sendRequestToOpenAI(model, message, apiKey = null) {
         } catch (chatError) {
           lastError = chatError;
           const chatErrorMessage = buildOpenAIErrorMessage(chatError);
-          console.error(`Error sending request to OpenAI Chat Completions fallback (attempt ${attemptNumber}):`, chatError.message);
+          console.error('%s', `Error sending request to OpenAI Chat Completions fallback (attempt ${attemptNumber}):`, chatError.message);
           if (chatError.response) {
             console.error('OpenAI Chat Completions Error Response:', JSON.stringify(chatError.response.data, null, 2));
           }
@@ -589,7 +589,7 @@ async function sendRequestToAnthropic(model, message, apiKey = null) {
       console.log(`Received response from Anthropic`);
       return response.content[0].text;
     } catch (error) {
-      console.error(`Error sending request to Anthropic (attempt ${i + 1}):`, error.message);
+      console.error('%s', `Error sending request to Anthropic (attempt ${i + 1}):`, error.message);
       if (i === MAX_RETRIES - 1) throw error;
       await sleep(RETRY_DELAY);
     }
@@ -728,7 +728,7 @@ async function sendRequestToLocalLLM(endpoint, model, message, requestConfig = {
         continue;
       }
 
-      console.error(`Error sending request to local LLM with model "${candidateModel}":`, errorMessage);
+      console.error('%s', `Error sending request to local LLM with model "${candidateModel}":`, errorMessage);
       throw error;
     }
   }
@@ -946,7 +946,7 @@ async function sendLLMRequestWithFallback(message, priorityList = null, requestC
       }
 
     } catch (error) {
-      console.error(`LLM Service: Error with provider ${provider}:`, error.message);
+      console.error('%s', `LLM Service: Error with provider ${provider}:`, error.message);
       errors.push({ provider, error: error.message });
       // Continue to next provider in priority list
     }
@@ -1039,7 +1039,7 @@ async function sendLLMRequestWithFallbackDetailed(message, priorityList = null, 
           continue;
       }
     } catch (error) {
-      console.error(`LLM Service: Error with provider ${provider}:`, error.message);
+      console.error('%s', `LLM Service: Error with provider ${provider}:`, error.message);
       errors.push({ provider, error: error.message });
     }
   }

@@ -61,7 +61,7 @@ router.get('/:id', async (req, res) => {
       user
     });
   } catch (error) {
-    console.error(`GET /api/users/${req.params.id} - Error:`, error.message);
+    console.error('%s', `GET /api/users/${req.params.id} - Error:`, error.message);
     return res.status(500).json({
       success: false,
       message: error.message || 'Failed to fetch user'
@@ -146,7 +146,7 @@ router.put('/:id', async (req, res) => {
       user
     });
   } catch (error) {
-    console.error(`PUT /api/users/${req.params.id} - Error:`, error.message);
+    console.error('%s', `PUT /api/users/${req.params.id} - Error:`, error.message);
     const statusCode = error.message?.includes('not found')
       ? 404
       : error.message?.includes('already exists')
@@ -174,7 +174,7 @@ router.post('/:id/reset-password', async (req, res) => {
       message: 'Password reset successfully'
     });
   } catch (error) {
-    console.error(`POST /api/users/${req.params.id}/reset-password - Error:`, error.message);
+    console.error('%s', `POST /api/users/${req.params.id}/reset-password - Error:`, error.message);
     const statusCode = error.message?.includes('not found') ? 404 : error.message?.includes('required') ? 400 : 500;
     return res.status(statusCode).json({
       success: false,
@@ -298,7 +298,7 @@ router.delete('/:id', async (req, res) => {
       message: 'User deleted successfully'
     });
   } catch (error) {
-    console.error(`DELETE /api/users/${req.params.id} - Error:`, error.message);
+    console.error('%s', `DELETE /api/users/${req.params.id} - Error:`, error.message);
     const statusCode = error.message?.includes('At least one active HomeBrain admin account is required') ? 400 : 500;
     return res.status(statusCode).json({
       success: false,

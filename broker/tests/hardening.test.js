@@ -73,6 +73,30 @@ test('broker URL validation rejects credentials, unsafe schemes, and cross-origi
   assert.throws(() => validateHubBaseUrl('https://hub.example.test/path', { mode: 'public' }), /without a path/);
 });
 
+test('broker pairing blocks private callback addresses unless explicitly allowed', async (t) => {
+  const broker = await listen(http.createServer(createApp({
+    store: createMemoryStore(),
+    startDispatcher: false,
+    autoKickDispatcher: false,
+    allowPrivateHubUrls: false
+  })));
+  t.after(() => close(broker.server));
+
+  const response = await fetch(`${broker.baseUrl}/api/alexa/hubs/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      hubBaseUrl: 'http://127.0.0.1:1',
+      linkCode: 'HBAX-SSRF-TEST',
+      mode: 'private'
+    })
+  });
+  const payload = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.match(payload.error, /outside the permitted network/);
+});
+
 test('broker request safety finds prototype and query-operator keys', () => {
   assert.equal(findUnsafeRequestKey(JSON.parse('{"nested":{"__proto__":{"polluted":true}}}')), '__proto__');
   assert.equal(findUnsafeRequestKey({ nested: { $where: 'sleep(1)' } }), '$where');

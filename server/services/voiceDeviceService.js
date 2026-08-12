@@ -160,7 +160,7 @@ class VoiceDeviceService {
         diagnostics
       };
 
-      console.log(`VoiceDeviceService: Diagnostics completed for ${device.name}:`, result);
+      console.log('%s', `VoiceDeviceService: Diagnostics completed for ${device.name}:`, result);
       return result;
       
     } catch (error) {
@@ -340,7 +340,7 @@ class VoiceDeviceService {
       console.log(`VoiceDeviceService: Updated status for ${device.name} to ${status}`);
       return device;
     } catch (error) {
-      console.error(`VoiceDeviceService: Error updating device status ${deviceId}:`, error.message);
+      console.error('%s', `VoiceDeviceService: Error updating device status ${deviceId}:`, error.message);
       console.error(error.stack);
       
       if (error.message === 'Voice device not found') {
@@ -365,7 +365,7 @@ class VoiceDeviceService {
       console.log(`VoiceDeviceService: Found ${devices.length} voice devices in ${room}`);
       return devices;
     } catch (error) {
-      console.error(`VoiceDeviceService: Error fetching devices in room ${room}:`, error.message);
+      console.error('%s', `VoiceDeviceService: Error fetching devices in room ${room}:`, error.message);
       console.error(error.stack);
       throw new Error(`Failed to fetch devices in room: ${error.message}`);
     }
@@ -386,7 +386,7 @@ class VoiceDeviceService {
       console.log(`VoiceDeviceService: Found ${devices.length} voice devices with status ${status}`);
       return devices;
     } catch (error) {
-      console.error(`VoiceDeviceService: Error fetching devices with status ${status}:`, error.message);
+      console.error('%s', `VoiceDeviceService: Error fetching devices with status ${status}:`, error.message);
       console.error(error.stack);
       throw new Error(`Failed to fetch devices by status: ${error.message}`);
     }

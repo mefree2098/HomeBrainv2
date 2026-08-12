@@ -905,7 +905,7 @@ router.get('/devices/:deviceId/status', async (req, res) => {
       ...status
     });
   } catch (error) {
-    console.error(`InsteonRoutes: Failed to get device ${deviceId} status:`, error.message);
+    console.error('%s', `InsteonRoutes: Failed to get device ${deviceId} status:`, error.message);
     console.error(error.stack);
     res.status(500).json({
       success: false,
@@ -928,7 +928,7 @@ router.post('/devices/:deviceId/on', async (req, res) => {
     const result = await insteonService.turnOn(deviceId, brightness);
     res.status(200).json(result);
   } catch (error) {
-    console.error(`InsteonRoutes: Failed to turn on device ${deviceId}:`, error.message);
+    console.error('%s', `InsteonRoutes: Failed to turn on device ${deviceId}:`, error.message);
     console.error(error.stack);
     res.status(500).json({
       success: false,
@@ -949,7 +949,7 @@ router.post('/devices/:deviceId/off', async (req, res) => {
     const result = await insteonService.turnOff(deviceId);
     res.status(200).json(result);
   } catch (error) {
-    console.error(`InsteonRoutes: Failed to turn off device ${deviceId}:`, error.message);
+    console.error('%s', `InsteonRoutes: Failed to turn off device ${deviceId}:`, error.message);
     console.error(error.stack);
     res.status(500).json({
       success: false,
@@ -979,7 +979,7 @@ router.post('/devices/:deviceId/brightness', async (req, res) => {
     const result = await insteonService.setBrightness(deviceId, brightness);
     res.status(200).json(result);
   } catch (error) {
-    console.error(`InsteonRoutes: Failed to set device ${deviceId} brightness:`, error.message);
+    console.error('%s', `InsteonRoutes: Failed to set device ${deviceId} brightness:`, error.message);
     console.error(error.stack);
     res.status(500).json({
       success: false,
@@ -1021,7 +1021,7 @@ router.delete('/devices/:deviceId/unlink', async (req, res) => {
     const result = await insteonService.unlinkDevice(deviceId);
     res.status(200).json(result);
   } catch (error) {
-    console.error(`InsteonRoutes: Failed to unlink device ${deviceId}:`, error.message);
+    console.error('%s', `InsteonRoutes: Failed to unlink device ${deviceId}:`, error.message);
     console.error(error.stack);
     res.status(500).json({
       success: false,
@@ -1042,7 +1042,7 @@ router.delete('/devices/:deviceId', async (req, res) => {
     const result = await insteonService.deleteDevice(deviceId);
     res.status(200).json(result);
   } catch (error) {
-    console.error(`InsteonRoutes: Failed to delete device ${deviceId}:`, error.message);
+    console.error('%s', `InsteonRoutes: Failed to delete device ${deviceId}:`, error.message);
     console.error(error.stack);
     res.status(500).json({
       success: false,

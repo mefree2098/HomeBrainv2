@@ -1149,7 +1149,7 @@ async function getAutomationById(id) {
     console.log(`AutomationService: Successfully retrieved automation: ${automation.name}`);
     return automation;
   } catch (error) {
-    console.error(`AutomationService: Error fetching automation ${id}:`, error.message);
+    console.error('%s', `AutomationService: Error fetching automation ${id}:`, error.message);
     console.error('AutomationService: Full error:', error);
 
     if (error.message.includes('not found') || error.message.includes('Invalid')) {
@@ -1293,7 +1293,7 @@ async function updateAutomation(id, updateData) {
     console.log(`AutomationService: Automation updated successfully: ${updatedAutomation.name}`);
     return updatedAutomation;
   } catch (error) {
-    console.error(`AutomationService: Error updating automation ${id}:`, error.message);
+    console.error('%s', `AutomationService: Error updating automation ${id}:`, error.message);
     console.error('AutomationService: Full error:', error);
 
     if (error.message.includes('not found') || error.message.includes('required') ||
@@ -1330,7 +1330,7 @@ async function deleteAutomation(id) {
       deletedAutomation
     };
   } catch (error) {
-    console.error(`AutomationService: Error deleting automation ${id}:`, error.message);
+    console.error('%s', `AutomationService: Error deleting automation ${id}:`, error.message);
     console.error('AutomationService: Full error:', error);
 
     if (error.message.includes('not found') || error.message.includes('Invalid')) {
@@ -1373,7 +1373,7 @@ async function toggleAutomation(id, enabled) {
       automation: updatedAutomation
     };
   } catch (error) {
-    console.error(`AutomationService: Error toggling automation ${id}:`, error.message);
+    console.error('%s', `AutomationService: Error toggling automation ${id}:`, error.message);
     console.error('AutomationService: Full error:', error);
 
     if (error.message.includes('not found') || error.message.includes('Invalid') ||
@@ -2116,7 +2116,7 @@ async function generateAutomationDraftsFromText(text, roomContext = null, option
       handledDirectCommand: false
     };
   } catch (error) {
-    console.error(`AutomationService: Error ${mode === 'revise' ? 'revising' : 'creating'} automation from text:`, error.message);
+    console.error('%s', `AutomationService: Error ${mode === 'revise' ? 'revising' : 'creating'} automation from text:`, error.message);
     console.error('AutomationService: Full error:', error);
 
     if (error.message.includes('required') || error.message.includes('unavailable') || error.message.includes('after')) {
@@ -2953,7 +2953,7 @@ async function executeAutomation(id, options = {}) {
       };
     }
 
-    console.error(`AutomationService: Error executing automation ${id}:`, error.message);
+    console.error('%s', `AutomationService: Error executing automation ${id}:`, error.message);
     console.error('AutomationService: Full error:', error);
 
     if (error.message.includes('not found') || error.message.includes('Invalid') ||

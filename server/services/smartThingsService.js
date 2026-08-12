@@ -446,7 +446,7 @@ class SmartThingsService {
           response
         });
       } catch (error) {
-        console.error(`SmartThingsService: Failed to create subscription for ${descriptor.capability || descriptor.deviceId}:`, error.message);
+        console.error('%s', `SmartThingsService: Failed to create subscription for ${descriptor.capability || descriptor.deviceId}:`, error.message);
         throw error;
       }
     }
@@ -1263,9 +1263,9 @@ class SmartThingsService {
 
       const logPayload = error.response?.data || error.message;
       if (isExpectedSecurityFallback) {
-        console.debug(`SmartThingsService: Expected fallback for ${endpoint} (${status}):`, logPayload);
+        console.debug('%s', `SmartThingsService: Expected fallback for ${endpoint} (${status}):`, logPayload);
       } else {
-        console.error(`SmartThingsService: API request failed for ${endpoint}:`, logPayload);
+        console.error('%s', `SmartThingsService: API request failed for ${endpoint}:`, logPayload);
       }
 
       if (status === 401) {
@@ -2682,7 +2682,7 @@ class SmartThingsService {
         }
 
         if (!rawValue) {
-          console.debug(`SmartThingsService: Security device ${deviceId} main component missing expected status fields`, Object.keys(securityComponent));
+          console.debug('%s', `SmartThingsService: Security device ${deviceId} main component missing expected status fields`, Object.keys(securityComponent));
           continue;
         }
 

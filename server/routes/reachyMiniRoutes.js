@@ -106,7 +106,7 @@ function responseStatus(error) {
 function sendError(res, error, fallback) {
   const status = responseStatus(error);
   if (status >= 500) {
-    console.error(`ReachyMiniRoutes: ${fallback}:`, error.message);
+    console.error('%s', `ReachyMiniRoutes: ${fallback}:`, error.message);
   }
   return res.status(status).json({
     success: false,

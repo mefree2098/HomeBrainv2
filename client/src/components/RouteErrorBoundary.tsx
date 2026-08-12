@@ -23,7 +23,7 @@ export class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, Route
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error(`RouteErrorBoundary: ${this.props.routeName || "Route"} crashed`, error, errorInfo)
+    console.error('%s', `RouteErrorBoundary: ${this.props.routeName || "Route"} crashed`, error, errorInfo)
   }
 
   render() {

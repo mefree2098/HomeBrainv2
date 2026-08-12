@@ -723,7 +723,7 @@ router.get('/:key', auth, async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`Error in GET /api/settings/${req.params.key}:`, error.message);
+    console.error('%s', `Error in GET /api/settings/${req.params.key}:`, error.message);
     console.error('Full error:', error);
     res.status(500).json({
       success: false,

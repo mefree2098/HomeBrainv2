@@ -33,7 +33,7 @@ router.get('/:id', async (req, res) => {
       data: { group }
     });
   } catch (error) {
-    console.error(`GET /api/device-groups/${req.params.id} - Error:`, error.message);
+    console.error('%s', `GET /api/device-groups/${req.params.id} - Error:`, error.message);
     console.error(error.stack);
     const statusCode = error.message.includes('Invalid')
       ? 400
@@ -82,7 +82,7 @@ router.put('/:id', admin, async (req, res) => {
       data: { group }
     });
   } catch (error) {
-    console.error(`PUT /api/device-groups/${req.params.id} - Error:`, error.message);
+    console.error('%s', `PUT /api/device-groups/${req.params.id} - Error:`, error.message);
     console.error(error.stack);
     const statusCode = error.message.includes('Invalid')
       || error.message.includes('required')
@@ -111,7 +111,7 @@ router.put('/:id/devices', admin, async (req, res) => {
       data: { group }
     });
   } catch (error) {
-    console.error(`PUT /api/device-groups/${req.params.id}/devices - Error:`, error.message);
+    console.error('%s', `PUT /api/device-groups/${req.params.id}/devices - Error:`, error.message);
     console.error(error.stack);
     const statusCode = error.message.includes('Invalid')
       || error.message.includes('Unknown device IDs')
@@ -135,7 +135,7 @@ router.put('/:id/children', admin, async (req, res) => {
       data: { group }
     });
   } catch (error) {
-    console.error(`PUT /api/device-groups/${req.params.id}/children - Error:`, error.message);
+    console.error('%s', `PUT /api/device-groups/${req.params.id}/children - Error:`, error.message);
     console.error(error.stack);
     const statusCode = error.message.includes('Invalid')
       || error.message.includes('Unknown child group IDs')
@@ -161,7 +161,7 @@ router.put('/:id/membership', admin, async (req, res) => {
       data: { group }
     });
   } catch (error) {
-    console.error(`PUT /api/device-groups/${req.params.id}/membership - Error:`, error.message);
+    console.error('%s', `PUT /api/device-groups/${req.params.id}/membership - Error:`, error.message);
     console.error(error.stack);
     const statusCode = error.message.includes('Invalid')
       || error.message.includes('Unknown device IDs')
@@ -188,7 +188,7 @@ router.delete('/:id', admin, async (req, res) => {
       data: { group: result.group }
     });
   } catch (error) {
-    console.error(`DELETE /api/device-groups/${req.params.id} - Error:`, error.message);
+    console.error('%s', `DELETE /api/device-groups/${req.params.id} - Error:`, error.message);
     console.error(error.stack);
     const statusCode = error.message.includes('Invalid')
       || error.message.includes('Cannot delete')

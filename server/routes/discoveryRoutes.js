@@ -235,7 +235,7 @@ router.post('/approve/:deviceId', async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`POST /api/discovery/approve/${deviceId} - Error:`, error.message);
+    console.error('%s', `POST /api/discovery/approve/${deviceId} - Error:`, error.message);
     console.error(error.stack);
 
     const statusCode = error.message === 'Pending device not found' ? 404 : 500;
@@ -272,7 +272,7 @@ router.post('/reject/:deviceId', async (req, res) => {
     });
 
   } catch (error) {
-    console.error(`POST /api/discovery/reject/${deviceId} - Error:`, error.message);
+    console.error('%s', `POST /api/discovery/reject/${deviceId} - Error:`, error.message);
     console.error(error.stack);
 
     const statusCode = error.message === 'Pending device not found' ? 404 : 500;
