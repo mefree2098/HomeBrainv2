@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "id": "ios-app-store-archive-validator",
+  "summary": "Validate a HomeBrain iOS archive's release identity, signature, and absence of Siri/App Intents integration before App Store submission.",
+  "scope": "project",
+  "tags": ["ios", "app-store", "archive", "validation", "app-intents"],
+  "entrypoint": ["python3", "scripts/validate-ios-app-store-archive.py"],
+  "inputs": ["An .xcarchive path plus explicit --expected-version and --expected-build values."],
+  "outputs": ["A human-readable or JSON validation report and exit status 0 only for a conforming archive."],
+  "side_effects": ["None; the archive and repository are read-only."],
+  "verify": [
+    ["python3", "scripts/test-validate-ios-app-store-archive.py"]
+  ],
+  "determinism": {
+    "environment": ["macOS", "Python 3.10+", "Xcode command-line tools including codesign and otool"],
+    "network": "forbidden",
+    "clock": "forbidden",
+    "randomness": "forbidden"
+  },
+  "status": "experimental"
+}
