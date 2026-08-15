@@ -440,3 +440,55 @@ test('getThermostats uses Ecobee GET json selection request', async (t) => {
   assert.deepEqual(thermostats, [thermostat]);
   assert.deepEqual(updatedDevices, [thermostat]);
 });
+
+test('setTemperatureHold always sends Ecobee both required hold temperatures', async (t) => {
+  const originalMakeAuthenticatedRequest = ecobeeService.makeAuthenticatedRequest;
+  const calls = [];
+
+  ecobeeService.makeAuthenticatedRequest = async (endpoint, options) => {
+    calls.push({ endpoint, options });
+    return { status: { code: 0, message: '' } };
+  };
+
+  t.after(() => {
+    ecobeeService.makeAuthenticatedRequest = originalMakeAuthenticatedRequest;
+  });
+
+  const scenarios = [
+    {
+      mode: 'cool',
+      target: 68,
+      expected: { holdType: 'nextTransition', heatHoldTemp: 680, coolHoldTemp: 680 }
+    },
+    {
+      mode: 'heat',
+      target: 71.5,
+      expected: { holdType: 'nextTransition', heatHoldTemp: 715, coolHoldTemp: 715 }
+    },
+    {
+      mode: 'auto',
+      target: 70,
+      expected: { holdType: 'nextTransition', heatHoldTemp: 690, coolHoldTemp: 710 }
+    }
+  ];
+
+  for (const scenario of scenarios) {
+    await ecobeeService.setTemperatureHold('thermostat-1', scenario.target, scenario.mode);
+  }
+
+  assert.equal(calls.length, scenarios.length);
+  calls.forEach((call, index) => {
+    assert.equal(call.endpoint, '/1/thermostat');
+    assert.equal(call.options.method, 'post');
+    assert.deepEqual(call.options.data, {
+      selection: {
+        selectionType: 'thermostats',
+        selectionMatch: 'thermostat-1'
+      },
+      functions: [{
+        type: 'setHold',
+        params: scenarios[index].expected
+      }]
+    });
+  });
+});
