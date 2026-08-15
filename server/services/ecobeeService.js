@@ -1314,13 +1314,14 @@ class EcobeeService {
       holdType: 'nextTransition'
     };
 
-    if (mode === 'heat' || mode === 'auxheatonly') {
-      holdParams.heatHoldTemp = targetDeci;
-    } else if (mode === 'cool') {
-      holdParams.coolHoldTemp = targetDeci;
-    } else {
+    if (mode === 'auto') {
       holdParams.heatHoldTemp = targetDeci - 10;
       holdParams.coolHoldTemp = targetDeci + 10;
+    } else {
+      // Ecobee requires both values for every absolute temperature hold,
+      // including thermostats currently running in a single HVAC mode.
+      holdParams.heatHoldTemp = targetDeci;
+      holdParams.coolHoldTemp = targetDeci;
     }
 
     await this.makeAuthenticatedRequest('/1/thermostat', {
