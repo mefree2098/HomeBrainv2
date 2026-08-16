@@ -14,7 +14,8 @@ authors = [{ name = "HomeBrain" }]
 dependencies = [
   "aiohttp>=3.14.3,<4",
   "numpy>=1.26,<3",
-  "reachy-mini>=1.9,<2",
+  # Audited 1.9.0 backport of upstream PR #1326; commit-pinned until Pollen ships the fix.
+  "reachy-mini @ https://github.com/mefree2098/reachy_mini/archive/ac88bc8db34ff533ea67e034bea4b7ddd36439a1.zip",
   "websockets>=12,<17",
 ]
 
