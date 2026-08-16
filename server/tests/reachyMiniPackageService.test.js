@@ -16,17 +16,20 @@ const {
   normalizeCompatibility
 } = packageService;
 
-function resolveSupportedPython() {
+function resolveContractTestPython() {
   const candidates = [
     process.env.HOMEBRAIN_REACHY_PYTHON,
     path.join(__dirname, '..', '.wakeword-venv', 'bin', 'python'),
     'python3.12',
     'python3.11',
+    'python3.10',
     'python3'
   ].filter(Boolean);
   for (const candidate of candidates) {
     try {
-      execFileSync(candidate, ['-c', 'import sys; raise SystemExit(sys.version_info < (3, 11))'], {
+      // These tests exercise launcher metadata and receipt parsing only. The package
+      // installer independently enforces the declared Python >=3.11 runtime floor.
+      execFileSync(candidate, ['-c', 'import sys; raise SystemExit(sys.version_info < (3, 10))'], {
         stdio: 'ignore'
       });
       return candidate;
@@ -34,7 +37,7 @@ function resolveSupportedPython() {
       // Keep looking for a Python version supported by the Reachy package.
     }
   }
-  throw new Error('Reachy package tests require Python 3.11 or newer');
+  throw new Error('Reachy package contract tests require Python 3.10 or newer');
 }
 
 test('Reachy runtime manifest includes exact launcher compatibility and bytewise aggregate', async () => {
@@ -99,7 +102,7 @@ test('server-generated bootstrap archive contains the declared license file', as
 test('fresh bootstrap receipt aggregate exactly matches the server runtime manifest', async (t) => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'reachy-bootstrap-digest-'));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
-  const realPython = resolveSupportedPython();
+  const realPython = resolveContractTestPython();
   const pythonWrapper = path.join(temporary, 'python-wrapper');
   const receiptPath = path.join(temporary, 'installed-receipt.json');
   fs.writeFileSync(pythonWrapper, [
@@ -174,7 +177,7 @@ test('server-built runtime manifest is accepted by the real Python PackageStager
     'version, digest, entries = stager._validate_manifest(manifest)',
     'print(version, digest, len(entries))'
   ].join('\n');
-  const output = execFileSync(resolveSupportedPython(), ['-c', script, manifestPath], {
+  const output = execFileSync(resolveContractTestPython(), ['-c', script, manifestPath], {
     cwd: SOURCE_ROOT,
     env: {
       ...process.env,
