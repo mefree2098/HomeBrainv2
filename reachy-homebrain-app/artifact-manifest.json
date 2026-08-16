@@ -23,8 +23,8 @@
   ],
   "compatibility": {
     "launcherApi": 1,
-    "dependencyFingerprint": "b306fae41f2796ef661ed4d1bb32e2628bc8aed83347ddbbedc0f5f9b6862886",
-    "launcherFingerprint": "2ce5c8ccf9ea8c4bda6d4c05d673e1b7ae3474598d271916ddbb9d57b96e82e4",
+    "dependencyFingerprint": "af6aaa8819c9f1bfb93a4c66a8044bd364307107831e50c9e9a358825a707a5f",
+    "launcherFingerprint": "fda87ab56fc890b5d9922220da77683882f0beb848cfbbdfcb44203be1de5d7d",
     "requiresManualReinstall": false
   },
   "sourceLayout": "src/reachy_homebrain"
