@@ -19,6 +19,7 @@ const {
 function resolveSupportedPython() {
   const candidates = [
     process.env.HOMEBRAIN_REACHY_PYTHON,
+    path.join(__dirname, '..', '.wakeword-venv', 'bin', 'python'),
     'python3.12',
     'python3.11',
     'python3'
