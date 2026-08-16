@@ -11,7 +11,7 @@ _DEPENDENCIES = "\n".join(
     (
         "aiohttp>=3.14.3,<4",
         "numpy>=1.26,<3",
-        "reachy-mini>=1.9,<2",
+        "reachy-mini @ https://github.com/mefree2098/reachy_mini/archive/ac88bc8db34ff533ea67e034bea4b7ddd36439a1.zip",
         "websockets>=12,<17",
         "onnxruntime>=1.19,<2 (optional-installed)",
         "openwakeword>=0.6,<0.7 (optional-installed)",

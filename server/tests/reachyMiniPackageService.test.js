@@ -16,6 +16,26 @@ const {
   normalizeCompatibility
 } = packageService;
 
+function resolveSupportedPython() {
+  const candidates = [
+    process.env.HOMEBRAIN_REACHY_PYTHON,
+    'python3.12',
+    'python3.11',
+    'python3'
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      execFileSync(candidate, ['-c', 'import sys; raise SystemExit(sys.version_info < (3, 11))'], {
+        stdio: 'ignore'
+      });
+      return candidate;
+    } catch (_error) {
+      // Keep looking for a Python version supported by the Reachy package.
+    }
+  }
+  throw new Error('Reachy package tests require Python 3.11 or newer');
+}
+
 test('Reachy runtime manifest includes exact launcher compatibility and bytewise aggregate', async () => {
   const manifest = await packageService.buildManifest({ force: true, runtimeOnly: true });
   const artifact = JSON.parse(fs.readFileSync(path.join(SOURCE_ROOT, 'artifact-manifest.json'), 'utf8'));
@@ -78,7 +98,7 @@ test('server-generated bootstrap archive contains the declared license file', as
 test('fresh bootstrap receipt aggregate exactly matches the server runtime manifest', async (t) => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'reachy-bootstrap-digest-'));
   t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
-  const realPython = execFileSync('sh', ['-c', 'command -v python3'], { encoding: 'utf8' }).trim();
+  const realPython = resolveSupportedPython();
   const pythonWrapper = path.join(temporary, 'python-wrapper');
   const receiptPath = path.join(temporary, 'installed-receipt.json');
   fs.writeFileSync(pythonWrapper, [
@@ -153,7 +173,7 @@ test('server-built runtime manifest is accepted by the real Python PackageStager
     'version, digest, entries = stager._validate_manifest(manifest)',
     'print(version, digest, len(entries))'
   ].join('\n');
-  const output = execFileSync('python3', ['-c', script, manifestPath], {
+  const output = execFileSync(resolveSupportedPython(), ['-c', script, manifestPath], {
     cwd: SOURCE_ROOT,
     env: {
       ...process.env,
