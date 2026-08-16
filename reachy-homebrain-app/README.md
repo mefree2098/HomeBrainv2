@@ -62,7 +62,8 @@ every operation except stop until a later physical OFF retry succeeds.
 
 Prerequisites:
 
-- Reachy Mini SDK/app runtime 1.9.x.
+- Reachy Mini SDK/app runtime 1.9.x. Installation uses HomeBrain's commit-pinned security
+  backport of upstream PR #1326 so the shared app environment resolves Starlette 1.3.1 or newer.
 - The official shared app interpreter at `/venvs/apps_venv/bin/python3` (the default).
 - A reachable HTTPS HomeBrain URL and one temporary registration or claim credential.
 
