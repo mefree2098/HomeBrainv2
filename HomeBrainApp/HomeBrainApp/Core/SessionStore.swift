@@ -323,6 +323,25 @@ final class SessionStore: ObservableObject {
         }
     }
 
+    func registerFirstOwner(email: String, password: String) async {
+        let contextID = sessionContextID
+        isProcessingAuth = true
+        authError = nil
+        defer { isProcessingAuth = false }
+
+        do {
+            let payload: [String: Any] = ["email": email, "password": password]
+            let response = try await apiClient.post("/api/auth/register", body: payload, authorized: false)
+            try assertActiveContext(contextID)
+            try applyAuthPayload(JSON.object(response))
+        } catch is CancellationError {
+            return
+        } catch {
+            guard contextID == sessionContextID else { return }
+            authError = error.localizedDescription
+        }
+    }
+
     func logout() {
         guard let activeInstanceID else {
             clearAuthData()

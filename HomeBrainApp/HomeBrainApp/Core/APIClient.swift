@@ -147,7 +147,7 @@ final class APIClient {
 
             var urlRequest = URLRequest(url: url)
             urlRequest.httpMethod = method.rawValue
-            if path == "/api/auth/login" {
+            if path == "/api/auth/login" || path == "/api/auth/register" {
                 urlRequest.timeoutInterval = 15
             }
             urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")

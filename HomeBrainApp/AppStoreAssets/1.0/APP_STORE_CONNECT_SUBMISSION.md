@@ -1,6 +1,6 @@
 # HomeBrain — App Store Connect submission packet
 
-Prepared for version **1.0 (build 7)** of bundle ID `NTechR.HomeBrainApp`. The app's project declares **Utilities** as its category and includes an Apple Watch companion (`NTechR.HomeBrainApp.watchkitapp`). Build 7 is sign-in only, adds self-service account deletion, and recognizes the dedicated Apple reviewer account as an isolated virtual sandbox.
+Prepared for version **1.0 (build 14)** of bundle ID `NTechR.HomeBrainApp`. The app's project declares **Utilities** as its category and includes an Apple Watch companion (`NTechR.HomeBrainApp.watchkitapp`). Build 14 adds public first-owner setup, retains self-service account deletion, and recognizes the dedicated Apple reviewer account as an isolated virtual sandbox.
 
 > **App Review follow-up:** Apple requested additional Guideline 2.1 information on July 15, 2026. Use [`APP_REVIEW_GUIDELINE_2_1_RESPONSE.md`](./APP_REVIEW_GUIDELINE_2_1_RESPONSE.md) before replying or resubmitting.
 
@@ -16,7 +16,7 @@ Upload the numbered PNGs in the shown order only after they have been recaptured
 
 The first three iPhone images are deliberately ordered as Dashboard, Devices, and Scenes because App Store Connect uses the first three on installation sheets. The two Watch images use one consistent 416 × 496 size; keep that size for every localization.
 
-These files were recaptured from build 7 against the nine-device reviewer sandbox and validated as opaque PNGs at the listed dimensions. Recheck them visually immediately before upload so no file has been replaced or reordered.
+The stored files were captured from build 7 against the nine-device reviewer sandbox and validated as opaque PNGs at the listed dimensions. Recheck them visually immediately before upload. Recapture them from build 14 if any submitted image or caption discusses onboarding or account availability.
 
 ## 2. Ready-to-paste store listing copy
 
@@ -29,7 +29,7 @@ These files were recaptured from build 7 against the nine-device reviewer sandbo
 | Keywords (93 characters) | `smart home,home automation,lights,thermostat,scenes,voice control,energy,security,Apple Watch` |
 | Promotional text (123 characters) | `See your home at a glance, run favorite scenes, and manage compatible rooms and devices from iPhone, iPad, and Apple Watch.` |
 | Version | `1.0` |
-| Build to select | `7` |
+| Build to select | `14` |
 | Copyright — confirm the legal owner first | `2026 [CONFIRMED LEGAL OWNER]` |
 | SKU | Use the SKU already shown in this App Store Connect app record. It is account-specific and cannot be changed after the app record is created. |
 
@@ -45,7 +45,7 @@ HomeBrain brings your connected home into one calm, private control center. See 
 • Use Apple Watch for quick lights, security, power, and weather checks
 • Designed for your HomeBrain hub and your connected home
 
-HomeBrain requires a HomeBrain hub and an account provisioned by its administrator. Device availability varies with your connected services and hardware.
+HomeBrain is available to any individual or household and is not limited to a company, client, partner, or organization. It requires a user-owned HomeBrain hub. Any person can install the publicly available HomeBrain software and create the first household-owner account from the iPhone, iPad, or web app. Device availability varies with the compatible services and hardware each household chooses.
 ```
 
 App Store Connect does not require **What's New in This Version** for the first version of an app. Do not invent or paste release notes for version 1.0 unless the field is unexpectedly presented and required for this existing record.
@@ -58,7 +58,7 @@ These values are factual, legal, or account-specific, so they should not be inve
 | --- | --- |
 | Support URL | `https://freestonefamily.com/support` — the deployed page must load without authentication and its no-login support request form must submit successfully before resubmission. |
 | Privacy Policy URL | `https://freestonefamily.com/privacy` — use only after confirming it loads without authentication and matches the released behavior and retention. |
-| Marketing URL | Optional public product page; omit if none exists. |
+| Marketing URL | `https://freestonefamily.com/getting-started` — public audience, installation, account-creation, and pricing information. |
 | Pricing and availability | Choose Free or a paid tier and the exact countries/regions. The iOS source has no StoreKit purchase implementation, so do not advertise in-app purchases unless another release component adds them. This remains an App Store Connect account decision. |
 | Copyright owner | Confirm the legal individual or company and enter `2026 [CONFIRMED LEGAL OWNER]`; Apple supplies the copyright symbol. Do not use `NTechR` unless it is the confirmed owner. |
 | Content rights | Likely confirm that you have rights to the HomeBrain product, branding, device integrations, and any displayed third-party content. Choose the answer that reflects the actual integrations and licenses. |
@@ -73,13 +73,13 @@ These values are factual, legal, or account-specific, so they should not be inve
 
 ## 4. App Review Information
 
-Set **Sign-in required** to **Yes**. Give Apple credentials for a non-personal persistent review account, not an administrator's account. The iOS app has no Register/Create Account option: accounts are provisioned on the HomeBrain backend by an administrator.
+Set **Sign-in required** to **Yes** for App Review and provide the non-personal persistent review account. Build 14 also offers **Set Up New Hub** so any individual can create the first household-owner account on a fresh HomeBrain installation. After initial setup, the household owner can add family members or other trusted users.
 
 The complete paste-ready response and Notes-field copy are in [`APP_REVIEW_GUIDELINE_2_1_RESPONSE.md`](./APP_REVIEW_GUIDELINE_2_1_RESPONSE.md). The condensed Notes below still requires a verified endpoint, two verified credentials, actual physical test results, and the final recording filename.
 
 ```text
 PURPOSE
-HomeBrain is a companion for owners and authorized household users of a HomeBrain hub. It provides one private interface for compatible devices, rooms, scenes, workflows, security state, weather, notifications, energy information, optional voice commands, and Apple Watch. The iOS app is sign-in only; accounts are provisioned by a HomeBrain administrator.
+HomeBrain is a public consumer companion for individuals and households that run their own HomeBrain hub. It is not restricted to a business, client, employer, partner, or invited organization. Any person can download the publicly available Apache-2.0 HomeBrain software, install a hub, and use Set Up New Hub in the iPhone or iPad app to create the first household-owner account. It provides one private interface for compatible devices, rooms, scenes, workflows, security state, weather, notifications, energy information, optional voice commands, and Apple Watch.
 
 REVIEW ACCESS
 Endpoint: https://freestonefamily.com
@@ -91,7 +91,7 @@ Privacy: https://freestonefamily.com/privacy
 
 No VPN, LAN, private DNS, sample file, purchase, subscription, or physical accessory is required. Enter the endpoint and sign in. The persistent account is restricted to a per-user sandbox with nine virtual devices, six named rooms, two groups, three scenes, three workflows, two notifications, synthetic weather, virtual security, and Watch data. Actions cannot read or control the owner's household devices, integrations, credentials, or settings.
 
-The reviewer can use Dashboard, Weather, Watch App, Devices, Rooms, Scenes, Workflows, Notifications, and Settings. Notifications are requested after sign-in when enabled. Location is requested only after choosing Use Device Location; coordinates are rounded to two decimal places and disclosed as Coarse Location. Microphone and Apple Speech Recognition are requested only after enabling Voice Commands; the resulting command text is sent to HomeBrain for interpretation. Local Network is used only for a customer-entered LAN hub. Camera is limited to the administrator-only Add Z-Wave Device QR scanner and is unavailable to the read-only review accounts. The Watch companion uses the same authorized session from its paired iPhone.
+The reviewer can use Dashboard, Weather, Watch App, Devices, Rooms, Scenes, Workflows, Notifications, and Settings. Notifications are requested after sign-in when enabled. Location is requested only after choosing Use Device Location; coordinates are rounded to two decimal places and disclosed as Coarse Location. Microphone and Apple Speech Recognition are requested only after enabling Voice Commands; the resulting command text is sent to HomeBrain for interpretation. Local Network is used only for a user-entered LAN hub. Camera is limited to the household-owner Add Z-Wave Device QR scanner and is unavailable to the read-only review accounts. The Watch companion uses the same authorized session from its paired iPhone.
 
 ACCOUNT DELETION
 Use only the disposable account. Open Settings > Account > Delete Account, enter its password, type DELETE, and confirm. Its account, sessions, push registrations, isolated sandbox, and account-linked data are removed, and the app returns to sign-in. Older unattributable operational records and backups may remain under the hub operator's configured retention practices. Please do not delete the persistent review credential.
@@ -105,7 +105,7 @@ Recording attached: [FILENAME]
 The physical-device recording is required. Any simulator capture is an internal rehearsal only.
 
 SERVICES/REGIONS/REGULATION
-HomeBrain uses its backend/hub, Apple APNs, Speech Recognition, the device microphone, Core Location, the device camera for administrator-started Z-Wave QR pairing, Local Network for customer-entered LAN hubs, WatchConnectivity/watchOS, and Open-Meteo. Optional hub integrations and AI/voice providers are listed in the attached Guideline 2.1 response and are not required for review. There are no payments/subscriptions, ads, ATT, or public UGC. The same binary and features operate in all App Store regions. HomeBrain is a consumer smart-home app, not a highly regulated service, and distributes no protected third-party media or editorial content.
+HomeBrain uses its backend/hub, Apple APNs, Speech Recognition, the device microphone, Core Location, the device camera for household-owner-started Z-Wave QR pairing, Local Network for user-entered LAN hubs, WatchConnectivity/watchOS, and Open-Meteo. Optional hub integrations and AI/voice providers are listed in the attached Guideline 2.1 response and are not required for review. There are no paid accounts, in-app purchases, subscriptions, ads, ATT, or public UGC. The same binary and features operate in all App Store regions. HomeBrain is a consumer smart-home app, not a highly regulated service, and distributes no protected third-party media or editorial content.
 ```
 
 Do not submit until the public endpoint works over cellular internet, the persistent account reaches only the virtual sandbox, the disposable deletion account has been reset, and both credentials have been verified from a clean install. The reviewer must not need local-network access or physical smart-home hardware.
@@ -143,7 +143,7 @@ The policy and labels must plainly cover Location, Camera, Local Network, Microp
 2. Complete App Information: name, subtitle, categories, content rights, age rating, verified support URL, verified privacy-policy URL, and `2026 [CONFIRMED LEGAL OWNER]`. Do not add What's New text for this first version.
 3. Complete App Privacy with the verified answers above; add the public privacy-policy URL.
 4. Under version 1.0, paste the listing copy, upload the four iPhone images, four iPad images, and two Watch images in the folders above.
-5. Choose build 7 after it has finished processing, complete export compliance, and check the embedded iOS and Watch app icons on the processed build.
+5. Choose build 14 after it has finished processing, complete export compliance, and check the embedded iOS and Watch app icons on the processed build.
 6. Enter real App Review contact details, the public endpoint, the persistent credential, the disposable deletion-test credential, verified device/OS results, and the review notes above. Attach the physical-device recording requested under Guideline 2.1; a simulator rehearsal does not satisfy this request.
 7. Choose pricing, territories, Digital Services Act trader status, and a release method; ensure Agreements, Tax, Banking, and any trader-contact verification are complete where required.
 8. Save, use **Add for Review**, then submit when every required field shows complete.

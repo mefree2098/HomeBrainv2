@@ -432,6 +432,7 @@ function sendPublicPage(filename) {
 
 router.get('/privacy/', publicInfoReadRateLimit, (_req, res) => res.redirect(308, '/privacy'));
 router.get('/support/', publicInfoReadRateLimit, (_req, res) => res.redirect(308, '/support'));
+router.get('/getting-started/', publicInfoReadRateLimit, (_req, res) => res.redirect(308, '/getting-started'));
 router.post(
   '/api/public/support-requests',
   supportRequestRateLimit,
@@ -462,6 +463,7 @@ router.patch(
 );
 router.get('/privacy', publicInfoReadRateLimit, sendPublicPage('privacy.html'));
 router.get('/support', publicInfoReadRateLimit, sendPublicPage('support.html'));
+router.get('/getting-started', publicInfoReadRateLimit, sendPublicPage('getting-started.html'));
 router.use('/app-info', publicInfoReadRateLimit, express.static(publicInfoRoot, {
   fallthrough: false,
   immutable: false,
