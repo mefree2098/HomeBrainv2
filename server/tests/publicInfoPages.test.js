@@ -24,11 +24,12 @@ async function withServer(run) {
   }
 }
 
-test('public privacy and support pages are available without authentication', async () => {
+test('public product, privacy, and support pages are available without authentication', async () => {
   await withServer(async (origin) => {
     for (const [pathname, requiredText] of [
       ['/privacy', 'HomeBrain Privacy Policy'],
-      ['/support', 'HomeBrain Support']
+      ['/support', 'HomeBrain Support'],
+      ['/getting-started', 'Get Started with HomeBrain']
     ]) {
       const response = await fetch(`${origin}${pathname}`);
       assert.equal(response.status, 200);
@@ -59,13 +60,21 @@ test('public pages disclose support, privacy choices, and account deletion', asy
     assert.match(privacy, /automatically expire 90 days after submission/i);
 
     const support = await (await fetch(`${origin}/support`)).text();
-    assert.match(support, /does not offer public or in-app account registration/i);
+    assert.match(support, /available to any individual or household/i);
+    assert.match(support, /Set Up New Hub/i);
     assert.match(support, /do not need a HomeBrain or third-party account/i);
     assert.match(support, /Settings → Account → Delete Account/);
     assert.match(support, /older operational logs that cannot be attributed/i);
     assert.match(support, /id="support-request-form"/);
     assert.match(support, /maxlength="1400"/);
     assert.doesNotMatch(support, /github\.com|mailto:/i);
+
+    const gettingStarted = await (await fetch(`${origin}/getting-started`)).text();
+    assert.match(gettingStarted, /not restricted to employees, companies, clients, partners/i);
+    assert.match(gettingStarted, /Apache License 2\.0/i);
+    assert.match(gettingStarted, /create the first household-owner account/i);
+    assert.match(gettingStarted, /no paid account, paid digital content, in-app purchase, subscription/i);
+    assert.match(gettingStarted, /github\.com\/mefree2098\/HomeBrainv2#quick-install/i);
   });
 });
 
@@ -372,7 +381,7 @@ test('private support requests have bounded fields and automatic TTL retention',
 
 test('public page canonical URLs and stylesheet are served directly', async () => {
   await withServer(async (origin) => {
-    for (const pathname of ['/privacy/', '/support/']) {
+    for (const pathname of ['/privacy/', '/support/', '/getting-started/']) {
       const response = await fetch(`${origin}${pathname}`, { redirect: 'manual' });
       assert.equal(response.status, 308);
       assert.equal(response.headers.get('location'), pathname.slice(0, -1));

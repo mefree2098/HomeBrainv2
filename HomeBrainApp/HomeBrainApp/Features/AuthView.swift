@@ -5,6 +5,23 @@ struct AuthView: View {
         case endpoint
         case email
         case password
+        case confirmPassword
+    }
+
+    private enum AuthMode: String, CaseIterable, Identifiable {
+        case signIn
+        case setUpNewHub
+
+        var id: Self { self }
+
+        var title: String {
+            switch self {
+            case .signIn:
+                "Sign In"
+            case .setUpNewHub:
+                "Set Up New Hub"
+            }
+        }
     }
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -18,6 +35,8 @@ struct AuthView: View {
     @State private var serverURL = ""
     @State private var email = ""
     @State private var password = ""
+    @State private var confirmPassword = ""
+    @State private var authMode: AuthMode = .signIn
 
     #if DEBUG
     private let previewSections: [AppShellView.AppSection] = [
@@ -70,6 +89,7 @@ struct AuthView: View {
                                 if !session.isAddingInstance && !session.savedInstances.isEmpty {
                                     savedInstancesPanel
                                 }
+                                publicAudiencePanel
                                 authPanel
                                 #if DEBUG
                                 previewPanel
@@ -118,7 +138,7 @@ struct AuthView: View {
 
     private var heroCopy: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Private Home Control")
+            Text("Personal Smart Home Control")
                 .font(HBTypography.display(.caption2, weight: .bold))
                 .textCase(.uppercase)
                 .tracking(2.2)
@@ -173,15 +193,32 @@ struct AuthView: View {
         HBPanel {
             VStack(alignment: .leading, spacing: 18) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(session.isAddingInstance ? "Sign In to New Platform" : "Sign In")
+                    Text(authMode == .setUpNewHub
+                        ? "Create the First Household Account"
+                        : (session.isAddingInstance ? "Sign In to New Platform" : "Sign In"))
                         .font(HBTypography.display(.title2, weight: .bold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .accessibilityAddTraits(.isHeader)
 
-                    Text("Use the account credentials supplied by your HomeBrain administrator.")
+                    Text(authMode == .setUpNewHub
+                        ? "Use this on a newly installed HomeBrain hub before its first household owner has been created."
+                        : "Use the account for your own HomeBrain household.")
                         .font(HBTypography.body(.subheadline, weight: .medium))
                         .foregroundStyle(HBPalette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Picker("Account action", selection: $authMode) {
+                    ForEach(AuthMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("auth.mode")
+                .onChange(of: authMode) { _, _ in
+                    session.authError = nil
+                    confirmPassword = ""
+                    focusedField = .email
                 }
 
                 endpointSection
@@ -194,7 +231,9 @@ struct AuthView: View {
                 signInActions
 
                 Label {
-                    Text("Accounts are created on the HomeBrain hub. This app does not offer public or in-app registration.")
+                    Text(authMode == .setUpNewHub
+                        ? "Any individual can create the first owner account on a fresh HomeBrain hub. Registration closes after that account is created to protect the household."
+                        : "The household owner can add family members and other trusted users from HomeBrain's Users screen.")
                         .fixedSize(horizontal: false, vertical: true)
                 } icon: {
                     Image(systemName: "person.crop.circle.badge.checkmark")
@@ -207,6 +246,30 @@ struct AuthView: View {
                 legalLinks
             }
         }
+    }
+
+    private var publicAudiencePanel: some View {
+        HBPanel {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Available to Individuals and Households", systemImage: "house.and.flag.fill")
+                    .font(HBTypography.display(.title3, weight: .bold))
+                    .foregroundStyle(HBPalette.textPrimary)
+                    .accessibilityAddTraits(.isHeader)
+
+                Text("HomeBrain is a consumer smart-home platform available to any individual or household. It is not restricted to an employer, company, client, partner, or invited organization.")
+                    .font(HBTypography.body(.subheadline, weight: .medium))
+                    .foregroundStyle(HBPalette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Link(destination: URL(string: "https://freestonefamily.com/getting-started")!) {
+                    Label("How to Get and Set Up HomeBrain", systemImage: "arrow.up.right.square")
+                }
+                .font(HBTypography.body(.subheadline, weight: .semibold))
+                .tint(HBPalette.accentBlue)
+                .accessibilityIdentifier("auth.gettingStarted")
+            }
+        }
+        .accessibilityIdentifier("auth.publicAudience")
     }
 
     private var savedInstancesPanel: some View {
@@ -361,12 +424,28 @@ struct AuthView: View {
                 .accessibilityIdentifier("auth.email")
 
             SecureField("Password", text: $password)
-                .textContentType(.password)
-                .submitLabel(.go)
+                .textContentType(authMode == .setUpNewHub ? .newPassword : .password)
+                .submitLabel(authMode == .setUpNewHub ? .next : .go)
                 .focused($focusedField, equals: .password)
-                .onSubmit { submit() }
+                .onSubmit {
+                    if authMode == .setUpNewHub {
+                        focusedField = .confirmPassword
+                    } else {
+                        submit()
+                    }
+                }
                 .hbPanelTextField()
                 .accessibilityIdentifier("auth.password")
+
+            if authMode == .setUpNewHub {
+                SecureField("Confirm Password", text: $confirmPassword)
+                    .textContentType(.newPassword)
+                    .submitLabel(.go)
+                    .focused($focusedField, equals: .confirmPassword)
+                    .onSubmit { submit() }
+                    .hbPanelTextField()
+                    .accessibilityIdentifier("auth.confirmPassword")
+            }
         }
     }
 
@@ -394,18 +473,23 @@ struct AuthView: View {
                     HStack(spacing: 8) {
                         ProgressView()
                             .tint(.white)
-                        Text("Signing In…")
+                        Text(authMode == .setUpNewHub ? "Creating Account…" : "Signing In…")
                     }
                 } else {
-                    Label("Sign In", systemImage: "arrow.right.circle.fill")
+                    Label(
+                        authMode == .setUpNewHub ? "Create First Account" : "Sign In",
+                        systemImage: authMode == .setUpNewHub ? "person.crop.circle.badge.plus" : "arrow.right.circle.fill"
+                    )
                 }
             }
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(HBPrimaryButtonStyle())
         .disabled(session.isProcessingAuth)
-        .accessibilityHint("Validates the fields and signs in to the selected HomeBrain hub")
-        .accessibilityIdentifier("auth.signIn")
+        .accessibilityHint(authMode == .setUpNewHub
+            ? "Creates the first household owner account on a new HomeBrain hub"
+            : "Validates the fields and signs in to the selected HomeBrain hub")
+        .accessibilityIdentifier(authMode == .setUpNewHub ? "auth.createFirstAccount" : "auth.signIn")
     }
 
     private var useSavedHubButton: some View {
@@ -484,15 +568,25 @@ struct AuthView: View {
     private func submit() {
         let submittedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !submittedEmail.isEmpty else {
-            session.authError = "Enter the email address supplied by your HomeBrain administrator."
+            session.authError = "Enter your email address."
             focusedField = .email
             return
         }
 
         guard !password.isEmpty else {
-            session.authError = "Enter your HomeBrain account password."
+            session.authError = authMode == .setUpNewHub
+                ? "Choose a password for the first household owner account."
+                : "Enter your HomeBrain account password."
             focusedField = .password
             return
+        }
+
+        if authMode == .setUpNewHub {
+            guard password == confirmPassword else {
+                session.authError = "The passwords do not match."
+                focusedField = .confirmPassword
+                return
+            }
         }
 
         let requestedEndpoint = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -501,7 +595,7 @@ struct AuthView: View {
             requestedEndpoint: requestedEndpoint
         )
         guard !submittedEndpoint.isEmpty else {
-            session.authError = "Enter the HomeBrain hub address supplied with your account."
+            session.authError = "Enter your HomeBrain hub address."
             focusedField = .endpoint
             return
         }
@@ -519,10 +613,17 @@ struct AuthView: View {
         focusedField = nil
 
         Task {
-            await session.login(
-                email: submittedEmail,
-                password: submittedPassword
-            )
+            if authMode == .setUpNewHub {
+                await session.registerFirstOwner(
+                    email: submittedEmail,
+                    password: submittedPassword
+                )
+            } else {
+                await session.login(
+                    email: submittedEmail,
+                    password: submittedPassword
+                )
+            }
         }
     }
 }
