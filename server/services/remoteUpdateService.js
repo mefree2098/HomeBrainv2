@@ -222,6 +222,7 @@ class RemoteUpdateService {
       const filesToInclude = [
         'index.js',
         'package.json',
+        'package-lock.json',
         'README.md',
         'updater.js',
         'feature_infer.py'

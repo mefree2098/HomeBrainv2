@@ -1,9 +1,32 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const VoiceDevice = require('../models/VoiceDevice');
 const remoteUpdateService = require('../services/remoteUpdateService');
 const eventStreamService = require('../services/eventStreamService');
+
+test('remote update archive includes the package lock required by npm ci', async (t) => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'homebrain-remote-update-'));
+  const archivePath = path.join(tempDir, 'remote.zip');
+  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+
+  await remoteUpdateService.createZipArchive(archivePath);
+  const listed = spawnSync('unzip', ['-Z1', archivePath], {
+    encoding: 'utf8',
+    timeout: 10_000
+  });
+
+  assert.equal(listed.status, 0, listed.stderr);
+  const entries = listed.stdout.split('\n').filter(Boolean);
+  assert.equal(entries.includes('package.json'), true);
+  assert.equal(entries.includes('package-lock.json'), true);
+  assert.equal(entries.includes('index.js'), true);
+  assert.equal(entries.includes('updater.js'), true);
+});
 
 test('initiateUpdate preserves previous offline status when websocket delivery fails', async (t) => {
   const originalFindById = VoiceDevice.findById;
