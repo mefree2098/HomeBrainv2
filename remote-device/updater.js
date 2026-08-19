@@ -319,7 +319,10 @@ class RemoteDeviceUpdater {
           totalUncompressedBytes += Number(firstField);
         }
       }
-      const maxUncompressedBytes = Math.min(512 * 1024 * 1024, this.maxDownloadBytes * 4);
+      const maxUncompressedBytes = Math.min(
+        512 * 1024 * 1024,
+        Math.max(4 * 1024 * 1024, this.maxDownloadBytes * 8)
+      );
       if (!Number.isSafeInteger(totalUncompressedBytes) || totalUncompressedBytes > maxUncompressedBytes) {
         throw new Error('Update archive exceeds the extracted size limit');
       }

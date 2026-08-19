@@ -230,7 +230,10 @@ class RemoteUpdateService {
 
       for (const file of filesToInclude) {
         const filePath = path.join(this.remoteDevicePath, file);
-        zipfile.addFile(filePath, file, { compress: true });
+        // Existing listeners cap extracted bytes relative to the advertised
+        // download size. Store these small, trusted package files without
+        // compression so older updaters can validate the archive ratio.
+        zipfile.addFile(filePath, file, { compress: false });
       }
 
       zipfile.end();
