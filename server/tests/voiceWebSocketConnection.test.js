@@ -445,6 +445,84 @@ test('buildWakeWordConfig normalizes zero wake-word RMS gate to the default', as
   assert.equal(config.wakeWord.vad.minRms, 0.004);
 });
 
+test('buildWakeWordConfig uses calibrated model thresholds and excludes missing assets', async (t) => {
+  const originalFind = WakeWordModel.find;
+  const originalAssets = require('../utils/wakeWordAssets').getAssetsForWakeWords;
+  t.after(() => {
+    WakeWordModel.find = originalFind;
+    require('../utils/wakeWordAssets').getAssetsForWakeWords = originalAssets;
+  });
+  WakeWordModel.find = async () => [{
+    slug: 'anna',
+    metadata: { threshold: 0.72, recommendedSensitivity: 0.28 }
+  }];
+  require('../utils/wakeWordAssets').getAssetsForWakeWords = () => [{
+    label: 'Anna',
+    slug: 'anna',
+    fileName: 'anna.onnx',
+    checksum: 'a'.repeat(64),
+    size: 100,
+    threshold: 0.55,
+    sensitivity: null,
+    engine: 'openwakeword',
+    format: 'onnx',
+    updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    dependencies: []
+  }];
+
+  const voiceWs = new VoiceWebSocketServer();
+  const device = createDevice();
+  device.supportedWakeWords = ['Anna', 'Home Brain'];
+  const { config } = await voiceWs.buildWakeWordConfig(device, { deviceToken: 'token' }, {
+    platform: 'linux',
+    arch: 'arm64'
+  });
+
+  assert.deepEqual(config.wakeWords, ['Anna']);
+  assert.deepEqual(config.wakeWord.enabled, ['Anna']);
+  assert.deepEqual(config.wakeWord.missing, ['Home Brain']);
+  assert.equal(config.wakeWord.assets[0].threshold, 0.72);
+  assert.equal(config.wakeWord.assets[0].sensitivity, 0.28);
+});
+
+test('speaker wake acknowledgment advertises adaptive endpointing instead of a five-second cutoff', async (t) => {
+  const originalSave = VoiceCommand.prototype.save;
+  const originalUpdate = VoiceDevice.findByIdAndUpdate;
+  t.after(() => {
+    VoiceCommand.prototype.save = originalSave;
+    VoiceDevice.findByIdAndUpdate = originalUpdate;
+  });
+  VoiceCommand.prototype.save = async function save() { return this; };
+  VoiceDevice.findByIdAndUpdate = async () => createDevice();
+
+  const voiceWs = new VoiceWebSocketServer();
+  const ws = new MockWebSocket();
+  const connection = {
+    ws,
+    authenticated: true,
+    device: createDevice(),
+    pendingWakeWord: null,
+    lastPing: Date.now()
+  };
+  voiceWs.deviceConnections.set(deviceId, connection);
+
+  await voiceWs.handleWakeWordDetection(deviceId, {
+    wakeWord: 'Anna',
+    confidence: 0.95,
+    timestamp: new Date().toISOString()
+  });
+
+  const acknowledgment = ws.sent.find((message) => message.type === 'wake_word_ack');
+  assert.equal(acknowledgment.timeout, 15000);
+  assert.deepEqual(acknowledgment.endpointing, {
+    minCaptureMs: 1800,
+    silenceMs: 1100,
+    speechStartTimeoutMs: 6000,
+    minSpeechMs: 160,
+    minRms: 0.0025
+  });
+});
+
 test('stripWakeWordPrefix removes wake words from one-breath commands', () => {
   const voiceWs = new VoiceWebSocketServer();
 

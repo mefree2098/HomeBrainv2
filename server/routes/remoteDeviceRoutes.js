@@ -749,6 +749,8 @@ router.post(
         res.setHeader('Content-Type', 'audio/mpeg');
         res.setHeader('Content-Length', stat.size);
         res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('X-HomeBrain-TTS-Provider', 'elevenlabs');
+        res.setHeader('X-ElevenLabs-Cache', 'hit');
         const cachedStream = fs.createReadStream(cachedAudioPath);
         cachedStream.on('error', () => {
           res.status(500).end();
@@ -757,7 +759,14 @@ router.post(
         return;
       }
 
-      const speech = await ttsProviderService.textToSpeechDetailed(text, voiceId || undefined);
+      // User-profile voice IDs are ElevenLabs voices. Keep response identity
+      // deterministic: use the exact voice selected from the wake word, reuse
+      // ElevenLabs' content-addressed cache, and generate/cache only on a miss.
+      const speech = await ttsProviderService.textToSpeechDetailed(
+        text,
+        voiceId || undefined,
+        voiceId ? { provider: 'elevenlabs', cache: true } : { cache: true }
+      );
       const audioBuffer = speech.audioBuffer;
 
       res.setHeader('Content-Type', speech.contentType || 'audio/mpeg');

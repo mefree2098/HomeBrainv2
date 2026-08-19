@@ -22,6 +22,14 @@ const MAX_AUDIO_SESSION_BYTES = Math.max(
 const MAX_VOICE_WEBSOCKET_PAYLOAD_BYTES = 2 * 1024 * 1024;
 const DEFAULT_WAKE_WORD_MIN_RMS = 0.004;
 const MAX_WAKE_WORD_MIN_RMS = 0.2;
+const REMOTE_COMMAND_MAX_DURATION_MS = 15000;
+const REMOTE_COMMAND_ENDPOINTING = Object.freeze({
+  minCaptureMs: 1800,
+  silenceMs: 1100,
+  speechStartTimeoutMs: 6000,
+  minSpeechMs: 160,
+  minRms: 0.0025
+});
 const REACHY_CAPTURE_GRANT_TTL_MS = 7000;
 const REACHY_WAKE_TIMESTAMP_MAX_SKEW_MS = 30000;
 const REACHY_AUDIO_SESSION_MAX_MS = 30000;
@@ -411,10 +419,13 @@ class VoiceWebSocketServer {
       };
 
       const modelMetadata = metadataBySlug[asset.slug] || {};
-      const rawThreshold = typeof asset.threshold === 'number'
-        ? asset.threshold
-        : typeof modelMetadata.threshold === 'number'
-          ? modelMetadata.threshold
+      // Custom model validation computes a calibrated threshold. The asset
+      // helper also carries the device-wide fallback, so metadata must win or
+      // every custom model silently runs at the generic 0.55 threshold.
+      const rawThreshold = typeof modelMetadata.threshold === 'number'
+        ? modelMetadata.threshold
+        : typeof asset.threshold === 'number'
+          ? asset.threshold
           : defaultThreshold;
       const rawSensitivity = typeof asset.sensitivity === 'number'
         ? asset.sensitivity
@@ -450,12 +461,17 @@ class VoiceWebSocketServer {
       : 1500;
     const vadSettings = device.settings?.wakeWordVad || {};
     const audioSettings = sanitizeRemoteAudioConfig(device.settings?.audio);
+    const enabledWakeWords = wakeWordAssetPayload.map((asset) => asset.label);
+    const enabledSlugs = new Set(wakeWordAssetPayload.map((asset) => asset.slug));
+    const missingWakeWords = (Array.isArray(device.supportedWakeWords) ? device.supportedWakeWords : [])
+      .filter((label) => !enabledSlugs.has(wakeWordAssets.slugify(label)));
 
     return {
       config: {
-        wakeWords: device.supportedWakeWords,
+        wakeWords: enabledWakeWords,
         wakeWord: {
-          enabled: device.supportedWakeWords,
+          enabled: enabledWakeWords,
+          missing: missingWakeWords,
           assets: wakeWordAssetPayload,
           debounceMs,
           vad: {
@@ -983,7 +999,10 @@ class VoiceWebSocketServer {
       const acknowledged = this.sendToConnection(connection, {
         type: 'wake_word_ack',
         message: 'Ready for voice command',
-        timeout: Math.min(5000, this.reachyCaptureGrantTtlMs),
+        timeout: isReachy
+          ? Math.min(5000, this.reachyCaptureGrantTtlMs)
+          : REMOTE_COMMAND_MAX_DURATION_MS,
+        ...(!isReachy ? { endpointing: REMOTE_COMMAND_ENDPOINTING } : {}),
         ...(isReachy ? {
           captureGrantId: connection.captureGrant.id,
           sessionId: connection.captureGrant.id

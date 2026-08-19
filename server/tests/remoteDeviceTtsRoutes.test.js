@@ -62,8 +62,8 @@ test('Reachy TTS accepts only POST JSON and never puts spoken text in the URL', 
   });
   voiceAcknowledgmentService.findCachedAudio = async () => null;
   let providerRequest = null;
-  ttsProviderService.textToSpeechDetailed = async (text, voiceId) => {
-    providerRequest = { text, voiceId };
+  ttsProviderService.textToSpeechDetailed = async (text, voiceId, options) => {
+    providerRequest = { text, voiceId, options };
     return { audioBuffer: Buffer.from('audio'), contentType: 'audio/mpeg', provider: 'test' };
   };
   console.error = (...args) => errors.push(args.map(String).join(' '));
@@ -74,7 +74,11 @@ test('Reachy TTS accepts only POST JSON and never puts spoken text in the URL', 
   const postHandler = routeHandlers('/:deviceId/tts', 'post').at(-1);
   await postHandler(req, res);
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(providerRequest, { text: spokenText, voiceId: 'voice-1' });
+  assert.deepEqual(providerRequest, {
+    text: spokenText,
+    voiceId: 'voice-1',
+    options: { provider: 'elevenlabs', cache: true }
+  });
   assert.equal(req.url.includes(spokenText), false);
   assert.equal(JSON.stringify(req.query).includes(spokenText), false);
   assert.equal(errors.join('\n').includes(spokenText), false);

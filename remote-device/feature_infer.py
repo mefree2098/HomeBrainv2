@@ -2,13 +2,14 @@
 """
 Feature-based wake-word inference sidecar for HomeBrain Remote Device.
 
-- Reads 16 kHz mono PCM frames from stdin as raw bytes (little-endian int16).
-- Computes OpenWakeWord AudioFeatures and windows them into [16 x 96] features.
+- Reads continuous 16 kHz mono PCM frames from stdin as raw bytes (little-endian int16).
+- Advances OpenWakeWord's streaming AudioFeatures state every 80 ms and reads
+  the latest trained [16 x 96] feature window.
 - Performs ONNX inference and returns scores over stdout as JSON lines.
 
 Protocol (stdin -> stdout):
 - Input JSON control messages to set models and options, e.g.
-  {"type":"config","models":[{"label":"Anna","path":"/path/anna.onnx","threshold":0.55}],"frameSamples":16000}
+  {"type":"config","models":[{"label":"Anna","path":"/path/anna.onnx","threshold":0.55}],"frameSamples":1280}
 - Audio data frames are sent as binary blocks preceded by a 8-byte header:
   4 bytes: magic 'AUD0'
   4 bytes: uint32 frame byte length (should be frameSamples*2)
@@ -54,6 +55,7 @@ except Exception as exc:  # pragma: no cover
 
 MAGIC = b"AUD0"
 DEFAULT_SAMPLE_RATE = 16000
+STREAM_FRAME_SAMPLES = 1280
 DEFAULT_MIN_RMS = 0.004
 MAX_MIN_RMS = 0.2
 DEFAULT_COOLDOWN_MS = 1500
@@ -66,6 +68,12 @@ MAX_FRAME_SAMPLES = 160_000
 MAX_CONTROL_MESSAGE_BYTES = 64 * 1024
 MAX_MODELS = 32
 MAX_LABEL_LENGTH = 128
+ACTIVITY_HOLD_MS = 480
+DETECTION_ARBITRATION_MS = 240
+SCORE_REPORT_INTERVAL_MS = 500
+# Matches the minimum clip duration used by train_wake_word.py for a 16-frame
+# classifier window: (76 + (16 - 1) * 8 + 3) * 160 samples.
+MIN_READY_SAMPLES = (76 + (WINDOW_FRAMES - 1) * 8 + 3) * 160
 
 @dataclass
 class ModelSpec:
@@ -81,10 +89,16 @@ class FeatureInfer:
     def __init__(self) -> None:
         self.models: List[ModelSpec] = []
         self.sample_rate = DEFAULT_SAMPLE_RATE
-        self.frame_samples = DEFAULT_SAMPLE_RATE  # 1 second by default
+        self.frame_samples = STREAM_FRAME_SAMPLES
         self.min_rms = DEFAULT_MIN_RMS  # energy gate to reduce false positives on silence
         self.cooldown_ms = DEFAULT_COOLDOWN_MS  # per-model cooldown between detects
         self.last_detect_ts: Dict[str, float] = {}
+        self.last_global_detect_ts = 0.0
+        self.samples_seen = 0
+        self.activity_frames_remaining = 0
+        self.pending_detection: Optional[Dict] = None
+        self.pending_detection_frames = 0
+        self.last_score_report_ts = 0.0
         # Initialize AudioFeatures; if resources missing, attempt one more download, then retry once
         try:
             self.features = self._init_features()
@@ -128,11 +142,18 @@ class FeatureInfer:
         except (TypeError, ValueError):
             sample_rate = DEFAULT_SAMPLE_RATE
         self.sample_rate = max(MIN_SAMPLE_RATE, min(MAX_SAMPLE_RATE, sample_rate))
+        if self.sample_rate != DEFAULT_SAMPLE_RATE:
+            self.log(
+                level="warn",
+                msg="OpenWakeWord feature models require 16000 Hz mono audio; using 16000 Hz",
+                requestedSampleRate=self.sample_rate,
+            )
+            self.sample_rate = DEFAULT_SAMPLE_RATE
 
         try:
-            frame_samples = int(payload.get("frameSamples") or self.sample_rate)
+            frame_samples = int(payload.get("frameSamples") or STREAM_FRAME_SAMPLES)
         except (TypeError, ValueError):
-            frame_samples = self.sample_rate
+            frame_samples = STREAM_FRAME_SAMPLES
         self.frame_samples = max(MIN_FRAME_SAMPLES, min(MAX_FRAME_SAMPLES, frame_samples))
 
         vad = payload.get("vad") or {}
@@ -186,25 +207,27 @@ class FeatureInfer:
                 self.log(level="error", msg="Failed to load model", label=label, path=path, error=str(e))
         with self.lock:
             self.models = configured
+        if hasattr(self.features, "reset"):
+            self.features.reset()
+        self.samples_seen = 0
+        self.activity_frames_remaining = 0
+        self.pending_detection = None
+        self.pending_detection_frames = 0
+        self.last_score_report_ts = 0.0
+        self.last_global_detect_ts = 0.0
+        self.last_detect_ts.clear()
 
-    def preprocess(self, pcm: np.ndarray) -> np.ndarray:
-        """Compute features and extract latest [WINDOW_FRAMES, FEATURE_DIM] window."""
-        # pcm expected float32 [-1,1], shape (N,)
-        # AudioFeatures.embed_clips wants int16 mono samples shaped [clips, samples]
-        if pcm.dtype != np.float32:
-            pcm = pcm.astype(np.float32)
-        pcm = np.clip(pcm, -1.0, 1.0)
-        pcm_i16 = (pcm * 32767.0).astype(np.int16)[None, :]
-        emb = self.features.embed_clips(pcm_i16, batch_size=1, ncpu=1)  # -> [clips, frames, 96]
-        if emb.ndim != 3:
-            raise RuntimeError(f"Unexpected embedding shape: {emb.shape}")
-        frames = emb.shape[1]
-        if frames < WINDOW_FRAMES:
-            # pad or repeat last frame
-            pad = np.repeat(emb[:, -1:, :], WINDOW_FRAMES - frames, axis=1)
-            window = np.concatenate([emb, pad], axis=1)[:, :WINDOW_FRAMES, :]
-        else:
-            window = emb[:, -WINDOW_FRAMES:, :]
+    def preprocess(self, pcm_i16: np.ndarray) -> Optional[np.ndarray]:
+        """Advance continuous features and return the latest real [16, 96] window."""
+        if pcm_i16.dtype != np.int16:
+            pcm_i16 = np.asarray(pcm_i16, dtype=np.int16)
+        processed_samples = int(self.features(pcm_i16))
+        self.samples_seen += int(pcm_i16.size)
+        if processed_samples < STREAM_FRAME_SAMPLES or self.samples_seen < MIN_READY_SAMPLES:
+            return None
+        window = self.features.get_features(WINDOW_FRAMES)
+        if window.ndim != 3 or window.shape[0] != 1 or window.shape[1:] != (WINDOW_FRAMES, FEATURE_DIM):
+            raise RuntimeError(f"Unexpected streaming embedding shape: {window.shape}")
         return window.astype(np.float32)[0]
 
     def infer(self, window: np.ndarray) -> List[Dict]:
@@ -240,11 +263,85 @@ class FeatureInfer:
             else:
                 score = 0.0
             last = self.last_detect_ts.get(m.label, 0.0)
-            detect = (score is not None) and (score >= m.threshold) and (((now - last) * 1000.0) >= self.cooldown_ms)
-            if detect:
-                self.last_detect_ts[m.label] = now
-            results.append({"model": m.label, "score": score, "detect": bool(detect)})
+            eligible = (
+                (score is not None)
+                and (score >= m.threshold)
+                and (((now - last) * 1000.0) >= self.cooldown_ms)
+                and (((now - self.last_global_detect_ts) * 1000.0) >= self.cooldown_ms)
+            )
+            results.append({
+                "model": m.label,
+                "score": score,
+                "threshold": m.threshold,
+                "eligible": bool(eligible),
+                "detect": False,
+            })
         return results
+
+    @staticmethod
+    def _label_words(label: str) -> List[str]:
+        normalized = "".join(character.lower() if character.isalnum() else " " for character in str(label))
+        return [word for word in normalized.split() if word]
+
+    def _prefer_candidate(self, candidate: Dict, current: Dict) -> bool:
+        candidate_words = self._label_words(candidate.get("model", ""))
+        current_words = self._label_words(current.get("model", ""))
+        candidate_text = " ".join(candidate_words)
+        current_text = " ".join(current_words)
+
+        # If two configured phrases contain one another ("Anna" / "Hey Anna"),
+        # prefer the more specific phrase once both cross their own calibrated
+        # thresholds. This keeps wake-word-specific voice profiles stable.
+        if candidate_text and current_text:
+            candidate_contains_current = f" {current_text} " in f" {candidate_text} "
+            current_contains_candidate = f" {candidate_text} " in f" {current_text} "
+            if candidate_contains_current != current_contains_candidate:
+                return candidate_contains_current
+
+        def relative_margin(entry: Dict) -> float:
+            score = float(entry.get("score") or 0.0)
+            threshold = float(entry.get("threshold") or 0.0)
+            return (score - threshold) / max(0.001, 1.0 - threshold)
+
+        candidate_rank = (relative_margin(candidate), float(candidate.get("score") or 0.0), len(candidate_words))
+        current_rank = (relative_margin(current), float(current.get("score") or 0.0), len(current_words))
+        return candidate_rank > current_rank
+
+    def update_detection_candidate(self, results: List[Dict]) -> Optional[Dict]:
+        candidates = [entry for entry in results if entry.get("eligible")]
+        best = None
+        for candidate in candidates:
+            if best is None or self._prefer_candidate(candidate, best):
+                best = candidate
+
+        arbitration_frames = max(
+            1,
+            int(np.ceil(DETECTION_ARBITRATION_MS / max(1.0, self.frame_samples / self.sample_rate * 1000.0)))
+        )
+        if best is not None:
+            if self.pending_detection is None or self._prefer_candidate(best, self.pending_detection):
+                self.pending_detection = dict(best)
+            if self.pending_detection_frames <= 0:
+                self.pending_detection_frames = arbitration_frames
+
+        if self.pending_detection is None:
+            return None
+
+        self.pending_detection_frames -= 1
+        if self.pending_detection_frames > 0:
+            return None
+
+        selected = self.pending_detection
+        self.pending_detection = None
+        self.pending_detection_frames = 0
+        now = time.time()
+        if ((now - self.last_global_detect_ts) * 1000.0) < self.cooldown_ms:
+            return None
+        label = str(selected.get("model") or "wake_word")
+        self.last_detect_ts[label] = now
+        self.last_global_detect_ts = now
+        selected["detect"] = True
+        return selected
 
 
 def read_exact(stream, n):
@@ -308,24 +405,71 @@ def main():
         data = read_exact(sys.stdin.buffer, length)
         if data is None:
             break
-        # Convert to float32
         pcm_i16 = np.frombuffer(data, dtype=np.int16)
-        pcm = (pcm_i16.astype(np.float32) / 32768.0)
         try:
-            # Simple energy gate to avoid processing silence
-            rms = float(np.sqrt(np.mean(np.square(pcm))) if pcm.size else 0.0)
-            if rms < fi.min_rms:
-                # Skip low-energy frame
-                continue
-            window = fi.preprocess(pcm)
-            results = fi.infer(window)
-            ts = time.time()
-            for r in results:
-                payload = {"type": "score", "ts": ts, **r}
-                sys.stdout.write(json.dumps(payload) + "\n")
-                if r.get("detect"):
-                    sys.stdout.write(json.dumps({"type": "detect", "ts": ts, "model": r["model"], "score": r["score"]}) + "\n")
-            sys.stdout.flush()
+            emitted = False
+            for start in range(0, pcm_i16.size, STREAM_FRAME_SAMPLES):
+                audio_frame = pcm_i16[start:start + STREAM_FRAME_SAMPLES]
+                if audio_frame.size == 0:
+                    continue
+                float_frame = audio_frame.astype(np.float32) / 32768.0
+                rms = float(np.sqrt(np.mean(np.square(float_frame))) if float_frame.size else 0.0)
+
+                # Silence must still advance AudioFeatures so separated phrases
+                # are never spliced together. The energy gate controls model
+                # inference only and stays open briefly after voiced audio.
+                if rms >= fi.min_rms:
+                    fi.activity_frames_remaining = max(
+                        1,
+                        int(np.ceil(ACTIVITY_HOLD_MS / (STREAM_FRAME_SAMPLES / fi.sample_rate * 1000.0)))
+                    )
+                elif fi.activity_frames_remaining > 0:
+                    fi.activity_frames_remaining -= 1
+
+                window = fi.preprocess(audio_frame)
+                if window is None or fi.activity_frames_remaining <= 0:
+                    detection = fi.update_detection_candidate([])
+                    if detection:
+                        ts = time.time()
+                        sys.stdout.write(json.dumps({
+                            "type": "detect",
+                            "ts": ts,
+                            "model": detection["model"],
+                            "score": detection["score"],
+                        }) + "\n")
+                        emitted = True
+                    continue
+
+                results = fi.infer(window)
+                detection = fi.update_detection_candidate(results)
+                ts = time.time()
+                should_report_scores = (
+                    detection is not None
+                    or any(entry.get("eligible") for entry in results)
+                    or ((ts - fi.last_score_report_ts) * 1000.0) >= SCORE_REPORT_INTERVAL_MS
+                )
+                if should_report_scores:
+                    fi.last_score_report_ts = ts
+                    for result in results:
+                        payload = {
+                            "type": "score",
+                            "ts": ts,
+                            "model": result.get("model"),
+                            "score": result.get("score"),
+                            "threshold": result.get("threshold"),
+                        }
+                        sys.stdout.write(json.dumps(payload) + "\n")
+                    emitted = True
+                if detection:
+                    sys.stdout.write(json.dumps({
+                        "type": "detect",
+                        "ts": ts,
+                        "model": detection["model"],
+                        "score": detection["score"],
+                    }) + "\n")
+                    emitted = True
+            if emitted:
+                sys.stdout.flush()
         except Exception as e:
             sys.stdout.write(json.dumps({"type": "error", "message": str(e)}) + "\n")
             sys.stdout.flush()
