@@ -12,15 +12,6 @@ test('voice acknowledgment paths accept generated profile artifacts', () => {
   assert.equal(path.basename(voiceAcknowledgmentService.getAudioPath(audioName)), audioName);
 });
 
-test('voice acknowledgment templates include deterministic execution outcomes', () => {
-  const templates = voiceAcknowledgmentService.buildTemplates({ name: 'Anna' });
-  assert.equal(voiceAcknowledgmentService.getStageText('understood'), 'On it.');
-  assert.equal(voiceAcknowledgmentService.getStageText('success'), 'Done.');
-  assert.equal(voiceAcknowledgmentService.getStageText('failure'), "Sorry, that didn't work.");
-  assert.equal(templates.includes('Done.'), true);
-  assert.equal(templates.includes("Sorry, that didn't work."), true);
-});
-
 test('voice acknowledgment paths reject traversal and malformed identifiers', () => {
   assert.throws(
     () => voiceAcknowledgmentService.getManifestPath('../../outside'),

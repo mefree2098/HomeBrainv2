@@ -449,7 +449,7 @@ class WhisperService {
 
     if (normalized === 'auto' || normalized === 'default') {
       if (preferGpu) { add('float16'); add('int8_float16'); add('float32'); add('int8'); }
-      else { add('float32'); add('int8'); }
+      else { add('int8'); add('float32'); }
       add('auto');
     } else {
       add(normalized);

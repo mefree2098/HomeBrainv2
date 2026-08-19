@@ -9,7 +9,6 @@ const WakeWordModel = require('../models/WakeWordModel');
 const speechService = require('../services/speechService');
 const voiceCommandService = require('../services/voiceCommandService');
 const settingsService = require('../services/settingsService');
-const voiceAcknowledgmentService = require('../services/voiceAcknowledgmentService');
 const { validateDeviceCredentials } = require('../services/voiceDeviceLifecycleService');
 const reachyMiniService = require('../services/reachyMiniService');
 
@@ -28,7 +27,7 @@ const REMOTE_COMMAND_ENDPOINTING = Object.freeze({
   silenceMs: 700,
   speechStartTimeoutMs: 4000,
   minSpeechMs: 120,
-  minRms: 0.0015
+  minRms: 0.0006
 });
 const REACHY_CAPTURE_GRANT_TTL_MS = 7000;
 const REACHY_WAKE_TIMESTAMP_MAX_SKEW_MS = 30000;
@@ -1306,9 +1305,6 @@ class VoiceWebSocketServer {
         ...timingBase
       };
 
-      await voiceCommand.save();
-      if (!authorizeExecution()) return;
-
       const processingStart = Date.now();
       const executionStartedAt = new Date(processingStart);
       const [result, preferredVoiceId] = await Promise.all([
@@ -1394,9 +1390,7 @@ class VoiceWebSocketServer {
       const succeeded = resultStatus === 'success' || resultStatus === 'partial_success';
       const hasExecutedActions = Array.isArray(result.execution?.actions)
         && result.execution.actions.length > 0;
-      const spokenResult = hasExecutedActions
-        ? voiceAcknowledgmentService.getStageText(succeeded ? 'success' : 'failure')
-        : responseText;
+      const spokenResult = hasExecutedActions ? null : responseText;
       const resultTiming = {
         ...timingBase,
         executionStartedAt: executionStartedAt.toISOString(),
@@ -1414,7 +1408,7 @@ class VoiceWebSocketServer {
         interactionId,
         commandId: voiceCommand._id.toString(),
         status: resultStatus,
-        text: spokenResult,
+        ...(spokenResult ? { text: spokenResult } : {}),
         voice: preferredVoiceId || 'default',
         timing: resultTiming
       });
@@ -1442,7 +1436,7 @@ class VoiceWebSocketServer {
         type: 'command_result',
         interactionId,
         status: 'failed',
-        text: voiceAcknowledgmentService.getStageText('failure'),
+        errorCode: String(error?.code || error?.name || 'VOICE_COMMAND_FAILED').slice(0, 128),
         voice: failureVoice || 'default',
         timing: {
           ...timingBase,
@@ -1568,7 +1562,10 @@ class VoiceWebSocketServer {
       format,
       isStart,
       isFinal,
-      sequence
+      sequence,
+      speechDetected,
+      endpointReason,
+      durationMs
     } = message;
 
     if (connection.device?.deviceType === 'robot') {
@@ -1645,6 +1642,17 @@ class VoiceWebSocketServer {
 
     session.chunkCount += 1;
     session.lastReceivedAt = new Date();
+    if (isFinal) {
+      if (typeof speechDetected === 'boolean') {
+        session.reportedSpeechDetected = speechDetected;
+      }
+      if (typeof endpointReason === 'string') {
+        session.endpointReason = endpointReason.slice(0, 64);
+      }
+      if (typeof durationMs === 'number' && Number.isFinite(durationMs)) {
+        session.captureDurationMs = Math.max(0, Math.round(durationMs));
+      }
+    }
 
     const bytes = audioData ? Math.ceil((audioData.length * 3) / 4) : 0;
 
@@ -1840,6 +1848,23 @@ class VoiceWebSocketServer {
         ...fields
       });
     };
+
+    if (session?.reportedSpeechDetected === false) {
+      console.log(`Skipping transcription for no-speech session ${session.sessionId} on device ${deviceId}`);
+      await markInactive({
+        lastTranscriptText: null,
+        lastTranscriptConfidence: null,
+        lastTranscriptProvider: null,
+        lastTranscriptModel: null,
+        lastTranscriptLanguage: null,
+        lastTranscriptError: 'No speech detected'
+      });
+      this.sendMessage(deviceId, {
+        type: 'command_error',
+        message: 'I did not hear a command.'
+      });
+      return;
+    }
 
     if (!session || !Array.isArray(session.chunks) || session.chunks.length === 0) {
       console.warn(`Audio session ${session?.sessionId || 'unknown'} for device ${deviceId} contained no data`);

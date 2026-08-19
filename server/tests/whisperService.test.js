@@ -36,6 +36,13 @@ function createConfig(overrides = {}) {
   return config;
 }
 
+test('Whisper CPU auto mode prefers int8 for realtime latency', () => {
+  assert.deepEqual(
+    whisperService._resolveComputeCandidates('auto', 'cpu').slice(0, 2),
+    ['int8', 'float32']
+  );
+});
+
 test('Whisper start waits for readiness and falls back after CUDA preload failure', async (t) => {
   const originals = snapshotMethods(whisperService, [
     '_ensureInstalled',

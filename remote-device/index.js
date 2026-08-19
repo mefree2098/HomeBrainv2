@@ -32,7 +32,7 @@ const DEFAULT_COMMAND_MIN_CAPTURE_MS = 900;
 const DEFAULT_COMMAND_SILENCE_MS = 700;
 const DEFAULT_COMMAND_SPEECH_START_TIMEOUT_MS = 4000;
 const DEFAULT_COMMAND_MIN_SPEECH_MS = 120;
-const DEFAULT_COMMAND_MIN_RMS = 0.0015;
+const DEFAULT_COMMAND_MIN_RMS = 0.0006;
 const MAX_PENDING_COMMAND_AUDIO_MS = 8000;
 const WAKE_ACK_TIMEOUT_MS = 10000;
 const WAKE_EARCON_ENDPOINT_IGNORE_MS = 220;
@@ -427,6 +427,7 @@ class HomeBrainRemoteDevice {
     this.sidecarStderrBuffer = '';
     this.recordingStderrBuffer = '';
     this.captureDeviceProbeCache = null;
+    this.configUpdateRequiresCaptureReopen = false;
 
     this.configDirectory = path.dirname(path.resolve(argv.config || './config.json'));
     this.packageVersion = PACKAGE_VERSION;
@@ -805,7 +806,7 @@ class HomeBrainRemoteDevice {
             const detectorNeedsRestart = await this.applyConfigUpdate(message.config);
             await this.saveConfig();
             if (detectorNeedsRestart) {
-              await this.restartWakeWordDetection();
+              await this.restartWakeWordDetectionAfterConfigUpdate();
             } else if (!this.isWakeWordDetectorActive() && this.hasLocalWakeWordModels()) {
               await this.startWakeWordDetection();
             }
@@ -822,7 +823,7 @@ class HomeBrainRemoteDevice {
             const detectorNeedsRestart = await this.applyConfigUpdate(message.config);
             await this.saveConfig();
             if (detectorNeedsRestart) {
-              await this.restartWakeWordDetection();
+              await this.restartWakeWordDetectionAfterConfigUpdate();
             }
           }
           break;
@@ -956,6 +957,7 @@ class HomeBrainRemoteDevice {
 
     let restartNeeded = false;
     const previousRecordingSignature = this.getRecordingOptionsSignature();
+    this.configUpdateRequiresCaptureReopen = false;
 
     if (config.wakeWord) {
       this.config.wakeWord = {
@@ -979,7 +981,9 @@ class HomeBrainRemoteDevice {
         if (typeof audioUpdate.sampleRate === 'number') {
           this.wakeWordSampleRate = audioUpdate.sampleRate;
         }
-        restartNeeded = restartNeeded || previousRecordingSignature !== this.getRecordingOptionsSignature();
+        const recordingChanged = previousRecordingSignature !== this.getRecordingOptionsSignature();
+        this.configUpdateRequiresCaptureReopen = this.configUpdateRequiresCaptureReopen || recordingChanged;
+        restartNeeded = restartNeeded || recordingChanged;
         console.log(`Audio config updated: recorder=${this.config.audio.recorder || this.config.audio.recordProgram || 'arecord'}, recordingDevice=${this.config.audio.recordingDevice || this.config.audio.microphoneDevice || 'default'}`);
       }
     }
@@ -1020,6 +1024,9 @@ class HomeBrainRemoteDevice {
 
     const assetsChanged = await this.syncWakeWordAssetsFromConfig(config);
     restartNeeded = restartNeeded || assetsChanged;
+    // Wake thresholds and RMS/VAD settings are consumed by the sidecar config.
+    // Restart only the sidecar so live tuning never tears down the USB mic.
+    restartNeeded = restartNeeded || Boolean(config.wakeWord);
 
     const keywordSummary = Array.isArray(this.config.wakeWord?.keywords) && this.config.wakeWord.keywords.length
       ? this.config.wakeWord.keywords.map((keyword) => `${keyword.label}:${keyword.path}`).join(', ')
@@ -2130,6 +2137,19 @@ class HomeBrainRemoteDevice {
     return assetsChanged;
   }
 
+  async restartWakeWordDetectionAfterConfigUpdate() {
+    const requiresCaptureReopen = this.configUpdateRequiresCaptureReopen === true;
+    this.configUpdateRequiresCaptureReopen = false;
+    if (!requiresCaptureReopen && this.recordingStream) {
+      this.isWakeWordListening = false;
+      this.stopFeatureSidecar();
+      if (await this.resumeWakeWordSidecarOnActiveStream()) {
+        return;
+      }
+    }
+    await this.restartWakeWordDetection();
+  }
+
   async restartWakeWordDetection() {
     console.log('Restarting wake word detection with updated configuration...');
     this.isWakeWordListening = false;
@@ -2752,6 +2772,35 @@ class HomeBrainRemoteDevice {
     });
 
     sidecar.stdin.write(JSON.stringify(cfg) + '\n');
+  }
+
+  async resumeWakeWordSidecarOnActiveStream() {
+    const keywordEntries = Array.isArray(this.config?.wakeWord?.keywords)
+      ? this.config.wakeWord.keywords
+      : [];
+    const hasOnnx = keywordEntries.some((keyword) => /\.onnx$/i.test(keyword.path || ''));
+    if (!this.recordingStream || !hasOnnx || keywordEntries.length === 0) {
+      return false;
+    }
+
+    try {
+      this.isWakeWordListening = false;
+      const recordingOptions = this.buildRecordingOptions();
+      const minRms = this.getWakeWordMinRms();
+      this.resetWakeWordRuntime('FeatureSidecar/OWW', recordingOptions, { minRms });
+      await this.startFeatureSidecar(keywordEntries);
+      this.wakeWordEngineFailed = false;
+      this.wakeWordAudioBuffer = Buffer.alloc(0);
+      this.wakeWordDetectionQueue = Promise.resolve();
+      this.isWakeWordListening = true;
+      this.wakeWordRestartAttempts = 0;
+      console.log('Wake word detection resumed on the existing microphone stream');
+      this.reportWakeWordRuntimeStatus(true, 'resumed_existing_stream');
+      return true;
+    } catch (error) {
+      console.warn(`Unable to resume wake sidecar on active stream: ${error.message}`);
+      return false;
+    }
   }
 
   stopFeatureSidecar() {
@@ -3421,9 +3470,14 @@ class HomeBrainRemoteDevice {
 
     if (shouldResumeWakeWord) {
       setTimeout(() => {
-        this.restartWakeWordDetection().catch((error) => {
-          console.error('Failed to resume wake word detection after command:', error.message);
-        });
+        this.resumeWakeWordSidecarOnActiveStream()
+          .then((resumed) => {
+            if (resumed) return;
+            return this.restartWakeWordDetection();
+          })
+          .catch((error) => {
+            console.error('Failed to resume wake word detection after command:', error.message);
+          });
       }, 250);
     } else {
       this.isWakeWordListening = true;
@@ -3478,6 +3532,7 @@ class HomeBrainRemoteDevice {
       ...(typeof message.wakeWord === 'string' ? { wakeWord: message.wakeWord } : {}),
       ...(typeof message.confidence === 'number' ? { confidence: message.confidence } : {}),
       ...(typeof message.status === 'string' ? { status: message.status } : {}),
+      ...(typeof message.errorCode === 'string' ? { errorCode: message.errorCode.slice(0, 128) } : {}),
       timing: {
         ...(this.lastVoiceInteraction?.timing || {}),
         ...safeTiming

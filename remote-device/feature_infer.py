@@ -69,7 +69,7 @@ MAX_CONTROL_MESSAGE_BYTES = 64 * 1024
 MAX_MODELS = 32
 MAX_LABEL_LENGTH = 128
 ACTIVITY_HOLD_MS = 480
-DETECTION_ARBITRATION_MS = 240
+DETECTION_CONFIRMATION_MS = 160
 SCORE_REPORT_INTERVAL_MS = 500
 # Matches the minimum clip duration used by train_wake_word.py for a 16-frame
 # classifier window: (76 + (16 - 1) * 8 + 3) * 160 samples.
@@ -314,18 +314,22 @@ class FeatureInfer:
             if best is None or self._prefer_candidate(candidate, best):
                 best = candidate
 
-        arbitration_frames = max(
+        confirmation_frames = max(
             1,
-            int(np.ceil(DETECTION_ARBITRATION_MS / max(1.0, self.frame_samples / self.sample_rate * 1000.0)))
+            int(np.ceil(DETECTION_CONFIRMATION_MS / max(1.0, self.frame_samples / self.sample_rate * 1000.0)))
         )
-        if best is not None:
-            if self.pending_detection is None or self._prefer_candidate(best, self.pending_detection):
-                self.pending_detection = dict(best)
-            if self.pending_detection_frames <= 0:
-                self.pending_detection_frames = arbitration_frames
-
-        if self.pending_detection is None:
+        if best is None:
+            self.pending_detection = None
+            self.pending_detection_frames = 0
             return None
+
+        pending_label = str(self.pending_detection.get("model")) if self.pending_detection else ""
+        best_label = str(best.get("model") or "")
+        if self.pending_detection is None or pending_label != best_label:
+            self.pending_detection = dict(best)
+            self.pending_detection_frames = confirmation_frames
+        elif self._prefer_candidate(best, self.pending_detection):
+            self.pending_detection = dict(best)
 
         self.pending_detection_frames -= 1
         if self.pending_detection_frames > 0:

@@ -830,11 +830,14 @@ class SpeechService {
     }
 
     const startedAt = Date.now();
-    const beamSizeRaw = process.env.STT_BEAM_SIZE ?? '5';
+    // Room voice commands favor latency over long-form transcription search.
+    // Beam 1 is substantially faster on CPU and remains accurate for short,
+    // deterministic smart-home utterances.
+    const beamSizeRaw = process.env.STT_BEAM_SIZE ?? '1';
     const parsedBeamSize = Number.parseInt(String(beamSizeRaw), 10);
     const beamSize = Number.isFinite(parsedBeamSize) && parsedBeamSize > 0
       ? Math.min(parsedBeamSize, 10)
-      : 5;
+      : 1;
     const response = await whisperService.transcribe({
       audioBuffer,
       sampleRate,
