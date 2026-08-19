@@ -2109,10 +2109,14 @@ class VoiceWebSocketServer {
       if (!connection) {
         throw new Error('Device not connected');
       }
-      const device = connection.device || await VoiceDevice.findById(deviceId);
+      // The websocket snapshot can outlive settings updates made through the
+      // REST API. Always rebuild pushed config from the current database row
+      // so live wake/VAD tuning does not resend stale values.
+      const device = await VoiceDevice.findById(deviceId);
       if (!device) {
         throw new Error('Device not found');
       }
+      connection.device = device;
       const credentials = connection.credentials || {};
       const { config } = await this.buildWakeWordConfig(device, credentials, connection.deviceInfo || {});
       if (device.deviceType === 'robot') {

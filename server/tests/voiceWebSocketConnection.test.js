@@ -486,6 +486,38 @@ test('buildWakeWordConfig uses calibrated model thresholds and excludes missing 
   assert.equal(config.wakeWord.assets[0].sensitivity, 0.28);
 });
 
+test('pushConfigToDevice refreshes settings instead of reusing the websocket snapshot', async (t) => {
+  const originalFindById = VoiceDevice.findById;
+  t.after(() => { VoiceDevice.findById = originalFindById; });
+
+  const staleDevice = createDevice();
+  staleDevice.settings.wakeWordVad = { minRms: 0.02 };
+  const currentDevice = createDevice();
+  currentDevice.settings.wakeWordVad = { minRms: 0.008 };
+  VoiceDevice.findById = async () => currentDevice;
+
+  const voiceWs = new VoiceWebSocketServer();
+  const ws = new MockWebSocket();
+  const connection = {
+    ws,
+    authenticated: true,
+    device: staleDevice,
+    credentials: { deviceToken: 'token' },
+    deviceInfo: {}
+  };
+  voiceWs.deviceConnections.set(deviceId, connection);
+  voiceWs.buildWakeWordConfig = async (device) => ({
+    config: { wakeWord: { vad: { minRms: device.settings.wakeWordVad.minRms } } },
+    assets: []
+  });
+
+  const result = await voiceWs.pushConfigToDevice(deviceId);
+
+  assert.deepEqual(result, { success: true });
+  assert.equal(ws.sent.at(-1).config.wakeWord.vad.minRms, 0.008);
+  assert.equal(connection.device, currentDevice);
+});
+
 test('speaker wake acknowledgment advertises low-latency adaptive endpointing', async (t) => {
   const originalSave = VoiceCommand.prototype.save;
   const originalUpdate = VoiceDevice.findByIdAndUpdate;
