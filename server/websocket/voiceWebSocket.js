@@ -23,6 +23,7 @@ const DEFAULT_WAKE_WORD_MIN_RMS = 0.004;
 const MAX_WAKE_WORD_MIN_RMS = 0.2;
 const REMOTE_COMMAND_MAX_DURATION_MS = 12000;
 const REMOTE_COMMAND_ENDPOINTING = Object.freeze({
+  maxDurationMs: REMOTE_COMMAND_MAX_DURATION_MS,
   minCaptureMs: 900,
   silenceMs: 700,
   speechStartTimeoutMs: 4000,
@@ -361,6 +362,38 @@ class VoiceWebSocketServer {
     );
   }
 
+  resolveVoiceTuning(device) {
+    const raw = device?.settings?.voiceTuning || {};
+    const bounded = (value, min, max, fallback) => {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? Math.min(Math.max(numeric, min), max) : fallback;
+    };
+    const maxDurationMs = Math.round(bounded(
+      raw.commandMaxDurationMs,
+      3000,
+      20000,
+      REMOTE_COMMAND_MAX_DURATION_MS
+    ));
+    return {
+      wakeConfirmationMs: Math.round(bounded(raw.wakeConfirmationMs, 80, 1000, 160)),
+      silentEmptyWakes: raw.silentEmptyWakes !== false,
+      backgroundGuardEnabled: raw.backgroundGuardEnabled !== false,
+      endpointing: {
+        maxDurationMs,
+        minCaptureMs: Math.round(bounded(raw.commandMinCaptureMs, 300, 3000, REMOTE_COMMAND_ENDPOINTING.minCaptureMs)),
+        silenceMs: Math.round(bounded(raw.commandSilenceMs, 250, 5000, REMOTE_COMMAND_ENDPOINTING.silenceMs)),
+        speechStartTimeoutMs: Math.round(bounded(
+          raw.commandSpeechStartTimeoutMs,
+          1000,
+          Math.min(10000, maxDurationMs),
+          Math.min(REMOTE_COMMAND_ENDPOINTING.speechStartTimeoutMs, maxDurationMs)
+        )),
+        minSpeechMs: Math.round(bounded(raw.commandMinSpeechMs, 40, 1000, REMOTE_COMMAND_ENDPOINTING.minSpeechMs)),
+        minRms: bounded(raw.commandMinRms, 0.0005, 0.05, REMOTE_COMMAND_ENDPOINTING.minRms)
+      }
+    };
+  }
+
   async buildWakeWordConfig(device, credentials = {}, deviceInfo = {}) {
     if (typeof credentials === 'string') {
       credentials = { registrationCode: credentials };
@@ -459,6 +492,7 @@ class VoiceWebSocketServer {
       ? device.settings.wakeWordDebounceMs
       : 1500;
     const vadSettings = device.settings?.wakeWordVad || {};
+    const voiceTuning = this.resolveVoiceTuning(device);
     const audioSettings = sanitizeRemoteAudioConfig(device.settings?.audio);
     const enabledWakeWords = wakeWordAssetPayload.map((asset) => asset.label);
     const enabledSlugs = new Set(wakeWordAssetPayload.map((asset) => asset.slug));
@@ -473,6 +507,7 @@ class VoiceWebSocketServer {
           missing: missingWakeWords,
           assets: wakeWordAssetPayload,
           debounceMs,
+          confirmationMs: voiceTuning.wakeConfirmationMs,
           vad: {
             speechThreshold: typeof vadSettings.speechThreshold === 'number'
               ? clampValue(vadSettings.speechThreshold, 0, 1)
@@ -492,6 +527,11 @@ class VoiceWebSocketServer {
         volume: device.volume,
         microphoneSensitivity: device.microphoneSensitivity,
         ...(audioSettings ? { audio: audioSettings } : {}),
+        voice: {
+          endpointing: voiceTuning.endpointing,
+          silentEmptyWakes: voiceTuning.silentEmptyWakes,
+          backgroundGuardEnabled: voiceTuning.backgroundGuardEnabled
+        },
         settings: {
           audioSampleRate: 16000,
           audioChannels: 1,
@@ -997,14 +1037,15 @@ class VoiceWebSocketServer {
       // A Reachy grant becomes observable only after both event persistence and
       // device-state persistence succeed. The grant is short-lived, server-time
       // based, and consumed by exactly one text or audio capture start.
+      const voiceTuning = this.resolveVoiceTuning(connection.device);
       const acknowledged = this.sendToConnection(connection, {
         type: 'wake_word_ack',
         message: 'Ready for voice command',
         interactionId,
         timeout: isReachy
           ? Math.min(5000, this.reachyCaptureGrantTtlMs)
-          : REMOTE_COMMAND_MAX_DURATION_MS,
-        ...(!isReachy ? { endpointing: REMOTE_COMMAND_ENDPOINTING } : {}),
+          : voiceTuning.endpointing.maxDurationMs,
+        ...(!isReachy ? { endpointing: voiceTuning.endpointing } : {}),
         ...(isReachy ? {
           captureGrantId: connection.captureGrant.id,
           sessionId: connection.captureGrant.id
@@ -1885,6 +1926,18 @@ class VoiceWebSocketServer {
         ...fields
       });
     };
+    const discardPendingEmptySpeakerWake = () => {
+      if (
+        connection.device?.deviceType !== 'speaker'
+        || !connection.pendingWakeWord
+        || !this.resolveVoiceTuning(connection.device).silentEmptyWakes
+      ) {
+        return false;
+      }
+      connection.pendingWakeWord = null;
+      console.log(`Silently discarded empty speaker wake session for device ${deviceId}`);
+      return true;
+    };
 
     if (session?.reportedSpeechDetected === false) {
       console.log(`Skipping transcription for no-speech session ${session.sessionId} on device ${deviceId}`);
@@ -1896,6 +1949,7 @@ class VoiceWebSocketServer {
         lastTranscriptLanguage: null,
         lastTranscriptError: 'No speech detected'
       });
+      if (discardPendingEmptySpeakerWake()) return;
       this.sendMessage(deviceId, {
         type: 'command_error',
         message: 'I did not hear a command.'
@@ -1913,6 +1967,7 @@ class VoiceWebSocketServer {
         lastTranscriptLanguage: null,
         lastTranscriptError: 'No audio received'
       });
+      if (discardPendingEmptySpeakerWake()) return;
       this.sendMessage(deviceId, {
         type: 'command_error',
         message: "I didn't hear anything. Let's try again."
@@ -1960,6 +2015,7 @@ class VoiceWebSocketServer {
         lastTranscriptLanguage: transcription?.language || null,
         lastTranscriptError: 'No speech detected'
       });
+      if (discardPendingEmptySpeakerWake()) return;
       this.sendMessage(deviceId, {
         type: 'command_error',
         message: 'I did not catch that. Please try again.'
@@ -1971,6 +2027,7 @@ class VoiceWebSocketServer {
     if (
       connection.device?.deviceType === 'speaker'
       && detectedWakeWord
+      && this.resolveVoiceTuning(connection.device).backgroundGuardEnabled
       && !this.isPlausibleRoomTranscript(transcription.text, detectedWakeWord)
     ) {
       console.log(`Ignoring background-like transcript for device ${deviceId} after wake detection`);

@@ -265,12 +265,46 @@ test('applyConfigUpdate merges pushed audio config and restarts the detector', a
     audio: {
       recordingDevice: 'auto',
       preferredInputName: 'Jabra'
+    },
+    voice: {
+      endpointing: {
+        maxDurationMs: 8000,
+        silenceMs: 550,
+        speechStartTimeoutMs: 3000,
+        minRms: 0.0012
+      }
     }
   });
 
   assert.equal(restartNeeded, true);
   assert.equal(device.config.audio.recordingDevice, 'auto');
   assert.equal(device.buildRecordingOptions().device, 'plughw:2,0');
+  assert.equal(device.voiceConfig.endpointing.maxDurationMs, 8000);
+  assert.equal(device.voiceConfig.endpointing.silenceMs, 550);
+  assert.equal(device.voiceConfig.endpointing.speechStartTimeoutMs, 3000);
+  assert.equal(device.voiceConfig.endpointing.minRms, 0.0012);
+});
+
+test('command endpoint timers accept bounded live tuning', () => {
+  const device = new HomeBrainRemoteDevice({ audio: {}, wakeWord: {} });
+
+  const endpointing = device.normalizeCommandEndpointing(9000, {
+    maxDurationMs: 8000,
+    minCaptureMs: 750,
+    silenceMs: 550,
+    speechStartTimeoutMs: 3000,
+    minSpeechMs: 100,
+    minRms: 0.0012
+  });
+
+  assert.deepEqual(endpointing, {
+    maxDurationMs: 8000,
+    minCaptureMs: 750,
+    silenceMs: 550,
+    speechStartTimeoutMs: 3000,
+    minSpeechMs: 100,
+    minRms: 0.0012
+  });
 });
 
 test('syncWakeWordAssetsFromConfig downloads ONNX external data dependencies', async (t) => {

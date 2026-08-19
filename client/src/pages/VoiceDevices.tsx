@@ -19,7 +19,8 @@ import {
   RefreshCw,
   Download,
   CheckCircle2,
-  XCircle
+  XCircle,
+  SlidersHorizontal
 } from "lucide-react"
 import { getVoiceDevices, testVoiceDevice, pushConfigToDevice, pingTtsToDevice, updateVoiceDeviceSettings } from "@/api/voice"
 import {
@@ -35,6 +36,115 @@ import { PendingDevices } from "@/components/discovery/PendingDevices"
 import { AutoDiscoverySettings } from "@/components/discovery/AutoDiscoverySettings"
 import UpdateManager from "@/components/remote/UpdateManager"
 import { useToast } from "@/hooks/useToast"
+
+type VoiceTuningSliderProps = {
+  label: string
+  description: string
+  value: number
+  min: number
+  max: number
+  step: number
+  formatValue: (value: number) => string
+  onCommit: (value: number) => void | Promise<void>
+}
+
+function VoiceTuningSlider({
+  label,
+  description,
+  value,
+  min,
+  max,
+  step,
+  formatValue,
+  onCommit
+}: VoiceTuningSliderProps) {
+  const [draft, setDraft] = useState(value)
+  const committedRef = useRef(value)
+
+  useEffect(() => {
+    setDraft(value)
+    committedRef.current = value
+  }, [value])
+
+  const commit = () => {
+    if (Math.abs(draft - committedRef.current) < (step / 10)) return
+    committedRef.current = draft
+    void onCommit(draft)
+  }
+
+  return (
+    <div className="space-y-1 rounded-md border border-border/60 bg-background/70 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <label className="text-sm font-medium">{label}</label>
+        <span className="font-mono text-xs text-foreground">{formatValue(draft)}</span>
+      </div>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={draft}
+        onChange={(event) => setDraft(Number(event.target.value))}
+        onPointerUp={commit}
+        onBlur={commit}
+        onKeyUp={(event) => {
+          if (event.key.startsWith('Arrow') || event.key === 'Home' || event.key === 'End') commit()
+        }}
+        className="w-full"
+        aria-label={label}
+      />
+      <p className="text-[11px] leading-4 text-muted-foreground">{description}</p>
+    </div>
+  )
+}
+
+const DEFAULT_VOICE_TUNING = {
+  wakeConfirmationMs: 160,
+  commandMaxDurationMs: 12000,
+  commandMinCaptureMs: 900,
+  commandSilenceMs: 700,
+  commandSpeechStartTimeoutMs: 4000,
+  commandMinSpeechMs: 120,
+  commandMinRms: 0.0006,
+  silentEmptyWakes: true,
+  backgroundGuardEnabled: true
+}
+
+const VOICE_TUNING_PRESETS = {
+  responsive: {
+    wakeMinRms: 0.01,
+    voiceTuning: {
+      ...DEFAULT_VOICE_TUNING,
+      wakeConfirmationMs: 160,
+      commandMaxDurationMs: 10000,
+      commandSilenceMs: 800,
+      commandSpeechStartTimeoutMs: 5000,
+      commandMinRms: 0.0005
+    }
+  },
+  balanced: {
+    wakeMinRms: 0.02,
+    voiceTuning: {
+      ...DEFAULT_VOICE_TUNING,
+      wakeConfirmationMs: 240,
+      commandMaxDurationMs: 8000,
+      commandSilenceMs: 700,
+      commandSpeechStartTimeoutMs: 4000,
+      commandMinRms: 0.0006
+    }
+  },
+  noisy: {
+    wakeMinRms: 0.04,
+    voiceTuning: {
+      ...DEFAULT_VOICE_TUNING,
+      wakeConfirmationMs: 400,
+      commandMaxDurationMs: 7000,
+      commandSilenceMs: 600,
+      commandSpeechStartTimeoutMs: 3000,
+      commandMinRms: 0.0012
+    }
+  }
+}
 
 export function VoiceDevices() {
   const { toast } = useToast()
@@ -137,7 +247,7 @@ export function VoiceDevices() {
     }
   }
 
-  const refreshDevices = async () => {
+  const refreshDevices = useCallback(async () => {
     try {
       console.log('Refreshing voice devices data')
       const [devicesData] = await Promise.all([
@@ -153,7 +263,7 @@ export function VoiceDevices() {
         variant: "destructive"
       })
     }
-  }
+  }, [refreshUpdateTelemetry, toast])
 
   useEffect(() => {
     if (!verifyingFleet) {
@@ -205,7 +315,7 @@ export function VoiceDevices() {
     }, 12000);
 
     return () => clearInterval(interval);
-  }, [verifyingFleet, toast, refreshUpdateTelemetry]);
+  }, [verifyingFleet, toast, refreshUpdateTelemetry, refreshDevices]);
 
   const commitDeviceSettings = useCallback(async (
     deviceId: string,
@@ -225,6 +335,7 @@ export function VoiceDevices() {
         )))
       }
       toast({ title: 'Settings updated', description })
+      setTimeout(() => { void refreshDevices() }, 2500)
     } catch (error: any) {
       console.error('Failed to update device settings:', error)
       toast({
@@ -233,7 +344,7 @@ export function VoiceDevices() {
         variant: 'destructive'
       })
     }
-  }, [toast])
+  }, [refreshDevices, toast])
 
   const handleUpdateDevice = async (deviceId: string, deviceName: string) => {
     setUpdatingDevice(deviceId)
@@ -684,7 +795,7 @@ export function VoiceDevices() {
       </div>
 
       {/* Voice Devices Grid */}
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-6 xl:grid-cols-2">
         {devices.map((device) => {
           const streamElapsed = formatElapsed(device.audioStreamStartedAt)
           const transcriptConfidence = typeof device.lastTranscriptConfidence === 'number'
@@ -693,6 +804,19 @@ export function VoiceDevices() {
           const wakeWordConfidence = typeof device.lastWakeWordConfidence === 'number'
             ? Math.round(device.lastWakeWordConfidence * 100)
             : null
+          const voiceTuning = {
+            ...DEFAULT_VOICE_TUNING,
+            ...(device.settings?.voiceTuning || {})
+          }
+          const wakeMinRms = device.settings?.wakeWordVad?.minRms ?? 0.02
+          const runtimeWakeMinRms = device.settings?.wakeWordRuntime?.sidecar?.minRms
+          const runtimeConfirmationMs = device.settings?.wakeWordRuntime?.sidecar?.confirmationMs
+          const tuningApplied = typeof runtimeWakeMinRms === 'number'
+            && Math.abs(runtimeWakeMinRms - wakeMinRms) < 0.00005
+            && (
+              typeof runtimeConfirmationMs !== 'number'
+              || runtimeConfirmationMs === voiceTuning.wakeConfirmationMs
+            )
 
           return (
             <Card key={device._id} className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg hover:shadow-xl transition-all duration-300">
@@ -822,36 +946,192 @@ export function VoiceDevices() {
                       <span className="font-mono text-xs">{device.microphoneSensitivity ?? 50}%</span>
                     </div>
                   </div>
-                  <div className="flex justify-between text-sm text-muted-foreground items-center">
-                    <span>Wake-word Noise Gate (higher = less sensitive):</span>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="range"
-                        min={0.004}
-                        max={1}
-                        step={0.001}
-                        defaultValue={device.settings?.wakeWordVad?.minRms ?? 0.02}
-                        onMouseUp={(e) => {
-                          const val = Number((e.target as HTMLInputElement).value)
-                          commitDeviceSettings(
+                  <details className="rounded-lg border border-border/70 bg-muted/20">
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-sm font-medium">
+                      <span className="flex items-center gap-2">
+                        <SlidersHorizontal className="h-4 w-4" />
+                        Advanced Voice Tuning
+                      </span>
+                      <Badge variant={tuningApplied ? "default" : "outline"}>
+                        {tuningApplied ? 'Applied live' : 'Syncing'}
+                      </Badge>
+                    </summary>
+                    <div className="space-y-3 border-t border-border/60 p-3">
+                      <p className="text-xs leading-5 text-muted-foreground">
+                        Changes are saved per device and pushed into the running detector. They do not restart the hub, listener, or microphone stream.
+                      </p>
+
+                      <div className="flex flex-wrap gap-2">
+                        {Object.entries(VOICE_TUNING_PRESETS).map(([name, preset]) => (
+                          <Button
+                            key={name}
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={() => commitDeviceSettings(
+                              device._id,
+                              {
+                                wakeWordVad: { minRms: preset.wakeMinRms },
+                                voiceTuning: preset.voiceTuning
+                              },
+                              `${name[0].toUpperCase()}${name.slice(1)} voice preset applied`
+                            )}
+                          >
+                            {name[0].toUpperCase()}{name.slice(1)}
+                          </Button>
+                        ))}
+                      </div>
+
+                      <div className="grid gap-3 xl:grid-cols-2">
+                        <VoiceTuningSlider
+                          label="Wake noise gate"
+                          description="Raise this when room noise triggers wakes; lower it if your voice cannot wake the device."
+                          value={wakeMinRms}
+                          min={0.004}
+                          max={0.1}
+                          step={0.001}
+                          formatValue={(value) => value.toFixed(3)}
+                          onCommit={(value) => commitDeviceSettings(
                             device._id,
-                            { wakeWordVad: { minRms: val } },
-                            `Wake-word minRms set to ${val.toFixed(3)}`
-                          )
-                        }}
-                        onTouchEnd={(e) => {
-                          const val = Number((e.target as HTMLInputElement).value)
-                          commitDeviceSettings(
+                            { wakeWordVad: { minRms: value } },
+                            `Wake noise gate set to ${value.toFixed(3)}`
+                          )}
+                        />
+                        <VoiceTuningSlider
+                          label="Wake confirmation"
+                          description="How long the same wake model must remain positive. Higher values reject brief false hits."
+                          value={voiceTuning.wakeConfirmationMs}
+                          min={80}
+                          max={1000}
+                          step={80}
+                          formatValue={(value) => `${Math.round(value)} ms`}
+                          onCommit={(value) => commitDeviceSettings(
                             device._id,
-                            { wakeWordVad: { minRms: val } },
-                            `Wake-word minRms set to ${val.toFixed(3)}`
-                          )
-                        }}
-                        className="w-40"
-                      />
-                      <span className="font-mono text-xs">{(device.settings?.wakeWordVad?.minRms ?? 0.02).toFixed(3)}</span>
+                            { voiceTuning: { wakeConfirmationMs: value } },
+                            `Wake confirmation set to ${Math.round(value)} ms`
+                          )}
+                        />
+                        <VoiceTuningSlider
+                          label="Command speech floor"
+                          description="Minimum command audio energy. Raise it to ignore background sound after a wake."
+                          value={voiceTuning.commandMinRms}
+                          min={0.0005}
+                          max={0.02}
+                          step={0.0001}
+                          formatValue={(value) => value.toFixed(4)}
+                          onCommit={(value) => commitDeviceSettings(
+                            device._id,
+                            { voiceTuning: { commandMinRms: value } },
+                            `Command speech floor set to ${value.toFixed(4)}`
+                          )}
+                        />
+                        <VoiceTuningSlider
+                          label="End-of-speech pause"
+                          description="Silence required before capture ends. Raise it if commands are cut off mid-sentence."
+                          value={voiceTuning.commandSilenceMs}
+                          min={250}
+                          max={2000}
+                          step={50}
+                          formatValue={(value) => `${Math.round(value)} ms`}
+                          onCommit={(value) => commitDeviceSettings(
+                            device._id,
+                            { voiceTuning: { commandSilenceMs: value } },
+                            `End-of-speech pause set to ${Math.round(value)} ms`
+                          )}
+                        />
+                        <VoiceTuningSlider
+                          label="Minimum capture"
+                          description="Shortest listening window after wake, even when the command is very brief."
+                          value={voiceTuning.commandMinCaptureMs}
+                          min={300}
+                          max={3000}
+                          step={100}
+                          formatValue={(value) => `${Math.round(value)} ms`}
+                          onCommit={(value) => commitDeviceSettings(
+                            device._id,
+                            { voiceTuning: { commandMinCaptureMs: value } },
+                            `Minimum capture set to ${Math.round(value)} ms`
+                          )}
+                        />
+                        <VoiceTuningSlider
+                          label="Speech-start timeout"
+                          description="How long to wait for speech after the wake acknowledgement before ending quietly."
+                          value={voiceTuning.commandSpeechStartTimeoutMs}
+                          min={1000}
+                          max={10000}
+                          step={250}
+                          formatValue={(value) => `${(value / 1000).toFixed(2)} s`}
+                          onCommit={(value) => commitDeviceSettings(
+                            device._id,
+                            { voiceTuning: { commandSpeechStartTimeoutMs: value } },
+                            `Speech-start timeout set to ${(value / 1000).toFixed(2)} seconds`
+                          )}
+                        />
+                        <VoiceTuningSlider
+                          label="Maximum capture"
+                          description="Hard limit for a command capture when background speech never becomes quiet."
+                          value={voiceTuning.commandMaxDurationMs}
+                          min={3000}
+                          max={20000}
+                          step={500}
+                          formatValue={(value) => `${(value / 1000).toFixed(1)} s`}
+                          onCommit={(value) => commitDeviceSettings(
+                            device._id,
+                            { voiceTuning: { commandMaxDurationMs: value } },
+                            `Maximum capture set to ${(value / 1000).toFixed(1)} seconds`
+                          )}
+                        />
+                        <VoiceTuningSlider
+                          label="Minimum speech"
+                          description="Speech duration required before a command is considered real."
+                          value={voiceTuning.commandMinSpeechMs}
+                          min={40}
+                          max={1000}
+                          step={40}
+                          formatValue={(value) => `${Math.round(value)} ms`}
+                          onCommit={(value) => commitDeviceSettings(
+                            device._id,
+                            { voiceTuning: { commandMinSpeechMs: value } },
+                            `Minimum speech set to ${Math.round(value)} ms`
+                          )}
+                        />
+                      </div>
+
+                      <label className="flex items-start justify-between gap-4 rounded-md border border-border/60 bg-background/70 p-3">
+                        <span>
+                          <span className="block text-sm font-medium">Silence empty false wakes</span>
+                          <span className="block text-[11px] leading-4 text-muted-foreground">Do not play a failure tone when no command was actually captured.</span>
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={voiceTuning.silentEmptyWakes}
+                          onChange={(event) => commitDeviceSettings(
+                            device._id,
+                            { voiceTuning: { silentEmptyWakes: event.target.checked } },
+                            `Silent empty wakes ${event.target.checked ? 'enabled' : 'disabled'}`
+                          )}
+                          className="mt-1 h-4 w-4"
+                        />
+                      </label>
+
+                      <label className="flex items-start justify-between gap-4 rounded-md border border-border/60 bg-background/70 p-3">
+                        <span>
+                          <span className="block text-sm font-medium">Reject background prose</span>
+                          <span className="block text-[11px] leading-4 text-muted-foreground">Require a wake prefix, command shape, or question shape before executing captured speech.</span>
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={voiceTuning.backgroundGuardEnabled}
+                          onChange={(event) => commitDeviceSettings(
+                            device._id,
+                            { voiceTuning: { backgroundGuardEnabled: event.target.checked } },
+                            `Background guard ${event.target.checked ? 'enabled' : 'disabled'}`
+                          )}
+                          className="mt-1 h-4 w-4"
+                        />
+                      </label>
                     </div>
-                  </div>
+                  </details>
 
                   <div className="flex justify-between text-sm text-muted-foreground">
                     <span>Latest:</span>

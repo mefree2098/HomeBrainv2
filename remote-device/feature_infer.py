@@ -70,6 +70,8 @@ MAX_MODELS = 32
 MAX_LABEL_LENGTH = 128
 ACTIVITY_HOLD_MS = 480
 DETECTION_CONFIRMATION_MS = 160
+MIN_DETECTION_CONFIRMATION_MS = 80
+MAX_DETECTION_CONFIRMATION_MS = 1000
 SCORE_REPORT_INTERVAL_MS = 500
 # Matches the minimum clip duration used by train_wake_word.py for a 16-frame
 # classifier window: (76 + (16 - 1) * 8 + 3) * 160 samples.
@@ -98,6 +100,7 @@ class FeatureInfer:
         self.activity_frames_remaining = 0
         self.pending_detection: Optional[Dict] = None
         self.pending_detection_frames = 0
+        self.detection_confirmation_ms = DETECTION_CONFIRMATION_MS
         self.last_score_report_ts = 0.0
         # Initialize AudioFeatures; if resources missing, attempt one more download, then retry once
         try:
@@ -170,6 +173,14 @@ class FeatureInfer:
         except (TypeError, ValueError):
             cooldown_ms = DEFAULT_COOLDOWN_MS
         self.cooldown_ms = max(0, min(300_000, cooldown_ms))
+        try:
+            confirmation_ms = int(payload.get("confirmationMs")) if payload.get("confirmationMs") is not None else self.detection_confirmation_ms
+        except (TypeError, ValueError):
+            confirmation_ms = DETECTION_CONFIRMATION_MS
+        self.detection_confirmation_ms = max(
+            MIN_DETECTION_CONFIRMATION_MS,
+            min(MAX_DETECTION_CONFIRMATION_MS, confirmation_ms),
+        )
 
         providers = ["CPUExecutionProvider"]
         configured: List[ModelSpec] = []
@@ -316,7 +327,10 @@ class FeatureInfer:
 
         confirmation_frames = max(
             1,
-            int(np.ceil(DETECTION_CONFIRMATION_MS / max(1.0, self.frame_samples / self.sample_rate * 1000.0)))
+            int(np.ceil(
+                getattr(self, "detection_confirmation_ms", DETECTION_CONFIRMATION_MS)
+                / max(1.0, self.frame_samples / self.sample_rate * 1000.0)
+            ))
         )
         if best is None:
             self.pending_detection = None
@@ -381,7 +395,11 @@ def main():
             payload = json.loads(text)
             if payload.get('type') == 'config':
                 fi.configure(payload)
-                sys.stdout.write(json.dumps({"type": "ready", "models": [m.label for m in fi.models]}) + "\n")
+                sys.stdout.write(json.dumps({
+                    "type": "ready",
+                    "models": [m.label for m in fi.models],
+                    "confirmationMs": fi.detection_confirmation_ms,
+                }) + "\n")
                 sys.stdout.flush()
             else:
                 fi.log(level="warn", msg="Unknown control message")
