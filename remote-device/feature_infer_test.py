@@ -49,10 +49,18 @@ class FeatureInferStreamingTests(unittest.TestCase):
 
         self.assertIsNone(instance.update_detection_candidate([anna]))
         self.assertIsNone(instance.update_detection_candidate([anna, hey_anna]))
-        detection = instance.update_detection_candidate([])
+        detection = instance.update_detection_candidate([anna, hey_anna])
 
         self.assertIsNotNone(detection)
         self.assertEqual(detection["model"], "Hey Anna")
+
+    def test_single_frame_score_spike_does_not_trigger_a_wake(self):
+        instance = self.make_infer()
+        spike = {"model": "Anna", "score": 0.99, "threshold": 0.68, "eligible": True}
+
+        self.assertIsNone(instance.update_detection_candidate([spike]))
+        self.assertIsNone(instance.update_detection_candidate([]))
+        self.assertIsNone(instance.update_detection_candidate([]))
 
 
 if __name__ == "__main__":

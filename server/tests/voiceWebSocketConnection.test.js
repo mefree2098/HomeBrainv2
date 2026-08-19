@@ -9,6 +9,7 @@ const WakeWordModel = require('../models/WakeWordModel');
 const VoiceWebSocketServer = require('../websocket/voiceWebSocket');
 const reachyMiniService = require('../services/reachyMiniService');
 const voiceCommandService = require('../services/voiceCommandService');
+const speechService = require('../services/speechService');
 const voiceAcknowledgmentService = require('../services/voiceAcknowledgmentService');
 const { hashDeviceToken } = require('../services/voiceDeviceLifecycleService');
 const { redactMessageForLog } = VoiceWebSocketServer;
@@ -520,7 +521,7 @@ test('speaker wake acknowledgment advertises low-latency adaptive endpointing', 
     silenceMs: 700,
     speechStartTimeoutMs: 4000,
     minSpeechMs: 120,
-    minRms: 0.0015
+    minRms: 0.0006
   });
 });
 
@@ -537,7 +538,7 @@ test('speaker command emits understood and execution result feedback without blo
   });
   VoiceCommand.prototype.save = async function save() {
     saveCount += 1;
-    if (saveCount === 2) {
+    if (saveCount === 1) {
       await new Promise((resolve) => { releaseFinalSave = resolve; });
     }
     return this;
@@ -594,17 +595,56 @@ test('speaker command emits understood and execution result feedback without blo
   const result = ws.sent.find((message) => message.type === 'command_result');
   assert.deepEqual(feedbackTypes, ['command_understood', 'command_result']);
   assert.equal(result.status, 'success');
-  assert.equal(result.text, 'Done.');
+  assert.equal(result.text, undefined);
   assert.equal(result.voice, 'anna-voice');
   assert.equal(result.interactionId, 'interaction-1');
   assert.equal(result.timing.captureDurationMs, 900);
   assert.equal(result.timing.transcriptionMs, 90);
   assert.ok(result.timing.wakeToResultMs >= 0);
-  assert.equal(saveCount, 2);
+  assert.equal(saveCount, 1);
   assert.equal(connection.pendingWakeWord, null);
 
   releaseFinalSave();
   await processing;
+});
+
+test('listener no-speech final skips Whisper instead of queueing an empty transcription', async (t) => {
+  const originalTranscribe = speechService.transcribe;
+  t.after(() => { speechService.transcribe = originalTranscribe; });
+  let transcriptions = 0;
+  speechService.transcribe = async () => {
+    transcriptions += 1;
+    return { text: 'should not run' };
+  };
+
+  const voiceWs = new VoiceWebSocketServer();
+  const ws = new MockWebSocket();
+  const connection = {
+    ws,
+    authenticated: true,
+    device: createDevice(),
+    pendingWakeWord: { id: 'interaction-1', wakeWord: 'anna', timestamp: new Date() },
+    lastPing: Date.now()
+  };
+  voiceWs.deviceConnections.set(deviceId, connection);
+  const updates = [];
+  voiceWs.updateDeviceAudioState = async (_id, update) => { updates.push(update); };
+
+  await voiceWs.finalizeAudioSession(deviceId, {
+    sessionId: 'no-speech-session',
+    connection,
+    chunks: [Buffer.alloc(3200)],
+    sampleRate: 16000,
+    channels: 1,
+    format: 'S16LE',
+    startedAt: new Date(Date.now() - 1000),
+    reportedSpeechDetected: false,
+    endpointReason: 'no_speech'
+  });
+
+  assert.equal(transcriptions, 0);
+  assert.equal(updates.at(-1).lastTranscriptError, 'No speech detected');
+  assert.equal(ws.sent.at(-1).type, 'command_error');
 });
 
 test('stripWakeWordPrefix removes wake words from one-breath commands', () => {

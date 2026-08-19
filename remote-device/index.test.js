@@ -487,7 +487,7 @@ test('wake detection plays an immediate local earcon before hub acknowledgment',
   if (device.pendingWakeAckTimer) clearTimeout(device.pendingWakeAckTimer);
 });
 
-test('command result plays a local outcome earcon before queued voice feedback', async () => {
+test('command result plays a local outcome earcon without delayed generic speech', async () => {
   const device = new HomeBrainRemoteDevice({ audio: {}, wakeWord: {} });
   const feedback = [];
   device.wakeWordRuntime = { sidecar: {}, recording: {}, audio: {} };
@@ -506,13 +506,12 @@ test('command result plays a local outcome earcon before queued voice feedback',
     interactionId: 'interaction-1',
     commandId: 'command-1',
     status: 'success',
-    text: 'Done.',
     voice: 'anna-voice',
     timing: { wakeToResultMs: 1600 }
   })));
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(feedback, ['earcon:success', 'voice:anna-voice:Done.']);
+  assert.deepEqual(feedback, ['earcon:success']);
   assert.equal(device.lastVoiceInteraction.stage, 'success');
   assert.equal(device.lastVoiceInteraction.timing.wakeToResultMs, 1600);
 });
@@ -581,6 +580,50 @@ test('isWakeWordDetectorActive treats the feature sidecar as an active detector'
   device.sidecar = { pid: 1234 };
 
   assert.equal(device.isWakeWordDetectorActive(), true);
+});
+
+test('wake sidecar resumes on the existing microphone stream without reopening ALSA', async () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: { recordingDevice: 'sysdefault:CARD=MS', sampleRate: 16000 },
+    wakeWord: {
+      keywords: [{ label: 'Anna', path: '/tmp/anna.onnx', threshold: 0.7 }]
+    }
+  });
+  const activeStream = { stop() { throw new Error('active microphone must stay open'); } };
+  device.recordingStream = activeStream;
+  let sidecarStarts = 0;
+  device.startFeatureSidecar = async () => { sidecarStarts += 1; };
+  device.reportWakeWordRuntimeStatus = () => true;
+
+  const resumed = await device.resumeWakeWordSidecarOnActiveStream();
+
+  assert.equal(resumed, true);
+  assert.equal(sidecarStarts, 1);
+  assert.equal(device.recordingStream, activeStream);
+  assert.equal(device.isWakeWordListening, true);
+});
+
+test('wake config updates restart only the sidecar when capture settings are unchanged', async () => {
+  const device = new HomeBrainRemoteDevice({ audio: {}, wakeWord: {} });
+  const activeStream = { stop() { throw new Error('mic must not reopen for wake tuning'); } };
+  device.recordingStream = activeStream;
+  device.configUpdateRequiresCaptureReopen = false;
+  let sidecarStops = 0;
+  let sidecarResumes = 0;
+  let fullRestarts = 0;
+  device.stopFeatureSidecar = () => { sidecarStops += 1; };
+  device.resumeWakeWordSidecarOnActiveStream = async () => {
+    sidecarResumes += 1;
+    return true;
+  };
+  device.restartWakeWordDetection = async () => { fullRestarts += 1; };
+
+  await device.restartWakeWordDetectionAfterConfigUpdate();
+
+  assert.equal(sidecarStops, 1);
+  assert.equal(sidecarResumes, 1);
+  assert.equal(fullRestarts, 0);
+  assert.equal(device.recordingStream, activeStream);
 });
 
 test('playTTSResponse uses authenticated POST JSON and the selected wake-word voice', async () => {
