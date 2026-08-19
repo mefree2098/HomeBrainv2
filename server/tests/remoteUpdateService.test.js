@@ -26,6 +26,17 @@ test('remote update archive includes the package lock required by npm ci', async
   assert.equal(entries.includes('package-lock.json'), true);
   assert.equal(entries.includes('index.js'), true);
   assert.equal(entries.includes('updater.js'), true);
+
+  const sizes = spawnSync('unzip', ['-l', archivePath], {
+    encoding: 'utf8',
+    timeout: 10_000
+  });
+  assert.equal(sizes.status, 0, sizes.stderr);
+  const summary = sizes.stdout.split('\n').find((line) => /\bfiles?$/.test(line.trim()));
+  const uncompressedBytes = Number(summary?.trim().split(/\s+/)[0]);
+  const archiveBytes = fs.statSync(archivePath).size;
+  assert.equal(Number.isFinite(uncompressedBytes), true);
+  assert.ok(uncompressedBytes <= archiveBytes * 4);
 });
 
 test('initiateUpdate preserves previous offline status when websocket delivery fails', async (t) => {
