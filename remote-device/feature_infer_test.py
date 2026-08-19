@@ -29,6 +29,7 @@ class FeatureInferStreamingTests(unittest.TestCase):
         instance.last_global_detect_ts = 0.0
         instance.pending_detection = None
         instance.pending_detection_frames = 0
+        instance.detection_confirmation_ms = feature_infer.DETECTION_CONFIRMATION_MS
         return instance
 
     def test_preprocess_advances_quiet_audio_before_inference_is_ready(self):
@@ -60,6 +61,19 @@ class FeatureInferStreamingTests(unittest.TestCase):
 
         self.assertIsNone(instance.update_detection_candidate([spike]))
         self.assertIsNone(instance.update_detection_candidate([]))
+
+    def test_confirmation_window_is_runtime_tunable(self):
+        instance = self.make_infer()
+        instance.detection_confirmation_ms = 320
+        candidate = {"model": "Anna", "score": 0.99, "threshold": 0.68, "eligible": True}
+
+        self.assertIsNone(instance.update_detection_candidate([candidate]))
+        self.assertIsNone(instance.update_detection_candidate([candidate]))
+        self.assertIsNone(instance.update_detection_candidate([candidate]))
+        detection = instance.update_detection_candidate([candidate])
+
+        self.assertIsNotNone(detection)
+        self.assertEqual(detection["model"], "Anna")
         self.assertIsNone(instance.update_detection_candidate([]))
 
 

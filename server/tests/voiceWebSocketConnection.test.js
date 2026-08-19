@@ -446,6 +446,32 @@ test('buildWakeWordConfig normalizes zero wake-word RMS gate to the default', as
   assert.equal(config.wakeWord.vad.minRms, 0.004);
 });
 
+test('buildWakeWordConfig includes bounded live voice tuning', async (t) => {
+  const originalFind = WakeWordModel.find;
+  t.after(() => { WakeWordModel.find = originalFind; });
+  WakeWordModel.find = async () => [];
+
+  const voiceWs = new VoiceWebSocketServer();
+  const device = createDevice();
+  device.settings.voiceTuning = {
+    wakeConfirmationMs: 320,
+    commandMaxDurationMs: 8000,
+    commandSilenceMs: 550,
+    commandMinRms: 0.0012,
+    silentEmptyWakes: true,
+    backgroundGuardEnabled: true
+  };
+
+  const { config } = await voiceWs.buildWakeWordConfig(device, { deviceToken: 'token' }, {});
+
+  assert.equal(config.wakeWord.confirmationMs, 320);
+  assert.equal(config.voice.endpointing.maxDurationMs, 8000);
+  assert.equal(config.voice.endpointing.silenceMs, 550);
+  assert.equal(config.voice.endpointing.minRms, 0.0012);
+  assert.equal(config.voice.silentEmptyWakes, true);
+  assert.equal(config.voice.backgroundGuardEnabled, true);
+});
+
 test('buildWakeWordConfig uses calibrated model thresholds and excludes missing assets', async (t) => {
   const originalFind = WakeWordModel.find;
   const originalAssets = require('../utils/wakeWordAssets').getAssetsForWakeWords;
@@ -530,10 +556,20 @@ test('speaker wake acknowledgment advertises low-latency adaptive endpointing', 
 
   const voiceWs = new VoiceWebSocketServer();
   const ws = new MockWebSocket();
+  const device = createDevice();
+  device.deviceType = 'speaker';
+  device.settings.voiceTuning = {
+    commandMaxDurationMs: 8000,
+    commandMinCaptureMs: 750,
+    commandSilenceMs: 550,
+    commandSpeechStartTimeoutMs: 3000,
+    commandMinSpeechMs: 100,
+    commandMinRms: 0.0012
+  };
   const connection = {
     ws,
     authenticated: true,
-    device: createDevice(),
+    device,
     pendingWakeWord: null,
     lastPing: Date.now()
   };
@@ -546,14 +582,15 @@ test('speaker wake acknowledgment advertises low-latency adaptive endpointing', 
   });
 
   const acknowledgment = ws.sent.find((message) => message.type === 'wake_word_ack');
-  assert.equal(acknowledgment.timeout, 12000);
+  assert.equal(acknowledgment.timeout, 8000);
   assert.equal(typeof acknowledgment.interactionId, 'string');
   assert.deepEqual(acknowledgment.endpointing, {
-    minCaptureMs: 900,
-    silenceMs: 700,
-    speechStartTimeoutMs: 4000,
-    minSpeechMs: 120,
-    minRms: 0.0006
+    maxDurationMs: 8000,
+    minCaptureMs: 750,
+    silenceMs: 550,
+    speechStartTimeoutMs: 3000,
+    minSpeechMs: 100,
+    minRms: 0.0012
   });
 });
 
@@ -651,10 +688,12 @@ test('listener no-speech final skips Whisper instead of queueing an empty transc
 
   const voiceWs = new VoiceWebSocketServer();
   const ws = new MockWebSocket();
+  const device = createDevice();
+  device.deviceType = 'speaker';
   const connection = {
     ws,
     authenticated: true,
-    device: createDevice(),
+    device,
     pendingWakeWord: { id: 'interaction-1', wakeWord: 'anna', timestamp: new Date() },
     lastPing: Date.now()
   };
@@ -676,7 +715,49 @@ test('listener no-speech final skips Whisper instead of queueing an empty transc
 
   assert.equal(transcriptions, 0);
   assert.equal(updates.at(-1).lastTranscriptError, 'No speech detected');
-  assert.equal(ws.sent.at(-1).type, 'command_error');
+  assert.equal(connection.pendingWakeWord, null);
+  assert.equal(ws.sent.length, 0);
+});
+
+test('listener silently discards an empty speaker transcription', async (t) => {
+  const originalTranscribe = speechService.transcribe;
+  t.after(() => { speechService.transcribe = originalTranscribe; });
+  speechService.transcribe = async () => ({
+    text: '',
+    confidence: 0.6,
+    provider: 'whisper_local',
+    model: 'tiny',
+    language: 'en'
+  });
+
+  const voiceWs = new VoiceWebSocketServer();
+  const ws = new MockWebSocket();
+  const device = createDevice();
+  device.deviceType = 'speaker';
+  const connection = {
+    ws,
+    authenticated: true,
+    device,
+    pendingWakeWord: { id: 'interaction-1', wakeWord: 'anna', timestamp: new Date() },
+    lastPing: Date.now()
+  };
+  voiceWs.deviceConnections.set(deviceId, connection);
+  const updates = [];
+  voiceWs.updateDeviceAudioState = async (_id, update) => { updates.push(update); };
+
+  await voiceWs.finalizeAudioSession(deviceId, {
+    sessionId: 'empty-transcript-session',
+    connection,
+    chunks: [Buffer.alloc(3200)],
+    sampleRate: 16000,
+    channels: 1,
+    format: 'S16LE',
+    startedAt: new Date(Date.now() - 1000)
+  });
+
+  assert.equal(connection.pendingWakeWord, null);
+  assert.equal(updates.at(-1).lastTranscriptError, 'No speech detected');
+  assert.equal(ws.sent.length, 0);
 });
 
 test('listener drops background-like speech without executing or playing a failure result', async (t) => {

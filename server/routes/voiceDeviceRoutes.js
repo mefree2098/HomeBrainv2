@@ -714,6 +714,26 @@ router.put('/devices/:id/settings', admin, async (req, res) => {
       }
       return next;
     };
+    const sanitizeVoiceTuning = (value = {}) => {
+      const next = {};
+      const boundedNumber = (key, min, max, round = false) => {
+        const candidate = value[key];
+        if (typeof candidate !== 'number' || !Number.isFinite(candidate)) return;
+        const bounded = clampValue(candidate, min, max);
+        next[key] = round ? Math.round(bounded) : bounded;
+      };
+      boundedNumber('wakeConfirmationMs', 80, 1000, true);
+      boundedNumber('commandMaxDurationMs', 3000, 20000, true);
+      boundedNumber('commandMinCaptureMs', 300, 3000, true);
+      boundedNumber('commandSilenceMs', 250, 5000, true);
+      boundedNumber('commandSpeechStartTimeoutMs', 1000, 10000, true);
+      boundedNumber('commandMinSpeechMs', 40, 1000, true);
+      boundedNumber('commandMinRms', 0.0005, 0.05);
+      for (const key of ['silentEmptyWakes', 'backgroundGuardEnabled']) {
+        if (typeof value[key] === 'boolean') next[key] = value[key];
+      }
+      return next;
+    };
     const { volume, microphoneSensitivity, ...settingsUpdates } = updates || {};
 
     if (typeof volume === 'number' && Number.isFinite(volume)) {
@@ -732,6 +752,13 @@ router.put('/devices/:id/settings', admin, async (req, res) => {
           ...sanitizeWakeWordVad(settingsUpdates.wakeWordVad)
         };
         delete settingsUpdates.wakeWordVad;
+      }
+      if (settingsUpdates.voiceTuning && typeof settingsUpdates.voiceTuning === 'object') {
+        nextSettings.voiceTuning = {
+          ...(nextSettings.voiceTuning || {}),
+          ...sanitizeVoiceTuning(settingsUpdates.voiceTuning)
+        };
+        delete settingsUpdates.voiceTuning;
       }
 
       device.settings = {

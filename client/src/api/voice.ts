@@ -498,13 +498,14 @@ export const pingTtsToDevice = async (deviceId: string, text?: string) => {
   }
 }
 
-// Description: Update voice device settings (volume, microphoneSensitivity, wake word VAD, etc.)
+// Description: Update voice device settings and live wake/command tuning
 // Endpoint: PUT /api/voice/devices/:id/settings
-// Request: { volume?: number, microphoneSensitivity?: number, wakeWordVad?: object }
+// Request: { volume?: number, microphoneSensitivity?: number, wakeWordVad?: object, voiceTuning?: object }
 // Response: { success: boolean, device: object }
 export const updateVoiceDeviceSettings = async (deviceId: string, updates: Record<string, unknown>) => {
   try {
     const response = await api.put(`/api/voice/devices/${deviceId}/settings`, updates);
+    requestCache.delete('voice-devices');
     return response.data;
   } catch (error) {
     console.error('Error updating voice device settings:', error);
