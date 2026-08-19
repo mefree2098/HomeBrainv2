@@ -36,10 +36,23 @@ function createConfig(overrides = {}) {
   return config;
 }
 
-test('Whisper CPU auto mode prefers int8 for realtime latency', () => {
+test('Whisper CPU auto mode prefers int8 for realtime latency', (t) => {
+  const originalIsJetson = whisperService._isJetson;
+  t.after(() => { whisperService._isJetson = originalIsJetson; });
+  whisperService._isJetson = () => false;
   assert.deepEqual(
     whisperService._resolveComputeCandidates('auto', 'cpu').slice(0, 2),
     ['int8', 'float32']
+  );
+});
+
+test('Whisper Jetson CPU auto mode avoids a known-failing int8 startup attempt', (t) => {
+  const originalIsJetson = whisperService._isJetson;
+  t.after(() => { whisperService._isJetson = originalIsJetson; });
+  whisperService._isJetson = () => true;
+  assert.deepEqual(
+    whisperService._resolveComputeCandidates('auto', 'cpu').slice(0, 2),
+    ['float32', 'int8']
   );
 });
 

@@ -1159,6 +1159,43 @@ class VoiceWebSocketServer {
     return command;
   }
 
+  isPlausibleRoomTranscript(commandText, detectedWakeWord = '') {
+    const normalized = String(commandText || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+    if (!normalized) return false;
+
+    const wakeWords = new Set();
+    const detected = String(detectedWakeWord || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+    if (detected) {
+      wakeWords.add(detected);
+      const words = detected.split(/\s+/).filter(Boolean);
+      if (words.length > 1) wakeWords.add(words.at(-1));
+    }
+    for (const wakeWord of wakeWords) {
+      if (normalized === wakeWord || normalized.startsWith(`${wakeWord} `)) {
+        return true;
+      }
+    }
+
+    // A valid one-breath room command can lose the wake word during STT, so
+    // retain common command/question shapes. Reject arbitrary background prose
+    // before it reaches the slower intent/LLM execution path.
+    const commandLead = /^(?:please\s+)?(?:turn|switch|toggle|set|dim|brighten|adjust|change|increase|decrease|raise|lower|lock|unlock|open|close|start|stop|pause|resume|play|run|activate|deactivate|arm|disarm|mute|unmute|show|check|find|read|tell|give|make|create)\b/;
+    const questionLead = /^(?:please\s+)?(?:what|who|when|where|why|how|is|are|am|do|does|did|can|could|would|will|should)\b/;
+    if (commandLead.test(normalized) || questionLead.test(normalized)) {
+      return true;
+    }
+
+    const words = normalized.split(/\s+/);
+    return words.length <= 8
+      && /\b(?:on|off|up|down|warmer|cooler|brighter|dimmer)\b/.test(normalized);
+  }
+
   async processVoiceCommandText(deviceId, context = {}) {
     const connection = context.sourceConnection || this.deviceConnections.get(deviceId);
     const authorizeExecution = () => this.isCurrentAuthenticatedConnection(deviceId, connection);
@@ -1926,6 +1963,25 @@ class VoiceWebSocketServer {
       this.sendMessage(deviceId, {
         type: 'command_error',
         message: 'I did not catch that. Please try again.'
+      });
+      return;
+    }
+
+    const detectedWakeWord = connection.pendingWakeWord?.wakeWord || '';
+    if (
+      connection.device?.deviceType === 'speaker'
+      && detectedWakeWord
+      && !this.isPlausibleRoomTranscript(transcription.text, detectedWakeWord)
+    ) {
+      console.log(`Ignoring background-like transcript for device ${deviceId} after wake detection`);
+      connection.pendingWakeWord = null;
+      await markInactive({
+        lastTranscriptText: null,
+        lastTranscriptConfidence: typeof transcription.confidence === 'number' ? transcription.confidence : null,
+        lastTranscriptProvider: transcription.provider || null,
+        lastTranscriptModel: transcription.model || null,
+        lastTranscriptLanguage: transcription.language || null,
+        lastTranscriptError: 'Background speech rejected'
       });
       return;
     }
