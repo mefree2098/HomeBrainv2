@@ -1101,13 +1101,19 @@ class HomeBrainRemoteDevice {
   }
 
   getRecordingOptionsSignature() {
-    const options = this.buildRecordingOptions();
+    const audioConfig = this.config.audio || {};
+    const configuredDevice = (
+      audioConfig.recordingDevice
+      || audioConfig.microphoneDevice
+      || 'default'
+    ).toString().trim() || 'default';
     return JSON.stringify({
-      sampleRate: options.sampleRate,
-      channels: options.channels,
-      recorder: options.recorder,
-      audioType: options.audioType,
-      device: options.device
+      sampleRate: this.wakeWordSampleRate,
+      channels: audioConfig.channels || 1,
+      recorder: audioConfig.recorder || audioConfig.recordProgram || 'arecord',
+      audioType: audioConfig.audioType || 'raw',
+      device: configuredDevice,
+      preferredInputName: audioConfig.preferredInputName || ''
     });
   }
 
@@ -1457,6 +1463,31 @@ class HomeBrainRemoteDevice {
       recorder: recorderName,
       recordProgram: recorderName,
       audioType,
+      device
+    };
+  }
+
+  getActiveRecordingOptions() {
+    const audioConfig = this.config.audio || {};
+    const current = this.wakeWordRuntime?.recording || {};
+    const configuredDevice = (
+      audioConfig.recordingDevice
+      || audioConfig.microphoneDevice
+      || 'default'
+    ).toString().trim() || 'default';
+    const device = current.device
+      || audioConfig.resolvedRecordingDevice
+      || (this.isAutoRecordingDevice(configuredDevice) ? 'default' : configuredDevice);
+    const recorderName = current.recorder || audioConfig.recorder || audioConfig.recordProgram || 'arecord';
+    return {
+      sampleRate: current.sampleRate || this.wakeWordSampleRate,
+      sampleRateHertz: current.sampleRate || this.wakeWordSampleRate,
+      channels: current.channels || audioConfig.channels || 1,
+      threshold: audioConfig.threshold ?? 0.5,
+      verbose: false,
+      recorder: recorderName,
+      recordProgram: recorderName,
+      audioType: current.audioType || audioConfig.audioType || 'raw',
       device
     };
   }
@@ -2785,7 +2816,10 @@ class HomeBrainRemoteDevice {
 
     try {
       this.isWakeWordListening = false;
-      const recordingOptions = this.buildRecordingOptions();
+      // Reuse the already-open stream's resolved options. Calling the normal
+      // builder here can launch a one-second ALSA probe after its cache expires,
+      // which is enough to disturb hardware mute state on USB speakerphones.
+      const recordingOptions = this.getActiveRecordingOptions();
       const minRms = this.getWakeWordMinRms();
       this.resetWakeWordRuntime('FeatureSidecar/OWW', recordingOptions, { minRms });
       await this.startFeatureSidecar(keywordEntries);

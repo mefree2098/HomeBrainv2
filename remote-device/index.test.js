@@ -591,6 +591,9 @@ test('wake sidecar resumes on the existing microphone stream without reopening A
   });
   const activeStream = { stop() { throw new Error('active microphone must stay open'); } };
   device.recordingStream = activeStream;
+  device.detectPreferredCaptureDevice = () => {
+    throw new Error('active microphone resume must not probe ALSA');
+  };
   let sidecarStarts = 0;
   device.startFeatureSidecar = async () => { sidecarStarts += 1; };
   device.reportWakeWordRuntimeStatus = () => true;
@@ -601,6 +604,26 @@ test('wake sidecar resumes on the existing microphone stream without reopening A
   assert.equal(sidecarStarts, 1);
   assert.equal(device.recordingStream, activeStream);
   assert.equal(device.isWakeWordListening, true);
+});
+
+test('wake-only config comparison does not probe an automatic capture device', async () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: { recordingDevice: 'auto', preferredInputName: 'Jabra', sampleRate: 16000 },
+    wakeWord: {}
+  });
+  let probes = 0;
+  device.detectPreferredCaptureDevice = () => {
+    probes += 1;
+    return { device: 'plughw:CARD=USB,DEV=0', label: 'Jabra' };
+  };
+  device.syncWakeWordAssetsFromConfig = async () => false;
+
+  const restartNeeded = await device.applyConfigUpdate({
+    wakeWord: { vad: { minRms: 0.008 } }
+  });
+
+  assert.equal(restartNeeded, true);
+  assert.equal(probes, 0);
 });
 
 test('wake config updates restart only the sidecar when capture settings are unchanged', async () => {
