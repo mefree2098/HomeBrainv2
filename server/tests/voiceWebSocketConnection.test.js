@@ -679,6 +679,50 @@ test('listener no-speech final skips Whisper instead of queueing an empty transc
   assert.equal(ws.sent.at(-1).type, 'command_error');
 });
 
+test('listener drops background-like speech without executing or playing a failure result', async (t) => {
+  const originalTranscribe = speechService.transcribe;
+  t.after(() => { speechService.transcribe = originalTranscribe; });
+  speechService.transcribe = async () => ({
+    text: 'her gut fund me raised nine hundred thousand dollars let me ask you this',
+    confidence: 0.84,
+    provider: 'whisper_local',
+    model: 'tiny',
+    language: 'en'
+  });
+
+  const voiceWs = new VoiceWebSocketServer();
+  const ws = new MockWebSocket();
+  const device = createDevice();
+  device.deviceType = 'speaker';
+  const connection = {
+    ws,
+    authenticated: true,
+    device,
+    pendingWakeWord: { id: 'interaction-1', wakeWord: 'henry', timestamp: new Date() },
+    lastPing: Date.now()
+  };
+  voiceWs.deviceConnections.set(deviceId, connection);
+  const updates = [];
+  voiceWs.updateDeviceAudioState = async (_id, update) => { updates.push(update); };
+  let processed = 0;
+  voiceWs.processVoiceCommandText = async () => { processed += 1; };
+
+  await voiceWs.finalizeAudioSession(deviceId, {
+    sessionId: 'background-session',
+    connection,
+    chunks: [Buffer.alloc(3200)],
+    sampleRate: 16000,
+    channels: 1,
+    format: 'S16LE',
+    startedAt: new Date(Date.now() - 1000)
+  });
+
+  assert.equal(processed, 0);
+  assert.equal(connection.pendingWakeWord, null);
+  assert.equal(updates.at(-1).lastTranscriptError, 'Background speech rejected');
+  assert.equal(ws.sent.length, 0);
+});
+
 test('stripWakeWordPrefix removes wake words from one-breath commands', () => {
   const voiceWs = new VoiceWebSocketServer();
 
@@ -697,6 +741,22 @@ test('stripWakeWordPrefix removes wake words from one-breath commands', () => {
   assert.equal(
     voiceWs.stripWakeWordPrefix('Henry should not be stripped after Anna woke', 'anna'),
     'Henry should not be stripped after Anna woke'
+  );
+});
+
+test('room transcript plausibility rejects background prose before execution', () => {
+  const voiceWs = new VoiceWebSocketServer();
+
+  assert.equal(voiceWs.isPlausibleRoomTranscript('Henry, turn off the office', 'henry'), true);
+  assert.equal(voiceWs.isPlausibleRoomTranscript('turn off the office', 'henry'), true);
+  assert.equal(voiceWs.isPlausibleRoomTranscript('office lights off', 'henry'), true);
+  assert.equal(voiceWs.isPlausibleRoomTranscript('what is the weather tomorrow', 'anna'), true);
+  assert.equal(
+    voiceWs.isPlausibleRoomTranscript(
+      'her gut fund me raised nine hundred thousand dollars let me ask you this for sporty life',
+      'henry'
+    ),
+    false
   );
 });
 

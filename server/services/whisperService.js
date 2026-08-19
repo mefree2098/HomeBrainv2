@@ -449,6 +449,10 @@ class WhisperService {
 
     if (normalized === 'auto' || normalized === 'default') {
       if (preferGpu) { add('float16'); add('int8_float16'); add('float32'); add('int8'); }
+      // The current Jetson CTranslate2 CPU build reports int8 as unsupported
+      // and falls back only after a failed process start. Prefer its proven
+      // float32 path; conventional CPU builds still prefer int8.
+      else if (this._isJetson()) { add('float32'); add('int8'); }
       else { add('int8'); add('float32'); }
       add('auto');
     } else {
