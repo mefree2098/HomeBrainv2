@@ -28,7 +28,6 @@ const MAX_WAKE_WORD_MIN_RMS = 0.2;
 const DEFAULT_COMMAND_PREROLL_MS = 3000;
 const MAX_COMMAND_PREROLL_MS = 5000;
 const DEFAULT_COMMAND_MAX_DURATION_MS = 15000;
-const MAX_COMMAND_MAX_DURATION_MS = 30000;
 const DEFAULT_COMMAND_MIN_CAPTURE_MS = 1800;
 const DEFAULT_COMMAND_SILENCE_MS = 1100;
 const DEFAULT_COMMAND_SPEECH_START_TIMEOUT_MS = 6000;
@@ -1667,15 +1666,12 @@ class HomeBrainRemoteDevice {
       const candidate = supplied[key] ?? local[key];
       return Number.isFinite(Number(candidate)) ? Number(candidate) : fallback;
     };
-    const requestedMax = Number.isFinite(Number(timeoutMs)) ? Number(timeoutMs) : DEFAULT_COMMAND_MAX_DURATION_MS;
-    const maxDurationMs = clamp(requestedMax, 1000, MAX_COMMAND_MAX_DURATION_MS);
+    // Hub websocket values can tune endpoint comparisons but never timer
+    // allocation. Hard-stop and no-speech timers stay fixed device constants.
+    const maxDurationMs = DEFAULT_COMMAND_MAX_DURATION_MS;
     const minCaptureMs = clamp(read('minCaptureMs', DEFAULT_COMMAND_MIN_CAPTURE_MS), 0, maxDurationMs);
     const silenceMs = clamp(read('silenceMs', DEFAULT_COMMAND_SILENCE_MS), 250, 5000);
-    const speechStartTimeoutMs = clamp(
-      read('speechStartTimeoutMs', DEFAULT_COMMAND_SPEECH_START_TIMEOUT_MS),
-      Math.max(1000, minCaptureMs),
-      maxDurationMs
-    );
+    const speechStartTimeoutMs = DEFAULT_COMMAND_SPEECH_START_TIMEOUT_MS;
     const minSpeechMs = clamp(read('minSpeechMs', DEFAULT_COMMAND_MIN_SPEECH_MS), 40, 1000);
     const rawMinRms = read('minRms', DEFAULT_COMMAND_MIN_RMS);
     const minRms = Math.min(Math.max(rawMinRms, 0.0005), MAX_WAKE_WORD_MIN_RMS);
@@ -1698,15 +1694,6 @@ class HomeBrainRemoteDevice {
     if (this.commandSilenceTimer) {
       clearTimeout(this.commandSilenceTimer);
     }
-    const now = Date.now();
-    const minCaptureRemaining = Math.max(
-      0,
-      this.commandEndpointing.minCaptureMs - (now - this.commandCaptureStartedAt)
-    );
-    const silenceRemaining = Math.max(
-      0,
-      this.commandEndpointing.silenceMs - (now - this.commandLastSpeechAt)
-    );
     this.commandSilenceTimer = setTimeout(() => {
       this.commandSilenceTimer = null;
       if (!this.isRecording || !this.commandSpeechDetected || !this.commandEndpointing) {
@@ -1719,7 +1706,7 @@ class HomeBrainRemoteDevice {
       } else {
         this.scheduleCommandSilenceEndpoint();
       }
-    }, Math.max(25, minCaptureRemaining, silenceRemaining));
+    }, 100);
   }
 
   processCommandEndpointFrame(frameBuffer) {
@@ -3231,13 +3218,13 @@ class HomeBrainRemoteDevice {
       if (this.isRecording) {
         this.stopVoiceRecording('max_duration');
       }
-    }, this.commandEndpointing.maxDurationMs);
+    }, DEFAULT_COMMAND_MAX_DURATION_MS);
     this.commandSpeechStartTimer = setTimeout(() => {
       this.commandSpeechStartTimer = null;
       if (this.isRecording && !this.commandSpeechDetected) {
         this.stopVoiceRecording('no_speech');
       }
-    }, this.commandEndpointing.speechStartTimeoutMs);
+    }, DEFAULT_COMMAND_SPEECH_START_TIMEOUT_MS);
 
     const sessionId = `${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
     this.commandSessionId = sessionId;
