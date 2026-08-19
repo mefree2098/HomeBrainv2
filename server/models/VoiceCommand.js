@@ -125,7 +125,7 @@ const voiceCommandSchema = new mongoose.Schema({
   },
   
   // LLM processing details
-    llmProcessing: {
+  llmProcessing: {
     provider: {
       type: String,
       enum: ['openai', 'anthropic', 'local', 'codex'],
@@ -143,6 +143,23 @@ const voiceCommandSchema = new mongoose.Schema({
       output: Number,
       total: Number
     }
+  },
+
+  timing: {
+    interactionId: String,
+    wakeDetectedAt: Date,
+    captureStartedAt: Date,
+    captureCompletedAt: Date,
+    transcriptionCompletedAt: Date,
+    understoodAt: Date,
+    executionStartedAt: Date,
+    executionCompletedAt: Date,
+    resultSentAt: Date,
+    wakeToUnderstoodMs: Number,
+    wakeToResultMs: Number,
+    captureDurationMs: Number,
+    transcriptionMs: Number,
+    executionMs: Number
   },
   
   // Quality and feedback

@@ -9,6 +9,11 @@ const ACK_ROOT = path.join(__dirname, '..', 'data', 'voice-acknowledgments');
 const MANIFEST_VERSION = 1;
 const PROFILE_ID_PATTERN = /^[a-f0-9]{24}$/i;
 const AUDIO_FILE_PATTERN = /^[a-f0-9]{24}-[a-f0-9]{16}\.mp3$/i;
+const VOICE_STAGE_TEXT = Object.freeze({
+  understood: 'On it.',
+  success: 'Done.',
+  failure: "Sorry, that didn't work."
+});
 
 function resolveAcknowledgmentPath(fileName, pattern, label) {
   const normalized = typeof fileName === 'string' ? fileName.trim() : '';
@@ -62,7 +67,9 @@ class VoiceAcknowledgmentService {
       `One moment.`,
       `Working on that now.`,
       `Right away.`,
-      `Checking now.`
+      `Checking now.`,
+      VOICE_STAGE_TEXT.success,
+      VOICE_STAGE_TEXT.failure
     ];
 
     return Array.from(
@@ -76,6 +83,10 @@ class VoiceAcknowledgmentService {
 
   normalizeLookupKey(voiceId, text) {
     return `${(voiceId || '').toString().trim().toLowerCase()}::${(text || '').toString().trim().toLowerCase()}`;
+  }
+
+  getStageText(stage) {
+    return VOICE_STAGE_TEXT[stage] || '';
   }
 
   makeAudioFileName(profileId, voiceId, text) {
