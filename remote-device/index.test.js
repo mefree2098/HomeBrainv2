@@ -224,6 +224,28 @@ test('detectPreferredCaptureDevice probes ALSA candidates before selecting one',
   assert.equal(device.config.audio.lastCaptureProbe.selected, 'sysdefault:CARD=Jabra');
 });
 
+test('auto capture falls back to a validated playback-card alias when ALSA enumeration fails', () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: {
+      recordingDevice: 'auto',
+      preferredInputName: 'Jabra',
+      playbackDevice: 'sysdefault:CARD=MS',
+      sampleRate: 16000,
+      channels: 1
+    },
+    wakeWord: {}
+  });
+  device.listAlsaCaptureDevices = () => ({ devices: [], error: 'no cards listed', output: '' });
+  device.probeCaptureDevice = (candidate) => ({
+    ok: candidate === 'sysdefault:CARD=MS',
+    exit: candidate === 'sysdefault:CARD=MS' ? 'code 0' : 'code 1',
+    stderr: null
+  });
+
+  assert.equal(device.buildRecordingOptions().device, 'sysdefault:CARD=MS');
+  assert.equal(device.config.audio.lastCaptureProbe.selected, 'sysdefault:CARD=MS');
+});
+
 test('applyConfigUpdate merges pushed audio config and restarts the detector', async () => {
   const device = new HomeBrainRemoteDevice({
     audio: {
@@ -392,6 +414,55 @@ test('startVoiceRecording prepends pending wake pre-roll audio', async (t) => {
   device.stopVoiceRecording();
 });
 
+test('pending command audio bridges speech spoken while the hub acknowledges the wake word', () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: { sampleRate: 16000 },
+    wakeWord: {}
+  });
+  device.pendingCommandPreRollBuffer = Buffer.from([1, 2]);
+  device.pendingCommandBridgeOffset = 2;
+
+  device.appendPendingCommandAudio(Buffer.from([3, 4, 5]));
+
+  assert.deepEqual(device.pendingCommandPreRollBuffer, Buffer.from([1, 2, 3, 4, 5]));
+  assert.equal(device.pendingCommandBridgeOffset, 2);
+});
+
+test('adaptive command endpointing ends after speech followed by silence', async () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: { recordingDevice: 'default', sampleRate: 16000, channels: 1 },
+    wakeWord: {}
+  });
+  const messages = [];
+  device.recordingStream = { stop() {} };
+  device.sidecar = createFakeSidecar();
+  device.sendMessage = (message) => {
+    messages.push(message);
+    return true;
+  };
+  device.restartWakeWordDetection = async () => {};
+
+  device.startVoiceRecording(2000, true, {
+    minCaptureMs: 0,
+    silenceMs: 250,
+    speechStartTimeoutMs: 1000,
+    minSpeechMs: 40,
+    minRms: 0.001
+  });
+  const speechFrame = Buffer.alloc(2560);
+  for (let offset = 0; offset < speechFrame.length; offset += 2) {
+    speechFrame.writeInt16LE(offset % 4 === 0 ? 12000 : -12000, offset);
+  }
+  device.streamCommandAudioChunk(speechFrame, { source: 'wake_stream' });
+  await new Promise((resolve) => setTimeout(resolve, 320));
+
+  const final = messages.find((message) => message.isFinal === true);
+  assert.ok(final);
+  assert.equal(final.endpointReason, 'silence');
+  assert.equal(final.speechDetected, true);
+  assert.equal(device.isRecording, false);
+});
+
 test('startVoiceRecording reuses the active wake mic stream for command audio', async (t) => {
   const childProcess = require('child_process');
   const originalSpawn = childProcess.spawn;
@@ -458,7 +529,46 @@ test('isWakeWordDetectorActive treats the feature sidecar as an active detector'
   assert.equal(device.isWakeWordDetectorActive(), true);
 });
 
-test('enqueueSidecarAudio drops wake frames below the RMS gate', () => {
+test('playTTSResponse uses authenticated POST JSON and the selected wake-word voice', async () => {
+  const device = new HomeBrainRemoteDevice({
+    hubUrl: 'https://hub.example.test',
+    deviceToken: 'device-token',
+    audio: { playbackDevice: 'sysdefault:CARD=MS' },
+    wakeWord: {}
+  });
+  device.deviceId = '507f1f77bcf86cd799439011';
+  let request = null;
+  device.fetchHubAudio = async (url, options) => {
+    request = { url, options };
+    const audio = Uint8Array.from(Buffer.from('ID3cached-audio'));
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: (name) => name.toLowerCase() === 'content-type' ? 'audio/mpeg' : null },
+      body: null,
+      arrayBuffer: async () => audio.buffer
+    };
+  };
+  device.playAudioClip = async (filePath, options) => {
+    assert.equal(fs.existsSync(filePath), true);
+    assert.equal(options.playbackDevice, 'sysdefault:CARD=MS');
+    return true;
+  };
+
+  const played = await device.playTTSResponse('The lights are on.', 'anna-voice-id', { kind: 'response' });
+
+  assert.equal(played, true);
+  assert.equal(request.url, 'https://hub.example.test/api/remote-devices/507f1f77bcf86cd799439011/tts');
+  assert.equal(request.options.method, 'POST');
+  assert.equal(request.options.headers['X-HomeBrain-Device-Token'], 'device-token');
+  assert.deepEqual(JSON.parse(request.options.body), {
+    text: 'The lights are on.',
+    voiceId: 'anna-voice-id'
+  });
+  assert.equal(request.url.includes('The lights are on'), false);
+});
+
+test('enqueueSidecarAudio forwards quiet frames so streaming feature history stays continuous', () => {
   const device = new HomeBrainRemoteDevice({
     audio: { sampleRate: 16000 },
     wakeWord: { vad: { minRms: 0.02 } }
@@ -471,7 +581,9 @@ test('enqueueSidecarAudio drops wake frames below the RMS gate', () => {
   device.reportWakeWordRuntimeStatus = () => {};
 
   device.enqueueSidecarAudio(Buffer.alloc(4));
-  assert.equal(sidecar.stdin.writes.length, 0);
+  assert.equal(sidecar.stdin.writes.length, 2);
+  assert.equal(sidecar.stdin.writes[0].toString('ascii', 0, 4), 'AUD0');
+  assert.deepEqual(sidecar.stdin.writes[1], Buffer.alloc(4));
   assert.equal(device.wakeWordRuntime.audio.frames, 1);
   assert.equal(device.wakeWordRuntime.audio.lastFrameRms, 0);
 
@@ -480,9 +592,9 @@ test('enqueueSidecarAudio drops wake frames below the RMS gate', () => {
   loudFrame.writeInt16LE(-16000, 2);
   device.enqueueSidecarAudio(loudFrame);
 
-  assert.equal(sidecar.stdin.writes.length, 2);
-  assert.equal(sidecar.stdin.writes[0].toString('ascii', 0, 4), 'AUD0');
-  assert.deepEqual(sidecar.stdin.writes[1], loudFrame);
+  assert.equal(sidecar.stdin.writes.length, 4);
+  assert.equal(sidecar.stdin.writes[2].toString('ascii', 0, 4), 'AUD0');
+  assert.deepEqual(sidecar.stdin.writes[3], loudFrame);
 });
 
 test('wake-word RMS gate treats zero config as the default minimum', () => {

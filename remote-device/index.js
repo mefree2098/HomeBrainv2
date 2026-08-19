@@ -25,9 +25,18 @@ const DEFAULT_WAKE_WORD_THRESHOLD = 0.55;
 const DEFAULT_WAKE_WORD_DEBOUNCE_MS = 1500;
 const DEFAULT_WAKE_WORD_MIN_RMS = 0.004;
 const MAX_WAKE_WORD_MIN_RMS = 0.2;
-const DEFAULT_COMMAND_PREROLL_MS = 2000;
-const MAX_COMMAND_PREROLL_MS = 3000;
+const DEFAULT_COMMAND_PREROLL_MS = 3000;
+const MAX_COMMAND_PREROLL_MS = 5000;
+const DEFAULT_COMMAND_MAX_DURATION_MS = 15000;
+const DEFAULT_COMMAND_MIN_CAPTURE_MS = 1800;
+const DEFAULT_COMMAND_SILENCE_MS = 1100;
+const DEFAULT_COMMAND_SPEECH_START_TIMEOUT_MS = 6000;
+const DEFAULT_COMMAND_MIN_SPEECH_MS = 160;
+const DEFAULT_COMMAND_MIN_RMS = 0.0025;
+const MAX_PENDING_COMMAND_AUDIO_MS = 8000;
+const WAKE_ACK_TIMEOUT_MS = 10000;
 const PCM_SAMPLE_WIDTH_BYTES = 2;
+const OPENWAKEWORD_FRAME_MS = 80;
 const DEFAULT_VAD_WINDOW_MS = 30;
 const DEFAULT_VAD_HISTORY = 8;
 const DEFAULT_VAD_THRESHOLD = 0.35;
@@ -421,11 +430,26 @@ class HomeBrainRemoteDevice {
     // captureMode: 'none' (default), 'simulate', or 'pcm'
     this.captureMode = process.env.HB_CAPTURE_MODE || this.voiceConfig.captureMode || 'none';
     this.recordStopTimer = null;
+    this.commandSilenceTimer = null;
+    this.commandSpeechStartTimer = null;
     this.commandProc = null;
     this.commandSessionId = null;
     this.commandSequence = 0;
     this.commandAudioSource = null;
     this.pendingCommandPreRollBuffer = null;
+    this.pendingCommandBridgeOffset = 0;
+    this.pendingWakeAckTimer = null;
+    this.commandCaptureStartedAt = 0;
+    this.commandLastSpeechAt = 0;
+    this.commandSpeechCandidateMs = 0;
+    this.commandSpeechDetected = false;
+    this.commandNoiseFloorRms = 0;
+    this.commandCaptureStats = null;
+    this.lastCommandCapture = null;
+    this.commandEndpointing = null;
+    this.commandEndpointAudioBuffer = Buffer.alloc(0);
+    this.ttsPlaybackQueue = Promise.resolve();
+    this.ttsGeneration = 0;
 
     // Wake word detection
     this.wakeWordDisplayNames = ['Anna', 'Henry', 'Home Brain', 'Homebrain'];
@@ -803,16 +827,8 @@ class HomeBrainRemoteDevice {
             const requestedTimeout = Number(message.timeout);
             const timeoutMs = Number.isFinite(requestedTimeout)
               ? Math.max(250, Math.min(30_000, Math.round(requestedTimeout)))
-              : 5000;
-            this.startVoiceRecording(timeoutMs, true);
-
-            if (this.recordStopTimer) clearTimeout(this.recordStopTimer);
-            // lgtm[js/resource-exhaustion] The hub-provided timeout is clamped to 250-30,000 ms immediately above.
-            this.recordStopTimer = setTimeout(() => {
-              if (this.isRecording) {
-                this.stopVoiceRecording();
-              }
-            }, timeoutMs);
+              : DEFAULT_COMMAND_MAX_DURATION_MS;
+            this.startVoiceRecording(timeoutMs, true, message.endpointing);
           }
           break;
 
@@ -823,15 +839,17 @@ class HomeBrainRemoteDevice {
             const ackVoice = typeof message.voice === 'string' && message.voice.trim().length > 0
               ? message.voice.trim()
               : 'default';
-            void this.playTTSResponse(ackText, ackVoice).catch((error) => {
+            void this.enqueueTTSResponse(ackText, ackVoice, { kind: 'acknowledgment', commandId: message.commandId }).catch((error) => {
               console.warn(`Failed to play acknowledgment prompt: ${error.message}`);
             });
           }
           break;
 
         case 'tts_response':
-          console.log('Playing TTS response:', message.text);
-          this.playTTSResponse(message.text, message.voice);
+          console.log('Queued TTS response from hub');
+          void this.enqueueTTSResponse(message.text, message.voice, { kind: 'response', commandId: message.commandId }).catch((error) => {
+            console.warn(`Failed to play response audio: ${error.message}`);
+          });
           break;
 
         case 'command_error':
@@ -1133,6 +1151,20 @@ class HomeBrainRemoteDevice {
     ));
   }
 
+  captureAliasFromPlaybackDevice(value = '') {
+    const configured = String(value || '').trim();
+    const named = configured.match(/^(sysdefault|plughw|hw):CARD=([A-Za-z0-9_-]+)(?:,DEV=([0-9]+))?$/i);
+    if (named && this.isSafeAlsaIdentifier(named[2])) {
+      const deviceSuffix = named[3] == null ? '' : `,DEV=${named[3]}`;
+      return `${named[1].toLowerCase()}:CARD=${named[2]}${deviceSuffix}`;
+    }
+    const numeric = configured.match(/^(plughw|hw):([0-9]+),([0-9]+)$/i);
+    if (numeric) {
+      return `${numeric[1].toLowerCase()}:${numeric[2]},${numeric[3]}`;
+    }
+    return '';
+  }
+
   rankAlsaCaptureDevices(devices = [], preferredName = '') {
     if (!Array.isArray(devices) || devices.length === 0) {
       return [];
@@ -1158,7 +1190,7 @@ class HomeBrainRemoteDevice {
     return this.rankAlsaCaptureDevices(devices, preferredName)[0] || null;
   }
 
-  buildCaptureDeviceCandidates(devices = []) {
+  buildCaptureDeviceCandidates(devices = [], audioConfig = {}) {
     const candidates = [];
     const seen = new Set();
     const push = (source, device, kind) => {
@@ -1193,6 +1225,11 @@ class HomeBrainRemoteDevice {
       if (source.cardNumber) {
         push(source, `hw:${source.cardNumber},${source.deviceNumber}`, 'hw-number');
       }
+    }
+
+    const playbackCaptureAlias = this.captureAliasFromPlaybackDevice(audioConfig.playbackDevice);
+    if (playbackCaptureAlias) {
+      push({ label: `Configured playback card (${audioConfig.playbackDevice})` }, playbackCaptureAlias, 'playback-card');
     }
 
     push({ label: 'ALSA default' }, 'default', 'default');
@@ -1258,23 +1295,27 @@ class HomeBrainRemoteDevice {
       sampleRate: audioConfig.sampleRate || this.wakeWordSampleRate || 16000,
       channels: audioConfig.channels || 1
     });
-    if (this.captureDeviceProbeCache?.key === cacheKey) {
+    const cacheAgeMs = Date.now() - Number(this.captureDeviceProbeCache?.at || 0);
+    const cacheTtlMs = this.captureDeviceProbeCache?.ok ? 10 * 60_000 : 30_000;
+    if (this.captureDeviceProbeCache?.key === cacheKey && cacheAgeMs >= 0 && cacheAgeMs < cacheTtlMs) {
       return this.captureDeviceProbeCache.selected;
     }
 
     const listed = this.listAlsaCaptureDevices();
     if (listed.error && listed.devices.length === 0) {
       console.warn(`Unable to list ALSA capture devices: ${listed.error}`);
-      this.config.audio.lastCaptureProbe = {
-        at: new Date().toISOString(),
-        error: listed.error,
-        attempts: []
-      };
-      return null;
+      if (!this.captureAliasFromPlaybackDevice(audioConfig.playbackDevice)) {
+        this.config.audio.lastCaptureProbe = {
+          at: new Date().toISOString(),
+          error: listed.error,
+          attempts: []
+        };
+        return null;
+      }
     }
 
     const rankedDevices = this.rankAlsaCaptureDevices(listed.devices, preferredName);
-    const candidates = this.buildCaptureDeviceCandidates(rankedDevices).slice(0, 16);
+    const candidates = this.buildCaptureDeviceCandidates(rankedDevices, audioConfig).slice(0, 16);
     if (!candidates.length) {
       console.warn('No ALSA capture devices were discovered by arecord -l');
       this.config.audio.lastCaptureProbe = {
@@ -1309,7 +1350,7 @@ class HomeBrainRemoteDevice {
           selectedLabel: candidate.label,
           attempts
         };
-        this.captureDeviceProbeCache = { key: cacheKey, selected };
+        this.captureDeviceProbeCache = { key: cacheKey, selected, ok: true, at: Date.now() };
         console.log(`Selected ALSA capture device ${candidate.device} (${candidate.label}) after probe`);
         return selected;
       }
@@ -1328,7 +1369,7 @@ class HomeBrainRemoteDevice {
       error: 'No ALSA capture candidate completed a one-second probe',
       attempts
     };
-    this.captureDeviceProbeCache = { key: cacheKey, selected };
+    this.captureDeviceProbeCache = { key: cacheKey, selected, ok: false, at: Date.now() };
     console.warn('No ALSA capture candidate completed a one-second probe; using the highest-ranked candidate for telemetry.');
     return selected;
   }
@@ -1408,6 +1449,7 @@ class HomeBrainRemoteDevice {
         lastFrameRms: null,
         peakFrameRms: 0
       },
+      commandCapture: this.lastCommandCapture,
       lastScore: null,
       lastDetect: null,
       lastError: null,
@@ -1439,7 +1481,7 @@ class HomeBrainRemoteDevice {
       };
     }
 
-    for (const key of ['lastScore', 'lastDetect', 'lastError']) {
+    for (const key of ['commandCapture', 'lastScore', 'lastDetect', 'lastError']) {
       if (Object.prototype.hasOwnProperty.call(updates, key)) {
         this.wakeWordRuntime[key] = updates[key];
       }
@@ -1530,6 +1572,7 @@ class HomeBrainRemoteDevice {
   }
 
   handleRecordingStreamError(streamError) {
+    this.captureDeviceProbeCache = null;
     const baseMessage = this.normalizeErrorMessage(streamError, 'Recording stream error');
     const stderrTail = this.recordingStderrBuffer.trim().slice(-1000);
     const message = stderrTail && !baseMessage.includes(stderrTail)
@@ -1592,6 +1635,151 @@ class HomeBrainRemoteDevice {
     return Buffer.from(this.wakeWordPreRollBuffer.subarray(start));
   }
 
+  getPendingCommandAudioByteLimit() {
+    const sampleRate = this.wakeWordSampleRate || this.config.audio?.sampleRate || 16000;
+    return Math.round((MAX_PENDING_COMMAND_AUDIO_MS / 1000) * sampleRate * PCM_SAMPLE_WIDTH_BYTES);
+  }
+
+  appendPendingCommandAudio(data) {
+    if (!Buffer.isBuffer(this.pendingCommandPreRollBuffer) || !data) {
+      return;
+    }
+    const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    if (!chunk.length) {
+      return;
+    }
+    this.pendingCommandPreRollBuffer = Buffer.concat([this.pendingCommandPreRollBuffer, chunk]);
+    const limit = this.getPendingCommandAudioByteLimit();
+    if (this.pendingCommandPreRollBuffer.length > limit) {
+      const trimBytes = this.pendingCommandPreRollBuffer.length - limit;
+      this.pendingCommandPreRollBuffer = this.pendingCommandPreRollBuffer.subarray(trimBytes);
+      this.pendingCommandBridgeOffset = Math.max(0, this.pendingCommandBridgeOffset - trimBytes);
+    }
+  }
+
+  normalizeCommandEndpointing(timeoutMs, overrides = {}) {
+    const local = this.voiceConfig?.endpointing && typeof this.voiceConfig.endpointing === 'object'
+      ? this.voiceConfig.endpointing
+      : {};
+    const supplied = overrides && typeof overrides === 'object' ? overrides : {};
+    const read = (key, fallback) => {
+      const candidate = supplied[key] ?? local[key];
+      return Number.isFinite(Number(candidate)) ? Number(candidate) : fallback;
+    };
+    // Hub websocket values can tune endpoint comparisons but never timer
+    // allocation. Hard-stop and no-speech timers stay fixed device constants.
+    const maxDurationMs = DEFAULT_COMMAND_MAX_DURATION_MS;
+    const minCaptureMs = clamp(read('minCaptureMs', DEFAULT_COMMAND_MIN_CAPTURE_MS), 0, maxDurationMs);
+    const silenceMs = clamp(read('silenceMs', DEFAULT_COMMAND_SILENCE_MS), 250, 5000);
+    const speechStartTimeoutMs = DEFAULT_COMMAND_SPEECH_START_TIMEOUT_MS;
+    const minSpeechMs = clamp(read('minSpeechMs', DEFAULT_COMMAND_MIN_SPEECH_MS), 40, 1000);
+    const rawMinRms = read('minRms', DEFAULT_COMMAND_MIN_RMS);
+    const minRms = Math.min(Math.max(rawMinRms, 0.0005), MAX_WAKE_WORD_MIN_RMS);
+    return { maxDurationMs, minCaptureMs, silenceMs, speechStartTimeoutMs, minSpeechMs, minRms };
+  }
+
+  clearCommandEndpointTimers() {
+    for (const key of ['recordStopTimer', 'commandSilenceTimer', 'commandSpeechStartTimer']) {
+      if (this[key]) {
+        clearTimeout(this[key]);
+        this[key] = null;
+      }
+    }
+  }
+
+  scheduleCommandSilenceEndpoint() {
+    if (!this.isRecording || !this.commandSpeechDetected || !this.commandEndpointing) {
+      return;
+    }
+    if (this.commandSilenceTimer) {
+      clearTimeout(this.commandSilenceTimer);
+    }
+    this.commandSilenceTimer = setTimeout(() => {
+      this.commandSilenceTimer = null;
+      if (!this.isRecording || !this.commandSpeechDetected || !this.commandEndpointing) {
+        return;
+      }
+      const elapsed = Date.now() - this.commandCaptureStartedAt;
+      const silentFor = Date.now() - this.commandLastSpeechAt;
+      if (elapsed >= this.commandEndpointing.minCaptureMs && silentFor >= this.commandEndpointing.silenceMs) {
+        this.stopVoiceRecording('silence');
+      } else {
+        this.scheduleCommandSilenceEndpoint();
+      }
+    }, 100);
+  }
+
+  processCommandEndpointFrame(frameBuffer) {
+    if (!this.isRecording || !this.commandEndpointing || !frameBuffer?.length) {
+      return;
+    }
+    const rms = this.calculatePcmRms(frameBuffer);
+    const frameDurationMs = (frameBuffer.length / PCM_SAMPLE_WIDTH_BYTES)
+      / (this.wakeWordSampleRate || 16000) * 1000;
+    const stats = this.commandCaptureStats || {};
+    this.commandCaptureStats = {
+      ...stats,
+      frames: (stats.frames || 0) + 1,
+      lastRms: Number(rms.toFixed(6)),
+      peakRms: Number(Math.max(stats.peakRms || 0, rms).toFixed(6))
+    };
+
+    const adaptiveThreshold = Math.max(
+      this.commandEndpointing.minRms,
+      this.commandNoiseFloorRms > 0 ? this.commandNoiseFloorRms * 3 : 0
+    );
+    if (rms >= adaptiveThreshold) {
+      this.commandSpeechCandidateMs += frameDurationMs;
+      if (this.commandSpeechDetected || this.commandSpeechCandidateMs >= this.commandEndpointing.minSpeechMs) {
+        this.commandSpeechDetected = true;
+        this.commandLastSpeechAt = Date.now();
+        this.commandCaptureStats.speechMs = Number(
+          ((this.commandCaptureStats.speechMs || 0) + frameDurationMs).toFixed(1)
+        );
+        if (this.commandSpeechStartTimer) {
+          clearTimeout(this.commandSpeechStartTimer);
+          this.commandSpeechStartTimer = null;
+        }
+        this.scheduleCommandSilenceEndpoint();
+      }
+      return;
+    }
+
+    this.commandSpeechCandidateMs = 0;
+    if (!this.commandSpeechDetected) {
+      this.commandNoiseFloorRms = this.commandNoiseFloorRms > 0
+        ? (this.commandNoiseFloorRms * 0.9) + (rms * 0.1)
+        : rms;
+    }
+  }
+
+  observeCommandAudioChunk(data) {
+    if (!this.isRecording || !data) {
+      return;
+    }
+    const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    if (!chunk.length) {
+      return;
+    }
+    const stats = this.commandCaptureStats || {};
+    this.commandCaptureStats = {
+      ...stats,
+      chunks: (stats.chunks || 0) + 1,
+      bytes: (stats.bytes || 0) + chunk.length
+    };
+    this.commandEndpointAudioBuffer = Buffer.concat([this.commandEndpointAudioBuffer, chunk]);
+    const frameBytes = Math.round(
+      (OPENWAKEWORD_FRAME_MS / 1000)
+      * (this.wakeWordSampleRate || 16000)
+      * PCM_SAMPLE_WIDTH_BYTES
+    );
+    while (this.commandEndpointAudioBuffer.length >= frameBytes) {
+      const frame = this.commandEndpointAudioBuffer.subarray(0, frameBytes);
+      this.commandEndpointAudioBuffer = this.commandEndpointAudioBuffer.subarray(frameBytes);
+      this.processCommandEndpointFrame(frame);
+    }
+  }
+
   streamCommandAudioChunk(data, metadata = {}) {
     if (!this.isRecording || !this.commandSessionId || !data) {
       return false;
@@ -1612,6 +1800,9 @@ class HomeBrainRemoteDevice {
       format: 'S16LE',
       ...metadata
     });
+    if (!metadata.preRoll) {
+      this.observeCommandAudioChunk(chunk);
+    }
     return true;
   }
 
@@ -2254,6 +2445,7 @@ class HomeBrainRemoteDevice {
           }
           if (!this.isWakeWordListening) {
             this.appendWakeWordPreRoll(audioChunk);
+            this.appendPendingCommandAudio(audioChunk);
             return;
           }
           this.enqueueSidecarAudio(audioChunk);
@@ -2299,6 +2491,7 @@ class HomeBrainRemoteDevice {
         }
         if (!this.isWakeWordListening) {
           this.appendWakeWordPreRoll(audioChunk);
+          this.appendPendingCommandAudio(audioChunk);
           return;
         }
 
@@ -2433,8 +2626,13 @@ class HomeBrainRemoteDevice {
 
     // Send config
     const models = keywordEntries.map((k) => ({ label: k.label, path: k.path, threshold: k.threshold ?? this.wakeWordThreshold }));
-    // Default frameSamples to 1s of audio at current sample rate if not set
-    this.wakeWordFrameSamples = this.wakeWordFrameSamples || this.wakeWordSampleRate || 16000;
+    // OpenWakeWord's streaming feature extractor is designed around 80 ms
+    // frames. Sending one-second, non-overlapping clips loses boundary-spanning
+    // phrases and does not match the feature windows used during training.
+    this.wakeWordFrameSamples = Math.max(
+      160,
+      Math.round((OPENWAKEWORD_FRAME_MS / 1000) * (this.wakeWordSampleRate || 16000))
+    );
     const minRms = this.getWakeWordMinRms();
     const cfg = { type: 'config', models, sampleRate: this.wakeWordSampleRate, frameSamples: this.wakeWordFrameSamples, cooldownMs: this.wakeWordDebounceMs, vad: { minRms } };
 
@@ -2557,9 +2755,9 @@ class HomeBrainRemoteDevice {
         }
       });
       this.reportWakeWordRuntimeStatus(false, 'audio_frame');
-      if (!this.shouldProcessWakeWordFrame(frame, rms)) {
-        continue;
-      }
+      // Always advance the sidecar's streaming feature state, including during
+      // silence. The sidecar applies the energy gate only to model inference;
+      // dropping quiet frames here would splice unrelated speech together.
       const header = Buffer.alloc(8);
       header.write('AUD0', 0);
       header.writeUInt32LE(frame.length, 4);
@@ -2907,6 +3105,7 @@ class HomeBrainRemoteDevice {
     console.log(`Wake word detected: "${label}" (confidence: ${normalizedConfidence.toFixed(2)})`);
 
     this.stats.wakeWordsDetected++;
+    this.ttsGeneration += 1;
     this.lastInteraction = new Date();
     this.updateWakeWordRuntime({
       lastDetect: {
@@ -2924,7 +3123,21 @@ class HomeBrainRemoteDevice {
     });
     this.reportWakeWordRuntimeStatus(true, 'wake_word_detected');
 
-    this.pendingCommandPreRollBuffer = this.captureCommandPreRoll();
+    this.pendingCommandPreRollBuffer = this.captureCommandPreRoll() || Buffer.alloc(0);
+    this.pendingCommandBridgeOffset = this.pendingCommandPreRollBuffer.length;
+    if (this.pendingWakeAckTimer) {
+      clearTimeout(this.pendingWakeAckTimer);
+    }
+    this.pendingWakeAckTimer = setTimeout(() => {
+      this.pendingWakeAckTimer = null;
+      if (!this.isRecording && Buffer.isBuffer(this.pendingCommandPreRollBuffer)) {
+        console.warn('Wake word acknowledgment timed out; resuming wake-word listening');
+        this.pendingCommandPreRollBuffer = null;
+        this.pendingCommandBridgeOffset = 0;
+        this.isWakeWordListening = true;
+      }
+    }, WAKE_ACK_TIMEOUT_MS);
+    this.pendingWakeAckTimer.unref?.();
     this.wakeWordAudioBuffer = Buffer.alloc(0);
     if (this.vadEnabled) {
       this.vadHistory = [];
@@ -2934,12 +3147,18 @@ class HomeBrainRemoteDevice {
     // Brief pause to prevent multiple detections
     this.isWakeWordListening = false;
     setTimeout(() => {
-      this.isWakeWordListening = true;
+      if (!this.isRecording && !Buffer.isBuffer(this.pendingCommandPreRollBuffer)) {
+        this.isWakeWordListening = true;
+      }
     }, this.wakeWordDebounceMs);
   }
 
-  startVoiceRecording(timeoutMs = 5000, force = false) {
+  startVoiceRecording(timeoutMs = DEFAULT_COMMAND_MAX_DURATION_MS, force = false, endpointing = {}) {
     if (this.isRecording) return;
+    if (this.pendingWakeAckTimer) {
+      clearTimeout(this.pendingWakeAckTimer);
+      this.pendingWakeAckTimer = null;
+    }
 
     // If simulate explicitly requested, run demo path
     if (this.captureMode === 'simulate' && !force) {
@@ -2975,6 +3194,37 @@ class HomeBrainRemoteDevice {
     // Default: stream PCM to hub during listening window
     console.log(`Starting voice command recording (pcm via ${this.commandAudioSource})...`);
     this.isRecording = true;
+    this.clearCommandEndpointTimers();
+    this.commandEndpointing = this.normalizeCommandEndpointing(timeoutMs, endpointing);
+    this.commandCaptureStartedAt = Date.now();
+    this.commandLastSpeechAt = 0;
+    this.commandSpeechCandidateMs = 0;
+    this.commandSpeechDetected = false;
+    this.commandNoiseFloorRms = 0;
+    this.commandEndpointAudioBuffer = Buffer.alloc(0);
+    this.commandCaptureStats = {
+      startedAt: new Date(this.commandCaptureStartedAt).toISOString(),
+      source: this.commandAudioSource,
+      chunks: 0,
+      bytes: 0,
+      frames: 0,
+      speechMs: 0,
+      lastRms: 0,
+      peakRms: 0,
+      endpointing: { ...this.commandEndpointing }
+    };
+
+    this.recordStopTimer = setTimeout(() => {
+      if (this.isRecording) {
+        this.stopVoiceRecording('max_duration');
+      }
+    }, DEFAULT_COMMAND_MAX_DURATION_MS);
+    this.commandSpeechStartTimer = setTimeout(() => {
+      this.commandSpeechStartTimer = null;
+      if (this.isRecording && !this.commandSpeechDetected) {
+        this.stopVoiceRecording('no_speech');
+      }
+    }, DEFAULT_COMMAND_SPEECH_START_TIMEOUT_MS);
 
     const sessionId = `${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
     this.commandSessionId = sessionId;
@@ -2990,11 +3240,20 @@ class HomeBrainRemoteDevice {
     });
 
     const preRollBuffer = this.pendingCommandPreRollBuffer;
+    const bridgeOffset = Math.max(0, Math.min(
+      Number(this.pendingCommandBridgeOffset) || 0,
+      Buffer.isBuffer(preRollBuffer) ? preRollBuffer.length : 0
+    ));
     this.pendingCommandPreRollBuffer = null;
+    this.pendingCommandBridgeOffset = 0;
     if (Buffer.isBuffer(preRollBuffer) && preRollBuffer.length > 0) {
       this.streamCommandAudioChunk(preRollBuffer, {
         preRoll: true
       });
+      const wakeAckBridge = preRollBuffer.subarray(bridgeOffset);
+      if (wakeAckBridge.length > 0) {
+        this.observeCommandAudioChunk(wakeAckBridge);
+      }
     }
 
     if (reuseWakeStream) {
@@ -3047,11 +3306,23 @@ class HomeBrainRemoteDevice {
     setTimeout(() => startCommandCapture(), delayMs);
   }
 
-  stopVoiceRecording() {
+  stopVoiceRecording(reason = 'manual') {
     if (!this.isRecording) return;
 
-    console.log('Stopping voice command recording');
+    console.log(`Stopping voice command recording (${reason})`);
     this.isRecording = false;
+    const completedAt = Date.now();
+    const captureSummary = {
+      ...(this.commandCaptureStats || {}),
+      completedAt: new Date(completedAt).toISOString(),
+      durationMs: this.commandCaptureStartedAt ? Math.max(0, completedAt - this.commandCaptureStartedAt) : 0,
+      endpointReason: reason,
+      speechDetected: this.commandSpeechDetected,
+      noiseFloorRms: Number((this.commandNoiseFloorRms || 0).toFixed(6))
+    };
+    this.lastCommandCapture = captureSummary;
+    this.updateWakeWordRuntime({ commandCapture: captureSummary });
+    this.reportWakeWordRuntimeStatus(true, `command_${reason}`);
 
     if (this.commandRecording) {
       try { this.commandRecording.stop(); } catch (_) {}
@@ -3061,10 +3332,7 @@ class HomeBrainRemoteDevice {
       try { this.commandProc.kill('SIGTERM'); } catch (_) {}
       this.commandProc = null;
     }
-    if (this.recordStopTimer) {
-      clearTimeout(this.recordStopTimer);
-      this.recordStopTimer = null;
-    }
+    this.clearCommandEndpointTimers();
 
     const shouldResumeWakeWord = this.resumeWakeWordAfterCommand;
     this.resumeWakeWordAfterCommand = false;
@@ -3075,11 +3343,23 @@ class HomeBrainRemoteDevice {
         type: 'audio_data',
         sessionId: this.commandSessionId,
         sequence: this.commandSequence++,
-        isFinal: true
+        isFinal: true,
+        endpointReason: reason,
+        durationMs: captureSummary.durationMs,
+        speechDetected: captureSummary.speechDetected
       });
       this.commandSessionId = null;
       this.commandSequence = 0;
     }
+
+    this.commandEndpointAudioBuffer = Buffer.alloc(0);
+    this.commandEndpointing = null;
+    this.commandCaptureStats = null;
+    this.commandCaptureStartedAt = 0;
+    this.commandLastSpeechAt = 0;
+    this.commandSpeechCandidateMs = 0;
+    this.commandSpeechDetected = false;
+    this.commandNoiseFloorRms = 0;
 
     if (shouldResumeWakeWord) {
       setTimeout(() => {
@@ -3107,97 +3387,120 @@ class HomeBrainRemoteDevice {
     this.stopVoiceRecording();
   }
 
-  async playTTSResponse(text, voice = 'default') {
-    console.log(`Playing TTS: "${text}"`);
-
-    // Ask the hub for TTS first; the hub decides whether S2 Pro, ElevenLabs, or
-    // another provider should generate the audio.
-    let usedRemote = false;
-    try {
-      const base = this.getHubHttpBase();
-      const params = new URLSearchParams({ text });
-      if (!this.config.deviceToken) {
-        if (this.config.registrationCode) {
-          params.set('code', this.config.registrationCode);
-        } else if (this.config.claimToken) {
-          params.set('claim', this.config.claimToken);
+  enqueueTTSResponse(text, voice = 'default', metadata = {}) {
+    const generation = this.ttsGeneration;
+    const queued = this.ttsPlaybackQueue
+      .catch(() => {})
+      .then(async () => {
+        if (generation !== this.ttsGeneration) {
+          console.log('Discarding stale queued TTS from an earlier voice interaction');
+          return false;
         }
+        return this.playTTSResponse(text, voice, metadata);
+      });
+    this.ttsPlaybackQueue = queued.catch(() => {});
+    return queued;
+  }
+
+  fetchHubAudio(url, options, timeoutMs) {
+    return fetchWithTimeout(url, options, timeoutMs);
+  }
+
+  playAudioClip(filePath, options) {
+    return playAudioFile(filePath, options);
+  }
+
+  async playTtsFailureCue() {
+    try {
+      const sampleRate = 16000;
+      const durationSec = 0.2;
+      const freq = 440;
+      const samples = Math.floor(sampleRate * durationSec);
+      const buffer = new Float32Array(samples);
+      for (let i = 0; i < samples; i++) {
+        const envelope = Math.max(0, 1 - (i / samples));
+        buffer[i] = Math.sin(2 * Math.PI * freq * (i / sampleRate)) * 0.18 * envelope;
       }
-      const voiceId = voice && voice !== 'default' ? voice : null;
-      if (voiceId) {
-        params.set('voiceId', voiceId);
-      }
-      const url = `${base}/api/remote-devices/${this.deviceId}/tts?${params.toString()}`;
-      const res = await fetchWithTimeout(url, {
-        redirect: 'error',
-        headers: this.getDeviceAuthHeaders()
-      }, 30_000);
-      if (res.ok) {
-        const buf = await readResponseBuffer(res, MAX_TTS_AUDIO_BYTES);
-        const contentType = typeof res.headers?.get === 'function' ? res.headers.get('content-type') : '';
-        const extension = detectAudioFileExtension(buf, contentType);
-        const tmpPath = path.join(os.tmpdir(), `hb_tts_${Date.now()}${extension}`);
-        await fsp.writeFile(tmpPath, buf);
-        const played = await playAudioFile(tmpPath, {
-          extension,
+      const wav = require('node-wav');
+      const wavBuffer = wav.encode([buffer], { sampleRate, float: false, bitDepth: 16 });
+      const tmpPath = path.join(os.tmpdir(), `hb_tts_error_${process.pid}_${crypto.randomBytes(4).toString('hex')}.wav`);
+      await fsp.writeFile(tmpPath, wavBuffer, { flag: 'wx', mode: 0o600 });
+      try {
+        return await this.playAudioClip(tmpPath, {
+          extension: '.wav',
           playbackDevice: this.config.audio?.playbackDevice
         });
-        try { await fsp.unlink(tmpPath); } catch (_) {}
-        if (played) {
-          usedRemote = true;
-        }
+      } finally {
+        await fsp.unlink(tmpPath).catch(() => {});
       }
-    } catch (e) {
-      // ignore and fall back
+    } catch (error) {
+      console.warn(`Failed to play TTS failure cue: ${error.message}`);
+      return false;
     }
+  }
 
-    if (!usedRemote) {
-      // Local TTS
-      const ttsText = String(text || '');
-      let played = false;
-      try {
-        played = await runCommand('espeak', ['-s', '175', '-a', '150', ttsText]);
-        if (!played) {
-          const tmpWav = path.join(os.tmpdir(), `hb_tts_${Date.now()}.wav`);
-          const rendered = await runCommand('pico2wave', ['-w', tmpWav, ttsText]);
-          played = rendered && await playAudioFile(tmpWav, {
-            extension: '.wav',
-            playbackDevice: this.config.audio?.playbackDevice
-          });
-          try { await fsp.unlink(tmpWav); } catch (_) {}
-        }
-      } catch (_) {}
+  async playTTSResponse(text, voice = 'default', metadata = {}) {
+    const ttsText = typeof text === 'string' ? text.trim() : '';
+    if (!ttsText) {
+      throw new Error('TTS response text is empty');
+    }
+    const voiceId = typeof voice === 'string' && voice.trim() && voice.trim() !== 'default'
+      ? voice.trim()
+      : undefined;
+    console.log(`Resolving ${metadata.kind || 'response'} audio from HomeBrain${voiceId ? ' with the selected wake-word voice' : ''}`);
 
+    let tmpPath = null;
+    try {
+      const base = this.getHubHttpBase();
+      const url = `${base}/api/remote-devices/${this.deviceId}/tts`;
+      const headers = {
+        ...this.getDeviceAuthHeaders(),
+        'Content-Type': 'application/json',
+        Accept: 'audio/*'
+      };
+      const res = await this.fetchHubAudio(url, {
+        method: 'POST',
+        redirect: 'error',
+        headers,
+        body: JSON.stringify({ text: ttsText, ...(voiceId ? { voiceId } : {}) })
+      }, 60_000);
+      if (!res.ok) {
+        throw new Error(`HomeBrain TTS returned HTTP ${res.status}`);
+      }
+
+      const buf = await readResponseBuffer(res, MAX_TTS_AUDIO_BYTES);
+      if (!buf.length) {
+        throw new Error('HomeBrain TTS returned an empty audio clip');
+      }
+      const contentType = typeof res.headers?.get === 'function' ? res.headers.get('content-type') : '';
+      const extension = detectAudioFileExtension(buf, contentType);
+      tmpPath = path.join(
+        os.tmpdir(),
+        `hb_tts_${process.pid}_${crypto.randomBytes(6).toString('hex')}${extension}`
+      );
+      await fsp.writeFile(tmpPath, buf, { flag: 'wx', mode: 0o600 });
+      const played = await this.playAudioClip(tmpPath, {
+        extension,
+        playbackDevice: this.config.audio?.playbackDevice
+      });
       if (!played) {
-        // Audible beep
-        try {
-          const sampleRate = 16000;
-          const durationSec = 0.35;
-          const freq = 880;
-          const samples = Math.floor(sampleRate * durationSec);
-          const buffer = new Float32Array(samples);
-          for (let i = 0; i < samples; i++) {
-            buffer[i] = Math.sin(2 * Math.PI * freq * (i / sampleRate)) * 0.3;
-          }
-          const wav = require('node-wav');
-          const wavBuffer = wav.encode([buffer], { sampleRate, float: false, bitDepth: 16 });
-          const tmpPath = path.join(os.tmpdir(), `hb_ping_${Date.now()}.wav`);
-          await fsp.writeFile(tmpPath, wavBuffer);
-          const ok = await playAudioFile(tmpPath, {
-            extension: '.wav',
-            playbackDevice: this.config.audio?.playbackDevice
-          });
-          try { await fsp.unlink(tmpPath); } catch (_) {}
-          if (!ok) {
-            console.warn('No audio player available (aplay/play). Unable to play TTS or beep.');
-          }
-        } catch (err) {
-          console.warn('Failed to render/play audible ping:', err.message);
-        }
+        throw new Error('No compatible audio player could play the HomeBrain TTS clip');
+      }
+      console.log('Played cached or freshly generated HomeBrain voice clip');
+      return true;
+    } catch (error) {
+      console.warn(`HomeBrain voice clip unavailable: ${error.message}`);
+      // Never speak assistant content through espeak/Pico. A short neutral cue
+      // is less confusing than a delayed robotic response in the wrong voice.
+      if (metadata.kind !== 'acknowledgment') {
+        await this.playTtsFailureCue();
+      }
+      return false;
+    } finally {
+      if (tmpPath) {
+        await fsp.unlink(tmpPath).catch(() => {});
       }
     }
-
-    console.log(`🔊 TTS Response: "${text}"`);
   }
 
   verifyCommand(command) {
