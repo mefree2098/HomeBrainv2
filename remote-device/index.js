@@ -27,16 +27,24 @@ const DEFAULT_WAKE_WORD_MIN_RMS = 0.004;
 const MAX_WAKE_WORD_MIN_RMS = 0.2;
 const DEFAULT_COMMAND_PREROLL_MS = 3000;
 const MAX_COMMAND_PREROLL_MS = 5000;
-const DEFAULT_COMMAND_MAX_DURATION_MS = 15000;
-const DEFAULT_COMMAND_MIN_CAPTURE_MS = 1800;
-const DEFAULT_COMMAND_SILENCE_MS = 1100;
-const DEFAULT_COMMAND_SPEECH_START_TIMEOUT_MS = 6000;
-const DEFAULT_COMMAND_MIN_SPEECH_MS = 160;
-const DEFAULT_COMMAND_MIN_RMS = 0.0025;
+const DEFAULT_COMMAND_MAX_DURATION_MS = 12000;
+const DEFAULT_COMMAND_MIN_CAPTURE_MS = 900;
+const DEFAULT_COMMAND_SILENCE_MS = 700;
+const DEFAULT_COMMAND_SPEECH_START_TIMEOUT_MS = 4000;
+const DEFAULT_COMMAND_MIN_SPEECH_MS = 120;
+const DEFAULT_COMMAND_MIN_RMS = 0.0015;
 const MAX_PENDING_COMMAND_AUDIO_MS = 8000;
 const WAKE_ACK_TIMEOUT_MS = 10000;
+const WAKE_EARCON_ENDPOINT_IGNORE_MS = 220;
 const PCM_SAMPLE_WIDTH_BYTES = 2;
 const OPENWAKEWORD_FRAME_MS = 80;
+const EARCON_SAMPLE_RATE = 16000;
+const EARCON_PATTERNS = Object.freeze({
+  wake: Object.freeze([[880, 45], [1175, 65]]),
+  understood: Object.freeze([[1047, 85]]),
+  success: Object.freeze([[784, 55], [1047, 85]]),
+  failure: Object.freeze([[440, 90], [330, 130]])
+});
 const DEFAULT_VAD_WINDOW_MS = 30;
 const DEFAULT_VAD_HISTORY = 8;
 const DEFAULT_VAD_THRESHOLD = 0.35;
@@ -48,6 +56,7 @@ const VAD_FRAME_BYTES = VAD_FRAME_SAMPLES * PCM_SAMPLE_WIDTH_BYTES;
 const MAX_WAKE_WORD_ASSET_BYTES = 64 * 1024 * 1024;
 const MAX_REGISTRATION_RESPONSE_BYTES = 1024 * 1024;
 const MAX_TTS_AUDIO_BYTES = 32 * 1024 * 1024;
+const OUTCOME_TTS_TIMEOUT_MS = 2000;
 const ALLOWED_AUDIO_EXECUTABLES = new Set([
   'aplay',
   'arecord',
@@ -438,6 +447,7 @@ class HomeBrainRemoteDevice {
     this.commandAudioSource = null;
     this.pendingCommandPreRollBuffer = null;
     this.pendingCommandBridgeOffset = 0;
+    this.pendingCommandEndpointIgnoreBytes = 0;
     this.pendingWakeAckTimer = null;
     this.commandCaptureStartedAt = 0;
     this.commandLastSpeechAt = 0;
@@ -449,7 +459,9 @@ class HomeBrainRemoteDevice {
     this.commandEndpointing = null;
     this.commandEndpointAudioBuffer = Buffer.alloc(0);
     this.ttsPlaybackQueue = Promise.resolve();
+    this.earconPlaybackQueue = Promise.resolve();
     this.ttsGeneration = 0;
+    this.lastVoiceInteraction = null;
 
     // Wake word detection
     this.wakeWordDisplayNames = ['Anna', 'Henry', 'Home Brain', 'Homebrain'];
@@ -845,6 +857,32 @@ class HomeBrainRemoteDevice {
           }
           break;
 
+        case 'command_understood':
+          console.log('Hub understood the voice command');
+          this.updateVoiceInteractionTelemetry('understood', message);
+          void this.playEarcon('understood');
+          break;
+
+        case 'command_result': {
+          const succeeded = message.status === 'success' || message.status === 'partial_success';
+          console.log(`Voice command ${succeeded ? 'succeeded' : 'failed'}`);
+          this.updateVoiceInteractionTelemetry(succeeded ? 'success' : 'failure', message);
+          void this.playEarcon(succeeded ? 'success' : 'failure')
+            .then(() => {
+              if (typeof message.text === 'string' && message.text.trim()) {
+                return this.enqueueTTSResponse(message.text.trim(), message.voice, {
+                  kind: succeeded ? 'success' : 'failure',
+                  commandId: message.commandId
+                });
+              }
+              return false;
+            })
+            .catch((error) => {
+              console.warn(`Failed to play command result feedback: ${error.message}`);
+            });
+          break;
+        }
+
         case 'tts_response':
           console.log('Queued TTS response from hub');
           void this.enqueueTTSResponse(message.text, message.voice, { kind: 'response', commandId: message.commandId }).catch((error) => {
@@ -854,6 +892,8 @@ class HomeBrainRemoteDevice {
 
         case 'command_error':
           console.error('Command processing error:', message.message);
+          this.updateVoiceInteractionTelemetry('failure', message);
+          void this.playEarcon('failure');
           break;
 
         case 'heartbeat_ack':
@@ -1450,6 +1490,7 @@ class HomeBrainRemoteDevice {
         peakFrameRms: 0
       },
       commandCapture: this.lastCommandCapture,
+      voiceInteraction: this.lastVoiceInteraction,
       lastScore: null,
       lastDetect: null,
       lastError: null,
@@ -1481,7 +1522,7 @@ class HomeBrainRemoteDevice {
       };
     }
 
-    for (const key of ['commandCapture', 'lastScore', 'lastDetect', 'lastError']) {
+    for (const key of ['commandCapture', 'voiceInteraction', 'lastScore', 'lastDetect', 'lastError']) {
       if (Object.prototype.hasOwnProperty.call(updates, key)) {
         this.wakeWordRuntime[key] = updates[key];
       }
@@ -3107,6 +3148,12 @@ class HomeBrainRemoteDevice {
     this.stats.wakeWordsDetected++;
     this.ttsGeneration += 1;
     this.lastInteraction = new Date();
+    this.updateVoiceInteractionTelemetry('wake', {
+      wakeWord,
+      confidence: normalizedConfidence,
+      timing: { wakeDetectedAt: this.lastInteraction.toISOString() }
+    });
+    void this.playEarcon('wake');
     this.updateWakeWordRuntime({
       lastDetect: {
         model: label,
@@ -3125,6 +3172,11 @@ class HomeBrainRemoteDevice {
 
     this.pendingCommandPreRollBuffer = this.captureCommandPreRoll() || Buffer.alloc(0);
     this.pendingCommandBridgeOffset = this.pendingCommandPreRollBuffer.length;
+    this.pendingCommandEndpointIgnoreBytes = Math.round(
+      (WAKE_EARCON_ENDPOINT_IGNORE_MS / 1000)
+      * (this.wakeWordSampleRate || 16000)
+      * PCM_SAMPLE_WIDTH_BYTES
+    );
     if (this.pendingWakeAckTimer) {
       clearTimeout(this.pendingWakeAckTimer);
     }
@@ -3134,6 +3186,7 @@ class HomeBrainRemoteDevice {
         console.warn('Wake word acknowledgment timed out; resuming wake-word listening');
         this.pendingCommandPreRollBuffer = null;
         this.pendingCommandBridgeOffset = 0;
+        this.pendingCommandEndpointIgnoreBytes = 0;
         this.isWakeWordListening = true;
       }
     }, WAKE_ACK_TIMEOUT_MS);
@@ -3244,13 +3297,18 @@ class HomeBrainRemoteDevice {
       Number(this.pendingCommandBridgeOffset) || 0,
       Buffer.isBuffer(preRollBuffer) ? preRollBuffer.length : 0
     ));
+    const endpointBridgeOffset = Math.max(bridgeOffset, Math.min(
+      bridgeOffset + (Number(this.pendingCommandEndpointIgnoreBytes) || 0),
+      Buffer.isBuffer(preRollBuffer) ? preRollBuffer.length : 0
+    ));
     this.pendingCommandPreRollBuffer = null;
     this.pendingCommandBridgeOffset = 0;
+    this.pendingCommandEndpointIgnoreBytes = 0;
     if (Buffer.isBuffer(preRollBuffer) && preRollBuffer.length > 0) {
       this.streamCommandAudioChunk(preRollBuffer, {
         preRoll: true
       });
-      const wakeAckBridge = preRollBuffer.subarray(bridgeOffset);
+      const wakeAckBridge = preRollBuffer.subarray(endpointBridgeOffset);
       if (wakeAckBridge.length > 0) {
         this.observeCommandAudioChunk(wakeAckBridge);
       }
@@ -3387,6 +3445,97 @@ class HomeBrainRemoteDevice {
     this.stopVoiceRecording();
   }
 
+  updateVoiceInteractionTelemetry(stage, message = {}) {
+    const timing = message?.timing && typeof message.timing === 'object'
+      ? message.timing
+      : {};
+    const safeTiming = {};
+    for (const key of [
+      'wakeDetectedAt',
+      'captureStartedAt',
+      'captureCompletedAt',
+      'transcriptionCompletedAt',
+      'understoodAt',
+      'executionStartedAt',
+      'executionCompletedAt',
+      'resultSentAt',
+      'wakeToUnderstoodMs',
+      'wakeToResultMs',
+      'captureDurationMs',
+      'transcriptionMs',
+      'executionMs'
+    ]) {
+      const value = timing[key];
+      if (typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value))) {
+        safeTiming[key] = value;
+      }
+    }
+    this.lastVoiceInteraction = {
+      ...(this.lastVoiceInteraction || {}),
+      stage,
+      ...(typeof message.commandId === 'string' ? { commandId: message.commandId } : {}),
+      ...(typeof message.interactionId === 'string' ? { interactionId: message.interactionId } : {}),
+      ...(typeof message.wakeWord === 'string' ? { wakeWord: message.wakeWord } : {}),
+      ...(typeof message.confidence === 'number' ? { confidence: message.confidence } : {}),
+      ...(typeof message.status === 'string' ? { status: message.status } : {}),
+      timing: {
+        ...(this.lastVoiceInteraction?.timing || {}),
+        ...safeTiming
+      },
+      updatedAt: new Date().toISOString()
+    };
+    this.updateWakeWordRuntime({ voiceInteraction: this.lastVoiceInteraction });
+    this.reportWakeWordRuntimeStatus(true, `voice_${stage}`);
+  }
+
+  renderEarcon(kind) {
+    const pattern = EARCON_PATTERNS[kind] || EARCON_PATTERNS.failure;
+    const gapSamples = Math.round(EARCON_SAMPLE_RATE * 0.006);
+    const totalSamples = pattern.reduce(
+      (total, [, durationMs]) => total + Math.round((durationMs / 1000) * EARCON_SAMPLE_RATE),
+      gapSamples * Math.max(0, pattern.length - 1)
+    );
+    const samples = new Float32Array(totalSamples);
+    let cursor = 0;
+    for (const [frequency, durationMs] of pattern) {
+      const toneSamples = Math.round((durationMs / 1000) * EARCON_SAMPLE_RATE);
+      const fadeSamples = Math.max(1, Math.round(EARCON_SAMPLE_RATE * 0.008));
+      for (let index = 0; index < toneSamples; index += 1) {
+        const fadeIn = Math.min(1, index / fadeSamples);
+        const fadeOut = Math.min(1, (toneSamples - index - 1) / fadeSamples);
+        const envelope = Math.max(0, Math.min(fadeIn, fadeOut));
+        samples[cursor + index] = Math.sin(2 * Math.PI * frequency * (index / EARCON_SAMPLE_RATE))
+          * 0.16
+          * envelope;
+      }
+      cursor += toneSamples + gapSamples;
+    }
+    const wav = require('node-wav');
+    return wav.encode([samples], { sampleRate: EARCON_SAMPLE_RATE, float: false, bitDepth: 16 });
+  }
+
+  playEarcon(kind) {
+    const queued = this.earconPlaybackQueue
+      .catch(() => {})
+      .then(async () => {
+        const tmpPath = path.join(
+          os.tmpdir(),
+          `hb_${kind}_${process.pid}_${crypto.randomBytes(4).toString('hex')}.wav`
+        );
+        await fsp.writeFile(tmpPath, this.renderEarcon(kind), { flag: 'wx', mode: 0o600 });
+        try {
+          return await this.playAudioClip(tmpPath, {
+            extension: '.wav',
+            playbackDevice: this.config.audio?.playbackDevice
+          });
+        } finally {
+          await fsp.unlink(tmpPath).catch(() => {});
+        }
+      });
+    this.earconPlaybackQueue = queued.catch(() => {});
+    return queued;
+  }
+
   enqueueTTSResponse(text, voice = 'default', metadata = {}) {
     const generation = this.ttsGeneration;
     const queued = this.ttsPlaybackQueue
@@ -3458,12 +3607,15 @@ class HomeBrainRemoteDevice {
         'Content-Type': 'application/json',
         Accept: 'audio/*'
       };
+      const ttsTimeoutMs = ['success', 'failure'].includes(metadata.kind)
+        ? OUTCOME_TTS_TIMEOUT_MS
+        : 60_000;
       const res = await this.fetchHubAudio(url, {
         method: 'POST',
         redirect: 'error',
         headers,
         body: JSON.stringify({ text: ttsText, ...(voiceId ? { voiceId } : {}) })
-      }, 60_000);
+      }, ttsTimeoutMs);
       if (!res.ok) {
         throw new Error(`HomeBrain TTS returned HTTP ${res.status}`);
       }
@@ -3492,7 +3644,7 @@ class HomeBrainRemoteDevice {
       console.warn(`HomeBrain voice clip unavailable: ${error.message}`);
       // Never speak assistant content through espeak/Pico. A short neutral cue
       // is less confusing than a delayed robotic response in the wrong voice.
-      if (metadata.kind !== 'acknowledgment') {
+      if (!['acknowledgment', 'success', 'failure'].includes(metadata.kind)) {
         await this.playTtsFailureCue();
       }
       return false;

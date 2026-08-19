@@ -22,13 +22,13 @@ const MAX_AUDIO_SESSION_BYTES = Math.max(
 const MAX_VOICE_WEBSOCKET_PAYLOAD_BYTES = 2 * 1024 * 1024;
 const DEFAULT_WAKE_WORD_MIN_RMS = 0.004;
 const MAX_WAKE_WORD_MIN_RMS = 0.2;
-const REMOTE_COMMAND_MAX_DURATION_MS = 15000;
+const REMOTE_COMMAND_MAX_DURATION_MS = 12000;
 const REMOTE_COMMAND_ENDPOINTING = Object.freeze({
-  minCaptureMs: 1800,
-  silenceMs: 1100,
-  speechStartTimeoutMs: 6000,
-  minSpeechMs: 160,
-  minRms: 0.0025
+  minCaptureMs: 900,
+  silenceMs: 700,
+  speechStartTimeoutMs: 4000,
+  minSpeechMs: 120,
+  minRms: 0.0015
 });
 const REACHY_CAPTURE_GRANT_TTL_MS = 7000;
 const REACHY_WAKE_TIMESTAMP_MAX_SKEW_MS = 30000;
@@ -979,7 +979,9 @@ class VoiceWebSocketServer {
         return;
       }
 
+      const interactionId = crypto.randomUUID();
       connection.pendingWakeWord = {
+        id: interactionId,
         wakeWord: normalizedWake,
         timestamp: eventTimestamp,
         clientTimestamp
@@ -999,6 +1001,7 @@ class VoiceWebSocketServer {
       const acknowledged = this.sendToConnection(connection, {
         type: 'wake_word_ack',
         message: 'Ready for voice command',
+        interactionId,
         timeout: isReachy
           ? Math.min(5000, this.reachyCaptureGrantTtlMs)
           : REMOTE_COMMAND_MAX_DURATION_MS,
@@ -1194,6 +1197,48 @@ class VoiceWebSocketServer {
     const timestamp = context.receivedAt instanceof Date
       ? context.receivedAt
       : (context.timestamp ? new Date(context.timestamp) : new Date());
+    const pendingWakeWord = connection.pendingWakeWord || {};
+    const interactionId = typeof pendingWakeWord.id === 'string'
+      ? pendingWakeWord.id
+      : crypto.randomUUID();
+    const candidateWakeDetectedAt = pendingWakeWord.timestamp instanceof Date
+      ? pendingWakeWord.timestamp
+      : new Date(pendingWakeWord.timestamp || timestamp);
+    const wakeDetectedAt = Number.isFinite(candidateWakeDetectedAt.getTime())
+      ? candidateWakeDetectedAt
+      : timestamp;
+    const captureStartedAt = context.captureStartedAt instanceof Date
+      ? context.captureStartedAt
+      : (context.captureStartedAt ? new Date(context.captureStartedAt) : null);
+    const captureCompletedAt = context.captureCompletedAt instanceof Date
+      ? context.captureCompletedAt
+      : (context.captureCompletedAt ? new Date(context.captureCompletedAt) : null);
+    const understoodAt = new Date();
+    const timingBase = {
+      wakeDetectedAt: wakeDetectedAt.toISOString(),
+      ...(captureStartedAt && Number.isFinite(captureStartedAt.getTime())
+        ? { captureStartedAt: captureStartedAt.toISOString() }
+        : {}),
+      ...(captureCompletedAt && Number.isFinite(captureCompletedAt.getTime())
+        ? { captureCompletedAt: captureCompletedAt.toISOString() }
+        : {}),
+      transcriptionCompletedAt: timestamp.toISOString(),
+      understoodAt: understoodAt.toISOString(),
+      wakeToUnderstoodMs: Math.max(0, understoodAt.getTime() - wakeDetectedAt.getTime()),
+      ...(captureStartedAt && captureCompletedAt
+        ? { captureDurationMs: Math.max(0, captureCompletedAt.getTime() - captureStartedAt.getTime()) }
+        : {}),
+      ...(typeof context.stt?.processingTimeMs === 'number'
+        ? { transcriptionMs: Math.max(0, Math.round(context.stt.processingTimeMs)) }
+        : {})
+    };
+    const wakeWordForVoice = pendingWakeWord.wakeWord;
+    const preferredVoicePromise = this.getPreferredVoiceId(connection, {
+      wakeWord: wakeWordForVoice
+    }).catch((error) => {
+      console.warn(`Failed to resolve preferred voice for ${deviceId}: ${error.message}`);
+      return 'default';
+    });
 
     console.log('Voice command received from authenticated device', {
       deviceId,
@@ -1201,7 +1246,7 @@ class VoiceWebSocketServer {
       transport: context?.metadata?.transport || null
     });
 
-    await this.updateDeviceAudioState(deviceId, {
+    void this.updateDeviceAudioState(deviceId, {
       lastTranscriptText: command,
       lastTranscriptAt: timestamp,
       lastTranscriptConfidence: typeof confidence === 'number' ? Math.max(0, Math.min(1, confidence)) : null,
@@ -1209,6 +1254,11 @@ class VoiceWebSocketServer {
       lastTranscriptModel: context?.stt?.model || null,
       lastTranscriptLanguage: context?.stt?.language || null,
       lastTranscriptError: null
+    });
+    this.sendToConnection(connection, {
+      type: 'command_understood',
+      interactionId,
+      timing: timingBase
     });
     if (!authorizeExecution()) return;
 
@@ -1251,44 +1301,31 @@ class VoiceWebSocketServer {
         });
       }
 
+      voiceCommand.timing = {
+        interactionId,
+        ...timingBase
+      };
+
       await voiceCommand.save();
       if (!authorizeExecution()) return;
 
-      const wakeWordForVoice = connection.pendingWakeWord?.wakeWord;
-      const preferredVoiceId = await this.getPreferredVoiceId(connection, {
-        wakeWord: wakeWordForVoice
-      });
-      let acknowledgment = null;
-      try {
-        acknowledgment = await voiceAcknowledgmentService.getRandomAcknowledgment(
-          wakeWordForVoice,
-          preferredVoiceId
-        );
-      } catch (ackError) {
-        console.warn('%s', `Failed to fetch acknowledgment for ${deviceId}:`, ackError.message);
-      }
-
-      if (!authorizeExecution()) return;
-      this.sendToConnection(connection, {
-        type: 'command_processing',
-        commandId: voiceCommand._id,
-        message: 'Processing your command...',
-        acknowledgmentText: acknowledgment?.text || null,
-        voice: acknowledgment?.voiceId || preferredVoiceId || 'default'
-      });
-
       const processingStart = Date.now();
-      const result = await voiceCommandService.processCommand({
-        commandText: command,
-        room: connection.device.room,
-        wakeWord: connection.pendingWakeWord?.wakeWord || 'anna',
-        deviceId,
-        stt: context.stt || null,
-        originDeviceType: connection.device.deviceType,
-        authorizeExecution
-      });
+      const executionStartedAt = new Date(processingStart);
+      const [result, preferredVoiceId] = await Promise.all([
+        voiceCommandService.processCommand({
+          commandText: command,
+          room: connection.device.room,
+          wakeWord: wakeWordForVoice || 'anna',
+          deviceId,
+          stt: context.stt || null,
+          originDeviceType: connection.device.deviceType,
+          authorizeExecution
+        }),
+        preferredVoicePromise
+      ]);
+      const executionCompletedAt = new Date();
 
-      const executionTime = Date.now() - processingStart;
+      const executionTime = executionCompletedAt.getTime() - processingStart;
       const responseText = result.responseText || `Command "${command}" received and processed.`;
 
       voiceCommand.processedText = result.processedText || command;
@@ -1299,7 +1336,7 @@ class VoiceWebSocketServer {
       voiceCommand.intent.entities = result.intent?.entities || {};
 
       voiceCommand.execution.status = result.execution?.status || 'failed';
-      voiceCommand.execution.completedAt = new Date();
+      voiceCommand.execution.completedAt = executionCompletedAt;
       voiceCommand.execution.executionTime = executionTime;
       if (Array.isArray(result.execution?.actions)) {
         voiceCommand.execution.actions = result.execution.actions.map((action) => ({
@@ -1351,16 +1388,40 @@ class VoiceWebSocketServer {
       }
       voiceCommand.quality.correctionNeeded = false;
 
-      await voiceCommand.save();
+      if (!authorizeExecution()) return;
+      const resultSentAt = new Date();
+      const resultStatus = voiceCommand.execution.status;
+      const succeeded = resultStatus === 'success' || resultStatus === 'partial_success';
+      const hasExecutedActions = Array.isArray(result.execution?.actions)
+        && result.execution.actions.length > 0;
+      const spokenResult = hasExecutedActions
+        ? voiceAcknowledgmentService.getStageText(succeeded ? 'success' : 'failure')
+        : responseText;
+      const resultTiming = {
+        ...timingBase,
+        executionStartedAt: executionStartedAt.toISOString(),
+        executionCompletedAt: executionCompletedAt.toISOString(),
+        resultSentAt: resultSentAt.toISOString(),
+        executionMs: executionTime,
+        wakeToResultMs: Math.max(0, resultSentAt.getTime() - wakeDetectedAt.getTime())
+      };
+      voiceCommand.timing = {
+        interactionId,
+        ...resultTiming
+      };
+      this.sendToConnection(connection, {
+        type: 'command_result',
+        interactionId,
+        commandId: voiceCommand._id.toString(),
+        status: resultStatus,
+        text: spokenResult,
+        voice: preferredVoiceId || 'default',
+        timing: resultTiming
+      });
 
       connection.pendingWakeWord = null;
-      if (!authorizeExecution()) return;
-
-      this.sendToConnection(connection, {
-        type: 'tts_response',
-        commandId: voiceCommand._id,
-        text: responseText,
-        voice: preferredVoiceId || acknowledgment?.voiceId || 'default'
+      await voiceCommand.save().catch((saveError) => {
+        console.warn(`Failed to persist completed voice command ${voiceCommand._id}: ${saveError.message}`);
       });
 
     } catch (error) {
@@ -1375,9 +1436,19 @@ class VoiceWebSocketServer {
         lastTranscriptAt: new Date()
       });
       if (!authorizeExecution()) return;
+      const failedAt = new Date();
+      const failureVoice = await preferredVoicePromise;
       this.sendToConnection(connection, {
-        type: 'command_error',
-        message: 'Failed to process voice command'
+        type: 'command_result',
+        interactionId,
+        status: 'failed',
+        text: voiceAcknowledgmentService.getStageText('failure'),
+        voice: failureVoice || 'default',
+        timing: {
+          ...timingBase,
+          resultSentAt: failedAt.toISOString(),
+          wakeToResultMs: Math.max(0, failedAt.getTime() - wakeDetectedAt.getTime())
+        }
       });
     }
   }
@@ -1847,6 +1918,8 @@ class VoiceWebSocketServer {
       commandText: transcription.text,
       confidence: transcription.confidence,
       receivedAt: new Date(),
+      captureStartedAt: session.startedAt,
+      captureCompletedAt: completedAt,
       sessionId: session.sessionId,
       stt: transcription,
       metadata: {

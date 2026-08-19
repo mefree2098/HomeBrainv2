@@ -463,6 +463,60 @@ test('adaptive command endpointing ends after speech followed by silence', async
   assert.equal(device.isRecording, false);
 });
 
+test('wake detection plays an immediate local earcon before hub acknowledgment', () => {
+  const device = new HomeBrainRemoteDevice({ audio: { sampleRate: 16000 }, wakeWord: {} });
+  const sent = [];
+  const earcons = [];
+  device.isAuthenticated = true;
+  device.wakeWordRuntime = { sidecar: {}, recording: {}, audio: {} };
+  device.sendMessage = (message) => {
+    sent.push(message);
+    return true;
+  };
+  device.reportWakeWordRuntimeStatus = () => true;
+  device.playEarcon = (kind) => {
+    earcons.push(kind);
+    return Promise.resolve(true);
+  };
+
+  device.onWakeWordDetected('anna', 0.9, 'Anna');
+
+  assert.deepEqual(earcons, ['wake']);
+  assert.equal(sent.some((message) => message.type === 'wake_word_detected'), true);
+  assert.equal(device.lastVoiceInteraction.stage, 'wake');
+  if (device.pendingWakeAckTimer) clearTimeout(device.pendingWakeAckTimer);
+});
+
+test('command result plays a local outcome earcon before queued voice feedback', async () => {
+  const device = new HomeBrainRemoteDevice({ audio: {}, wakeWord: {} });
+  const feedback = [];
+  device.wakeWordRuntime = { sidecar: {}, recording: {}, audio: {} };
+  device.reportWakeWordRuntimeStatus = () => true;
+  device.playEarcon = async (kind) => {
+    feedback.push(`earcon:${kind}`);
+    return true;
+  };
+  device.enqueueTTSResponse = async (text, voice) => {
+    feedback.push(`voice:${voice}:${text}`);
+    return true;
+  };
+
+  await device.handleMessage(Buffer.from(JSON.stringify({
+    type: 'command_result',
+    interactionId: 'interaction-1',
+    commandId: 'command-1',
+    status: 'success',
+    text: 'Done.',
+    voice: 'anna-voice',
+    timing: { wakeToResultMs: 1600 }
+  })));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(feedback, ['earcon:success', 'voice:anna-voice:Done.']);
+  assert.equal(device.lastVoiceInteraction.stage, 'success');
+  assert.equal(device.lastVoiceInteraction.timing.wakeToResultMs, 1600);
+});
+
 test('startVoiceRecording reuses the active wake mic stream for command audio', async (t) => {
   const childProcess = require('child_process');
   const originalSpawn = childProcess.spawn;
@@ -538,8 +592,8 @@ test('playTTSResponse uses authenticated POST JSON and the selected wake-word vo
   });
   device.deviceId = '507f1f77bcf86cd799439011';
   let request = null;
-  device.fetchHubAudio = async (url, options) => {
-    request = { url, options };
+  device.fetchHubAudio = async (url, options, timeoutMs) => {
+    request = { url, options, timeoutMs };
     const audio = Uint8Array.from(Buffer.from('ID3cached-audio'));
     return {
       ok: true,
@@ -565,7 +619,11 @@ test('playTTSResponse uses authenticated POST JSON and the selected wake-word vo
     text: 'The lights are on.',
     voiceId: 'anna-voice-id'
   });
+  assert.equal(request.timeoutMs, 60_000);
   assert.equal(request.url.includes('The lights are on'), false);
+
+  await device.playTTSResponse('Done.', 'anna-voice-id', { kind: 'success' });
+  assert.equal(request.timeoutMs, 2000);
 });
 
 test('enqueueSidecarAudio forwards quiet frames so streaming feature history stays continuous', () => {

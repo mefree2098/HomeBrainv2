@@ -485,7 +485,7 @@ test('buildWakeWordConfig uses calibrated model thresholds and excludes missing 
   assert.equal(config.wakeWord.assets[0].sensitivity, 0.28);
 });
 
-test('speaker wake acknowledgment advertises adaptive endpointing instead of a five-second cutoff', async (t) => {
+test('speaker wake acknowledgment advertises low-latency adaptive endpointing', async (t) => {
   const originalSave = VoiceCommand.prototype.save;
   const originalUpdate = VoiceDevice.findByIdAndUpdate;
   t.after(() => {
@@ -513,14 +513,98 @@ test('speaker wake acknowledgment advertises adaptive endpointing instead of a f
   });
 
   const acknowledgment = ws.sent.find((message) => message.type === 'wake_word_ack');
-  assert.equal(acknowledgment.timeout, 15000);
+  assert.equal(acknowledgment.timeout, 12000);
+  assert.equal(typeof acknowledgment.interactionId, 'string');
   assert.deepEqual(acknowledgment.endpointing, {
-    minCaptureMs: 1800,
-    silenceMs: 1100,
-    speechStartTimeoutMs: 6000,
-    minSpeechMs: 160,
-    minRms: 0.0025
+    minCaptureMs: 900,
+    silenceMs: 700,
+    speechStartTimeoutMs: 4000,
+    minSpeechMs: 120,
+    minRms: 0.0015
   });
+});
+
+test('speaker command emits understood and execution result feedback without blocking on final persistence', async (t) => {
+  const originalSave = VoiceCommand.prototype.save;
+  const originalUpdate = VoiceDevice.findByIdAndUpdate;
+  const originalProcess = voiceCommandService.processCommand;
+  let saveCount = 0;
+  let releaseFinalSave;
+  t.after(() => {
+    VoiceCommand.prototype.save = originalSave;
+    VoiceDevice.findByIdAndUpdate = originalUpdate;
+    voiceCommandService.processCommand = originalProcess;
+  });
+  VoiceCommand.prototype.save = async function save() {
+    saveCount += 1;
+    if (saveCount === 2) {
+      await new Promise((resolve) => { releaseFinalSave = resolve; });
+    }
+    return this;
+  };
+  VoiceDevice.findByIdAndUpdate = async () => createDevice();
+  voiceCommandService.processCommand = async () => ({
+    processedText: 'turn off the office',
+    intent: { action: 'device_control', confidence: 1, entities: {} },
+    execution: {
+      status: 'success',
+      actions: [{
+        type: 'device_control',
+        deviceId: '507f1f77bcf86cd799439012',
+        deviceName: 'Office',
+        action: 'turn_off',
+        success: true,
+        message: 'Executed turn_off on Office'
+      }]
+    },
+    responseText: 'Okay, turn off Office.',
+    llm: { provider: 'heuristic', model: 'rule-based', processingTimeMs: 0 },
+    usedFallback: true
+  });
+
+  const voiceWs = new VoiceWebSocketServer();
+  voiceWs.getPreferredVoiceId = async () => 'anna-voice';
+  const ws = new MockWebSocket();
+  const wakeAt = new Date(Date.now() - 1500);
+  const connection = {
+    ws,
+    authenticated: true,
+    device: createDevice(),
+    pendingWakeWord: { id: 'interaction-1', wakeWord: 'anna', timestamp: wakeAt },
+    lastPing: Date.now()
+  };
+  voiceWs.deviceConnections.set(deviceId, connection);
+
+  const processing = voiceWs.processVoiceCommandText(deviceId, {
+    commandText: 'turn off the office',
+    confidence: 0.9,
+    receivedAt: new Date(),
+    captureStartedAt: new Date(wakeAt.getTime() + 50),
+    captureCompletedAt: new Date(wakeAt.getTime() + 950),
+    stt: { provider: 'whisper_local', model: 'small', processingTimeMs: 90 },
+    sourceConnection: connection
+  });
+
+  while (!ws.sent.some((message) => message.type === 'command_result')) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  const feedbackTypes = ws.sent
+    .filter((message) => ['command_understood', 'command_result', 'command_processing', 'tts_response'].includes(message.type))
+    .map((message) => message.type);
+  const result = ws.sent.find((message) => message.type === 'command_result');
+  assert.deepEqual(feedbackTypes, ['command_understood', 'command_result']);
+  assert.equal(result.status, 'success');
+  assert.equal(result.text, 'Done.');
+  assert.equal(result.voice, 'anna-voice');
+  assert.equal(result.interactionId, 'interaction-1');
+  assert.equal(result.timing.captureDurationMs, 900);
+  assert.equal(result.timing.transcriptionMs, 90);
+  assert.ok(result.timing.wakeToResultMs >= 0);
+  assert.equal(saveCount, 2);
+  assert.equal(connection.pendingWakeWord, null);
+
+  releaseFinalSave();
+  await processing;
 });
 
 test('stripWakeWordPrefix removes wake words from one-breath commands', () => {
