@@ -1,8 +1,10 @@
 # HomeBrain — App Store Connect submission packet
 
-Prepared for version **1.0 (build 14)** of bundle ID `NTechR.HomeBrainApp`. The app's project declares **Utilities** as its category and includes an Apple Watch companion (`NTechR.HomeBrainApp.watchkitapp`). Build 14 adds public first-owner setup, retains self-service account deletion, and recognizes the dedicated Apple reviewer account as an isolated virtual sandbox.
+Prepared for version **1.0 (build 15)** of bundle ID `NTechR.HomeBrainApp`. The app's project declares **Utilities** as its category and includes an Apple Watch companion (`NTechR.HomeBrainApp.watchkitapp`). Build 15 includes public first-owner setup, self-service account deletion, the dedicated Apple reviewer sandbox, and a revised Watch-specific icon with a lighter background that remains visibly circular against the black Apple Watch interface.
 
 > **App Review follow-up:** Apple requested additional Guideline 2.1 information on July 15, 2026. Use [`APP_REVIEW_GUIDELINE_2_1_RESPONSE.md`](./APP_REVIEW_GUIDELINE_2_1_RESPONSE.md) before replying or resubmitting.
+>
+> **Guideline 4 follow-up:** Apple rejected build 14 on August 20, 2026 because the Watch icon's black background obscured its circular shape. Use [`APP_REVIEW_GUIDELINE_4_RESPONSE_BUILD_15.md`](./APP_REVIEW_GUIDELINE_4_RESPONSE_BUILD_15.md) when replying and submit build 15.
 
 ## 1. Upload these screenshots
 
@@ -16,7 +18,7 @@ Upload the numbered PNGs in the shown order only after they have been recaptured
 
 The first three iPhone images are deliberately ordered as Dashboard, Devices, and Scenes because App Store Connect uses the first three on installation sheets. The two Watch images use one consistent 416 × 496 size; keep that size for every localization.
 
-The stored files were captured from build 7 against the nine-device reviewer sandbox and validated as opaque PNGs at the listed dimensions. Recheck them visually immediately before upload. Recapture them from build 14 if any submitted image or caption discusses onboarding or account availability.
+The stored files were captured from build 7 against the nine-device reviewer sandbox and validated as opaque PNGs at the listed dimensions. Recheck them visually immediately before upload. Recapture them from build 15 if any submitted image or caption discusses onboarding or account availability.
 
 ## 2. Ready-to-paste store listing copy
 
@@ -29,7 +31,7 @@ The stored files were captured from build 7 against the nine-device reviewer san
 | Keywords (93 characters) | `smart home,home automation,lights,thermostat,scenes,voice control,energy,security,Apple Watch` |
 | Promotional text (123 characters) | `See your home at a glance, run favorite scenes, and manage compatible rooms and devices from iPhone, iPad, and Apple Watch.` |
 | Version | `1.0` |
-| Build to select | `14` |
+| Build to select | `15` |
 | Copyright — confirm the legal owner first | `2026 [CONFIRMED LEGAL OWNER]` |
 | SKU | Use the SKU already shown in this App Store Connect app record. It is account-specific and cannot be changed after the app record is created. |
 
@@ -73,7 +75,7 @@ These values are factual, legal, or account-specific, so they should not be inve
 
 ## 4. App Review Information
 
-Set **Sign-in required** to **Yes** for App Review and provide the non-personal persistent review account. Build 14 also offers **Set Up New Hub** so any individual can create the first household-owner account on a fresh HomeBrain installation. After initial setup, the household owner can add family members or other trusted users.
+Set **Sign-in required** to **Yes** for App Review and provide the non-personal persistent review account. Build 15 offers **Set Up New Hub** so any individual can create the first household-owner account on a fresh HomeBrain installation. After initial setup, the household owner can add family members or other trusted users.
 
 The complete paste-ready response and Notes-field copy are in [`APP_REVIEW_GUIDELINE_2_1_RESPONSE.md`](./APP_REVIEW_GUIDELINE_2_1_RESPONSE.md). The condensed Notes below still requires a verified endpoint, two verified credentials, actual physical test results, and the final recording filename.
 
@@ -143,7 +145,7 @@ The policy and labels must plainly cover Location, Camera, Local Network, Microp
 2. Complete App Information: name, subtitle, categories, content rights, age rating, verified support URL, verified privacy-policy URL, and `2026 [CONFIRMED LEGAL OWNER]`. Do not add What's New text for this first version.
 3. Complete App Privacy with the verified answers above; add the public privacy-policy URL.
 4. Under version 1.0, paste the listing copy, upload the four iPhone images, four iPad images, and two Watch images in the folders above.
-5. Choose build 14 after it has finished processing, complete export compliance, and check the embedded iOS and Watch app icons on the processed build.
+5. Choose build 15 after it has finished processing, complete export compliance, and check the embedded iOS and Watch app icons on the processed build. Do not resubmit rejected build 14.
 6. Enter real App Review contact details, the public endpoint, the persistent credential, the disposable deletion-test credential, verified device/OS results, and the review notes above. Attach the physical-device recording requested under Guideline 2.1; a simulator rehearsal does not satisfy this request.
 7. Choose pricing, territories, Digital Services Act trader status, and a release method; ensure Agreements, Tax, Banking, and any trader-contact verification are complete where required.
 8. Save, use **Add for Review**, then submit when every required field shows complete.
