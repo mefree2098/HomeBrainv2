@@ -1174,10 +1174,10 @@ class VoiceWebSocketServer {
     }
   }
 
-  stripWakeWordPrefix(commandText, wakeWord) {
+  matchWakeWordPrefix(commandText, wakeWord, supportedWakeWords = []) {
     const command = (commandText || '').toString().trim();
     if (!command) {
-      return '';
+      return { command: '', wakeWord: '' };
     }
 
     const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -1189,14 +1189,19 @@ class VoiceWebSocketServer {
       .trim();
 
     const candidates = new Set();
-    const normalizedWake = normalizePhrase(wakeWord);
-    if (normalizedWake) {
-      candidates.add(normalizedWake);
-      candidates.add(normalizedWake.replace(/^hey\s+/, ''));
-      if (!normalizedWake.startsWith('hey ')) {
-        candidates.add(`hey ${normalizedWake}`);
-      }
-    } else {
+    const addCandidate = (value) => {
+      const normalized = normalizePhrase(value);
+      if (!normalized) return;
+      candidates.add(normalized);
+      const withoutHey = normalized.replace(/^hey\s+/, '');
+      if (withoutHey) candidates.add(withoutHey);
+      if (!normalized.startsWith('hey ')) candidates.add(`hey ${normalized}`);
+    };
+    addCandidate(wakeWord);
+    for (const supportedWakeWord of Array.isArray(supportedWakeWords) ? supportedWakeWords : []) {
+      addCandidate(supportedWakeWord);
+    }
+    if (candidates.size === 0) {
       candidates.add('anna');
       candidates.add('henry');
     }
@@ -1214,14 +1219,35 @@ class VoiceWebSocketServer {
         .join('\\s+');
       const match = command.match(new RegExp(`^${pattern}(?:\\s*[,;:.!?-]+\\s*|\\s+|$)`, 'i'));
       if (match) {
-        return command.slice(match[0].length).trim();
+        return {
+          command: command.slice(match[0].length).trim(),
+          wakeWord: candidate
+        };
       }
     }
 
-    return command;
+    return { command, wakeWord: '' };
   }
 
-  isPlausibleRoomTranscript(commandText, detectedWakeWord = '') {
+  stripWakeWordPrefix(commandText, wakeWord, supportedWakeWords = []) {
+    return this.matchWakeWordPrefix(commandText, wakeWord, supportedWakeWords).command;
+  }
+
+  canonicalVoiceCommandWakeWord(wakeWord) {
+    const normalized = String(wakeWord || '')
+      .toLowerCase()
+      .replace(/[-_]+/g, ' ')
+      .replace(/[^a-z0-9\s]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (/(?:^|\s)anna(?:$|\s)/.test(normalized)) return 'anna';
+    if (/(?:^|\s)henry(?:$|\s)/.test(normalized)) return 'henry';
+    if (normalized === 'home brain' || normalized === 'homebrain') return 'home-brain';
+    if (normalized === 'computer') return 'computer';
+    return 'custom';
+  }
+
+  isPlausibleRoomTranscript(commandText, detectedWakeWord = '', supportedWakeWords = []) {
     const normalized = String(commandText || '')
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, ' ')
@@ -1238,6 +1264,16 @@ class VoiceWebSocketServer {
       const words = detected.split(/\s+/).filter(Boolean);
       if (words.length > 1) wakeWords.add(words.at(-1));
     }
+    for (const supported of Array.isArray(supportedWakeWords) ? supportedWakeWords : []) {
+      const normalizedSupported = String(supported || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim();
+      if (!normalizedSupported) continue;
+      wakeWords.add(normalizedSupported);
+      const words = normalizedSupported.split(/\s+/).filter(Boolean);
+      if (words.length > 1) wakeWords.add(words.at(-1));
+    }
     for (const wakeWord of wakeWords) {
       if (normalized === wakeWord || normalized.startsWith(`${wakeWord} `)) {
         return true;
@@ -1248,12 +1284,17 @@ class VoiceWebSocketServer {
     // retain common command/question shapes. Reject arbitrary background prose
     // before it reaches the slower intent/LLM execution path.
     const commandLead = /^(?:please\s+)?(?:turn|switch|toggle|set|dim|brighten|adjust|change|increase|decrease|raise|lower|lock|unlock|open|close|start|stop|pause|resume|play|run|activate|deactivate|arm|disarm|mute|unmute|show|check|find|read|tell|give|make|create)\b/;
-    const questionLead = /^(?:please\s+)?(?:what|who|when|where|why|how|is|are|am|do|does|did|can|could|would|will|should)\b/;
-    if (commandLead.test(normalized) || questionLead.test(normalized)) {
+    if (commandLead.test(normalized)) {
       return true;
     }
 
     const words = normalized.split(/\s+/);
+    const questionLead = /^(?:please\s+)?(?:what|who|when|where|why|how|is|are|am|do|does|did|can|could|would|will|should)\b/;
+    const homeQuestionTopic = /\b(?:weather|forecast|temperature|humidity|time|date|day|light|door|lock|garage|alarm|thermostat|rain|snow|wind|outside|inside|room|home|house|device|scene|automation|music|song|playing|status|state)\b/;
+    if (words.length <= 12 && questionLead.test(normalized) && homeQuestionTopic.test(normalized)) {
+      return true;
+    }
+
     return words.length <= 8
       && /\b(?:on|off|up|down|warmer|cooler|brighter|dimmer)\b/.test(normalized);
   }
@@ -1274,7 +1315,21 @@ class VoiceWebSocketServer {
     };
 
     const rawCommand = (context.commandText || context.command || '').toString().trim();
-    const command = this.stripWakeWordPrefix(rawCommand, connection.pendingWakeWord?.wakeWord);
+    let pendingWakeWord = connection.pendingWakeWord || {};
+    const wakeMatch = this.matchWakeWordPrefix(
+      rawCommand,
+      pendingWakeWord.wakeWord,
+      connection.device?.supportedWakeWords
+    );
+    const command = wakeMatch.command;
+    const wakeWordForVoice = wakeMatch.wakeWord || pendingWakeWord.wakeWord;
+    if (wakeMatch.wakeWord && connection.pendingWakeWord) {
+      pendingWakeWord = {
+        ...connection.pendingWakeWord,
+        wakeWord: wakeMatch.wakeWord
+      };
+      connection.pendingWakeWord = pendingWakeWord;
+    }
     if (!command) {
       console.warn(`Empty command received from device ${deviceId}`);
       this.sendToConnection(connection, {
@@ -1295,7 +1350,6 @@ class VoiceWebSocketServer {
     const timestamp = context.receivedAt instanceof Date
       ? context.receivedAt
       : (context.timestamp ? new Date(context.timestamp) : new Date());
-    const pendingWakeWord = connection.pendingWakeWord || {};
     const interactionId = typeof pendingWakeWord.id === 'string'
       ? pendingWakeWord.id
       : crypto.randomUUID();
@@ -1330,7 +1384,6 @@ class VoiceWebSocketServer {
         ? { transcriptionMs: Math.max(0, Math.round(context.stt.processingTimeMs)) }
         : {})
     };
-    const wakeWordForVoice = pendingWakeWord.wakeWord;
     const preferredVoicePromise = this.getPreferredVoiceId(connection, {
       wakeWord: wakeWordForVoice
     }).catch((error) => {
@@ -1365,7 +1418,7 @@ class VoiceWebSocketServer {
         deviceId: deviceId,
         originalText: command,
         processedText: command,
-        wakeWord: connection.pendingWakeWord?.wakeWord || 'anna',
+        wakeWord: this.canonicalVoiceCommandWakeWord(wakeWordForVoice),
         sourceRoom: connection.device.room,
         intent: {
           action: 'unknown',
@@ -2089,7 +2142,11 @@ class VoiceWebSocketServer {
       connection.device?.deviceType === 'speaker'
       && detectedWakeWord
       && this.resolveVoiceTuning(connection.device).backgroundGuardEnabled
-      && !this.isPlausibleRoomTranscript(transcription.text, detectedWakeWord)
+      && !this.isPlausibleRoomTranscript(
+        transcription.text,
+        detectedWakeWord,
+        connection.device?.supportedWakeWords
+      )
     ) {
       console.log(`Ignoring background-like transcript for device ${deviceId} after wake detection`);
       connection.pendingWakeWord = null;

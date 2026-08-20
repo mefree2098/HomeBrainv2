@@ -174,6 +174,27 @@ test('buildRecordingOptions auto-selects a preferred ALSA capture device', () =>
   assert.equal(device.config.audio.resolvedRecordingDevice, 'plughw:2,0');
 });
 
+test('buildRecordingOptions reuses the saved ALSA capture device without probing again', () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: {
+      sampleRate: 16000,
+      channels: 1,
+      recordingDevice: 'auto',
+      preferredInputName: 'Jabra',
+      resolvedRecordingDevice: 'plughw:CARD=USB,DEV=0',
+      resolvedRecordingDeviceName: 'Jabra SPEAK 510'
+    },
+    wakeWord: {}
+  });
+  device.detectPreferredCaptureDevice = () => {
+    throw new Error('saved capture device must not be probed');
+  };
+
+  const options = device.buildRecordingOptions();
+
+  assert.equal(options.device, 'plughw:CARD=USB,DEV=0');
+});
+
 test('selectAlsaCaptureDevice prefers Jabra USB capture devices', () => {
   const device = new HomeBrainRemoteDevice({
     audio: {},
@@ -896,6 +917,7 @@ test('handleRecordingStreamError appends recorder stderr details', () => {
   device.reportWakeWordRuntimeStatus = () => {};
   device.releaseWakeWordEngine = () => {};
   device.startTestMode = () => {};
+  device.saveConfig = async () => {};
   device.resetWakeWordRuntime('FeatureSidecar/OWW', device.buildRecordingOptions());
   device.recordingStderrBuffer = 'ALSA lib pcm.c: Cannot open audio device default\n';
 
