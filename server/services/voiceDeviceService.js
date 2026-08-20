@@ -128,7 +128,9 @@ class VoiceDeviceService {
       const device = await this.getDeviceById(deviceId);
 
       const diagnostics = this.buildDeviceDiagnostics(device, options);
-      const success = diagnostics.checks.websocketAuthenticated.ok && diagnostics.checks.heartbeatFresh.ok;
+      const success = diagnostics.checks.websocketAuthenticated.ok
+        && diagnostics.checks.heartbeatFresh.ok
+        && diagnostics.checks.audioInput.ok;
       const errors = Object.values(diagnostics.checks)
         .filter((check) => !check.ok && check.severity !== 'info')
         .map((check) => check.message);
@@ -213,6 +215,14 @@ class VoiceDeviceService {
     const websocketAuthenticated = Boolean(connection?.authenticated);
     const websocketConnected = Boolean(connection);
     const heartbeatFresh = heartbeatAgeMs !== null && heartbeatAgeMs <= heartbeatFreshThresholdMs;
+    const wakeAudio = settings.wakeWordRuntime?.audio && typeof settings.wakeWordRuntime.audio === 'object'
+      ? settings.wakeWordRuntime.audio
+      : null;
+    const lastAudioAtMs = wakeAudio?.lastAudioAt ? new Date(wakeAudio.lastAudioAt).getTime() : 0;
+    const wakeAudioAgeMs = lastAudioAtMs ? Math.max(0, nowMs - lastAudioAtMs) : null;
+    const wakeAudioFresh = wakeAudioAgeMs === null || wakeAudioAgeMs <= heartbeatFreshThresholdMs;
+    const mutedLikely = wakeAudio?.mutedLikely === true;
+    const audioCaptureHealthy = !supportsAudioInput || (wakeAudioFresh && !mutedLikely);
     const persistedUpdateStatus = device.updateStatus?.status && device.updateStatus.status !== 'idle'
       ? device.updateStatus
       : { ...(device.updateStatus || {}), ...(settings.updateStatus || {}) };
@@ -262,6 +272,17 @@ class VoiceDeviceService {
             ? 'Device has never reported a heartbeat.'
             : `Last heartbeat is stale (${heartbeatAgeMs}ms ago).`
       },
+      audioInput: {
+        ok: audioCaptureHealthy,
+        severity: 'error',
+        message: mutedLikely
+          ? 'Microphone stream is digital silence; hardware mute may be active.'
+          : !wakeAudioFresh
+            ? `Microphone audio telemetry is stale (${wakeAudioAgeMs}ms ago).`
+            : wakeAudio
+              ? `Microphone stream is healthy (recent RMS ${wakeAudio.recentPeakRms ?? wakeAudio.lastFrameRms ?? 'unknown'}).`
+              : 'Microphone health telemetry is not available from this firmware.'
+      },
       wakeWordConfigured: {
         ok: wakeWordConfigured,
         severity: 'warning',
@@ -299,8 +320,20 @@ class VoiceDeviceService {
         supportsAudioInput,
         supportsAudioOutput,
         wakeWordConfigured,
-        audioInputAvailable: websocketAuthenticated && supportsAudioInput,
+        audioInputAvailable: websocketAuthenticated && supportsAudioInput && audioCaptureHealthy,
         audioOutputAvailable: websocketAuthenticated && supportsAudioOutput
+      },
+      audio: {
+        reported: Boolean(wakeAudio),
+        fresh: wakeAudioFresh,
+        ageMs: wakeAudioAgeMs,
+        mutedLikely,
+        health: wakeAudio?.health || null,
+        lastFrameRms: wakeAudio?.lastFrameRms ?? null,
+        recentPeakRms: wakeAudio?.recentPeakRms ?? null,
+        peakFrameRms: wakeAudio?.peakFrameRms ?? null,
+        digitalSilenceSince: wakeAudio?.digitalSilenceSince || null,
+        lastNonZeroAt: wakeAudio?.lastNonZeroAt || null
       },
       updateStatus: {
         status: persistedUpdateStatus.status || (device.status === 'updating' ? 'installing' : 'idle'),

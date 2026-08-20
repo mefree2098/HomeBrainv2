@@ -2,6 +2,7 @@ const express = require('express');
 const fs = require('fs');
 const router = express.Router();
 const rateLimit = require('express-rate-limit');
+const mongoose = require('mongoose');
 const voiceDeviceService = require('../services/voiceDeviceService');
 const voiceCommandService = require('../services/voiceCommandService');
 const speechService = require('../services/speechService');
@@ -11,6 +12,7 @@ const voiceAcknowledgmentService = require('../services/voiceAcknowledgmentServi
 const { requireUser, requireAdmin } = require('./middlewares/auth');
 const voiceWs = require('../websocket/voiceWebSocket');
 const VoiceDevice = require('../models/VoiceDevice');
+const VoiceCommand = require('../models/VoiceCommand');
 const eventStreamService = require('../services/eventStreamService');
 
 const admin = requireAdmin();
@@ -95,6 +97,42 @@ router.get('/devices/:id', requireUser(), async (req, res) => {
     res.status(statusCode).json({
       success: false,
       message: error.message || 'Failed to fetch voice device'
+    });
+  }
+});
+
+router.get('/devices/:id/interactions', admin, async (req, res) => {
+  const { id } = req.params;
+  if (!mongoose.isObjectIdOrHexString(id)) {
+    return res.status(400).json({ success: false, message: 'Invalid voice device id' });
+  }
+
+  try {
+    const device = await VoiceDevice.findById(id).select('_id name room').lean();
+    if (!device) {
+      return res.status(404).json({ success: false, message: 'Voice device not found' });
+    }
+    const limit = Math.max(1, Math.min(100, Number.parseInt(String(req.query.limit || '25'), 10) || 25));
+    const interactions = await VoiceCommand.find({ deviceId: id })
+      .select('-llmProcessing.prompt -llmProcessing.rawResponse')
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      device,
+      interactions,
+      count: interactions.length
+    });
+  } catch (error) {
+    console.error('GET /api/voice/devices/:id/interactions - Error:', {
+      deviceId: String(id),
+      error: error.message
+    });
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to fetch voice interactions'
     });
   }
 });
@@ -723,6 +761,9 @@ router.put('/devices/:id/settings', admin, async (req, res) => {
         next[key] = round ? Math.round(bounded) : bounded;
       };
       boundedNumber('wakeConfirmationMs', 80, 1000, true);
+      boundedNumber('wakeMinScoreHits', 1, 6, true);
+      boundedNumber('wakeThresholdOffset', -0.2, 0.2);
+      boundedNumber('commandPreRollMs', 500, 5000, true);
       boundedNumber('commandMaxDurationMs', 3000, 20000, true);
       boundedNumber('commandMinCaptureMs', 300, 3000, true);
       boundedNumber('commandSilenceMs', 250, 5000, true);

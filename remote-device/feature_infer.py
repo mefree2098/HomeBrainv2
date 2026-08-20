@@ -72,6 +72,9 @@ ACTIVITY_HOLD_MS = 480
 DETECTION_CONFIRMATION_MS = 160
 MIN_DETECTION_CONFIRMATION_MS = 80
 MAX_DETECTION_CONFIRMATION_MS = 1000
+DEFAULT_MIN_SCORE_HITS = 2
+MIN_SCORE_HITS = 1
+MAX_SCORE_HITS = 6
 SCORE_REPORT_INTERVAL_MS = 500
 # Matches the minimum clip duration used by train_wake_word.py for a 16-frame
 # classifier window: (76 + (16 - 1) * 8 + 3) * 160 samples.
@@ -101,6 +104,8 @@ class FeatureInfer:
         self.pending_detection: Optional[Dict] = None
         self.pending_detection_frames = 0
         self.detection_confirmation_ms = DETECTION_CONFIRMATION_MS
+        self.min_score_hits = DEFAULT_MIN_SCORE_HITS
+        self.noise_floor_rms = 0.0
         self.last_score_report_ts = 0.0
         # Initialize AudioFeatures; if resources missing, attempt one more download, then retry once
         try:
@@ -181,6 +186,11 @@ class FeatureInfer:
             MIN_DETECTION_CONFIRMATION_MS,
             min(MAX_DETECTION_CONFIRMATION_MS, confirmation_ms),
         )
+        try:
+            min_score_hits = int(payload.get("minScoreHits")) if payload.get("minScoreHits") is not None else DEFAULT_MIN_SCORE_HITS
+        except (TypeError, ValueError):
+            min_score_hits = DEFAULT_MIN_SCORE_HITS
+        self.min_score_hits = max(MIN_SCORE_HITS, min(MAX_SCORE_HITS, min_score_hits))
 
         providers = ["CPUExecutionProvider"]
         configured: List[ModelSpec] = []
@@ -224,6 +234,7 @@ class FeatureInfer:
         self.activity_frames_remaining = 0
         self.pending_detection = None
         self.pending_detection_frames = 0
+        self.noise_floor_rms = 0.0
         self.last_score_report_ts = 0.0
         self.last_global_detect_ts = 0.0
         self.last_detect_ts.clear()
@@ -325,34 +336,68 @@ class FeatureInfer:
             if best is None or self._prefer_candidate(candidate, best):
                 best = candidate
 
-        confirmation_frames = max(
-            1,
-            int(np.ceil(
-                getattr(self, "detection_confirmation_ms", DETECTION_CONFIRMATION_MS)
-                / max(1.0, self.frame_samples / self.sample_rate * 1000.0)
-            ))
+        now = time.time()
+        required_hits = max(
+            MIN_SCORE_HITS,
+            min(MAX_SCORE_HITS, getattr(self, "min_score_hits", DEFAULT_MIN_SCORE_HITS)),
         )
+        frame_duration_ms = max(1.0, self.frame_samples / self.sample_rate * 1000.0)
+        confirmation_window_seconds = max(
+            MIN_DETECTION_CONFIRMATION_MS,
+            getattr(self, "detection_confirmation_ms", DETECTION_CONFIRMATION_MS),
+            frame_duration_ms * required_hits,
+        ) / 1000.0
         if best is None:
-            self.pending_detection = None
-            self.pending_detection_frames = 0
+            if self.pending_detection and now > float(self.pending_detection.get("expires_at") or 0.0):
+                self.pending_detection = None
+                self.pending_detection_frames = 0
             return None
 
         pending_label = str(self.pending_detection.get("model")) if self.pending_detection else ""
         best_label = str(best.get("model") or "")
-        if self.pending_detection is None or pending_label != best_label:
-            self.pending_detection = dict(best)
-            self.pending_detection_frames = confirmation_frames
+        pending_expired = bool(
+            self.pending_detection
+            and now > float(self.pending_detection.get("expires_at") or 0.0)
+        )
+        if self.pending_detection is None or pending_expired:
+            self.pending_detection = {
+                **best,
+                "hits": 1,
+                "first_seen_at": now,
+                "expires_at": now + confirmation_window_seconds,
+            }
+        elif pending_label == best_label:
+            self.pending_detection = {
+                **self.pending_detection,
+                **best,
+                "hits": int(self.pending_detection.get("hits") or 0) + 1,
+            }
         elif self._prefer_candidate(best, self.pending_detection):
-            self.pending_detection = dict(best)
+            pending_words = self._label_words(pending_label)
+            best_words = self._label_words(best_label)
+            related_phrase = bool(
+                pending_words
+                and best_words
+                and (
+                    " ".join(pending_words) in " ".join(best_words)
+                    or " ".join(best_words) in " ".join(pending_words)
+                )
+            )
+            self.pending_detection = {
+                **best,
+                "hits": (int(self.pending_detection.get("hits") or 0) if related_phrase else 0) + 1,
+                "first_seen_at": self.pending_detection.get("first_seen_at") if related_phrase else now,
+                "expires_at": self.pending_detection.get("expires_at") if related_phrase else now + confirmation_window_seconds,
+            }
 
-        self.pending_detection_frames -= 1
-        if self.pending_detection_frames > 0:
+        hits = int(self.pending_detection.get("hits") or 0)
+        self.pending_detection_frames = max(0, required_hits - hits)
+        if hits < required_hits:
             return None
 
         selected = self.pending_detection
         self.pending_detection = None
         self.pending_detection_frames = 0
-        now = time.time()
         if ((now - self.last_global_detect_ts) * 1000.0) < self.cooldown_ms:
             return None
         label = str(selected.get("model") or "wake_word")
@@ -399,6 +444,7 @@ def main():
                     "type": "ready",
                     "models": [m.label for m in fi.models],
                     "confirmationMs": fi.detection_confirmation_ms,
+                    "minScoreHits": fi.min_score_hits,
                 }) + "\n")
                 sys.stdout.flush()
             else:
@@ -436,11 +482,18 @@ def main():
                     continue
                 float_frame = audio_frame.astype(np.float32) / 32768.0
                 rms = float(np.sqrt(np.mean(np.square(float_frame))) if float_frame.size else 0.0)
+                if rms < fi.min_rms:
+                    fi.noise_floor_rms = (
+                        (fi.noise_floor_rms * 0.98) + (rms * 0.02)
+                        if fi.noise_floor_rms > 0
+                        else rms
+                    )
+                effective_min_rms = max(fi.min_rms, (fi.noise_floor_rms * 1.8) + 0.0005)
 
                 # Silence must still advance AudioFeatures so separated phrases
                 # are never spliced together. The energy gate controls model
                 # inference only and stays open briefly after voiced audio.
-                if rms >= fi.min_rms:
+                if rms >= effective_min_rms:
                     fi.activity_frames_remaining = max(
                         1,
                         int(np.ceil(ACTIVITY_HOLD_MS / (STREAM_FRAME_SAMPLES / fi.sample_rate * 1000.0)))
@@ -479,6 +532,10 @@ def main():
                             "model": result.get("model"),
                             "score": result.get("score"),
                             "threshold": result.get("threshold"),
+                            "eligible": bool(result.get("eligible")),
+                            "rms": rms,
+                            "noiseFloorRms": fi.noise_floor_rms,
+                            "effectiveMinRms": effective_min_rms,
                         }
                         sys.stdout.write(json.dumps(payload) + "\n")
                     emitted = True

@@ -25,7 +25,7 @@ const DEFAULT_WAKE_WORD_THRESHOLD = 0.55;
 const DEFAULT_WAKE_WORD_DEBOUNCE_MS = 1500;
 const DEFAULT_WAKE_WORD_MIN_RMS = 0.004;
 const MAX_WAKE_WORD_MIN_RMS = 0.2;
-const DEFAULT_COMMAND_PREROLL_MS = 3000;
+const DEFAULT_COMMAND_PREROLL_MS = 1800;
 const MAX_COMMAND_PREROLL_MS = 5000;
 const DEFAULT_COMMAND_MAX_DURATION_MS = 12000;
 const DEFAULT_COMMAND_MIN_CAPTURE_MS = 900;
@@ -36,6 +36,7 @@ const DEFAULT_COMMAND_MIN_RMS = 0.0006;
 const MAX_PENDING_COMMAND_AUDIO_MS = 8000;
 const WAKE_ACK_TIMEOUT_MS = 10000;
 const WAKE_EARCON_ENDPOINT_IGNORE_MS = 220;
+const DIGITAL_SILENCE_WARNING_MS = 4000;
 const PCM_SAMPLE_WIDTH_BYTES = 2;
 const OPENWAKEWORD_FRAME_MS = 80;
 const EARCON_SAMPLE_RATE = 16000;
@@ -463,6 +464,7 @@ class HomeBrainRemoteDevice {
     this.earconPlaybackQueue = Promise.resolve();
     this.ttsGeneration = 0;
     this.lastVoiceInteraction = null;
+    this.audioHealthWarned = false;
 
     // Wake word detection
     this.wakeWordDisplayNames = ['Anna', 'Henry', 'Home Brain', 'Homebrain'];
@@ -1001,6 +1003,9 @@ class HomeBrainRemoteDevice {
         ...(endpointing ? { endpointing } : {})
       };
       this.voiceConfig = this.config.voice;
+      if (Number.isFinite(Number(config.voice.commandPreRollMs))) {
+        this.commandPreRollMs = clamp(config.voice.commandPreRollMs, 500, MAX_COMMAND_PREROLL_MS);
+      }
     }
 
     const previousNamesSignature = JSON.stringify(this.wakeWordDisplayNames);
@@ -1532,6 +1537,7 @@ class HomeBrainRemoteDevice {
         frameSamples: this.wakeWordFrameSamples || this.wakeWordSampleRate || 16000,
         minRms: extra.minRms ?? null,
         confirmationMs: Number(this.config.wakeWord?.confirmationMs) || 160,
+        minScoreHits: Number(this.config.wakeWord?.minScoreHits) || 2,
         stderr: null,
         stderrAt: null
       },
@@ -1541,11 +1547,20 @@ class HomeBrainRemoteDevice {
         frames: 0,
         lastAudioAt: null,
         lastFrameRms: null,
-        peakFrameRms: 0
+        peakFrameRms: 0,
+        recentPeakRms: 0,
+        zeroFrames: 0,
+        nonZeroFrames: 0,
+        zeroFrameStreak: 0,
+        digitalSilenceSince: null,
+        lastNonZeroAt: null,
+        mutedLikely: false,
+        health: 'checking'
       },
       commandCapture: this.lastCommandCapture,
       voiceInteraction: this.lastVoiceInteraction,
       lastScore: null,
+      scoreStats: {},
       lastDetect: null,
       lastError: null,
       updatedAt: new Date().toISOString()
@@ -1573,6 +1588,12 @@ class HomeBrainRemoteDevice {
       this.wakeWordRuntime.audio = {
         ...this.wakeWordRuntime.audio,
         ...updates.audio
+      };
+    }
+    if (updates.scoreStats && typeof updates.scoreStats === 'object') {
+      this.wakeWordRuntime.scoreStats = {
+        ...(this.wakeWordRuntime.scoreStats || {}),
+        ...updates.scoreStats
       };
     }
 
@@ -1699,6 +1720,37 @@ class HomeBrainRemoteDevice {
       sumSquares += sample * sample;
     }
     return Math.sqrt(sumSquares / sampleCount);
+  }
+
+  buildWakeAudioFrameStats(rms, previous = {}) {
+    const nowIso = new Date().toISOString();
+    const exactSilence = !Number.isFinite(rms) || rms <= 0.000001;
+    const zeroFrameStreak = exactSilence ? (previous.zeroFrameStreak || 0) + 1 : 0;
+    const mutedLikely = zeroFrameStreak * OPENWAKEWORD_FRAME_MS >= DIGITAL_SILENCE_WARNING_MS;
+    if (mutedLikely && !this.audioHealthWarned) {
+      console.warn('Microphone stream is returning digital silence; hardware mute may be active');
+      this.audioHealthWarned = true;
+    } else if (!exactSilence) {
+      this.audioHealthWarned = false;
+    }
+
+    return {
+      ...previous,
+      frames: (previous.frames || 0) + 1,
+      lastFrameRms: Number((Number.isFinite(rms) ? rms : 0).toFixed(6)),
+      peakFrameRms: Number(Math.max(previous.peakFrameRms || 0, rms || 0).toFixed(6)),
+      recentPeakRms: Number(Math.max(rms || 0, (previous.recentPeakRms || 0) * 0.95).toFixed(6)),
+      zeroFrames: (previous.zeroFrames || 0) + (exactSilence ? 1 : 0),
+      nonZeroFrames: (previous.nonZeroFrames || 0) + (exactSilence ? 0 : 1),
+      zeroFrameStreak,
+      digitalSilenceSince: exactSilence
+        ? (previous.digitalSilenceSince || nowIso)
+        : null,
+      lastNonZeroAt: exactSilence ? (previous.lastNonZeroAt || null) : nowIso,
+      mutedLikely,
+      health: mutedLikely ? 'muted_or_silent' : (exactSilence ? 'checking' : 'ok'),
+      lastAudioAt: nowIso
+    };
   }
 
   getCommandPreRollByteLimit() {
@@ -2758,6 +2810,7 @@ class HomeBrainRemoteDevice {
       frameSamples: this.wakeWordFrameSamples,
       cooldownMs: this.wakeWordDebounceMs,
       confirmationMs: this.config.wakeWord?.confirmationMs,
+      minScoreHits: this.config.wakeWord?.minScoreHits,
       vad: { minRms }
     };
 
@@ -2786,6 +2839,7 @@ class HomeBrainRemoteDevice {
                 ready: true,
                 models: Array.isArray(msg.models) ? msg.models : [],
                 confirmationMs: Number(msg.confirmationMs) || Number(this.config.wakeWord?.confirmationMs) || 160,
+                minScoreHits: Number(msg.minScoreHits) || Number(this.config.wakeWord?.minScoreHits) || 2,
                 readyAt: new Date().toISOString()
               }
             });
@@ -2805,11 +2859,34 @@ class HomeBrainRemoteDevice {
             console.warn(`[sidecar] error: ${msg.message || 'unknown error'}`);
           }
           if (msg.type === 'score') {
+            const modelKey = slugify(msg.model || 'unknown') || 'unknown';
+            const previousScoreStats = this.wakeWordRuntime?.scoreStats?.[modelKey] || {};
+            const numericScore = typeof msg.score === 'number' ? msg.score : null;
+            const numericThreshold = typeof msg.threshold === 'number' ? msg.threshold : null;
             this.updateWakeWordRuntime({
               lastScore: {
                 model: msg.model || 'unknown',
-                score: typeof msg.score === 'number' ? msg.score : null,
+                score: numericScore,
+                threshold: numericThreshold,
                 at: new Date().toISOString()
+              },
+              scoreStats: {
+                [modelKey]: {
+                  model: msg.model || 'unknown',
+                  score: numericScore,
+                  threshold: numericThreshold,
+                  peakScore: numericScore === null
+                    ? (previousScoreStats.peakScore ?? null)
+                    : Math.max(previousScoreStats.peakScore || 0, numericScore),
+                  aboveThresholdFrames: (previousScoreStats.aboveThresholdFrames || 0) + (msg.eligible ? 1 : 0),
+                  lastAboveThresholdAt: msg.eligible
+                    ? new Date().toISOString()
+                    : (previousScoreStats.lastAboveThresholdAt || null),
+                  rms: typeof msg.rms === 'number' ? msg.rms : null,
+                  noiseFloorRms: typeof msg.noiseFloorRms === 'number' ? msg.noiseFloorRms : null,
+                  effectiveMinRms: typeof msg.effectiveMinRms === 'number' ? msg.effectiveMinRms : null,
+                  updatedAt: new Date().toISOString()
+                }
               }
             });
             this.reportWakeWordRuntimeStatus(false, 'score');
@@ -2905,12 +2982,7 @@ class HomeBrainRemoteDevice {
       const rms = this.calculatePcmRms(frame);
       const audioStats = this.wakeWordRuntime?.audio || {};
       this.updateWakeWordRuntime({
-        audio: {
-          frames: (audioStats.frames || 0) + 1,
-          lastFrameRms: Number(rms.toFixed(6)),
-          peakFrameRms: Number(Math.max(audioStats.peakFrameRms || 0, rms).toFixed(6)),
-          lastAudioAt: new Date().toISOString()
-        }
+        audio: this.buildWakeAudioFrameStats(rms, audioStats)
       });
       this.reportWakeWordRuntimeStatus(false, 'audio_frame');
       // Always advance the sidecar's streaming feature state, including during
@@ -3025,12 +3097,7 @@ class HomeBrainRemoteDevice {
       const rms = this.calculatePcmRms(frameBuffer);
       const audioStats = this.wakeWordRuntime?.audio || {};
       this.updateWakeWordRuntime({
-        audio: {
-          frames: (audioStats.frames || 0) + 1,
-          lastFrameRms: Number(rms.toFixed(6)),
-          peakFrameRms: Number(Math.max(audioStats.peakFrameRms || 0, rms).toFixed(6)),
-          lastAudioAt: new Date().toISOString()
-        }
+        audio: this.buildWakeAudioFrameStats(rms, audioStats)
       });
       this.reportWakeWordRuntimeStatus(false, 'audio_frame');
       if (!this.shouldProcessWakeWordFrame(frameBuffer, rms)) {

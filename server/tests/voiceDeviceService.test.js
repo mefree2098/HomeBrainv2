@@ -97,3 +97,50 @@ test('diagnoseDevice reports expired onboarding and missing websocket', async (t
   assert.equal(result.diagnostics.checks.heartbeatFresh.ok, false);
   assert.match(result.message, /No live websocket connection is open/);
 });
+
+test('diagnoseDevice does not report a digitally silent microphone as available', async (t) => {
+  const originalFindById = VoiceDevice.findById;
+  const now = new Date('2026-06-11T12:00:00.000Z');
+  t.after(() => { VoiceDevice.findById = originalFindById; });
+
+  VoiceDevice.findById = async () => ({
+    _id: { toString: () => '507f1f77bcf86cd799439011' },
+    name: 'Pi5',
+    room: 'Living Room',
+    deviceType: 'speaker',
+    status: 'online',
+    lastSeen: new Date(now.getTime() - 5_000),
+    wakeWordSupport: true,
+    supportedWakeWords: ['Anna'],
+    settings: {
+      registered: true,
+      deviceTokenHash: 'hashed-token',
+      wakeWordRuntime: {
+        audio: {
+          lastAudioAt: new Date(now.getTime() - 1_000).toISOString(),
+          lastFrameRms: 0,
+          recentPeakRms: 0,
+          mutedLikely: true,
+          health: 'muted_or_silent'
+        }
+      }
+    },
+    updateStatus: { status: 'idle' }
+  });
+
+  const result = await voiceDeviceService.diagnoseDevice('507f1f77bcf86cd799439011', {
+    now,
+    websocketStats: [{
+      connections: [{
+        deviceId: '507f1f77bcf86cd799439011',
+        authenticated: true,
+        lastPing: now.toISOString()
+      }]
+    }]
+  });
+
+  assert.equal(result.success, false);
+  assert.equal(result.testResults.audioInput, false);
+  assert.equal(result.diagnostics.checks.audioInput.ok, false);
+  assert.match(result.diagnostics.checks.audioInput.message, /hardware mute/i);
+});

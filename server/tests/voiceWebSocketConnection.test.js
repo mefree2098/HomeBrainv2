@@ -455,6 +455,9 @@ test('buildWakeWordConfig includes bounded live voice tuning', async (t) => {
   const device = createDevice();
   device.settings.voiceTuning = {
     wakeConfirmationMs: 320,
+    wakeMinScoreHits: 3,
+    wakeThresholdOffset: 0.04,
+    commandPreRollMs: 1700,
     commandMaxDurationMs: 8000,
     commandSilenceMs: 550,
     commandMinRms: 0.0012,
@@ -465,6 +468,8 @@ test('buildWakeWordConfig includes bounded live voice tuning', async (t) => {
   const { config } = await voiceWs.buildWakeWordConfig(device, { deviceToken: 'token' }, {});
 
   assert.equal(config.wakeWord.confirmationMs, 320);
+  assert.equal(config.wakeWord.minScoreHits, 3);
+  assert.equal(config.voice.commandPreRollMs, 1700);
   assert.equal(config.voice.endpointing.maxDurationMs, 8000);
   assert.equal(config.voice.endpointing.silenceMs, 550);
   assert.equal(config.voice.endpointing.minRms, 0.0012);
@@ -499,6 +504,7 @@ test('buildWakeWordConfig uses calibrated model thresholds and excludes missing 
 
   const voiceWs = new VoiceWebSocketServer();
   const device = createDevice();
+  device.settings.voiceTuning = { wakeThresholdOffset: 0.04 };
   device.supportedWakeWords = ['Anna', 'Home Brain'];
   const { config } = await voiceWs.buildWakeWordConfig(device, { deviceToken: 'token' }, {
     platform: 'linux',
@@ -508,7 +514,7 @@ test('buildWakeWordConfig uses calibrated model thresholds and excludes missing 
   assert.deepEqual(config.wakeWords, ['Anna']);
   assert.deepEqual(config.wakeWord.enabled, ['Anna']);
   assert.deepEqual(config.wakeWord.missing, ['Home Brain']);
-  assert.equal(config.wakeWord.assets[0].threshold, 0.72);
+  assert.equal(config.wakeWord.assets[0].threshold, 0.76);
   assert.equal(config.wakeWord.assets[0].sensitivity, 0.28);
 });
 

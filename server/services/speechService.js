@@ -357,17 +357,43 @@ class SpeechService {
           model: providerConfig.model
         });
       case 'lan_whisper':
-        return this.transcribeWithLanWhisper({
-          audioBuffer,
-          sampleRate,
-          channels,
-          format,
-          language: sttLanguage,
-          model: providerConfig.model,
-          endpoint: providerConfig.lanEndpoint,
-          apiKey: providerConfig.lanApiKey,
-          timeoutMs: providerConfig.lanTimeoutMs
-        });
+        try {
+          return await this.transcribeWithLanWhisper({
+            audioBuffer,
+            sampleRate,
+            channels,
+            format,
+            language: sttLanguage,
+            model: providerConfig.model,
+            endpoint: providerConfig.lanEndpoint,
+            apiKey: providerConfig.lanApiKey,
+            timeoutMs: providerConfig.lanTimeoutMs
+          });
+        } catch (error) {
+          console.warn(`LAN Whisper unavailable; falling back to the local worker: ${error.message}`);
+          let fallbackModel = process.env.LAN_WHISPER_FALLBACK_MODEL || 'tiny';
+          try {
+            const localStatus = await whisperService.getStatus();
+            if (typeof localStatus?.activeModel === 'string' && localStatus.activeModel.trim()) {
+              fallbackModel = localStatus.activeModel.trim();
+            }
+          } catch (_statusError) {
+            // The local transcription method performs its own availability check.
+          }
+          const fallback = await this.transcribeWithWhisperLocal({
+            audioBuffer,
+            sampleRate,
+            channels,
+            format,
+            language: sttLanguage,
+            model: fallbackModel
+          });
+          return {
+            ...fallback,
+            fallbackFrom: 'lan_whisper',
+            fallbackReason: String(error.message || 'LAN Whisper unavailable').slice(0, 500)
+          };
+        }
       default:
         throw new Error(`Unsupported speech-to-text provider: ${providerConfig.provider}`);
     }

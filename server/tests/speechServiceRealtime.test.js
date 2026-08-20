@@ -46,3 +46,48 @@ test('room voice transcription defaults to greedy beam size one', async (t) => {
   assert.equal(result.beamSize, 1);
   assert.equal(result.text, 'turn off the office');
 });
+
+test('room voice transcription falls back locally when LAN Whisper is unavailable', async (t) => {
+  const originals = {
+    getProviderConfig: speechService.getProviderConfig,
+    transcribeWithLanWhisper: speechService.transcribeWithLanWhisper,
+    transcribeWithWhisperLocal: speechService.transcribeWithWhisperLocal,
+    getStatus: whisperService.getStatus
+  };
+  t.after(() => {
+    speechService.getProviderConfig = originals.getProviderConfig;
+    speechService.transcribeWithLanWhisper = originals.transcribeWithLanWhisper;
+    speechService.transcribeWithWhisperLocal = originals.transcribeWithWhisperLocal;
+    whisperService.getStatus = originals.getStatus;
+  });
+
+  speechService.getProviderConfig = async () => ({
+    provider: 'lan_whisper',
+    model: 'large-v3',
+    language: 'en',
+    lanEndpoint: 'http://192.168.1.30:8000',
+    lanApiKey: '',
+    lanTimeoutMs: 1000
+  });
+  speechService.transcribeWithLanWhisper = async () => {
+    throw new Error('connection refused');
+  };
+  whisperService.getStatus = async () => ({ activeModel: 'tiny' });
+  let localRequest = null;
+  speechService.transcribeWithWhisperLocal = async (options) => {
+    localRequest = options;
+    return { provider: 'whisper_local', model: 'tiny', text: 'turn off the office' };
+  };
+
+  const result = await speechService.transcribe({
+    audioBuffer: Buffer.alloc(3200),
+    sampleRate: 16000,
+    channels: 1,
+    format: 'S16LE'
+  });
+
+  assert.equal(localRequest.model, 'tiny');
+  assert.equal(result.text, 'turn off the office');
+  assert.equal(result.fallbackFrom, 'lan_whisper');
+  assert.match(result.fallbackReason, /connection refused/);
+});
