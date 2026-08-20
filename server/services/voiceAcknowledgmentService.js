@@ -62,7 +62,9 @@ class VoiceAcknowledgmentService {
       `One moment.`,
       `Working on that now.`,
       `Right away.`,
-      `Checking now.`
+      `Checking now.`,
+      `Done.`,
+      `Sorry, that did not work.`
     ];
 
     return Array.from(

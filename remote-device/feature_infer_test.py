@@ -1,6 +1,21 @@
 import unittest
+import sys
+import types
 
 import numpy as np
+
+if "onnxruntime" not in sys.modules:
+    fake_onnxruntime = types.ModuleType("onnxruntime")
+    fake_onnxruntime.InferenceSession = object
+    sys.modules["onnxruntime"] = fake_onnxruntime
+
+if "openwakeword.utils" not in sys.modules:
+    fake_openwakeword = types.ModuleType("openwakeword")
+    fake_openwakeword_utils = types.ModuleType("openwakeword.utils")
+    fake_openwakeword_utils.AudioFeatures = object
+    fake_openwakeword.utils = fake_openwakeword_utils
+    sys.modules["openwakeword"] = fake_openwakeword
+    sys.modules["openwakeword.utils"] = fake_openwakeword_utils
 
 import feature_infer
 
@@ -30,6 +45,7 @@ class FeatureInferStreamingTests(unittest.TestCase):
         instance.pending_detection = None
         instance.pending_detection_frames = 0
         instance.detection_confirmation_ms = feature_infer.DETECTION_CONFIRMATION_MS
+        instance.min_score_hits = feature_infer.DEFAULT_MIN_SCORE_HITS
         return instance
 
     def test_preprocess_advances_quiet_audio_before_inference_is_ready(self):
@@ -49,7 +65,6 @@ class FeatureInferStreamingTests(unittest.TestCase):
         hey_anna = {"model": "Hey Anna", "score": 0.75, "threshold": 0.57, "eligible": True}
 
         self.assertIsNone(instance.update_detection_candidate([anna]))
-        self.assertIsNone(instance.update_detection_candidate([anna, hey_anna]))
         detection = instance.update_detection_candidate([anna, hey_anna])
 
         self.assertIsNotNone(detection)
@@ -62,19 +77,30 @@ class FeatureInferStreamingTests(unittest.TestCase):
         self.assertIsNone(instance.update_detection_candidate([spike]))
         self.assertIsNone(instance.update_detection_candidate([]))
 
-    def test_confirmation_window_is_runtime_tunable(self):
+    def test_confirmation_window_allows_non_consecutive_evidence(self):
         instance = self.make_infer()
         instance.detection_confirmation_ms = 320
         candidate = {"model": "Anna", "score": 0.99, "threshold": 0.68, "eligible": True}
 
         self.assertIsNone(instance.update_detection_candidate([candidate]))
-        self.assertIsNone(instance.update_detection_candidate([candidate]))
-        self.assertIsNone(instance.update_detection_candidate([candidate]))
+        self.assertIsNone(instance.update_detection_candidate([]))
         detection = instance.update_detection_candidate([candidate])
 
         self.assertIsNotNone(detection)
         self.assertEqual(detection["model"], "Anna")
         self.assertIsNone(instance.update_detection_candidate([]))
+
+    def test_required_score_hits_are_runtime_tunable(self):
+        instance = self.make_infer()
+        instance.detection_confirmation_ms = 320
+        instance.min_score_hits = 3
+        candidate = {"model": "Anna", "score": 0.99, "threshold": 0.68, "eligible": True}
+
+        self.assertIsNone(instance.update_detection_candidate([candidate]))
+        self.assertIsNone(instance.update_detection_candidate([candidate]))
+        detection = instance.update_detection_candidate([candidate])
+
+        self.assertIsNotNone(detection)
 
 
 if __name__ == "__main__":

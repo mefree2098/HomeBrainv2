@@ -9,6 +9,7 @@ const WakeWordModel = require('../models/WakeWordModel');
 const speechService = require('../services/speechService');
 const voiceCommandService = require('../services/voiceCommandService');
 const settingsService = require('../services/settingsService');
+const eventStreamService = require('../services/eventStreamService');
 const { validateDeviceCredentials } = require('../services/voiceDeviceLifecycleService');
 const reachyMiniService = require('../services/reachyMiniService');
 
@@ -375,7 +376,10 @@ class VoiceWebSocketServer {
       REMOTE_COMMAND_MAX_DURATION_MS
     ));
     return {
-      wakeConfirmationMs: Math.round(bounded(raw.wakeConfirmationMs, 80, 1000, 160)),
+      wakeConfirmationMs: Math.round(bounded(raw.wakeConfirmationMs, 80, 1000, 320)),
+      wakeMinScoreHits: Math.round(bounded(raw.wakeMinScoreHits, 1, 6, 2)),
+      wakeThresholdOffset: bounded(raw.wakeThresholdOffset, -0.2, 0.2, 0.02),
+      commandPreRollMs: Math.round(bounded(raw.commandPreRollMs, 500, 5000, 1800)),
       silentEmptyWakes: raw.silentEmptyWakes !== false,
       backgroundGuardEnabled: raw.backgroundGuardEnabled !== false,
       endpointing: {
@@ -428,6 +432,7 @@ class VoiceWebSocketServer {
       console.warn('%s', `Failed to load wake word metadata for device ${device.name}:`, error.message);
     }
 
+    const voiceTuning = this.resolveVoiceTuning(device);
     const wakeWordAssetPayload = assets.map((asset) => {
       const buildAssetUrl = (dependencyFileName = null) => {
         const params = new URLSearchParams();
@@ -472,7 +477,7 @@ class VoiceWebSocketServer {
         checksum: asset.checksum,
         size: asset.size,
         sensitivity: rawSensitivity != null ? clampValue(rawSensitivity, 0, 1) : undefined,
-        threshold: clampValue(rawThreshold, 0, 1),
+        threshold: clampValue(rawThreshold + voiceTuning.wakeThresholdOffset, 0, 1),
         engine: asset.engine || 'openwakeword',
         format: asset.format,
         updatedAt: asset.updatedAt,
@@ -492,7 +497,6 @@ class VoiceWebSocketServer {
       ? device.settings.wakeWordDebounceMs
       : 1500;
     const vadSettings = device.settings?.wakeWordVad || {};
-    const voiceTuning = this.resolveVoiceTuning(device);
     const audioSettings = sanitizeRemoteAudioConfig(device.settings?.audio);
     const enabledWakeWords = wakeWordAssetPayload.map((asset) => asset.label);
     const enabledSlugs = new Set(wakeWordAssetPayload.map((asset) => asset.slug));
@@ -508,6 +512,7 @@ class VoiceWebSocketServer {
           assets: wakeWordAssetPayload,
           debounceMs,
           confirmationMs: voiceTuning.wakeConfirmationMs,
+          minScoreHits: voiceTuning.wakeMinScoreHits,
           vad: {
             speechThreshold: typeof vadSettings.speechThreshold === 'number'
               ? clampValue(vadSettings.speechThreshold, 0, 1)
@@ -528,6 +533,7 @@ class VoiceWebSocketServer {
         microphoneSensitivity: device.microphoneSensitivity,
         ...(audioSettings ? { audio: audioSettings } : {}),
         voice: {
+          commandPreRollMs: voiceTuning.commandPreRollMs,
           endpointing: voiceTuning.endpointing,
           silentEmptyWakes: voiceTuning.silentEmptyWakes,
           backgroundGuardEnabled: voiceTuning.backgroundGuardEnabled
@@ -1054,6 +1060,21 @@ class VoiceWebSocketServer {
       if (!acknowledged && isReachy) {
         this.clearRejectedReachyAudio(deviceId, connection);
       }
+      void eventStreamService.publishSafe({
+        type: 'voice.wake_detected',
+        source: 'voice',
+        category: 'voice',
+        payload: {
+          deviceId: String(deviceId),
+          deviceName: connection.device?.name || '',
+          room: connection.device?.room || '',
+          wakeWord: normalizedWake,
+          confidence: safeConfidence,
+          interactionId
+        },
+        tags: ['voice', 'wake'],
+        correlationId: interactionId
+      });
 
     } catch (error) {
       if (isReachy) this.clearRejectedReachyAudio(deviceId, connection);
@@ -1142,7 +1163,7 @@ class VoiceWebSocketServer {
       return profileVoice.trim();
     }
 
-    return 'default';
+    return null;
   }
 
   async updateDeviceAudioState(deviceId, updates) {
@@ -1468,7 +1489,9 @@ class VoiceWebSocketServer {
       const succeeded = resultStatus === 'success' || resultStatus === 'partial_success';
       const hasExecutedActions = Array.isArray(result.execution?.actions)
         && result.execution.actions.length > 0;
-      const spokenResult = hasExecutedActions ? null : responseText;
+      const spokenResult = !succeeded
+        ? responseText
+        : (hasExecutedActions ? null : responseText);
       const resultTiming = {
         ...timingBase,
         executionStartedAt: executionStartedAt.toISOString(),
@@ -1489,6 +1512,23 @@ class VoiceWebSocketServer {
         ...(spokenResult ? { text: spokenResult } : {}),
         voice: preferredVoiceId || 'default',
         timing: resultTiming
+      });
+      void eventStreamService.publishSafe({
+        type: succeeded ? 'voice.command_succeeded' : 'voice.command_failed',
+        source: 'voice',
+        category: 'voice',
+        severity: succeeded ? 'info' : 'error',
+        payload: {
+          deviceId: String(deviceId),
+          deviceName: connection.device?.name || '',
+          room: connection.device?.room || '',
+          wakeWord: wakeWordForVoice || '',
+          commandId: voiceCommand._id.toString(),
+          status: resultStatus,
+          timing: resultTiming
+        },
+        tags: ['voice', 'command'],
+        correlationId: interactionId
       });
 
       connection.pendingWakeWord = null;
@@ -1515,12 +1555,33 @@ class VoiceWebSocketServer {
         interactionId,
         status: 'failed',
         errorCode: String(error?.code || error?.name || 'VOICE_COMMAND_FAILED').slice(0, 128),
+        text: 'Sorry, that did not work.',
         voice: failureVoice || 'default',
         timing: {
           ...timingBase,
           resultSentAt: failedAt.toISOString(),
           wakeToResultMs: Math.max(0, failedAt.getTime() - wakeDetectedAt.getTime())
         }
+      });
+      void eventStreamService.publishSafe({
+        type: 'voice.command_failed',
+        source: 'voice',
+        category: 'voice',
+        severity: 'error',
+        payload: {
+          deviceId: String(deviceId),
+          deviceName: connection.device?.name || '',
+          room: connection.device?.room || '',
+          wakeWord: wakeWordForVoice || '',
+          errorCode: String(error?.code || error?.name || 'VOICE_COMMAND_FAILED').slice(0, 128),
+          timing: {
+            ...timingBase,
+            resultSentAt: failedAt.toISOString(),
+            wakeToResultMs: Math.max(0, failedAt.getTime() - wakeDetectedAt.getTime())
+          }
+        },
+        tags: ['voice', 'command'],
+        correlationId: interactionId
       });
     }
   }

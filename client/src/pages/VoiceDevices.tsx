@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import {
   Mic,
+  MicOff,
   Volume2,
   Wifi,
   WifiOff,
@@ -99,7 +100,10 @@ function VoiceTuningSlider({
 }
 
 const DEFAULT_VOICE_TUNING = {
-  wakeConfirmationMs: 160,
+  wakeConfirmationMs: 320,
+  wakeMinScoreHits: 2,
+  wakeThresholdOffset: 0.02,
+  commandPreRollMs: 1800,
   commandMaxDurationMs: 12000,
   commandMinCaptureMs: 900,
   commandSilenceMs: 700,
@@ -112,32 +116,43 @@ const DEFAULT_VOICE_TUNING = {
 
 const VOICE_TUNING_PRESETS = {
   responsive: {
-    wakeMinRms: 0.01,
+    wakeMinRms: 0.006,
     voiceTuning: {
       ...DEFAULT_VOICE_TUNING,
-      wakeConfirmationMs: 160,
+      wakeConfirmationMs: 240,
+      wakeMinScoreHits: 2,
+      wakeThresholdOffset: 0,
+      commandPreRollMs: 1600,
       commandMaxDurationMs: 10000,
-      commandSilenceMs: 800,
-      commandSpeechStartTimeoutMs: 5000,
+      commandMinCaptureMs: 600,
+      commandSilenceMs: 500,
+      commandSpeechStartTimeoutMs: 3000,
       commandMinRms: 0.0005
     }
   },
   balanced: {
-    wakeMinRms: 0.02,
+    wakeMinRms: 0.01,
     voiceTuning: {
       ...DEFAULT_VOICE_TUNING,
-      wakeConfirmationMs: 240,
+      wakeConfirmationMs: 320,
+      wakeMinScoreHits: 2,
+      wakeThresholdOffset: 0.02,
+      commandPreRollMs: 1800,
       commandMaxDurationMs: 8000,
-      commandSilenceMs: 700,
-      commandSpeechStartTimeoutMs: 4000,
+      commandMinCaptureMs: 700,
+      commandSilenceMs: 600,
+      commandSpeechStartTimeoutMs: 3500,
       commandMinRms: 0.0006
     }
   },
   noisy: {
-    wakeMinRms: 0.04,
+    wakeMinRms: 0.02,
     voiceTuning: {
       ...DEFAULT_VOICE_TUNING,
       wakeConfirmationMs: 400,
+      wakeMinScoreHits: 3,
+      wakeThresholdOffset: 0.06,
+      commandPreRollMs: 2000,
       commandMaxDurationMs: 7000,
       commandSilenceMs: 600,
       commandSpeechStartTimeoutMs: 3000,
@@ -808,14 +823,20 @@ export function VoiceDevices() {
             ...DEFAULT_VOICE_TUNING,
             ...(device.settings?.voiceTuning || {})
           }
-          const wakeMinRms = device.settings?.wakeWordVad?.minRms ?? 0.02
+          const wakeMinRms = device.settings?.wakeWordVad?.minRms ?? 0.004
           const runtimeWakeMinRms = device.settings?.wakeWordRuntime?.sidecar?.minRms
           const runtimeConfirmationMs = device.settings?.wakeWordRuntime?.sidecar?.confirmationMs
+          const runtimeMinScoreHits = device.settings?.wakeWordRuntime?.sidecar?.minScoreHits
+          const microphoneMutedLikely = device.settings?.wakeWordRuntime?.audio?.mutedLikely === true
           const tuningApplied = typeof runtimeWakeMinRms === 'number'
             && Math.abs(runtimeWakeMinRms - wakeMinRms) < 0.00005
             && (
               typeof runtimeConfirmationMs !== 'number'
               || runtimeConfirmationMs === voiceTuning.wakeConfirmationMs
+            )
+            && (
+              typeof runtimeMinScoreHits !== 'number'
+              || runtimeMinScoreHits === voiceTuning.wakeMinScoreHits
             )
 
           return (
@@ -872,6 +893,13 @@ export function VoiceDevices() {
                     {streamElapsed && (
                       <span className="text-blue-600/80">({streamElapsed})</span>
                     )}
+                  </div>
+                )}
+
+                {microphoneMutedLikely && (
+                  <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                    <MicOff className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>The microphone stream is digital silence. Hardware mute is likely active; HomeBrain will not unmute it automatically.</span>
                   </div>
                 )}
 
@@ -998,8 +1026,8 @@ export function VoiceDevices() {
                           )}
                         />
                         <VoiceTuningSlider
-                          label="Wake confirmation"
-                          description="How long the same wake model must remain positive. Higher values reject brief false hits."
+                          label="Wake evidence window"
+                          description="Time in which the detector can collect multiple positive model frames. It no longer requires uninterrupted positives."
                           value={voiceTuning.wakeConfirmationMs}
                           min={80}
                           max={1000}
@@ -1009,6 +1037,48 @@ export function VoiceDevices() {
                             device._id,
                             { voiceTuning: { wakeConfirmationMs: value } },
                             `Wake confirmation set to ${Math.round(value)} ms`
+                          )}
+                        />
+                        <VoiceTuningSlider
+                          label="Wake score hits"
+                          description="Positive model frames required inside the evidence window. Two rejects isolated spikes without making normal speech hard to detect."
+                          value={voiceTuning.wakeMinScoreHits}
+                          min={1}
+                          max={6}
+                          step={1}
+                          formatValue={(value) => `${Math.round(value)} hit${Math.round(value) === 1 ? '' : 's'}`}
+                          onCommit={(value) => commitDeviceSettings(
+                            device._id,
+                            { voiceTuning: { wakeMinScoreHits: value } },
+                            `Wake score hits set to ${Math.round(value)}`
+                          )}
+                        />
+                        <VoiceTuningSlider
+                          label="Wake threshold offset"
+                          description="Fine-tunes every model around its trained threshold. Raise to reduce false wakes; lower if clear wake phrases are missed."
+                          value={voiceTuning.wakeThresholdOffset}
+                          min={-0.15}
+                          max={0.15}
+                          step={0.01}
+                          formatValue={(value) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}`}
+                          onCommit={(value) => commitDeviceSettings(
+                            device._id,
+                            { voiceTuning: { wakeThresholdOffset: value } },
+                            `Wake threshold offset set to ${value >= 0 ? '+' : ''}${value.toFixed(2)}`
+                          )}
+                        />
+                        <VoiceTuningSlider
+                          label="Command pre-roll"
+                          description="Audio retained before wake detection so one-breath commands are not clipped. Shorter values reduce transcription work."
+                          value={voiceTuning.commandPreRollMs}
+                          min={500}
+                          max={5000}
+                          step={100}
+                          formatValue={(value) => `${(value / 1000).toFixed(1)} s`}
+                          onCommit={(value) => commitDeviceSettings(
+                            device._id,
+                            { voiceTuning: { commandPreRollMs: value } },
+                            `Command pre-roll set to ${(value / 1000).toFixed(1)} seconds`
                           )}
                         />
                         <VoiceTuningSlider

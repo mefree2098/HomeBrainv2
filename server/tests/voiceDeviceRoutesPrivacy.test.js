@@ -3,12 +3,17 @@ const assert = require('node:assert/strict');
 
 const voiceCommandService = require('../services/voiceCommandService');
 const eventStreamService = require('../services/eventStreamService');
+const VoiceDevice = require('../models/VoiceDevice');
+const VoiceCommand = require('../models/VoiceCommand');
 const voiceDeviceRoutes = require('../routes/voiceDeviceRoutes');
 
 const interpretRoute = voiceDeviceRoutes.stack.find(
   (layer) => layer.route?.path === '/commands/interpret'
 );
 const interpretHandler = interpretRoute.route.stack.at(-1).handle;
+const interactionsHandler = voiceDeviceRoutes.stack.find(
+  (layer) => layer.route?.path === '/devices/:id/interactions'
+).route.stack.at(-1).handle;
 
 function responseRecorder() {
   return {
@@ -102,4 +107,40 @@ test('voice failure events retain attribution but omit command text', async (t) 
   assert.equal(published[0].type, 'voice.command_failed');
   assert.equal(Object.hasOwn(published[0].payload, 'command'), false);
   assert.equal(published[0].payload.error, 'Processor unavailable');
+});
+
+test('recent device interactions omit stored prompts and raw model responses', async (t) => {
+  const originalDeviceFind = VoiceDevice.findById;
+  const originalCommandFind = VoiceCommand.find;
+  t.after(() => {
+    VoiceDevice.findById = originalDeviceFind;
+    VoiceCommand.find = originalCommandFind;
+  });
+
+  VoiceDevice.findById = () => ({
+    select() { return this; },
+    async lean() { return { _id: '507f1f77bcf86cd799439011', name: 'Pi5', room: 'Living Room' }; }
+  });
+  let selectedFields = '';
+  let requestedLimit = null;
+  VoiceCommand.find = () => ({
+    select(value) { selectedFields = value; return this; },
+    sort() { return this; },
+    limit(value) { requestedLimit = value; return this; },
+    async lean() { return [{ originalText: 'turn off the office', execution: { status: 'success' } }]; }
+  });
+
+  const req = {
+    params: { id: '507f1f77bcf86cd799439011' },
+    query: { limit: '2' },
+    user: { role: 'admin' }
+  };
+  const res = responseRecorder();
+  await interactionsHandler(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(requestedLimit, 2);
+  assert.match(selectedFields, /-llmProcessing\.prompt/);
+  assert.match(selectedFields, /-llmProcessing\.rawResponse/);
+  assert.equal(res.body.count, 1);
 });

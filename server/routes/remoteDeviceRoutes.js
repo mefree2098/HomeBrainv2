@@ -741,8 +741,33 @@ router.post(
         return res.status(403).json({ success: false, message: 'Invalid device credentials' });
       }
 
-      const cachedAudioPath = voiceId
-        ? await voiceAcknowledgmentService.findCachedAudio(voiceId, text)
+      let resolvedVoiceId = voiceId;
+      if (!resolvedVoiceId && device.lastWakeWord) {
+        try {
+          const wakeProfile = await voiceAcknowledgmentService.resolveProfileForWakeWord(device.lastWakeWord);
+          resolvedVoiceId = typeof wakeProfile?.voiceId === 'string' ? wakeProfile.voiceId.trim() : '';
+        } catch (profileError) {
+          console.warn('Remote TTS wake-word voice lookup failed:', profileError.message);
+        }
+      }
+      if (!resolvedVoiceId) {
+        const deviceVoiceCandidates = [
+          device.settings?.voiceId,
+          device.settings?.preferredVoiceId,
+          device.settings?.elevenLabsVoiceId,
+          device.settings?.voice?.elevenLabsVoiceId
+        ];
+        resolvedVoiceId = deviceVoiceCandidates.find((value) => typeof value === 'string' && value.trim())?.trim() || '';
+      }
+      if (!resolvedVoiceId && device.deviceType === 'speaker') {
+        return res.status(503).json({
+          success: false,
+          message: 'No ElevenLabs voice is configured for this speaker wake word'
+        });
+      }
+
+      const cachedAudioPath = resolvedVoiceId
+        ? await voiceAcknowledgmentService.findCachedAudio(resolvedVoiceId, text)
         : null;
       if (cachedAudioPath) {
         const stat = await fsPromises.stat(cachedAudioPath);
@@ -750,6 +775,7 @@ router.post(
         res.setHeader('Content-Length', stat.size);
         res.setHeader('Cache-Control', 'no-store');
         res.setHeader('X-HomeBrain-TTS-Provider', 'elevenlabs');
+        res.setHeader('X-HomeBrain-TTS-Voice', resolvedVoiceId);
         res.setHeader('X-ElevenLabs-Cache', 'hit');
         const cachedStream = fs.createReadStream(cachedAudioPath);
         cachedStream.on('error', () => {
@@ -764,8 +790,8 @@ router.post(
       // ElevenLabs' content-addressed cache, and generate/cache only on a miss.
       const speech = await ttsProviderService.textToSpeechDetailed(
         text,
-        voiceId || undefined,
-        voiceId ? { provider: 'elevenlabs', cache: true } : { cache: true }
+        resolvedVoiceId || undefined,
+        resolvedVoiceId ? { provider: 'elevenlabs', cache: true } : { cache: true }
       );
       const audioBuffer = speech.audioBuffer;
 
@@ -773,6 +799,9 @@ router.post(
       res.setHeader('Content-Length', audioBuffer.length);
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('X-HomeBrain-TTS-Provider', speech.provider || 'unknown');
+      if (resolvedVoiceId) {
+        res.setHeader('X-HomeBrain-TTS-Voice', resolvedVoiceId);
+      }
       if (speech.provider === 'elevenlabs') {
         res.setHeader('X-ElevenLabs-Cache', speech.cacheHit ? 'hit' : 'miss');
         res.setHeader('X-ElevenLabs-Emotion-Tagging', speech.tagger?.status || 'unknown');

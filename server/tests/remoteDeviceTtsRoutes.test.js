@@ -108,6 +108,49 @@ test('Reachy TTS requires a valid steady-state device token', async (t) => {
   assert.match(res.body.message, /credentials/i);
 });
 
+test('speaker TTS resolves the ElevenLabs voice from the last wake word when omitted', async (t) => {
+  const originals = {
+    findById: VoiceDevice.findById,
+    resolveProfile: voiceAcknowledgmentService.resolveProfileForWakeWord,
+    findCached: voiceAcknowledgmentService.findCachedAudio,
+    textToSpeech: ttsProviderService.textToSpeechDetailed
+  };
+  t.after(() => {
+    VoiceDevice.findById = originals.findById;
+    voiceAcknowledgmentService.resolveProfileForWakeWord = originals.resolveProfile;
+    voiceAcknowledgmentService.findCachedAudio = originals.findCached;
+    ttsProviderService.textToSpeechDetailed = originals.textToSpeech;
+  });
+
+  VoiceDevice.findById = async () => ({
+    _id: DEVICE_ID,
+    deviceType: 'speaker',
+    lastWakeWord: 'Anna',
+    settings: { registered: true, deviceTokenHash: hashDeviceToken('device-secret') }
+  });
+  voiceAcknowledgmentService.resolveProfileForWakeWord = async () => ({ voiceId: 'anna-voice' });
+  voiceAcknowledgmentService.findCachedAudio = async () => null;
+  let providerRequest = null;
+  ttsProviderService.textToSpeechDetailed = async (text, voiceId, options) => {
+    providerRequest = { text, voiceId, options };
+    return { audioBuffer: Buffer.from('audio'), contentType: 'audio/mpeg', provider: 'elevenlabs' };
+  };
+
+  const res = response();
+  await routeHandlers('/:deviceId/tts', 'post').at(-1)(
+    request({ body: { text: 'Done.' } }),
+    res
+  );
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(providerRequest, {
+    text: 'Done.',
+    voiceId: 'anna-voice',
+    options: { provider: 'elevenlabs', cache: true }
+  });
+  assert.equal(res.headers['X-HomeBrain-TTS-Voice'], 'anna-voice');
+});
+
 test('Reachy TTS body validation is strict and bounded', () => {
   assert.deepEqual(router.normalizeRemoteTtsPayload({ text: ' hello ', voiceId: 'voice:1' }), {
     text: 'hello',

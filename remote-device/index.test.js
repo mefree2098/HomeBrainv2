@@ -660,6 +660,37 @@ test('wake-only config comparison does not probe an automatic capture device', a
   assert.equal(probes, 0);
 });
 
+test('live voice config updates command pre-roll without reopening the microphone', async () => {
+  const device = new HomeBrainRemoteDevice({ audio: {}, wakeWord: {}, voice: {} });
+  device.syncWakeWordAssetsFromConfig = async () => false;
+
+  const restartNeeded = await device.applyConfigUpdate({
+    voice: { commandPreRollMs: 1700 }
+  });
+
+  assert.equal(restartNeeded, false);
+  assert.equal(device.commandPreRollMs, 1700);
+  assert.equal(device.getCommandPreRollByteLimit(), 1700 * 16 * 2);
+});
+
+test('microphone health telemetry identifies digital silence without changing mute state', () => {
+  const device = new HomeBrainRemoteDevice({ audio: {}, wakeWord: {} });
+  let stats = {};
+  const silentFrames = Math.ceil(4000 / 80);
+  for (let index = 0; index < silentFrames; index += 1) {
+    stats = device.buildWakeAudioFrameStats(0, stats);
+  }
+
+  assert.equal(stats.mutedLikely, true);
+  assert.equal(stats.health, 'muted_or_silent');
+  assert.equal(stats.nonZeroFrames, 0);
+
+  stats = device.buildWakeAudioFrameStats(0.01, stats);
+  assert.equal(stats.mutedLikely, false);
+  assert.equal(stats.health, 'ok');
+  assert.equal(stats.zeroFrameStreak, 0);
+});
+
 test('wake config updates restart only the sidecar when capture settings are unchanged', async () => {
   const device = new HomeBrainRemoteDevice({ audio: {}, wakeWord: {} });
   const activeStream = { stop() { throw new Error('mic must not reopen for wake tuning'); } };
