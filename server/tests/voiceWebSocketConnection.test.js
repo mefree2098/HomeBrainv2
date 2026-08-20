@@ -619,40 +619,48 @@ test('speaker command emits understood and execution result feedback without blo
     return this;
   };
   VoiceDevice.findByIdAndUpdate = async () => createDevice();
-  voiceCommandService.processCommand = async () => ({
-    processedText: 'turn off the office',
-    intent: { action: 'device_control', confidence: 1, entities: {} },
-    execution: {
-      status: 'success',
-      actions: [{
-        type: 'device_control',
-        deviceId: '507f1f77bcf86cd799439012',
-        deviceName: 'Office',
-        action: 'turn_off',
-        success: true,
-        message: 'Executed turn_off on Office'
-      }]
-    },
-    responseText: 'Okay, turn off Office.',
-    llm: { provider: 'heuristic', model: 'rule-based', processingTimeMs: 0 },
-    usedFallback: true
-  });
+  let processedWakeWord = null;
+  voiceCommandService.processCommand = async (request) => {
+    processedWakeWord = request.wakeWord;
+    return ({
+      processedText: 'turn off the office',
+      intent: { action: 'device_control', confidence: 1, entities: {} },
+      execution: {
+        status: 'success',
+        actions: [{
+          type: 'device_control',
+          deviceId: '507f1f77bcf86cd799439012',
+          deviceName: 'Office',
+          action: 'turn_off',
+          success: true,
+          message: 'Executed turn_off on Office'
+        }]
+      },
+      responseText: 'Okay, turn off Office.',
+      llm: { provider: 'heuristic', model: 'rule-based', processingTimeMs: 0 },
+      usedFallback: true
+    });
+  };
 
   const voiceWs = new VoiceWebSocketServer();
-  voiceWs.getPreferredVoiceId = async () => 'anna-voice';
+  let preferredWakeWord = null;
+  voiceWs.getPreferredVoiceId = async (_connection, options) => {
+    preferredWakeWord = options.wakeWord;
+    return 'henry-voice';
+  };
   const ws = new MockWebSocket();
   const wakeAt = new Date(Date.now() - 1500);
   const connection = {
     ws,
     authenticated: true,
-    device: createDevice(),
+    device: { ...createDevice(), supportedWakeWords: ['Anna', 'Hey Anna', 'Henry', 'Hey Henry'] },
     pendingWakeWord: { id: 'interaction-1', wakeWord: 'anna', timestamp: wakeAt },
     lastPing: Date.now()
   };
   voiceWs.deviceConnections.set(deviceId, connection);
 
   const processing = voiceWs.processVoiceCommandText(deviceId, {
-    commandText: 'turn off the office',
+    commandText: 'Hey Henry, turn off the office',
     confidence: 0.9,
     receivedAt: new Date(),
     captureStartedAt: new Date(wakeAt.getTime() + 50),
@@ -671,7 +679,9 @@ test('speaker command emits understood and execution result feedback without blo
   assert.deepEqual(feedbackTypes, ['command_understood', 'command_result']);
   assert.equal(result.status, 'success');
   assert.equal(result.text, undefined);
-  assert.equal(result.voice, 'anna-voice');
+  assert.equal(result.voice, 'henry-voice');
+  assert.equal(preferredWakeWord, 'hey henry');
+  assert.equal(processedWakeWord, 'hey henry');
   assert.equal(result.interactionId, 'interaction-1');
   assert.equal(result.timing.captureDurationMs, 900);
   assert.equal(result.timing.transcriptionMs, 90);
@@ -829,6 +839,16 @@ test('stripWakeWordPrefix removes wake words from one-breath commands', () => {
     voiceWs.stripWakeWordPrefix('Henry should not be stripped after Anna woke', 'anna'),
     'Henry should not be stripped after Anna woke'
   );
+  assert.deepEqual(
+    voiceWs.matchWakeWordPrefix(
+      'Hey Henry, turn off the office',
+      'anna',
+      ['Anna', 'Hey Anna', 'Henry', 'Hey Henry']
+    ),
+    { command: 'turn off the office', wakeWord: 'hey henry' }
+  );
+  assert.equal(voiceWs.canonicalVoiceCommandWakeWord('Hey Henry'), 'henry');
+  assert.equal(voiceWs.canonicalVoiceCommandWakeWord('Hey Anna'), 'anna');
 });
 
 test('room transcript plausibility rejects background prose before execution', () => {
@@ -838,6 +858,22 @@ test('room transcript plausibility rejects background prose before execution', (
   assert.equal(voiceWs.isPlausibleRoomTranscript('turn off the office', 'henry'), true);
   assert.equal(voiceWs.isPlausibleRoomTranscript('office lights off', 'henry'), true);
   assert.equal(voiceWs.isPlausibleRoomTranscript('what is the weather tomorrow', 'anna'), true);
+  assert.equal(voiceWs.isPlausibleRoomTranscript('What the hell is it here just then?', 'anna'), false);
+  assert.equal(
+    voiceWs.isPlausibleRoomTranscript(
+      "who's a right winner I just got off the ship to Olive Garden what I am saying is it is work",
+      'anna'
+    ),
+    false
+  );
+  assert.equal(
+    voiceWs.isPlausibleRoomTranscript(
+      'Hey Henry, who won the election?',
+      'anna',
+      ['Anna', 'Hey Anna', 'Henry', 'Hey Henry']
+    ),
+    true
+  );
   assert.equal(
     voiceWs.isPlausibleRoomTranscript(
       'her gut fund me raised nine hundred thousand dollars let me ask you this for sporty life',

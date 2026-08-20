@@ -984,6 +984,11 @@ class HomeBrainRemoteDevice {
           this.wakeWordSampleRate = audioUpdate.sampleRate;
         }
         const recordingChanged = previousRecordingSignature !== this.getRecordingOptionsSignature();
+        if (recordingChanged) {
+          delete this.config.audio.resolvedRecordingDevice;
+          delete this.config.audio.resolvedRecordingDeviceName;
+          this.captureDeviceProbeCache = null;
+        }
         this.configUpdateRequiresCaptureReopen = this.configUpdateRequiresCaptureReopen || recordingChanged;
         restartNeeded = restartNeeded || recordingChanged;
         console.log(`Audio config updated: recorder=${this.config.audio.recorder || this.config.audio.recordProgram || 'arecord'}, recordingDevice=${this.config.audio.recordingDevice || this.config.audio.microphoneDevice || 'default'}`);
@@ -1453,6 +1458,13 @@ class HomeBrainRemoteDevice {
       return configuredDevice;
     }
 
+    const savedDevice = typeof audioConfig.resolvedRecordingDevice === 'string'
+      ? audioConfig.resolvedRecordingDevice.trim()
+      : '';
+    if (savedDevice && !this.isAutoRecordingDevice(savedDevice)) {
+      return savedDevice;
+    }
+
     const preferredName = audioConfig.preferredInputName || (configuredDevice === 'auto' ? '' : configuredDevice);
     const detected = this.detectPreferredCaptureDevice(preferredName, audioConfig);
     if (detected?.device) {
@@ -1689,6 +1701,13 @@ class HomeBrainRemoteDevice {
 
   handleRecordingStreamError(streamError) {
     this.captureDeviceProbeCache = null;
+    if (this.config.audio) {
+      delete this.config.audio.resolvedRecordingDevice;
+      delete this.config.audio.resolvedRecordingDeviceName;
+      void this.saveConfig().catch((saveError) => {
+        console.warn(`Unable to clear the failed saved capture device: ${saveError.message}`);
+      });
+    }
     const baseMessage = this.normalizeErrorMessage(streamError, 'Recording stream error');
     const stderrTail = this.recordingStderrBuffer.trim().slice(-1000);
     const message = stderrTail && !baseMessage.includes(stderrTail)
