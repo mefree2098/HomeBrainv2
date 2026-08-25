@@ -42,7 +42,7 @@
     "mongoose": "^9.2.2",
     "mqtt": "^5.15.2",
     "node-forge": "^1.4.0",
-    "openai": "^6.25.0",
+    "openai": "^7.5.0",
     "q": "file:vendor/q-native-compat/q-1.5.2.tgz",
     "serialport": "^13.0.0",
     "tough-cookie": "^6.0.1",
