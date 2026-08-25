@@ -43,9 +43,14 @@ export const getScenes = async () => {
 
 // Description: Activate a scene
 // Endpoint: POST /api/scenes/activate
-// Request: { sceneId: string, waitForCompletion?: boolean }
+// Request: { sceneId: string, waitForCompletion?: boolean, source?: string, reason?: string }
 // Response: { success: boolean, message: string }
-export const activateScene = async (data: { sceneId: string; waitForCompletion?: boolean }) => {
+export const activateScene = async (data: {
+  sceneId: string;
+  waitForCompletion?: boolean;
+  source?: string;
+  reason?: string;
+}) => {
   console.log('Activating scene:', data)
   try {
     const response = await api.post('/api/scenes/activate', data);
@@ -58,9 +63,13 @@ export const activateScene = async (data: { sceneId: string; waitForCompletion?:
 
 // Description: Deactivate a scene
 // Endpoint: POST /api/scenes/deactivate
-// Request: { sceneId: string }
+// Request: { sceneId: string, source?: string, reason?: string }
 // Response: { success: boolean, message: string }
-export const deactivateScene = async (data: { sceneId: string }) => {
+export const deactivateScene = async (data: {
+  sceneId: string;
+  source?: string;
+  reason?: string;
+}) => {
   console.log('Deactivating scene:', data)
   try {
     const response = await api.post('/api/scenes/deactivate', data);

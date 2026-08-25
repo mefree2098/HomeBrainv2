@@ -19,10 +19,11 @@ The primary production target is a Jetson Orin Nano Super running Ubuntu through
 | People and clients | First-user admin bootstrap, admin/standard/read-only accounts, per-user platform access, Voice Profiles, iPhone, Apple Watch, browser, API, and OIDC clients |
 | Physical surfaces | Raspberry Pi/Linux voice listeners, ELECROW ESP32-S3 rotary wall panels, hardware Orbs, and Reachy Mini Wireless companion integration |
 | Operations | systemd service management, Caddy domains, TLS inventory, Azure Dynamic DNS, Platform Deploy, managed service updates, Pi-hole, Mosquitto, disaster-recovery backups, SMB scheduling, restore jobs, health checks, and live logs |
-| Agent integrations | Downloadable HomeBrain Codex live skill, managed Codex CLI, model-aware Codex reasoning levels, OpenClaw MCP/skill bundle, mutation audit events, and HomeBrain OIDC identity services |
+| Agent integrations | OpenAI WebMCP site tools for the live signed-in web app, downloadable HomeBrain Codex live skill, managed Codex CLI, model-aware Codex reasoning levels, OpenClaw MCP/skill bundle, mutation audit events, and HomeBrain OIDC identity services |
 
 ## Current Highlights
 
+- **OpenAI WebMCP site tools:** ChatGPT Work and Codex can use the signed-in HomeBrain page directly for typed overview, device, room, scene, workflow, weather, notification, security-status, navigation, and safe control actions. Tools follow the active account's HomeBrain access, admin routes, and read-only policy, return verification data, and do not expose direct unlock or disarm tools.
 - **Reachy Mini Wireless:** first-class enrollment, authenticated voice transport, semantic motion and expression controls, privacy switches, snapshots, workflow actions, managed companion-package updates, safe stop/rollback behavior, and simulator-backed tests. Physical hardware acceptance testing is still required before unattended use.
 - **Managed Platform Services:** install, repair, inspect, and update Caddy, Mosquitto, Pi-hole, the Codex CLI, and Reachy companion packages. Each service has visible status, update checks, manual actions, and optional delayed auto-update policy.
 - **Rooms and account permissions:** dedicated room management, room-aware device assignment, admin/standard/read-only users, HomeBrain/Axiom platform access, session management, and admin-created accounts after initial registration closes.
@@ -36,6 +37,7 @@ The primary production target is a Jetson Orin Nano Super running Ubuntu through
 ## Supported Surfaces
 
 - React web app for desktop, tablet, and mobile browsers
+- OpenAI WebMCP site tools in ChatGPT's built-in browser, using the same live page and signed-in session
 - Native iPhone app in [`HomeBrainApp`](HomeBrainApp)
 - Embedded Apple Watch companion in [`HomeBrainWatch`](HomeBrainWatch)
 - Linux/Raspberry Pi remote listeners in [`remote-device`](remote-device)
@@ -297,10 +299,28 @@ HomeBrain also acts as an OIDC provider with discovery, JWKS, authorization, tok
 
 ### Codex and OpenClaw
 
+- The React app registers role-aware [WebMCP site tools](https://learn.chatgpt.com/docs/webmcp) through the current `document.modelContext` browser API. No separate MCP server, API key, plugin, or HomeBrain token is required for in-page use.
 - **Settings → Integrations → Codex Skill** rotates a dedicated HomeBrain token and downloads a ready-to-install [`homebrain-live`](codex/skills/homebrain-live) skill bundle for live health, events, resources, and deploy operations.
 - **Platform Services** can install or update the official global `@openai/codex` CLI.
 - **Settings → Integrations → OpenClaw** publishes a protected streamable-HTTP MCP endpoint, rotates an admin-grade integration token, and downloads a HomeBrain skill/config bundle.
 - OpenClaw mutations are attributed and recorded in **Operations**.
+
+#### WebMCP Site Tools
+
+Open HomeBrain in ChatGPT's built-in browser, sign in normally, and enable **Site tools** in the browser permissions. ChatGPT Work or Codex can then discover the tools registered by that page:
+
+| Tools | Capability |
+| --- | --- |
+| `homebrain_get_overview`, `homebrain_list_devices`, `homebrain_get_device`, `homebrain_list_rooms` | Inspect live household and device state without exposing raw integration payloads |
+| `homebrain_list_scenes`, `homebrain_list_workflows`, `homebrain_get_weather` | Inspect saved routines, forecast, Tempest, and indoor-air state |
+| `homebrain_list_notifications`, `homebrain_get_security_status` | Inspect alerts and security state without clearing, arming, disarming, unlocking, or bypassing |
+| `homebrain_open_page` | Move the current tab to a role-appropriate HomeBrain page so the person and agent see the same interface |
+| `homebrain_control_device` | Run a narrow device command and read the device back for verification; direct unlock and other safety-sensitive controls are rejected |
+| `homebrain_activate_scene`, `homebrain_deactivate_scene`, `homebrain_run_workflow` | Run exact saved scene/workflow IDs after the browser's normal action review |
+
+Tools exist only while an authenticated HomeBrain page is open. Logging out, losing HomeBrain platform access, or closing the page unregisters them. Read-only accounts receive read and navigation tools but no backend mutation tools; the server still authenticates and authorizes every request. Device, scene, and workflow actions are attributed to `webmcp` in HomeBrain command/runtime telemetry. Browsers without WebMCP continue to use the normal HomeBrain interface with no extra setup.
+
+The implementation follows OpenAI's site-tools guidance and the current [WebMCP proposal](https://webmachinelearning.github.io/webmcp/): narrow closed schemas, explicit side-effect descriptions, signed-in application logic, abort-driven registration cleanup, safe output projections, and post-action verification.
 
 See [`docs/openclaw/jetson-setup.md`](docs/openclaw/jetson-setup.md) for deployment details.
 

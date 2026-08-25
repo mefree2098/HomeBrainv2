@@ -6,6 +6,7 @@ import { AuthProvider } from "./contexts/AuthContext"
 import { ProtectedRoute } from "./components/ProtectedRoute"
 import { Layout } from "./components/Layout"
 import { RouteErrorBoundary } from "./components/RouteErrorBoundary"
+import { HomeBrainWebMCP } from "./webmcp/HomeBrainWebMCP"
 import RainMachine from "./pages/RainMachine"
 
 const Login = lazy(() => import("./pages/Login").then((module) => ({ default: module.Login })))
@@ -63,6 +64,7 @@ function App() {
   <AuthProvider>
     <ThemeProvider defaultTheme="system" storageKey="ui-theme">
       <Router>
+        <HomeBrainWebMCP />
         <Suspense fallback={<LoadingScreen />}>
           <Routes>
             <Route path="/login" element={<Login />} />

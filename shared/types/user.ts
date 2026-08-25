@@ -36,6 +36,8 @@ export type User = {
   createdAt: string
   lastLoginAt: string
   isActive: boolean
+  isReadOnly?: boolean
+  isReviewSandbox?: boolean
   platforms: UserPlatforms
   watchPreferences?: WatchPreferences
   defaultRedirectUrl?: string | null

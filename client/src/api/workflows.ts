@@ -274,9 +274,16 @@ export const toggleWorkflow = async (id: string, enabled: boolean) => {
   }
 };
 
-export const executeWorkflow = async (id: string, context?: Record<string, unknown>) => {
+export const executeWorkflow = async (
+  id: string,
+  context?: Record<string, unknown>,
+  options: { source?: "webmcp" } = {}
+) => {
   try {
-    const response = await api.post(`/api/workflows/${id}/execute`, { context });
+    const response = await api.post(`/api/workflows/${id}/execute`, {
+      context,
+      ...(options.source ? { source: options.source } : {})
+    });
     return response.data as { success: boolean; message: string; workflow: Workflow };
   } catch (error) {
     throw new Error(getApiErrorMessage(error));
