@@ -9,7 +9,7 @@
     "test:broker": "node scripts/run-with-modern-node.js npm --prefix broker test",
     "test:lambda": "node scripts/run-with-modern-node.js npm --prefix lambda test",
     "test:remote": "node scripts/run-with-modern-node.js npm --prefix remote-device test",
-    "test:client": "node scripts/run-with-modern-node.js npm --prefix client run lint && node scripts/run-with-modern-node.js npm --prefix client run build",
+    "test:client": "node scripts/run-with-modern-node.js npm --prefix client test && node scripts/run-with-modern-node.js npm --prefix client run lint && node scripts/run-with-modern-node.js npm --prefix client run build",
     "check:console-format": "node scripts/harden-console-format-strings.js",
     "fix:console-format": "node scripts/harden-console-format-strings.js --write",
     "client": "node scripts/run-with-modern-node.js npm --prefix client run dev",

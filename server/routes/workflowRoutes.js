@@ -285,9 +285,10 @@ router.put('/:id/toggle', admin, async (req, res) => {
 
 router.post('/:id/execute', async (req, res) => {
   try {
+    const triggerSource = req.body?.source === 'webmcp' ? 'webmcp' : 'manual';
     const result = await workflowService.executeWorkflow(req.params.id, {
       triggerType: 'manual',
-      triggerSource: 'manual',
+      triggerSource,
       context: req.body?.context || {}
     });
     return res.status(200).json({
