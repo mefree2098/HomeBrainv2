@@ -103,6 +103,7 @@ const DEFAULT_VOICE_TUNING = {
   wakeConfirmationMs: 320,
   wakeMinScoreHits: 2,
   wakeThresholdOffset: 0.02,
+  wakeConfidenceFloor: 0,
   commandPreRollMs: 1800,
   commandMaxDurationMs: 12000,
   commandMinCaptureMs: 900,
@@ -122,6 +123,7 @@ const VOICE_TUNING_PRESETS = {
       wakeConfirmationMs: 240,
       wakeMinScoreHits: 2,
       wakeThresholdOffset: 0,
+      wakeConfidenceFloor: 0.65,
       commandPreRollMs: 1600,
       commandMaxDurationMs: 10000,
       commandMinCaptureMs: 600,
@@ -137,6 +139,7 @@ const VOICE_TUNING_PRESETS = {
       wakeConfirmationMs: 320,
       wakeMinScoreHits: 2,
       wakeThresholdOffset: 0.02,
+      wakeConfidenceFloor: 0.72,
       commandPreRollMs: 1800,
       commandMaxDurationMs: 8000,
       commandMinCaptureMs: 700,
@@ -152,6 +155,7 @@ const VOICE_TUNING_PRESETS = {
       wakeConfirmationMs: 400,
       wakeMinScoreHits: 3,
       wakeThresholdOffset: 0.06,
+      wakeConfidenceFloor: 0.8,
       commandPreRollMs: 2000,
       commandMaxDurationMs: 7000,
       commandSilenceMs: 600,
@@ -827,6 +831,7 @@ export function VoiceDevices() {
           const runtimeWakeMinRms = device.settings?.wakeWordRuntime?.sidecar?.minRms
           const runtimeConfirmationMs = device.settings?.wakeWordRuntime?.sidecar?.confirmationMs
           const runtimeMinScoreHits = device.settings?.wakeWordRuntime?.sidecar?.minScoreHits
+          const runtimeConfidenceFloor = device.settings?.wakeWordRuntime?.sidecar?.confidenceFloor
           const microphoneMutedLikely = device.settings?.wakeWordRuntime?.audio?.mutedLikely === true
           const tuningApplied = typeof runtimeWakeMinRms === 'number'
             && Math.abs(runtimeWakeMinRms - wakeMinRms) < 0.00005
@@ -837,6 +842,10 @@ export function VoiceDevices() {
             && (
               typeof runtimeMinScoreHits !== 'number'
               || runtimeMinScoreHits === voiceTuning.wakeMinScoreHits
+            )
+            && (
+              typeof runtimeConfidenceFloor !== 'number'
+              || Math.abs(runtimeConfidenceFloor - voiceTuning.wakeConfidenceFloor) < 0.0005
             )
 
           return (
@@ -1065,6 +1074,20 @@ export function VoiceDevices() {
                             device._id,
                             { voiceTuning: { wakeThresholdOffset: value } },
                             `Wake threshold offset set to ${value >= 0 ? '+' : ''}${value.toFixed(2)}`
+                          )}
+                        />
+                        <VoiceTuningSlider
+                          label="Wake confidence floor"
+                          description="Absolute minimum score any wake model must reach. Raise this to reject confident false wakes while keeping each model's trained threshold and offset. Set to 0 to disable the floor."
+                          value={voiceTuning.wakeConfidenceFloor}
+                          min={0}
+                          max={0.95}
+                          step={0.01}
+                          formatValue={(value) => value === 0 ? 'Off' : `${Math.round(value * 100)}%`}
+                          onCommit={(value) => commitDeviceSettings(
+                            device._id,
+                            { voiceTuning: { wakeConfidenceFloor: value } },
+                            `Wake confidence floor ${value === 0 ? 'disabled' : `set to ${Math.round(value * 100)}%`}`
                           )}
                         />
                         <VoiceTuningSlider

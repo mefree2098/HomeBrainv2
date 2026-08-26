@@ -457,6 +457,7 @@ test('buildWakeWordConfig includes bounded live voice tuning', async (t) => {
     wakeConfirmationMs: 320,
     wakeMinScoreHits: 3,
     wakeThresholdOffset: 0.04,
+    wakeConfidenceFloor: 0.78,
     commandPreRollMs: 1700,
     commandMaxDurationMs: 8000,
     commandSilenceMs: 550,
@@ -469,6 +470,7 @@ test('buildWakeWordConfig includes bounded live voice tuning', async (t) => {
 
   assert.equal(config.wakeWord.confirmationMs, 320);
   assert.equal(config.wakeWord.minScoreHits, 3);
+  assert.equal(config.wakeWord.confidenceFloor, 0.78);
   assert.equal(config.voice.commandPreRollMs, 1700);
   assert.equal(config.voice.endpointing.maxDurationMs, 8000);
   assert.equal(config.voice.endpointing.silenceMs, 550);
@@ -504,7 +506,10 @@ test('buildWakeWordConfig uses calibrated model thresholds and excludes missing 
 
   const voiceWs = new VoiceWebSocketServer();
   const device = createDevice();
-  device.settings.voiceTuning = { wakeThresholdOffset: 0.04 };
+  device.settings.voiceTuning = {
+    wakeThresholdOffset: 0.04,
+    wakeConfidenceFloor: 0.8
+  };
   device.supportedWakeWords = ['Anna', 'Home Brain'];
   const { config } = await voiceWs.buildWakeWordConfig(device, { deviceToken: 'token' }, {
     platform: 'linux',
@@ -514,7 +519,7 @@ test('buildWakeWordConfig uses calibrated model thresholds and excludes missing 
   assert.deepEqual(config.wakeWords, ['Anna']);
   assert.deepEqual(config.wakeWord.enabled, ['Anna']);
   assert.deepEqual(config.wakeWord.missing, ['Home Brain']);
-  assert.equal(config.wakeWord.assets[0].threshold, 0.76);
+  assert.equal(config.wakeWord.assets[0].threshold, 0.8);
   assert.equal(config.wakeWord.assets[0].sensitivity, 0.28);
 });
 
@@ -678,7 +683,7 @@ test('speaker command emits understood and execution result feedback without blo
   const result = ws.sent.find((message) => message.type === 'command_result');
   assert.deepEqual(feedbackTypes, ['command_understood', 'command_result']);
   assert.equal(result.status, 'success');
-  assert.equal(result.text, undefined);
+  assert.equal(result.text, 'Okay, turn off Office.');
   assert.equal(result.voice, 'henry-voice');
   assert.equal(preferredWakeWord, 'hey henry');
   assert.equal(processedWakeWord, 'hey henry');

@@ -542,7 +542,7 @@ test('wake detection plays an immediate local earcon before hub acknowledgment',
   if (device.pendingWakeAckTimer) clearTimeout(device.pendingWakeAckTimer);
 });
 
-test('command result plays a local outcome earcon without delayed generic speech', async () => {
+test('command result plays an immediate outcome earcon followed by the selected voice', async () => {
   const device = new HomeBrainRemoteDevice({ audio: {}, wakeWord: {} });
   const feedback = [];
   device.wakeWordRuntime = { sidecar: {}, recording: {}, audio: {} };
@@ -561,12 +561,16 @@ test('command result plays a local outcome earcon without delayed generic speech
     interactionId: 'interaction-1',
     commandId: 'command-1',
     status: 'success',
+    text: 'Okay, turn off Office.',
     voice: 'anna-voice',
     timing: { wakeToResultMs: 1600 }
   })));
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(feedback, ['earcon:success']);
+  assert.deepEqual(feedback, [
+    'earcon:success',
+    'voice:anna-voice:Okay, turn off Office.'
+  ]);
   assert.equal(device.lastVoiceInteraction.stage, 'success');
   assert.equal(device.lastVoiceInteraction.timing.wakeToResultMs, 1600);
 });
@@ -775,7 +779,7 @@ test('playTTSResponse uses authenticated POST JSON and the selected wake-word vo
   assert.equal(request.url.includes('The lights are on'), false);
 
   await device.playTTSResponse('Done.', 'anna-voice-id', { kind: 'success' });
-  assert.equal(request.timeoutMs, 2000);
+  assert.equal(request.timeoutMs, 15_000);
 });
 
 test('enqueueSidecarAudio forwards quiet frames so streaming feature history stays continuous', () => {
