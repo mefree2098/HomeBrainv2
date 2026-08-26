@@ -542,6 +542,78 @@ test('wake detection plays an immediate local earcon before hub acknowledgment',
   if (device.pendingWakeAckTimer) clearTimeout(device.pendingWakeAckTimer);
 });
 
+test('verified wake detection stays silent until the hub confirms the phrase', async () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: { sampleRate: 16000 },
+    wakeWord: {
+      verification: { enabled: true, preRollMs: 2400, timeoutMs: 3000 }
+    }
+  });
+  const sent = [];
+  const earcons = [];
+  let recordingStarted = false;
+  device.isAuthenticated = true;
+  device.wakeWordRuntime = { sidecar: {}, recording: {}, audio: {} };
+  device.sendMessage = (message) => {
+    sent.push(message);
+    return true;
+  };
+  device.reportWakeWordRuntimeStatus = () => true;
+  device.playEarcon = (kind) => {
+    earcons.push(kind);
+    return Promise.resolve(true);
+  };
+  device.startVoiceRecording = () => {
+    recordingStarted = true;
+  };
+  const preRoll = Buffer.alloc(16000 * 2 * 2.4, 7);
+  device.appendWakeWordPreRoll(preRoll);
+
+  device.onWakeWordDetected('hey-anna', 0.91, 'Hey Anna');
+
+  const candidate = sent.find((message) => message.type === 'wake_word_detected');
+  assert.deepEqual(earcons, []);
+  assert.equal(candidate.wakeWord, 'Hey Anna');
+  assert.equal(Buffer.from(candidate.verificationAudio, 'base64').length, preRoll.length);
+  assert.equal(recordingStarted, false);
+
+  await device.handleMessage(Buffer.from(JSON.stringify({
+    type: 'wake_word_ack',
+    timeout: 8000,
+    endpointing: { maxDurationMs: 8000 }
+  })));
+
+  assert.deepEqual(earcons, ['wake']);
+  assert.equal(recordingStarted, true);
+  if (device.pendingWakeAckTimer) clearTimeout(device.pendingWakeAckTimer);
+});
+
+test('rejected verified wake candidate resumes detection without a chirp', async () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: { sampleRate: 16000 },
+    wakeWord: { verification: { enabled: true, preRollMs: 2400 } }
+  });
+  const earcons = [];
+  device.isAuthenticated = true;
+  device.wakeWordRuntime = { sidecar: {}, recording: {}, audio: {} };
+  device.sendMessage = () => true;
+  device.reportWakeWordRuntimeStatus = () => true;
+  device.playEarcon = async (kind) => { earcons.push(kind); };
+  device.appendWakeWordPreRoll(Buffer.alloc(16000 * 2 * 2.4, 3));
+  device.onWakeWordDetected('hey-henry', 0.92, 'Hey Henry');
+
+  assert.equal(device.isWakeWordListening, false);
+  await device.handleMessage(Buffer.from(JSON.stringify({
+    type: 'wake_word_rejected',
+    reason: 'phrase_not_confirmed'
+  })));
+
+  assert.deepEqual(earcons, []);
+  assert.equal(device.isWakeWordListening, true);
+  assert.equal(device.pendingCommandPreRollBuffer, null);
+  assert.equal(device.lastVoiceInteraction.stage, 'wake_rejected');
+});
+
 test('command result plays an immediate outcome earcon followed by the selected voice', async () => {
   const device = new HomeBrainRemoteDevice({ audio: {}, wakeWord: {} });
   const feedback = [];

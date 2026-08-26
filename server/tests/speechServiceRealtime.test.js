@@ -91,3 +91,45 @@ test('room voice transcription falls back locally when LAN Whisper is unavailabl
   assert.equal(result.fallbackFrom, 'lan_whisper');
   assert.match(result.fallbackReason, /connection refused/);
 });
+
+test('wake verification can fail closed without starting the slower local fallback', async (t) => {
+  const originals = {
+    getProviderConfig: speechService.getProviderConfig,
+    transcribeWithLanWhisper: speechService.transcribeWithLanWhisper,
+    transcribeWithWhisperLocal: speechService.transcribeWithWhisperLocal
+  };
+  t.after(() => {
+    speechService.getProviderConfig = originals.getProviderConfig;
+    speechService.transcribeWithLanWhisper = originals.transcribeWithLanWhisper;
+    speechService.transcribeWithWhisperLocal = originals.transcribeWithWhisperLocal;
+  });
+
+  speechService.getProviderConfig = async () => ({
+    provider: 'lan_whisper',
+    model: 'large-v3',
+    language: 'en',
+    lanEndpoint: 'http://192.168.1.30:8000',
+    lanApiKey: '',
+    lanTimeoutMs: 1000
+  });
+  speechService.transcribeWithLanWhisper = async () => {
+    throw new Error('connection refused');
+  };
+  let localFallbackCalled = false;
+  speechService.transcribeWithWhisperLocal = async () => {
+    localFallbackCalled = true;
+    return { text: 'unexpected fallback' };
+  };
+
+  await assert.rejects(
+    speechService.transcribe({
+      audioBuffer: Buffer.alloc(3200),
+      sampleRate: 16000,
+      channels: 1,
+      format: 'S16LE',
+      allowFallback: false
+    }),
+    /connection refused/
+  );
+  assert.equal(localFallbackCalled, false);
+});

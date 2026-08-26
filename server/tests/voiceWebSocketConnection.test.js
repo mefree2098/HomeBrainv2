@@ -459,6 +459,9 @@ test('buildWakeWordConfig includes bounded live voice tuning', async (t) => {
     wakeThresholdOffset: 0.04,
     wakeConfidenceFloor: 0.78,
     wakePlaybackSuppressionMs: 900,
+    wakePhraseVerificationEnabled: true,
+    wakePhraseVerificationPreRollMs: 2300,
+    wakePhraseVerificationTimeoutMs: 2750,
     commandPreRollMs: 1700,
     commandMaxDurationMs: 8000,
     commandSilenceMs: 550,
@@ -473,6 +476,11 @@ test('buildWakeWordConfig includes bounded live voice tuning', async (t) => {
   assert.equal(config.wakeWord.minScoreHits, 3);
   assert.equal(config.wakeWord.confidenceFloor, 0.78);
   assert.equal(config.wakeWord.playbackSuppressionMs, 900);
+  assert.deepEqual(config.wakeWord.verification, {
+    enabled: true,
+    preRollMs: 2300,
+    timeoutMs: 2750
+  });
   assert.equal(config.voice.commandPreRollMs, 1700);
   assert.equal(config.voice.endpointing.maxDurationMs, 8000);
   assert.equal(config.voice.endpointing.silenceMs, 550);
@@ -635,6 +643,110 @@ test('speaker wake acknowledgment advertises low-latency adaptive endpointing', 
     minSpeechMs: 100,
     minRms: 0.0012
   });
+});
+
+test('speaker wake verification acknowledges only a transcribed full wake phrase', async (t) => {
+  const originalSave = VoiceCommand.prototype.save;
+  const originalUpdate = VoiceDevice.findByIdAndUpdate;
+  const originalTranscribe = speechService.transcribe;
+  t.after(() => {
+    VoiceCommand.prototype.save = originalSave;
+    VoiceDevice.findByIdAndUpdate = originalUpdate;
+    speechService.transcribe = originalTranscribe;
+  });
+  let saveCount = 0;
+  VoiceCommand.prototype.save = async function save() {
+    saveCount += 1;
+    return this;
+  };
+  VoiceDevice.findByIdAndUpdate = async () => createDevice();
+  let transcribedBytes = 0;
+  let transcriptionFallbackAllowed = null;
+  speechService.transcribe = async ({ audioBuffer, allowFallback }) => {
+    transcribedBytes = audioBuffer.length;
+    transcriptionFallbackAllowed = allowFallback;
+    return {
+      provider: 'lan_whisper',
+      model: 'large-v3',
+      text: 'Hey Anna, turn off the office.'
+    };
+  };
+
+  const voiceWs = new VoiceWebSocketServer();
+  const ws = new MockWebSocket();
+  const device = createDevice();
+  device.deviceType = 'speaker';
+  device.supportedWakeWords = ['Hey Anna', 'Hey Henry'];
+  device.settings.voiceTuning = {
+    wakeRequireFullPhrase: true,
+    wakePhraseVerificationEnabled: true,
+    wakePhraseVerificationTimeoutMs: 2000
+  };
+  const connection = { ws, authenticated: true, device, pendingWakeWord: null };
+  voiceWs.deviceConnections.set(deviceId, connection);
+  const verificationAudio = Buffer.alloc(32000, 5).toString('base64');
+
+  await voiceWs.handleWakeWordDetection(deviceId, {
+    wakeWord: 'Hey Anna',
+    confidence: 0.95,
+    timestamp: new Date().toISOString(),
+    verificationAudio,
+    sampleRate: 16000,
+    channels: 1,
+    format: 'S16LE'
+  });
+
+  const acknowledgment = ws.sent.find((message) => message.type === 'wake_word_ack');
+  assert.equal(transcribedBytes, 32000);
+  assert.equal(transcriptionFallbackAllowed, false);
+  assert.equal(saveCount, 1);
+  assert.equal(acknowledgment.verification.provider, 'lan_whisper');
+  assert.equal(acknowledgment.verification.model, 'large-v3');
+  assert.equal(connection.pendingWakeWord.wakeWord, 'hey anna');
+  assert.equal(ws.sent.some((message) => message.type === 'wake_word_rejected'), false);
+});
+
+test('speaker wake verification silently rejects unrelated background speech', async (t) => {
+  const originalSave = VoiceCommand.prototype.save;
+  const originalTranscribe = speechService.transcribe;
+  t.after(() => {
+    VoiceCommand.prototype.save = originalSave;
+    speechService.transcribe = originalTranscribe;
+  });
+  let saveCount = 0;
+  VoiceCommand.prototype.save = async function save() {
+    saveCount += 1;
+    return this;
+  };
+  speechService.transcribe = async () => ({
+    provider: 'lan_whisper',
+    model: 'large-v3',
+    text: 'The weather report continues after the break.'
+  });
+
+  const voiceWs = new VoiceWebSocketServer();
+  const ws = new MockWebSocket();
+  const device = createDevice();
+  device.deviceType = 'speaker';
+  device.supportedWakeWords = ['Hey Anna', 'Hey Henry'];
+  device.settings.voiceTuning = { wakePhraseVerificationEnabled: true };
+  const connection = { ws, authenticated: true, device, pendingWakeWord: null };
+  voiceWs.deviceConnections.set(deviceId, connection);
+
+  await voiceWs.handleWakeWordDetection(deviceId, {
+    wakeWord: 'Hey Henry',
+    confidence: 0.98,
+    verificationAudio: Buffer.alloc(32000, 4).toString('base64'),
+    sampleRate: 16000,
+    channels: 1,
+    format: 'S16LE'
+  });
+
+  const rejection = ws.sent.find((message) => message.type === 'wake_word_rejected');
+  assert.equal(rejection.reason, 'phrase_not_confirmed');
+  assert.equal(ws.sent.some((message) => message.type === 'wake_word_ack'), false);
+  assert.equal(saveCount, 0);
+  assert.equal(connection.pendingWakeWord, null);
 });
 
 test('speaker command emits understood and execution result feedback without blocking on final persistence', async (t) => {
@@ -922,21 +1034,25 @@ test('room transcript plausibility rejects background prose before execution', (
 
 test('websocket logging never includes household audio, transcripts, or credentials', () => {
   const audioData = Buffer.alloc(4096, 7).toString('base64');
+  const verificationAudio = Buffer.alloc(2048, 8).toString('base64');
   const redacted = redactMessageForLog({
     type: 'audio_data',
     sessionId: 'session-1',
     sequence: 4,
     audioData,
+    verificationAudio,
     command: 'unlock the front door',
     transcript: 'private household conversation',
     deviceToken: 'top-secret-token'
   });
   const serialized = JSON.stringify(redacted);
   assert.equal(redacted.audioData, '[redacted audio]');
+  assert.equal(redacted.verificationAudio, '[redacted audio]');
   assert.equal(redacted.command, '[redacted text]');
   assert.equal(redacted.transcript, '[redacted text]');
   assert.equal(redacted.deviceToken, '[redacted secret]');
   assert.equal(serialized.includes(audioData), false);
+  assert.equal(serialized.includes(verificationAudio), false);
   assert.equal(serialized.includes('unlock the front door'), false);
   assert.equal(serialized.includes('private household conversation'), false);
   assert.equal(serialized.includes('top-secret-token'), false);

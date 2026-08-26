@@ -765,6 +765,8 @@ router.put('/devices/:id/settings', admin, async (req, res) => {
       boundedNumber('wakeThresholdOffset', -0.2, 0.2);
       boundedNumber('wakeConfidenceFloor', 0, 1);
       boundedNumber('wakePlaybackSuppressionMs', 0, 3000, true);
+      boundedNumber('wakePhraseVerificationPreRollMs', 800, 4000, true);
+      boundedNumber('wakePhraseVerificationTimeoutMs', 1000, 5000, true);
       boundedNumber('commandPreRollMs', 500, 5000, true);
       boundedNumber('commandMaxDurationMs', 3000, 20000, true);
       boundedNumber('commandMinCaptureMs', 300, 3000, true);
@@ -772,7 +774,12 @@ router.put('/devices/:id/settings', admin, async (req, res) => {
       boundedNumber('commandSpeechStartTimeoutMs', 1000, 10000, true);
       boundedNumber('commandMinSpeechMs', 40, 1000, true);
       boundedNumber('commandMinRms', 0.0005, 0.05);
-      for (const key of ['silentEmptyWakes', 'backgroundGuardEnabled', 'wakeRequireFullPhrase']) {
+      for (const key of [
+        'silentEmptyWakes',
+        'backgroundGuardEnabled',
+        'wakeRequireFullPhrase',
+        'wakePhraseVerificationEnabled'
+      ]) {
         if (typeof value[key] === 'boolean') next[key] = value[key];
       }
       return next;
