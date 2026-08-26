@@ -104,6 +104,7 @@ const DEFAULT_VOICE_TUNING = {
   wakeMinScoreHits: 2,
   wakeThresholdOffset: 0.02,
   wakeConfidenceFloor: 0,
+  wakePlaybackSuppressionMs: 800,
   commandPreRollMs: 1800,
   commandMaxDurationMs: 12000,
   commandMinCaptureMs: 900,
@@ -124,6 +125,7 @@ const VOICE_TUNING_PRESETS = {
       wakeMinScoreHits: 2,
       wakeThresholdOffset: 0,
       wakeConfidenceFloor: 0.65,
+      wakePlaybackSuppressionMs: 500,
       commandPreRollMs: 1600,
       commandMaxDurationMs: 10000,
       commandMinCaptureMs: 600,
@@ -140,6 +142,7 @@ const VOICE_TUNING_PRESETS = {
       wakeMinScoreHits: 2,
       wakeThresholdOffset: 0.02,
       wakeConfidenceFloor: 0.72,
+      wakePlaybackSuppressionMs: 800,
       commandPreRollMs: 1800,
       commandMaxDurationMs: 8000,
       commandMinCaptureMs: 700,
@@ -156,6 +159,7 @@ const VOICE_TUNING_PRESETS = {
       wakeMinScoreHits: 3,
       wakeThresholdOffset: 0.06,
       wakeConfidenceFloor: 0.8,
+      wakePlaybackSuppressionMs: 1200,
       commandPreRollMs: 2000,
       commandMaxDurationMs: 7000,
       commandSilenceMs: 600,
@@ -832,6 +836,7 @@ export function VoiceDevices() {
           const runtimeConfirmationMs = device.settings?.wakeWordRuntime?.sidecar?.confirmationMs
           const runtimeMinScoreHits = device.settings?.wakeWordRuntime?.sidecar?.minScoreHits
           const runtimeConfidenceFloor = device.settings?.wakeWordRuntime?.sidecar?.confidenceFloor
+          const runtimePlaybackSuppressionMs = device.settings?.wakeWordRuntime?.playbackGuard?.tailMs
           const microphoneMutedLikely = device.settings?.wakeWordRuntime?.audio?.mutedLikely === true
           const tuningApplied = typeof runtimeWakeMinRms === 'number'
             && Math.abs(runtimeWakeMinRms - wakeMinRms) < 0.00005
@@ -846,6 +851,10 @@ export function VoiceDevices() {
             && (
               typeof runtimeConfidenceFloor !== 'number'
               || Math.abs(runtimeConfidenceFloor - voiceTuning.wakeConfidenceFloor) < 0.0005
+            )
+            && (
+              typeof runtimePlaybackSuppressionMs !== 'number'
+              || runtimePlaybackSuppressionMs === voiceTuning.wakePlaybackSuppressionMs
             )
 
           return (
@@ -1088,6 +1097,20 @@ export function VoiceDevices() {
                             device._id,
                             { voiceTuning: { wakeConfidenceFloor: value } },
                             `Wake confidence floor ${value === 0 ? 'disabled' : `set to ${Math.round(value * 100)}%`}`
+                          )}
+                        />
+                        <VoiceTuningSlider
+                          label="Speaker echo guard"
+                          description="Keeps the wake detector deaf to this device's own earcons and voice replies, plus a short room-echo tail. It does not mute or reopen the microphone."
+                          value={voiceTuning.wakePlaybackSuppressionMs}
+                          min={0}
+                          max={3000}
+                          step={100}
+                          formatValue={(value) => value === 0 ? 'Off' : `${Math.round(value)} ms`}
+                          onCommit={(value) => commitDeviceSettings(
+                            device._id,
+                            { voiceTuning: { wakePlaybackSuppressionMs: value } },
+                            `Speaker echo guard ${value === 0 ? 'disabled' : `set to ${Math.round(value)} ms`}`
                           )}
                         />
                         <VoiceTuningSlider

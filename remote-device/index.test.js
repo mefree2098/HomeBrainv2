@@ -811,6 +811,51 @@ test('enqueueSidecarAudio forwards quiet frames so streaming feature history sta
   assert.deepEqual(sidecar.stdin.writes[3], loudFrame);
 });
 
+test('enqueueSidecarAudio masks local speaker playback without hiding microphone health', () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: { sampleRate: 16000 },
+    wakeWord: { playbackSuppressionMs: 800 }
+  });
+  const sidecar = createFakeSidecar();
+  const loudFrame = Buffer.alloc(4);
+  loudFrame.writeInt16LE(16000, 0);
+  loudFrame.writeInt16LE(-16000, 2);
+
+  device.sidecar = sidecar;
+  device.sidecarFrameBytes = 4;
+  device.resetWakeWordRuntime('FeatureSidecar/OWW', device.buildRecordingOptions());
+  device.reportWakeWordRuntimeStatus = () => {};
+  device.localAudioPlaybackDepth = 1;
+
+  device.enqueueSidecarAudio(loudFrame);
+
+  assert.deepEqual(sidecar.stdin.writes[1], Buffer.alloc(4));
+  assert.ok(device.wakeWordRuntime.audio.lastFrameRms > 0.4);
+  assert.equal(device.wakeWordRuntime.playbackGuard.active, true);
+  assert.equal(device.wakeWordRuntime.playbackGuard.framesMasked, 1);
+  assert.deepEqual(device.wakeWordPreRollBuffer.subarray(-4), Buffer.alloc(4));
+});
+
+test('speaker playback guard remains active for the configured echo tail', (t) => {
+  const originalNow = Date.now;
+  let now = 10_000;
+  Date.now = () => now;
+  t.after(() => { Date.now = originalNow; });
+
+  const device = new HomeBrainRemoteDevice({
+    audio: { sampleRate: 16000 },
+    wakeWord: { playbackSuppressionMs: 900 }
+  });
+  const release = device.beginWakeWordPlaybackSuppression();
+
+  assert.equal(device.isWakeWordPlaybackSuppressed(), true);
+  release();
+  assert.equal(device.wakePlaybackSuppressedUntil, 10_900);
+  assert.equal(device.isWakeWordPlaybackSuppressed(), true);
+  now = 10_901;
+  assert.equal(device.isWakeWordPlaybackSuppressed(), false);
+});
+
 test('wake-word RMS gate treats zero config as the default minimum', () => {
   const device = new HomeBrainRemoteDevice({
     audio: { sampleRate: 16000 },
