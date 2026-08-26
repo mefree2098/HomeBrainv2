@@ -272,6 +272,40 @@ test('requestApi falls back to full Sense auth when refresh token renewal is rej
   assert.equal(result.monitor.id, 'monitor-1');
 });
 
+test('Sense catalog refresh preserves a fresh realtime connection after a transient refresh failure', async () => {
+  const service = new senseService.SenseService();
+  const now = new Date('2026-08-26T07:03:48.000Z');
+  const integration = {
+    monitorId: 'monitor-1',
+    pollIntervalSeconds: 10,
+    isConnected: false
+  };
+
+  assert.equal(service.isRealtimeSummaryFresh(integration, {
+    observedAt: '2026-08-26T07:03:43.000Z'
+  }, now), true);
+  assert.equal(service.isRealtimeSummaryFresh(integration, {
+    observedAt: '2026-08-26T07:03:27.000Z'
+  }, now), false);
+
+  service.latestRealtimeSummary = {
+    observedAt: new Date(Date.now() - 5_000).toISOString(),
+    activeDevices: []
+  };
+  service.requestApi = async () => [];
+
+  let upsertInput = null;
+  service.upsertSenseDevices = async (input) => {
+    upsertInput = input;
+    return [];
+  };
+
+  await service.syncDeviceCatalog(integration, { force: true });
+
+  assert.equal(upsertInput.realtimeConnected, true);
+  assert.equal(upsertInput.summary, service.latestRealtimeSummary);
+});
+
 test('updateRealtimeState throttles websocket heartbeat persistence to avoid save storms', async () => {
   const service = new senseService.SenseService();
   const originalUpdateOne = SenseIntegration.updateOne;
