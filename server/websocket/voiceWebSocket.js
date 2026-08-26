@@ -380,6 +380,7 @@ class VoiceWebSocketServer {
       wakeMinScoreHits: Math.round(bounded(raw.wakeMinScoreHits, 1, 6, 2)),
       wakeThresholdOffset: bounded(raw.wakeThresholdOffset, -0.2, 0.2, 0.02),
       wakeConfidenceFloor: bounded(raw.wakeConfidenceFloor, 0, 1, 0),
+      wakePlaybackSuppressionMs: Math.round(bounded(raw.wakePlaybackSuppressionMs, 0, 3000, 800)),
       commandPreRollMs: Math.round(bounded(raw.commandPreRollMs, 500, 5000, 1800)),
       silentEmptyWakes: raw.silentEmptyWakes !== false,
       backgroundGuardEnabled: raw.backgroundGuardEnabled !== false,
@@ -518,6 +519,7 @@ class VoiceWebSocketServer {
           confirmationMs: voiceTuning.wakeConfirmationMs,
           minScoreHits: voiceTuning.wakeMinScoreHits,
           confidenceFloor: voiceTuning.wakeConfidenceFloor,
+          playbackSuppressionMs: voiceTuning.wakePlaybackSuppressionMs,
           vad: {
             speechThreshold: typeof vadSettings.speechThreshold === 'number'
               ? clampValue(vadSettings.speechThreshold, 0, 1)

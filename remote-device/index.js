@@ -36,6 +36,8 @@ const DEFAULT_COMMAND_MIN_RMS = 0.0006;
 const MAX_PENDING_COMMAND_AUDIO_MS = 8000;
 const WAKE_ACK_TIMEOUT_MS = 10000;
 const WAKE_EARCON_ENDPOINT_IGNORE_MS = 220;
+const DEFAULT_WAKE_PLAYBACK_SUPPRESSION_MS = 800;
+const MAX_WAKE_PLAYBACK_SUPPRESSION_MS = 3000;
 const DIGITAL_SILENCE_WARNING_MS = 4000;
 const PCM_SAMPLE_WIDTH_BYTES = 2;
 const OPENWAKEWORD_FRAME_MS = 80;
@@ -426,6 +428,7 @@ class HomeBrainRemoteDevice {
     this.stoppingSidecars = new WeakSet();
     this.sidecarFrameBytes = 0;
     this.sidecarAudioBuffer = Buffer.alloc(0);
+    this.sidecarObservedAudioBuffer = Buffer.alloc(0);
     this.sidecarStdoutBuffer = '';
     this.sidecarStderrBuffer = '';
     this.recordingStderrBuffer = '';
@@ -465,6 +468,8 @@ class HomeBrainRemoteDevice {
     this.ttsPlaybackQueue = Promise.resolve();
     this.earconPlaybackQueue = Promise.resolve();
     this.ttsGeneration = 0;
+    this.localAudioPlaybackDepth = 0;
+    this.wakePlaybackSuppressedUntil = 0;
     this.lastVoiceInteraction = null;
     this.audioHealthWarned = false;
 
@@ -1555,6 +1560,12 @@ class HomeBrainRemoteDevice {
         stderr: null,
         stderrAt: null
       },
+      playbackGuard: {
+        active: false,
+        tailMs: this.getWakePlaybackSuppressionMs(),
+        suppressedUntil: null,
+        framesMasked: 0
+      },
       audio: {
         chunks: 0,
         bytes: 0,
@@ -1602,6 +1613,12 @@ class HomeBrainRemoteDevice {
       this.wakeWordRuntime.audio = {
         ...this.wakeWordRuntime.audio,
         ...updates.audio
+      };
+    }
+    if (updates.playbackGuard && typeof updates.playbackGuard === 'object') {
+      this.wakeWordRuntime.playbackGuard = {
+        ...(this.wakeWordRuntime.playbackGuard || {}),
+        ...updates.playbackGuard
       };
     }
     if (updates.scoreStats && typeof updates.scoreStats === 'object') {
@@ -1727,6 +1744,48 @@ class HomeBrainRemoteDevice {
     });
     this.reportWakeWordRuntimeStatus(true, 'recording_error');
     this.handleWakeWordEngineFailure(new Error(message));
+  }
+
+  getWakePlaybackSuppressionMs() {
+    const configured = Number(this.config.wakeWord?.playbackSuppressionMs);
+    return Number.isFinite(configured)
+      ? Math.round(clamp(configured, 0, MAX_WAKE_PLAYBACK_SUPPRESSION_MS))
+      : DEFAULT_WAKE_PLAYBACK_SUPPRESSION_MS;
+  }
+
+  isWakeWordPlaybackSuppressed(now = Date.now()) {
+    return this.localAudioPlaybackDepth > 0 || now < this.wakePlaybackSuppressedUntil;
+  }
+
+  updatePlaybackGuardRuntime() {
+    if (!this.wakeWordRuntime) return;
+    const now = Date.now();
+    const active = this.isWakeWordPlaybackSuppressed(now);
+    this.updateWakeWordRuntime({
+      playbackGuard: {
+        active,
+        tailMs: this.getWakePlaybackSuppressionMs(),
+        suppressedUntil: this.wakePlaybackSuppressedUntil > now
+          ? new Date(this.wakePlaybackSuppressedUntil).toISOString()
+          : null
+      }
+    });
+    this.reportWakeWordRuntimeStatus(false, active ? 'playback_guard_active' : 'playback_guard_released');
+  }
+
+  beginWakeWordPlaybackSuppression() {
+    this.localAudioPlaybackDepth += 1;
+    this.updatePlaybackGuardRuntime();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.localAudioPlaybackDepth = Math.max(0, this.localAudioPlaybackDepth - 1);
+      if (this.localAudioPlaybackDepth === 0) {
+        this.wakePlaybackSuppressedUntil = Date.now() + this.getWakePlaybackSuppressionMs();
+      }
+      this.updatePlaybackGuardRuntime();
+    };
   }
 
   calculatePcmRms(frameBuffer) {
@@ -2838,6 +2897,7 @@ class HomeBrainRemoteDevice {
     // Prepare chunking into exact frames for the sidecar
     this.sidecarFrameBytes = (this.wakeWordFrameSamples || 16000) * PCM_SAMPLE_WIDTH_BYTES;
     this.sidecarAudioBuffer = Buffer.alloc(0);
+    this.sidecarObservedAudioBuffer = Buffer.alloc(0);
 
     // Read results
     this.sidecarStdoutBuffer = '';
@@ -2981,6 +3041,7 @@ class HomeBrainRemoteDevice {
     } catch (_) {}
     this.sidecar = null;
     this.sidecarAudioBuffer = Buffer.alloc(0);
+    this.sidecarObservedAudioBuffer = Buffer.alloc(0);
     this.sidecarStdoutBuffer = '';
     this.sidecarStderrBuffer = '';
   }
@@ -2988,7 +3049,13 @@ class HomeBrainRemoteDevice {
   enqueueSidecarAudio(data) {
     if (!this.sidecar || !data) return;
     const chunk = Buffer.isBuffer(data) ? data : Buffer.from(data);
-    this.appendWakeWordPreRoll(chunk);
+    const detectorChunk = this.isWakeWordPlaybackSuppressed()
+      ? Buffer.alloc(chunk.length)
+      : chunk;
+    // Never carry the device's own speaker output into the next command's
+    // pre-roll. The live capture stream remains open and telemetry still uses
+    // the unmodified microphone samples below.
+    this.appendWakeWordPreRoll(detectorChunk);
     const chunkStats = this.wakeWordRuntime?.audio || {};
     this.updateWakeWordRuntime({
       audio: {
@@ -2997,14 +3064,27 @@ class HomeBrainRemoteDevice {
         lastAudioAt: new Date().toISOString()
       }
     });
-    this.sidecarAudioBuffer = Buffer.concat([this.sidecarAudioBuffer, chunk]);
+    this.sidecarAudioBuffer = Buffer.concat([this.sidecarAudioBuffer, detectorChunk]);
+    this.sidecarObservedAudioBuffer = Buffer.concat([this.sidecarObservedAudioBuffer, chunk]);
     while (this.sidecarAudioBuffer.length >= (this.sidecarFrameBytes || 32000)) {
       const frame = this.sidecarAudioBuffer.subarray(0, this.sidecarFrameBytes);
       this.sidecarAudioBuffer = this.sidecarAudioBuffer.subarray(this.sidecarFrameBytes);
-      const rms = this.calculatePcmRms(frame);
+      const observedFrame = this.sidecarObservedAudioBuffer.subarray(0, this.sidecarFrameBytes);
+      this.sidecarObservedAudioBuffer = this.sidecarObservedAudioBuffer.subarray(this.sidecarFrameBytes);
+      const rms = this.calculatePcmRms(observedFrame);
       const audioStats = this.wakeWordRuntime?.audio || {};
+      const playbackGuard = this.wakeWordRuntime?.playbackGuard || {};
+      const frameWasMasked = !frame.equals(observedFrame);
       this.updateWakeWordRuntime({
-        audio: this.buildWakeAudioFrameStats(rms, audioStats)
+        audio: this.buildWakeAudioFrameStats(rms, audioStats),
+        playbackGuard: {
+          active: this.isWakeWordPlaybackSuppressed(),
+          tailMs: this.getWakePlaybackSuppressionMs(),
+          suppressedUntil: this.wakePlaybackSuppressedUntil > Date.now()
+            ? new Date(this.wakePlaybackSuppressedUntil).toISOString()
+            : null,
+          framesMasked: (playbackGuard.framesMasked || 0) + (frameWasMasked ? 1 : 0)
+        }
       });
       this.reportWakeWordRuntimeStatus(false, 'audio_frame');
       // Always advance the sidecar's streaming feature state, including during
@@ -3080,13 +3160,16 @@ class HomeBrainRemoteDevice {
       return;
     }
 
-    const bufferData = Buffer.isBuffer(audioData) ? audioData : Buffer.from(audioData);
+    const observedBufferData = Buffer.isBuffer(audioData) ? audioData : Buffer.from(audioData);
+    const bufferData = this.isWakeWordPlaybackSuppressed()
+      ? Buffer.alloc(observedBufferData.length)
+      : observedBufferData;
     this.appendWakeWordPreRoll(bufferData);
     const chunkStats = this.wakeWordRuntime?.audio || {};
     this.updateWakeWordRuntime({
       audio: {
         chunks: (chunkStats.chunks || 0) + 1,
-        bytes: (chunkStats.bytes || 0) + bufferData.length,
+        bytes: (chunkStats.bytes || 0) + observedBufferData.length,
         lastAudioAt: new Date().toISOString()
       }
     });
@@ -3785,8 +3868,13 @@ class HomeBrainRemoteDevice {
     return fetchWithTimeout(url, options, timeoutMs);
   }
 
-  playAudioClip(filePath, options) {
-    return playAudioFile(filePath, options);
+  async playAudioClip(filePath, options) {
+    const releasePlaybackGuard = this.beginWakeWordPlaybackSuppression();
+    try {
+      return await playAudioFile(filePath, options);
+    } finally {
+      releasePlaybackGuard();
+    }
   }
 
   async playTtsFailureCue() {

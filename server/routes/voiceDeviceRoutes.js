@@ -764,6 +764,7 @@ router.put('/devices/:id/settings', admin, async (req, res) => {
       boundedNumber('wakeMinScoreHits', 1, 6, true);
       boundedNumber('wakeThresholdOffset', -0.2, 0.2);
       boundedNumber('wakeConfidenceFloor', 0, 1);
+      boundedNumber('wakePlaybackSuppressionMs', 0, 3000, true);
       boundedNumber('commandPreRollMs', 500, 5000, true);
       boundedNumber('commandMaxDurationMs', 3000, 20000, true);
       boundedNumber('commandMinCaptureMs', 300, 3000, true);

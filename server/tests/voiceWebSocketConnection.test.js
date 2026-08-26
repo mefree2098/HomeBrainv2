@@ -458,6 +458,7 @@ test('buildWakeWordConfig includes bounded live voice tuning', async (t) => {
     wakeMinScoreHits: 3,
     wakeThresholdOffset: 0.04,
     wakeConfidenceFloor: 0.78,
+    wakePlaybackSuppressionMs: 900,
     commandPreRollMs: 1700,
     commandMaxDurationMs: 8000,
     commandSilenceMs: 550,
@@ -471,6 +472,7 @@ test('buildWakeWordConfig includes bounded live voice tuning', async (t) => {
   assert.equal(config.wakeWord.confirmationMs, 320);
   assert.equal(config.wakeWord.minScoreHits, 3);
   assert.equal(config.wakeWord.confidenceFloor, 0.78);
+  assert.equal(config.wakeWord.playbackSuppressionMs, 900);
   assert.equal(config.voice.commandPreRollMs, 1700);
   assert.equal(config.voice.endpointing.maxDurationMs, 8000);
   assert.equal(config.voice.endpointing.silenceMs, 550);
