@@ -708,6 +708,25 @@ class SenseService {
     return Math.max(0, Number.isFinite(remainingMs) ? remainingMs : 0);
   }
 
+  isRealtimeSummaryFresh(integration, summary = this.latestRealtimeSummary, now = Date.now()) {
+    // A transient HTTP refresh failure can leave isConnected false while the
+    // realtime feed is still current. Keep that fresh telemetry authoritative.
+    const observedAt = parseOptionalDate(summary?.observedAt);
+    const referenceAt = parseOptionalDate(now);
+    if (!observedAt || !referenceAt) {
+      return false;
+    }
+
+    const pollIntervalSeconds = clampInteger(
+      integration?.pollIntervalSeconds,
+      DEFAULT_POLL_INTERVAL_SECONDS,
+      5,
+      300
+    );
+    const freshnessWindowMs = pollIntervalSeconds * 2 * 1000;
+    return Math.abs(referenceAt.getTime() - observedAt.getTime()) <= freshnessWindowMs;
+  }
+
   async ensurePollTimer() {
     if (!this.backgroundEnabled) {
       return;
@@ -1189,7 +1208,7 @@ class SenseService {
       integration,
       summary: this.latestRealtimeSummary,
       emitUpdates: false,
-      realtimeConnected: false
+      realtimeConnected: this.isRealtimeSummaryFresh(integration)
     });
 
     return catalog;
@@ -1974,7 +1993,7 @@ class SenseService {
       integration,
       summary: this.latestRealtimeSummary,
       emitUpdates: true,
-      realtimeConnected: false
+      realtimeConnected: this.isRealtimeSummaryFresh(integration)
     });
 
     integration.lastTrendSyncAt = new Date();
