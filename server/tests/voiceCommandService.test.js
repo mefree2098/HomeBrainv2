@@ -117,6 +117,125 @@ test('processCommand handles direct office light control without LLM interpretat
   assert.equal(controlCall[1], 'turnOn');
 });
 
+test('processCommand strips a spoken wake phrase before matching the Office device', async (t) => {
+  const voiceCommandService = require('../services/voiceCommandService');
+  const deviceService = require('../services/deviceService');
+
+  const originalGetContext = voiceCommandService.getContext;
+  const originalInterpretCommand = voiceCommandService.interpretCommand;
+  const originalControlDevice = deviceService.controlDevice;
+
+  t.after(() => {
+    voiceCommandService.getContext = originalGetContext;
+    voiceCommandService.interpretCommand = originalInterpretCommand;
+    deviceService.controlDevice = originalControlDevice;
+  });
+
+  const vaultId = 'vault-overhead-id';
+  const officeId = 'office-device-id';
+  const makeDevice = (id, name, room) => ({
+    _id: { toString: () => id },
+    id,
+    name,
+    room,
+    type: 'light',
+    source: 'insteon',
+    capabilities: ['turn_on', 'turn_off', 'set_brightness'],
+    properties: { source: 'insteon' }
+  });
+  const vault = makeDevice(vaultId, 'Vault Overhead Lights', 'Vault');
+  const office = makeDevice(officeId, 'Office', 'Unassigned');
+  let controlledDeviceId = null;
+  let llmCalled = false;
+
+  voiceCommandService.getContext = async () => ({
+    devices: [vault, office],
+    scenes: [],
+    workflows: [],
+    raw: { devices: [vault, office], groups: [], scenes: [], workflows: [] },
+    deviceMap: new Map([[vaultId, vault], [officeId, office]]),
+    groupMap: new Map(),
+    sceneMap: new Map(),
+    workflowMap: new Map()
+  });
+  voiceCommandService.interpretCommand = async () => {
+    llmCalled = true;
+    throw new Error('LLM must not choose a device for an exact spoken target');
+  };
+  deviceService.controlDevice = async (deviceId) => {
+    controlledDeviceId = deviceId;
+    return { success: true };
+  };
+
+  const result = await voiceCommandService.processCommand({
+    commandText: 'Hey, Anna, turn off the office.',
+    room: 'Living Room',
+    wakeWord: 'anna'
+  });
+
+  assert.equal(llmCalled, false);
+  assert.equal(controlledDeviceId, officeId);
+  assert.equal(result.execution.status, 'success');
+  assert.equal(result.execution.actions[0].deviceName, 'Office');
+  assert.equal(result.responseText, 'Okay, turn off Office.');
+});
+
+test('immediate voice control never chooses an unrelated device for an unknown target', async (t) => {
+  const voiceCommandService = require('../services/voiceCommandService');
+  const deviceService = require('../services/deviceService');
+
+  const originalGetContext = voiceCommandService.getContext;
+  const originalInterpretCommand = voiceCommandService.interpretCommand;
+  const originalControlDevice = deviceService.controlDevice;
+  t.after(() => {
+    voiceCommandService.getContext = originalGetContext;
+    voiceCommandService.interpretCommand = originalInterpretCommand;
+    deviceService.controlDevice = originalControlDevice;
+  });
+
+  const vault = {
+    _id: { toString: () => 'vault-id' },
+    id: 'vault-id',
+    name: 'Vault Overhead Lights',
+    room: 'Vault',
+    type: 'light',
+    source: 'insteon',
+    capabilities: ['turn_on', 'turn_off'],
+    properties: { source: 'insteon' }
+  };
+  let controlled = false;
+  let llmCalled = false;
+  voiceCommandService.getContext = async () => ({
+    devices: [vault],
+    scenes: [],
+    workflows: [],
+    raw: { devices: [vault], groups: [], scenes: [], workflows: [] },
+    deviceMap: new Map([['vault-id', vault]]),
+    groupMap: new Map(),
+    sceneMap: new Map(),
+    workflowMap: new Map()
+  });
+  voiceCommandService.interpretCommand = async () => {
+    llmCalled = true;
+    return { interpretation: null, llm: {} };
+  };
+  deviceService.controlDevice = async () => {
+    controlled = true;
+  };
+
+  const result = await voiceCommandService.processCommand({
+    commandText: 'Hey Anna, turn off the observatory',
+    room: 'Living Room',
+    wakeWord: 'hey anna'
+  });
+
+  assert.equal(llmCalled, false);
+  assert.equal(controlled, false);
+  assert.equal(result.execution.status, 'failed');
+  assert.deepEqual(result.execution.actions, []);
+  assert.match(result.responseText, /couldn't safely match/i);
+});
+
 test('immediate voice fallback prefers exact device names over longer Harmony activity matches', async (t) => {
   const voiceCommandService = require('../services/voiceCommandService');
   const deviceService = require('../services/deviceService');

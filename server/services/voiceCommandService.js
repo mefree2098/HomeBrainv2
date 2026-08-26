@@ -680,11 +680,15 @@ RULES
       return '';
     }
 
+    // Speech-to-text frequently keeps the spoken wake phrase (for example,
+    // "Hey Anna, turn off the office"). Match the first control verb anywhere
+    // in the leading clause so the wake phrase cannot become part of the
+    // device target.
     const actionPrefixes = [
-      /^(?:please\s+)?(?:turn|switch|power)\s+(?:on|off)\s+(?:the\s+)?/,
-      /^(?:please\s+)?(?:turn|switch)\s+(?:the\s+)?/,
-      /^(?:please\s+)?(?:set|dim|brighten|fade|activate|deactivate|run|start|stop|toggle)\s+(?:the\s+)?/,
-      /^(?:please\s+)?(?:open|close|lock|unlock)\s+(?:the\s+)?/
+      /^(?:.*?\b)?(?:turn|switch|power)\s+(?:on|off)\s+(?:the\s+)?/,
+      /^(?:.*?\b)?(?:turn|switch)\s+(?:the\s+)?/,
+      /^(?:.*?\b)?(?:set|dim|brighten|fade|activate|deactivate|run|start|stop|toggle)\s+(?:the\s+)?/,
+      /^(?:.*?\b)?(?:open|close|lock|unlock)\s+(?:the\s+)?/
     ];
 
     for (const pattern of actionPrefixes) {
@@ -748,7 +752,7 @@ RULES
       let score = 0;
       for (const token of targetTokens.length ? targetTokens : nameTokens) {
         if (token.length < 3) continue;
-        if (aliases.some((alias) => alias.includes(token)) || text.includes(token)) {
+        if (aliases.some((alias) => alias.includes(token))) {
           score += 2;
         }
       }
@@ -2365,6 +2369,28 @@ RULES
           rawResponse: null,
           processingTimeMs: 0
         };
+      } else {
+        // Immediate home-control commands must never fall through to an LLM
+        // that is instructed to choose the "closest" device. An unmatched
+        // target is safer and faster as a clarification than an arbitrary
+        // device action.
+        interpretation = {
+          intent: 'unknown',
+          confidence: 0,
+          normalizedCommand: commandText,
+          actions: [],
+          response: "I couldn't safely match that request to a controllable device.",
+          followUpQuestion: 'Which device would you like me to control?',
+          usedFallback: true
+        };
+        llm = {
+          provider: 'heuristic',
+          model: 'safe-device-matcher',
+          runtime: null,
+          prompt: null,
+          rawResponse: null,
+          processingTimeMs: 0
+        };
       }
     }
 
@@ -2501,7 +2527,7 @@ RULES
         authorizeExecution
       })
       : {
-        status: 'success',
+        status: String(interpretation.intent || '').toLowerCase() === 'unknown' ? 'failed' : 'success',
         results: [],
         entities: {}
       };

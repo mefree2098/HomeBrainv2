@@ -772,7 +772,7 @@ router.put('/devices/:id/settings', admin, async (req, res) => {
       boundedNumber('commandSpeechStartTimeoutMs', 1000, 10000, true);
       boundedNumber('commandMinSpeechMs', 40, 1000, true);
       boundedNumber('commandMinRms', 0.0005, 0.05);
-      for (const key of ['silentEmptyWakes', 'backgroundGuardEnabled']) {
+      for (const key of ['silentEmptyWakes', 'backgroundGuardEnabled', 'wakeRequireFullPhrase']) {
         if (typeof value[key] === 'boolean') next[key] = value[key];
       }
       return next;

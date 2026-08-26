@@ -525,6 +525,36 @@ test('buildWakeWordConfig uses calibrated model thresholds and excludes missing 
   assert.equal(config.wakeWord.assets[0].sensitivity, 0.28);
 });
 
+test('buildWakeWordConfig can suppress unreliable one-word wake aliases', async (t) => {
+  const originalFind = WakeWordModel.find;
+  const originalAssets = require('../utils/wakeWordAssets').getAssetsForWakeWords;
+  t.after(() => {
+    WakeWordModel.find = originalFind;
+    require('../utils/wakeWordAssets').getAssetsForWakeWords = originalAssets;
+  });
+  WakeWordModel.find = async () => [];
+  require('../utils/wakeWordAssets').getAssetsForWakeWords = () => [
+    { label: 'Anna', slug: 'anna', fileName: 'anna.onnx', dependencies: [] },
+    { label: 'Hey Anna', slug: 'hey-anna', fileName: 'hey-anna.onnx', dependencies: [] },
+    { label: 'Henry', slug: 'henry', fileName: 'henry.onnx', dependencies: [] },
+    { label: 'Hey Henry', slug: 'hey-henry', fileName: 'hey-henry.onnx', dependencies: [] }
+  ];
+
+  const voiceWs = new VoiceWebSocketServer();
+  const device = createDevice();
+  device.supportedWakeWords = ['Anna', 'Hey Anna', 'Henry', 'Hey Henry'];
+  device.settings.voiceTuning = { wakeRequireFullPhrase: true };
+
+  const { config, assets } = await voiceWs.buildWakeWordConfig(device, { deviceToken: 'token' }, {});
+
+  assert.deepEqual(config.wakeWords, ['Hey Anna', 'Hey Henry']);
+  assert.deepEqual(config.wakeWord.enabled, ['Hey Anna', 'Hey Henry']);
+  assert.deepEqual(config.wakeWord.suppressed, ['Anna', 'Henry']);
+  assert.deepEqual(config.wakeWord.missing, []);
+  assert.equal(config.wakeWord.requireFullPhrase, true);
+  assert.deepEqual(assets.map((asset) => asset.label), ['Hey Anna', 'Hey Henry']);
+});
+
 test('pushConfigToDevice refreshes settings instead of reusing the websocket snapshot', async (t) => {
   const originalFindById = VoiceDevice.findById;
   t.after(() => { VoiceDevice.findById = originalFindById; });
