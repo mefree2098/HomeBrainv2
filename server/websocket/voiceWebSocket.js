@@ -379,6 +379,7 @@ class VoiceWebSocketServer {
       wakeConfirmationMs: Math.round(bounded(raw.wakeConfirmationMs, 80, 1000, 320)),
       wakeMinScoreHits: Math.round(bounded(raw.wakeMinScoreHits, 1, 6, 2)),
       wakeThresholdOffset: bounded(raw.wakeThresholdOffset, -0.2, 0.2, 0.02),
+      wakeConfidenceFloor: bounded(raw.wakeConfidenceFloor, 0, 1, 0),
       commandPreRollMs: Math.round(bounded(raw.commandPreRollMs, 500, 5000, 1800)),
       silentEmptyWakes: raw.silentEmptyWakes !== false,
       backgroundGuardEnabled: raw.backgroundGuardEnabled !== false,
@@ -477,7 +478,10 @@ class VoiceWebSocketServer {
         checksum: asset.checksum,
         size: asset.size,
         sensitivity: rawSensitivity != null ? clampValue(rawSensitivity, 0, 1) : undefined,
-        threshold: clampValue(rawThreshold + voiceTuning.wakeThresholdOffset, 0, 1),
+        threshold: clampValue(Math.max(
+          rawThreshold + voiceTuning.wakeThresholdOffset,
+          voiceTuning.wakeConfidenceFloor
+        ), 0, 1),
         engine: asset.engine || 'openwakeword',
         format: asset.format,
         updatedAt: asset.updatedAt,
@@ -513,6 +517,7 @@ class VoiceWebSocketServer {
           debounceMs,
           confirmationMs: voiceTuning.wakeConfirmationMs,
           minScoreHits: voiceTuning.wakeMinScoreHits,
+          confidenceFloor: voiceTuning.wakeConfidenceFloor,
           vad: {
             speechThreshold: typeof vadSettings.speechThreshold === 'number'
               ? clampValue(vadSettings.speechThreshold, 0, 1)
@@ -1540,11 +1545,6 @@ class VoiceWebSocketServer {
       const resultSentAt = new Date();
       const resultStatus = voiceCommand.execution.status;
       const succeeded = resultStatus === 'success' || resultStatus === 'partial_success';
-      const hasExecutedActions = Array.isArray(result.execution?.actions)
-        && result.execution.actions.length > 0;
-      const spokenResult = !succeeded
-        ? responseText
-        : (hasExecutedActions ? null : responseText);
       const resultTiming = {
         ...timingBase,
         executionStartedAt: executionStartedAt.toISOString(),
@@ -1562,7 +1562,7 @@ class VoiceWebSocketServer {
         interactionId,
         commandId: voiceCommand._id.toString(),
         status: resultStatus,
-        ...(spokenResult ? { text: spokenResult } : {}),
+        text: responseText,
         voice: preferredVoiceId || 'default',
         timing: resultTiming
       });
