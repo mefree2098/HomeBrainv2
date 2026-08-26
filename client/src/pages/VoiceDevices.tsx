@@ -105,6 +105,7 @@ const DEFAULT_VOICE_TUNING = {
   wakeThresholdOffset: 0.02,
   wakeConfidenceFloor: 0,
   wakePlaybackSuppressionMs: 800,
+  wakeRequireFullPhrase: false,
   commandPreRollMs: 1800,
   commandMaxDurationMs: 12000,
   commandMinCaptureMs: 900,
@@ -1212,6 +1213,23 @@ export function VoiceDevices() {
                           )}
                         />
                       </div>
+
+                      <label className="flex items-start justify-between gap-4 rounded-md border border-border/60 bg-background/70 p-3">
+                        <span>
+                          <span className="block text-sm font-medium">Require full wake phrase</span>
+                          <span className="block text-[11px] leading-4 text-muted-foreground">When multi-word models are available, listen for “Hey Anna” and “Hey Henry” instead of the much less reliable one-word aliases.</span>
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={voiceTuning.wakeRequireFullPhrase}
+                          onChange={(event) => commitDeviceSettings(
+                            device._id,
+                            { voiceTuning: { wakeRequireFullPhrase: event.target.checked } },
+                            `Full wake phrase ${event.target.checked ? 'required' : 'optional'}`
+                          )}
+                          className="mt-1 h-4 w-4"
+                        />
+                      </label>
 
                       <label className="flex items-start justify-between gap-4 rounded-md border border-border/60 bg-background/70 p-3">
                         <span>

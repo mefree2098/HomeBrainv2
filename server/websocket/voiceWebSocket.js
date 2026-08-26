@@ -381,6 +381,7 @@ class VoiceWebSocketServer {
       wakeThresholdOffset: bounded(raw.wakeThresholdOffset, -0.2, 0.2, 0.02),
       wakeConfidenceFloor: bounded(raw.wakeConfidenceFloor, 0, 1, 0),
       wakePlaybackSuppressionMs: Math.round(bounded(raw.wakePlaybackSuppressionMs, 0, 3000, 800)),
+      wakeRequireFullPhrase: raw.wakeRequireFullPhrase === true,
       commandPreRollMs: Math.round(bounded(raw.commandPreRollMs, 500, 5000, 1800)),
       silentEmptyWakes: raw.silentEmptyWakes !== false,
       backgroundGuardEnabled: raw.backgroundGuardEnabled !== false,
@@ -412,12 +413,19 @@ class VoiceWebSocketServer {
       ? device.settings.wakeWordThreshold
       : 0.55;
 
-    const assets = wakeWordAssets.getAssetsForWakeWords(device.supportedWakeWords, {
+    const voiceTuning = this.resolveVoiceTuning(device);
+    const availableAssets = wakeWordAssets.getAssetsForWakeWords(device.supportedWakeWords, {
       platform,
       arch,
       allowGeneric: true,
       threshold: defaultThreshold
     });
+    const fullPhraseAssets = availableAssets.filter((asset) => (
+      String(asset?.label || '').trim().split(/\s+/).filter(Boolean).length > 1
+    ));
+    const assets = voiceTuning.wakeRequireFullPhrase && fullPhraseAssets.length
+      ? fullPhraseAssets
+      : availableAssets;
 
     const clampValue = (value, min, max) => Math.min(Math.max(value, min), max);
 
@@ -434,7 +442,6 @@ class VoiceWebSocketServer {
       console.warn('%s', `Failed to load wake word metadata for device ${device.name}:`, error.message);
     }
 
-    const voiceTuning = this.resolveVoiceTuning(device);
     const wakeWordAssetPayload = assets.map((asset) => {
       const buildAssetUrl = (dependencyFileName = null) => {
         const params = new URLSearchParams();
@@ -505,7 +512,11 @@ class VoiceWebSocketServer {
     const audioSettings = sanitizeRemoteAudioConfig(device.settings?.audio);
     const enabledWakeWords = wakeWordAssetPayload.map((asset) => asset.label);
     const enabledSlugs = new Set(wakeWordAssetPayload.map((asset) => asset.slug));
+    const availableSlugs = new Set(availableAssets.map((asset) => asset.slug));
     const missingWakeWords = (Array.isArray(device.supportedWakeWords) ? device.supportedWakeWords : [])
+      .filter((label) => !availableSlugs.has(wakeWordAssets.slugify(label)));
+    const suppressedWakeWords = (Array.isArray(device.supportedWakeWords) ? device.supportedWakeWords : [])
+      .filter((label) => availableSlugs.has(wakeWordAssets.slugify(label)))
       .filter((label) => !enabledSlugs.has(wakeWordAssets.slugify(label)));
 
     return {
@@ -514,12 +525,14 @@ class VoiceWebSocketServer {
         wakeWord: {
           enabled: enabledWakeWords,
           missing: missingWakeWords,
+          suppressed: suppressedWakeWords,
           assets: wakeWordAssetPayload,
           debounceMs,
           confirmationMs: voiceTuning.wakeConfirmationMs,
           minScoreHits: voiceTuning.wakeMinScoreHits,
           confidenceFloor: voiceTuning.wakeConfidenceFloor,
           playbackSuppressionMs: voiceTuning.wakePlaybackSuppressionMs,
+          requireFullPhrase: voiceTuning.wakeRequireFullPhrase,
           vad: {
             speechThreshold: typeof vadSettings.speechThreshold === 'number'
               ? clampValue(vadSettings.speechThreshold, 0, 1)
