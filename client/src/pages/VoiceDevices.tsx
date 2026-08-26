@@ -106,6 +106,9 @@ const DEFAULT_VOICE_TUNING = {
   wakeConfidenceFloor: 0,
   wakePlaybackSuppressionMs: 800,
   wakeRequireFullPhrase: false,
+  wakePhraseVerificationEnabled: false,
+  wakePhraseVerificationPreRollMs: 2400,
+  wakePhraseVerificationTimeoutMs: 3000,
   commandPreRollMs: 1800,
   commandMaxDurationMs: 12000,
   commandMinCaptureMs: 900,
@@ -838,6 +841,8 @@ export function VoiceDevices() {
           const runtimeMinScoreHits = device.settings?.wakeWordRuntime?.sidecar?.minScoreHits
           const runtimeConfidenceFloor = device.settings?.wakeWordRuntime?.sidecar?.confidenceFloor
           const runtimePlaybackSuppressionMs = device.settings?.wakeWordRuntime?.playbackGuard?.tailMs
+          const runtimeWakeVerificationEnabled = device.settings?.wakeWordRuntime?.verification?.enabled
+          const runtimeWakeVerificationPreRollMs = device.settings?.wakeWordRuntime?.verification?.preRollMs
           const microphoneMutedLikely = device.settings?.wakeWordRuntime?.audio?.mutedLikely === true
           const tuningApplied = typeof runtimeWakeMinRms === 'number'
             && Math.abs(runtimeWakeMinRms - wakeMinRms) < 0.00005
@@ -856,6 +861,14 @@ export function VoiceDevices() {
             && (
               typeof runtimePlaybackSuppressionMs !== 'number'
               || runtimePlaybackSuppressionMs === voiceTuning.wakePlaybackSuppressionMs
+            )
+            && (
+              !voiceTuning.wakePhraseVerificationEnabled
+              || runtimeWakeVerificationEnabled === true
+            )
+            && (
+              !voiceTuning.wakePhraseVerificationEnabled
+              || runtimeWakeVerificationPreRollMs === voiceTuning.wakePhraseVerificationPreRollMs
             )
 
           return (
@@ -1019,7 +1032,13 @@ export function VoiceDevices() {
                               device._id,
                               {
                                 wakeWordVad: { minRms: preset.wakeMinRms },
-                                voiceTuning: preset.voiceTuning
+                                voiceTuning: {
+                                  ...preset.voiceTuning,
+                                  wakeRequireFullPhrase: voiceTuning.wakeRequireFullPhrase,
+                                  wakePhraseVerificationEnabled: voiceTuning.wakePhraseVerificationEnabled,
+                                  wakePhraseVerificationPreRollMs: voiceTuning.wakePhraseVerificationPreRollMs,
+                                  wakePhraseVerificationTimeoutMs: voiceTuning.wakePhraseVerificationTimeoutMs
+                                }
                               },
                               `${name[0].toUpperCase()}${name.slice(1)} voice preset applied`
                             )}
@@ -1112,6 +1131,34 @@ export function VoiceDevices() {
                             device._id,
                             { voiceTuning: { wakePlaybackSuppressionMs: value } },
                             `Speaker echo guard ${value === 0 ? 'disabled' : `set to ${Math.round(value)} ms`}`
+                          )}
+                        />
+                        <VoiceTuningSlider
+                          label="Wake verification audio"
+                          description="Audio retained for the speech verifier. Raise this if the start of a full wake phrase is missing; the clip stays in memory and is not saved."
+                          value={voiceTuning.wakePhraseVerificationPreRollMs}
+                          min={800}
+                          max={4000}
+                          step={100}
+                          formatValue={(value) => `${(value / 1000).toFixed(1)} s`}
+                          onCommit={(value) => commitDeviceSettings(
+                            device._id,
+                            { voiceTuning: { wakePhraseVerificationPreRollMs: value } },
+                            `Wake verification audio set to ${(value / 1000).toFixed(1)} seconds`
+                          )}
+                        />
+                        <VoiceTuningSlider
+                          label="Wake verification timeout"
+                          description="Maximum time to wait for the speech verifier before silently rejecting a candidate."
+                          value={voiceTuning.wakePhraseVerificationTimeoutMs}
+                          min={1000}
+                          max={5000}
+                          step={250}
+                          formatValue={(value) => `${(value / 1000).toFixed(2)} s`}
+                          onCommit={(value) => commitDeviceSettings(
+                            device._id,
+                            { voiceTuning: { wakePhraseVerificationTimeoutMs: value } },
+                            `Wake verification timeout set to ${(value / 1000).toFixed(2)} seconds`
                           )}
                         />
                         <VoiceTuningSlider
@@ -1226,6 +1273,23 @@ export function VoiceDevices() {
                             device._id,
                             { voiceTuning: { wakeRequireFullPhrase: event.target.checked } },
                             `Full wake phrase ${event.target.checked ? 'required' : 'optional'}`
+                          )}
+                          className="mt-1 h-4 w-4"
+                        />
+                      </label>
+
+                      <label className="flex items-start justify-between gap-4 rounded-md border border-border/60 bg-background/70 p-3">
+                        <span>
+                          <span className="block text-sm font-medium">Verify wake phrase before chirping</span>
+                          <span className="block text-[11px] leading-4 text-muted-foreground">Treat the wake model as a silent candidate, then use speech recognition to confirm the full phrase before acknowledging or recording a command.</span>
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={voiceTuning.wakePhraseVerificationEnabled}
+                          onChange={(event) => commitDeviceSettings(
+                            device._id,
+                            { voiceTuning: { wakePhraseVerificationEnabled: event.target.checked } },
+                            `Wake phrase verification ${event.target.checked ? 'enabled' : 'disabled'}`
                           )}
                           className="mt-1 h-4 w-4"
                         />

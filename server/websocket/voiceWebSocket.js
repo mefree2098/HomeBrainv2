@@ -20,6 +20,8 @@ const MAX_AUDIO_SESSION_BYTES = Math.max(
   Number(process.env.HOMEBRAIN_VOICE_AUDIO_SESSION_MAX_BYTES || 20 * 1024 * 1024)
 );
 const MAX_VOICE_WEBSOCKET_PAYLOAD_BYTES = 2 * 1024 * 1024;
+const MAX_WAKE_VERIFICATION_AUDIO_BYTES = 16000 * 2 * 4;
+const MIN_WAKE_VERIFICATION_AUDIO_BYTES = 16000 * 2 * 0.5;
 const DEFAULT_WAKE_WORD_MIN_RMS = 0.004;
 const MAX_WAKE_WORD_MIN_RMS = 0.2;
 const REMOTE_COMMAND_MAX_DURATION_MS = 12000;
@@ -71,6 +73,10 @@ function redactMessageForLog(message = {}) {
   if (typeof message.audioData === 'string') {
     redacted.audioBytesApprox = Math.floor(message.audioData.length * 3 / 4);
     redacted.audioData = '[redacted audio]';
+  }
+  if (typeof message.verificationAudio === 'string') {
+    redacted.verificationAudioBytesApprox = Math.floor(message.verificationAudio.length * 3 / 4);
+    redacted.verificationAudio = '[redacted audio]';
   }
   for (const key of ['command', 'text', 'transcript', 'originalText', 'processedText', 'responseText']) {
     if (typeof message[key] === 'string') redacted[key] = '[redacted text]';
@@ -382,6 +388,9 @@ class VoiceWebSocketServer {
       wakeConfidenceFloor: bounded(raw.wakeConfidenceFloor, 0, 1, 0),
       wakePlaybackSuppressionMs: Math.round(bounded(raw.wakePlaybackSuppressionMs, 0, 3000, 800)),
       wakeRequireFullPhrase: raw.wakeRequireFullPhrase === true,
+      wakePhraseVerificationEnabled: raw.wakePhraseVerificationEnabled === true,
+      wakePhraseVerificationPreRollMs: Math.round(bounded(raw.wakePhraseVerificationPreRollMs, 800, 4000, 2400)),
+      wakePhraseVerificationTimeoutMs: Math.round(bounded(raw.wakePhraseVerificationTimeoutMs, 1000, 5000, 3000)),
       commandPreRollMs: Math.round(bounded(raw.commandPreRollMs, 500, 5000, 1800)),
       silentEmptyWakes: raw.silentEmptyWakes !== false,
       backgroundGuardEnabled: raw.backgroundGuardEnabled !== false,
@@ -533,6 +542,11 @@ class VoiceWebSocketServer {
           confidenceFloor: voiceTuning.wakeConfidenceFloor,
           playbackSuppressionMs: voiceTuning.wakePlaybackSuppressionMs,
           requireFullPhrase: voiceTuning.wakeRequireFullPhrase,
+          verification: {
+            enabled: voiceTuning.wakePhraseVerificationEnabled,
+            preRollMs: voiceTuning.wakePhraseVerificationPreRollMs,
+            timeoutMs: voiceTuning.wakePhraseVerificationTimeoutMs
+          },
           vad: {
             speechThreshold: typeof vadSettings.speechThreshold === 'number'
               ? clampValue(vadSettings.speechThreshold, 0, 1)
@@ -924,6 +938,138 @@ class VoiceWebSocketServer {
     }
   }
 
+  normalizeWakePhrase(value) {
+    return String(value || '')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  wakePhraseAppearsInTranscript(transcript, wakeWord) {
+    const normalizedTranscript = this.normalizeWakePhrase(transcript);
+    const normalizedWake = this.normalizeWakePhrase(wakeWord);
+    if (!normalizedTranscript || !normalizedWake) return false;
+
+    const candidates = new Set([normalizedWake]);
+    // Whisper occasionally uses the single-n spelling for the name Anna.
+    // Keep this alias narrow so ordinary background mentions of a name do not
+    // become a valid wake phrase.
+    if (normalizedWake === 'hey anna') candidates.add('hey ana');
+
+    const paddedTranscript = ` ${normalizedTranscript} `;
+    return [...candidates].some((candidate) => paddedTranscript.includes(` ${candidate} `));
+  }
+
+  async verifySpeakerWakePhrase(connection, message, normalizedWake, voiceTuning) {
+    const startedAt = Date.now();
+    const reject = (reason, metadata = {}) => ({
+      accepted: false,
+      reason,
+      processingTimeMs: Date.now() - startedAt,
+      ...metadata
+    });
+
+    const supportedWakeWords = Array.isArray(connection.device?.supportedWakeWords)
+      ? connection.device.supportedWakeWords.map((value) => this.normalizeWakePhrase(value)).filter(Boolean)
+      : [];
+    if (!normalizedWake || !supportedWakeWords.includes(normalizedWake)) {
+      return reject('unsupported_wake_word');
+    }
+
+    const encodedAudio = message?.verificationAudio;
+    const maxEncodedLength = Math.ceil(MAX_WAKE_VERIFICATION_AUDIO_BYTES / 3) * 4;
+    if (typeof encodedAudio !== 'string' || encodedAudio.length > maxEncodedLength) {
+      return reject('invalid_audio');
+    }
+    const audioBuffer = this.decodeCanonicalBase64(encodedAudio);
+    const sampleRate = Number(message?.sampleRate);
+    const channels = Number(message?.channels);
+    const format = String(message?.format || '').toUpperCase();
+    if (
+      !audioBuffer
+      || audioBuffer.length < MIN_WAKE_VERIFICATION_AUDIO_BYTES
+      || audioBuffer.length > MAX_WAKE_VERIFICATION_AUDIO_BYTES
+      || audioBuffer.length % 2 !== 0
+      || sampleRate !== 16000
+      || channels !== 1
+      || format !== 'S16LE'
+    ) {
+      return reject('invalid_audio');
+    }
+
+    let timeout;
+    try {
+      const timeoutMs = voiceTuning.wakePhraseVerificationTimeoutMs;
+      const transcription = await Promise.race([
+        speechService.transcribe({
+          audioBuffer,
+          sampleRate,
+          channels,
+          format,
+          language: 'en',
+          allowFallback: false
+        }),
+        new Promise((_, rejectTimeout) => {
+          timeout = setTimeout(() => rejectTimeout(new Error('wake_phrase_verification_timeout')), timeoutMs);
+          timeout.unref?.();
+        })
+      ]);
+      const metadata = {
+        provider: transcription?.provider || null,
+        model: transcription?.model || null
+      };
+      if (!this.wakePhraseAppearsInTranscript(transcription?.text, normalizedWake)) {
+        return reject('phrase_not_confirmed', metadata);
+      }
+      return {
+        accepted: true,
+        processingTimeMs: Date.now() - startedAt,
+        ...metadata
+      };
+    } catch (error) {
+      return reject(
+        error?.message === 'wake_phrase_verification_timeout' ? 'verification_timeout' : 'verification_error'
+      );
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  }
+
+  rejectWakeWordCandidate(deviceId, connection, details = {}) {
+    const reason = typeof details.reason === 'string' ? details.reason : 'phrase_not_confirmed';
+    const processingTimeMs = Number.isFinite(details.processingTimeMs)
+      ? Math.max(0, Math.round(details.processingTimeMs))
+      : null;
+    connection.pendingWakeWord = null;
+    this.sendToConnection(connection, {
+      type: 'wake_word_rejected',
+      reason,
+      ...(processingTimeMs !== null ? { processingTimeMs } : {})
+    });
+    void eventStreamService.publishSafe({
+      type: 'voice.wake_candidate_rejected',
+      source: 'voice',
+      category: 'voice',
+      payload: {
+        deviceId: String(deviceId),
+        deviceName: connection.device?.name || '',
+        room: connection.device?.room || '',
+        wakeWord: this.normalizeWakePhrase(details.wakeWord),
+        confidence: typeof details.confidence === 'number' ? details.confidence : null,
+        reason,
+        processingTimeMs
+      },
+      tags: ['voice', 'wake', 'rejected']
+    });
+    console.log('Rejected unverified wake-word candidate', {
+      deviceId: String(deviceId),
+      reason,
+      processingTimeMs
+    });
+  }
+
   async handleWakeWordDetection(deviceId, message, sourceConnection = null) {
     const connection = sourceConnection || this.deviceConnections.get(deviceId);
     if (!connection || !connection.authenticated) return;
@@ -934,10 +1080,7 @@ class VoiceWebSocketServer {
 
     const { wakeWord, confidence, timestamp } = message;
     const isReachy = connection.device?.deviceType === 'robot';
-    const normalizeWakePhrase = (value) => String(value || '')
-      .trim()
-      .toLowerCase()
-      .replace(/\s+/g, ' ');
+    const normalizeWakePhrase = (value) => this.normalizeWakePhrase(value);
     const normalizedWake = normalizeWakePhrase(wakeWord || (isReachy ? '' : 'anna'));
     const serverNow = Date.now();
     let clientTimestamp = timestamp == null ? null : new Date(timestamp);
@@ -988,9 +1131,30 @@ class VoiceWebSocketServer {
       ? Math.max(0, Math.min(1, confidence))
       : null;
 
+    const voiceTuning = this.resolveVoiceTuning(connection.device);
+    let wakeVerification = null;
+    if (!isReachy && voiceTuning.wakePhraseVerificationEnabled) {
+      wakeVerification = await this.verifySpeakerWakePhrase(
+        connection,
+        message,
+        normalizedWake,
+        voiceTuning
+      );
+      if (!this.isCurrentAuthenticatedConnection(deviceId, connection)) return;
+      if (!wakeVerification.accepted) {
+        this.rejectWakeWordCandidate(deviceId, connection, {
+          ...wakeVerification,
+          wakeWord: normalizedWake,
+          confidence: safeConfidence
+        });
+        return;
+      }
+    }
+
     console.log('Wake word detected by voice device', {
       deviceId,
-      confidence: safeConfidence
+      confidence: safeConfidence,
+      verified: wakeVerification?.accepted === true
     });
 
     try {
@@ -1063,11 +1227,17 @@ class VoiceWebSocketServer {
       // A Reachy grant becomes observable only after both event persistence and
       // device-state persistence succeed. The grant is short-lived, server-time
       // based, and consumed by exactly one text or audio capture start.
-      const voiceTuning = this.resolveVoiceTuning(connection.device);
       const acknowledged = this.sendToConnection(connection, {
         type: 'wake_word_ack',
         message: 'Ready for voice command',
         interactionId,
+        ...(wakeVerification ? {
+          verification: {
+            provider: wakeVerification.provider,
+            model: wakeVerification.model,
+            processingTimeMs: wakeVerification.processingTimeMs
+          }
+        } : {}),
         timeout: isReachy
           ? Math.min(5000, this.reachyCaptureGrantTtlMs)
           : voiceTuning.endpointing.maxDurationMs,
@@ -1090,7 +1260,9 @@ class VoiceWebSocketServer {
           room: connection.device?.room || '',
           wakeWord: normalizedWake,
           confidence: safeConfidence,
-          interactionId
+          interactionId,
+          verified: wakeVerification?.accepted === true,
+          verificationTimeMs: wakeVerification?.processingTimeMs ?? null
         },
         tags: ['voice', 'wake'],
         correlationId: interactionId

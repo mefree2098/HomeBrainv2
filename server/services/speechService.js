@@ -329,7 +329,14 @@ class SpeechService {
     }
   }
 
-  async transcribe({ audioBuffer, sampleRate = 16000, channels = 1, format = 'S16LE', language }) {
+  async transcribe({
+    audioBuffer,
+    sampleRate = 16000,
+    channels = 1,
+    format = 'S16LE',
+    language,
+    allowFallback = true
+  }) {
     if (!audioBuffer || !audioBuffer.length) {
       throw new Error('No audio data provided for transcription');
     }
@@ -370,6 +377,7 @@ class SpeechService {
             timeoutMs: providerConfig.lanTimeoutMs
           });
         } catch (error) {
+          if (!allowFallback) throw error;
           console.warn(`LAN Whisper unavailable; falling back to the local worker: ${error.message}`);
           let fallbackModel = process.env.LAN_WHISPER_FALLBACK_MODEL || 'tiny';
           try {
