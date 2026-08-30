@@ -108,6 +108,7 @@ const DEFAULT_VOICE_TUNING = {
   wakeRequireFullPhrase: false,
   wakePhraseVerificationEnabled: false,
   wakePhraseVerificationPreRollMs: 2400,
+  wakePhraseVerificationTailMs: 320,
   wakePhraseVerificationTimeoutMs: 3000,
   commandPreRollMs: 1800,
   commandMaxDurationMs: 12000,
@@ -116,6 +117,7 @@ const DEFAULT_VOICE_TUNING = {
   commandSpeechStartTimeoutMs: 4000,
   commandMinSpeechMs: 120,
   commandMinRms: 0.0006,
+  commandNoiseFloorMultiplier: 2,
   silentEmptyWakes: true,
   backgroundGuardEnabled: true
 }
@@ -843,6 +845,7 @@ export function VoiceDevices() {
           const runtimePlaybackSuppressionMs = device.settings?.wakeWordRuntime?.playbackGuard?.tailMs
           const runtimeWakeVerificationEnabled = device.settings?.wakeWordRuntime?.verification?.enabled
           const runtimeWakeVerificationPreRollMs = device.settings?.wakeWordRuntime?.verification?.preRollMs
+          const runtimeWakeVerificationTailMs = device.settings?.wakeWordRuntime?.verification?.tailMs
           const microphoneMutedLikely = device.settings?.wakeWordRuntime?.audio?.mutedLikely === true
           const tuningApplied = typeof runtimeWakeMinRms === 'number'
             && Math.abs(runtimeWakeMinRms - wakeMinRms) < 0.00005
@@ -869,6 +872,10 @@ export function VoiceDevices() {
             && (
               !voiceTuning.wakePhraseVerificationEnabled
               || runtimeWakeVerificationPreRollMs === voiceTuning.wakePhraseVerificationPreRollMs
+            )
+            && (
+              !voiceTuning.wakePhraseVerificationEnabled
+              || runtimeWakeVerificationTailMs === voiceTuning.wakePhraseVerificationTailMs
             )
 
           return (
@@ -1037,6 +1044,7 @@ export function VoiceDevices() {
                                   wakeRequireFullPhrase: voiceTuning.wakeRequireFullPhrase,
                                   wakePhraseVerificationEnabled: voiceTuning.wakePhraseVerificationEnabled,
                                   wakePhraseVerificationPreRollMs: voiceTuning.wakePhraseVerificationPreRollMs,
+                                  wakePhraseVerificationTailMs: voiceTuning.wakePhraseVerificationTailMs,
                                   wakePhraseVerificationTimeoutMs: voiceTuning.wakePhraseVerificationTimeoutMs
                                 }
                               },
@@ -1162,6 +1170,20 @@ export function VoiceDevices() {
                           )}
                         />
                         <VoiceTuningSlider
+                          label="Wake phrase tail"
+                          description="Audio collected after the local detector fires so the verifier receives the end of Anna or Henry. This also preserves command words spoken without a pause."
+                          value={voiceTuning.wakePhraseVerificationTailMs}
+                          min={0}
+                          max={800}
+                          step={40}
+                          formatValue={(value) => value === 0 ? 'Off' : `${Math.round(value)} ms`}
+                          onCommit={(value) => commitDeviceSettings(
+                            device._id,
+                            { voiceTuning: { wakePhraseVerificationTailMs: value } },
+                            `Wake phrase tail ${value === 0 ? 'disabled' : `set to ${Math.round(value)} ms`}`
+                          )}
+                        />
+                        <VoiceTuningSlider
                           label="Command pre-roll"
                           description="Audio retained before wake detection so one-breath commands are not clipped. Shorter values reduce transcription work."
                           value={voiceTuning.commandPreRollMs}
@@ -1187,6 +1209,20 @@ export function VoiceDevices() {
                             device._id,
                             { voiceTuning: { commandMinRms: value } },
                             `Command speech floor set to ${value.toFixed(4)}`
+                          )}
+                        />
+                        <VoiceTuningSlider
+                          label="Adaptive noise guard"
+                          description="How far command speech must rise above the measured room noise. Lower values hear quieter speech; higher values reject more background sound."
+                          value={voiceTuning.commandNoiseFloorMultiplier}
+                          min={1.25}
+                          max={4}
+                          step={0.25}
+                          formatValue={(value) => `${value.toFixed(2)}×`}
+                          onCommit={(value) => commitDeviceSettings(
+                            device._id,
+                            { voiceTuning: { commandNoiseFloorMultiplier: value } },
+                            `Adaptive noise guard set to ${value.toFixed(2)}×`
                           )}
                         />
                         <VoiceTuningSlider

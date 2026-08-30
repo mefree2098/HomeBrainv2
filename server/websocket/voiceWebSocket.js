@@ -31,7 +31,8 @@ const REMOTE_COMMAND_ENDPOINTING = Object.freeze({
   silenceMs: 700,
   speechStartTimeoutMs: 4000,
   minSpeechMs: 120,
-  minRms: 0.0006
+  minRms: 0.0006,
+  noiseFloorMultiplier: 2
 });
 const REACHY_CAPTURE_GRANT_TTL_MS = 7000;
 const REACHY_WAKE_TIMESTAMP_MAX_SKEW_MS = 30000;
@@ -390,6 +391,7 @@ class VoiceWebSocketServer {
       wakeRequireFullPhrase: raw.wakeRequireFullPhrase === true,
       wakePhraseVerificationEnabled: raw.wakePhraseVerificationEnabled === true,
       wakePhraseVerificationPreRollMs: Math.round(bounded(raw.wakePhraseVerificationPreRollMs, 800, 4000, 2400)),
+      wakePhraseVerificationTailMs: Math.round(bounded(raw.wakePhraseVerificationTailMs, 0, 800, 320)),
       wakePhraseVerificationTimeoutMs: Math.round(bounded(raw.wakePhraseVerificationTimeoutMs, 1000, 5000, 3000)),
       commandPreRollMs: Math.round(bounded(raw.commandPreRollMs, 500, 5000, 1800)),
       silentEmptyWakes: raw.silentEmptyWakes !== false,
@@ -405,7 +407,13 @@ class VoiceWebSocketServer {
           Math.min(REMOTE_COMMAND_ENDPOINTING.speechStartTimeoutMs, maxDurationMs)
         )),
         minSpeechMs: Math.round(bounded(raw.commandMinSpeechMs, 40, 1000, REMOTE_COMMAND_ENDPOINTING.minSpeechMs)),
-        minRms: bounded(raw.commandMinRms, 0.0005, 0.05, REMOTE_COMMAND_ENDPOINTING.minRms)
+        minRms: bounded(raw.commandMinRms, 0.0005, 0.05, REMOTE_COMMAND_ENDPOINTING.minRms),
+        noiseFloorMultiplier: bounded(
+          raw.commandNoiseFloorMultiplier,
+          1.25,
+          4,
+          REMOTE_COMMAND_ENDPOINTING.noiseFloorMultiplier
+        )
       }
     };
   }
@@ -545,6 +553,7 @@ class VoiceWebSocketServer {
           verification: {
             enabled: voiceTuning.wakePhraseVerificationEnabled,
             preRollMs: voiceTuning.wakePhraseVerificationPreRollMs,
+            tailMs: voiceTuning.wakePhraseVerificationTailMs,
             timeoutMs: voiceTuning.wakePhraseVerificationTimeoutMs
           },
           vad: {
@@ -953,13 +962,27 @@ class VoiceWebSocketServer {
     if (!normalizedTranscript || !normalizedWake) return false;
 
     const candidates = new Set([normalizedWake]);
-    // Whisper occasionally uses the single-n spelling for the name Anna.
-    // Keep this alias narrow so ordinary background mentions of a name do not
-    // become a valid wake phrase.
-    if (normalizedWake === 'hey anna') candidates.add('hey ana');
+    const leadingNameCandidates = new Set();
+    // Short wake clips are unusually prone to proper-name spelling changes or
+    // to Whisper dropping the initial interjection. Keep the aliases explicit
+    // and require a dropped-"hey" name to start the transcript so unrelated
+    // background prose still fails closed.
+    if (normalizedWake === 'hey anna') {
+      for (const phrase of ['hey ana', 'hey hanna', 'hey hannah', 'hay anna', 'hay ana']) {
+        candidates.add(phrase);
+      }
+      for (const name of ['anna', 'ana', 'hanna', 'hannah']) leadingNameCandidates.add(name);
+    } else if (normalizedWake === 'hey henry') {
+      for (const phrase of ['hey henri', 'hay henry', 'hay henri']) candidates.add(phrase);
+      for (const name of ['henry', 'henri']) leadingNameCandidates.add(name);
+    }
 
     const paddedTranscript = ` ${normalizedTranscript} `;
-    return [...candidates].some((candidate) => paddedTranscript.includes(` ${candidate} `));
+    if ([...candidates].some((candidate) => paddedTranscript.includes(` ${candidate} `))) {
+      return true;
+    }
+    const firstWord = normalizedTranscript.split(' ')[0];
+    return leadingNameCandidates.has(firstWord);
   }
 
   async verifySpeakerWakePhrase(connection, message, normalizedWake, voiceTuning) {
@@ -1523,6 +1546,15 @@ class VoiceWebSocketServer {
       connection.pendingWakeWord = pendingWakeWord;
     }
     if (!command) {
+      if (
+        connection.device?.deviceType === 'speaker'
+        && connection.pendingWakeWord
+        && this.resolveVoiceTuning(connection.device).silentEmptyWakes
+      ) {
+        connection.pendingWakeWord = null;
+        console.log(`Silently discarded wake-only speaker transcript for device ${deviceId}`);
+        return;
+      }
       console.warn(`Empty command received from device ${deviceId}`);
       this.sendToConnection(connection, {
         type: 'command_error',
@@ -2240,7 +2272,24 @@ class VoiceWebSocketServer {
       return true;
     };
 
-    if (session?.reportedSpeechDetected === false) {
+    const hasAudioChunks = Boolean(session && Array.isArray(session.chunks) && session.chunks.length > 0);
+    const pcmBuffer = hasAudioChunks ? Buffer.concat(session.chunks) : Buffer.alloc(0);
+    const bytesPerSecond = Math.max(
+      1,
+      Number(session?.sampleRate || 16000)
+        * Number(session?.channels || 1)
+        * 2
+    );
+    const bufferedDurationMs = (pcmBuffer.length / bytesPerSecond) * 1000;
+    const recoverVerifiedSpeakerAudio = Boolean(
+      session?.reportedSpeechDetected === false
+      && connection.device?.deviceType === 'speaker'
+      && connection.pendingWakeWord
+      && this.resolveVoiceTuning(connection.device).wakePhraseVerificationEnabled
+      && bufferedDurationMs >= 500
+    );
+
+    if (session?.reportedSpeechDetected === false && !recoverVerifiedSpeakerAudio) {
       console.log(`Skipping transcription for no-speech session ${session.sessionId} on device ${deviceId}`);
       await markInactive({
         lastTranscriptText: null,
@@ -2258,7 +2307,7 @@ class VoiceWebSocketServer {
       return;
     }
 
-    if (!session || !Array.isArray(session.chunks) || session.chunks.length === 0) {
+    if (!hasAudioChunks) {
       console.warn(`Audio session ${session?.sessionId || 'unknown'} for device ${deviceId} contained no data`);
       await markInactive({
         lastTranscriptText: null,
@@ -2276,7 +2325,12 @@ class VoiceWebSocketServer {
       return;
     }
 
-    const pcmBuffer = Buffer.concat(session.chunks);
+    if (recoverVerifiedSpeakerAudio) {
+      console.log(
+        `Transcribing verified speaker buffer despite edge no-speech result `
+        + `(${Math.round(bufferedDurationMs)}ms for device ${deviceId})`
+      );
+    }
 
     console.log(`Transcribing ${pcmBuffer.length} bytes of audio for device ${deviceId} (session ${session.sessionId})`);
 

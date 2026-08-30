@@ -315,7 +315,8 @@ test('command endpoint timers accept bounded live tuning', () => {
     silenceMs: 550,
     speechStartTimeoutMs: 3000,
     minSpeechMs: 100,
-    minRms: 0.0012
+    minRms: 0.0012,
+    noiseFloorMultiplier: 1.75
   });
 
   assert.deepEqual(endpointing, {
@@ -324,7 +325,8 @@ test('command endpoint timers accept bounded live tuning', () => {
     silenceMs: 550,
     speechStartTimeoutMs: 3000,
     minSpeechMs: 100,
-    minRms: 0.0012
+    minRms: 0.0012,
+    noiseFloorMultiplier: 1.75
   });
 });
 
@@ -546,7 +548,7 @@ test('verified wake detection stays silent until the hub confirms the phrase', a
   const device = new HomeBrainRemoteDevice({
     audio: { sampleRate: 16000 },
     wakeWord: {
-      verification: { enabled: true, preRollMs: 2400, timeoutMs: 3000 }
+      verification: { enabled: true, preRollMs: 2400, tailMs: 0, timeoutMs: 3000 }
     }
   });
   const sent = [];
@@ -591,7 +593,7 @@ test('verified wake detection stays silent until the hub confirms the phrase', a
 test('rejected verified wake candidate resumes detection without a chirp', async () => {
   const device = new HomeBrainRemoteDevice({
     audio: { sampleRate: 16000 },
-    wakeWord: { verification: { enabled: true, preRollMs: 2400 } }
+    wakeWord: { verification: { enabled: true, preRollMs: 2400, tailMs: 0 } }
   });
   const earcons = [];
   device.isAuthenticated = true;
@@ -612,6 +614,70 @@ test('rejected verified wake candidate resumes detection without a chirp', async
   assert.equal(device.isWakeWordListening, true);
   assert.equal(device.pendingCommandPreRollBuffer, null);
   assert.equal(device.lastVoiceInteraction.stage, 'wake_rejected');
+});
+
+test('verified wake candidate includes trailing phrase and command audio before dispatch', async () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: { sampleRate: 16000 },
+    wakeWord: {
+      verification: { enabled: true, preRollMs: 2400, tailMs: 40, timeoutMs: 3000 }
+    }
+  });
+  const sent = [];
+  device.isAuthenticated = true;
+  device.wakeWordRuntime = { sidecar: {}, recording: {}, audio: {} };
+  device.sendMessage = (message) => {
+    sent.push(message);
+    return true;
+  };
+  device.reportWakeWordRuntimeStatus = () => true;
+  device.playEarcon = async () => true;
+  const beforeDetection = Buffer.alloc(32000, 3);
+  const trailingAudio = Buffer.alloc(6400, 9);
+  device.appendWakeWordPreRoll(beforeDetection);
+
+  device.onWakeWordDetected('hey-anna', 0.92, 'Hey Anna');
+  assert.equal(sent.some((message) => message.type === 'wake_word_detected'), false);
+
+  device.appendWakeWordPreRoll(trailingAudio);
+  device.appendPendingCommandAudio(trailingAudio);
+  await new Promise((resolve) => setTimeout(resolve, 70));
+
+  const candidate = sent.find((message) => message.type === 'wake_word_detected');
+  const verificationAudio = Buffer.from(candidate.verificationAudio, 'base64');
+  assert.deepEqual(verificationAudio.subarray(-trailingAudio.length), trailingAudio);
+  assert.deepEqual(device.pendingCommandPreRollBuffer.subarray(-trailingAudio.length), trailingAudio);
+  assert.equal(device.isWakeWordListening, false);
+  if (device.pendingWakeAckTimer) clearTimeout(device.pendingWakeAckTimer);
+});
+
+test('adaptive command endpointing honors the configured room-noise multiplier', () => {
+  const device = new HomeBrainRemoteDevice({
+    audio: { sampleRate: 16000 },
+    wakeWord: {},
+    voice: { endpointing: { noiseFloorMultiplier: 2 } }
+  });
+  device.isRecording = true;
+  device.commandEndpointing = device.normalizeCommandEndpointing(5000, {
+    minRms: 0.0005,
+    minSpeechMs: 120,
+    noiseFloorMultiplier: 2
+  });
+  device.commandCaptureStats = { frames: 0, speechMs: 0, peakRms: 0 };
+  const frame = (sample) => {
+    const buffer = Buffer.alloc(2560);
+    for (let offset = 0; offset < buffer.length; offset += 2) buffer.writeInt16LE(sample, offset);
+    return buffer;
+  };
+
+  device.processCommandEndpointFrame(frame(9));
+  device.processCommandEndpointFrame(frame(23));
+  device.processCommandEndpointFrame(frame(23));
+
+  assert.equal(device.commandEndpointing.noiseFloorMultiplier, 2);
+  assert.equal(device.commandSpeechDetected, true);
+  device.isRecording = false;
+  device.clearCommandEndpointTimers();
 });
 
 test('command result plays an immediate outcome earcon followed by the selected voice', async () => {
