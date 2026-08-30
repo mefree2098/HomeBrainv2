@@ -461,11 +461,13 @@ test('buildWakeWordConfig includes bounded live voice tuning', async (t) => {
     wakePlaybackSuppressionMs: 900,
     wakePhraseVerificationEnabled: true,
     wakePhraseVerificationPreRollMs: 2300,
+    wakePhraseVerificationTailMs: 360,
     wakePhraseVerificationTimeoutMs: 2750,
     commandPreRollMs: 1700,
     commandMaxDurationMs: 8000,
     commandSilenceMs: 550,
     commandMinRms: 0.0012,
+    commandNoiseFloorMultiplier: 1.75,
     silentEmptyWakes: true,
     backgroundGuardEnabled: true
   };
@@ -479,12 +481,14 @@ test('buildWakeWordConfig includes bounded live voice tuning', async (t) => {
   assert.deepEqual(config.wakeWord.verification, {
     enabled: true,
     preRollMs: 2300,
+    tailMs: 360,
     timeoutMs: 2750
   });
   assert.equal(config.voice.commandPreRollMs, 1700);
   assert.equal(config.voice.endpointing.maxDurationMs, 8000);
   assert.equal(config.voice.endpointing.silenceMs, 550);
   assert.equal(config.voice.endpointing.minRms, 0.0012);
+  assert.equal(config.voice.endpointing.noiseFloorMultiplier, 1.75);
   assert.equal(config.voice.silentEmptyWakes, true);
   assert.equal(config.voice.backgroundGuardEnabled, true);
 });
@@ -641,8 +645,20 @@ test('speaker wake acknowledgment advertises low-latency adaptive endpointing', 
     silenceMs: 550,
     speechStartTimeoutMs: 3000,
     minSpeechMs: 100,
-    minRms: 0.0012
+    minRms: 0.0012,
+    noiseFloorMultiplier: 2
   });
+});
+
+test('wake verification tolerates narrow Whisper name variants without accepting background prose', () => {
+  const voiceWs = new VoiceWebSocketServer();
+
+  assert.equal(voiceWs.wakePhraseAppearsInTranscript('Hey Hannah, turn off the office.', 'Hey Anna'), true);
+  assert.equal(voiceWs.wakePhraseAppearsInTranscript('Ana turn on the office.', 'Hey Anna'), true);
+  assert.equal(voiceWs.wakePhraseAppearsInTranscript('Hey Henri, turn on the office.', 'Hey Henry'), true);
+  assert.equal(voiceWs.wakePhraseAppearsInTranscript('Henry turn off the office.', 'Hey Henry'), true);
+  assert.equal(voiceWs.wakePhraseAppearsInTranscript('The report mentions Anna tomorrow.', 'Hey Anna'), false);
+  assert.equal(voiceWs.wakePhraseAppearsInTranscript('The weather report continues.', 'Hey Henry'), false);
 });
 
 test('speaker wake verification acknowledges only a transcribed full wake phrase', async (t) => {
@@ -882,6 +898,62 @@ test('listener no-speech final skips Whisper instead of queueing an empty transc
   assert.equal(updates.at(-1).lastTranscriptError, 'No speech detected');
   assert.equal(connection.pendingWakeWord, null);
   assert.equal(ws.sent.length, 0);
+});
+
+test('verified speaker command transcribes buffered audio despite an edge no-speech result', async (t) => {
+  const originalTranscribe = speechService.transcribe;
+  t.after(() => { speechService.transcribe = originalTranscribe; });
+  let transcriptions = 0;
+  speechService.transcribe = async () => {
+    transcriptions += 1;
+    return {
+      text: 'Hey Anna, turn off the office.',
+      confidence: 0.91,
+      provider: 'lan_whisper',
+      model: 'large-v3',
+      language: 'en'
+    };
+  };
+
+  const voiceWs = new VoiceWebSocketServer();
+  const ws = new MockWebSocket();
+  const device = createDevice();
+  device.deviceType = 'speaker';
+  device.supportedWakeWords = ['Hey Anna', 'Hey Henry'];
+  device.settings.voiceTuning = {
+    wakePhraseVerificationEnabled: true,
+    silentEmptyWakes: true,
+    backgroundGuardEnabled: true
+  };
+  const connection = {
+    ws,
+    authenticated: true,
+    device,
+    pendingWakeWord: { id: 'interaction-1', wakeWord: 'hey anna', timestamp: new Date() },
+    lastPing: Date.now()
+  };
+  voiceWs.deviceConnections.set(deviceId, connection);
+  const updates = [];
+  voiceWs.updateDeviceAudioState = async (_id, update) => { updates.push(update); };
+  let processedText = null;
+  voiceWs.processVoiceCommandText = async (_id, context) => { processedText = context.commandText; };
+
+  await voiceWs.finalizeAudioSession(deviceId, {
+    sessionId: 'verified-quiet-command',
+    connection,
+    chunks: [Buffer.alloc(32000)],
+    sampleRate: 16000,
+    channels: 1,
+    format: 'S16LE',
+    startedAt: new Date(Date.now() - 1000),
+    reportedSpeechDetected: false,
+    endpointReason: 'no_speech'
+  });
+
+  assert.equal(transcriptions, 1);
+  assert.equal(processedText, 'Hey Anna, turn off the office.');
+  assert.equal(updates.at(-1).lastTranscriptError, null);
+  assert.equal(ws.sent.some((message) => message.type === 'command_error'), false);
 });
 
 test('listener silently discards an empty speaker transcription', async (t) => {

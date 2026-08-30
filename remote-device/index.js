@@ -29,6 +29,8 @@ const DEFAULT_COMMAND_PREROLL_MS = 1800;
 const MAX_COMMAND_PREROLL_MS = 5000;
 const DEFAULT_WAKE_VERIFICATION_PREROLL_MS = 2400;
 const MAX_WAKE_VERIFICATION_PREROLL_MS = 4000;
+const DEFAULT_WAKE_VERIFICATION_TAIL_MS = 320;
+const MAX_WAKE_VERIFICATION_TAIL_MS = 800;
 const DEFAULT_COMMAND_MAX_DURATION_MS = 12000;
 const DEFAULT_COMMAND_MIN_CAPTURE_MS = 900;
 const DEFAULT_COMMAND_SILENCE_MS = 700;
@@ -459,6 +461,7 @@ class HomeBrainRemoteDevice {
     this.pendingCommandEndpointIgnoreBytes = 0;
     this.pendingPostAckEndpointIgnoreBytes = 0;
     this.commandEndpointIgnoreRemainingBytes = 0;
+    this.pendingWakeCandidateTimer = null;
     this.pendingWakeAckTimer = null;
     this.commandCaptureStartedAt = 0;
     this.commandLastSpeechAt = 0;
@@ -1893,6 +1896,11 @@ class HomeBrainRemoteDevice {
         800,
         MAX_WAKE_VERIFICATION_PREROLL_MS
       ),
+      tailMs: clamp(
+        raw.tailMs ?? DEFAULT_WAKE_VERIFICATION_TAIL_MS,
+        0,
+        MAX_WAKE_VERIFICATION_TAIL_MS
+      ),
       timeoutMs: clamp(raw.timeoutMs ?? 3000, 1000, 5000)
     };
   }
@@ -1990,7 +1998,16 @@ class HomeBrainRemoteDevice {
     const minSpeechMs = clamp(read('minSpeechMs', DEFAULT_COMMAND_MIN_SPEECH_MS), 40, 1000);
     const rawMinRms = read('minRms', DEFAULT_COMMAND_MIN_RMS);
     const minRms = Math.min(Math.max(rawMinRms, 0.0005), MAX_WAKE_WORD_MIN_RMS);
-    return { maxDurationMs, minCaptureMs, silenceMs, speechStartTimeoutMs, minSpeechMs, minRms };
+    const noiseFloorMultiplier = clamp(read('noiseFloorMultiplier', 2), 1.25, 4);
+    return {
+      maxDurationMs,
+      minCaptureMs,
+      silenceMs,
+      speechStartTimeoutMs,
+      minSpeechMs,
+      minRms,
+      noiseFloorMultiplier
+    };
   }
 
   clearCommandEndpointTimers() {
@@ -2041,7 +2058,9 @@ class HomeBrainRemoteDevice {
 
     const adaptiveThreshold = Math.max(
       this.commandEndpointing.minRms,
-      this.commandNoiseFloorRms > 0 ? this.commandNoiseFloorRms * 3 : 0
+      this.commandNoiseFloorRms > 0
+        ? this.commandNoiseFloorRms * this.commandEndpointing.noiseFloorMultiplier
+        : 0
     );
     if (rms >= adaptiveThreshold) {
       this.commandSpeechCandidateMs += frameDurationMs;
@@ -3503,6 +3522,10 @@ class HomeBrainRemoteDevice {
   }
 
   clearPendingWakeWordCandidate(reason = 'rejected', processingTimeMs = null) {
+    if (this.pendingWakeCandidateTimer) {
+      clearTimeout(this.pendingWakeCandidateTimer);
+      this.pendingWakeCandidateTimer = null;
+    }
     if (this.pendingWakeAckTimer) {
       clearTimeout(this.pendingWakeAckTimer);
       this.pendingWakeAckTimer = null;
@@ -3535,68 +3558,18 @@ class HomeBrainRemoteDevice {
     this.reportWakeWordRuntimeStatus(true, 'wake_word_rejected');
   }
 
-  onWakeWordDetected(wakeWord, confidence, displayName) {
-    if (!this.isAuthenticated) {
-      console.warn('Skipping wake word event: device not authenticated with hub');
-      return;
+  dispatchWakeWordCandidate({ label, confidence, timestamp, verification }) {
+    if (!this.isAuthenticated || !Buffer.isBuffer(this.pendingCommandPreRollBuffer)) {
+      return false;
     }
-
-    const now = Date.now();
-    if (now - this.lastWakeWordAt < this.wakeWordDebounceMs) {
-      return;
-    }
-    this.lastWakeWordAt = now;
-
-    const normalizedConfidence = clamp(confidence ?? this.wakeWordReportedConfidence, 0, 1);
-    const label = displayName || wakeWord;
-
-    console.log(`Wake word detected: "${label}" (confidence: ${normalizedConfidence.toFixed(2)})`);
-
-    this.stats.wakeWordsDetected++;
-    this.ttsGeneration += 1;
-    this.lastInteraction = new Date();
-    this.updateVoiceInteractionTelemetry('wake', {
-      wakeWord: label,
-      confidence: normalizedConfidence,
-      timing: { wakeDetectedAt: this.lastInteraction.toISOString() }
-    });
-    this.updateWakeWordRuntime({
-      lastDetect: {
-        model: label,
-        score: normalizedConfidence,
-        at: this.lastInteraction.toISOString()
-      }
-    });
-
-    const verification = this.getWakePhraseVerificationConfig();
-    const verificationAudio = this.captureWakePhraseVerificationAudio();
-    this.pendingCommandPreRollBuffer = this.captureCommandPreRoll() || Buffer.alloc(0);
-    this.pendingCommandBridgeOffset = this.pendingCommandPreRollBuffer.length;
-    const earconIgnoreBytes = Math.round(
-      (WAKE_EARCON_ENDPOINT_IGNORE_MS / 1000)
-      * (this.wakeWordSampleRate || 16000)
-      * PCM_SAMPLE_WIDTH_BYTES
-    );
-    this.pendingCommandEndpointIgnoreBytes = verification.enabled ? 0 : earconIgnoreBytes;
-    this.pendingPostAckEndpointIgnoreBytes = verification.enabled ? earconIgnoreBytes : 0;
-    if (!verification.enabled) {
-      void this.playEarcon('wake');
-    } else {
-      this.updateWakeWordRuntime({
-        verification: {
-          ...verification,
-          state: 'pending',
-          candidateAt: this.lastInteraction.toISOString(),
-          lastReason: null
-        }
-      });
-    }
-
-    this.sendMessage({
+    const verificationAudio = verification.enabled
+      ? this.captureWakePhraseVerificationAudio()
+      : null;
+    const sent = this.sendMessage({
       type: 'wake_word_detected',
       wakeWord: label,
-      confidence: normalizedConfidence,
-      timestamp: this.lastInteraction.toISOString(),
+      confidence,
+      timestamp,
       ...(verification.enabled && Buffer.isBuffer(verificationAudio) ? {
         verificationAudio: verificationAudio.toString('base64'),
         sampleRate: this.wakeWordSampleRate || 16000,
@@ -3622,6 +3595,66 @@ class HomeBrainRemoteDevice {
       }
     }, WAKE_ACK_TIMEOUT_MS);
     this.pendingWakeAckTimer.unref?.();
+    return sent;
+  }
+
+  onWakeWordDetected(wakeWord, confidence, displayName) {
+    if (!this.isAuthenticated) {
+      console.warn('Skipping wake word event: device not authenticated with hub');
+      return;
+    }
+
+    const now = Date.now();
+    if (now - this.lastWakeWordAt < this.wakeWordDebounceMs) {
+      return;
+    }
+    this.lastWakeWordAt = now;
+
+    const normalizedConfidence = clamp(confidence ?? this.wakeWordReportedConfidence, 0, 1);
+    const label = displayName || wakeWord;
+
+    console.log(`Wake word detected: "${label}" (confidence: ${normalizedConfidence.toFixed(2)})`);
+
+    this.stats.wakeWordsDetected++;
+    this.ttsGeneration += 1;
+    this.lastInteraction = new Date();
+    const candidateTimestamp = this.lastInteraction.toISOString();
+    this.updateVoiceInteractionTelemetry('wake', {
+      wakeWord: label,
+      confidence: normalizedConfidence,
+      timing: { wakeDetectedAt: candidateTimestamp }
+    });
+    this.updateWakeWordRuntime({
+      lastDetect: {
+        model: label,
+        score: normalizedConfidence,
+        at: candidateTimestamp
+      }
+    });
+
+    const verification = this.getWakePhraseVerificationConfig();
+    this.pendingCommandPreRollBuffer = this.captureCommandPreRoll() || Buffer.alloc(0);
+    this.pendingCommandBridgeOffset = this.pendingCommandPreRollBuffer.length;
+    const earconIgnoreBytes = Math.round(
+      (WAKE_EARCON_ENDPOINT_IGNORE_MS / 1000)
+      * (this.wakeWordSampleRate || 16000)
+      * PCM_SAMPLE_WIDTH_BYTES
+    );
+    this.pendingCommandEndpointIgnoreBytes = verification.enabled ? 0 : earconIgnoreBytes;
+    this.pendingPostAckEndpointIgnoreBytes = verification.enabled ? earconIgnoreBytes : 0;
+    if (!verification.enabled) {
+      void this.playEarcon('wake');
+    } else {
+      this.updateWakeWordRuntime({
+        verification: {
+          ...verification,
+          state: 'pending',
+          candidateAt: candidateTimestamp,
+          lastReason: null
+        }
+      });
+    }
+
     this.wakeWordAudioBuffer = Buffer.alloc(0);
     if (this.vadEnabled) {
       this.vadHistory = [];
@@ -3630,6 +3663,22 @@ class HomeBrainRemoteDevice {
 
     // Brief pause to prevent multiple detections
     this.isWakeWordListening = false;
+    const dispatchCandidate = () => {
+      this.pendingWakeCandidateTimer = null;
+      this.dispatchWakeWordCandidate({
+        label,
+        confidence: normalizedConfidence,
+        timestamp: candidateTimestamp,
+        verification
+      });
+    };
+    if (verification.enabled && verification.tailMs > 0) {
+      if (this.pendingWakeCandidateTimer) clearTimeout(this.pendingWakeCandidateTimer);
+      this.pendingWakeCandidateTimer = setTimeout(dispatchCandidate, verification.tailMs);
+      this.pendingWakeCandidateTimer.unref?.();
+    } else {
+      dispatchCandidate();
+    }
     setTimeout(() => {
       if (!this.isRecording && !Buffer.isBuffer(this.pendingCommandPreRollBuffer)) {
         this.isWakeWordListening = true;
@@ -4750,6 +4799,15 @@ class HomeBrainRemoteDevice {
 
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
+    }
+
+    if (this.pendingWakeCandidateTimer) {
+      clearTimeout(this.pendingWakeCandidateTimer);
+      this.pendingWakeCandidateTimer = null;
+    }
+    if (this.pendingWakeAckTimer) {
+      clearTimeout(this.pendingWakeAckTimer);
+      this.pendingWakeAckTimer = null;
     }
 
     if (this.recordingStream) {
