@@ -1459,7 +1459,6 @@ struct DashboardView: View {
         }
         .task(id: dashboardDeviceStreamTaskKey) {
             guard !previewMode, scenePhase == .active, session.accessToken != nil else { return }
-            await refreshSecurityStatus()
             await listenForDashboardDeviceUpdates()
         }
         .task(id: dashboardDeviceFallbackRefreshTaskKey) {
@@ -1473,6 +1472,12 @@ struct DashboardView: View {
         }
         .task(id: dashboardSecurityRefreshTaskKey) {
             guard !previewMode, scenePhase == .active, session.accessToken != nil else { return }
+
+            // The full dashboard load owns the cold-launch security request. Starting a
+            // second request here can supersede it just as credential-bound tasks restart.
+            if !isLoading {
+                await refreshSecurityStatus()
+            }
 
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(20))
@@ -7582,6 +7587,7 @@ struct DashboardView: View {
         }
 
         isLoading = true
+        defer { isLoading = false }
         errorMessage = nil
         infoMessage = nil
 
@@ -7628,11 +7634,13 @@ struct DashboardView: View {
             )
             await loadVisibleSecuritySensorSelection(profileId: dashboardContext.profileId ?? favoritesContext.profileId)
             dashboardDirty = false
+            errorMessage = nil
         } catch {
+            guard !isExpectedCancellation(error), !Task.isCancelled else {
+                return
+            }
             errorMessage = error.localizedDescription
         }
-
-        isLoading = false
     }
 
     private func previewDashboardView() -> DashboardViewItem {
@@ -7827,10 +7835,22 @@ struct DashboardView: View {
             errorMessage = nil
             await refreshSecurityDoorLocksFromDevices()
         } catch {
+            guard !isExpectedCancellation(error), !Task.isCancelled else {
+                return
+            }
             if isCurrentSecurityStatusRefresh(refreshSequence) {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    private func isExpectedCancellation(_ error: Error) -> Bool {
+        if error is CancellationError {
+            return true
+        }
+
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
     }
 
     private func refreshSecurityDoorLocksFromDevices() async {
