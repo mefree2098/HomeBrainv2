@@ -1,10 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const dns = require('dns').promises;
 
+const axios = require('axios');
 const reverseProxyService = require('../services/reverseProxyService');
 const ReverseProxyRoute = require('../models/ReverseProxyRoute');
 const ReverseProxySettings = require('../models/ReverseProxySettings');
 const ReverseProxyAuditLog = require('../models/ReverseProxyAuditLog');
+const caddyAdminService = require('../services/caddyAdminService');
 
 function createSettings(overrides = {}) {
   return {
@@ -166,6 +169,46 @@ test('buildDesiredConfig pins production ACME to Let\'s Encrypt', async (t) => {
 
   assert.match(result.caddyfile, /acme_ca "https:\/\/acme-v02\.api\.letsencrypt\.org\/directory"/);
   assert.doesNotMatch(result.caddyfile, /acme-staging-v02/);
+});
+
+test('validateRoute treats an unreachable upstream as an operational warning', async (t) => {
+  const originalResolve4 = dns.resolve4;
+  const originalResolve6 = dns.resolve6;
+  const originalAxiosGet = axios.get;
+  const originalCaddyPing = caddyAdminService.ping;
+
+  t.after(() => {
+    dns.resolve4 = originalResolve4;
+    dns.resolve6 = originalResolve6;
+    axios.get = originalAxiosGet;
+    caddyAdminService.ping = originalCaddyPing;
+  });
+
+  dns.resolve4 = async () => ['203.0.113.44'];
+  dns.resolve6 = async () => [];
+  axios.get = async () => {
+    throw new Error('connect ECONNREFUSED');
+  };
+  caddyAdminService.ping = async () => ({ reachable: true, status: 200 });
+
+  const result = await reverseProxyService.validateRoute({
+    hostname: 'offline.example.com',
+    enabled: true,
+    upstreamProtocol: 'http',
+    upstreamHost: '192.0.2.10',
+    upstreamPort: 4310,
+    healthCheckPath: '/health',
+    allowPublicUpstream: false,
+    tlsMode: 'automatic',
+    certificateStatus: {}
+  }, createSettings());
+
+  assert.equal(result.validationStatus, 'valid');
+  assert.deepEqual(result.validation.blockingErrors, []);
+  assert.equal(
+    result.validation.warnings.includes('Upstream is unreachable at http://192.0.2.10:4310/health'),
+    true
+  );
 });
 
 test('getRoutePresets defaults Axiom to the public gateway health endpoint', async (t) => {
