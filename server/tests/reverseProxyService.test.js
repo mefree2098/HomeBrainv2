@@ -70,6 +70,7 @@ test('buildDesiredConfig renders Caddy global options and enabled routes', async
           upstreamPort: 3000,
           healthCheckPath: '/ping',
           stripPrefix: '',
+          useUpstreamHostHeader: true,
           tlsMode: 'automatic',
           websocketSupport: true
         },
@@ -95,6 +96,7 @@ test('buildDesiredConfig renders Caddy global options and enabled routes', async
   assert.match(result.caddyfile, /on_demand_tls/);
   assert.match(result.caddyfile, /example\.com \{/);
   assert.match(result.caddyfile, /reverse_proxy "http:\/\/127\.0\.0\.1:3000"/);
+  assert.match(result.caddyfile, /header_up Host \{upstream_hostport\}/);
   assert.match(result.caddyfile, /mail\.example\.com \{/);
   assert.match(result.caddyfile, /tls \{\n    on_demand\n  \}/);
   assert.doesNotMatch(result.caddyfile, /health_interval 5s/);

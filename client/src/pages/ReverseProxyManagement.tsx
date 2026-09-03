@@ -52,6 +52,7 @@ type RouteFormState = {
   enabled: boolean;
   tlsMode: "automatic" | "internal" | "manual" | "on_demand";
   allowOnDemandTls: boolean;
+  useUpstreamHostHeader: boolean;
   dynamicDnsEnabled: boolean;
   healthCheckPath: string;
   websocketSupport: boolean;
@@ -104,6 +105,7 @@ const EMPTY_FORM: RouteFormState = {
   enabled: false,
   tlsMode: "automatic",
   allowOnDemandTls: false,
+  useUpstreamHostHeader: false,
   dynamicDnsEnabled: false,
   healthCheckPath: "/",
   websocketSupport: true,
@@ -303,6 +305,10 @@ function RouteEditor({
               <Switch checked={form.allowOnDemandTls} onCheckedChange={(checked) => onChange({ allowOnDemandTls: checked })} />
             </label>
             <label className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+              Use Upstream Host Header
+              <Switch checked={form.useUpstreamHostHeader} onCheckedChange={(checked) => onChange({ useUpstreamHostHeader: checked })} />
+            </label>
+            <label className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
               Update with Dynamic DNS
               <Switch checked={form.dynamicDnsEnabled} onCheckedChange={(checked) => onChange({ dynamicDnsEnabled: checked })} />
             </label>
@@ -419,6 +425,7 @@ export function ReverseProxyManagement() {
       enabled: route.enabled,
       tlsMode: route.tlsMode,
       allowOnDemandTls: Boolean(route.allowOnDemandTls),
+      useUpstreamHostHeader: Boolean(route.useUpstreamHostHeader),
       dynamicDnsEnabled: Boolean(route.dynamicDnsEnabled),
       healthCheckPath: route.healthCheckPath || "/",
       websocketSupport: Boolean(route.websocketSupport),

@@ -149,6 +149,10 @@ const reverseProxyRouteSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  useUpstreamHostHeader: {
+    type: Boolean,
+    default: false
+  },
   healthCheckPath: {
     type: String,
     trim: true,

@@ -575,6 +575,9 @@ function buildSiteBlock(route, settings) {
   }
   lines.push(`    reverse_proxy ${quoteCaddy(buildUpstreamUrl(route))} {`);
   lines.push(`      health_uri ${quoteCaddy(normalizePath(route.healthCheckPath || '/', '/'))}`);
+  if (route.useUpstreamHostHeader) {
+    lines.push('      header_up Host {upstream_hostport}');
+  }
   if (route.platformKey === 'alexa-broker') {
     lines.push('      health_interval 5s');
     lines.push('      health_timeout 2s');
@@ -641,6 +644,7 @@ function sanitizeRoutePayload(input = {}) {
     tlsMode,
     allowOnDemandTls: normalizeBoolean(input.allowOnDemandTls, false),
     allowPublicUpstream: normalizeBoolean(input.allowPublicUpstream, false),
+    useUpstreamHostHeader: normalizeBoolean(input.useUpstreamHostHeader, false),
     healthCheckPath: normalizePath(defaults.healthCheckPath || '/', '/'),
     websocketSupport: normalizeBoolean(defaults.websocketSupport, true),
     dynamicDnsEnabled: normalizeBoolean(input.dynamicDnsEnabled, false),
@@ -851,6 +855,7 @@ class ReverseProxyService {
       upstreamProtocol: payload.upstreamProtocol ?? before.upstreamProtocol,
       upstreamHost: payload.upstreamHost ?? before.upstreamHost,
       upstreamPort: payload.upstreamPort ?? before.upstreamPort,
+      useUpstreamHostHeader: payload.useUpstreamHostHeader ?? before.useUpstreamHostHeader,
       healthCheckPath: payload.healthCheckPath ?? before.healthCheckPath,
       websocketSupport: payload.websocketSupport ?? before.websocketSupport,
       dynamicDnsEnabled: payload.dynamicDnsEnabled ?? before.dynamicDnsEnabled,
