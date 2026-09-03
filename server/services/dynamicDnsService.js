@@ -23,6 +23,18 @@ function normalizeHostname(value) {
   return trimString(value).toLowerCase().replace(/\.$/, '');
 }
 
+function normalizeRecordHostnames(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return [...new Set(value.map(normalizeHostname).filter(Boolean))].sort();
+}
+
+function recordHostnamesMatch(left, right) {
+  return left.length === right.length && left.every((hostname, index) => hostname === right[index]);
+}
+
 function normalizeIntervalMs(value) {
   const seconds = Number(value);
   if (!Number.isFinite(seconds)) {
@@ -192,11 +204,15 @@ class DynamicDnsService {
     try {
       const publicIp = await this.fetchPublicIp(settings);
       const previousIp = trimString(settings.dynamicDnsLastPublicIp);
-      const shouldUpdate = force || previousIp !== publicIp;
       const records = await this.getDesiredRecords(settings);
       if (records.length === 0) {
         throw new Error('No Dynamic DNS records are configured');
       }
+
+      const recordHostnames = normalizeRecordHostnames(records.map((record) => record.hostname));
+      const previousRecordHostnames = normalizeRecordHostnames(settings.dynamicDnsLastRecordHostnames);
+      const recordsChanged = !recordHostnamesMatch(recordHostnames, previousRecordHostnames);
+      const shouldUpdate = force || previousIp !== publicIp || recordsChanged;
 
       if (!shouldUpdate) {
         await Settings.updateSettings({
@@ -212,6 +228,7 @@ class DynamicDnsService {
           publicIp,
           previousIp,
           records,
+          recordsChanged,
           reason
         };
       }
@@ -246,7 +263,8 @@ class DynamicDnsService {
         dynamicDnsLastUpdatedAt: new Date(),
         dynamicDnsLastStatus: 'updated',
         dynamicDnsLastError: '',
-        dynamicDnsLastPublicIp: publicIp
+        dynamicDnsLastPublicIp: publicIp,
+        dynamicDnsLastRecordHostnames: recordHostnames
       });
 
       return {
@@ -255,6 +273,7 @@ class DynamicDnsService {
         publicIp,
         previousIp,
         records,
+        recordsChanged,
         updates,
         reason,
         actor

@@ -21,6 +21,7 @@ function createSettings(overrides = {}) {
     dynamicDnsAzureZoneName: 'example.com',
     dynamicDnsAzureTtlSeconds: 60,
     dynamicDnsLastPublicIp: '',
+    dynamicDnsLastRecordHostnames: ['home.example.com'],
     ...overrides
   };
 }
@@ -127,6 +128,59 @@ test('scheduled check skips provider update when cached public IP is unchanged',
   assert.equal(result.publicIp, '203.0.113.44');
   assert.equal(putCount, 0);
   assert.equal(updatePayloads.at(-1).dynamicDnsLastStatus, 'unchanged');
+});
+
+test('scheduled check updates Azure when the desired hostname set changes', async (t) => {
+  dynamicDnsService.stop();
+  const originalGetSettings = Settings.getSettings;
+  const originalUpdateSettings = Settings.updateSettings;
+  const originalRouteFind = ReverseProxyRoute.find;
+  const originalAxiosGet = axios.get;
+  const originalAxiosPost = axios.post;
+  const originalAxiosPut = axios.put;
+  const updatePayloads = [];
+  const putUrls = [];
+
+  t.after(() => {
+    dynamicDnsService.stop();
+    Settings.getSettings = originalGetSettings;
+    Settings.updateSettings = originalUpdateSettings;
+    ReverseProxyRoute.find = originalRouteFind;
+    axios.get = originalAxiosGet;
+    axios.post = originalAxiosPost;
+    axios.put = originalAxiosPut;
+  });
+
+  Settings.getSettings = async () => createSettings({
+    dynamicDnsLastPublicIp: '203.0.113.44',
+    dynamicDnsLastRecordHostnames: ['home.example.com']
+  });
+  Settings.updateSettings = async (updates) => {
+    updatePayloads.push(updates);
+    return { ...createSettings(), ...updates };
+  };
+  mockRouteFind([{
+    _id: 'route-1',
+    hostname: 'new.example.com',
+    enabled: true,
+    dynamicDnsEnabled: true
+  }]);
+  axios.get = async () => ({ data: { ip: '203.0.113.44' } });
+  axios.post = async () => ({ data: { access_token: 'azure-token' } });
+  axios.put = async (url) => {
+    putUrls.push(url);
+    return { data: {} };
+  };
+
+  const result = await dynamicDnsService.checkAndUpdate({ reason: 'scheduled' });
+
+  assert.equal(result.updated, true);
+  assert.equal(result.recordsChanged, true);
+  assert.equal(putUrls.length, 2);
+  assert.deepEqual(updatePayloads.at(-1).dynamicDnsLastRecordHostnames, [
+    'home.example.com',
+    'new.example.com'
+  ]);
 });
 
 test('incomplete Azure settings do not arm the background scheduler', (t) => {

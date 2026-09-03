@@ -1035,11 +1035,7 @@ class ReverseProxyService {
 
     if (!validation.upstreamReachable) {
       const upstreamError = `Upstream is unreachable at ${buildUpstreamUrl(route)}${route.healthCheckPath || '/'}`;
-      if (route.enabled) {
-        validation.blockingErrors.push(upstreamError);
-      } else {
-        validation.warnings.push(`${upstreamError} (route is currently disabled)`);
-      }
+      validation.warnings.push(route.enabled ? upstreamError : `${upstreamError} (route is currently disabled)`);
     }
 
     if (!validation.routerPortsReachable) {

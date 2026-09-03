@@ -514,6 +514,10 @@ const SettingsSchema = new mongoose.Schema({
     trim: true,
     default: ''
   },
+  dynamicDnsLastRecordHostnames: {
+    type: [String],
+    default: []
+  },
   dynamicDnsLastCheckedAt: {
     type: Date,
     default: null
