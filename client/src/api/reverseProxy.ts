@@ -16,6 +16,7 @@ export interface ReverseProxyRoute {
   tlsMode: TlsMode;
   allowOnDemandTls: boolean;
   allowPublicUpstream?: boolean;
+  useUpstreamHostHeader?: boolean;
   healthCheckPath: string;
   websocketSupport: boolean;
   dynamicDnsEnabled?: boolean;
