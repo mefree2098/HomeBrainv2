@@ -11,12 +11,12 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          ref: 0e530a25e4df1f910632688442c76da31125fee9
+          ref: 2521010ecb6ff640ab565003244a506a4340748e
           fetch-depth: 2
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22
-      - name: Apply hash-verified refinement and fast-forward isolated branch
+      - name: Apply exact transport regression fix on feature branch
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -26,31 +26,31 @@ jobs:
           mkdir -p "$RUNNER_TEMP/evidence"
           python3 - <<'PY'
           import base64, hashlib, json, lzma, os, pathlib, subprocess
-          sha = '71d93dec14ee75afec402ae96dff24d27eb4180d'
+          sha = '53fa6af78948ddc573fd14be739e2304ef81d28e'
           blob = json.loads(subprocess.check_output(['gh','api',f'repos/{os.environ["GH_REPO"]}/git/blobs/{sha}']))
           packed = base64.b64decode(blob['content'])
           assert hashlib.sha1(b'blob '+str(len(packed)).encode()+b'\0'+packed).hexdigest() == sha
           patch = lzma.decompress(packed)
-          assert hashlib.sha256(patch).hexdigest() == '98e95e2d45f8f021c85c0942189e9cf631f8e326139153efc610aa0e09355ca3'
-          pathlib.Path(os.environ['RUNNER_TEMP'],'refinement.patch').write_bytes(patch)
+          assert hashlib.sha256(patch).hexdigest() == 'da8f7c59b36509bbeb976c5edf2ed33086214c6598fa7217212218c5b8c35ac6'
+          pathlib.Path(os.environ['RUNNER_TEMP'],'transport.patch').write_bytes(patch)
           PY
           git fetch origin feature/apple-home-bridge-20260910
-          test "$(git rev-parse FETCH_HEAD)" = 0e530a25e4df1f910632688442c76da31125fee9
+          test "$(git rev-parse FETCH_HEAD)" = 2521010ecb6ff640ab565003244a506a4340748e
           git switch -c feature/apple-home-bridge-20260910
-          git apply --check "$RUNNER_TEMP/refinement.patch"
-          git apply --index "$RUNNER_TEMP/refinement.patch"
+          git apply --check "$RUNNER_TEMP/transport.patch"
+          git apply --index "$RUNNER_TEMP/transport.patch"
           git diff --cached --check
           npm --prefix server ci --no-audit --no-fund 2>&1 | tee "$RUNNER_TEMP/evidence/install.txt"
           node --test server/tests/appleHome*.test.js server/tests/runWithModernNode.test.js 2>&1 | tee "$RUNNER_TEMP/evidence/tests.txt"
           git config user.name mefree2098
           git config user.email 142266106+mefree2098@users.noreply.github.com
-          git commit -m 'fix: use public HomeKit identity and validate nested workflow branches and hidden group members'
+          git commit -m 'fix: allow only explicit Apple Home API endpoints and test native setup transport and HAP handlers'
           git push origin HEAD:refs/heads/feature/apple-home-bridge-20260910
           git rev-parse HEAD | tee "$RUNNER_TEMP/evidence/commit.txt"
           git diff --stat HEAD^ HEAD | tee "$RUNNER_TEMP/evidence/changes.txt"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: apple-home-refined-source
+          name: apple-home-transport-source
           path: ${{ runner.temp }}/evidence
           retention-days: 7
