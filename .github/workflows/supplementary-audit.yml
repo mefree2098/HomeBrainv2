@@ -1,0 +1,102 @@
+name: Supplementary audit validation
+
+on:
+  push:
+    branches: [audit/validation-20260910]
+
+permissions:
+  contents: read
+
+env:
+  AUDIT_COMMIT: 01c52a14d951f3b2fe0542cba4b08975a9f7e2a7
+
+jobs:
+  ios-build:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.AUDIT_COMMIT }}
+          persist-credentials: false
+      - name: Build iOS and watchOS simulator targets without signing
+        shell: bash
+        run: |
+          xcodebuild -version
+          git rev-parse HEAD
+          xcodebuild -project HomeBrainApp/HomeBrainApp.xcodeproj -scheme HomeBrainApp -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$RUNNER_TEMP/ios-build.log"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: audit-ios-build
+          path: ${{ runner.temp }}/ios-build.log
+          retention-days: 7
+  firmware-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.AUDIT_COMMIT }}
+          persist-credentials: false
+      - name: Install isolated PlatformIO build tool
+        shell: bash
+        run: |
+          python3 -m venv "$RUNNER_TEMP/platformio"
+          "$RUNNER_TEMP/platformio/bin/pip" install platformio==6.2.0
+      - name: Compile configured wall-panel firmware
+        shell: bash
+        run: |
+          git rev-parse HEAD
+          "$RUNNER_TEMP/platformio/bin/pio" run -d embedded/elecrow-wall-panel 2>&1 | tee "$RUNNER_TEMP/firmware-build.log"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: audit-firmware-build
+          path: ${{ runner.temp }}/firmware-build.log
+          retention-days: 7
+  typescript-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ env.AUDIT_COMMIT }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+      - name: Install exact client dependencies
+        run: npm --prefix client ci --no-audit --no-fund
+      - name: Compare baseline and candidate TypeScript diagnostics
+        shell: bash
+        run: |
+          git worktree add "$RUNNER_TEMP/base" 1823f6885c912c179c7a5f4067e9aed6fe296d30
+          ln -s "$GITHUB_WORKSPACE/client/node_modules" "$RUNNER_TEMP/base/client/node_modules"
+          python3 - <<'PY'
+          import collections, json, os, pathlib, re, subprocess
+          root = pathlib.Path(os.environ['GITHUB_WORKSPACE'])
+          temp = pathlib.Path(os.environ['RUNNER_TEMP'])
+          command = [str(root/'client/node_modules/.bin/tsc'), '-p', 'tsconfig.app.json', '--noEmit', '--pretty', 'false']
+          results = {}
+          for name, cwd in [('baseline', temp/'base/client'), ('candidate', root/'client')]:
+              result = subprocess.run(command, cwd=cwd, text=True, capture_output=True)
+              (temp/f'typescript-{name}.log').write_text(result.stdout + result.stderr)
+              assert result.returncode in (0, 2), f'Compiler failed unexpectedly: {result.returncode}'
+              diagnostics = re.findall(r'^(.*?)\(\d+,\d+\): (error TS\d+:.*)$', result.stdout, re.M)
+              results[name] = collections.Counter(f'{file}: {message}' for file, message in diagnostics)
+          added = results['candidate'] - results['baseline']
+          summary = {'baseline': sum(results['baseline'].values()), 'candidate': sum(results['candidate'].values()), 'added': dict(added)}
+          (temp/'typescript-comparison.json').write_text(json.dumps(summary, indent=2))
+          print(json.dumps(summary, indent=2))
+          assert not added, 'Candidate introduced TypeScript diagnostics; inspect artifact before merge'
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: audit-typescript
+          path: |
+            ${{ runner.temp }}/typescript-*.log
+            ${{ runner.temp }}/typescript-comparison.json
+          retention-days: 7
