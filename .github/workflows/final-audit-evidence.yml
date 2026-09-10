@@ -9,50 +9,74 @@ permissions:
   actions: read
   checks: read
   contents: read
+  pull-requests: read
 
 jobs:
   evidence:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - name: Retrieve exact final-head run and job records
+      - name: Verify merge, exact source tree and post-merge checks
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          mkdir -p "$RUNNER_TEMP/evidence"
-          gh api "repos/$GH_REPO/actions/runs/34490135783" > "$RUNNER_TEMP/evidence/run.json"
-          gh api "repos/$GH_REPO/actions/runs/34490135783/jobs?per_page=100" > "$RUNNER_TEMP/evidence/jobs.json"
-          gh api "repos/$GH_REPO/actions/jobs/102914422635" > "$RUNNER_TEMP/evidence/job.json"
-          gh api "repos/$GH_REPO/actions/runs/34490135783/logs" > "$RUNNER_TEMP/evidence/logs.zip"
-          gh api "repos/$GH_REPO/commits/b5b49dd1795ef7d207dfd5dfb6831becff97b12a/check-runs?per_page=100" > "$RUNNER_TEMP/evidence/checks.json"
           python3 - <<'PY'
-          import json, os, pathlib, re, zipfile
+          import json, os, pathlib, re, subprocess, time, zipfile
           root = pathlib.Path(os.environ['RUNNER_TEMP'])/'evidence'
-          run = json.loads((root/'run.json').read_text())
-          job = json.loads((root/'job.json').read_text())
-          assert run['id'] == 34490135783
-          assert run['head_sha'] == 'b5b49dd1795ef7d207dfd5dfb6831becff97b12a'
-          assert job['id'] == 102914422635 and job['run_id'] == run['id']
-          summary = {'run_id': run['id'], 'head_sha': run['head_sha'], 'conclusion': run['conclusion'], 'job': {'id': job['id'], 'name': job['name'], 'conclusion': job['conclusion']}, 'failures': []}
-          with zipfile.ZipFile(root/'logs.zip') as archive:
-              summary['log_files'] = archive.namelist()
-              for entry in archive.infolist():
-                  if '/' in entry.filename or not entry.filename.endswith('.txt'):
-                      continue
-                  text = re.sub(r'\x1b\[[0-9;]*m', '', archive.read(entry).decode('utf8', errors='replace'))
-                  lines = text.splitlines()
-                  for index, line in enumerate(lines):
-                      if re.search(r'not ok|failureType:|ERR_ASSERTION|# fail [1-9]', line):
-                          summary['failures'].append({'file': entry.filename, 'context': lines[max(0,index-5):index+40]})
-          (root/'summary.json').write_text(json.dumps(summary, indent=2))
+          root.mkdir()
+          repo = os.environ['GH_REPO']
+          merged = 'd37df89c910526684ec39f453202fc5cef470fcc'
+          head = '2b294e85ff2594b92bf6e7253f0728b1ef827628'
+          def read(endpoint):
+              return json.loads(subprocess.check_output(['gh', 'api', f'repos/{repo}/{endpoint}'], timeout=60))
+          def save(name, value):
+              (root/name).write_text(json.dumps(value, indent=2))
+          pr = read('pulls/676')
+          save('pull-request.json', pr)
+          assert pr['merged'] is True and pr['merge_commit_sha'] == merged
+          assert pr['head']['sha'] == head
+          main = read('branches/main')
+          save('main.json', main)
+          assert main['commit']['sha'] == merged
+          before, after = read(f'git/commits/{head}'), read(f'git/commits/{merged}')
+          assert before['tree']['sha'] == after['tree']['sha'], 'Merged source differs from tested source'
+          expected = {'Regression tests', 'npm-audit', 'secret-scan', 'codeql'}
+          selected = {}
+          for attempt in range(60):
+              response = read(f'actions/runs?head_sha={merged}&event=push&per_page=100')
+              selected = {r['name']: r for r in response['workflow_runs'] if r['name'] in expected}
+              save('post-merge-runs.json', response)
+              if set(selected) == expected and all(r['status'] == 'completed' for r in selected.values()):
+                  break
+              time.sleep(5)
+          assert set(selected) == expected, 'A required workflow did not start'
+          assert all(r['head_sha'] == merged and r['head_branch'] == 'main' for r in selected.values())
+          assert all(r['conclusion'] == 'success' for r in selected.values()), 'Post-merge checks are not all successful'
+          checks = read(f'commits/{merged}/check-runs?per_page=100')
+          save('post-merge-checks.json', checks)
+          summary = {'repository': repo, 'pull_request': 676, 'merged': True, 'merge_commit': merged, 'tested_pr_head': head, 'same_source_tree': True, 'changed_files': pr['changed_files'], 'runs': {}, 'test_and_warning_lines': {}}
+          for name, run in selected.items():
+              summary['runs'][name] = {key: run[key] for key in ['id', 'head_sha', 'status', 'conclusion', 'html_url']}
+              if name not in ('Regression tests', 'npm-audit'):
+                  continue
+              archive_path = root/f"{run['id']}.zip"
+              with archive_path.open('wb') as output:
+                  subprocess.run(['gh', 'api', f"repos/{repo}/actions/runs/{run['id']}/logs"], stdout=output, check=True, timeout=60)
+              with zipfile.ZipFile(archive_path) as archive:
+                  for entry in archive.infolist():
+                      if '/' in entry.filename or not entry.filename.endswith('.txt'):
+                          continue
+                      text = re.sub(r'\x1b\[[0-9;]*m', '', archive.read(entry).decode('utf8', errors='replace'))
+                      summary['test_and_warning_lines'][entry.filename] = [line for line in text.splitlines() if re.search(r'# (tests|pass|fail|skipped) \d|\d+ passed|Ran \d+ tests|npm warn|warning:|DeprecationWarning|PRE-EXISTING EXCEPTION|no unaccepted|Dynamic console format|built in', line, re.I)]
+          save('summary.json', summary)
           print(json.dumps(summary, indent=2))
           PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: exact-final-head-evidence
+          name: verified-main-audit-evidence
           path: ${{ runner.temp }}/evidence
           retention-days: 7
           if-no-files-found: error
