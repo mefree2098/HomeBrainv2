@@ -1,5 +1,5 @@
-import axios, { AxiosRequestConfig, AxiosError, InternalAxiosRequestConfig } from 'axios';
-import JSONbig from 'json-bigint';
+import axios, { AxiosInstance, AxiosRequestConfig, AxiosError, InternalAxiosRequestConfig } from 'axios';
+import { parseApiResponse, shouldRefreshAccessToken } from './responsePolicy';
 
 const LIVE_SETTINGS_INPUT_FIELDS = [
   'dynamicDnsPrimaryHostname',
@@ -67,30 +67,7 @@ const localApi = axios.create({
   validateStatus: (status) => {
     return status >= 200 && status < 300;
   },
-  transformResponse: [(data) => {
-    // Handle empty responses
-    if (!data || data === '') {
-      return {};
-    }
-
-    // Check if data looks like HTML instead of JSON
-    if (typeof data === 'string') {
-      const trimmed = data.trim();
-      if (trimmed.startsWith('<') || trimmed.startsWith('<!DOCTYPE')) {
-        console.error('Received HTML instead of JSON. This usually means the API endpoint is not accessible or returned an error page.');
-        throw new Error('API endpoint returned HTML instead of JSON. The server may be unreachable or the endpoint does not exist.');
-      }
-    }
-
-    // Try to parse as JSON
-    try {
-      return JSONbig.parse(data);
-    } catch (error: any) {
-      console.error('Failed to parse response as JSON:', error.message);
-      console.error('Response data:', data);
-      throw new Error(`Invalid JSON response from server: ${error.message}`);
-    }
-  }]
+  transformResponse: [parseApiResponse]
 });
 
 let refreshRequest: Promise<void> | null = null;
@@ -130,15 +107,6 @@ const buildWebClientName = (): string => {
   return platform ? `${browser} on ${platform}` : browser;
 };
 
-const getApiInstance = (url: string) => {
-  return localApi;
-};
-
-// Check if the URL is for the refresh token endpoint to avoid infinite loops
-const isRefreshTokenEndpoint = (url: string): boolean => {
-  return url.includes('/api/auth/refresh');
-};
-
 const clearClientAuthState = () => {
   // Remove legacy browser-readable token storage from older HomeBrain builds.
   localStorage.removeItem('refreshToken');
@@ -174,7 +142,7 @@ const refreshAccessToken = async (): Promise<void> => {
   }
 };
 
-const setupInterceptors = (apiInstance: typeof axios) => {
+const setupInterceptors = (apiInstance: AxiosInstance) => {
   apiInstance.interceptors.request.use(
     (config: InternalAxiosRequestConfig): InternalAxiosRequestConfig => {
       if (config.headers) {
@@ -197,15 +165,12 @@ const setupInterceptors = (apiInstance: typeof axios) => {
         return Promise.reject(error);
       }
 
-      // Only refresh token when we get a 401/403 error (token is invalid/expired)
-      if (error.response?.status && [401, 403].includes(error.response.status) &&
-          !originalRequest._retry &&
-          originalRequest.url && !isRefreshTokenEndpoint(originalRequest.url)) {
+      if (shouldRefreshAccessToken(error.response?.status, originalRequest.url, originalRequest._retry)) {
         originalRequest._retry = true;
 
         try {
           await refreshAccessToken();
-          return getApiInstance(originalRequest.url || '')(originalRequest);
+          return localApi(originalRequest);
         } catch (err) {
           const refreshStatus = axios.isAxiosError(err) ? err.response?.status : undefined;
           if (refreshStatus !== 401 && refreshStatus !== 403) {
@@ -214,7 +179,7 @@ const setupInterceptors = (apiInstance: typeof axios) => {
           clearClientAuthState();
           const currentPath = window.location.pathname;
           const isPublicAuthPage = currentPath === '/login' || currentPath === '/register';
-          const isCurrentUserBootstrap = originalRequest.url.includes('/api/auth/me');
+          const isCurrentUserBootstrap = originalRequest.url?.includes('/api/auth/me');
           if (!isPublicAuthPage && !isCurrentUserBootstrap) {
             window.location.href = '/login';
           }
@@ -231,24 +196,19 @@ setupInterceptors(localApi);
 
 const api = {
   request: (config: AxiosRequestConfig) => {
-    const apiInstance = getApiInstance(config.url || '');
-    return apiInstance(config);
+    return localApi(config);
   },
   get: (url: string, config?: AxiosRequestConfig) => {
-    const apiInstance = getApiInstance(url);
-    return apiInstance.get(url, config);
+    return localApi.get(url, config);
   },
   post: (url: string, data?: any, config?: AxiosRequestConfig) => {
-    const apiInstance = getApiInstance(url);
-    return apiInstance.post(url, data, config);
+    return localApi.post(url, data, config);
   },
   put: (url: string, data?: any, config?: AxiosRequestConfig) => {
-    const apiInstance = getApiInstance(url);
-    return apiInstance.put(url, mergeLiveSettingsInputValues(url, data), config);
+    return localApi.put(url, mergeLiveSettingsInputValues(url, data), config);
   },
   delete: (url: string, config?: AxiosRequestConfig) => {
-    const apiInstance = getApiInstance(url);
-    return apiInstance.delete(url, config);
+    return localApi.delete(url, config);
   },
 };
 

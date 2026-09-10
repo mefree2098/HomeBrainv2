@@ -103,3 +103,21 @@ test('private addresses require opt-in and metadata remains blocked', async () =
     /cloud metadata service/
   );
 });
+
+for (const address of [
+  'fd00:ec2:0:0:0:0:0:254', '::ffff:a9fe:a9fe',
+  '::ffff:169.254.169.254', '::ffff:169.254.170.2', '::ffff:100.100.100.200'
+]) {
+  test(`metadata alias ${address} stays blocked with private opt-in`, async () => {
+    assert.equal(isCloudMetadataHostname(address), true);
+    assert.equal(isPermittedAddress(address, { allowPrivate: true }), false);
+    assert.throws(() => createOutboundAgents(`http://[${address}]/`, { allowPrivate: true }), /permitted network/);
+    const lookup = createValidatedLookup('hub.example.test', {
+      allowPrivate: true,
+      lookup: (_host, _options, callback) => callback(null, [
+        { address: '10.0.0.2', family: 4 }, { address, family: 6 }
+      ])
+    });
+    await assert.rejects(runLookup(lookup, 'hub.example.test'), /permitted network/);
+  });
+}

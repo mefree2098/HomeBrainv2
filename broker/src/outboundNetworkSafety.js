@@ -8,13 +8,11 @@ const CLOUD_METADATA_HOSTNAMES = new Set([
   'metadata.azure.internal',
   'metadata.google.internal'
 ]);
-
-const CLOUD_METADATA_ADDRESSES = new Set([
-  '100.100.100.200',
-  '169.254.169.254',
-  '169.254.170.2',
-  'fd00:ec2::254'
-]);
+const CLOUD_METADATA_ADDRESSES = new net.BlockList();
+for (const address of ['100.100.100.200', '169.254.169.254', '169.254.170.2']) {
+  CLOUD_METADATA_ADDRESSES.addAddress(address, 'ipv4');
+}
+CLOUD_METADATA_ADDRESSES.addAddress('fd00:ec2::254', 'ipv6');
 
 const NON_PUBLIC_IPV4_ADDRESSES = new net.BlockList();
 [
@@ -56,7 +54,9 @@ function normalizeHostname(value) {
 
 function isCloudMetadataHostname(value) {
   const normalized = normalizeHostname(value);
-  return CLOUD_METADATA_HOSTNAMES.has(normalized) || CLOUD_METADATA_ADDRESSES.has(normalized);
+  const family = net.isIP(normalized);
+  return CLOUD_METADATA_HOSTNAMES.has(normalized)
+    || (family !== 0 && CLOUD_METADATA_ADDRESSES.check(normalized, family === 6 ? 'ipv6' : 'ipv4'));
 }
 
 function isPublicAddress(value) {

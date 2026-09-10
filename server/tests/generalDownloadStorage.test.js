@@ -120,3 +120,37 @@ test('writeDownloadChunk rejects mismatched offsets so resumable uploads stay co
     }
   );
 });
+
+test('simultaneous stream uploads never share a timestamp-based staging file', async (t) => {
+  const root = await withTempDownloadsRoot(t);
+  t.mock.method(Date, 'now', () => 123456789);
+  const results = await Promise.all(['first', 'second'].map((value) =>
+    generalDownloadStorage.writeDownloadStream('same.bin', Readable.from([Buffer.from(value)]))
+  ));
+  assert.equal(results.length, 2);
+  assert.ok(['first', 'second'].includes(await fs.promises.readFile(path.join(root, 'same.bin'), 'utf8')));
+  assert.deepEqual(await fs.promises.readdir(root), ['same.bin']);
+});
+test('truncated stream uploads leave the previous complete file untouched', async (t) => {
+  const root = await withTempDownloadsRoot(t);
+  await fs.promises.writeFile(path.join(root, 'file.bin'), 'previous');
+  await assert.rejects(generalDownloadStorage.writeDownloadStream('file.bin', Readable.from([Buffer.from('short')]), { expectedBytes: 10 }), /size mismatch/);
+  assert.equal(await fs.promises.readFile(path.join(root, 'file.bin'), 'utf8'), 'previous');
+  assert.deepEqual(await fs.promises.readdir(root), ['file.bin']);
+});
+test('invalid declared byte lengths fail before creating staging files', async (t) => {
+  const root = await withTempDownloadsRoot(t);
+  for (const expectedBytes of [-1, 1.2, 'invalid', Infinity]) {
+    await assert.rejects(generalDownloadStorage.writeDownloadStream('file.bin', Readable.from([]), { expectedBytes }), /integer byte count/);
+  }
+  assert.deepEqual(await fs.promises.readdir(root), []);
+});
+
+test('a failed exclusive staging-file open never deletes a different writer file', async (t) => {
+  const root = await withTempDownloadsRoot(t);
+  t.mock.method(require('node:crypto'), 'randomUUID', () => 'collision');
+  const otherWriter = path.join(root, '.file.bin.collision.upload');
+  await fs.promises.writeFile(otherWriter, 'another writer');
+  await assert.rejects(generalDownloadStorage.writeDownloadStream('file.bin', Readable.from([Buffer.from('replacement')])), { code: 'EEXIST' });
+  assert.equal(await fs.promises.readFile(otherWriter, 'utf8'), 'another writer');
+});

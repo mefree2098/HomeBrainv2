@@ -494,7 +494,6 @@ app.use('/api/elevenlabs', elevenLabsRoutes);
 app.use('/api/tts', ttsRoutes);
 // Settings Routes
 app.use('/api/settings', settingsRoutes);
-app.use('/api/notifications', notificationRoutes);
 app.use('/api/integrations', integrationRoutes);
 // Weather Routes
 app.use('/api/weather', weatherRoutes);

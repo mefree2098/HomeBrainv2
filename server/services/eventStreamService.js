@@ -7,6 +7,12 @@ const COUNTER_ID = 'global';
 const DEFAULT_REPLAY_LIMIT = 100;
 const MAX_REPLAY_LIMIT = 500;
 
+function normalizeReplayLimit(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed === 0) return DEFAULT_REPLAY_LIMIT;
+  return Math.min(MAX_REPLAY_LIMIT, Math.max(1, Math.trunc(parsed)));
+}
+
 class EventStreamService extends EventEmitter {
   constructor() {
     super();
@@ -114,10 +120,7 @@ class EventStreamService extends EventEmitter {
 
   async replay(options = {}) {
     const sinceSequence = Math.max(0, Number(options.sinceSequence) || 0);
-    const limit = Math.min(
-      MAX_REPLAY_LIMIT,
-      Math.max(1, Number(options.limit) || DEFAULT_REPLAY_LIMIT)
-    );
+    const limit = normalizeReplayLimit(options.limit);
     const types = Array.isArray(options.types)
       ? options.types.map((value) => String(value).trim()).filter(Boolean)
       : [];
@@ -161,9 +164,7 @@ class EventStreamService extends EventEmitter {
   }
 
   async latest(options = DEFAULT_REPLAY_LIMIT) {
-    const limit = typeof options === 'number'
-      ? options
-      : Math.min(MAX_REPLAY_LIMIT, Math.max(1, Number(options?.limit) || DEFAULT_REPLAY_LIMIT));
+    const limit = normalizeReplayLimit(typeof options === 'number' ? options : options?.limit);
     const source = typeof options === 'object' && typeof options?.source === 'string' && options.source.trim()
       ? options.source.trim()
       : null;

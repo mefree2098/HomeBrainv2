@@ -113,3 +113,29 @@ test('same-origin URL resolution rejects absolute URLs for another service', () 
     /configured service origin/
   );
 });
+
+const metadataAliases = [
+  'fd00:ec2::254', 'fd00:ec2:0:0:0:0:0:254',
+  '::ffff:169.254.169.254', '::ffff:a9fe:a9fe',
+  '::ffff:169.254.170.2', '::ffff:100.100.100.200'
+];
+for (const address of metadataAliases) {
+  test(`metadata alias ${address} cannot bypass local-provider policy`, async () => {
+    for (const allowPublic of [false, true]) {
+      assert.equal(isAllowedResolvedAddress(address, { allowPublic }), false);
+      assert.throws(() => parseLocalHttpUrl(`http://[${address}]/`, 'URL', { allowPublic }), /metadata/);
+      const lookup = createLocalAddressLookup('hub.local', {
+        allowPublic,
+        lookup: (_host, _options, callback) => callback(null, [
+          { address: '192.168.1.2', family: 4 }, { address, family: 6 }
+        ])
+      });
+      await assert.rejects(runLookup(lookup, 'hub.local', { all: true }), /outside the permitted network/);
+    }
+  });
+}
+test('metadata names remain blocked with mixed case, trailing dots and public opt-in', () => {
+  for (const host of ['Metadata.Google.Internal.', 'instance-data.ec2.internal', 'metadata.azure.internal']) {
+    assert.throws(() => parseLocalHttpUrl(`http://${host}/`, 'URL', { allowPublic: true }), /metadata/);
+  }
+});

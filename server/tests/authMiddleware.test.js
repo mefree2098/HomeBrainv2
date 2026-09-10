@@ -382,3 +382,20 @@ test('verifyAccessToken accepts a HomeBrain Codex skill token for admin routes',
   assert.equal(String(verified._id), user._id);
   assert.equal(verified.email, user.email);
 });
+
+test('extractToken tolerates malformed cookies and non-string authorization headers', () => {
+  assert.equal(authMiddleware.extractToken({ headers: { authorization: 'Bearer valid', cookie: 'hbAccessToken=%' } }), 'valid');
+  assert.equal(authMiddleware.extractToken({ headers: { authorization: [], cookie: 'bad%=x; hbAccessToken=valid' } }), 'valid');
+  assert.equal(authMiddleware.extractToken({}), null);
+});
+test('invalid and expired JWT credentials return 401 rather than a permission denial', async (t) => {
+  const oldSecret = process.env.JWT_SECRET;
+  t.after(() => { if (oldSecret === undefined) delete process.env.JWT_SECRET; else process.env.JWT_SECRET = oldSecret; });
+  process.env.JWT_SECRET = 'audit-regression-signing-secret';
+  t.mock.method(oidcService, 'verifyIssuedAccessToken', async () => {
+    throw Object.assign(new Error('Invalid token'), { status: 401, oidcError: 'invalid_token' });
+  });
+  for (const token of ['invalid-token', jwt.sign({ sub: 'test' }, process.env.JWT_SECRET, { expiresIn: -1 })]) {
+    await assert.rejects(authMiddleware.verifyAccessToken(token), (error) => error.status === 401);
+  }
+});

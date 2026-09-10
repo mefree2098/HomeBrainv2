@@ -80,3 +80,21 @@ test('publishSafe skips immediately when MongoDB is disconnected', async (t) => 
   assert.equal(result, null);
   assert.equal(publishCalled, false);
 });
+
+test('latest and replay always apply finite, positive, bounded integer limits', async (t) => {
+  let appliedLimit;
+  t.mock.method(EventStreamEvent, 'find', () => ({
+    sort() { return this; },
+    async limit(value) { appliedLimit = value; return []; }
+  }));
+  for (const limit of [0, -1, 0.4, 12.9, 999999, NaN, Infinity, -Infinity, undefined]) {
+    await eventStreamService.latest(limit);
+    assert.ok(Number.isInteger(appliedLimit) && appliedLimit >= 1 && appliedLimit <= 500);
+    await eventStreamService.latest({ limit });
+    assert.ok(Number.isInteger(appliedLimit) && appliedLimit >= 1 && appliedLimit <= 500);
+    await eventStreamService.replay({ limit });
+    assert.ok(Number.isInteger(appliedLimit) && appliedLimit >= 1 && appliedLimit <= 500);
+  }
+  await eventStreamService.latest(25);
+  assert.equal(appliedLimit, 25);
+});

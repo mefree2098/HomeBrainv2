@@ -12,6 +12,7 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -32,4 +33,4 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: ${{ matrix.project }}/package-lock.json
-      - run: npm audit --audit-level=high
+      - run: node "$GITHUB_WORKSPACE/scripts/audit-dependencies.js"

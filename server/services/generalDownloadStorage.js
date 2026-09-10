@@ -114,7 +114,9 @@ async function hashFile(filePath) {
 async function writeDownloadStream(inputPath, readable, options = {}) {
   const { root, relativePath, absolutePath } = resolveDownloadPath(inputPath);
   const maxBytes = parseMaxBytes(options.maxBytes || process.env.GENERAL_DOWNLOADS_MAX_UPLOAD_BYTES);
-  const expectedBytes = Number(options.expectedBytes || 0);
+  const expectedBytes = options.expectedBytes === undefined || options.expectedBytes === null
+    ? null
+    : parseRequiredByteCount(options.expectedBytes, 'content-length');
 
   if (expectedBytes > maxBytes) {
     throw Object.assign(new Error(`Upload exceeds the ${maxBytes} byte limit`), { status: 413 });
@@ -124,7 +126,7 @@ async function writeDownloadStream(inputPath, readable, options = {}) {
 
   const tempPath = path.join(
     path.dirname(absolutePath),
-    `.${path.basename(absolutePath)}.${Date.now()}.${process.pid}.upload`
+    `.${path.basename(absolutePath)}.${crypto.randomUUID()}.upload`
   );
   const hash = crypto.createHash('sha256');
   let bytes = 0;
@@ -142,11 +144,17 @@ async function writeDownloadStream(inputPath, readable, options = {}) {
     }
   });
 
+  let ownsTempFile = false;
+  const output = fs.createWriteStream(tempPath, { flags: 'wx' });
+  output.once('open', () => { ownsTempFile = true; });
   try {
-    await pipeline(readable, counter, fs.createWriteStream(tempPath, { flags: 'wx' }));
+    await pipeline(readable, counter, output);
+    if (expectedBytes !== null && bytes !== expectedBytes) {
+      throw Object.assign(new Error(`Upload size mismatch: expected ${expectedBytes}, received ${bytes}`), { status: 400 });
+    }
     await fs.promises.rename(tempPath, absolutePath);
   } catch (error) {
-    await fs.promises.rm(tempPath, { force: true }).catch(() => {});
+    if (ownsTempFile) await fs.promises.rm(tempPath, { force: true }).catch(() => {});
     throw error;
   }
 

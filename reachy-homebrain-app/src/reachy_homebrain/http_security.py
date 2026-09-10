@@ -16,8 +16,20 @@ class DownloadSecurityError(RuntimeError):
 
 
 def origin(url: str) -> tuple[str, str, int | None]:
-    parsed = urllib.parse.urlsplit(url)
-    return parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        scheme = parsed.scheme.lower()
+        hostname = (parsed.hostname or "").lower()
+        port = parsed.port
+    except (TypeError, ValueError) as exc:
+        raise DownloadSecurityError("download URL is malformed") from exc
+    if scheme not in {"http", "https"} or not hostname or (port is not None and not 1 <= port <= 65535):
+        raise DownloadSecurityError("download URL must use a valid HTTP(S) origin")
+    if parsed.username is not None or parsed.password is not None or parsed.fragment:
+        raise DownloadSecurityError("download URL contains forbidden components")
+    if any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in url):
+        raise DownloadSecurityError("download URL contains forbidden characters")
+    return scheme, hostname, port if port is not None else (443 if scheme == "https" else 80)
 
 
 def resolve_homebrain_url(config: HomeBrainConfig, value: str) -> str:
@@ -26,12 +38,17 @@ def resolve_homebrain_url(config: HomeBrainConfig, value: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise DownloadSecurityError("download URL is required")
     raw = value.strip()
-    candidate = urllib.parse.urlsplit(raw)
-    if candidate.username or candidate.password or candidate.fragment:
-        raise DownloadSecurityError("download URL contains forbidden components")
-    base = f"{config.http_base_url.rstrip('/')}/"
-    resolved = urllib.parse.urljoin(base, raw)
-    parsed = urllib.parse.urlsplit(resolved)
+    try:
+        candidate = urllib.parse.urlsplit(raw)
+        if candidate.username is not None or candidate.password is not None or candidate.fragment:
+            raise DownloadSecurityError("download URL contains forbidden components")
+        if any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in raw):
+            raise DownloadSecurityError("download URL contains forbidden characters")
+        base = f"{config.http_base_url.rstrip('/')}/"
+        resolved = urllib.parse.urljoin(base, raw)
+        parsed = urllib.parse.urlsplit(resolved)
+    except ValueError as exc:
+        raise DownloadSecurityError("download URL is malformed") from exc
     if parsed.scheme not in {"http", "https"}:
         raise DownloadSecurityError("download URL must use HTTP(S)")
     if parsed.scheme == "http" and not config.allow_insecure_http:
