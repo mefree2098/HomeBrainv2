@@ -479,6 +479,7 @@ app.use('/api/device-groups', deviceGroupRoutes);
 app.use('/api/device-command-coordinator', deviceCommandCoordinatorRoutes);
 app.use('/api/telemetry', telemetryRoutes);
 app.use('/api/watch', watchRoutes);
+app.use('/api/siri', require('./routes/siriRoutes'));
 // Scene Routes
 app.use('/api/scenes', sceneRoutes);
 // Automation Routes

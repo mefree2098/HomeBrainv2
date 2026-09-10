@@ -538,6 +538,13 @@ struct SettingsView: View {
 
                         if session.currentUser != nil {
                             settingsAccountSection
+                            Section("Siri") {
+                                NavigationLink {
+                                    HomeBrainSiriSetupView()
+                                } label: {
+                                    Label("Siri & Shortcuts", systemImage: "waveform")
+                                }
+                            }
                             settingsHelpAndLegalSection
                         }
 

@@ -10,6 +10,7 @@ enum BackendConnectionState: Equatable {
 
 @MainActor
 final class SessionStore: ObservableObject {
+    static let shared = SessionStore()
     @Published private(set) var serverURLString = ""
     @Published var currentUser: AppUser?
     @Published var authError: String?

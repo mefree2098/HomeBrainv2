@@ -50,6 +50,11 @@
 			path = "../HomeBrainWatch/HomeBrainWatch Watch App";
 			sourceTree = "<group>";
 		};
+		B27A5F001000000000000001 /* Shared Apple Siri */ = {
+            isa = PBXFileSystemSynchronizedRootGroup;
+            path = "../shared/apple";
+            sourceTree = "<group>";
+        };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -74,6 +79,7 @@
 			isa = PBXGroup;
 			children = (
 				14B671742F50F83300C98D01 /* HomeBrainApp */,
+                B27A5F001000000000000001 /* Shared Apple Siri */,
 				A1B2C3D42FA5000000000005 /* ../HomeBrainWatch/HomeBrainWatch Watch App */,
 				14B671732F50F83300C98D01 /* Products */,
 			);
@@ -106,6 +112,7 @@
 				A1B2C3D42FA500000000000A /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
+                B27A5F001000000000000001 /* Shared Apple Siri */,
 				14B671742F50F83300C98D01 /* HomeBrainApp */,
 			);
 			name = HomeBrainApp;
@@ -128,6 +135,7 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
+                B27A5F001000000000000001 /* Shared Apple Siri */,
 				A1B2C3D42FA5000000000005 /* ../HomeBrainWatch/HomeBrainWatch Watch App */,
 			);
 			name = "HomeBrainWatch Watch App";
@@ -356,6 +364,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "HomeBrainApp-Info.plist";
+                INFOPLIST_KEY_CFBundleDisplayName = HomeBrain;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSCameraUsageDescription = "HomeBrain uses the camera only when a hub administrator chooses Add Z-Wave Device and scans a device QR code, for example to securely pair a lock or sensor.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "HomeBrain uses your local network to connect to the HomeBrain hub address you enter, for example homebrain.local, and to display and control devices on that hub.";
@@ -396,6 +405,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "HomeBrainApp-Info.plist";
+                INFOPLIST_KEY_CFBundleDisplayName = HomeBrain;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_NSCameraUsageDescription = "HomeBrain uses the camera only when a hub administrator chooses Add Z-Wave Device and scans a device QR code, for example to securely pair a lock or sensor.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "HomeBrain uses your local network to connect to the HomeBrain hub address you enter, for example homebrain.local, and to display and control devices on that hub.";
@@ -437,7 +447,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "HomeBrainWatch-Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = HomeBrainWatch;
+				INFOPLIST_KEY_CFBundleDisplayName = HomeBrain;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "HomeBrainWatch uses your local network to connect to the HomeBrain hub configured on iPhone, for example homebrain.local, and to display and control synchronized devices.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = NTechR.HomeBrainApp;
@@ -474,7 +484,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "HomeBrainWatch-Info.plist";
-				INFOPLIST_KEY_CFBundleDisplayName = HomeBrainWatch;
+				INFOPLIST_KEY_CFBundleDisplayName = HomeBrain;
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "HomeBrainWatch uses your local network to connect to the HomeBrain hub configured on iPhone, for example homebrain.local, and to display and control synchronized devices.";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown";
 				INFOPLIST_KEY_WKCompanionAppBundleIdentifier = NTechR.HomeBrainApp;

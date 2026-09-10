@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var store = HomeBrainWatchStore()
+    @StateObject private var store = HomeBrainWatchStore.shared
     @EnvironmentObject private var pushNotificationManager: WatchPushNotificationManager
 
     var body: some View {
@@ -34,10 +34,12 @@ struct ContentView: View {
         }
         .tint(.cyan)
         .task {
+            HomeBrainSiriRuntime.refreshSuggestions()
             pushNotificationManager.bind(store: store)
             await pushNotificationManager.configureForAuthenticationState()
         }
         .onChange(of: store.isAuthenticated) { _, isAuthenticated in
+            HomeBrainSiriRuntime.refreshSuggestions()
             Task {
                 if isAuthenticated {
                     await pushNotificationManager.configureForAuthenticationState()

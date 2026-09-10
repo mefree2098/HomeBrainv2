@@ -60,6 +60,7 @@ struct PushDeviceResponse: Decodable {
 
 final class HomeBrainAPIClient {
     private let baseURL: URL
+    var siriBaseURL: URL { baseURL }
     private let deviceID: String
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
@@ -197,9 +198,7 @@ final class HomeBrainAPIClient {
     }
 
     private func makeRequest(path: String, method: String, token: String?) throws -> URLRequest {
-        guard let url = URL(string: path, relativeTo: baseURL)?.absoluteURL else {
-            throw HomeBrainAPIError.invalidServerURL
-        }
+        let url = baseURL.appendingPathComponent(path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
 
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
         request.httpMethod = method
@@ -262,7 +261,7 @@ final class HomeBrainAPIClient {
         }
 
         guard (200..<300).contains(httpResponse.statusCode) else {
-            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+            if httpResponse.statusCode == 401 {
                 throw HomeBrainAPIError.unauthorized
             }
 

@@ -4,6 +4,29 @@ import SwiftUI
 
 @MainActor
 final class HomeBrainWatchStore: ObservableObject {
+    static let shared = HomeBrainWatchStore()
+    private var siriContextID = UUID()
+    private var tokenRefreshTask: Task<String, Error>?
+    private var tokenRefreshTaskID: UUID?
+
+    func siriSession() throws -> HBSiriSession {
+        guard !isPreviewMode, isAuthenticated,
+              let token = KeychainStore.read(account: "accessToken"), !token.isEmpty else { throw HBSiriError.signIn }
+        return HBSiriSession(baseURL: try makeClient().siriBaseURL, accessToken: token, context: siriContextID)
+    }
+    func refreshSiriSession(_ context: UUID) async throws {
+        guard context == siriContextID else { throw HBSiriError.changedHome }
+        _ = try await refreshAccessToken(with: makeClient())
+        guard context == siriContextID else { throw HBSiriError.changedHome }
+    }
+    private func invalidateSiriContext() {
+        siriContextID = UUID()
+        tokenRefreshTask?.cancel()
+        tokenRefreshTask = nil
+        tokenRefreshTaskID = nil
+        HomeBrainSiriRuntime.refreshSuggestions()
+    }
+
     @AppStorage("homebrain.serverURL") var serverURL = "http://homebrain.local:3000"
     @AppStorage("homebrain.email") var email = ""
     @AppStorage("homebrain.deviceID") private var storedDeviceID = ""
@@ -60,6 +83,7 @@ final class HomeBrainWatchStore: ObservableObject {
                 email: email.trimmingCharacters(in: .whitespacesAndNewlines),
                 password: password
             )
+            invalidateSiriContext()
             try store(tokens: tokens)
             password = ""
             isAuthenticated = true
@@ -73,6 +97,7 @@ final class HomeBrainWatchStore: ObservableObject {
     }
 
     func signOut() {
+        invalidateSiriContext()
         KeychainStore.delete(account: accessTokenAccount)
         KeychainStore.delete(account: refreshTokenAccount)
         dashboard = nil
@@ -116,6 +141,8 @@ final class HomeBrainWatchStore: ObservableObject {
         }
 
         do {
+            _ = try HomeBrainAPIClient(baseURLString: serverURL, deviceID: deviceID)
+            invalidateSiriContext()
             self.serverURL = serverURL
             if let email = normalized(payload["email"] as? String) {
                 self.email = email
@@ -368,32 +395,56 @@ final class HomeBrainWatchStore: ObservableObject {
   private func withValidAccessToken<T>(
         operation: (HomeBrainAPIClient, String) async throws -> T
     ) async throws -> T {
+        let context = siriContextID
+        let initialURL = serverURL
         let client = try makeClient()
         guard let accessToken = KeychainStore.read(account: accessTokenAccount), !accessToken.isEmpty else {
             throw HomeBrainAPIError.missingToken
         }
 
         do {
-            return try await operation(client, accessToken)
+            let result = try await operation(client, accessToken)
+            guard context == siriContextID, initialURL == serverURL else { throw HBSiriError.changedHome }
+            return result
         } catch HomeBrainAPIError.unauthorized {
+            guard context == siriContextID, initialURL == serverURL else { throw HBSiriError.changedHome }
             let refreshedToken = try await refreshAccessToken(with: client)
-            return try await operation(client, refreshedToken)
+            guard context == siriContextID, initialURL == serverURL else { throw HBSiriError.changedHome }
+            let result = try await operation(client, refreshedToken)
+            guard context == siriContextID, initialURL == serverURL else { throw HBSiriError.changedHome }
+            return result
         }
     }
 
     private func refreshAccessToken(with client: HomeBrainAPIClient) async throws -> String {
+        let context = siriContextID
+        let initialURL = serverURL
+        if let task = tokenRefreshTask {
+            let token = try await task.value
+            guard context == siriContextID, initialURL == serverURL else { throw HBSiriError.changedHome }
+            return token
+        }
         guard let refreshToken = KeychainStore.read(account: refreshTokenAccount), !refreshToken.isEmpty else {
             throw HomeBrainAPIError.missingToken
         }
-
-        let tokens = try await client.refresh(refreshToken: refreshToken)
-        try store(tokens: tokens)
-
-        guard let accessToken = tokens.accessToken, !accessToken.isEmpty else {
-            throw HomeBrainAPIError.missingToken
+        let taskID = UUID()
+        let task = Task { @MainActor in
+            let tokens = try await client.refresh(refreshToken: refreshToken)
+            try Task.checkCancellation()
+            guard context == self.siriContextID, initialURL == self.serverURL else { throw HBSiriError.changedHome }
+            try self.store(tokens: tokens)
+            guard let token = tokens.accessToken, !token.isEmpty else { throw HomeBrainAPIError.missingToken }
+            return token
         }
-
-        return accessToken
+        tokenRefreshTask = task
+        tokenRefreshTaskID = taskID
+        defer {
+            if tokenRefreshTaskID == taskID {
+                tokenRefreshTask = nil
+                tokenRefreshTaskID = nil
+            }
+        }
+        return try await task.value
     }
 
     private func store(tokens: AuthTokens) throws {

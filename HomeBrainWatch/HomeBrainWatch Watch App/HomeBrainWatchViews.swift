@@ -173,6 +173,13 @@ struct OverviewPage: View {
                 }
 
                 NavigationLink {
+                    HomeBrainSiriSetupView()
+                } label: {
+                    Label("Siri & Shortcuts", systemImage: "waveform")
+                }
+                .buttonStyle(.bordered)
+
+                NavigationLink {
                     AccountPage(store: store, dashboard: dashboard)
                 } label: {
                     DashboardLinkRow(
