@@ -16,39 +16,20 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22
-      - name: Export exact source and inspect bridge dependency
+      - name: Verify required bridge dependency and export locked installation
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/evidence"
-          git archive --format=tar HEAD | gzip > "$RUNNER_TEMP/evidence/source.tar.gz"
-          npm view @homebridge/hap-nodejs@2.2.3 version engines dependencies dist --json > "$RUNNER_TEMP/evidence/hap-registry.json"
           cd server
-          npm install --save-optional --save-exact @homebridge/hap-nodejs@2.2.3 --ignore-scripts --no-audit --no-fund 2>&1 | tee "$RUNNER_TEMP/evidence/install.txt"
-          npm audit --json > "$RUNNER_TEMP/evidence/audit.json" || test "$?" = 1
+          npm install --save-exact @homebridge/hap-nodejs@2.2.3 --ignore-scripts --no-audit --no-fund 2>&1 | tee "$RUNNER_TEMP/evidence/install.txt"
+          node -e 'const hap=require("@homebridge/hap-nodejs"); if(!hap.Bridge) process.exit(1); console.log("HAP runtime loaded")'
+          npm audit --json > "$RUNNER_TEMP/evidence/audit.json"
           cp package.json package-lock.json "$RUNNER_TEMP/evidence/"
           tar -czf "$RUNNER_TEMP/evidence/node_modules.tar.gz" node_modules
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: apple-home-source
+          name: apple-home-required-dependency
           path: ${{ runner.temp }}/evidence
-          retention-days: 7
-  sdk:
-    runs-on: macos-26
-    timeout-minutes: 5
-    steps:
-      - name: Export installed HomeKit interface for compile-accurate implementation
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/sdk"
-          SDK=$(xcrun --sdk iphonesimulator --show-sdk-path)
-          cp "$SDK/System/Library/Frameworks/HomeKit.framework/Modules/HomeKit.swiftmodule/arm64-apple-ios-simulator.swiftinterface" "$RUNNER_TEMP/sdk/" 2>/dev/null || true
-          cp -R "$SDK/System/Library/Frameworks/HomeKit.framework/Headers" "$RUNNER_TEMP/sdk/"
-          xcodebuild -version > "$RUNNER_TEMP/sdk/version.txt"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: apple-home-sdk
-          path: ${{ runner.temp }}/sdk
           retention-days: 7
