@@ -125,7 +125,7 @@ nonisolated struct Failure: Error, CustomStringConvertible { let description: St
             try check(try HBSiriPolicy.endpoint(baseURL: url, path: "/api/siri/catalog").path == "/homebrain/api/siri/catalog", "base path lost")
         }
         try passes("untrusted request paths and URL credentials rejected") {
-            for path in ["https://evil.test", "/api/siri/../auth", "/api/siri/catalog?token=x"] {
+            for path in ["https://evil.test", "/api/siri/../auth", "/api/siri/catalog?token=x", "/api/apple-home/status?token=x", "/api/apple-home/../auth", "/api/apple-home/unapproved", "/api/siri/%2e%2e/auth"] {
                 try rejects { _ = try HBSiriPolicy.endpoint(baseURL: URL(string: identity.server)!, path: path) }
             }
             try rejects { _ = try HBSiriPolicy.endpoint(baseURL: URL(string: "https://user:pass@example.test")!, path: "/api/siri/catalog") }
@@ -224,6 +224,67 @@ nonisolated struct Failure: Error, CustomStringConvertible { let description: St
             let (client, _) = makeClient { _ in (200, Data("not JSON".utf8)) }
             try await rejectsAsync { _ = try await client.catalog() }
             tests += 1; print("PASS malformed backend response rejected")
+        }
+        let homeStatusData = Data("{\"success\":true,\"enabled\":true,\"running\":true,\"namespace\":\"hub\",\"canManage\":true,\"error\":\"\",\"bridges\":[],\"targets\":[],\"skipped\":[]}".utf8)
+        let pairingData = Data("{\"success\":true,\"pin\":\"000-00-000\",\"bridges\":[]}".utf8)
+        do {
+            let (client, _) = makeClient { request in
+                guard request.httpMethod == "GET", request.url!.path == "/homebrain/api/apple-home/status" else { throw Failure(description: "wrong Apple Home status endpoint") }
+                return (200, homeStatusData)
+            }
+            let (status, _) = try await client.appleHomeStatus()
+            try check(status.running && status.canManage, "status decode")
+            tests += 1; print("PASS Apple Home live status uses authenticated prefixed endpoint")
+        }
+        do {
+            let (client, _) = makeClient { request in
+                let body = try JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+                guard request.httpMethod == "PUT", body["enabled"] as? Bool == true,
+                      body["confirm"] as? String == "SHARE WITH APPLE HOME" else { throw Failure(description: "missing explicit bridge consent") }
+                return (200, homeStatusData)
+            }
+            _ = try await client.configureAppleHome(enabled: true)
+            tests += 1; print("PASS enabling Apple Home includes explicit delegated-control consent")
+        }
+        do {
+            let (client, _) = makeClient { request in
+                guard request.httpMethod == "POST", request.url!.path.hasSuffix("/pairing"), request.url!.query == nil,
+                      request.value(forHTTPHeaderField: "Authorization") == "Bearer test-access-token" else { throw Failure(description: "unsafe pairing request") }
+                return (200, pairingData)
+            }
+            _ = try await client.appleHomePairing()
+            tests += 1; print("PASS private pairing material requested with authenticated POST, not URL credentials")
+        }
+        do {
+            let (client, credentials) = makeClient { request in
+                if request.value(forHTTPHeaderField: "Authorization") == "Bearer test-access-token" { return (401, Data()) }
+                return (200, homeStatusData)
+            }
+            _ = try await client.appleHomeStatus()
+            try check(credentials.refreshes == 1, "Apple Home refresh count")
+            tests += 1; print("PASS Apple Home token expiry safely refreshes once")
+        }
+        do {
+            let (client, credentials) = makeClient { _ in (403, Data()) }
+            try await rejectsAsync { _ = try await client.appleHomePairing() }
+            try check(credentials.refreshes == 0, "pairing permission denial refreshed token")
+            tests += 1; print("PASS Apple Home pairing permission denial is not a token-refresh loop")
+        }
+        do {
+            let (client, credentials) = makeClient { _ in (200, pairingData) }
+            credentials.invalidateAfterFirstValidation = true
+            try await rejectsAsync { _ = try await client.appleHomePairing() }
+            tests += 1; print("PASS account switch rejects stale Apple Home pairing response")
+        }
+        do {
+            let (client, _) = makeClient { _ in (404, Data()) }
+            try await rejectsAsync { _ = try await client.appleHomeStatus() }
+            tests += 1; print("PASS old backend without Apple Home routes reports unavailable")
+        }
+        do {
+            let (client, _) = makeClient { _ in (200, Data("{}".utf8)) }
+            try await rejectsAsync { _ = try await client.appleHomePairing() }
+            tests += 1; print("PASS malformed Apple Home pairing responses rejected")
         }
         print("Siri core: \(tests) tests passed")
     }

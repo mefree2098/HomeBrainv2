@@ -134,6 +134,14 @@ test('real HAP accessory engine, lifecycle and authorization integration', async
     assert.equal(calls.at(-1)[3].command.source, 'siri');
     assert.equal(calls.at(-1)[3].command.actor, 'admin');
   });
+  await t.test('real HAP characteristic handlers reach device execution and live reads', async () => {
+    const characteristic = bridge.accessories.get('light:lamp').homebrainService.getCharacteristic(hap.Characteristic.On);
+    const before = calls.length;
+    await characteristic.handleSetRequest(false);
+    assert.equal(calls.length, before + 1);
+    assert.equal(calls.at(-1)[1], 'turn_off');
+    assert.equal(await characteristic.handleGetRequest(), true);
+  });
   await t.test('brightness 0 and 100 preserved; malformed values refused', async () => {
     for (const value of [0, 100]) { await bridge.write('light:lamp', 'brightness', value); assert.equal(calls.at(-1)[2], value); }
     for (const value of [-1, 101, '40', NaN]) await assert.rejects(bridge.write('light:lamp', 'brightness', value));
