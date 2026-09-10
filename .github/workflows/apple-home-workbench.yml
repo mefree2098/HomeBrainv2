@@ -11,12 +11,12 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          ref: 7e29d6ab9d67b2ca27229b1c11b2d47ebdfab746
+          ref: 0e530a25e4df1f910632688442c76da31125fee9
           fetch-depth: 2
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: 22
-      - name: Verify exact source, test and fast-forward only feature branch
+      - name: Apply hash-verified refinement and fast-forward isolated branch
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -26,34 +26,31 @@ jobs:
           mkdir -p "$RUNNER_TEMP/evidence"
           python3 - <<'PY'
           import base64, hashlib, json, lzma, os, pathlib, subprocess
-          shas = ['23b548bc3cb8c729e88cc83b2a7f03c04e14aa70','cda4aa98550448920ec91a931bbb128cc54e570c','961d602b413795f2cc7841709c07f6ddd8ab100f','9514f6baaeeec17e00a0cf831f56c4faa2dca183']
-          data = b''
-          for sha in shas:
-              blob = json.loads(subprocess.check_output(['gh','api',f'repos/{os.environ["GH_REPO"]}/git/blobs/{sha}']))
-              chunk = base64.b64decode(blob['content'])
-              assert hashlib.sha1(b'blob '+str(len(chunk)).encode()+b'\0'+chunk).hexdigest() == sha
-              data += chunk
-          patch = lzma.decompress(data)
-          assert hashlib.sha256(patch).hexdigest() == '691ebd2786d76ef7ca8377c044539143197680fa6f5c6c4908b5756a3ea474a1'
-          pathlib.Path(os.environ['RUNNER_TEMP'],'apple-home.patch').write_bytes(patch)
+          sha = '71d93dec14ee75afec402ae96dff24d27eb4180d'
+          blob = json.loads(subprocess.check_output(['gh','api',f'repos/{os.environ["GH_REPO"]}/git/blobs/{sha}']))
+          packed = base64.b64decode(blob['content'])
+          assert hashlib.sha1(b'blob '+str(len(packed)).encode()+b'\0'+packed).hexdigest() == sha
+          patch = lzma.decompress(packed)
+          assert hashlib.sha256(patch).hexdigest() == '98e95e2d45f8f021c85c0942189e9cf631f8e326139153efc610aa0e09355ca3'
+          pathlib.Path(os.environ['RUNNER_TEMP'],'refinement.patch').write_bytes(patch)
           PY
           git fetch origin feature/apple-home-bridge-20260910
-          test "$(git rev-parse FETCH_HEAD)" = 7e29d6ab9d67b2ca27229b1c11b2d47ebdfab746
+          test "$(git rev-parse FETCH_HEAD)" = 0e530a25e4df1f910632688442c76da31125fee9
           git switch -c feature/apple-home-bridge-20260910
-          git apply --check --exclude=.github/workflows/siri-native.yml "$RUNNER_TEMP/apple-home.patch"
-          git apply --index --exclude=.github/workflows/siri-native.yml "$RUNNER_TEMP/apple-home.patch"
+          git apply --check "$RUNNER_TEMP/refinement.patch"
+          git apply --index "$RUNNER_TEMP/refinement.patch"
           git diff --cached --check
           npm --prefix server ci --no-audit --no-fund 2>&1 | tee "$RUNNER_TEMP/evidence/install.txt"
           node --test server/tests/appleHome*.test.js server/tests/runWithModernNode.test.js 2>&1 | tee "$RUNNER_TEMP/evidence/tests.txt"
           git config user.name mefree2098
           git config user.email 142266106+mefree2098@users.noreply.github.com
-          git commit -m 'feat: add opt-in Apple Home bridge, automatic room and workflow scenes, and working Settings navigation'
+          git commit -m 'fix: use public HomeKit identity and validate nested workflow branches and hidden group members'
           git push origin HEAD:refs/heads/feature/apple-home-bridge-20260910
           git rev-parse HEAD | tee "$RUNNER_TEMP/evidence/commit.txt"
           git diff --stat HEAD^ HEAD | tee "$RUNNER_TEMP/evidence/changes.txt"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
-          name: apple-home-published-source
+          name: apple-home-refined-source
           path: ${{ runner.temp }}/evidence
           retention-days: 7
