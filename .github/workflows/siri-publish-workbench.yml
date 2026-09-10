@@ -1,0 +1,56 @@
+name: Publish validated Siri source
+on:
+  push:
+    branches: [audit/siri-publish-20260910]
+    paths: [.github/workflows/siri-publish-workbench.yml]
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: 02fb8fbd99711413f168df8f9a1024d20237b17a
+          fetch-depth: 1
+      - name: Verify exact patch and fast-forward only the requested feature branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/siri-publish"
+          python3 - <<'PY'
+          import base64, hashlib, json, lzma, os, pathlib, subprocess
+          shas = ['2d36d745eb9885fb590a6f80b9ca996ee2d57da4', '4c4e6cc3ce3e524493cc1ba1570fae516708b050', '4f1e1e45405353da74a47d2f90b722f4acda09ee', '5c8d8b1f92ec4734df0dc79e9d2f57aa507df394', '8ebdc6ee433dc27e0dafb39b4dfd7a1b36f43691']
+          data = b''
+          for sha in shas:
+              blob = json.loads(subprocess.check_output(['gh', 'api', f'repos/{os.environ["GH_REPO"]}/git/blobs/{sha}']))
+              chunk = base64.b64decode(blob['content'])
+              assert hashlib.sha1(b'blob '+str(len(chunk)).encode()+b'\0'+chunk).hexdigest() == sha
+              data += chunk
+          patch = lzma.decompress(data)
+          assert hashlib.sha256(patch).hexdigest() == 'c52abf648c9423ef25d0da5b4ae6b32058acba6d7ae49f9dab9f4e11c5456ae9'
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'siri.patch').write_bytes(patch)
+          PY
+          git fetch origin feature/siri-controls-20260910
+          test "$(git rev-parse FETCH_HEAD)" = 02fb8fbd99711413f168df8f9a1024d20237b17a
+          git switch --create feature/siri-controls-20260910
+          git apply --check --exclude=.github/workflows/siri-native.yml "$RUNNER_TEMP/siri.patch"
+          git apply --index --exclude=.github/workflows/siri-native.yml "$RUNNER_TEMP/siri.patch"
+          node --test server/tests/siriCommandService.test.js
+          git diff --cached --check
+          git config user.name mefree2098
+          git config user.email 142266106+mefree2098@users.noreply.github.com
+          git commit -m 'feat: integrate authenticated Siri light, workflow and scene controls on iOS and Watch'
+          git push origin HEAD:refs/heads/feature/siri-controls-20260910
+          git rev-parse HEAD | tee "$RUNNER_TEMP/siri-publish/commit.txt"
+          git diff --stat d37df89c910526684ec39f453202fc5cef470fcc HEAD | tee "$RUNNER_TEMP/siri-publish/changes.txt"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: siri-published-source
+          path: ${{ runner.temp }}/siri-publish
+          retention-days: 14
