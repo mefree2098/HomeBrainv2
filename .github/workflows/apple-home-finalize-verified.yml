@@ -1,0 +1,93 @@
+name: Verify and finalize approved Apple Home integration
+on:
+  push:
+    branches: [audit/apple-home-workbench-20260910]
+    paths: [.github/workflows/apple-home-finalize-verified.yml]
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+  checks: read
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Verify exact-head gates and use the normal merge endpoint
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/apple-home-finalization"
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess, time
+          repo = os.environ['GH_REPO']
+          assert repo == 'mefree2098/HomeBrainv2'
+          expected = 'fb63c9055febf30e49120112369f84a234a4247f'
+          baseline = 'f1ff47b89b83657a65ef419be1b4820df6ef4f4e'
+          root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'apple-home-finalization'
+          def api(path, method=None, data=None):
+              args = ['gh', 'api', f'repos/{repo}/{path}']
+              if method:
+                  args += ['--method', method]
+              if data is not None:
+                  args += ['--input', '-']
+              return json.loads(subprocess.check_output(args, input=json.dumps(data).encode() if data is not None else None))
+          pr = api('pulls/680')
+          assert pr['head']['sha'] == expected, 'PR head moved; inspect the new changes before proceeding'
+          assert pr['base']['ref'] == 'main' and pr['head']['ref'] == 'feature/apple-home-bridge-20260910'
+          required = {'Regression tests', 'Siri native', 'dependency-review', 'npm-audit', 'secret-scan', 'codeql'}
+          selected = {}
+          deadline = time.monotonic() + 1500
+          while time.monotonic() < deadline:
+              runs = api(f'actions/runs?head_sha={expected}&event=pull_request&per_page=100')['workflow_runs']
+              selected = {}
+              for run in sorted(runs, key=lambda r: (r['id'], r.get('run_attempt', 1)), reverse=True):
+                  if run['name'] in required:
+                      selected.setdefault(run['name'], run)
+              failed = {name: run['conclusion'] for name, run in selected.items() if run['status'] == 'completed' and run['conclusion'] != 'success'}
+              assert not failed, f'Exact-head checks need attention: {failed}'
+              if set(selected) == required and all(run['status'] == 'completed' and run['conclusion'] == 'success' for run in selected.values()):
+                  break
+              time.sleep(20)
+          else:
+              raise RuntimeError('Exact-head checks did not complete; no merge performed')
+          native_jobs = api(f"actions/runs/{selected['Siri native']['id']}/jobs?filter=latest&per_page=100")['jobs']
+          for configuration in ('Debug', 'Release'):
+              job = next(j for j in native_jobs if j['name'] == f'apple ({configuration})')
+              assert job['conclusion'] == 'success'
+              if configuration == 'Debug':
+                  step = next(s for s in job['steps'] if s['name'] == 'Tap Apple Home in real stackless Settings screen')
+                  assert step['conclusion'] == 'success', 'Actual settings interaction test must pass'
+          checks = api(f'commits/{expected}/check-runs?filter=latest&per_page=100')['check_runs']
+          security = [c for c in checks if c['name'] == 'CodeQL']
+          assert security and all(c['conclusion'] == 'success' and c['output']['annotations_count'] == 0 for c in security), 'Separate CodeQL result must pass without new annotations'
+          (root / 'pre-merge.json').write_text(json.dumps({'head': expected, 'runs': selected, 'native_jobs': native_jobs, 'codeql': security}, indent=2))
+          pr = api('pulls/680')
+          if pr['merged']:
+              merge_sha = pr['merge_commit_sha']
+          else:
+              main = api('branches/main')['commit']['sha']
+              assert main == baseline, 'Main advanced; reconcile and revalidate before merge'
+              result = api('pulls/680/merge', 'PUT', {'sha': expected, 'merge_method': 'squash', 'commit_title': 'feat: connect HomeBrain to Apple Home with automatic accessory and workflow discovery (#680)', 'commit_message': 'User-approved one-time Apple Home pairing. Exact-head native Debug/Release, actual Settings interaction, regression, dependency review, audit policy, secret scan and CodeQL checks passed before this normal expected-SHA merge. No force push or protection bypass. Production pairing, signed installation and physical voice acceptance remain separate deployment steps.'})
+              assert result.get('merged'), result
+              merge_sha = result['sha']
+          pr = api('pulls/680')
+          assert pr['merged'] and pr['merge_commit_sha'] == merge_sha
+          merged_tree = api(f'git/commits/{merge_sha}')['tree']['sha']
+          tested_tree = api(f'git/commits/{expected}')['tree']['sha']
+          assert merged_tree == tested_tree, 'Merged tree differs from tested tree'
+          result = {'merged': True, 'pr': 680, 'merge_sha': merge_sha, 'tested_head': expected, 'tree': merged_tree, 'pre_merge_checks': {k: {'id': v['id'], 'conclusion': v['conclusion']} for k, v in selected.items()}, 'note': 'A merge performed by GITHUB_TOKEN may not trigger new push workflows. Exact merged tree is verified identical to the fully tested PR tree; do not describe absent post-merge workflows as passed.'}
+          (root / 'result.json').write_text(json.dumps(result, indent=2))
+          print(json.dumps(result, indent=2))
+          api('issues/680/comments', 'POST', {'body': 'Verified normal merge into main: `' + merge_sha + '`. All six exact-head workflows and the separate CodeQL security result passed. Debug simulator Settings tap/dismiss test passed. Merged tree `' + merged_tree + '` matches tested PR head `' + expected + '` exactly. Evidence is retained by this finalization run. Post-merge push workflows, if suppressed by GitHub token event rules, are not being represented as run. Production pairing, deployment and actual spoken Siri acceptance remain installation steps.'})
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: apple-home-finalization-evidence
+          path: ${{ runner.temp }}/apple-home-finalization
+          retention-days: 14
+          if-no-files-found: warn
