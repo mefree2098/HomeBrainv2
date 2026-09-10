@@ -1,0 +1,58 @@
+name: Final audit evidence
+
+on:
+  push:
+    branches: [audit/final-evidence-20260910]
+    paths: [.github/workflows/final-audit-evidence.yml]
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Retrieve exact final-head run and job records
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence"
+          gh api "repos/$GH_REPO/actions/runs/34490135783" > "$RUNNER_TEMP/evidence/run.json"
+          gh api "repos/$GH_REPO/actions/runs/34490135783/jobs?per_page=100" > "$RUNNER_TEMP/evidence/jobs.json"
+          gh api "repos/$GH_REPO/actions/jobs/102914422635" > "$RUNNER_TEMP/evidence/job.json"
+          gh api "repos/$GH_REPO/actions/runs/34490135783/logs" > "$RUNNER_TEMP/evidence/logs.zip"
+          gh api "repos/$GH_REPO/commits/b5b49dd1795ef7d207dfd5dfb6831becff97b12a/check-runs?per_page=100" > "$RUNNER_TEMP/evidence/checks.json"
+          python3 - <<'PY'
+          import json, os, pathlib, re, zipfile
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])/'evidence'
+          run = json.loads((root/'run.json').read_text())
+          job = json.loads((root/'job.json').read_text())
+          assert run['id'] == 34490135783
+          assert run['head_sha'] == 'b5b49dd1795ef7d207dfd5dfb6831becff97b12a'
+          assert job['id'] == 102914422635 and job['run_id'] == run['id']
+          summary = {'run_id': run['id'], 'head_sha': run['head_sha'], 'conclusion': run['conclusion'], 'job': {'id': job['id'], 'name': job['name'], 'conclusion': job['conclusion']}, 'failures': []}
+          with zipfile.ZipFile(root/'logs.zip') as archive:
+              summary['log_files'] = archive.namelist()
+              for entry in archive.infolist():
+                  if '/' in entry.filename or not entry.filename.endswith('.txt'):
+                      continue
+                  text = re.sub(r'\x1b\[[0-9;]*m', '', archive.read(entry).decode('utf8', errors='replace'))
+                  lines = text.splitlines()
+                  for index, line in enumerate(lines):
+                      if re.search(r'not ok|failureType:|ERR_ASSERTION|# fail [1-9]', line):
+                          summary['failures'].append({'file': entry.filename, 'context': lines[max(0,index-5):index+40]})
+          (root/'summary.json').write_text(json.dumps(summary, indent=2))
+          print(json.dumps(summary, indent=2))
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: exact-final-head-evidence
+          path: ${{ runner.temp }}/evidence
+          retention-days: 7
+          if-no-files-found: error
