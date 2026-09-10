@@ -44,8 +44,9 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          # A global -sdk would incorrectly force the embedded watchOS target onto iOS.
           xcodebuild -project HomeBrainApp/HomeBrainApp.xcodeproj -scheme HomeBrainApp \
-            -configuration '${{ matrix.configuration }}' -sdk iphonesimulator \
+            -configuration '${{ matrix.configuration }}' \
             -destination 'generic/platform=iOS Simulator' -derivedDataPath "$RUNNER_TEMP/SiriIOS" \
             CODE_SIGNING_ALLOWED=NO SWIFT_TREAT_WARNINGS_AS_ERRORS=YES build \
             2>&1 | tee "$RUNNER_TEMP/siri-evidence/ios-build.txt"
@@ -54,12 +55,14 @@ jobs:
         run: |
           set -o pipefail
           xcodebuild -project HomeBrainApp/HomeBrainApp.xcodeproj -scheme 'HomeBrainWatch Watch App' \
-            -configuration '${{ matrix.configuration }}' -sdk watchsimulator \
+            -configuration '${{ matrix.configuration }}' \
             -destination 'generic/platform=watchOS Simulator' -derivedDataPath "$RUNNER_TEMP/SiriWatch" \
             CODE_SIGNING_ALLOWED=NO SWIFT_TREAT_WARNINGS_AS_ERRORS=YES build \
             2>&1 | tee "$RUNNER_TEMP/siri-evidence/watch-build.txt"
       - name: Verify compiled Siri metadata in both app products
+        shell: bash
         run: |
+          set -o pipefail
           python3 scripts/check-siri-metadata.py "$RUNNER_TEMP/SiriIOS/Build/Products" "$RUNNER_TEMP/SiriWatch/Build/Products" | tee "$RUNNER_TEMP/siri-evidence/metadata.txt"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
