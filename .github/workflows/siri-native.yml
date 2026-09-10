@@ -37,9 +37,13 @@ jobs:
           set -o pipefail
           mkdir -p "$RUNNER_TEMP/siri-evidence"
           swiftc -warnings-as-errors -default-isolation MainActor -parse-as-library \
-            shared/apple/HomeBrainSiriModels.swift shared/apple/HomeBrainSiriClient.swift \
+            shared/apple/HomeBrainSiriModels.swift shared/apple/HomeBrainAppleHomeModels.swift shared/apple/HomeBrainSiriClient.swift \
             scripts/tests/siri-core-tests.swift -o "$RUNNER_TEMP/siri-core-tests"
           "$RUNNER_TEMP/siri-core-tests" | tee "$RUNNER_TEMP/siri-evidence/core-tests.txt"
+          swiftc -warnings-as-errors -default-isolation MainActor -parse-as-library \
+            shared/apple/HomeBrainSiriModels.swift shared/apple/HomeBrainAppleHomeModels.swift \
+            scripts/tests/apple-home-sync-tests.swift -o "$RUNNER_TEMP/apple-home-sync-tests"
+          "$RUNNER_TEMP/apple-home-sync-tests" | tee "$RUNNER_TEMP/siri-evidence/apple-home-sync-tests.txt"
       - name: Build iOS app and embedded Apple Watch app
         shell: bash
         run: |
@@ -64,6 +68,30 @@ jobs:
         run: |
           set -o pipefail
           python3 scripts/check-siri-metadata.py "$RUNNER_TEMP/SiriIOS/Build/Products" "$RUNNER_TEMP/SiriWatch/Build/Products" | tee "$RUNNER_TEMP/siri-evidence/metadata.txt"
+      - name: Verify Apple Home entitlement and usage description
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import pathlib, plistlib, os
+          ent = plistlib.loads(pathlib.Path('HomeBrainApp/HomeBrainApp/HomeBrainApp.entitlements').read_bytes())
+          assert ent.get('com.apple.developer.homekit') is True
+          assert 'com.apple.developer.homekit.allow-setup-payload' not in ent
+          products = pathlib.Path(os.environ['RUNNER_TEMP']) / 'SiriIOS/Build/Products'
+          info = next(products.glob('*/HomeBrainApp.app/Info.plist'))
+          assert plistlib.loads(info.read_bytes()).get('NSHomeKitUsageDescription')
+          print('PASS public HomeKit entitlement, privacy usage string, no restricted setup entitlement')
+          PYTHON
+      - name: Tap Apple Home in real stackless Settings screen
+        if: matrix.configuration == 'Debug'
+        shell: bash
+        run: |
+          set -o pipefail
+          SIMULATOR=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for k,v in sorted(d["devices"].items(),reverse=True) if "iOS" in k for x in v if "iPhone" in x["name"]))')
+          xcodebuild -project HomeBrainApp/HomeBrainApp.xcodeproj -scheme HomeBrainAppleHomeUITests \
+            -configuration Debug -destination "platform=iOS Simulator,id=$SIMULATOR" \
+            -derivedDataPath "$RUNNER_TEMP/SiriIOS" -resultBundlePath "$RUNNER_TEMP/siri-evidence/apple-home-ui.xcresult" \
+            -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO SWIFT_TREAT_WARNINGS_AS_ERRORS=YES test \
+            2>&1 | tee "$RUNNER_TEMP/siri-evidence/apple-home-ui.txt"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
