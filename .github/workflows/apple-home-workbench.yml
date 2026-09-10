@@ -1,0 +1,54 @@
+name: Apple Home workbench
+on:
+  push:
+    branches: [audit/apple-home-workbench-20260910]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: f1ff47b89b83657a65ef419be1b4820df6ef4f4e
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      - name: Export exact source and inspect bridge dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/evidence"
+          git archive --format=tar HEAD | gzip > "$RUNNER_TEMP/evidence/source.tar.gz"
+          npm view @homebridge/hap-nodejs@2.2.3 version engines dependencies dist --json > "$RUNNER_TEMP/evidence/hap-registry.json"
+          cd server
+          npm install --save-optional --save-exact @homebridge/hap-nodejs@2.2.3 --ignore-scripts --no-audit --no-fund 2>&1 | tee "$RUNNER_TEMP/evidence/install.txt"
+          npm audit --json > "$RUNNER_TEMP/evidence/audit.json" || test "$?" = 1
+          cp package.json package-lock.json "$RUNNER_TEMP/evidence/"
+          tar -czf "$RUNNER_TEMP/evidence/node_modules.tar.gz" node_modules
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: apple-home-source
+          path: ${{ runner.temp }}/evidence
+          retention-days: 7
+  sdk:
+    runs-on: macos-26
+    timeout-minutes: 5
+    steps:
+      - name: Export installed HomeKit interface for compile-accurate implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/sdk"
+          SDK=$(xcrun --sdk iphonesimulator --show-sdk-path)
+          cp "$SDK/System/Library/Frameworks/HomeKit.framework/Modules/HomeKit.swiftmodule/arm64-apple-ios-simulator.swiftinterface" "$RUNNER_TEMP/sdk/" 2>/dev/null || true
+          cp -R "$SDK/System/Library/Frameworks/HomeKit.framework/Headers" "$RUNNER_TEMP/sdk/"
+          xcodebuild -version > "$RUNNER_TEMP/sdk/version.txt"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: apple-home-sdk
+          path: ${{ runner.temp }}/sdk
+          retention-days: 7
