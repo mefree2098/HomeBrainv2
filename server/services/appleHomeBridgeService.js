@@ -15,10 +15,12 @@ const eventStreamService = require('./eventStreamService');
 module.exports = new AppleHomeBridge({
   storage: new BridgeStorage(process.env.HOMEBRAIN_HOMEKIT_DATA_DIR || path.join(__dirname, '..', 'data', 'apple-home')),
   load: async () => {
-    const [devices, workflows, scenes, groups] = await Promise.all([
-      deviceService.getAllDevices(), Workflow.find({}).lean(), Scene.find({}).lean(), DeviceGroup.find({}).lean()
+    const [devices, workflows, scenes, groups, safetyDevices] = await Promise.all([
+      deviceService.getAllDevices(), Workflow.find({}).lean(), Scene.find({}).lean(), DeviceGroup.find({}).lean(),
+      // Hidden devices still participate in group execution; include them in safety checks, not discovery.
+      Device.find({}).select('_id name type groups properties').lean()
     ]);
-    return { devices, workflows, scenes, groups };
+    return { devices, workflows, scenes, groups, safetyDevices };
   },
   getUser: (userId) => userId ? User.findById(userId).select('_id role isActive isReadOnly isReviewSandbox platforms').lean() : null,
   readDevice: (deviceId) => Device.findById(deviceId).lean(),

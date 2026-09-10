@@ -20,8 +20,12 @@ class BridgeStorage {
       const stat = await fs.lstat(filename);
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('Invalid Apple Home identity file.');
       const value = JSON.parse(await fs.readFile(filename, 'utf8'));
-      if (value.version !== 1 || typeof value.namespace !== 'string' || !value.namespace
+      if (value.version !== 1 || typeof value.namespace !== 'string' || !/^[0-9a-f-]{36}$/i.test(value.namespace)
           || !/^\d{3}-\d{2}-\d{3}$/.test(value.pin) || typeof value.ownerId !== 'string'
+          || !value.ownerId || typeof value.enabled !== 'boolean' || !/^[0-9a-f]{32}$/i.test(value.setupSeed)
+          || !value.assignments || typeof value.assignments !== 'object' || Array.isArray(value.assignments)
+          || !Object.values(value.assignments).every((shard) => Number.isInteger(shard) && shard >= 0 && shard < 32)
+          || (value.highestShard !== undefined && (!Number.isInteger(value.highestShard) || value.highestShard < 0 || value.highestShard > 31))
           || !Number.isInteger(value.port) || value.port < 1024 || value.port > 65000) {
         throw new Error('Apple Home identity is corrupt; restore the pairing-state backup.');
       }

@@ -22,13 +22,16 @@ const SAFE_ACTIONS = new Set(['turn_on', 'turn_off', 'turnon', 'turnoff', 'on', 
  * Security devices and opaque HTTP/ISY/robot actions must not bypass HomeKit's security UI.
  * This is a conservative discovery policy, not a substitute for the existing command engine.
  */
-function createSafetyPolicy({ devices, workflows, scenes, groups = [] }) {
+function createSafetyPolicy({ devices: visibleDevices, safetyDevices, workflows, scenes, groups = [] }) {
+  const devices = safetyDevices || visibleDevices;
   const deviceMap = new Map(devices.map((d) => [id(d), d]));
   const workflowMap = new Map(workflows.map((w) => [id(w), w]));
   const sceneMap = new Map(scenes.map((s) => [id(s), s]));
   const groupMap = new Map(groups.map((g) => [id(g), g]));
   const safeDevice = (d) => DEVICE_TYPES.has(d?.type) && d?.properties?.isSecurityDevice !== true
-    && d?.properties?.supportsAlarm !== true && d?.properties?.supportsSirenSound !== true;
+    && d?.properties?.supportsAlarm !== true && d?.properties?.supportsSirenSound !== true
+    && !d?.properties?.securityZoneId && !d?.properties?.securityZone
+    && !normal(d?.properties?.source).includes('security');
   function groupSafe(groupId, seen = new Set()) {
     const group = groupMap.get(String(groupId));
     if (!group || seen.has(id(group)) || seen.size > 16) return false;
@@ -42,7 +45,7 @@ function createSafetyPolicy({ devices, workflows, scenes, groups = [] }) {
   function targetSafe(target) {
     if (typeof target === 'string') return safeDevice(deviceMap.get(target));
     if (!target || typeof target !== 'object' || Array.isArray(target)) return false;
-    if (target.kind === 'device_group') {
+    if (target.kind === 'device_group' || target.kind === 'group') {
       const found = groups.find((g) => id(g) === String(target.groupId || '') || normal(g.name) === normal(target.group));
       return found ? groupSafe(id(found)) : false;
     }
@@ -55,8 +58,8 @@ function createSafetyPolicy({ devices, workflows, scenes, groups = [] }) {
     return actions.length > 0 && actions.every((a) => SAFE_ACTIONS.has(a.action)
       && (a.groupId ? groupSafe(String(a.groupId)) : targetSafe(String(a.deviceId))));
   }
-  function actionsSafe(actions, seen) {
-    if (!Array.isArray(actions) || actions.length > 1000) return false;
+  function actionsSafe(actions, seen, depth = 0) {
+    if (!Array.isArray(actions) || actions.length > 1000 || depth > 16) return false;
     return actions.every((a) => {
       const p = a?.parameters || {};
       switch (a?.type) {
@@ -64,12 +67,14 @@ function createSafetyPolicy({ devices, workflows, scenes, groups = [] }) {
           && targetSafe(a.target || p.deviceId);
         case 'scene_activate': return sceneSafe(a.target || p.sceneId, seen);
         case 'workflow_control': {
-          const operation = text(p.operation || p.action).toLowerCase();
-          return ['run', 'run_then', 'then', 'run_else', 'else'].includes(operation)
-            && workflowSafe(String(p.workflowId || p.targetWorkflowId || a.target || ''), seen);
+          const operation = text(p.operation || p.action || 'run_if').toLowerCase();
+          // Match executeWorkflowControl's explicit-ID precedence; do not guess by name/ISY marker.
+          return ['run', 'run_if', 'if', 'run_then', 'then', 'run_else', 'else'].includes(operation)
+            && workflowSafe(String(p.workflowId || p.targetWorkflowId || p.target || ''), seen);
         }
-        case 'repeat': return actionsSafe(p.actions || [], seen);
-        case 'condition': return ['thenActions', 'elseActions', 'actions'].every((key) => !p[key] || actionsSafe(p[key], seen));
+        case 'repeat': return actionsSafe(p.actions || [], seen, depth + 1);
+        case 'condition': return ['onFalseActions', 'onTrueActions', 'thenActions', 'elseActions', 'actions']
+          .every((key) => !p[key] || actionsSafe(p[key], seen, depth + 1));
         case 'notification': case 'delay': case 'alexa_speak': return true;
         default: return false;
       }

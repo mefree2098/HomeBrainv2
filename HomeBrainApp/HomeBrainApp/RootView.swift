@@ -29,7 +29,7 @@ struct RootView: View {
         .onAppear {
             applyPreviewOrientationIfNeeded()
         }
-        .task(id: "\(scenePhase == .active)-\(session.sessionContextID)") {
+        .task(id: "\(scenePhase == .active)-\(session.isAuthenticated)-\(session.sessionContextID)") {
             guard scenePhase == .active, session.isAuthenticated, !uiPreview.isEnabled else { return }
             await AppleHomeStore.shared.foregroundLoop()
         }

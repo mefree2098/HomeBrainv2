@@ -1,3 +1,9 @@
+# Siri integration: Apple Home is the primary path
+
+For automatic accessory/room/workflow-scene discovery with one-time pairing and **no personal Shortcuts**, use [Apple Home integration](apple-home-integration.md). In the HomeBrain app open **Settings → Siri & Apple Home**. This replaces the previous disabled navigation row.
+
+The sections below document the retained **optional App Intents fallback**, not the required setup for ordinary Apple Home/Siri commands. The old “Siri & Shortcuts” screen name and manual named-Shortcut setup are not the primary integration.
+
 # Siri and Shortcuts: iPhone and Apple Watch
 
 ## What is supported

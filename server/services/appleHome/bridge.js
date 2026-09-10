@@ -96,8 +96,9 @@ class AppleHomeBridge {
     const input = await this.load();
     const next = catalog(input, this.config.namespace, this.supportsBrightness);
     const assignments = assignBridges(next.targets, this.config.assignments);
-    if (JSON.stringify(assignments) !== JSON.stringify(this.config.assignments)) {
-      this.config.assignments = assignments;
+    const highestShard = Math.max(this.config.highestShard || 0, 0, ...Object.values(assignments));
+    if (JSON.stringify(assignments) !== JSON.stringify(this.config.assignments) || this.config.highestShard !== highestShard) {
+      this.config.assignments = assignments; this.config.highestShard = highestShard;
       await this.storage.write(this.config);
     }
     if (!this.hap) this.hap = this.loadHap();
@@ -107,7 +108,7 @@ class AppleHomeBridge {
       this.storageConfigured = true;
     }
     const binding = this.interfaces();
-    const shards = new Set([0, ...Object.values(assignments)]);
+    const shards = new Set(Array.from({ length: highestShard + 1 }, (_, index) => index));
     // Keep previously paired empty shards alive: do not invalidate pairings as accessories change.
     for (const shard of this.bridges.keys()) shards.add(shard);
     const previousTargets = new Map(this.targets.map((target) => [target.key, target]));
@@ -159,8 +160,10 @@ class AppleHomeBridge {
   makeAccessory(target) {
     const { Accessory, uuid, Service, Characteristic } = this.hap;
     const accessory = new Accessory(target.name, uuid.generate(`homebrain:${this.config.namespace}:${target.key}`));
+    // HMAccessory.model is public; iOS no longer exposes the old SerialNumber characteristic.
+    // Publish the same opaque, hub-scoped identifier in Model for safe native discovery.
     accessory.getService(Service.AccessoryInformation).setCharacteristic(Characteristic.Manufacturer, 'HomeBrain')
-      .setCharacteristic(Characteristic.Model, target.kind)
+      .setCharacteristic(Characteristic.Model, target.serial)
       .setCharacteristic(Characteristic.SerialNumber, target.serial);
     const Type = target.kind === 'light' || target.brightness ? Service.Lightbulb : Service.Switch;
     const service = accessory.addService(Type, target.name, target.key);

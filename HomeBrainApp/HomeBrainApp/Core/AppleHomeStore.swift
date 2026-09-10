@@ -69,6 +69,9 @@ final class AppleHomeStore: NSObject, ObservableObject, HMHomeManagerDelegate {
     private func persist() {
         guard let currentBinding, let data = try? JSONEncoder().encode(state) else { return }
         UserDefaults.standard.set(data, forKey: currentBinding)
+        if let homeID = state.homeID {
+            UserDefaults.standard.set(data, forKey: currentBinding + ".home." + homeID.uuidString)
+        }
     }
     private func bind(_ status: HBAppleHomeStatus, snapshot: HBSiriSession) throws {
         guard let account = SessionStore.shared.currentUser?.id,
@@ -128,7 +131,11 @@ final class AppleHomeStore: NSObject, ObservableObject, HMHomeManagerDelegate {
         guard !busy else { return }
         if id != selectedHomeID {
             // Do not delete resources in the previous home or reuse ownership records in the next one.
-            state = HBAppleHomeSyncState(homeID: id)
+            if let id, let binding = currentBinding,
+               let data = UserDefaults.standard.data(forKey: binding + ".home." + id.uuidString),
+               let saved = try? JSONDecoder().decode(HBAppleHomeSyncState.self, from: data), saved.homeID == id {
+                state = saved
+            } else { state = HBAppleHomeSyncState(homeID: id) }
             selectedHomeID = id; persist()
         }
     }
@@ -196,14 +203,15 @@ final class AppleHomeStore: NSObject, ObservableObject, HMHomeManagerDelegate {
         var desiredKeys = Set<String>()
         var characteristicBySerial: [String: HMCharacteristic] = [:]
         var accessoryBySerial: [String: HMAccessory] = [:]
+        var duplicateSerials = Set<String>()
         // Read identity only for this manufacturer's accessories. Never adopt by display name alone.
         for accessory in home.accessories where accessory.manufacturer == "HomeBrain" {
             try check()
-            guard let serialCharacteristic = accessory.services.flatMap(\.characteristics).first(where: { $0.characteristicType == HMCharacteristicTypeSerialNumber }) else { continue }
-            if serialCharacteristic.value == nil { try? await serialCharacteristic.readValue() }
-            try check()
-            guard let serial = serialCharacteristic.value as? String, status.targets.contains(where: { $0.serial == serial }) else { continue }
-            if accessoryBySerial[serial] != nil {
+            // HomeKit deprecated/removed app access to its SerialNumber characteristic in iOS 11.
+            // Our publisher also exposes the opaque hub-scoped identity as the public accessory model.
+            guard let serial = accessory.model, status.targets.contains(where: { $0.serial == serial }) else { continue }
+            if accessoryBySerial[serial] != nil || duplicateSerials.contains(serial) {
+                accessoryBySerial.removeValue(forKey: serial); duplicateSerials.insert(serial)
                 warnings.append("Duplicate accessory identity in Apple Home. Remove the duplicate before synchronizing.")
                 continue
             }
@@ -257,7 +265,6 @@ final class AppleHomeStore: NSObject, ObservableObject, HMHomeManagerDelegate {
             for name in target.sceneNames {
                 try check()
                 let key = HBAppleHomeSyncPolicy.sceneKey(serial: target.serial, name: name)
-                let existing = home.actionSets.map(snapshot)
                 if let owned = state.scenes[key], owned.pending,
                    let scene = home.actionSets.first(where: { $0.uniqueIdentifier == owned.uuid }), scene.name == owned.name {
                     do {
@@ -275,7 +282,7 @@ final class AppleHomeStore: NSObject, ObservableObject, HMHomeManagerDelegate {
                     warnings.append("Preserved customized scene ‘\(scene.name)’ instead of overwriting it.")
                     continue
                 }
-                switch HBAppleHomeSyncPolicy.decision(name: name, characteristic: characteristic.uniqueIdentifier, existing: existing) {
+                switch HBAppleHomeSyncPolicy.decision(name: name, characteristic: characteristic.uniqueIdentifier, existing: home.actionSets.map(snapshot)) {
                 case .reuse:
                     // An exact pre-existing scene works already. Do not claim ownership of somebody else's scene.
                     break

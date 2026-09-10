@@ -122,6 +122,7 @@ test('real HAP accessory engine, lifecycle and authorization integration', async
     assert.equal(publisher.bridgedAccessories.length, 5);
     const lamp = bridge.accessories.get('light:lamp');
     assert.ok(lamp.getService(hap.Service.Lightbulb));
+    assert.equal(lamp.getService(hap.Service.AccessoryInformation).getCharacteristic(hap.Characteristic.Model).value, bridge.targets.find((target) => target.id === 'lamp').serial);
     assert.ok(lamp.homebrainService.getCharacteristic(hap.Characteristic.Brightness));
     assert.equal(JSON.stringify(bridge.status(admin)).includes(bridge.config.pin), false);
     assert.equal((await bridge.pairing(admin)).pin, bridge.config.pin);
@@ -175,4 +176,42 @@ test('real HAP accessory engine, lifecycle and authorization integration', async
     await bridge.configure(admin, { enabled: true, confirm: 'SHARE WITH APPLE HOME' }); assert.equal(bridge.config.namespace, namespace);
     await bridge.shutdown(); assert.equal(events.listenerCount('devices:update'), 0);
   });
+});
+
+test('actual workflow onFalseActions are security checked, including deeply nested repeats', () => {
+  const f = fixtures();
+  const unsafe = { type: 'device_control', target: 'lock', parameters: { action: 'unlock' } };
+  f.workflows[0].actions = [{ type: 'condition', parameters: { onFalseActions: [unsafe] } }];
+  assert.equal(createSafetyPolicy(f).workflowSafe('night'), false);
+  let action = { type: 'delay', parameters: { seconds: 1 } };
+  for (let n = 0; n < 20; n++) action = { type: 'repeat', parameters: { actions: [action] } };
+  f.workflows[0].actions = [action];
+  assert.equal(createSafetyPolicy(f).workflowSafe('night'), false);
+});
+test('nested workflow target precedence exactly follows the real execution engine', () => {
+  const f = fixtures();
+  const child = { _id: 'safeChild', enabled: true, name: 'Child', actions: f.workflows[0].actions };
+  f.workflows.push(child);
+  f.workflows[0].actions = [{ type: 'workflow_control', target: 'safeChild', parameters: { target: 'unsafe', operation: 'run' } }];
+  assert.equal(createSafetyPolicy(f).workflowSafe('night'), false);
+  f.workflows[0].actions = [{ type: 'workflow_control', parameters: { target: 'safeChild' } }];
+  assert.equal(createSafetyPolicy(f).workflowSafe('night'), true);
+});
+test('invalid pairing identity fields fail closed instead of changing established identities', async (t) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'hb-homekit-corrupt-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const store = new BridgeStorage(dir), good = store.create('admin');
+  for (const update of [{ setupSeed: null }, { enabled: 'true' }, { assignments: [] }, { highestShard: 999 }]) {
+    await fs.writeFile(path.join(dir, 'bridge.json'), JSON.stringify({ ...good, ...update }));
+    await assert.rejects(store.read());
+  }
+});
+
+test('hidden security members cannot escape group safety checks through UI discovery filtering', () => {
+  const f = fixtures();
+  const hidden = { _id: 'hiddenAlarm', name: 'Alarm', type: 'switch', groups: ['Theater Lights'], properties: { securityZoneId: 'entry' } };
+  f.safetyDevices = [...f.devices, hidden];
+  f.workflows[0].actions = [{ type: 'device_control', target: { kind: 'group', group: 'Theater Lights' }, parameters: { action: 'turn_on' } }];
+  assert.equal(createSafetyPolicy(f).workflowSafe('night'), false);
+  assert.equal(catalog(f, 'hub').targets.some((x) => x.id === 'hiddenAlarm'), false);
 });
