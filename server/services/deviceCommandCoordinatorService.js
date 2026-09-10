@@ -47,7 +47,7 @@ function normalizeSource(value) {
     return 'unknown';
   }
 
-  if (normalized === 'voice_command' || normalized === 'custom_skill') {
+  if (normalized === 'voice_command' || normalized === 'custom_skill' || normalized === 'siri') {
     return 'voice';
   }
   if (normalized === 'alexa_custom_skill' || normalized === 'alexa_bridge') {
@@ -284,7 +284,7 @@ class DeviceCommandCoordinatorService {
     if (triggerType === 'security_alarm_status' || triggerSource.includes('security')) {
       return 'security';
     }
-    if (triggerSource.includes('voice')) {
+    if (triggerSource.includes('voice') || triggerSource === 'siri') {
       return 'voice';
     }
     if (triggerSource.includes('alexa')) {
