@@ -53,7 +53,7 @@ test('run-with-modern-node enforces the dependency-compatible Node floor', () =>
   assert.equal(isProjectSupported(parseVersion('23.0.0')), true);
 });
 
-test('run-with-modern-node forwards termination signals to the spawned command', async (t) => {
+test('run-with-modern-node forwards termination signals to the spawned command', { timeout: 45_000 }, async (t) => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'homebrain-modern-node-test-'));
   t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
 
@@ -80,7 +80,11 @@ test('run-with-modern-node forwards termination signals to the spawned command',
   });
   t.after(() => child.kill('SIGKILL'));
 
-  await waitForFile(readyPath);
+  // Discovery probes several installed Node binaries before launching the
+  // fixture. A busy CI runner can exceed five seconds before it is ready.
+  // Allow bounded startup time; keep the five-second shutdown deadline and
+  // every signal/exit assertion unchanged. This is not a performance test.
+  await waitForFile(readyPath, 30_000);
   child.kill('SIGTERM');
   const result = await waitForExit(child);
 
