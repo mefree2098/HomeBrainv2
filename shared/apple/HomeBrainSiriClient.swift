@@ -92,6 +92,28 @@ final class HBSiriClient {
         return try HBSiriPolicy.dialog(result)
     }
 
+    func appleHomeStatus() async throws -> (HBAppleHomeStatus, HBSiriSession) {
+        let snapshot = try await credentials.snapshot()
+        let (status, latest): (HBAppleHomeStatus, HBSiriSession) = try await send("/api/apple-home/status", snapshot: snapshot)
+        guard status.success else { throw HBSiriError.invalidResponse }
+        return (status, latest)
+    }
+
+    func configureAppleHome(enabled: Bool) async throws -> HBAppleHomeStatus {
+        let snapshot = try await credentials.snapshot()
+        let body = try JSONSerialization.data(withJSONObject: ["enabled": enabled, "confirm": "SHARE WITH APPLE HOME"])
+        let (status, _): (HBAppleHomeStatus, HBSiriSession) = try await send("/api/apple-home/configuration", method: "PUT", body: body, snapshot: snapshot)
+        guard status.success else { throw HBSiriError.invalidResponse }
+        return status
+    }
+
+    func appleHomePairing() async throws -> HBAppleHomePairing {
+        let snapshot = try await credentials.snapshot()
+        let (pairing, _): (HBAppleHomePairing, HBSiriSession) = try await send("/api/apple-home/pairing", method: "POST", body: Data("{}".utf8), snapshot: snapshot)
+        guard pairing.success else { throw HBSiriError.invalidResponse }
+        return pairing
+    }
+
     private func send<Response: Decodable>(_ path: String, method: String = "GET", body: Data? = nil,
                                            snapshot: HBSiriSession, canRefresh: Bool = true) async throws -> (Response, HBSiriSession) {
         try credentials.validate(snapshot)
@@ -113,6 +135,9 @@ final class HBSiriClient {
         }
         guard (200..<300).contains(response.statusCode) else {
             if response.statusCode == 401 { throw HBSiriError.signIn }
+            if response.statusCode == 404 && path == "/api/apple-home/status" {
+                throw HBSiriError.message("Deploy the HomeBrain backend update with Apple Home bridge support, then retry.")
+            }
             if response.statusCode == 404 && path == "/api/siri/catalog" {
                 throw HBSiriError.message("Update the HomeBrain backend to the version with Siri support.")
             }

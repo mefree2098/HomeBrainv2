@@ -29,6 +29,16 @@ struct RootView: View {
         .onAppear {
             applyPreviewOrientationIfNeeded()
         }
+        .task(id: "\(scenePhase == .active)-\(session.isAuthenticated)-\(session.sessionContextID)") {
+            guard scenePhase == .active, session.isAuthenticated, !uiPreview.isEnabled else { return }
+            await AppleHomeStore.shared.foregroundLoop()
+        }
+        .onChange(of: session.sessionContextID) { _, _ in
+            AppleHomeStore.shared.resetVisibleContext()
+        }
+        .onChange(of: session.isAuthenticated) { _, value in
+            if !value { AppleHomeStore.shared.resetVisibleContext() }
+        }
         .onChange(of: session.backendRecoveryGeneration) { _, generation in
             guard generation > 0 else {
                 return

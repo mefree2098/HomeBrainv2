@@ -18,6 +18,7 @@
 			remoteGlobalIDString = A1B2C3D42FA5000000000007;
 			remoteInfo = "HomeBrainWatch Watch App";
 		};
+        AB1E2600000000000000000A = {isa = PBXContainerItemProxy; containerPortal = 14B6716A2F50F83300C98D01; proxyType = 1; remoteGlobalIDString = 14B671712F50F83300C98D01; remoteInfo = HomeBrainApp; };
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -37,6 +38,7 @@
 /* Begin PBXFileReference section */
 		14B671722F50F83300C98D01 /* HomeBrainApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = HomeBrainApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1B2C3D42FA5000000000004 /* HomeBrainWatch Watch App.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "HomeBrainWatch Watch App.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		AB1E26000000000000000001 /* HomeBrainAppUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = HomeBrainAppUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -55,6 +57,7 @@
             path = "../shared/apple";
             sourceTree = "<group>";
         };
+		AB1E26000000000000000002 /* HomeBrainAppUITests */ = {isa = PBXFileSystemSynchronizedRootGroup; path = HomeBrainAppUITests; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -72,6 +75,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AB1E26000000000000000005 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -79,6 +83,7 @@
 			isa = PBXGroup;
 			children = (
 				14B671742F50F83300C98D01 /* HomeBrainApp */,
+                AB1E26000000000000000002 /* HomeBrainAppUITests */,
                 B27A5F001000000000000001 /* Shared Apple Siri */,
 				A1B2C3D42FA5000000000005 /* ../HomeBrainWatch/HomeBrainWatch Watch App */,
 				14B671732F50F83300C98D01 /* Products */,
@@ -89,6 +94,7 @@
 			isa = PBXGroup;
 			children = (
 				14B671722F50F83300C98D01 /* HomeBrainApp.app */,
+                AB1E26000000000000000001 /* HomeBrainAppUITests.xctest */,
 				A1B2C3D42FA5000000000004 /* HomeBrainWatch Watch App.app */,
 			);
 			name = Products;
@@ -145,6 +151,18 @@
 			productReference = A1B2C3D42FA5000000000004 /* HomeBrainWatch Watch App.app */;
 			productType = "com.apple.product-type.application";
 		};
+        AB1E26000000000000000003 /* HomeBrainAppUITests */ = {
+            isa = PBXNativeTarget;
+            buildConfigurationList = AB1E26000000000000000009;
+            buildPhases = (AB1E26000000000000000004, AB1E26000000000000000005, AB1E26000000000000000006,);
+            buildRules = ();
+            dependencies = (AB1E2600000000000000000B,);
+            fileSystemSynchronizedGroups = (AB1E26000000000000000002,);
+            name = HomeBrainAppUITests;
+            productName = HomeBrainAppUITests;
+            productReference = AB1E26000000000000000001;
+            productType = "com.apple.product-type.bundle.ui-testing";
+        };
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -177,6 +195,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
+                AB1E26000000000000000003 /* HomeBrainAppUITests */,
 				14B671712F50F83300C98D01 /* HomeBrainApp */,
 				A1B2C3D42FA5000000000007 /* HomeBrainWatch Watch App */,
 			);
@@ -198,6 +217,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AB1E26000000000000000006 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -215,6 +235,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		AB1E26000000000000000004 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -223,6 +244,7 @@
 			target = A1B2C3D42FA5000000000007 /* HomeBrainWatch Watch App */;
 			targetProxy = A1B2C3D42FA5000000000002 /* PBXContainerItemProxy */;
 		};
+        AB1E2600000000000000000B = {isa = PBXTargetDependency; target = 14B671712F50F83300C98D01; targetProxy = AB1E2600000000000000000A; };
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
@@ -510,6 +532,40 @@
 			};
 			name = Release;
 		};
+        AB1E26000000000000000007 /* Debug */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_STYLE = Automatic;
+                GENERATE_INFOPLIST_FILE = YES;
+                IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+                PRODUCT_BUNDLE_IDENTIFIER = NTechR.HomeBrainApp.UITests;
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SDKROOT = iphoneos;
+                SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+                SWIFT_VERSION = 5.0;
+                SWIFT_EMIT_LOC_STRINGS = NO;
+                TARGETED_DEVICE_FAMILY = "1,2";
+                TEST_TARGET_NAME = HomeBrainApp;
+            };
+            name = Debug;
+        };
+        AB1E26000000000000000008 /* Release */ = {
+            isa = XCBuildConfiguration;
+            buildSettings = {
+                CODE_SIGN_STYLE = Automatic;
+                GENERATE_INFOPLIST_FILE = YES;
+                IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+                PRODUCT_BUNDLE_IDENTIFIER = NTechR.HomeBrainApp.UITests;
+                PRODUCT_NAME = "$(TARGET_NAME)";
+                SDKROOT = iphoneos;
+                SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+                SWIFT_VERSION = 5.0;
+                SWIFT_EMIT_LOC_STRINGS = NO;
+                TARGETED_DEVICE_FAMILY = "1,2";
+                TEST_TARGET_NAME = HomeBrainApp;
+            };
+            name = Release;
+        };
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -540,6 +596,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+        AB1E26000000000000000009 = {isa = XCConfigurationList; buildConfigurations = (AB1E26000000000000000007, AB1E26000000000000000008,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 /* End XCConfigurationList section */
 	};
 	rootObject = 14B6716A2F50F83300C98D01 /* Project object */;

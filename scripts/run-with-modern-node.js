@@ -25,10 +25,10 @@ function compareVersion(a, b) {
 
 function isProjectSupported(version) {
   // Matches strictest project dependencies:
-  // - Matter: ^20.19.0 || >=22.13.0
-  if (version.major === 20) return version.minor >= 19;
+  // - Matter needs >=22.13.0; maintained HAP supports Node 22, 24 and 26.
+  if (!version) return false;
   if (version.major === 22) return version.minor >= 13;
-  return version.major >= 23;
+  return version.major === 24 || version.major === 26;
 }
 
 function isExecutable(filePath) {
@@ -195,7 +195,7 @@ function main() {
   const { selected, inspected, bestAny, preferredMajor } = selectNodeBinary();
   if (!selected) {
     const latest = bestAny ? `${bestAny.version.raw} at ${bestAny.bin}` : 'none';
-    console.error('HomeBrain requires Node ^20.19.0 or >=22.13.0.');
+    console.error('HomeBrain requires Node 22.13+ (22.x), 24.x or 26.x. Node 22 LTS is preferred.');
     if (Number.isFinite(preferredMajor)) {
       console.error(`Preferred major version: ${preferredMajor}.`);
     }

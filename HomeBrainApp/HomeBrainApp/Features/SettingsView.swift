@@ -308,6 +308,7 @@ struct SettingsView: View {
     @State private var presentedWebSettingsArea: SettingsWebArea?
     @State private var selectedSettingsArea: SettingsWebArea = .general
     @State private var showingDeleteAccount = false
+    @State private var showingAppleHome = false
     @State private var deleteAccountPassword = ""
     @State private var deleteAccountConfirmation = ""
     @State private var deleteAccountError: String?
@@ -538,13 +539,18 @@ struct SettingsView: View {
 
                         if session.currentUser != nil {
                             settingsAccountSection
+                        }
+                        if session.currentUser != nil || previewMode {
                             Section("Siri") {
-                                NavigationLink {
-                                    HomeBrainSiriSetupView()
+                                Button {
+                                    showingAppleHome = true
                                 } label: {
-                                    Label("Siri & Shortcuts", systemImage: "waveform")
+                                    Label("Siri & Apple Home", systemImage: "house.fill")
                                 }
+                                .accessibilityIdentifier("settings-apple-home")
                             }
+                        }
+                        if session.currentUser != nil {
                             settingsHelpAndLegalSection
                         }
 
@@ -575,6 +581,18 @@ struct SettingsView: View {
                 return
             }
             await loadSettings()
+        }
+        .sheet(isPresented: $showingAppleHome) {
+            NavigationStack {
+                HomeBrainSiriSetupView()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { showingAppleHome = false }
+                                .accessibilityIdentifier("apple-home-done")
+                        }
+                    }
+            }
+            .environmentObject(session)
         }
         .sheet(isPresented: $showingDeleteAccount) {
             deleteAccountSheet

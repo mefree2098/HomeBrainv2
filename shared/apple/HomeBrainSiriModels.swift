@@ -90,7 +90,9 @@ nonisolated enum HBSiriPolicy {
         return targets.filter { ([ $0.name ] + $0.aliases).contains { normalized($0).contains(query) } }
     }
     static func endpoint(baseURL: URL, path: String) throws -> URL {
-        guard path.hasPrefix("/api/siri/"), !path.contains(".."), !path.contains("?"), !path.contains("#"),
+        let appleHomeEndpoints: Set<String> = ["/api/apple-home/status", "/api/apple-home/configuration", "/api/apple-home/pairing", "/api/apple-home/sync"]
+        guard (path.hasPrefix("/api/siri/") || appleHomeEndpoints.contains(path)),
+              !path.contains(".."), !path.contains("?"), !path.contains("#"), !path.contains("%"), !path.contains("\\"),
               var parts = URLComponents(url: baseURL, resolvingAgainstBaseURL: false),
               ["http", "https"].contains(parts.scheme?.lowercased() ?? ""), parts.host != nil,
               parts.user == nil, parts.password == nil else { throw HBSiriError.signIn }

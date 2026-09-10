@@ -47,10 +47,13 @@ function waitForExit(child, timeoutMs = 5000) {
 
 test('run-with-modern-node enforces the dependency-compatible Node floor', () => {
   assert.equal(isProjectSupported(parseVersion('20.18.9')), false);
-  assert.equal(isProjectSupported(parseVersion('20.19.0')), true);
+  assert.equal(isProjectSupported(parseVersion('20.19.0')), false);
   assert.equal(isProjectSupported(parseVersion('22.12.0')), false);
   assert.equal(isProjectSupported(parseVersion('22.13.0')), true);
-  assert.equal(isProjectSupported(parseVersion('23.0.0')), true);
+  assert.equal(isProjectSupported(parseVersion('23.0.0')), false);
+  assert.equal(isProjectSupported(parseVersion('24.0.0')), true);
+  assert.equal(isProjectSupported(parseVersion('26.0.0')), true);
+  assert.equal(isProjectSupported(null), false);
 });
 
 test('run-with-modern-node forwards termination signals to the spawned command', { timeout: 45_000 }, async (t) => {

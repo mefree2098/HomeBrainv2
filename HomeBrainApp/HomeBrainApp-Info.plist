@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>NSHomeKitUsageDescription</key>
+    <string>Connect HomeBrain devices to your Apple Home and automatically create rooms and workflow scenes for Siri. HomeBrain does not run device commands while synchronizing your home.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

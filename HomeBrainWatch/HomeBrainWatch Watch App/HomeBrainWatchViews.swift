@@ -175,7 +175,7 @@ struct OverviewPage: View {
                 NavigationLink {
                     HomeBrainSiriSetupView()
                 } label: {
-                    Label("Siri & Shortcuts", systemImage: "waveform")
+                    Label("Siri & Apple Home", systemImage: "house.fill")
                 }
                 .buttonStyle(.bordered)
 
