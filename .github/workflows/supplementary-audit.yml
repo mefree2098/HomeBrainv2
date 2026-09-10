@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 env:
-  AUDIT_COMMIT: 01c52a14d951f3b2fe0542cba4b08975a9f7e2a7
+  AUDIT_COMMIT: af6660a2d2c79be64ddfdc7869d8160a0ec79609
 
 jobs:
   ios-build:
@@ -24,7 +24,7 @@ jobs:
         run: |
           xcodebuild -version
           git rev-parse HEAD
-          xcodebuild -project HomeBrainApp/HomeBrainApp.xcodeproj -scheme HomeBrainApp -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$RUNNER_TEMP/ios-build.log"
+          xcodebuild -project HomeBrainApp/HomeBrainApp.xcodeproj -scheme HomeBrainApp -configuration Debug -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$RUNNER_TEMP/ios-build.log"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
