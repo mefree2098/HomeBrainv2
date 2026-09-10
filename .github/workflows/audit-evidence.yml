@@ -1,0 +1,54 @@
+name: Audit evidence
+
+on:
+  push:
+    branches: [audit/validation-20260910]
+    paths: [.github/workflows/audit-evidence.yml]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read completed regression and dependency scan logs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence"
+          for run in 34489197987 34489198054; do
+            gh api "repos/$GH_REPO/actions/runs/$run" > "$RUNNER_TEMP/evidence/$run.json"
+            gh api "repos/$GH_REPO/actions/runs/$run/logs" > "$RUNNER_TEMP/evidence/$run.zip"
+          done
+          python3 - <<'PY'
+          import json, os, pathlib, re, zipfile
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])/'evidence'
+          summary = {}
+          for archive in root.glob('*.zip'):
+              run = json.loads(archive.with_suffix('.json').read_text())
+              assert run['conclusion'] == 'success', 'Expected a successful completed run'
+              assert run['head_sha'] == 'e70d5a2f242c70878915df4f0893cbccaacf2e35'
+              files = {}
+              with zipfile.ZipFile(archive) as source:
+                  for entry in source.infolist():
+                      if '/' in entry.filename or not entry.filename.endswith('.txt'):
+                          continue
+                      text = re.sub(r'\x1b\[[0-9;]*m', '', source.read(entry).decode('utf8', errors='replace'))
+                      selected = [line for line in text.splitlines() if re.search(r'# (tests|pass|fail|skipped) \d|\d+ passed|Ran \d+ tests|npm warn|warning:|DeprecationWarning|PRE-EXISTING EXCEPTION|no unaccepted|Dynamic console format|built in', line, re.I)]
+                      files[entry.filename] = selected
+              summary[archive.stem] = {'head_sha': run['head_sha'], 'conclusion': run['conclusion'], 'logs': files}
+          (root/'summary.json').write_text(json.dumps(summary, indent=2))
+          print(json.dumps(summary, indent=2))
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: final-audit-evidence
+          path: ${{ runner.temp }}/evidence
+          retention-days: 7
+          if-no-files-found: error
