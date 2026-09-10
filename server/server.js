@@ -396,6 +396,9 @@ app.on("error", (error) => {
   console.error(error.stack);
 });
 
+// Optional, default-off LAN bridge. Never make server availability depend on HomeKit.
+void dbReady.then(() => require('./services/appleHomeBridgeService').initialize()).catch(() => {});
+
 // Device Updates Stream (SSE)
 app.get('/api/devices/stream', requireUser(), (req, res) => {
   if (req.user?.isReviewSandbox === true) {
@@ -480,6 +483,7 @@ app.use('/api/device-command-coordinator', deviceCommandCoordinatorRoutes);
 app.use('/api/telemetry', telemetryRoutes);
 app.use('/api/watch', watchRoutes);
 app.use('/api/siri', require('./routes/siriRoutes'));
+app.use('/api/apple-home', require('./routes/appleHomeRoutes'));
 // Scene Routes
 app.use('/api/scenes', sceneRoutes);
 // Automation Routes
@@ -852,6 +856,7 @@ async function gracefulShutdown(signal) {
   await runShutdownStep('platform managed services monitor', () => platformManagedService.stop());
   await runShutdownStep('MQTT platform bridge', () => mqttPlatformService.shutdown());
   await runShutdownStep('Matter service', () => matterService.shutdown());
+  await runShutdownStep('Apple Home bridge', () => require('./services/appleHomeBridgeService').shutdown());
   await runShutdownStep('device library update service', () => deviceLibraryUpdateService.stop());
 
   console.log('Preserving running automation executions for resume after restart');

@@ -67,3 +67,6 @@ temp_ctranslate2/
 temp_openwakeword/
 .pio/
 **/.pio/
+
+# Apple Home pairing identity and controller keys (private runtime state)
+server/data/apple-home/
