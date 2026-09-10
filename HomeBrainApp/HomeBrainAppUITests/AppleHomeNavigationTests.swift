@@ -1,4 +1,7 @@
 import XCTest
+// Xcode runs App Intents metadata extraction for this native test target too.
+// Link the public framework rather than suppressing the extraction diagnostic.
+import AppIntents
 
 /// Exercise the actual Settings screen in the same stackless shell that exposed the disabled-link bug.
 /// Preview mode is synthetic and signed out: this test cannot pair accessories or control a home.
