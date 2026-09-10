@@ -1,0 +1,31 @@
+name: Audit CodeQL diagnostics
+
+on:
+  push:
+    branches: [audit/validation-20260910]
+    paths: [.github/workflows/audit-codeql-report.yml]
+
+permissions:
+  contents: read
+  checks: read
+
+jobs:
+  diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read the candidate security annotations
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh api "repos/$GH_REPO/check-runs/102905531935/annotations" > "$RUNNER_TEMP/codeql-annotations.json"
+          cat "$RUNNER_TEMP/codeql-annotations.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: codeql-annotations
+          path: ${{ runner.temp }}/codeql-annotations.json
+          retention-days: 7
+          if-no-files-found: error
