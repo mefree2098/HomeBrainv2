@@ -98,7 +98,11 @@ test('real HAP accessory engine, lifecycle and authorization integration', async
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'hb-hap-')); t.after(() => fs.rm(dir, { recursive: true, force: true }));
   let owner = admin, result = { state: 'running' }, catalogFailure = false;
   class TestBridge extends hap.Bridge {
-    async publish(info, insecure) { this.info = info; this.insecure = insecure; this._accessoryInfo = { paired: () => false }; }
+    async publish(info, insecure) {
+      this.info = info; this.insecure = insecure; this._accessoryInfo = { paired: () => false };
+      this._server = { httpServer: { tcpServer: new EventEmitter() } };
+      queueMicrotask(() => this.emit('advertised'));
+    }
     async unpublish() { this.unpublished = true; }
     setupURI() { return 'X-HM://TEST'; }
   }

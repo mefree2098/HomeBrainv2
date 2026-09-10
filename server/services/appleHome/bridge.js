@@ -4,6 +4,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { BlockList, isIP } = require('node:net');
 const { catalog, assignBridges, digest, id } = require('./catalog');
+const { publishBridge } = require('./publisher');
 const { hasPlatformAccess } = require('../../utils/userPlatforms');
 const problem = (status, message) => Object.assign(new Error(message), { status });
 
@@ -122,7 +123,6 @@ class AppleHomeBridge {
         bridge.getService(Service.AccessoryInformation).setCharacteristic(Characteristic.Manufacturer, 'HomeBrain')
           .setCharacteristic(Characteristic.Model, 'HomeBrain Apple Home Bridge')
           .setCharacteristic(Characteristic.SerialNumber, `HB${digest(this.config.namespace + ':bridge:' + shard).slice(0, 30)}`);
-        bridge.on('error', () => { this.lastError = 'Apple Home network publisher failed. Check LAN connectivity and hub logs.'; });
         this.bridges.set(shard, bridge);
       }
     }
@@ -150,9 +150,14 @@ class AppleHomeBridge {
       const bytes = Buffer.from(digest(`${this.config.namespace}:bridge:${shard}`).slice(0, 12), 'hex');
       bytes[0] = (bytes[0] | 2) & 0xfe;
       const username = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join(':').toUpperCase();
-      await bridge.publish({ username, pincode: this.config.pin, category: this.hap.Categories.BRIDGE,
+      await publishBridge(bridge, { username, pincode: this.config.pin, category: this.hap.Categories.BRIDGE,
         port: this.config.port + shard, setupID: digest(this.config.setupSeed + ':' + shard).slice(0, 4).toUpperCase(),
-        bind: binding, advertiser: this.hap.MDNSAdvertiser.CIAO, addIdentifyingMaterial: false }, false);
+        bind: binding, advertiser: this.hap.MDNSAdvertiser.CIAO, addIdentifyingMaterial: false }, () => {
+        this.lastError = 'Apple Home network publisher failed. Check LAN connectivity and hub logs.';
+        void this.serial(async () => {
+          if (this.bridges.get(shard) === bridge) await this.stopPublishing();
+        }).catch(() => {});
+      });
       bridge.homebrainPublished = true;
     }
     this.lastError = ''; this.lastSync = new Date().toISOString();
@@ -290,7 +295,11 @@ class AppleHomeBridge {
   }
   async stopPublishing() {
     const bridges = [...this.bridges.values()]; this.bridges.clear(); this.accessories.clear();
-    for (const bridge of bridges) await bridge.unpublish().catch(() => {});
+    for (const bridge of bridges) {
+      bridge.homebrainPublished = false;
+      bridge.homebrainStopPublicationMonitor?.();
+      await bridge.unpublish().catch(() => {});
+    }
     await this.storage.release();
   }
   async shutdown() {
