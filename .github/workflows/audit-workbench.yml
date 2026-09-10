@@ -1,0 +1,68 @@
+name: Audit workbench
+
+on:
+  push:
+    branches:
+      - audit/security-quality-20260910
+
+permissions:
+  contents: read
+
+jobs:
+  source-snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Archive tracked source for offline review
+        run: git archive --format=tar HEAD -o "$RUNNER_TEMP/homebrain-source.tar"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: audit-source
+          path: ${{ runner.temp }}/homebrain-source.tar
+          retention-days: 3
+          if-no-files-found: error
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [server, broker, lambda, remote-device, client]
+    defaults:
+      run:
+        working-directory: ${{ matrix.project }}
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.project }}/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund 2>&1 | tee "$RUNNER_TEMP/install.log"
+      - name: Regression tests
+        run: npm test 2>&1 | tee "$RUNNER_TEMP/tests.log"
+      - name: Client lint
+        if: matrix.project == 'client'
+        run: npm run lint -- --max-warnings=0 2>&1 | tee "$RUNNER_TEMP/lint.log"
+      - name: Client production build
+        if: matrix.project == 'client'
+        run: npm run build 2>&1 | tee "$RUNNER_TEMP/build.log"
+      - name: Audit every severity
+        if: always()
+        run: npm audit --json > "$RUNNER_TEMP/npm-audit.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: baseline-${{ matrix.project }}
+          path: |
+            ${{ runner.temp }}/*.log
+            ${{ runner.temp }}/npm-audit.json
+          retention-days: 7
+          if-no-files-found: error
