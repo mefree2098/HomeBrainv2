@@ -125,7 +125,7 @@ export function HomeBrainWebMCP() {
           await modelContext.registerTool(tool, { signal: controller.signal })
         } catch (error) {
           if (!controller.signal.aborted) {
-            console.warn(`HomeBrain WebMCP registration failed for ${tool.name}:`, error)
+            console.warn("HomeBrain WebMCP registration failed for %s:", tool.name, error)
           }
         }
       }

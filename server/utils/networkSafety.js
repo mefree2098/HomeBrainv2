@@ -5,6 +5,18 @@ const https = require('https');
 
 const DEFAULT_MAX_URL_LENGTH = 2048;
 
+const CLOUD_METADATA_HOSTNAMES = new Set([
+  'instance-data.ec2.internal',
+  'metadata.azure.internal',
+  'metadata.google.internal'
+]);
+const CLOUD_METADATA_ADDRESSES = new net.BlockList();
+for (const address of ['100.100.100.200', '169.254.169.254', '169.254.170.2']) {
+  CLOUD_METADATA_ADDRESSES.addAddress(address, 'ipv4');
+}
+CLOUD_METADATA_ADDRESSES.addAddress('fd00:ec2::254', 'ipv6');
+
+
 function trimTrailingSlashes(value) {
   const text = String(value || '');
   let end = text.length;
@@ -28,7 +40,13 @@ function normalizeHostname(hostname) {
   if (normalized.startsWith('[') && normalized.endsWith(']')) {
     normalized = normalized.slice(1, -1);
   }
-  return normalized;
+  // An unanchored trailing-dot regex can backtrack quadratically on a long
+  // dotted value followed by a non-dot. Scan once and avoid split allocations.
+  let end = normalized.length;
+  while (end > 0 && normalized[end - 1] === '.') end -= 1;
+  const zoneIndex = normalized.indexOf('%');
+  if (zoneIndex !== -1 && zoneIndex < end) end = zoneIndex;
+  return normalized.slice(0, end);
 }
 
 function isPrivateIpv4(hostname) {
@@ -61,11 +79,9 @@ function isLoopbackHostname(hostname) {
 
 function isCloudMetadataHostname(hostname) {
   const normalized = normalizeHostname(hostname);
-  return normalized === '169.254.169.254'
-    || normalized === '169.254.170.2'
-    || normalized === '100.100.100.200'
-    || normalized === 'metadata.google.internal'
-    || normalized === 'metadata.google.internal.';
+  const family = net.isIP(normalized);
+  return CLOUD_METADATA_HOSTNAMES.has(normalized)
+    || (family !== 0 && CLOUD_METADATA_ADDRESSES.check(normalized, family === 6 ? 'ipv6' : 'ipv4'));
 }
 
 function isAllowedLocalHostname(hostname, { allowPublic = false } = {}) {

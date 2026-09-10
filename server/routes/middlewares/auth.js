@@ -10,12 +10,12 @@ const { ACCESS_TOKEN_COOKIE_NAME, getCookieValue } = require('../../utils/authCo
 const READ_ONLY_SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 function extractToken(req) {
-  const authorizationHeader = req.headers.authorization;
-  const [scheme, headerToken] = authorizationHeader?.split(/\s+/, 2) || [];
+  const authorizationHeader = req?.headers?.authorization;
+  const [scheme, headerToken] = typeof authorizationHeader === 'string'
+    ? authorizationHeader.trim().split(/\s+/, 2)
+    : [];
   const bearerToken = scheme?.toLowerCase() === 'bearer' ? headerToken : null;
-  const cookieToken = getCookieValue(req, ACCESS_TOKEN_COOKIE_NAME);
-
-  return bearerToken || cookieToken || null;
+  return bearerToken || getCookieValue(req, ACCESS_TOKEN_COOKIE_NAME) || null;
 }
 
 function formatPlatformName(platform) {
@@ -145,7 +145,10 @@ async function verifyAccessToken(token, allowedRoles = ALL_ROLES, req = null, op
     } else if (error.name === 'TokenExpiredError') {
       console.error('Access token has expired');
     }
-    error.status = error.status || 403;
+    const invalidCredentials = error.name === 'JsonWebTokenError'
+      || error.name === 'TokenExpiredError'
+      || error.oidcError === 'invalid_token';
+    error.status = error.status || (invalidCredentials ? 401 : 403);
     throw error;
   }
 }

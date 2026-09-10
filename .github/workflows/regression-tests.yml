@@ -1,0 +1,85 @@
+name: Regression tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: regression-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  javascript:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [server, broker, lambda, remote-device, client]
+    defaults:
+      run:
+        working-directory: ${{ matrix.project }}
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.project }}/package-lock.json
+      - name: Install exact locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Run regression tests
+        run: npm test
+      - name: Lint without warnings
+        if: matrix.project == 'client'
+        run: npm run lint -- --max-warnings=0
+      - name: Check console formatting across tracked source
+        if: matrix.project == 'client'
+        run: node ../scripts/harden-console-format-strings.js
+      - name: Build production client
+        if: matrix.project == 'client'
+        run: npm run build
+  repository-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+      - run: node --test scripts/tests/*.test.js
+      - run: bash scripts/check-secrets.sh
+      - run: python3 scripts/test-validate-ios-app-store-archive.py
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TERM: xterm
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install Python unit-test dependencies from project constraints
+        run: |
+          python3 - <<'PYTHON'
+          import subprocess, sys, tomllib
+          with open('reachy-homebrain-app/pyproject.toml', 'rb') as source:
+              project = tomllib.load(source)['project']
+          # Unit tests use fake robot/media objects, not physical robot drivers.
+          dependencies = [item for item in project['dependencies'] if not item.startswith('reachy-mini ')]
+          dependencies += project['optional-dependencies']['test']
+          subprocess.run([sys.executable, '-m', 'pip', 'install', *dependencies], check=True)
+          PYTHON
+      - name: Reachy Python regression tests
+        run: python3 -m pytest -q reachy-homebrain-app
+      - name: Remote audio feature tests
+        run: python3 remote-device/feature_infer_test.py

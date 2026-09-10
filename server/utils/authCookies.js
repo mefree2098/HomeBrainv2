@@ -48,12 +48,23 @@ function getCookieValue(req, name) {
       continue;
     }
 
-    const key = decodeURIComponent(trimmed.slice(0, separatorIndex));
+    let key;
+    try {
+      key = decodeURIComponent(trimmed.slice(0, separatorIndex));
+    } catch (_error) {
+      // Ignore malformed unrelated names without losing a valid auth cookie.
+      continue;
+    }
     if (key !== name) {
       continue;
     }
 
-    return decodeURIComponent(trimmed.slice(separatorIndex + 1));
+    try {
+      return decodeURIComponent(trimmed.slice(separatorIndex + 1));
+    } catch (_error) {
+      // Fail closed for a malformed matching cookie, including duplicates.
+      return null;
+    }
   }
 
   return null;
