@@ -1,0 +1,44 @@
+name: Siri SDK evidence
+on:
+  push:
+    branches: [feature/siri-intelligence-20260910]
+    paths: [.github/workflows/siri-sdk-evidence.yml]
+permissions:
+  contents: read
+jobs:
+  sdk:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - name: Inspect installed Apple SDKs
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/siri-sdk"
+          ls -d /Applications/Xcode*.app | tee "$RUNNER_TEMP/siri-sdk/xcodes.txt"
+          python3 - <<'PY'
+          import glob, os, pathlib, shutil, subprocess
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])/'siri-sdk'
+          for app in glob.glob('/Applications/Xcode*.app'):
+              dest = root/pathlib.Path(app).stem
+              dest.mkdir(exist_ok=True)
+              env = dict(os.environ, DEVELOPER_DIR=app+'/Contents/Developer')
+              for command, name in [(['xcodebuild','-version'],'version.txt'), (['xcrun','swift','--version'],'swift.txt'), (['xcrun','simctl','list','devices','available','--json'],'devices.json')]:
+                  result = subprocess.run(command, env=env, capture_output=True, text=True)
+                  (dest/name).write_text(result.stdout+result.stderr)
+              try:
+                  sdk = subprocess.check_output(['xcrun','--sdk','iphonesimulator','--show-sdk-path'], env=env, text=True).strip()
+              except subprocess.CalledProcessError:
+                  continue
+              for framework in ['AppIntents','AppIntentsTesting','CoreSpotlight','SwiftUI']:
+                  modules = pathlib.Path(sdk)/'System/Library/Frameworks'/f'{framework}.framework/Modules'/f'{framework}.swiftmodule'
+                  matches = list(modules.glob('arm64-apple-ios-simulator.swiftinterface'))
+                  if matches:
+                      shutil.copyfile(matches[0], dest/f'{framework}.swiftinterface')
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: siri-sdk-evidence
+          path: ${{ runner.temp }}/siri-sdk
+          retention-days: 7
+          if-no-files-found: error
