@@ -40,7 +40,13 @@ function normalizeHostname(hostname) {
   if (normalized.startsWith('[') && normalized.endsWith(']')) {
     normalized = normalized.slice(1, -1);
   }
-  return normalized.replace(/\.+$/, '').split('%')[0];
+  // An unanchored trailing-dot regex can backtrack quadratically on a long
+  // dotted value followed by a non-dot. Scan once and avoid split allocations.
+  let end = normalized.length;
+  while (end > 0 && normalized[end - 1] === '.') end -= 1;
+  const zoneIndex = normalized.indexOf('%');
+  if (zoneIndex !== -1 && zoneIndex < end) end = zoneIndex;
+  return normalized.slice(0, end);
 }
 
 function isPrivateIpv4(hostname) {
