@@ -38,6 +38,18 @@ test('security and opaque workflows never become ordinary Home switches', () => 
   f.workflows[0].actions = [{ type: 'repeat', parameters: { actions: [{ type: 'device_control', target: 'lock', parameters: { action: 'unlock' } }] } }];
   assert.equal(createSafetyPolicy(f).workflowSafe('night'), false);
 });
+test('catalog distinguishes assigned rooms from placeholders without guessing from device names', () => {
+  const f = fixtures();
+  f.devices[0].room = ' Unassigned ';
+  delete f.devices[1].room;
+  f.devices[2].room = 'HomeBrain';
+  const targets = catalog(f, 'hub').targets;
+  assert.equal(targets.find((target) => target.id === 'lamp').roomAssigned, false);
+  assert.equal(targets.find((target) => target.id === 'bedroom').roomAssigned, false);
+  assert.equal(targets.find((target) => target.id === 'night').roomAssigned, false);
+  assert.equal(targets.find((target) => target.id === 'tv').roomAssigned, true);
+  assert.equal(targets.find((target) => target.id === 'tv').room, 'HomeBrain');
+});
 test('nested scene security, group security and recursive workflow cycles fail closed', () => {
   const f = fixtures();
   f.workflows[0].actions = [{ type: 'scene_activate', target: 'movie' }];
@@ -126,6 +138,9 @@ test('real HAP accessory engine, lifecycle and authorization integration', async
     assert.equal(publisher.bridgedAccessories.length, 5);
     const lamp = bridge.accessories.get('light:lamp');
     assert.ok(lamp.getService(hap.Service.Lightbulb));
+    assert.equal(lamp.getService(hap.Service.AccessoryInformation).getCharacteristic(hap.Characteristic.Name).value, 'Theater Cans');
+    assert.equal(lamp.homebrainService.getCharacteristic(hap.Characteristic.Name).value, 'Theater Cans');
+    assert.equal(lamp.homebrainService.isPrimaryService, true);
     assert.equal(lamp.getService(hap.Service.AccessoryInformation).getCharacteristic(hap.Characteristic.Model).value, bridge.targets.find((target) => target.id === 'lamp').serial);
     assert.ok(lamp.homebrainService.getCharacteristic(hap.Characteristic.Brightness));
     assert.equal(JSON.stringify(bridge.status(admin)).includes(bridge.config.pin), false);
@@ -171,6 +186,8 @@ test('real HAP accessory engine, lifecycle and authorization integration', async
     f.devices = f.devices.filter((d) => d._id !== 'bedroom');
     await bridge.refresh();
     assert.equal(bridge.accessories.get('light:lamp'), original); assert.equal(original.displayName, 'Theater Lights');
+    assert.equal(original.getService(hap.Service.AccessoryInformation).getCharacteristic(hap.Characteristic.Name).value, 'Theater Lights');
+    assert.equal(original.homebrainService.getCharacteristic(hap.Characteristic.Name).value, 'Theater Lights');
     assert.equal(bridge.accessories.has('light:bedroom'), false);
   });
   await t.test('revoked owner authorization refuses HAP commands and unpublishes', async () => {
