@@ -172,6 +172,7 @@ class AppleHomeBridge {
       .setCharacteristic(Characteristic.SerialNumber, target.serial);
     const Type = target.kind === 'light' || target.brightness ? Service.Lightbulb : Service.Switch;
     const service = accessory.addService(Type, target.name, target.key);
+    service.setPrimaryService(true);
     service.getCharacteristic(Characteristic.On)
       .onGet(() => this.read(target.key, 'on'))
       .onSet((value) => this.write(target.key, 'on', value));

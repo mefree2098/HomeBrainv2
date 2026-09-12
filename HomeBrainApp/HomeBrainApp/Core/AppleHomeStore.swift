@@ -16,6 +16,7 @@ final class AppleHomeStore: NSObject, ObservableObject, HMHomeManagerDelegate {
     @Published private(set) var homeAccessGranted = false
     @Published private(set) var selectedHomeID: UUID?
     @Published private(set) var pairing: HBAppleHomePairing?
+    @Published private(set) var matchedAccessoryCount: Int?
     private var manager: HMHomeManager?
     private var homeDataReady = false
     private var currentBinding: String?
@@ -27,6 +28,18 @@ final class AppleHomeStore: NSObject, ObservableObject, HMHomeManagerDelegate {
         return HBAppleHomeSyncPolicy.binding(server: url, account: account, namespace: "consent")
     }
     var hasConnected: Bool { consentKey.map { UserDefaults.standard.bool(forKey: $0) } ?? false }
+    struct RestoreRequest {
+        fileprivate let binding: String
+        fileprivate let sessionContext: UUID
+        fileprivate let homeID: UUID
+        let homeName: String
+    }
+    var restoreRequest: RestoreRequest? {
+        guard hasConnected, status?.running == true, let currentBinding, let selectedHomeID,
+              let home = homes.first(where: { $0.uniqueIdentifier == selectedHomeID }) else { return nil }
+        return .init(binding: currentBinding, sessionContext: SessionStore.shared.sessionContextID,
+                     homeID: selectedHomeID, homeName: home.name)
+    }
 
     nonisolated func homeManagerDidUpdateHomes(_ manager: HMHomeManager) {
         Task { @MainActor [weak self] in self?.updateHomeData() }
@@ -78,23 +91,39 @@ final class AppleHomeStore: NSObject, ObservableObject, HMHomeManagerDelegate {
               SessionStore.shared.sessionContextID == snapshot.context else { throw HBSiriError.changedHome }
         let key = HBAppleHomeSyncPolicy.binding(server: snapshot.baseURL, account: account, namespace: status.namespace)
         if currentBinding != key {
-            pairing = nil; issues = []; currentBinding = key
+            pairing = nil; issues = []; matchedAccessoryCount = nil; currentBinding = key
             state = UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode(HBAppleHomeSyncState.self, from: $0) } ?? HBAppleHomeSyncState()
             selectedHomeID = state.homeID
         }
         self.status = status
     }
-    func refresh() async {
+    func refresh() async { await refresh(restoring: nil) }
+    private func refresh(restoring request: RestoreRequest?) async {
         guard !busy else { return }
         busy = true; defer { busy = false }
         do {
             let (status, snapshot) = try await HomeBrainSiriRuntime.client.appleHomeStatus()
             try bind(status, snapshot: snapshot)
+            if let request {
+                guard currentBinding == request.binding, snapshot.context == request.sessionContext,
+                      selectedHomeID == request.homeID else { throw HBSiriError.changedHome }
+            }
+            issues = []; matchedAccessoryCount = nil
             message = !status.error.isEmpty ? status.error : status.running
-                ? "\(status.targets.count) accessories and workflow triggers are published by HomeBrain."
+                ? "\(status.targets.count) accessories and workflow triggers are published by the hub. Pair the bridge with Apple Home to add them to your home."
                 : "The Apple Home bridge is not enabled. Connect below to begin."
-            if hasConnected, status.running { try await sync(status: status, snapshot: snapshot) }
+            if hasConnected, status.running {
+                try await sync(status: status, snapshot: snapshot, restoringNamesAndRooms: request != nil)
+            }
         } catch { message = error.localizedDescription }
+    }
+    func restoreNamesAndRooms(_ request: RestoreRequest?) async {
+        guard let request, currentBinding == request.binding, selectedHomeID == request.homeID,
+              SessionStore.shared.sessionContextID == request.sessionContext else {
+            message = "The selected Apple Home changed. Review the selected home before restoring names and rooms."
+            return
+        }
+        await refresh(restoring: request)
     }
     func connect() async {
         guard !busy else { return }
@@ -136,7 +165,8 @@ final class AppleHomeStore: NSObject, ObservableObject, HMHomeManagerDelegate {
                let saved = try? JSONDecoder().decode(HBAppleHomeSyncState.self, from: data), saved.homeID == id {
                 state = saved
             } else { state = HBAppleHomeSyncState(homeID: id) }
-            selectedHomeID = id; persist()
+            selectedHomeID = id; matchedAccessoryCount = nil; issues = []; persist()
+            message = "Home selected. Use Set Up Bridge Pairing to add HomeBrain to this home, then refresh to synchronize rooms and workflow scenes."
         }
     }
     func pairBridge(_ bridge: HBAppleHomePairing.Bridge) async {
@@ -144,31 +174,59 @@ final class AppleHomeStore: NSObject, ObservableObject, HMHomeManagerDelegate {
         busy = true; defer { busy = false }
         do {
             try await homeManagerReady()
-            guard let homeID = selectedHomeID, homes.contains(where: { $0.uniqueIdentifier == homeID }) else {
+            guard let homeID = selectedHomeID, let home = homes.first(where: { $0.uniqueIdentifier == homeID }) else {
                 throw HBSiriError.message("Choose the Apple Home to connect first. Create a home in Apple's Home app if none is listed.")
             }
             let (status, snapshot) = try await HomeBrainSiriRuntime.client.appleHomeStatus()
             try bind(status, snapshot: snapshot)
             guard let binding = currentBinding else { throw HBSiriError.changedHome }
             try requireCurrent(snapshot, binding: binding, homeID: homeID)
-            let request = HMAccessorySetupRequest()
-            request.homeUniqueIdentifier = homeID
-            request.suggestedAccessoryName = bridge.name
-            // payload is deliberately nil: prefilled payloads require Apple's restricted entitlement.
-            // The system chooser supports the nearby bridge plus its displayed numeric pairing code.
-            let result = try await HMAccessorySetupManager().performAccessorySetup(using: request)
+            guard let currentBridge = status.bridges.first(where: { $0.index == bridge.index && $0.name == bridge.name }) else {
+                throw HBSiriError.message("The bridge changed. Refresh its pairing information before retrying.")
+            }
+            if !currentBridge.paired {
+                message = "Finding \(currentBridge.name) on your local network…"
+                let accessory = try await discoverBridge(named: currentBridge.name) {
+                    try self.requireCurrent(snapshot, binding: binding, homeID: homeID)
+                }
+                // addAccessory performs Apple's pairing/code authentication and leaves organization
+                // to this app. performAccessorySetup also launches room/name setup for EVERY
+                // bridged device, blocking our bulk synchronization until that wizard completes.
+                message = "Enter the bridge pairing code when Apple asks. HomeBrain will organize its devices after pairing."
+                try await home.addAccessory(accessory)
+                try requireCurrent(snapshot, binding: binding, homeID: homeID)
+            }
+            // The status captured before pairing may still say unpaired.
+            let (updatedStatus, updatedSession) = try await HomeBrainSiriRuntime.client.appleHomeStatus()
             try requireCurrent(snapshot, binding: binding, homeID: homeID)
-            guard result.homeUniqueIdentifier == homeID else { throw HBSiriError.message("Accessory was paired to another Apple Home. Select that home explicitly before synchronizing.") }
+            try bind(updatedStatus, snapshot: updatedSession)
+            pairing = nil
             updateHomeData()
-            try await sync(status: status, snapshot: snapshot)
+            try await sync(status: updatedStatus, snapshot: updatedSession)
         } catch { message = error.localizedDescription }
+    }
+    private func discoverBridge(named name: String, check: () throws -> Void) async throws -> HMAccessory {
+        let browser = HMAccessoryBrowser()
+        browser.startSearchingForNewAccessories()
+        defer { browser.stopSearchingForNewAccessories() }
+        for _ in 0..<100 {
+            try check()
+            let accessories = browser.discoveredAccessories
+            let id = try HBAppleHomeSyncPolicy.pairingCandidate(named: name, candidates: accessories.map {
+                .init(id: $0.uniqueIdentifier, name: $0.name, isBridge: $0.category.categoryType == HMAccessoryCategoryTypeBridge,
+                      manufacturer: $0.manufacturer)
+            })
+            if let id, let accessory = accessories.first(where: { $0.uniqueIdentifier == id }) { return accessory }
+            try await Task.sleep(for: .milliseconds(200))
+        }
+        throw HBSiriError.message("\(name) was not found nearby. Connect your iPhone to the hub's LAN, allow Home and Local Network access, then retry. If you already paired it in Apple's Home app, refresh the connection instead.")
     }
     func disable() async {
         guard !busy else { return }
         busy = true; defer { busy = false }
         do {
             status = try await HomeBrainSiriRuntime.client.configureAppleHome(enabled: false)
-            pairing = nil
+            pairing = nil; matchedAccessoryCount = nil; issues = []
             if let key = consentKey { UserDefaults.standard.set(false, forKey: key) }
             message = "Bridge disabled. Apple Home cannot send commands through it. Pairings are retained for reconnection."
         } catch { message = error.localizedDescription }
@@ -182,6 +240,7 @@ final class AppleHomeStore: NSObject, ObservableObject, HMHomeManagerDelegate {
     func resetVisibleContext() {
         // Retain per-account connection preferences, never a previous account's visible pairing PIN.
         pairing = nil; status = nil; currentBinding = nil; selectedHomeID = nil; issues = []
+        matchedAccessoryCount = nil
         state = HBAppleHomeSyncState()
     }
     private func snapshot(_ scene: HMActionSet) -> HBAppleHomeSyncPolicy.SceneSnapshot {
@@ -189,7 +248,7 @@ final class AppleHomeStore: NSObject, ObservableObject, HMHomeManagerDelegate {
         return .init(uuid: scene.uniqueIdentifier, name: scene.name, characteristic: action?.characteristic.uniqueIdentifier,
                      writesOn: action?.targetValue.boolValue == true, actionCount: scene.actions.count)
     }
-    private func sync(status: HBAppleHomeStatus, snapshot session: HBSiriSession) async throws {
+    private func sync(status: HBAppleHomeStatus, snapshot session: HBSiriSession, restoringNamesAndRooms: Bool = false) async throws {
         try await homeManagerReady()
         guard let binding = currentBinding else { throw HBSiriError.changedHome }
         try requireCurrent(session, binding: binding)
@@ -199,6 +258,10 @@ final class AppleHomeStore: NSObject, ObservableObject, HMHomeManagerDelegate {
         }
         let check = { try self.requireCurrent(session, binding: binding, homeID: homeID) }
         var warnings: [String] = []
+        let unassigned = status.targets.filter { !$0.hasAssignedRoom }.count
+        if unassigned > 0 {
+            warnings.append("\(unassigned) accessories have no room assigned in HomeBrain. Their existing Apple Home rooms are preserved. Set their rooms in HomeBrain to include them in automatic room synchronization.")
+        }
         var matched = 0
         var desiredKeys = Set<String>()
         var characteristicBySerial: [String: HMCharacteristic] = [:]
@@ -225,19 +288,40 @@ final class AppleHomeStore: NSObject, ObservableObject, HMHomeManagerDelegate {
                 try check()
                 let previous = state.accessories[target.serial]
                 var record = previous ?? .init(lastName: accessory.name, lastRoom: accessory.room?.name ?? "")
-                if HBAppleHomeSyncPolicy.shouldUpdate(current: accessory.name, previous: previous?.lastName, desired: target.name) {
-                    try await accessory.updateName(target.name); try check()
-                    record.lastName = target.name
-                } else if accessory.name == target.name { record.lastName = target.name }
-                if HBAppleHomeSyncPolicy.shouldUpdate(current: accessory.room?.name ?? "", previous: previous?.lastRoom, desired: target.room) {
-                    let matching = home.rooms.filter { HBAppleHomeSyncPolicy.normalize($0.name) == HBAppleHomeSyncPolicy.normalize(target.room) }
-                    guard matching.count <= 1 else { throw HBSiriError.message("Ambiguous room name ‘\(target.room)’ in Apple Home.") }
-                    let room: HMRoom
-                    if let existing = matching.first { room = existing }
-                    else { room = try await home.addRoom(named: target.room); try check() }
-                    try await home.assignAccessory(accessory, to: room); try check()
-                    record.lastRoom = room.name
-                } else if accessory.room?.name == target.room { record.lastRoom = target.room }
+                do {
+                    if HBAppleHomeSyncPolicy.shouldUpdate(current: accessory.name, previous: previous?.lastName, desired: target.name, restore: restoringNamesAndRooms) {
+                        try await accessory.updateName(target.name); try check()
+                        record.lastName = target.name
+                    } else if accessory.name == target.name { record.lastName = target.name }
+                } catch { try check(); warnings.append("\(target.name) accessory name: \(error.localizedDescription)") }
+                state.accessories[target.serial] = record; persist()
+                // HomeKit keeps service names separately from the accessory name. Home tiles and
+                // Siri can retain the wizard's generic name if only the accessory is renamed.
+                for service in accessory.services where [HMServiceTypeLightbulb, HMServiceTypeSwitch].contains(service.serviceType) {
+                    let serviceID = service.uniqueIdentifier.uuidString
+                    let lastName = previous?.serviceNames?[serviceID] ?? previous?.lastName
+                    do {
+                        if HBAppleHomeSyncPolicy.shouldUpdate(current: service.name, previous: lastName, desired: target.name, restore: restoringNamesAndRooms) {
+                            try await service.updateName(target.name); try check()
+                            record.serviceNames = (record.serviceNames ?? [:]).merging([serviceID: target.name]) { _, new in new }
+                        } else if service.name == target.name {
+                            record.serviceNames = (record.serviceNames ?? [:]).merging([serviceID: target.name]) { _, new in new }
+                        }
+                    } catch { try check(); warnings.append("\(target.name) service name: \(error.localizedDescription)") }
+                    state.accessories[target.serial] = record; persist()
+                }
+                do {
+                    if HBAppleHomeSyncPolicy.shouldUpdateRoom(current: accessory.room?.name ?? "", previous: previous?.lastRoom,
+                        desired: target.room, assigned: target.hasAssignedRoom, restore: restoringNamesAndRooms) {
+                        let matching = home.rooms.filter { HBAppleHomeSyncPolicy.normalize($0.name) == HBAppleHomeSyncPolicy.normalize(target.room) }
+                        guard matching.count <= 1 else { throw HBSiriError.message("Ambiguous room name ‘\(target.room)’ in Apple Home.") }
+                        let room: HMRoom
+                        if let existing = matching.first { room = existing }
+                        else { room = try await home.addRoom(named: target.room); try check() }
+                        try await home.assignAccessory(accessory, to: room); try check()
+                        record.lastRoom = room.name
+                    } else if target.hasAssignedRoom, accessory.room?.name == target.room { record.lastRoom = target.room }
+                } catch { try check(); warnings.append("\(target.name) room: \(error.localizedDescription)") }
                 state.accessories[target.serial] = record; persist()
                 if let on = accessory.services.flatMap(\.characteristics).first(where: { $0.characteristicType == HMCharacteristicTypePowerState }) {
                     characteristicBySerial[target.serial] = on
@@ -312,9 +396,8 @@ final class AppleHomeStore: NSObject, ObservableObject, HMHomeManagerDelegate {
         }
         try check()
         issues = warnings
-        let missing = status.targets.count - matched
-        message = "Synced \(matched) HomeBrain accessories in \(home.name)." + (missing > 0
-            ? " \(missing) are waiting for bridge pairing or Apple Home discovery." : " Devices, rooms, and workflow scenes are available to Apple Home and Siri.")
-        if !warnings.isEmpty { message += " Review \(warnings.count) synchronization issue(s) below." }
+        matchedAccessoryCount = matched
+        message = HBAppleHomeSyncPolicy.syncMessage(home: home.name, matched: matched, total: status.targets.count,
+            unpairedBridges: status.unpairedBridges.map(\.name), issueCount: warnings.count)
     }
 }

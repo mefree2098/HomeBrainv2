@@ -97,6 +97,7 @@ function catalog(input, namespace, supportsBrightness = (d) => d.type === 'light
     const name = homeName(record.name);
     if (!id(record) || !name) { skipped.push({ id: key, name: text(record.name), reason: 'Missing usable name or ID.' }); return; }
     targets.push({ key, kind, id: id(record), name, room: homeName(record.room) || 'HomeBrain',
+      roomAssigned: Boolean(homeName(record.room)) && normal(record.room) !== 'unassigned',
       serial: `HB${digest(namespace + ':' + key).slice(0, 30)}`, aliases: [], ...extra });
   }
   for (const device of devices) {

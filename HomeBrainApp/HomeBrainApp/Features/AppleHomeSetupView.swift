@@ -7,6 +7,8 @@ struct AppleHomeSetupView: View {
     @StateObject private var store = AppleHomeStore.shared
     @State private var confirmingConnection = false
     @State private var confirmingDisable = false
+    @State private var confirmingRestore = false
+    @State private var restoreRequest: AppleHomeStore.RestoreRequest?
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
@@ -24,7 +26,17 @@ struct AppleHomeSetupView: View {
                 if store.busy { ProgressView("Updating Apple Home…") }
                 if let status = store.status {
                     LabeledContent("Backend", value: status.running ? "Bridge running" : status.enabled ? "Needs attention" : "Not enabled")
-                    LabeledContent("Published targets", value: String(status.targets.count))
+                    LabeledContent("Published by hub", value: String(status.targets.count))
+                    if let matched = store.matchedAccessoryCount {
+                        LabeledContent("Found in selected Apple Home", value: String(matched))
+                    }
+                    ForEach(status.bridges) { bridge in
+                        LabeledContent(bridge.name, value: bridge.paired ? "Has a pairing" : "Not paired — setup required")
+                    }
+                    if status.running, !status.unpairedBridges.isEmpty {
+                        Text("Pair the bridge once to add its devices to Apple's Home app. Choosing a home and tapping Synchronize do not complete pairing.")
+                            .font(.footnote)
+                    }
                     if status.canManage {
                         Button(store.hasConnected && status.enabled ? "Review Apple Home Connection" : "Connect HomeBrain to Apple Home") {
                             confirmingConnection = true
@@ -32,7 +44,11 @@ struct AppleHomeSetupView: View {
                         .accessibilityIdentifier("apple-home-connect")
                         .disabled(store.busy)
                         if status.running {
-                            Button("Show Pairing Code") { Task { await store.loadPairing() } }.disabled(store.busy)
+                            Button(status.unpairedBridges.isEmpty ? "Review Bridge Pairing" : "Set Up Bridge Pairing") {
+                                Task { await store.loadPairing() }
+                            }
+                            .accessibilityIdentifier("apple-home-pairing")
+                            .disabled(store.busy)
                         }
                     } else {
                         Text("A controlling HomeBrain administrator must enable and pair this bridge. People added to that Apple Home then use its devices and scenes through Siri.")
@@ -40,6 +56,16 @@ struct AppleHomeSetupView: View {
                     }
                 }
                 Button("Refresh Connection & Synchronize") { Task { await store.refresh() } }.disabled(store.busy)
+                if let request = store.restoreRequest {
+                    Button("Restore HomeBrain Names & Rooms") {
+                        restoreRequest = request
+                        confirmingRestore = true
+                    }
+                    .accessibilityIdentifier("apple-home-restore")
+                    .disabled(store.busy)
+                    Text("Repair an existing import in one pass using HomeBrain's device names and assigned rooms. No re-pairing is needed.")
+                        .font(.footnote)
+                }
             }
             if store.homeAccessGranted {
                 Section("Choose your Apple Home") {
@@ -56,24 +82,31 @@ struct AppleHomeSetupView: View {
             }
             if let pairing = store.pairing {
                 Section("One-time bridge pairing") {
+                    if store.selectedHomeID == nil {
+                        Text("Choose your Apple Home above before pairing the bridge.").font(.footnote)
+                    }
                     Text(pairing.pin).font(.system(.title, design: .monospaced)).textSelection(.enabled).privacySensitive()
                     Button("Copy Pairing Code") {
                         UIPasteboard.general.setItems([["public.utf8-plain-text": pairing.pin]], options: [.localOnly: true, .expirationDate: Date().addingTimeInterval(120)])
                     }
-                    Text("In Apple's setup screen, choose More Options and the nearby HomeBrain bridge, then enter this code. You can also scan the QR code from another display. Apple may show an uncertified-accessory notice for this software bridge.")
+                    Text("Tap Pair below. HomeBrain finds this bridge on your LAN; enter this code when Apple asks. HomeBrain then applies device names, assigned rooms, and workflow scenes. Apple may show an uncertified-accessory notice for this software bridge.")
                         .font(.footnote)
                     ForEach(pairing.bridges) { bridge in
+                        let paired = store.status?.bridges.first(where: { $0.index == bridge.index })?.paired ?? bridge.paired
                         VStack(alignment: .leading, spacing: 12) {
                             Text(bridge.name).font(.headline)
-                            Text(bridge.paired ? "Already paired. Refresh to synchronize this Apple Home." : "Ready for pairing.").font(.footnote)
-                            if !bridge.paired {
-                                if let image = qrImage(bridge.setupURI) {
-                                    Image(uiImage: image).interpolation(.none).resizable().scaledToFit()
-                                        .frame(width: 160, height: 160).padding(12).background(.white)
-                                        .accessibilityLabel("HomeBrain bridge pairing QR code").privacySensitive()
-                                }
+                            Text(paired ? "This bridge has a pairing. Select the Apple Home used during pairing, then refresh to verify its accessories are present." : "Not paired. Tap Pair below to add this bridge and its devices to Apple Home.").font(.footnote)
+                            if !paired {
                                 Button("Pair \(bridge.name)") { Task { await store.pairBridge(bridge) } }
                                     .disabled(store.busy || store.selectedHomeID == nil)
+                                DisclosureGroup("Pair using Apple's Home app instead") {
+                                    Text("Apple's Home app runs its own setup for each accessory. Use Pair above to let HomeBrain organize the devices after pairing.").font(.footnote)
+                                    if let image = qrImage(bridge.setupURI) {
+                                        Image(uiImage: image).interpolation(.none).resizable().scaledToFit()
+                                            .frame(width: 160, height: 160).padding(12).background(.white)
+                                            .accessibilityLabel("HomeBrain bridge pairing QR code").privacySensitive()
+                                    }
+                                }
                             }
                         }.padding(.vertical, 6)
                     }
@@ -127,6 +160,12 @@ struct AppleHomeSetupView: View {
             Button("Cancel", role: .cancel) {}
             Button("Disable", role: .destructive) { Task { await store.disable() } }
         } message: { Text("This stops Apple Home control for every member of the connected home. Your pairing identity is retained, so reconnecting does not require pairing again.") }
+        .alert("Restore HomeBrain names and rooms?", isPresented: $confirmingRestore) {
+            Button("Cancel", role: .cancel) {}
+            Button("Restore") { Task { await store.restoreNamesAndRooms(restoreRequest) } }
+        } message: {
+            Text("This replaces names and assigned rooms for matched HomeBrain accessories in \(restoreRequest?.homeName ?? "the selected Apple Home"), including edits made in Apple Home. Accessories without a room in HomeBrain keep their current Apple Home room. Device state and customized scenes are unchanged.")
+        }
     }
     private func qrImage(_ text: String) -> UIImage? {
         let filter = CIFilter.qrCodeGenerator()
