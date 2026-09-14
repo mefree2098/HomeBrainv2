@@ -1,3 +1,4 @@
+import { TemperatureDial } from "./TemperatureDial"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   type LucideIcon,
@@ -3119,14 +3120,11 @@ export function DeviceDetailsDialog({
               }}
               disabled={sendingDirectControl}
             >
-              <Minus className="h-4 w-4" />
+              <Minus className="h-4 w-4" /><span className="sr-only">Decrease target temperature</span>
             </Button>
-            <div className="rounded-[1.2rem] border border-white/10 bg-white/[0.04] px-4 py-4 text-center">
-              <p className="section-kicker text-white/45">Setpoint</p>
-              <p className="mt-1 text-4xl font-semibold tracking-[-0.06em] text-white">{Math.round(currentThermostatSetpoint)}°</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {Number.isFinite(currentTemp) ? `${Math.round(currentTemp)}° current` : "Current temperature unavailable"}
-              </p>
+            <div>
+              <TemperatureDial temperature={Math.round(currentThermostatSetpoint)} mode={currentThermostatMode} />
+              <p className="hb-device-current">{Number.isFinite(currentTemp) ? `${Math.round(currentTemp)}°F current` : "Current temperature unavailable"}</p>
             </div>
             <Button
               type="button"
@@ -3139,13 +3137,14 @@ export function DeviceDetailsDialog({
               }}
               disabled={sendingDirectControl}
             >
-              <Plus className="h-4 w-4" />
+              <Plus className="h-4 w-4" /><span className="sr-only">Increase target temperature</span>
             </Button>
           </div>
-          <div className="grid gap-2 sm:grid-cols-4">
+          <div className="hb-device-mode-grid sm:!grid-cols-4">
             {DETAIL_THERMOSTAT_MODES.map((mode) => (
               <Button
                 key={mode}
+                aria-pressed={currentThermostatMode === mode}
                 type="button"
                 variant={currentThermostatMode === mode ? "default" : "outline"}
                 size="sm"
@@ -3179,9 +3178,11 @@ export function DeviceDetailsDialog({
                 <p className="section-kicker text-white/45">Brightness</p>
                 <p className="mt-1 text-sm text-muted-foreground">Drag to set the live level.</p>
               </div>
-              <p className="text-2xl font-semibold tracking-[-0.05em] text-white">{currentLightBrightness}%</p>
+              <p className="hb-device-reading">{currentLightBrightness}%</p>
             </div>
             <Slider
+              className="hb-device-slider"
+              aria-label={`Brightness for ${device.name}`}
               value={[currentLightBrightness]}
               min={0}
               max={100}
@@ -3378,7 +3379,7 @@ export function DeviceDetailsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="left-0 top-0 flex h-[100dvh] w-screen max-h-none max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none border-0 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.16),transparent_30%),radial-gradient(circle_at_top_right,rgba(96,165,250,0.12),transparent_34%),linear-gradient(180deg,rgba(8,16,31,0.96),rgba(3,9,20,0.98))] p-0 [--card-foreground:210_36%_96%] [--foreground:210_36%_96%] [--muted-foreground:217_18%_72%] [--popover-foreground:210_36%_96%] [--secondary-foreground:210_36%_96%] sm:left-[50%] sm:top-[50%] sm:h-auto sm:max-h-[94vh] sm:w-[min(96vw,1180px)] sm:max-w-[1180px] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[1.9rem] sm:border sm:border-white/10">
+      <DialogContent className="hb-device-details left-0 top-0 flex h-[100dvh] w-screen max-h-none max-w-none translate-x-0 translate-y-0 flex-col gap-0 overflow-hidden rounded-none border-0 bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.16),transparent_30%),radial-gradient(circle_at_top_right,rgba(96,165,250,0.12),transparent_34%),linear-gradient(180deg,rgba(8,16,31,0.96),rgba(3,9,20,0.98))] p-0 [--card-foreground:210_36%_96%] [--foreground:210_36%_96%] [--muted-foreground:217_18%_72%] [--popover-foreground:210_36%_96%] [--secondary-foreground:210_36%_96%] sm:left-[50%] sm:top-[50%] sm:h-auto sm:max-h-[94vh] sm:w-[min(96vw,1180px)] sm:max-w-[1180px] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-[1.9rem] sm:border sm:border-white/10">
         {!device ? (
           <div className="p-6 sm:p-7">
             <Card className="border-white/10 bg-black/20">
@@ -3953,9 +3954,9 @@ export function DeviceDetailsDialog({
                     ) : null}
 
                     {!harmonyCommandDevice ? (
-                      <Card className="border-white/10 bg-black/20">
+                      <Card className="hb-device" data-device-kind={device.type} data-device-active={device.type === "thermostat" ? currentThermostatMode !== "off" : device.status}>
                         <CardHeader className="pb-4">
-                          <CardTitle className="font-body text-[1.15rem] tracking-[-0.05em] text-white">Primary controls</CardTitle>
+                          <CardTitle className="hb-device-title">Primary controls</CardTitle>
                           <CardDescription>
                             Everyday state changes with larger touch targets and less visual noise.
                           </CardDescription>

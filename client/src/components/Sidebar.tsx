@@ -93,7 +93,7 @@ export function Sidebar({
         "glass-panel glass-panel-strong fixed bottom-6 left-3 top-[5.5rem] transition-[width,transform] duration-500",
         mobile ? "z-50 shadow-2xl" : "z-40",
         collapsed ? "w-[5.75rem]" : "w-[17rem]",
-        mobile ? (open ? "translate-x-0" : "-translate-x-full pointer-events-none") : "translate-x-0"
+        mobile ? (open ? "translate-x-0" : "-translate-x-[calc(100%+1rem)] invisible pointer-events-none") : "translate-x-0"
       )}
     >
       <div className="flex h-full flex-col">

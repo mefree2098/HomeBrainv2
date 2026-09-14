@@ -1,3 +1,5 @@
+import { DeviceSymbol } from "@/components/devices/DeviceSymbol"
+import { TemperatureDial } from "@/components/devices/TemperatureDial"
 import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import { useSearchParams } from "react-router"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -2433,7 +2435,9 @@ export function Devices({
         ref={(node) => {
           deviceCardRefs.current[device._id] = node
         }}
-        className={`rounded-[1.45rem] transition-all duration-300 hover:-translate-y-0.5 ${
+        data-device-kind={device.type}
+        data-device-active={device.type === "thermostat" ? getThermostatMode(device) !== "off" : device.status}
+        className={`hb-device ${
           highlightedDeviceId === device._id
             ? 'ring-2 ring-cyan-400/80 shadow-[0_0_0_1px_rgba(34,211,238,0.25)]'
             : ''
@@ -2442,11 +2446,9 @@ export function Devices({
         <CardHeader className="space-y-4 p-4 pb-3 sm:p-5 sm:pb-3">
           <div className="flex items-start justify-between gap-3">
             <div className="flex min-w-0 items-start gap-3">
-              <div className={`mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-[1.15rem] ${device.status ? 'bg-cyan-400 text-slate-950' : 'bg-white/10 text-white/70'} shadow-[inset_0_1px_0_rgba(255,255,255,0.16)]`}>
-                {getDeviceIcon(device)}
-              </div>
+              <DeviceSymbol type={device.type} />
               <div className="min-w-0 space-y-1">
-                <CardTitle className="break-words text-base leading-tight sm:text-lg">{device.name}</CardTitle>
+                <CardTitle className="hb-device-title">{device.name}</CardTitle>
                 <p className="text-sm text-muted-foreground">{getDeviceDisplayRoom(device)}</p>
                 <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                   <span className={`h-2 w-2 rounded-full ${device.isOnline === false ? 'bg-amber-400' : 'bg-emerald-400'}`} />
@@ -2501,17 +2503,16 @@ export function Devices({
           </div>
         </CardHeader>
         <CardContent className="space-y-3 p-4 pt-0 sm:p-5 sm:pt-0">
-          <div className="rounded-[1.1rem] border border-white/10 bg-white/[0.04] px-3 py-3">
-            <p className="text-sm font-semibold text-foreground">{getDeviceControlSummary(device)}</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Direct control, grouping, voice, history, and migration context.
-            </p>
+          <div className="py-3">
+            {device.type === "thermostat" ? <TemperatureDial temperature={getThermostatTargetTemperature(device)} mode={getThermostatMode(device)} /> : supportsLightFade(device) ? <><p className="hb-device-reading">{getLightBrightness(device)}%</p><p className="hb-device-caption">Brightness</p></> : null}
+            {!supportsLightFade(device) || device.type === "thermostat" ? <p className={device.type === "thermostat" ? "hb-device-caption mt-2" : "hb-device-summary"}>{getDeviceControlSummary(device)}</p> : null}
+
           </div>
           <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
             <Button
               onClick={() => handlePrimaryDeviceAction(device)}
               variant={canPrimaryControl ? getDevicePrimaryActionVariant(device) : "outline"}
-              className="min-w-0"
+              className="hb-device-power min-w-0"
               size="sm"
               disabled={isPendingControl}
             >

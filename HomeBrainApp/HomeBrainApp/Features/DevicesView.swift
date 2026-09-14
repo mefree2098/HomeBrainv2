@@ -490,7 +490,7 @@ struct DevicesView: View {
     }
 
     private var embeddedDeviceHeaderPanel: some View {
-        HBPanel {
+        HBDevicePanel {
             HStack(alignment: .top, spacing: 14) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Security Device")
@@ -521,7 +521,7 @@ struct DevicesView: View {
     }
 
     private var deviceHeaderPanel: some View {
-        HBPanel {
+        HBDevicePanel {
             VStack(alignment: .leading, spacing: 16) {
                 HBSectionHeader(
                     title: "Smart Devices",
@@ -700,27 +700,14 @@ struct DevicesView: View {
     }
 
     private func deviceCard(_ device: DeviceItem) -> some View {
-        HBPanel {
+        HBDevicePanel {
             VStack(alignment: .leading, spacing: useLandscapeCompactLayout ? 10 : 12) {
                 HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: iconName(for: device))
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(Color.white)
-                        .frame(width: 38, height: 38)
-                        .background(
-                            LinearGradient(
-                                colors: device.status
-                                    ? [HBPalette.accentGreen, HBPalette.accentBlue]
-                                    : [HBPalette.accentSlate, HBPalette.panelSoft],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            in: Circle()
-                        )
+                    HBDeviceSymbol(symbol: iconName(for: device), accent: HBDeviceAppearance.accent(for: device.type), glowingLight: device.type == "light" && device.status)
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text(device.name)
-                            .font(HBTypography.display(size: useLandscapeCompactLayout ? 18 : 20, weight: .bold))
+                            .font(HBTypography.body(.headline, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
                             .lineLimit(2)
                         Text(device.displayRoom)
@@ -760,14 +747,19 @@ struct DevicesView: View {
 
                 deviceIdentityBadges(for: device)
 
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 6) {
+                    if device.type == "thermostat" {
+                        HBDeviceTemperatureDial(target: Int(currentThermostatSetpoint(for: device).rounded()), current: device.temperature.map { Int($0.rounded()) }, mode: thermostatMode(for: device))
+                    } else if supportsLightFade(device) {
+                        Text("\(Int(currentLightBrightness(for: device).rounded()))%")
+                            .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                            .monospacedDigit()
+                        Text("Brightness").font(HBTypography.body(.caption)).foregroundStyle(HBPalette.textSecondary)
+                    }
                     Text(deviceControlSummary(for: device))
                         .font(HBTypography.body(size: 14, weight: .semibold))
                         .foregroundStyle(HBPalette.textPrimary)
-                    Text("Direct control, grouping, voice, history, and migration context.")
-                        .font(HBTypography.body(size: 12, weight: .medium))
-                        .foregroundStyle(HBPalette.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
+
                 }
                 .padding(12)
                 .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
@@ -779,7 +771,7 @@ struct DevicesView: View {
                     } label: {
                         Image(systemName: "slider.horizontal.3")
                             .font(.system(size: 14, weight: .bold))
-                            .frame(width: 42, height: 42)
+                            .frame(width: 44, height: 44)
                     }
                     .buttonStyle(HBSecondaryButtonStyle(compact: true))
                     .accessibilityLabel("Open controls for \(device.name)")
@@ -863,12 +855,12 @@ struct DevicesView: View {
             if isPending {
                 ProgressView()
                     .controlSize(.small)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 44, height: 44)
             } else {
                 Image(systemName: isFavorite ? "heart.fill" : "heart")
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(isFavorite ? Color.red.opacity(0.95) : HBPalette.textSecondary)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
         }
@@ -1627,33 +1619,7 @@ struct DevicesView: View {
         pending: Bool
     ) -> some View {
         VStack(spacing: 12) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("SETPOINT")
-                        .font(HBTypography.display(size: 12, weight: .semibold))
-                        .tracking(1.2)
-                        .foregroundStyle(HBPalette.textSecondary)
-                    Text("\(targetTemp)°F")
-                        .font(HBTypography.display(size: useLandscapeCompactLayout ? 40 : 48, weight: .bold))
-                        .foregroundStyle(HBPalette.textPrimary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                }
-
-                Spacer(minLength: 12)
-
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("CURRENT")
-                        .font(HBTypography.display(size: 12, weight: .semibold))
-                        .tracking(1.2)
-                        .foregroundStyle(HBPalette.textSecondary)
-                    Text(currentTemp.map { "\($0)°F" } ?? "--")
-                        .font(HBTypography.display(size: useLandscapeCompactLayout ? 30 : 36, weight: .bold))
-                        .foregroundStyle(HBPalette.textPrimary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                }
-            }
+            HBDeviceTemperatureDial(target: targetTemp, current: currentTemp, mode: mode)
 
             Slider(
                 value: Binding(
@@ -1670,8 +1636,9 @@ struct DevicesView: View {
             )
             .tint(HBPalette.accentBlue)
             .disabled(pending)
+            .accessibilityLabel("Target temperature for \(device.name)")
 
-            HStack(spacing: 8) {
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                 ForEach(thermostatModes, id: \.self) { thermostatMode in
                     thermostatModeChip(
                         device: device,
@@ -1682,8 +1649,7 @@ struct DevicesView: View {
                 }
             }
         }
-        .padding(14)
-        .background(HBGlassBackground(cornerRadius: 18, variant: .panelSoft))
+
     }
 
     private func thermostatModeChip(
@@ -1692,37 +1658,9 @@ struct DevicesView: View {
         activeMode: String,
         pending: Bool
     ) -> some View {
-        let active = activeMode == mode
-
-        return Button(mode.uppercased()) {
+        HBDeviceModeButton(title: mode, selected: activeMode == mode, disabled: pending) {
             Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: mode) }
         }
-        .buttonStyle(.plain)
-        .font(HBTypography.display(size: 14, weight: .bold))
-        .foregroundStyle(active ? Color.white : HBPalette.textPrimary)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, useLandscapeCompactLayout ? 9 : 11)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(
-                    active
-                    ? LinearGradient(
-                        colors: [HBPalette.accentBlue, HBPalette.accentPurple],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                    : LinearGradient(
-                        colors: [HBPalette.panelSoft.opacity(0.92), HBPalette.panel.opacity(0.74)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(active ? HBPalette.accentBlue.opacity(0.18) : HBPalette.panelStroke.opacity(0.4), lineWidth: 1)
-        )
-        .disabled(pending)
     }
 
     private func lightControls(for device: DeviceItem) -> some View {
@@ -1733,12 +1671,12 @@ struct DevicesView: View {
 
         return VStack(spacing: 10) {
             HStack {
-                Text("Fade")
+                Text("Brightness")
                     .font(HBTypography.body(size: 14, weight: .medium))
                     .foregroundStyle(HBPalette.textSecondary)
                 Spacer()
                 Text("\(Int(brightness.rounded()))%")
-                    .font(HBTypography.body(size: 15, weight: .bold))
+                    .font(.system(.largeTitle, design: .rounded, weight: .bold))
                     .foregroundStyle(HBPalette.textPrimary)
             }
 
@@ -1757,6 +1695,7 @@ struct DevicesView: View {
             )
             .tint(HBPalette.accentBlue)
             .disabled(pending)
+            .accessibilityLabel("Brightness for \(device.name)")
 
             HStack(spacing: 8) {
                 Button("Fade Down") {
@@ -1990,7 +1929,7 @@ struct DevicesView: View {
         let ias = JSON.object(JSON.object(device.properties["homebrainDirect"])["iasZone"])
         let hasIas = !ias.isEmpty
         let enrolled = boolValue(ias["enrolled"])
-        return HBPanel {
+        return HBDevicePanel {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Zigbee Maintenance")
                     .font(HBTypography.body(size: 17, weight: .bold))
@@ -2034,7 +1973,7 @@ struct DevicesView: View {
         let minPinLength = state?.capabilities.minPinLength ?? 4
         let maxPinLength = state?.capabilities.maxPinLength ?? 8
 
-        return HBPanel {
+        return HBDevicePanel {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .center) {
                     Label("Lock PINs", systemImage: "key.fill")
@@ -2252,26 +2191,13 @@ struct DevicesView: View {
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
-                        HBPanel {
+                        HBDevicePanel {
                             HStack(alignment: .top, spacing: 14) {
-                                Image(systemName: iconName(for: device))
-                                    .font(.system(size: 18, weight: .bold))
-                                    .foregroundStyle(Color.white)
-                                    .frame(width: 46, height: 46)
-                                    .background(
-                                        LinearGradient(
-                                            colors: device.status
-                                                ? [HBPalette.accentGreen, HBPalette.accentBlue]
-                                                : [HBPalette.accentSlate, HBPalette.panelSoft],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        ),
-                                        in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                    )
+                                            HBDeviceSymbol(symbol: iconName(for: device), accent: HBDeviceAppearance.accent(for: device.type), glowingLight: device.type == "light" && device.status)
 
                                 VStack(alignment: .leading, spacing: 6) {
                                     Text(device.name)
-                                        .font(HBTypography.display(size: 26, weight: .bold))
+                                        .font(HBTypography.body(.title2, weight: .bold))
                                         .foregroundStyle(HBPalette.textPrimary)
                                         .fixedSize(horizontal: false, vertical: true)
                                     Text("\(device.displayRoom) · \(deviceTypeDisplayLabel(device.type)) · \(device.selectionSourceLabel)")
@@ -2288,7 +2214,7 @@ struct DevicesView: View {
                         }
 
                         if isReviewSandbox {
-                            HBPanel {
+                            HBDevicePanel {
                                 Label("Synthetic device — controls affect this review account only", systemImage: "checkmark.shield")
                                     .font(HBTypography.body(size: 14, weight: .semibold))
                                     .foregroundStyle(HBPalette.textSecondary)
@@ -2297,7 +2223,7 @@ struct DevicesView: View {
                             deviceIdentityEditor(for: device)
                         }
 
-                        HBPanel {
+                        HBDevicePanel {
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("Primary Controls")
                                     .font(HBTypography.body(size: 17, weight: .bold))
@@ -2342,7 +2268,7 @@ struct DevicesView: View {
 
                         deviceTelemetryDetailsPanel(for: device)
 
-                        HBPanel {
+                        HBDevicePanel {
                             VStack(alignment: .leading, spacing: 8) {
                                 Text("Voice")
                                     .font(HBTypography.body(size: 17, weight: .bold))
@@ -2355,7 +2281,7 @@ struct DevicesView: View {
                         }
 
                         if !isReviewSandbox {
-                            HBPanel {
+                            HBDevicePanel {
                                 VStack(alignment: .leading, spacing: 12) {
                                     Text("Device Record")
                                         .font(HBTypography.body(size: 17, weight: .bold))
@@ -2451,7 +2377,7 @@ struct DevicesView: View {
             && !editDeviceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !savingDeviceDetails
 
-        return HBPanel {
+        return HBDevicePanel {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Device Details")
                     .font(HBTypography.body(size: 17, weight: .bold))
@@ -2549,7 +2475,7 @@ struct DevicesView: View {
     private func deviceTelemetryDetailsPanel(for device: DeviceItem) -> some View {
         let rows = deviceTelemetryRows(for: device)
         if !rows.isEmpty {
-            HBPanel {
+            HBDevicePanel {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Telemetry")
                         .font(HBTypography.body(size: 17, weight: .bold))
@@ -2588,7 +2514,7 @@ struct DevicesView: View {
 
                 ScrollView {
                     VStack(alignment: .leading, spacing: addDeviceSheetSpacing) {
-                        HBPanel {
+                        HBDevicePanel {
                             VStack(alignment: .leading, spacing: 16) {
                                 Text("Device Provisioning")
                                     .font(HBTypography.display(size: 11, weight: .bold))

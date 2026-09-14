@@ -681,3 +681,7 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* Mobile header actions retain descriptive labels in the overflow menu. */
+.header-mobile-actions button[title] { width:auto; min-height:44px; padding-inline:12px; gap:8px; }
+.header-mobile-actions button[title]::after { content:attr(title); }

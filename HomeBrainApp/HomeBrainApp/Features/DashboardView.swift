@@ -782,6 +782,7 @@ private struct DashboardSecuritySirenOutputItem: Identifiable {
 
 struct DashboardView: View {
     let previewMode: Bool
+    @Environment(\.dynamicTypeSize) private var dashboardDynamicTypeSize
     let onOpenDevice: ((String) -> Void)?
 
     private enum DashboardNameAction {
@@ -1349,16 +1350,7 @@ struct DashboardView: View {
     }
 
     private var heroBadgeTexts: [String] {
-        var badges = [
-            "\(scenes.count) scenes ready",
-            "\(onlineVoiceDevices) voice hubs online"
-        ]
-
-        if favoritesProfileId != nil {
-            badges.append("Favorites tuned")
-        }
-
-        return badges
+        ["\(onlineDevices) devices on", "\(onlineVoiceDevices) voice \(onlineVoiceDevices == 1 ? "hub" : "hubs")", "\(favoriteDeviceIds.count) favorites"]
     }
 
     var body: some View {
@@ -1550,19 +1542,22 @@ struct DashboardView: View {
     }
 
     private func dashboardWidgetPanel(_ widget: DashboardWidgetItem, index: Int, availableWidth: CGFloat? = nil) -> some View {
+        let bare = !isEditingDashboard && !widget.minimized && (widget.type == .summary || widget.type == .device)
         let constrainedContentWidth = availableWidth.map {
-            max($0 - (dashboardWidgetPanelHorizontalPadding * 2), 1)
+            max($0 - (bare ? 0 : dashboardWidgetPanelHorizontalPadding * 2), 1)
         }
 
-        return HBPanel {
+        return HBDevicePanel(bare: bare, inset: dashboardWidgetPanelHorizontalPadding) {
             VStack(alignment: .leading, spacing: 12) {
+            if isEditingDashboard || widget.minimized || (widget.type != .hero && widget.type != .summary && widget.type != .device) {
             if usesCompactWidgetToolbar {
                 VStack(alignment: .leading, spacing: 10) {
                     Label(dashboardWidgetDisplayTitle(widget), systemImage: widgetSystemImage(widget.type))
-                        .font(HBTypography.display(size: 17, weight: .bold))
+                        .font(HBTypography.body(.headline, weight: .semibold).weight(.semibold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
 
+                        if isEditingDashboard {
                         HStack(spacing: 8) {
                             HBBadge(
                                 text: widget.size.title,
@@ -1577,11 +1572,12 @@ struct DashboardView: View {
                                 compactWidgetToolbarMenu(widget: widget, index: index)
                             }
                         }
+                        }
                     }
             } else {
                 HStack(alignment: .top, spacing: 12) {
                     Label(dashboardWidgetDisplayTitle(widget), systemImage: widgetSystemImage(widget.type))
-                        .font(HBTypography.display(size: 18, weight: .bold))
+                        .font(HBTypography.body(.headline, weight: .semibold).weight(.semibold))
                         .foregroundStyle(HBPalette.textPrimary)
 
                         Spacer(minLength: 8)
@@ -1616,17 +1612,11 @@ struct DashboardView: View {
                                     removeWidget(widget.id)
                                 }
                             }
-                        } else {
-                            HBBadge(
-                                text: widget.size.title,
-                                foreground: HBPalette.textPrimary,
-                                background: HBPalette.panelSoft.opacity(0.92),
-                                stroke: HBPalette.panelStrokeStrong
-                            )
                         }
                     }
                 }
 
+                }
                 if widget.minimized {
                     Text("This widget is minimized. Turn on layout editing to expand it again.")
                         .font(HBTypography.body(size: 14, weight: .medium))
@@ -1757,37 +1747,37 @@ struct DashboardView: View {
         case .summary:
             LazyVGrid(columns: summaryColumns(for: widget.size), spacing: 12) {
                 metricCard(
-                    title: "Live Devices",
+                    title: "Devices on",
                     value: "\(onlineDevices)/\(devices.count)",
-                    subtitle: "Realtime endpoints responding",
-                    icon: "lightbulb.max",
+                    subtitle: "Devices currently switched on",
+                    icon: "power",
                     colors: [HBPalette.accentBlue.opacity(0.24), HBPalette.accentPurple.opacity(0.14)],
-                    accent: HBPalette.accentBlue,
-                    compact: widget.size == .small
-                )
-                metricCard(
-                    title: "Voice Mesh",
-                    value: "\(onlineVoiceDevices)/\(voiceDevices.count)",
-                    subtitle: "Wake hubs currently connected",
-                    icon: "mic",
-                    colors: [HBPalette.accentGreen.opacity(0.22), HBPalette.accentBlue.opacity(0.12)],
                     accent: HBPalette.accentGreen,
                     compact: widget.size == .small
                 )
                 metricCard(
-                    title: "Scene Library",
-                    value: "\(scenes.count)",
-                    subtitle: "Pinned atmospheres available",
-                    icon: "play.fill",
-                    colors: [HBPalette.accentPurple.opacity(0.24), HBPalette.panelSoft.opacity(0.18)],
+                    title: "Voice hubs",
+                    value: "\(onlineVoiceDevices)/\(voiceDevices.count)",
+                    subtitle: "Wake hubs currently connected",
+                    icon: "mic",
+                    colors: [HBPalette.accentGreen.opacity(0.22), HBPalette.accentBlue.opacity(0.12)],
                     accent: HBPalette.accentPurple,
                     compact: widget.size == .small
                 )
                 metricCard(
-                    title: "Automation Signal",
-                    value: systemStatus,
-                    subtitle: "Residence mesh health",
-                    icon: "waveform.path.ecg",
+                    title: "Scenes",
+                    value: "\(scenes.count)",
+                    subtitle: "Pinned atmospheres available",
+                    icon: "square.3.layers.3d",
+                    colors: [HBPalette.accentPurple.opacity(0.24), HBPalette.panelSoft.opacity(0.18)],
+                    accent: HBPalette.accentBlue,
+                    compact: widget.size == .small
+                )
+                metricCard(
+                    title: "Favorites",
+                    value: "\(favoriteDeviceIds.count)",
+                    subtitle: "Devices pinned for quick access",
+                    icon: "star",
                     colors: [HBPalette.accentOrange.opacity(0.22), HBPalette.panelSoft.opacity(0.16)],
                     accent: HBPalette.accentOrange,
                     compact: widget.size == .small
@@ -2113,6 +2103,7 @@ struct DashboardView: View {
     }
 
     private func summaryColumns(for size: DashboardWidgetSize) -> [GridItem] {
+        if dashboardDynamicTypeSize.isAccessibilitySize { return [GridItem(.flexible(), spacing: 10)] }
         switch size {
         case .small:
             return [GridItem(.flexible(), spacing: 10)]
@@ -2395,187 +2386,46 @@ struct DashboardView: View {
         }
     }
 
-    @ViewBuilder
     private func dashboardHeader(for widget: DashboardWidgetItem) -> some View {
-        let compactHero = widget.size == .small || widget.size == .medium || usesPortraitCompactLayout
-
-        Group {
-            if compactHero {
-                VStack(alignment: .leading, spacing: 12) {
-                    dashboardHeroCopy(compact: true)
-
-                    if widget.size != .small {
-                        dashboardHeroCommandSurface(compact: true)
-                    }
-                }
-            } else if usesHeroSplitLayout {
-                HStack(alignment: .top, spacing: 16) {
-                    dashboardHeroCopy(compact: false)
-                    dashboardHeroCommandSurface(compact: false)
-                        .frame(maxWidth: 320, alignment: .trailing)
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 14) {
-                    dashboardHeroCopy(compact: false)
-                    dashboardHeroCommandSurface(compact: false)
-                }
-            }
-        }
-    }
-
-    private func dashboardHeroCopy(compact: Bool) -> some View {
-        VStack(alignment: .leading, spacing: compact ? 10 : 14) {
-            Text("Residence Control Nexus")
-                .font(HBTypography.display(size: 11, weight: .bold))
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Home overview")
+                .font(HBTypography.body(.caption2, weight: .bold))
                 .textCase(.uppercase)
-                .tracking(3.0)
-                .foregroundStyle(HBPalette.textMuted)
-
-                        Text("Welcome home. Every room, routine, and wake-word path is online.")
-                            .font(HBTypography.display(size: compact ? 26 : (useLandscapeCompactLayout ? 28 : (layoutWidth < 520 ? 30 : (layoutWidth < 760 ? 34 : (layoutWidth < 960 ? 38 : 42)))), weight: .bold))
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [HBPalette.accentBlue, HBPalette.accentPurple, HBPalette.textPrimary],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .fixedSize(horizontal: false, vertical: true)
-
-            Text(compact
-                ? "Keep the controls you use, shrink the rest, and tune this deck per room."
-                : "Control the home as one responsive system with cinematic visibility across devices, scenes, voice hubs, and workflows."
-            )
-                .font(HBTypography.body(size: compact ? 14 : (useLandscapeCompactLayout ? 14 : 17), weight: .medium))
+                .tracking(2.5)
                 .foregroundStyle(HBPalette.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-
+            HBDashboardWelcomeTitle()
+            Text("Your home, at a glance.")
+                .font(HBTypography.body(.subheadline))
+                .foregroundStyle(HBPalette.textSecondary)
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) {
-                    ForEach(heroBadgeTexts, id: \.self) { badge in
-                        HBBadge(text: badge)
-                    }
+                    ForEach(Array(heroBadgeTexts.enumerated()), id: \.offset) { index, text in dashboardOverviewBadge(text, symbol: ["power", "mic", "heart"][index]) }
                 }
-
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(heroBadgeTexts, id: \.self) { badge in
-                        HBBadge(text: badge)
-                    }
+                    ForEach(Array(heroBadgeTexts.enumerated()), id: \.offset) { index, text in dashboardOverviewBadge(text, symbol: ["power", "mic", "heart"][index]) }
                 }
             }
+            .padding(.top, 4)
+
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func dashboardHeroCommandSurface(compact: Bool) -> some View {
-        VStack(alignment: .leading, spacing: compact ? 10 : 12) {
-            Text("Natural Language Interface")
-                .font(HBTypography.display(size: 11, weight: .bold))
-                .textCase(.uppercase)
-                .tracking(2.6)
-                .foregroundStyle(HBPalette.textMuted)
-
-            Text(compact ? "Voice console" : "Speak the next move")
-                .font(HBTypography.display(size: compact ? 20 : (useLandscapeCompactLayout ? 22 : (contentWidth < 760 ? 24 : 28)), weight: .bold))
-                .foregroundStyle(HBPalette.textPrimary)
-
-            Text(compact
-                ? "Launch scenes, lights, and routines from a tighter command dock."
-                : "Trigger a scene, dim a room, or compose a workflow from a single command surface."
-            )
-                .font(HBTypography.body(size: compact ? 14 : 15, weight: .medium))
-                .foregroundStyle(HBPalette.textSecondary)
-
-            LazyVGrid(columns: compact ? [GridItem(.flexible(), spacing: 8)] : commandSuggestionColumns, spacing: 8) {
-                ForEach(commandSuggestions, id: \.self) { suggestion in
-                    Text(suggestion)
-                        .font(HBTypography.body(size: compact ? 12 : 13, weight: .medium))
-                        .foregroundStyle(HBPalette.textSecondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, compact ? 8 : 10)
-                        .background(HBGlassBackground(cornerRadius: 16, variant: .panelSoft))
-                }
-            }
-
-            Button {
-                selectionHaptic()
-            } label: {
-                Label("Open Voice Console", systemImage: "waveform")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(HBPrimaryButtonStyle(compact: compact))
-        }
-        .padding(compact ? 14 : 16)
-        .background(HBGlassBackground(cornerRadius: 20, variant: .panelSoft))
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(HBPalette.panelStroke.opacity(0.45), lineWidth: 1)
-        )
+    private func dashboardOverviewBadge(_ text: String, symbol: String) -> some View {
+        Label(text, systemImage: symbol)
+            .font(HBTypography.body(.caption2, weight: .medium))
+            .foregroundStyle(HBPalette.textPrimary)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
+            .background(HBPalette.panelSoft.opacity(0.5), in: Capsule())
+            .overlay(Capsule().stroke(HBPalette.panelStrokeStrong.opacity(0.5), lineWidth: 1))
     }
 
     private func metricCard(
-        title: String,
-        value: String,
-        subtitle: String,
-        icon: String,
-        colors: [Color],
-        accent: Color,
-        compact: Bool
+        title: String, value: String, subtitle: String, icon: String,
+        colors: [Color], accent: Color, compact: Bool
     ) -> some View {
-        VStack(alignment: .leading, spacing: compact ? 6 : 8) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(title)
-                        .font(HBTypography.display(size: 11, weight: .bold))
-                        .textCase(.uppercase)
-                        .tracking(2.2)
-                        .foregroundStyle(HBPalette.textMuted)
-
-                    Text(value)
-                        .font(HBTypography.display(size: compact ? 28 : (useLandscapeCompactLayout ? 28 : 34), weight: .bold))
-                        .foregroundStyle(HBPalette.textPrimary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.65)
-                }
-
-                Spacer(minLength: 10)
-
-                Image(systemName: icon)
-                    .font(.system(size: compact ? 14 : 16, weight: .bold))
-                    .foregroundStyle(accent)
-                    .frame(width: compact ? 34 : 38, height: compact ? 34 : 38)
-                    .background(HBGlassBackground(cornerRadius: compact ? 12 : 14, variant: .panelSoft))
-            }
-
-            Text(subtitle)
-                .font(HBTypography.body(size: compact ? 13 : (useLandscapeCompactLayout ? 13 : 15), weight: .medium))
-                .foregroundStyle(HBPalette.textSecondary)
-
-            Capsule()
-                .fill(
-                    LinearGradient(
-                        colors: [accent, accent.opacity(0.18)],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-                .frame(width: 52, height: 4)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(compact ? 14 : 18)
-        .background {
-            ZStack {
-                HBGlassBackground(cornerRadius: compact ? 18 : 22, variant: .panelSoft)
-                RoundedRectangle(cornerRadius: compact ? 18 : 22, style: .continuous)
-                    .fill(LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing))
-                    .opacity(0.92)
-            }
-        }
-        .overlay(
-            RoundedRectangle(cornerRadius: compact ? 18 : 22, style: .continuous)
-                .stroke(accent.opacity(0.32), lineWidth: 1)
-        )
+        HBDashboardMetric(title: title, value: value, detail: subtitle, symbol: icon, accent: accent)
     }
 
     private func securityPanel(for widget: DashboardWidgetItem) -> some View {
@@ -4042,8 +3892,8 @@ struct DashboardView: View {
         let tabletCompactWeatherGrid = widget.size == .medium && dashboardGridColumnCount == 2 && !usesPortraitCompactLayout
         let compactWeatherHeader = compact || tabletCompactWeatherGrid
         let stackedHeroLayout = usesPortraitCompactLayout
-        let headlineFontSize: CGFloat = compact ? 34 : (tabletCompactWeatherGrid ? 38 : 42)
-        let weatherGlyphSize: CGFloat = compact ? 28 : (tabletCompactWeatherGrid ? 30 : 34)
+        let headlineFontSize: CGFloat = compact ? 44 : (tabletCompactWeatherGrid ? 48 : 56)
+        let weatherGlyphSize: CGFloat = compact ? 36 : (tabletCompactWeatherGrid ? 38 : 44)
         let weatherGlyphFrame: CGFloat = compact ? 50 : (tabletCompactWeatherGrid ? 54 : 58)
         let snapshot = weatherByWidgetID[widget.id]
         let error = weatherErrorsByWidgetID[widget.id]
@@ -6266,97 +6116,74 @@ struct DashboardView: View {
         .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
-    private func featuredDeviceCard(_ device: DeviceItem, cardSize: DashboardFavoriteDeviceCardSize = .large) -> some View {
+    private func featuredDeviceCard(_ device: DeviceItem, cardSize: DashboardFavoriteDeviceCardSize = .large, label: String? = nil) -> some View {
         let isThermostat = device.type == "thermostat"
-        let mode = thermostatMode(for: device)
-        let statusText = isThermostat ? mode.uppercased() : (device.status ? "On" : "Off")
-        let statusEnabled = isThermostat ? mode != "off" : device.status
         let compact = cardSize == .small
-        let expanded = cardSize == .large
         let pending = pendingControlDeviceIds.contains(device.id)
-        return HBPanel {
-            VStack(alignment: .leading, spacing: compact ? 10 : 12) {
-                HStack(alignment: .top, spacing: compact ? 10 : 12) {
-                    Image(systemName: iconForDevice(device.type))
-                        .font(.system(size: compact ? 14 : 16, weight: .bold))
-                        .foregroundStyle(Color.white)
-                        .frame(width: compact ? 34 : 38, height: compact ? 34 : 38)
-                        .background(
-                            LinearGradient(
-                                colors: statusEnabled
-                                    ? [HBPalette.accentGreen, HBPalette.accentBlue]
-                                    : [HBPalette.accentSlate, HBPalette.panelSoft],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            in: Circle()
-                        )
-
-                    VStack(alignment: .leading, spacing: 6) {
+        let accent = device.status ? HBDeviceAppearance.accent(for: device.type) : HBPalette.accentSlate
+        return HBDevicePanel {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top, spacing: 12) {
+                    HBDeviceSymbol(symbol: iconForDevice(device.type), accent: accent, glowingLight: device.type == "light" && device.status)
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let label, label != device.name, label != "Device" {
+                            Text(label).font(HBTypography.body(.caption)).foregroundStyle(HBPalette.textSecondary)
+                        }
                         Text(device.name)
-                            .font(HBTypography.display(size: compact ? 17 : (useLandscapeCompactLayout ? 20 : 22), weight: .bold))
+                            .font(HBTypography.body(.headline, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
-                            .lineLimit(2)
-                        if !device.displayRoom.isEmpty {
-                            Text(device.displayRoom)
-                                .font(HBTypography.body(size: compact ? 12 : (useLandscapeCompactLayout ? 13 : 15), weight: .medium))
-                                .foregroundStyle(HBPalette.textSecondary)
-                        }
-                    }
-
-                    Spacer(minLength: 0)
-
-                    HStack(spacing: 8) {
-                        if supportsLightColor(device) {
-                            dashboardColorWheelPicker(for: device, size: compact ? 32 : 36)
-                        }
-                        favoriteButton(for: device)
-                    }
-                }
-
-                HStack(spacing: 8) {
-                    HBBadge(
-                        text: statusText,
-                        foreground: statusEnabled ? HBPalette.textPrimary : HBPalette.textSecondary,
-                        background: statusEnabled ? HBPalette.accentBlue.opacity(0.22) : HBPalette.panelSoft.opacity(0.88),
-                        stroke: statusEnabled ? HBPalette.accentBlue : HBPalette.panelStrokeStrong
-                    )
-
-                    if let temperature = device.temperature, !isThermostat {
-                        HBBadge(
-                            text: "\(Int(temperature))°F",
-                            foreground: HBPalette.textPrimary,
-                            background: HBPalette.panelSoft.opacity(0.88),
-                            stroke: HBPalette.panelStrokeStrong
-                        )
-                    }
-                }
-
-                if isThermostat {
-                    featuredThermostatControls(for: device, compact: compact || !expanded)
-                } else {
-                    if device.status {
-                        Button("Turn Off") {
-                            Task { await toggleDevice(device) }
-                        }
-                        .buttonStyle(HBSecondaryButtonStyle(compact: compact))
-                        .frame(maxWidth: .infinity)
-                        .disabled(pending)
-                    } else {
-                        Button("Turn On") {
-                            Task { await toggleDevice(device) }
-                        }
-                        .buttonStyle(HBPrimaryButtonStyle(compact: compact))
-                        .frame(maxWidth: .infinity)
-                        .disabled(pending)
-                    }
-
-                    if !compact {
-                        Text("Say: \"Hey Anna, \(device.status ? "turn off" : "turn on") \(device.name)\"")
-                            .font(HBTypography.body(size: 13, weight: .medium))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text(device.displayRoom)
+                            .font(HBTypography.body(.caption))
                             .foregroundStyle(HBPalette.textSecondary)
-                            .lineLimit(2)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    favoriteButton(for: device)
+                }
+                if supportsLightColor(device) {
+                    HStack {
+                        Text("Light color").font(HBTypography.body(.caption)).foregroundStyle(HBPalette.textSecondary)
+                        Spacer()
+                        dashboardColorWheelPicker(for: device, size: 44)
+                    }
+                }
+                if isThermostat {
+                    featuredThermostatControls(for: device, compact: compact)
+                } else {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(device.status ? (supportsLightFade(device) ? "\(Int(currentDashboardLightBrightness(for: device).rounded()))%" : "On") : "Off")
+                            .font(HBTypography.body(.largeTitle, weight: .bold))
+                            .monospacedDigit()
+                            .foregroundStyle(HBPalette.textPrimary)
+                        Text(device.status && supportsLightFade(device) ? "Brightness" : "Power")
+                            .font(HBTypography.body(.caption))
+                            .foregroundStyle(HBPalette.textSecondary)
+                    }
+                    if supportsLightFade(device) && device.status {
+                        Slider(value: Binding(
+                            get: { currentDashboardLightBrightness(for: device) },
+                            set: { dashboardLightBrightnessDrafts[device.id] = clampDashboardLightBrightness($0) }
+                        ), in: 0...100, step: 1, onEditingChanged: { editing in
+                            guard !editing else { return }
+                            let next = Int(currentDashboardLightBrightness(for: device).rounded())
+                            Task { await handleDeviceControl(deviceId: device.id, action: "set_brightness", value: next) }
+                        })
+                        .tint(accent)
+                        .disabled(pending)
+                        .accessibilityLabel("Brightness for \(device.name)")
+                    }
+                    if let temperature = device.temperature {
+                        Text("\(Int(temperature.rounded()))°F")
+                            .font(HBTypography.body(.caption))
+                            .foregroundStyle(HBPalette.textSecondary)
+                    }
+                    Button { Task { await toggleDevice(device) } } label: {
+                        Label(device.status ? "Turn Off" : "Turn On", systemImage: "power")
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .buttonStyle(HBSecondaryButtonStyle(compact: true))
+                    .disabled(pending)
+                    .accessibilityLabel("\(device.status ? "Turn off" : "Turn on") \(device.name)")
                 }
             }
         }
@@ -6372,12 +6199,12 @@ struct DashboardView: View {
             if isPending {
                 ProgressView()
                     .controlSize(.small)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 44, height: 44)
             } else {
                 Image(systemName: isFavorite ? "heart.fill" : "heart")
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(isFavorite ? Color.red.opacity(0.95) : HBPalette.textSecondary)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
         }
@@ -6433,13 +6260,21 @@ struct DashboardView: View {
         let isOff = mode == "off"
 
         return VStack(alignment: .leading, spacing: 12) {
+            thermostatSetpointPanel(
+                device: device,
+                mode: mode,
+                targetTemp: targetTemp,
+                currentTemp: currentTemp,
+                pending: pending,
+                compact: compact
+            )
             if isOff {
                 Button {
                     let nextMode = isOff ? onMode : "off"
                     Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: nextMode) }
                 } label: {
                     Label(isOff ? "Turn On" : "Turn Off", systemImage: isOff ? "power.circle.fill" : "power.circle")
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity, minHeight: 44)
                 }
                 .buttonStyle(HBPrimaryButtonStyle(compact: compact))
                 .disabled(pending)
@@ -6449,27 +6284,14 @@ struct DashboardView: View {
                     Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: nextMode) }
                 } label: {
                     Label(isOff ? "Turn On" : "Turn Off", systemImage: isOff ? "power.circle.fill" : "power.circle")
-                        .frame(maxWidth: .infinity)
+                        .frame(maxWidth: .infinity, minHeight: 44)
                 }
                 .buttonStyle(HBSecondaryButtonStyle(compact: compact))
                 .disabled(pending)
             }
 
-            thermostatSetpointPanel(
-                device: device,
-                mode: mode,
-                targetTemp: targetTemp,
-                currentTemp: currentTemp,
-                pending: pending,
-                compact: compact
-            )
 
-            if !compact {
-                Text("Say: \"Hey Anna, set \(device.name) to \(targetTemp) degrees\"")
-                    .font(HBTypography.body(size: 13, weight: .medium))
-                    .foregroundStyle(HBPalette.textSecondary)
-                    .lineLimit(2)
-            }
+
         }
     }
 
@@ -6486,33 +6308,7 @@ struct DashboardView: View {
             : Array(repeating: GridItem(.flexible(), spacing: 8), count: 4)
 
         return VStack(spacing: compact ? 10 : 12) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("SETPOINT")
-                        .font(HBTypography.display(size: 12, weight: .semibold))
-                        .tracking(1.2)
-                        .foregroundStyle(HBPalette.textSecondary)
-                    Text("\(targetTemp)°F")
-                        .font(HBTypography.display(size: compact ? 34 : (useLandscapeCompactLayout ? 40 : 48), weight: .bold))
-                        .foregroundStyle(HBPalette.textPrimary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-                }
-
-                Spacer(minLength: 12)
-
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text("CURRENT")
-                        .font(HBTypography.display(size: 12, weight: .semibold))
-                        .tracking(1.2)
-                        .foregroundStyle(HBPalette.textSecondary)
-                    Text(currentTemp.map { "\($0)°F" } ?? "--")
-                        .font(HBTypography.display(size: compact ? 24 : (useLandscapeCompactLayout ? 30 : 36), weight: .bold))
-                        .foregroundStyle(HBPalette.textPrimary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-                }
-            }
+            HBDeviceTemperatureDial(target: targetTemp, current: currentTemp, mode: mode)
 
             Slider(
                 value: Binding(
@@ -6529,6 +6325,7 @@ struct DashboardView: View {
             )
             .tint(HBPalette.accentBlue)
             .disabled(pending)
+            .accessibilityLabel("Target temperature for \(device.name)")
 
             LazyVGrid(columns: modeColumns, spacing: 8) {
                 ForEach(["auto", "cool", "heat", "off"], id: \.self) { thermostatMode in
@@ -6542,8 +6339,7 @@ struct DashboardView: View {
                 }
             }
         }
-        .padding(compact ? 12 : 14)
-        .background(HBGlassBackground(cornerRadius: compact ? 16 : 18, variant: .panelSoft))
+
     }
 
     private func thermostatModeChip(
@@ -6553,94 +6349,8 @@ struct DashboardView: View {
         pending: Bool,
         compact: Bool
     ) -> some View {
-        let active = activeMode == mode
-
-        return Button(mode.uppercased()) {
+        HBDeviceModeButton(title: mode, selected: activeMode == mode, disabled: pending) {
             Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: mode) }
-        }
-        .buttonStyle(.plain)
-        .font(HBTypography.display(size: compact ? 12 : 14, weight: .bold))
-        .foregroundStyle(active ? Color.white : HBPalette.textPrimary)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, compact ? 8 : (useLandscapeCompactLayout ? 9 : 11))
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(
-                    active
-                    ? LinearGradient(
-                        colors: [HBPalette.accentBlue, HBPalette.accentPurple],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                    : LinearGradient(
-                        colors: [HBPalette.panelSoft.opacity(0.92), HBPalette.panel.opacity(0.74)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(active ? HBPalette.accentBlue.opacity(0.18) : HBPalette.panelStroke.opacity(0.4), lineWidth: 1)
-        )
-        .disabled(pending)
-    }
-
-    private var voiceCommandPanel: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Voice Command Surface")
-                    .font(HBTypography.display(size: 11, weight: .bold))
-                    .textCase(.uppercase)
-                    .tracking(2.6)
-                    .foregroundStyle(HBPalette.textMuted)
-
-                Text("Launch a natural-language control pass")
-                    .font(HBTypography.display(size: useLandscapeCompactLayout ? 20 : 24, weight: .bold))
-                    .foregroundStyle(HBPalette.textPrimary)
-            }
-
-            Text("Type or speak a request and HomeBrain interprets the intent, confidence, and execution path.")
-                .font(HBTypography.body(size: 15, weight: .medium))
-                .foregroundStyle(HBPalette.textSecondary)
-
-            TextField("Type a natural language command", text: $commandText)
-                .hbPanelTextField()
-
-            HStack(spacing: 10) {
-                Button {
-                    Task { await sendVoiceCommand() }
-                } label: {
-                    if isSendingCommand {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .tint(HBPalette.textPrimary)
-                            Text("Sending...")
-                        }
-                        .frame(maxWidth: .infinity)
-                    } else {
-                        Label("Run Command", systemImage: "waveform")
-                            .frame(maxWidth: .infinity)
-                    }
-                }
-                .buttonStyle(HBPrimaryButtonStyle(compact: true))
-                .disabled(commandText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSendingCommand)
-
-                Button("Refresh") {
-                    Task { await loadDashboard() }
-                }
-                .buttonStyle(HBSecondaryButtonStyle(compact: true))
-            }
-
-            if !commandResponse.isEmpty {
-                Text(commandResponse)
-                    .font(HBTypography.body(size: 15, weight: .medium))
-                    .foregroundStyle(HBPalette.textSecondary)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(HBGlassBackground(cornerRadius: 18, variant: .panelSoft))
-            }
         }
     }
 
@@ -6710,6 +6420,65 @@ struct DashboardView: View {
             }
         }
     }
+
+    private var voiceCommandPanel: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Voice Command Surface")
+                    .font(HBTypography.display(size: 11, weight: .bold))
+                    .textCase(.uppercase)
+                    .tracking(2.6)
+                    .foregroundStyle(HBPalette.textMuted)
+
+                Text("Launch a natural-language control pass")
+                    .font(HBTypography.display(size: useLandscapeCompactLayout ? 20 : 24, weight: .bold))
+                    .foregroundStyle(HBPalette.textPrimary)
+            }
+
+            Text("Type or speak a request and HomeBrain interprets the intent, confidence, and execution path.")
+                .font(HBTypography.body(size: 15, weight: .medium))
+                .foregroundStyle(HBPalette.textSecondary)
+
+            TextField("Type a natural language command", text: $commandText)
+                .hbPanelTextField()
+
+            HStack(spacing: 10) {
+                Button {
+                    Task { await sendVoiceCommand() }
+                } label: {
+                    if isSendingCommand {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .tint(HBPalette.textPrimary)
+                            Text("Sending...")
+                        }
+                        .frame(maxWidth: .infinity)
+                    } else {
+                        Label("Run Command", systemImage: "waveform")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .buttonStyle(HBPrimaryButtonStyle(compact: true))
+                .disabled(commandText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSendingCommand)
+
+                Button("Refresh") {
+                    Task { await loadDashboard() }
+                }
+                .buttonStyle(HBSecondaryButtonStyle(compact: true))
+            }
+
+            if !commandResponse.isEmpty {
+                Text(commandResponse)
+                    .font(HBTypography.body(size: 15, weight: .medium))
+                    .foregroundStyle(HBPalette.textSecondary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(HBGlassBackground(cornerRadius: 18, variant: .panelSoft))
+            }
+        }
+    }
+
 
     private func favoriteDevicesWidget(for widget: DashboardWidgetItem) -> some View {
         let limitedDevices: [DeviceItem]
@@ -6825,18 +6594,19 @@ struct DashboardView: View {
         let currentPowerText = formatDashboardPowerValue(energySnapshot.powerValue, unit: energySnapshot.powerUnit)
         let energyTotalText = formatDashboardEnergyValue(energySnapshot.energyValue, unit: energySnapshot.energyUnit)
 
-        return HBPanel {
+        return HBDevicePanel {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top, spacing: 8) {
+                    HBDeviceSymbol(symbol: iconForDevice(device.type), accent: HBDeviceAppearance.accent(for: device.type), glowingLight: device.type == "light" && device.status)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(device.name)
-                            .font(HBTypography.body(size: denseDeviceTitleFontSize(for: device.name), weight: .bold))
+                            .font(HBTypography.body(.headline, weight: .bold))
                             .foregroundStyle(HBPalette.textPrimary)
                             .lineLimit(2)
                             .minimumScaleFactor(0.68)
                             .frame(maxWidth: .infinity, minHeight: 38, alignment: .topLeading)
                         Text(device.displayRoom)
-                            .font(HBTypography.body(size: 11, weight: .medium))
+                            .font(HBTypography.body(.caption, weight: .medium))
                             .foregroundStyle(HBPalette.textSecondary)
                             .lineLimit(1)
                             .minimumScaleFactor(0.8)
@@ -6880,7 +6650,7 @@ struct DashboardView: View {
 
                         if let energyTotalText {
                             Text("Energy total \(energyTotalText)")
-                                .font(HBTypography.body(size: 11, weight: .medium))
+                                .font(HBTypography.body(.caption, weight: .medium))
                                 .foregroundStyle(HBPalette.textSecondary)
                         }
 
@@ -6889,13 +6659,13 @@ struct DashboardView: View {
                                 ProgressView()
                                     .controlSize(.small)
                                 Text("Loading history…")
-                                    .font(HBTypography.body(size: 11, weight: .medium))
+                                    .font(HBTypography.body(.caption, weight: .medium))
                                     .foregroundStyle(HBPalette.textSecondary)
                             }
                             .frame(maxWidth: .infinity, minHeight: 56, alignment: .center)
                         } else if energyPoints.isEmpty {
                             Text("No recent power samples yet.")
-                                .font(HBTypography.body(size: 11, weight: .medium))
+                                .font(HBTypography.body(.caption, weight: .medium))
                                 .foregroundStyle(HBPalette.textSecondary)
                                 .frame(maxWidth: .infinity, minHeight: 56, alignment: .leading)
                                 .padding(.horizontal, 10)
@@ -7047,7 +6817,7 @@ struct DashboardView: View {
     private func singleDeviceWidget(for widget: DashboardWidgetItem) -> some View {
         if let deviceId = widget.settings.deviceId,
            let device = devices.first(where: { $0.id == deviceId }) {
-            featuredDeviceCard(device, cardSize: deviceCardSize(for: widget.size))
+            featuredDeviceCard(device, cardSize: deviceCardSize(for: widget.size), label: widget.title)
         } else {
             EmptyStateView(
                 title: "Device unavailable",
@@ -7650,6 +7420,14 @@ struct DashboardView: View {
         }
 
         switch focus {
+        case "visual-pilot":
+            view.widgets = [
+                DashboardSupport.makeWidget(type: .hero, title: "Welcome Home", size: .full),
+                DashboardSupport.makeWidget(type: .summary, title: "At a glance", size: .full),
+                DashboardSupport.makeWidget(type: .device, title: "Patio Lights", size: .full, settings: DashboardWidgetSettings(deviceId: "preview-patio")),
+                DashboardSupport.makeWidget(type: .device, title: "Upstairs Climate", size: .full, settings: DashboardWidgetSettings(deviceId: "preview-thermostat")),
+                DashboardSupport.makeWidget(type: .weather, title: "Weather", size: .full)
+            ]
         case "security":
             let securityWidgets = view.widgets.filter { $0.type == .security }
             if !securityWidgets.isEmpty {

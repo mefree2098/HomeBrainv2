@@ -469,45 +469,14 @@ function WeatherInfoPopover({
   className?: string
   contentClassName?: string
 }) {
-  const [open, setOpen] = useState(false)
-  const closeTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null)
-
-  const clearCloseTimer = () => {
-    if (!closeTimerRef.current) {
-      return
-    }
-    window.clearTimeout(closeTimerRef.current)
-    closeTimerRef.current = null
-  }
-
-  const openPopover = () => {
-    clearCloseTimer()
-    setOpen(true)
-  }
-
-  const closePopover = () => {
-    clearCloseTimer()
-    closeTimerRef.current = window.setTimeout(() => {
-      setOpen(false)
-      closeTimerRef.current = null
-    }, 120)
-  }
-
-  useEffect(() => {
-    return () => {
-      clearCloseTimer()
-    }
-  }, [])
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover>
       <PopoverTrigger asChild>
         <button
           type="button"
           aria-label={label}
-          className={cn("block text-left", className)}
-          onMouseEnter={openPopover}
-          onMouseLeave={closePopover}
+          className={cn("block rounded-[1.05rem] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", className)}
         >
           {children}
         </button>
@@ -516,8 +485,6 @@ function WeatherInfoPopover({
         align={align}
         sideOffset={8}
         className={cn("w-80 max-w-[calc(100vw-1.5rem)] p-0", contentClassName)}
-        onMouseEnter={openPopover}
-        onMouseLeave={closePopover}
       >
         {content}
       </PopoverContent>
@@ -1182,7 +1149,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
   const compactSummary = buildCompactWeatherSummary(weather, tempestStation, indoorAir)
 
   return (
-    <section className="relative overflow-hidden rounded-[1.6rem] border border-white/15 bg-white/8 p-4 shadow-lg shadow-black/5 backdrop-blur-xl dark:bg-slate-950/15 sm:p-5">
+    <section className="dashboard-weather relative overflow-hidden rounded-[1.6rem] border border-white/15 bg-white/8 p-4 shadow-lg shadow-black/5 backdrop-blur-xl dark:bg-slate-950/15 sm:p-5">
       <div className="panel-grid absolute inset-0 opacity-20" />
       <div className="absolute right-[-5rem] top-[-5rem] h-40 w-40 rounded-full bg-cyan-300/16 blur-3xl dark:bg-cyan-500/10" />
       <div className="absolute bottom-[-6rem] left-[-4rem] h-44 w-44 rounded-full bg-blue-300/18 blur-3xl dark:bg-blue-500/10" />
@@ -1191,9 +1158,9 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
         <div className="space-y-3">
           <div className={cn("flex gap-3", stackedHero ? "items-start justify-between" : "items-start justify-between")}>
             <div className="min-w-0 flex-1">
-              <p className="section-kicker">Local Forecast</p>
+              <p className="text-sm font-medium text-muted-foreground">Outdoor weather</p>
               <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                <h3 className={cn("font-semibold leading-none text-foreground", compact ? "text-[2.1rem]" : medium ? "text-[2.45rem]" : "text-[2.7rem]")}>
+                <h3 className={cn("dashboard-weather-temperature font-semibold leading-none text-foreground", compact ? "text-[2.1rem]" : medium ? "text-[2.45rem]" : "text-[2.7rem]")}>
                   {formatTemperature(headlineTemperature)}
                 </h3>
                 <span className="text-sm font-medium text-muted-foreground">
@@ -1264,7 +1231,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
                 </WeatherInfoPopover>
                 ) : null}
 
-                <div className="flex h-14 w-14 items-center justify-center rounded-[1.1rem] border border-white/15 bg-white/10 text-cyan-700 shadow-lg shadow-cyan-500/5 dark:text-cyan-300">
+                <div className="dashboard-weather-symbol">
                   <WeatherGlyph icon={weather.current.icon} isDay={weather.current.isDay} className="h-7 w-7" />
                 </div>
               </div>
