@@ -102,7 +102,8 @@ struct HBDeviceTemperatureDial: View {
 struct HBDashboardWelcomeTitle: View {
     @Environment(\.colorScheme) private var colorScheme
     var body: some View {
-        (Text("Welcome ").foregroundColor(HBPalette.textPrimary) + Text("home.").foregroundColor(colorScheme == .dark ? Color(red: 0.36, green: 0.87, blue: 0.96) : Color(red: 0.05, green: 0.43, blue: 0.57)))
+        Text("Welcome \(Text("home.").foregroundColor(colorScheme == .dark ? Color(red: 0.36, green: 0.87, blue: 0.96) : Color(red: 0.05, green: 0.43, blue: 0.57)))")
+            .foregroundStyle(HBPalette.textPrimary)
             .font(.system(.largeTitle, design: .rounded, weight: .bold))
             .tracking(-1.4)
             .fixedSize(horizontal: false, vertical: true)
