@@ -21,3 +21,7 @@ The renderer uses only local SVG primitives and headless Google Chrome; it does 
 The Atmosphere sheet uses a centered XIAO star layout. Its 16 physical jumper runs are deliberately separate, uniquely colored, and labeled `W01` through `W16`; the bottom checklist repeats both printed endpoint labels for every wire. The SCD41 and VEML7700 are rotated 90 degrees counter-clockwise on that sheet so their hole columns face the XIAO. Their displayed top-to-bottom pin order is the reverse of the boards' original bottom left-to-right order, exactly as a physical counter-clockwise rotation requires.
 
 If a delivered board revision differs from the catalog, stop before wiring it. Photograph both sides next to a ruler, update the physical order/drawing, and run the verifier. An ASIN remaining the same is not proof that a marketplace seller has not revised a PCB.
+
+## Portable CI validation
+
+`python3 scripts/verify-homebrain-wiring-diagrams.py --svg-only --repeat` validates every retained SVG contract and PNG dimension, then regenerates the SVGs twice and compares them byte for byte. It runs without Chrome on Linux. The default verifier additionally rasterizes and compares PNG bytes using the documented macOS Chrome/font environment; that full check is required when changing diagram artwork.

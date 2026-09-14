@@ -68,7 +68,7 @@ jobs:
           python3 scripts/verify-homebrain-motherboards.py
           python3 scripts/verify-homebrain-enclosures.py
           python3 scripts/verify-homebrain-carrier.py
-          python3 scripts/verify-homebrain-wiring-diagrams.py
+          python3 scripts/verify-homebrain-wiring-diagrams.py --svg-only --repeat
   python:
     runs-on: ubuntu-latest
     timeout-minutes: 10

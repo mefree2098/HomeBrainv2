@@ -34,6 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--spec", type=Path, default=DEFAULT_SPEC)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--repeat", action="store_true", help="Regenerate twice and compare SVG/PNG byte streams.")
+    parser.add_argument("--svg-only", action="store_true", help="Compare regenerated SVGs without requiring the macOS Chrome/font rasterizer; still validate checked-in PNG dimensions.")
     return parser.parse_args()
 
 
@@ -441,9 +442,9 @@ def verify_svg(svg_path: Path, spec: dict, device: dict) -> dict:
     }
 
 
-def run_generator(spec_path: Path, output: Path) -> None:
+def run_generator(spec_path: Path, output: Path, svg_only: bool = False) -> None:
     subprocess.run(
-        ["python3", str(GENERATOR), "--spec", str(spec_path), "--output", str(output)],
+        ["python3", str(GENERATOR), "--spec", str(spec_path), "--output", str(output), *(["--svg-only"] if svg_only else [])],
         cwd=ROOT,
         check=True,
         stdout=subprocess.DEVNULL,
@@ -466,9 +467,9 @@ def verify_generated_pair(output: Path, spec: dict, devices: dict[str, dict]) ->
     return report
 
 
-def compare_outputs(first: Path, second: Path, device_ids: set[str], label: str) -> None:
+def compare_outputs(first: Path, second: Path, device_ids: set[str], label: str, svg_only: bool = False) -> None:
     for device_id in device_ids:
-        for suffix in ("svg", "png"):
+        for suffix in (("svg",) if svg_only else ("svg", "png")):
             first_file = first / f"wiring-{device_id}.{suffix}"
             second_file = second / f"wiring-{device_id}.{suffix}"
             require(sha256(first_file) == sha256(second_file), f"{device_id}.{suffix}: {label} differs")
@@ -483,15 +484,15 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="homebrain-wiring-verify-") as temp_name:
         regenerated = Path(temp_name) / "regenerated"
         regenerated.mkdir()
-        run_generator(args.spec, regenerated)
-        compare_outputs(args.output, regenerated, set(devices), "checked artifact and fresh generation")
+        run_generator(args.spec, regenerated, args.svg_only)
+        compare_outputs(args.output, regenerated, set(devices), "checked artifact and fresh generation", args.svg_only)
         if args.repeat:
             repeated = Path(temp_name) / "repeated"
             repeated.mkdir()
-            run_generator(args.spec, repeated)
-            compare_outputs(regenerated, repeated, set(devices), "first and second fresh generations")
+            run_generator(args.spec, repeated, args.svg_only)
+            compare_outputs(regenerated, repeated, set(devices), "first and second fresh generations", args.svg_only)
 
-    print(json.dumps({"status": "verified", "repeatability": bool(args.repeat), "devices": report}, indent=2, sort_keys=True))
+    print(json.dumps({"status": "verified", "repeatability": bool(args.repeat), "regenerated_formats": ["svg"] if args.svg_only else ["svg", "png"], "devices": report}, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
