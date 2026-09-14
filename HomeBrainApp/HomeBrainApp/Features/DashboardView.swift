@@ -6303,9 +6303,10 @@ struct DashboardView: View {
         pending: Bool,
         compact: Bool
     ) -> some View {
-        let modeColumns = compact
-            ? [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
-            : Array(repeating: GridItem(.flexible(), spacing: 8), count: 4)
+        let modeColumns = Array(
+            repeating: GridItem(.flexible(), spacing: 8),
+            count: dashboardDynamicTypeSize.isAccessibilitySize ? 1 : (compact ? 2 : 4)
+        )
 
         return VStack(spacing: compact ? 10 : 12) {
             HBDeviceTemperatureDial(target: targetTemp, current: currentTemp, mode: mode)
@@ -6726,7 +6727,7 @@ struct DashboardView: View {
                 }
 
                 if thermostat {
-                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: dashboardDynamicTypeSize.isAccessibilitySize ? 1 : 2), spacing: 8) {
                         ForEach(["auto", "cool", "heat", "off"], id: \.self) { mode in
                             thermostatModeChip(
                                 device: device,
