@@ -1,5 +1,38 @@
 import SwiftUI
 
+struct HBDeviceSurface: View {
+    var cornerRadius: CGFloat = 22
+    var inset = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .fill(colorScheme == .dark
+                ? (inset ? Color(red: 0.065, green: 0.12, blue: 0.19) : Color(red: 0.043, green: 0.094, blue: 0.165))
+                : Color.white.opacity(inset ? 0.65 : 0.88))
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(HBPalette.panelStrokeStrong.opacity(inset ? 0.4 : 0.65), lineWidth: 1)
+            }
+    }
+}
+
+/// A phone dashboard has one vertical scroll surface; larger grids may bound their lists.
+struct HBDashboardList<Content: View>: View {
+    let expanded: Bool
+    let maximumHeight: CGFloat
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        if expanded {
+            content
+        } else {
+            ScrollView(.vertical) { content }
+                .frame(maxHeight: maximumHeight)
+        }
+    }
+}
+
 /// Shared device surfaces, with native controls layered above them.
 struct HBDevicePanel<Content: View>: View {
     var bare = false
@@ -12,12 +45,7 @@ struct HBDevicePanel<Content: View>: View {
             .padding(bare ? 0 : inset)
             .background {
                 if !bare {
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .fill(colorScheme == .dark ? Color(red: 0.043, green: 0.094, blue: 0.165) : Color.white.opacity(0.88))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                                .stroke(HBPalette.panelStrokeStrong.opacity(0.65), lineWidth: 1)
-                        }
+                    HBDeviceSurface()
                 }
             }
             .shadow(color: .black.opacity(bare ? 0 : (colorScheme == .dark ? 0.12 : 0.04)), radius: 12, y: 4)
