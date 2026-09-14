@@ -1,0 +1,13 @@
+[calm, measured, and matter-of-fact] HomeBrain brings your local forecast and live environmental sensors together in one place.
+
+[calm, measured, and matter-of-fact] On the Dashboard, the Climate card shows the current outdoor temperature, weather conditions, indoor air quality, wind, rainfall, pressure, and today’s outlook.
+
+[calm, measured, and matter-of-fact] Select Weather in the side menu to open the Weather Command Deck.
+
+[calm, measured, and matter-of-fact] The deck combines the forecast for your saved location with live Tempest station readings and indoor air data. Status badges confirm when live telemetry is active and when indoor air quality is good.
+
+[calm, measured, and matter-of-fact] Use the summary cards to check the daily high and low, indoor temperature, wind, pressure, and rainfall. Forecast charts and sensor history continue below.
+
+[calm, measured, and matter-of-fact] Select Refresh whenever you want the latest readings from your connected systems.
+
+[calm, measured, and matter-of-fact] That is the HomeBrain weather system.

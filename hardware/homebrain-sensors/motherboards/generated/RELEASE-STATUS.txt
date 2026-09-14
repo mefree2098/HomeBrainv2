@@ -1,0 +1,2 @@
+HOLD
+Not approved for manufacture. See ../PREORDER-REVIEW.md for unresolved physical-fit and electrical validation requirements.

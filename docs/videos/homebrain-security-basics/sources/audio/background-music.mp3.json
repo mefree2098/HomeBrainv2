@@ -1,0 +1,18 @@
+{
+  "method": "POST",
+  "operation": "music",
+  "output_file": "docs/videos/homebrain-security-basics/sources/audio/background-music.mp3",
+  "request": {
+    "force_instrumental": true,
+    "model_id": "music_v1",
+    "music_length_ms": 45000,
+    "prompt": "Loopable 45-second instrumental background bed for a premium smart-home instructional video. Warm modern ambient electronic production with gentle glassy synth pads, a soft muted pulse, and subtle marimba-like plucks. Calm, confident, trustworthy, and welcoming at a slow-to-medium tempo. Restrained arrangement, modest dynamics, no vocals, no dramatic builds, and no lead melody competing with speech. Leave ample space for a clear British female narrator and finish with a seamless loop point."
+  },
+  "response_headers": {
+    "content-length": "720606",
+    "content-type": "audio/mpeg",
+    "song-id": "ZdUbTB8mb0bWzYXsOX2x"
+  },
+  "status": 200,
+  "url": "https://api.elevenlabs.io/v1/music?output_format=mp3_44100_128"
+}

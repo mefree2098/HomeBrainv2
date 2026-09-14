@@ -1,0 +1,26 @@
+{
+  "method": "POST",
+  "operation": "tts",
+  "output_file": "docs/videos/weather-system-live/sources/audio/narration-evening-british-female-v3-calm.mp3",
+  "request": {
+    "language_code": "en",
+    "model_id": "eleven_v3",
+    "seed": 20260813,
+    "text": "[calm, measured, and matter-of-fact] HomeBrain brings your local forecast and live environmental sensors together in one place.\n\n[calm, measured, and matter-of-fact] On the Dashboard, the Climate card shows the current outdoor temperature, weather conditions, indoor air quality, wind, rainfall, pressure, and today\u2019s outlook.\n\n[calm, measured, and matter-of-fact] Select Weather in the side menu to open the Weather Command Deck.\n\n[calm, measured, and matter-of-fact] The deck combines the forecast for your saved location with live Tempest station readings and indoor air data. Status badges confirm when live telemetry is active and when indoor air quality is good.\n\n[calm, measured, and matter-of-fact] Use the summary cards to check the daily high and low, indoor temperature, wind, pressure, and rainfall. Forecast charts and sensor history continue below.\n\n[calm, measured, and matter-of-fact] Select Refresh whenever you want the latest readings from your connected systems.\n\n[calm, measured, and matter-of-fact] That is the HomeBrain weather system.",
+    "voice_settings": {
+      "similarity_boost": 0.75,
+      "speed": 0.96,
+      "stability": 0.5,
+      "style": 0.0,
+      "use_speaker_boost": false
+    }
+  },
+  "response_headers": {
+    "character-cost": "641",
+    "content-length": "966365",
+    "content-type": "audio/mpeg",
+    "request-id": "7uanFELoxj1h372VvZdA"
+  },
+  "status": 200,
+  "url": "https://api.elevenlabs.io/v1/text-to-speech/QIizStenaoETiqNgOXtC?output_format=mp3_44100_128"
+}

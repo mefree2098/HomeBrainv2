@@ -1,0 +1,26 @@
+{
+  "method": "POST",
+  "operation": "tts",
+  "output_file": "docs/videos/homebrain-security-basics/sources/audio/narration-evening-british-female-v3-calm.mp3",
+  "request": {
+    "language_code": "en",
+    "model_id": "eleven_v3",
+    "seed": 20260812,
+    "text": "[calm, measured, and matter-of-fact] Here\u2019s how to use HomeBrain\u2019s Security Center to arm away, arm stay, and disarm your security system.\n\n[calm, measured, and matter-of-fact] On the Dashboard, find the Security Center. The large status label tells you whether the system is disarmed or armed.\n\n[calm, measured, and matter-of-fact] Choose Arm Away when everyone is leaving. Away mode monitors every sensor configured for away protection, including interior motion sensors when enabled. Tap Arm Away. On a live system, HomeBrain begins your configured exit countdown. Leave during that time, and wait for the status to read Armed Away.\n\n[calm, measured, and matter-of-fact] To turn monitoring off, tap Disarm. If your home requires a security PIN, enter it when prompted. Check that the status returns to Disarmed.\n\n[calm, measured, and matter-of-fact] Choose Arm Stay when you are remaining at home. Stay mode protects the configured perimeter while typically leaving interior motion free, so you can move around inside. Tap Arm Stay, and confirm that the status reads Armed Stay.\n\n[calm, measured, and matter-of-fact] When you\u2019re ready, tap Disarm again and confirm the system reads Disarmed. Your administrator can choose exactly which sensors each mode monitors. That\u2019s all it takes to control HomeBrain security from the Dashboard.",
+    "voice_settings": {
+      "similarity_boost": 0.75,
+      "speed": 0.96,
+      "stability": 0.5,
+      "style": 0.0,
+      "use_speaker_boost": false
+    }
+  },
+  "response_headers": {
+    "character-cost": "810",
+    "content-length": "1350052",
+    "content-type": "audio/mpeg",
+    "request-id": "gLgT6YeysDDoPycsEeab"
+  },
+  "status": 200,
+  "url": "https://api.elevenlabs.io/v1/text-to-speech/QIizStenaoETiqNgOXtC?output_format=mp3_44100_128"
+}

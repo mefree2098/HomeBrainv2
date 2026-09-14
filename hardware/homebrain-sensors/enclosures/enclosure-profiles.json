@@ -1,0 +1,185 @@
+{
+  "schema_version": 2,
+  "units": "millimeters",
+  "printer_assumptions": {
+    "process": "FDM",
+    "nozzle_diameter": 0.4,
+    "layer_height": 0.2,
+    "xy_clearance": 0.35,
+    "minimum_wall": 1.2,
+    "recommended_material": "PETG"
+  },
+  "xiao_radio": {
+    "antenna_mode": "onboard_ceramic",
+    "antenna_end": "opposite_usb",
+    "forward_keepout_mm": 12.0,
+    "side_keepout_mm": 3.0,
+    "factory_header_usb_center_z_mm": 21.0,
+    "external_ufl_reserved": true
+  },
+  "motherboard_mount": {
+    "retention": "four common #4 screws through motherboard into printed plastic posts plus two tall rear USB-load walls",
+    "board_thickness_mm": 1.6,
+    "post_top_z_mm": 12.0,
+    "factory_header_standoff_mm": 2.5,
+    "post_outer_diameter_mm": 7.5,
+    "pilot_diameter_mm": 2.35,
+    "pilot_depth_mm": 8.4,
+    "rear_wall_height_mm": 18.0,
+    "rear_wall_depth_mm": 3.2,
+    "rear_wall_width_mm": 16.0,
+    "rear_wall_center_gap_mm": 18.0
+  },
+  "fastener": {
+    "description": "#4 x 3/8 in Phillips pan-head coarse-thread sheet-metal screw",
+    "home_depot_model": "Everbilt 824681",
+    "home_depot_store_sku": "1006540029",
+    "quantity_per_case_lid": 4,
+    "quantity_per_motherboard": 4,
+    "total_quantity": 24,
+    "screw_length_mm": 9.525,
+    "pilot_diameter_mm": 2.35,
+    "pilot_depth_mm": 8.4,
+    "clearance_diameter_mm": 3.4,
+    "head_recess_diameter_mm": 6.2,
+    "head_recess_depth_mm": 0.65,
+    "boss_outer_diameter_mm": 8.0,
+    "boss_edge_gap_mm": 1.0,
+    "gusset_boss_overlap_mm": 1.5,
+    "gusset_pilot_clearance_mm": 1.0
+  },
+  "profiles": [
+    {
+      "id": "atmosphere",
+      "title": "ATMOSPHERE // HB-01",
+      "accent": [0.10, 0.66, 0.72, 1.0],
+      "outer": [146.0, 104.0, 38.0],
+      "wall": 2.2,
+      "bottom": 2.4,
+      "corner_radius": 7.0,
+      "lid_thickness": 2.2,
+      "usb_cutout": {"side": -1, "center_y": 0.0, "width": 13.8, "height": 9.0, "center_z": 21.0},
+      "lid_features": {
+        "vent_fields": [
+          {"center": [-46.0, -25.75], "rows": 4, "columns": 2, "slot": [13.0, 2.4], "spacing": [14.5, 5.2], "angle": 18.0},
+          {"center": [-18.0, -20.0], "rows": 4, "columns": 2, "slot": [13.0, 2.4], "spacing": [14.5, 5.2], "angle": -18.0}
+        ],
+        "light_aperture": [-16.5, 16.5, 6.0]
+      },
+      "side_vents": [
+        {"id": "pms5003_intake", "axis": "y", "side": -1, "center": [22.0, -52.0, 13.7], "count": 4, "spacing": 5.0, "slot": [3.6, 8.0, 19.4]},
+        {"id": "pms5003_exhaust", "axis": "y", "side": -1, "center": [45.8, -52.0, 13.7], "count": 5, "spacing": 5.0, "slot": [3.6, 8.0, 19.4]}
+      ],
+      "components": [
+        {
+          "name": "Atmosphere motherboard",
+          "kind": "motherboard",
+          "center": [-32.0, 0.0],
+          "size": [64.0, 80.0, 1.6],
+          "source_board_size": [80.0, 64.0],
+          "source_rotation_degrees": 90,
+          "open_side": -1,
+          "mounting_holes": [[-59.5, -35.5], [-59.5, 35.5], [-4.5, -35.5], [-4.5, 35.5]],
+          "radio_board_size": [21.0, 17.8],
+          "radio_board_center_offset": [-21.0, 0.0]
+        },
+        {
+          "name": "PMS5003",
+          "kind": "large",
+          "center": [35.0, -28.4],
+          "size": [50.0, 38.0, 21.0],
+          "rotation": 0.0,
+          "airflow": {
+            "port_face_axis": "y",
+            "port_face_side": -1,
+            "port_face_size_mm": [50.0, 20.9],
+            "wall_gap_mm": 2.4,
+            "mount_base_height_mm": 0.8,
+            "intake_vent_id": "pms5003_intake",
+            "exhaust_vent_id": "pms5003_exhaust",
+            "fan_opening_diameter_mm": 18.0,
+            "minimum_intake_free_area_mm2": 250.0,
+            "separator_offset_mm": -2.0,
+            "separator_thickness_mm": 1.6,
+            "separator_sensor_clearance_mm": 0.3,
+            "shroud_rib_thickness_mm": 1.4
+          }
+        },
+        {"name": "BME680 on factory male header", "kind": "soldered", "factory_headered": true, "source_ref": "J1", "center": [-46.0, -25.75], "size": [18.0, 18.5, 7.0], "bottom_z": 16.1},
+        {"name": "SCD41 on factory male header", "kind": "soldered", "factory_headered": true, "source_ref": "J2", "center": [-18.0, -20.0], "size": [22.0, 22.0, 8.0], "bottom_z": 16.1},
+        {"name": "VEML7700 on factory male header", "kind": "soldered", "factory_headered": true, "source_ref": "J3", "center": [-16.5, 16.5], "size": [17.0, 17.0, 5.0], "bottom_z": 16.1},
+        {"name": "PMS red breakout on factory male header", "kind": "soldered", "factory_headered": true, "source_ref": "J4", "center": [-41.5, 27.5], "size": [25.0, 21.0, 8.5], "bottom_z": 16.1}
+      ]
+    },
+    {
+      "id": "presence",
+      "title": "PRESENCE // HB-02",
+      "accent": [0.63, 0.34, 0.94, 1.0],
+      "outer": [66.0, 94.0, 48.0],
+      "wall": 2.2,
+      "bottom": 2.4,
+      "corner_radius": 7.0,
+      "lid_thickness": 2.2,
+      "usb_cutout": {"side": -1, "center_y": -13.0, "width": 13.8, "height": 9.0, "center_z": 21.0},
+      "lid_features": {
+        "vent_fields": [
+          {"center": [18.5, 2.5], "rows": 4, "columns": 2, "slot": [11.0, 2.4], "spacing": [12.5, 5.2], "angle": -18.0}
+        ],
+        "light_aperture": [10.5, 18.5, 6.0],
+        "radar_window": {"center": [-7.0, 35.0], "size": [24.0, 18.0], "remaining_thickness": 1.2}
+      },
+      "side_vents": [],
+      "components": [
+        {
+          "name": "Presence motherboard",
+          "kind": "motherboard",
+          "center": [0.0, 0.0],
+          "size": [54.0, 64.0, 1.6],
+          "source_board_size": [64.0, 54.0],
+          "source_rotation_degrees": 90,
+          "open_side": -1,
+          "mounting_holes": [[-22.5, -27.5], [-22.5, 27.5], [22.5, -27.5], [22.5, 27.5]],
+          "radio_board_size": [21.0, 17.8],
+          "radio_board_center_offset": [-16.0, -13.0]
+        },
+        {"name": "DHT11 on factory male header", "kind": "soldered", "factory_headered": true, "source_ref": "J1", "center": [18.5, 2.5], "size": [3.0, 15.0, 28.0], "bottom_z": 16.1},
+        {"name": "VEML7700 on factory male header", "kind": "soldered", "factory_headered": true, "source_ref": "J2", "center": [10.5, 18.5], "size": [17.0, 17.0, 5.0], "bottom_z": 16.1},
+        {"name": "LD2410C factory-header overhang", "kind": "soldered", "factory_headered": true, "source_ref": "J3", "center": [-7.0, 35.0], "size": [22.0, 16.0, 5.0], "bottom_z": 16.1, "radar_face": "+z"}
+      ]
+    },
+    {
+      "id": "climate",
+      "title": "CLIMATE // HB-03",
+      "accent": [0.95, 0.55, 0.16, 1.0],
+      "outer": [110.0, 84.0, 48.0],
+      "wall": 2.2,
+      "bottom": 2.4,
+      "corner_radius": 7.0,
+      "lid_thickness": 2.2,
+      "usb_cutout": {"side": -1, "center_y": -9.0, "width": 13.8, "height": 9.0, "center_z": 21.0},
+      "lid_features": {
+        "vent_fields": [
+          {"center": [-12.0, 13.5], "rows": 4, "columns": 2, "slot": [11.0, 2.4], "spacing": [12.5, 5.2], "angle": -18.0}
+        ],
+        "status_aperture": [-40.0, -9.0, 2.4]
+      },
+      "side_vents": [],
+      "components": [
+        {
+          "name": "Climate motherboard",
+          "kind": "motherboard",
+          "center": [-27.0, 0.0],
+          "size": [48.0, 58.0, 1.6],
+          "source_board_size": [58.0, 48.0],
+          "source_rotation_degrees": 90,
+          "open_side": -1,
+          "mounting_holes": [[-46.5, -24.5], [-46.5, 24.5], [-7.5, -24.5], [-7.5, 24.5]],
+          "radio_board_size": [21.0, 17.8],
+          "radio_board_center_offset": [-13.0, -9.0]
+        },
+        {"name": "DHT11 on factory male header", "kind": "soldered", "factory_headered": true, "source_ref": "J1", "center": [-12.0, 13.5], "size": [3.0, 15.0, 28.0], "bottom_z": 16.1},
+        {"name": "LiPo 1000 mAh", "kind": "battery", "center": [26.0, 0.0], "size": [46.0, 32.0, 9.5], "rotation": 0.0}
+      ]
+    }
+  ]
+}

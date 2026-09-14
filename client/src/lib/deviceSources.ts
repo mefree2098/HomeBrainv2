@@ -13,6 +13,7 @@ type DeviceSourceDevice = {
 }
 
 const STANDARD_DEVICE_SOURCE_OPTIONS: DeviceSourceOption[] = [
+  { value: "homebrain-sensor", label: "HomeBrain Sensor", aliases: ["sensor-node"], standard: true },
   { value: "homebrain-zigbee", label: "Zigbee", aliases: ["zigbee"], standard: true },
   { value: "homebrain-zwave", label: "Z-Wave", aliases: ["zwave", "z-wave"], standard: true },
   { value: "homebrain-thread", label: "Thread", aliases: ["thread"], standard: true },

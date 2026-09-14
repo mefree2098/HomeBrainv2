@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "id": "homebrain-carrier-generator",
+  "summary": "DEPRECATED rejected universal-carrier experiment; retained only to explain and reproduce obsolete artifacts. Use homebrain-motherboard-generator.",
+  "scope": "project",
+  "tags": ["homebrain", "hardware", "pcb", "gerber", "wiring", "jst-xh"],
+  "entrypoint": ["python3", "scripts/generate-homebrain-carrier.py"],
+  "inputs": ["hardware/homebrain-sensors/carrier/carrier-design.json"],
+  "outputs": ["A deterministic Gerber/drill ZIP for a 32 x 56 mm two-layer carrier, routed layout JSON, exact BOM, carrier schematic/assembly images, and final Atmosphere/Presence/Climate keyed-harness SVG/PNG guides."],
+  "side_effects": ["Replaces only generated carrier artifacts under hardware/homebrain-sensors/carrier/generated/."],
+  "verify": [
+    ["python3", "scripts/test-verify-homebrain-carrier.py"],
+    ["python3", "scripts/verify-homebrain-carrier.py", "--repeat"]
+  ],
+  "determinism": {
+    "environment": ["macOS", "Python 3.10+", "Google Chrome at /Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
+    "network": "forbidden",
+    "clock": "forbidden",
+    "randomness": "forbidden"
+  },
+  "status": "deprecated",
+  "replaced_by": "homebrain-motherboard-generator"
+}

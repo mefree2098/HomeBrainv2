@@ -1,0 +1,79 @@
+{
+  "FilesAttributes": [
+    {
+      "FileFunction": "Copper,L1,Top",
+      "Path": "homebrain-carrier-F_Cu.gbr"
+    },
+    {
+      "FileFunction": "Copper,L2,Bot",
+      "Path": "homebrain-carrier-B_Cu.gbr"
+    },
+    {
+      "FileFunction": "SolderMask,Top",
+      "Path": "homebrain-carrier-F_Mask.gbr"
+    },
+    {
+      "FileFunction": "SolderMask,Bot",
+      "Path": "homebrain-carrier-B_Mask.gbr"
+    },
+    {
+      "FileFunction": "Legend,Top",
+      "Path": "homebrain-carrier-F_Silkscreen.gbr"
+    },
+    {
+      "FileFunction": "Profile",
+      "Path": "homebrain-carrier-Edge_Cuts.gbr"
+    },
+    {
+      "FileFunction": "Plated,1,2,PTH,Drill",
+      "Path": "homebrain-carrier-PTH.drl"
+    }
+  ],
+  "GeneralSpecs": {
+    "LayerNumber": 2,
+    "ProjectId": {
+      "Name": "homebrain-carrier",
+      "Revision": "v1.0"
+    },
+    "Size": {
+      "X": 32.0,
+      "Y": 56.0
+    }
+  },
+  "Header": {
+    "GenerationSoftware": {
+      "Application": "HomeBrain Carrier Generator",
+      "Vendor": "OpenAI",
+      "Version": "1.0"
+    }
+  },
+  "MaterialStackup": [
+    {
+      "Name": "Top Silkscreen",
+      "Type": "Legend"
+    },
+    {
+      "Name": "Top Solder Mask",
+      "Type": "SolderPaste"
+    },
+    {
+      "Name": "Top Copper",
+      "Notes": "1 oz",
+      "Type": "Copper"
+    },
+    {
+      "Name": "FR-4",
+      "Thickness": 1.6,
+      "Type": "Dielectric"
+    },
+    {
+      "Name": "Bottom Copper",
+      "Notes": "1 oz",
+      "Type": "Copper"
+    },
+    {
+      "Name": "Bottom Solder Mask",
+      "Type": "SolderPaste"
+    }
+  ]
+}

@@ -10,7 +10,7 @@ const {
   getDeviceSourceLabel
 } = require('../services/deviceSourceCatalog');
 
-test('device source catalog exposes native radio, Thread, and Matter options even before devices exist', () => {
+test('device source catalog exposes native sensors, radio, Thread, and Matter options even before devices exist', () => {
   const options = buildDeviceSourceOptions([]);
   const values = options.map((option) => option.value);
   const labels = options.map((option) => option.label);
@@ -19,10 +19,12 @@ test('device source catalog exposes native radio, Thread, and Matter options eve
   assert.equal(values.includes('homebrain-zwave'), true);
   assert.equal(values.includes('homebrain-thread'), true);
   assert.equal(values.includes('homebrain-matter'), true);
+  assert.equal(values.includes('homebrain-sensor'), true);
   assert.equal(labels.includes('Zigbee'), true);
   assert.equal(labels.includes('Z-Wave'), true);
   assert.equal(labels.includes('Thread'), true);
   assert.equal(labels.includes('Matter'), true);
+  assert.equal(labels.includes('HomeBrain Sensor'), true);
 });
 
 test('device source catalog canonicalizes source aliases and infers native protocols', () => {
@@ -30,6 +32,7 @@ test('device source catalog canonicalizes source aliases and infers native proto
   assert.equal(canonicalizeDeviceSource('z-wave'), 'homebrain-zwave');
   assert.equal(canonicalizeDeviceSource('thread'), 'homebrain-thread');
   assert.equal(canonicalizeDeviceSource('matter'), 'homebrain-matter');
+  assert.equal(canonicalizeDeviceSource('sensor-node'), 'homebrain-sensor');
   assert.equal(getDeviceSourceLabel('homebrain-zwave'), 'Z-Wave');
 
   assert.equal(getDeviceSource({

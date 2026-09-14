@@ -1,0 +1,13 @@
+Item,Exact part,Order quantity,Use,Source,URL
+Bare carrier PCB,HomeBrain Universal Sensor Carrier v1.0,5,3 used + 2 spares,JLCPCB,https://cart.jlcpcb.com/quote
+1x7 female socket,Sullins PPTC071LFBN-RC / DigiKey S7005-ND,8,6 used + 2 spares,DigiKey,https://www.digikey.com/en/products/detail/sullins-connector-solutions/PPTC071LFBN-RC/810146
+4-pin vertical header,JST B4B-XH-A(LF)(SN) / 455-B4B-XH-A-ND,14,12 used + 2 spares,DigiKey,https://www.digikey.com/en/products/detail/jst-sales-america-inc/B4B-XH-A/1651047
+3-pin vertical header,JST B3B-XH-A(LF)(SN) / 455-2248-ND,4,3 used + 1 spare,DigiKey,https://www.digikey.com/en/products/detail/jst-sales-america-inc/B3B-XH-A/1651046
+2-pin vertical header,JST B2B-XH-A(LF)(SN) / 455-B2B-XH-A-ND,8,6 used + 2 spares,DigiKey,https://www.digikey.com/en/products/detail/jst-sales-america-inc/B2B-XH-A/1651045
+4-pin plug housing,JST XHP-4 / 455-2267-ND,8,6 used + 2 spares,DigiKey,https://www.digikey.com/en/products/detail/jst-sales-america-inc/XHP-4/683353
+3-pin plug housing,JST XHP-3 / 455-2219-ND,4,2 used + 2 spares,DigiKey,https://www.digikey.com/en/products/detail/jst-sales-america-inc/XHP-3/1651017
+2-pin plug housing,JST XHP-2 / 455-2266-ND,4,2 used + 2 spares,DigiKey,https://www.digikey.com/en/products/detail/jst-sales-america-inc/XHP-2/555485
+8-inch double-ended pre-crimp lead,JST ASXHSXH22K203 / 455-4222-ND,20,Cut 1.25-inch stubs from both ends: 40 keyed contacts; 34 used,DigiKey,https://www.digikey.com/en/products/detail/jst-sales-america-inc/ASXHSXH22K203/9961918
+200 kOhm 1% resistor,Yageo MFR-25FRF52-200K cut tape,4,Climate R1/R2: 2 used + 2 spares,DigiKey,https://www.digikey.com/en/products/detail/yageo/MFR-25FRF52-200K/15104
+Micro 1.25 mm 2-pin pigtail set,Amazon B0DMT6VZVC,1 kit,Use the half that physically mates with the MakerHawk battery; polarity-meter before splicing to J6,Amazon,https://www.amazon.com/dp/B0DMT6VZVC
+Female Dupont jumper ribbon,ELEGOO B01EV70C78,1 kit,Use 30 female ends for module-side harnesses,Already purchased deluxe item,https://www.amazon.com/dp/B01EV70C78

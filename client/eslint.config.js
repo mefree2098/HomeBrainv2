@@ -18,7 +18,9 @@ export default tseslint.config(
       'react-refresh': reactRefresh,
     },
     rules: {
-      ...reactHooks.configs.recommended.rules,
+      // Preserve the existing Hooks policy while upgrading the ESLint engine.
+      // The v7 recommended preset also enables a separate React Compiler migration.
+      'react-hooks/rules-of-hooks': 'error',
       // Legacy codebase baseline: strict enforcement is applied incrementally via file-level overrides below.
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-unused-vars': 'off',

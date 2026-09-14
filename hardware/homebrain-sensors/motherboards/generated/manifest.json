@@ -1,0 +1,261 @@
+{
+  "boards": {
+    "atmosphere": {
+      "board_mm": [
+        80.0,
+        64.0,
+        1.6
+      ],
+      "gerber_zip": "atmosphere/homebrain-atmosphere-motherboard-gerbers.zip",
+      "ground_plane_void_count": 1009,
+      "jlcpcb_import_zip": "atmosphere/homebrain-atmosphere-motherboard-jlcpcb-import-check.zip",
+      "pad_count": 41,
+      "route_segment_count": 110,
+      "via_count": 0
+    },
+    "climate": {
+      "board_mm": [
+        58.0,
+        48.0,
+        1.6
+      ],
+      "gerber_zip": "climate/homebrain-climate-motherboard-gerbers.zip",
+      "ground_plane_void_count": 62,
+      "jlcpcb_import_zip": "climate/homebrain-climate-motherboard-jlcpcb-import-check.zip",
+      "pad_count": 29,
+      "route_segment_count": 120,
+      "via_count": 0
+    },
+    "presence": {
+      "board_mm": [
+        64.0,
+        54.0,
+        1.6
+      ],
+      "gerber_zip": "presence/homebrain-presence-motherboard-gerbers.zip",
+      "ground_plane_void_count": 1616,
+      "jlcpcb_import_zip": "presence/homebrain-presence-motherboard-jlcpcb-import-check.zip",
+      "pad_count": 31,
+      "route_segment_count": 121,
+      "via_count": 1
+    }
+  },
+  "design_sha256": "981a20c0719c4890354ac60fdc553605a30987ebeaf7b8987afc2434f3efee5e",
+  "files": {
+    "RELEASE-STATUS.txt": {
+      "bytes": 129,
+      "sha256": "8fcdae3691e0c68c6e1d148af0546d628d4a1e2656b28c4bfdec53c322597715"
+    },
+    "atmosphere/assembly-bom.csv": {
+      "bytes": 1302,
+      "sha256": "6ee539317aab9a3d289b4034efd797312151f800150bb4833b0747c46d754d15"
+    },
+    "atmosphere/gerbers/homebrain-atmosphere-motherboard-B_Cu.gbr": {
+      "bytes": 41454,
+      "sha256": "148b820abc76722c9ae9abffeaef04dbfa660ece9dbb1d1278ccec7bf49fdd4c"
+    },
+    "atmosphere/gerbers/homebrain-atmosphere-motherboard-B_Mask.gbr": {
+      "bytes": 1522,
+      "sha256": "e935d8860d083392db93fee666c1126f9cb8f745cdc7f5a29b1ddb3d97685914"
+    },
+    "atmosphere/gerbers/homebrain-atmosphere-motherboard-Edge_Cuts.gbr": {
+      "bytes": 417,
+      "sha256": "39fcf4510061a383d5900199da52cb3e90d7eb29ce9280421661d52882ff1ea5"
+    },
+    "atmosphere/gerbers/homebrain-atmosphere-motherboard-F_Cu.gbr": {
+      "bytes": 9690,
+      "sha256": "e0cdeab9f24327d9d61680ab6b9305738766afcc7eaa88a6b68fde0a1c26fa1a"
+    },
+    "atmosphere/gerbers/homebrain-atmosphere-motherboard-F_Mask.gbr": {
+      "bytes": 1523,
+      "sha256": "35281d75a7fab43ec508c37eb133007412c5f3e409129f6ef8df786e5d5b5a50"
+    },
+    "atmosphere/gerbers/homebrain-atmosphere-motherboard-F_Silkscreen.gbr": {
+      "bytes": 33431,
+      "sha256": "2a8be3c6503ee3fa6752248be8593266cb89108d5465b6f246da600d730c0022"
+    },
+    "atmosphere/gerbers/homebrain-atmosphere-motherboard-PTH.drl": {
+      "bytes": 699,
+      "sha256": "693992b68923947f881081a0a66a671fa253813bb02f864deba76cf2a1236c67"
+    },
+    "atmosphere/gerbers/homebrain-atmosphere-motherboard-job.gbrjob": {
+      "bytes": 1191,
+      "sha256": "5bb8ec0d6bff66356ed5c4834693d51900291bdc408c829f35a18e1b95894114"
+    },
+    "atmosphere/homebrain-atmosphere-motherboard-assembly.png": {
+      "bytes": 231157,
+      "sha256": "61bf7b427cbc196c3135cab94bafb4410bfa49ac87a067ac99dd26e81dcc1133"
+    },
+    "atmosphere/homebrain-atmosphere-motherboard-assembly.svg": {
+      "bytes": 34523,
+      "sha256": "059c13d9718a7e5546085c5492150ee1c20658d3d7c6530ab8c376a2ebe84411"
+    },
+    "atmosphere/homebrain-atmosphere-motherboard-fit-check.svg": {
+      "bytes": 9852,
+      "sha256": "c12b2a2e9fd97bff141fcfe3eaf4dc32eb55f0fa778a6e720bf56af08da0daf2"
+    },
+    "atmosphere/homebrain-atmosphere-motherboard-gerbers.zip": {
+      "bytes": 12394,
+      "sha256": "bbd632ed45e2617f7dc22a45bfc2d85f084db30db0e661cd9235027c993b21ad"
+    },
+    "atmosphere/homebrain-atmosphere-motherboard-jlcpcb-import-check.zip": {
+      "bytes": 12123,
+      "sha256": "e2eb535fac1fa57e4a15994f9a5dfb70d41cadb52316d5e9cc9a02143c75c797"
+    },
+    "atmosphere/homebrain-atmosphere-motherboard-schematic.png": {
+      "bytes": 120783,
+      "sha256": "b914ce1991a6f5c0a882b774e527238f40c836c33c555d23fee157a71ebace1e"
+    },
+    "atmosphere/homebrain-atmosphere-motherboard-schematic.svg": {
+      "bytes": 5554,
+      "sha256": "57f54049a92c2f01824e483ad8a3a3d5ba89bc0db40921e78c3058b1a9112eb0"
+    },
+    "atmosphere/layout.json": {
+      "bytes": 126641,
+      "sha256": "936b6076382dc2cacfadd288d09921687a94fa0a9109f29b278556866a56f288"
+    },
+    "climate/assembly-bom.csv": {
+      "bytes": 1154,
+      "sha256": "925b4c63a89afe81a2db56ed530f973d7a2ba116c5bd2d96149c7ab37080bb22"
+    },
+    "climate/gerbers/homebrain-climate-motherboard-B_Cu.gbr": {
+      "bytes": 8811,
+      "sha256": "4aed7616ec12367b2d17bade8b87d40f20d57c85b87a938dd40cf73d8f79d57d"
+    },
+    "climate/gerbers/homebrain-climate-motherboard-B_Mask.gbr": {
+      "bytes": 1135,
+      "sha256": "b47ef2c66a18866e204f52c0bc42d4eef4b5793927deb1034b5af16636def9ab"
+    },
+    "climate/gerbers/homebrain-climate-motherboard-Edge_Cuts.gbr": {
+      "bytes": 414,
+      "sha256": "12b846b9f540ae2f3beb1c13a5847aec16208d5b1ad05dc222f95e94f5f972d0"
+    },
+    "climate/gerbers/homebrain-climate-motherboard-F_Cu.gbr": {
+      "bytes": 11667,
+      "sha256": "17f51b38806ab447f57fc87066960378a2bdc262f7a976b32e439866e003ebf8"
+    },
+    "climate/gerbers/homebrain-climate-motherboard-F_Mask.gbr": {
+      "bytes": 1136,
+      "sha256": "a0032c1d1759523322ba243a66c1db3616e91e048edcdc13058c9f56c9bde332"
+    },
+    "climate/gerbers/homebrain-climate-motherboard-F_Silkscreen.gbr": {
+      "bytes": 20884,
+      "sha256": "71331237763773f81e19f0540073fe820f226848c719b4be09a2c07f358af657"
+    },
+    "climate/gerbers/homebrain-climate-motherboard-PTH.drl": {
+      "bytes": 551,
+      "sha256": "d060e903e1fa8f3bd1655f39feb7f668b52171070a2dd9b25b79eb450b530362"
+    },
+    "climate/gerbers/homebrain-climate-motherboard-job.gbrjob": {
+      "bytes": 1167,
+      "sha256": "d4319e44fa628553d279006c54f16bdd0a10a15c2fcee741f7970ba8dcc4d289"
+    },
+    "climate/homebrain-climate-motherboard-assembly.png": {
+      "bytes": 179116,
+      "sha256": "35509c0b6011dc532533631ef2abc8d48b1df800f3b4948301189a0fb5a6c430"
+    },
+    "climate/homebrain-climate-motherboard-assembly.svg": {
+      "bytes": 30181,
+      "sha256": "e52aa3c910bab62dd4c5941488e53f1b40c714c81e1142747617758cc5e2fc28"
+    },
+    "climate/homebrain-climate-motherboard-fit-check.svg": {
+      "bytes": 7564,
+      "sha256": "bc245084519973bd584e9e53379a8f8ee32da7a4aebcb1db345aaef4e05c2368"
+    },
+    "climate/homebrain-climate-motherboard-gerbers.zip": {
+      "bytes": 7819,
+      "sha256": "95c542c294d3dea8c4449bcfebd7463f484e3a99b4df5f451a3d4f9f9d5f5d1b"
+    },
+    "climate/homebrain-climate-motherboard-jlcpcb-import-check.zip": {
+      "bytes": 7547,
+      "sha256": "dbd475cb171a08113e26a80c52590704e969b27d0f43e462ed350195d6d690a9"
+    },
+    "climate/homebrain-climate-motherboard-schematic.png": {
+      "bytes": 95807,
+      "sha256": "a222180fb51e7092413052dba3360da0e1bf800534c6214b8f0548a8c21fab77"
+    },
+    "climate/homebrain-climate-motherboard-schematic.svg": {
+      "bytes": 4135,
+      "sha256": "e8750a801bd304235365884b1c9e34799d4e540196ef9854c62c0b2b6b9a141a"
+    },
+    "climate/layout.json": {
+      "bytes": 39296,
+      "sha256": "9f69850fe5ab72a76f25cbf6f2f1c832c2e1236453f222bc74f186100ea27903"
+    },
+    "order-list.csv": {
+      "bytes": 941,
+      "sha256": "9bc4912bf50df647ae76edc9fb5071c8f55a81009aebf7899172c4922b3055ed"
+    },
+    "presence/assembly-bom.csv": {
+      "bytes": 1122,
+      "sha256": "d2879c8d7124a140259b4a32c17edac8599440766085701f63c265b1d7710e2b"
+    },
+    "presence/gerbers/homebrain-presence-motherboard-B_Cu.gbr": {
+      "bytes": 63494,
+      "sha256": "df805319ae5c7de9698301c86ca48cb46128a3a6b4cb020741c1bbdd0a369ee1"
+    },
+    "presence/gerbers/homebrain-presence-motherboard-B_Mask.gbr": {
+      "bytes": 1200,
+      "sha256": "e8a53350dcba0a11fce657dfab4168578e122b654f7b69dc388e834adb6c1873"
+    },
+    "presence/gerbers/homebrain-presence-motherboard-Edge_Cuts.gbr": {
+      "bytes": 415,
+      "sha256": "c913cc92b559b98aae970fcb1e0530d167e88e749baa00dfd9b8faa3cfb22868"
+    },
+    "presence/gerbers/homebrain-presence-motherboard-F_Cu.gbr": {
+      "bytes": 7348,
+      "sha256": "921746bf9a0443b2d199ee95c1afde07c96070cba08d9c9c3bb9f45bf6c879af"
+    },
+    "presence/gerbers/homebrain-presence-motherboard-F_Mask.gbr": {
+      "bytes": 1201,
+      "sha256": "a6639e57f571af419d22e0bfc97a7bc880751b963e83fa1dc58ee9eb7b526d2b"
+    },
+    "presence/gerbers/homebrain-presence-motherboard-F_Silkscreen.gbr": {
+      "bytes": 20605,
+      "sha256": "b15398f64c2fcbe67c7a470ef1aa010e8d01d697131b3f3ad3ef12452d459182"
+    },
+    "presence/gerbers/homebrain-presence-motherboard-PTH.drl": {
+      "bytes": 579,
+      "sha256": "037516f0bbbb78f93378f3ee6597a4a6ce81e3102dfa38c1d82c541b33850cec"
+    },
+    "presence/gerbers/homebrain-presence-motherboard-job.gbrjob": {
+      "bytes": 1175,
+      "sha256": "18ed24bae90d1066f11280bf08aefaa3e85be14cd0d2ecf89890b61e5f00f3d9"
+    },
+    "presence/homebrain-presence-motherboard-assembly.png": {
+      "bytes": 182836,
+      "sha256": "3c042aa7c649ca30fe5773b8e69800d715b4ee5aeacf97a25d42dd364623b868"
+    },
+    "presence/homebrain-presence-motherboard-assembly.svg": {
+      "bytes": 30010,
+      "sha256": "c4f499ee6f6ab6409cf414c897f29a41f13f9e735889baa6ed39aad935c96951"
+    },
+    "presence/homebrain-presence-motherboard-fit-check.svg": {
+      "bytes": 7722,
+      "sha256": "b6a6bd2776c0f54b28e42215c5cd14bbc8d7631305146d1f926f622e531be681"
+    },
+    "presence/homebrain-presence-motherboard-gerbers.zip": {
+      "bytes": 11897,
+      "sha256": "fc85a8089b9a62881898d692f44173e154ae2878d376db401151d61b124e61f0"
+    },
+    "presence/homebrain-presence-motherboard-jlcpcb-import-check.zip": {
+      "bytes": 11635,
+      "sha256": "774169295fb03e3d0d3fe867342e3b87949d9e3bfc4f1ac5631d834632b51d23"
+    },
+    "presence/homebrain-presence-motherboard-schematic.png": {
+      "bytes": 100931,
+      "sha256": "ac7df418d3796cc4faab517b0be94a666f5ba7b4c723e14a0ac263347ef13cab"
+    },
+    "presence/homebrain-presence-motherboard-schematic.svg": {
+      "bytes": 5960,
+      "sha256": "96f7ef867462b6da2e78f7d1089aee60202dad9e5be25278ebf792ac6d051981"
+    },
+    "presence/layout.json": {
+      "bytes": 180405,
+      "sha256": "7dff828bcbc48be3a32ffef3b078b28cf9c86db4ad64cf5b65a76de3f29ec371"
+    }
+  },
+  "generator": "scripts/generate-homebrain-motherboards.py",
+  "release_status": "HOLD",
+  "schema_version": 1
+}

@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1100" viewBox="0 0 1800 1100">
+<title>HomeBrain carrier electrical schematic</title>
+<metadata>{"artifact": "carrier-schematic", "net_count": 12}</metadata>
+<rect width="100%" height="100%" fill="#f4f7fb"/>
+<text x="60" y="62" font-family="Arial,Helvetica,sans-serif" font-size="34" font-weight="850" fill="#15243b" text-anchor="start">HOMEBRAIN CARRIER — ELECTRICAL SCHEMATIC</text>
+<text x="60" y="100" font-family="Arial,Helvetica,sans-serif" font-size="21" font-weight="650" fill="#56708d" text-anchor="start">The carrier is passive: sockets, copper fan-out, keyed headers, and the Climate-only 1:2 battery divider.</text>
+<rect x="690" y="210" width="420" height="620" rx="22" fill="#103b53" stroke="#62dfd0" stroke-width="4" data-part="U1"/>
+<text x="900" y="262" font-family="Arial,Helvetica,sans-serif" font-size="27" font-weight="850" fill="white" text-anchor="middle">U1  XIAO ESP32-C6</text>
+<rect x="90" y="190" width="360" height="130" rx="16" fill="#ffffff" stroke="#c7d2e2" stroke-width="2.0" data-part="J1"/>
+<text x="115" y="224" font-family="Arial,Helvetica,sans-serif" font-size="21" font-weight="850" fill="#15243b" text-anchor="start">J1  I2C-A</text>
+<text x="120" y="251" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#252f3d" text-anchor="start">1 GND</text>
+<path d="M 450 246 H 570 V 310 H 690" fill="none" stroke="#252f3d" stroke-width="4" data-net="GND"/>
+<text x="120" y="270" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#e13d4e" text-anchor="start">2 3V3</text>
+<path d="M 450 265 H 570 V 348 H 690" fill="none" stroke="#e13d4e" stroke-width="4" data-net="3V3"/>
+<text x="120" y="289" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#1aa876" text-anchor="start">3 SDA</text>
+<path d="M 450 284 H 570 V 614 H 690" fill="none" stroke="#1aa876" stroke-width="4" data-net="SDA"/>
+<text x="120" y="308" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#237bd8" text-anchor="start">4 SCL</text>
+<path d="M 450 303 H 570 V 652 H 690" fill="none" stroke="#237bd8" stroke-width="4" data-net="SCL"/>
+<rect x="90" y="360" width="360" height="130" rx="16" fill="#ffffff" stroke="#c7d2e2" stroke-width="2.0" data-part="J2"/>
+<text x="115" y="394" font-family="Arial,Helvetica,sans-serif" font-size="21" font-weight="850" fill="#15243b" text-anchor="start">J2  I2C-B</text>
+<text x="120" y="421" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#252f3d" text-anchor="start">1 GND</text>
+<path d="M 450 416 H 570 V 310 H 690" fill="none" stroke="#252f3d" stroke-width="4" data-net="GND"/>
+<text x="120" y="440" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#e13d4e" text-anchor="start">2 3V3</text>
+<path d="M 450 435 H 570 V 348 H 690" fill="none" stroke="#e13d4e" stroke-width="4" data-net="3V3"/>
+<text x="120" y="459" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#1aa876" text-anchor="start">3 SDA</text>
+<path d="M 450 454 H 570 V 614 H 690" fill="none" stroke="#1aa876" stroke-width="4" data-net="SDA"/>
+<text x="120" y="478" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#237bd8" text-anchor="start">4 SCL</text>
+<path d="M 450 473 H 570 V 652 H 690" fill="none" stroke="#237bd8" stroke-width="4" data-net="SCL"/>
+<rect x="90" y="530" width="360" height="130" rx="16" fill="#ffffff" stroke="#c7d2e2" stroke-width="2.0" data-part="J3"/>
+<text x="115" y="564" font-family="Arial,Helvetica,sans-serif" font-size="21" font-weight="850" fill="#15243b" text-anchor="start">J3  I2C-C</text>
+<text x="120" y="591" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#252f3d" text-anchor="start">1 GND</text>
+<path d="M 450 586 H 570 V 310 H 690" fill="none" stroke="#252f3d" stroke-width="4" data-net="GND"/>
+<text x="120" y="610" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#e13d4e" text-anchor="start">2 3V3</text>
+<path d="M 450 605 H 570 V 348 H 690" fill="none" stroke="#e13d4e" stroke-width="4" data-net="3V3"/>
+<text x="120" y="629" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#1aa876" text-anchor="start">3 SDA</text>
+<path d="M 450 624 H 570 V 614 H 690" fill="none" stroke="#1aa876" stroke-width="4" data-net="SDA"/>
+<text x="120" y="648" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#237bd8" text-anchor="start">4 SCL</text>
+<path d="M 450 643 H 570 V 652 H 690" fill="none" stroke="#237bd8" stroke-width="4" data-net="SCL"/>
+<rect x="90" y="700" width="360" height="130" rx="16" fill="#ffffff" stroke="#c7d2e2" stroke-width="2.0" data-part="J5"/>
+<text x="115" y="734" font-family="Arial,Helvetica,sans-serif" font-size="21" font-weight="850" fill="#15243b" text-anchor="start">J5  DHT</text>
+<text x="120" y="761" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#252f3d" text-anchor="start">1 GND</text>
+<path d="M 450 756 H 570 V 310 H 690" fill="none" stroke="#252f3d" stroke-width="4" data-net="GND"/>
+<text x="120" y="780" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#9b7fc2" text-anchor="start">2 DATA</text>
+<path d="M 450 775 H 570 V 538 H 690" fill="none" stroke="#9b7fc2" stroke-width="4" data-net="D2"/>
+<text x="120" y="799" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#f28b27" text-anchor="start">3 PWR</text>
+<path d="M 450 794 H 570 V 576 H 690" fill="none" stroke="#f28b27" stroke-width="4" data-net="D3"/>
+<rect x="1350" y="220" width="360" height="130" rx="16" fill="#ffffff" stroke="#c7d2e2" stroke-width="2.0" data-part="J4"/>
+<text x="1375" y="254" font-family="Arial,Helvetica,sans-serif" font-size="21" font-weight="850" fill="#15243b" text-anchor="start">J4  UART-5V</text>
+<text x="1380" y="281" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#252f3d" text-anchor="start">1 GND</text>
+<path d="M 1110 310 H 1230 V 276 H 1350" fill="none" stroke="#252f3d" stroke-width="4" data-net="GND"/>
+<text x="1380" y="300" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#ff675c" text-anchor="start">2 5V</text>
+<path d="M 1110 386 H 1230 V 295 H 1350" fill="none" stroke="#ff675c" stroke-width="4" data-net="VBUS"/>
+<text x="1380" y="319" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#814cd1" text-anchor="start">3 MCU-TX</text>
+<path d="M 1110 690 H 1230 V 314 H 1350" fill="none" stroke="#814cd1" stroke-width="4" data-net="TX"/>
+<text x="1380" y="338" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#e0a61a" text-anchor="start">4 MCU-RX</text>
+<path d="M 1110 728 H 1230 V 333 H 1350" fill="none" stroke="#e0a61a" stroke-width="4" data-net="RX"/>
+<rect x="1350" y="480" width="360" height="130" rx="16" fill="#ffffff" stroke="#c7d2e2" stroke-width="2.0" data-part="J6"/>
+<text x="1375" y="514" font-family="Arial,Helvetica,sans-serif" font-size="21" font-weight="850" fill="#15243b" text-anchor="start">J6  BAT-IN</text>
+<text x="1380" y="541" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#252f3d" text-anchor="start">1 BAT-</text>
+<path d="M 1110 310 H 1230 V 536 H 1350" fill="none" stroke="#252f3d" stroke-width="4" data-net="GND"/>
+<text x="1380" y="560" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#d32636" text-anchor="start">2 BAT+</text>
+<path d="M 1110 424 H 1230 V 555 H 1350" fill="none" stroke="#d32636" stroke-width="4" data-net="BAT+"/>
+<rect x="1350" y="680" width="360" height="130" rx="16" fill="#ffffff" stroke="#c7d2e2" stroke-width="2.0" data-part="J7"/>
+<text x="1375" y="714" font-family="Arial,Helvetica,sans-serif" font-size="21" font-weight="850" fill="#15243b" text-anchor="start">J7  TO-XIAO-BAT</text>
+<text x="1380" y="741" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#252f3d" text-anchor="start">1 BAT-</text>
+<path d="M 1110 310 H 1230 V 736 H 1350" fill="none" stroke="#252f3d" stroke-width="4" data-net="GND"/>
+<text x="1380" y="760" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="700" fill="#d32636" text-anchor="start">2 BAT+</text>
+<path d="M 1110 424 H 1230 V 755 H 1350" fill="none" stroke="#d32636" stroke-width="4" data-net="BAT+"/>
+<text x="900" y="316" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="850" fill="#252f3d" text-anchor="middle">GND</text>
+<text x="900" y="354" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="850" fill="#e13d4e" text-anchor="middle">3V3</text>
+<text x="900" y="392" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="850" fill="#ff675c" text-anchor="middle">VBUS</text>
+<text x="900" y="430" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="850" fill="#d32636" text-anchor="middle">BAT+</text>
+<text x="900" y="468" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="850" fill="#d39b12" text-anchor="middle">A0</text>
+<text x="900" y="506" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="850" fill="#7b8798" text-anchor="middle">D1</text>
+<text x="900" y="544" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="850" fill="#9b7fc2" text-anchor="middle">D2</text>
+<text x="900" y="582" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="850" fill="#f28b27" text-anchor="middle">D3</text>
+<text x="900" y="620" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="850" fill="#1aa876" text-anchor="middle">SDA</text>
+<text x="900" y="658" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="850" fill="#237bd8" text-anchor="middle">SCL</text>
+<text x="900" y="696" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="850" fill="#814cd1" text-anchor="middle">TX</text>
+<text x="900" y="734" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="850" fill="#e0a61a" text-anchor="middle">RX</text>
+<rect x="1160" y="865" width="550" height="175" rx="18" fill="#fff9e9" stroke="#e9b847" stroke-width="3" />
+<text x="1188" y="905" font-family="Arial,Helvetica,sans-serif" font-size="21" font-weight="850" fill="#7a5400" text-anchor="start">CLIMATE BATTERY DIVIDER</text>
+<text x="1190" y="950" font-family="Arial,Helvetica,sans-serif" font-size="20" font-weight="750" fill="#15243b" text-anchor="start">BAT+ ─ R1 200 kΩ ─ A0 ─ R2 200 kΩ ─ GND</text>
+<text x="1190" y="990" font-family="Arial,Helvetica,sans-serif" font-size="17" font-weight="650" fill="#6d5b32" text-anchor="start">J6 feeds the battery; J7 carries ± to the XIAO underside pads.</text>
+<rect x="90" y="865" width="720" height="175" rx="18" fill="#ffffff" stroke="#c7d2e2" stroke-width="2.0" />
+<text x="118" y="905" font-family="Arial,Helvetica,sans-serif" font-size="21" font-weight="850" fill="#c22f35" text-anchor="start">IMPORTANT</text>
+<text x="118" y="950" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="700" fill="#15243b" text-anchor="start">J4 pin 3 MCU-TX goes to the sensor RX pin.</text>
+<text x="118" y="988" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="700" fill="#15243b" text-anchor="start">J4 pin 4 MCU-RX comes from the sensor TX pin.</text>
+</svg>

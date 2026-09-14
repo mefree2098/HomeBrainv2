@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "title": "HomeBrain Universal Sensor Carrier v1.0",
+  "units": "millimeters",
+  "board": {
+    "width": 32.0,
+    "height": 56.0,
+    "thickness": 1.6,
+    "layers": 2,
+    "minimum_trace_width": 0.4,
+    "power_trace_width": 0.8,
+    "minimum_clearance": 0.25,
+    "edge_clearance": 0.6,
+    "solder_mask_expansion": 0.08,
+    "finish": "lead-free HASL",
+    "material": "FR-4",
+    "copper_weight_oz": 1,
+    "antenna_copper_keepout": {
+      "min": [17.5, 22.0],
+      "max": [32.0, 34.0],
+      "reason": "No carrier copper directly under or forward of the XIAO ESP32-C6 onboard ceramic antenna."
+    }
+  },
+  "xiao": {
+    "reference": "U1",
+    "center": [11.0, 28.0],
+    "board_size": [21.0, 17.8],
+    "usb_edge": "left",
+    "row_spacing": 15.24,
+    "pin_pitch": 2.54,
+    "socket_drill": 1.0,
+    "socket_pad_diameter": 1.8,
+    "top_row": [
+      ["D0/A0", "A0"],
+      ["D1/SERVICE", "D1"],
+      ["D2", "D2"],
+      ["D3/PWR", "D3"],
+      ["D4/SDA", "SDA"],
+      ["D5/SCL", "SCL"],
+      ["D6/TX", "TX"]
+    ],
+    "bottom_row": [
+      ["VBUS/5V", "VBUS"],
+      ["GND", "GND"],
+      ["3V3", "3V3"],
+      ["D10", "NC_D10"],
+      ["D9", "NC_D9"],
+      ["D8", "NC_D8"],
+      ["D7/RX", "RX"]
+    ]
+  },
+  "parts": [
+    {
+      "ref": "J1",
+      "value": "I2C-A",
+      "type": "JST-XH",
+      "positions": 4,
+      "center": [8.0, 4.5],
+      "pin_nets": ["GND", "3V3", "SDA", "SCL"],
+      "labels": ["GND", "3V3", "SDA", "SCL"]
+    },
+    {
+      "ref": "J2",
+      "value": "I2C-B",
+      "type": "JST-XH",
+      "positions": 4,
+      "center": [24.0, 4.5],
+      "pin_nets": ["GND", "3V3", "SDA", "SCL"],
+      "labels": ["GND", "3V3", "SDA", "SCL"]
+    },
+    {
+      "ref": "J5",
+      "value": "DHT",
+      "type": "JST-XH",
+      "positions": 3,
+      "center": [8.0, 12.0],
+      "pin_nets": ["GND", "D2", "D3"],
+      "labels": ["GND", "DATA", "PWR"]
+    },
+    {
+      "ref": "J6",
+      "value": "BAT-IN",
+      "type": "JST-XH",
+      "positions": 2,
+      "center": [20.0, 12.0],
+      "pin_nets": ["GND", "BAT+"],
+      "labels": ["BAT-", "BAT+"]
+    },
+    {
+      "ref": "R1",
+      "value": "200k 1%",
+      "type": "AXIAL",
+      "center": [13.0, 16.0],
+      "lead_spacing": 10.0,
+      "pin_nets": ["A0", "BAT+"]
+    },
+    {
+      "ref": "R2",
+      "value": "200k 1%",
+      "type": "AXIAL",
+      "center": [10.0, 42.0],
+      "lead_spacing": 10.0,
+      "pin_nets": ["A0", "GND"]
+    },
+    {
+      "ref": "J7",
+      "value": "TO-XIAO-BAT",
+      "type": "JST-XH",
+      "positions": 2,
+      "center": [28.5, 12.0],
+      "pin_nets": ["GND", "BAT+"],
+      "labels": ["BAT-", "BAT+"]
+    },
+    {
+      "ref": "J3",
+      "value": "I2C-C",
+      "type": "JST-XH",
+      "positions": 4,
+      "center": [8.0, 51.5],
+      "pin_nets": ["GND", "3V3", "SDA", "SCL"],
+      "labels": ["GND", "3V3", "SDA", "SCL"]
+    },
+    {
+      "ref": "J4",
+      "value": "UART-5V",
+      "type": "JST-XH",
+      "positions": 4,
+      "center": [24.0, 51.5],
+      "pin_nets": ["GND", "VBUS", "TX", "RX"],
+      "labels": ["GND", "5V", "MCU-TX", "MCU-RX"]
+    },
+    {
+      "ref": "TP1",
+      "value": "SERVICE",
+      "type": "TEST_PAD",
+      "center": [30.2, 40.0],
+      "pin_nets": ["D1"]
+    },
+    {
+      "ref": "TP2",
+      "value": "GND",
+      "type": "TEST_PAD",
+      "center": [30.2, 42.6],
+      "pin_nets": ["GND"]
+    }
+  ],
+  "nets": {
+    "GND": {"class": "power"},
+    "3V3": {"class": "power"},
+    "VBUS": {"class": "power"},
+    "BAT+": {"class": "power"},
+    "A0": {"class": "signal"},
+    "D1": {"class": "signal"},
+    "D2": {"class": "signal"},
+    "D3": {"class": "signal"},
+    "SDA": {"class": "signal"},
+    "SCL": {"class": "signal"},
+    "TX": {"class": "signal"},
+    "RX": {"class": "signal"}
+  },
+  "wire_colors": {
+    "GND": "black",
+    "3V3": "red",
+    "VBUS": "red",
+    "BAT+": "red",
+    "A0": "yellow",
+    "D1": "gray",
+    "D2": "white",
+    "D3": "orange",
+    "SDA": "green",
+    "SCL": "blue",
+    "TX": "purple",
+    "RX": "yellow"
+  },
+  "profiles": {
+    "atmosphere": {
+      "title": "Atmosphere Air Station",
+      "ports": {
+        "J1": {"module": "BME680", "module_pins": ["GND", "VCC", "SDA", "SCL"]},
+        "J2": {"module": "SCD41", "module_pins": ["GND", "VDD", "SDA", "SCL"]},
+        "J3": {"module": "VEML7700", "module_pins": ["GND", "VIN", "SDA", "SCL"]},
+        "J4": {"module": "PMS5003 breakout", "module_pins": ["GND", "VCC(+5V)", "RXD", "TXD"]}
+      },
+      "unpopulated": ["R1", "R2"],
+      "unused_ports": ["J5", "J6", "J7"]
+    },
+    "presence": {
+      "title": "Presence Pod",
+      "ports": {
+        "J1": {"module": "VEML7700", "module_pins": ["GND", "VIN", "SDA", "SCL"]},
+        "J4": {"module": "LD2410C", "module_pins": ["GND", "VCC", "RX", "TX"]},
+        "J5": {"module": "DHT11", "module_pins": ["-", "OUT", "+"]}
+      },
+      "unpopulated": ["R1", "R2"],
+      "unused_ports": ["J2", "J3", "J6", "J7"]
+    },
+    "climate": {
+      "title": "Climate Pod",
+      "ports": {
+        "J5": {"module": "DHT11", "module_pins": ["-", "OUT", "+"]},
+        "J6": {"module": "LiPo adapter", "module_pins": ["BAT-", "BAT+"]},
+        "J7": {"module": "XIAO underside battery pads", "module_pins": ["BAT-", "BAT+"]}
+      },
+      "populate": ["R1", "R2"],
+      "unused_ports": ["J1", "J2", "J3", "J4"]
+    }
+  },
+  "fabrication_order": {
+    "quantity": 5,
+    "board_dimensions": "32 mm x 56 mm",
+    "layers": 2,
+    "thickness": "1.6 mm",
+    "copper": "1 oz",
+    "surface_finish": "Lead-free HASL",
+    "solder_mask": "Any color",
+    "silkscreen": "White",
+    "assembly": "Bare boards only; hand-solder through-hole parts"
+  }
+}

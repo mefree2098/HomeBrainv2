@@ -1,0 +1,47 @@
+1
+00:00:02,200 --> 00:00:10,500
+Here’s how to use HomeBrain’s Security Center to arm away,
+arm stay, and disarm your security system.
+
+2
+00:00:10,500 --> 00:00:19,000
+On the Dashboard, find the Security Center. The large status label
+shows whether the system is disarmed or armed.
+
+3
+00:00:19,000 --> 00:00:24,800
+Choose Arm Away when everyone is leaving.
+
+4
+00:00:24,800 --> 00:00:30,800
+Away mode monitors every sensor configured for Away,
+including interior motion sensors when enabled.
+
+5
+00:00:30,800 --> 00:00:39,000
+Tap Arm Away. On a live system, leave during the configured
+exit countdown and wait for Armed Away.
+
+6
+00:00:39,000 --> 00:00:49,000
+To turn monitoring off, tap Disarm. Enter your security PIN
+if prompted, and confirm Disarmed.
+
+7
+00:00:49,000 --> 00:00:55,200
+Choose Arm Stay when you are remaining at home.
+
+8
+00:00:55,200 --> 00:01:03,500
+Stay mode protects the configured perimeter while typically
+leaving interior motion free.
+
+9
+00:01:03,500 --> 00:01:10,300
+Tap Arm Stay and confirm Armed Stay.
+When ready, tap Disarm again.
+
+10
+00:01:10,300 --> 00:01:18,900
+Confirm Disarmed. Your administrator controls exactly which
+sensors each mode monitors.

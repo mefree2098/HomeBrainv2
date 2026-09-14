@@ -1,0 +1,423 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1200" viewBox="0 0 1800 1200">
+<title>HomeBrain Universal Sensor Carrier v1.0</title>
+<metadata>{"artifact": "carrier-assembly", "pads": 43, "segments": 264, "vias": 4}</metadata>
+<rect width="100%" height="100%" fill="#f4f7fb"/>
+<text x="70" y="62" font-family="Arial,Helvetica,sans-serif" font-size="34" font-weight="850" fill="#15243b" text-anchor="start">HOMEBRAIN UNIVERSAL SENSOR CARRIER — ASSEMBLY</text>
+<text x="70" y="102" font-family="Arial,Helvetica,sans-serif" font-size="21" font-weight="650" fill="#56708d" text-anchor="start">Front/component side • USB edge left • keyed JST-XH ports • XIAO plugs into two 1×7 sockets</text>
+<rect x="82.0" y="162.0" width="461.6" height="780.8000000000001" rx="24" fill="#ffffff" stroke="#c7d2e2" stroke-width="2.0" />
+<rect x="100.0" y="180.0" width="425.6" height="744.8000000000001" rx="5" fill="#0b695f" stroke="#083e48" stroke-width="4" />
+<rect x="332.75" y="472.6" width="192.85000000000002" height="159.60000000000002" fill="#ffe7a4" fill-opacity="0.78" stroke="#f5b23b" stroke-width="2" stroke-dasharray="8 6"/>
+<text x="429.175" y="552.4000000000001" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="900" fill="#875308" text-anchor="middle">NO COPPER</text>
+<line x1="146.55" y1="452.65000000000003" x2="146.55" y2="426.05" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="A0" data-layer="F.Cu"/>
+<line x1="179.8" y1="452.65000000000003" x2="179.8" y2="426.05" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="D1" data-layer="B.Cu"/>
+<line x1="213.05" y1="452.65000000000003" x2="213.05" y2="426.05" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D2" data-layer="F.Cu"/>
+<line x1="246.3" y1="452.65000000000003" x2="246.3" y2="426.05" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="D3" data-layer="B.Cu"/>
+<line x1="279.55" y1="452.65000000000003" x2="279.55" y2="426.05" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="312.8" y1="452.65000000000003" x2="312.8" y2="426.05" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="346.05" y1="452.65000000000003" x2="346.05" y2="426.05" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="146.55" y1="652.1500000000001" x2="146.55" y2="678.75" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="213.05" y1="652.1500000000001" x2="213.05" y2="678.75" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="346.05" y1="652.1500000000001" x2="346.05" y2="678.75" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="RX" data-layer="B.Cu"/>
+<line x1="435.82500000000005" y1="864.95" x2="422.52500000000003" y2="864.95" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="422.52500000000003" y1="864.95" x2="422.52500000000003" y2="854.975" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="422.52500000000003" y1="854.975" x2="419.20000000000005" y2="854.975" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="419.20000000000005" y1="854.975" x2="419.20000000000005" y2="851.6500000000001" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="419.20000000000005" y1="851.6500000000001" x2="415.875" y2="851.6500000000001" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="415.875" y1="851.6500000000001" x2="415.875" y2="848.325" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="415.875" y1="848.325" x2="412.55" y2="848.325" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="412.55" y1="848.325" x2="412.55" y2="845.0" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="412.55" y1="845.0" x2="366.0" y2="845.0" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="366.0" y1="845.0" x2="366.0" y2="642.175" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="366.0" y1="642.175" x2="362.675" y2="642.175" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="362.675" y1="642.175" x2="362.675" y2="638.85" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="362.675" y1="638.85" x2="359.35" y2="638.85" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="359.35" y1="638.85" x2="359.35" y2="635.5250000000001" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="359.35" y1="635.5250000000001" x2="329.425" y2="635.5250000000001" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="329.425" y1="635.5250000000001" x2="329.425" y2="462.625" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="329.425" y1="462.625" x2="332.75" y2="462.625" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="332.75" y1="462.625" x2="332.75" y2="452.65000000000003" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="332.75" y1="452.65000000000003" x2="346.05" y2="452.65000000000003" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="TX" data-layer="F.Cu"/>
+<line x1="469.07500000000005" y1="864.95" x2="455.77500000000003" y2="864.95" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="RX" data-layer="B.Cu"/>
+<line x1="455.77500000000003" y1="864.95" x2="455.77500000000003" y2="854.975" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="RX" data-layer="B.Cu"/>
+<line x1="455.77500000000003" y1="854.975" x2="452.45000000000005" y2="854.975" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="RX" data-layer="B.Cu"/>
+<line x1="452.45000000000005" y1="854.975" x2="452.45000000000005" y2="851.6500000000001" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="RX" data-layer="B.Cu"/>
+<line x1="452.45000000000005" y1="851.6500000000001" x2="449.125" y2="851.6500000000001" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="RX" data-layer="B.Cu"/>
+<line x1="449.125" y1="851.6500000000001" x2="449.125" y2="848.325" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="RX" data-layer="B.Cu"/>
+<line x1="449.125" y1="848.325" x2="445.8" y2="848.325" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="RX" data-layer="B.Cu"/>
+<line x1="445.8" y1="848.325" x2="445.8" y2="845.0" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="RX" data-layer="B.Cu"/>
+<line x1="445.8" y1="845.0" x2="346.05" y2="845.0" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="RX" data-layer="B.Cu"/>
+<line x1="346.05" y1="845.0" x2="346.05" y2="678.75" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="RX" data-layer="B.Cu"/>
+<line x1="402.575" y1="864.95" x2="392.6" y2="864.95" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="392.6" y1="864.95" x2="392.6" y2="871.6" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="392.6" y1="871.6" x2="389.27500000000003" y2="871.6" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="389.27500000000003" y1="871.6" x2="389.27500000000003" y2="878.25" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="389.27500000000003" y1="878.25" x2="385.95" y2="878.25" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="385.95" y1="878.25" x2="385.95" y2="881.575" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="385.95" y1="881.575" x2="382.625" y2="881.575" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="382.625" y1="881.575" x2="382.625" y2="884.9000000000001" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="382.625" y1="884.9000000000001" x2="375.975" y2="884.9000000000001" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="375.975" y1="884.9000000000001" x2="375.975" y2="888.225" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="375.975" y1="888.225" x2="279.55" y2="888.225" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="279.55" y1="888.225" x2="279.55" y2="858.3000000000001" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="279.55" y1="858.3000000000001" x2="276.225" y2="858.3000000000001" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="276.225" y1="858.3000000000001" x2="276.225" y2="851.6500000000001" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="276.225" y1="851.6500000000001" x2="272.9" y2="851.6500000000001" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="272.9" y1="851.6500000000001" x2="272.9" y2="848.325" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="272.9" y1="848.325" x2="269.57500000000005" y2="848.325" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="269.57500000000005" y1="848.325" x2="269.57500000000005" y2="845.0" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="269.57500000000005" y1="845.0" x2="262.925" y2="845.0" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="262.925" y1="845.0" x2="262.925" y2="841.6750000000001" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="262.925" y1="841.6750000000001" x2="189.775" y2="841.6750000000001" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="189.775" y1="841.6750000000001" x2="189.775" y2="731.95" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="189.775" y1="731.95" x2="186.45" y2="731.95" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="186.45" y1="731.95" x2="186.45" y2="725.3000000000001" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="186.45" y1="725.3000000000001" x2="183.125" y2="725.3000000000001" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="183.125" y1="725.3000000000001" x2="183.125" y2="721.975" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="183.125" y1="721.975" x2="179.8" y2="721.975" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="179.8" y1="721.975" x2="179.8" y2="718.65" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="179.8" y1="718.65" x2="173.15" y2="718.65" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="173.15" y1="718.65" x2="173.15" y2="715.325" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="173.15" y1="715.325" x2="146.55" y2="715.325" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="146.55" y1="715.325" x2="146.55" y2="678.75" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="VBUS" data-layer="F.Cu"/>
+<line x1="256.275" y1="239.85" x2="256.275" y2="329.625" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="256.275" y1="329.625" x2="259.6" y2="329.625" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="259.6" y1="329.625" x2="259.6" y2="426.05" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="259.6" y1="426.05" x2="312.8" y2="426.05" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="469.07500000000005" y1="239.85" x2="455.77500000000003" y2="239.85" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="455.77500000000003" y1="239.85" x2="455.77500000000003" y2="249.825" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="455.77500000000003" y1="249.825" x2="452.45000000000005" y2="249.825" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="452.45000000000005" y1="249.825" x2="452.45000000000005" y2="253.15" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="452.45000000000005" y1="253.15" x2="449.125" y2="253.15" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="449.125" y1="253.15" x2="449.125" y2="256.475" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="449.125" y1="256.475" x2="445.8" y2="256.475" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="445.8" y1="256.475" x2="445.8" y2="259.8" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="445.8" y1="259.8" x2="256.275" y2="259.8" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="256.275" y1="864.95" x2="256.275" y2="672.1" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="256.275" y1="672.1" x2="133.25" y2="672.1" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="133.25" y1="672.1" x2="133.25" y2="668.7750000000001" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="133.25" y1="668.7750000000001" x2="129.925" y2="668.7750000000001" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="129.925" y1="668.7750000000001" x2="129.925" y2="665.45" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="129.925" y1="665.45" x2="126.6" y2="665.45" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="126.6" y1="665.45" x2="126.6" y2="439.35" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="126.6" y1="439.35" x2="129.925" y2="439.35" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="129.925" y1="439.35" x2="129.925" y2="436.02500000000003" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="129.925" y1="436.02500000000003" x2="133.25" y2="436.02500000000003" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="133.25" y1="436.02500000000003" x2="133.25" y2="432.70000000000005" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="133.25" y1="432.70000000000005" x2="169.825" y2="432.70000000000005" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="169.825" y1="432.70000000000005" x2="169.825" y2="419.4" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="169.825" y1="419.4" x2="173.15" y2="419.4" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="173.15" y1="419.4" x2="173.15" y2="416.07500000000005" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="173.15" y1="416.07500000000005" x2="259.6" y2="416.07500000000005" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SCL" data-layer="B.Cu"/>
+<line x1="223.025" y1="239.85" x2="223.025" y2="319.65" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="223.025" y1="319.65" x2="249.625" y2="319.65" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="249.625" y1="319.65" x2="249.625" y2="322.975" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="249.625" y1="322.975" x2="252.95000000000002" y2="322.975" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="252.95000000000002" y1="322.975" x2="252.95000000000002" y2="326.3" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="252.95000000000002" y1="326.3" x2="256.275" y2="326.3" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="256.275" y1="326.3" x2="256.275" y2="329.625" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="256.275" y1="329.625" x2="259.6" y2="329.625" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="259.6" y1="329.625" x2="259.6" y2="426.05" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="259.6" y1="426.05" x2="279.55" y2="426.05" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="435.82500000000005" y1="239.85" x2="422.52500000000003" y2="239.85" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="422.52500000000003" y1="239.85" x2="422.52500000000003" y2="249.825" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="422.52500000000003" y1="249.825" x2="419.20000000000005" y2="249.825" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="419.20000000000005" y1="249.825" x2="419.20000000000005" y2="253.15" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="419.20000000000005" y1="253.15" x2="415.875" y2="253.15" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="415.875" y1="253.15" x2="415.875" y2="256.475" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="415.875" y1="256.475" x2="412.55" y2="256.475" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="412.55" y1="256.475" x2="412.55" y2="259.8" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="412.55" y1="259.8" x2="223.025" y2="259.8" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="223.025" y1="864.95" x2="223.025" y2="758.5500000000001" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="B.Cu"/>
+<line x1="223.025" y1="758.5500000000001" x2="156.525" y2="758.5500000000001" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="B.Cu"/>
+<line x1="156.525" y1="758.5500000000001" x2="156.525" y2="755.225" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="B.Cu"/>
+<line x1="156.525" y1="755.225" x2="153.2" y2="755.225" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="B.Cu"/>
+<line x1="153.2" y1="755.225" x2="153.2" y2="751.9" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="B.Cu"/>
+<line x1="153.2" y1="751.9" x2="149.875" y2="751.9" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="B.Cu"/>
+<line x1="149.875" y1="751.9" x2="149.875" y2="748.575" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="B.Cu"/>
+<line x1="149.875" y1="748.575" x2="146.55" y2="748.575" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="B.Cu"/>
+<line x1="146.55" y1="748.575" x2="146.55" y2="728.625" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="146.55" y1="728.625" x2="139.9" y2="728.625" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="139.9" y1="728.625" x2="139.9" y2="725.3000000000001" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="139.9" y1="725.3000000000001" x2="136.575" y2="725.3000000000001" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="136.575" y1="725.3000000000001" x2="136.575" y2="721.975" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="136.575" y1="721.975" x2="133.25" y2="721.975" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="133.25" y1="721.975" x2="133.25" y2="668.7750000000001" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="133.25" y1="668.7750000000001" x2="129.925" y2="668.7750000000001" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="129.925" y1="668.7750000000001" x2="129.925" y2="665.45" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="129.925" y1="665.45" x2="126.6" y2="665.45" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="126.6" y1="665.45" x2="126.6" y2="469.27500000000003" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="126.6" y1="469.27500000000003" x2="259.6" y2="469.27500000000003" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="259.6" y1="469.27500000000003" x2="259.6" y2="465.95" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="259.6" y1="465.95" x2="262.925" y2="465.95" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="262.925" y1="465.95" x2="262.925" y2="459.3" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="262.925" y1="459.3" x2="266.25" y2="459.3" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="266.25" y1="459.3" x2="266.25" y2="452.65000000000003" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="266.25" y1="452.65000000000003" x2="279.55" y2="452.65000000000003" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="SDA" data-layer="F.Cu"/>
+<line x1="189.775" y1="864.95" x2="189.775" y2="771.85" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="189.775" y1="771.85" x2="206.4" y2="771.85" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="206.4" y1="771.85" x2="206.4" y2="678.75" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="206.4" y1="678.75" x2="213.05" y2="678.75" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="189.775" y1="239.85" x2="189.775" y2="316.32500000000005" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="189.775" y1="316.32500000000005" x2="166.5" y2="316.32500000000005" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="166.5" y1="316.32500000000005" x2="166.5" y2="319.65" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="166.5" y1="319.65" x2="159.85" y2="319.65" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="159.85" y1="319.65" x2="159.85" y2="322.975" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="159.85" y1="322.975" x2="156.525" y2="322.975" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="156.525" y1="322.975" x2="156.525" y2="326.3" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="156.525" y1="326.3" x2="153.2" y2="326.3" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="153.2" y1="326.3" x2="153.2" y2="332.95000000000005" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="153.2" y1="332.95000000000005" x2="149.875" y2="332.95000000000005" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="149.875" y1="332.95000000000005" x2="149.875" y2="419.4" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="149.875" y1="419.4" x2="126.6" y2="419.4" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="126.6" y1="419.4" x2="126.6" y2="422.725" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="126.6" y1="422.725" x2="123.275" y2="422.725" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="123.275" y1="422.725" x2="123.275" y2="426.05" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="123.275" y1="426.05" x2="119.95" y2="426.05" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="119.95" y1="426.05" x2="119.95" y2="429.375" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="119.95" y1="429.375" x2="116.625" y2="429.375" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="116.625" y1="429.375" x2="116.625" y2="432.70000000000005" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="116.625" y1="432.70000000000005" x2="113.3" y2="432.70000000000005" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="113.3" y1="432.70000000000005" x2="113.3" y2="672.1" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="113.3" y1="672.1" x2="116.625" y2="672.1" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="116.625" y1="672.1" x2="116.625" y2="675.425" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="116.625" y1="675.425" x2="119.95" y2="675.425" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="119.95" y1="675.425" x2="119.95" y2="678.75" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="119.95" y1="678.75" x2="123.275" y2="678.75" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="123.275" y1="678.75" x2="123.275" y2="682.075" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="123.275" y1="682.075" x2="126.6" y2="682.075" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="126.6" y1="682.075" x2="126.6" y2="685.4000000000001" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="126.6" y1="685.4000000000001" x2="206.4" y2="685.4000000000001" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="B.Cu"/>
+<line x1="402.575" y1="239.85" x2="392.6" y2="239.85" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="392.6" y1="239.85" x2="392.6" y2="233.2" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="392.6" y1="233.2" x2="389.27500000000003" y2="233.2" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="389.27500000000003" y1="233.2" x2="389.27500000000003" y2="226.55" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="389.27500000000003" y1="226.55" x2="385.95" y2="226.55" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="385.95" y1="226.55" x2="385.95" y2="223.225" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="385.95" y1="223.225" x2="382.625" y2="223.225" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="382.625" y1="223.225" x2="382.625" y2="219.9" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="382.625" y1="219.9" x2="375.975" y2="219.9" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="375.975" y1="219.9" x2="375.975" y2="216.575" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="375.975" y1="216.575" x2="213.05" y2="216.575" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="213.05" y1="216.575" x2="213.05" y2="219.9" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="213.05" y1="219.9" x2="209.72500000000002" y2="219.9" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="209.72500000000002" y1="219.9" x2="209.72500000000002" y2="223.225" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="209.72500000000002" y1="223.225" x2="206.4" y2="223.225" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="206.4" y1="223.225" x2="206.4" y2="226.55" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="206.4" y1="226.55" x2="203.075" y2="226.55" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="203.075" y1="226.55" x2="203.075" y2="233.2" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="203.075" y1="233.2" x2="199.75" y2="233.2" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="199.75" y1="233.2" x2="199.75" y2="239.85" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="199.75" y1="239.85" x2="189.775" y2="239.85" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="3V3" data-layer="F.Cu"/>
+<line x1="339.4" y1="392.8" x2="339.4" y2="362.875" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="339.4" y1="362.875" x2="356.02500000000003" y2="362.875" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="356.02500000000003" y1="362.875" x2="356.02500000000003" y2="359.55" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="356.02500000000003" y1="359.55" x2="362.675" y2="359.55" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="362.675" y1="359.55" x2="362.675" y2="356.225" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="362.675" y1="356.225" x2="366.0" y2="356.225" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="366.0" y1="356.225" x2="366.0" y2="352.9" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="366.0" y1="352.9" x2="369.325" y2="352.9" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="369.325" y1="352.9" x2="369.325" y2="346.25" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="369.325" y1="346.25" x2="372.65000000000003" y2="346.25" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="372.65000000000003" y1="346.25" x2="372.65000000000003" y2="339.6" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="372.65000000000003" y1="339.6" x2="382.625" y2="339.6" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="495.675" y1="339.6" x2="485.70000000000005" y2="339.6" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="485.70000000000005" y1="339.6" x2="485.70000000000005" y2="346.25" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="485.70000000000005" y1="346.25" x2="482.375" y2="346.25" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="482.375" y1="346.25" x2="482.375" y2="352.9" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="482.375" y1="352.9" x2="479.05" y2="352.9" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="479.05" y1="352.9" x2="479.05" y2="356.225" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="479.05" y1="356.225" x2="475.725" y2="356.225" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="475.725" y1="356.225" x2="475.725" y2="359.55" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="475.725" y1="359.55" x2="469.07500000000005" y2="359.55" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="469.07500000000005" y1="359.55" x2="469.07500000000005" y2="362.875" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="469.07500000000005" y1="362.875" x2="362.675" y2="362.875" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="362.675" y1="362.875" x2="362.675" y2="359.55" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="10.64" stroke-linecap="round" data-net="BAT+" data-layer="F.Cu"/>
+<line x1="502.32500000000005" y1="712.0" x2="366.0" y2="712.0" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="D1" data-layer="B.Cu"/>
+<line x1="366.0" y1="712.0" x2="366.0" y2="642.175" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="D1" data-layer="B.Cu"/>
+<line x1="366.0" y1="642.175" x2="362.675" y2="642.175" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="D1" data-layer="B.Cu"/>
+<line x1="362.675" y1="642.175" x2="362.675" y2="638.85" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="D1" data-layer="B.Cu"/>
+<line x1="362.675" y1="638.85" x2="359.35" y2="638.85" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="D1" data-layer="B.Cu"/>
+<line x1="359.35" y1="638.85" x2="359.35" y2="635.5250000000001" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="D1" data-layer="B.Cu"/>
+<line x1="359.35" y1="635.5250000000001" x2="179.8" y2="635.5250000000001" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="D1" data-layer="B.Cu"/>
+<line x1="179.8" y1="635.5250000000001" x2="179.8" y2="452.65000000000003" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="D1" data-layer="B.Cu"/>
+<line x1="206.4" y1="339.6" x2="206.4" y2="372.85" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D2" data-layer="F.Cu"/>
+<line x1="206.4" y1="372.85" x2="216.375" y2="372.85" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D2" data-layer="F.Cu"/>
+<line x1="216.375" y1="372.85" x2="216.375" y2="376.175" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D2" data-layer="F.Cu"/>
+<line x1="216.375" y1="376.175" x2="219.7" y2="376.175" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D2" data-layer="F.Cu"/>
+<line x1="219.7" y1="376.175" x2="219.7" y2="379.5" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D2" data-layer="F.Cu"/>
+<line x1="219.7" y1="379.5" x2="223.025" y2="379.5" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D2" data-layer="F.Cu"/>
+<line x1="223.025" y1="379.5" x2="223.025" y2="382.82500000000005" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D2" data-layer="F.Cu"/>
+<line x1="223.025" y1="382.82500000000005" x2="226.35000000000002" y2="382.82500000000005" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D2" data-layer="F.Cu"/>
+<line x1="226.35000000000002" y1="382.82500000000005" x2="226.35000000000002" y2="402.775" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D2" data-layer="F.Cu"/>
+<line x1="226.35000000000002" y1="402.775" x2="223.025" y2="402.775" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D2" data-layer="F.Cu"/>
+<line x1="223.025" y1="402.775" x2="223.025" y2="406.1" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D2" data-layer="F.Cu"/>
+<line x1="223.025" y1="406.1" x2="219.7" y2="406.1" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D2" data-layer="F.Cu"/>
+<line x1="219.7" y1="406.1" x2="219.7" y2="409.425" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D2" data-layer="F.Cu"/>
+<line x1="219.7" y1="409.425" x2="216.375" y2="409.425" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D2" data-layer="F.Cu"/>
+<line x1="216.375" y1="409.425" x2="216.375" y2="412.75" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D2" data-layer="F.Cu"/>
+<line x1="216.375" y1="412.75" x2="213.05" y2="412.75" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D2" data-layer="F.Cu"/>
+<line x1="213.05" y1="412.75" x2="213.05" y2="426.05" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D2" data-layer="F.Cu"/>
+<line x1="239.65" y1="339.6" x2="239.65" y2="426.05" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D3" data-layer="F.Cu"/>
+<line x1="239.65" y1="426.05" x2="246.3" y2="426.05" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D3" data-layer="F.Cu"/>
+<line x1="246.3" y1="426.05" x2="246.3" y2="452.65000000000003" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="D3" data-layer="F.Cu"/>
+<line x1="206.4" y1="392.8" x2="146.55" y2="392.8" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="A0" data-layer="F.Cu"/>
+<line x1="146.55" y1="392.8" x2="146.55" y2="426.05" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="A0" data-layer="F.Cu"/>
+<line x1="166.5" y1="738.6" x2="166.5" y2="735.275" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="A0" data-layer="B.Cu"/>
+<line x1="166.5" y1="735.275" x2="126.6" y2="735.275" stroke="#36a3ff" stroke-opacity="0.62" stroke-width="5.32" stroke-linecap="round" data-net="A0" data-layer="B.Cu"/>
+<line x1="126.6" y1="735.275" x2="126.6" y2="728.625" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="A0" data-layer="F.Cu"/>
+<line x1="126.6" y1="728.625" x2="123.275" y2="728.625" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="A0" data-layer="F.Cu"/>
+<line x1="123.275" y1="728.625" x2="123.275" y2="675.425" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="A0" data-layer="F.Cu"/>
+<line x1="123.275" y1="675.425" x2="119.95" y2="675.425" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="A0" data-layer="F.Cu"/>
+<line x1="119.95" y1="675.425" x2="119.95" y2="672.1" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="A0" data-layer="F.Cu"/>
+<line x1="119.95" y1="672.1" x2="116.625" y2="672.1" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="A0" data-layer="F.Cu"/>
+<line x1="116.625" y1="672.1" x2="116.625" y2="452.65000000000003" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="A0" data-layer="F.Cu"/>
+<line x1="116.625" y1="452.65000000000003" x2="146.55" y2="452.65000000000003" stroke="#ff4b55" stroke-opacity="0.88" stroke-width="5.32" stroke-linecap="round" data-net="A0" data-layer="F.Cu"/>
+<circle cx="146.55" cy="748.575" r="6.65" fill="#f6c74f" stroke="#16334d" stroke-width="2" data-net="SDA"/>
+<circle cx="206.4" cy="771.85" r="6.65" fill="#f6c74f" stroke="#16334d" stroke-width="2" data-net="3V3"/>
+<circle cx="206.4" cy="685.4000000000001" r="6.65" fill="#f6c74f" stroke="#16334d" stroke-width="2" data-net="3V3"/>
+<circle cx="126.6" cy="735.275" r="6.65" fill="#f6c74f" stroke="#16334d" stroke-width="2" data-net="A0"/>
+<rect x="106.65" y="434.03000000000003" width="279.3" height="236.74" rx="8" fill="#113c54" stroke="#6ce0d3" stroke-width="3" data-part="U1"/>
+<text x="246.3" y="508.03000000000003" font-family="Arial,Helvetica,sans-serif" font-size="22" font-weight="900" fill="white" text-anchor="middle">XIAO</text>
+<text x="246.3" y="536.03" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="750" fill="#a9f3ea" text-anchor="middle">ESP32-C6</text>
+<rect x="99.65" y="517.03" width="22" height="52" rx="5" fill="#b9c1cc" stroke="#65758a" stroke-width="2" />
+<text x="90.65" y="507.03000000000003" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="900" fill="#f8d36a" text-anchor="end">USB-C</text>
+<rect x="123.275" y="201.28" width="166.25" height="77.14" rx="5" fill="#f2f1e9" stroke="#223b55" stroke-width="2" data-part="J1"/>
+<text x="206.4" y="193.28" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#ffffff" text-anchor="middle">J1 I2C-A</text>
+<rect x="336.07500000000005" y="201.28" width="166.25" height="77.14" rx="5" fill="#f2f1e9" stroke="#223b55" stroke-width="2" data-part="J2"/>
+<text x="419.20000000000005" y="193.28" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#ffffff" text-anchor="middle">J2 I2C-B</text>
+<rect x="139.9" y="301.03000000000003" width="133.0" height="77.14" rx="5" fill="#f2f1e9" stroke="#223b55" stroke-width="2" data-part="J5"/>
+<text x="206.4" y="293.03000000000003" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#ffffff" text-anchor="middle">J5 DHT</text>
+<rect x="316.125" y="301.03000000000003" width="99.75" height="77.14" rx="5" fill="#f2f1e9" stroke="#223b55" stroke-width="2" data-part="J6"/>
+<text x="366.0" y="293.03000000000003" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#ffffff" text-anchor="middle">J6 BAT-IN</text>
+<rect x="231.67000000000002" y="379.5" width="82.46000000000001" height="26.6" rx="8" fill="#d6b47b" stroke="#5d4428" stroke-width="2" data-part="R1"/>
+<text x="272.9" y="397.45500000000004" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="900" fill="#3b2c18" text-anchor="middle">R1</text>
+<rect x="191.77" y="725.3000000000001" width="82.46000000000001" height="26.6" rx="8" fill="#d6b47b" stroke="#5d4428" stroke-width="2" data-part="R2"/>
+<text x="233.0" y="743.255" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="900" fill="#3b2c18" text-anchor="middle">R2</text>
+<rect x="429.175" y="301.03000000000003" width="99.75" height="77.14" rx="5" fill="#f2f1e9" stroke="#223b55" stroke-width="2" data-part="J7"/>
+<text x="479.05" y="293.03000000000003" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#ffffff" text-anchor="middle">J7 TO-XIAO-BAT</text>
+<rect x="123.275" y="826.38" width="166.25" height="77.14" rx="5" fill="#f2f1e9" stroke="#223b55" stroke-width="2" data-part="J3"/>
+<text x="206.4" y="818.38" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#ffffff" text-anchor="middle">J3 I2C-C</text>
+<rect x="336.07500000000005" y="826.38" width="166.25" height="77.14" rx="5" fill="#f2f1e9" stroke="#223b55" stroke-width="2" data-part="J4"/>
+<text x="419.20000000000005" y="818.38" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#ffffff" text-anchor="middle">J4 UART-5V</text>
+<circle cx="144.954" cy="451.054" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="U1.D0/A0" data-net="A0"/>
+<circle cx="144.954" cy="451.054" r="6.65" fill="#eef2f6"/>
+<circle cx="178.736" cy="451.054" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="U1.D1/SERVICE" data-net="D1"/>
+<circle cx="178.736" cy="451.054" r="6.65" fill="#eef2f6"/>
+<circle cx="212.51800000000003" cy="451.054" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="U1.D2" data-net="D2"/>
+<circle cx="212.51800000000003" cy="451.054" r="6.65" fill="#eef2f6"/>
+<circle cx="246.3" cy="451.054" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="U1.D3/PWR" data-net="D3"/>
+<circle cx="246.3" cy="451.054" r="6.65" fill="#eef2f6"/>
+<circle cx="280.082" cy="451.054" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="U1.D4/SDA" data-net="SDA"/>
+<circle cx="280.082" cy="451.054" r="6.65" fill="#eef2f6"/>
+<circle cx="313.864" cy="451.054" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="U1.D5/SCL" data-net="SCL"/>
+<circle cx="313.864" cy="451.054" r="6.65" fill="#eef2f6"/>
+<circle cx="347.646" cy="451.054" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="U1.D6/TX" data-net="TX"/>
+<circle cx="347.646" cy="451.054" r="6.65" fill="#eef2f6"/>
+<circle cx="144.954" cy="653.746" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="U1.VBUS/5V" data-net="VBUS"/>
+<circle cx="144.954" cy="653.746" r="6.65" fill="#eef2f6"/>
+<circle cx="178.736" cy="653.746" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="U1.GND" data-net="GND"/>
+<circle cx="178.736" cy="653.746" r="6.65" fill="#eef2f6"/>
+<circle cx="212.51800000000003" cy="653.746" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="U1.3V3" data-net="3V3"/>
+<circle cx="212.51800000000003" cy="653.746" r="6.65" fill="#eef2f6"/>
+<circle cx="246.3" cy="653.746" r="11.97" fill="#a4afbd" stroke="#172b42" stroke-width="2" data-pad="U1.D10" data-net="NC_D10"/>
+<circle cx="246.3" cy="653.746" r="6.65" fill="#eef2f6"/>
+<circle cx="280.082" cy="653.746" r="11.97" fill="#a4afbd" stroke="#172b42" stroke-width="2" data-pad="U1.D9" data-net="NC_D9"/>
+<circle cx="280.082" cy="653.746" r="6.65" fill="#eef2f6"/>
+<circle cx="313.864" cy="653.746" r="11.97" fill="#a4afbd" stroke="#172b42" stroke-width="2" data-pad="U1.D8" data-net="NC_D8"/>
+<circle cx="313.864" cy="653.746" r="6.65" fill="#eef2f6"/>
+<circle cx="347.646" cy="653.746" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="U1.D7/RX" data-net="RX"/>
+<circle cx="347.646" cy="653.746" r="6.65" fill="#eef2f6"/>
+<circle cx="156.525" cy="239.85" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J1.1" data-net="GND"/>
+<circle cx="156.525" cy="239.85" r="6.65" fill="#eef2f6"/>
+<circle cx="189.775" cy="239.85" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J1.2" data-net="3V3"/>
+<circle cx="189.775" cy="239.85" r="6.65" fill="#eef2f6"/>
+<circle cx="223.025" cy="239.85" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J1.3" data-net="SDA"/>
+<circle cx="223.025" cy="239.85" r="6.65" fill="#eef2f6"/>
+<circle cx="256.275" cy="239.85" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J1.4" data-net="SCL"/>
+<circle cx="256.275" cy="239.85" r="6.65" fill="#eef2f6"/>
+<circle cx="369.325" cy="239.85" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J2.1" data-net="GND"/>
+<circle cx="369.325" cy="239.85" r="6.65" fill="#eef2f6"/>
+<circle cx="402.575" cy="239.85" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J2.2" data-net="3V3"/>
+<circle cx="402.575" cy="239.85" r="6.65" fill="#eef2f6"/>
+<circle cx="435.82500000000005" cy="239.85" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J2.3" data-net="SDA"/>
+<circle cx="435.82500000000005" cy="239.85" r="6.65" fill="#eef2f6"/>
+<circle cx="469.07500000000005" cy="239.85" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J2.4" data-net="SCL"/>
+<circle cx="469.07500000000005" cy="239.85" r="6.65" fill="#eef2f6"/>
+<circle cx="173.15" cy="339.6" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J5.1" data-net="GND"/>
+<circle cx="173.15" cy="339.6" r="6.65" fill="#eef2f6"/>
+<circle cx="206.4" cy="339.6" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J5.2" data-net="D2"/>
+<circle cx="206.4" cy="339.6" r="6.65" fill="#eef2f6"/>
+<circle cx="239.65" cy="339.6" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J5.3" data-net="D3"/>
+<circle cx="239.65" cy="339.6" r="6.65" fill="#eef2f6"/>
+<circle cx="349.375" cy="339.6" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J6.1" data-net="GND"/>
+<circle cx="349.375" cy="339.6" r="6.65" fill="#eef2f6"/>
+<circle cx="382.625" cy="339.6" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J6.2" data-net="BAT+"/>
+<circle cx="382.625" cy="339.6" r="6.65" fill="#eef2f6"/>
+<circle cx="206.4" cy="392.8" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="R1.1" data-net="A0"/>
+<circle cx="206.4" cy="392.8" r="5.32" fill="#eef2f6"/>
+<circle cx="339.4" cy="392.8" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="R1.2" data-net="BAT+"/>
+<circle cx="339.4" cy="392.8" r="5.32" fill="#eef2f6"/>
+<circle cx="166.5" cy="738.6" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="R2.1" data-net="A0"/>
+<circle cx="166.5" cy="738.6" r="5.32" fill="#eef2f6"/>
+<circle cx="299.5" cy="738.6" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="R2.2" data-net="GND"/>
+<circle cx="299.5" cy="738.6" r="5.32" fill="#eef2f6"/>
+<circle cx="462.425" cy="339.6" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J7.1" data-net="GND"/>
+<circle cx="462.425" cy="339.6" r="6.65" fill="#eef2f6"/>
+<circle cx="495.675" cy="339.6" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J7.2" data-net="BAT+"/>
+<circle cx="495.675" cy="339.6" r="6.65" fill="#eef2f6"/>
+<circle cx="156.525" cy="864.95" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J3.1" data-net="GND"/>
+<circle cx="156.525" cy="864.95" r="6.65" fill="#eef2f6"/>
+<circle cx="189.775" cy="864.95" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J3.2" data-net="3V3"/>
+<circle cx="189.775" cy="864.95" r="6.65" fill="#eef2f6"/>
+<circle cx="223.025" cy="864.95" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J3.3" data-net="SDA"/>
+<circle cx="223.025" cy="864.95" r="6.65" fill="#eef2f6"/>
+<circle cx="256.275" cy="864.95" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J3.4" data-net="SCL"/>
+<circle cx="256.275" cy="864.95" r="6.65" fill="#eef2f6"/>
+<circle cx="369.325" cy="864.95" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J4.1" data-net="GND"/>
+<circle cx="369.325" cy="864.95" r="6.65" fill="#eef2f6"/>
+<circle cx="402.575" cy="864.95" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J4.2" data-net="VBUS"/>
+<circle cx="402.575" cy="864.95" r="6.65" fill="#eef2f6"/>
+<circle cx="435.82500000000005" cy="864.95" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J4.3" data-net="TX"/>
+<circle cx="435.82500000000005" cy="864.95" r="6.65" fill="#eef2f6"/>
+<circle cx="469.07500000000005" cy="864.95" r="11.97" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="J4.4" data-net="RX"/>
+<circle cx="469.07500000000005" cy="864.95" r="6.65" fill="#eef2f6"/>
+<circle cx="501.66" cy="712.0" r="13.3" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="TP1.1" data-net="D1"/>
+<circle cx="501.66" cy="712.0" r="6.65" fill="#eef2f6"/>
+<circle cx="501.66" cy="746.58" r="13.3" fill="#f4ce55" stroke="#172b42" stroke-width="2" data-pad="TP2.1" data-net="GND"/>
+<circle cx="501.66" cy="746.58" r="6.65" fill="#eef2f6"/>
+<rect x="535" y="180" width="1190" height="198" rx="20" fill="#ffffff" stroke="#c7d2e2" stroke-width="2.0" />
+<text x="563" y="220" font-family="Arial,Helvetica,sans-serif" font-size="25" font-weight="850" fill="#15243b" text-anchor="start">Why this fixes the fan-out problem</text>
+<text x="563" y="258" font-family="Arial,Helvetica,sans-serif" font-size="20" font-weight="600" fill="#15243b" text-anchor="start">Each XIAO pin enters exactly one socket contact. Copper on this PCB fans power, ground, SDA and SCL out</text>
+<text x="563" y="290" font-family="Arial,Helvetica,sans-serif" font-size="20" font-weight="600" fill="#15243b" text-anchor="start">to separate keyed ports. No XIAO hole ever contains two wires, and every sensor harness can be unplugged.</text>
+<text x="563" y="338" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#56708d" text-anchor="start">Red = front copper   •   Blue = back copper   •   Gold = plated through-hole   •   Yellow = antenna copper keep-out</text>
+<rect x="535" y="400" width="580" height="650" rx="20" fill="#ffffff" stroke="#c7d2e2" stroke-width="2.0" />
+<text x="563" y="440" font-family="Arial,Helvetica,sans-serif" font-size="25" font-weight="850" fill="#15243b" text-anchor="start">Connector pin contract</text>
+<text x="563" y="480" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="850" fill="#15243b" text-anchor="start">J1  I2C-A</text>
+<text x="745" y="480" font-family="Arial,Helvetica,sans-serif" font-size="17" font-weight="650" fill="#3f5d79" text-anchor="start">1:GND  ·  2:3V3  ·  3:SDA  ·  4:SCL</text>
+<text x="563" y="534" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="850" fill="#15243b" text-anchor="start">J2  I2C-B</text>
+<text x="745" y="534" font-family="Arial,Helvetica,sans-serif" font-size="17" font-weight="650" fill="#3f5d79" text-anchor="start">1:GND  ·  2:3V3  ·  3:SDA  ·  4:SCL</text>
+<text x="563" y="588" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="850" fill="#15243b" text-anchor="start">J5  DHT</text>
+<text x="745" y="588" font-family="Arial,Helvetica,sans-serif" font-size="17" font-weight="650" fill="#3f5d79" text-anchor="start">1:GND  ·  2:DATA  ·  3:PWR</text>
+<text x="563" y="642" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="850" fill="#15243b" text-anchor="start">J6  BAT-IN</text>
+<text x="745" y="642" font-family="Arial,Helvetica,sans-serif" font-size="17" font-weight="650" fill="#3f5d79" text-anchor="start">1:BAT-  ·  2:BAT+</text>
+<text x="563" y="696" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="850" fill="#15243b" text-anchor="start">J7  TO-XIAO-BAT</text>
+<text x="745" y="696" font-family="Arial,Helvetica,sans-serif" font-size="17" font-weight="650" fill="#3f5d79" text-anchor="start">1:BAT-  ·  2:BAT+</text>
+<text x="563" y="750" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="850" fill="#15243b" text-anchor="start">J3  I2C-C</text>
+<text x="745" y="750" font-family="Arial,Helvetica,sans-serif" font-size="17" font-weight="650" fill="#3f5d79" text-anchor="start">1:GND  ·  2:3V3  ·  3:SDA  ·  4:SCL</text>
+<text x="563" y="804" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="850" fill="#15243b" text-anchor="start">J4  UART-5V</text>
+<text x="745" y="804" font-family="Arial,Helvetica,sans-serif" font-size="17" font-weight="650" fill="#3f5d79" text-anchor="start">1:GND  ·  2:5V  ·  3:MCU-TX  ·  4:MCU-RX</text>
+<rect x="1145" y="400" width="580" height="650" rx="20" fill="#ffffff" stroke="#c7d2e2" stroke-width="2.0" />
+<text x="1173" y="440" font-family="Arial,Helvetica,sans-serif" font-size="25" font-weight="850" fill="#15243b" text-anchor="start">Assembly rules</text>
+<text x="1173" y="488" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="650" fill="#15243b" text-anchor="start">1. Solder the two 1×7 sockets perfectly vertical.</text>
+<text x="1173" y="532" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="650" fill="#15243b" text-anchor="start">2. Solder all keyed headers with pin 1 at the round silk dot.</text>
+<text x="1173" y="576" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="650" fill="#15243b" text-anchor="start">3. Populate R1/R2 only on Climate; both are 200 kΩ 1%.</text>
+<text x="1173" y="620" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="650" fill="#15243b" text-anchor="start">4. Plug the XIAO in component-side up, USB toward the arrow.</text>
+<text x="1173" y="664" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="650" fill="#15243b" text-anchor="start">5. Meter-check GND↔GND and confirm no 3V3↔5V short.</text>
+<text x="1173" y="708" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="650" fill="#15243b" text-anchor="start">6. On Climate, verify battery polarity before inserting J6/J7.</text>
+<text x="1173" y="768" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="850" fill="#8b4db8" text-anchor="start">SERVICE</text>
+<text x="1283" y="768" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="650" fill="#15243b" text-anchor="start">Short TP1 to TP2/GND during boot for 1.5 seconds.</text>
+<text x="1173" y="824" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="850" fill="#087d70" text-anchor="start">XIAO SOCKET ROWS</text>
+<text x="1173" y="862" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="650" fill="#15243b" text-anchor="start">Top: D0, D1, D2, D3, SDA, SCL, TX</text>
+<text x="1173" y="898" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="650" fill="#15243b" text-anchor="start">Bottom: VBUS, GND, 3V3, D10, D9, D8, RX</text>
+<text x="1173" y="958" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="650" fill="#66788c" text-anchor="start">D10/D9/D8 remain electrically isolated on this board.</text>
+</svg>

@@ -1,0 +1,30 @@
+1
+00:00:02,000 --> 00:00:08,000
+HomeBrain brings your local forecast and live environmental sensors together in one place.
+
+2
+00:00:08,000 --> 00:00:19,000
+On the Dashboard, the Climate card shows current weather, indoor air quality,
+wind, rainfall, pressure, and today’s outlook.
+
+3
+00:00:19,000 --> 00:00:25,000
+Select Weather in the side menu to open the Weather Command Deck.
+
+4
+00:00:25,000 --> 00:00:39,000
+The deck combines your saved-location forecast with live Tempest station
+readings and indoor air data.
+
+5
+00:00:39,000 --> 00:00:51,000
+Use the summary cards for the daily outlook, indoor temperature,
+wind, pressure, and rainfall.
+
+6
+00:00:51,000 --> 00:00:58,000
+Select Refresh whenever you want the latest connected readings.
+
+7
+00:00:58,000 --> 00:01:03,000
+That is the HomeBrain weather system.

@@ -106,6 +106,49 @@ test('extractDeviceMetrics maps direct-radio sensor state into standard telemetr
   assert.equal(metrics.current_a, 1.525);
 });
 
+test('extractDeviceMetrics maps HomeBrain sensor readings into standard telemetry metrics', () => {
+  const metrics = extractDeviceMetrics({
+    _id: 'homebrain-sensor-1',
+    isOnline: true,
+    status: true,
+    properties: {
+      source: 'homebrain-sensor',
+      homebrainSensor: {
+        readings: {
+          temperature_c: 22.4,
+          temperature_f: 72.32,
+          humidity_pct: 41.8,
+          pressure_hpa: 839.2,
+          co2_ppm: 734,
+          pm1_0_ugm3: 2.1,
+          pm2_5_ugm3: 3.7,
+          pm10_ugm3: 4.4,
+          illuminance_lux: 84.2,
+          presence_present: false,
+          comfort_score: 92
+        },
+        power: { battery_volts: 4.08, battery_pct: 88, usb_powered: false },
+        diagnostics: { signal_rssi_dbm: -58, wake_count: 9 }
+      }
+    }
+  });
+
+  assert.equal(metrics.temperature_c, 22.4);
+  assert.equal(metrics.temperature_f, 72.32);
+  assert.equal(metrics.humidity_pct, 41.8);
+  assert.equal(metrics.pressure_hpa, 839.2);
+  assert.equal(metrics.co2_ppm, 734);
+  assert.equal(metrics.pm2_5_ugm3, 3.7);
+  assert.equal(metrics.illuminance_lux, 84.2);
+  assert.equal(metrics.presence_present, 0);
+  assert.equal(metrics.comfort_score, 92);
+  assert.equal(metrics.battery_volts, 4.08);
+  assert.equal(metrics.battery_pct, 88);
+  assert.equal(metrics.usb_powered, 0);
+  assert.equal(metrics.signal_rssi_dbm, -58);
+  assert.equal(metrics.wake_count, 9);
+});
+
 test('extractDeviceMetrics captures Tempest connectivity telemetry without duplicating observation metrics', () => {
   const metrics = extractDeviceMetrics({
     _id: 'tempest-device-1',

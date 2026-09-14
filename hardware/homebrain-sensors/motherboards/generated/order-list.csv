@@ -1,0 +1,6 @@
+Order,Item,Quantity,Specification,Source
+HOLD,HomeBrain Atmosphere Motherboard,5,v1.2-draft; 80.0 x 64.0 mm; 2-layer; 1.6 mm; 1 oz; lead-free HASL; bare board,DO NOT ORDER until PREORDER-REVIEW.md blockers are resolved
+HOLD,HomeBrain Presence Motherboard,5,v1.2-draft; 64.0 x 54.0 mm; 2-layer; 1.6 mm; 1 oz; lead-free HASL; bare board,DO NOT ORDER until PREORDER-REVIEW.md blockers are resolved
+HOLD,HomeBrain Climate Motherboard,5,v1.2-draft; 58.0 x 48.0 mm; 2-layer; 1.6 mm; 1 oz; lead-free HASL; bare board,DO NOT ORDER until PREORDER-REVIEW.md blockers are resolved
+Fastener,Everbilt #4 x 3/8 in Phillips pan-head sheet-metal screws,Two 16-packs total,24 used: 12 motherboard + 12 lid; eight spares,Home Depot model 824681 / Store SKU 1006540029
+Additional electronics,None,0,"Use the purchased modules and their installed/supplied pins, the PMS factory cable, battery mating pigtail, and purchased 200 kOhm resistors",Already purchased

@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1900" height="1250" viewBox="0 0 1900 1250">
+<title>Atmosphere Air Station final harness</title>
+<metadata>{"active_ports": ["J1", "J2", "J3", "J4"], "artifact": "final-harness", "profile": "atmosphere"}</metadata>
+<rect width="100%" height="100%" fill="#f4f7fb"/>
+<text x="55" y="58" font-family="Arial,Helvetica,sans-serif" font-size="34" font-weight="850" fill="#15243b" text-anchor="start">ATMOSPHERE AIR STATION — FINAL KEYED HARNESS</text>
+<text x="55" y="98" font-family="Arial,Helvetica,sans-serif" font-size="21" font-weight="650" fill="#56708d" text-anchor="start">Carrier front/component side • XIAO USB left • follow connector pin numbers and printed module labels</text>
+<rect x="55" y="135" width="590" height="1010" rx="22" fill="#ffffff" stroke="#c7d2e2" stroke-width="2.0" />
+<text x="350" y="180" font-family="Arial,Helvetica,sans-serif" font-size="26" font-weight="850" fill="#15243b" text-anchor="middle">HOMEBRAIN CARRIER</text>
+<text x="350" y="214" font-family="Arial,Helvetica,sans-serif" font-size="17" font-weight="700" fill="#087d70" text-anchor="middle">XIAO plugs into sockets — no wire fan-out here</text>
+<rect x="210" y="290" width="280" height="470" rx="12" fill="#0b695f" stroke="#083e48" stroke-width="4" />
+<rect x="268" y="410" width="164" height="230" rx="10" fill="#123c54" stroke="#64dfd1" stroke-width="3" />
+<text x="350" y="500" font-family="Arial,Helvetica,sans-serif" font-size="28" font-weight="900" fill="white" text-anchor="middle">XIAO</text>
+<text x="350" y="536" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#a9f3ea" text-anchor="middle">ESP32-C6</text>
+<text x="198" y="540" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="850" fill="#d9a614" text-anchor="end">USB-C</text>
+<rect x="192" y="305" width="108" height="40" rx="5" fill="#f2f1e9" stroke="#20384f" stroke-width="2" data-port="J1" data-state="active"/>
+<text x="246" y="331" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="900" fill="#15243b" text-anchor="middle">J1</text>
+<rect x="348" y="305" width="108" height="40" rx="5" fill="#f2f1e9" stroke="#20384f" stroke-width="2" data-port="J2" data-state="active"/>
+<text x="402" y="331" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="900" fill="#15243b" text-anchor="middle">J2</text>
+<rect x="168" y="355" width="108" height="40" rx="5" fill="#cfd6df" stroke="#20384f" stroke-width="2" data-port="J5" data-state="unused"/>
+<text x="222" y="381" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="900" fill="#758293" text-anchor="middle">J5</text>
+<rect x="296" y="355" width="108" height="40" rx="5" fill="#cfd6df" stroke="#20384f" stroke-width="2" data-port="J6" data-state="unused"/>
+<text x="350" y="381" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="900" fill="#758293" text-anchor="middle">J6</text>
+<rect x="412" y="355" width="108" height="40" rx="5" fill="#cfd6df" stroke="#20384f" stroke-width="2" data-port="J7" data-state="unused"/>
+<text x="466" y="381" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="900" fill="#758293" text-anchor="middle">J7</text>
+<rect x="192" y="700" width="108" height="40" rx="5" fill="#f2f1e9" stroke="#20384f" stroke-width="2" data-port="J3" data-state="active"/>
+<text x="246" y="726" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="900" fill="#15243b" text-anchor="middle">J3</text>
+<rect x="348" y="700" width="108" height="40" rx="5" fill="#f2f1e9" stroke="#20384f" stroke-width="2" data-port="J4" data-state="active"/>
+<text x="402" y="726" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="900" fill="#15243b" text-anchor="middle">J4</text>
+<text x="350" y="820" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="850" fill="#6b7788" text-anchor="middle">R1 + R2: LEAVE EMPTY</text>
+<text x="350" y="870" font-family="Arial,Helvetica,sans-serif" font-size="16" font-weight="650" fill="#5d7085" text-anchor="middle">Unused keyed ports remain empty; never install jumpers across them.</text>
+<rect x="690" y="145" width="540" height="246" rx="20" fill="#ffffff" stroke="#c7d2e2" stroke-width="2.0" data-harness="J1" data-module="BME680"/>
+<text x="714" y="183" font-family="Arial,Helvetica,sans-serif" font-size="22" font-weight="850" fill="#15243b" text-anchor="start">J1 I2C-A  →  BME680</text>
+<line x1="716" y1="215" x2="772" y2="215" stroke="#222a35" stroke-width="9" stroke-linecap="round" data-net="GND"/>
+<text x="786" y="221" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">pin 1 GND  →  GND</text>
+<text x="1190" y="221" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#222a35" text-anchor="end">BLACK</text>
+<line x1="716" y1="249" x2="772" y2="249" stroke="#e33f4b" stroke-width="9" stroke-linecap="round" data-net="3V3"/>
+<text x="786" y="255" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">pin 2 3V3  →  VCC</text>
+<text x="1190" y="255" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#e33f4b" text-anchor="end">RED</text>
+<line x1="716" y1="283" x2="772" y2="283" stroke="#14a879" stroke-width="9" stroke-linecap="round" data-net="SDA"/>
+<text x="786" y="289" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">pin 3 SDA  →  SDA</text>
+<text x="1190" y="289" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#14a879" text-anchor="end">GREEN</text>
+<line x1="716" y1="317" x2="772" y2="317" stroke="#277fd4" stroke-width="9" stroke-linecap="round" data-net="SCL"/>
+<text x="786" y="323" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">pin 4 SCL  →  SCL</text>
+<text x="1190" y="323" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#277fd4" text-anchor="end">BLUE</text>
+<text x="714" y="367" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="650" fill="#60748a" text-anchor="start">Sensor LEFT; holes RIGHT top→bottom: VCC, GND, SCL, SDA, SDO, CS</text>
+<rect x="690" y="413" width="540" height="246" rx="20" fill="#ffffff" stroke="#c7d2e2" stroke-width="2.0" data-harness="J2" data-module="SCD41"/>
+<text x="714" y="451" font-family="Arial,Helvetica,sans-serif" font-size="22" font-weight="850" fill="#15243b" text-anchor="start">J2 I2C-B  →  SCD41</text>
+<line x1="716" y1="483" x2="772" y2="483" stroke="#222a35" stroke-width="9" stroke-linecap="round" data-net="GND"/>
+<text x="786" y="489" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">pin 1 GND  →  GND</text>
+<text x="1190" y="489" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#222a35" text-anchor="end">BLACK</text>
+<line x1="716" y1="517" x2="772" y2="517" stroke="#e33f4b" stroke-width="9" stroke-linecap="round" data-net="3V3"/>
+<text x="786" y="523" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">pin 2 3V3  →  VDD</text>
+<text x="1190" y="523" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#e33f4b" text-anchor="end">RED</text>
+<line x1="716" y1="551" x2="772" y2="551" stroke="#14a879" stroke-width="9" stroke-linecap="round" data-net="SDA"/>
+<text x="786" y="557" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">pin 3 SDA  →  SDA</text>
+<text x="1190" y="557" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#14a879" text-anchor="end">GREEN</text>
+<line x1="716" y1="585" x2="772" y2="585" stroke="#277fd4" stroke-width="9" stroke-linecap="round" data-net="SCL"/>
+<text x="786" y="591" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">pin 4 SCL  →  SCL</text>
+<text x="1190" y="591" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#277fd4" text-anchor="end">BLUE</text>
+<text x="714" y="635" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="650" fill="#60748a" text-anchor="start">Sensor TOP; holes BOTTOM left→right: GND, VDD, SCL, SDA</text>
+<rect x="690" y="681" width="540" height="246" rx="20" fill="#ffffff" stroke="#c7d2e2" stroke-width="2.0" data-harness="J3" data-module="VEML7700"/>
+<text x="714" y="719" font-family="Arial,Helvetica,sans-serif" font-size="22" font-weight="850" fill="#15243b" text-anchor="start">J3 I2C-C  →  VEML7700</text>
+<line x1="716" y1="751" x2="772" y2="751" stroke="#222a35" stroke-width="9" stroke-linecap="round" data-net="GND"/>
+<text x="786" y="757" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">pin 1 GND  →  GND</text>
+<text x="1190" y="757" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#222a35" text-anchor="end">BLACK</text>
+<line x1="716" y1="785" x2="772" y2="785" stroke="#e33f4b" stroke-width="9" stroke-linecap="round" data-net="3V3"/>
+<text x="786" y="791" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">pin 2 3V3  →  VIN</text>
+<text x="1190" y="791" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#e33f4b" text-anchor="end">RED</text>
+<line x1="716" y1="819" x2="772" y2="819" stroke="#14a879" stroke-width="9" stroke-linecap="round" data-net="SDA"/>
+<text x="786" y="825" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">pin 3 SDA  →  SDA</text>
+<text x="1190" y="825" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#14a879" text-anchor="end">GREEN</text>
+<line x1="716" y1="853" x2="772" y2="853" stroke="#277fd4" stroke-width="9" stroke-linecap="round" data-net="SCL"/>
+<text x="786" y="859" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">pin 4 SCL  →  SCL</text>
+<text x="1190" y="859" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#277fd4" text-anchor="end">BLUE</text>
+<text x="714" y="903" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="650" fill="#60748a" text-anchor="start">Sensor TOP; holes BOTTOM left→right: VIN, 3Vo, GND, SCL, SDA</text>
+<rect x="1270" y="145" width="540" height="246" rx="20" fill="#ffffff" stroke="#c7d2e2" stroke-width="2.0" data-harness="J4" data-module="PMS5003 breakout"/>
+<text x="1294" y="183" font-family="Arial,Helvetica,sans-serif" font-size="22" font-weight="850" fill="#15243b" text-anchor="start">J4 UART-5V  →  PMS5003 breakout</text>
+<line x1="1296" y1="215" x2="1352" y2="215" stroke="#222a35" stroke-width="9" stroke-linecap="round" data-net="GND"/>
+<text x="1366" y="221" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">pin 1 GND  →  GND</text>
+<text x="1770" y="221" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#222a35" text-anchor="end">BLACK</text>
+<line x1="1296" y1="249" x2="1352" y2="249" stroke="#e33f4b" stroke-width="9" stroke-linecap="round" data-net="VBUS"/>
+<text x="1366" y="255" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">pin 2 5V  →  VCC(+5V)</text>
+<text x="1770" y="255" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#e33f4b" text-anchor="end">RED</text>
+<line x1="1296" y1="283" x2="1352" y2="283" stroke="#8751d0" stroke-width="9" stroke-linecap="round" data-net="TX"/>
+<text x="1366" y="289" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">pin 3 MCU-TX  →  RXD</text>
+<text x="1770" y="289" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#8751d0" text-anchor="end">PURPLE</text>
+<line x1="1296" y1="317" x2="1352" y2="317" stroke="#e4a91a" stroke-width="9" stroke-linecap="round" data-net="RX"/>
+<text x="1366" y="323" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">pin 4 MCU-RX  →  TXD</text>
+<text x="1770" y="323" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="850" fill="#e4a91a" text-anchor="end">YELLOW</text>
+<text x="1294" y="367" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="650" fill="#60748a" text-anchor="start">Red breakout holes top→bottom: VCC, GND, SET, RXD, TXD, RESET, NC, NC</text>
+<rect x="55" y="1165" width="1790" height="60" rx="12" fill="#fff3d5" stroke="#e7b54a" stroke-width="2" />
+<text x="82" y="1203" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="800" fill="#744c00" text-anchor="start">KEY RULE: the white XH plug is keyed at the carrier. At the sensor, match the printed pin label—not the module's left/right appearance or ribbon position.</text>
+</svg>

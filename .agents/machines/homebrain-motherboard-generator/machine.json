@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "id": "homebrain-motherboard-generator",
+  "summary": "Generate and independently verify three dedicated HomeBrain sensor motherboards with factory-header through-hole footprints, routed copper, draft Gerbers under manufacturing HOLD, BOMs, and assembly sheets.",
+  "scope": "project",
+  "tags": [
+    "homebrain",
+    "hardware",
+    "pcb",
+    "gerber",
+    "motherboard",
+    "through-hole",
+    "factory-header"
+  ],
+  "entrypoint": [
+    "python3",
+    "scripts/generate-homebrain-motherboards.py"
+  ],
+  "inputs": [
+    "hardware/homebrain-sensors/motherboards/motherboard-designs.json",
+    "hardware/homebrain-sensors/motherboards/references/seeed-xiao-c6.zip",
+    "hardware/homebrain-sensors/motherboards/references/seeed-footprints.zip",
+    "hardware/homebrain-sensors/motherboards/references/hlk-ld2410c-3d.zip"
+  ],
+  "outputs": [
+    "One separate Gerber ZIP, checked layout, assembly BOM, assembly PNG/SVG, schematic PNG/SVG, and actual-size SVG fit template for each Atmosphere, Presence, and Climate motherboard, plus a fleet order list and hash manifest."
+  ],
+  "side_effects": [
+    "Replaces only generated motherboard artifacts under hardware/homebrain-sensors/motherboards/generated/."
+  ],
+  "verify": [
+    [
+      "python3",
+      "scripts/test-verify-homebrain-motherboards.py"
+    ],
+    [
+      "python3",
+      "scripts/verify-homebrain-motherboards.py",
+      "--repeat"
+    ]
+  ],
+  "determinism": {
+    "environment": [
+      "macOS",
+      "Python 3.10+",
+      "Google Chrome at /Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    ],
+    "network": "forbidden",
+    "clock": "forbidden",
+    "randomness": "forbidden"
+  },
+  "status": "active"
+}
