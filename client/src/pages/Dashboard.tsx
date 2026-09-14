@@ -1,3 +1,4 @@
+import "@/components/dashboard/dashboard-visuals.css"
 import { Suspense, lazy, useState, useEffect, useMemo, useCallback, useRef } from "react"
 import { Link } from "react-router"
 import {
@@ -159,7 +160,7 @@ const getSummaryGridClass = (size: DashboardWidgetSize) => {
     case "large":
       return "grid-cols-1 sm:grid-cols-2 xl:grid-cols-2"
     case "full":
-      return "grid-cols-1 sm:grid-cols-2 xl:grid-cols-4"
+      return "grid-cols-2 xl:grid-cols-4"
     default:
       return "grid-cols-1 sm:grid-cols-2 xl:grid-cols-4"
   }
@@ -174,7 +175,7 @@ const getFavoriteDevicesGridClass = (size: DashboardWidgetSize) => {
     case "large":
       return "grid-cols-1 sm:grid-cols-2 xl:grid-cols-3"
     case "full":
-      return "grid-cols-1 sm:grid-cols-2 xl:grid-cols-4"
+      return "grid-cols-2 xl:grid-cols-4"
     default:
       return "grid-cols-1 sm:grid-cols-2 xl:grid-cols-4"
   }
@@ -692,15 +693,15 @@ export function Dashboard() {
 
   const summaryCards = useMemo(() => ([
     {
-      title: "Live Devices",
+      title: "Devices on",
       value: `${onlineDevices}/${devices.length}`,
-      description: "Realtime endpoints responding",
+      description: "Devices currently switched on",
       icon: Lightbulb,
       accent: "text-cyan-700 dark:text-cyan-300",
       glow: "from-cyan-300/35 via-cyan-200/10 to-transparent"
     },
     {
-      title: "Voice Mesh",
+      title: "Voice hubs",
       value: `${onlineVoiceDevices}/${voiceDevices.length}`,
       description: "Wake hubs currently connected",
       icon: Mic,
@@ -708,7 +709,7 @@ export function Dashboard() {
       glow: "from-emerald-300/30 via-emerald-200/10 to-transparent"
     },
     {
-      title: "Scene Library",
+      title: "Scenes",
       value: `${scenes.length}`,
       description: `${favoriteSceneCount} pinned for instant launch`,
       icon: Play,
@@ -716,14 +717,14 @@ export function Dashboard() {
       glow: "from-violet-300/30 via-violet-200/10 to-transparent"
     },
     {
-      title: "Automation Signal",
-      value: hasProfile ? "Tuned" : "Standby",
-      description: hasProfile ? "Favorites adapt to your active profile" : "Activate a profile for personalized quick access",
-      icon: Zap,
+      title: "Favorites",
+      value: `${favoriteDevices.length}`,
+      description: "Devices pinned for quick access",
+      icon: Heart,
       accent: "text-amber-700 dark:text-amber-300",
       glow: "from-amber-300/32 via-amber-200/10 to-transparent"
     }
-  ]), [devices.length, favoriteSceneCount, hasProfile, onlineDevices, onlineVoiceDevices, scenes.length, voiceDevices.length])
+  ]), [devices.length, favoriteDevices.length, favoriteSceneCount, onlineDevices, onlineVoiceDevices, scenes.length, voiceDevices.length])
 
   const mutateViews = useCallback((mutator: (views: DashboardViewConfig[]) => DashboardViewConfig[]) => {
     setDashboardViews((prev) => {
@@ -1175,27 +1176,14 @@ export function Dashboard() {
       const compactHero = widget.size === "small" || widget.size === "medium"
 
       return (
-        <section className={cn("relative overflow-hidden rounded-[1.5rem] border border-white/10 bg-white/5 dark:bg-slate-950/12", compactHero ? "p-4" : "p-5")}>
-          <div className="panel-grid absolute inset-0 opacity-30" />
-          <div className={cn("absolute rounded-full blur-3xl dark:bg-cyan-500/18", compactHero ? "right-[-3rem] top-[-3rem] h-36 w-36 bg-cyan-300/18" : "right-[-5rem] top-[-4rem] h-52 w-52 bg-cyan-300/25")} />
-          <div className={cn("absolute rounded-full blur-3xl dark:bg-blue-500/16", compactHero ? "bottom-[-3rem] left-[-2rem] h-28 w-28 bg-blue-300/14" : "bottom-[-5rem] left-[-4rem] h-44 w-44 bg-blue-300/20")} />
-          <div className={cn("relative", compactHero ? "space-y-3" : "space-y-5")}>
-            <div className={cn(compactHero ? "space-y-2" : "space-y-4")}>
-              <p className="section-kicker">Residence Control Nexus</p>
-              <div className={cn(compactHero ? "max-w-2xl" : "max-w-4xl")}>
-                <h2 className={cn("text-balance font-semibold leading-tight text-foreground", compactHero ? "text-2xl sm:text-[2rem]" : "text-[2rem] sm:text-[2.4rem]")}>
-                  <span className="text-signal">Welcome home.</span> {selectedView?.name ?? "Your dashboard"} is ready.
-                </h2>
-                <p className={cn("max-w-2xl leading-relaxed text-muted-foreground", compactHero ? "mt-2 text-sm" : "mt-4 text-base")}>
-                  Keep the controls you use, shrink the rest, and tune this deck per room or device.
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Badge variant="secondary">Widgets {selectedView?.widgets.length ?? 0}</Badge>
-                <Badge variant="outline">{favoriteDevices.length} favorite devices ready</Badge>
-                <Badge variant="outline">{onlineVoiceDevices} voice hubs online</Badge>
-              </div>
-            </div>
+        <section className="dashboard-hero">
+          <p className="dashboard-eyebrow">{selectedView?.name ?? "Home"} overview</p>
+          <h2>Welcome <span>home.</span></h2>
+          <p className={compactHero ? "text-sm" : "text-base"}>Your home, at a glance.</p>
+          <div className="dashboard-hero-pills">
+            <span><Lightbulb aria-hidden="true" />{onlineDevices} devices on</span>
+            <span><Mic aria-hidden="true" />{onlineVoiceDevices} voice {onlineVoiceDevices === 1 ? "hub" : "hubs"} online</span>
+            <span><Heart aria-hidden="true" />{favoriteDevices.length} favorites</span>
           </div>
         </section>
       )
@@ -1205,18 +1193,9 @@ export function Dashboard() {
       return (
         <div className={cn("grid gap-3", getSummaryGridClass(widget.size))}>
           {summaryCards.map((card) => (
-            <div key={card.title} className={cn("card-shell rounded-[1.4rem]", widget.size === "small" ? "p-4" : "p-5")}>
-              <div className={`absolute inset-0 bg-gradient-to-br ${card.glow}`} />
-              <div className="relative flex items-start justify-between gap-3">
-                <div>
-                  <p className="section-kicker">{card.title}</p>
-                  <p className={cn("font-semibold text-foreground", widget.size === "small" ? "mt-2 text-2xl" : "mt-3 text-3xl")}>{card.value}</p>
-                  <p className={cn("leading-relaxed text-muted-foreground", widget.size === "small" ? "mt-1 text-xs" : "mt-2 text-sm")}>{card.description}</p>
-                </div>
-                <div className={cn("rounded-[1rem] border border-white/20 bg-white/10", widget.size === "small" ? "p-2.5" : "p-3", card.accent)}>
-                  <card.icon className="h-5 w-5" />
-                </div>
-              </div>
+            <div key={card.title} className="dashboard-metric" title={card.description}>
+              <span className={cn("dashboard-metric-icon", card.accent)}><card.icon aria-hidden="true" /></span>
+              <div className="min-w-0"><p className="dashboard-metric-value">{card.value}</p><p className="dashboard-metric-label">{card.title}</p></div>
             </div>
           ))}
         </div>
@@ -1348,7 +1327,7 @@ export function Dashboard() {
           canToggleFavorite={hasProfile}
           isFavoritePending={pendingDeviceIds.has(device._id)}
           cardSize={getSingleDeviceCardSize(widget.size)}
-          label="Device Control"
+          label={widget.title === "Device" ? "" : widget.title}
         />
       )
     }
@@ -1396,7 +1375,7 @@ export function Dashboard() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="dashboard-surface space-y-4">
       {dashboardDirty ? (
         <div className="flex flex-wrap gap-2 px-1">
           <Badge variant="secondary">Unsaved changes</Badge>
@@ -1424,19 +1403,20 @@ export function Dashboard() {
               <div
                 key={widget.id}
                 className={cn(
-                  "rounded-[1.8rem] border border-white/15 bg-white/10 shadow-lg shadow-black/5 backdrop-blur-xl dark:bg-slate-950/20",
+                  "dashboard-shell",
+                  !isEditingLayout && !widget.minimized && ["hero", "summary", "device"].includes(widget.type) && "dashboard-shell-bare",
                   (widget.type === "security" || widget.type === "weather") && "self-start",
                   WIDGET_SPAN_CLASSES[widget.size]
                 )}
               >
-                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-2.5 dark:border-cyan-200/10">
+                <div className={cn("dashboard-shell-header flex flex-wrap items-center justify-between gap-3", !isEditingLayout && !widget.minimized && ["hero", "summary", "device"].includes(widget.type) && "hidden")}>
                   <div className="flex items-center gap-3">
                     <span className="rounded-full border border-white/15 bg-white/10 p-2 text-cyan-600 dark:text-cyan-300">
                       <Icon className="h-4 w-4" />
                     </span>
                     <div>
                       <p className="text-sm font-semibold text-foreground">{widgetDisplayTitle(widget)}</p>
-                      <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">{widgetDisplayType(widget)}</p>
+                      {isEditingLayout ? <p className="text-xs text-muted-foreground">{widgetDisplayType(widget)}</p> : null}
                     </div>
                   </div>
 
@@ -1497,12 +1477,10 @@ export function Dashboard() {
                         <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>
-                  ) : (
-                    <Badge variant="outline">{widget.size}</Badge>
-                  )}
+                  ) : null}
                 </div>
 
-                <div className="p-3.5">
+                <div className="dashboard-shell-content">
                   {widget.minimized ? (
                     <div className="rounded-[1.35rem] border border-dashed border-white/15 bg-white/5 px-4 py-5 text-sm text-muted-foreground dark:bg-slate-950/10">
                       This widget is minimized. Turn on edit mode to expand it again.

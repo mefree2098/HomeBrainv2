@@ -1,0 +1,40 @@
+@import "../devices/device-visuals.css";
+/* Dashboard surfaces keep state and controls readable in both themes. */
+.dashboard-surface { --dashboard-panel:rgba(255,255,255,.88); --dashboard-edge:rgba(83,126,168,.22); }
+.dark .dashboard-surface { --dashboard-panel:rgba(8,27,48,.95); --dashboard-edge:rgba(93,177,224,.28); }
+.dashboard-surface .dashboard-shell { min-width:0; align-self:start; border:1px solid var(--dashboard-edge); border-radius:22px; background:var(--dashboard-panel); box-shadow:0 8px 28px rgba(0,12,28,.06); }
+.dashboard-surface .dashboard-shell-bare { border:0; background:transparent; box-shadow:none; }
+.dashboard-surface .dashboard-shell-content { padding:16px; }
+.dashboard-surface .dashboard-shell-bare > .dashboard-shell-content { padding:0; }
+.dashboard-surface .dashboard-shell-header { padding:14px 18px 0; border:0; }
+.dashboard-surface .dashboard-shell-header p { font-family:var(--font-body); }
+.dashboard-hero { position:relative; overflow:hidden; padding:28px 30px; border:1px solid var(--dashboard-edge); border-radius:22px; background:radial-gradient(ellipse at 96% 0%, hsl(var(--primary)/.18),transparent 65%),var(--dashboard-panel); }
+.dashboard-hero h2 { margin:12px 0 8px; font-family:var(--font-body); font-size:clamp(2.1rem,5.3vw,4.75rem); font-weight:700; letter-spacing:-.055em; line-height:1.1; }
+.dashboard-hero h2 span { color:#126b8a; }
+.dark .dashboard-hero h2 span { color:#5bdef5; }
+.dashboard-hero p { color:hsl(var(--muted-foreground)); }
+.dashboard-eyebrow { font-family:var(--font-body); font-size:10px; font-weight:700; letter-spacing:.22em; text-transform:uppercase; }
+.dashboard-hero-pills { display:flex; flex-wrap:wrap; gap:8px; margin-top:20px; }
+.dashboard-hero-pills span { display:inline-flex; align-items:center; gap:8px; padding:9px 13px; border:1px solid var(--dashboard-edge); border-radius:999px; font-size:14px; color:hsl(var(--foreground)); background:hsl(var(--background)/.5); }
+.dashboard-hero-pills svg { width:14px; height:14px; color:#137c8d; }
+.dark .dashboard-hero-pills svg { color:#67dff3; }
+.dashboard-metric { display:flex; align-items:center; gap:14px; min-width:0; padding:22px 18px; border:1px solid var(--dashboard-edge); border-radius:20px; background:var(--dashboard-panel); }
+.dashboard-metric-icon { display:grid; place-items:center; width:56px; height:56px; flex-shrink:0; border-radius:16px; background:currentColor; position:relative; isolation:isolate; }
+.dashboard-metric-icon::before { content:''; position:absolute; inset:0; border-radius:inherit; background:hsl(var(--card)/.82); z-index:-1; }
+.dashboard-metric-icon svg { width:30px; height:30px; }
+.dashboard-metric-value { font-family:var(--font-body); font-size:32px; line-height:1.15; font-weight:700; letter-spacing:-.045em; font-variant-numeric:tabular-nums; }
+.dashboard-metric-label { margin-top:4px; font-size:14px; color:hsl(var(--foreground)/.78); }
+.dashboard-surface .dashboard-weather { border:0; background:transparent; padding:0; box-shadow:none; backdrop-filter:none; }
+.dashboard-weather > .panel-grid, .dashboard-weather > .absolute { display:none; }
+.dashboard-weather .dashboard-weather-temperature { font-family:var(--font-body); font-size:clamp(46px,5vw,64px); font-weight:600; letter-spacing:-.06em; }
+.dashboard-weather-symbol { display:grid; place-items:center; width:72px; height:72px; border-radius:20px; color:hsl(var(--primary)); background:radial-gradient(circle,hsl(var(--primary)/.15),transparent 72%); }
+.dashboard-weather-symbol svg { width:56px; height:56px; filter:drop-shadow(0 4px 9px hsl(var(--primary)/.2)); }
+@media (max-width:639px) { .dashboard-hero { padding:23px; } .dashboard-metric { padding:14px; gap:10px; } .dashboard-metric-icon { width:36px; height:36px; border-radius:12px; } .dashboard-metric-value { font-size:24px; } }
+@media (prefers-reduced-motion:reduce) { .dashboard-surface *, .hb-device * { animation:none !important; transition:none !important; scroll-behavior:auto !important; } }
+
+/* Responsive emphasis and generous control hit areas. */
+.dashboard-hero > p:not(.dashboard-eyebrow) { font-size:18px; }
+.dashboard-weather .section-kicker { letter-spacing:.15em; padding-left:1px; }
+.dashboard-weather [title^='Last synced'] { font-size:12px; }
+@media(max-width:639px) { .dashboard-hero > p:not(.dashboard-eyebrow) { font-size:16px; } .dashboard-hero-pills span { font-size:12px; } .dashboard-metric { padding:16px 12px; gap:10px; } .dashboard-metric-icon { width:34px; height:38px; } .dashboard-metric-icon svg { width:22px; height:22px; } .dashboard-metric-value { font-size:26px; } .dashboard-metric-label { font-size:13px; } }
+.dashboard-surface .dashboard-weather { border-radius:0; overflow:visible; }

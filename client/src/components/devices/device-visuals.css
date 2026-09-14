@@ -1,0 +1,56 @@
+/* Shared device surfaces across dashboards, device lists, and detailed controls. */
+.hb-device { --device-accent:192 85% 40%; min-width:0; border:1px solid hsl(var(--device-accent)/.23); border-radius:20px; background:radial-gradient(ellipse at 8% 0%,hsl(var(--device-accent)/.1),transparent 65%),hsl(var(--card)/.92); box-shadow:none; }
+.dark .hb-device { --device-accent:190 95% 66%; background:radial-gradient(ellipse at 0 0,hsl(var(--device-accent)/.18),transparent 70%),#081c31; border-color:hsl(var(--device-accent)/.38); }
+.hb-device[data-device-kind='light'] { --device-accent:38 90% 40%; }
+.dark .hb-device[data-device-kind='light'] { --device-accent:42 95% 63%; }
+.hb-device[data-device-active='false'] { --device-accent:215 15% 55%; }
+.hb-device-heading { display:flex; flex-direction:column; gap:12px; padding:18px 18px 12px; }
+.hb-device-actions { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.hb-device-icon { display:grid; place-items:center; width:44px; height:44px; border-radius:50%; color:hsl(var(--device-accent)); background:hsl(var(--device-accent)/.14); border:1px solid hsl(var(--device-accent)/.25); box-shadow:0 0 28px hsl(var(--device-accent)/.1); }
+.hb-device-icon svg { width:23px; height:23px; }
+.hb-device-title { font-family:var(--font-body); font-size:17px; font-weight:600; line-height:1.35; overflow-wrap:anywhere; }
+.hb-device-room { margin-top:3px; font-size:12px; color:hsl(var(--muted-foreground)); }
+.hb-device-content { padding:0 18px 18px; display:flex; flex-direction:column; gap:14px; }
+.hb-device .hb-device-power { width:100%; min-height:44px; border-radius:14px; background:hsl(var(--device-accent)/.13); color:hsl(var(--foreground)); border:1px solid hsl(var(--device-accent)/.3); box-shadow:none; }
+.hb-device .hb-device-power:hover { background:hsl(var(--device-accent)/.22); }
+.hb-device button { min-height:44px; }
+.hb-device-reading { font-size:48px; font-weight:600; font-family:var(--font-body); line-height:1.1; letter-spacing:-.05em; font-variant-numeric:tabular-nums; }
+.hb-device-caption { font-size:11px; color:hsl(var(--muted-foreground)); }
+.hb-device-slider { padding:7px 0; min-height:44px; }
+.hb-device-slider [role='slider'] { width:22px; height:22px; border-color:hsl(var(--device-accent)); position:relative; }
+.hb-device-slider [data-orientation='horizontal'] > span { background:hsl(var(--device-accent)); }
+.hb-temperature-dial { position:relative; width:min(100%,190px); margin:0 auto; aspect-ratio:1.2; }
+.hb-temperature-dial svg { width:100%; height:100%; overflow:visible; }
+.hb-temperature-dial-copy { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; padding-top:14px; }
+.hb-temperature-dial-value { font-size:44px; font-weight:600; letter-spacing:-.05em; line-height:1.1; }
+.hb-device-current { text-align:center; font-size:12px; color:hsl(var(--muted-foreground)); }
+.hb-device-mode-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
+.hb-device-mode-grid button { min-width:0; padding:6px; border-radius:11px; font-size:14px; box-shadow:none; }
+.hb-device-mode-grid button[aria-pressed='true'] { background:hsl(var(--device-accent)/.18); color:hsl(var(--foreground)); border:1px solid hsl(var(--device-accent)/.45); }
+.hb-device-room, .hb-device-caption, .hb-device-current { font-size:14px; }
+.hb-device[data-device-kind='light'][data-device-active='true'] .hb-device-icon { background:linear-gradient(135deg,#ffe18a,#f5ae21); color:#5b3500; border-color:#ffd668; box-shadow:0 0 30px #f5ae2126; }
+.hb-device[data-device-kind='thermostat'] .hb-device-icon { background:hsl(var(--device-accent)/.22); box-shadow:0 0 24px hsl(var(--device-accent)/.14); }
+.hb-device-slider [role='slider']::after { content:''; position:absolute; inset:-12px; border-radius:50%; }
+
+.hb-device[data-device-kind='lock'] { --device-accent: 155 65% 35%; }
+.hb-device[data-device-kind='sensor'] { --device-accent: 265 60% 53%; }
+.hb-device[data-device-kind='camera'] { --device-accent: 208 75% 43%; }
+.hb-device[data-device-kind='siren'] { --device-accent: 14 78% 45%; }
+.hb-device[data-device-kind='speaker'] { --device-accent: 275 65% 50%; }
+.dark .hb-device[data-device-kind='lock'] { --device-accent: 155 65% 63%; }
+.dark .hb-device[data-device-kind='sensor'], .dark .hb-device[data-device-kind='speaker'] { --device-accent: 270 85% 78%; }
+.dark .hb-device[data-device-kind='camera'] { --device-accent: 205 90% 72%; }
+.dark .hb-device[data-device-kind='siren'] { --device-accent: 20 90% 70%; }
+.hb-device[data-device-active='false'] { --device-accent: 215 15% 55%; }
+.hb-device .hb-device-icon { flex-shrink:0; }
+.hb-device-controls { padding:18px; }
+.hb-device-summary { font-size:22px; font-weight:600; letter-spacing:-.025em; line-height:1.3; }
+.hb-device button[aria-pressed='true'] { background:hsl(var(--device-accent)/.18); color:hsl(var(--foreground)); border-color:hsl(var(--device-accent)/.4); }
+.hb-device input[type='color'] { min-width:44px; min-height:44px; }
+.hb-device-details { --device-accent:192 88% 65%; }
+.hb-device-details .hb-device { --card:214 60% 10%; background:radial-gradient(ellipse at 0 0,hsl(var(--device-accent)/.13),transparent 70%),#081c31; }
+@media(prefers-reduced-motion:reduce) { .hb-device *, .hb-device { animation:none !important; transition:none !important; } }
+.hb-device.card-shell { backdrop-filter:none; -webkit-backdrop-filter:none; }
+.hb-device.card-shell::before { display:none; }
+
+.dark .hb-temperature-dial svg path:last-child { filter:drop-shadow(0 0 5px hsl(var(--device-accent)/.2)); }

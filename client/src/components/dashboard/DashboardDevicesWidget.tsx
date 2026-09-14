@@ -1,5 +1,7 @@
+import { DeviceSymbol } from "../devices/DeviceSymbol"
+import { TemperatureDial } from "../devices/TemperatureDial"
 import { useEffect, useMemo, useState } from "react"
-import { Loader2, Palette, Power, PowerOff, Zap } from "lucide-react"
+import { Loader2, Palette, Power, Zap } from "lucide-react"
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts"
 import { getDeviceEnergyHistory, type DeviceEnergySample } from "@/api/devices"
 import { Badge } from "@/components/ui/badge"
@@ -481,7 +483,7 @@ function ColorWheelControl({
         className="absolute inset-[5px] rounded-full border border-white/70 shadow-[inset_0_1px_2px_rgba(255,255,255,0.5)]"
         style={{ backgroundColor: color }}
       />
-      <Palette className="relative z-10 h-4 w-4 text-white drop-shadow-[0_1px_2px_rgba(15,23,42,0.85)]" />
+      <Palette className="relative z-10 h-4 w-4 text-foreground drop-shadow-[0_1px_2px_rgba(15,23,42,0.85)]" />
       <input
         type="color"
         value={color}
@@ -593,17 +595,18 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
   }
 
   return (
-    <Card className="h-full rounded-[1.25rem] border border-white/10 bg-[radial-gradient(circle_at_top,rgba(148,163,184,0.28),rgba(15,23,42,0.92)_72%)] shadow-[0_24px_48px_-28px_rgba(15,23,42,0.95)] backdrop-blur-md">
+    <Card className="hb-device h-full" data-device-kind={device.type} data-device-active={isThermostat ? getThermostatMode(device) !== "off" : device.status}>
       <CardContent className="flex h-full min-h-[188px] flex-col p-3">
-        <div className="mb-2 flex min-h-[3.25rem] items-start gap-2">
+        <div className="mb-3 flex flex-wrap items-start gap-3">
+          <DeviceSymbol type={device.type} />
           <div className="min-w-0 flex-1 space-y-1">
             <p className={cn(
-              "min-h-[2.35rem] line-clamp-2 font-semibold leading-tight text-white",
+              "hb-device-title",
               getDenseDeviceNameClass(device.name)
             )}>
               {device.name}
             </p>
-            <p className="line-clamp-1 text-[11px] text-slate-300/75">{device.room || "Unassigned"}</p>
+            <p className="line-clamp-1 text-[11px] text-muted-foreground">{device.room || "Unassigned"}</p>
           </div>
           {supportsColor ? (
             <ColorWheelControl
@@ -617,26 +620,24 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
           ) : null}
         </div>
 
-        {isThermostat ? (
-          <p className="mb-2 text-[11px] text-slate-300/75">{getStatusLabel(device)}</p>
-        ) : null}
+        {isThermostat ? <><TemperatureDial temperature={Math.round(device.targetTemperature ?? device.temperature ?? 70)} mode={getThermostatMode(device)} /><p className="hb-device-caption mb-2">{getStatusLabel(device)}</p></> : null}
 
         {energySnapshot.supportsEnergyMonitoring ? (
           <div className="mb-2 space-y-2 rounded-[0.9rem] border border-emerald-400/15 bg-emerald-400/8 p-2.5">
             <div className="flex items-center justify-between gap-2">
               <div>
                 <p className="text-[10px] uppercase tracking-[0.16em] text-slate-300/70">Current Draw</p>
-                <p className="text-sm font-semibold text-white">{formatPowerValue(latestPowerValue, latestPowerUnit)}</p>
+                <p className="text-sm font-semibold text-foreground">{formatPowerValue(latestPowerValue, latestPowerUnit)}</p>
               </div>
               <Zap className="h-4 w-4 text-emerald-400" />
             </div>
 
             {latestEnergyText ? (
-              <p className="text-[11px] text-slate-300/75">Energy total {latestEnergyText}</p>
+              <p className="text-[11px] text-muted-foreground">Energy total {latestEnergyText}</p>
             ) : null}
 
             {loading && chartData.length === 0 ? (
-              <div className="flex h-14 items-center justify-center text-[11px] text-slate-300/75">
+              <div className="flex h-14 items-center justify-center text-[11px] text-muted-foreground">
                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                 Loading history
               </div>
@@ -673,7 +674,7 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
                 </LineChart>
               </ChartContainer>
             ) : (
-              <div className="rounded-md border border-dashed border-white/10 px-2 py-3 text-center text-[11px] text-slate-300/75">
+              <div className="rounded-md border border-dashed border-white/10 px-2 py-3 text-center text-[11px] text-muted-foreground">
                 No recent power samples yet.
               </div>
             )}
@@ -682,11 +683,12 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
 
         {supportsFade ? (
           <div className="mb-2 space-y-1.5">
-            <div className="flex items-center justify-between text-[11px] text-slate-300/75">
-              <span>Fade</span>
-              <span className="font-medium text-white">{brightness}%</span>
+            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+              <span>Brightness</span>
+              <span className="hb-device-reading">{brightness}%</span>
             </div>
             <Slider
+              aria-label={`Brightness for ${device.name}`}
               value={[brightness]}
               onValueChange={(values) => setBrightness(clampBrightness(values?.[0] ?? brightness))}
               onValueCommit={(values) => {
@@ -696,7 +698,7 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
               }}
               max={100}
               step={1}
-              className="w-full"
+              className="hb-device-slider w-full"
             />
           </div>
         ) : null}
@@ -705,11 +707,11 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
           onClick={handleToggle}
           variant={device.status ? "default" : "outline"}
           size="sm"
-          className={cn("w-full", !isThermostat && "mt-auto")}
+          className={cn("hb-device-power w-full", !isThermostat && "mt-auto")}
         >
           {device.status ? (
             <>
-              <PowerOff className="mr-1.5 h-3.5 w-3.5" />
+              <Power className="mr-1.5 h-3.5 w-3.5" />
               {device.type === "lock" ? "Unlock" : "Turn Off"}
             </>
           ) : (
@@ -721,7 +723,7 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
         </Button>
 
         {isThermostat ? (
-          <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+          <div className="hb-device-mode-grid">
             {THERMOSTAT_MODES.map((mode) => {
               const active = getThermostatMode(device) === mode
 
@@ -730,7 +732,7 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
                   key={mode}
                   variant={active ? "default" : "outline"}
                   size="sm"
-                  className="h-7 px-2 text-[10px] uppercase tracking-[0.14em]"
+                  aria-pressed={active}
                   onClick={() => onControl(device._id, "set_mode", mode)}
                 >
                   {mode}
