@@ -35,6 +35,10 @@ final class DashboardVisualTests: XCTestCase {
         let uv = app.buttons["Open UV details"]
         XCTAssertTrue(uv.isHittable)
         XCTAssertLessThanOrEqual(uv.frame.maxX, app.frame.maxX)
+        let temperature = app.staticTexts["climate-summary-temperature"]
+        XCTAssertGreaterThan(aqi.frame.minX, temperature.frame.maxX, "Air readings should use the space beside the temperature")
+        let wind = app.buttons["Open Live Wind details"]
+        XCTAssertLessThan(wind.frame.minY - temperature.frame.minY, 260, "The phone summary should not push weather metrics down with empty space")
         attachScreenshot("iPhone Air Climate", from: app)
         aqi.tap()
         let done = app.buttons["Done"]
@@ -42,12 +46,32 @@ final class DashboardVisualTests: XCTestCase {
         done.tap()
         XCTAssertTrue(aqi.waitForExistence(timeout: 10))
         XCTAssertTrue(aqi.isHittable)
-        let wind = app.buttons["Open Live Wind details"]
         reveal(wind, in: app)
         XCTAssertTrue(wind.isHittable)
         wind.tap()
         XCTAssertTrue(done.waitForExistence(timeout: 10))
         done.tap()
+    }
+
+    func testClimateSummaryExpandsForAccessibilityText() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-preview", "-ui-preview-section", "dashboard", "-ui-preview-dashboard-focus", "weather", "-ui-preview-weather-source", "tempest", "-homebrain.ios.theme-mode", "light", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        let temperature = app.staticTexts["climate-summary-temperature"]
+        XCTAssertTrue(temperature.waitForExistence(timeout: 30))
+        let aqi = app.buttons["Open AQI details"]
+        reveal(aqi, in: app)
+        XCTAssertTrue(aqi.isHittable)
+        XCTAssertGreaterThanOrEqual(aqi.frame.minY, temperature.frame.maxY)
+        let uv = app.buttons["Open UV details"]
+        XCTAssertGreaterThanOrEqual(aqi.frame.minX, app.frame.minX)
+        XCTAssertLessThanOrEqual(uv.frame.maxX, app.frame.maxX)
+        attachScreenshot("Climate with accessibility text", from: app)
+        let indoor = app.buttons["Open Indoor Air details"].firstMatch
+        reveal(indoor, in: app)
+        XCTAssertTrue(indoor.isHittable)
+        indoor.tap()
+        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 10))
     }
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication) {

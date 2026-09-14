@@ -783,6 +783,7 @@ private struct DashboardSecuritySirenOutputItem: Identifiable {
 struct DashboardView: View {
     let previewMode: Bool
     @Environment(\.dynamicTypeSize) private var dashboardDynamicTypeSize
+    @ScaledMetric(relativeTo: .body) private var weatherSummaryColumnMinimumWidth: CGFloat = 148
     let onOpenDevice: ((String) -> Void)?
 
     private enum DashboardNameAction {
@@ -3970,77 +3971,7 @@ struct DashboardView: View {
                             }
                         }
                     } else if stackedHeroLayout {
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack(alignment: .top, spacing: 12) {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Local Forecast")
-                                        .font(HBTypography.body(.caption, weight: .bold))
-                                        .textCase(.uppercase)
-                                        .tracking(1.0)
-                                        .foregroundStyle(HBPalette.textMuted)
-
-                                    Text(formattedTemperature(snapshot.displayTemperatureF))
-                                        .font(HBTypography.body(size: headlineFontSize, weight: .bold))
-                                        .foregroundStyle(HBPalette.textPrimary)
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.78)
-
-                                    Text("Feels like \(formattedTemperature(snapshot.displayFeelsLikeF))")
-                                        .font(HBTypography.body(size: 14, weight: .medium))
-                                        .foregroundStyle(HBPalette.textSecondary)
-                                        .lineLimit(1)
-                                        .minimumScaleFactor(0.82)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-
-                                Spacer(minLength: 10)
-
-                                Image(systemName: weatherIconName(icon: snapshot.icon, isDay: snapshot.isDay))
-                                    .font(.system(size: weatherGlyphSize, weight: .semibold))
-                                    .foregroundStyle(
-                                        LinearGradient(
-                                            colors: [HBPalette.accentBlue, HBPalette.accentPurple],
-                                            startPoint: .topLeading,
-                                            endPoint: .bottomTrailing
-                                        )
-                                    )
-                                    .frame(width: weatherGlyphFrame, height: weatherGlyphFrame)
-                                    .background(HBDeviceSurface(cornerRadius: compact ? 16 : 18, inset: true))
-                            }
-
-                            VStack(alignment: .leading, spacing: 10) {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(snapshot.condition)
-                                        .font(HBTypography.body(size: compactWeatherHeader ? 15 : 17, weight: .semibold))
-                                        .foregroundStyle(HBPalette.textPrimary)
-
-                                    Label(snapshot.locationName, systemImage: "mappin.and.ellipse")
-                                        .font(HBTypography.body(size: 13, weight: .medium))
-                                        .foregroundStyle(HBPalette.textSecondary)
-                                        .lineLimit(tabletCompactWeatherGrid ? 1 : 2)
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-
-                                VStack(alignment: .leading, spacing: 7) {
-                                    weatherOutdoorClimateRow(
-                                        snapshot: snapshot,
-                                        widgetID: widget.id,
-                                        compact: true,
-                                        includeIcon: false,
-                                        weatherGlyphSize: weatherGlyphSize,
-                                        weatherGlyphFrame: weatherGlyphFrame
-                                    )
-
-                                    weatherIndoorClimateRow(
-                                        widgetID: widget.id,
-                                        indoorAir: snapshot.indoorAir,
-                                        compact: true
-                                    )
-                                }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            weatherStatusBadges(snapshot: snapshot, compact: true)
-                        }
+                        weatherPhoneSummary(snapshot: snapshot, widgetID: widget.id, compact: compact)
                     } else {
                         HStack(alignment: .top, spacing: 12) {
                             VStack(alignment: .leading, spacing: 6) {
@@ -4491,47 +4422,145 @@ struct DashboardView: View {
         }
     }
 
+    private func weatherPhoneSummary(snapshot: DashboardWeatherSnapshot, widgetID: String, compact: Bool) -> some View {
+        let availableWidth = max(layoutWidth - dashboardWidgetPanelHorizontalPadding * 2, 0)
+        let columnsFit = !dashboardDynamicTypeSize.isAccessibilitySize
+            && availableWidth >= weatherSummaryColumnMinimumWidth * 2 + 12
+        let summaryLayout = columnsFit
+            ? AnyLayout(HStackLayout(alignment: .top, spacing: 12))
+            : AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+
+        return VStack(alignment: .leading, spacing: 12) {
+            summaryLayout {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Local Forecast")
+                        .font(HBTypography.body(.caption, weight: .bold))
+                        .textCase(.uppercase)
+                        .tracking(1)
+                        .foregroundStyle(HBPalette.textMuted)
+                    Text(formattedTemperature(snapshot.displayTemperatureF))
+                        .font(HBTypography.body(size: compact ? 44 : 56, weight: .bold))
+                        .monospacedDigit()
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                        .accessibilityIdentifier("climate-summary-temperature")
+                    Text("Feels like \(formattedTemperature(snapshot.displayFeelsLikeF))")
+                        .font(HBTypography.body(.caption))
+                        .foregroundStyle(HBPalette.textSecondary)
+                    Text(snapshot.condition)
+                        .font(HBTypography.body(.subheadline, weight: .semibold))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Label(snapshot.locationName, systemImage: "mappin.and.ellipse")
+                        .font(HBTypography.body(.caption))
+                        .foregroundStyle(HBPalette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Outside")
+                            .font(HBTypography.body(.caption, weight: .bold))
+                            .foregroundStyle(HBPalette.textSecondary)
+                        Spacer(minLength: 6)
+                        Image(systemName: weatherIconName(icon: snapshot.icon, isDay: snapshot.isDay))
+                            .font(.system(size: 24, weight: .medium))
+                            .foregroundStyle(HBPalette.accentBlue)
+                            .accessibilityHidden(true)
+                    }
+                    HStack(spacing: 6) {
+                        weatherInfoPopoverTrigger(topic: .aqi(widgetID: widgetID, value: snapshot.airQualityIndex)) {
+                            weatherPhoneReading(title: "AQI", value: formattedAQI(snapshot.airQualityIndex), tone: aqiRiskColor(snapshot.airQualityIndex))
+                        }
+                        if let tempest = snapshot.tempest {
+                            weatherInfoPopoverTrigger(topic: .uv(widgetID: widgetID, value: tempest.uvIndex)) {
+                                weatherPhoneReading(title: "UV", value: formattedUV(tempest.uvIndex), tone: uvRiskColor(tempest.uvIndex))
+                            }
+                        }
+                    }
+                    if let indoor = snapshot.indoorAir {
+                        weatherInfoPopoverTrigger(topic: .indoorAir(widgetID: widgetID, snapshot: indoor)) {
+                            VStack(alignment: .leading, spacing: 5) {
+                                HStack {
+                                    Text("Indoor")
+                                        .foregroundStyle(HBPalette.textSecondary)
+                                    Spacer(minLength: 4)
+                                    Text("AQI \(formattedAQI(indoor.usAqi))")
+                                        .foregroundStyle(aqiRiskColor(indoor.usAqi))
+                                }
+                                .font(HBTypography.body(.caption, weight: .semibold))
+                                HStack(spacing: 6) {
+                                    Text(formattedTemperature(indoor.temperatureF))
+                                        .font(.system(.headline, design: .rounded, weight: .bold))
+                                        .foregroundStyle(HBPalette.textPrimary)
+                                    Text(formattedPercent(indoor.humidityPct))
+                                        .font(HBTypography.body(.caption))
+                                        .foregroundStyle(HBPalette.textSecondary)
+                                }
+                                Text(indoor.qualityLabel)
+                                    .font(HBTypography.body(.caption2))
+                                    .foregroundStyle(HBPalette.textSecondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                            .background(HBDeviceSurface(cornerRadius: 14, inset: true))
+                        }
+                    } else {
+                        Text("Indoor · No sensor")
+                            .font(HBTypography.body(.caption))
+                            .foregroundStyle(HBPalette.textSecondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            weatherStatusBadges(snapshot: snapshot, compact: true)
+        }
+    }
+
+    private func weatherPhoneReading(title: String, value: String, tone: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(HBTypography.body(.caption2, weight: .bold))
+                .foregroundStyle(HBPalette.textSecondary)
+            Text(value)
+                .font(.system(.title3, design: .rounded, weight: .bold))
+                .monospacedDigit()
+                .foregroundStyle(tone)
+        }
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(tone.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(tone.opacity(0.25), lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private func weatherStatusBadgeItems(snapshot: DashboardWeatherSnapshot) -> some View {
+        if let tempest = snapshot.tempest {
+            HBTempestBatteryBadge(volts: tempest.batteryVolts)
+                .fixedSize(horizontal: true, vertical: false)
+            HBBadge(
+                text: tempest.websocketConnected ? "\(snapshot.outdoorProviderBadgeLabel) Live" : "\(snapshot.outdoorProviderBadgeLabel) Snapshot",
+                foreground: HBPalette.textPrimary,
+                background: HBPalette.heroCore.opacity(0.22),
+                stroke: HBPalette.heroCore.opacity(0.42)
+            )
+            .fixedSize(horizontal: true, vertical: false)
+        }
+        weatherSourceBadge(text: snapshot.sourceBadgeLabel)
+            .fixedSize(horizontal: true, vertical: false)
+    }
+
     private func weatherStatusBadges(snapshot: DashboardWeatherSnapshot, compact: Bool = false) -> some View {
         let badgeAlignment: HorizontalAlignment = usesPortraitCompactLayout ? .leading : .trailing
         let frameAlignment: Alignment = usesPortraitCompactLayout ? .leading : .trailing
 
         return VStack(alignment: badgeAlignment, spacing: 6) {
-            if compact {
-                if let tempest = snapshot.tempest {
-                    HStack(spacing: 6) {
-                        HBTempestBatteryBadge(volts: tempest.batteryVolts)
-                            .fixedSize(horizontal: true, vertical: false)
-
-                        HBBadge(
-                            text: tempest.websocketConnected ? "\(snapshot.outdoorProviderBadgeLabel) Live" : "\(snapshot.outdoorProviderBadgeLabel) Snapshot",
-                            foreground: HBPalette.textPrimary,
-                            background: HBPalette.heroCore.opacity(0.22),
-                            stroke: HBPalette.heroCore.opacity(0.42)
-                        )
-                        .fixedSize(horizontal: true, vertical: false)
-                    }
-                }
-
-                weatherSourceBadge(text: snapshot.sourceBadgeLabel)
-                    .fixedSize(horizontal: true, vertical: false)
-            } else {
-                HStack(spacing: 6) {
-                    if let tempest = snapshot.tempest {
-                        HBTempestBatteryBadge(volts: tempest.batteryVolts)
-                            .fixedSize(horizontal: true, vertical: false)
-
-                        HBBadge(
-                            text: tempest.websocketConnected ? "\(snapshot.outdoorProviderBadgeLabel) Live" : "\(snapshot.outdoorProviderBadgeLabel) Snapshot",
-                            foreground: HBPalette.textPrimary,
-                            background: HBPalette.heroCore.opacity(0.22),
-                            stroke: HBPalette.heroCore.opacity(0.42)
-                        )
-                        .fixedSize(horizontal: true, vertical: false)
-                    }
-
-                    weatherSourceBadge(text: snapshot.sourceBadgeLabel)
-                        .fixedSize(horizontal: true, vertical: false)
-                }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) { weatherStatusBadgeItems(snapshot: snapshot) }
+                VStack(alignment: badgeAlignment, spacing: 6) { weatherStatusBadgeItems(snapshot: snapshot) }
             }
 
             HBWeatherSyncCaption(value: snapshot.lastSyncedAt)
