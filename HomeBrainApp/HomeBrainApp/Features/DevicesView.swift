@@ -60,6 +60,7 @@ struct DevicesView: View {
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @State private var devices: [DeviceItem] = []
     @State private var isLoading = true
@@ -1638,7 +1639,7 @@ struct DevicesView: View {
             .disabled(pending)
             .accessibilityLabel("Target temperature for \(device.name)")
 
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), spacing: 8) {
                 ForEach(thermostatModes, id: \.self) { thermostatMode in
                     thermostatModeChip(
                         device: device,

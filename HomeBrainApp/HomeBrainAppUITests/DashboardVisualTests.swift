@@ -76,6 +76,12 @@ final class DashboardVisualTests: XCTestCase {
         let target = app.sliders["Target temperature for Upstairs Climate Array"]
         reveal(target, in: app)
         XCTAssertTrue(target.isHittable)
+        let auto = app.buttons["Auto"]
+        reveal(auto, in: app)
+        XCTAssertTrue(auto.isHittable)
+        XCTAssertGreaterThan(auto.frame.width, 250, "Large text mode labels need a full-width button")
+        let cool = app.buttons["Cool"]
+        XCTAssertGreaterThanOrEqual(cool.frame.minY, auto.frame.maxY, "Mode buttons must stack at accessibility text sizes")
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "Dashboard accessibility text size"
         attachment.lifetime = .keepAlways
