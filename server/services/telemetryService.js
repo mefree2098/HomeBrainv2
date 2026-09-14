@@ -109,7 +109,17 @@ const METRIC_LABELS = {
   battery_pct: 'Battery',
   battery_low: 'Battery Low',
   humidity_pct: 'Humidity',
+  dew_point_c: 'Dew Point',
+  absolute_humidity_gm3: 'Absolute Humidity',
+  pressure_hpa: 'Pressure',
+  gas_resistance_ohms: 'Gas Resistance',
+  air_quality_score: 'Air Quality Score',
+  voc_trend_index: 'VOC Trend Index',
+  comfort_score: 'Comfort Score',
+  mold_risk_score: 'Mold Risk Score',
+  pm1_0_ugm3: 'PM1.0',
   pm2_5_ugm3: 'PM2.5',
+  pm10_ugm3: 'PM10',
   air_quality_index: 'Indoor AQI',
   co2_ppm: 'CO2',
   tvoc_ppb: 'TVOC',
@@ -138,6 +148,14 @@ const METRIC_LABELS = {
   smoke_detected: 'Smoke Detected',
   carbon_monoxide_detected: 'CO Detected',
   illuminance_lux: 'Illuminance',
+  moving_distance_cm: 'Moving Target Distance',
+  stationary_distance_cm: 'Stationary Target Distance',
+  moving_energy_pct: 'Moving Target Energy',
+  stationary_energy_pct: 'Stationary Target Energy',
+  usb_powered: 'USB Powered',
+  wake_count: 'Wake Count',
+  uptime_ms: 'Uptime',
+  free_heap_bytes: 'Free Heap',
   temperature_c: 'Temperature',
   temperature_f: 'Temperature',
   feels_like_f: 'Feels Like',
@@ -181,9 +199,16 @@ const FEATURED_METRIC_PRIORITY = [
   'temperature_f',
   'temperature',
   'humidity_pct',
-  'air_quality_index',
-  'pm2_5_ugm3',
   'co2_ppm',
+  'air_quality_index',
+  'air_quality_score',
+  'pm2_5_ugm3',
+  'pm10_ugm3',
+  'voc_trend_index',
+  'comfort_score',
+  'mold_risk_score',
+  'presence_present',
+  'illuminance_lux',
   'tvoc_ppb',
   'execution_failed',
   'execution_succeeded',
@@ -289,7 +314,7 @@ const BOOLEAN_STATE_MAP = {
   true: 1,
   false: 0
 };
-const BINARY_METRIC_PATTERN = /(^|_)(online|status|open|closed|locked|active|detected|present|occupied|water|smoke|carbon|contact|motion|occupancy|presence|tamper|vibration|acceleration|connected|listening)($|_)/i;
+const BINARY_METRIC_PATTERN = /(^|_)(online|status|open|closed|locked|active|detected|present|occupied|water|smoke|carbon|contact|motion|occupancy|presence|tamper|vibration|acceleration|connected|listening|powered)($|_)/i;
 const TIMELINE_PRIORITY_KEYS = new Set([
   'status',
   'online',
@@ -819,6 +844,9 @@ function inferMetricUnit(key) {
   if (/_mb$/.test(key)) {
     return 'mb';
   }
+  if (/_hpa$/.test(key)) {
+    return 'hPa';
+  }
   if (/_in_hr$/.test(key)) {
     return 'in/hr';
   }
@@ -850,7 +878,19 @@ function inferMetricUnit(key) {
     return 'dBm';
   }
   if (/_ugm3$/.test(key)) {
-    return 'ug/m³';
+    return 'µg/m³';
+  }
+  if (/_gm3$/.test(key)) {
+    return 'g/m³';
+  }
+  if (/_ohms$/.test(key)) {
+    return 'Ω';
+  }
+  if (/_cm$/.test(key)) {
+    return 'cm';
+  }
+  if (/_bytes$/.test(key)) {
+    return 'bytes';
   }
   if (/_ppm$/.test(key)) {
     return 'ppm';
@@ -1233,6 +1273,47 @@ function extractDeviceMetrics(device = {}) {
         addMetric(metrics, `${prefix}_cost_usd`, trend.costUsd);
       }
     });
+
+    return metrics;
+  }
+
+  if (sourceOrigin === 'homebrain-sensor') {
+    const sensor = properties.homebrainSensor && typeof properties.homebrainSensor === 'object'
+      ? properties.homebrainSensor
+      : {};
+    const readings = sensor.readings && typeof sensor.readings === 'object' ? sensor.readings : {};
+    const power = sensor.power && typeof sensor.power === 'object' ? sensor.power : {};
+    const diagnostics = sensor.diagnostics && typeof sensor.diagnostics === 'object' ? sensor.diagnostics : {};
+
+    addMetric(metrics, 'temperature_c', readings.temperature_c ?? readings.temperatureC);
+    addMetric(metrics, 'temperature_f', readings.temperature_f ?? readings.temperatureF);
+    addMetric(metrics, 'humidity_pct', readings.humidity_pct ?? readings.humidityPct);
+    addMetric(metrics, 'dew_point_c', readings.dew_point_c ?? readings.dewPointC);
+    addMetric(metrics, 'dew_point_f', readings.dew_point_f ?? readings.dewPointF);
+    addMetric(metrics, 'absolute_humidity_gm3', readings.absolute_humidity_gm3 ?? readings.absoluteHumidityGm3);
+    addMetric(metrics, 'pressure_hpa', readings.pressure_hpa ?? readings.pressureHpa);
+    addMetric(metrics, 'gas_resistance_ohms', readings.gas_resistance_ohms ?? readings.gasResistanceOhms);
+    addMetric(metrics, 'air_quality_score', readings.air_quality_score ?? readings.airQualityScore);
+    addMetric(metrics, 'voc_trend_index', readings.voc_trend_index ?? readings.vocTrendIndex);
+    addMetric(metrics, 'comfort_score', readings.comfort_score ?? readings.comfortScore);
+    addMetric(metrics, 'mold_risk_score', readings.mold_risk_score ?? readings.moldRiskScore);
+    addMetric(metrics, 'co2_ppm', readings.co2_ppm ?? readings.co2Ppm);
+    addMetric(metrics, 'pm1_0_ugm3', readings.pm1_0_ugm3 ?? readings.pm1Ugm3);
+    addMetric(metrics, 'pm2_5_ugm3', readings.pm2_5_ugm3 ?? readings.pm25Ugm3);
+    addMetric(metrics, 'pm10_ugm3', readings.pm10_ugm3 ?? readings.pm10Ugm3);
+    addMetric(metrics, 'illuminance_lux', readings.illuminance_lux ?? readings.illuminanceLux);
+    addMetric(metrics, 'presence_present', readings.presence_present ?? readings.presencePresent);
+    addMetric(metrics, 'moving_distance_cm', readings.moving_distance_cm ?? readings.movingDistanceCm);
+    addMetric(metrics, 'stationary_distance_cm', readings.stationary_distance_cm ?? readings.stationaryDistanceCm);
+    addMetric(metrics, 'moving_energy_pct', readings.moving_energy_pct ?? readings.movingEnergyPct);
+    addMetric(metrics, 'stationary_energy_pct', readings.stationary_energy_pct ?? readings.stationaryEnergyPct);
+    addMetric(metrics, 'battery_volts', power.battery_volts ?? power.batteryVolts);
+    addMetric(metrics, 'battery_pct', power.battery_pct ?? power.batteryPct);
+    addMetric(metrics, 'usb_powered', power.usb_powered ?? power.usbPowered);
+    addMetric(metrics, 'signal_rssi_dbm', diagnostics.signal_rssi_dbm ?? diagnostics.rssi_dbm ?? diagnostics.rssiDbm);
+    addMetric(metrics, 'uptime_ms', diagnostics.uptime_ms ?? diagnostics.uptimeMs);
+    addMetric(metrics, 'wake_count', diagnostics.wake_count ?? diagnostics.wakeCount);
+    addMetric(metrics, 'free_heap_bytes', diagnostics.free_heap_bytes ?? diagnostics.freeHeapBytes);
 
     return metrics;
   }

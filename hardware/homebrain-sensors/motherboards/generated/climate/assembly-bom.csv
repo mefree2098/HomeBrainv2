@@ -1,0 +1,7 @@
+Reference,Part,Quantity,Assembly,Purchased part/source
+U1,Seeed Studio XIAO ESP32-C6,1,"First solder two straight rigid posts made from saved 200 kOhm resistor-lead offcuts perpendicular to the XIAO underside BAT- and BAT+ pads. Then insert both factory-installed 1x7 male header rows through U1 while guiding those posts through XB1/XB2, solder from the motherboard underside, inspect polarity and continuity, and trim all excess pin/post length.",B0DJ6N55FX
+J1,DIYables DHT11,1,"vertical; insert factory-installed 1x3 male header through J1, solder from the motherboard underside, inspect, then trim; blue sensor rises from the board and printed + OUT - faces inward",B0DQ3PPGH2
+J2,MakerHawk 1.25 mm battery pigtail,1,solder the verified mating pigtail directly into BAT+ and BAT- holes; its factory connector remains detachable at the battery,B07FP2FCYC / B0DMT6VZVC
+R1,200 kOhm 1%,1,axial resistor,B08QRKSH5C (purchased resistor kit)
+R2,200 kOhm 1%,1,axial resistor,B08QRKSH5C (purchased resistor kit)
+MH1-MH4,#4 x 3/8 in Phillips pan-head coarse-thread sheet-metal screw,4,PCB to printed plastic motherboard posts,Home Depot 824681 / SKU 1006540029

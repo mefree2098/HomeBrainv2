@@ -1,0 +1,293 @@
+{
+  "schema_version": 1,
+  "units": "diagram pixels; physical order is authoritative",
+  "render": {
+    "width": 2600,
+    "height": 1700,
+    "png_scale": 1
+  },
+  "wire_colors": {
+    "3V3": "#f59e0b",
+    "5V": "#ef4444",
+    "GND": "#26354d",
+    "SDA": "#10a66a",
+    "SCL": "#2583e8",
+    "DATA": "#d946a5",
+    "UART_TX": "#8b5cf6",
+    "UART_RX": "#6d43d9",
+    "BAT_POS": "#ef4444",
+    "BAT_NEG": "#26354d",
+    "ADC": "#14a47b",
+    "USB": "#64748b"
+  },
+  "atmosphere_individual_wire_colors": [
+    "#D7263D",
+    "#C2410C",
+    "#B77900",
+    "#1D4ED8",
+    "#334155",
+    "#7C2D12",
+    "#111827",
+    "#047857",
+    "#4D7C0F",
+    "#0F766E",
+    "#0369A1",
+    "#0E7490",
+    "#4338CA",
+    "#BE185D",
+    "#7E22CE",
+    "#581C87"
+  ],
+  "sources": {
+    "xiao": {
+      "name": "Seeed Studio XIAO ESP32-C6, 3-pack",
+      "asin": "B0DJ6N55FX",
+      "url": "https://www.amazon.com/dp/B0DJ6N55FX",
+      "official_pinout": "https://wiki.seeedstudio.com/xiao_esp32c6_getting_started/"
+    },
+    "dht11": {
+      "name": "DIYables DHT11 module, 2-pack",
+      "asin": "B0DQ3PPGH2",
+      "url": "https://www.amazon.com/dp/B0DQ3PPGH2"
+    },
+    "bme680": {
+      "name": "hiBCTR BME680 breakout",
+      "asin": "B0GXHGYRN2",
+      "url": "https://www.amazon.com/dp/B0GXHGYRN2"
+    },
+    "battery": {
+      "name": "MakerHawk 1000 mAh 1S LiPo with 1.25 mm plug",
+      "asin": "B0FZSR8MQY",
+      "url": "https://www.amazon.com/dp/B0FZSR8MQY"
+    },
+    "pigtail": {
+      "name": "1.25 mm 2-pin mating pigtail",
+      "asin": "B07FP2FCYC",
+      "url": "https://www.amazon.com/dp/B07FP2FCYC"
+    },
+    "resistor": {
+      "name": "200 kOhm 1% axial resistors",
+      "asin": "B08QRKSH5C",
+      "url": "https://www.amazon.com/dp/B08QRKSH5C"
+    },
+    "scd41": {
+      "name": "Teyleten Robot SCD41 breakout",
+      "asin": "B0C622SS34",
+      "url": "https://www.amazon.com/dp/B0C622SS34"
+    },
+    "veml7700": {
+      "name": "HiLetgo VEML7700 breakout, 2-pack",
+      "asin": "B09KGYF83T",
+      "url": "https://www.amazon.com/dp/B09KGYF83T"
+    },
+    "ld2410c": {
+      "name": "Qoroos LD2410C presence radar, 3-pack",
+      "asin": "B0F1F97422",
+      "url": "https://www.amazon.com/dp/B0F1F97422"
+    },
+    "pms5003": {
+      "name": "PMS5003 particulate sensor",
+      "asin": "B0BHZTCK8J",
+      "url": "https://www.amazon.com/dp/B0BHZTCK8J"
+    },
+    "pms_breakout": {
+      "name": "PMS5003 cable and red breakout",
+      "asin": "B0BG612GB2",
+      "url": "https://www.amazon.com/dp/B0BG612GB2"
+    },
+    "wall_adapter": {
+      "name": "Anker 323 USB wall adapter",
+      "asin": "B0B2MMYZPL",
+      "url": "https://www.amazon.com/dp/B0B2MMYZPL"
+    },
+    "usb_cable": {
+      "name": "UGREEN USB-C cable",
+      "asin": "B0BPXKJSWY",
+      "url": "https://www.amazon.com/dp/B0BPXKJSWY"
+    }
+  },
+  "parts": {
+    "xiao_top": {
+      "source": "xiao",
+      "view": "component side",
+      "orientation": "USB-C at top; ceramic antenna at bottom; do not mirror",
+      "physical_pin_order": {
+        "left_top_to_bottom": ["D0/A0", "D1", "D2", "D3", "D4/SDA", "D5/SCL", "D6/TX"],
+        "right_top_to_bottom": ["VBUS/5V", "GND", "3V3", "D10", "D9", "D8", "D7/RX"]
+      }
+    },
+    "xiao_bottom": {
+      "source": "xiao",
+      "view": "underside",
+      "orientation": "USB-C at top; BAT- pad is left and BAT+ pad is right",
+      "physical_pin_order": {
+        "battery_pads_left_to_right": ["BAT-", "BAT+"]
+      }
+    },
+    "dht11": {
+      "source": "dht11",
+      "view": "component side",
+      "orientation": "blue vented sensor at top; three male pins point down",
+      "physical_pin_order": {
+        "bottom_left_to_right": ["+", "OUT", "-"]
+      }
+    },
+    "bme680": {
+      "source": "bme680",
+      "view": "component side",
+      "orientation": "metal sensor at left; six plated holes at right",
+      "physical_pin_order": {
+        "right_top_to_bottom": ["VCC", "GND", "SCL", "SDA", "SDO", "CS"]
+      }
+    },
+    "scd41": {
+      "source": "scd41",
+      "view": "component side",
+      "orientation": "metal sensor at top; four plated holes along bottom",
+      "diagram_rotation_degrees": -90,
+      "diagram_orientation": "rotated 90 degrees counter-clockwise: sensor edge points left; holes are at right; original bottom left-to-right order becomes bottom-to-top",
+      "physical_pin_order": {
+        "bottom_left_to_right": ["GND", "VDD", "SCL", "SDA"]
+      }
+    },
+    "veml7700": {
+      "source": "veml7700",
+      "view": "component side",
+      "orientation": "small light sensor at top; five plated holes along bottom",
+      "diagram_rotation_degrees": 90,
+      "diagram_orientation": "Presence sheet default: rotated 90 degrees clockwise; holes are at left; original bottom left-to-right order becomes top-to-bottom",
+      "atmosphere_diagram_rotation_degrees": -90,
+      "atmosphere_diagram_orientation": "Atmosphere sheet: rotated 90 degrees counter-clockwise; holes are at right; original bottom left-to-right order becomes bottom-to-top",
+      "physical_pin_order": {
+        "bottom_left_to_right": ["VIN", "3Vo", "GND", "SCL", "SDA"]
+      }
+    },
+    "ld2410c": {
+      "source": "ld2410c",
+      "view": "antenna/component side",
+      "orientation": "silkscreen readable; five edge pins read left to right",
+      "physical_pin_order": {
+        "edge_left_to_right": ["TX", "RX", "OUT", "GND", "VCC"]
+      }
+    },
+    "pms_breakout": {
+      "source": "pms_breakout",
+      "view": "component side",
+      "orientation": "eight plated holes at left; white cable socket at right",
+      "physical_pin_order": {
+        "left_top_to_bottom": ["VCC(+5V)", "GND", "SET", "RXD", "TXD", "RESET", "NC1", "NC2"]
+      }
+    },
+    "pms5003": {
+      "source": "pms5003",
+      "view": "label/fan side",
+      "orientation": "keyed 8-wire cable connects sensor directly to the red breakout socket",
+      "physical_pin_order": {}
+    },
+    "battery": {
+      "source": "battery",
+      "view": "label side",
+      "orientation": "1S pouch with two-wire 1.25 mm plug; verify polarity with a meter",
+      "physical_pin_order": {"leads": ["POS", "NEG"]}
+    },
+    "pigtail": {
+      "source": "pigtail",
+      "view": "wire side",
+      "orientation": "mating 1.25 mm connector with two bare wire ends",
+      "physical_pin_order": {"leads": ["POS", "NEG"]}
+    },
+    "resistor_r1": {
+      "source": "resistor",
+      "view": "axial",
+      "orientation": "200 kOhm 1%; either direction",
+      "physical_pin_order": {"leads": ["A", "B"]}
+    },
+    "resistor_r2": {
+      "source": "resistor",
+      "view": "axial",
+      "orientation": "200 kOhm 1%; either direction",
+      "physical_pin_order": {"leads": ["A", "B"]}
+    },
+    "usb_cable": {
+      "source": "usb_cable",
+      "view": "USB-C plug",
+      "orientation": "plug into the XIAO USB-C receptacle",
+      "physical_pin_order": {}
+    },
+    "wall_adapter": {
+      "source": "wall_adapter",
+      "view": "external supply",
+      "orientation": "remains outside the printed case",
+      "physical_pin_order": {}
+    }
+  },
+  "devices": [
+    {
+      "id": "atmosphere",
+      "title": "ATMOSPHERE AIR STATION — PHYSICAL WIRING",
+      "subtitle": "Exact purchased boards • component side up • XIAO USB-C at top • 5 V USB power",
+      "parts": ["xiao_top", "bme680", "scd41", "veml7700", "pms_breakout", "pms5003", "usb_cable", "wall_adapter"],
+      "connections": [
+        {"id": "A1", "net": "3V3", "from": "xiao_top.3V3", "to": ["bme680.VCC", "scd41.VDD", "veml7700.VIN"], "instruction": "XIAO 3V3 → BME680 VCC + SCD41 VDD + VEML7700 VIN"},
+        {"id": "A2", "net": "GND", "from": "xiao_top.GND", "to": ["bme680.GND", "scd41.GND", "veml7700.GND", "pms_breakout.GND"], "instruction": "XIAO GND → every module GND"},
+        {"id": "A3", "net": "SDA", "from": "xiao_top.D4/SDA", "to": ["bme680.SDA", "scd41.SDA", "veml7700.SDA"], "instruction": "XIAO D4/SDA → all three SDA holes"},
+        {"id": "A4", "net": "SCL", "from": "xiao_top.D5/SCL", "to": ["bme680.SCL", "scd41.SCL", "veml7700.SCL"], "instruction": "XIAO D5/SCL → all three SCL holes"},
+        {"id": "A5", "net": "5V", "from": "xiao_top.VBUS/5V", "to": ["pms_breakout.VCC(+5V)"], "instruction": "XIAO VBUS/5V → PMS breakout VCC(+5V)"},
+        {"id": "A6", "net": "UART_TX", "from": "xiao_top.D6/TX", "to": ["pms_breakout.RXD"], "instruction": "XIAO D6/TX → PMS breakout RXD (UART is crossed)"},
+        {"id": "A7", "net": "UART_RX", "from": "pms_breakout.TXD", "to": ["xiao_top.D7/RX"], "instruction": "PMS breakout TXD → XIAO D7/RX (UART is crossed)"},
+        {"id": "A8", "net": "USB", "from": "wall_adapter", "to": ["usb_cable", "xiao_top.USB-C"], "instruction": "External wall adapter → USB-C cable → XIAO USB-C"}
+      ],
+      "unconnected": ["bme680.SDO", "bme680.CS", "veml7700.3Vo", "pms_breakout.SET", "pms_breakout.RESET", "pms_breakout.NC1", "pms_breakout.NC2"],
+      "assembly_notes": [
+        "The PMS5003's supplied keyed 8-wire cable plugs into the sensor and the breakout; do not rearrange its conductors.",
+        "On the red PMS breakout, trust the printed hole labels—not cable colors.",
+        "Leave every gray X/NC hole empty. Power the PMS5003 from VBUS/5V, never 3V3."
+      ]
+    },
+    {
+      "id": "presence",
+      "title": "PRESENCE POD — PHYSICAL WIRING",
+      "subtitle": "Exact purchased boards • component side up • XIAO USB-C at top • 5 V USB power",
+      "parts": ["xiao_top", "dht11", "veml7700", "ld2410c", "usb_cable", "wall_adapter"],
+      "connections": [
+        {"id": "P1", "net": "3V3", "from": "xiao_top.D3", "to": ["dht11.+"], "instruction": "XIAO D3 → DHT11 + (switched 3.3 V power)"},
+        {"id": "P2", "net": "DATA", "from": "xiao_top.D2", "to": ["dht11.OUT"], "instruction": "XIAO D2 → DHT11 OUT"},
+        {"id": "P3", "net": "GND", "from": "xiao_top.GND", "to": ["dht11.-", "veml7700.GND", "ld2410c.GND"], "instruction": "XIAO GND → DHT11 − + VEML7700 GND + LD2410C GND"},
+        {"id": "P4", "net": "3V3", "from": "xiao_top.3V3", "to": ["veml7700.VIN"], "instruction": "XIAO 3V3 → VEML7700 VIN"},
+        {"id": "P5", "net": "SDA", "from": "xiao_top.D4/SDA", "to": ["veml7700.SDA"], "instruction": "XIAO D4/SDA → VEML7700 SDA"},
+        {"id": "P6", "net": "SCL", "from": "xiao_top.D5/SCL", "to": ["veml7700.SCL"], "instruction": "XIAO D5/SCL → VEML7700 SCL"},
+        {"id": "P7", "net": "5V", "from": "xiao_top.VBUS/5V", "to": ["ld2410c.VCC"], "instruction": "XIAO VBUS/5V → LD2410C VCC"},
+        {"id": "P8", "net": "UART_TX", "from": "xiao_top.D6/TX", "to": ["ld2410c.RX"], "instruction": "XIAO D6/TX → LD2410C RX (UART is crossed)"},
+        {"id": "P9", "net": "UART_RX", "from": "ld2410c.TX", "to": ["xiao_top.D7/RX"], "instruction": "LD2410C TX → XIAO D7/RX (UART is crossed)"},
+        {"id": "P10", "net": "USB", "from": "wall_adapter", "to": ["usb_cable", "xiao_top.USB-C"], "instruction": "External wall adapter → USB-C cable → XIAO USB-C"}
+      ],
+      "unconnected": ["veml7700.3Vo", "ld2410c.OUT"],
+      "assembly_notes": [
+        "LD2410C pin order is TX, RX, OUT, GND, VCC left-to-right with its silkscreen readable.",
+        "Aim the LD2410C antenna/component face toward the case's thin radar window.",
+        "Leave VEML7700 3Vo and LD2410C OUT empty. Power radar from VBUS/5V, never 3V3."
+      ]
+    },
+    {
+      "id": "climate",
+      "title": "CLIMATE POD — PHYSICAL WIRING",
+      "subtitle": "Exact purchased boards • top and underside XIAO views • 1S LiPo • two-resistor divider",
+      "parts": ["xiao_top", "xiao_bottom", "dht11", "battery", "pigtail", "resistor_r1", "resistor_r2", "usb_cable"],
+      "connections": [
+        {"id": "C1", "net": "3V3", "from": "xiao_top.D3", "to": ["dht11.+"], "instruction": "XIAO D3 → DHT11 + (switched 3.3 V power)"},
+        {"id": "C2", "net": "DATA", "from": "xiao_top.D2", "to": ["dht11.OUT"], "instruction": "XIAO D2 → DHT11 OUT"},
+        {"id": "C3", "net": "GND", "from": "xiao_top.GND", "to": ["dht11.-", "resistor_r2.B"], "instruction": "XIAO GND → DHT11 − and one lead of R2"},
+        {"id": "C4", "net": "BAT_POS", "from": "pigtail.POS", "to": ["xiao_bottom.BAT+", "resistor_r1.A"], "instruction": "Meter-verified pigtail + wire → underside BAT+; the same BAT+ node → R1"},
+        {"id": "C5", "net": "BAT_NEG", "from": "pigtail.NEG", "to": ["xiao_bottom.BAT-"], "instruction": "Meter-verified pigtail − wire → underside BAT−"},
+        {"id": "C6", "net": "ADC", "from": "resistor_r1.B", "to": ["xiao_top.D0/A0", "resistor_r2.A"], "instruction": "R1 other lead + R2 other lead join at XIAO D0/A0"},
+        {"id": "C7", "net": "USB", "from": "usb_cable", "to": ["xiao_top.USB-C"], "instruction": "USB-C is only for flashing/charging; it is not a permanent internal wire"}
+      ],
+      "unconnected": [],
+      "assembly_notes": [
+        "R1 = 200 kOhm from BAT+ to A0. R2 = 200 kOhm from A0 to GND. Both resistors are external and required.",
+        "Do not trust connector colors or shell orientation: unplug everything and verify +/− with a multimeter before soldering.",
+        "Solder the underside BAT pads and divider before applying mounting tape; insulate every exposed splice with heat-shrink."
+      ]
+    }
+  ]
+}

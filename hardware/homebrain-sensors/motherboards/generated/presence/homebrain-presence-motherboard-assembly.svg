@@ -1,0 +1,221 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="1250" viewBox="0 0 2000 1250">
+<title>HomeBrain Presence Motherboard</title>
+<metadata>{"artifact": "dedicated-motherboard-assembly", "board": "presence", "pads": 31, "segments": 121, "vias": 1}</metadata>
+<rect width="100%" height="100%" fill="#f4f7fb"/>
+<text x="70" y="58" font-family="Arial,Helvetica,sans-serif" font-size="33" font-weight="900" fill="#15243b" text-anchor="start">HOMEBRAIN PRESENCE MOTHERBOARD — V1.2-DRAFT DIRECT-SOLDER ASSEMBLY</text>
+<text x="70" y="100" font-family="Arial,Helvetica,sans-serif" font-size="21" font-weight="650" fill="#526d89" text-anchor="start">One dedicated PCB • factory male headers solder through labeled footprints • no inter-module wire harnesses</text>
+<rect x="66.0" y="176.0" width="688.0" height="588.0" rx="24" fill="#ffffff" stroke="#c7d2e2" stroke-width="2.0" />
+<rect x="90.0" y="200.0" width="640.0" height="540.0" rx="5" fill="#0b695f" stroke="#073f48" stroke-width="4" />
+<rect x="220.0" y="390.0" width="120.0" height="150.0" fill="#ffd976" fill-opacity="0.60" stroke="#f0b02e" stroke-width="2" stroke-dasharray="8 6"/>
+<line x1="205.0" y1="385.0" x2="185.0" y2="385.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="TX"/>
+<line x1="355.0" y1="385.0" x2="375.0" y2="385.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="RX"/>
+<line x1="355.0" y1="235.0" x2="375.0" y2="235.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="8.0" stroke-linecap="round" data-net="VBUS"/>
+<line x1="205.0" y1="360.0" x2="185.0" y2="360.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SCL"/>
+<line x1="205.0" y1="335.0" x2="185.0" y2="335.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="355.0" y1="285.0" x2="375.0" y2="285.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="8.0" stroke-linecap="round" data-net="3V3"/>
+<line x1="205.0" y1="285.0" x2="185.0" y2="285.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="205.0" y1="310.0" x2="185.0" y2="310.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="695.0" y1="425.0" x2="342.5" y2="425.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="TX"/>
+<line x1="342.5" y1="425.0" x2="342.5" y2="387.5" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="TX"/>
+<line x1="342.5" y1="387.5" x2="205.0" y2="387.5" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="TX"/>
+<line x1="205.0" y1="387.5" x2="205.0" y2="385.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="TX"/>
+<line x1="695.0" y1="450.0" x2="375.0" y2="450.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="RX"/>
+<line x1="375.0" y1="450.0" x2="375.0" y2="385.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="RX"/>
+<line x1="695.0" y1="347.5" x2="375.0" y2="347.5" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="8.0" stroke-linecap="round" data-net="VBUS"/>
+<line x1="375.0" y1="347.5" x2="375.0" y2="235.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="8.0" stroke-linecap="round" data-net="VBUS"/>
+<line x1="620.0" y1="645.0" x2="610.0" y2="645.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SCL"/>
+<line x1="610.0" y1="645.0" x2="610.0" y2="637.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SCL"/>
+<line x1="610.0" y1="637.5" x2="607.5" y2="637.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SCL"/>
+<line x1="607.5" y1="637.5" x2="607.5" y2="635.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SCL"/>
+<line x1="607.5" y1="635.0" x2="605.0" y2="635.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SCL"/>
+<line x1="605.0" y1="635.0" x2="605.0" y2="632.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SCL"/>
+<line x1="605.0" y1="632.5" x2="602.5" y2="632.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SCL"/>
+<line x1="602.5" y1="632.5" x2="602.5" y2="630.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SCL"/>
+<line x1="602.5" y1="630.0" x2="217.5" y2="630.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SCL"/>
+<line x1="217.5" y1="630.0" x2="217.5" y2="377.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SCL"/>
+<line x1="217.5" y1="377.5" x2="215.0" y2="377.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SCL"/>
+<line x1="215.0" y1="377.5" x2="215.0" y2="375.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SCL"/>
+<line x1="215.0" y1="375.0" x2="212.5" y2="375.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SCL"/>
+<line x1="212.5" y1="375.0" x2="212.5" y2="372.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SCL"/>
+<line x1="212.5" y1="372.5" x2="205.0" y2="372.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SCL"/>
+<line x1="205.0" y1="372.5" x2="205.0" y2="360.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SCL"/>
+<line x1="645.0" y1="645.0" x2="635.0" y2="645.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="635.0" y1="645.0" x2="635.0" y2="637.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="635.0" y1="637.5" x2="632.5" y2="637.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="632.5" y1="637.5" x2="632.5" y2="635.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="632.5" y1="635.0" x2="630.0" y2="635.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="630.0" y1="635.0" x2="630.0" y2="632.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="630.0" y1="632.5" x2="627.5" y2="632.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="627.5" y1="632.5" x2="627.5" y2="630.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="627.5" y1="630.0" x2="612.5" y2="630.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="612.5" y1="630.0" x2="612.5" y2="627.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="612.5" y1="627.5" x2="610.0" y2="627.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="610.0" y1="627.5" x2="610.0" y2="625.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="610.0" y1="625.0" x2="607.5" y2="625.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="607.5" y1="625.0" x2="607.5" y2="622.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="607.5" y1="622.5" x2="342.5" y2="622.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="342.5" y1="622.5" x2="342.5" y2="387.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="342.5" y1="387.5" x2="225.0" y2="387.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="225.0" y1="387.5" x2="225.0" y2="372.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="225.0" y1="372.5" x2="222.5" y2="372.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="222.5" y1="372.5" x2="222.5" y2="370.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="222.5" y1="370.0" x2="220.0" y2="370.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="220.0" y1="370.0" x2="220.0" y2="367.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="220.0" y1="367.5" x2="217.5" y2="367.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="217.5" y1="367.5" x2="217.5" y2="352.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="217.5" y1="352.5" x2="215.0" y2="352.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="215.0" y1="352.5" x2="215.0" y2="350.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="215.0" y1="350.0" x2="212.5" y2="350.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="212.5" y1="350.0" x2="212.5" y2="347.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="212.5" y1="347.5" x2="207.5" y2="347.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="207.5" y1="347.5" x2="207.5" y2="345.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="207.5" y1="345.0" x2="205.0" y2="345.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="205.0" y1="345.0" x2="205.0" y2="335.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="SDA"/>
+<line x1="545.0" y1="645.0" x2="497.5" y2="645.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="8.0" stroke-linecap="round" data-net="3V3"/>
+<line x1="497.5" y1="645.0" x2="497.5" y2="642.5" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="8.0" stroke-linecap="round" data-net="3V3"/>
+<line x1="497.5" y1="642.5" x2="495.0" y2="642.5" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="8.0" stroke-linecap="round" data-net="3V3"/>
+<line x1="495.0" y1="642.5" x2="495.0" y2="640.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="8.0" stroke-linecap="round" data-net="3V3"/>
+<line x1="495.0" y1="640.0" x2="490.0" y2="640.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="8.0" stroke-linecap="round" data-net="3V3"/>
+<line x1="490.0" y1="640.0" x2="490.0" y2="637.5" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="8.0" stroke-linecap="round" data-net="3V3"/>
+<line x1="490.0" y1="637.5" x2="385.0" y2="637.5" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="8.0" stroke-linecap="round" data-net="3V3"/>
+<line x1="385.0" y1="637.5" x2="385.0" y2="435.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="8.0" stroke-linecap="round" data-net="3V3"/>
+<line x1="385.0" y1="435.0" x2="385.0" y2="380.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="8.0" stroke-linecap="round" data-net="3V3"/>
+<line x1="385.0" y1="380.0" x2="382.5" y2="380.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="8.0" stroke-linecap="round" data-net="3V3"/>
+<line x1="382.5" y1="380.0" x2="382.5" y2="377.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="8.0" stroke-linecap="round" data-net="3V3"/>
+<line x1="382.5" y1="377.5" x2="380.0" y2="377.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="8.0" stroke-linecap="round" data-net="3V3"/>
+<line x1="380.0" y1="377.5" x2="380.0" y2="375.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="8.0" stroke-linecap="round" data-net="3V3"/>
+<line x1="380.0" y1="375.0" x2="375.0" y2="375.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="8.0" stroke-linecap="round" data-net="3V3"/>
+<line x1="375.0" y1="375.0" x2="375.0" y2="285.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="8.0" stroke-linecap="round" data-net="3V3"/>
+<line x1="460.0" y1="655.0" x2="450.0" y2="655.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="450.0" y1="655.0" x2="450.0" y2="650.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="450.0" y1="650.0" x2="447.5" y2="650.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="447.5" y1="650.0" x2="447.5" y2="645.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="447.5" y1="645.0" x2="445.0" y2="645.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="445.0" y1="645.0" x2="445.0" y2="642.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="445.0" y1="642.5" x2="440.0" y2="642.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="440.0" y1="642.5" x2="440.0" y2="640.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="440.0" y1="640.0" x2="205.0" y2="640.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="205.0" y1="640.0" x2="205.0" y2="400.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="205.0" y1="400.0" x2="195.0" y2="400.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="195.0" y1="400.0" x2="195.0" y2="397.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="195.0" y1="397.5" x2="192.5" y2="397.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="192.5" y1="397.5" x2="192.5" y2="395.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="192.5" y1="395.0" x2="190.0" y2="395.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="190.0" y1="395.0" x2="190.0" y2="367.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="190.0" y1="367.5" x2="180.0" y2="367.5" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="180.0" y1="367.5" x2="180.0" y2="365.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="180.0" y1="365.0" x2="177.5" y2="365.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="177.5" y1="365.0" x2="177.5" y2="285.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="177.5" y1="285.0" x2="205.0" y2="285.0" stroke="#31a6ff" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D2"/>
+<line x1="485.0" y1="655.0" x2="475.0" y2="655.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="475.0" y1="655.0" x2="475.0" y2="662.5" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="475.0" y1="662.5" x2="472.5" y2="662.5" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="472.5" y1="662.5" x2="472.5" y2="665.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="472.5" y1="665.0" x2="470.0" y2="665.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="470.0" y1="665.0" x2="470.0" y2="667.5" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="470.0" y1="667.5" x2="467.5" y2="667.5" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="467.5" y1="667.5" x2="467.5" y2="670.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="467.5" y1="670.0" x2="205.0" y2="670.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="205.0" y1="670.0" x2="205.0" y2="400.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="205.0" y1="400.0" x2="195.0" y2="400.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="195.0" y1="400.0" x2="195.0" y2="397.5" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="195.0" y1="397.5" x2="192.5" y2="397.5" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="192.5" y1="397.5" x2="192.5" y2="395.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="192.5" y1="395.0" x2="190.0" y2="395.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="190.0" y1="395.0" x2="190.0" y2="392.5" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="190.0" y1="392.5" x2="180.0" y2="392.5" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="180.0" y1="392.5" x2="180.0" y2="390.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="180.0" y1="390.0" x2="177.5" y2="390.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="177.5" y1="390.0" x2="177.5" y2="310.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<line x1="177.5" y1="310.0" x2="205.0" y2="310.0" stroke="#ff4b55" stroke-opacity="0.78" stroke-width="4.0" stroke-linecap="round" data-net="D3"/>
+<rect x="360.0" y="440.0" width="150.0" height="260.0" rx="5" fill="#334c68" stroke="#dce9f2" stroke-width="2" data-module="J1"/>
+<text x="435.0" y="570.0" font-family="Arial,Helvetica,sans-serif" font-size="17" font-weight="900" fill="white" text-anchor="middle">J1</text>
+<rect x="510.0" y="490.0" width="170.0" height="170.0" rx="5" fill="#1e78ad" stroke="#dce9f2" stroke-width="2" data-module="J2"/>
+<text x="595.0" y="575.0" font-family="Arial,Helvetica,sans-serif" font-size="17" font-weight="900" fill="white" text-anchor="middle">J2</text>
+<rect x="680.0" y="290.0" width="160.0" height="220.0" rx="5" fill="#334c68" stroke="#dce9f2" stroke-width="2" data-module="J3"/>
+<text x="760.0" y="400.0" font-family="Arial,Helvetica,sans-serif" font-size="17" font-weight="900" fill="white" text-anchor="middle">J3</text>
+<rect x="191.0" y="205.0" width="178.0" height="210.0" rx="6" fill="#103d55" stroke="#6ce0d3" stroke-width="3" data-module="U1"/>
+<text x="280.0" y="310.0" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="900" fill="white" text-anchor="middle">XIAO</text>
+<text x="280.0" y="223.0" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="900" fill="#f8d36a" text-anchor="middle">USB-C</text>
+<circle cx="203.79999999999998" cy="233.8" r="9.0" fill="#14a47b" stroke="#172b42" stroke-width="1.5" data-pad="U1.D0/A0" data-net="A0"/>
+<circle cx="203.79999999999998" cy="233.8" r="5.0" fill="#f5f7fa"/>
+<circle cx="203.79999999999998" cy="259.20000000000005" r="9.0" fill="#f4ce55" stroke="#172b42" stroke-width="1.5" data-pad="U1.D1/SERVICE" data-net="D1"/>
+<circle cx="203.79999999999998" cy="259.20000000000005" r="5.0" fill="#f5f7fa"/>
+<circle cx="203.79999999999998" cy="284.6" r="9.0" fill="#d946a5" stroke="#172b42" stroke-width="1.5" data-pad="U1.D2" data-net="D2"/>
+<circle cx="203.79999999999998" cy="284.6" r="5.0" fill="#f5f7fa"/>
+<circle cx="203.79999999999998" cy="310.0" r="9.0" fill="#e67620" stroke="#172b42" stroke-width="1.5" data-pad="U1.D3/PWR" data-net="D3"/>
+<circle cx="203.79999999999998" cy="310.0" r="5.0" fill="#f5f7fa"/>
+<circle cx="203.79999999999998" cy="335.4" r="9.0" fill="#10a66a" stroke="#172b42" stroke-width="1.5" data-pad="U1.D4/SDA" data-net="SDA"/>
+<circle cx="203.79999999999998" cy="335.4" r="5.0" fill="#f5f7fa"/>
+<circle cx="203.79999999999998" cy="360.79999999999995" r="9.0" fill="#2583e8" stroke="#172b42" stroke-width="1.5" data-pad="U1.D5/SCL" data-net="SCL"/>
+<circle cx="203.79999999999998" cy="360.79999999999995" r="5.0" fill="#f5f7fa"/>
+<circle cx="203.79999999999998" cy="386.2" r="9.0" fill="#8b5cf6" stroke="#172b42" stroke-width="1.5" data-pad="U1.D6/TX" data-net="TX"/>
+<circle cx="203.79999999999998" cy="386.2" r="5.0" fill="#f5f7fa"/>
+<circle cx="356.2" cy="233.8" r="9.0" fill="#ef4444" stroke="#172b42" stroke-width="1.5" data-pad="U1.VBUS/5V" data-net="VBUS"/>
+<circle cx="356.2" cy="233.8" r="5.0" fill="#f5f7fa"/>
+<circle cx="356.2" cy="259.20000000000005" r="9.0" fill="#28364b" stroke="#172b42" stroke-width="1.5" data-pad="U1.GND" data-net="GND"/>
+<circle cx="356.2" cy="259.20000000000005" r="5.0" fill="#f5f7fa"/>
+<circle cx="356.2" cy="284.6" r="9.0" fill="#f59e0b" stroke="#172b42" stroke-width="1.5" data-pad="U1.3V3" data-net="3V3"/>
+<circle cx="356.2" cy="284.6" r="5.0" fill="#f5f7fa"/>
+<circle cx="356.2" cy="310.0" r="9.0" fill="#adb7c3" stroke="#172b42" stroke-width="1.5" data-pad="U1.D10" data-net="NC_D10"/>
+<circle cx="356.2" cy="310.0" r="5.0" fill="#f5f7fa"/>
+<circle cx="356.2" cy="335.4" r="9.0" fill="#adb7c3" stroke="#172b42" stroke-width="1.5" data-pad="U1.D9" data-net="NC_D9"/>
+<circle cx="356.2" cy="335.4" r="5.0" fill="#f5f7fa"/>
+<circle cx="356.2" cy="360.79999999999995" r="9.0" fill="#adb7c3" stroke="#172b42" stroke-width="1.5" data-pad="U1.D8" data-net="NC_D8"/>
+<circle cx="356.2" cy="360.79999999999995" r="5.0" fill="#f5f7fa"/>
+<circle cx="356.2" cy="386.2" r="9.0" fill="#6d43d9" stroke="#172b42" stroke-width="1.5" data-pad="U1.D7/RX" data-net="RX"/>
+<circle cx="356.2" cy="386.2" r="5.0" fill="#f5f7fa"/>
+<circle cx="485.4" cy="655.0" r="9.0" fill="#e67620" stroke="#172b42" stroke-width="1.5" data-pad="J1.1" data-net="D3"/>
+<circle cx="485.4" cy="655.0" r="5.0" fill="#f5f7fa"/>
+<circle cx="460.0" cy="655.0" r="9.0" fill="#d946a5" stroke="#172b42" stroke-width="1.5" data-pad="J1.2" data-net="D2"/>
+<circle cx="460.0" cy="655.0" r="5.0" fill="#f5f7fa"/>
+<circle cx="434.6" cy="655.0" r="9.0" fill="#28364b" stroke="#172b42" stroke-width="1.5" data-pad="J1.3" data-net="GND"/>
+<circle cx="434.6" cy="655.0" r="5.0" fill="#f5f7fa"/>
+<circle cx="544.2" cy="645.0" r="9.0" fill="#f59e0b" stroke="#172b42" stroke-width="1.5" data-pad="J2.1" data-net="3V3"/>
+<circle cx="544.2" cy="645.0" r="5.0" fill="#f5f7fa"/>
+<circle cx="569.6" cy="645.0" r="9.0" fill="#adb7c3" stroke="#172b42" stroke-width="1.5" data-pad="J2.2" data-net="NC_VEML_3VO"/>
+<circle cx="569.6" cy="645.0" r="5.0" fill="#f5f7fa"/>
+<circle cx="595.0" cy="645.0" r="9.0" fill="#28364b" stroke="#172b42" stroke-width="1.5" data-pad="J2.3" data-net="GND"/>
+<circle cx="595.0" cy="645.0" r="5.0" fill="#f5f7fa"/>
+<circle cx="620.4" cy="645.0" r="9.0" fill="#2583e8" stroke="#172b42" stroke-width="1.5" data-pad="J2.4" data-net="SCL"/>
+<circle cx="620.4" cy="645.0" r="5.0" fill="#f5f7fa"/>
+<circle cx="645.8" cy="645.0" r="9.0" fill="#10a66a" stroke="#172b42" stroke-width="1.5" data-pad="J2.5" data-net="SDA"/>
+<circle cx="645.8" cy="645.0" r="5.0" fill="#f5f7fa"/>
+<circle cx="694.6479999999999" cy="450.288" r="9.0" fill="#6d43d9" stroke="#172b42" stroke-width="1.5" data-pad="J3.1" data-net="RX"/>
+<circle cx="694.6479999999999" cy="450.288" r="5.0" fill="#f5f7fa"/>
+<circle cx="694.6479999999999" cy="424.88800000000003" r="9.0" fill="#8b5cf6" stroke="#172b42" stroke-width="1.5" data-pad="J3.2" data-net="TX"/>
+<circle cx="694.6479999999999" cy="424.88800000000003" r="5.0" fill="#f5f7fa"/>
+<circle cx="694.6479999999999" cy="399.488" r="9.0" fill="#adb7c3" stroke="#172b42" stroke-width="1.5" data-pad="J3.3" data-net="NC_RADAR_OUT"/>
+<circle cx="694.6479999999999" cy="399.488" r="5.0" fill="#f5f7fa"/>
+<circle cx="694.6479999999999" cy="374.08799999999997" r="9.0" fill="#28364b" stroke="#172b42" stroke-width="1.5" data-pad="J3.4" data-net="GND"/>
+<circle cx="694.6479999999999" cy="374.08799999999997" r="5.0" fill="#f5f7fa"/>
+<circle cx="694.6479999999999" cy="348.688" r="9.0" fill="#ef4444" stroke="#172b42" stroke-width="1.5" data-pad="J3.5" data-net="VBUS"/>
+<circle cx="694.6479999999999" cy="348.688" r="5.0" fill="#f5f7fa"/>
+<circle cx="135.0" cy="695.0" r="26.0" fill="#28364b" stroke="#172b42" stroke-width="1.5" data-pad="MH1.1" data-net="GND"/>
+<circle cx="135.0" cy="695.0" r="17.0" fill="#f5f7fa"/>
+<circle cx="685.0" cy="695.0" r="26.0" fill="#28364b" stroke="#172b42" stroke-width="1.5" data-pad="MH2.1" data-net="GND"/>
+<circle cx="685.0" cy="695.0" r="17.0" fill="#f5f7fa"/>
+<circle cx="135.0" cy="245.0" r="26.0" fill="#28364b" stroke="#172b42" stroke-width="1.5" data-pad="MH3.1" data-net="GND"/>
+<circle cx="135.0" cy="245.0" r="17.0" fill="#f5f7fa"/>
+<circle cx="685.0" cy="245.0" r="26.0" fill="#28364b" stroke="#172b42" stroke-width="1.5" data-pad="MH4.1" data-net="GND"/>
+<circle cx="685.0" cy="245.0" r="17.0" fill="#f5f7fa"/>
+<rect x="980" y="180" width="930" height="140" rx="18" fill="#fff7dc" stroke="#e5b746" stroke-width="2.0" />
+<text x="1008" y="222" font-family="Arial,Helvetica,sans-serif" font-size="23" font-weight="900" fill="#744c00" text-anchor="start">THE ELECTRICAL CONNECTIONS ARE COPPER TRACES</text>
+<text x="1008" y="262" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="650" fill="#6e5a2c" text-anchor="start">Colored routes are visualization only; the finished assembly contains no loose sensor wiring.</text>
+<rect x="980" y="345" width="930" height="785" rx="18" fill="#ffffff" stroke="#c7d2e2" stroke-width="2.0" />
+<text x="1008" y="390" font-family="Arial,Helvetica,sans-serif" font-size="25" font-weight="900" fill="#15243b" text-anchor="start">Direct-solder footprints</text>
+<text x="1008" y="420" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="650" fill="#087d70" text-anchor="start">U1 XIAO: insert both factory 1x7 headers; solder underside, inspect, then trim.</text>
+<text x="1008" y="466" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="850" fill="#15243b" text-anchor="start">J1  DIYables DHT11</text>
+<text x="1008" y="494" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="650" fill="#46617d" text-anchor="start">+=D3  •  OUT=D2  •  -=GND</text>
+<text x="1008" y="519" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="600" fill="#64768a" text-anchor="start">vertical; insert factory-installed 1x3 male header through J1, solder from the motherboard underside,</text>
+<text x="1008" y="540" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="600" fill="#64768a" text-anchor="start">inspect, then trim; blue sensor rises from the board and printed + OUT - faces inward</text>
+<text x="1008" y="581" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="850" fill="#15243b" text-anchor="start">J2  HiLetgo VEML7700</text>
+<text x="1008" y="609" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="650" fill="#46617d" text-anchor="start">VIN=3V3  •  3Vo=NC_VEML_3VO  •  GND=GND  •  SCL=SCL  •  SDA=SDA</text>
+<text x="1008" y="634" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="600" fill="#64768a" text-anchor="start">parallel, component side up; insert factory-installed 1x5 male header through J2, solder from the</text>
+<text x="1008" y="655" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="600" fill="#64768a" text-anchor="start">motherboard underside, inspect, then trim; light sensor above header</text>
+<text x="1008" y="696" font-family="Arial,Helvetica,sans-serif" font-size="19" font-weight="850" fill="#15243b" text-anchor="start">J3  Hi-Link LD2410C</text>
+<text x="1008" y="724" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="650" fill="#46617d" text-anchor="start">TX=RX  •  RX=TX  •  OUT=NC_RADAR_OUT  •  GND=GND  •  VCC=VBUS</text>
+<text x="1008" y="749" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="600" fill="#64768a" text-anchor="start">parallel, antenna face up; insert factory-installed 1x5 male header through J3, solder from the motherboard</text>
+<text x="1008" y="770" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="600" fill="#64768a" text-anchor="start">underside, inspect, then trim; module overhangs right PCB edge; verify enclosure antenna-face clearance</text>
+<text x="1008" y="829" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="750" fill="#087d70" text-anchor="start">Four 3.4 mm grounded mounting holes accept common #4 screws into printed plastic posts.</text>
+</svg>

@@ -1,0 +1,369 @@
+{
+  "schema_version": 1,
+  "release_status": "HOLD",
+  "release_note": "Not approved for manufacture. See ../PREORDER-REVIEW.md for unresolved physical-fit and electrical validation requirements.",
+  "title": "HomeBrain Dedicated Sensor Motherboards v1.2 DRAFT",
+  "units": "millimeters",
+  "fabrication_defaults": {
+    "layers": 2,
+    "thickness": 1.6,
+    "minimum_trace_width": 0.4,
+    "power_trace_width": 0.8,
+    "minimum_clearance": 0.25,
+    "edge_clearance": 0.6,
+    "solder_mask_expansion": 0.08,
+    "finish": "lead-free HASL",
+    "material": "FR-4",
+    "copper_weight_oz": 1,
+    "quantity": 5,
+    "assembly": "Bare boards only; hand-solder the purchased modules directly to their labeled footprints"
+  },
+  "xiao_footprint": {
+    "board_size": [17.8, 21.0],
+    "row_spacing": 15.24,
+    "pin_pitch": 2.54,
+    "drill": 1.0,
+    "pad_diameter": 1.8,
+    "orientation": "component side up; USB-C points toward +Y/top edge; factory-installed straight male header rows pass through the motherboard",
+    "mounting_method": "through-hole: insert both factory-installed 1x7 straight male header rows through U1, solder from the motherboard underside, inspect, then trim excess pin length",
+    "official_source": "https://wiki.seeedstudio.com/xiao_esp32c6_getting_started/",
+    "official_pcb_source": "https://files.seeedstudio.com/wiki/SeeedStudio-XIAO-ESP32C6/XIAO_ESP32_C6_v1.0_SCH%26PCB_260114.zip",
+    "bottom_battery_pad_offsets_usb_top": {
+      "BAT-": [0.7586, -5.5277],
+      "BAT+": [-1.7814, -5.5277],
+      "derivation": "Seeed PCB U2 origin (108.3977,72.876), TP10 GND (102.87,73.6346), TP9 VBAT (102.87,71.0946). KiCad Y-down, USB-right to motherboard Y-up, USB-top: x_new=dy, y_new=dx. Top-through view, NOT a mirrored underside view."
+    },
+    "left_top_to_bottom": [
+      ["D0/A0", "A0"],
+      ["D1/SERVICE", "D1"],
+      ["D2", "D2"],
+      ["D3/PWR", "D3"],
+      ["D4/SDA", "SDA"],
+      ["D5/SCL", "SCL"],
+      ["D6/TX", "TX"]
+    ],
+    "right_top_to_bottom": [
+      ["VBUS/5V", "VBUS"],
+      ["GND", "GND"],
+      ["3V3", "3V3"],
+      ["D10", "NC_D10"],
+      ["D9", "NC_D9"],
+      ["D8", "NC_D8"],
+      ["D7/RX", "RX"]
+    ]
+  },
+  "boards": [
+    {
+      "id": "atmosphere",
+      "name": "HomeBrain Atmosphere Motherboard",
+      "revision": "v1.2-draft",
+      "size": [80.0, 64.0],
+      "xiao_center": [40.0, 53.0],
+      "xiao_assembly": "Insert both factory-installed 1x7 male header rows through U1, hold the XIAO component-side up with USB-C toward the USB arrow, solder from the motherboard underside, inspect, then trim excess pin length.",
+      "antenna_copper_keepout": {
+        "min": [34.0, 30.0],
+        "max": [46.0, 45.0],
+        "reason": "No motherboard copper below or forward of the XIAO onboard ceramic antenna."
+      },
+      "mounting_holes": [[4.5, 4.5], [75.5, 4.5], [4.5, 59.5], [75.5, 59.5]],
+      "route_order": ["TX", "RX", "VBUS", "SCL", "SDA", "3V3"],
+      "nets": {
+        "GND": "power",
+        "3V3": "power",
+        "VBUS": "power",
+        "SDA": "signal",
+        "SCL": "signal",
+        "TX": "signal",
+        "RX": "signal"
+      },
+      "modules": [
+        {
+          "ref": "J1",
+          "name": "hiBCTR BME680",
+          "asin": "B0GXHGYRN2",
+          "published_board_size_mm": [18.5, 16.0],
+          "mechanical_source": "https://m.media-amazon.com/images/I/61XrN4UIEeL._AC_SL1500_.jpg",
+          "mechanical_status": "Seller dimensioned graphic confirms overall envelope, but header-to-edge offsets are not dimensioned. Existing placement outline is not approved.",
+          "mount": "parallel, component side up; insert factory-installed 1x6 male header through J1, solder from the motherboard underside, inspect, then trim; sensor/board extends left",
+          "outline": [5.0, 37.0, 23.5, 55.0],
+          "header": {
+            "installed_on_module": true,
+            "assembly_method": "through-hole-insert-solder-inspect-trim",
+            "origin": [25.5, 52.85],
+            "step": [0.0, -2.54],
+            "pins": [
+              ["1", "VCC", "3V3"], ["2", "GND", "GND"], ["3", "SCL", "SCL"],
+              ["4", "SDA", "SDA"], ["5", "SDO", "NC_BME_SDO"], ["6", "CS", "NC_BME_CS"]
+            ]
+          }
+        },
+        {
+          "ref": "J2",
+          "name": "Teyleten Robot SCD41",
+          "asin": "B0C622SS34",
+          "mount": "parallel, component side up; insert factory-installed 1x4 male header through J2, solder from the motherboard underside, inspect, then trim; metal sensor above header",
+          "outline": [9.0, 7.0, 31.0, 29.0],
+          "header": {
+            "installed_on_module": true,
+            "assembly_method": "through-hole-insert-solder-inspect-trim",
+            "origin": [16.19, 8.5],
+            "step": [2.54, 0.0],
+            "pins": [
+              ["1", "GND", "GND"], ["2", "VDD", "3V3"], ["3", "SCL", "SCL"], ["4", "SDA", "SDA"]
+            ]
+          }
+        },
+        {
+          "ref": "J3",
+          "name": "HiLetgo VEML7700",
+          "asin": "B09KGYF83T",
+          "mount": "parallel, component side up; insert factory-installed 1x5 male header through J3, solder from the motherboard underside, inspect, then trim; light sensor above header",
+          "outline": [48.0, 8.0, 65.0, 25.0],
+          "header": {
+            "installed_on_module": true,
+            "assembly_method": "through-hole-insert-solder-inspect-trim",
+            "origin": [51.42, 9.5],
+            "step": [2.54, 0.0],
+            "pins": [
+              ["1", "VIN", "3V3"], ["2", "3Vo", "NC_VEML_3VO"], ["3", "GND", "GND"],
+              ["4", "SCL", "SCL"], ["5", "SDA", "SDA"]
+            ]
+          }
+        },
+        {
+          "ref": "J4",
+          "name": "PMS5003 supplied red breakout",
+          "asin": "B0BG612GB2",
+          "mount": "parallel, component side up; insert its factory-installed 1x8 male header through J4; solder from the motherboard underside, inspect, then trim excess pin length; keyed cable socket faces right",
+          "outline": [57.0, 29.0, 78.0, 54.0],
+          "header": {
+            "installed_on_module": true,
+            "assembly_method": "through-hole-insert-solder-inspect-trim",
+            "origin": [59.0, 50.89],
+            "step": [0.0, -2.54],
+            "pins": [
+              ["1", "VCC(+5V)", "VBUS"], ["2", "GND", "GND"], ["3", "SET", "NC_PMS_SET"],
+              ["4", "RXD", "TX"], ["5", "TXD", "RX"], ["6", "RESET", "NC_PMS_RESET"],
+              ["7", "NC1", "NC_PMS_1"], ["8", "NC2", "NC_PMS_2"]
+            ]
+          }
+        }
+      ],
+      "external_connections": [
+        {
+          "name": "PMS5003 factory keyed cable",
+          "from": "J4 red breakout socket",
+          "to": "PMS5003 metal sensor",
+          "rule": "Use the supplied keyed eight-wire cable intact; do not cut, splice, or reorder it."
+        },
+        {
+          "name": "USB-C power/data",
+          "from": "external USB-C cable",
+          "to": "XIAO USB-C receptacle",
+          "rule": "The Atmosphere station requires continuous external USB power."
+        }
+      ]
+    },
+    {
+      "id": "presence",
+      "name": "HomeBrain Presence Motherboard",
+      "revision": "v1.2-draft",
+      "size": [64.0, 54.0],
+      "xiao_center": [19.0, 43.0],
+      "xiao_assembly": "Insert both factory-installed 1x7 male header rows through U1, hold the XIAO component-side up with USB-C toward the USB arrow, solder from the motherboard underside, inspect, then trim excess pin length.",
+      "antenna_copper_keepout": {
+        "min": [13.0, 20.0],
+        "max": [25.0, 35.0],
+        "reason": "No motherboard copper below or forward of the XIAO onboard ceramic antenna."
+      },
+      "mounting_holes": [[4.5, 4.5], [59.5, 4.5], [4.5, 49.5], [59.5, 49.5]],
+      "route_order": ["TX", "RX", "VBUS", "SCL", "SDA", "3V3", "D2", "D3"],
+      "nets": {
+        "GND": "power",
+        "3V3": "power",
+        "VBUS": "power",
+        "D2": "signal",
+        "D3": "signal",
+        "SDA": "signal",
+        "SCL": "signal",
+        "TX": "signal",
+        "RX": "signal"
+      },
+      "modules": [
+        {
+          "ref": "J1",
+          "name": "DIYables DHT11",
+          "asin": "B0DQ3PPGH2",
+          "mount": "vertical; insert factory-installed 1x3 male header through J1, solder from the motherboard underside, inspect, then trim; blue sensor rises from the board and printed + OUT - faces inward",
+          "outline": [27.0, 4.0, 42.0, 30.0],
+          "header": {
+            "installed_on_module": true,
+            "assembly_method": "through-hole-insert-solder-inspect-trim",
+            "origin": [39.54, 8.5],
+            "step": [-2.54, 0.0],
+            "pins": [["1", "+", "D3"], ["2", "OUT", "D2"], ["3", "-", "GND"]]
+          }
+        },
+        {
+          "ref": "J2",
+          "name": "HiLetgo VEML7700",
+          "asin": "B09KGYF83T",
+          "mount": "parallel, component side up; insert factory-installed 1x5 male header through J2, solder from the motherboard underside, inspect, then trim; light sensor above header",
+          "outline": [42.0, 8.0, 59.0, 25.0],
+          "header": {
+            "installed_on_module": true,
+            "assembly_method": "through-hole-insert-solder-inspect-trim",
+            "origin": [45.42, 9.5],
+            "step": [2.54, 0.0],
+            "pins": [
+              ["1", "VIN", "3V3"], ["2", "3Vo", "NC_VEML_3VO"], ["3", "GND", "GND"],
+              ["4", "SCL", "SCL"], ["5", "SDA", "SDA"]
+            ]
+          }
+        },
+        {
+          "ref": "J3",
+          "name": "Hi-Link LD2410C",
+          "asin": "B0F1F97422",
+          "mechanical_source": "https://h.hlktech.com/Mobile/download/fdetail/214.html",
+          "mechanical_status": "Header offsets derived from manufacturer STEP Board solid. Antenna face must point toward room; motherboard overlap is not proof of an RF keepout.",
+          "mount": "parallel, antenna face up; insert factory-installed 1x5 male header through J3, solder from the motherboard underside, inspect, then trim; module overhangs right PCB edge; verify enclosure antenna-face clearance",
+          "outline": [59.0, 23.0, 75.0, 45.0],
+          "overhang": true,
+          "header": {
+            "installed_on_module": true,
+            "assembly_method": "through-hole-insert-solder-inspect-trim",
+            "origin": [60.4648, 28.9712],
+            "step": [0.0, 2.54],
+            "pins": [
+              ["1", "TX", "RX"], ["2", "RX", "TX"], ["3", "OUT", "NC_RADAR_OUT"],
+              ["4", "GND", "GND"], ["5", "VCC", "VBUS"]
+            ]
+          }
+        }
+      ],
+      "external_connections": [
+        {
+          "name": "USB-C power/data",
+          "from": "external USB-C cable",
+          "to": "XIAO USB-C receptacle",
+          "rule": "The Presence station requires continuous external USB power."
+        }
+      ]
+    },
+    {
+      "id": "climate",
+      "name": "HomeBrain Climate Motherboard",
+      "revision": "v1.2-draft",
+      "size": [58.0, 48.0],
+      "xiao_center": [20.0, 37.0],
+      "xiao_assembly": "First solder two straight rigid posts made from saved 200 kOhm resistor-lead offcuts perpendicular to the XIAO underside BAT- and BAT+ pads. Then insert both factory-installed 1x7 male header rows through U1 while guiding those posts through XB1/XB2, solder from the motherboard underside, inspect polarity and continuity, and trim all excess pin/post length.",
+      "antenna_copper_keepout": {
+        "min": [14.0, 14.0],
+        "max": [26.0, 29.0],
+        "reason": "No motherboard copper below or forward of the XIAO onboard ceramic antenna."
+      },
+      "mounting_holes": [[4.5, 4.5], [53.5, 4.5], [4.5, 43.5], [53.5, 43.5]],
+      "route_order": ["D2", "D3", "A0", "BAT+"],
+      "xiao_battery_fill_pads": [
+        {
+          "ref": "XB1",
+          "label": "BAT-",
+          "net": "GND",
+          "offset_from_xiao_center": [0.7586, -5.5277],
+          "drill": 0.8,
+          "pad_diameter": 1.8,
+          "connection_method": "rigid-post-through-hole",
+          "assembly": "Before installing the XIAO, solder a straight rigid post cut from a saved 200 kOhm resistor lead perpendicular to its underside BAT- pad. Guide that post through XB1 with the factory side headers, solder XB1 from the motherboard underside, inspect, then trim."
+        },
+        {
+          "ref": "XB2",
+          "label": "BAT+",
+          "net": "BAT+",
+          "offset_from_xiao_center": [-1.7814, -5.5277],
+          "drill": 0.8,
+          "pad_diameter": 1.8,
+          "connection_method": "rigid-post-through-hole",
+          "assembly": "Before installing the XIAO, solder a straight rigid post cut from a saved 200 kOhm resistor lead perpendicular to its underside BAT+ pad. Guide that post through XB2 with the factory side headers, solder XB2 from the motherboard underside, verify polarity, then trim."
+        }
+      ],
+      "nets": {
+        "GND": "power",
+        "BAT+": "power",
+        "A0": "signal",
+        "D2": "signal",
+        "D3": "signal"
+      },
+      "modules": [
+        {
+          "ref": "J1",
+          "name": "DIYables DHT11",
+          "asin": "B0DQ3PPGH2",
+          "mount": "vertical; insert factory-installed 1x3 male header through J1, solder from the motherboard underside, inspect, then trim; blue sensor rises from the board and printed + OUT - faces inward",
+          "outline": [35.0, 7.0, 50.0, 33.0],
+          "header": {
+            "installed_on_module": true,
+            "assembly_method": "through-hole-insert-solder-inspect-trim",
+            "origin": [47.54, 9.0],
+            "step": [-2.54, 0.0],
+            "pins": [["1", "+", "D3"], ["2", "OUT", "D2"], ["3", "-", "GND"]]
+          }
+        },
+        {
+          "ref": "J2",
+          "name": "MakerHawk 1.25 mm battery pigtail",
+          "asin": "B07FP2FCYC / B0DMT6VZVC",
+          "mount": "solder the verified mating pigtail directly into BAT+ and BAT- holes; its factory connector remains detachable at the battery",
+          "outline": [8.0, 5.0, 22.0, 12.0],
+          "header": {
+            "origin": [11.0, 8.5],
+            "step": [2.54, 0.0],
+            "drill": 1.2,
+            "pins": [["1", "BAT+", "BAT+"], ["2", "BAT-", "GND"]]
+          }
+        },
+        {
+          "ref": "R1",
+          "name": "200 kOhm 1%",
+          "mount": "axial resistor",
+          "outline": [30.0, 15.0, 42.0, 19.0],
+          "header": {
+            "origin": [31.0, 17.0],
+            "step": [10.0, 0.0],
+            "drill": 0.8,
+            "pins": [["1", "BAT+", "BAT+"], ["2", "A0", "A0"]]
+          }
+        },
+        {
+          "ref": "R2",
+          "name": "200 kOhm 1%",
+          "mount": "axial resistor",
+          "outline": [30.0, 21.0, 42.0, 25.0],
+          "header": {
+            "origin": [31.0, 23.0],
+            "step": [10.0, 0.0],
+            "drill": 0.8,
+            "pins": [["1", "GND", "GND"], ["2", "A0", "A0"]]
+          }
+        }
+      ],
+      "external_connections": [
+        {
+          "name": "LiPo factory lead",
+          "from": "MakerHawk battery",
+          "to": "meter-verified mating pigtail soldered at J2",
+          "rule": "This flexible lead is unavoidable because it is integral to the pouch cell; verify polarity before first connection."
+        }
+      ]
+    }
+  ],
+  "assembly_fastener": {
+    "description": "#4 x 3/8 in Phillips pan-head coarse-thread sheet-metal screw",
+    "home_depot_model": "Everbilt 824681",
+    "home_depot_store_sku": "1006540029",
+    "board_screws_per_device": 4,
+    "lid_screws_per_device": 4,
+    "total_screws": 24,
+    "recommended_purchase": "Two 16-packs total; if one pack was already purchased, add one more pack."
+  }
+}

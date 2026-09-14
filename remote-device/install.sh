@@ -177,7 +177,7 @@ cat > package.json << 'EOF'
     "node-record-lpcm16": "^1.0.1",
     "yargs": "^17.7.2",
     "node-wav": "^0.0.2",
-    "onnxruntime-node": "1.27.0",
+    "onnxruntime-node": "1.29.0",
     "tflite-node": "1.0.0"
   },
   "engines": {

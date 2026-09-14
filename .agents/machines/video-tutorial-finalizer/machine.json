@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "id": "video-tutorial-finalizer",
+  "summary": "Validate a 1080p HomeBrain tutorial master and create the standard 1024x600 30 fps derivative.",
+  "scope": "project",
+  "tags": ["video", "tutorial", "ffmpeg", "rendering", "validation"],
+  "entrypoint": ["python3", "scripts/finalize-video-tutorial.py", "finalize"],
+  "inputs": ["A 1920x1080, 30 fps H.264/AAC MP4 master supplied with --master."],
+  "outputs": ["A 1024x600, 30 fps H.264/AAC MP4 supplied with --output."],
+  "side_effects": ["Atomically replaces only the explicit --output path after successful verification."],
+  "verify": [
+    ["python3", "scripts/test-finalize-video-tutorial.py"]
+  ],
+  "determinism": {
+    "environment": ["Python 3.10+", "ffmpeg and ffprobe with libx264"],
+    "network": "forbidden",
+    "clock": "forbidden",
+    "randomness": "forbidden"
+  },
+  "status": "experimental"
+}

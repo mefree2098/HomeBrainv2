@@ -59,6 +59,16 @@ jobs:
       - run: node --test scripts/tests/*.test.js
       - run: bash scripts/check-secrets.sh
       - run: python3 scripts/test-validate-ios-app-store-archive.py
+      - name: Sensor firmware contract and hardware artifact checks
+        run: |
+          python3 scripts/test-bench-test-homebrain-sensor.py
+          python3 scripts/test-verify-homebrain-motherboards.py
+          python3 scripts/test-verify-homebrain-enclosures.py
+          python3 scripts/test-verify-homebrain-carrier.py
+          python3 scripts/verify-homebrain-motherboards.py
+          python3 scripts/verify-homebrain-enclosures.py
+          python3 scripts/verify-homebrain-carrier.py
+          python3 scripts/verify-homebrain-wiring-diagrams.py --svg-only --repeat
   python:
     runs-on: ubuntu-latest
     timeout-minutes: 10

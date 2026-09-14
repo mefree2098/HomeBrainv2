@@ -58,6 +58,7 @@ const reverseProxyRoutes = require("./routes/reverseProxyRoutes");
 const remoteDeviceRoutes = require("./routes/remoteDeviceRoutes");
 const reachyMiniRoutes = require("./routes/reachyMiniRoutes");
 const panelRoutes = require("./routes/panelRoutes");
+const sensorNodeRoutes = require("./routes/sensorNodeRoutes");
 const wakeWordRoutes = require("./routes/wakeWordRoutes");
 const remoteUpdateRoutes = require("./routes/remoteUpdateRoutes");
 const eventStreamRoutes = require("./routes/eventStreamRoutes");
@@ -115,6 +116,7 @@ const directRadioService = require("./services/directRadioService");
 const matterService = require("./services/matterService");
 const deviceLibraryUpdateService = require("./services/deviceLibraryUpdateService");
 const telemetryService = require("./services/telemetryService");
+const sensorNodeService = require("./services/sensorNodeService");
 const eventStreamService = require("./services/eventStreamService");
 const reachyMiniService = require("./services/reachyMiniService");
 const reachySnapshotService = require("./services/reachySnapshotService");
@@ -475,6 +477,7 @@ app.use('/api/users', userRoutes);
 app.use('/api/notifications', notificationRoutes);
 // Device Routes
 app.use('/api/devices', deviceRoutes);
+app.use('/api/sensor-nodes', sensorNodeRoutes);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/direct-radios', directRadioRoutes);
 app.use('/api/matter', matterRoutes);
@@ -790,6 +793,17 @@ void dbReady
   }
 })();
 
+// Initialize the native ESP32 sensor-node offline watchdog.
+void dbReady
+  .then(async () => {
+    sensorNodeService.initialize();
+    await sensorNodeService.markStaleNodesOffline();
+    console.log('Sensor node watchdog initialized successfully');
+  })
+  .catch((error) => {
+    console.error('Failed to initialize sensor node watchdog:', error.message);
+  });
+
 // Initialize Tempest weather integration
 (async () => {
   try {
@@ -883,6 +897,7 @@ async function gracefulShutdown(signal) {
   await runShutdownStep('Govee Indoor Air service', () => goveeAirQualityService.shutdown());
   await runShutdownStep('RainMachine service', () => rainMachineService.shutdown());
   await runShutdownStep('Sense service', () => senseService.shutdown());
+  await runShutdownStep('sensor node watchdog', () => sensorNodeService.shutdown());
   await runShutdownStep('telemetry listeners', () => telemetryService.shutdown());
   await runShutdownStep('Codex CLI sessions', () => shutdownCodexCliService());
   await runShutdownStep('HTTP server', () => closeServer(httpServer, 'HTTP server'), HTTP_CLOSE_TIMEOUT_MS + 1000);

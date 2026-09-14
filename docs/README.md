@@ -21,6 +21,9 @@
 - Troubleshooting: [`troubleshooting.md`](troubleshooting.md)
 - Remote listener guide: [`../remote-device/README.md`](../remote-device/README.md)
 
+- Custom sensor fleet and firmware: [`homebrain-sensors/README.md`](homebrain-sensors/README.md)
+- Tutorial videos and editable sources: [`videos/README.md`](videos/README.md)
+
 ## Reference / Historical Notes
 
 These are not the main onboarding docs:

@@ -1,0 +1,19 @@
+{
+  "description": "Regression fixture for the former top gusset geometry, which crossed each boss center and sealed the pilot entrance.",
+  "fastener": {
+    "description": "#4 x 3/8 in Phillips pan-head coarse-thread sheet-metal screw",
+    "home_depot_model": "Everbilt 824681",
+    "home_depot_store_sku": "1006540029",
+    "quantity_per_case": 4,
+    "screw_length_mm": 9.525,
+    "pilot_diameter_mm": 2.35,
+    "pilot_depth_mm": 8.4,
+    "clearance_diameter_mm": 3.4,
+    "head_recess_diameter_mm": 6.2,
+    "head_recess_depth_mm": 0.65,
+    "boss_outer_diameter_mm": 8.0,
+    "boss_edge_gap_mm": 5.0,
+    "gusset_boss_overlap_mm": 6.4,
+    "gusset_pilot_clearance_mm": 1.0
+  }
+}

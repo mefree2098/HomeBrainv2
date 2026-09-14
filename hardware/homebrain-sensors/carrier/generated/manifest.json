@@ -1,0 +1,111 @@
+{
+  "board_mm": [
+    32.0,
+    56.0,
+    1.6
+  ],
+  "design_sha256": "8129aceb58eb7df36cf57d07c6fca84d545568151bdd5416238f6c695af928ab",
+  "fabrication_order": {
+    "assembly": "Bare boards only; hand-solder through-hole parts",
+    "board_dimensions": "32 mm x 56 mm",
+    "copper": "1 oz",
+    "layers": 2,
+    "quantity": 5,
+    "silkscreen": "White",
+    "solder_mask": "Any color",
+    "surface_finish": "Lead-free HASL",
+    "thickness": "1.6 mm"
+  },
+  "files": {
+    "bom.csv": {
+      "bytes": 2059,
+      "sha256": "ffcca8a939ea12cdd0c2084046a9033f5e1d965fa87b029dccd32e0dfb378ba2"
+    },
+    "final-harness-atmosphere.png": {
+      "bytes": 174464,
+      "sha256": "8e7198e55344a5ea2033be5678162bb0f8d25c9b5e6db04a57669466e85543aa"
+    },
+    "final-harness-atmosphere.svg": {
+      "bytes": 13331,
+      "sha256": "1a6aa78c7ad53d4b033d00294d9a91f1a560e92bb5ca45cbc244b187f736c77a"
+    },
+    "final-harness-climate.png": {
+      "bytes": 139317,
+      "sha256": "d7a0fc7c8c4a16b6a60444d2fc6be53eac0078cee38ba8eea2c8eef80551e092"
+    },
+    "final-harness-climate.svg": {
+      "bytes": 9041,
+      "sha256": "2fa21914996fa196010a5c514f348e549739eed7dd21c0a75a6569bb566f943d"
+    },
+    "final-harness-presence.png": {
+      "bytes": 147979,
+      "sha256": "6fd233c3a16bbf9224dc7f30a936e3163b4662d1796d392d286a7da6cc6c47ee"
+    },
+    "final-harness-presence.svg": {
+      "bytes": 10651,
+      "sha256": "6724ce592401495d5c9aa7e61dbe2a8f9852034715338777421799b8d3cba67c"
+    },
+    "gerbers/homebrain-carrier-B_Cu.gbr": {
+      "bytes": 45166,
+      "sha256": "960ea16d130b5c10fe0a6002def506df6a8266ee9f6c9cc01bf0f063acbff7ae"
+    },
+    "gerbers/homebrain-carrier-B_Mask.gbr": {
+      "bytes": 1557,
+      "sha256": "5a73d0874fa8a6df049107633f168c4e6eecd6749c451c9df87e853d339869f4"
+    },
+    "gerbers/homebrain-carrier-Edge_Cuts.gbr": {
+      "bytes": 388,
+      "sha256": "7d934ecc005f23eadc53dda652eba28214190a1732d4fa6cc88f4cb9b73c8f5c"
+    },
+    "gerbers/homebrain-carrier-F_Cu.gbr": {
+      "bytes": 34498,
+      "sha256": "f4a2b76ba462c66841100620ff860bde7ce54f6e12747d14f48a72ee722561bb"
+    },
+    "gerbers/homebrain-carrier-F_Mask.gbr": {
+      "bytes": 1558,
+      "sha256": "ac2200585a8d7b709d1a90179deff6e2c79f83448bafbfe5e99e34d967424786"
+    },
+    "gerbers/homebrain-carrier-F_Silkscreen.gbr": {
+      "bytes": 8056,
+      "sha256": "4b667f0e826341ddaef98235683421acd6d1b2ecfca15ff3e94a5d4a7e1a1f28"
+    },
+    "gerbers/homebrain-carrier-PTH.drl": {
+      "bytes": 821,
+      "sha256": "33093fa15690d1daf2f0ab98cd03a3ecf910d651d112bd6d3a242aeb5292dc6e"
+    },
+    "gerbers/homebrain-carrier-job.gbrjob": {
+      "bytes": 1560,
+      "sha256": "7bd616888f6277f2032c6f93271c9858d42d5575e01d44f6cdd6d0185267f1d2"
+    },
+    "homebrain-carrier-assembly.png": {
+      "bytes": 273221,
+      "sha256": "650d58052be65d665c8556a4c1e567cc275c26003cccc999360efbeaffc30d94"
+    },
+    "homebrain-carrier-assembly.svg": {
+      "bytes": 66800,
+      "sha256": "aab8671f593ef8e0ac183364fc19bc7f82dffb28480cd4beeddfcb96b7af795c"
+    },
+    "homebrain-carrier-gerbers.zip": {
+      "bytes": 11853,
+      "sha256": "4c26c3e20d180b56e208e612f1bd7ddb898384cd3ec7eb92e17c84fe341696bd"
+    },
+    "homebrain-carrier-schematic.png": {
+      "bytes": 125348,
+      "sha256": "544922ab0c0c80f93afb72df1eb53cb1a42ad22f2c78a84c24e4d91ce182b285"
+    },
+    "homebrain-carrier-schematic.svg": {
+      "bytes": 11551,
+      "sha256": "b7c53654836e5f339da206491c3f93f21f4f522a06da4a5159b012d0fd2e56d6"
+    },
+    "layout.json": {
+      "bytes": 176198,
+      "sha256": "f2eb3b65d22ffe1d8d7f228ab262fe3cf1dbf7ca70106bd432ee8ed28b86984f"
+    }
+  },
+  "generator": "scripts/generate-homebrain-carrier.py",
+  "ground_plane_void_count": 1309,
+  "pad_count": 43,
+  "route_segment_count": 264,
+  "schema_version": 1,
+  "via_count": 4
+}

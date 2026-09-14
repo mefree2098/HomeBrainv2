@@ -1,0 +1,6 @@
+Reference,Part,Quantity,Assembly,Purchased part/source
+U1,Seeed Studio XIAO ESP32-C6,1,"Insert both factory-installed 1x7 male header rows through U1, hold the XIAO component-side up with USB-C toward the USB arrow, solder from the motherboard underside, inspect, then trim excess pin length.",B0DJ6N55FX
+J1,DIYables DHT11,1,"vertical; insert factory-installed 1x3 male header through J1, solder from the motherboard underside, inspect, then trim; blue sensor rises from the board and printed + OUT - faces inward",B0DQ3PPGH2
+J2,HiLetgo VEML7700,1,"parallel, component side up; insert factory-installed 1x5 male header through J2, solder from the motherboard underside, inspect, then trim; light sensor above header",B09KGYF83T
+J3,Hi-Link LD2410C,1,"parallel, antenna face up; insert factory-installed 1x5 male header through J3, solder from the motherboard underside, inspect, then trim; module overhangs right PCB edge; verify enclosure antenna-face clearance",B0F1F97422
+MH1-MH4,#4 x 3/8 in Phillips pan-head coarse-thread sheet-metal screw,4,PCB to printed plastic motherboard posts,Home Depot 824681 / SKU 1006540029

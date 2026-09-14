@@ -1,0 +1,7 @@
+{
+  "description": "Negative fixture: reverse the carrier-side UART net order so MCU TX/RX no longer match the locked keyed-port contract.",
+  "part": "J4",
+  "field": "pin_nets",
+  "value": ["GND", "VBUS", "RX", "TX"],
+  "expected_error": "UART keyed port order or crossing changed"
+}

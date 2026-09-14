@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "homebrain-usb-bench-diagnostic",
+  "summary": "Reset a USB-connected HomeBrain XIAO, request its built-in Atmosphere diagnostic, parse the structured module report, and fail on any missing bus acknowledgement or invalid reading.",
+  "scope": "project",
+  "tags": ["homebrain", "esp32-c6", "usb", "hardware", "diagnostic", "platformio"],
+  "entrypoint": ["python3", "scripts/bench-test-homebrain-sensor.py", "--profile", "air-station"],
+  "inputs": ["one USB-connected XIAO ESP32-C6 running the production HomeBrain firmware"],
+  "outputs": ["structured homebrain.usb-diagnostic.v1 JSON on stdout"],
+  "side_effects": ["Resets the selected XIAO; --flash additionally replaces its application firmware with the current production build."],
+  "verify": [
+    ["python3", "scripts/test-bench-test-homebrain-sensor.py"],
+    ["pio", "run", "--project-dir", "embedded/homebrain-sensor"]
+  ],
+  "determinism": {
+    "environment": ["macOS or Linux", "Python 3.10+", "PlatformIO Core 6.x with pyserial", "one explicit or uniquely detected /dev/cu.usbmodem device"],
+    "network": "declared",
+    "clock": "declared",
+    "randomness": "forbidden"
+  },
+  "status": "experimental"
+}

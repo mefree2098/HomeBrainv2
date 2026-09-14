@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1900" height="1150" viewBox="0 0 1900 1150">
+<title>HomeBrain Atmosphere Motherboard net contract</title>
+<metadata>{"artifact": "dedicated-motherboard-schematic", "board": "atmosphere", "nets": ["SDA", "SCL", "TX", "VBUS", "GND", "3V3", "RX"]}</metadata>
+<rect width="100%" height="100%" fill="#f4f7fb"/>
+<text x="60" y="60" font-family="Arial,Helvetica,sans-serif" font-size="32" font-weight="900" fill="#15243b" text-anchor="start">HOMEBRAIN ATMOSPHERE MOTHERBOARD — V1.2-DRAFT VERIFIED NET CONTRACT</text>
+<text x="60" y="102" font-family="Arial,Helvetica,sans-serif" font-size="20" font-weight="650" fill="#526d89" text-anchor="start">Every row below is implemented as PCB copper. NC pads are drilled for mechanical mounting only and have no copper route.</text>
+<rect x="60" y="170" width="1780" height="82" rx="14" fill="#ffffff" stroke="#ced8e5" stroke-width="2.0" />
+<rect x="60" y="170" width="14" height="82" rx="7" fill="#28364b"/>
+<text x="96" y="204" font-family="Arial,Helvetica,sans-serif" font-size="22" font-weight="900" fill="#28364b" text-anchor="start">GND</text>
+<text x="240" y="204" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">U1 GND   →   J1 GND   →   J2 GND   →   J3 GND   →   J4 GND</text>
+<text x="240" y="232" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="650" fill="#5e7187" text-anchor="start">Both copper layers are stitched GND planes; mounting holes also connect to GND.</text>
+<rect x="60" y="272" width="1780" height="82" rx="14" fill="#ffffff" stroke="#ced8e5" stroke-width="2.0" />
+<rect x="60" y="272" width="14" height="82" rx="7" fill="#f59e0b"/>
+<text x="96" y="306" font-family="Arial,Helvetica,sans-serif" font-size="22" font-weight="900" fill="#f59e0b" text-anchor="start">3V3</text>
+<text x="240" y="306" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">U1 3V3   →   J1 VCC   →   J2 VDD   →   J3 VIN</text>
+<rect x="60" y="374" width="1780" height="82" rx="14" fill="#ffffff" stroke="#ced8e5" stroke-width="2.0" />
+<rect x="60" y="374" width="14" height="82" rx="7" fill="#ef4444"/>
+<text x="96" y="408" font-family="Arial,Helvetica,sans-serif" font-size="22" font-weight="900" fill="#ef4444" text-anchor="start">VBUS</text>
+<text x="240" y="408" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">U1 VBUS/5V   →   J4 VCC(+5V)</text>
+<rect x="60" y="476" width="1780" height="82" rx="14" fill="#ffffff" stroke="#ced8e5" stroke-width="2.0" />
+<rect x="60" y="476" width="14" height="82" rx="7" fill="#10a66a"/>
+<text x="96" y="510" font-family="Arial,Helvetica,sans-serif" font-size="22" font-weight="900" fill="#10a66a" text-anchor="start">SDA</text>
+<text x="240" y="510" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">U1 D4/SDA   →   J1 SDA   →   J2 SDA   →   J3 SDA</text>
+<rect x="60" y="578" width="1780" height="82" rx="14" fill="#ffffff" stroke="#ced8e5" stroke-width="2.0" />
+<rect x="60" y="578" width="14" height="82" rx="7" fill="#2583e8"/>
+<text x="96" y="612" font-family="Arial,Helvetica,sans-serif" font-size="22" font-weight="900" fill="#2583e8" text-anchor="start">SCL</text>
+<text x="240" y="612" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">U1 D5/SCL   →   J1 SCL   →   J2 SCL   →   J3 SCL</text>
+<rect x="60" y="680" width="1780" height="82" rx="14" fill="#ffffff" stroke="#ced8e5" stroke-width="2.0" />
+<rect x="60" y="680" width="14" height="82" rx="7" fill="#8b5cf6"/>
+<text x="96" y="714" font-family="Arial,Helvetica,sans-serif" font-size="22" font-weight="900" fill="#8b5cf6" text-anchor="start">TX</text>
+<text x="240" y="714" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">U1 D6/TX   →   J4 RXD</text>
+<rect x="60" y="782" width="1780" height="82" rx="14" fill="#ffffff" stroke="#ced8e5" stroke-width="2.0" />
+<rect x="60" y="782" width="14" height="82" rx="7" fill="#6d43d9"/>
+<text x="96" y="816" font-family="Arial,Helvetica,sans-serif" font-size="22" font-weight="900" fill="#6d43d9" text-anchor="start">RX</text>
+<text x="240" y="816" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="750" fill="#15243b" text-anchor="start">U1 D7/RX   →   J4 TXD</text>
+<text x="60" y="914" font-family="Arial,Helvetica,sans-serif" font-size="23" font-weight="900" fill="#15243b" text-anchor="start">Unavoidable external factory leads</text>
+<text x="86" y="942" font-family="Arial,Helvetica,sans-serif" font-size="17" font-weight="800" fill="#15243b" text-anchor="start">• PMS5003 factory keyed cable: J4 red breakout socket → PMS5003 metal sensor</text>
+<text x="112" y="970" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="600" fill="#5e7187" text-anchor="start">Use the supplied keyed eight-wire cable intact; do not cut, splice, or reorder it.</text>
+<text x="86" y="1004" font-family="Arial,Helvetica,sans-serif" font-size="17" font-weight="800" fill="#15243b" text-anchor="start">• USB-C power/data: external USB-C cable → XIAO USB-C receptacle</text>
+<text x="112" y="1032" font-family="Arial,Helvetica,sans-serif" font-size="15" font-weight="600" fill="#5e7187" text-anchor="start">The Atmosphere station requires continuous external USB power.</text>
+</svg>

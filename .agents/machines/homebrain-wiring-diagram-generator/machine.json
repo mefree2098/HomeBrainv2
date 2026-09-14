@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "id": "homebrain-wiring-diagram-generator",
+  "summary": "Generate and independently validate three exact-part HomeBrain physical wiring sheets from one reviewed ASIN/pin-order/netlist catalog.",
+  "scope": "project",
+  "tags": ["homebrain", "hardware", "wiring", "svg", "png", "electronics"],
+  "entrypoint": ["python3", "scripts/generate-homebrain-wiring-diagrams.py"],
+  "inputs": ["hardware/homebrain-sensors/wiring/physical-hardware.json"],
+  "outputs": ["docs/homebrain-sensors/wiring-atmosphere.svg/png, wiring-presence.svg/png, and wiring-climate.svg/png"],
+  "side_effects": ["Replaces only the six generated wiring artifacts in docs/homebrain-sensors/."],
+  "verify": [
+    ["python3", "scripts/verify-homebrain-wiring-diagrams.py", "--repeat"]
+  ],
+  "determinism": {
+    "environment": ["macOS", "Python 3.10+", "Google Chrome at /Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
+    "network": "forbidden",
+    "clock": "forbidden",
+    "randomness": "forbidden"
+  },
+  "status": "active"
+}

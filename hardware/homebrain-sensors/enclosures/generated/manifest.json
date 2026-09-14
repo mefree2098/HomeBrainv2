@@ -1,0 +1,558 @@
+{
+  "blend": {
+    "bytes": 828643,
+    "file": "homebrain-sensor-enclosures.blend",
+    "sha256": "7b8daf6951a3613009842be8c9367484f28684bf00009b0841a171431c9a800f"
+  },
+  "blender_version": "5.1.0",
+  "config_sha256": "de9d521a6cf88905e492d8ab3d5720bda23316ed2e9bdf1fe8fe3109877880ca",
+  "fastener": {
+    "boss_edge_gap_mm": 1.0,
+    "boss_outer_diameter_mm": 8.0,
+    "clearance_diameter_mm": 3.4,
+    "description": "#4 x 3/8 in Phillips pan-head coarse-thread sheet-metal screw",
+    "gusset_boss_overlap_mm": 1.5,
+    "gusset_pilot_clearance_mm": 1.0,
+    "head_recess_depth_mm": 0.65,
+    "head_recess_diameter_mm": 6.2,
+    "home_depot_model": "Everbilt 824681",
+    "home_depot_store_sku": "1006540029",
+    "pilot_depth_mm": 8.4,
+    "pilot_diameter_mm": 2.35,
+    "quantity_per_case_lid": 4,
+    "quantity_per_motherboard": 4,
+    "screw_length_mm": 9.525,
+    "total_quantity": 24
+  },
+  "generator": "scripts/generate-homebrain-enclosures.py",
+  "linkedin_hero": {
+    "bytes": 1813740,
+    "file": "homebrain-sensor-fleet-linkedin.png",
+    "pixels": [
+      1600,
+      1000
+    ],
+    "sha256": "145c9ca9e2e6ce58e240961a87b67e24deba5704febc73faa741c1722a8740e3"
+  },
+  "motherboard_design_sha256": "981a20c0719c4890354ac60fdc553605a30987ebeaf7b8987afc2434f3efee5e",
+  "motherboard_mount": {
+    "board_thickness_mm": 1.6,
+    "factory_header_standoff_mm": 2.5,
+    "pilot_depth_mm": 8.4,
+    "pilot_diameter_mm": 2.35,
+    "post_outer_diameter_mm": 7.5,
+    "post_top_z_mm": 12.0,
+    "rear_wall_center_gap_mm": 18.0,
+    "rear_wall_depth_mm": 3.2,
+    "rear_wall_height_mm": 18.0,
+    "rear_wall_width_mm": 16.0,
+    "retention": "four common #4 screws through motherboard into printed plastic posts plus two tall rear USB-load walls"
+  },
+  "profiles": {
+    "atmosphere": {
+      "antenna_keepout_mm": {
+        "antenna_edge_x": -42.5,
+        "bounds": [
+          [
+            -42.5,
+            -11.9
+          ],
+          [
+            -30.5,
+            11.9
+          ]
+        ],
+        "mode": "onboard_ceramic",
+        "usb_direction": -1
+      },
+      "body": {
+        "bounds": {
+          "max": [
+            73.0,
+            52.0,
+            35.8
+          ],
+          "min": [
+            -73.0,
+            -52.0,
+            0.0
+          ],
+          "size": [
+            146.0,
+            104.0,
+            35.8
+          ]
+        },
+        "bytes": 526184,
+        "sha256": "5cfa269e9b72904ffa9c8fb417274ac7c497650fa567b2df033ab98b6c84e1d8",
+        "triangles": 10522
+      },
+      "body_height_mm": 35.8,
+      "inner_mm": [
+        141.6,
+        99.6,
+        33.4
+      ],
+      "lid": {
+        "bounds": {
+          "max": [
+            73.0,
+            52.0,
+            3.0
+          ],
+          "min": [
+            -73.0,
+            -52.0,
+            0.0
+          ],
+          "size": [
+            146.0,
+            104.0,
+            3.0
+          ]
+        },
+        "bytes": 260184,
+        "sha256": "f2b662b7bb54d79d65cd2bac8e0e56ad11c7bbbd3b3811d0d1a78e1df19c1534",
+        "triangles": 5202
+      },
+      "motherboard_mount": {
+        "board_bottom_z_mm": 12.0,
+        "pilot_depth_mm": 8.4,
+        "pilot_diameter_mm": 2.35,
+        "post_centers_mm": [
+          [
+            -59.5,
+            -35.5,
+            12.0
+          ],
+          [
+            -59.5,
+            35.5,
+            12.0
+          ],
+          [
+            -4.5,
+            -35.5,
+            12.0
+          ],
+          [
+            -4.5,
+            35.5,
+            12.0
+          ]
+        ],
+        "post_outer_diameter_mm": 7.5,
+        "rear_wall_centers_mm": [
+          [
+            1.6,
+            -17.0,
+            11.4
+          ],
+          [
+            1.6,
+            17.0,
+            11.4
+          ]
+        ],
+        "rear_wall_size_mm": [
+          3.2,
+          16.0,
+          18.0
+        ],
+        "retention": "four common #4 screws through motherboard into printed plastic posts plus two tall rear USB-load walls",
+        "usb_open_side": -1
+      },
+      "outer_mm": [
+        146.0,
+        104.0,
+        38.0
+      ],
+      "pms5003_airflow": {
+        "component": "PMS5003",
+        "exhaust": {
+          "bounds_xz_mm": [
+            [
+              34.0,
+              4.0
+            ],
+            [
+              57.6,
+              23.4
+            ]
+          ],
+          "count": 5,
+          "nominal_free_area_mm2": 349.2,
+          "vent_id": "pms5003_exhaust"
+        },
+        "fan_opening_diameter_mm": 18.0,
+        "installation": "small inlet holes and round fan opening face the dedicated exterior grille",
+        "intake": {
+          "bounds_xz_mm": [
+            [
+              12.7,
+              4.0
+            ],
+            [
+              31.3,
+              23.4
+            ]
+          ],
+          "count": 4,
+          "nominal_free_area_mm2": 279.36,
+          "vent_id": "pms5003_intake"
+        },
+        "port_face": {
+          "axis": "y",
+          "bounds_xz_mm": [
+            [
+              10.0,
+              3.25
+            ],
+            [
+              60.0,
+              24.15
+            ]
+          ],
+          "host_inner_wall_plane_mm": -49.8,
+          "plane_mm": -47.4,
+          "side": -1,
+          "wall_gap_mm": 2.4
+        },
+        "separator": {
+          "center_mm": [
+            33.0,
+            -48.75,
+            13.7
+          ],
+          "sensor_clearance_mm": 0.3,
+          "size_mm": [
+            1.6,
+            2.1,
+            21.0
+          ]
+        },
+        "shroud": {
+          "channel_depth_mm": 2.1,
+          "frame_outer_bounds_xz_mm": [
+            [
+              8.6,
+              1.8
+            ],
+            [
+              61.4,
+              25.6
+            ]
+          ],
+          "rib_thickness_mm": 1.4
+        }
+      },
+      "preview": "atmosphere-exploded.png",
+      "screw_boss_centers_mm": [
+        [
+          -65.8,
+          -44.8
+        ],
+        [
+          -65.8,
+          44.8
+        ],
+        [
+          65.8,
+          -44.8
+        ],
+        [
+          65.8,
+          44.8
+        ]
+      ]
+    },
+    "climate": {
+      "antenna_keepout_mm": {
+        "antenna_edge_x": -29.5,
+        "bounds": [
+          [
+            -29.5,
+            -20.9
+          ],
+          [
+            -17.5,
+            2.9
+          ]
+        ],
+        "mode": "onboard_ceramic",
+        "usb_direction": -1
+      },
+      "body": {
+        "bounds": {
+          "max": [
+            55.0,
+            42.0,
+            45.8
+          ],
+          "min": [
+            -55.0,
+            -42.0,
+            0.0
+          ],
+          "size": [
+            110.0,
+            84.0,
+            45.8
+          ]
+        },
+        "bytes": 411284,
+        "sha256": "6da3d0493d4e0e0ad07087ecbe2b53f5b3a3d118c3b5438fc51d821d7c2cdefa",
+        "triangles": 8224
+      },
+      "body_height_mm": 45.8,
+      "inner_mm": [
+        105.6,
+        79.6,
+        43.4
+      ],
+      "lid": {
+        "bounds": {
+          "max": [
+            55.0,
+            42.0,
+            3.0
+          ],
+          "min": [
+            -55.0,
+            -42.0,
+            0.0
+          ],
+          "size": [
+            110.0,
+            84.0,
+            3.0
+          ]
+        },
+        "bytes": 225184,
+        "sha256": "a6f0ff23ba7de1107176fa4a0d8e469d37413bd537475dae97f8f1404b2567d5",
+        "triangles": 4502
+      },
+      "motherboard_mount": {
+        "board_bottom_z_mm": 12.0,
+        "pilot_depth_mm": 8.4,
+        "pilot_diameter_mm": 2.35,
+        "post_centers_mm": [
+          [
+            -46.5,
+            -24.5,
+            12.0
+          ],
+          [
+            -46.5,
+            24.5,
+            12.0
+          ],
+          [
+            -7.5,
+            -24.5,
+            12.0
+          ],
+          [
+            -7.5,
+            24.5,
+            12.0
+          ]
+        ],
+        "post_outer_diameter_mm": 7.5,
+        "rear_wall_centers_mm": [
+          [
+            -1.4,
+            -17.0,
+            11.4
+          ],
+          [
+            -1.4,
+            17.0,
+            11.4
+          ]
+        ],
+        "rear_wall_size_mm": [
+          3.2,
+          16.0,
+          18.0
+        ],
+        "retention": "four common #4 screws through motherboard into printed plastic posts plus two tall rear USB-load walls",
+        "usb_open_side": -1
+      },
+      "outer_mm": [
+        110.0,
+        84.0,
+        48.0
+      ],
+      "pms5003_airflow": null,
+      "preview": "climate-exploded.png",
+      "screw_boss_centers_mm": [
+        [
+          -47.8,
+          -34.8
+        ],
+        [
+          -47.8,
+          34.8
+        ],
+        [
+          47.8,
+          -34.8
+        ],
+        [
+          47.8,
+          34.8
+        ]
+      ]
+    },
+    "presence": {
+      "antenna_keepout_mm": {
+        "antenna_edge_x": -5.5,
+        "bounds": [
+          [
+            -5.5,
+            -24.9
+          ],
+          [
+            6.5,
+            -1.1
+          ]
+        ],
+        "mode": "onboard_ceramic",
+        "usb_direction": -1
+      },
+      "body": {
+        "bounds": {
+          "max": [
+            33.0,
+            47.0,
+            45.8
+          ],
+          "min": [
+            -33.0,
+            -47.0,
+            0.0
+          ],
+          "size": [
+            66.0,
+            94.0,
+            45.8
+          ]
+        },
+        "bytes": 351284,
+        "sha256": "9983a94328d5f7ec0ace9ca8b79e8556b68714c360d4f9aa7344c790927ed888",
+        "triangles": 7024
+      },
+      "body_height_mm": 45.8,
+      "inner_mm": [
+        61.6,
+        89.6,
+        43.4
+      ],
+      "lid": {
+        "bounds": {
+          "max": [
+            33.0,
+            47.0,
+            3.0
+          ],
+          "min": [
+            -33.0,
+            -47.0,
+            0.0
+          ],
+          "size": [
+            66.0,
+            94.0,
+            3.0
+          ]
+        },
+        "bytes": 240284,
+        "sha256": "39fa27a70afaaa39bfdddc6e34561d3387d1c81567017ba5154153c552eb3ec1",
+        "triangles": 4804
+      },
+      "motherboard_mount": {
+        "board_bottom_z_mm": 12.0,
+        "pilot_depth_mm": 8.4,
+        "pilot_diameter_mm": 2.35,
+        "post_centers_mm": [
+          [
+            -22.5,
+            -27.5,
+            12.0
+          ],
+          [
+            -22.5,
+            27.5,
+            12.0
+          ],
+          [
+            22.5,
+            -27.5,
+            12.0
+          ],
+          [
+            22.5,
+            27.5,
+            12.0
+          ]
+        ],
+        "post_outer_diameter_mm": 7.5,
+        "rear_wall_centers_mm": [
+          [
+            28.6,
+            -17.0,
+            11.4
+          ],
+          [
+            28.6,
+            17.0,
+            11.4
+          ]
+        ],
+        "rear_wall_size_mm": [
+          3.2,
+          16.0,
+          18.0
+        ],
+        "retention": "four common #4 screws through motherboard into printed plastic posts plus two tall rear USB-load walls",
+        "usb_open_side": -1
+      },
+      "outer_mm": [
+        66.0,
+        94.0,
+        48.0
+      ],
+      "pms5003_airflow": null,
+      "preview": "presence-exploded.png",
+      "screw_boss_centers_mm": [
+        [
+          -25.8,
+          -39.8
+        ],
+        [
+          -25.8,
+          39.8
+        ],
+        [
+          25.8,
+          -39.8
+        ],
+        [
+          25.8,
+          39.8
+        ]
+      ]
+    }
+  },
+  "schema_version": 2,
+  "units": "millimeters",
+  "xiao_radio": {
+    "antenna_end": "opposite_usb",
+    "antenna_mode": "onboard_ceramic",
+    "external_ufl_reserved": true,
+    "factory_header_usb_center_z_mm": 21.0,
+    "forward_keepout_mm": 12.0,
+    "side_keepout_mm": 3.0
+  }
+}

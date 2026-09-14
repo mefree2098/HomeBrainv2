@@ -176,6 +176,7 @@ import { TempestIntegrationCard } from "@/components/weather/TempestIntegrationC
 import { GoveeIndoorAirIntegrationCard } from "@/components/weather/GoveeIndoorAirIntegrationCard"
 import { RainMachineIntegrationCard } from "@/components/rainmachine/RainMachineIntegrationCard"
 import { HardwareOrbsTab } from "@/components/settings/HardwareOrbsTab"
+import { SensorFleetTab } from "@/components/settings/SensorFleetTab"
 import { DeviceCommandCoordinatorTab } from "@/components/settings/DeviceCommandCoordinatorTab"
 import { RemoteHomeBrainNotificationsCard } from "@/components/settings/RemoteHomeBrainNotificationsCard"
 import { DirectRadioAdminCard } from "@/components/settings/DirectRadioAdminCard"
@@ -226,6 +227,7 @@ const SETTINGS_MAIN_TABS = new Set([
   "voice",
   "integrations",
   "hardware-orbs",
+  "sensor-fleet",
   "command-coordinator",
   "security",
   "resources",
@@ -5365,6 +5367,7 @@ export function Settings() {
             <TabsTrigger value="voice">Voice & Audio</TabsTrigger>
             <TabsTrigger value="integrations">Integrations</TabsTrigger>
             <TabsTrigger value="hardware-orbs">Hardware Orbs</TabsTrigger>
+            <TabsTrigger value="sensor-fleet">Sensor Fleet</TabsTrigger>
             <TabsTrigger value="command-coordinator">Command Control</TabsTrigger>
             <TabsTrigger value="security">Security</TabsTrigger>
             <TabsTrigger value="resources">System Resources</TabsTrigger>
@@ -9251,6 +9254,10 @@ export function Settings() {
 
           <TabsContent value="hardware-orbs" className="space-y-6">
             <HardwareOrbsTab />
+          </TabsContent>
+
+          <TabsContent value="sensor-fleet" className="space-y-6">
+            <SensorFleetTab />
           </TabsContent>
 
           <TabsContent value="command-coordinator" className="space-y-6">

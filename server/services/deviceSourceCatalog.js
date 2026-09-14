@@ -1,4 +1,5 @@
 const STANDARD_DEVICE_SOURCE_OPTIONS = Object.freeze([
+  { value: 'homebrain-sensor', label: 'HomeBrain Sensor', aliases: ['sensor-node'] },
   { value: 'homebrain-zigbee', label: 'Zigbee', aliases: ['zigbee'] },
   { value: 'homebrain-zwave', label: 'Z-Wave', aliases: ['zwave', 'z-wave'] },
   { value: 'homebrain-thread', label: 'Thread', aliases: ['thread'] },
