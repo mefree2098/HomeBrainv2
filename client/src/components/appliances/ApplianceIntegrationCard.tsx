@@ -41,6 +41,7 @@ export function ApplianceIntegrationCard({ provider }: { provider: "midea" | "ec
       </form> : <div className="space-y-3">
         <Label className="grid gap-1">AC IP address (optional)<Input placeholder="Discover automatically on the home network" value={ip} onChange={(event) => setIp(event.target.value)} /></Label>
         <Button disabled={busy} onClick={() => void run(async () => { const { data } = await api.post(`${base}/discover`, { ip }, { timeout: 240000 }); setFound(data.devices); if (!data.devices.length) setMessage("No compatible AC replied. Check Wi-Fi or enter its current IP address.") })}>{busy ? "Working…" : "Discover ACs"}</Button>
+        <p className="text-xs text-muted-foreground">Connected ACs are added to HomeBrain’s Alexa discovery catalog automatically. You can manage their exposure in Alexa settings.</p>
         {found.length > 0 && <><Label className="grid gap-1">HomeBrain name<Input value={name} onChange={(event) => setName(event.target.value)} /></Label><Label className="grid gap-1">Room<Input value={room} onChange={(event) => setRoom(event.target.value)} /></Label></>}
         {found.map((device) => <div key={device.id} className="flex items-center justify-between gap-2 rounded-md border p-3"><span>{device.name} · {device.ip}</span><Button disabled={busy || !name.trim() || !room.trim()} onClick={() => void run(async () => { await api.post(`${base}/pair`, { id: device.id, name, room }); await api.post(`${base}/sync`, {}, { timeout: 240000 }); setFound([]) })}>Connect</Button></div>)}
       </div>}

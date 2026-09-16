@@ -22,6 +22,22 @@ const {
   summarizeStorageCollections
 } = telemetryService.__private__;
 
+test('appliance reporting records actual AC settings and heater usage without resampling stale values or labelling gas as kWh', () => {
+  const ac = { isOnline: true, status: true, temperature: 71, targetTemperature: 74.3, properties: { source: 'midea', appliance: { mode: 'cool', eco: false, outdoorTemperature: 83, powerW: null } } };
+  const metrics = extractDeviceMetrics(ac);
+  assert.equal(metrics.temperature_f, 71);
+  assert.equal(metrics.target_temperature_f, 74.3);
+  assert.equal(metrics.cool_active, 1);
+  assert.equal(metrics.heat_active, 0);
+  assert.equal(metrics.power_w, undefined);
+  assert.deepEqual(extractDeviceMetrics({ ...ac, isOnline: false }), { online: 0 });
+  const heater = extractDeviceMetrics({ isOnline: true, properties: { source: 'econet', appliance: { alertCount: 2, energyUsageToday: 8.5, energyType: 'KBTU', waterUsageToday: 43 } } });
+  assert.equal(heater.energy_usage_today, 8.5);
+  assert.equal(heater.energy_kwh, undefined);
+  assert.equal(heater.water_usage_today_gal, 43);
+  assert.equal(heater.alert_count, 2);
+});
+
 test('telemetry prompt windows are interpreted within bounded limits', () => {
   assert.equal(inferRequestedHoursFromPrompt('show the last 6 hours'), 6);
   assert.equal(inferRequestedHoursFromPrompt('show 2 weeks'), 24 * 7 * 2);

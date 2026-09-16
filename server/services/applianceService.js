@@ -53,7 +53,7 @@ async function decrypt(value) {
 
 function stateUpdate(provider, state, previous = {}) {
   const prior = previous.properties || {};
-  const update = { isOnline: state.online === true, 'properties.appliance.lastError': state.error || '' };
+  const update = { isOnline: state.online === true, 'properties.appliance.lastError': state.error || '', 'properties.appliance.checkedAt': new Date().toISOString() };
   if (!state.online) return update;
   const capabilities = state.capabilities || prior.appliance?.capabilities || {};
   update.lastSeen = new Date();
@@ -62,12 +62,13 @@ function stateUpdate(provider, state, previous = {}) {
   if (Number.isFinite(state.targetTemperature)) update.targetTemperature = state.targetTemperature;
   update['properties.source'] = provider;
   update['properties.applianceId'] = String(state.id);
-  update['properties.appliance'] = { ...state, observedAt: new Date().toISOString(), capabilities, lastError: '' };
+  update['properties.appliance'] = { ...state, observedAt: new Date().toISOString(), checkedAt: new Date().toISOString(), capabilities, lastError: '' };
   update['properties.hvacMode'] = state.mode;
   update['properties.lastActiveHvacMode'] = state.lastActiveMode || prior.lastActiveHvacMode;
   update['properties.supportedThermostatModes'] = capabilities.modes || [];
   update['properties.temperatureUnit'] = 'F';
   delete update['properties.appliance.lastError'];
+  delete update['properties.appliance.checkedAt'];
   return update;
 }
 
@@ -166,7 +167,12 @@ class ApplianceService {
       integration.enabled = true;
       await integration.save();
       this.reset('midea');
-      await this.persistStates('midea', [found.state], integration);
+      const [device] = await this.persistStates('midea', [found.state], integration);
+      if (device && input.alexaEnabled !== false) {
+        await require('./alexaBridgeService').upsertExposure('device', String(device._id), {
+          enabled: true, friendlyName: device.name, roomHint: device.room
+        });
+      }
       return this.getStatus('midea');
     });
   }
