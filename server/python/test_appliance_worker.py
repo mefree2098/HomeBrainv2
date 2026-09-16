@@ -59,6 +59,27 @@ class ApplianceTests(unittest.IsolatedAsyncioTestCase):
                 await self.worker.ac_command(ac, action, value)
         self.assertEqual(ac.writes, 0)
 
+    async def test_mode_change_does_not_echo_dry_mode_status_only_fan_code(self):
+        ac = FakeAC()
+        ac.remote.update(operational_mode=AC.OperationalMode.DRY, fan_speed=101)
+        result = await self.worker.ac_command(ac, "setmode", "cool")
+        self.assertEqual(result["operational_mode"], AC.OperationalMode.COOL)
+        self.assertEqual(result["fan_speed"], AC.FanSpeed.AUTO)
+
+    async def test_named_fan_command_accepts_observed_firmware_alias(self):
+        ac = FakeAC()
+        ac.remote["fan_speed"] = AC.FanSpeed.HIGH
+        ac.supported_fan_speeds = list(AC.FanSpeed)
+        original_apply = ac.apply
+        async def apply():
+            await original_apply()
+            ac.remote["fan_speed"] = 30
+        ac.apply = apply
+        result = await self.worker.ac_command(ac, "setfanspeed", "low")
+        self.assertEqual(result["fan_speed"], 30)
+        with self.assertRaisesRegex(CommandError, "did not confirm"):
+            await self.worker.ac_command(ac, "setfanspeed", "high")
+
     async def test_dhcp_recovery_matches_paired_id_and_retains_saved_auth(self):
         ac = FakeAC()
         ac.get_capabilities = AsyncMock()

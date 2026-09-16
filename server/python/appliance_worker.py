@@ -21,6 +21,14 @@ def label(value):
     return getattr(value, "name", str(value)).lower().replace("fan_only", "fan") if value is not None else None
 
 
+def fan_label(value):
+    # Some C&H firmware reports its three-speed levels as 30/50/80 and
+    # automatic dry-mode fan as 101, rather than the command enum values.
+    if isinstance(value, int) and not hasattr(value, "name"):
+        return {30: "low", 50: "medium", 101: "auto"}.get(value, value)
+    return label(value)
+
+
 def optional(obj, name):
     try:
         return getattr(obj, name)
@@ -121,7 +129,7 @@ class Worker:
             "temperature": fahrenheit(device.indoor_temperature),
             "targetTemperature": fahrenheit(device.target_temperature),
             "outdoorTemperature": fahrenheit(device.outdoor_temperature),
-            "fanSpeed": label(device.fan_speed) if hasattr(device.fan_speed, "name") else device.fan_speed,
+            "fanSpeed": fan_label(device.fan_speed),
             "swing": label(device.swing_mode), "humidity": device.indoor_humidity,
             "eco": device.eco, "turbo": device.turbo, "sleep": device.sleep,
             "filterAlert": device.filter_alert, "errorCode": device.error_code,
@@ -183,13 +191,22 @@ class Worker:
             expected[prop] = value
         else:
             raise CommandError("Unsupported AC action")
+        # 101 is a status-only automatic-fan code. Echoing it in a set
+        # packet causes this firmware to ignore mode/power changes.
+        if getattr(device, "fan_speed", None) == 101:
+            device.fan_speed = AC.FanSpeed.AUTO
         for key, val in expected.items():
             setattr(device, key, val)
         await device.apply()
         for _ in range(3):
             await asyncio.sleep(.4)
             await device.refresh()
-            if device.online and all(getattr(device, key) == val for key, val in expected.items()):
+            if device.online and all(
+                fan_label(device.fan_speed) == fan_label(val)
+                if key == "fan_speed" and hasattr(val, "name")
+                else getattr(device, key) == val
+                for key, val in expected.items()
+            ):
                 return self.ac_snapshot(device)
         raise CommandError("The AC did not confirm the requested state; refresh before retrying")
 
