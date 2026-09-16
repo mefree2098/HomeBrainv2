@@ -82,3 +82,12 @@ test('integration preferences normalize selected and auto modes safely', () => {
     }
   });
 });
+
+
+test('appliance telemetry belongs to its provider, not the generic device provider', () => {
+  for (const origin of ['midea', 'econet']) {
+    const summary = decorateTelemetrySourceSummary({ sourceType: 'device', origin });
+    assert.equal(summary.integrationModuleId, origin);
+    assert.equal(summary.capabilities.includes('telemetry_source'), true);
+  }
+});

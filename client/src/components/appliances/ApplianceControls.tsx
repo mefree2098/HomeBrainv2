@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { controlDevice } from "@/api/devices"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -12,6 +12,7 @@ type ApplianceDevice = {
 export function ApplianceControls({ device: input }: { device: ApplianceDevice }) {
   const [device, setDevice] = useState(input)
   const [target, setTarget] = useState(String(input.targetTemperature ?? ""))
+  const targetInput = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   useEffect(() => { setDevice(input); setTarget(String(input.targetTemperature ?? "")) }, [input])
@@ -41,18 +42,18 @@ export function ApplianceControls({ device: input }: { device: ApplianceDevice }
       {Object.entries({ "Setpoint": device.targetTemperature == null ? null : `${device.targetTemperature}°F`, "State": state.runningState, "Mode": state.mode, "Active alerts": state.alertCount, "Wi-Fi signal": state.wifiSignal == null ? null : `${state.wifiSignal} dBm`, "Water today": state.waterUsageToday == null ? null : `${state.waterUsageToday} gal`, "Energy today": state.energyUsageToday == null ? null : `${state.energyUsageToday} ${state.energyType || ""}`, "Leak sensor installed": state.leakSensorInstalled, "Shutoff valve open": state.shutoffValveOpen }).filter(([, value]) => value !== null && value !== undefined && value !== "").map(([key, value]) => <div key={key}><dt className="text-muted-foreground">{key}</dt><dd>{typeof value === "boolean" ? (value ? "Yes" : "No") : String(value)}</dd></div>)}
     </dl> : <>
       <p>{device.temperature == null ? "Room temperature unavailable" : `${device.temperature}°F in the room`} · {state.mode || "Unknown mode"}</p>
-      <Button className="w-full" disabled={busy} onClick={() => void send(device.status ? "turn_off" : "turn_on")}>{busy ? "Waiting for AC confirmation…" : device.status ? "Turn Off" : "Turn On"}</Button>
-      <form className="flex items-end gap-2" onSubmit={(event) => { event.preventDefault(); void send("set_temperature", Number(target)) }}>
-        <Label className="grid flex-1 gap-1">Target °F<Input type="number" required step="0.1" min={caps.minTemperature} max={caps.maxTemperature} value={target} onChange={(event) => setTarget(event.target.value)} disabled={busy} /></Label>
-        <Button disabled={busy} type="submit">Set</Button>
-      </form>
+      <Button type="button" className="w-full" disabled={busy} onClick={() => void send(device.status ? "turn_off" : "turn_on")}>{busy ? "Waiting for AC confirmation…" : device.status ? "Turn Off" : "Turn On"}</Button>
+      <div className="flex items-end gap-2">
+        <Label className="grid flex-1 gap-1">Target °F<Input ref={targetInput} type="number" step="0.1" min={caps.minTemperature} max={caps.maxTemperature} value={target} onChange={(event) => setTarget(event.target.value)} disabled={busy} /></Label>
+        <Button disabled={busy} type="button" onClick={() => { if (targetInput.current?.reportValidity() && target.trim()) void send("set_temperature", Number(target)) }}>Set</Button>
+      </div>
       <p className="text-xs text-muted-foreground">Range {caps.minTemperature}–{caps.maxTemperature}°F. The AC rounds to its supported temperature increments.</p>
       <div className="grid gap-3 sm:grid-cols-2">
         {select("Mode", state.mode, caps.modes, "set_mode")}
         {select("Fan speed", state.fanSpeed, caps.fanSpeeds, "set_fan_speed")}
         {select("Swing", state.swing, caps.swings, "set_swing")}
       </div>
-      <div className="flex flex-wrap gap-2">{["eco", "turbo", "sleep"].filter((key) => caps[key]).map((key) => <Button key={key} variant={state[key] ? "default" : "outline"} aria-pressed={Boolean(state[key])} disabled={busy} onClick={() => void send(`set_${key}`, !state[key])}>{key}</Button>)}</div>
+      <div className="flex flex-wrap gap-2">{["eco", "turbo", "sleep"].filter((key) => caps[key]).map((key) => <Button type="button" key={key} variant={state[key] ? "default" : "outline"} aria-pressed={Boolean(state[key])} disabled={busy} onClick={() => void send(`set_${key}`, !state[key])}>{key}</Button>)}</div>
       {state.errorCode ? <p role="alert">AC reports error code {state.errorCode}.</p> : null}
       {state.filterAlert ? <p role="status">The AC reports a filter maintenance reminder.</p> : null}
     </>}

@@ -288,7 +288,10 @@ function getTelemetrySourceModule(sourceType) {
 }
 
 function decorateTelemetrySourceSummary(summary = {}) {
-  const moduleDefinition = getTelemetrySourceModule(summary.sourceType);
+  const sourceModule = summary.sourceType === 'device' && summary.origin
+    ? INTEGRATION_MODULE_DEFINITIONS.find((definition) => definition.deviceSource === summary.origin)
+    : null;
+  const moduleDefinition = sourceModule || getTelemetrySourceModule(summary.sourceType);
   if (!moduleDefinition) {
     return {
       ...summary,
