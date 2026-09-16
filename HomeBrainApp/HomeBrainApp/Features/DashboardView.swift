@@ -8155,6 +8155,9 @@ struct DashboardView: View {
         if device.type == "sensor" {
             return device.effectiveSensorStateLabel
         }
+        if device.type == "lock" {
+            return device.status ? "Locked" : "Unlocked"
+        }
 
         return nil
     }
