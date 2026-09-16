@@ -106,6 +106,24 @@ enum UIPreviewData {
     static let favoriteProfileId = "preview-profile"
     static let favoriteDeviceIds: Set<String> = ["preview-thermostat", "preview-patio", "preview-living-room"]
 
+    /// Long, similar names reproduce a dense theater dashboard without operating real lights.
+    static let theaterDevices: [DeviceItem] = [
+        "Theater Wall Sconce Left", "Theater Wall Sconce Right",
+        "Theater Ceiling Accent Strip", "Theater Ceiling Can Lights",
+        "Theater Kitchen Island Pendants", "Theater Rear Reading Light",
+        "Theater Exit Sign", "Theater Ceiling Fan Power"
+    ].enumerated().map { index, name in
+        DeviceItem(
+            id: "preview-theater-\(index)", name: name,
+            type: index == 3 || index == 7 ? "switch" : "light", room: "Theater",
+            status: index % 2 == 0, isOnline: index != 5,
+            brightness: index == 7 ? 0 : 68, color: "#ffd391",
+            temperature: nil, targetTemperature: nil,
+            properties: ["supportsBrightness": index != 7, "supportsColor": index < 3],
+            lastSeen: "Just now"
+        )
+    }
+
     static let devices: [DeviceItem] = [
         DeviceItem(
             id: "preview-thermostat",

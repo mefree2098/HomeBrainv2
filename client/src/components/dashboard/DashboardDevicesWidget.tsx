@@ -272,19 +272,6 @@ const supportsLightFade = (device: DeviceLike) => {
     || propertyListIncludes(device, ["matterFeatures"], "brightness")
 }
 
-const getDenseDeviceNameClass = (name: string) => {
-  const length = name.trim().length
-
-  if (length >= 30) {
-    return "text-[12px]"
-  }
-  if (length >= 22) {
-    return "text-[13px]"
-  }
-
-  return "text-[15px]"
-}
-
 const supportsLightColor = (device: DeviceLike) => {
   if (isSmartThingsBackedDevice(device)) {
     if (hasSmartThingsCapability(device, "colorControl")) {
@@ -445,21 +432,6 @@ const getStatusLabel = (device: DeviceLike) => {
   return device.status ? "On" : "Off"
 }
 
-const getGridClass = (size: Props["size"]) => {
-  switch (size) {
-    case "small":
-      return "grid-cols-1 sm:grid-cols-2"
-    case "medium":
-      return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3"
-    case "large":
-      return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4"
-    case "full":
-      return "grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6"
-    default:
-      return "grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6"
-  }
-}
-
 function ColorWheelControl({
   color,
   deviceName,
@@ -474,7 +446,7 @@ function ColorWheelControl({
   return (
     <label
       className={cn(
-        "relative mt-0.5 flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full border border-white/20 shadow-[0_10px_24px_-14px_rgba(34,211,238,0.85)] transition-transform hover:scale-105",
+        "relative flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-full border border-white/20 shadow-[0_10px_24px_-14px_rgba(34,211,238,0.85)] transition-transform hover:scale-105",
         disabled && "cursor-not-allowed opacity-55 hover:scale-100"
       )}
       title={`Set color for ${deviceName}`}
@@ -596,19 +568,17 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
   }
 
   return (
-    <Card className="hb-device h-full" data-device-kind={device.type} data-device-active={isThermostat ? getThermostatMode(device) !== "off" : device.status}>
-      <CardContent className="flex h-full min-h-[188px] flex-col p-3">
-        <div className="mb-3 flex flex-wrap items-start gap-3">
+    <Card className="hb-device hb-dense-device h-full" data-device-kind={device.type} data-device-active={isThermostat ? getThermostatMode(device) !== "off" : device.status}>
+      <CardContent className="flex h-full flex-col gap-3 p-3 sm:p-3">
+        <div className="min-w-0 space-y-1">
+          <h3 className="hb-device-title">{device.name}</h3>
+          <p className="hb-device-room break-words">{device.room || "Unassigned"}</p>
+        </div>
+        <div className="flex items-center gap-2">
           <DeviceSymbol type={device.type} />
-          <div className="min-w-0 flex-1 space-y-1">
-            <p className={cn(
-              "hb-device-title",
-              getDenseDeviceNameClass(device.name)
-            )}>
-              {device.name}
-            </p>
-            <p className="line-clamp-1 text-[11px] text-muted-foreground">{device.room || "Unassigned"}</p>
-          </div>
+          <span className="min-w-0 flex-1 break-words text-sm text-muted-foreground">
+            {device.isOnline === false ? "Offline" : getStatusLabel(device)}
+          </span>
           {supportsColor ? (
             <ColorWheelControl
               color={color}
@@ -686,7 +656,7 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
           <div className="mb-2 space-y-1.5">
             <div className="flex items-center justify-between text-[11px] text-muted-foreground">
               <span>Brightness</span>
-              <span className="hb-device-reading">{brightness}%</span>
+              <span className="text-base font-semibold tabular-nums text-foreground">{brightness}%</span>
             </div>
             <Slider
               aria-label={`Brightness for ${device.name}`}
@@ -706,6 +676,7 @@ function DeviceGridCard({ device, onControl }: { device: DeviceLike; onControl: 
 
         <Button
           onClick={handleToggle}
+          aria-label={`${device.type === "lock" ? (device.status ? "Unlock" : "Lock") : (device.status ? "Turn off" : "Turn on")} ${device.name}`}
           variant={device.status ? "default" : "outline"}
           size="sm"
           className={cn("hb-device-power w-full", !isThermostat && "mt-auto")}
@@ -768,7 +739,7 @@ export function DashboardDevicesWidget({ devices, size, onControl }: Props) {
         <Badge variant="secondary">Dense control grid</Badge>
       </div>
 
-      <div className={cn("grid auto-rows-fr gap-2.5", getGridClass(size))}>
+      <div className="hb-dense-device-grid" data-widget-size={size}>
         {devices.map((device) => (
           <DeviceGridCard key={device._id} device={device} onControl={onControl} />
         ))}

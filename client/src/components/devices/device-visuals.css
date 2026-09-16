@@ -54,3 +54,8 @@
 .hb-device.card-shell::before { display:none; }
 
 .dark .hb-temperature-dial svg path:last-child { filter:drop-shadow(0 0 5px hsl(var(--device-accent)/.2)); }
+
+/* Size the dense grid from its widget, including narrow desktop columns and zoom. */
+.hb-dense-device-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,12.5rem),1fr)); gap:10px; align-items:stretch; }
+.hb-dense-device .hb-device-title { min-height:2.7em; }
+.hb-dense-device .hb-device-power { white-space:normal; height:auto; }
