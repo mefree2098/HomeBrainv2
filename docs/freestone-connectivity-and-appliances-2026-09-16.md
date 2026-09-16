@@ -42,10 +42,24 @@ The adapter uses [pyeconet](https://github.com/w1ll1am23/pyeconet) 0.2.6 through
 
 Monitoring includes connectivity, operating mode/state, setpoint, alert count, signal strength, and available daily water/energy readings. Missing model-specific fields remain unknown. Gas energy is not labelled kWh. A leak-sensor capability is not presented as a detected leak. HomeBrain creates ordinary in-app notifications when offline/error/filter/alert states appear; active fault details and service instructions remain in EcoNet. Heater control is outside this monitoring integration.
 
-This household's heater account has not yet been authenticated, so actual available readings and alert delivery still require live verification. EcoNet cloud changes may require adapter updates.
+EcoNet connected successfully at 1:46 PM. The discovered Tankless Water Heater reported a 120°F setpoint, one active alert, 124 gallons of water used today, and 24 kBTU today. HomeBrain persisted the readings and created the heater alert notification. The API does not supply the alert description through this adapter; open EcoNet for its details. EcoNet cloud changes may require adapter updates.
 
 ## Validation and release requirements
 
 Local validation: 1,466 server tests, 38 broker tests, 12 Lambda tests, six Python appliance adapter tests, web tests/lint/production build, console-format checks, and iOS simulator build with Swift warnings treated as errors. Regression tests cover failed-query stale caches, startup reads, real command confirmation, temperature conversion, DHCP identity matching, voice device selection, and Alexa controller instance forwarding.
 
-After the integration release: verify runtime SHA matches GitHub main; pair/sync TheaterAC; enable its Alexa exposure and refresh discovery; create and test the daily 1 AM shutdown; run Stars Only and query its devices; connect EcoNet through Settings; verify the updated native app and Alexa Lambda separately. Do not treat package/build success as live end-to-end verification.
+Production verification:
+
+- Integration release 8458e42c and compatibility follow-up 467233d2 were deployed through HomeBrain. Health returned green; Zigbee automatically recovered its startup timeout without re-pairing.
+- TheaterAC is paired as device `6aaaeec609a5fd9e521fbbda`. Live API commands confirmed power, temperature, heat, cool, dry, fan-only, and fan-speed changes. The final compatibility checks completed in about four seconds each and restored cooling, 74.3°F, high fan.
+- C&H firmware reports low/medium fan as 30/50 and dry-mode automatic fan as status-only code 101. The adapter recognizes these readings and uses the valid automatic-fan command when changing modes.
+- Workflow `6aaaeee2fba859d4ffdcad12`, “Theater AC Off at 1 AM,” is enabled daily at 1 AM in the server's America/Denver timezone. It retries transient failures. A manual execution confirmed the AC switched off in approximately three seconds. It does not promise catch-up if the server is down at the scheduled time.
+- Alexa exposure is enabled automatically. Broker catalog/state synchronization succeeded; Amazon accepted TheaterAC ChangeReports with HTTP 202. Household rediscovery was requested. The production Smart Home Lambda in account 201813911302 was updated successfully. A spoken Echo command still requires household confirmation.
+- Data Platform persisted AC and heater samples. Gallon usage is numeric, and new energy samples include the reported unit in their metric name.
+- Stars Only succeeded for all 11 group members, with exit sign at 36% and stage at 30%. A deliberate Zigbee light ON followed by scene activation produced a verified OFF state.
+- Signed Release builds were installed and launched on Matt's iPhone Air and the Theater iPad. The Security Center decoration and provider-name cleanup was also installed on both.
+
+Additional live checks exposed and corrected the nested Settings form that prevented EcoNet login submission, inaccurate default electric-mode naming for Eagle tankless units, and appliance report-provider labels. Regression checks now include 14 web tests, nine Python appliance tests, and unit-bearing numeric water/energy metrics.
+
+One existing Z-Wave node (node 6, Honeywell switch) remained offline/incompletely interviewed despite a healthy controller. It was not reset or removed. Physical power/range checks may be needed for that separate device.
+
