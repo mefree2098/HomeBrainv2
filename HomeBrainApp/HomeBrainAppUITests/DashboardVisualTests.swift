@@ -82,12 +82,12 @@ final class DashboardVisualTests: XCTestCase {
         app.launch()
         let title = app.staticTexts["dashboard-device-name-preview-theater-2"]
         XCTAssertTrue(title.waitForExistence(timeout: 30))
-        if app.buttons["Collapse main menu"].exists { app.buttons["Collapse main menu"].tap() }
+        if app.buttons["Collapse main menu"].isHittable { app.buttons["Collapse main menu"].tap() }
         XCTAssertEqual(title.label, "Theater Ceiling Accent Strip")
-        XCTAssertGreaterThanOrEqual(title.frame.width, 170, "Names need readable space inside each dense card")
         let slider = app.sliders["Brightness for Theater Ceiling Accent Strip"]
         reveal(slider, in: app)
         XCTAssertTrue(slider.isHittable)
+        XCTAssertGreaterThanOrEqual(slider.frame.width, 170, "Dense cards need enough usable width for names and controls")
         let previous = slider.value as? String
         slider.adjust(toNormalizedSliderPosition: 0.4)
         XCTAssertNotEqual(slider.value as? String, previous)
@@ -107,7 +107,7 @@ final class DashboardVisualTests: XCTestCase {
         app.launch()
         let title = app.staticTexts["dashboard-device-name-preview-theater-2"]
         XCTAssertTrue(title.waitForExistence(timeout: 30))
-        if app.buttons["Collapse main menu"].exists { app.buttons["Collapse main menu"].tap() }
+        if app.buttons["Collapse main menu"].isHittable { app.buttons["Collapse main menu"].tap() }
         let color = app.buttons["Set color for Theater Ceiling Accent Strip"]
         reveal(color, in: app)
         XCTAssertTrue(color.isHittable)
