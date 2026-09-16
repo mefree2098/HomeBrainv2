@@ -4,7 +4,7 @@ import XCTest
 @MainActor
 final class DashboardVisualTests: XCTestCase {
     private func attachScreenshot(_ name: String, from app: XCUIApplication) {
-        let attachment = XCTAttachment(screenshot: app.screenshot())
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
@@ -72,6 +72,80 @@ final class DashboardVisualTests: XCTestCase {
         XCTAssertTrue(indoor.isHittable)
         indoor.tap()
         XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 10))
+    }
+
+    func testDenseLightingKeepsNamesAndControlsInLandscape() {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-preview", "-ui-preview-section", "dashboard", "-ui-preview-dashboard-focus", "lighting", "-homebrain.ios.theme-mode", "dark"]
+        app.launch()
+        let title = app.staticTexts["dashboard-device-name-preview-theater-2"]
+        XCTAssertTrue(title.waitForExistence(timeout: 30))
+        if app.buttons["Collapse main menu"].isHittable { app.buttons["Collapse main menu"].tap() }
+        XCTAssertEqual(title.label, "Theater Ceiling Accent Strip")
+        let slider = app.sliders["Brightness for Theater Ceiling Accent Strip"]
+        reveal(slider, in: app)
+        XCTAssertTrue(slider.isHittable)
+        XCTAssertGreaterThanOrEqual(slider.frame.width, 170, "Dense cards need enough usable width for names and controls")
+        let previous = slider.value as? String
+        slider.adjust(toNormalizedSliderPosition: 0.4)
+        XCTAssertNotEqual(slider.value as? String, previous)
+        let off = app.buttons["Turn Off Theater Ceiling Accent Strip"]
+        reveal(off, in: app)
+        XCTAssertGreaterThanOrEqual(off.frame.height, 44)
+        off.tap()
+        XCTAssertTrue(app.buttons["Turn On Theater Ceiling Accent Strip"].waitForExistence(timeout: 5))
+        attachScreenshot("Adaptive theater lighting landscape", from: app)
+    }
+
+    func testSmallLightingWidgetPreservesFullIdentityAndColor() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-preview", "-ui-preview-section", "dashboard", "-ui-preview-dashboard-focus", "lighting-small", "-homebrain.ios.theme-mode", "light"]
+        app.launch()
+        let title = app.staticTexts["dashboard-device-name-preview-theater-2"]
+        XCTAssertTrue(title.waitForExistence(timeout: 30))
+        if app.buttons["Collapse main menu"].isHittable { app.buttons["Collapse main menu"].tap() }
+        let color = app.buttons["Set color for Theater Ceiling Accent Strip"]
+        reveal(color, in: app)
+        XCTAssertTrue(color.isHittable)
+        XCTAssertGreaterThanOrEqual(color.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(color.frame.minY, title.frame.maxY, "Color controls must not squeeze the name")
+        attachScreenshot("Small lighting widget", from: app)
+        color.tap()
+        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5), "The native color picker must open")
+        app.buttons["Sliders"].tap()
+        let red = app.sliders["Red"]
+        XCTAssertTrue(red.waitForExistence(timeout: 5))
+        let originalRed = red.value as? String
+        red.adjust(toNormalizedSliderPosition: 0.2)
+        let selectedRed = red.value as? String
+        XCTAssertNotEqual(selectedRed, originalRed)
+        attachScreenshot("Lighting color picker", from: app)
+        app.buttons["Done"].tap()
+        color.tap()
+        app.buttons["Sliders"].tap()
+        let restoredPercent = try XCTUnwrap(Double((red.value as? String ?? "").replacingOccurrences(of: "%", with: "")))
+        let selectedPercent = try XCTUnwrap(Double((selectedRed ?? "").replacingOccurrences(of: "%", with: "")))
+        // Device colors use 8-bit RGB, while the system slider reports rounded percentages.
+        XCTAssertEqual(restoredPercent, selectedPercent, accuracy: 1, "The selected color must persist on the device")
+        app.buttons["Done"].tap()
+    }
+
+    func testDenseLightingExpandsForAccessibilityText() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-preview", "-ui-preview-section", "dashboard", "-ui-preview-dashboard-focus", "lighting", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        let name = app.staticTexts["dashboard-device-name-preview-theater-2"]
+        XCTAssertTrue(name.waitForExistence(timeout: 30))
+        let slider = app.sliders["Brightness for Theater Ceiling Accent Strip"]
+        reveal(slider, in: app)
+        XCTAssertTrue(slider.isHittable)
+        XCTAssertGreaterThan(slider.frame.width, 250)
+        XCTAssertLessThanOrEqual(slider.frame.maxX, app.frame.maxX)
+        attachScreenshot("Lighting with accessibility text", from: app)
     }
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication) {

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct HBDeviceSurface: View {
     var cornerRadius: CGFloat = 22
@@ -154,6 +155,75 @@ struct HBDeviceSymbol: View {
             }
             .shadow(color: accent.opacity(glowingLight ? 0.18 : 0.06), radius: 10)
             .accessibilityHidden(true)
+    }
+}
+
+/// A real button owns the entire color wheel hit area; the native picker owns color editing.
+struct HBDeviceColorPicker: View {
+    let deviceName: String
+    @Binding var selection: Color
+    var size: CGFloat = 44
+    @State private var isPresented = false
+
+    var body: some View {
+        Button { isPresented = true } label: {
+            ZStack {
+                Circle().fill(AngularGradient(
+                    colors: [.red, .orange, .yellow, .green, .cyan, .blue, .purple, .red],
+                    center: .center
+                ))
+                Circle().fill(selection)
+                    .frame(width: size * 0.58, height: size * 0.58)
+                    .overlay(Circle().stroke(Color.white.opacity(0.8), lineWidth: 1))
+                Image(systemName: "paintpalette.fill")
+                    .font(.system(size: size * 0.34, weight: .bold))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.55), radius: 3, y: 1)
+            }
+            .frame(width: size, height: size)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Set color for \(deviceName)")
+        .sheet(isPresented: $isPresented) {
+            NavigationStack {
+                HBColorPickerController(selection: $selection)
+                    .navigationTitle(deviceName)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { isPresented = false }
+                        }
+                    }
+            }
+        }
+    }
+}
+
+private struct HBColorPickerController: UIViewControllerRepresentable {
+    @Binding var selection: Color
+
+    func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
+
+    func makeUIViewController(context: Context) -> UIColorPickerViewController {
+        let picker = UIColorPickerViewController()
+        picker.supportsAlpha = false
+        picker.selectedColor = UIColor(selection)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ picker: UIColorPickerViewController, context: Context) {
+        context.coordinator.selection = $selection
+        if picker.selectedColor != UIColor(selection) { picker.selectedColor = UIColor(selection) }
+    }
+
+    final class Coordinator: NSObject, UIColorPickerViewControllerDelegate {
+        var selection: Binding<Color>
+        init(selection: Binding<Color>) { self.selection = selection }
+        func colorPickerViewControllerDidSelectColor(_ viewController: UIColorPickerViewController) {
+            selection.wrappedValue = Color(uiColor: viewController.selectedColor)
+        }
     }
 }
 

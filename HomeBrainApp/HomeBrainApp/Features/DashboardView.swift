@@ -783,6 +783,7 @@ private struct DashboardSecuritySirenOutputItem: Identifiable {
 struct DashboardView: View {
     let previewMode: Bool
     @Environment(\.dynamicTypeSize) private var dashboardDynamicTypeSize
+    @ScaledMetric(relativeTo: .headline) private var minimumDeviceCardWidth: CGFloat = 200
     @ScaledMetric(relativeTo: .body) private var weatherSummaryColumnMinimumWidth: CGFloat = 148
     let onOpenDevice: ((String) -> Void)?
 
@@ -1620,7 +1621,7 @@ struct DashboardView: View {
                         .foregroundStyle(HBPalette.textSecondary)
                         .padding(.vertical, 10)
                 } else {
-                    dashboardWidgetContent(widget)
+                    dashboardWidgetContent(widget, availableWidth: constrainedContentWidth ?? layoutWidth)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .frame(minHeight: minimumHeight(for: widget.size), alignment: .topLeading)
                 }
@@ -1737,7 +1738,7 @@ struct DashboardView: View {
     }
 
     @ViewBuilder
-    private func dashboardWidgetContent(_ widget: DashboardWidgetItem) -> some View {
+    private func dashboardWidgetContent(_ widget: DashboardWidgetItem, availableWidth: CGFloat) -> some View {
         switch widget.type {
         case .hero:
             dashboardHeader(for: widget)
@@ -1791,7 +1792,7 @@ struct DashboardView: View {
         case .voiceCommand:
             voiceCommandPanel
         case .devices:
-            devicesWidget(for: widget)
+            devicesWidget(for: widget, availableWidth: availableWidth)
         case .device:
             singleDeviceWidget(for: widget)
         }
@@ -2129,31 +2130,12 @@ struct DashboardView: View {
         return Array(repeating: GridItem(.flexible(), spacing: 10), count: max(1, count))
     }
 
-    private func devicesWidgetColumns(for widget: DashboardWidgetItem) -> [GridItem] {
-        let count: Int
-
-        switch widget.size {
-        case .small:
-            count = usesPortraitCompactLayout ? 1 : 2
-        case .medium:
-            count = usesPortraitCompactLayout ? 1 : (layoutWidth >= 700 ? 3 : 2)
-        case .large:
-            count = usesPortraitCompactLayout ? 1 : (layoutWidth >= 780 ? 4 : 3)
-        case .full:
-            if usesPortraitCompactLayout {
-                count = 1
-            } else if layoutWidth >= 900 {
-                count = 6
-            } else if layoutWidth >= 760 {
-                count = 5
-            } else if layoutWidth >= 620 {
-                count = 4
-            } else {
-                count = 3
-            }
-        }
-
-        return Array(repeating: GridItem(.flexible(), spacing: 10), count: max(1, count))
+    private func devicesWidgetColumns(availableWidth: CGFloat) -> [GridItem] {
+        // The widget can occupy only a fraction of an iPad or desktop-width dashboard.
+        // Keep controls readable using its actual content width, not the screen width.
+        let count = dashboardDynamicTypeSize.isAccessibilitySize
+            ? 1 : max(1, Int((availableWidth + 10) / (minimumDeviceCardWidth + 10)))
+        return Array(repeating: GridItem(.flexible(minimum: 0), spacing: 10, alignment: .top), count: count)
     }
 
     private func favoriteDeviceCardSize(for widget: DashboardWidgetItem, device: DeviceItem) -> DashboardFavoriteDeviceCardSize {
@@ -6052,23 +6034,25 @@ struct DashboardView: View {
         let accent = device.status ? HBDeviceAppearance.accent(for: device.type) : HBPalette.accentSlate
         return HBDevicePanel {
             VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .top, spacing: 12) {
+                HStack {
                     HBDeviceSymbol(symbol: iconForDevice(device.type), accent: accent, glowingLight: device.type == "light" && device.status)
-                    VStack(alignment: .leading, spacing: 4) {
-                        if let label, label != device.name, label != "Device" {
-                            Text(label).font(HBTypography.body(.caption)).foregroundStyle(HBPalette.textSecondary)
-                        }
-                        Text(device.name)
-                            .font(HBTypography.body(.headline, weight: .bold))
-                            .foregroundStyle(HBPalette.textPrimary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Text(device.displayRoom)
-                            .font(HBTypography.body(.caption))
-                            .foregroundStyle(HBPalette.textSecondary)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    Spacer(minLength: 8)
                     favoriteButton(for: device)
                 }
+                VStack(alignment: .leading, spacing: 4) {
+                    if let label, label != device.name, label != "Device" {
+                        Text(label).font(HBTypography.body(.caption)).foregroundStyle(HBPalette.textSecondary)
+                    }
+                    Text(device.name)
+                        .font(HBTypography.body(.headline, weight: .bold))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(device.displayRoom)
+                        .font(HBTypography.body(.caption))
+                        .foregroundStyle(HBPalette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 if supportsLightColor(device) {
                     HStack {
                         Text("Light color").font(HBTypography.body(.caption)).foregroundStyle(HBPalette.textSecondary)
@@ -6145,39 +6129,13 @@ struct DashboardView: View {
 
     private func dashboardColorWheelPicker(for device: DeviceItem, size: CGFloat) -> some View {
         let pending = pendingControlDeviceIds.contains(device.id)
-        let currentColor = dashboardColor(from: currentDashboardLightColor(for: device))
-
-        return ZStack {
-            Circle()
-                .fill(
-                    AngularGradient(
-                        colors: [.red, .orange, .yellow, .green, .cyan, .blue, .purple, .red],
-                        center: .center
-                    )
-                )
-
-            Circle()
-                .fill(currentColor)
-                .frame(width: size * 0.58, height: size * 0.58)
-                .overlay(Circle().stroke(Color.white.opacity(0.8), lineWidth: 1))
-
-            Image(systemName: "paintpalette.fill")
-                .font(.system(size: size * 0.34, weight: .bold))
-                .foregroundStyle(Color.white)
-                .shadow(color: Color.black.opacity(0.55), radius: 3, x: 0, y: 1)
-
-            ColorPicker("", selection: dashboardColorBinding(for: device), supportsOpacity: false)
-                .labelsHidden()
-                .frame(width: size, height: size)
-                .opacity(0.02)
-        }
-        .frame(width: size, height: size)
-        .clipShape(Circle())
-        .overlay(Circle().stroke(Color.white.opacity(0.22), lineWidth: 1))
-        .shadow(color: HBPalette.accentBlue.opacity(0.2), radius: 10, x: 0, y: 5)
+        return HBDeviceColorPicker(
+            deviceName: device.name,
+            selection: dashboardColorBinding(for: device),
+            size: max(size, 44)
+        )
         .disabled(pending)
         .opacity(pending ? 0.55 : 1)
-        .accessibilityLabel("Set color for \(device.name)")
     }
 
     private func featuredThermostatControls(for device: DeviceItem, compact: Bool) -> some View {
@@ -6474,31 +6432,13 @@ struct DashboardView: View {
         }
     }
 
-    private func devicesWidget(for widget: DashboardWidgetItem) -> some View {
+    private func devicesWidget(for widget: DashboardWidgetItem, availableWidth: CGFloat) -> some View {
         let selectedDevices = devicesForWidget(widget)
 
         return VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Dense Controls")
-                    .font(HBTypography.display(size: 11, weight: .bold))
-                    .textCase(.uppercase)
-                    .tracking(2.6)
-                    .foregroundStyle(HBPalette.textMuted)
-
-                Text("Devices")
-                    .font(HBTypography.display(size: useLandscapeCompactLayout ? 20 : 24, weight: .bold))
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [HBPalette.accentBlue, HBPalette.accentGreen],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
-
-                Text("Compact controls sized to fit a lot more devices on one dashboard row.")
-                    .font(HBTypography.body(size: 14, weight: .medium))
-                    .foregroundStyle(HBPalette.textSecondary)
-            }
+            Text("\(selectedDevices.count) devices")
+                .font(HBTypography.body(.caption))
+                .foregroundStyle(HBPalette.textSecondary)
 
             if selectedDevices.isEmpty {
                 EmptyStateView(
@@ -6506,7 +6446,7 @@ struct DashboardView: View {
                     subtitle: "Choose one or more devices for this widget to build a dense control grid."
                 )
             } else {
-                LazyVGrid(columns: devicesWidgetColumns(for: widget), spacing: 10) {
+                LazyVGrid(columns: devicesWidgetColumns(availableWidth: availableWidth), spacing: 10) {
                     ForEach(selectedDevices) { device in
                         denseDeviceCard(device)
                     }
@@ -6524,38 +6464,32 @@ struct DashboardView: View {
         let currentPowerText = formatDashboardPowerValue(energySnapshot.powerValue, unit: energySnapshot.powerUnit)
         let energyTotalText = formatDashboardEnergyValue(energySnapshot.energyValue, unit: energySnapshot.energyUnit)
 
-        return HBDevicePanel {
+        return HBDevicePanel(inset: 14) {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .top, spacing: 8) {
-                    HBDeviceSymbol(symbol: iconForDevice(device.type), accent: HBDeviceAppearance.accent(for: device.type), glowingLight: device.type == "light" && device.status)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(device.name)
-                            .font(HBTypography.body(.headline, weight: .bold))
-                            .foregroundStyle(HBPalette.textPrimary)
-                            .lineLimit(2)
-                            .minimumScaleFactor(0.68)
-                            .frame(maxWidth: .infinity, minHeight: 38, alignment: .topLeading)
-                        Text(device.displayRoom)
-                            .font(HBTypography.body(.caption, weight: .medium))
-                            .foregroundStyle(HBPalette.textSecondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 52, alignment: .topLeading)
-
-                    Spacer(minLength: 0)
-
-                    if supportsLightColor(device) {
-                        dashboardColorWheelPicker(for: device, size: 28)
-                            .padding(.top, 1)
-                    }
-                }
-
-                if let statusText {
-                    Text(statusText)
-                        .font(HBTypography.body(size: 12, weight: .medium))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(device.name)
+                        .font(HBTypography.body(.headline, weight: .bold))
+                        .foregroundStyle(HBPalette.textPrimary)
+                        .lineLimit(2...)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("dashboard-device-name-\(device.id)")
+                    Text(device.displayRoom)
+                        .font(HBTypography.body(.caption))
                         .foregroundStyle(HBPalette.textSecondary)
-                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                HStack(spacing: 8) {
+                    HBDeviceSymbol(symbol: iconForDevice(device.type), accent: HBDeviceAppearance.accent(for: device.type), glowingLight: device.type == "light" && device.status)
+                    Text(device.isOnline ? (statusText ?? (device.status ? "On" : "Off")) : "Offline")
+                        .font(HBTypography.body(.caption))
+                        .foregroundStyle(HBPalette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if supportsLightColor(device) {
+                        dashboardColorWheelPicker(for: device, size: 44)
+                    }
                 }
 
                 if energySnapshot.supportsEnergyMonitoring {
@@ -6624,12 +6558,12 @@ struct DashboardView: View {
                 if supportsLightFade(device) {
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
-                            Text("Fade")
-                                .font(HBTypography.body(size: 11, weight: .semibold))
+                            Text("Brightness")
+                                .font(HBTypography.body(.caption, weight: .semibold))
                                 .foregroundStyle(HBPalette.textSecondary)
                             Spacer()
                             Text("\(Int(currentDashboardLightBrightness(for: device).rounded()))%")
-                                .font(HBTypography.body(size: 11, weight: .semibold))
+                                .font(HBTypography.body(.caption, weight: .semibold))
                                 .foregroundStyle(HBPalette.textPrimary)
                         }
 
@@ -6648,6 +6582,7 @@ struct DashboardView: View {
                         )
                         .tint(HBPalette.accentBlue)
                         .disabled(pending)
+                        .accessibilityLabel("Brightness for \(device.name)")
                     }
                 }
 
@@ -6674,19 +6609,21 @@ struct DashboardView: View {
                         Task { await handleDenseDeviceToggle(device) }
                     } label: {
                         Label(denseDeviceToggleLabel(for: device), systemImage: "power.circle")
-                            .frame(maxWidth: .infinity)
+                            .frame(maxWidth: .infinity, minHeight: 44)
                     }
                     .buttonStyle(HBSecondaryButtonStyle(compact: true))
                     .disabled(pending)
+                    .accessibilityLabel("\(denseDeviceToggleLabel(for: device)) \(device.name)")
                 } else {
                     Button {
                         Task { await handleDenseDeviceToggle(device) }
                     } label: {
                         Label(denseDeviceToggleLabel(for: device), systemImage: "power.circle.fill")
-                            .frame(maxWidth: .infinity)
+                            .frame(maxWidth: .infinity, minHeight: 44)
                     }
                     .buttonStyle(HBPrimaryButtonStyle(compact: true))
                     .disabled(pending)
+                    .accessibilityLabel("\(denseDeviceToggleLabel(for: device)) \(device.name)")
                 }
             }
             .frame(maxWidth: .infinity, minHeight: useLandscapeCompactLayout ? 180 : 190, alignment: .topLeading)
@@ -7155,7 +7092,8 @@ struct DashboardView: View {
         if previewMode {
             errorMessage = nil
             infoMessage = nil
-            devices = UIPreviewData.devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            let previewDevices = Self.previewDashboardFocus()?.hasPrefix("lighting") == true ? UIPreviewData.theaterDevices : UIPreviewData.devices
+            devices = previewDevices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             scenes = UIPreviewData.scenes.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             voiceDevices = UIPreviewData.voiceDevices
             securityStatus = Self.previewSecurityAlarmState() ?? "Disarmed"
@@ -7350,6 +7288,11 @@ struct DashboardView: View {
         }
 
         switch focus {
+        case "lighting", "lighting-small":
+            view.widgets = [DashboardSupport.makeWidget(
+                type: .devices, title: "Theater Lighting", size: focus == "lighting-small" ? .small : .full,
+                settings: DashboardWidgetSettings(deviceIds: UIPreviewData.theaterDevices.map(\.id))
+            )]
         case "visual-pilot":
             view.widgets = [
                 DashboardSupport.makeWidget(type: .hero, title: "Welcome Home", size: .full),
@@ -8110,18 +8053,6 @@ struct DashboardView: View {
         min(100, max(0, value)).rounded()
     }
 
-    private func denseDeviceTitleFontSize(for name: String) -> CGFloat {
-        let length = name.trimmingCharacters(in: .whitespacesAndNewlines).count
-        switch length {
-        case 0..<20:
-            return 14
-        case 20..<30:
-            return 13
-        default:
-            return 12
-        }
-    }
-
     private func normalizedDashboardHexColor(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let regex = try? NSRegularExpression(pattern: "^#[0-9a-fA-F]{6}$"),
@@ -8223,6 +8154,9 @@ struct DashboardView: View {
         }
         if device.type == "sensor" {
             return device.effectiveSensorStateLabel
+        }
+        if device.type == "lock" {
+            return device.status ? "Locked" : "Unlocked"
         }
 
         return nil
