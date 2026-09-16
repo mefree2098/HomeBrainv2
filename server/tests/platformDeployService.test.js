@@ -11,6 +11,22 @@ const eventStreamService = require('../services/eventStreamService');
 
 const { PlatformDeployService } = platformDeployServiceModule;
 
+test('health reports a detected but failed radio as degraded and respects disabled radios', () => {
+  const service = new PlatformDeployService({
+    directRadioService: {
+      detected: { zigbee: { path: '/dev/zigbee' } },
+      zigbee: { started: false, error: 'Cannot lock port' },
+      zwave: { started: true, driver: {} }
+    }
+  });
+  const checks = service.getDirectRadioHealth({});
+  assert.equal(checks.zigbee.status, 'degraded');
+  assert.equal(checks.zigbee.message, 'Cannot lock port');
+  assert.equal(checks.zwave.status, 'healthy');
+  assert.equal(service.getDirectRadioHealth({ HOMEBRAIN_ZIGBEE_ENABLED: 'false' }).zigbee, undefined);
+  assert.deepEqual(service.getDirectRadioHealth({ HOMEBRAIN_DIRECT_RADIOS_ENABLED: '0' }), {});
+});
+
 test('deployment job paths only accept safe identifiers without traversal segments', () => {
   const service = new PlatformDeployService({ dataDir: '/tmp/homebrain-platform-deploy-test' });
   assert.throws(() => service.getJobPath('../../etc/passwd'), /job id is invalid/);

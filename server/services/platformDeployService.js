@@ -170,6 +170,7 @@ class PlatformDeployService {
     this.legacyDiscoveryServiceName = process.env.HOMEBRAIN_LEGACY_DISCOVERY_SERVICE_NAME || 'homebrain-discovery';
     this.alexaBrokerService = options.alexaBrokerService || alexaBrokerService;
     this.mqttPlatformService = options.mqttPlatformService || mqttPlatformService;
+    this.directRadioService = options.directRadioService || require('./directRadioService');
     this.runtimeSnapshotCaptured = false;
     this.runtimeSnapshot = {
       pid: typeof options.runtimePid === 'number' ? options.runtimePid : process.pid,
@@ -355,7 +356,7 @@ class PlatformDeployService {
       expectedShortCommit: pendingRestart?.expectedShortCommit || null
     };
 
-    const checks = { api, websocket, database, wakeWordWorker, reverseProxy, mqttBroker, deployment };
+    const checks = { api, websocket, database, wakeWordWorker, reverseProxy, mqttBroker, deployment, ...this.getDirectRadioHealth() };
     const hasDegraded = Object.values(checks).some((item) => item.status !== 'healthy');
 
     return {
@@ -365,6 +366,25 @@ class PlatformDeployService {
       runtime,
       pendingRestart
     };
+  }
+
+  getDirectRadioHealth(env = process.env) {
+    const { parseEnabledFlag } = require('./directRadioHelpers');
+    const radioChecks = {};
+    if (parseEnabledFlag(env.HOMEBRAIN_DIRECT_RADIOS_ENABLED, true)) {
+      for (const protocol of ['zigbee', 'zwave']) {
+        const radio = this.directRadioService[protocol];
+        const expected = parseEnabledFlag(env[`HOMEBRAIN_${protocol.toUpperCase()}_ENABLED`], true)
+          && (this.directRadioService.detected?.[protocol] || radio?.controller || radio?.driver || radio?.error);
+        if (expected) {
+          radioChecks[protocol] = {
+            status: radio?.started === true ? 'healthy' : 'degraded',
+            message: radio?.started === true ? `${protocol} controller is running.` : (radio?.error || `${protocol} controller is not running.`)
+          };
+        }
+      }
+    }
+    return radioChecks;
   }
 
   getJobPath(jobId) {

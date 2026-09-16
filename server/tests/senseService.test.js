@@ -6,6 +6,29 @@ const senseService = require('../services/senseService');
 const Device = require('../models/Device');
 const SenseIntegration = require('../models/SenseIntegration');
 
+test('stopping a connecting Sense socket contains its asynchronous close error', async () => {
+  const WebSocket = require('ws');
+  const service = new senseService.SenseService();
+  const socket = new WebSocket('ws://127.0.0.1:1');
+  service.websocket = socket;
+  service.stopWebSocket();
+  await new Promise((resolve) => socket.once('close', resolve));
+  assert.equal(service.websocket, null);
+  assert.equal(socket.readyState, WebSocket.CLOSED);
+});
+
+test('a Sense refresh preserves an in-flight handshake for the same monitor and credentials', () => {
+  const WebSocket = require('ws');
+  const service = new senseService.SenseService();
+  const socket = { readyState: WebSocket.CONNECTING };
+  service.websocket = socket;
+  service.websocketMonitorId = 'monitor-1';
+  service.websocketAccessToken = 'test-token';
+  service.stopWebSocket = () => assert.fail('must not tear down an in-flight handshake');
+  service.startWebSocket({ monitorId: 'monitor-1', accessToken: 'test-token' });
+  assert.equal(service.websocket, socket);
+});
+
 const {
   buildSenseApiUrl,
   buildTrendSummaryMap,
