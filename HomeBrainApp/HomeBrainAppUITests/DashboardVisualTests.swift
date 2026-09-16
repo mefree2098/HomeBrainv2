@@ -105,11 +105,12 @@ final class DashboardVisualTests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-preview", "-ui-preview-section", "dashboard", "-ui-preview-dashboard-focus", "lighting-small", "-homebrain.ios.theme-mode", "light"]
         app.launch()
-        let title = app.staticTexts["dashboard-device-name-preview-theater-2"]
+        let title = app.staticTexts["dashboard-device-name-preview-theater-0"]
         XCTAssertTrue(title.waitForExistence(timeout: 30))
         if app.buttons["Collapse main menu"].isHittable { app.buttons["Collapse main menu"].tap() }
-        let color = app.buttons["Set color for Theater Ceiling Accent Strip"]
-        reveal(color, in: app)
+        let color = app.buttons["Set color for Theater Wall Sconce Left"]
+        let cardCenterX = title.frame.midX
+        revealInNarrowWidget(color, in: app, atX: cardCenterX)
         XCTAssertTrue(color.isHittable)
         XCTAssertGreaterThanOrEqual(color.frame.width, 44)
         XCTAssertGreaterThanOrEqual(color.frame.minY, title.frame.maxY, "Color controls must not squeeze the name")
@@ -132,6 +133,9 @@ final class DashboardVisualTests: XCTestCase {
         // Device colors use 8-bit RGB, while the system slider reports rounded percentages.
         XCTAssertEqual(restoredPercent, selectedPercent, accuracy: 1, "The selected color must persist on the device")
         app.buttons["Done"].tap()
+        let lastControl = app.buttons["Turn On Theater Ceiling Fan Power"]
+        revealInNarrowWidget(lastControl, in: app, atX: cardCenterX)
+        XCTAssertTrue(lastControl.isHittable, "The last device must remain reachable in a narrow widget")
     }
 
     func testDenseLightingExpandsForAccessibilityText() {
@@ -146,6 +150,18 @@ final class DashboardVisualTests: XCTestCase {
         XCTAssertGreaterThan(slider.frame.width, 250)
         XCTAssertLessThanOrEqual(slider.frame.maxX, app.frame.maxX)
         attachScreenshot("Lighting with accessibility text", from: app)
+    }
+
+    private func revealInNarrowWidget(_ element: XCUIElement, in app: XCUIApplication, atX x: CGFloat) {
+        // A small widget may occupy only the left quarter of a landscape dashboard.
+        // Swipe inside its cards, rather than the empty center of the app window.
+        let normalizedX = (x - app.frame.minX) / app.frame.width
+        for _ in 0..<20 {
+            if element.isHittable { return }
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: normalizedX, dy: 0.8))
+            let end = app.coordinate(withNormalizedOffset: CGVector(dx: normalizedX, dy: 0.25))
+            start.press(forDuration: 0.05, thenDragTo: end)
+        }
     }
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication) {
