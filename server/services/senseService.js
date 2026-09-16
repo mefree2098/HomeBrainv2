@@ -621,6 +621,7 @@ class SenseService {
     this.pollTimer = null;
     this.pollIntervalMs = 0;
     this.websocket = null;
+    this.websocketAccessToken = '';
     this.websocketReconnectTimer = null;
     this.websocketReconnectAttempt = 0;
     this.websocketMonitorId = '';
@@ -1249,17 +1250,22 @@ class SenseService {
       return;
     }
 
-    if (this.websocket && this.websocket.readyState === WebSocket.OPEN && this.websocketMonitorId === monitorId) {
+    if (this.websocket
+      && [WebSocket.OPEN, WebSocket.CONNECTING].includes(this.websocket.readyState)
+      && this.websocketMonitorId === monitorId
+      && this.websocketAccessToken === integration.accessToken) {
       return;
     }
 
     this.stopWebSocket({ resetMonitor: false });
     this.websocketMonitorId = monitorId;
+    this.websocketAccessToken = integration.accessToken;
 
-    const socket = new WebSocket(`${SENSE_WS_BASE}/${encodeURIComponent(monitorId)}/realtimefeed?access_token=${encodeURIComponent(integration.accessToken)}`);
+    const socket = new WebSocket(`${SENSE_WS_BASE}/${encodeURIComponent(monitorId)}/realtimefeed?access_token=${encodeURIComponent(integration.accessToken)}`, { handshakeTimeout: 15000 });
     this.websocket = socket;
 
     socket.on('open', () => {
+      if (this.websocket !== socket) return;
       this.websocketReconnectAttempt = 0;
       this.runBackgroundTask('websocket open state update', async () => {
         await this.updateRealtimeState(integration, {
@@ -1276,6 +1282,7 @@ class SenseService {
     });
 
     socket.on('message', (raw) => {
+      if (this.websocket !== socket) return;
       let payload = null;
       try {
         payload = JSON.parse(raw.toString());
@@ -1315,6 +1322,7 @@ class SenseService {
     });
 
     socket.on('close', () => {
+      if (this.websocket !== socket) return;
       this.runBackgroundTask('websocket close state update', async () => {
         await this.updateRealtimeState(integration, {
           websocket: {
@@ -1328,6 +1336,7 @@ class SenseService {
     });
 
     socket.on('error', (error) => {
+      if (this.websocket !== socket) return;
       console.warn(`SenseService: websocket error: ${error.message}`);
       this.runBackgroundTask('websocket error state update', async () => {
         await this.updateRealtimeState(integration, {
@@ -1411,10 +1420,14 @@ class SenseService {
 
     const socket = this.websocket;
     this.websocket = null;
+    this.websocketAccessToken = '';
 
     if (socket) {
       try {
         socket.removeAllListeners();
+        // Closing a CONNECTING ws emits an error on the next tick. Keep a sink
+        // on this retired socket; a synchronous catch cannot handle that event.
+        socket.on('error', () => {});
         socket.close();
       } catch (_error) {
         // Ignore websocket close issues during shutdown.

@@ -473,7 +473,29 @@ detectExistingZigbeeNetwork() {
   },
 
 async startZigbee(serialPath) {
+    if (this.zigbee.startPromise) return this.zigbee.startPromise;
+    if (this.zigbee.started) return;
+    this.zigbee.startPromise = this.startZigbeeOnce(serialPath)
+      .finally(() => { this.zigbee.startPromise = null; });
+    return this.zigbee.startPromise;
+  },
+
+async releaseFailedZigbeeController() {
+    const controller = this.zigbee.controller;
+    if (!controller) return;
+    // An incomplete herdsman startup must not save a partial coordinator
+    // database/backup. Close its adapter directly to release the serial lock.
+    if (controller.adapter) {
+      controller.adapter.removeAllListeners();
+      await withTimeout(controller.adapter.stop(), 15000, 'Failed Zigbee adapter cleanup timed out');
+    }
+    controller.removeAllListeners();
+    this.zigbee.controller = null;
+  },
+
+async startZigbeeOnce(serialPath) {
     try {
+      await this.releaseFailedZigbeeController();
       this.log('info', 'zigbee', 'Starting Zigbee coordinator', {
         serialPath
       });
@@ -600,7 +622,10 @@ async startZigbee(serialPath) {
           lastStartResult: this.zigbee.lastStartResult || null
         });
       }
-      await this.syncZigbeeDevices();
+      // A catalog/database failure does not mean the radio failed to start.
+      await this.syncZigbeeDevices().catch((error) => {
+        this.log('warn', 'zigbee', 'Zigbee device sync failed after coordinator startup', { error: error.message });
+      });
     } catch (error) {
       this.zigbee.started = false;
       this.zigbee.error = error.message;
@@ -609,6 +634,9 @@ async startZigbee(serialPath) {
         error: error.message
       });
       console.warn(`DirectRadioService: Zigbee controller failed to start: ${error.message}`);
+      await this.releaseFailedZigbeeController().catch((cleanupError) => {
+        this.log('error', 'zigbee', 'Failed to release Zigbee adapter after startup failure', { error: cleanupError.message });
+      });
     }
   },
 
