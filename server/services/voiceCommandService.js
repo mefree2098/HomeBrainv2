@@ -28,6 +28,12 @@ const ACTION_MAP = {
   colour: 'setColor',
   set_temperature: 'setTemperature',
   settemperature: 'setTemperature',
+  set_mode: 'setMode',
+  set_fan_speed: 'setFanSpeed',
+  set_swing: 'setSwing',
+  set_eco: 'setEco',
+  set_turbo: 'setTurbo',
+  set_sleep: 'setSleep',
   lock: 'lock',
   unlock: 'unlock',
   open: 'open',
@@ -253,7 +259,11 @@ class VoiceCommandService {
         return capabilities;
       }
       case 'thermostat':
-        return ['turn_on', 'turn_off', 'set_temperature'];
+        return normalizedSource === 'midea'
+          ? ['turn_on', 'turn_off', 'set_temperature', 'set_mode', 'set_fan_speed', 'set_swing', 'set_eco', 'set_turbo', 'set_sleep']
+          : ['turn_on', 'turn_off', 'set_temperature', 'set_mode'];
+      case 'water_heater':
+        return [];
       case 'lock':
         return ['lock', 'unlock'];
       case 'garage':
@@ -446,6 +456,9 @@ class VoiceCommandService {
     const wakeWordLabel = wakeWord || 'unknown';
 
     const sortedDevices = [...devices].sort((a, b) => {
+      const compactText = this.normalizeVoiceSearchText(commandText).replace(/\s/g, '');
+      const named = (device) => this.getDeviceVoiceAliases(device).some((alias) => alias.length >= 3 && compactText.includes(alias.replace(/\s/g, '')));
+      if (named(a) !== named(b)) return named(a) ? -1 : 1;
       if (a.room === primaryRoom && b.room !== primaryRoom) return -1;
       if (b.room === primaryRoom && a.room !== primaryRoom) return 1;
       return a.name.localeCompare(b.name);
@@ -463,7 +476,8 @@ class VoiceCommandService {
       .slice(0, 30);
 
     const deviceLines = sortedDevices.map((device, index) => {
-      return `${index + 1}. ID:${device.id} | Name:${device.name} | Room:${device.room} | Type:${device.type} | Source:${device.source} | Capabilities:${device.capabilities.join(',')}`;
+      const settings = device.properties?.appliance?.capabilities;
+      return `${index + 1}. ID:${device.id} | Name:${device.name} | Room:${device.room} | Type:${device.type} | Source:${device.source} | Capabilities:${device.capabilities.join(',')}${settings ? ` | Supported settings:${JSON.stringify(settings)} | Temperature unit:Fahrenheit` : ''}`;
     }).join('\n');
 
     const sceneLines = sortedScenes.map((scene, index) => {
@@ -732,6 +746,12 @@ RULES
     let best = null;
     let bestScore = Number.NEGATIVE_INFINITY;
 
+    // Speech separates names such as TheaterAC into “Theater AC”. Match that
+    // explicit name before room words can select another theater device.
+    const compactText = text.replace(/\s/g, '');
+    const explicit = devices.filter((device) => this.getDeviceVoiceAliases(device).some((alias) => alias.replace(/\s/g, '').length >= 5 && compactText.includes(alias.replace(/\s/g, ''))));
+    if (explicit.length === 1) return explicit[0];
+
     if (targetPhrase) {
       for (const device of devices) {
         const aliases = this.getDeviceVoiceAliases(device);
@@ -906,6 +926,23 @@ RULES
     const value = this.extractNumber(commandText);
     const colorValue = this.extractColor(commandText);
     const capabilities = new Set(Array.isArray(device.capabilities) ? device.capabilities : []);
+
+    if (device.type === 'thermostat' && capabilities.has('set_mode') && !/\b(?:turn|switch|power)\b.*\boff\b/.test(text)) {
+      const supported = device.properties?.appliance?.capabilities || {};
+      const mode = /\b(heat|cool|auto|dry|fan)(?:\s+mode)?\b/.exec(text)?.[1];
+      const fan = /\bfan\s+(?:speed\s+)?(?:to\s+)?(auto|max|high|medium|low|silent)\b/.exec(text)?.[1];
+      const acActions = [];
+      if (fan && capabilities.has('set_fan_speed')) acActions.push({ action: 'set_fan_speed', value: fan });
+      else if (mode && (!supported.modes || supported.modes.includes(mode))) acActions.push({ action: 'set_mode', value: mode });
+      if (value !== null && value !== undefined && /\b(temperature|degrees|heat|cool|set)\b/.test(text) && !fan) {
+        acActions.push({ action: 'set_temperature', value });
+      }
+      if (acActions.length) return {
+        intent: 'device_control', confidence: 0.8, normalizedCommand: commandText,
+        actions: acActions.map((action) => ({ type: 'device_control', deviceId: device.id, room: room || device.room, ...action })),
+        response: `Okay, updating ${device.name}.`, followUpQuestion: null, usedFallback: true
+      };
+    }
 
     const actionCandidates = [];
     if (text.includes('turn on') || text.includes('switch on') || text.includes('power on')) {

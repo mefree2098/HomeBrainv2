@@ -299,6 +299,11 @@ function isTemperatureSensorDevice(device) {
 }
 
 function normalizeThermostatMode(device) {
+  if (device?.properties?.source === 'midea') {
+    const mode = device.properties.appliance?.mode;
+    if (['dry', 'smart_dry'].includes(mode)) return 'COOL';
+    if (mode === 'fan') return 'OFF';
+  }
   const mode = deviceService.normalizeThermostatMode?.(
     device?.properties?.hvacMode
     || device?.properties?.smartThingsThermostatMode
@@ -388,6 +393,7 @@ function buildEndpointStatePropertiesForDevice(device, inferred = inferDeviceTra
   }
 
   if (inferred.interfaces.has(ALEXA_INTERFACES.THERMOSTAT_CONTROLLER)) {
+    properties.push(...require('../../shared/alexa/appliances').acProperties(device));
     if (Number.isFinite(Number(device?.targetTemperature))) {
       properties.push(buildAlexaProperty(
         ALEXA_INTERFACES.THERMOSTAT_CONTROLLER,
@@ -489,7 +495,14 @@ function inferDeviceTraits(device) {
       break;
     case 'thermostat':
       interfaces.add(ALEXA_INTERFACES.THERMOSTAT_CONTROLLER);
-      capabilities.push(buildReportableCapability(ALEXA_INTERFACES.THERMOSTAT_CONTROLLER, ['targetSetpoint', 'thermostatMode']));
+      capabilities.push(buildReportableCapability(ALEXA_INTERFACES.THERMOSTAT_CONTROLLER, ['targetSetpoint', 'thermostatMode'], {
+        configuration: { supportedModes: (device?.properties?.supportedThermostatModes?.length ? device.properties.supportedThermostatModes : ['auto', 'cool', 'heat', 'off']).filter((mode) => ['auto', 'cool', 'heat', 'off'].includes(mode)).map((mode) => mode.toUpperCase()), supportsScheduling: false }
+      }));
+      if (device?.properties?.source === 'midea') {
+        interfaces.add(ALEXA_INTERFACES.POWER_CONTROLLER);
+        capabilities.push(buildReportableCapability(ALEXA_INTERFACES.POWER_CONTROLLER, ['powerState']));
+        capabilities.push(...require('../../shared/alexa/appliances').acCapabilities(device));
+      }
       displayCategories.push(ALEXA_DISPLAY_CATEGORIES.THERMOSTAT);
       break;
     case 'lock':

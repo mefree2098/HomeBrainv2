@@ -626,6 +626,7 @@ async startZigbeeOnce(serialPath) {
       await this.syncZigbeeDevices().catch((error) => {
         this.log('warn', 'zigbee', 'Zigbee device sync failed after coordinator startup', { error: error.message });
       });
+      this.dispatchHandler('zigbee:reconnect-state-refresh', 'zigbee', () => this.refreshDirectStatesOnReconnect('zigbee'));
     } catch (error) {
       this.zigbee.started = false;
       this.zigbee.error = error.message;

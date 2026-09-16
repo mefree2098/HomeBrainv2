@@ -173,6 +173,7 @@ function normalizeDirectivePayload(requestBody = {}) {
 
   return {
     namespace: requestBody.namespace || directive.namespace || header.namespace || '',
+    instance: requestBody.instance || directive.instance || header.instance || '',
     name: requestBody.name || directive.name || header.name || '',
     payload: requestBody.payload || directive.payload || topLevelDirective.payload || {},
     endpointId: requestBody.endpointId || endpoint.endpointId || '',
@@ -1124,7 +1125,7 @@ class AlexaBridgeService {
         connectivity: 'OK'
       };
     } else if (record.exposure.entityType === 'device') {
-      await this.executeDeviceDirective(record, namespace, name, payload);
+      await this.executeDeviceDirective(record, namespace, name, payload, normalized.instance);
     } else if (record.exposure.entityType === 'device_group') {
       await this.executeGroupDirective(record, namespace, name, payload);
     } else {
@@ -1145,7 +1146,7 @@ class AlexaBridgeService {
     };
   }
 
-  async executeDeviceDirective(record, namespace, name, payload) {
+  async executeDeviceDirective(record, namespace, name, payload, instance = '') {
     const deviceId = record.exposure.entityId;
     const currentProperties = record.endpoint?.state?.properties || [];
     const isHarmonyDevice = deviceService.isHarmonyDevice(record.entity);
@@ -1216,13 +1217,15 @@ class AlexaBridgeService {
 
     if (namespace === 'Alexa.ThermostatController') {
       if (name === 'SetTargetTemperature') {
-        await deviceService.controlDevice(deviceId, 'set_temperature', payload.targetSetpoint?.value, commandOptions);
+        const target = require('../../shared/alexa/appliances').temperatureInFahrenheit(payload.targetSetpoint);
+        await deviceService.controlDevice(deviceId, 'set_temperature', target, commandOptions);
         return;
       }
 
       if (name === 'AdjustTargetTemperature') {
         const current = Number(getPropertyValue(currentProperties, 'Alexa.ThermostatController', 'targetSetpoint')?.value || record.entity?.targetTemperature || 0);
-        await deviceService.controlDevice(deviceId, 'set_temperature', current + Number(payload.targetSetpointDelta?.value || 0), commandOptions);
+        const delta = require('../../shared/alexa/appliances').temperatureInFahrenheit(payload.targetSetpointDelta, { delta: true });
+        await deviceService.controlDevice(deviceId, 'set_temperature', current + delta, commandOptions);
         return;
       }
 
@@ -1234,6 +1237,12 @@ class AlexaBridgeService {
         await deviceService.controlDevice(deviceId, 'set_mode', mode, commandOptions);
         return;
       }
+    }
+
+    if (['Alexa.ModeController', 'Alexa.ToggleController'].includes(namespace)) {
+      const command = require('../../shared/alexa/appliances').resolveAcDirective(record.entity, namespace, name, instance, payload);
+      await deviceService.controlDevice(deviceId, command.action, command.value, commandOptions);
+      return;
     }
 
     if (namespace === 'Alexa.LockController') {

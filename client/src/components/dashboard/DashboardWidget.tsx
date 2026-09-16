@@ -59,6 +59,7 @@ const normalizeThermostatMode = (value: unknown): string => {
   if (normalized === "heat" || normalized === "auxheatonly" || normalized === "emergencyheat") {
     return "heat"
   }
+  if (["dry", "fan", "smartdry"].includes(normalized)) return normalized === "smartdry" ? "smart_dry" : normalized
   if (normalized === "off") {
     return "off"
   }

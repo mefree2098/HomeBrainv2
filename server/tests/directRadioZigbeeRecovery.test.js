@@ -3,8 +3,28 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const methods = require('../services/directRadioZigbee');
 
+test('protocol reconnect queries listening devices and marks failed reads stale without waiting on sleepers', async (t) => {
+  const core = require('../services/directRadioCore');
+  const Device = require('../models/Device');
+  const deviceService = require('../services/deviceService');
+  const original = { find: Device.find, update: Device.updateOne, refresh: deviceService.refreshDirectRadioDeviceState };
+  t.after(() => { Device.find = original.find; Device.updateOne = original.update; deviceService.refreshDirectRadioDeviceState = original.refresh; });
+  const queried = [], stale = [];
+  Device.find = () => ({ lean: async () => [{ _id: 'light', type: 'light' }, { _id: 'sleeping-lock', type: 'lock' }, { _id: 'offline-switch', type: 'switch' }] });
+  Device.updateOne = async (filter, update) => stale.push([filter._id, update['properties.homebrainDirect.stateStale']]);
+  deviceService.refreshDirectRadioDeviceState = async (device, options) => {
+    assert.equal(options.liveRead, true);
+    queried.push(device._id);
+    return { __homebrainLiveRead: { success: device._id === 'light' } };
+  };
+  const radio = { zigbee: { started: true }, getDirectNodeForDevice: (device) => ({ type: device._id === 'sleeping-lock' ? 'EndDevice' : 'Router' }), log() {} };
+  await core.refreshDirectStatesOnReconnect.call(radio, 'zigbee');
+  assert.deepEqual(queried, ['light', 'offline-switch']);
+  assert.deepEqual(stale, [['light', false], ['offline-switch', true]]);
+});
+
 function service() {
-  return Object.assign({ zigbee: { started: false, controller: null }, log() {} }, methods);
+  return Object.assign({ zigbee: { started: false, controller: null }, log() {}, dispatchHandler() {} }, methods);
 }
 
 test('concurrent Zigbee recovery attempts open only one controller', async () => {

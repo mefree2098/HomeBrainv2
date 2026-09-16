@@ -13,6 +13,7 @@ const schema = new mongoose.Schema({
       'light',
       'lock',
       'thermostat',
+      'water_heater',
       'garage',
       'sensor',
       'siren',

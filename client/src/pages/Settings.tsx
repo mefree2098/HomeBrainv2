@@ -172,6 +172,7 @@ import {
 import { useNavigate, useSearchParams } from "react-router"
 import { SettingsResourceUtilizationTab } from "@/components/system/SystemResourceUtilization"
 import { SenseIntegrationCard } from "@/components/sense/SenseIntegrationCard"
+import { ApplianceIntegrationCard } from "@/components/appliances/ApplianceIntegrationCard"
 import { TempestIntegrationCard } from "@/components/weather/TempestIntegrationCard"
 import { GoveeIndoorAirIntegrationCard } from "@/components/weather/GoveeIndoorAirIntegrationCard"
 import { RainMachineIntegrationCard } from "@/components/rainmachine/RainMachineIntegrationCard"
@@ -240,6 +241,8 @@ const SETTINGS_INTEGRATION_TABS = new Set([
   "codex-skill",
   "openclaw",
   "sense",
+  "midea",
+  "econet",
   "tempest",
   "govee",
   "rainmachine",
@@ -6011,6 +6014,8 @@ export function Settings() {
                 <TabsTrigger value="codex-skill">Codex Skill</TabsTrigger>
                 <TabsTrigger value="openclaw">OpenClaw</TabsTrigger>
                 <TabsTrigger value="sense">Sense Energy</TabsTrigger>
+                <TabsTrigger value="midea">Theater AC</TabsTrigger>
+                <TabsTrigger value="econet">Rheem Water Heater</TabsTrigger>
                 <TabsTrigger value="tempest">Tempest</TabsTrigger>
                 <TabsTrigger value="govee">Govee Indoor Air</TabsTrigger>
                 <TabsTrigger value="rainmachine">RainMachine</TabsTrigger>
@@ -6753,6 +6758,8 @@ export function Settings() {
               <TabsContent value="sense" className="space-y-6">
                 <SenseIntegrationCard />
               </TabsContent>
+              <TabsContent value="midea" className="space-y-6"><ApplianceIntegrationCard provider="midea" /></TabsContent>
+              <TabsContent value="econet" className="space-y-6"><ApplianceIntegrationCard provider="econet" /></TabsContent>
 
               <TabsContent value="tempest" className="space-y-6">
                 <TempestIntegrationCard />

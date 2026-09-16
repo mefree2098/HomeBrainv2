@@ -1176,6 +1176,25 @@ function extractDeviceMetrics(device = {}) {
   addMetric(metrics, 'online', device.isOnline);
   addMetric(metrics, 'status', device.status);
 
+  if (sourceOrigin === 'midea' || sourceOrigin === 'econet') {
+    const appliance = properties.appliance || {};
+    addMetric(metrics, 'temperature_f', device.temperature);
+    addMetric(metrics, 'target_temperature_f', device.targetTemperature);
+    addMetric(metrics, 'outdoor_temperature_f', appliance.outdoorTemperature);
+    addMetric(metrics, 'humidity_pct', appliance.humidity);
+    addMetric(metrics, 'power_w', appliance.powerW);
+    addMetric(metrics, 'energy_kwh', appliance.energyKwh);
+    addMetric(metrics, 'alert_count', appliance.alertCount);
+    addMetric(metrics, 'error_code', appliance.errorCode);
+    addMetric(metrics, 'filter_alert', appliance.filterAlert);
+    addMetric(metrics, 'signal_rssi_dbm', appliance.wifiSignal);
+    addMetric(metrics, 'water_usage_today_gal', appliance.waterUsageToday);
+    // EcoNet returns an explicit energy type; gas usage must not be labelled kWh.
+    addMetric(metrics, 'energy_usage_today', appliance.energyUsageToday);
+    addMetric(metrics, 'shutoff_valve_open', appliance.shutoffValveOpen);
+    return metrics;
+  }
+
   if (sourceOrigin === 'rainmachine') {
     const rainMachine = properties.rainmachine && typeof properties.rainmachine === 'object'
       ? properties.rainmachine

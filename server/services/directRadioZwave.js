@@ -2053,6 +2053,7 @@ async syncZWaveNodes() {
       // eslint-disable-next-line no-await-in-loop
       await this.handleZWaveNodeChanged(node, 'sync');
     }
+    this.dispatchHandler('zwave:reconnect-state-refresh', 'zwave', () => this.refreshDirectStatesOnReconnect('zwave'));
   },
 
 normalizeZWaveNode(node, reason = 'sync') {

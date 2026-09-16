@@ -509,6 +509,7 @@ app.use('/api/tempest', tempestRoutes);
 app.use('/api/govee-air-quality', goveeAirQualityRoutes);
 app.use('/api/rainmachine', rainMachineRoutes);
 app.use('/api/sense', senseRoutes);
+app.use('/api/appliances', require('./routes/applianceRoutes'));
 // Security Alarm Routes
 app.use('/api/security-alarm', securityAlarmRoutes);
   // SmartThings Routes
@@ -845,6 +846,16 @@ void dbReady
   }
 })();
 
+// Appliance startup must remain independent of the energy monitor connection.
+(async () => {
+  try {
+    await dbReady;
+    await require('./services/applianceService').initialize();
+  } catch (error) {
+    console.error('Failed to initialize appliance integrations:', error.message);
+  }
+})();
+
 async function gracefulShutdown(signal) {
   if (isShuttingDown) {
     return;
@@ -897,6 +908,7 @@ async function gracefulShutdown(signal) {
   await runShutdownStep('Govee Indoor Air service', () => goveeAirQualityService.shutdown());
   await runShutdownStep('RainMachine service', () => rainMachineService.shutdown());
   await runShutdownStep('Sense service', () => senseService.shutdown());
+  await runShutdownStep('Appliance integrations', () => require('./services/applianceService').shutdown());
   await runShutdownStep('sensor node watchdog', () => sensorNodeService.shutdown());
   await runShutdownStep('telemetry listeners', () => telemetryService.shutdown());
   await runShutdownStep('Codex CLI sessions', () => shutdownCodexCliService());

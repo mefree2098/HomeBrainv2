@@ -1,0 +1,2 @@
+msmart-ng==2026.9.0
+pyeconet==0.2.6

@@ -1,6 +1,18 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+test('Theater AC voice commands retain an explicitly named device beyond the 40-device prompt limit', () => {
+  const service = require('../services/voiceCommandService');
+  const ac = { id: 'theater-ac', name: 'TheaterAC', room: 'Theater', type: 'thermostat', source: 'midea', capabilities: ['turn_on', 'turn_off', 'set_mode', 'set_temperature', 'set_fan_speed'], properties: { source: 'midea', appliance: { capabilities: { modes: ['off', 'heat', 'cool', 'fan'] } } } };
+  const devices = Array.from({ length: 60 }, (_, i) => ({ ...ac, id: `light-${i}`, name: `A light ${i}`, room: 'Bedroom', type: 'light', capabilities: ['turn_on', 'turn_off'] })).concat(ac);
+  assert.match(service.buildPrompt('Set Theater AC to heat at 74 degrees', { room: 'Bedroom', devices, scenes: [], workflows: [] }), /ID:theater-ac/);
+  assert.equal(service.findBestDevice('Set Theater AC to heat at 74 degrees', devices).id, ac.id);
+  const plan = service.fallbackInterpretation('Set Theater AC to heat at 74 degrees', { devices }, 'Bedroom');
+  assert.deepEqual(plan.actions.map(({ action, value }) => ({ action, value })), [{ action: 'set_mode', value: 'heat' }, { action: 'set_temperature', value: 74 }]);
+  const off = service.fallbackInterpretation('Turn off Theater AC fan', { devices }, 'Bedroom');
+  assert.equal(off.actions[0].action, 'turn_off');
+});
+
 test('extractNumber handles percentages and bounded control phrases', () => {
   const voiceCommandService = require('../services/voiceCommandService');
   assert.equal(voiceCommandService.extractNumber('set it to 42 percent'), 42);

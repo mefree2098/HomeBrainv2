@@ -135,6 +135,9 @@ function normalizeDeviceGroupNames(groups) {
 function getWorkflowCapabilitiesForDevice(device = {}) {
   const source = sanitizeString(device?.properties?.source || 'local').toLowerCase();
 
+  if (source === 'midea') return ['turn_on', 'turn_off', 'set_temperature', 'set_mode', 'set_fan_speed', 'set_swing', 'set_eco', 'set_turbo', 'set_sleep'];
+  if (source === 'econet') return [];
+
   if (source === 'harmony') {
     return ['turn_on', 'turn_off', 'toggle'];
   }
@@ -147,7 +150,7 @@ function getWorkflowCapabilitiesForDevice(device = {}) {
         ? ['turn_on', 'turn_off', 'set_brightness', 'set_color']
         : ['turn_on', 'turn_off', 'set_brightness'];
     case 'thermostat':
-      return ['turn_on', 'turn_off', 'set_temperature'];
+      return ['turn_on', 'turn_off', 'set_temperature', 'set_mode'];
     case 'lock':
       return ['lock', 'unlock'];
     case 'switch': {

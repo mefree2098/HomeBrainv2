@@ -93,3 +93,7 @@ jobs:
         run: python3 -m pytest -q reachy-homebrain-app
       - name: Remote audio feature tests
         run: python3 remote-device/feature_infer_test.py
+      - name: Appliance protocol adapter tests
+        run: |
+          python3 -m pip install -r server/python/appliance-requirements.txt
+          python3 -m unittest discover -s server/python -p 'test_*.py'

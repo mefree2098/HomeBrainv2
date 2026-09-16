@@ -9625,6 +9625,11 @@ class InsteonService {
             this.connectionTransport = connection.transport;
             this.connectionTarget = targetIdentity;
             console.log('InsteonService: Successfully connected to PLM');
+            setImmediate(() => {
+              this.refreshKnownDeviceStatesOnConnect().catch((error) => {
+                this._logEngineWarn('INSTEON reconnect state refresh failed', { error: error.message });
+              });
+            });
             this._logEngineInfo('Successfully connected to INSTEON PLM', {
               stage: 'connection',
               transport: connection.transport,
@@ -12220,6 +12225,20 @@ class InsteonService {
    * @param {String} deviceId - Database device ID
    * @returns {Promise<Object>} Device status
    */
+  async refreshKnownDeviceStatesOnConnect() {
+    if (this.reconnectStateRefreshPromise) return this.reconnectStateRefreshPromise;
+    if (Device.db?.readyState !== 1) return;
+    this.reconnectStateRefreshPromise = (async () => {
+      const devices = await Device.find({ 'properties.source': 'insteon', type: { $in: ['light', 'switch'] } }).select('_id').lean();
+      for (const device of devices) {
+        if (!this.isConnected) break;
+        await this.getDeviceStatus(device._id).catch(() => {});
+      }
+      this._logEngineInfo('INSTEON reconnect live state refresh finished', { deviceCount: devices.length });
+    })().finally(() => { this.reconnectStateRefreshPromise = null; });
+    return this.reconnectStateRefreshPromise;
+  }
+
   async getDeviceStatus(deviceId) {
     console.log(`InsteonService: Getting status for device ${deviceId}`);
 

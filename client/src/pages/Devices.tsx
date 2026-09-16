@@ -62,6 +62,7 @@ import {
   getDeviceSourceLabel
 } from "@/lib/deviceSources"
 
+import { ApplianceControls } from "@/components/appliances/ApplianceControls"
 const THERMOSTAT_MODES = ['auto', 'cool', 'heat', 'off'] as const
 const ALL_DEVICE_ROOMS_VALUE = '__all_rooms__'
 const HARMONY_CARD_COMMANDS = [
@@ -278,6 +279,7 @@ const normalizeThermostatMode = (value: unknown): string => {
   if (normalized === 'heat' || normalized === 'auxheatonly' || normalized === 'emergencyheat') {
     return 'heat'
   }
+  if (["dry", "fan", "smartdry"].includes(normalized)) return normalized === "smartdry" ? "smart_dry" : normalized
   if (normalized === 'off') {
     return 'off'
   }
@@ -1859,6 +1861,7 @@ export function Devices({
   }
 
   const renderThermostatControls = (device: any, compact = false) => {
+    if (device.properties?.source === 'midea') return <ApplianceControls device={device} />
     const currentMode = getThermostatMode(device)
     const onMode = getThermostatOnMode(device)
     const targetTemperature = getThermostatTargetTemperature(device)

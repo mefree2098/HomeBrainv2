@@ -13,6 +13,27 @@ const directRadioProtocolCatalogService = require('../services/directRadioProtoc
 const Device = require('../models/Device');
 const matterService = require('../services/matterService');
 
+test('Matter startup subscribes to existing nodes without treating local cached attributes as fresh', async () => {
+  const service = new matterService.MatterService();
+  const listeners = {};
+  const calls = [];
+  const node = { nodeId: 123n, isConnected: false, events: {
+    initializedFromRemote: { on(fn) { listeners.remote = fn; }, off() {} },
+    attributeChanged: { on(fn) { listeners.attribute = fn; }, off() {} }
+  }, connect(options) { calls.push(options); } };
+  service.controller = { getCommissionedNodes: () => [123n], getNode: async () => node, close: async () => {} };
+  let persisted = 0;
+  service.persistMatterNodeState = async () => { persisted++; };
+  await service.connectKnownMatterNodes();
+  assert.equal(persisted, 0);
+  assert.deepEqual(calls, [{ autoSubscribe: true }]);
+  listeners.remote();
+  listeners.attribute();
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.equal(persisted, 1);
+  await service.shutdown();
+});
+
 test('Matter BLE is registered in the controller environment used for commissioning', (t) => {
   const runtime = matterService.loadMatterRuntime();
   const environment = runtime.NodeJsEnvironment();
