@@ -240,22 +240,6 @@ const formatAlarmStateDetail = (alarmState?: string | null) => {
   }
 }
 
-const formatSecurityPlatformStatus = (enabledPlatforms?: AlarmStatus["enabledPlatforms"] | null) => {
-  const homebrainEnabled = enabledPlatforms?.homebrain !== false
-  const smartThingsEnabled = enabledPlatforms?.smartthings !== false
-
-  if (homebrainEnabled && smartThingsEnabled) {
-    return "HomeBrain + SmartThings"
-  }
-  if (homebrainEnabled) {
-    return "HomeBrain native"
-  }
-  if (smartThingsEnabled) {
-    return "SmartThings"
-  }
-  return "No security platform"
-}
-
 const batteryClassName = (sensor: SecuritySensor) => {
   if (sensor.batteryState === "critical" || (sensor.batteryLevel != null && sensor.batteryLevel <= 15)) {
     return "text-red-600 dark:text-red-300"
@@ -971,10 +955,7 @@ export function SecurityAlarmWidget({
     : sensors.filter((sensor) => sensor.requiresAttention).length
   const alarmTone = alarmStateTone(alarmStatus?.alarmState)
   const alarmStatusDetail = formatAlarmStateDetail(alarmStatus?.alarmState)
-  const systemStatus = [
-    formatSecurityPlatformStatus(enabledPlatforms),
-    alarmStatus?.isOnline ? "Online" : "Offline"
-  ].join(" • ")
+  const systemStatus = alarmStatus?.isOnline ? "Online" : "Offline"
 
   const sensorSummaryParts = [
     sensorCount > 0 ? `${activeSensorCount}/${sensorCount} active` : "No sensors detected",
@@ -1250,7 +1231,6 @@ export function SecurityAlarmWidget({
               </div>
             </div>
 
-            <div className={cn("mt-3 h-1 w-10 rounded-full", alarmTone.accentClassName)} />
           </div>
 
           <div className={sectionShellClassName(compact)}>

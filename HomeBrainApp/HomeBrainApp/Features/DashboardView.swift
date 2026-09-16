@@ -2577,10 +2577,6 @@ struct DashboardView: View {
                     securityAlarmHeaderActions(compact: true)
                 }
             }
-
-            Capsule()
-                .fill(securityStatusAccent)
-                .frame(width: compact ? 38 : 46, height: 4)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(compact ? 12 : 14)
@@ -2614,7 +2610,7 @@ struct DashboardView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
 
-            Text("\(securityStatusDetail) • \(securitySystemStatusText)")
+            Text("\(securityStatusDetail) • \(systemStatus)")
                 .font(HBTypography.body(size: compact ? 12 : 13, weight: .medium))
                 .foregroundStyle(securityStateDetailColor)
                 .lineLimit(2)
@@ -2745,23 +2741,6 @@ struct DashboardView: View {
         default:
             return "System currently disarmed"
         }
-    }
-
-    private var securityPlatformStatusText: String {
-        switch (securityHomeBrainPlatformEnabled, securitySmartThingsPlatformEnabled) {
-        case (true, true):
-            return "HomeBrain + SmartThings"
-        case (true, false):
-            return "HomeBrain native"
-        case (false, true):
-            return "SmartThings"
-        default:
-            return "No security platform"
-        }
-    }
-
-    private var securitySystemStatusText: String {
-        "\(securityPlatformStatusText) • \(systemStatus)"
     }
 
     private var securityStatusAccent: Color {
