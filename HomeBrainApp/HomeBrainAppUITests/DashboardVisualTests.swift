@@ -99,7 +99,7 @@ final class DashboardVisualTests: XCTestCase {
         attachScreenshot("Adaptive theater lighting landscape", from: app)
     }
 
-    func testSmallLightingWidgetPreservesFullIdentityAndColor() {
+    func testSmallLightingWidgetPreservesFullIdentityAndColor() throws {
         XCUIDevice.shared.orientation = .landscapeLeft
         defer { XCUIDevice.shared.orientation = .portrait }
         let app = XCUIApplication()
@@ -127,7 +127,10 @@ final class DashboardVisualTests: XCTestCase {
         app.buttons["Done"].tap()
         color.tap()
         app.buttons["Sliders"].tap()
-        XCTAssertEqual(red.value as? String, selectedRed, "The selected color must persist on the device")
+        let restoredPercent = try XCTUnwrap(Double((red.value as? String ?? "").replacingOccurrences(of: "%", with: "")))
+        let selectedPercent = try XCTUnwrap(Double((selectedRed ?? "").replacingOccurrences(of: "%", with: "")))
+        // Device colors use 8-bit RGB, while the system slider reports rounded percentages.
+        XCTAssertEqual(restoredPercent, selectedPercent, accuracy: 1, "The selected color must persist on the device")
         app.buttons["Done"].tap()
     }
 
