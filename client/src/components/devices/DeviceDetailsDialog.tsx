@@ -1,3 +1,4 @@
+import { ApplianceControls } from "@/components/appliances/ApplianceControls"
 import { TemperatureDial } from "./TemperatureDial"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
@@ -1067,6 +1068,7 @@ function normalizeThermostatMode(value: unknown): string {
   if (normalized === "heat" || normalized === "auxheatonly" || normalized === "emergencyheat") {
     return "heat"
   }
+  if (["dry", "fan", "smartdry"].includes(normalized)) return normalized === "smartdry" ? "smart_dry" : normalized
   if (normalized === "off") {
     return "off"
   }
@@ -3101,6 +3103,7 @@ export function DeviceDetailsDialog({
     if (!device) {
       return null
     }
+    if (['midea', 'econet'].includes(String(device.properties?.source))) return <ApplianceControls device={device} />
     const PrimaryActionIcon = getPrimaryActionIcon(device)
 
     if (device.type === "thermostat") {

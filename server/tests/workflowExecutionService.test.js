@@ -15,6 +15,20 @@ const Automation = require('../models/Automation');
 const deviceGroupService = require('../services/deviceGroupService');
 const deviceService = require('../services/deviceService');
 
+test('a failed live query cannot suppress an explicit off command using a stale off cache', async (t) => {
+  const id = new mongoose.Types.ObjectId().toString();
+  const original = { find: Device.findById, refresh: deviceService.refreshDirectRadioDeviceState, control: deviceService.controlDevice };
+  t.after(() => { Device.findById = original.find; deviceService.refreshDirectRadioDeviceState = original.refresh; deviceService.controlDevice = original.control; });
+  const stale = { _id: id, name: 'Theater light', type: 'light', status: false, isOnline: true, properties: { source: 'homebrain-zigbee' } };
+  Device.findById = () => ({ lean: async () => stale });
+  deviceService.refreshDirectRadioDeviceState = async () => { throw new Error('radio reconnecting'); };
+  const calls = [];
+  deviceService.controlDevice = async (target, action) => { calls.push({ target, action }); return stale; };
+  const result = await executeActionSequence([{ type: 'device_control', target: id, parameters: { action: 'turn_off', skipIfAlreadyInState: true } }], { context: { sceneId: 'scene' } });
+  assert.equal(result.status, 'success');
+  assert.deepEqual(calls, [{ target: id, action: 'turn_off' }]);
+});
+
 test('condition edge=change executes onFalseActions when condition transitions to false', async () => {
   const stateKey = `test-condition-false-${Date.now()}`;
   const actions = [

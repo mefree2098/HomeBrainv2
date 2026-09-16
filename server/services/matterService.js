@@ -1669,6 +1669,12 @@ class MatterService {
   }
 
   async shutdown() {
+    for (const [node, observer] of this.stateObservers || []) {
+      clearTimeout(observer.timer);
+      node.events?.initializedFromRemote?.off(observer.refresh);
+      node.events?.attributeChanged?.off(observer.refresh);
+    }
+    this.stateObservers?.clear();
     if (this.controller && typeof this.controller.close === 'function') {
       await this.controller.close();
     }
@@ -1685,6 +1691,7 @@ class MatterService {
 
     try {
       await this.ensureController();
+      await this.connectKnownMatterNodes();
       this.startError = null;
       this.controllerError = null;
     } catch (error) {
@@ -4037,7 +4044,49 @@ class MatterService {
       || Boolean(device?.properties?.matter?.nodeId);
   }
 
-  async refreshMatterDeviceState(device) {
+  async connectKnownMatterNodes() {
+    if (!this.controller) return;
+    for (const nodeId of this.controller.getCommissionedNodes()) {
+      try {
+        const node = await this.controller.getNode(nodeId, true);
+        this.observeMatterNode(node);
+        // connect() starts the subscription asynchronously. Its persisted local
+        // attributes are stale until initializedFromRemote/attributeChanged.
+        node.connect({ autoSubscribe: true });
+      } catch (error) {
+        console.warn(`MatterService: Failed to reconnect node ${normalizeMatterNodeId(nodeId)}: ${error.message}`);
+      }
+    }
+  }
+
+  observeMatterNode(node) {
+    this.stateObservers ||= new Map();
+    if (this.stateObservers.has(node)) return;
+    const observer = { timer: null, refresh: null };
+    observer.refresh = () => {
+      clearTimeout(observer.timer);
+      observer.timer = setTimeout(() => {
+        this.persistMatterNodeState(node).catch((error) => console.warn(`MatterService: State refresh failed: ${error.message}`));
+      }, 250);
+      observer.timer.unref?.();
+    };
+    this.stateObservers.set(node, observer);
+    node.events?.initializedFromRemote?.on(observer.refresh);
+    node.events?.attributeChanged?.on(observer.refresh);
+  }
+
+  async persistMatterNodeState(node) {
+    if (!node.isConnected) return;
+    const known = await Device.find({ 'properties.source': MATTER_SOURCE, 'properties.matter.nodeId': normalizeMatterNodeId(node.nodeId) }).lean();
+    const updated = [];
+    for (const device of known) {
+      const changes = await this.refreshMatterDeviceState(device, { fromSubscription: true });
+      if (changes) updated.push(await Device.findByIdAndUpdate(device._id, { $set: changes }, { returnDocument: 'after' }));
+    }
+    if (updated.length) deviceUpdateEmitter.emit('devices:update', deviceUpdateEmitter.normalizeDevices(updated.filter(Boolean)));
+  }
+
+  async refreshMatterDeviceState(device, { fromSubscription = false } = {}) {
     if (!this.isMatterDevice(device)) {
       return null;
     }
@@ -4050,6 +4099,7 @@ class MatterService {
     }
 
     const node = await controller.getNode(BigInt(nodeId), true);
+    this.observeMatterNode(node);
     if (!node.isConnected) {
       node.connect({ autoSubscribe: true });
     }
@@ -4060,6 +4110,15 @@ class MatterService {
         lastSeen: new Date(),
         'properties.matterLastError': `Matter endpoint ${endpointId} was not found`
       };
+    }
+    if (!fromSubscription) {
+      // Passing true bypasses the matter.js attribute cache.
+      for (const client of endpoint.getAllClusterClients?.() || []) {
+        for (const name of ['OnOff', 'CurrentLevel', 'LockState', 'LocalTemperature', 'OccupiedHeatingSetpoint', 'OccupiedCoolingSetpoint', 'MeasuredValue', 'StateValue']) {
+          const read = client[`get${name}Attribute`];
+          if (typeof read === 'function') await read.call(client, true);
+        }
+      }
     }
     const descriptor = this.getEndpointDescriptor(node, endpoint, {
       requestedName: device.name,
@@ -4254,6 +4313,7 @@ class MatterService {
     for (const nodeId of nodeIds) {
       try {
         const node = await controller.getNode(nodeId, true);
+        this.observeMatterNode(node);
         if (!node.isConnected) {
           node.connect({ autoSubscribe: true });
         }

@@ -1176,6 +1176,33 @@ function extractDeviceMetrics(device = {}) {
   addMetric(metrics, 'online', device.isOnline);
   addMetric(metrics, 'status', device.status);
 
+  if (sourceOrigin === 'midea' || sourceOrigin === 'econet') {
+    if (device.isOnline !== true) {
+      delete metrics.status;
+      return metrics; // Record availability, without resampling old readings.
+    }
+    const appliance = properties.appliance || {};
+    addMetric(metrics, 'temperature_f', device.temperature);
+    addMetric(metrics, 'target_temperature_f', device.targetTemperature);
+    addMetric(metrics, 'outdoor_temperature_f', appliance.outdoorTemperature);
+    addMetric(metrics, 'humidity_pct', appliance.humidity);
+    addMetric(metrics, 'power_w', appliance.powerW);
+    addMetric(metrics, 'energy_kwh', appliance.energyKwh);
+    addMetric(metrics, 'alert_count', appliance.alertCount);
+    addMetric(metrics, 'error_code', appliance.errorCode);
+    addMetric(metrics, 'filter_alert', appliance.filterAlert);
+    addMetric(metrics, 'signal_rssi_dbm', appliance.wifiSignal);
+    addMetric(metrics, 'water_usage_today_gal', appliance.waterUsageToday);
+    // EcoNet returns an explicit energy type; gas usage must not be labelled kWh.
+    addMetric(metrics, 'energy_usage_today', appliance.energyUsageToday);
+    addMetric(metrics, 'shutoff_valve_open', appliance.shutoffValveOpen);
+    for (const setting of ['eco', 'turbo', 'sleep']) addMetric(metrics, `${setting}_active`, appliance[setting]);
+    if (sourceOrigin === 'midea' && appliance.mode) {
+      for (const mode of ['auto', 'cool', 'heat', 'dry', 'fan', 'smart_dry']) addMetric(metrics, `${mode}_active`, appliance.mode === mode);
+    }
+    return metrics;
+  }
+
   if (sourceOrigin === 'rainmachine') {
     const rainMachine = properties.rainmachine && typeof properties.rainmachine === 'object'
       ? properties.rainmachine
@@ -1948,7 +1975,8 @@ class TelemetryService {
           ? 'sense_device_state'
           : 'device_state';
 
-    const recordedAt = parseOptionalDate(device?.lastSeen) || new Date();
+    const isAppliance = ['midea', 'econet'].includes(sourceOrigin);
+    const recordedAt = (isAppliance && parseOptionalDate(device?.properties?.appliance?.checkedAt)) || parseOptionalDate(device?.lastSeen) || new Date();
     const payload = {
       sourceType,
       sourceId,
@@ -1962,7 +1990,8 @@ class TelemetryService {
       metrics,
       metadata: {
         hasProperties: device?.properties && typeof device.properties === 'object',
-        sourceOrigin
+        sourceOrigin,
+        ...(isAppliance ? { energyType: device.properties?.appliance?.energyType || null, mode: device.properties?.appliance?.mode || null, observedAt: device.properties?.appliance?.observedAt || null } : {})
       },
       recordedAt,
       createdAt: new Date()

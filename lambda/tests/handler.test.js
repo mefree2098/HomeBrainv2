@@ -294,6 +294,20 @@ test('lambda handler resolves Discover, AcceptGrant, ReportState, and control di
     endpointId: 'hb:hub-test:device:lamp-1'
   });
 
+  for (const [namespace, name, instance, payload] of [
+    ['Alexa.ModeController', 'SetMode', 'HomeBrain.AC.Fan', { mode: 'low' }],
+    ['Alexa.ToggleController', 'TurnOn', 'HomeBrain.AC.eco', {}]
+  ]) {
+    const response = await handler({ directive: {
+      header: { namespace, name, instance, payloadVersion: '3', messageId: 'ac-test', correlationToken: 'ac-corr' },
+      endpoint: { endpointId: 'hb:hub-test:device:lamp-1', scope: { type: 'BearerToken', token: 'access-123' } }, payload
+    } });
+    assert.equal(response.event.header.name, 'Response');
+    const forwarded = calls.filter((call) => call.url === '/api/alexa/directives/execute').at(-1).body;
+    assert.equal(forwarded.directive.header.instance, instance);
+    assert.deepEqual(forwarded.directive.payload, payload);
+  }
+
   const sceneResponse = await handler({
     directive: {
       header: {

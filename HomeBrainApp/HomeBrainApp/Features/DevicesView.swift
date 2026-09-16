@@ -1609,6 +1609,9 @@ struct DevicesView: View {
                 currentTemp: currentTemp,
                 pending: pending
             )
+            if device.properties["source"] as? String == "midea" {
+                applianceExtraControls(for: device)
+            }
         }
     }
 
@@ -1625,9 +1628,9 @@ struct DevicesView: View {
             Slider(
                 value: Binding(
                     get: { currentThermostatSetpoint(for: device) },
-                    set: { thermostatTemperatureDrafts[device.id] = clampThermostatTemperature($0) }
+                    set: { thermostatTemperatureDrafts[device.id] = clampThermostatTemperature($0, for: device) }
                 ),
-                in: 55...90,
+                in: thermostatTemperatureRange(for: device),
                 step: 1,
                 onEditingChanged: { editing in
                     guard !editing else { return }
@@ -1640,7 +1643,7 @@ struct DevicesView: View {
             .accessibilityLabel("Target temperature for \(device.name)")
 
             LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: dynamicTypeSize.isAccessibilitySize ? 1 : 2), spacing: 8) {
-                ForEach(thermostatModes, id: \.self) { thermostatMode in
+                ForEach(supportedThermostatModes(for: device), id: \.self) { thermostatMode in
                     thermostatModeChip(
                         device: device,
                         mode: thermostatMode,
@@ -1661,6 +1664,75 @@ struct DevicesView: View {
     ) -> some View {
         HBDeviceModeButton(title: mode, selected: activeMode == mode, disabled: pending) {
             Task { await handleDeviceControl(deviceId: device.id, action: "set_mode", value: mode) }
+        }
+    }
+
+    private func supportedThermostatModes(for device: DeviceItem) -> [String] {
+        let supported = device.properties["supportedThermostatModes"] as? [String] ?? []
+        return supported.isEmpty ? thermostatModes : supported
+    }
+
+    private func thermostatTemperatureRange(for device: DeviceItem) -> ClosedRange<Double> {
+        let appliance = JSON.object(device.properties["appliance"])
+        let capabilities = JSON.object(appliance["capabilities"])
+        let minimum = numberValue(from: capabilities["minTemperature"]) ?? 55
+        let maximum = numberValue(from: capabilities["maxTemperature"]) ?? 90
+        return minimum...max(minimum, maximum)
+    }
+
+    private func applianceExtraControls(for device: DeviceItem) -> some View {
+        let state = JSON.object(device.properties["appliance"])
+        let capabilities = JSON.object(state["capabilities"])
+        let pending = pendingControls.contains(device.id)
+        return VStack(alignment: .leading, spacing: 12) {
+            ForEach(["fanSpeeds", "swings"], id: \.self) { key in
+                let options = capabilities[key] as? [String] ?? []
+                let stateKey = key == "fanSpeeds" ? "fanSpeed" : "swing"
+                let action = key == "fanSpeeds" ? "set_fan_speed" : "set_swing"
+                if !options.isEmpty {
+                    Picker(key == "fanSpeeds" ? "Fan speed" : "Swing", selection: Binding(
+                        get: { String(describing: state[stateKey] ?? options[0]) },
+                        set: { value in Task { await handleDeviceControl(deviceId: device.id, action: action, value: value) } }
+                    )) {
+                        ForEach(options, id: \.self) { option in Text(option.capitalized).tag(option) }
+                    }
+                    .disabled(pending)
+                }
+            }
+            ForEach(["eco", "turbo", "sleep"], id: \.self) { key in
+                if capabilities[key] as? Bool == true {
+                    Toggle(key.capitalized, isOn: Binding(
+                        get: { state[key] as? Bool ?? false },
+                        set: { value in Task { await handleDeviceControl(deviceId: device.id, action: "set_\(key)", value: value) } }
+                    ))
+                    .disabled(pending)
+                }
+            }
+            if let code = numberValue(from: state["errorCode"]), code != 0 {
+                Text("AC error code: \(Int(code))").foregroundStyle(.red)
+            }
+            if state["filterAlert"] as? Bool == true {
+                Text("Filter maintenance reminder").foregroundStyle(.orange)
+            }
+            if let error = state["lastError"] as? String, !error.isEmpty {
+                Text(error).font(.caption).foregroundStyle(.red)
+            }
+        }
+    }
+
+    private func waterHeaterReadings(for device: DeviceItem) -> some View {
+        let state = JSON.object(device.properties["appliance"])
+        let fields = [("runningState", "Operating state"), ("mode", "Mode"), ("alertCount", "Active alerts"), ("wifiSignal", "Wi-Fi signal (dBm)"), ("energyUsageToday", "Energy used today"), ("energyType", "Energy type"), ("waterUsageToday", "Water used today (gal)"), ("leakSensorInstalled", "Leak sensor installed"), ("shutoffValveOpen", "Shutoff valve open")]
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(device.isOnline ? "Connected to EcoNet" : "Offline — last known readings")
+            if let target = device.targetTemperature { Text("Water setpoint: \(target, specifier: "%.0f")°F") }
+            ForEach(fields, id: \.0) { field in
+                if let value = state[field.0], !(value is NSNull) {
+                    HStack { Text(field.1); Spacer(); Text(String(describing: value)) }
+                        .font(.caption)
+                }
+            }
+            Text("Active alerts and service details are available in EcoNet.").font(.caption)
         }
     }
 
@@ -2232,6 +2304,8 @@ struct DevicesView: View {
 
                                 if device.type == "thermostat" {
                                     thermostatControls(for: device)
+                                } else if device.type == "water_heater" {
+                                    waterHeaterReadings(for: device)
                                 } else if supportsLightFade(device) {
                                     lightControls(for: device)
                                 } else if supportsSirenVolume(device) || supportsSirenSound(device) {
@@ -4405,6 +4479,8 @@ struct DevicesView: View {
 
         var updated = devices[index]
 
+        if updated.properties["source"] as? String == "midea" { return }
+
         switch action {
         case "turn_on":
             updated.status = true
@@ -5492,6 +5568,10 @@ struct DevicesView: View {
             return "heat"
         case "off":
             return "off"
+        case "dry", "fan", "fanonly":
+            return raw == "fanonly" ? "fan" : raw
+        case "smartdry":
+            return "smart_dry"
         default:
             return nil
         }
@@ -5522,6 +5602,7 @@ struct DevicesView: View {
         if let fallback = normalizeThermostatMode(
             device.properties["smartThingsLastActiveThermostatMode"]
                 ?? device.properties["ecobeeLastActiveHvacMode"]
+                ?? device.properties["lastActiveHvacMode"]
         ) {
             return fallback
         }
@@ -5539,8 +5620,9 @@ struct DevicesView: View {
         return 68
     }
 
-    private func clampThermostatTemperature(_ value: Double) -> Double {
-        let clamped = min(90, max(55, value))
+    private func clampThermostatTemperature(_ value: Double, for device: DeviceItem? = nil) -> Double {
+        let range = device.map { thermostatTemperatureRange(for: $0) } ?? 55...90
+        let clamped = min(range.upperBound, max(range.lowerBound, value))
         return clamped.rounded()
     }
 

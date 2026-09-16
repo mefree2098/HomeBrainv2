@@ -531,6 +531,11 @@ async function loadReachyModule(definition, preferences) {
 async function loadModuleStatus(definition, preferences) {
   try {
     switch (definition.id) {
+      case 'midea':
+      case 'econet': {
+        const { integration, devices } = await require('./applianceService').getStatus(definition.id);
+        return buildModuleStatus(definition, { ...integration, resources: devices.map((device) => ({ id: String(device._id || device.id), label: device.name, online: device.isOnline })) });
+      }
       case 'tempest':
         return await loadTempestModule(definition, preferences);
       case 'govee-indoor-air':

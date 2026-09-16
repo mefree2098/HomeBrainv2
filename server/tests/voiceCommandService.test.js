@@ -1,6 +1,29 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+test('Theater AC voice commands retain an explicitly named device beyond the 40-device prompt limit', () => {
+  const service = require('../services/voiceCommandService');
+  const ac = { id: 'theater-ac', name: 'TheaterAC', room: 'Theater', type: 'thermostat', source: 'midea', capabilities: ['turn_on', 'turn_off', 'set_mode', 'set_temperature', 'set_fan_speed', 'set_eco', 'set_swing'], properties: { source: 'midea', appliance: { capabilities: { modes: ['off', 'heat', 'cool', 'fan'], eco: true, swings: ['off', 'vertical', 'horizontal', 'both'] } } } };
+  const devices = Array.from({ length: 60 }, (_, i) => ({ ...ac, id: `light-${i}`, name: `A light ${i}`, room: 'Bedroom', type: 'light', capabilities: ['turn_on', 'turn_off'] })).concat(ac);
+  assert.match(service.buildPrompt('Set Theater AC to heat at 74 degrees', { room: 'Bedroom', devices, scenes: [], workflows: [] }), /ID:theater-ac/);
+  assert.equal(service.findBestDevice('Set Theater AC to heat at 74 degrees', devices).id, ac.id);
+  const plan = service.fallbackInterpretation('Set Theater AC to heat at 74 degrees', { devices }, 'Bedroom');
+  assert.deepEqual(plan.actions.map(({ action, value }) => ({ action, value })), [{ action: 'set_mode', value: 'heat' }, { action: 'set_temperature', value: 74 }]);
+  const off = service.fallbackInterpretation('Turn off Theater AC fan', { devices }, 'Bedroom');
+  assert.equal(off.actions[0].action, 'turn_off');
+  for (const [phrase, action, value] of [
+    ['Turn Theater AC off', 'turn_off', undefined],
+    ['Turn Theater AC eco off', 'set_eco', false],
+    ['Set Theater AC fan speed to low', 'set_fan_speed', 'low'],
+    ['Set Theater AC swing to horizontal', 'set_swing', 'horizontal'],
+    ['Set Theater AC to 20 degrees Celsius', 'set_temperature', 68]
+  ]) {
+    const result = service.fallbackInterpretation(phrase, { devices }, 'Bedroom');
+    assert.equal(result.actions[0].action, action);
+    assert.equal(result.actions[0].value, value);
+  }
+});
+
 test('extractNumber handles percentages and bounded control phrases', () => {
   const voiceCommandService = require('../services/voiceCommandService');
   assert.equal(voiceCommandService.extractNumber('set it to 42 percent'), 42);

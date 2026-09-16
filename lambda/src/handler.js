@@ -18,6 +18,8 @@ const CONTROL_NAMESPACES = new Set([
   'Alexa.ColorController',
   'Alexa.ColorTemperatureController',
   'Alexa.ThermostatController',
+  'Alexa.ModeController',
+  'Alexa.ToggleController',
   'Alexa.LockController',
   'Alexa.SceneController'
 ]);

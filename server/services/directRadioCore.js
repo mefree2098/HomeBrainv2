@@ -1111,6 +1111,24 @@ async refreshDirectDeviceState(device, options = {}) {
       return null;
     }
 
+    let zwaveLiveFields = [];
+    if (protocol === 'zwave' && options.liveRead === true && typeof node.pollValue === 'function') {
+      const pollable = (node.getDefinedValueIDs?.() || []).filter((valueId) =>
+        ([37, 38].includes(valueId.commandClass) && valueId.property === 'currentValue')
+        || (valueId.commandClass === 98 && valueId.property === 'currentMode')
+      );
+      for (const valueId of pollable) {
+        try {
+          const value = await withTimeout(node.pollValue(valueId), 8000, 'Z-Wave live state query timed out');
+          if (value !== undefined) {
+            zwaveLiveFields.push('status');
+            if (valueId.commandClass === 38) zwaveLiveFields.push('brightness');
+          }
+        } catch (error) {
+          this.log('warn', 'zwave', 'Z-Wave live state query failed', { nodeId: node.id, error: error.message });
+        }
+      }
+    }
     const normalized = protocol === 'zigbee'
       ? this.normalizeZigbeeDevice(node, 'refresh')
       : this.normalizeZWaveNode(node, 'refresh');
@@ -1119,6 +1137,9 @@ async refreshDirectDeviceState(device, options = {}) {
     }
 
     let refreshUpdate = normalized.update;
+    if (protocol === 'zwave' && options.liveRead === true) {
+      refreshUpdate.__homebrainLiveRead = { attempted: true, success: zwaveLiveFields.length > 0, fields: [...new Set(zwaveLiveFields)] };
+    }
     if (protocol === 'zigbee' && options?.liveRead === true && typeof this.readZigbeeLiveRuntimeState === 'function') {
       const requiredLiveFields = getZigbeeLiveReadRequiredFields(options.action);
       const liveRuntimeUpdate = await this.readZigbeeLiveRuntimeState(node, device, {
@@ -1192,6 +1213,34 @@ async refreshDirectDeviceState(device, options = {}) {
     }
 
     return merged;
+  },
+
+async refreshDirectStatesOnReconnect(protocol) {
+    const radio = this[protocol];
+    if (!radio?.started || radio.stateRefreshPromise) return radio?.stateRefreshPromise;
+    radio.stateRefreshPromise = (async () => {
+      const devices = await Device.find({ 'properties.source': `homebrain-${protocol}` }).lean();
+      let queried = 0;
+      for (const device of devices) {
+        if (!radio.started) break;
+        const node = this.getDirectNodeForDevice(device);
+        // Sleeping battery devices report on wake. Querying them immediately
+        // would stall recovery for the listening lights, plugs, and locks.
+        const listening = protocol === 'zigbee' ? node?.type === 'Router' : (node?.isListening || node?.isFrequentListening);
+        if (!listening || !['light', 'switch', 'lock', 'siren', 'thermostat'].includes(device.type)) continue;
+        try {
+          const updated = await require('./deviceService').refreshDirectRadioDeviceState(device, { liveRead: true, reason: 'protocol_reconnected' });
+          const verified = updated?.__homebrainLiveRead?.success === true;
+          await Device.updateOne({ _id: device._id }, { 'properties.homebrainDirect.stateStale': !verified });
+          if (verified) queried++;
+        } catch (error) {
+          await Device.updateOne({ _id: device._id }, { 'properties.homebrainDirect.stateStale': true });
+          this.log('warn', protocol, 'Device state could not be refreshed after reconnect', { deviceId: String(device._id), error: error.message });
+        }
+      }
+      this.log('info', protocol, 'Live device state refresh after reconnect finished', { queried, knownDevices: devices.length });
+    })().finally(() => { radio.stateRefreshPromise = null; });
+    return radio.stateRefreshPromise;
   },
 
 getDetectedPortDetails(protocol) {

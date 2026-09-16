@@ -591,10 +591,13 @@ function getRequiredVerifiedFieldsForAlreadySatisfied(actionName, value) {
 function hasVerifiedFieldsForAlreadySatisfied(device, actionName, value) {
   const marker = device?.__homebrainLiveRead;
   if (!marker?.attempted) {
-    return true;
+    // Persisted state cannot suppress a command to physical hardware after an
+    // outage. Only local/mock devices have no remote state to verify.
+    return ['local', 'mock', ''].includes(getDeviceSource(device));
   }
 
   const fields = Array.isArray(marker.fields) ? marker.fields : [];
+  if (marker.success !== true) return false;
   return getRequiredVerifiedFieldsForAlreadySatisfied(actionName, value)
     .every((field) => fields.includes(field));
 }
@@ -618,7 +621,7 @@ async function refreshDeviceBeforeAlreadySatisfiedCheck(device, actionName, cont
     console.warn(
       `WorkflowExecutionService: Direct radio state refresh before skip check failed for ${device?.name || device?._id || 'device'}: ${error.message}`
     );
-    return device;
+    return { ...device, __homebrainLiveRead: { attempted: true, success: false, fields: [] } };
   }
 }
 

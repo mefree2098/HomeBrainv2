@@ -32,6 +32,20 @@ const SHARED_DEVICE_TYPES = Object.freeze([
 
 const INTEGRATION_MODULE_DEFINITIONS = [
   {
+    id: 'midea', label: 'Cooper & Hunter / Midea AC', provider: 'Midea LAN', category: 'Climate',
+    description: 'Local AC control, supported modes, fan speed, live readings, and maintenance alerts.',
+    settingsTab: 'midea', apiBasePath: '/api/appliances/midea', deviceSource: 'midea',
+    capabilities: ['thermostat', 'indoor_climate', 'device_control', 'workflow_actions', 'workflow_conditions', 'telemetry_source', 'alerts_source'],
+    deviceTypes: ['thermostat'], telemetrySourceTypes: []
+  },
+  {
+    id: 'econet', label: 'Rheem EcoNet Water Heater', provider: 'Rheem EcoNet', category: 'Climate',
+    description: 'Water heater status, active alerts, connectivity, and available water and energy usage.',
+    settingsTab: 'econet', apiBasePath: '/api/appliances/econet', deviceSource: 'econet',
+    capabilities: ['workflow_conditions', 'telemetry_source', 'alerts_source'],
+    deviceTypes: ['water_heater'], telemetrySourceTypes: []
+  },
+  {
     id: 'tempest',
     label: 'Tempest Weather Station',
     provider: 'WeatherFlow Tempest',

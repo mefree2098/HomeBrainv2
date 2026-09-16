@@ -28,6 +28,12 @@ const ACTION_MAP = {
   colour: 'setColor',
   set_temperature: 'setTemperature',
   settemperature: 'setTemperature',
+  set_mode: 'setMode',
+  set_fan_speed: 'setFanSpeed',
+  set_swing: 'setSwing',
+  set_eco: 'setEco',
+  set_turbo: 'setTurbo',
+  set_sleep: 'setSleep',
   lock: 'lock',
   unlock: 'unlock',
   open: 'open',
@@ -253,7 +259,11 @@ class VoiceCommandService {
         return capabilities;
       }
       case 'thermostat':
-        return ['turn_on', 'turn_off', 'set_temperature'];
+        return normalizedSource === 'midea'
+          ? ['turn_on', 'turn_off', 'set_temperature', 'set_mode', 'set_fan_speed', 'set_swing', 'set_eco', 'set_turbo', 'set_sleep']
+          : ['turn_on', 'turn_off', 'set_temperature', 'set_mode'];
+      case 'water_heater':
+        return [];
       case 'lock':
         return ['lock', 'unlock'];
       case 'garage':
@@ -446,6 +456,9 @@ class VoiceCommandService {
     const wakeWordLabel = wakeWord || 'unknown';
 
     const sortedDevices = [...devices].sort((a, b) => {
+      const compactText = this.normalizeVoiceSearchText(commandText).replace(/\s/g, '');
+      const named = (device) => this.getDeviceVoiceAliases(device).some((alias) => alias.length >= 3 && compactText.includes(alias.replace(/\s/g, '')));
+      if (named(a) !== named(b)) return named(a) ? -1 : 1;
       if (a.room === primaryRoom && b.room !== primaryRoom) return -1;
       if (b.room === primaryRoom && a.room !== primaryRoom) return 1;
       return a.name.localeCompare(b.name);
@@ -463,7 +476,8 @@ class VoiceCommandService {
       .slice(0, 30);
 
     const deviceLines = sortedDevices.map((device, index) => {
-      return `${index + 1}. ID:${device.id} | Name:${device.name} | Room:${device.room} | Type:${device.type} | Source:${device.source} | Capabilities:${device.capabilities.join(',')}`;
+      const settings = device.properties?.appliance?.capabilities;
+      return `${index + 1}. ID:${device.id} | Name:${device.name} | Room:${device.room} | Type:${device.type} | Source:${device.source} | Capabilities:${device.capabilities.join(',')}${settings ? ` | Supported settings:${JSON.stringify(settings)} | Temperature unit:Fahrenheit` : ''}`;
     }).join('\n');
 
     const sceneLines = sortedScenes.map((scene, index) => {
@@ -507,8 +521,8 @@ OUTPUT FORMAT (must be valid JSON ONLY, no surrounding text):
       "workflowName": "WORKFLOW_NAME_IF_REFERENCED",
       "operation": "run|enable|disable",
       "description": "Required for workflow_create/workflow_revise: what should be created or changed",
-      "action": "<device_action>",  // e.g., turn_on, turn_off, toggle, set_brightness, set_color, set_temperature, lock, unlock, open, close
-      "value": "optional numeric or string value",
+      "action": "<device_action>",  // e.g., turn_on, turn_off, toggle, set_brightness, set_color, set_temperature, set_mode, set_fan_speed, set_swing, set_eco, set_turbo, set_sleep, lock, unlock, open, close
+      "value": "optional numeric, string, or boolean value",
       "room": "optional room for extra clarity"
     }
   ],
@@ -519,7 +533,7 @@ OUTPUT FORMAT (must be valid JSON ONLY, no surrounding text):
 DECISION RULES
 1. ALWAYS return at least one action when the user wants something controlled. Map the request to the closest matching device using name + room context. Prefer devices in ${primaryRoom} unless the user clearly specifies another room.
 2. ONLY use deviceId / sceneId values from the lists above. Do not invent IDs. If two devices match equally, pick the most specific (exact name match beats fuzzy match).
-3. For brightness actions return percentages (0-100). For color actions return a hex color string (for example "#ff0000"). For temperature, use whole-number Fahrenheit unless the user specifies another scale.
+3. For brightness actions return percentages (0-100). For color actions return a hex color string (for example "#ff0000"). Temperature action values must be Fahrenheit; convert a spoken Celsius value to Fahrenheit. Use only the device's listed supported settings. AC eco/turbo/sleep values are booleans, mode/fan/swing values use the exact supported setting names.
 4. Use "workflow_create" when the user asks to create/schedule a routine or workflow. Use "workflow_revise" when the user asks to edit, fix, update, revise, or change an existing workflow. Use "workflow_control" when the user asks to run/enable/disable an existing workflow. Immediate commands like "turn on the vault light" must stay "device_control".
 5. For "workflow_revise", choose the best matching workflow from AVAILABLE WORKFLOWS. Use "workflowId" whenever possible, include the exact "workflowName", and include a concise "description" of the requested changes.
 6. If the request is a general question or not about controlling devices, set intent to "query", leave "actions" empty, and provide the direct answer in "response". Only use "followUpQuestion" when clarification is required.
@@ -732,6 +746,12 @@ RULES
     let best = null;
     let bestScore = Number.NEGATIVE_INFINITY;
 
+    // Speech separates names such as TheaterAC into “Theater AC”. Match that
+    // explicit name before room words can select another theater device.
+    const compactText = text.replace(/\s/g, '');
+    const explicit = devices.filter((device) => this.getDeviceVoiceAliases(device).some((alias) => alias.replace(/\s/g, '').length >= 5 && compactText.includes(alias.replace(/\s/g, ''))));
+    if (explicit.length === 1) return explicit[0];
+
     if (targetPhrase) {
       for (const device of devices) {
         const aliases = this.getDeviceVoiceAliases(device);
@@ -906,6 +926,35 @@ RULES
     const value = this.extractNumber(commandText);
     const colorValue = this.extractColor(commandText);
     const capabilities = new Set(Array.isArray(device.capabilities) ? device.capabilities : []);
+
+    if (device.type === 'thermostat' && capabilities.has('set_mode')) {
+      const supported = device.properties?.appliance?.capabilities || {};
+      const mode = /\b(smart[ _]dry|heat|cool|auto|dry|fan)(?:\s+mode)?\b/.exec(text)?.[1]?.replace(' ', '_');
+      const fan = /\bfan\s+(?:speed\s+)?(?:to\s+)?(auto|max|high|medium|low|silent)\b/.exec(text)?.[1];
+      const acActions = [];
+      const toggle = /\b(eco|turbo|sleep)\b/.exec(text)?.[1];
+      const off = /\b(off|disable)\b/.test(text);
+      const on = /\b(on|enable)\b/.test(text);
+      const swing = /\b(vertical|horizontal|both|off)\b/.exec(text)?.[1];
+      if (toggle && supported[toggle] && (on || off)) {
+        acActions.push({ action: `set_${toggle}`, value: !off });
+      } else if (/\bswing\b/.test(text) && capabilities.has('set_swing') && supported.swings?.includes(swing)) {
+        acActions.push({ action: 'set_swing', value: swing });
+      } else if (off && /\b(turn|switch|power)\b/.test(text)) {
+        acActions.push({ action: 'turn_off' });
+      } else {
+        if (fan && capabilities.has('set_fan_speed')) acActions.push({ action: 'set_fan_speed', value: fan });
+        else if (mode && (!supported.modes || supported.modes.includes(mode))) acActions.push({ action: 'set_mode', value: mode });
+        if (value !== null && value !== undefined && /\b(temperature|degrees|heat|cool|set)\b/.test(text) && !fan) {
+          acActions.push({ action: 'set_temperature', value: /\b(celsius|centigrade)\b|\d\s*°?c\b/.test(text) ? value * 1.8 + 32 : value });
+        }
+      }
+      if (acActions.length) return {
+        intent: 'device_control', confidence: 0.8, normalizedCommand: commandText,
+        actions: acActions.map((action) => ({ type: 'device_control', deviceId: device.id, room: room || device.room, ...action })),
+        response: `Okay, updating ${device.name}.`, followUpQuestion: null, usedFallback: true
+      };
+    }
 
     const actionCandidates = [];
     if (text.includes('turn on') || text.includes('switch on') || text.includes('power on')) {

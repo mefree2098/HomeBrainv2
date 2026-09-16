@@ -1247,6 +1247,14 @@ class DeviceService {
         metadata: commandMetadata
       });
 
+      if (['midea', 'econet'].includes(device?.properties?.source)) {
+        const updated = await require('./applianceService').controlDevice(device, normalizedAction, value);
+        if (options?.releaseCommandClaimOnSuccess && coordinatorAdmission?.accepted && !coordinatorAdmission.disabled) {
+          await deviceCommandCoordinatorService.releaseCommand(coordinatorAdmission.command?.commandId, { reason: 'Appliance confirmed the requested state' });
+        }
+        return updated;
+      }
+
       const isSmartThings = this.isSmartThingsDevice(device);
       const isHarmony = this.isHarmonyDevice(device);
       const isEcobee = this.isEcobeeDevice(device);
