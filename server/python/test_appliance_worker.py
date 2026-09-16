@@ -92,6 +92,11 @@ class ApplianceTests(unittest.IsolatedAsyncioTestCase):
         ac.authenticate.assert_awaited_once_with('private-token', 'private-key')
         self.assertEqual(self.worker.config['devices'][0]['ip'], '192.168.1.9')
 
+    async def test_tankless_family_is_not_mislabelled_as_electric(self):
+        from pyeconet.equipment.water_heater import WaterHeaterOperationMode
+        heater = SimpleNamespace(serial_number='tankless', generic_type='eagleWaterHeater', enabled=True, mode=WaterHeaterOperationMode.ELECTRIC_MODE)
+        self.assertEqual(self.worker.heater_snapshot(heater)['mode'], 'enabled')
+
     async def test_heater_missing_values_remain_unknown_and_leak_capability_is_not_an_alarm(self):
         heater = SimpleNamespace(serial_number='rheem-123', connected=True, alert_count=0, leak_installed=True)
         result = self.worker.heater_snapshot(heater)

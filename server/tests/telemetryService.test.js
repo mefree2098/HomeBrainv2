@@ -32,10 +32,15 @@ test('appliance reporting records actual AC settings and heater usage without re
   assert.equal(metrics.power_w, undefined);
   assert.deepEqual(extractDeviceMetrics({ ...ac, isOnline: false }), { online: 0 });
   const heater = extractDeviceMetrics({ isOnline: true, properties: { source: 'econet', appliance: { alertCount: 2, energyUsageToday: 8.5, energyType: 'KBTU', waterUsageToday: 43 } } });
-  assert.equal(heater.energy_usage_today, 8.5);
+  assert.equal(heater.energy_usage_today_kbtu, 8.5);
   assert.equal(heater.energy_kwh, undefined);
   assert.equal(heater.water_usage_today_gal, 43);
   assert.equal(heater.alert_count, 2);
+  const descriptors = buildMetricDescriptors(Object.keys(heater));
+  const water = descriptors.find((d) => d.key === 'water_usage_today_gal');
+  assert.equal(water.unit, 'gal');
+  assert.equal(water.binary, false);
+  assert.equal(descriptors.find((d) => d.key === 'energy_usage_today_kbtu').unit, 'kBTU');
 });
 
 test('telemetry prompt windows are interpreted within bounded limits', () => {

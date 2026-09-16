@@ -226,6 +226,11 @@ class Worker:
 
     def heater_snapshot(self, device):
         mode = optional(device, "mode")
+        # pyeconet defaults an unrecognized heater family to electric mode.
+        # Eagle tankless units expose on/off without an actual mode selector.
+        if optional(device, "generic_type") == "eagleWaterHeater" and label(mode) == "electric_mode":
+            enabled = optional(device, "enabled")
+            mode = "enabled" if enabled is True else "off" if enabled is False else None
         return {
             "id": str(device.serial_number), "name": optional(device, "device_name"),
             "online": optional(device, "connected") is True,

@@ -811,6 +811,10 @@ function inferMetricLabel(key) {
 }
 
 function inferMetricUnit(key) {
+  if (/_gal$/.test(key)) return 'gal';
+  if (/_kbtu$/.test(key)) return 'kBTU';
+  if (/_btu$/.test(key)) return 'BTU';
+  if (/_therm$/.test(key)) return 'therm';
   if (/_ms$/.test(key)) {
     return 'ms';
   }
@@ -1028,7 +1032,7 @@ function timelineMetricPriority(key) {
 }
 
 function isBinaryMetric(key) {
-  return BINARY_METRIC_PATTERN.test(key);
+  return !inferMetricUnit(key) && BINARY_METRIC_PATTERN.test(key);
 }
 
 function metricPriority(key) {
@@ -1194,7 +1198,9 @@ function extractDeviceMetrics(device = {}) {
     addMetric(metrics, 'signal_rssi_dbm', appliance.wifiSignal);
     addMetric(metrics, 'water_usage_today_gal', appliance.waterUsageToday);
     // EcoNet returns an explicit energy type; gas usage must not be labelled kWh.
-    addMetric(metrics, 'energy_usage_today', appliance.energyUsageToday);
+    const energyUnit = String(appliance.energyType || '').trim().toLowerCase();
+    const energyMetric = ['kbtu', 'btu', 'kwh', 'therm'].includes(energyUnit) ? `energy_usage_today_${energyUnit}` : 'energy_usage_today';
+    addMetric(metrics, energyMetric, appliance.energyUsageToday);
     addMetric(metrics, 'shutoff_valve_open', appliance.shutoffValveOpen);
     for (const setting of ['eco', 'turbo', 'sleep']) addMetric(metrics, `${setting}_active`, appliance[setting]);
     if (sourceOrigin === 'midea' && appliance.mode) {
