@@ -109,8 +109,9 @@ final class DashboardVisualTests: XCTestCase {
         XCTAssertTrue(title.waitForExistence(timeout: 30))
         if app.buttons["Collapse main menu"].isHittable { app.buttons["Collapse main menu"].tap() }
         let color = app.buttons["Set color for Theater Wall Sconce Left"]
-        let cardCenterX = title.frame.midX
-        revealInNarrowWidget(color, in: app, atX: cardCenterX)
+        // Stay in the card padding: a drag through its brightness slider edits it instead of scrolling.
+        let cardSwipeX = title.frame.minX - 8
+        revealInNarrowWidget(color, in: app, atX: cardSwipeX)
         XCTAssertTrue(color.isHittable)
         XCTAssertGreaterThanOrEqual(color.frame.width, 44)
         XCTAssertGreaterThanOrEqual(color.frame.minY, title.frame.maxY, "Color controls must not squeeze the name")
@@ -118,23 +119,24 @@ final class DashboardVisualTests: XCTestCase {
         color.tap()
         XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5), "The native color picker must open")
         app.buttons["Sliders"].tap()
-        let red = app.sliders["Red"]
-        XCTAssertTrue(red.waitForExistence(timeout: 5))
-        let originalRed = red.value as? String
-        red.adjust(toNormalizedSliderPosition: 0.2)
-        let selectedRed = red.value as? String
-        XCTAssertNotEqual(selectedRed, originalRed)
+        // Green starts inside the track; the red thumb starts at the clipped landscape edge.
+        let green = app.sliders["Green"]
+        XCTAssertTrue(green.waitForExistence(timeout: 5))
+        let originalGreen = green.value as? String
+        green.adjust(toNormalizedSliderPosition: 0.2)
+        let selectedGreen = green.value as? String
+        XCTAssertNotEqual(selectedGreen, originalGreen)
         attachScreenshot("Lighting color picker", from: app)
         app.buttons["Done"].tap()
         color.tap()
         app.buttons["Sliders"].tap()
-        let restoredPercent = try XCTUnwrap(Double((red.value as? String ?? "").replacingOccurrences(of: "%", with: "")))
-        let selectedPercent = try XCTUnwrap(Double((selectedRed ?? "").replacingOccurrences(of: "%", with: "")))
+        let restoredPercent = try XCTUnwrap(Double((green.value as? String ?? "").replacingOccurrences(of: "%", with: "")))
+        let selectedPercent = try XCTUnwrap(Double((selectedGreen ?? "").replacingOccurrences(of: "%", with: "")))
         // Device colors use 8-bit RGB, while the system slider reports rounded percentages.
         XCTAssertEqual(restoredPercent, selectedPercent, accuracy: 1, "The selected color must persist on the device")
         app.buttons["Done"].tap()
         let lastControl = app.buttons["Turn On Theater Ceiling Fan Power"]
-        revealInNarrowWidget(lastControl, in: app, atX: cardCenterX)
+        revealInNarrowWidget(lastControl, in: app, atX: cardSwipeX)
         XCTAssertTrue(lastControl.isHittable, "The last device must remain reachable in a narrow widget")
     }
 
