@@ -351,15 +351,20 @@ class RemoteDeviceUpdater {
       // Files to update
       const filesToUpdate = MANAGED_FILES;
 
-      // Determine if dependencies changed by comparing package.json
+      // Lockfile-only security updates and override changes also require npm ci.
       let depsChanged = false;
       try {
         const oldPkg = JSON.parse(fs.readFileSync(path.join(this.installDir, 'package.json'), 'utf8'));
         const newPkg = JSON.parse(fs.readFileSync(path.join(extractDir, 'package.json'), 'utf8'));
-        const pick = (o) => ({ ...(o.dependencies||{}), ...(o.optionalDependencies||{}), ...(o.peerDependencies||{}) });
+        const fields = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies', 'overrides'];
+        const pick = (o) => Object.fromEntries(fields.map((field) => [field, o[field] || {}]));
         const oldDeps = JSON.stringify(pick(oldPkg));
         const newDeps = JSON.stringify(pick(newPkg));
-        depsChanged = oldDeps !== newDeps;
+        const readLock = (directory) => {
+          const lockPath = path.join(directory, 'package-lock.json');
+          return fs.existsSync(lockPath) ? fs.readFileSync(lockPath, 'utf8') : null;
+        };
+        depsChanged = oldDeps !== newDeps || readLock(this.installDir) !== readLock(extractDir);
       } catch (_) {
         // If we can't compare, assume changed
         depsChanged = true;

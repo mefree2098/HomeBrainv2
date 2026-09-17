@@ -20,6 +20,7 @@
   "author": "HomeBrain",
   "license": "Apache-2.0",
   "dependencies": {
+    "adm-zip": "0.6.1",
     "node-record-lpcm16": "^1.0.1",
     "node-wav": "^0.0.2",
     "onnxruntime-node": "1.29.0",
