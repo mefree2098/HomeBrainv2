@@ -52,7 +52,7 @@ Bench consumables assumed: soldering iron, solder, flux, desoldering braid if th
 
 ## Radio and antenna
 
-**No external antennas are required and there is nothing additional to order.** The XIAO ESP32-C6 includes an onboard 2.4 GHz ceramic antenna; its U.FL connector is an optional alternate antenna port. Seeed documents the onboard antenna as the default, selected with RF-switch power GPIO3 low and antenna-select GPIO14 low. The pinned Arduino-ESP32 3.3.7 XIAO board variant performs that selection in `initVariant()` before this firmware's `setup()` runs.
+**No external antennas are required and there is nothing additional to order.** The XIAO ESP32-C6 includes an onboard 2.4 GHz ceramic antenna; its U.FL connector is an optional alternate antenna port. Seeed documents the onboard antenna as the default, selected with RF-switch power GPIO3 low and antenna-select GPIO14 low. The pinned Arduino-ESP32 3.3.11 XIAO board variant performs that selection in `initVariant()` before this firmware's `setup()` runs.
 
 The house Wi-Fi must offer a 2.4 GHz network. An external antenna can improve 2.4 GHz signal strength in a difficult location, but it cannot add 5 GHz support.
 
