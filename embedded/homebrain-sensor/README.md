@@ -10,12 +10,12 @@ See the complete [assembly, wiring, power, flashing, and commissioning guide](..
 pio run
 ```
 
-Verified build target: Seeed Studio XIAO ESP32-C6 using the Seeed platform pinned in `platformio.ini` (Arduino-ESP32 3.3.7).
+Verified build target: Seeed Studio XIAO ESP32-C6 using the Seeed platform pinned in `platformio.ini` with matched Arduino-ESP32 3.3.11 core and ESP-IDF library packages.
 
 Current release build:
 
-- Flash: approximately 1.41 MB of a 1.81 MB OTA slot
-- Static RAM: approximately 46 KB of 320 KB
+- Flash: 1,427,688 bytes of a 1,900,544-byte OTA slot (75.1%)
+- Static RAM: 46,396 bytes of 327,680 bytes (14.2%)
 - Reading schema: `homebrain.sensor.reading.v1`
 - Config schema: `homebrain.sensor.config.v1`
 
