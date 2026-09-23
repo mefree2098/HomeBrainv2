@@ -12,6 +12,7 @@ constexpr uint8_t BME_ADDRESS_SECONDARY = 0x77;
 constexpr uint8_t SCD41_ADDRESS = 0x62;
 constexpr uint8_t VEML7700_ADDRESS = 0x10;
 constexpr char DIAGNOSTIC_SCHEMA[] = "homebrain.usb-diagnostic.v1";
+bool setupRequested = false;
 
 bool probe(uint8_t address) {
   Wire.beginTransmission(address);
@@ -129,7 +130,21 @@ UsbDiagnosticSummary runUsbBenchDiagnostic(
     if (!pmsCommandPath) failures.add("pms5003-two-way-uart-failed");
     passed = failures.size() == 0;
   } else {
-    failures.add("profile-diagnostic-not-yet-implemented");
+    JsonObject dht = modules.createNestedObject("dht11");
+    const bool dhtValid = inRange(reading.temperatureC, -10.0f, 60.0f)
+      && inRange(reading.humidityPct, 0.0f, 100.0f);
+    dht["reading_valid"] = dhtValid;
+    setFloat(dht, "temperature_c", reading.temperatureC);
+    setFloat(dht, "humidity_pct", reading.humidityPct);
+    if (!dhtValid) failures.add("dht11-invalid-reading");
+    if (profile == Profile::Presence) {
+      JsonObject radar = modules.createNestedObject("ld2410");
+      radar["reading_valid"] = reading.hasPresence;
+      radar["presence_present"] = reading.presencePresent;
+      if (!reading.hasPresence) failures.add("ld2410-no-valid-frame");
+      if (!vemlAck || !vemlReading) failures.add("veml7700-invalid-reading");
+    }
+    passed = failures.size() == 0;
   }
   document["passed"] = passed;
 
@@ -156,7 +171,10 @@ bool pollUsbDiagnosticConsole(
     command.trim();
     if (command.isEmpty()) continue;
     if (command == "help") {
-      output.println("USB commands: diag | diag air-station | help");
+      output.println("USB commands: diag | diag air-station | diag presence | diag climate | setup | help");
+    } else if (command == "setup") {
+      setupRequested = true;
+      output.println("Local Bluetooth setup requested. Existing HomeBrain credentials are preserved.");
     } else if (command == "diag" || command.startsWith("diag ")) {
       const Profile requested = command == "diag"
         ? (runtime.profile == Profile::Auto ? detectUsbDiagnosticProfile() : runtime.profile)
@@ -172,6 +190,12 @@ bool pollUsbDiagnosticConsole(
     command = "";
   }
   return ranDiagnostic;
+}
+
+bool consumeUsbSetupRequest() {
+  const bool requested = setupRequested;
+  setupRequested = false;
+  return requested;
 }
 
 }  // namespace homebrain

@@ -1,4 +1,5 @@
 import { DeviceSymbol } from "@/components/devices/DeviceSymbol"
+import { sensorSnapshot, sensorSummary } from '@/lib/homebrainSensors'
 import { TemperatureDial } from "@/components/devices/TemperatureDial"
 import { useState, useEffect, useCallback, useMemo, useRef } from "react"
 import { useSearchParams } from "react-router"
@@ -1086,6 +1087,8 @@ const matchesDeviceTypeFilter = (device: any, filterType: string): boolean => {
   if (filterType === 'switch') {
     return device?.type === 'switch' && !isSmartThingsVirtualSwitch(device)
   }
+
+  if (filterType === 'sensor' && device?.properties?.homebrainSensor) return true
 
   return device?.type === filterType
 }
@@ -2425,7 +2428,7 @@ export function Devices({
     const isPendingFavorite = pendingDeviceIds.has(device._id)
     const energyMonitoring = supportsEnergyMonitoring(device)
     const canPrimaryControl = canUsePrimaryDeviceAction(device)
-    const stateText = getDeviceStateText(device)
+    const stateText = sensorSnapshot(device) ? sensorSummary(sensorSnapshot(device)!) : getDeviceStateText(device)
     const sourceLabel = getDeviceSourceLabel(getDeviceSource(device))
     const primaryActionLabel = canPrimaryControl ? getDevicePrimaryActionLabel(device) : "Details"
     const supportsColor = supportsLightColor(device)

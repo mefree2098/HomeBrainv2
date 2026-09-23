@@ -102,6 +102,8 @@ bool applyRuntimeConfig(JsonVariantConst source, RuntimeConfig& runtime) {
 
   const Profile previousProfile = runtime.profile;
   runtime.profile = parseProfile(String(source["profile"] | "auto"));
+  // Retain an already detected profile when the hub asks for auto detection.
+  if (runtime.profile == Profile::Auto && previousProfile != Profile::Auto) runtime.profile = previousProfile;
   runtime.reportingIntervalSeconds = constrain(
     static_cast<uint32_t>(source["reporting_interval_seconds"] | 300U),
     10U,

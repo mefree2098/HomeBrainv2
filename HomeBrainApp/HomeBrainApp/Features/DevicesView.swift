@@ -151,7 +151,7 @@ struct DevicesView: View {
     private let contactOpenDebounceMinSeconds = 0.25
     private let contactOpenDebounceMaxSeconds = 10.0
     private let contactOpenDebounceStepSeconds = 0.25
-    private let addDeviceModes = ["zwave", "zigbee", "insteon", "matter", "manual"]
+    private let addDeviceModes = ["homebrain", "zwave", "zigbee", "insteon", "matter", "manual"]
     private let thermostatModes = ["auto", "cool", "heat", "off"]
 
     private enum ControlFeedback: Equatable {
@@ -218,7 +218,7 @@ struct DevicesView: View {
             if typeFilter == "all" {
                 matchesType = true
             } else {
-                matchesType = device.type == typeFilter
+                matchesType = device.type == typeFilter || (typeFilter == "sensor" && device.properties["homebrainSensor"] != nil)
             }
             let matchesRoom = roomFilter == "all"
                 || device.room.localizedCaseInsensitiveCompare(roomFilter) == .orderedSame
@@ -273,7 +273,7 @@ struct DevicesView: View {
 
     private static func previewAddDeviceModeFromLaunch() -> String? {
         let processInfo = ProcessInfo.processInfo
-        let allowedModes = Set(["zwave", "zigbee", "insteon", "matter", "manual"])
+        let allowedModes = Set(["homebrain", "zwave", "zigbee", "insteon", "matter", "manual"])
 
         if let index = processInfo.arguments.firstIndex(of: "-ui-preview-add-device-mode"),
            processInfo.arguments.indices.contains(index + 1) {
@@ -1015,6 +1015,9 @@ struct DevicesView: View {
     }
 
     private func deviceControlSummary(for device: DeviceItem) -> String {
+        if device.properties["homebrainSensor"] != nil {
+            return HomeBrainSensorTelemetry.summary(JSON.object(device.properties["homebrainSensor"]))
+        }
         if device.type == "thermostat" {
             let current = device.temperature.map { " · \(Int($0.rounded()))° current" } ?? ""
             return "\(thermostatTargetTemperature(for: device))° setpoint\(current)"
@@ -2406,7 +2409,7 @@ struct DevicesView: View {
         editDeviceID = device.id
         editDeviceName = device.name
         editDeviceRoom = device.room.isEmpty ? "Unassigned" : device.room
-        editDeviceType = availableTypes.contains(device.type) && device.type != "all" ? device.type : "switch"
+        editDeviceType = device.type
         let debounce = contactOpenDebounceConfig(for: device)
         editContactOpenDebounceEnabled = debounce.enabled
         editContactOpenDebounceSeconds = debounce.seconds
@@ -2484,6 +2487,7 @@ struct DevicesView: View {
                             .foregroundStyle(HBPalette.textSecondary)
                         Spacer()
                         Picker("Type", selection: $editDeviceType) {
+                            if !availableTypes.contains(device.type) { Text(device.type.replacingOccurrences(of: "_", with: " ").capitalized).tag(device.type) }
                             ForEach(availableTypes.filter { $0 != "all" }, id: \.self) { type in
                                 Text(deviceTypeDisplayLabel(type)).tag(type)
                             }
@@ -2549,7 +2553,9 @@ struct DevicesView: View {
     @ViewBuilder
     private func deviceTelemetryDetailsPanel(for device: DeviceItem) -> some View {
         let rows = deviceTelemetryRows(for: device)
-        if !rows.isEmpty {
+        if device.properties["homebrainSensor"] != nil {
+            HomeBrainSensorTelemetryView(device: device)
+        } else if !rows.isEmpty {
             HBDevicePanel {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Telemetry")
@@ -2610,7 +2616,9 @@ struct DevicesView: View {
 
                                 addDeviceModeSelector
 
-                                if addDeviceMode == "manual" {
+                                if addDeviceMode == "homebrain" {
+                                    SensorBluetoothOnboardingView()
+                                } else if addDeviceMode == "manual" {
                                     manualCreateFields
                                 } else if addDeviceMode == "matter" {
                                     matterAddFields
@@ -2649,7 +2657,7 @@ struct DevicesView: View {
                 .scrollIndicators(.hidden)
             }
             .safeAreaInset(edge: .bottom) {
-                addDeviceBottomBar
+                if addDeviceMode != "homebrain" { addDeviceBottomBar }
             }
             .toolbar(.hidden, for: .navigationBar)
             .presentationDragIndicator(.visible)
@@ -2713,6 +2721,7 @@ struct DevicesView: View {
 
     private func addDeviceModeIcon(_ mode: String) -> String {
         switch mode {
+        case "homebrain": return "sensor.tag.radiowaves.forward.fill"
         case "zwave": return "wave.3.right"
         case "zigbee": return "dot.radiowaves.left.and.right"
         case "insteon": return "link"
@@ -3305,6 +3314,7 @@ struct DevicesView: View {
 
     private func addDeviceModeLabel(_ mode: String) -> String {
         switch mode {
+        case "homebrain": return "HomeBrain"
         case "zwave": return "Z-Wave"
         case "zigbee": return "Zigbee"
         case "insteon": return "Insteon"

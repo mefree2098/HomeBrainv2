@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { SensorBluetoothOnboarding } from './SensorBluetoothOnboarding'
 import {
   AlertTriangle,
   CheckCircle2,
@@ -255,6 +256,7 @@ const pairingHasDetectedDevice = (pairing: DirectRadioPairingSession | null | un
 
 export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddDeviceDialogProps) {
   const [protocol, setProtocol] = useState<AddDeviceProtocol>("zwave")
+  const [bluetoothMode, setBluetoothMode] = useState(false)
   const [durationSeconds, setDurationSeconds] = useState("180")
   const [busy, setBusy] = useState(false)
   const [activeProtocol, setActiveProtocol] = useState<AddDeviceProtocol | null>(null)
@@ -846,9 +848,15 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
             Add Native Device
           </DialogTitle>
           <DialogDescription>
-            Start a native add flow for Z-Wave, Zigbee, Insteon, or Matter hardware.
+            Add a HomeBrain sensor over Bluetooth, or connect Z-Wave, Zigbee, Insteon and Matter hardware.
           </DialogDescription>
         </DialogHeader>
+
+        <div className="flex flex-wrap gap-2">
+          <Button variant={bluetoothMode ? 'default' : 'outline'} disabled={busy} onClick={() => setBluetoothMode(true)}>HomeBrain sensor · Bluetooth</Button>
+          <Button variant={!bluetoothMode ? 'default' : 'outline'} onClick={() => setBluetoothMode(false)}>Other native devices</Button>
+        </div>
+        {bluetoothMode ? <SensorBluetoothOnboarding onComplete={() => void onRefresh?.()} /> : <>
 
         <Tabs value={protocol} onValueChange={(value) => setProtocol(value as AddDeviceProtocol)} className="space-y-5">
           <TabsList className="grid w-full grid-cols-2 gap-1 md:grid-cols-4">
@@ -1154,6 +1162,7 @@ export function AddDeviceDialog({ devices, open, onOpenChange, onRefresh }: AddD
               : ""}.
           </p>
         ) : null}
+        </>}
       </DialogContent>
     </Dialog>
   )

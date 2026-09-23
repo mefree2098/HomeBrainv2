@@ -1,4 +1,6 @@
 import { ApplianceControls } from "@/components/appliances/ApplianceControls"
+import { HomeBrainSensorTelemetry } from './HomeBrainSensorTelemetry'
+import { sensorSnapshot } from '@/lib/homebrainSensors'
 import { TemperatureDial } from "./TemperatureDial"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
@@ -3425,6 +3427,7 @@ export function DeviceDetailsDialog({
 
             <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-5 sm:px-7 sm:pb-7 sm:pt-6">
               <TabsContent value="overview" className="mt-0 space-y-5">
+                {sensorSnapshot(device) && <HomeBrainSensorTelemetry sensor={sensorSnapshot(device)!} deviceId={device._id} isOnline={device.isOnline} />}
                 <DeviceTabHero
                   icon={HeroIcon}
                   eyebrow="System overview"
@@ -4616,6 +4619,7 @@ export function DeviceDetailsDialog({
               ) : null}
 
               <TabsContent value="history" className="mt-0 space-y-5">
+                {sensorSnapshot(device) && <HomeBrainSensorTelemetry sensor={sensorSnapshot(device)!} deviceId={device?._id} isOnline={device?.isOnline} />}
                 <DeviceTabHero
                   icon={HeroIcon}
                   eyebrow="Telemetry history"

@@ -50,6 +50,69 @@ test('sensor reading contract rejects unknown schemas and empty or out-of-range 
   );
 });
 
+test('module health survives normalization without manufacturing measurements or leaking arbitrary diagnostics', () => {
+  const result = normalizeReadingPayload({ readings: { pm2_5_ugm3: 0, presence_present: false },
+    diagnostics: { bme680_available: false, scd41_available: true, temperature_source: 'scd41', password: 'never-store-this' } });
+  assert.deepEqual(result.readings, { pm2_5_ugm3: 0, presence_present: false });
+  assert.deepEqual(result.diagnostics, { bme680_available: false, scd41_available: true, temperature_source: 'scd41' });
+});
+
+test('Bluetooth onboarding chooses sensible defaults for all three profiles and binds the discovered hardware', async () => {
+  const service = new sensorNodeService.SensorNodeService({ SensorNodeModel: { findOne: async () => null } });
+  let created;
+  service.registerNode = async (input, hubUrl) => { created = { input, hubUrl }; return { node: { id: 'example' }, provisioning: { setupCode: 'one-time' } }; };
+  for (const profile of ['air-station', 'presence', 'climate']) {
+    const result = await service.onboardNode({ hardwareId: 'XIAO-C6-001122aabbcc', profile }, 'https://home.example');
+    assert.equal(result.alreadyRegistered, false);
+    assert.equal(created.input.profile, profile);
+    assert.equal(created.input.hardwareId, 'XIAO-C6-001122AABBCC');
+    assert.equal(created.input.room, 'Unassigned');
+    assert.match(created.input.name, /AABBCC$/);
+    assert.equal(created.hubUrl, 'https://home.example');
+  }
+  await assert.rejects(service.onboardNode({ hardwareId: 'not-a-device' }), { status: 400 });
+});
+
+test('Bluetooth retry resumes an unfinished claim, never duplicates a device or revokes an active claim', async () => {
+  const node = { _id: '507f1f77bcf86cd799439011', hardwareId: 'XIAO-C6-001122AABBCC', profile: 'climate', setupCodeUsedAt: null, deviceTokenCreatedAt: null };
+  let updates = 0, activationWonRace = false;
+  const service = new sensorNodeService.SensorNodeService({ SensorNodeModel: {
+    findOne: async () => node,
+    findById: async () => ({ ...node, deviceTokenCreatedAt: new Date() }),
+    findOneAndUpdate: async (filter, update, options) => {
+      updates++;
+      assert.equal(filter.setupCodeUsedAt, null);
+      assert.equal(filter.deviceTokenCreatedAt, null);
+      assert.equal(update.$set.deviceTokenHash, undefined);
+      assert.equal(options.new, true);
+      return activationWonRace ? null : { ...node, ...update.$set };
+    }
+  } });
+  service.registerNode = async () => { throw new Error('Must not duplicate registration'); };
+  const resumed = await service.onboardNode({ hardwareId: node.hardwareId }, 'https://home.example');
+  assert.equal(resumed.alreadyRegistered, false);
+  assert.ok(resumed.provisioning.setupCode);
+  assert.equal(resumed.node.setupCodeHash, undefined);
+  activationWonRace = true;
+  const raced = await service.onboardNode({ hardwareId: node.hardwareId }, 'https://home.example');
+  assert.equal(raced.alreadyRegistered, true);
+  assert.equal(raced.provisioning.setupCode, null);
+  node.deviceTokenCreatedAt = new Date();
+  const claimed = await service.onboardNode({ hardwareId: node.hardwareId }, 'https://home.example');
+  assert.equal(claimed.alreadyRegistered, true);
+  assert.equal(claimed.provisioning.setupCode, null);
+  assert.equal(updates, 2);
+});
+
+test('activation refuses a setup code on the wrong physical board before any mutation', async () => {
+  const id = '507f1f77bcf86cd799439011';
+  const service = new sensorNodeService.SensorNodeService({ SensorNodeModel: {
+    findById: async () => ({ _id: id, setupCodeHash: hashSecret(id, 'SETUP'), setupCodeExpiresAt: new Date(Date.now() + 60_000), hardwareId: 'XIAO-C6-001122AABBCC' })
+  } });
+  await assert.rejects(service.activateNode(id, 'SETUP', { hardware_id: 'XIAO-C6-001122DDEEFF' }), { status: 409 });
+  await assert.rejects(service.activateNode(id, 'SETUP'), { status: 409 });
+});
+
 test('sensor settings apply profile defaults and clamp unsafe values', () => {
   assert.deepEqual(normalizeSettings({}, 'climate', 'battery'), {
     reportingIntervalSeconds: 300,

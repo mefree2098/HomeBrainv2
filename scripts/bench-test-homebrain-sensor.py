@@ -22,6 +22,11 @@ EXPECTED_AIR_MODULES = {
     "veml7700": ("i2c_ack", "reading_valid"),
     "pms5003": ("checksum_valid_frame", "two_way_uart"),
 }
+EXPECTED_PROFILE_MODULES = {
+    "air-station": EXPECTED_AIR_MODULES,
+    "presence": {"dht11": ("reading_valid",), "ld2410": ("reading_valid",), "veml7700": ("i2c_ack", "reading_valid")},
+    "climate": {"dht11": ("reading_valid",)},
+}
 
 
 class BenchDiagnosticError(RuntimeError):
@@ -31,7 +36,7 @@ class BenchDiagnosticError(RuntimeError):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", help="Exact serial port; auto-detects one /dev/cu.usbmodem* when omitted.")
-    parser.add_argument("--profile", default="air-station", choices=("air-station",))
+    parser.add_argument("--profile", default="air-station", choices=tuple(EXPECTED_PROFILE_MODULES))
     parser.add_argument("--timeout", type=float, default=35.0)
     parser.add_argument("--flash", action="store_true", help="Build and flash the same production image before testing.")
     parser.add_argument("--json-output", type=Path, help="Optional path for the validated diagnostic JSON.")
@@ -105,15 +110,14 @@ def validate_report(report: dict, expected_profile: str) -> list[str]:
     modules = report.get("modules")
     if not isinstance(modules, dict):
         return [*errors, "missing modules object"]
-    if expected_profile == "air-station":
-        for module_name, checks in EXPECTED_AIR_MODULES.items():
-            module = modules.get(module_name)
-            if not isinstance(module, dict):
-                errors.append(f"{module_name}: missing result")
-                continue
-            for check in checks:
-                if module.get(check) is not True:
-                    errors.append(f"{module_name}: {check} is not true")
+    for module_name, checks in EXPECTED_PROFILE_MODULES.get(expected_profile, {}).items():
+        module = modules.get(module_name)
+        if not isinstance(module, dict):
+            errors.append(f"{module_name}: missing result")
+            continue
+        for check in checks:
+            if module.get(check) is not True:
+                errors.append(f"{module_name}: {check} is not true")
     if report.get("passed") is not True:
         failures = report.get("failures", [])
         errors.append("firmware reported failure" + (f": {', '.join(failures)}" if failures else ""))
