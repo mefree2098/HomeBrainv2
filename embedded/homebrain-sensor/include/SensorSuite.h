@@ -19,6 +19,7 @@ class SensorSuite {
   void poll(const RuntimeConfig& config);
   SensorReading capture(const RuntimeConfig& config);
   void addCapabilities(JsonArray target) const;
+  void addDiagnostics(JsonObject target, const SensorReading& reading) const;
   bool presenceChanged();
   bool currentPresence(const RuntimeConfig& config);
   bool testPmsCommandPath();

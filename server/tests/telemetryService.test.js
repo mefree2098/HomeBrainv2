@@ -204,6 +204,27 @@ test('extractDeviceMetrics captures Tempest connectivity telemetry without dupli
   assert.equal(metrics.temperature_f, undefined);
 });
 
+test('all custom sensor profiles expose chartable measurements, power and module diagnostics without stale offline samples', () => {
+  for (const profile of ['air-station', 'presence', 'climate']) {
+    const readings = profile === 'air-station' ? { gas_resistance_ohms: 54000, co2_ppm: 800, pm1_0_ugm3: 0, pm2_5_ugm3: 0, pm10_ugm3: 1, voc_trend_index: 110 }
+      : profile === 'presence' ? { presence_present: false, moving_distance_cm: 0, stationary_distance_cm: 55, moving_energy_pct: 0, stationary_energy_pct: 20 }
+        : { dew_point_c: 10, absolute_humidity_gm3: 7.6, mold_risk_score: 0, comfort_score: 90 };
+    const device = { isOnline: true, properties: { source: 'homebrain-sensor', homebrainSensor: { profile, readings,
+      power: { battery_pct: 0, battery_volts: 3.2 }, diagnostics: { bme680_available: false, ld2410_available: true, dht11_available: true, free_heap_bytes: 80000 } } } };
+    const metrics = extractDeviceMetrics(device);
+    for (const [key, value] of Object.entries(readings)) assert.equal(metrics[key], typeof value === 'boolean' ? Number(value) : value);
+    assert.equal(metrics.temperature_f, undefined);
+    assert.equal(metrics.battery_pct, 0);
+    assert.equal(metrics.bme680_available, 0);
+    assert.equal(metrics.ld2410_available, 1);
+    assert.equal(metrics.free_heap_bytes, 80000);
+    const descriptors = buildMetricDescriptors(Object.keys(metrics));
+    assert.equal(descriptors.find(metric => metric.key === 'bme680_available').binary, true);
+    assert.equal(descriptors.find(metric => metric.key === 'battery_volts').binary, false);
+    assert.deepEqual(extractDeviceMetrics({ ...device, isOnline: false }), { online: 0 });
+  }
+});
+
 test('extractDeviceMetrics captures RainMachine controller and zone runtime telemetry', () => {
   const metrics = extractDeviceMetrics({
     _id: 'rainmachine-zone-1',

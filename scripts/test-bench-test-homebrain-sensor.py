@@ -41,6 +41,14 @@ def main() -> None:
     assert "scd41: i2c_ack is not true" in errors
     assert any("firmware reported failure" in error for error in errors)
 
+    for profile in ("presence", "climate"):
+        report = {"schema": bench.SCHEMA, "profile": profile, "passed": True,
+                  "modules": {name: dict.fromkeys(checks, True) for name, checks in bench.EXPECTED_PROFILE_MODULES[profile].items()}}
+        assert bench.validate_report(report, profile) == []
+        report["modules"]["dht11"]["reading_valid"] = False
+        assert "dht11: reading_valid is not true" in bench.validate_report(report, profile)
+        assert bench.validate_report(report, "air-station")
+
     try:
         bench.extract_report(["not json", '{"schema":"unrelated"}'])
     except bench.BenchDiagnosticError:

@@ -417,6 +417,7 @@ private nonisolated func telemetryBinaryLabel(for metricKey: String, value: Doub
     guard let value else { return "--" }
     let on = value >= 0.5
 
+    if metricKey.hasSuffix("_available") { return on ? "Reporting" : "Not reporting" }
     switch metricKey {
     case "online":
         return on ? "Online" : "Offline"
@@ -605,6 +606,15 @@ private struct TelemetryMetricPanel: View {
 }
 
 struct DataPlatformView: View {
+    let initialSourceKey: String?
+    let initialMetricKey: String?
+
+    init(initialSourceKey: String? = nil, initialMetricKey: String? = nil) {
+        self.initialSourceKey = initialSourceKey
+        self.initialMetricKey = initialMetricKey
+        _selectedSourceKey = State(initialValue: initialSourceKey)
+        _selectedMetricKeys = State(initialValue: initialMetricKey.map { [$0] } ?? [])
+    }
     @EnvironmentObject private var session: SessionStore
 
     @State private var overview: TelemetryOverviewSnapshot?
@@ -665,7 +675,7 @@ struct DataPlatformView: View {
                 }
 
                 sourceExplorerPanel
-                storageFootprintPanel
+                if initialSourceKey == nil { storageFootprintPanel }
 
                 if isLoadingSeries, selectedSource != nil {
                     LoadingView(title: "Rendering telemetry window...")
@@ -693,6 +703,11 @@ struct DataPlatformView: View {
         }
         .task {
             await loadOverview(showLoading: true)
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(30)) } catch { break }
+                await loadOverview(showLoading: false)
+                await loadSeriesIfNeeded()
+            }
         }
         .task(id: seriesTaskKey) {
             await loadSeriesIfNeeded()
@@ -1120,19 +1135,17 @@ struct DataPlatformView: View {
 
     private func applySelection(using snapshot: TelemetryOverviewSnapshot) {
         guard !snapshot.sources.isEmpty else {
-            selectedSourceKey = nil
-            selectedMetricKeys = []
             return
         }
 
         let previousSourceKey = selectedSourceKey
-        let resolvedSource = snapshot.sources.first(where: { $0.sourceKey == previousSourceKey }) ?? snapshot.sources.first
-        selectedSourceKey = resolvedSource?.sourceKey
-
+        let resolvedSource = snapshot.sources.first(where: { $0.sourceKey == previousSourceKey })
+            ?? snapshot.sources.first(where: { $0.sourceKey == initialSourceKey })
+            ?? (initialSourceKey == nil ? snapshot.sources.first : nil)
         guard let resolvedSource else {
-            selectedMetricKeys = []
             return
         }
+        selectedSourceKey = resolvedSource.sourceKey
 
         let availableKeys = Set(resolvedSource.availableMetrics.map(\.key))
         let preservedMetrics = selectedMetricKeys.filter { availableKeys.contains($0) }

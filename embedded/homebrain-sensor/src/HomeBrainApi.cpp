@@ -191,7 +191,8 @@ ApiResult HomeBrainApi::publish(
   JsonObject power = document.createNestedObject("power");
   addFloat(power, "battery_volts", reading.batteryVolts, 3);
   addFloat(power, "battery_pct", reading.batteryPct, 1);
-  power["usb_powered"] = reading.usbPowered;
+  // Climate's PCB has no VBUS sense line; it cannot report charging/USB state.
+  if (runtime.profile != Profile::Climate) power["usb_powered"] = reading.usbPowered;
 
   JsonObject diagnostics = document.createNestedObject("diagnostics");
   diagnostics["signal_rssi_dbm"] = WiFi.RSSI();
@@ -199,6 +200,7 @@ ApiResult HomeBrainApi::publish(
   diagnostics["wake_count"] = wakeCount;
   diagnostics["free_heap_bytes"] = ESP.getFreeHeap();
   diagnostics["ip_address"] = WiFi.localIP().toString();
+  sensors.addDiagnostics(diagnostics, reading);
 
   String requestBody;
   serializeJson(document, requestBody);

@@ -2,16 +2,14 @@
 #include "HomeBrainSensor.h"
 #include "SensorSuite.h"
 #include "UsbBenchDiagnostic.h"
+#include "BleProvisioning.h"
 
 #include <WiFi.h>
-#include <WiFiManager.h>
 #include <esp_sleep.h>
 
 using namespace homebrain;
 
 namespace {
-constexpr char PORTAL_PASSWORD[] = "HomeBrainSetup";
-constexpr uint32_t PORTAL_TIMEOUT_SECONDS = 600;
 constexpr uint32_t WIFI_RECONNECT_TIMEOUT_MS = 12000;
 constexpr uint32_t FAILURE_RETRY_MS = 10000;
 constexpr uint32_t UNPROVISIONED_USB_DIAGNOSTIC_WINDOW_MS = 12000;
@@ -28,70 +26,18 @@ uint32_t nextPublishAt = 0;
 uint32_t lastPublishAt = 0;
 bool pendingPresenceEvent = false;
 
-String portalSsid() {
-  String suffix = hardwareId();
-  suffix = suffix.substring(suffix.length() - 6);
-  return String("HomeBrain-Sensor-") + suffix;
-}
-
-void copyString(char* destination, size_t length, const String& source) {
-  strlcpy(destination, source.c_str(), length);
-}
-
-bool runNetworkSetup(bool forcePortal) {
-  char hubUrl[161] = {};
-  char nodeId[97] = {};
-  char setupCode[49] = {};
-  copyString(hubUrl, sizeof(hubUrl), credentials.hubUrl);
-  copyString(nodeId, sizeof(nodeId), credentials.nodeId);
-  copyString(setupCode, sizeof(setupCode), credentials.setupCode);
-
-  WiFiManager manager;
-  WiFiManagerParameter intro("<p>Paste the three values shown in HomeBrain &rarr; Settings &rarr; Sensor Fleet.</p>");
-  WiFiManagerParameter hubParameter("hub", "HomeBrain hub URL", hubUrl, sizeof(hubUrl) - 1);
-  WiFiManagerParameter nodeParameter("node", "Sensor node ID", nodeId, sizeof(nodeId) - 1);
-  WiFiManagerParameter setupParameter(
-    "setup",
-    "One-time setup code",
-    setupCode,
-    sizeof(setupCode) - 1,
-    "type='text' autocapitalize='characters'"
-  );
-  manager.addParameter(&intro);
-  manager.addParameter(&hubParameter);
-  manager.addParameter(&nodeParameter);
-  manager.addParameter(&setupParameter);
-  manager.setConfigPortalTimeout(PORTAL_TIMEOUT_SECONDS);
-  manager.setConnectTimeout(30);
-  manager.setConnectRetries(3);
-  manager.setHostname(portalSsid().c_str());
-  manager.setTitle("HomeBrain Sensor Setup");
-  manager.setClass("invert");
-
-  bool saveParameters = false;
-  manager.setSaveParamsCallback([&saveParameters]() { saveParameters = true; });
-
-  const String ssid = portalSsid();
+bool runNetworkSetup(bool forceBluetooth) {
   const bool incomplete = credentials.hubUrl.isEmpty()
     || credentials.nodeId.isEmpty()
     || (credentials.deviceToken.isEmpty() && credentials.setupCode.isEmpty());
-  const bool connected = (forcePortal || incomplete)
-    ? manager.startConfigPortal(ssid.c_str(), PORTAL_PASSWORD)
-    : manager.autoConnect(ssid.c_str(), PORTAL_PASSWORD);
-
-  if (saveParameters) {
-    credentials.hubUrl = hubParameter.getValue();
-    credentials.nodeId = nodeParameter.getValue();
-    credentials.setupCode = setupParameter.getValue();
-    credentials.hubUrl.trim();
-    credentials.nodeId.trim();
-    credentials.setupCode.trim();
-    while (credentials.hubUrl.endsWith("/")) {
-      credentials.hubUrl.remove(credentials.hubUrl.length() - 1);
-    }
-    configStore.saveCredentials(credentials);
+  if (forceBluetooth || incomplete) {
+    return runBleProvisioning(credentials, configStore, runtimeConfig, sensors);
   }
-  return connected && WiFi.status() == WL_CONNECTED;
+  WiFi.mode(WIFI_STA);
+  WiFi.begin();
+  const uint32_t started = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - started < WIFI_RECONNECT_TIMEOUT_MS) delay(50);
+  return WiFi.status() == WL_CONNECTED;
 }
 
 void factoryResetIfRequested() {
@@ -102,8 +48,7 @@ void factoryResetIfRequested() {
   if (millis() - startedAt < 1500) return;
 
   Serial.println("Service input held: clearing Wi-Fi and HomeBrain provisioning.");
-  WiFiManager manager;
-  manager.resetSettings();
+  WiFi.disconnect(true, true);
   configStore.clearAll();
   delay(250);
   ESP.restart();
@@ -146,10 +91,12 @@ bool provisionWithHomeBrain() {
   for (uint8_t attempt = 0; attempt < 2; ++attempt) {
     if (credentials.setupCode.isEmpty() || attempt > 0) {
       if (!runNetworkSetup(true)) return false;
+      // BLE performs activation itself; do not consume the setup code twice.
+      if (!credentials.deviceToken.isEmpty()) return true;
     }
     const ApiResult result = api->activate(runtimeConfig);
     if (result == ApiResult::Success) return true;
-    Serial.println("Activation failed. Reopening the setup portal so the provisioning values can be corrected.");
+    Serial.println("Activation failed. Open Add HomeBrain Sensor in the app to retry Bluetooth setup.");
   }
   return false;
 }
@@ -174,7 +121,7 @@ void publishNow() {
     wakeCount
   );
   if (result == ApiResult::Unauthorized) {
-    Serial.println("The device token was revoked; hold SERVICE to GND during boot and enter the new setup code.");
+    Serial.println("The device token was revoked; use Add HomeBrain Sensor to claim it again.");
     configStore.clearDeviceToken();
     delay(500);
     ESP.restart();
@@ -221,7 +168,7 @@ void setup() {
   configStore.load(credentials, runtimeConfig);
   factoryResetIfRequested();
 
-  Serial.println("USB diagnostics are built in. Type 'help' after normal startup; resetting always emits a fresh bench report.");
+  Serial.println("USB diagnostics are built in. Type 'help' after normal startup; manual reset emits a fresh bench report.");
   const bool unprovisioned = credentials.nodeId.isEmpty()
     || (credentials.deviceToken.isEmpty() && credentials.setupCode.isEmpty());
   bool diagnosticRan = false;
@@ -233,15 +180,19 @@ void setup() {
       delay(10);
     }
   }
-  if (!diagnosticRan) {
+  if (!diagnosticRan && esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER) {
     runUsbBenchDiagnostic(sensors, runtimeConfig.profile, Serial);
   }
   sensors.prepareForSleep();
 
-  if (!runNetworkSetup(false)) {
-    Serial.println("Wi-Fi setup timed out; restarting.");
-    delay(1000);
-    ESP.restart();
+  if (!runNetworkSetup(consumeUsbSetupRequest())) {
+    Serial.println("Network setup unavailable. Existing registration is preserved. Type 'setup' over USB to reopen Bluetooth.");
+    // Never reopen an unattended pairing window in a reboot loop.
+    while (credentials.nodeId.isEmpty() || credentials.deviceToken.isEmpty()) {
+      pollUsbDiagnosticConsole(sensors, runtimeConfig, Serial);
+      if (consumeUsbSetupRequest()) runNetworkSetup(true);
+      delay(20);
+    }
   }
 
   static HomeBrainApi homeBrainApi(credentials, configStore);
@@ -251,6 +202,8 @@ void setup() {
     delay(1000);
     ESP.restart();
   }
+
+  if (runtimeConfig.profile == Profile::Auto) runtimeConfig.profile = detectUsbDiagnosticProfile();
 
   configStore.saveRuntime(runtimeConfig);
   sensors.begin(runtimeConfig);
@@ -262,6 +215,12 @@ void setup() {
 
 void loop() {
   pollUsbDiagnosticConsole(sensors, runtimeConfig, Serial);
+  if (consumeUsbSetupRequest()) {
+    sensors.prepareForSleep();
+    runNetworkSetup(true);
+    sensors.begin(runtimeConfig);
+    nextPublishAt = millis();
+  }
   sensors.poll(runtimeConfig);
   const uint32_t now = millis();
   if (runtimeConfig.profile == Profile::Presence && sensors.presenceChanged()) {

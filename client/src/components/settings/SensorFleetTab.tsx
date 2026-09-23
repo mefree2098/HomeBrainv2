@@ -1,24 +1,18 @@
 import { useEffect, useMemo, useState } from "react"
+import { HomeBrainSensorTelemetry } from '@/components/devices/HomeBrainSensorTelemetry'
+import { SensorBluetoothOnboarding } from '@/components/devices/SensorBluetoothOnboarding'
 import {
-  Activity,
-  Battery,
   CheckCircle,
-  Cloud,
   Copy,
   Cpu,
-  Gauge,
-  Lightbulb,
   Loader2,
   Plus,
   RadioTower,
   RefreshCw,
   RotateCcw,
   Save,
-  Thermometer,
   Trash2,
-  UserRoundCheck,
-  Wifi,
-  Wind
+  Wifi
 } from "lucide-react"
 
 import { getRooms } from "@/api/rooms"
@@ -108,13 +102,6 @@ const toDraft = (node: SensorNodeRecord): NodeDraft => ({
   settings: { ...node.settings }
 })
 
-const asNumber = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : null
-
-const formatNumber = (value: unknown, unit = "", digits = 1) => {
-  const numeric = asNumber(value)
-  return numeric === null ? "—" : `${numeric.toFixed(digits)}${unit ? ` ${unit}` : ""}`
-}
-
 const formatSeen = (value: string | null | undefined) => {
   if (!value) return "Never"
   const date = new Date(value)
@@ -125,63 +112,6 @@ const statusVariant = (status: SensorNodeRecord["status"]) => {
   if (status === "online") return "default" as const
   if (status === "error") return "destructive" as const
   return "secondary" as const
-}
-
-const readingTiles = (node: SensorNodeRecord) => {
-  const readings = node.latestReading?.readings || {}
-  const power = node.latestReading?.power || {}
-  return [
-    {
-      key: "temperature",
-      label: "Temperature",
-      value: formatNumber(readings.temperature_f, "°F"),
-      icon: Thermometer
-    },
-    {
-      key: "humidity",
-      label: "Humidity",
-      value: formatNumber(readings.humidity_pct, "%"),
-      icon: Cloud
-    },
-    {
-      key: "co2",
-      label: "CO₂",
-      value: formatNumber(readings.co2_ppm, "ppm", 0),
-      icon: Wind
-    },
-    {
-      key: "pm25",
-      label: "PM2.5",
-      value: formatNumber(readings.pm2_5_ugm3, "µg/m³"),
-      icon: Activity
-    },
-    {
-      key: "presence",
-      label: "Presence",
-      value: typeof readings.presence_present === "boolean"
-        ? readings.presence_present ? "Present" : "Clear"
-        : "—",
-      icon: UserRoundCheck
-    },
-    {
-      key: "lux",
-      label: "Illuminance",
-      value: formatNumber(readings.illuminance_lux, "lux", 0),
-      icon: Lightbulb
-    },
-    {
-      key: "battery",
-      label: "Battery",
-      value: formatNumber(power.battery_pct, "%", 0),
-      icon: Battery
-    },
-    {
-      key: "air",
-      label: "Air Score",
-      value: formatNumber(readings.air_quality_score, "/ 100", 0),
-      icon: Gauge
-    }
-  ].filter((tile) => tile.value !== "—")
 }
 
 export function SensorFleetTab() {
@@ -222,6 +152,13 @@ export function SensorFleetTab() {
 
   useEffect(() => {
     void loadFleet()
+    let cancelled = false
+    const interval = window.setInterval(() => {
+      void getSensorNodes().then(result => {
+        if (!cancelled) setNodes(result.nodes || [])
+      }).catch(() => { /* Keep the last snapshot; manual refresh exposes errors. */ })
+    }, 30_000)
+    return () => { cancelled = true; window.clearInterval(interval) }
   }, [])
 
   const patchNode = (node: SensorNodeRecord) => {
@@ -357,6 +294,7 @@ export function SensorFleetTab() {
 
   return (
     <div className="space-y-6">
+      <SensorBluetoothOnboarding onComplete={() => void loadFleet()} />
       <Card className="border-border/50 bg-white/80 shadow-lg backdrop-blur-sm dark:bg-slate-900/70">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -368,7 +306,8 @@ export function SensorFleetTab() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-3 lg:grid-cols-[1.1fr_1fr_1.4fr_auto] lg:items-end">
+          <details><summary className="cursor-pointer text-sm text-muted-foreground">Advanced: legacy firmware registration</summary>
+          <div className="mt-3 grid gap-3 lg:grid-cols-[1.1fr_1fr_1.4fr_auto] lg:items-end">
             <div>
               <label htmlFor="sensor-create-name" className="text-sm font-medium">Node name</label>
               <Input
@@ -410,6 +349,7 @@ export function SensorFleetTab() {
               Register
             </Button>
           </div>
+          </details>
 
           <div className="flex items-center justify-between rounded-lg border border-border/60 bg-slate-50/70 px-3 py-2 dark:bg-slate-950/30">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -431,7 +371,6 @@ export function SensorFleetTab() {
         <div className="grid gap-5 xl:grid-cols-2">
           {sortedNodes.map((node) => {
             const draft = drafts[node.id] || toDraft(node)
-            const tiles = readingTiles(node)
             const busy = busyNodeId === node.id
             return (
               <Card key={node.id} className="border-border/50 bg-white/80 shadow-md dark:bg-slate-900/70">
@@ -451,21 +390,7 @@ export function SensorFleetTab() {
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  {tiles.length > 0 && (
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      {tiles.map((tile) => {
-                        const Icon = tile.icon
-                        return (
-                          <div key={tile.key} className="rounded-lg border border-border/50 bg-slate-50/70 p-2.5 dark:bg-slate-950/30">
-                            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                              <Icon className="h-3.5 w-3.5" /> {tile.label}
-                            </div>
-                            <div className="mt-1 font-semibold">{tile.value}</div>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
+                  <HomeBrainSensorTelemetry sensor={{ ...node.latestReading, profile: node.profile, firmwareVersion: node.firmwareVersion, hardwareId: node.hardwareId, lastReadingAt: node.lastReadingAt || undefined }} deviceId={node.deviceId} isOnline={node.status === 'online'} />
 
                   <div className="flex flex-wrap gap-1.5">
                     {node.capabilities.map((capability) => <Badge key={capability} variant="secondary">{capability}</Badge>)}

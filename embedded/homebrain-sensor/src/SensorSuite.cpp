@@ -47,6 +47,13 @@ void SensorSuite::begin(const RuntimeConfig& config) {
   pm_ = {};
   pmsPosition_ = 0;
   pmsFrameCount_ = 0;
+  lastCo2Ppm_ = NAN;
+  lastScdTemperatureC_ = NAN;
+  lastScdHumidityPct_ = NAN;
+  lastPresenceAt_ = 0;
+  lastRadarFrameAt_ = 0;
+  lastReportedPresence_ = false;
+  presenceTransition_ = false;
   activeProfile_ = config.profile;
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
   Wire.setClock(100000);
@@ -157,6 +164,7 @@ void SensorSuite::readPmsStream() {
 void SensorSuite::updateRadar(const RuntimeConfig& config) {
   radar_.read();
   if (radar_.isConnected()) lastRadarFrameAt_ = millis();
+  if (!radar_.isConnected()) return;
   if (radar_.presenceDetected()) lastPresenceAt_ = millis();
   const bool present = currentPresence(config);
   if (present != lastReportedPresence_) {
@@ -254,11 +262,16 @@ SensorReading SensorSuite::capture(const RuntimeConfig& config) {
   }
 
   if (scdReady_) {
+    // Never carry old measurements into a new report if this read fails.
+    lastCo2Ppm_ = NAN;
+    lastScdTemperatureC_ = NAN;
+    lastScdHumidityPct_ = NAN;
     bool dataReady = false;
     const uint32_t deadline = millis() + 5200;
     do {
       poll(config);
       if (scd41_.getDataReadyStatus(dataReady) != 0) break;
+      if (dataReady) break;
       if (!dataReady) delay(50);
     } while (static_cast<int32_t>(deadline - millis()) > 0);
 
@@ -281,7 +294,7 @@ SensorReading SensorSuite::capture(const RuntimeConfig& config) {
     }
   }
 
-  if (vemlReady_) {
+  if (vemlReady_ && probeI2c(VEML7700_ADDRESS)) {
     const float lux = veml7700_.readLux(VEML_LUX_AUTO);
     if (isfinite(lux) && lux >= 0.0f) reading.illuminanceLux = lux;
   }
@@ -305,13 +318,13 @@ SensorReading SensorSuite::capture(const RuntimeConfig& config) {
       updateRadar(config);
       delay(5);
     }
-    reading.hasPresence = true;
-    reading.presencePresent = currentPresence(config);
-    if (radar_.movingTargetDetected()) {
+    reading.hasPresence = radarReady_ && lastRadarFrameAt_ > 0 && radar_.isConnected();
+    reading.presencePresent = reading.hasPresence && currentPresence(config);
+    if (reading.hasPresence && radar_.movingTargetDetected()) {
       reading.movingDistanceCm = radar_.movingTargetDistance();
       reading.movingEnergyPct = radar_.movingTargetEnergy();
     }
-    if (radar_.stationaryTargetDetected()) {
+    if (reading.hasPresence && radar_.stationaryTargetDetected()) {
       reading.stationaryDistanceCm = radar_.stationaryTargetDistance();
       reading.stationaryEnergyPct = radar_.stationaryTargetEnergy();
     }
@@ -376,6 +389,21 @@ float SensorSuite::readBatteryVolts() {
   }
   // Two external 200k resistors form BAT+ -> R1 -> A0 -> R2 -> GND (1:2).
   return (totalMillivolts / 16.0f) * 2.0f / 1000.0f;
+}
+
+void SensorSuite::addDiagnostics(JsonObject target, const SensorReading& reading) const {
+  if (activeProfile_ == Profile::AirStation) {
+    target["bme680_available"] = bmeReady_ && isfinite(reading.pressureHpa) && isfinite(reading.gasResistanceOhms);
+    target["scd41_available"] = scdReady_ && isfinite(reading.co2Ppm);
+    target["pms5003_available"] = pmsReady_ && isfinite(reading.pm25Ugm3);
+  } else {
+    target["dht11_available"] = dhtReady_ && isfinite(reading.temperatureC) && isfinite(reading.humidityPct);
+    if (activeProfile_ == Profile::Presence) target["ld2410_available"] = reading.hasPresence;
+  }
+  if (activeProfile_ != Profile::Climate) target["veml7700_available"] = vemlReady_ && isfinite(reading.illuminanceLux);
+  if (isfinite(reading.temperatureC)) {
+    target["temperature_source"] = bmeReady_ && isfinite(reading.pressureHpa) ? "bme680" : scdReady_ ? "scd41" : "dht11";
+  }
 }
 
 void SensorSuite::addCapabilities(JsonArray target) const {

@@ -90,6 +90,16 @@ export async function getSensorNodes() {
   }
 }
 
+export async function onboardSensorNode(payload: { hardwareId: string; profile: SensorNodeProfile; name?: string; room?: string }) {
+  const response = await api.post('/api/sensor-nodes/onboard', payload)
+  return response.data as { success: boolean; node: SensorNodeRecord; provisioning: SensorNodeProvisioning; alreadyRegistered: boolean }
+}
+
+export async function getSensorNode(nodeId: string) {
+  const response = await api.get(`/api/sensor-nodes/${encodeURIComponent(nodeId)}`)
+  return response.data as { success: boolean; node: SensorNodeRecord }
+}
+
 export async function registerSensorNode(payload: {
   name: string
   room: string

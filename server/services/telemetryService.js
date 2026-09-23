@@ -314,7 +314,7 @@ const BOOLEAN_STATE_MAP = {
   true: 1,
   false: 0
 };
-const BINARY_METRIC_PATTERN = /(^|_)(online|status|open|closed|locked|active|detected|present|occupied|water|smoke|carbon|contact|motion|occupancy|presence|tamper|vibration|acceleration|connected|listening|powered)($|_)/i;
+const BINARY_METRIC_PATTERN = /(^|_)(online|status|open|closed|locked|active|detected|present|occupied|water|smoke|carbon|contact|motion|occupancy|presence|tamper|vibration|acceleration|connected|listening|powered|available)($|_)/i;
 const TIMELINE_PRIORITY_KEYS = new Set([
   'status',
   'online',
@@ -1311,6 +1311,7 @@ function extractDeviceMetrics(device = {}) {
   }
 
   if (sourceOrigin === 'homebrain-sensor') {
+    if (device.isOnline === false) return { online: 0 };
     const sensor = properties.homebrainSensor && typeof properties.homebrainSensor === 'object'
       ? properties.homebrainSensor
       : {};
@@ -1347,6 +1348,9 @@ function extractDeviceMetrics(device = {}) {
     addMetric(metrics, 'uptime_ms', diagnostics.uptime_ms ?? diagnostics.uptimeMs);
     addMetric(metrics, 'wake_count', diagnostics.wake_count ?? diagnostics.wakeCount);
     addMetric(metrics, 'free_heap_bytes', diagnostics.free_heap_bytes ?? diagnostics.freeHeapBytes);
+    for (const module of ['bme680', 'scd41', 'veml7700', 'pms5003', 'ld2410', 'dht11']) {
+      addMetric(metrics, `${module}_available`, diagnostics[`${module}_available`]);
+    }
 
     return metrics;
   }

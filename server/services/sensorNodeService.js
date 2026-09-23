@@ -266,6 +266,12 @@ function normalizeReadingPayload(payload = {}) {
   addBoundedNumber(diagnostics, 'uptime_ms', readPath(sourceDiagnostics, 'uptime_ms', 'uptimeMs'), 0, Number.MAX_SAFE_INTEGER, 0);
   addBoundedNumber(diagnostics, 'wake_count', readPath(sourceDiagnostics, 'wake_count', 'wakeCount'), 0, Number.MAX_SAFE_INTEGER, 0);
   addBoundedNumber(diagnostics, 'free_heap_bytes', readPath(sourceDiagnostics, 'free_heap_bytes', 'freeHeapBytes'), 0, Number.MAX_SAFE_INTEGER, 0);
+  for (const module of ['bme680', 'scd41', 'veml7700', 'pms5003', 'ld2410', 'dht11']) {
+    addBoolean(diagnostics, `${module}_available`, sourceDiagnostics[`${module}_available`]);
+  }
+  if (['bme680', 'scd41', 'dht11'].includes(sourceDiagnostics.temperature_source)) {
+    diagnostics.temperature_source = sourceDiagnostics.temperature_source;
+  }
   const reportedIp = trimString(readPath(sourceDiagnostics, 'ip_address', 'ipAddress'), 64);
   if (reportedIp) {
     diagnostics.ip_address = reportedIp;
@@ -322,6 +328,9 @@ function buildDeviceProperties(node, existing = {}, reading = null) {
       hardwareProfile: node.hardwareProfile,
       powerSource: node.powerSource,
       firmwareVersion: node.firmwareVersion || '',
+      hardwareId: node.hardwareId || '',
+      reportingIntervalSeconds: node.settings?.reportingIntervalSeconds,
+      lastReadingAt: node.lastReadingAt || null,
       capabilities: normalizeCapabilityList(node.capabilities),
       readings: reading?.readings || previousSensor.readings || {},
       power: reading?.power || previousSensor.power || {},
@@ -469,6 +478,10 @@ class SensorNodeService {
     const profile = normalizeProfile(input.profile);
     const powerSource = normalizePowerSource(input.powerSource, profile);
     const setupCode = createSetupCode();
+    const hardwareId = trimString(input.hardwareId, 96).toUpperCase();
+    if (hardwareId && !/^XIAO-C6-[A-Fa-f0-9]{12}$/.test(hardwareId)) {
+      throw serviceError('Invalid sensor hardware identifier.');
+    }
     const node = new this.SensorNode({
       name,
       room,
@@ -480,6 +493,7 @@ class SensorNodeService {
       setupCodeExpiresAt: new Date(Date.now() + SETUP_CODE_TTL_MS),
       deviceTokenVersion: 0
     });
+    if (hardwareId) node.hardwareId = hardwareId;
     node.setupCodeHash = hashSecret(node, setupCode);
     await node.save();
 
@@ -507,6 +521,44 @@ class SensorNodeService {
       node: serializeNode(node),
       provisioning: buildProvisioning(node, setupCode, hubUrl)
     };
+  }
+
+  // The authenticated onboarding client transfers this short-lived credential
+  // over encrypted BLE. It is never presented as a user-entered setup field.
+  async onboardNode(input = {}, hubUrl = DEFAULT_HUB_URL) {
+    const hardwareId = trimString(input.hardwareId, 96).toUpperCase();
+    if (!/^XIAO-C6-[A-Fa-f0-9]{12}$/.test(hardwareId)) {
+      throw serviceError('A discovered HomeBrain sensor is required.');
+    }
+    const existing = await this.SensorNode.findOne({ hardwareId });
+    if (existing) {
+      if (existing.setupCodeUsedAt || existing.deviceTokenCreatedAt) {
+        return { node: serializeNode(existing), provisioning: buildProvisioning(existing, null, hubUrl), alreadyRegistered: true };
+      }
+      // Only rotate an unfinished claim. A concurrent activation must never
+      // have its newly issued device token revoked by an onboarding retry.
+      const setupCode = createSetupCode();
+      const resumed = await this.SensorNode.findOneAndUpdate({
+        _id: existing._id, setupCodeUsedAt: null, deviceTokenCreatedAt: null
+      }, { $set: {
+        setupCodeHash: hashSecret(existing, setupCode),
+        setupCodeExpiresAt: new Date(Date.now() + SETUP_CODE_TTL_MS)
+      } }, { new: true });
+      if (!resumed) {
+        const current = await this.getNodeById(toId(existing));
+        return { node: serializeNode(current), provisioning: buildProvisioning(current, null, hubUrl), alreadyRegistered: true };
+      }
+      return { node: serializeNode(resumed), provisioning: buildProvisioning(resumed, setupCode, hubUrl), alreadyRegistered: false };
+    }
+    const profile = normalizeProfile(input.profile);
+    const result = await this.registerNode({
+      ...input,
+      hardwareId,
+      profile,
+      name: trimString(input.name, 128) || `${PROFILE_DEFINITIONS[profile].label} ${hardwareId.slice(-6)}`,
+      room: trimString(input.room, 128) || 'Unassigned'
+    }, hubUrl);
+    return { ...result, alreadyRegistered: false };
   }
 
   async updateNode(nodeId, input = {}) {
@@ -606,6 +658,9 @@ class SensorNodeService {
     if (hardwareId && !/^[A-Za-z0-9:._-]{1,96}$/.test(hardwareId)) {
       throw serviceError('Invalid sensor hardware identifier.');
     }
+    if (node.hardwareId && node.hardwareId !== hardwareId) {
+      throw serviceError('Setup belongs to a different physical sensor.', 409);
+    }
     if (hardwareId) {
       const existing = await this.SensorNode.findOne({
         hardwareId,
@@ -694,8 +749,8 @@ class SensorNodeService {
     node.hardwareId = reading.hardwareId || node.hardwareId;
     node.firmwareVersion = reading.firmwareVersion || node.firmwareVersion;
     node.capabilities = inferCapabilities(reading);
-    node.ipAddress = trimString(context.ipAddress, 64)
-      || reading.diagnostics.ip_address
+    node.ipAddress = reading.diagnostics.ip_address
+      || trimString(context.ipAddress, 64)
       || node.ipAddress;
     node.latestReading = {
       ...reading,
@@ -710,12 +765,10 @@ class SensorNodeService {
     if (device) {
       device.isOnline = true;
       device.lastSeen = now;
-      if (reading.readings.temperature_f !== undefined) {
-        device.temperature = reading.readings.temperature_f;
-      }
+      device.temperature = reading.readings.temperature_f;
       device.status = reading.readings.presence_present !== undefined
         ? reading.readings.presence_present
-        : true;
+        : node.profile === 'presence' ? undefined : true;
       device.properties = buildDeviceProperties(node, device.properties, reading);
       await device.save();
       this.emitDevice(device);

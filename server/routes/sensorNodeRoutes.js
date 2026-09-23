@@ -85,6 +85,17 @@ function createSensorNodeRouter(sensorNodeService = require('../services/sensorN
     }
   });
 
+  router.post('/onboard', admin, async (req, res) => {
+    try {
+      setNoStoreHeaders(res);
+      const result = await sensorNodeService.onboardNode(req.body || {}, getRequestOrigin(req));
+      return res.status(200).json({ success: true, ...result });
+    } catch (error) {
+      console.error('POST /api/sensor-nodes/onboard - Error:', error.message);
+      return sendError(res, error, 'Failed to prepare sensor onboarding.');
+    }
+  });
+
   router.get('/:nodeId', admin, async (req, res) => {
     try {
       const node = await sensorNodeService.getNodeById(req.params.nodeId);

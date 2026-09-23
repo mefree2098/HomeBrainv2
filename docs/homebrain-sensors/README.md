@@ -177,16 +177,18 @@ The Atmosphere report checks all three I²C devices for acknowledgements and pla
 
 ## HomeBrain provisioning
 
-1. Deploy/restart HomeBrain with the new code and open **Settings → Sensor Fleet**.
-2. Register a node with its final name, room, and hardware profile. HomeBrain displays a hub URL, node ID, and one-time setup code.
-3. Power the freshly flashed sensor. Join its `HomeBrain-Sensor-XXXXXX` Wi-Fi network using password `HomeBrainSetup`.
-4. The captive portal opens. Select the house Wi-Fi and paste the three HomeBrain provisioning values.
-5. The sensor exchanges the one-time code for a 256-bit device token. HomeBrain stores only a SHA-256 hash of that token.
-6. The sensor detects the attached modules, uploads its capabilities, and appears online in Sensor Fleet and as a normal HomeBrain device.
+For firmware 1.2.0 and later, all three device types use app-driven Bluetooth setup:
+
+1. Power the freshly flashed sensor and open **Devices → Add Device → HomeBrain** in the native iOS app, or **Add Native Device → HomeBrain sensor · Bluetooth** in desktop Chrome/Edge over HTTPS. Web **Settings → Sensor Fleet** also offers setup.
+2. Choose **Find nearby sensor**, select the unit, then choose its 2.4 GHz Wi-Fi and enter the password. Optional name, room and profile can be assigned now or later. No HomeBrain URL, node ID, or setup code needs to be entered.
+3. The app handles registration and sends configuration over encrypted Bluetooth. The sensor verifies Wi-Fi and HTTPS activation before saving the network; the app then waits for a fresh report.
+4. Open the device to see every measurement, module health and diagnostics. Tap a numeric reading for its history graph, or open all history. Text diagnostics, such as the IP address, are displayed without meaningless numeric graphs.
+
+Bluetooth uses standard LE Secure Connections, Just Works: encrypted against passive interception, but not authenticated against an active nearby man-in-the-middle. Use a trusted physical setup environment. See the [firmware protocol and security notes](../../embedded/homebrain-sensor/README.md).
 
 Use the HTTPS hub URL shown in Settings for a publicly reachable instance. The firmware validates the server certificate and hostname against the ESP32 root CA bundle and synchronizes its clock before HTTPS requests. For a private CA, build with `HOMEBRAIN_SENSOR_CA_CERT` containing the PEM root certificate. Failed time synchronization or certificate validation never falls back to insecure HTTPS. Plain `http://` is supported only for a trusted local network; it sends provisioning codes and device tokens unencrypted.
 
-To move or reprovision a node, rotate its setup code in HomeBrain, then short XIAO D1/SERVICE to GND while powering the sensor. Hold for at least 1.5 seconds. This erases both Wi-Fi and the old device token and reopens the portal.
+To change Wi-Fi without erasing registration, send `setup` through the USB console and use Bluetooth setup again. Claimed devices do not automatically advertise when Wi-Fi drops. For a deliberate factory reset, rotate the setup code in HomeBrain, then short D1/SERVICE to GND during boot for at least 1.5 seconds; that erases Wi-Fi and the device token and reopens Bluetooth setup. Legacy portal fields remain under advanced registration only for older firmware.
 
 ## Runtime behavior
 

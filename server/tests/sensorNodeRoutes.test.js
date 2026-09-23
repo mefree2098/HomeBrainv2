@@ -29,6 +29,7 @@ test('Sensor Fleet HTTP boundaries separate administrators from device credentia
   const service = {
     listNodes: async () => { record('list'); return []; },
     registerNode: async (...args) => record('register', ...args),
+    onboardNode: async (...args) => record('onboard', ...args),
     rotateSetupCode: async (...args) => record('rotate', ...args),
     deleteNode: async (...args) => record('delete', ...args),
     activateNode: async (nodeId, setupCode) => {
@@ -57,7 +58,7 @@ test('Sensor Fleet HTTP boundaries separate administrators from device credentia
   });
   const adminHeaders = { Authorization: `Bearer ${bearer}` };
   await t.test('anonymous users and sensor credentials cannot administer the fleet', async () => {
-    for (const [path, method] of [['', 'GET'], ['', 'POST'], [`/${id}`, 'DELETE'], [`/${id}/setup-code/rotate`, 'POST']]) {
+    for (const [path, method] of [['', 'GET'], ['', 'POST'], ['/onboard', 'POST'], [`/${id}`, 'DELETE'], [`/${id}/setup-code/rotate`, 'POST']]) {
       const response = await send(path, method, { Authorization: 'Sensor test-device-token' }, {});
       assert.equal(response.status, 401);
       assert.match(response.headers.get('cache-control'), /no-store/);
@@ -81,6 +82,17 @@ test('Sensor Fleet HTTP boundaries separate administrators from device credentia
     assert.equal((await send(`/${id}/config`, 'GET', { Authorization: 'Sensor test-device-token' })).status, 200);
     assert.equal((await send(`/${id}/readings`, 'POST', {}, { readings: { temperature_c: 20 } })).status, 401);
     assert.equal((await send(`/${id}/readings`, 'POST', { Authorization: 'Sensor test-device-token' }, { readings: { temperature_c: 20 } })).status, 202);
+  });
+  await t.test('Bluetooth registration requires an administrator and is never cacheable', async () => {
+    user.role = 'user';
+    assert.equal((await send('/onboard', 'POST', adminHeaders, {})).status, 403);
+    user.role = 'admin';
+    const payload = { hardwareId: 'XIAO-C6-001122AABBCC', profile: 'presence' };
+    const response = await send('/onboard', 'POST', adminHeaders, payload);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('cache-control'), /no-store/);
+    assert.deepEqual(calls.at(-1).args[0], payload);
+    assert.equal(calls.at(-1).operation, 'onboard');
   });
   await t.test('invalid IDs and internal failures cannot disclose private storage details', async () => {
     assert.equal((await send('/invalid/config')).status, 400);

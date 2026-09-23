@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { useSearchParams } from 'react-router'
 import {
   Activity,
   Clock3,
@@ -145,6 +146,7 @@ function formatBinaryMetricValue(key: string, value: number | null | undefined) 
   }
 
   const on = value >= 0.5
+  if (key.endsWith('_available')) return on ? 'Reporting' : 'Not reporting'
   switch (key) {
     case "online":
       return on ? "Online" : "Offline"
@@ -506,12 +508,13 @@ function ChartBuilderSpotlight({ result, series, loading }: ChartBuilderSpotligh
 }
 
 export default function DataPlatform() {
+  const [searchParams] = useSearchParams()
   const { isAdmin } = useAuth()
   const { toast } = useToast()
   const [overview, setOverview] = useState<TelemetryOverviewPayload | null>(null)
   const [series, setSeries] = useState<TelemetrySeriesPayload | null>(null)
-  const [selectedSourceKey, setSelectedSourceKey] = useState<string | null>(null)
-  const [selectedMetricKeys, setSelectedMetricKeys] = useState<string[]>([])
+  const [selectedSourceKey, setSelectedSourceKey] = useState<string | null>(searchParams.get('sourceKey'))
+  const [selectedMetricKeys, setSelectedMetricKeys] = useState<string[]>(searchParams.get('metric') ? [searchParams.get('metric')!] : [])
   const [rangeHours, setRangeHours] = useState<number>(24 * 7)
   const [loadingOverview, setLoadingOverview] = useState(true)
   const [loadingSeries, setLoadingSeries] = useState(false)
@@ -565,9 +568,8 @@ export default function DataPlatform() {
   }, [loadOverview])
 
   useEffect(() => {
+    if (loadingOverview) return
     if (sources.length === 0) {
-      setSelectedSourceKey(null)
-      setSelectedMetricKeys([])
       return
     }
 
@@ -575,13 +577,12 @@ export default function DataPlatform() {
       if (current && sources.some((source) => source.sourceKey === current)) {
         return current
       }
-      return sources[0].sourceKey
+      return searchParams.get('sourceKey') || sources[0].sourceKey
     })
-  }, [sources])
+  }, [sources, loadingOverview, searchParams])
 
   useEffect(() => {
     if (!selectedSource) {
-      setSelectedMetricKeys([])
       return
     }
 
@@ -638,9 +639,11 @@ export default function DataPlatform() {
     }
 
     void loadSeries()
+    const interval = window.setInterval(() => void loadSeries(), 30_000)
 
     return () => {
       cancelled = true
+      window.clearInterval(interval)
     }
   }, [rangeHours, selectedMetricKeys, selectedSourceKey])
 
