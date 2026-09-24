@@ -118,6 +118,7 @@ test('queued sleepy devices, concurrent requests, failure/retry and terminal rep
   const jobs = await Promise.allSettled([f.firmware.queue(f.node(), release.id), f.firmware.queue(f.node(), release.id)]);
   assert.equal(jobs.filter(j => j.status === 'fulfilled').length, 1);
   const job = f.node().firmwareUpdate;
+  await assert.rejects(f.firmware.report(f.node(), { id: job.id, phase: ['downloading'] }), { status: 400 });
   assert.equal((await f.firmware.queue(f.node(), release.id)).id, job.id);
   assert.equal(firmwareCommand(f.node()).id, job.id);
   assert.equal((await f.firmware.expire(f.node())).firmwareUpdate.phase, 'queued');

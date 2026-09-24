@@ -148,7 +148,7 @@ class SensorFirmwareService {
     const job = node.firmwareUpdate;
     if (!job || payload.id !== job.id) throw fail('This update has been superseded.', 410);
     const phase = payload.phase;
-    if (!Object.hasOwn(RANK, phase) || phase === 'queued') throw fail('Invalid firmware update status.');
+    if (typeof phase !== 'string' || !Object.hasOwn(RANK, phase) || phase === 'queued') throw fail('Invalid firmware update status.');
     if (!ACTIVE.includes(job.phase)) return job; // Idempotent terminal acknowledgement.
     if (RANK[phase] < RANK[job.phase]) return job; // Late progress must not regress.
     if (phase === 'succeeded' && (payload.version !== job.version || payload.imageSha256 !== job.imageSha256)) {
