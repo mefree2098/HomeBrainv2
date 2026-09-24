@@ -60,7 +60,8 @@ function releaseSummary(release) {
 
 function firmwareCommand(node) {
   const job = node.firmwareUpdate;
-  if (node.otaProtocol !== 1 || !job || !ACTIVE.includes(job.phase)) return undefined;
+  if (node.otaProtocol !== 1 || !job || !ACTIVE.includes(job.phase)
+      || compareVersions(node.firmwareVersion, job.version) > 0) return undefined;
   return { id: job.id, version: job.version, hardware_profile: HARDWARE, protocol: 1,
     size: job.size, sha256: job.sha256, image_sha256: job.imageSha256,
     path: `/api/sensor-nodes/${node._id}/firmware/download/${job.id}` };
@@ -90,13 +91,16 @@ class SensorFirmwareService {
 
   async expire(node) {
     const job = node.firmwareUpdate;
+    const superseded = job && compareVersions(node.firmwareVersion, job.version) > 0;
     // Queued jobs wait indefinitely for sleepy/offline devices. A device spends
     // at most a few minutes downloading and verifying, even on a failed boot.
-    if (job && ACTIVE.includes(job.phase) && job.phase !== 'queued'
-        && Date.now() - new Date(job.updatedAt).getTime() > 30 * 60_000) {
+    if (job && ACTIVE.includes(job.phase) && (superseded || (job.phase !== 'queued'
+        && Date.now() - new Date(job.updatedAt).getTime() > 30 * 60_000))) {
       return await this.Node.findOneAndUpdate({ _id: node._id, 'firmwareUpdate.id': job.id,
         'firmwareUpdate.updatedAt': job.updatedAt, 'firmwareUpdate.phase': job.phase }, { $set: {
-        'firmwareUpdate.phase': 'failed', 'firmwareUpdate.error': 'The sensor stopped reporting update progress. Retry when it is online.',
+        'firmwareUpdate.phase': 'failed', 'firmwareUpdate.error': superseded
+          ? `Superseded by installed firmware ${node.firmwareVersion}.`
+          : 'The sensor stopped reporting update progress. Retry when it is online.',
         'firmwareUpdate.updatedAt': new Date()
       } }, { new: true }) || node;
     }

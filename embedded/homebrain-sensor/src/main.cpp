@@ -7,6 +7,7 @@
 
 #include <WiFi.h>
 #include <esp_sleep.h>
+#include <esp_wifi.h>
 
 using namespace homebrain;
 
@@ -36,6 +37,8 @@ bool runNetworkSetup(bool forceBluetooth) {
     return runBleProvisioning(credentials, configStore, runtimeConfig, sensors);
   }
   WiFi.mode(WIFI_STA);
+  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+  esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);
   WiFi.begin();
   const uint32_t started = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - started < WIFI_RECONNECT_TIMEOUT_MS) delay(50);
@@ -167,6 +170,10 @@ void publishNow() {
 void setup() {
   Serial.begin(115200);
   delay(250);
+  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+    Serial.printf("Wi-Fi disconnected at %lu ms (reason %u).\n",
+      static_cast<unsigned long>(millis()), info.wifi_sta_disconnected.reason);
+  }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   ota.begin();
   ++wakeCount;
   Serial.printf("\nHomeBrain Sensor %s, wake %lu, hardware %s\n",

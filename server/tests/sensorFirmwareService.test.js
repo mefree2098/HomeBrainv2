@@ -152,6 +152,18 @@ test('authenticated legacy Atmosphere migrates its corrected MAC while unrelated
   assert.equal(f.node()._id, nodeId);
 });
 
+test('a newer USB installation retires an older queued update and never commands a downgrade', async () => {
+  const f = fixture(), original = await f.firmware.publish(image('1.3.0'));
+  await f.firmware.queue(f.node(), original.id);
+  f.change({ firmwareVersion: '1.3.8' });
+  assert.equal(firmwareCommand(f.node()), undefined);
+  const status = await f.firmware.status(f.node());
+  assert.equal(status.update.phase, 'failed');
+  assert.match(status.update.error, /Superseded/);
+  const current = await f.firmware.publish(image('1.3.8'));
+  assert.equal((await f.firmware.queue(f.node(), current.id)).phase, 'queued');
+});
+
 test('HTTP flow: publish → queue → device config → authenticated download → reboot confirmation', async (t) => {
   const f = fixture();
   const old = { get: users.get, oidc: oidc.verifyIssuedAccessToken, secret: process.env.JWT_SECRET };
@@ -172,9 +184,9 @@ test('HTTP flow: publish → queue → device config → authenticated download 
   const base = `http://127.0.0.1:${server.address().port}/api/sensor-nodes`;
   const admin = `Bearer ${jwt.sign({ sub: nodeId }, process.env.JWT_SECRET)}`;
   const sensor = 'Sensor device-secret';
-  const send = (path, method = 'GET', auth, body) => fetch(base + path, {
+  const send = (path, method = 'GET', auth, body, headers = {}) => fetch(base + path, {
     method, headers: { ...(auth ? { Authorization: auth } : {}),
-      'Content-Type': Buffer.isBuffer(body) ? 'application/octet-stream' : 'application/json' },
+      'Content-Type': Buffer.isBuffer(body) ? 'application/octet-stream' : 'application/json', ...headers },
     ...(body ? { body: Buffer.isBuffer(body) ? body : JSON.stringify(body) } : {})
   });
   for (const auth of [undefined, sensor]) {
@@ -202,6 +214,25 @@ test('HTTP flow: publish → queue → device config → authenticated download 
   const bytes = Buffer.from(await download.arrayBuffer());
   assert.equal(bytes.length, job.size);
   assert.equal(createHash('sha256').update(bytes).digest('hex'), job.sha256);
+  assert.equal(download.headers.get('accept-ranges'), 'bytes');
+  // Simulate a connection cut after 123 bytes, then resume the exact suffix.
+  const resumed = await send(path, 'GET', sensor, undefined, { Range: 'bytes=123-' });
+  assert.equal(resumed.status, 206);
+  assert.equal(resumed.headers.get('content-range'), `bytes 123-${job.size - 1}/${job.size}`);
+  assert.equal(Number(resumed.headers.get('content-length')), job.size - 123);
+  const joined = Buffer.concat([bytes.subarray(0, 123), Buffer.from(await resumed.arrayBuffer())]);
+  assert.equal(createHash('sha256').update(joined).digest('hex'), job.sha256);
+  for (const range of ['bytes=10-19', 'bytes=-10']) {
+    const part = await send(path, 'GET', sensor, undefined, { Range: range });
+    assert.equal(part.status, 206);
+    assert.deepEqual(Buffer.from(await part.arrayBuffer()), range === 'bytes=-10' ? bytes.subarray(-10) : bytes.subarray(10, 20));
+  }
+  for (const range of [`bytes=${job.size}-`, 'bytes=20-10', 'bytes=0-10,20-30', 'items=0-10', 'invalid']) {
+    const invalid = await send(path, 'GET', sensor, undefined, { Range: range });
+    assert.equal(invalid.status, 416, range);
+    assert.equal(invalid.headers.get('content-range'), `bytes */${job.size}`);
+  }
+  assert.equal((await send(path, 'GET', 'Sensor wrong', undefined, { Range: 'bytes=123-' })).status, 401);
   for (const phase of ['downloading', 'installing', 'rebooting']) {
     assert.equal((await send(`/${nodeId}/firmware/status`, 'POST', sensor, { id: job.id, phase, progress: 50 })).status, 200);
   }
