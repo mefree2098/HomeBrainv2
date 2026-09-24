@@ -132,6 +132,8 @@ bool runBleProvisioning(AppCredentials& credentials, ConfigStore& store, Runtime
   advertising->start();
   Serial.printf("Bluetooth setup ready: %s (10-minute local setup window). No credentials are printed.\n", name.c_str());
   WiFi.mode(WIFI_STA);
+  esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+  esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);
 
   bool success = false;
   uint32_t scanId = 0;
