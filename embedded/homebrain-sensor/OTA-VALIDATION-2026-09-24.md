@@ -33,7 +33,7 @@ Its 1.3.6 wireless test received 413,696 bytes in 186,796 ms before the three-mi
 
 Version 1.3.8 adds authenticated byte-range resume with up to eight reconnections. The server rejects invalid/multiple ranges, and the firmware checks the resumed response's offset, total length and release hash before continuing the original full-image checksum. A newer USB installation also retires an obsolete queued job instead of downloading older firmware.
 
-The pinned 1.3.8 build and all 24 targeted sensor service/HTTP tests passed, including suffix reconstruction after a simulated interruption, invalid ranges, unauthorized resume requests and obsolete queued jobs. The Climate and Atmosphere 1.3.8 hardware tests subsequently passed; Presence's later upgrade attempts timed out as described below.
+The pinned 1.3.8 build and all 24 targeted sensor service/HTTP tests passed, including suffix reconstruction after a simulated interruption, invalid ranges, unauthorized resume requests and obsolete queued jobs. All three profiles subsequently completed real 1.3.8 wireless installs and post-boot confirmation as recorded below.
 
 ## Atmosphere validation on 1.3.8
 
@@ -61,8 +61,12 @@ Moving Atmosphere from laptop USB to a power adapter interrupted its first 1.3.8
 
 Reopening a macOS USB serial log reader restarted Climate during another transfer, which had reached 65%. That attempt is excluded from transfer reliability results. The subsequent successful test kept the console connection open throughout. Do not open, close or restart a USB monitor during an OTA transfer; observe production status and fresh readings instead. Stop capture after a Climate device has entered sleep, before its next wake.
 
-## Outstanding checks
+## Presence validation on 1.3.8
 
-Presence previously passed the 1.3.6 OTA test. Its initial 1.3.8 upgrade timed out at 8%; an isolated retry (`561a9eea-c0c4-4b1c-9fea-2ee4e506de07`) timed out at 36% at 04:01:37 UTC. The installed 1.3.6 downloader has a three-minute deadline and predates byte-range recovery. A subsequent reading arrived at 04:02:00 UTC with valid radar, DHT11 and light diagnostics and −73 dBm signal, confirming that the existing firmware and registration remained usable.
+Presence previously passed the 1.3.6 OTA test. Its initial 1.3.8 upgrade timed out at 8%; an isolated retry (`561a9eea-c0c4-4b1c-9fea-2ee4e506de07`) timed out at 36% at 04:01:37 UTC. That 1.3.6 downloader had a three-minute deadline and predated byte-range recovery. A subsequent reading arrived at 04:02:00 UTC with valid radar, DHT11 and light diagnostics and −73 dBm signal, confirming that the existing firmware and registration remained usable.
 
-The Presence upgrade needs a successful retry; closer placement to the IoT access point has been requested before another attempt. Its latest-version upgrade must not be reported as successful until production confirms it. Climate and Atmosphere have completed their final 1.3.8 OTA tests.
+After the pod was moved closer to the IoT access point, its reported signal improved to −59 dBm. Production job `445328e0-95e0-4dcc-b703-1ad39eb66b40` was queued at 05:04:49 UTC and confirmed `succeeded`, 100%, with no error at 05:05:39 UTC: 50 seconds from queueing to confirmation. This was an actual wireless upgrade from 1.3.6 to the exact published 1.3.8 image, with the same file and embedded-image digests recorded above. No USB flash or serial connection was used for this retry.
+
+A fresh reading captured at 05:06:15 UTC reported firmware 1.3.8, sequence 3 and 45,091 ms uptime. Radar, DHT11 and VEML7700 diagnostics passed, and presence, temperature, humidity and light readings resumed. Registration, calibration and the 15-second reporting interval were preserved.
+
+Climate, Atmosphere and Presence have now all passed a real Wi-Fi installation of 1.3.8 followed by authenticated post-boot reporting. The existing Atmosphere BME680 fault remains separate from this OTA validation.
