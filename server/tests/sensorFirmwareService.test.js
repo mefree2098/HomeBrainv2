@@ -26,6 +26,9 @@ function image(version = '1.3.0', fill = 0) {
 
 test('firmware validation rejects wrong boards, bootloader/merged images, truncation, tampering and excessive size', () => {
   const good = image();
+  for (const input of [[...good], { length: good.length }, good.toString('latin1'), null]) {
+    assert.throws(() => validateImage(input), /octet-stream/);
+  }
   assert.equal(validateImage(good).version, '1.3.0');
   assert.equal(validateImage(good).size, good.length);
   for (const bad of [good.subarray(0, -1), Buffer.concat([good, Buffer.alloc(1)]), Buffer.alloc(MAX_IMAGE_BYTES + 1), Buffer.from('not firmware')]) {
@@ -106,6 +109,9 @@ test('release publication is immutable and latest means version order', async ()
 
 test('queued sleepy devices, concurrent requests, failure/retry and terminal reports are handled without regressions', async () => {
   const f = fixture(), release = await f.firmware.publish(image('1.4.0'));
+  for (const releaseId of [[release.id], { $ne: null }, { id: release.id }, 1, null]) {
+    await assert.rejects(f.firmware.queue(f.node(), releaseId), { status: 400 });
+  }
   f.change({ otaProtocol: 0 });
   await assert.rejects(f.firmware.queue(f.node(), release.id), { status: 409 });
   f.change({ otaProtocol: 1 });

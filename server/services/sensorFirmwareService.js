@@ -1,4 +1,5 @@
 const { createHash, randomUUID } = require('node:crypto');
+const { Types } = require('mongoose');
 const SensorFirmwareRelease = require('../models/SensorFirmwareRelease');
 const SensorNode = require('../models/SensorNode');
 
@@ -16,8 +17,12 @@ function compareVersions(a, b) {
   return 0;
 }
 
-function validateImage(image) {
-  if (!Buffer.isBuffer(image) || image.length < 320 || image.length > MAX_IMAGE_BYTES) {
+function validateImage(input) {
+  if (!Buffer.isBuffer(input)) throw fail('Upload firmware as application/octet-stream.');
+  // Own the bytes we validate; JSON arrays/objects and mutable request buffers
+  // must never be interpreted as an image or influence its parsed metadata.
+  const image = Buffer.from(input);
+  if (image.length < 320 || image.length > MAX_IMAGE_BYTES) {
     throw fail('Upload an application firmware .bin that fits the sensor OTA slot (maximum 1,900,544 bytes).');
   }
   if (image[0] !== 0xE9 || image.readUInt16LE(12) !== 13 || image[23] !== 1 || image[1] < 1 || image[1] > 16) {
@@ -110,8 +115,8 @@ class SensorFirmwareService {
   async queue(input, releaseId) {
     const node = await this.expire(input);
     if (node.otaProtocol !== 1) throw fail('This sensor needs the one-time USB installation of OTA firmware first.', 409);
-    if (!/^[a-f0-9]{24}$/i.test(String(releaseId || ''))) throw fail('Choose a published firmware release.');
-    const release = await this.Release.findById(releaseId);
+    if (typeof releaseId !== 'string' || !/^[a-f0-9]{24}$/i.test(releaseId)) throw fail('Choose a published firmware release.');
+    const release = await this.Release.findById(new Types.ObjectId(releaseId));
     if (!release) throw fail('Firmware release not found.', 404);
     if (release.hardwareProfile !== node.hardwareProfile || release.protocol !== 1) throw fail('Firmware is incompatible with this sensor.');
     // Same-version reinstall is useful for recovery and for verifying the initial
