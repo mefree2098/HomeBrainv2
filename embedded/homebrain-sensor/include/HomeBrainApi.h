@@ -2,6 +2,8 @@
 
 #include "HomeBrainSensor.h"
 #include "SensorSuite.h"
+#include <WiFiClient.h>
+#include <memory>
 
 namespace homebrain {
 
@@ -18,6 +20,9 @@ class HomeBrainApi {
 
   ApiResult activate(RuntimeConfig& runtime);
   ApiResult fetchConfig(RuntimeConfig& runtime);
+  std::unique_ptr<WiFiClient> createHttpClient(bool requireTls = false) const;
+  bool reportFirmwareStatus(const String& id, const char* phase, uint8_t progress,
+    const String& error = "", const String& imageSha256 = "");
   ApiResult publish(
     const SensorReading& reading,
     const SensorSuite& sensors,

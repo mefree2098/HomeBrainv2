@@ -4,7 +4,8 @@ const rateLimit = require('express-rate-limit');
 const { requireAdmin } = require('./middlewares/auth');
 const { getRequestOrigin } = require('../utils/publicOrigin');
 
-function createSensorNodeRouter(sensorNodeService = require('../services/sensorNodeService')) {
+function createSensorNodeRouter(sensorNodeService = require('../services/sensorNodeService'),
+  firmwareService = require('../services/sensorFirmwareService')) {
   const router = express.Router();
   const admin = [requireAdmin(), (req, res, next) => req.user.isReviewSandbox
     ? res.status(403).json({ success: false, message: 'Sensor Fleet is not available in the review sandbox.' })
@@ -94,6 +95,54 @@ function createSensorNodeRouter(sensorNodeService = require('../services/sensorN
       console.error('POST /api/sensor-nodes/onboard - Error:', error.message);
       return sendError(res, error, 'Failed to prepare sensor onboarding.');
     }
+  });
+
+  router.get('/firmware/releases', admin, async (_req, res) => {
+    try {
+      return res.json({ success: true, releases: await firmwareService.listReleases() });
+    } catch (error) { return sendError(res, error, 'Failed to list firmware releases.'); }
+  });
+
+  router.post('/firmware/releases', admin,
+    express.raw({ type: 'application/octet-stream', limit: 0x1D0000 }), async (req, res) => {
+      try {
+        const release = await firmwareService.publish(req.body, req.get('X-Firmware-Notes') || '');
+        return res.status(201).json({ success: true, release });
+      } catch (error) { return sendError(res, error, 'Failed to publish firmware.'); }
+    });
+
+  router.get('/:nodeId/firmware', admin, async (req, res) => {
+    try {
+      const node = await sensorNodeService.getNodeById(req.params.nodeId);
+      return res.json({ success: true, ...await firmwareService.status(node) });
+    } catch (error) { return sendError(res, error, 'Failed to get firmware status.'); }
+  });
+
+  router.post('/:nodeId/firmware', admin, async (req, res) => {
+    try {
+      const node = await sensorNodeService.getNodeById(req.params.nodeId);
+      const update = await firmwareService.queue(node, req.body?.releaseId);
+      return res.status(202).json({ success: true, update });
+    } catch (error) { return sendError(res, error, 'Failed to queue firmware update.'); }
+  });
+
+  router.get('/:nodeId/firmware/download/:jobId', readingRateLimit, async (req, res) => {
+    try {
+      const node = await sensorNodeService.authenticateToken(req.params.nodeId, extractDeviceToken(req));
+      const release = await firmwareService.download(node, req.params.jobId);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      res.setHeader('Content-Length', release.size);
+      res.setHeader('X-Content-SHA256', release.sha256);
+      return res.send(Buffer.from(release.image));
+    } catch (error) { return sendError(res, error, 'Failed to download firmware.'); }
+  });
+
+  router.post('/:nodeId/firmware/status', readingRateLimit, async (req, res) => {
+    try {
+      const node = await sensorNodeService.authenticateToken(req.params.nodeId, extractDeviceToken(req));
+      const update = await firmwareService.report(node, req.body || {});
+      return res.json({ success: true, update });
+    } catch (error) { return sendError(res, error, 'Failed to record firmware status.'); }
   });
 
   router.get('/:nodeId', admin, async (req, res) => {

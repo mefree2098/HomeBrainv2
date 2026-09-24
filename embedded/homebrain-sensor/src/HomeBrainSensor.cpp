@@ -1,6 +1,7 @@
 #include "HomeBrainSensor.h"
 
 #include <WiFi.h>
+#include <esp_mac.h>
 
 namespace homebrain {
 
@@ -25,18 +26,16 @@ Profile parseProfile(const String& value) {
 }
 
 String hardwareId() {
-  const uint64_t mac = ESP.getEfuseMac();
+  // ESP.getEfuseMac() contains an EUI-64 on the ESP32-C6. Truncating that
+  // integer drops the two bytes that distinguish many XIAO boards.
+  uint8_t mac[6] = {};
+  if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK) return "";
   char value[32];
   snprintf(
     value,
     sizeof(value),
     "XIAO-C6-%02X%02X%02X%02X%02X%02X",
-    static_cast<uint8_t>(mac >> 40),
-    static_cast<uint8_t>(mac >> 32),
-    static_cast<uint8_t>(mac >> 24),
-    static_cast<uint8_t>(mac >> 16),
-    static_cast<uint8_t>(mac >> 8),
-    static_cast<uint8_t>(mac)
+    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
   );
   return String(value);
 }

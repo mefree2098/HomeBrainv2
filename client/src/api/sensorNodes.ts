@@ -157,3 +157,30 @@ export async function deleteSensorNode(nodeId: string) {
     throw new Error(errorMessage(error, 'Failed to remove the sensor node.'))
   }
 }
+
+export type SensorFirmwareRelease = {
+  id: string; version: string; notes: string; size: number; sha256: string
+}
+export type SensorFirmwareStatus = {
+  supported: boolean; currentVersion: string; latest: SensorFirmwareRelease | null; updateAvailable: boolean
+  update: null | { id: string; version: string; phase: string; progress: number; error: string }
+}
+
+export async function getSensorFirmwareStatus(nodeId: string): Promise<SensorFirmwareStatus> {
+  const result = await api.get(`/api/sensor-nodes/${encodeURIComponent(nodeId)}/firmware`)
+  return result.data
+}
+export async function queueSensorFirmware(nodeId: string, releaseId: string) {
+  try {
+    const result = await api.post(`/api/sensor-nodes/${encodeURIComponent(nodeId)}/firmware`, { releaseId })
+    return result.data as { update: SensorFirmwareStatus['update'] }
+  } catch (error) { throw new Error(errorMessage(error, 'Failed to schedule firmware update.')) }
+}
+export async function publishSensorFirmware(file: File) {
+  try {
+    const result = await api.post('/api/sensor-nodes/firmware/releases', await file.arrayBuffer(), {
+      headers: { 'Content-Type': 'application/octet-stream' }, timeout: 60_000
+    })
+    return result.data as { release: SensorFirmwareRelease }
+  } catch (error) { throw new Error(errorMessage(error, 'Failed to publish firmware.')) }
+}

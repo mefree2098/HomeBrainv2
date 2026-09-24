@@ -13,6 +13,7 @@ final class SensorBluetooth: NSObject, ObservableObject, @preconcurrency CBCentr
     @Published var nearby: [Nearby] = []
     @Published var message = "Choose Find nearby sensor to start Bluetooth discovery."
     @Published var identity: [String: Any] = [:]
+    @Published private(set) var isConnected = false
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var characteristics: [CBUUID: CBCharacteristic] = [:]
@@ -57,27 +58,36 @@ final class SensorBluetooth: NSObject, ObservableObject, @preconcurrency CBCentr
         disconnect()
         central.stopScan(); discoveryTimeout?.cancel(); wantsScan = false
         peripheral = device.peripheral; device.peripheral.delegate = self
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            connection = continuation; armTimeout()
-            central.connect(device.peripheral)
+        do {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                connection = continuation; armTimeout()
+                central.connect(device.peripheral)
+            }
+            identity = try await readObject(Self.infoID)
+            guard JSON.int(identity, "protocol") == 1,
+                  JSON.string(identity, "hardwareId").range(of: "^XIAO-C6-[A-Fa-f0-9]{12}$", options: .regularExpression) != nil else {
+                throw failure("Unsupported sensor firmware.")
+            }
+            _ = try await readObject(Self.responseID) // Encrypted read triggers native pairing before credentials.
+            isConnected = true
+        } catch {
+            disconnect()
+            throw error
         }
-        identity = try await readObject(Self.infoID)
-        guard JSON.int(identity, "protocol") == 1,
-              JSON.string(identity, "hardwareId").range(of: "^XIAO-C6-[A-Fa-f0-9]{12}$", options: .regularExpression) != nil else {
-            disconnect(); throw failure("Unsupported sensor firmware.")
-        }
-        _ = try await readObject(Self.responseID) // Encrypted read triggers native pairing before credentials.
     }
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         peripheral.discoverServices([Self.service])
     }
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         failPending(error ?? failure("Could not connect to the sensor."))
+        if self.peripheral?.identifier == peripheral.identifier {
+            self.peripheral = nil; characteristics = [:]; isConnected = false
+        }
     }
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         guard self.peripheral?.identifier == peripheral.identifier else { return }
         failPending(error ?? failure("Sensor disconnected. Reconnect to retry setup."))
-        characteristics = [:]
+        self.peripheral = nil; characteristics = [:]; isConnected = false
     }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         if let error { failPending(error); return }
@@ -159,7 +169,7 @@ final class SensorBluetooth: NSObject, ObservableObject, @preconcurrency CBCentr
         discoveryTimeout?.cancel(); wantsScan = false; central?.stopScan()
         failPending(failure("Bluetooth setup closed."))
         if let peripheral { central?.cancelPeripheralConnection(peripheral) }
-        peripheral = nil; characteristics = [:]
+        peripheral = nil; characteristics = [:]; isConnected = false
     }
     private func armTimeout() {
         operationTimeout?.cancel()

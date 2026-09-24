@@ -19,11 +19,16 @@ constexpr char COMMAND_UUID[] = "9c2f0003-7d1b-4a2f-9d3b-0f91e6a3b805";
 constexpr char RESPONSE_UUID[] = "9c2f0004-7d1b-4a2f-9d3b-0f91e6a3b805";
 constexpr size_t MAX_FRAME = 1536;
 constexpr uint32_t WINDOW_MS = 10 * 60 * 1000;
+constexpr uint32_t RECONNECT_GRACE_MS = 2 * 60 * 1000;
+constexpr uint32_t MAX_WINDOW_MS = 30 * 60 * 1000;
 SemaphoreHandle_t inboxMutex = nullptr;
 String incoming;
 String pending;
 bool droppingFrame = false;
 std::atomic<bool> acceptingConnections{false};
+std::atomic<bool> clientConnected{false};
+std::atomic<bool> clientSeen{false};
+std::atomic<uint32_t> lastDisconnectedAt{0};
 BLECharacteristic* responseCharacteristic = nullptr;
 
 class Commands : public BLECharacteristicCallbacks {
@@ -46,7 +51,13 @@ class Commands : public BLECharacteristicCallbacks {
 };
 
 class Connections : public BLEServerCallbacks {
+  void onConnect(BLEServer*) override {
+    clientSeen = true;
+    clientConnected = true;
+  }
   void onDisconnect(BLEServer*) override {
+    lastDisconnectedAt = millis();
+    clientConnected = false;
     xSemaphoreTake(inboxMutex, portMAX_DELAY);
     incoming = "";
     pending = "";
@@ -83,6 +94,9 @@ bool runBleProvisioning(AppCredentials& credentials, ConfigStore& store, Runtime
   incoming = "";
   pending = "";
   droppingFrame = false;
+  clientConnected = false;
+  clientSeen = false;
+  lastDisconnectedAt = 0;
   BLEDevice::init(name);
   BLEDevice::setMTU(247);
   // Standard LE Secure Connections, encrypted GATT writes. This board has no
@@ -124,7 +138,12 @@ bool runBleProvisioning(AppCredentials& credentials, ConfigStore& store, Runtime
   bool scanning = false;
   int networkCount = 0;
   const uint32_t started = millis();
-  while (millis() - started < WINDOW_MS) {
+  while (true) {
+    const uint32_t elapsed = millis() - started;
+    // Keep an active onboarding session alive beyond the advertising window.
+    // A dropped session gets a short reconnect window, with a hard upper bound.
+    if (elapsed >= MAX_WINDOW_MS || (elapsed >= WINDOW_MS && !clientConnected
+        && (!clientSeen || millis() - lastDisconnectedAt >= RECONNECT_GRACE_MS))) break;
     if (pollUsbDiagnosticConsole(sensors, runtime, Serial)) sensors.prepareForSleep();
     consumeUsbSetupRequest(); // Already in the local setup window.
     if (scanning) {
