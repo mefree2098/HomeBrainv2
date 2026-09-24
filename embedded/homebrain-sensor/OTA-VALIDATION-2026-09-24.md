@@ -1,6 +1,6 @@
 # OTA hardware validation — 2026-09-24
 
-## Verified release
+## Presence validation on 1.3.6
 
 - Version: 1.3.6
 - Board: Seeed XIAO ESP32-C6
@@ -24,3 +24,13 @@ Production reported `succeeded`, 100%, with an empty error at 02:55:14 UTC. Subs
 ## Checks and limits
 
 The pinned PlatformIO build passed, the production binary validator accepted the image, and a real Wi-Fi transfer plus reboot confirmation passed. This session did not inject a power cut or deliberately trigger boot rollback. Atmosphere and Climate still need their final release installation and profile-specific verification; this report does not claim those tests passed.
+
+## Atmosphere commissioning
+
+The Atmosphere node retained its registration and migrated from its legacy ID to `XIAO-C6-A0F262878CF4`. SCD41, VEML7700 and PMS5003 diagnostics passed; the existing BME680 I2C fault remained.
+
+Its 1.3.6 wireless test received 413,696 bytes in 186,796 ms before the three-minute limit expired. Version 1.3.7 reduced progress POST overhead and extended the total deadline, but an idle connection stalled after 68,434 bytes. Both failures preserved the running image and resumed readings.
+
+Version 1.3.8 adds authenticated byte-range resume with up to eight reconnections. The server rejects invalid/multiple ranges, and the firmware checks the resumed response's offset, total length and release hash before continuing the original full-image checksum. A newer USB installation also retires an obsolete queued job instead of downloading older firmware.
+
+The pinned 1.3.8 build and all 24 targeted sensor service/HTTP tests passed, including suffix reconstruction after a simulated interruption, invalid ranges, unauthorized resume requests and obsolete queued jobs. Physical 1.3.8 validation is pending.

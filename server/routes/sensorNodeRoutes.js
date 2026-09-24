@@ -130,10 +130,24 @@ function createSensorNodeRouter(sensorNodeService = require('../services/sensorN
     try {
       const node = await sensorNodeService.authenticateToken(req.params.nodeId, extractDeviceToken(req));
       const release = await firmwareService.download(node, req.params.jobId);
+      res.setHeader('Accept-Ranges', 'bytes');
+      let bytes = Buffer.from(release.image);
+      if (req.get('Range')) {
+        const ranges = req.range(release.size);
+        // One contiguous range is sufficient to resume an interrupted image.
+        if (!Array.isArray(ranges) || ranges.type !== 'bytes' || ranges.length !== 1) {
+          res.setHeader('Content-Range', `bytes */${release.size}`);
+          return res.status(416).end();
+        }
+        const { start, end } = ranges[0];
+        res.status(206);
+        res.setHeader('Content-Range', `bytes ${start}-${end}/${release.size}`);
+        bytes = bytes.subarray(start, end + 1);
+      }
       res.setHeader('Content-Type', 'application/octet-stream');
-      res.setHeader('Content-Length', release.size);
+      res.setHeader('Content-Length', bytes.length);
       res.setHeader('X-Content-SHA256', release.sha256);
-      return res.send(Buffer.from(release.image));
+      return res.send(bytes);
     } catch (error) { return sendError(res, error, 'Failed to download firmware.'); }
   });
 

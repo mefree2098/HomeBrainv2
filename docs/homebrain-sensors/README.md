@@ -163,7 +163,7 @@ pio run --target upload
 pio device monitor --baud 115200
 ```
 
-The same binary is flashed to all three boards. The build pins the exact Seeed platform commit and every sensor library version. Its 4 MB partition map provides two 1.8 MB application slots for future OTA support.
+The same binary is flashed to all three boards. The build pins the exact Seeed platform commit and every sensor library version. Its 4 MB partition map provides two 1.8 MB application slots for OTA updates.
 
 The full production image permanently includes a USB bench-diagnostic console; testing does not require a separate firmware. For an unprovisioned Atmosphere station, use the project runner, which resets the board, sends `diag air-station` during the startup command window, validates every module, and returns a nonzero exit status on any fault:
 
@@ -186,7 +186,7 @@ For firmware 1.2.0 and later, all three device types use app-driven Bluetooth se
 
 New sensors advertise setup for 10 minutes after boot. Firmware 1.2.3 and later keep an active setup session open for up to 30 minutes and allow two minutes to reconnect after an interrupted session. If the app reports a lost Bluetooth connection after the window closes, restart the sensor and choose **Reconnect / rescan**; its pending HomeBrain registration can be reused.
 
-Use firmware 1.3.6 or newer for Wi-Fi firmware updates on Atmosphere, Presence and Climate. Once installed over USB one time, open a sensor in iOS and use **Firmware updates**, or use **Settings → Sensor Fleet** on the web. Climate receives queued updates on its next wake. Installation preserves registration and settings, verifies the download, and confirms a successful report after reboot before keeping the new firmware. See the [OTA release and recovery instructions](../../embedded/homebrain-sensor/README.md#wireless-firmware-updates).
+Use firmware 1.3.8 or newer for Wi-Fi firmware updates on Atmosphere, Presence and Climate. Once installed over USB one time, open a sensor in iOS and use **Firmware updates**, or use **Settings → Sensor Fleet** on the web. Climate receives queued updates on its next wake. Installation preserves registration and settings, verifies the download, and confirms a successful report after reboot before keeping the new firmware. See the [OTA release and recovery instructions](../../embedded/homebrain-sensor/README.md#wireless-firmware-updates).
 
 Bluetooth uses standard LE Secure Connections, Just Works: encrypted against passive interception, but not authenticated against an active nearby man-in-the-middle. Use a trusted physical setup environment. See the [firmware protocol and security notes](../../embedded/homebrain-sensor/README.md).
 

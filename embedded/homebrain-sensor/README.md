@@ -14,7 +14,7 @@ Verified build target: Seeed Studio XIAO ESP32-C6 using the Seeed platform pinne
 
 Current release build:
 
-- Firmware: 1.3.6 (wireless updates with boot confirmation/rollback, native ESP-IDF download transport, Wi-Fi compatibility mode, Bluetooth recovery, full-profile telemetry)
+- Firmware: 1.3.8 (wireless updates with boot confirmation/rollback, native ESP-IDF download transport, Wi-Fi compatibility mode, Bluetooth recovery, full-profile telemetry)
 - Application: approximately 1.74 MiB of a 1.81 MiB OTA slot, including the image headers
 - Static RAM: approximately 46 KB of 320 KB
 - Reading schema: `homebrain.sensor.reading.v1`
@@ -26,7 +26,7 @@ Firmware 1.2.1 and later use the XIAO's full six-byte Wi-Fi MAC in its hardware 
 
 ## Wireless firmware updates
 
-All three profiles use the same application image. Use 1.3.6 or newer for USB bootstrap, including the pinned bootloader and partition table. Firmware older than 1.3.0 needs this one-time USB installation to enable OTA. Preserve NVS; do not erase flash. Future application updates use Wi-Fi.
+All three profiles use the same application image. Use 1.3.8 or newer for USB bootstrap, including the pinned bootloader and partition table. Firmware older than 1.3.0 needs this one-time USB installation to enable OTA. Preserve NVS; do not erase flash. Future application updates use Wi-Fi.
 
 1. Build with `pio run -d embedded/homebrain-sensor` from the repository root. Increment `HOMEBRAIN_SENSOR_FIRMWARE_VERSION` for each changed release.
 2. Publish `.pio/build/seeed-xiao-esp32-c6/firmware.bin` in **Settings → Sensor Fleet → Wireless firmware updates**. Upload the application binary, not a merged flash image or bootloader. The backend validates its ESP32-C6 header, segment checksum, appended SHA-256 and compiled HomeBrain board/version marker. Releases are immutable and stored with their artifact in MongoDB; keep the exact published binary for USB bootstrap.
@@ -35,9 +35,9 @@ All three profiles use the same application image. Use 1.3.6 or newer for USB bo
 
 The sensor downloads from its configured HTTPS hub using its own device token. Certificates and hostname are verified, redirects are disabled, and arbitrary manifest URLs are never followed. Download size and SHA-256 must match before the inactive slot is selected. Wi-Fi/registration/calibration in NVS are preserved.
 
-The radio uses 2.4 GHz 802.11b/g/n with 20 MHz channels for compatibility with the house access points. OTA temporarily disables modem power saving, prepares the inactive flash slot before opening the download, and uses the native ESP-IDF streaming client. Failed downloads close their connection safely and resume ordinary sensor reporting; serial logs include Wi-Fi disconnect reasons for diagnosis.
+The radio uses 2.4 GHz 802.11b/g/n with 20 MHz channels for compatibility with the house access points. OTA temporarily disables modem power saving, prepares the inactive flash slot before opening the download, and uses the native ESP-IDF streaming client. Interrupted downloads reconnect up to eight times and request the remaining byte range, keeping the existing hash and flash position. Every response must match the expected range, length and release hash; the full image is still verified before selecting it. If recovery fails, connections close safely and ordinary sensor reporting resumes; serial logs include Wi-Fi disconnect reasons for diagnosis.
 
-The pinned ESP32-C6 SDK enables `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`. `verifyRollbackLater()` overrides Arduino's automatic early acceptance. The new image is accepted only after a normal measurement reaches HomeBrain; a two-minute deadline or an unconfirmed reset triggers rollback. The previous image records an interrupted/rolled-back job on its next report. A failed job is not retried automatically; retry from the app creates a new job ID. Download time is bounded to three minutes, with a 15-second idle timeout. Status is persisted across reboot, including the target partition so a failed same-version reinstall cannot be mistaken for success.
+The pinned ESP32-C6 SDK enables `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`. `verifyRollbackLater()` overrides Arduino's automatic early acceptance. The new image is accepted only after a normal measurement reaches HomeBrain; a two-minute deadline or an unconfirmed reset triggers rollback. The previous image records an interrupted/rolled-back job on its next report. A failed job is not retried automatically; retry from the app creates a new job ID. Download time is bounded to ten minutes, with a 15-second idle timeout that excludes time spent sending progress. Progress reports require at least ten percentage points of advancement and fifteen seconds between reports, so their separate TLS connections do not continually interrupt a slow download. Status is persisted across reboot, including the target partition so a failed same-version reinstall cannot be mistaken for success.
 
 ### API contract
 
