@@ -39,6 +39,8 @@ The radio uses 2.4 GHz 802.11b/g/n with 20 MHz channels for compatibility with t
 
 The pinned ESP32-C6 SDK enables `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`. `verifyRollbackLater()` overrides Arduino's automatic early acceptance. The new image is accepted only after a normal measurement reaches HomeBrain; a two-minute deadline or an unconfirmed reset triggers rollback. The previous image records an interrupted/rolled-back job on its next report. A failed job is not retried automatically; retry from the app creates a new job ID. Download time is bounded to ten minutes, with a 15-second idle timeout that excludes time spent sending progress. Progress reports require at least ten percentage points of advancement and fifteen seconds between reports, so their separate TLS connections do not continually interrupt a slow download. Status is persisted across reboot, including the target partition so a failed same-version reinstall cannot be mistaken for success.
 
+A USB serial monitor can reset the board when opened or closed. Open any required monitor before queuing an update and keep that connection unchanged until the job finishes. Production firmware status and a fresh post-boot reading are the primary confirmation; reconnecting a monitor during a transfer can interrupt it.
+
 ### API contract
 
 - Admin `GET/POST /api/sensor-nodes/firmware/releases`: list manifests or upload a raw `application/octet-stream` image. Optional `X-Firmware-Notes` header (2,000 characters max).

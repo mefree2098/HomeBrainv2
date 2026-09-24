@@ -23,7 +23,7 @@ Production reported `succeeded`, 100%, with an empty error at 02:55:14 UTC. Subs
 
 ## Checks and limits
 
-The pinned PlatformIO build passed, the production binary validator accepted the image, and a real Wi-Fi transfer plus reboot confirmation passed. This session did not inject a power cut or deliberately trigger boot rollback. Atmosphere and Climate still need their final release installation and profile-specific verification; this report does not claim those tests passed.
+The pinned PlatformIO build passed, the production binary validator accepted the image, and a real Wi-Fi transfer plus reboot confirmation passed. This session did not inject a power cut or deliberately trigger boot rollback. The later profile-specific outcomes are recorded below.
 
 ## Atmosphere commissioning
 
@@ -33,4 +33,36 @@ Its 1.3.6 wireless test received 413,696 bytes in 186,796 ms before the three-mi
 
 Version 1.3.8 adds authenticated byte-range resume with up to eight reconnections. The server rejects invalid/multiple ranges, and the firmware checks the resumed response's offset, total length and release hash before continuing the original full-image checksum. A newer USB installation also retires an obsolete queued job instead of downloading older firmware.
 
-The pinned 1.3.8 build and all 24 targeted sensor service/HTTP tests passed, including suffix reconstruction after a simulated interruption, invalid ranges, unauthorized resume requests and obsolete queued jobs. Physical 1.3.8 validation is pending.
+The pinned 1.3.8 build and all 24 targeted sensor service/HTTP tests passed, including suffix reconstruction after a simulated interruption, invalid ranges, unauthorized resume requests and obsolete queued jobs. The Climate and Atmosphere 1.3.8 hardware tests subsequently passed; Presence's later upgrade attempts timed out as described below.
+
+## Atmosphere validation on 1.3.8
+
+After USB bootstrap, Atmosphere was powered by a wall adapter for the final same-version reinstall. Production job `6566f695-4753-4741-9c03-6ec0fd497e72` downloaded the published 1.3.8 image over Wi-Fi, reached `rebooting` at 03:57:08 UTC, and reported `succeeded`, 100%, with no error at 03:57:31 UTC. Its next captured reading arrived at 03:58:09 UTC with sequence 2 and 56,763 ms uptime, confirming the reboot and resumed reporting. The version and image digest matched the release below.
+
+This isolated transfer took roughly ten minutes on the existing wireless link. Post-boot signal was −78 dBm. CO₂, particulate, light and SCD41 temperature/humidity readings resumed; the BME680 remained unavailable. Registration and the 30-second reporting interval were preserved. An earlier concurrent download timed out without replacing the working image.
+
+## Climate validation on 1.3.8
+
+- Build source: `9ded90b7000e77e56732fd4002622103608e2829`, merged as `270eebf02fe5ee47b087a260846076221e0fce12` (PR #721, deployed and healthy on Freestone).
+- Image length: 1,826,896 bytes.
+- File SHA-256: `c6414ed1f7aff929bbed8103b68850680c814f48b0476039742dc93987e2dead`.
+- Embedded image SHA-256: `374dd15054eceae591701209b8517f62b3daf14169b46caca0880f95a8e877fd`.
+- Production job: `8f88f236-040c-49f0-9f56-0962a190f86f`.
+
+The full image downloaded over Wi-Fi in 63,125 ms, verified, and rebooted into the inactive slot. Production confirmed `succeeded`, 100%, with no error at 03:45:44 UTC. A fresh post-boot DHT11 reading was accepted at 03:45:41 UTC (7,233 ms uptime), followed by another normal reading. Signal during this successful transfer was approximately −64 dBm. USB supplied power and console capture, not the firmware image.
+
+The original 300-second reporting interval and enabled deep sleep were restored. The device accepted the setting and entered sleep; no extra five-minute wake cycle was needed for verification.
+
+An earlier attempt at roughly −72 to −79 dBm timed out after 609,402 ms and 1,414,085 bytes. Its serial log confirmed byte-range recovery at offsets 166,716, 1,136,190, 1,286,465 and 1,344,453. The running image and registration remained usable. The successful retry used the same published binary and backend.
+
+## Observed interruption recovery
+
+Moving Atmosphere from laptop USB to a power adapter interrupted its first 1.3.8 test. Its next authenticated report marked that job failed and retained the working image and registration. This exercised power interruption during download, not rollback of a newly booted invalid image.
+
+Reopening a macOS USB serial log reader restarted Climate during another transfer, which had reached 65%. That attempt is excluded from transfer reliability results. The subsequent successful test kept the console connection open throughout. Do not open, close or restart a USB monitor during an OTA transfer; observe production status and fresh readings instead. Stop capture after a Climate device has entered sleep, before its next wake.
+
+## Outstanding checks
+
+Presence previously passed the 1.3.6 OTA test. Its initial 1.3.8 upgrade timed out at 8%; an isolated retry (`561a9eea-c0c4-4b1c-9fea-2ee4e506de07`) timed out at 36% at 04:01:37 UTC. The installed 1.3.6 downloader has a three-minute deadline and predates byte-range recovery. A subsequent reading arrived at 04:02:00 UTC with valid radar, DHT11 and light diagnostics and −73 dBm signal, confirming that the existing firmware and registration remained usable.
+
+The Presence upgrade needs a successful retry; closer placement to the IoT access point has been requested before another attempt. Its latest-version upgrade must not be reported as successful until production confirms it. Climate and Atmosphere have completed their final 1.3.8 OTA tests.
