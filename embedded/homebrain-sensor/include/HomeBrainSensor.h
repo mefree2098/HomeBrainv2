@@ -32,6 +32,16 @@ struct AppCredentials {
   String deviceToken;
 };
 
+struct FirmwareUpdate {
+  String id;
+  String version;
+  String sha256;
+  String imageSha256;
+  String hardwareProfile;
+  uint32_t size = 0;
+  uint8_t protocol = 0;
+};
+
 struct RuntimeConfig {
   Profile profile = Profile::Auto;
   uint32_t reportingIntervalSeconds = 300;
@@ -41,6 +51,7 @@ struct RuntimeConfig {
   float altitudeMeters = 0.0f;
   uint16_t presenceHoldSeconds = 30;
   uint32_t tokenVersion = 0;
+  FirmwareUpdate firmwareUpdate;  // Live command; never saved as runtime configuration.
 };
 
 struct SensorReading {

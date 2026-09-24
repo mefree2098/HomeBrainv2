@@ -79,6 +79,9 @@ void SensorSuite::begin(const RuntimeConfig& config) {
 
   if (config.profile == Profile::Climate) {
     analogReadResolution(12);
+    // Arduino-ESP32 requires an initial read to attach the ADC channel before
+    // analogSetPinAttenuation can configure that specific pin.
+    analogRead(PIN_BATTERY_ADC);
     analogSetPinAttenuation(PIN_BATTERY_ADC, ADC_11db);
   }
   initialized_ = true;
@@ -255,10 +258,19 @@ SensorReading SensorSuite::capture(const RuntimeConfig& config) {
     reading.pressureHpa = bme680_.pressure / 100.0f;
     reading.gasResistanceOhms = static_cast<float>(bme680_.gas_resistance);
   } else if (dhtReady_) {
-    const float humidity = dht_.readHumidity();
-    const float temperature = dht_.readTemperature();
-    if (isfinite(temperature)) reading.temperatureC = temperature + config.temperatureOffsetC;
-    if (isfinite(humidity)) reading.humidityPct = clampFloat(humidity + config.humidityOffsetPct, 0.0f, 100.0f);
+    for (uint8_t attempt = 0; attempt < 2; ++attempt) {
+      const float humidity = dht_.readHumidity();
+      const float temperature = dht_.readTemperature();
+      // A newly powered DHT11 can return an invalid frame or checksum-valid
+      // zero humidity. Wait for a fresh measurement before reporting it absent.
+      if (isfinite(temperature) && temperature >= -10.0f && temperature <= 60.0f
+          && isfinite(humidity) && humidity > 0.0f && humidity <= 100.0f) {
+        reading.temperatureC = temperature + config.temperatureOffsetC;
+        reading.humidityPct = clampFloat(humidity + config.humidityOffsetPct, 0.0f, 100.0f);
+        break;
+      }
+      if (attempt == 0) delay(2200);
+    }
   }
 
   if (scdReady_) {

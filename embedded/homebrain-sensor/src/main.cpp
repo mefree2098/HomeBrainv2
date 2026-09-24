@@ -3,6 +3,7 @@
 #include "SensorSuite.h"
 #include "UsbBenchDiagnostic.h"
 #include "BleProvisioning.h"
+#include "SensorOta.h"
 
 #include <WiFi.h>
 #include <esp_sleep.h>
@@ -21,6 +22,7 @@ ConfigStore configStore;
 AppCredentials credentials;
 RuntimeConfig runtimeConfig;
 SensorSuite sensors;
+SensorOta ota;
 HomeBrainApi* api = nullptr;
 uint32_t nextPublishAt = 0;
 uint32_t lastPublishAt = 0;
@@ -81,6 +83,9 @@ bool provisionWithHomeBrain() {
     const ApiResult result = api->fetchConfig(runtimeConfig);
     if (result == ApiResult::Success || result == ApiResult::RetryableFailure) return true;
     if (result == ApiResult::Unauthorized) {
+      // A candidate image must not erase the working image's registration.
+      // Restarting an unconfirmed image lets the bootloader roll it back.
+      if (ota.awaitingConfirmation()) return false;
       Serial.println("HomeBrain rejected the stored device token; setup is required again.");
       credentials.deviceToken = "";
       credentials.setupCode = "";
@@ -109,7 +114,7 @@ void publishNow() {
   if (!reconnectWifi()) {
     Serial.println("Wi-Fi reconnect failed; reading will be retried on the next cycle.");
     nextPublishAt = millis() + FAILURE_RETRY_MS;
-    if (runtimeConfig.profile == Profile::Climate && runtimeConfig.deepSleepEnabled) enterDeepSleep(60);
+    if (!ota.awaitingConfirmation() && runtimeConfig.profile == Profile::Climate && runtimeConfig.deepSleepEnabled) enterDeepSleep(60);
     return;
   }
 
@@ -121,6 +126,10 @@ void publishNow() {
     wakeCount
   );
   if (result == ApiResult::Unauthorized) {
+    if (ota.awaitingConfirmation()) {
+      ESP.restart();
+      return;
+    }
     Serial.println("The device token was revoked; use Add HomeBrain Sensor to claim it again.");
     configStore.clearDeviceToken();
     delay(500);
@@ -128,6 +137,10 @@ void publishNow() {
   }
 
   const bool success = result == ApiResult::Success;
+  if (success) {
+    ota.readingAccepted(*api);
+    ota.maybeApply(*api, credentials, runtimeConfig, reading);
+  }
   lastPublishAt = millis();
   Serial.printf(
     "Reading %llu %s (%s, RSSI %d dBm).\n",
@@ -137,7 +150,7 @@ void publishNow() {
     WiFi.RSSI()
   );
 
-  if (runtimeConfig.profile == Profile::Climate && runtimeConfig.deepSleepEnabled) {
+  if (!ota.awaitingConfirmation() && runtimeConfig.profile == Profile::Climate && runtimeConfig.deepSleepEnabled) {
     enterDeepSleep(success ? runtimeConfig.reportingIntervalSeconds : 60);
   }
   if (runtimeConfig.profile != previousProfile) {
@@ -154,6 +167,7 @@ void publishNow() {
 void setup() {
   Serial.begin(115200);
   delay(250);
+  ota.begin();
   ++wakeCount;
   Serial.printf("\nHomeBrain Sensor %s, wake %lu, hardware %s\n",
                 HOMEBRAIN_SENSOR_FIRMWARE_VERSION,
@@ -173,14 +187,14 @@ void setup() {
     || (credentials.deviceToken.isEmpty() && credentials.setupCode.isEmpty());
   bool diagnosticRan = false;
   if (unprovisioned && runtimeConfig.profile == Profile::Auto) {
-    Serial.println("Unprovisioned USB window: send 'diag air-station' within 12 seconds to force the Atmosphere test.");
+    Serial.println("Unprovisioned USB window: send 'diag air-station', 'diag presence', or 'diag climate' within 12 seconds.");
     const uint32_t diagnosticDeadline = millis() + UNPROVISIONED_USB_DIAGNOSTIC_WINDOW_MS;
     while (!diagnosticRan && static_cast<int32_t>(diagnosticDeadline - millis()) > 0) {
       diagnosticRan = pollUsbDiagnosticConsole(sensors, runtimeConfig, Serial);
       delay(10);
     }
   }
-  if (!diagnosticRan && esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER) {
+  if (!ota.awaitingConfirmation() && !diagnosticRan && esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_TIMER) {
     runUsbBenchDiagnostic(sensors, runtimeConfig.profile, Serial);
   }
   sensors.prepareForSleep();

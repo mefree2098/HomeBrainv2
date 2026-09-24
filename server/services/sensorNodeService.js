@@ -391,6 +391,7 @@ function serializeNode(input, now = Date.now()) {
 
 function buildRuntimeConfig(node) {
   const serialized = serializeNode(node);
+  const firmwareUpdate = require('./sensorFirmwareService').firmwareCommand(node);
   return {
     schema: CONFIG_SCHEMA,
     node_id: serialized.id,
@@ -403,7 +404,8 @@ function buildRuntimeConfig(node) {
       altitude_meters: serialized.settings.altitudeMeters
     },
     presence_hold_seconds: serialized.settings.presenceHoldSeconds,
-    token_version: serialized.deviceTokenVersion
+    token_version: serialized.deviceTokenVersion,
+    ...(firmwareUpdate ? { firmware_update: firmwareUpdate } : {})
   };
 }
 
@@ -737,7 +739,13 @@ class SensorNodeService {
     const reading = normalizeReadingPayload(payload);
     const now = new Date();
 
-    if (reading.hardwareId && node.hardwareId && reading.hardwareId !== node.hardwareId) {
+    // 1.2.0 used a truncated EUI-64. Preserve the existing claim/history when
+    // its authenticated sensor first reports the corrected six-byte MAC.
+    const mac = /^XIAO-C6-([A-F0-9]{12})$/.exec(reading.hardwareId || '')?.[1];
+    const legacyId = mac ? `XIAO-C6-${mac.slice(6, 8)}FEFF${mac.slice(4, 6)}${mac.slice(2, 4)}${mac.slice(0, 2)}` : '';
+    const migratesLegacyId = node.firmwareVersion === '1.2.0' && payload.ota_protocol === 1
+      && legacyId === node.hardwareId;
+    if (reading.hardwareId && node.hardwareId && reading.hardwareId !== node.hardwareId && !migratesLegacyId) {
       throw serviceError('Sensor hardware identifier does not match the activated node.', 409);
     }
 
@@ -748,6 +756,7 @@ class SensorNodeService {
     node.readingSequence = Math.max(Number(node.readingSequence || 0), reading.sequence);
     node.hardwareId = reading.hardwareId || node.hardwareId;
     node.firmwareVersion = reading.firmwareVersion || node.firmwareVersion;
+    node.otaProtocol = payload.ota_protocol === 1 ? 1 : 0;
     node.capabilities = inferCapabilities(reading);
     node.ipAddress = reading.diagnostics.ip_address
       || trimString(context.ipAddress, 64)

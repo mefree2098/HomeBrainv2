@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import math
 import os
 import subprocess
 import sys
@@ -25,7 +26,7 @@ EXPECTED_AIR_MODULES = {
 EXPECTED_PROFILE_MODULES = {
     "air-station": EXPECTED_AIR_MODULES,
     "presence": {"dht11": ("reading_valid",), "ld2410": ("reading_valid",), "veml7700": ("i2c_ack", "reading_valid")},
-    "climate": {"dht11": ("reading_valid",)},
+    "climate": {"dht11": ("reading_valid",), "battery": ("reading_valid",)},
 }
 
 
@@ -118,6 +119,22 @@ def validate_report(report: dict, expected_profile: str) -> list[str]:
         for check in checks:
             if module.get(check) is not True:
                 errors.append(f"{module_name}: {check} is not true")
+    if expected_profile in ("presence", "climate"):
+        dht = modules.get("dht11") or {}
+        temperature = dht.get("temperature_c")
+        humidity = dht.get("humidity_pct")
+        if not isinstance(temperature, (int, float)) or isinstance(temperature, bool) \
+                or not math.isfinite(temperature) or not 0.0 <= temperature <= 50.0:
+            errors.append(f"dht11: implausible temperature {temperature!r} °C")
+        if not isinstance(humidity, (int, float)) or isinstance(humidity, bool) \
+                or not math.isfinite(humidity) or not 5.0 <= humidity <= 95.0:
+            errors.append(f"dht11: implausible humidity {humidity!r} %")
+    if expected_profile == "climate":
+        battery = modules.get("battery") or {}
+        voltage = battery.get("voltage_v")
+        if not isinstance(voltage, (int, float)) or isinstance(voltage, bool) \
+                or not math.isfinite(voltage) or not 2.5 <= voltage <= 4.3:
+            errors.append(f"battery: implausible voltage {voltage!r} V")
     if report.get("passed") is not True:
         failures = report.get("failures", [])
         errors.append("firmware reported failure" + (f": {', '.join(failures)}" if failures else ""))

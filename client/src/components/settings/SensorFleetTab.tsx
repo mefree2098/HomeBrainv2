@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react"
 import { HomeBrainSensorTelemetry } from '@/components/devices/HomeBrainSensorTelemetry'
 import { SensorBluetoothOnboarding } from '@/components/devices/SensorBluetoothOnboarding'
+import { SensorFirmwareCard, SensorFirmwareUpload } from './SensorFirmwareCard'
 import {
   CheckCircle,
   Copy,
@@ -124,6 +125,7 @@ export function SensorFleetTab() {
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
   const [busyNodeId, setBusyNodeId] = useState("")
+  const [releaseRevision, setReleaseRevision] = useState(0)
 
   const sortedNodes = useMemo(() => [...nodes].sort((left, right) => {
     const roomCompare = left.room.localeCompare(right.room)
@@ -294,6 +296,7 @@ export function SensorFleetTab() {
 
   return (
     <div className="space-y-6">
+      <SensorFirmwareUpload onPublished={() => setReleaseRevision(value => value + 1)} />
       <SensorBluetoothOnboarding onComplete={() => void loadFleet()} />
       <Card className="border-border/50 bg-white/80 shadow-lg backdrop-blur-sm dark:bg-slate-900/70">
         <CardHeader>
@@ -392,6 +395,7 @@ export function SensorFleetTab() {
                 <CardContent className="space-y-4">
                   <HomeBrainSensorTelemetry sensor={{ ...node.latestReading, profile: node.profile, firmwareVersion: node.firmwareVersion, hardwareId: node.hardwareId, lastReadingAt: node.lastReadingAt || undefined }} deviceId={node.deviceId} isOnline={node.status === 'online'} />
 
+                  <SensorFirmwareCard nodeId={node.id} releaseRevision={releaseRevision} />
                   <div className="flex flex-wrap gap-1.5">
                     {node.capabilities.map((capability) => <Badge key={capability} variant="secondary">{capability}</Badge>)}
                     {node.firmwareVersion && <Badge variant="outline">firmware {node.firmwareVersion}</Badge>}

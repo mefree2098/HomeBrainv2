@@ -68,7 +68,13 @@ UsbDiagnosticSummary runUsbBenchDiagnostic(
   diagnosticConfig.deepSleepEnabled = false;
   diagnosticConfig.reportingIntervalSeconds = 30;
   sensors.begin(diagnosticConfig);
-  const SensorReading reading = sensors.capture(diagnosticConfig);
+  SensorReading reading = sensors.capture(diagnosticConfig);
+  if ((profile == Profile::Presence || profile == Profile::Climate)
+      && !isfinite(reading.humidityPct)) {
+    // Give a newly powered DHT11 one more measurement cycle before failing it.
+    delay(2200);
+    reading = sensors.capture(diagnosticConfig);
+  }
 
   const bool bmeAck = probe(BME_ADDRESS_PRIMARY) || probe(BME_ADDRESS_SECONDARY);
   const bool scdAck = probe(SCD41_ADDRESS);
@@ -95,8 +101,8 @@ UsbDiagnosticSummary runUsbBenchDiagnostic(
   JsonObject bme = modules.createNestedObject("bme680");
   bme["i2c_ack"] = bmeAck;
   bme["reading_valid"] = bmeReading;
-  setFloat(bme, "temperature_c", reading.temperatureC);
-  setFloat(bme, "humidity_pct", reading.humidityPct);
+  setFloat(bme, "temperature_c", bmeAck ? reading.temperatureC : NAN);
+  setFloat(bme, "humidity_pct", bmeAck ? reading.humidityPct : NAN);
   setFloat(bme, "pressure_hpa", reading.pressureHpa);
   setFloat(bme, "gas_resistance_ohms", reading.gasResistanceOhms);
 
@@ -132,15 +138,27 @@ UsbDiagnosticSummary runUsbBenchDiagnostic(
   } else {
     JsonObject dht = modules.createNestedObject("dht11");
     const bool dhtValid = inRange(reading.temperatureC, -10.0f, 60.0f)
-      && inRange(reading.humidityPct, 0.0f, 100.0f);
+      && inRange(reading.humidityPct, 1.0f, 100.0f);
     dht["reading_valid"] = dhtValid;
     setFloat(dht, "temperature_c", reading.temperatureC);
     setFloat(dht, "humidity_pct", reading.humidityPct);
     if (!dhtValid) failures.add("dht11-invalid-reading");
+    if (profile == Profile::Climate) {
+      JsonObject battery = modules.createNestedObject("battery");
+      const bool batteryValid = inRange(reading.batteryVolts, 2.5f, 4.3f);
+      battery["reading_valid"] = batteryValid;
+      setFloat(battery, "voltage_v", reading.batteryVolts);
+      setFloat(battery, "percent", reading.batteryPct);
+      if (!batteryValid) failures.add("battery-invalid-reading");
+    }
     if (profile == Profile::Presence) {
       JsonObject radar = modules.createNestedObject("ld2410");
       radar["reading_valid"] = reading.hasPresence;
       radar["presence_present"] = reading.presencePresent;
+      setFloat(radar, "moving_distance_cm", reading.movingDistanceCm);
+      setFloat(radar, "moving_energy_pct", reading.movingEnergyPct);
+      setFloat(radar, "stationary_distance_cm", reading.stationaryDistanceCm);
+      setFloat(radar, "stationary_energy_pct", reading.stationaryEnergyPct);
       if (!reading.hasPresence) failures.add("ld2410-no-valid-frame");
       if (!vemlAck || !vemlReading) failures.add("veml7700-invalid-reading");
     }

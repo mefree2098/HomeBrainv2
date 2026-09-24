@@ -44,7 +44,20 @@ def main() -> None:
     for profile in ("presence", "climate"):
         report = {"schema": bench.SCHEMA, "profile": profile, "passed": True,
                   "modules": {name: dict.fromkeys(checks, True) for name, checks in bench.EXPECTED_PROFILE_MODULES[profile].items()}}
+        report["modules"]["dht11"].update(temperature_c=22.0, humidity_pct=40.0)
+        if profile == "climate":
+            report["modules"]["battery"]["voltage_v"] = 3.85
         assert bench.validate_report(report, profile) == []
+        if profile == "climate":
+            report["modules"]["battery"]["voltage_v"] = 0.0
+            assert "battery: implausible voltage 0.0 V" in bench.validate_report(report, profile)
+            report["modules"]["battery"]["voltage_v"] = 3.85
+            report["modules"]["battery"]["reading_valid"] = False
+            assert "battery: reading_valid is not true" in bench.validate_report(report, profile)
+            report["modules"]["battery"]["reading_valid"] = True
+        report["modules"]["dht11"].update(temperature_c=0.6, humidity_pct=0.0)
+        assert "dht11: implausible humidity 0.0 %" in bench.validate_report(report, profile)
+        report["modules"]["dht11"].update(temperature_c=22.0, humidity_pct=40.0)
         report["modules"]["dht11"]["reading_valid"] = False
         assert "dht11: reading_valid is not true" in bench.validate_report(report, profile)
         assert bench.validate_report(report, "air-station")

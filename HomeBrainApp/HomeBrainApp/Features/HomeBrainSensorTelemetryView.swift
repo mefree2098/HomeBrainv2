@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct HomeBrainSensorTelemetryView: View {
+    @EnvironmentObject private var session: SessionStore
     let device: DeviceItem
     private var snapshot: [String: Any] { JSON.object(device.properties["homebrainSensor"]) }
 
@@ -12,6 +13,9 @@ struct HomeBrainSensorTelemetryView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Text("Firmware \(JSON.string(snapshot, "firmwareVersion")) · \(JSON.string(snapshot, "hardwareId"))")
                     .font(.caption2).foregroundStyle(.secondary)
+                if session.currentUser?.role == "admin", let nodeId = snapshot["nodeId"] as? String, !nodeId.isEmpty {
+                    SensorFirmwareView(nodeId: nodeId)
+                }
                 NavigationLink {
                     DataPlatformView(initialSourceKey: "device:\(device.id)")
                         .navigationTitle(device.name)

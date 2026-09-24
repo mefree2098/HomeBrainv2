@@ -30,22 +30,15 @@ String HomeBrainApi::normalizedBaseUrl() const {
   return value;
 }
 
-int HomeBrainApi::request(
-  const String& method,
-  const String& path,
-  const String& requestBody,
-  String& responseBody,
-  bool useSetupCode
-) {
-  if (WiFi.status() != WL_CONNECTED) return -1;
-
-  const String url = normalizedBaseUrl() + path;
+std::unique_ptr<WiFiClient> HomeBrainApi::createHttpClient(bool requireTls) const {
+  if (WiFi.status() != WL_CONNECTED) return nullptr;
+  const String url = normalizedBaseUrl();
   std::unique_ptr<WiFiClient> client;
   if (url.startsWith("https://")) {
     if (time(nullptr) < 1700000000) {
       configTime(0, 0, "pool.ntp.org", "time.nist.gov");
       struct tm clock;
-      if (!getLocalTime(&clock, HTTP_TIMEOUT_MS)) return -1;
+      if (!getLocalTime(&clock, HTTP_TIMEOUT_MS)) return nullptr;
     }
     auto* secureClient = new WiFiClientSecure();
 #ifdef HOMEBRAIN_SENSOR_CA_CERT
@@ -55,8 +48,22 @@ int HomeBrainApi::request(
 #endif
     client.reset(secureClient);
   } else {
+    if (requireTls) return nullptr;
     client.reset(new WiFiClient());
   }
+  return client;
+}
+
+int HomeBrainApi::request(
+  const String& method,
+  const String& path,
+  const String& requestBody,
+  String& responseBody,
+  bool useSetupCode
+) {
+  auto client = createHttpClient();
+  if (!client) return -1;
+  const String url = normalizedBaseUrl() + path;
 
   HTTPClient http;
   http.setConnectTimeout(HTTP_TIMEOUT_MS);
@@ -101,7 +108,31 @@ bool HomeBrainApi::parseConfigResponse(const String& body, RuntimeConfig& runtim
   JsonVariantConst config = response["config"];
   if (config.isNull()) return false;
   applyRuntimeConfig(config, runtime);
+  const JsonVariantConst update = config["firmware_update"];
+  runtime.firmwareUpdate.id = update["id"] | "";
+  runtime.firmwareUpdate.version = update["version"] | "";
+  runtime.firmwareUpdate.sha256 = update["sha256"] | "";
+  runtime.firmwareUpdate.imageSha256 = update["image_sha256"] | "";
+  runtime.firmwareUpdate.hardwareProfile = update["hardware_profile"] | "";
+  runtime.firmwareUpdate.size = update["size"] | 0U;
+  runtime.firmwareUpdate.protocol = update["protocol"] | 0;
   return true;
+}
+
+bool HomeBrainApi::reportFirmwareStatus(const String& id, const char* phase, uint8_t progress,
+    const String& error, const String& imageSha256) {
+  StaticJsonDocument<768> document;
+  document["id"] = id;
+  document["phase"] = phase;
+  document["progress"] = progress;
+  document["version"] = HOMEBRAIN_SENSOR_FIRMWARE_VERSION;
+  document["imageSha256"] = imageSha256;
+  document["error"] = error;
+  String body, response;
+  serializeJson(document, body);
+  const int status = request("POST", String("/api/sensor-nodes/") + credentials_.nodeId + "/firmware/status", body, response, false);
+  // A superseded job is also acknowledged: do not replay its status forever.
+  return status == 410 || classifyResponse(status, response) == ApiResult::Success;
 }
 
 ApiResult HomeBrainApi::activate(RuntimeConfig& runtime) {
@@ -160,6 +191,7 @@ ApiResult HomeBrainApi::publish(
   document["schema"] = READING_SCHEMA;
   document["profile"] = profileName(runtime.profile);
   document["firmware_version"] = HOMEBRAIN_SENSOR_FIRMWARE_VERSION;
+  document["ota_protocol"] = 1;
   document["hardware_id"] = hardwareId();
   document["sequence"] = sequence;
   sensors.addCapabilities(document.createNestedArray("capabilities"));

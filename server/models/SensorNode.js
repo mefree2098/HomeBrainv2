@@ -83,6 +83,8 @@ const sensorNodeSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  otaProtocol: { type: Number, default: 0, min: 0, max: 1 },
+  firmwareUpdate: { type: mongoose.Schema.Types.Mixed, default: null },
   capabilities: {
     type: [String],
     default: []
