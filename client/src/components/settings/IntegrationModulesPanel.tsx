@@ -90,7 +90,8 @@ export function IntegrationModulesPanel() {
   const climateModules = useMemo(() => {
     const modules = catalog?.modules || []
     return CLIMATE_CAPABILITIES.map((capability) => {
-      const providers = modules.filter((module) => module.capabilities.includes(capability.key))
+      const providers = modules.filter((module) => module.capabilities.includes(capability.key)
+        && (capability.key !== "indoor_climate" || module.selectableResources?.includes(capability.key)))
       const preference = catalog?.preferences.capabilities[capability.key] || {
         mode: "auto",
         moduleId: "",
@@ -231,7 +232,7 @@ export function IntegrationModulesPanel() {
                     <SelectValue placeholder="Auto select" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__auto__">Auto select best source</SelectItem>
+                    <SelectItem value="__auto__">{capability.key === "indoor_climate" ? "Automatic (configured Govee monitor)" : "Auto select best source"}</SelectItem>
                     {options.map((option) => (
                       <SelectItem key={`${capability.key}-${option.value}`} value={option.value}>
                         {option.label}

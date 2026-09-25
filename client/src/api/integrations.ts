@@ -43,6 +43,7 @@ export type IntegrationModule = {
   capabilities: string[]
   deviceTypes: string[]
   telemetrySourceTypes: string[]
+  selectableResources?: string[]
   configured: boolean
   enabled: boolean
   connected: boolean

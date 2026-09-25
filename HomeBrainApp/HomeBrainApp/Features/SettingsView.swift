@@ -897,6 +897,7 @@ struct SettingsView: View {
         case .general:
             settingsConnectionSection
             settingsGeneralSection
+            IndoorClimateSourceSection()
             settingsDynamicDnsSection
             settingsSaveRefreshSection
 

@@ -1136,7 +1136,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
         { label: "Humidity", value: formatPercent(indoorAir.humidityPct), toneClassName: "text-emerald-600 dark:text-emerald-300" },
         { label: "PM2.5", value: formatPm25(indoorAir.pm25UgM3), toneClassName: "text-violet-600 dark:text-violet-300" }
       ]}
-      footer={indoorAir.qualityAdvice || "Indoor readings are pulled from the Govee monitor and stored for charting in the Weather and Data Platform panels."}
+      footer={indoorAir.qualityAdvice || "Indoor readings come from the sensor selected in Settings and are stored for weather history."}
     />
   ) : null
   const metricGrid = compact
@@ -1489,7 +1489,7 @@ export function WeatherWidget({ size, locationMode, locationQuery }: WeatherWidg
                     { label: "PM2.5", value: formatPm25(indoorAir.pm25UgM3), toneClassName: "text-violet-600 dark:text-violet-300" },
                     { label: "Indoor AQI", value: formatAqi(indoorAir.usAqi), toneClassName: "text-foreground" }
                   ]}
-                  footer={indoorAir.qualityAdvice || "Indoor readings are pulled from the Govee monitor and stored for charting in the Weather and Data Platform panels."}
+                  footer={indoorAir.qualityAdvice || "Indoor readings come from the sensor selected in Settings and are stored for weather history."}
                 />
               ) : moduleTelemetry ? (
                 <WeatherTelemetryPopoverCard

@@ -32,6 +32,20 @@ const SHARED_DEVICE_TYPES = Object.freeze([
 
 const INTEGRATION_MODULE_DEFINITIONS = [
   {
+    id: 'homebrain-sensors',
+    label: 'HomeBrain Sensors',
+    provider: 'HomeBrain',
+    category: 'Climate',
+    description: 'Atmosphere and climate sensor readings for indoor temperature, humidity, and air quality.',
+    settingsTab: 'sensor-fleet',
+    apiBasePath: '/api/sensor-nodes',
+    deviceSource: 'homebrain-sensor',
+    capabilities: ['indoor_climate', 'air_quality', 'telemetry_source', 'workflow_conditions'],
+    deviceTypes: ['indoor_climate_sensor', 'air_quality_monitor'],
+    telemetrySourceTypes: [],
+    selectableResources: ['indoor_climate']
+  },
+  {
     id: 'midea', label: 'Cooper & Hunter / Midea AC', provider: 'Midea LAN', category: 'Climate',
     description: 'Local AC control, supported modes, fan speed, live readings, and maintenance alerts.',
     settingsTab: 'midea', apiBasePath: '/api/appliances/midea', deviceSource: 'midea',
