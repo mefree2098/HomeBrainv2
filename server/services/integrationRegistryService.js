@@ -238,6 +238,26 @@ async function loadGoveeModule(definition, preferences) {
   });
 }
 
+async function loadSensorModule(definition, preferences) {
+  const nodes = await require('./indoorClimateService').listClimateSensors();
+  const resources = nodes.map((node) => decorateResource({
+    id: node.id,
+    label: node.name,
+    deviceType: 'indoor_climate_sensor',
+    room: node.room,
+    sourceKey: node.deviceId ? `device:${node.deviceId}` : '',
+    nativeId: node.id,
+    online: node.status === 'online',
+    primary: false
+  }, definition, 'indoor_climate', preferences));
+  return buildModuleStatus(definition, {
+    configured: nodes.length > 0,
+    enabled: nodes.length > 0,
+    connected: resources.some((resource) => resource.online),
+    resources
+  });
+}
+
 async function loadRainMachineModule(definition) {
   const rainMachineService = require('./rainMachineService');
   const status = await rainMachineService.getStatus();
@@ -540,6 +560,8 @@ async function loadModuleStatus(definition, preferences) {
         return await loadTempestModule(definition, preferences);
       case 'govee-indoor-air':
         return await loadGoveeModule(definition, preferences);
+      case 'homebrain-sensors':
+        return await loadSensorModule(definition, preferences);
       case 'rainmachine':
         return await loadRainMachineModule(definition);
       case 'sense':
@@ -630,7 +652,8 @@ async function getCatalog(options = {}) {
 async function getCapabilityProviders(capabilityKey) {
   const key = trimString(capabilityKey);
   const preferences = await getPreferences();
-  const definitions = getModulesForCapability(key);
+  const definitions = getModulesForCapability(key).filter((definition) =>
+    key !== 'indoor_climate' || definition.selectableResources?.includes(key));
   const modules = await Promise.all(definitions.map((definition) => loadModuleStatus(definition, preferences)));
 
   return {
@@ -658,6 +681,29 @@ async function updateCapabilityPreference(capabilityKey, input = {}) {
 
   if (mode === SELECTED_MODE && moduleId && !capabilityModules.some((definition) => definition.id === moduleId)) {
     throw new Error(`Module ${moduleId} does not provide ${key}`);
+  }
+
+  if (key === 'indoor_climate' && mode === SELECTED_MODE) {
+    const definition = getModuleDefinition(moduleId);
+    if (!definition?.selectableResources?.includes(key)) {
+      throw new Error('Choose a supported indoor climate source.');
+    }
+    const providers = await getCapabilityProviders(key);
+    const resource = providers.resources.find((entry) => entry.moduleId === moduleId && entry.id === resourceId);
+    if ((resourceId || moduleId === 'homebrain-sensors') && !resource) {
+      throw new Error('The selected indoor climate sensor is unavailable. Refresh the source list.');
+    }
+    if (moduleId === 'govee-indoor-air' && resource) {
+      const integration = await GoveeIntegration.getIntegration();
+      const sku = resourceId.slice(0, resourceId.length - resource.nativeId.length - 1);
+      if (integration.selectedDevice !== resource.nativeId || integration.selectedSku !== sku) {
+        integration.selectedDevice = resource.nativeId;
+        integration.selectedSku = sku;
+        integration.selectedDeviceName = resource.label;
+        integration.lastSample = null;
+        await integration.save();
+      }
+    }
   }
 
   const preferences = await getPreferences();

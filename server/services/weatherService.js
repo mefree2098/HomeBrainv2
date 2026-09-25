@@ -2,6 +2,7 @@ const axios = require('axios');
 const { collapseWhitespace } = require('../utils/stringSafety');
 const settingsService = require('./settingsService');
 const goveeAirQualityService = require('./goveeAirQualityService');
+const indoorClimateService = require('./indoorClimateService');
 const tempestService = require('./tempestService');
 const telemetryService = require('./telemetryService');
 const integrationRegistryService = require('./integrationRegistryService');
@@ -416,8 +417,8 @@ async function getWeatherTempestSnapshot() {
   return tempestService.getSelectedStationSnapshot().catch(() => null);
 }
 
-async function getWeatherIndoorAirSnapshot() {
-  return goveeAirQualityService.getLatestSnapshot().catch(() => null);
+async function getWeatherIndoorAirSnapshot(preference) {
+  return indoorClimateService.getLatestSnapshot(preference).catch(() => null);
 }
 
 function isIndoorAirSnapshotStale(indoorAirSnapshot, nowMs = Date.now()) {
@@ -430,6 +431,9 @@ function isIndoorAirSnapshotStale(indoorAirSnapshot, nowMs = Date.now()) {
 }
 
 async function refreshIndoorAirForWeatherIfNeeded(indoorAirSnapshot, options = {}) {
+  if (indoorClimateService.selectedModule(options.indoorPreference) !== 'govee-indoor-air') {
+    return { refreshed: false, indoorAirSnapshot };
+  }
   const forceIndoorAirSync = parseBooleanFlag(options.forceIndoorAirSync);
   const stale = !forceIndoorAirSync && isIndoorAirSnapshotStale(indoorAirSnapshot);
 
@@ -479,7 +483,7 @@ async function refreshIndoorAirForWeatherIfNeeded(indoorAirSnapshot, options = {
     return {
       refreshed: true,
       result,
-      indoorAirSnapshot: await getWeatherIndoorAirSnapshot()
+      indoorAirSnapshot: await getWeatherIndoorAirSnapshot(options.indoorPreference)
     };
   } catch (error) {
     console.warn(`WeatherService: Govee indoor air refresh failed before weather fetch: ${error.message}`);
@@ -584,16 +588,27 @@ function buildClimateSourceDescriptor({ capability, moduleId, resourceId, label,
   };
 }
 
+function buildIndoorClimateSource(indoorAirSnapshot, preference) {
+  const moduleId = indoorAirSnapshot?.moduleId || indoorClimateService.selectedModule(preference);
+  return buildClimateSourceDescriptor({
+    capability: 'indoor_climate',
+    moduleId,
+    resourceId: indoorAirSnapshot?.resourceId || preference.resourceId || [indoorAirSnapshot?.sku, indoorAirSnapshot?.device].filter(Boolean).join(':'),
+    label: indoorAirSnapshot?.deviceName,
+    deviceType: indoorAirSnapshot?.deviceType || 'indoor_climate_sensor',
+    room: indoorAirSnapshot?.room || 'Inside',
+    sourceKey: indoorAirSnapshot?.sourceKey || '',
+    available: Boolean(indoorAirSnapshot),
+    live: Boolean(indoorAirSnapshot) && indoorAirSnapshot.isOnline !== false
+  });
+}
+
 async function buildClimateSourceMetadata({ tempestStation, indoorAirSnapshot } = {}) {
   const [outdoorPreference, indoorPreference] = await Promise.all([
     getClimateCapabilityPreference('outdoor_climate'),
     getClimateCapabilityPreference('indoor_climate')
   ]);
   const tempestStationId = tempestStation?.stationId ?? tempestStation?.id ?? tempestStation?.deviceId ?? '';
-  const indoorResourceId = [
-    indoorAirSnapshot?.sku,
-    indoorAirSnapshot?.device
-  ].filter(Boolean).join(':') || indoorAirSnapshot?.device || indoorAirSnapshot?.id || '';
 
   const outdoorClimate = buildClimateSourceDescriptor({
     capability: 'outdoor_climate',
@@ -607,17 +622,7 @@ async function buildClimateSourceMetadata({ tempestStation, indoorAirSnapshot } 
     live: tempestStation?.status?.websocketConnected === true
   });
 
-  const indoorClimate = buildClimateSourceDescriptor({
-    capability: 'indoor_climate',
-    moduleId: indoorPreference.mode === 'selected' && indoorPreference.moduleId ? indoorPreference.moduleId : 'govee-indoor-air',
-    resourceId: indoorPreference.mode === 'selected' && indoorPreference.resourceId ? indoorPreference.resourceId : indoorResourceId,
-    label: indoorAirSnapshot?.deviceName || 'Govee Indoor Air',
-    deviceType: 'air_quality_monitor',
-    room: indoorAirSnapshot?.room || 'Inside',
-    sourceKey: indoorAirSnapshot?.sourceKey || (indoorAirSnapshot?.device ? `govee_air_quality:${indoorAirSnapshot.device}` : ''),
-    available: Boolean(indoorAirSnapshot),
-    live: indoorAirSnapshot?.isOnline !== false
-  });
+  const indoorClimate = buildIndoorClimateSource(indoorAirSnapshot, indoorPreference);
 
   return {
     preferences: {
@@ -1190,9 +1195,10 @@ async function fetchDashboardWeather(options = {}) {
   let tempestStation = await getWeatherTempestSnapshot();
   const refreshResult = await refreshTempestForWeatherIfNeeded(tempestStation, options);
   tempestStation = refreshResult.tempestStation || tempestStation;
-  let indoorAirSnapshot = await getWeatherIndoorAirSnapshot();
+  const indoorPreference = await getClimateCapabilityPreference('indoor_climate');
+  let indoorAirSnapshot = await getWeatherIndoorAirSnapshot(indoorPreference);
   const indoorAirRefreshResult = (forceIndoorAirSync || refreshIndoorAir)
-    ? await refreshIndoorAirForWeatherIfNeeded(indoorAirSnapshot, options)
+    ? await refreshIndoorAirForWeatherIfNeeded(indoorAirSnapshot, { ...options, indoorPreference })
     : { refreshed: false, indoorAirSnapshot };
   indoorAirSnapshot = indoorAirRefreshResult.indoorAirSnapshot || indoorAirSnapshot;
 
@@ -1201,16 +1207,26 @@ async function fetchDashboardWeather(options = {}) {
     dashboardWeatherCache.delete(dashboardCacheKey);
   }
 
-  if (forceTempestSync || forceIndoorAirSync) {
-    return buildDashboardWeatherPayload(location, { tempestStation, indoorAirSnapshot, includeModuleTelemetry });
-  }
-
-  return readThroughCache(
+  const payload = forceTempestSync || forceIndoorAirSync
+    ? await buildDashboardWeatherPayload(location, { tempestStation, indoorAirSnapshot, includeModuleTelemetry })
+    : await readThroughCache(
     dashboardWeatherCache,
     dashboardCacheKey,
     DASHBOARD_WEATHER_CACHE_TTL_MS,
     () => buildDashboardWeatherPayload(location, { tempestStation, indoorAirSnapshot, includeModuleTelemetry })
   );
+  // Indoor readings and source selections update independently of the forecast cache.
+  const indoorClimate = buildIndoorClimateSource(indoorAirSnapshot, indoorPreference);
+  return {
+    ...payload,
+    indoorAir: { available: Boolean(indoorAirSnapshot), monitor: indoorAirSnapshot },
+    sources: { ...payload.sources, indoorClimate },
+    climate: {
+      ...payload.climate,
+      indoor: indoorClimate,
+      preferences: { ...payload.climate?.preferences, indoorClimate: indoorPreference }
+    }
+  };
 }
 
 async function fetchWeatherDashboard(options = {}) {
@@ -1231,7 +1247,8 @@ async function fetchWeatherDashboard(options = {}) {
     events: [],
     moduleTelemetry: null
   }));
-  const indoorAir = await goveeAirQualityService.getDashboardData({
+  const indoorAir = await indoorClimateService.getDashboardData({
+    preference: forecast?.climate?.preferences?.indoorClimate,
     hours: requestOptions.indoorAirHistoryHours,
     limit: requestOptions.historyPointLimit
   }).catch(() => ({

@@ -803,7 +803,7 @@ export function Weather() {
                       <p className="text-xl font-semibold">{formatAqi(indoorAir.usAqi)}</p>
                     </div>
                   </div>
-                  <p className="mt-3 text-sm text-muted-foreground">{indoorAir.qualityAdvice || "Govee indoor air readings are retained for charting and Data Platform history."}</p>
+                  <p className="mt-3 text-sm text-muted-foreground">{indoorAir.qualityAdvice || "Readings from the selected indoor sensor are retained for charting and Data Platform history."}</p>
                 </div>
               ) : null}
 
@@ -931,7 +931,7 @@ export function Weather() {
             </ChartContainer>
           ) : (
             <div className="rounded-[1.2rem] border border-dashed border-border/60 bg-background/40 p-4 text-sm text-muted-foreground">
-              Connect and sync the Govee indoor air monitor to populate indoor climate and air-quality history.
+              Choose an indoor climate source in Settings to populate indoor climate and air-quality history.
             </div>
           )}
         </CardContent>

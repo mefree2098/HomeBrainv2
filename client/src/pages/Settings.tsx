@@ -1,3 +1,4 @@
+import { IndoorClimateSourceCard } from "@/components/settings/IndoorClimateSourceCard"
 import { useState, useEffect, ChangeEvent, forwardRef, type ComponentProps } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -5379,6 +5380,7 @@ export function Settings() {
           </TabsList>
 
           <TabsContent value="general" className="space-y-6">
+            <IndoorClimateSourceCard />
             <Card className="bg-white/80 dark:bg-slate-900/70 backdrop-blur-sm border border-border/50 shadow-lg">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">

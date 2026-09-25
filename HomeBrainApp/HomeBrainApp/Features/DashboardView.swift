@@ -189,7 +189,7 @@ private struct DashboardIndoorAirSnapshot: Equatable {
         }
 
         return DashboardIndoorAirSnapshot(
-            deviceName: JSON.string(object, "deviceName", fallback: "Govee Indoor Air"),
+            deviceName: JSON.string(object, "deviceName", fallback: "Indoor Climate"),
             room: JSON.string(object, "room", fallback: "Inside"),
             observedAt: JSON.optionalString(object, "observedAt"),
             temperatureF: dashboardOptionalDouble(object["temperatureF"]),

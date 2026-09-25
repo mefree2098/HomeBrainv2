@@ -2437,7 +2437,7 @@ struct WeatherView: View {
                 if indoorAirTrendData.isEmpty {
                     EmptyStateView(
                         title: "No indoor air history",
-                        subtitle: "Connect and sync the Govee monitor to populate indoor climate and air-quality charts."
+                        subtitle: "Choose an indoor climate source in Settings to populate indoor climate and air-quality charts."
                     )
                 } else {
                     Chart {
