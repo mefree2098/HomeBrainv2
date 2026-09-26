@@ -10,6 +10,87 @@ final class DashboardVisualTests: XCTestCase {
         add(attachment)
     }
 
+    func testSecurityAndClimateFitHalfWidthIPadWidgets() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-preview", "-ui-preview-section", "dashboard", "-ui-preview-dashboard-focus", "ipad-overview", "-ui-preview-weather-source", "tempest", "-homebrain.ios.theme-mode", "dark", "-homebrain.ios.main-menu-collapsed.regular", "YES"]
+        app.launch()
+        guard app.frame.width >= 1_000 else { throw XCTSkip("Exercises two widgets side by side on iPad") }
+        let sensor = app.buttons["dashboard-sensor-preview-front-door-sensor"]
+        XCTAssertTrue(sensor.waitForExistence(timeout: 30))
+        let name = sensor.staticTexts["Front Door Sensor"]
+        XCTAssertGreaterThanOrEqual(name.frame.width, 110, "Names need usable width beside the sensor icon")
+        XCTAssertLessThanOrEqual(name.frame.height, 55, "Sensor names must not wrap one letter per line")
+        let state = sensor.staticTexts["Closed"]
+        XCTAssertLessThanOrEqual(state.frame.height, 25, "The complete sensor state must fit on one line")
+        let climate = app.staticTexts["Climate"]
+        XCTAssertGreaterThan(climate.frame.minX, sensor.frame.maxX, "Exercise the half-width layout from the regression")
+        let location = app.staticTexts["Current location"]
+        XCTAssertTrue(location.isHittable)
+        XCTAssertGreaterThanOrEqual(location.frame.width, 100, "Provider badges must not squeeze the location into an ellipsis")
+        let aqi = app.buttons["Open AQI details"]
+        XCTAssertTrue(aqi.isHittable)
+        attachScreenshot("iPad half-width Security and Climate", from: app)
+        aqi.tap()
+        XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5))
+        app.buttons["Done"].tap()
+        let doorLock = app.buttons["dashboard-lock-preview-lock"]
+        reveal(doorLock, in: app)
+        XCTAssertTrue(doorLock.isHittable)
+        XCTAssertGreaterThanOrEqual(doorLock.frame.width, 160, "Lock controls must adapt to their own inset width")
+        attachScreenshot("iPad security lower controls", from: app)
+    }
+
+    func testIPadSecurityReflowsWithSidebarAndRotation() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-preview", "-ui-preview-section", "dashboard", "-ui-preview-dashboard-focus", "ipad-overview", "-ui-preview-weather-source", "tempest", "-homebrain.ios.theme-mode", "light"]
+        app.launch()
+        guard app.frame.width >= 1_000 else { throw XCTSkip("Exercises iPad sidebar and rotation") }
+        let sensor = app.buttons["dashboard-sensor-preview-front-door-sensor"]
+        XCTAssertTrue(sensor.waitForExistence(timeout: 30))
+        if app.buttons["Collapse main menu"].isHittable { app.buttons["Collapse main menu"].tap() }
+        XCTAssertLessThanOrEqual(sensor.staticTexts["Front Door Sensor"].frame.height, 55)
+        app.buttons["Expand main menu"].tap()
+        XCTAssertLessThanOrEqual(sensor.staticTexts["Front Door Sensor"].frame.height, 55)
+        XCTAssertGreaterThanOrEqual(sensor.staticTexts["Front Door Sensor"].frame.width, 110)
+        XCUIDevice.shared.orientation = .portrait
+        let rotationSettled = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in app.buttons.matching(identifier: "dashboard-sensor-preview-front-door-sensor").count == 1 }, object: nil
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [rotationSettled], timeout: 5), .completed)
+        reveal(sensor, in: app)
+        XCTAssertTrue(sensor.isHittable)
+        XCTAssertLessThanOrEqual(sensor.staticTexts["Front Door Sensor"].frame.height, 55)
+        XCTAssertGreaterThanOrEqual(sensor.staticTexts["Front Door Sensor"].frame.width, 110)
+        attachScreenshot("iPad portrait after sidebar reflow", from: app)
+    }
+
+    func testIPadSecuritySupportsAccessibilityText() throws {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = XCUIApplication()
+        app.launchArguments = ["-ui-preview", "-ui-preview-section", "dashboard", "-ui-preview-dashboard-focus", "ipad-overview", "-homebrain.ios.theme-mode", "dark", "-homebrain.ios.main-menu-collapsed.regular", "YES", "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        guard app.frame.width >= 1_000 else { throw XCTSkip("Exercises accessibility text in a half-width iPad widget") }
+        let sensor = app.buttons["dashboard-sensor-preview-front-door-sensor"]
+        XCTAssertTrue(app.staticTexts["Security Center"].waitForExistence(timeout: 30))
+        let stay = app.buttons["Arm Stay"]
+        let away = app.buttons["Arm Away"]
+        XCTAssertGreaterThanOrEqual(stay.staticTexts["Arm Stay"].frame.width, 100)
+        XCTAssertGreaterThanOrEqual(away.frame.minY, stay.frame.maxY, "Large alarm labels need separate full-width buttons")
+        let name = sensor.staticTexts["Front Door Sensor"]
+        reveal(name, in: app)
+        XCTAssertTrue(name.isHittable)
+        XCTAssertEqual(app.scrollViews.containing(.button, identifier: sensor.identifier).count, 1)
+        XCTAssertGreaterThanOrEqual(name.frame.width, 250)
+        XCTAssertLessThanOrEqual(name.frame.maxX, sensor.frame.maxX)
+        XCTAssertLessThanOrEqual(name.frame.height, 150, "Large names should wrap into words, not individual letters")
+        attachScreenshot("iPad security with accessibility text", from: app)
+    }
+
     func testSecurityUsesOneScrollSurfaceOnPhone() {
         let app = XCUIApplication()
         app.launchArguments = ["-ui-preview", "-ui-preview-section", "dashboard", "-ui-preview-dashboard-focus", "security", "-homebrain.ios.theme-mode", "dark"]

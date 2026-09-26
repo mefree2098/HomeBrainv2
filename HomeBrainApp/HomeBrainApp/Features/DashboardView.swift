@@ -784,7 +784,9 @@ struct DashboardView: View {
     let previewMode: Bool
     @Environment(\.dynamicTypeSize) private var dashboardDynamicTypeSize
     @ScaledMetric(relativeTo: .headline) private var minimumDeviceCardWidth: CGFloat = 200
+    @ScaledMetric(relativeTo: .subheadline) private var minimumSecurityControlWidth: CGFloat = 170
     @ScaledMetric(relativeTo: .body) private var weatherSummaryColumnMinimumWidth: CGFloat = 148
+    @ScaledMetric(relativeTo: .caption) private var minimumWeatherMetricWidth: CGFloat = 124
     let onOpenDevice: ((String) -> Void)?
 
     private enum DashboardNameAction {
@@ -1412,6 +1414,9 @@ struct DashboardView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             }
                             }
+                            // Rebuild retired grid children when rotation changes the row structure.
+                            // Otherwise SwiftUI can retain invisible controls in the accessibility tree.
+                            .id(dashboardGridColumnCount)
                             .frame(width: dashboardContentWidth, alignment: .topLeading)
                             .padding(dashboardOuterPadding)
                             .padding(.bottom, 8)
@@ -1782,13 +1787,13 @@ struct DashboardView: View {
                 )
             }
         case .security:
-            securityPanel(for: widget)
+            securityPanel(for: widget, availableWidth: availableWidth)
         case .favoriteScenes:
             quickScenePanel(for: widget)
         case .favoriteDevices:
             favoriteDevicesWidget(for: widget)
         case .weather:
-            weatherWidget(for: widget)
+            weatherWidget(for: widget, availableWidth: availableWidth)
         case .voiceCommand:
             voiceCommandPanel
         case .devices:
@@ -2407,8 +2412,12 @@ struct DashboardView: View {
         HBDashboardMetric(title: title, value: value, detail: subtitle, symbol: icon, accent: accent)
     }
 
-    private func securityPanel(for widget: DashboardWidgetItem) -> some View {
+    private func securityPanel(for widget: DashboardWidgetItem, availableWidth: CGFloat) -> some View {
         let compact = widget.size == .small
+        let stackedHeaders = expandsDashboardLists || availableWidth < 440
+        let insetWidth = max(availableWidth - (compact ? 24 : 28), 1)
+        let sensorColumns = securityColumns(availableWidth: availableWidth, minimumWidth: minimumDeviceCardWidth, maximumCount: 3)
+        let sensorWidth = (availableWidth - CGFloat(sensorColumns.count - 1) * 8) / CGFloat(sensorColumns.count)
         let sensorFooterParts = [
             securityZonesTotal > 0 ? "\(securityZonesActive)/\(securityZonesTotal) active" : "No sensors detected",
             securityMonitoredSensorCount > 0 ? "\(securityMonitoredSensorCount) monitored" : nil,
@@ -2417,10 +2426,10 @@ struct DashboardView: View {
         ].compactMap { $0 }
 
         return VStack(alignment: .leading, spacing: compact ? 10 : 12) {
-            securityAlarmStateTile(compact: compact)
+            securityAlarmStateTile(compact: compact, stacked: stackedHeaders)
 
             VStack(alignment: .leading, spacing: 12) {
-                if usesPortraitCompactLayout {
+                if stackedHeaders {
                     VStack(alignment: .leading, spacing: 8) {
                         securitySensorHeaderText()
                         securitySensorHeaderControls()
@@ -2451,9 +2460,9 @@ struct DashboardView: View {
                         : "Add security sensors to populate this panel."
                             )
                         } else {
-                            LazyVGrid(columns: securitySensorColumns(), spacing: 8) {
+                            LazyVGrid(columns: sensorColumns, spacing: 8) {
                                 ForEach(visibleSecuritySensors) { sensor in
-                                    securitySensorRow(sensor, compact: compact)
+                                    securitySensorRow(sensor, availableWidth: sensorWidth)
                                 }
                             }
                         }
@@ -2470,7 +2479,7 @@ struct DashboardView: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
-                if usesPortraitCompactLayout {
+                if stackedHeaders {
                     VStack(alignment: .leading, spacing: 8) {
                         securitySirenOutputHeaderText()
                         securitySirenOutputHeaderControls()
@@ -2493,7 +2502,7 @@ struct DashboardView: View {
                         subtitle: "Use the siren menu to choose alarm sirens."
                     )
                 } else {
-                    LazyVGrid(columns: securitySirenOutputColumns(), spacing: 8) {
+                    LazyVGrid(columns: securityColumns(availableWidth: insetWidth, minimumWidth: minimumSecurityControlWidth, maximumCount: min(3, selectedSecuritySirenOutputCount)), spacing: 8) {
                         ForEach(selectedSecuritySirenOutputs) { siren in
                             securitySirenOutputTile(siren, compact: compact)
                         }
@@ -2504,7 +2513,7 @@ struct DashboardView: View {
             .background(HBDeviceSurface(cornerRadius: compact ? 16 : 18, inset: true))
 
             VStack(alignment: .leading, spacing: 12) {
-                if usesPortraitCompactLayout {
+                if stackedHeaders {
                     VStack(alignment: .leading, spacing: 8) {
                         securityDoorLocksHeaderText()
                         securityDoorLocksHeaderBadge()
@@ -2527,8 +2536,8 @@ struct DashboardView: View {
                             : "Add lock devices to populate this section."
                     )
                 } else {
-                    HBDashboardList(expanded: expandsDashboardLists, maximumHeight: securityDoorLockContentHeight(for: widget.size, compact: compact)) {
-                        LazyVGrid(columns: securityDoorLockColumns(), spacing: 8) {
+                    HBDashboardList(expanded: expandsDashboardLists, maximumHeight: securityDoorLockListHeight(for: widget.size)) {
+                        LazyVGrid(columns: securityColumns(availableWidth: insetWidth, minimumWidth: minimumSecurityControlWidth, maximumCount: 4), spacing: 8) {
                             ForEach(securityDoorLocks) { doorLock in
                                 securityDoorLockTile(doorLock, compact: compact)
                             }
@@ -2542,11 +2551,11 @@ struct DashboardView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func securityAlarmStateTile(compact: Bool) -> some View {
+    private func securityAlarmStateTile(compact: Bool, stacked: Bool) -> some View {
         let shape = RoundedRectangle(cornerRadius: compact ? 16 : 18, style: .continuous)
 
         return VStack(alignment: .leading, spacing: compact ? 8 : 3) {
-            if usesPortraitCompactLayout {
+            if stacked {
                 securityAlarmStateLabels(compact: compact)
 
                 securityAlarmHeaderActions(compact: true)
@@ -2795,18 +2804,27 @@ struct DashboardView: View {
 
     @ViewBuilder
     private func securityAlarmHeaderActions(compact: Bool) -> some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 6) {
+        if dashboardDynamicTypeSize.isAccessibilitySize {
+            VStack(alignment: .leading, spacing: 8) {
                 securityPrimaryActionSlot(compact: compact)
                 if securitySmartThingsPlatformEnabled {
                     securitySyncAction(compact: compact)
                 }
             }
+        } else {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) {
+                    securityPrimaryActionSlot(compact: compact)
+                    if securitySmartThingsPlatformEnabled {
+                        securitySyncAction(compact: compact)
+                    }
+                }
 
-            VStack(alignment: .leading, spacing: 6) {
-                securityPrimaryActionSlot(compact: compact)
-                if securitySmartThingsPlatformEnabled {
-                    securitySyncAction(compact: compact)
+                VStack(alignment: .leading, spacing: 6) {
+                    securityPrimaryActionSlot(compact: compact)
+                    if securitySmartThingsPlatformEnabled {
+                        securitySyncAction(compact: compact)
+                    }
                 }
             }
         }
@@ -2902,7 +2920,10 @@ struct DashboardView: View {
             securityDisarmAction(compact: compact)
                 .frame(width: securityPrimaryActionSlotWidth(compact: compact))
         } else {
-            HStack(spacing: 6) {
+            let layout = dashboardDynamicTypeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+                : AnyLayout(HStackLayout(spacing: 6))
+            layout {
                 securityArmStayAction(compact: compact)
                     .frame(maxWidth: .infinity)
                 securityArmAwayAction(compact: compact)
@@ -2912,7 +2933,8 @@ struct DashboardView: View {
         }
     }
 
-    private func securityPrimaryActionSlotWidth(compact: Bool) -> CGFloat {
+    private func securityPrimaryActionSlotWidth(compact: Bool) -> CGFloat? {
+        if dashboardDynamicTypeSize.isAccessibilitySize { return nil }
         if usesPortraitCompactLayout {
             return compact ? 178 : 200
         }
@@ -3084,30 +3106,11 @@ struct DashboardView: View {
         }
     }
 
-    private var securityDoorLockColumnCount: Int {
-        expandsDashboardLists ? 1 : 4
-    }
-
-    private func securityDoorLockContentHeight(for size: DashboardWidgetSize, compact: Bool) -> CGFloat {
-        let maxHeight = securityDoorLockListHeight(for: size)
-        let rowCount = max(1, Int(ceil(Double(max(securityDoorLocks.count, 1)) / Double(securityDoorLockColumnCount))))
-        let rowHeight = compact ? 66.0 : 72.0
-        let contentHeight = (Double(rowCount) * rowHeight) + (Double(max(0, rowCount - 1)) * 8.0)
-        return min(maxHeight, CGFloat(contentHeight))
-    }
-
-    private func securitySensorColumns() -> [GridItem] {
-        let count = expandsDashboardLists ? 1 : 3
-        return Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: count)
-    }
-
-    private func securityDoorLockColumns() -> [GridItem] {
-        return Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: securityDoorLockColumnCount)
-    }
-
-    private func securitySirenOutputColumns() -> [GridItem] {
-        let count = expandsDashboardLists ? 1 : min(3, max(1, selectedSecuritySirenOutputCount))
-        return Array(repeating: GridItem(.flexible(), spacing: 8, alignment: .top), count: count)
+    private func securityColumns(availableWidth: CGFloat, minimumWidth: CGFloat, maximumCount: Int) -> [GridItem] {
+        // A regular-size iPad can still give this widget only half (or a quarter) of its width.
+        let fittingCount = max(1, Int((availableWidth + 8) / (minimumWidth + 8)))
+        let count = expandsDashboardLists ? 1 : min(max(1, maximumCount), fittingCount)
+        return Array(repeating: GridItem(.flexible(minimum: 0), spacing: 8, alignment: .top), count: count)
     }
 
     private func securitySensorHeaderControls() -> some View {
@@ -3746,15 +3749,18 @@ struct DashboardView: View {
         .buttonStyle(.plain)
     }
 
-    private func securitySensorRow(_ sensor: DashboardSecuritySensorItem, compact: Bool) -> some View {
+    private func securitySensorRow(_ sensor: DashboardSecuritySensorItem, availableWidth: CGFloat) -> some View {
         let canOpenDevice = sensor.localDeviceId != nil
         let tone = compactSecurityStatusTint(for: sensor)
+        let rowLayout = availableWidth >= minimumDeviceCardWidth
+            ? AnyLayout(HStackLayout(alignment: .center, spacing: 12))
+            : AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
 
         return Button {
             guard let deviceID = sensor.localDeviceId else { return }
             onOpenDevice?(deviceID)
         } label: {
-            HStack(spacing: 12) {
+            rowLayout {
                 HBDeviceSymbol(
                     symbol: sensor.sensorType == "motion" ? "sensor.tag.radiowaves.forward" : "door.left.hand.closed",
                     accent: tone,
@@ -3765,14 +3771,24 @@ struct DashboardView: View {
                         .font(HBTypography.body(.subheadline, weight: .semibold))
                         .foregroundStyle(HBPalette.textPrimary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(compactSecurityStatusText(for: sensor))
-                        .font(HBTypography.body(.caption))
-                        .foregroundStyle(tone)
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 6) {
+                            securitySensorStatus(sensor, tone: tone)
+                            Spacer(minLength: 0)
+                            if let batteryLevel = sensor.batteryLevel {
+                                HBBatteryIndicator(percent: batteryLevel, compact: true)
+                                    .fixedSize()
+                            }
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            securitySensorStatus(sensor, tone: tone)
+                            if let batteryLevel = sensor.batteryLevel {
+                                HBBatteryIndicator(percent: batteryLevel, compact: true)
+                            }
+                        }
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                if let batteryLevel = sensor.batteryLevel {
-                    HBBatteryIndicator(percent: batteryLevel, compact: true)
-                }
             }
             .padding(12)
             .frame(maxWidth: .infinity, minHeight: 76, alignment: .leading)
@@ -3782,6 +3798,13 @@ struct DashboardView: View {
         .buttonStyle(.plain)
         .accessibilityIdentifier("dashboard-sensor-\(sensor.id)")
         .disabled(!canOpenDevice)
+    }
+
+    private func securitySensorStatus(_ sensor: DashboardSecuritySensorItem, tone: Color) -> some View {
+        Text(compactSecurityStatusText(for: sensor))
+            .font(HBTypography.body(.caption))
+            .foregroundStyle(tone)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private func securityDoorLockTile(_ doorLock: DashboardSecurityDoorLockItem, compact: Bool) -> some View {
@@ -3835,12 +3858,12 @@ struct DashboardView: View {
         .disabled(!canToggle)
     }
 
-    private func weatherWidget(for widget: DashboardWidgetItem) -> some View {
+    private func weatherWidget(for widget: DashboardWidgetItem, availableWidth: CGFloat) -> some View {
         let compact = widget.size == .small
         let condensed = widget.size == .small || widget.size == .medium
         let tabletCompactWeatherGrid = widget.size == .medium && dashboardGridColumnCount == 2 && !usesPortraitCompactLayout
         let compactWeatherHeader = compact || tabletCompactWeatherGrid
-        let stackedHeroLayout = usesPortraitCompactLayout || dashboardDynamicTypeSize.isAccessibilitySize
+        let stackedHeroLayout = availableWidth < 600 || expandsDashboardLists
         let headlineFontSize: CGFloat = compact ? 44 : (tabletCompactWeatherGrid ? 48 : 56)
         let weatherGlyphSize: CGFloat = compact ? 36 : (tabletCompactWeatherGrid ? 38 : 44)
         let weatherGlyphFrame: CGFloat = compact ? 50 : (tabletCompactWeatherGrid ? 54 : 58)
@@ -3850,89 +3873,8 @@ struct DashboardView: View {
         return VStack(alignment: .leading, spacing: condensed ? 12 : 14) {
             if let snapshot {
                 Group {
-                    if tabletCompactWeatherGrid {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(alignment: .top, spacing: 12) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Local Forecast")
-                                        .font(HBTypography.body(.caption, weight: .bold))
-                                        .textCase(.uppercase)
-                                        .tracking(1.0)
-                                        .foregroundStyle(HBPalette.textMuted)
-
-                                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                        Text(formattedTemperature(snapshot.displayTemperatureF))
-                                            .font(HBTypography.body(size: headlineFontSize, weight: .bold))
-                                            .foregroundStyle(HBPalette.textPrimary)
-                                            .lineLimit(1)
-                                            .minimumScaleFactor(0.78)
-
-                                        Text("Feels like \(formattedTemperature(snapshot.displayFeelsLikeF))")
-                                            .font(HBTypography.body(size: 14, weight: .medium))
-                                            .foregroundStyle(HBPalette.textSecondary)
-                                            .lineLimit(1)
-                                            .minimumScaleFactor(0.82)
-                                    }
-                                }
-
-                                Spacer(minLength: 8)
-
-                                VStack(alignment: .trailing, spacing: 6) {
-                                    weatherOutdoorClimateRow(
-                                        snapshot: snapshot,
-                                        widgetID: widget.id,
-                                        compact: true,
-                                        includeIcon: true,
-                                        weatherGlyphSize: weatherGlyphSize,
-                                        weatherGlyphFrame: weatherGlyphFrame
-                                    )
-
-                                    weatherIndoorClimateRow(
-                                        widgetID: widget.id,
-                                        indoorAir: snapshot.indoorAir,
-                                        compact: true
-                                    )
-                                }
-                            }
-
-                            HStack(alignment: .top, spacing: 12) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(snapshot.condition)
-                                        .font(HBTypography.body(size: 15, weight: .semibold))
-                                        .foregroundStyle(HBPalette.textPrimary)
-
-                                    Label(snapshot.locationName, systemImage: "mappin.and.ellipse")
-                                        .font(HBTypography.body(size: 13, weight: .medium))
-                                        .foregroundStyle(HBPalette.textSecondary)
-                                        .lineLimit(1)
-
-                                    HBWeatherSyncCaption(value: snapshot.lastSyncedAt)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                }
-
-                                Spacer(minLength: 8)
-
-                                HStack(spacing: 5) {
-                                    if let tempest = snapshot.tempest {
-                                        HBTempestBatteryBadge(volts: tempest.batteryVolts)
-                                            .fixedSize(horizontal: true, vertical: false)
-
-                                        HBBadge(
-                                            text: tempest.websocketConnected ? "Tempest Live" : "Tempest Snapshot",
-                                            foreground: HBPalette.textPrimary,
-                                            background: HBPalette.heroCore.opacity(0.22),
-                                            stroke: HBPalette.heroCore.opacity(0.42)
-                                        )
-                                        .fixedSize(horizontal: true, vertical: false)
-                                    }
-
-                                    weatherSourceBadge(text: snapshot.sourceBadgeLabel, compact: true)
-                                        .fixedSize(horizontal: true, vertical: false)
-                                }
-                            }
-                        }
-                    } else if stackedHeroLayout {
-                        weatherPhoneSummary(snapshot: snapshot, widgetID: widget.id, compact: compact)
+                    if stackedHeroLayout {
+                        weatherAdaptiveSummary(snapshot: snapshot, widgetID: widget.id, compact: compact, availableWidth: availableWidth)
                     } else {
                         HStack(alignment: .top, spacing: 12) {
                             VStack(alignment: .leading, spacing: 6) {
@@ -3997,16 +3939,9 @@ struct DashboardView: View {
                 let metricGridSpacing: CGFloat = tabletCompactWeatherGrid ? 8 : 10
                 let metricColumns: [GridItem] = {
                     if dashboardDynamicTypeSize.isAccessibilitySize { return [GridItem(.flexible(minimum: 0))] }
-                    if tabletCompactWeatherGrid {
-                        return Array(repeating: GridItem(.flexible(minimum: 0), spacing: metricGridSpacing, alignment: .top), count: 3)
-                    }
-                    if widget.size == .small {
-                        return [GridItem(.flexible(minimum: 0), spacing: 10), GridItem(.flexible(minimum: 0), spacing: 10)]
-                    }
-                    if widget.size == .medium {
-                        return [GridItem(.flexible(minimum: 0), spacing: 10), GridItem(.flexible(minimum: 0), spacing: 10)]
-                    }
-                    return Array(repeating: GridItem(.flexible(minimum: 0), spacing: 10), count: 4)
+                    let maximumCount = tabletCompactWeatherGrid ? 3 : (condensed ? 2 : 4)
+                    let fittingCount = max(1, Int((availableWidth + metricGridSpacing) / (minimumWeatherMetricWidth + metricGridSpacing)))
+                    return Array(repeating: GridItem(.flexible(minimum: 0), spacing: metricGridSpacing, alignment: .top), count: min(maximumCount, fittingCount))
                 }()
 
                 if tabletCompactWeatherGrid {
@@ -4329,7 +4264,7 @@ struct DashboardView: View {
             }
 
             Group {
-                if usesPortraitCompactLayout && widget.settings.weatherLocationMode == .auto {
+                if (expandsDashboardLists || availableWidth < 400) && widget.settings.weatherLocationMode == .auto {
                     VStack(spacing: 10) {
                         Button {
                             Task { await refreshWeather(for: widget) }
@@ -4383,8 +4318,7 @@ struct DashboardView: View {
         }
     }
 
-    private func weatherPhoneSummary(snapshot: DashboardWeatherSnapshot, widgetID: String, compact: Bool) -> some View {
-        let availableWidth = max(layoutWidth - dashboardWidgetPanelHorizontalPadding * 2, 0)
+    private func weatherAdaptiveSummary(snapshot: DashboardWeatherSnapshot, widgetID: String, compact: Bool, availableWidth: CGFloat) -> some View {
         let columnsFit = !dashboardDynamicTypeSize.isAccessibilitySize
             && availableWidth >= weatherSummaryColumnMinimumWidth * 2 + 12
         let summaryLayout = columnsFit
@@ -7288,6 +7222,12 @@ struct DashboardView: View {
         }
 
         switch focus {
+        case "ipad-overview":
+            view.widgets = [
+                DashboardSupport.makeWidget(type: .security, title: "Security Center", size: .medium),
+                DashboardSupport.makeWidget(type: .weather, title: "Climate", size: .medium,
+                                           settings: DashboardWidgetSettings(weatherLocationMode: .auto))
+            ]
         case "lighting", "lighting-small":
             view.widgets = [DashboardSupport.makeWidget(
                 type: .devices, title: "Theater Lighting", size: focus == "lighting-small" ? .small : .full,
