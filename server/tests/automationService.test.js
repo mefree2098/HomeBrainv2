@@ -267,6 +267,100 @@ test('resumeRunningExecutions queues persisted running histories for background 
   });
 });
 
+test('resume watchdog does not relaunch a new execution while its history is being saved or initialized', async (t) => {
+  const runtimeService = require('../services/automationRuntimeService');
+  const originals = {
+    findAutomation: Automation.findById,
+    saveHistory: AutomationHistory.prototype.save,
+    findHistory: AutomationHistory.find,
+    findHistoryById: AutomationHistory.findById,
+    execute: automationService.executeAutomation,
+    trigger: runtimeService.recordTriggerMatched,
+    started: runtimeService.recordExecutionStarted,
+    completed: runtimeService.recordExecutionCompleted
+  };
+  t.after(() => {
+    Automation.findById = originals.findAutomation;
+    AutomationHistory.prototype.save = originals.saveHistory;
+    AutomationHistory.find = originals.findHistory;
+    AutomationHistory.findById = originals.findHistoryById;
+    automationService.executeAutomation = originals.execute;
+    runtimeService.recordTriggerMatched = originals.trigger;
+    runtimeService.recordExecutionStarted = originals.started;
+    runtimeService.recordExecutionCompleted = originals.completed;
+  });
+
+  let persistedHistory;
+  const launches = [];
+  const watchdogResults = [];
+  Automation.findById = async () => ({
+    _id: STANDALONE_AUTOMATION_ID,
+    name: 'Watchdog race regression',
+    enabled: true,
+    actions: [],
+    save: async () => {},
+    toObject: () => ({})
+  });
+  AutomationHistory.find = () => ({
+    sort: () => ({ select: () => ({ lean: async () => [persistedHistory] }) })
+  });
+  automationService.executeAutomation = async (id, options) => {
+    launches.push({ id, options });
+  };
+  const runWatchdog = async () => {
+    watchdogResults.push(await automationService.resumeRunningExecutions({ reason: 'scheduler_watchdog' }));
+  };
+  AutomationHistory.prototype.save = async function () {
+    persistedHistory = this;
+    this.markCompleted = async (status) => { this.status = status; };
+    // The row is visible to the watchdog before save() resolves to its owner.
+    await runWatchdog();
+    return this;
+  };
+  AutomationHistory.findById = async () => persistedHistory;
+  runtimeService.recordTriggerMatched = runWatchdog;
+  runtimeService.recordExecutionStarted = runWatchdog;
+  runtimeService.recordExecutionCompleted = async () => {};
+
+  await originals.execute(STANDALONE_AUTOMATION_ID);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(watchdogResults.length, 3);
+  assert.deepEqual(watchdogResults.map((result) => result.launchedCount), [0, 0, 0]);
+  assert.equal(launches.length, 0);
+  assert.equal(automationService.isExecutionActive(persistedHistory._id), false);
+});
+
+test('executeAutomation releases its watchdog reservation when the initial history save fails', async (t) => {
+  const originalFindAutomation = Automation.findById;
+  const originalSaveHistory = AutomationHistory.prototype.save;
+  const originalFindHistory = AutomationHistory.findById;
+  t.after(() => {
+    Automation.findById = originalFindAutomation;
+    AutomationHistory.prototype.save = originalSaveHistory;
+    AutomationHistory.findById = originalFindHistory;
+  });
+
+  let historyId;
+  let reservedDuringSave;
+  Automation.findById = async () => ({
+    _id: STANDALONE_AUTOMATION_ID,
+    name: 'Failed save regression',
+    enabled: true,
+    actions: []
+  });
+  AutomationHistory.prototype.save = async function () {
+    historyId = this._id.toString();
+    reservedDuringSave = automationService.isExecutionActive(historyId);
+    throw new Error('history save failed');
+  };
+  AutomationHistory.findById = async () => null;
+
+  await assert.rejects(automationService.executeAutomation(STANDALONE_AUTOMATION_ID), /history save failed/);
+  assert.equal(reservedDuringSave, true);
+  assert.equal(automationService.isExecutionActive(historyId), false);
+});
+
 test('createAutomationFromText exposes Sense devices as energy monitors with Sense trigger properties', async (t) => {
   const automationServicePath = require.resolve('../services/automationService');
   delete require.cache[automationServicePath];

@@ -2731,6 +2731,9 @@ async function executeAutomation(id, options = {}) {
         },
         status: 'running'
       });
+      // Reserve ownership before save makes the running history visible to the
+      // resume watchdog, including while runtime telemetry is initialized.
+      activeExecutionIds.add(history._id.toString());
       await history.save();
     }
 
