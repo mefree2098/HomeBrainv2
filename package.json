@@ -46,5 +46,8 @@
   },
   "devDependencies": {
     "cross-env": "^7.0.3"
+  },
+  "overrides": {
+    "shell-quote": "1.12.0"
   }
 }
