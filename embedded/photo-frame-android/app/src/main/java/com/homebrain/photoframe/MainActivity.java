@@ -4,10 +4,13 @@ import android.app.Activity;
 import android.annotation.SuppressLint;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.ActivityNotFoundException;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
+import android.os.Handler;
+import android.os.ResultReceiver;
 import android.provider.Settings;
 import android.text.InputType;
 import android.view.View;
@@ -124,10 +127,10 @@ public final class MainActivity extends Activity {
         });
         layout.addView(connect);
         Button settings = new Button(this); settings.setText("Android / Wi-Fi Settings");
-        settings.setOnClickListener(view -> startActivity(new Intent(Settings.ACTION_SETTINGS)));
+        settings.setOnClickListener(view -> openSettings());
         layout.addView(settings);
         TextView returnHelp = new TextView(this);
-        returnHelp.setText("To return from Android settings, tap the HomeBrain Frame notification.");
+        returnHelp.setText("In Android settings, use the Return to HomeBrain button at the top of the screen.");
         returnHelp.setTextColor(Color.LTGRAY); returnHelp.setPadding(0, 12, 0, 0);
         layout.addView(returnHelp);
         setContentView(layout);
@@ -180,9 +183,25 @@ public final class MainActivity extends Activity {
         new AlertDialog.Builder(this).setTitle("HomeBrain Frame")
             .setItems(new String[]{"Keep displaying", "Change connection", "Android settings"}, (dialog, item) -> {
                 if (item == 1) showSetup();
-                if (item == 2) startActivity(new Intent(Settings.ACTION_SETTINGS));
+                if (item == 2) openSettings();
             }).show();
     }
+    private void openSettings() {
+        // Open Settings only after the separate service has created the return button.
+        FrameUpdateService.settingsReturn(this, true, new ResultReceiver(new Handler(getMainLooper())) {
+            @Override protected void onReceiveResult(int resultCode, Bundle data) {
+                if (isFinishing() || isDestroyed()) { FrameUpdateService.settingsReturn(MainActivity.this, false, null); return; }
+                if (resultCode == RESULT_OK) {
+                    try { startActivity(new Intent(Settings.ACTION_SETTINGS)); return; }
+                    catch (ActivityNotFoundException ignored) { FrameUpdateService.settingsReturn(MainActivity.this, false, null); }
+                }
+                new AlertDialog.Builder(MainActivity.this).setTitle("Settings unavailable")
+                    .setMessage("The settings return button is unavailable. Ask your HomeBrain administrator to finish frame setup.")
+                    .setPositiveButton("OK", null).show();
+            }
+        });
+    }
+    @Override protected void onResume() { super.onResume(); FrameUpdateService.settingsReturn(this, false, null); }
     // Android 6 frames use the legacy callback; API 33+ uses the callback above.
     @SuppressLint("GestureBackNavigation")
     @Override public void onBackPressed() { showMenu(); }
