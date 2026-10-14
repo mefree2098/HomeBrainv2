@@ -175,7 +175,12 @@ final class FrameUpdates {
         if (archive == null || archive.signatures == null || archive.signatures.length != 1 || current.signatures == null || current.signatures.length != 1) throw new SecurityException("APK signature is missing or unsupported");
         UpdateTrust.checkApk(context.getPackageName(), archive.packageName, release.getLong("versionCode"), version(archive), current.signatures[0].toByteArray(), archive.signatures[0].toByteArray());
         if (!release.getString("versionName").equals(archive.versionName)) throw new SecurityException("APK version name does not match the release");
-        if (archive.requestedPermissions == null || !java.util.Arrays.asList(archive.requestedPermissions).contains(Manifest.permission.INSTALL_PACKAGES)) throw new SecurityException("Release would remove the OTA install permission");
+        if (archive.requestedPermissions == null || !java.util.Arrays.asList(archive.requestedPermissions).containsAll(java.util.Arrays.asList(Manifest.permission.INTERNET, Manifest.permission.INSTALL_PACKAGES, Manifest.permission.RECEIVE_BOOT_COMPLETED))) throw new SecurityException("Release would remove a required OTA permission");
+        boolean activity = false;
+        if (archive.activities != null) for (android.content.pm.ActivityInfo candidate : archive.activities) {
+            if (candidate.enabled && MainActivity.class.getName().equals(candidate.name)) activity = true;
+        }
+        if (!activity || archive.applicationInfo == null || !archive.applicationInfo.enabled) throw new SecurityException("Release would remove or disable the display startup activity");
         boolean startReceiver = false, installReceiver = false;
         if (archive.receivers != null) for (android.content.pm.ActivityInfo receiver : archive.receivers) {
             if (receiver.enabled && !receiver.exported && FrameStartReceiver.class.getName().equals(receiver.name)) startReceiver = true;
