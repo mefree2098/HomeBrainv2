@@ -58,7 +58,12 @@ export const listPhotoFrames = async (): Promise<PhotoFrame[]> => (await api.get
 export const getFrameCatalog = async (): Promise<FrameCatalog> => (await api.get('/api/photo-frames/catalog')).data
 export const createPhotoFrame = async (config: FrameConfig): Promise<PhotoFrame> => (await api.post('/api/photo-frames', { name: 'HomeBrainScreen', config })).data.frame
 export const savePhotoFrame = async (frameId: string, input: { name: string; room: string; config: FrameConfig }): Promise<PhotoFrame> => (await api.put(`/api/photo-frames/${frameId}`, input)).data.frame
-export const previewPhotoFrame = async (config: Partial<FrameConfig>): Promise<{ values: Record<string, FrameValue>; security: FrameSecurity | null; generatedAt: string }> => (await api.post('/api/photo-frames/preview', { config })).data
+export const previewPhotoFrame = async (config: Partial<FrameConfig>): Promise<{ values: Record<string, FrameValue>; security: FrameSecurity | null; generatedAt: string }> => {
+  const { values, security, generatedAt } = (await api.post('/api/photo-frames/preview', { config })).data
+  // Information-only queries include normalized defaults in their response.
+  // Keep those defaults out of the renderer payload's locally edited config.
+  return { values, security: security ?? null, generatedAt }
+}
 export const pairPhotoFrame = async (frameId: string): Promise<{ playerPath: string }> => (await api.post(`/api/photo-frames/${frameId}/pair`)).data
 export const uploadFramePhoto = async (frameId: string, name: string, data: string): Promise<PhotoFrame> => (await api.post(`/api/photo-frames/${frameId}/photos`, { name, data })).data.frame
 export const deleteFramePhoto = async (frameId: string, photoId: string): Promise<PhotoFrame> => (await api.delete(`/api/photo-frames/${frameId}/photos/${photoId}`)).data.frame
