@@ -46,16 +46,16 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        FrameUpdates.start(this);
+        FrameUpdateService.start(this, null);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON | WindowManager.LayoutParams.FLAG_FULLSCREEN);
         if (Build.VERSION.SDK_INT >= 33) {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::showMenu);
         }
         String supplied = getIntent().getStringExtra("player_url");
         if (supplied != null && validLink(supplied)) {
-            getSharedPreferences(FrameUpdates.STORE, MODE_PRIVATE).edit().putString("player_url", supplied).apply();
+            getSharedPreferences(FrameUpdateService.PLAYER_STORE, MODE_PRIVATE).edit().putString("player_url", supplied).apply();
         }
-        String saved = getSharedPreferences(FrameUpdates.STORE, MODE_PRIVATE).getString("player_url", "");
+        String saved = getSharedPreferences(FrameUpdateService.PLAYER_STORE, MODE_PRIVATE).getString("player_url", "");
         if (validLink(saved)) showPlayer(saved); else showSetup();
     }
 
@@ -88,13 +88,13 @@ public final class MainActivity extends Activity {
         link.setTextColor(Color.WHITE); link.setHintTextColor(Color.LTGRAY);
         link.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         link.setSingleLine(true);
-        link.setText(getSharedPreferences(FrameUpdates.STORE, MODE_PRIVATE).getString("player_url", ""));
+        link.setText(getSharedPreferences(FrameUpdateService.PLAYER_STORE, MODE_PRIVATE).getString("player_url", ""));
         layout.addView(link);
         Button connect = new Button(this); connect.setText("Connect Frame");
         connect.setOnClickListener(view -> {
             String value = link.getText().toString().trim();
             if (!validLink(value)) { link.setError("Paste the complete HomeBrain frame pairing link"); return; }
-            getSharedPreferences(FrameUpdates.STORE, MODE_PRIVATE).edit().putString("player_url", value).apply();
+            getSharedPreferences(FrameUpdateService.PLAYER_STORE, MODE_PRIVATE).edit().putString("player_url", value).apply();
             showPlayer(value);
         });
         layout.addView(connect);
@@ -109,6 +109,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showPlayer(String link) {
+        FrameUpdateService.start(this, link);
         playerUri = Uri.parse(link);
         webView = new WebView(this);
         WebSettings settings = webView.getSettings();

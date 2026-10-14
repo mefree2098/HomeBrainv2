@@ -35,6 +35,12 @@ final class FrameUpdates {
     private String installedDigest;
 
     private FrameUpdates(Context context) { this.context = context.getApplicationContext(); preferences = context.getSharedPreferences(STORE, Context.MODE_PRIVATE); }
+    static void configure(Context context, String link) {
+        new Connection(link);
+        // Only the updater process owns this preference file. The display sends
+        // connection changes through the explicit, non-exported service intent.
+        context.getSharedPreferences(STORE, Context.MODE_PRIVATE).edit().putString("player_url", link).commit();
+    }
     static synchronized void start(Context context) {
         if (started) return;
         started = true;
@@ -170,7 +176,7 @@ final class FrameUpdates {
     }
     @SuppressWarnings("deprecation")
     private void verifyApk(File file, JSONObject release) throws Exception {
-        PackageInfo archive = context.getPackageManager().getPackageArchiveInfo(file.getAbsolutePath(), PackageManager.GET_SIGNATURES | PackageManager.GET_PERMISSIONS | PackageManager.GET_RECEIVERS | PackageManager.GET_ACTIVITIES);
+        PackageInfo archive = context.getPackageManager().getPackageArchiveInfo(file.getAbsolutePath(), PackageManager.GET_SIGNATURES | PackageManager.GET_PERMISSIONS | PackageManager.GET_RECEIVERS | PackageManager.GET_ACTIVITIES | PackageManager.GET_SERVICES);
         PackageInfo current = installed();
         if (archive == null || archive.signatures == null || archive.signatures.length != 1 || current.signatures == null || current.signatures.length != 1) throw new SecurityException("APK signature is missing or unsupported");
         UpdateTrust.checkApk(context.getPackageName(), archive.packageName, release.getLong("versionCode"), version(archive), current.signatures[0].toByteArray(), archive.signatures[0].toByteArray());
@@ -181,6 +187,11 @@ final class FrameUpdates {
             if (candidate.enabled && MainActivity.class.getName().equals(candidate.name)) activity = true;
         }
         if (!activity || archive.applicationInfo == null || !archive.applicationInfo.enabled) throw new SecurityException("Release would remove or disable the display startup activity");
+        boolean service = false;
+        if (archive.services != null) for (android.content.pm.ServiceInfo candidate : archive.services) {
+            if (candidate.enabled && !candidate.exported && FrameUpdateService.class.getName().equals(candidate.name) && (context.getPackageName() + ":updates").equals(candidate.processName)) service = true;
+        }
+        if (!service) throw new SecurityException("Release would remove the independent OTA service");
         boolean startReceiver = false, installReceiver = false;
         if (archive.receivers != null) for (android.content.pm.ActivityInfo receiver : archive.receivers) {
             if (receiver.enabled && !receiver.exported && FrameStartReceiver.class.getName().equals(receiver.name)) startReceiver = true;

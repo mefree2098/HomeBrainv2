@@ -15,6 +15,6 @@ public final class FrameInstallReceiver extends BroadcastReceiver {
             String reason = status == PackageInstaller.STATUS_PENDING_USER_ACTION ? "Silent installation permission is missing; reprovision this frame" : "Android rejected the APK (status " + status + ")";
             preferences.edit().putString("update_error", reason).commit();
         }
-        FrameUpdates.start(context);
+        FrameUpdateService.start(context, null);
     }
 }
