@@ -1,4 +1,4 @@
-/* Shared by the frame, web preview, and iOS WKWebView preview. No home controls. */
+/* Shared by the frame, web preview, and iOS WKWebView preview. */
 (function () {
   'use strict';
   var preview = new URLSearchParams(location.search).get('preview') === '1';
@@ -21,6 +21,13 @@
   var failedPhotos = new Set();
   var cacheCursor = 0;
   var dbPromise = null;
+  var overlaySignature = null;
+  var securityUI = window.HomeBrainFrameSecurity ? window.HomeBrainFrameSecurity({
+    preview: preview,
+    getCredentials: function () { return credentials; },
+    getPreviewStatus: function () { return state && state.security; },
+    onRevoked: revoke
+  }) : null;
 
   function stored(key) { try { return JSON.parse(localStorage.getItem(key)); } catch (_error) { return null; } }
   function persist(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch (_error) { /* Playback works when storage is full. */ } }
@@ -64,8 +71,10 @@
     generation++;
     state = null;
     credentials = null;
+    if (securityUI) securityUI.update(false, false);
     clearImages();
     overlayRoot.textContent = '';
+    overlaySignature = null;
     localStorage.removeItem(credentialsKey);
     localStorage.removeItem(manifestKey);
     document.getElementById('sleep').hidden = true;
@@ -174,33 +183,50 @@
   }
   function renderOverlays() {
     if (!state) return;
-    overlayRoot.textContent = '';
-    positions.forEach(function (position) {
+    var signature = JSON.stringify([state.frameId, state.config.overlays, state.config.margin, state.config.securityControlsEnabled, positions.map(function (position) {
       var slot = state.config.overlays[position];
-      if (!slot || !slot.enabled || !slot.lines.length) return;
-      var element = document.createElement('div');
-      var center = position.indexOf('Center') !== -1;
-      var right = position.indexOf('Right') !== -1;
-      element.className = 'overlay' + (center ? ' center' : right ? ' right' : '');
-      if (!center) element.style.width = 'calc(33% - ' + (2 * state.config.margin) + 'px)';
-      element.dataset.position = position;
-      element.style[position.indexOf('top') === 0 ? 'top' : 'bottom'] = state.config.margin + 'px';
-      if (!center) element.style[right ? 'right' : 'left'] = state.config.margin + 'px';
-      element.style.fontFamily = slot.font === 'display' ? 'FrameDisplay, sans-serif' : slot.font === 'mono' ? 'monospace' : 'FrameSans, sans-serif';
-      element.style.fontSize = slot.fontSize + 'px';
-      element.style.backgroundColor = 'rgba(0,0,0,' + slot.panelOpacity + ')';
-      element.style.color = slot.color;
-      slot.lines.slice(0, center ? 1 : 2).forEach(function (line) {
-        var content = lineText(line);
-        var row = document.createElement('span');
-        row.className = 'overlay-line' + (content.stale ? ' stale' : '') + (content.alarm ? ' alarm' : '');
-        row.style.opacity = slot.textOpacity;
-        row.textContent = content.text;
-        element.appendChild(row);
+      return slot && slot.enabled ? slot.lines.map(lineText) : [];
+    })]);
+    if (signature !== overlaySignature) {
+      overlaySignature = signature;
+      overlayRoot.textContent = '';
+      positions.forEach(function (position) {
+        var slot = state.config.overlays[position];
+        if (!slot || !slot.enabled || !slot.lines.length) return;
+        var interactive = Boolean(securityUI && state.config.securityControlsEnabled && slot.lines.some(function (line) { return line.metric === 'alarm'; }));
+        var element = document.createElement(interactive ? 'button' : 'div');
+        var center = position.indexOf('Center') !== -1;
+        var right = position.indexOf('Right') !== -1;
+        element.className = 'overlay' + (center ? ' center' : right ? ' right' : '') + (interactive ? ' interactive' : '');
+        if (!center) element.style.maxWidth = 'calc(33% - ' + (2 * state.config.margin) + 'px)';
+        if (interactive) {
+          element.type = 'button';
+          element.setAttribute('aria-label', 'Open security controls');
+          element.addEventListener('click', securityUI.open);
+        }
+        element.dataset.position = position;
+        element.style[position.indexOf('top') === 0 ? 'top' : 'bottom'] = state.config.margin + 'px';
+        if (!center) element.style[right ? 'right' : 'left'] = state.config.margin + 'px';
+        element.style.fontFamily = slot.font === 'display' ? 'FrameDisplay, sans-serif' : slot.font === 'mono' ? 'monospace' : 'FrameSans, sans-serif';
+        element.style.fontSize = slot.fontSize + 'px';
+        element.style.backgroundColor = 'rgba(0,0,0,' + slot.panelOpacity + ')';
+        element.style.color = slot.color;
+        slot.lines.slice(0, center ? 1 : 2).forEach(function (line) {
+          var content = lineText(line);
+          var row = document.createElement('span');
+          row.className = 'overlay-line' + (content.stale ? ' stale' : '') + (content.alarm ? ' alarm' : '');
+          row.style.opacity = slot.textOpacity;
+          row.textContent = content.text;
+          element.appendChild(row);
+        });
+        overlayRoot.appendChild(element);
       });
-      overlayRoot.appendChild(element);
-    });
+    }
     document.getElementById('sleep').hidden = !isSleeping();
+    if (securityUI) securityUI.update(state.config.securityControlsEnabled === true && !isSleeping(), positions.some(function (position) {
+      var slot = state.config.overlays[position];
+      return slot && slot.enabled && slot.lines.some(function (line) { return line.metric === 'alarm'; });
+    }));
     canvas.style.filter = 'brightness(' + state.config.brightness / 100 + ')';
   }
   async function showPhoto(photo, immediate) {

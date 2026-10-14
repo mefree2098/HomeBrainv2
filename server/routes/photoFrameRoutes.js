@@ -4,6 +4,7 @@ const rateLimit = require('express-rate-limit');
 const { requireAdmin } = require('./middlewares/auth');
 const service = require('../services/photoFrameService');
 const updates = require('../services/photoFrameUpdateService');
+const security = require('../services/photoFrameSecurityService');
 const router = express.Router();
 const admin = requireAdmin();
 const readOnlyPreview = requireAdmin({ allowReadOnlyMutation: true });
@@ -13,7 +14,7 @@ const wrap = (handler) => async (req, res) => {
   res.set('Cache-Control', 'private, no-store');
   try { await handler(req, res); } catch (error) {
     const conflict = error.name === 'VersionError';
-    res.status(conflict ? 409 : (error.status || 500)).json({ success: false, message: conflict ? 'The frame changed while saving. Reload and retry.' : error.message });
+    res.status(conflict ? 409 : (error.status || error.statusCode || 500)).json({ success: false, message: conflict ? 'The frame changed while saving. Reload and retry.' : error.message });
   }
 };
 
@@ -42,8 +43,35 @@ router.get('/:frameId/photos/:photoId', admin, wrap(async (req, res) => {
   res.type(photo.contentType).sendFile(file);
 }));
 
-// Frame credentials authorize only this frame's display and assigned updates.
-// They are independent of user sessions and cannot control any home device.
+// Frame credentials authorize this display, assigned updates, and only the
+// alarm actions explicitly enabled by an administrator for this frame.
+const authenticateSecurityFrame = async (req, res, next) => {
+  res.set('Cache-Control', 'private, no-store');
+  try {
+    req.photoFrame = await service.authenticate(req.params.frameId, req.get('X-HomeBrain-Frame-Token'));
+    next();
+  } catch (error) {
+    const status = error.status || 500;
+    res.status(status).json({ success: false, ...([401, 404].includes(status) ? { code: 'FRAME_CREDENTIAL_INVALID' } : {}), message: error.message });
+  }
+};
+const securityActionLimit = rateLimit({
+  windowMs: 60_000, limit: 20, standardHeaders: true, legacyHeaders: false,
+  keyGenerator: (req) => String(req.photoFrame._id),
+  message: { success: false, message: 'Too many security requests. Please wait a minute.' }
+});
+const securityFailureLimit = rateLimit({
+  windowMs: 15 * 60_000, limit: 5, skipSuccessfulRequests: true,
+  standardHeaders: true, legacyHeaders: false,
+  keyGenerator: (req) => String(req.photoFrame._id),
+  message: { success: false, message: 'Too many unsuccessful security attempts. Please wait 15 minutes.' }
+});
+router.get('/:frameId/device/security', limited, authenticateSecurityFrame, wrap(async (req, res) => {
+  res.json({ success: true, security: await security.status(req.photoFrame) });
+}));
+router.post('/:frameId/device/security', limited, authenticateSecurityFrame, securityActionLimit, securityFailureLimit, wrap(async (req, res) => {
+  res.json({ success: true, security: await security.control(req.photoFrame, req.body) });
+}));
 router.get('/:frameId/device/manifest', limited, wrap(async (req, res) => {
   const frame = await service.authenticate(req.params.frameId, req.get('X-HomeBrain-Frame-Token'));
   res.json({ success: true, manifest: await service.manifest(frame, true) });

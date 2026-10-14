@@ -6,6 +6,7 @@
   <meta name="referrer" content="no-referrer">
   <title>HomeBrain Photo Frame</title>
   <link rel="stylesheet" href="player.css">
+  <script src="security.js" defer></script>
   <script src="player.js" defer></script>
 </head>
 <body>
@@ -18,6 +19,29 @@
     </div>
     <div id="connection" role="status" hidden></div>
     <div id="sleep" hidden></div>
+    <button id="security-launcher" type="button" class="security-button" hidden>Security</button>
+    <div id="security-modal" hidden>
+      <section id="security-panel" role="dialog" aria-modal="true" aria-labelledby="security-title" tabindex="-1">
+        <h2 id="security-title">Security</h2>
+        <p id="security-preview" hidden>Preview only · no alarm commands are sent</p>
+        <p id="security-state" role="status"></p>
+        <p id="security-message" role="alert"></p>
+        <div id="security-actions">
+          <button id="security-arm-stay" type="button" class="security-button">Arm Stay</button>
+          <button id="security-arm-away" type="button" class="security-button">Arm Away</button>
+          <button id="security-disarm" type="button" class="security-button">Disarm</button>
+        </div>
+        <div id="security-confirm" hidden>
+          <p id="security-action-title"></p>
+          <div id="security-pin" hidden>
+            <output id="security-pin-dots" aria-label="PIN length"></output>
+            <div id="security-keypad"></div>
+          </div>
+          <button id="security-submit" type="button" class="security-button security-primary">Confirm</button>
+        </div>
+        <button id="security-cancel" type="button" class="security-button">Close</button>
+      </section>
+    </div>
   </main>
   <form id="pairing" hidden>
     <h1>HomeBrain Photo Frame</h1>

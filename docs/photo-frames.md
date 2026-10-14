@@ -39,6 +39,8 @@ Before installing, read the exact firmware/USB identity and confirm Android SDK,
 
 Every position is optional. Each line selects one information item, with an optional label prefix. Custom text is also supported. Each position has its own font, size, text color, text opacity, and black background opacity. Space Grotesk and Orbitron are bundled with their existing OFL licenses; monospace uses the device's monospace font.
 
+Background boxes fit the longest visible line instead of filling a fixed screen column. Their padding and corner radius scale with the font size; long text still truncates within its region. Both apps also offer a **Text font (all regions)** picker, while retaining individual font choices. Background opacity remains adjustable per region, including 0% to hide it.
+
 The preview uses the real renderer at a fixed 1280 × 800 or 800 × 1280 logical size, scaled to the available space. Lines never wrap, and overflow truncates with an ellipsis. Reducing font size or shortening labels helps long forecasts fit. The preview ignores the sleep schedule to keep editing possible.
 
 Information choices are time, date, time/date, outside/inside temperature, outside/inside US AQI, alarm status, today's forecast, recorded rainfall over the last 24 hours, lightning over the last 24 hours, outside/inside humidity, indoor CO₂ and PM2.5, wind, UV, sunrise, sunset, and custom text. Climate readings use HomeBrain's existing weather/indoor-air source selections.
@@ -57,6 +59,14 @@ The player stores its latest manifest locally and caches photo blobs in IndexedD
 
 ## Pairing and Android runtime
 
+### Optional touchscreen security
+
+An administrator can enable **Allow arm/disarm on this frame** in either app and save the configuration. It defaults to off, including for existing frames. Tapping the alarm status then opens centered security controls; a separate Security button appears when no alarm overlay is shown. Arm Stay, Arm Away, and Disarm require an explicit confirmation. When HomeBrain requires a PIN for that action, a centered number pad accepts 4–8 digits. The existing alarm service enforces the current PIN settings and retains the platform Arm Away exit delay.
+
+PINs are masked and kept only in dialog memory until submission. Closing the dialog, a failed attempt, or 30 seconds of inactivity clears them. PIN errors do not revoke the independent frame pairing credential. The frame-specific endpoint returns only the alarm state, availability, and PIN requirement flags; it cannot change PIN settings, enumerate codes or zones, trigger the alarm, or control other devices. Commands are attributed to the frame name or the matched PIN name. Failed commands are limited to five per frame in 15 minutes, with a separate 20-command/minute limit. Disabling the frame option blocks further commands on the server.
+
+App previews display the same controls and PIN policy but send no alarm commands. The Android runtime must receive a signed APK with the updated player assets before touchscreen controls or the new background sizing appear on the physical frame.
+
 1. Add a frame in the web or iOS app, upload photos, arrange overlays, and save.
 2. Create its private pairing link. The token is returned only at creation, and only a SHA-256 hash is stored by the hub. Replacing the link revokes the previous credential.
 3. Install the built APK on an identified, accessible Android device and paste the pairing link into its setup screen. A valid TLS certificate and HTTPS hub URL are preferred; local HTTP is supported.
@@ -65,7 +75,7 @@ The player stores its latest manifest locally and caches photo blobs in IndexedD
 
 The setup screen shows the current IPv4 address. The PF1007L ROM has no SystemUI application or navigation buttons, so it cannot provide a notification drawer or normal Back/Home controls in Settings. Provision the HomeBrain package's `SYSTEM_ALERT_WINDOW` app-op during the initial authenticated setup. The native service then displays a small **Return to HomeBrain** button while Android settings is open and removes it when the display resumes. Settings opens only after that return control is successfully created. The control belongs to the separate updater process, rather than the WebView activity. A return notification is also available on Android systems that provide a notification drawer.
 
-The pairing token is in the URL fragment so it does not enter HTTP request URLs. Device requests carry it in `X-HomeBrain-Frame-Token`. It grants access to that frame's selected display values, photos, assigned software update, and update-status reports, with no general home-control authority. Online players clear displayed content and credentials when a token is rejected. An offline device retains cached photos until it reconnects or its application data is cleared. New pairing links also contain the SHA-256 fingerprint of the hub's OTA public key; the native installer pins this identity before trusting release metadata.
+The pairing token is in the URL fragment so it does not enter HTTP request URLs. Device requests carry it in `X-HomeBrain-Frame-Token`. It grants access to that frame's selected display values, photos, assigned software update, and update-status reports, plus the optional arm/disarm capability when an administrator enables it for that frame. It grants no general home-control authority. Online players clear displayed content and credentials when a pairing token is rejected; an incorrect security PIN leaves pairing intact. An offline device retains cached photos until it reconnects or its application data is cleared. New pairing links also contain the SHA-256 fingerprint of the hub's OTA public key; the native installer pins this identity before trusting release metadata.
 
 Build the runtime with JDK 17+ and Android SDK 36:
 
@@ -119,6 +129,8 @@ Management endpoints require a HomeBrain administrator:
 - `POST /api/photo-frames/:id/updates` with `{releaseId}`; `DELETE /api/photo-frames/:id/updates` cancels only an unclaimed queued update
 
 The public player assets contain no credentials. Device endpoints are `GET /api/photo-frames/:id/device/manifest` and `/device/photos/:photoId`, authenticated with the frame header. Device tokens are not accepted as administrator sessions. Heartbeats update connection state without replacing concurrent layout/photo edits.
+
+`GET` and `POST /api/photo-frames/:id/device/security` use the same scoped frame header and require `securityControlsEnabled: true`. POST accepts `{ action: 'armStay' | 'armAway' | 'disarm', pin?: string }`; platform selection, PIN policy, exit delay, and other home controls cannot be supplied by the frame.
 
 OTA device endpoints, with the same frame credential, are `GET /api/photo-frames/:id/device/updates`, `POST /device/updates/report`, and `GET /device/updates/:jobId/apk`. Artifact access requires that exact frame's current active assignment. Read-only administrators can inspect releases/status but cannot upload, queue, or cancel updates.
 

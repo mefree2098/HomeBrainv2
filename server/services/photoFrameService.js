@@ -64,7 +64,7 @@ function serialize(frame) {
     hardwareProfile: frame.hardwareProfile,
     width: frame.config.orientation === 'portrait' ? 800 : 1280,
     height: frame.config.orientation === 'portrait' ? 1280 : 800,
-    config: frame.config, photos: (frame.photos || []).map((photo) => ({
+    config: normalizeConfig(frame.config), photos: (frame.photos || []).map((photo) => ({
       id: photo.id, name: photo.name, contentType: photo.contentType,
       bytes: photo.bytes, createdAt: photo.createdAt,
       url: `/api/photo-frames/${frame._id}/photos/${photo.id}`
@@ -251,7 +251,11 @@ async function manifest(frame, device = false) {
 }
 async function preview(config) {
   const normalized = normalizeConfig(config);
-  return { config: normalized, values: await loadMetrics(normalized), generatedAt: new Date().toISOString() };
+  const [values, security] = await Promise.all([
+    loadMetrics(normalized),
+    normalized.securityControlsEnabled ? require('./photoFrameSecurityService').status({ config: normalized }).catch(() => null) : null
+  ]);
+  return { config: normalized, values, security, generatedAt: new Date().toISOString() };
 }
 
 module.exports = {
