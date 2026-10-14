@@ -284,10 +284,13 @@
     var parts = new URLSearchParams(url.hash.slice(1));
     var frameId = parts.get('frame'); var token = parts.get('token');
     if (!/^[a-f0-9]{24}$/i.test(frameId || '') || !/^[a-f0-9]{64}$/.test(token || '')) throw new Error('Invalid pairing link');
-    generation++; clearImages(); state = null;
+    var sameCredential = credentials && credentials.frameId === frameId && credentials.token === token;
+    if (!sameCredential) {
+      generation++; clearImages(); state = null;
+      localStorage.removeItem(manifestKey);
+    }
     credentials = { frameId: frameId, token: token };
     persist(credentialsKey, credentials);
-    localStorage.removeItem(manifestKey);
   }
   window.addEventListener('resize', resize);
   if (preview) {
