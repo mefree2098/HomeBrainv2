@@ -101,6 +101,7 @@ function normalizeConfig(input = {}) {
     paused: boolean(input.paused, false, 'Pause'),
     brightness: number(input.brightness, 100, 10, 100, 'Brightness'),
     margin: number(input.margin, 28, 8, 80, 'Edge margin'),
+    securityControlsEnabled: boolean(input.securityControlsEnabled, false, 'Touchscreen security controls'),
     sleep: { enabled: boolean(sleep.enabled, false, 'Sleep schedule enabled'), start: sleepStart, end: sleepEnd },
     overlays: normalizedOverlays
   };

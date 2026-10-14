@@ -44,6 +44,7 @@ public final class MainActivity extends Activity {
         Map<String, String> types = new HashMap<>();
         types.put("index.html", "text/html");
         types.put("player.js", "application/javascript");
+        types.put("security.js", "application/javascript");
         types.put("player.css", "text/css");
         types.put("fonts/SpaceGrotesk.ttf", "font/ttf");
         types.put("fonts/Orbitron.ttf", "font/ttf");

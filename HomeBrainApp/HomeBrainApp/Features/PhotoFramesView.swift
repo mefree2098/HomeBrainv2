@@ -35,6 +35,7 @@ private struct HBFrameConfig: Codable, Equatable {
     var paused: Bool
     var brightness: Double
     var margin: Double
+    var securityControlsEnabled: Bool?
     var sleep: HBFrameSleep
     var overlays: [String: HBFrameOverlay]
 }
@@ -174,6 +175,7 @@ private struct PhotoFrameEditor: View {
     @State private var selectedPhotoID = ""
     @State private var previewPhoto: HBFramePhoto?
     @State private var previewValues: [String: Any] = [:]
+    @State private var previewSecurity: [String: Any] = [:]
     @State private var generatedAt = ISO8601DateFormatter().string(from: Date())
     @State private var pairingURL: URL?
     @State private var replacePairing = false
@@ -193,7 +195,7 @@ private struct PhotoFrameEditor: View {
     private var dirty: Bool { config != frame.config || name != frame.name || room != frame.room }
     private var selectedPhoto: HBFramePhoto? { frame.photos.first { $0.id == selectedPhotoID } ?? frame.photos.first }
     private var metricSignature: String {
-        catalog.positions.map { position in
+        String(config.securityControlsEnabled == true) + "|" + catalog.positions.map { position in
             let slot = config.overlays[position.id]
             return position.id + ":" + String(slot?.enabled ?? false) + ":" + (slot?.lines.map(\.metric).joined(separator: ",") ?? "")
         }.joined(separator: "|")
@@ -203,7 +205,7 @@ private struct PhotoFrameEditor: View {
             let payload: [String: Any] = [
                 "frameId": frame.id, "config": try HBFrameJSON.object(config),
                 "photos": try HBFrameJSON.object(previewPhoto.map { [$0] } ?? []),
-                "values": previewValues, "generatedAt": generatedAt
+                "values": previewValues, "security": previewSecurity, "generatedAt": generatedAt
             ]
             return String(data: try JSONSerialization.data(withJSONObject: payload), encoding: .utf8) ?? "{}"
         } catch { return "{}" }
@@ -239,6 +241,13 @@ private struct PhotoFrameEditor: View {
                 }.padding(.top, 8)
             }
             slideshowSettings
+            GroupBox("Touchscreen Security") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Toggle("Allow arm/disarm on this frame", isOn: Binding(get: { config.securityControlsEnabled == true }, set: { config.securityControlsEnabled = $0 }))
+                    Text("Tap the alarm status on the display to open controls. A Security button appears if no alarm status is shown. HomeBrain’s PIN settings apply, with a number pad in the center of the screen. Preview controls send no alarm commands.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }.padding(.top, 8)
+            }
             ForEach(catalog.positions) { position in
                 if config.overlays[position.id] != nil {
                     FrameOverlayEditor(position: position, metrics: catalog.metrics, slot: Binding(
@@ -276,6 +285,15 @@ private struct PhotoFrameEditor: View {
                 TextField("Frame name", text: $name).textFieldStyle(.roundedBorder)
                 TextField("Room", text: $room).textFieldStyle(.roundedBorder)
                 TextField("IANA time zone", text: $config.timeZone).textFieldStyle(.roundedBorder).textInputAutocapitalization(.never).autocorrectionDisabled()
+                Picker("Text font (all regions)", selection: Binding(get: {
+                    let fonts = Set(config.overlays.values.map(\.font))
+                    return fonts.count == 1 ? (fonts.first ?? "sans") : "mixed"
+                }, set: { font in
+                    for key in Array(config.overlays.keys) { config.overlays[key]?.font = font }
+                })) {
+                    Text("Different fonts by region").tag("mixed").disabled(true)
+                    Text("Space Grotesk").tag("sans"); Text("Orbitron").tag("display"); Text("Monospace").tag("mono")
+                }
                 LabeledContent("Photo interval (seconds)") {
                     TextField("Seconds", value: $config.intervalSeconds, format: .number).keyboardType(.numberPad).multilineTextAlignment(.trailing)
                 }
@@ -341,6 +359,7 @@ private struct PhotoFrameEditor: View {
             let result = JSON.object(try await session.apiClient.post("/api/photo-frames/preview", body: ["config": try HBFrameJSON.object(config)]))
             try Task.checkCancellation()
             previewValues = JSON.object(result["values"])
+            previewSecurity = JSON.object(result["security"])
             generatedAt = JSON.string(result, "generatedAt")
         } catch is CancellationError { } catch { errorMessage = error.localizedDescription }
     }
@@ -524,7 +543,8 @@ private struct FrameOverlayEditor: View {
                 TextField("Text color (#rrggbb)", text: $slot.color).textFieldStyle(.roundedBorder).textInputAutocapitalization(.never).autocorrectionDisabled()
                 frameSlider("Font size", value: $slot.fontSize, range: 14...64, suffix: "px")
                 frameSlider("Text opacity", value: $slot.textOpacity, range: 0.2...1, step: 0.05, suffix: "")
-                frameSlider("Background opacity", value: $slot.panelOpacity, range: 0...0.85, step: 0.05, suffix: "")
+                frameSlider("Text background opacity", value: $slot.panelOpacity, range: 0...0.85, step: 0.05, suffix: "")
+                Text("Backgrounds fit the text and scale with its font size. Set opacity to 0 to hide them.").font(.caption).foregroundStyle(.secondary)
             }.padding(.top, 8)
         }
     }

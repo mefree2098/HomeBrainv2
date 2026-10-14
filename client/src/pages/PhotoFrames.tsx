@@ -31,7 +31,7 @@ export default function PhotoFrames() {
   const [draft, setDraft] = useState<FrameConfig | null>(null)
   const [name, setName] = useState('')
   const [room, setRoom] = useState('')
-  const [values, setValues] = useState<Pick<FrameManifest, 'values' | 'generatedAt'>>({ values: {}, generatedAt: new Date().toISOString() })
+  const [values, setValues] = useState<Pick<FrameManifest, 'values' | 'security' | 'generatedAt'>>({ values: {}, generatedAt: new Date().toISOString() })
   const [previewPhotoId, setPreviewPhotoId] = useState('')
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
@@ -58,7 +58,7 @@ export default function PhotoFrames() {
 
   // Only information selections trigger data reads; typography edits preview
   // immediately without polling alarm/weather services for every slider change.
-  const previewQuery = draft ? JSON.stringify({ overlays: Object.fromEntries(Object.entries(draft.overlays).map(([id, slot]) => [id, { enabled: slot.enabled, lines: slot.lines.map((line) => ({ metric: line.metric })) }])) }) : ''
+  const previewQuery = draft ? JSON.stringify({ securityControlsEnabled: draft.securityControlsEnabled === true, overlays: Object.fromEntries(Object.entries(draft.overlays).map(([id, slot]) => [id, { enabled: slot.enabled, lines: slot.lines.map((line) => ({ metric: line.metric })) }])) }) : ''
   useEffect(() => {
     if (!previewQuery) return
     let active = true
@@ -158,6 +158,7 @@ export default function PhotoFrames() {
         <Field title="Frame name"><Input value={name} maxLength={80} onChange={(event) => setName(event.target.value)} /></Field>
         <Field title="Room"><Input value={room} maxLength={80} onChange={(event) => setRoom(event.target.value)} /></Field>
         <Field title="Time zone"><Input value={draft.timeZone} onChange={(event) => patch('timeZone', event.target.value)} placeholder="America/Denver" /></Field>
+        <Field title="Text font · all regions"><select className={selectClass} value={Object.values(draft.overlays).every((slot) => slot.font === draft.overlays.topLeft.font) ? draft.overlays.topLeft.font : 'mixed'} onChange={(event) => patch('overlays', Object.fromEntries(Object.entries(draft.overlays).map(([id, slot]) => [id, { ...slot, font: event.target.value as FrameOverlay['font'] }])) as FrameConfig['overlays'])}><option value="mixed" disabled>Different fonts by region</option><option value="sans">Space Grotesk</option><option value="display">Orbitron</option><option value="mono">Monospace</option></select></Field>
         <Field title="Change photos every (seconds)"><Input type="number" min={5} max={86400} value={draft.intervalSeconds} onChange={(event) => patch('intervalSeconds', Number(event.target.value))} /></Field>
         <Field title="Transition"><select className={selectClass} value={draft.transition} onChange={(event) => patch('transition', event.target.value as FrameConfig['transition'])}><option value="fade">Crossfade</option><option value="slide">Slide</option><option value="cut">Instant</option></select></Field>
         <Field title={`Transition duration · ${draft.transitionSeconds}s`}><input type="range" min={0.2} max={4} step={0.1} value={draft.transitionSeconds} onChange={(event) => patch('transitionSeconds', Number(event.target.value))} /></Field>
@@ -167,6 +168,10 @@ export default function PhotoFrames() {
         <Field title={`Distance from edges · ${draft.margin}px`}><input type="range" min={8} max={80} value={draft.margin} onChange={(event) => patch('margin', Number(event.target.value))} /></Field>
         <div className="grid content-start gap-3"><Check title="Shuffle photos" checked={draft.shuffle} onChange={(value) => patch('shuffle', value)} /><Check title="Pause slideshow" checked={draft.paused} onChange={(value) => patch('paused', value)} /><Check title="12-hour clock" checked={draft.hour12} onChange={(value) => patch('hour12', value)} /></div>
         <div className="grid content-start gap-3"><Check title="Sleep schedule (black screen)" checked={draft.sleep.enabled} onChange={(enabled) => patch('sleep', { ...draft.sleep, enabled })} /><div className="grid grid-cols-2 gap-2"><Field title="Sleep"><Input type="time" value={draft.sleep.start} onChange={(event) => patch('sleep', { ...draft.sleep, start: event.target.value })} /></Field><Field title="Wake"><Input type="time" value={draft.sleep.end} onChange={(event) => patch('sleep', { ...draft.sleep, end: event.target.value })} /></Field></div></div>
+      </CardContent></Card>
+      <Card><CardHeader><CardTitle>Touchscreen security</CardTitle></CardHeader><CardContent className="space-y-3">
+        <Check title="Allow arm/disarm on this frame" checked={draft.securityControlsEnabled === true} onChange={(enabled) => patch('securityControlsEnabled', enabled)} />
+        <p className="text-sm text-muted-foreground">Tap the alarm status on the display to open controls. A Security button appears if no alarm status is shown. HomeBrain’s PIN settings apply, with a number pad in the center of the screen. Preview controls send no alarm commands.</p>
       </CardContent></Card>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{catalog.positions.map((position) => {
         const slot = draft.overlays[position.id]
@@ -187,7 +192,8 @@ export default function PhotoFrames() {
           <div className="grid grid-cols-2 gap-3"><Field title="Font"><select className={selectClass} value={slot.font} onChange={(event) => patchSlot(position.id, { font: event.target.value as FrameOverlay['font'] })}><option value="sans">Space Grotesk</option><option value="display">Orbitron</option><option value="mono">Monospace</option></select></Field><Field title="Text color"><input className="h-9 w-full rounded" type="color" value={slot.color} onChange={(event) => patchSlot(position.id, { color: event.target.value })} /></Field></div>
           <Field title={`Font size · ${slot.fontSize}px`}><input type="range" min={14} max={64} value={slot.fontSize} onChange={(event) => patchSlot(position.id, { fontSize: Number(event.target.value) })} /></Field>
           <Field title={`Text opacity · ${Math.round(slot.textOpacity * 100)}%`}><input type="range" min={0.2} max={1} step={0.05} value={slot.textOpacity} onChange={(event) => patchSlot(position.id, { textOpacity: Number(event.target.value) })} /></Field>
-          <Field title={`Background opacity · ${Math.round(slot.panelOpacity * 100)}%`}><input type="range" min={0} max={0.85} step={0.05} value={slot.panelOpacity} onChange={(event) => patchSlot(position.id, { panelOpacity: Number(event.target.value) })} /></Field>
+          <Field title={`Text background opacity · ${Math.round(slot.panelOpacity * 100)}%`}><input type="range" min={0} max={0.85} step={0.05} value={slot.panelOpacity} onChange={(event) => patchSlot(position.id, { panelOpacity: Number(event.target.value) })} /></Field>
+          <p className="text-xs text-muted-foreground">Backgrounds fit the text and scale with its font size. Set opacity to 0% to hide them.</p>
         </CardContent></Card>
       })}</div>
       <Card><CardHeader className="flex-row flex-wrap items-center justify-between gap-3"><div><CardTitle>Photo library</CardTitle><p className="mt-1 text-xs text-muted-foreground">{frame.photos.length} / {catalog.maxPhotos} photos · {(frame.photos.reduce((sum, photo) => sum + photo.bytes, 0) / 1048576).toFixed(1)} MB / 1 GB. Photos are resized to 2560 pixels before upload.</p></div><Button disabled={busy} onClick={() => uploads.current?.click()}><ImagePlus className="mr-2 h-4 w-4" />Add photos</Button><input ref={uploads} type="file" multiple accept="image/*" hidden onChange={(event) => void upload(event.target.files)} /></CardHeader><CardContent><div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">{frame.photos.map((photo, index) => <div key={photo.id} className="overflow-hidden rounded-lg border bg-muted/20"><button className="w-full" title={`Preview ${photo.name}`} onClick={() => setPreviewPhotoId(photo.id)}><img src={photo.url} alt={photo.name} className="aspect-[8/5] w-full object-cover" loading="lazy" /></button><p className="truncate px-2 py-1 text-xs" title={photo.name}>{photo.name}</p><div className="flex justify-between px-1 pb-1"><Button size="icon" variant="ghost" aria-label={`Move ${photo.name} earlier`} disabled={busy || index === 0} onClick={() => void perform(() => movePhoto(index, -1))}><ArrowLeft className="h-3 w-3" /></Button><Button size="icon" variant="ghost" aria-label={`Move ${photo.name} later`} disabled={busy || index === frame.photos.length - 1} onClick={() => void perform(() => movePhoto(index, 1))}><ArrowRight className="h-3 w-3" /></Button><Button size="icon" variant="ghost" aria-label={`Delete ${photo.name}`} disabled={busy} onClick={() => { if (window.confirm(`Remove ${photo.name} from this frame?`)) void perform(async () => adopt(await deleteFramePhoto(frame.id, photo.id))) }}><Trash2 className="h-3 w-3" /></Button></div></div>)}</div>{!frame.photos.length && <p className="py-6 text-sm text-muted-foreground">Add photos from this browser or your iPhone’s photo library.</p>}</CardContent></Card>
