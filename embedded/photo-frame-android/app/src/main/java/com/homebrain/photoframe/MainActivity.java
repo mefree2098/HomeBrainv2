@@ -24,7 +24,12 @@ import android.widget.TextView;
 import android.window.OnBackInvokedDispatcher;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.SocketException;
 import java.util.Collections;
+import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -69,6 +74,22 @@ public final class MainActivity extends Activity {
         return frame != null && frame.matches("[a-fA-F0-9]{24}") && token != null && token.matches("[a-f0-9]{64}");
     }
 
+    private String networkAddress() {
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                NetworkInterface network = interfaces.nextElement();
+                if (!network.isUp() || network.isLoopback()) continue;
+                Enumeration<InetAddress> addresses = network.getInetAddresses();
+                while (addresses.hasMoreElements()) {
+                    InetAddress address = addresses.nextElement();
+                    if (address instanceof Inet4Address && !address.isLoopbackAddress() && !address.isLinkLocalAddress()) return address.getHostAddress();
+                }
+            }
+        } catch (SocketException ignored) { /* Settings remain available without a connection. */ }
+        return "Not connected";
+    }
+
     private void showSetup() {
         if (webView != null) { webView.destroy(); webView = null; }
         LinearLayout layout = new LinearLayout(this);
@@ -79,6 +100,10 @@ public final class MainActivity extends Activity {
         TextView title = new TextView(this);
         title.setText("HomeBrain Photo Frame"); title.setTextSize(26); title.setTextColor(Color.WHITE);
         layout.addView(title);
+        TextView address = new TextView(this);
+        address.setText("IP address: " + networkAddress()); address.setTextColor(Color.LTGRAY);
+        address.setPadding(0, 12, 0, 0);
+        layout.addView(address);
         TextView instructions = new TextView(this);
         instructions.setText("Create a private pairing link under Photo Frames in HomeBrain, then paste it here. The frame needs its AC power adapter and Wi-Fi. Prefer an HTTPS hub address.");
         instructions.setTextColor(Color.LTGRAY); instructions.setPadding(0, 20, 0, 20);
@@ -101,6 +126,10 @@ public final class MainActivity extends Activity {
         Button settings = new Button(this); settings.setText("Android / Wi-Fi Settings");
         settings.setOnClickListener(view -> startActivity(new Intent(Settings.ACTION_SETTINGS)));
         layout.addView(settings);
+        TextView returnHelp = new TextView(this);
+        returnHelp.setText("To return from Android settings, tap the HomeBrain Frame notification.");
+        returnHelp.setTextColor(Color.LTGRAY); returnHelp.setPadding(0, 12, 0, 0);
+        layout.addView(returnHelp);
         setContentView(layout);
     }
 

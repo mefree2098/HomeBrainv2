@@ -3,6 +3,7 @@ package com.homebrain.photoframe;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
@@ -25,7 +26,9 @@ public final class FrameUpdateService extends Service {
             manager.createNotificationChannel(new NotificationChannel("frame_management", "Frame management", NotificationManager.IMPORTANCE_LOW));
             notification = new Notification.Builder(this, "frame_management");
         } else notification = new Notification.Builder(this);
-        startForeground(1, notification.setSmallIcon(android.R.drawable.stat_notify_sync).setContentTitle("HomeBrain Frame").setContentText("Software update service").setOngoing(true).build());
+        Intent display = new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent openDisplay = PendingIntent.getActivity(this, 0, display, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        startForeground(1, notification.setSmallIcon(android.R.drawable.stat_notify_sync).setContentTitle("HomeBrain Frame").setContentText("Tap to return to the display").setContentIntent(openDisplay).setOngoing(true).build());
         FrameUpdates.start(this);
     }
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
