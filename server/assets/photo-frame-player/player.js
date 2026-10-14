@@ -90,7 +90,15 @@
     } finally { if (timeout) clearTimeout(timeout); }
   }
   async function photoBlob(photo) {
-    if (preview && /^data:image\/(jpeg|png);base64,/.test(photo.url)) return (await fetch(photo.url)).blob();
+    var inline = preview && /^data:(image\/(?:jpeg|png));base64,/.exec(photo.url);
+    if (inline) {
+      // iOS supplies authenticated photo bytes inline. Decode them locally;
+      // fetching a data URL is blocked by the hub's connect-src policy.
+      var binary = atob(photo.url.slice(inline[0].length));
+      var bytes = new Uint8Array(binary.length);
+      for (var index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+      return new Blob([bytes], { type: inline[1] });
+    }
     var expected = preview ? /^\/api\/photo-frames\/[a-f0-9]{24}\/photos\/[a-f0-9-]+$/i : /^\/api\/photo-frames\/[a-f0-9]{24}\/device\/photos\/[a-f0-9-]+$/i;
     if (!expected.test(photo.url)) throw new Error('Invalid photo URL');
     var key = photoKey(photo);
