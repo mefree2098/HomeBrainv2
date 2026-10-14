@@ -61,3 +61,42 @@ test('a replacement credential discards the previous cached layout before contac
     assert.match(result.elements.get('connection').textContent, /Connecting to HomeBrain/);
   }
 });
+
+test('iOS inline preview photos render without a network fetch under a strict connect policy', async () => {
+  const config = normalizeConfig();
+  for (const overlay of Object.values(config.overlays)) overlay.enabled = false;
+  const bytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=', 'base64');
+  const elements = new Map();
+  const document = {
+    getElementById(id) {
+      if (!elements.has(id)) elements.set(id, { style: {}, className: '', textContent: '', hidden: false });
+      return elements.get(id);
+    }
+  };
+  const blobs = [];
+  class PreviewURL extends URL {
+    static createObjectURL(blob) { blobs.push(blob); return 'blob:inline-photo'; }
+  }
+  const requests = [];
+  const window = { addEventListener() {} };
+  window.parent = window;
+  vm.runInNewContext(source, {
+    window, document, URL: PreviewURL, URLSearchParams, Blob, atob,
+    location: { search: '?preview=1', origin: 'https://frame.test' },
+    innerWidth: 1280, innerHeight: 800,
+    Image: class { set src(_value) { this.onload(); } },
+    fetch: async url => { requests.push(url); throw new Error('connect-src blocks inline fetches'); },
+    setInterval() {}
+  });
+  window.HomeBrainFramePreview({
+    frameId: FRAME, config, values: {},
+    photos: [{ id: 'inline', url: 'data:image/png;base64,' + bytes.toString('base64') }]
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(requests, []);
+  assert.equal(blobs.length, 1);
+  assert.equal(blobs[0].type, 'image/png');
+  assert.deepEqual(Buffer.from(await blobs[0].arrayBuffer()), bytes);
+  assert.equal(window.HomeBrainFrameStatus().currentPhotoId, 'inline');
+  assert.equal(elements.get('photo-b').style.backgroundImage, 'url("blob:inline-photo")');
+});
