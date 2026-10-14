@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>HomeBrain Photo Frame</title>
+  <link rel="stylesheet" href="player.css">
+  <script src="player.js" defer></script>
+</head>
+<body>
+  <main id="screen" aria-label="HomeBrain photo frame">
+    <div id="canvas">
+      <div id="photo-a" class="photo"></div>
+      <div id="photo-b" class="photo"></div>
+      <div id="empty"><span>HOMEBRAIN</span><p>Add photos from the HomeBrain app</p></div>
+      <div id="overlays"></div>
+    </div>
+    <div id="connection" role="status" hidden></div>
+    <div id="sleep" hidden></div>
+  </main>
+  <form id="pairing" hidden>
+    <h1>HomeBrain Photo Frame</h1>
+    <p>In HomeBrain, open Photo Frames, select this frame, and create a pairing link. Paste it here.</p>
+    <label for="pairing-link">Pairing link</label>
+    <input id="pairing-link" type="url" required autocomplete="off" spellcheck="false">
+    <button type="submit">Connect frame</button>
+    <p id="pairing-message" role="alert"></p>
+  </form>
+</body>
+</html>

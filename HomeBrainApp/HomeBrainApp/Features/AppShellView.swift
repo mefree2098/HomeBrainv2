@@ -122,6 +122,7 @@ struct AppShellView: View {
         case dataPlatform
         case views
         case devices
+        case photoFrames
         case rooms
         case scenes
         case workflows
@@ -147,6 +148,7 @@ struct AppShellView: View {
             case .dataPlatform: return "Data Platform"
             case .views: return "Views"
             case .devices: return "Devices"
+            case .photoFrames: return "Photo Frames"
             case .rooms: return "Rooms"
             case .scenes: return "Scenes"
             case .workflows: return "Workflows"
@@ -172,6 +174,7 @@ struct AppShellView: View {
             case .dataPlatform: return "Telemetry Atlas"
             case .views: return "Device Dashboards"
             case .devices: return "Device Matrix"
+            case .photoFrames: return "Photo Frames"
             case .rooms: return "Room Registry"
             case .scenes: return "Scene Sequencer"
             case .workflows: return "Workflow Studio"
@@ -197,6 +200,7 @@ struct AppShellView: View {
             case .dataPlatform: return "Historical Intelligence"
             case .views: return "Room Presets"
             case .devices: return "Hardware Orchestration"
+            case .photoFrames: return "Home at a Glance"
             case .rooms: return "Home Topology"
             case .scenes: return "Atmosphere Control"
             case .workflows: return "Behavior Programming"
@@ -222,6 +226,7 @@ struct AppShellView: View {
             case .dataPlatform: return "chart.xyaxis.line"
             case .views: return "rectangle.3.group"
             case .devices: return "lightbulb"
+            case .photoFrames: return "photo.on.rectangle"
             case .rooms: return "map"
             case .scenes: return "sparkles"
             case .workflows: return "point.3.connected.trianglepath.dotted"
@@ -239,7 +244,7 @@ struct AppShellView: View {
 
         var adminOnly: Bool {
             switch self {
-            case .rooms, .operations, .platformDeploy, .ssl:
+            case .rooms, .operations, .platformDeploy, .ssl, .photoFrames:
                 return true
             default:
                 return false
@@ -1725,6 +1730,11 @@ struct AppShellView: View {
                 return AnyView(UIPreviewModuleView(section: section))
             }
             return AnyView(VoiceDevicesView())
+        case .photoFrames:
+            if previewMode {
+                return AnyView(UIPreviewModuleView(section: section))
+            }
+            return AnyView(PhotoFramesView())
         case .userProfiles:
             if previewMode {
                 return AnyView(UIPreviewModuleView(section: section))

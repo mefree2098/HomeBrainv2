@@ -37,6 +37,13 @@ server/data/device-library/
 server/data/matter/
 server/data/system-backup/
 server/data/wall-panel-ota/
+server/data/photo-frames/
+server/data/photo-frame-ota/
+embedded/photo-frame-android/.gradle/
+embedded/photo-frame-android/build/
+embedded/photo-frame-android/app/build/
+embedded/photo-frame-android/local.properties
+embedded/photo-frame-android/.signing/
 server/data/weather-provider-cache.json
 server/public/downloads/
 server/public/audio/security/*.json

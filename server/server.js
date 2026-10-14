@@ -58,6 +58,7 @@ const reverseProxyRoutes = require("./routes/reverseProxyRoutes");
 const remoteDeviceRoutes = require("./routes/remoteDeviceRoutes");
 const reachyMiniRoutes = require("./routes/reachyMiniRoutes");
 const panelRoutes = require("./routes/panelRoutes");
+const photoFrameRoutes = require("./routes/photoFrameRoutes");
 const sensorNodeRoutes = require("./routes/sensorNodeRoutes");
 const wakeWordRoutes = require("./routes/wakeWordRoutes");
 const remoteUpdateRoutes = require("./routes/remoteUpdateRoutes");
@@ -531,6 +532,7 @@ app.use('/api/remote-devices', remoteDeviceRoutes);
 app.use('/api/reachy-mini', reachyMiniRoutes);
 // Wall Panel Routes
 app.use('/api/panels', panelRoutes);
+app.use('/api/photo-frames', photoFrameRoutes);
 // Piper Voice Routes
 app.use('/api/wake-words/voices', piperVoiceRoutes);
 // Wake Word Routes
