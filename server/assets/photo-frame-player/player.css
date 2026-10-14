@@ -1,0 +1,14 @@
+@font-face{font-family:FrameSans;src:url('fonts/SpaceGrotesk.ttf') format('truetype');font-display:swap}
+@font-face{font-family:FrameDisplay;src:url('fonts/Orbitron.ttf') format('truetype');font-display:swap}
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000;color:#fff;font-family:FrameSans,sans-serif}
+[hidden]{display:none!important}#screen{position:relative;width:100%;height:100%;overflow:hidden;background:#000}
+#canvas{position:absolute;left:50%;top:50%;transform-origin:center;overflow:hidden;background:#111f29}
+.photo{position:absolute;inset:0;background-position:center;background-repeat:no-repeat;background-color:#000;opacity:0;transition-property:opacity,transform;transition-timing-function:ease-in-out}
+.photo.active{opacity:1;transform:translateX(0)}.photo.slide-enter{transform:translateX(100%)}
+#empty{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;align-items:center;background:radial-gradient(ellipse at 30% 75%,#387d80,transparent 60%),radial-gradient(ellipse at 80% 10%,#98816b,transparent 65%),linear-gradient(125deg,#182733,#293b4b)}
+#empty span{font-size:36px;letter-spacing:12px;font-weight:600}#empty p{font-size:20px;color:#d2e2e8}
+#overlays{position:absolute;inset:0;pointer-events:none}.overlay{position:absolute;width:30%;padding:12px 14px;border-radius:10px;line-height:1.32;text-shadow:0 1px 4px #0009;overflow:hidden}
+.overlay.center{width:34%;left:33%;text-align:center}.overlay.right{text-align:right}.overlay-line{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-height:1.32em}
+.overlay-line.stale{color:#fbd38d}.overlay-line.alarm{color:#ff7979;font-weight:700}
+#connection{position:absolute;left:50%;bottom:3px;transform:translateX(-50%);max-width:90%;padding:3px 8px;border-radius:4px;background:#000a;font:11px sans-serif;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;color:#fbd38d}
+#sleep{position:absolute;inset:0;background:#000;z-index:4}#pairing{position:absolute;inset:0;overflow:auto;padding:8vh 8vw;background:#142330}#pairing h1{font-size:28px}#pairing p{max-width:620px;line-height:1.5}#pairing label{display:block;margin:20px 0 8px}#pairing input{width:100%;max-width:720px;padding:12px;color:#fff;background:#203646;border:1px solid #537281;border-radius:8px;font:16px sans-serif}#pairing button{display:block;margin-top:16px;padding:12px 24px;font:16px sans-serif;border:0;border-radius:8px;background:#8de1da;color:#10252d}#pairing-message{color:#fbd38d}

@@ -1,0 +1,32 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.homebrain.photoframe'
+    compileSdk 36
+    defaultConfig {
+        applicationId 'com.homebrain.photoframe'
+        minSdk 23
+        targetSdk 36
+        versionCode (providers.gradleProperty('frameVersionCode').orElse('1').get().toInteger())
+        versionName providers.gradleProperty('frameVersionName').orElse('1.0.0').get()
+    }
+    // Keep the initial APK's Android signing identity for every OTA release.
+    def signingStore = providers.environmentVariable('HOMEBRAIN_FRAME_KEYSTORE').orNull
+    def signingPasswordFile = providers.environmentVariable('HOMEBRAIN_FRAME_PASSWORD_FILE').orNull
+    if (signingStore && signingPasswordFile) {
+        signingConfigs {
+            frameRelease {
+                storeFile file(signingStore)
+                storePassword file(signingPasswordFile).text.trim()
+                keyAlias 'homebrain-frame'
+                keyPassword file(signingPasswordFile).text.trim()
+                enableV1Signing true // PF1007L Android 6 requires JAR signing.
+                enableV2Signing true
+            }
+        }
+        buildTypes.release.signingConfig = signingConfigs.frameRelease
+    }
+    // Package exactly the same renderer used by both app previews. The shell
+    // serves these assets at the hub origin, including when Wi-Fi is unavailable.
+    sourceSets.main.assets.srcDirs = ['../../../server/assets/photo-frame-player']
+}

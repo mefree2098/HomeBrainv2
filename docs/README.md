@@ -7,6 +7,7 @@
 - Security checklist: [`security.md`](security.md)
 - Post-install configuration: [`configuration.md`](configuration.md)
 - ELECROW wall panel deployment: [`elecrow-wall-panel.md`](elecrow-wall-panel.md)
+- Photo frames, overlays, and Android display runtime: [`photo-frames.md`](photo-frames.md)
 
 ## Day-To-Day Guides
 
