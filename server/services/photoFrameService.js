@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const fs = require('fs/promises');
 const path = require('path');
+const { Types } = require('mongoose');
 const PhotoFrame = require('../models/PhotoFrame');
 const { normalizeConfig, METRICS, POSITIONS, invalid } = require('./photoFrameConfig');
 
@@ -14,8 +15,11 @@ const PHOTO_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 function hashToken(token) { return crypto.createHash('sha256').update(token).digest('hex'); }
 function failure(status, message) { return Object.assign(new Error(message), { status }); }
 function framePath(frameId, photoId) {
-  if (!FRAME_ID.test(String(frameId)) || (photoId && !PHOTO_ID.test(photoId))) throw invalid('Invalid frame or photo ID');
-  return photoId ? path.join(STORAGE_ROOT, String(frameId), photoId) : path.join(STORAGE_ROOT, String(frameId));
+  if (typeof frameId !== 'string' || !FRAME_ID.test(frameId)) throw invalid('Invalid frame or photo ID');
+  const directory = path.join(STORAGE_ROOT, path.basename(frameId));
+  if (photoId === undefined) return directory;
+  if (typeof photoId !== 'string' || !PHOTO_ID.test(photoId)) throw invalid('Invalid frame or photo ID');
+  return path.join(directory, path.basename(photoId));
 }
 function cleanName(value, fallback) {
   if (value === undefined) return fallback;
@@ -147,7 +151,7 @@ async function loadMetrics(config) {
 
 async function getFrame(frameId, includeToken = false) {
   framePath(frameId);
-  let query = PhotoFrame.findById(frameId);
+  let query = PhotoFrame.findById(new Types.ObjectId(frameId));
   if (includeToken) query = query.select('+deviceTokenHash');
   const frame = await query;
   if (!frame) throw failure(404, 'Photo frame not found');

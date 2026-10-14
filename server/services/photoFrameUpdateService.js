@@ -34,8 +34,8 @@ async function publicKey() {
   return { algorithm: 'SHA256withRSA', publicKey: der.toString('base64'), fingerprint: sha256(der) };
 }
 function releasePath(id, extension) {
-  if (!UUID.test(String(id))) throw failure(400, 'Invalid release ID');
-  return path.join(ROOT, 'releases', `${id}.${extension}`);
+  if (typeof id !== 'string' || !UUID.test(id) || !['apk', 'json'].includes(extension)) throw failure(400, 'Invalid release ID');
+  return path.join(ROOT, 'releases', `${path.basename(id)}.${extension}`);
 }
 async function getRelease(id) {
   try {
@@ -53,13 +53,20 @@ async function listReleases() {
   const releases = await Promise.all(files.filter((file) => UUID.test(file.slice(0, -5)) && file.endsWith('.json')).map(async (file) => (await getRelease(file.slice(0, -5))).details));
   return releases.sort((a, b) => b.versionCode - a.versionCode);
 }
-async function publish(bytes, input = {}) {
-  if (!Buffer.isBuffer(bytes) || bytes.length < 100 || bytes.length > MAX_BYTES || bytes.readUInt32LE(0) !== 0x04034b50) throw failure(400, 'Upload an Android APK of at most 16 MB');
-  const versionCode = Number(input.versionCode);
-  if (!Number.isSafeInteger(versionCode) || versionCode < 1 || versionCode > 2_100_000_000 || typeof input.versionName !== 'string' || !/^[0-9A-Za-z][0-9A-Za-z.+_-]{0,39}$/.test(input.versionName)) throw failure(400, 'Enter the APK’s version name and positive version code');
+async function publish(suppliedBytes, input = {}) {
+  if (!Buffer.isBuffer(suppliedBytes)) throw failure(400, 'Upload an Android APK of at most 16 MB');
+  // Own a typed byte copy before inspecting or signing it. JSON objects with
+  // buffer-like properties and mutable request-body aliases are never artifacts.
+  const bytes = Buffer.from(suppliedBytes);
+  if (bytes.length < 100 || bytes.length > MAX_BYTES || bytes.readUInt32LE(0) !== 0x04034b50) throw failure(400, 'Upload an Android APK of at most 16 MB');
+  const rawVersionCode = input.versionCode;
+  if (!['string', 'number'].includes(typeof rawVersionCode)) throw failure(400, 'Enter a positive APK version code');
+  const versionCode = Number(rawVersionCode);
+  const versionName = input.versionName;
+  if (!Number.isSafeInteger(versionCode) || versionCode < 1 || versionCode > 2_100_000_000 || typeof versionName !== 'string' || !/^[0-9A-Za-z][0-9A-Za-z.+_-]{0,39}$/.test(versionName)) throw failure(400, 'Enter the APK’s version name and positive version code');
   const details = {
     protocol: 1, kind: 'runtime-apk', releaseId: crypto.randomUUID(), packageName: PACKAGE,
-    hardwareProfile: HARDWARE, versionCode, versionName: input.versionName,
+    hardwareProfile: HARDWARE, versionCode, versionName,
     bytes: bytes.length, sha256: sha256(bytes), createdAt: new Date().toISOString()
   };
   // Devices additionally inspect the signed APK's manifest and certificate. A
@@ -113,15 +120,16 @@ async function report(frame, input = {}) {
   if (software.sha256 !== undefined && (typeof software.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(software.sha256))) throw failure(400, 'Invalid installed APK digest');
   const set = { software: { versionCode: software.versionCode, versionName: software.versionName, sha256: software.sha256 || null, otaCapable: software.otaCapable, reportedAt: new Date() }, playerVersion: software.versionName, lastSeen: new Date() };
   const filter = { _id: frame._id };
-  if (input.jobId) {
-    if (!UUID.test(input.jobId) || frame.ota?.id !== input.jobId) throw failure(409, 'Update assignment changed');
+  if (input.jobId !== undefined) {
+    const jobId = input.jobId;
+    if (typeof jobId !== 'string' || !UUID.test(jobId) || frame.ota?.id !== jobId) throw failure(409, 'Update assignment changed');
     if (!ACTIVE.includes(frame.ota?.status)) throw failure(409, 'Update is no longer active');
     if (!PHASES.includes(input.status) || !Number.isFinite(input.progress) || input.progress < 0 || input.progress > 100) throw failure(400, 'Invalid update progress');
     const previous = ACTIVE.indexOf(frame.ota.status);
     if (ACTIVE.includes(input.status) && ACTIVE.indexOf(input.status) < previous) throw failure(409, 'Update progress cannot move backward');
     if (input.status === 'complete' && software.versionCode !== frame.ota.versionCode) throw failure(409, 'Installed version does not match the assigned release');
     if (input.status === 'complete' && (!frame.ota.sha256 || software.sha256 !== frame.ota.sha256)) throw failure(409, 'Installed APK digest does not match the assigned release');
-    filter['ota.id'] = input.jobId;
+    filter['ota.id'] = { $eq: jobId };
     filter['ota.status'] = frame.ota.status;
     Object.assign(set, { 'ota.status': input.status, 'ota.progress': input.status === 'complete' ? 100 : input.progress,
       'ota.message': typeof input.message === 'string' ? input.message.replace(/[\u0000-\u001f]/g, '').slice(0, 240) : '', 'ota.updatedAt': new Date() });

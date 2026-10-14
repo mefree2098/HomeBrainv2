@@ -106,6 +106,8 @@ test('raster upload validates byte size, file signature, dimensions, and filesys
   assert.throws(() => inspectPhoto(giant.toString('base64')), /8192/);
   assert.throws(() => framePath('../secrets', 'image'), /Invalid/);
   assert.throws(() => framePath(FRAME_A, '../../credentials'), /Invalid/);
+  assert.throws(() => framePath([FRAME_A]), /Invalid/);
+  assert.throws(() => framePath(FRAME_A, ['12345678-1234-4234-8234-123456789012']), /Invalid/);
 });
 
 test('frame tokens are scoped to one frame and rotating immediately invalidates the previous token', async () => {
@@ -198,6 +200,9 @@ test('OTA signing identity persists, release payload binds exact artifact bytes,
   assert.ok((await updates.listReleases()).some((item) => item.releaseId === release.releaseId));
   await assert.rejects(updates.publish(Buffer.from('not an apk'), { versionCode: 3, versionName: '3.0' }), { status: 400 });
   await assert.rejects(updates.publish(apkFixture(), { versionCode: 0, versionName: '2.0' }), { status: 400 });
+  await assert.rejects(updates.publish({ length: 256, readUInt32LE: 0x04034b50 }, { versionCode: 3, versionName: '3.0' }), { status: 400 });
+  await assert.rejects(updates.publish(apkFixture(), { versionCode: [3], versionName: '3.0' }), { status: 400 });
+  assert.throws(() => updates.__private__.releasePath([release.releaseId], 'apk'), /Invalid/);
 });
 
 test('OTA queues only compatible upgrades with a provisioned installer and reserves the assignment atomically', async () => {
@@ -238,7 +243,7 @@ test('OTA progress cannot claim completion for another version, regress phases, 
   await updates.report(frame, { ...input, software: software(3) });
   assert.equal(lastWrite.update.$set['ota.status'], 'complete');
   assert.equal(lastWrite.update.$set.playerVersion, '3.0.0');
-  assert.equal(lastWrite.filter['ota.id'], id);
+  assert.deepEqual(lastWrite.filter['ota.id'], { $eq: id });
   assert.equal(lastWrite.filter['ota.status'], 'verifying');
   assert.equal(lastWrite.update.$set.config, undefined);
   mock.restoreAll();
