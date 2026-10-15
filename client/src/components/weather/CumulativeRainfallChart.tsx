@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, type ComponentProps } from "react"
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import { CloudRain, RefreshCw } from "lucide-react"
 import { getRainfallSeries, type TelemetrySeriesPayload } from "@/api/telemetry"
@@ -15,7 +15,15 @@ const ranges = [
 ]
 const rainfallKey = "cumulative_rainfall_in"
 const formatRain = (value: number) => `${value.toLocaleString(undefined, { minimumFractionDigits: 3, maximumFractionDigits: 3 })} in`
-const formatDate = (value: string) => new Date(value).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+const formatDate = (value?: string | number) => {
+  if (value == null) return ""
+  const date = new Date(value)
+  return Number.isFinite(date.getTime()) ? date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""
+}
+
+export function CumulativeRainfallTooltip(props: ComponentProps<typeof ChartTooltipContent>) {
+  return <ChartTooltipContent {...props} formatter={(value) => formatRain(Number(value))} labelFormatter={(_, payload) => formatDate(payload?.[0]?.payload?.observedAt)} />
+}
 
 export function CumulativeRainfallChart({ sourceKey, hours, onHoursChange }: { sourceKey?: string; hours?: number; onHoursChange?: (hours: number) => void }) {
   const [selectedHours, setSelectedHours] = useState(720)
@@ -90,7 +98,7 @@ export function CumulativeRainfallChart({ sourceKey, hours, onHoursChange }: { s
               <CartesianGrid vertical={false} stroke="rgba(148,163,184,0.15)" />
               <XAxis dataKey="observedAt" type="number" domain={["dataMin", "dataMax"]} minTickGap={32} tickLine={false} axisLine={false} tickFormatter={(value) => new Date(value).toLocaleDateString(undefined, { month: "short", day: "numeric", ...(rangeHours <= 24 ? { hour: "numeric" } : {}) })} />
               <YAxis domain={[0, "auto"]} width={62} tickLine={false} axisLine={false} tickFormatter={(value) => `${Number(value).toFixed(2)} in`} />
-              <ChartTooltip content={<ChartTooltipContent formatter={(value) => formatRain(Number(value))} labelFormatter={(value) => formatDate(new Date(Number(value)).toISOString())} />} />
+              <ChartTooltip content={<CumulativeRainfallTooltip />} />
               <Area dataKey="total" type="stepAfter" stroke="#38bdf8" fill="#38bdf8" fillOpacity={0.16} strokeWidth={2.5} isAnimationActive={false} dot={data.length === 1} />
             </AreaChart>
           </ChartContainer>
