@@ -67,6 +67,22 @@ TempestObservationSchema.index(
   { stationId: 1, deviceId: 1, observationType: 1, observedAt: 1 },
   { name: 'tempest_rainfall_station_device_type_time' }
 );
+// Cover the rainfall aggregation without fetching full weather observations.
+TempestObservationSchema.index(
+  {
+    stationId: 1,
+    deviceId: 1,
+    observationType: 1,
+    observedAt: 1,
+    'metrics.rain_mm_last_minute_final': 1,
+    'metrics.rain_mm_last_minute': 1,
+    _id: 1
+  },
+  {
+    name: 'tempest_rainfall_covering',
+    partialFilterExpression: { observationType: { $in: ['obs_st', 'obs_sky'] } }
+  }
+);
 TempestObservationSchema.index(
   { observedAt: 1 },
   {
