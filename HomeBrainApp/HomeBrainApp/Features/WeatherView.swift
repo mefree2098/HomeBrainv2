@@ -1813,6 +1813,9 @@ struct WeatherView: View {
                         weatherHero(for: dashboard)
                         weatherTelemetryGrid(for: dashboard)
                         weatherSensorAndForecastPanels(for: dashboard)
+                        if let station = dashboard.station {
+                            CumulativeRainfallView(sourceKey: "tempest_station:\(station.id)")
+                        }
                         indoorAirHistoryPanel
                         weatherHistoricalPanels(for: dashboard)
                         weatherEnvironmentalPanel

@@ -61,6 +61,21 @@ router.get('/series', user, async (req, res) => {
   }
 });
 
+router.get('/rainfall', user, async (req, res) => {
+  try {
+    const series = await telemetryService.getRainfallSeries({
+      sourceKey: queryString(req.query.sourceKey),
+      hours: queryString(req.query.hours),
+      maxPoints: queryString(req.query.maxPoints)
+    });
+    return res.status(200).json({ success: true, data: series });
+  } catch (error) {
+    console.error('GET /api/telemetry/rainfall - Error:', error.message);
+    const status = /No Tempest|not found|no station ID/.test(error.message) ? 404 : 500;
+    return res.status(status).json({ success: false, error: error.message || 'Failed to load rainfall history' });
+  }
+});
+
 router.post('/chart-builder', user, async (req, res) => {
   try {
     const plan = await telemetryService.buildChartFromPrompt({
@@ -74,7 +89,7 @@ router.post('/chart-builder', user, async (req, res) => {
     });
   } catch (error) {
     console.error('POST /api/telemetry/chart-builder - Error:', error.message);
-    const statusCode = error.message === 'A chart prompt is required.' ? 400 : 500;
+    const statusCode = /A chart prompt is required|No Tempest|No telemetry sources/.test(error.message) ? 400 : 500;
 
     return res.status(statusCode).json({
       success: false,

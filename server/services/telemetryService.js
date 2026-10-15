@@ -39,6 +39,8 @@ const TEMPEST_MODULE_AGGREGATE_MAX_TIME_MS = clampInteger(
 const DEFAULT_CHART_BUILDER_HOURS = 24 * 7;
 const CHART_BUILDER_SOURCE_LIMIT = 18;
 const SUPPORTED_CHART_TYPES = new Set(['area', 'line']);
+const CUMULATIVE_RAINFALL_KEY = 'cumulative_rainfall_in';
+const PROMPT_STOP_WORDS = new Set('show chart graph plot build create please me how much many total cumulative running have has had been was were are the and for from with that this our we you last past over days day hours hour weeks week months month years year'.split(' '));
 
 const METRIC_LABELS = {
   online: 'Online',
@@ -169,6 +171,7 @@ const METRIC_LABELS = {
   pressure_inhg: 'Pressure',
   rain_last_minute_in: 'Rain Last Minute',
   rain_today_in: 'Rain Today',
+  cumulative_rainfall_in: 'Cumulative Rainfall',
   rain_rate_in_hr: 'Rain Rate',
   uv_index: 'UV Index',
   solar_radiation_wm2: 'Solar Radiation',
@@ -618,7 +621,10 @@ function buildSourceSummaryFromSnapshot(snapshot = {}) {
     return null;
   }
 
-  const metricKeys = normalizeMetricKeys(snapshot.metricKeys);
+  const metricKeys = normalizeMetricKeys([
+    ...(snapshot.metricKeys || []),
+    ...(snapshot.sourceType === 'tempest_station' ? [CUMULATIVE_RAINFALL_KEY] : [])
+  ]);
   const descriptors = buildMetricDescriptors(metricKeys);
   const lastValues = asPlainNumberMap(snapshot.lastValues);
 
@@ -1109,6 +1115,71 @@ function downsamplePoints(points = [], maxPoints = DEFAULT_MAX_POINTS) {
   return sampled;
 }
 
+function buildRainfallPipeline({ stationId, deviceId, startAt, endAt, maxPoints }) {
+  const bucketMs = Math.max(1, Math.ceil((endAt - startAt) / (maxPoints - 1)));
+  return [
+    { $match: {
+      stationId,
+      ...(deviceId ? { deviceId } : {}),
+      observationType: { $in: ['obs_st', 'obs_sky'] },
+      observedAt: { $gte: startAt, $lte: endAt }
+    } },
+    { $project: {
+      deviceId: 1,
+      observedAt: 1,
+      rainMm: { $ifNull: ['$metrics.rain_mm_last_minute_final', '$metrics.rain_mm_last_minute'] }
+    } },
+    { $match: { rainMm: { $type: 'number', $gte: 0 } } },
+    // Transport replays share a canonical observation. Also guard against an
+    // obs_st/obs_sky duplicate for the same instrument and timestamp.
+    { $group: { _id: { deviceId: '$deviceId', observedAt: '$observedAt' }, rainMm: { $max: '$rainMm' } } },
+    { $group: {
+      _id: { $floor: { $divide: [{ $subtract: ['$_id.observedAt', startAt] }, bucketMs] } },
+      rainMm: { $sum: '$rainMm' },
+      observationCount: { $sum: 1 },
+      firstObservedAt: { $min: '$_id.observedAt' },
+      lastObservedAt: { $max: '$_id.observedAt' }
+    } },
+    { $sort: { _id: 1 } }
+  ];
+}
+
+function buildRainfallSeries(source, buckets, { hours, startAt, endAt, maxPoints }) {
+  let totalMm = 0;
+  let observationCount = 0;
+  const points = buckets.map((bucket) => {
+    // Sum every unrounded interval BEFORE reducing the chart resolution. Daily
+    // running counters reset at midnight and must never be added together.
+    totalMm += bucket.rainMm;
+    observationCount += bucket.observationCount;
+    return {
+      observedAt: new Date(bucket.lastObservedAt).toISOString(),
+      values: { [CUMULATIVE_RAINFALL_KEY]: Number((totalMm / 25.4).toFixed(6)) }
+    };
+  });
+  const firstObservedAt = buckets[0]?.firstObservedAt || null;
+  const lastObservedAt = buckets.at(-1)?.lastObservedAt || null;
+  // Only draw a baseline at the range boundary when observations reach it.
+  if (firstObservedAt && new Date(firstObservedAt) - startAt < 5 * 60_000
+      && new Date(points[0].observedAt) > startAt) {
+    points.unshift({ observedAt: startAt.toISOString(), values: { [CUMULATIVE_RAINFALL_KEY]: 0 } });
+  }
+  return {
+    source,
+    metrics: buildMetricDescriptors([CUMULATIVE_RAINFALL_KEY]),
+    range: { hours, startAt, endAt, rawPointCount: observationCount, pointCount: points.length, maxPoints },
+    points,
+    stats: buildMetricStats(points, [CUMULATIVE_RAINFALL_KEY]),
+    events: [],
+    rainfall: {
+      totalIn: observationCount > 0 ? Number((totalMm / 25.4).toFixed(6)) : null,
+      observationCount,
+      firstObservedAt,
+      lastObservedAt
+    }
+  };
+}
+
 function mergePointsByTimestamp(points = []) {
   const merged = [];
 
@@ -1543,18 +1614,50 @@ function extractPromptKeywords(value) {
   return Array.from(new Set(
     normalizePromptText(value)
       .split(/[^a-z0-9]+/)
-      .filter((token) => token.length >= 3)
+      .filter((token) => token.length >= 3 && !PROMPT_STOP_WORDS.has(token))
   ));
 }
 
+function requestsRainfall(prompt) {
+  return /\b(rain|rainfall|precipitation)\b/.test(normalizePromptText(prompt));
+}
+
+function requestsCumulativeRainfall(prompt) {
+  return requestsRainfall(prompt)
+    && !/\b(rate|intensity|per hour|per minute)\b/.test(normalizePromptText(prompt))
+    && /\b(cumulative|accumulated|accumulation|total|how much|running total)\b/.test(normalizePromptText(prompt));
+}
+
+function promptSourceCandidates(sources, prompt) {
+  // An explicit measurement takes precedence over the currently selected source.
+  const weatherRequest = requestsRainfall(prompt) || /\b(tempest|weather|wind|lightning|uv|barometric)\b/i.test(prompt);
+  if (weatherRequest && !/\b(rainmachine|irrigation|sprinkler|watering)\b/i.test(prompt)) {
+    const stations = sources.filter((source) => source.sourceType === 'tempest_station');
+    if (stations.length === 0) {
+      throw new Error('No Tempest weather station telemetry is available for this chart.');
+    }
+    return stations;
+  }
+  if (/\b(rainmachine|irrigation|sprinkler|watering)\b/i.test(prompt)) {
+    const irrigation = sources.filter((source) => source.sourceType === 'rainmachine_report' || source.origin === 'rainmachine');
+    if (irrigation.length > 0) return irrigation;
+  }
+  if (/\b(sense|whole.home|always on)\b/i.test(prompt)) {
+    const energy = sources.filter((source) => source.sourceType === 'sense_monitor' || source.sourceType === 'sense_device' || source.origin === 'sense');
+    if (energy.length > 0) return energy;
+  }
+  return sources;
+}
+
 function inferRequestedHoursFromPrompt(prompt) {
-  const text = normalizePromptText(prompt);
+  const numbers = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
+  const text = normalizePromptText(prompt).replace(/\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\b/g, (word) => numbers[word]);
   const unitMultipliers = new Map([
-    ['hour', 1], ['hours', 1], ['hr', 1], ['hrs', 1],
-    ['day', 24], ['days', 24],
-    ['week', 24 * 7], ['weeks', 24 * 7],
+    ['hour', 1], ['hours', 1], ['hr', 1], ['hrs', 1], ['h', 1],
+    ['day', 24], ['days', 24], ['d', 24],
+    ['week', 24 * 7], ['weeks', 24 * 7], ['w', 24 * 7],
     ['month', 24 * 30], ['months', 24 * 30],
-    ['year', 24 * 365], ['years', 24 * 365]
+    ['year', 24 * 365], ['years', 24 * 365], ['y', 24 * 365]
   ]);
   for (let index = 0; index < text.length; index += 1) {
     if (text[index] < '0' || text[index] > '9') continue;
@@ -1572,6 +1675,8 @@ function inferRequestedHoursFromPrompt(prompt) {
   }
 
   const padded = ` ${text} `;
+  const relativePeriod = text.match(/\b(?:last|past|this) (?:a |an |the )?(hour|day|week|month|year)\b/);
+  if (relativePeriod) return unitMultipliers.get(relativePeriod[1]);
   if (padded.includes(' 24h ') || padded.includes(' last 24 ') || padded.includes(' today ') || padded.includes(' daily ')) {
     return 24;
   }
@@ -1593,7 +1698,6 @@ function inferRequestedHoursFromPrompt(prompt) {
 
 function scoreSourceForPrompt(source, prompt, keywords = [], preferredSourceKey = '') {
   const normalizedPrompt = normalizePromptText(prompt);
-  const weightedKeywords = new Set(keywords);
   const haystacks = [
     source?.name,
     source?.category,
@@ -1608,23 +1712,17 @@ function scoreSourceForPrompt(source, prompt, keywords = [], preferredSourceKey 
     .filter(Boolean)
     .map((value) => normalizePromptText(value));
 
-  let score = source?.sourceKey === preferredSourceKey ? 30 : 0;
+  let score = source?.sourceKey === preferredSourceKey ? 3 : 0;
 
-  haystacks.forEach((entry) => {
-    if (!entry) {
-      return;
+  keywords.forEach((keyword) => {
+    // Count a word once per source; repeated internal attribute names must not
+    // outvote a station just because they contain common words such as "had".
+    if (haystacks.some((entry) => entry.split(/[^a-z0-9]+/).includes(keyword))) {
+      score += 10;
     }
-
-    if (normalizedPrompt && entry && normalizedPrompt.includes(entry)) {
-      score += 16;
-    }
-
-    weightedKeywords.forEach((keyword) => {
-      if (entry.includes(keyword)) {
-        score += entry === keyword ? 10 : 5;
-      }
-    });
   });
+  const sourceName = normalizePromptText(source?.name);
+  if (sourceName && ` ${normalizedPrompt} `.includes(` ${sourceName} `)) score += 40;
 
   if (/weather|tempest|rain|wind|pressure|humidity|uv|solar|lightning/.test(normalizedPrompt) && source?.sourceType === 'tempest_station') {
     score += 12;
@@ -1654,7 +1752,8 @@ function selectMetricKeysForPrompt(prompt, source) {
   const descriptors = Array.isArray(source?.availableMetrics) ? source.availableMetrics : [];
   const matches = descriptors.filter((descriptor) => {
     const haystack = `${descriptor.key} ${descriptor.label}`.toLowerCase();
-    return haystack.split(/\s+/).some((token) => token && normalizedPrompt.includes(token));
+    const words = new Set(extractPromptKeywords(normalizedPrompt));
+    return haystack.split(/[^a-z0-9]+/).some((token) => words.has(token));
   });
 
   if (/(on\/off|turned on|turned off|power state|state history|switch history)/.test(normalizedPrompt)) {
@@ -1664,6 +1763,12 @@ function selectMetricKeysForPrompt(prompt, source) {
     }
   }
 
+  if (/\balways on\b/.test(normalizedPrompt)) {
+    const keys = /\b(vs|versus|compare|total|load)\b/.test(normalizedPrompt) ? ['always_on_w', 'power_w'] : ['always_on_w'];
+    const metrics = keys.filter((key) => descriptors.some((descriptor) => descriptor.key === key));
+    if (metrics.length > 0) return metrics;
+  }
+
   if (/\blightning\b/.test(normalizedPrompt)) {
     return descriptors
       .filter((descriptor) => ['lightning_count', 'lightning_avg_distance_miles'].includes(descriptor.key))
@@ -1671,7 +1776,14 @@ function selectMetricKeysForPrompt(prompt, source) {
       .slice(0, MAX_DEFAULT_METRICS);
   }
 
-  if (/\brain\b/.test(normalizedPrompt)) {
+  if (requestsCumulativeRainfall(prompt)) {
+    return descriptors.filter((descriptor) => descriptor.key === CUMULATIVE_RAINFALL_KEY).map((descriptor) => descriptor.key);
+  }
+
+  if (requestsRainfall(prompt)) {
+    if (/\b(rate|intensity)\b/.test(normalizedPrompt)) {
+      return descriptors.filter((descriptor) => descriptor.key === 'rain_rate_in_hr').map((descriptor) => descriptor.key);
+    }
     return descriptors
       .filter((descriptor) => ['rain_today_in', 'rain_rate_in_hr', 'rain_last_minute_in'].includes(descriptor.key))
       .map((descriptor) => descriptor.key)
@@ -1767,6 +1879,7 @@ async function mapSettledWithConcurrency(items = [], concurrency = 8, worker) {
 class TelemetryService {
   constructor(options = {}) {
     this.initialized = false;
+    this.planChart = options.planChart || sendLLMRequestWithFallback;
     this.handleDeviceUpdates = this.handleDeviceUpdates.bind(this);
     this.deviceSnapshotConcurrency = clampInteger(
       options.deviceSnapshotConcurrency ?? process.env.HOMEBRAIN_TELEMETRY_DEVICE_SNAPSHOT_CONCURRENCY,
@@ -2447,6 +2560,7 @@ class TelemetryService {
     const metricKeySet = new Set(
       metricHistory.flatMap((sample) => Array.isArray(sample.metricKeys) ? sample.metricKeys : [])
     );
+    if (latestSample.sourceType === 'tempest_station') metricKeySet.add(CUMULATIVE_RAINFALL_KEY);
     const descriptors = buildMetricDescriptors(Array.from(metricKeySet));
     const featuredMetricKeys = pickFeaturedMetricKeys(descriptors);
     const metrics = asPlainMetrics(latestSample.metrics);
@@ -2980,7 +3094,7 @@ class TelemetryService {
       throw new Error('A chart prompt is required.');
     }
 
-    const sources = await this.listSourceSummaries();
+    const sources = promptSourceCandidates(await this.listSourceSummaries(), trimmedPrompt);
     if (sources.length === 0) {
       throw new Error('No telemetry sources are available yet.');
     }
@@ -3009,6 +3123,22 @@ class TelemetryService {
       reason: 'Generated from HomeBrain telemetry heuristics.'
     };
 
+    // Rain measurements have an unambiguous station and aggregation. Keep this
+    // path available even if every LLM provider is down or returns a bad plan.
+    if (requestsRainfall(trimmedPrompt) && heuristicSource.sourceType === 'tempest_station') {
+      return {
+        prompt: trimmedPrompt,
+        chart: {
+          ...heuristicChart,
+          description: requestsCumulativeRainfall(trimmedPrompt)
+            ? `Recorded rainfall accumulated over the selected ${heuristicHours >= 24 ? `${heuristicHours / 24} days` : `${heuristicHours} hours`} from ${heuristicSource.name}.`
+            : heuristicChart.description,
+          reason: 'Matched to Tempest weather station rainfall measurements.'
+        },
+        source: heuristicSource
+      };
+    }
+
     let plannedChart = heuristicChart;
 
     try {
@@ -3029,7 +3159,8 @@ class TelemetryService {
         `- Use between 1 and ${MAX_DEFAULT_METRICS} metricKeys from that source only.`,
         `- Choose hours between 1 and ${MAX_QUERY_HOURS}.`,
         '- If the user asks for on/off history, prefer the "status" metric when available.',
-        '- If the user references rain or lightning, prefer the weather-station source and those metrics.',
+        '- If the user references rain, rainfall, precipitation, or lightning, choose the weather-station source and those metrics.',
+        `- For total, accumulated, or cumulative rainfall, use only "${CUMULATIVE_RAINFALL_KEY}". Never sum daily running totals or rain rates.`,
         '',
         `User request: ${trimmedPrompt}`,
         preferredSourceKey ? `Preferred source (use this unless the prompt clearly asks for another source): ${preferredSourceKey}` : '',
@@ -3040,21 +3171,21 @@ class TelemetryService {
         'Return only the JSON object.'
       ].filter(Boolean).join('\n');
 
-      const rawResponse = await sendLLMRequestWithFallback(llmPrompt);
+      const rawResponse = await this.planChart(llmPrompt);
       const parsedResponse = extractJsonObject(rawResponse);
       if (parsedResponse && typeof parsedResponse === 'object' && !Array.isArray(parsedResponse)) {
-        const selectedSource = sources.find((source) => source.sourceKey === parsedResponse.sourceKey)
-          || sources.find((source) => source.sourceKey === preferredSourceKey)
-          || heuristicSource;
+        const selectedSource = sources.find((source) => source.sourceKey === parsedResponse.sourceKey);
+        if (!selectedSource) throw new Error('The chart planner selected an unavailable source.');
         const selectedMetricKeys = normalizeMetricKeyList(parsedResponse.metricKeys)
           .filter((metricKey) => selectedSource.availableMetrics.some((descriptor) => descriptor.key === metricKey))
           .slice(0, MAX_DEFAULT_METRICS);
 
+        if (selectedMetricKeys.length === 0) throw new Error('The chart planner selected unavailable metrics.');
         plannedChart = {
           title: String(parsedResponse.title || '').trim() || heuristicChart.title,
           description: String(parsedResponse.description || '').trim() || heuristicChart.description,
           sourceKey: selectedSource.sourceKey,
-          metricKeys: selectedMetricKeys.length > 0 ? selectedMetricKeys : heuristicMetricKeys,
+          metricKeys: selectedMetricKeys,
           hours: clampInteger(parsedResponse.hours, heuristicHours, 1, MAX_QUERY_HOURS),
           chartType: normalizeChartType(parsedResponse.chartType),
           reason: String(parsedResponse.reason || '').trim() || 'Generated from natural language.'
@@ -3065,7 +3196,7 @@ class TelemetryService {
     }
 
     const source = sources.find((entry) => entry.sourceKey === plannedChart.sourceKey) || heuristicSource;
-    const metricKeys = plannedChart.metricKeys
+    const metricKeys = (requestsCumulativeRainfall(trimmedPrompt) ? [CUMULATIVE_RAINFALL_KEY] : plannedChart.metricKeys)
       .filter((metricKey) => source.availableMetrics.some((descriptor) => descriptor.key === metricKey))
       .slice(0, MAX_DEFAULT_METRICS);
 
@@ -3163,10 +3294,15 @@ class TelemetryService {
       ? selectedMetricKeys
       : source.availableMetrics.slice(0, MAX_DEFAULT_METRICS).map((descriptor) => descriptor.key);
 
-    const startAt = new Date(Date.now() - hours * 60 * 60 * 1000);
+    const endAt = new Date();
+    const startAt = new Date(endAt.getTime() - hours * 60 * 60 * 1000);
+    const rainfallSeries = effectiveMetricKeys.includes(CUMULATIVE_RAINFALL_KEY)
+      ? await this.getRainfallSeries({ source, hours, maxPoints, startAt, endAt })
+      : null;
+    if (rainfallSeries && effectiveMetricKeys.length === 1) return rainfallSeries;
     const samples = await TelemetrySample.find({
       sourceKey: source.sourceKey,
-      recordedAt: { $gte: startAt }
+      recordedAt: { $gte: startAt, $lte: endAt }
     })
       .sort({ recordedAt: 1 })
       .select('recordedAt metrics')
@@ -3189,7 +3325,16 @@ class TelemetryService {
         };
       })
     );
-    const points = downsamplePoints(mergedPoints, maxPoints);
+    if (rainfallSeries) {
+      mergedPoints.push(...rainfallSeries.points);
+      mergedPoints.sort((left, right) => new Date(left.observedAt) - new Date(right.observedAt));
+      let cumulative = null;
+      mergedPoints.forEach((point) => {
+        if (point.values[CUMULATIVE_RAINFALL_KEY] != null) cumulative = point.values[CUMULATIVE_RAINFALL_KEY];
+        point.values[CUMULATIVE_RAINFALL_KEY] = cumulative;
+      });
+    }
+    const points = downsamplePoints(mergePointsByTimestamp(mergedPoints), maxPoints);
     const events = buildSourceTimelineEvents(samples, source.availableMetrics);
 
     return {
@@ -3198,15 +3343,41 @@ class TelemetryService {
       range: {
         hours,
         startAt,
-        endAt: new Date(),
+        endAt,
         rawPointCount: mergedPoints.length,
         pointCount: points.length,
         maxPoints
       },
       points,
       stats: buildMetricStats(points, effectiveMetricKeys),
-      events
+      events,
+      ...(rainfallSeries ? { rainfall: rainfallSeries.rainfall } : {})
     };
+  }
+
+  async getRainfallSeries(options = {}) {
+    let source = options.source;
+    if (!source) {
+      source = options.sourceKey
+        ? await this.resolveSourceSummary({ sourceKey: options.sourceKey })
+        : (await this.listSourceSummaries()).find((entry) => entry.sourceType === 'tempest_station');
+    }
+    if (!source || source.sourceType !== 'tempest_station') {
+      throw new Error('No Tempest weather station telemetry is available for this chart.');
+    }
+    const stationDevice = await Device.findById(source.sourceId).lean();
+    const stationId = Number(stationDevice?.properties?.tempest?.stationId);
+    if (!Number.isFinite(stationId) || stationId <= 0) {
+      throw new Error('The Tempest weather station has no station ID.');
+    }
+    const deviceId = Number(stationDevice?.properties?.tempest?.primaryDeviceId) || null;
+    const hours = clampInteger(options.hours, 24 * 30, 1, MAX_QUERY_HOURS);
+    const maxPoints = clampInteger(options.maxPoints, DEFAULT_MAX_POINTS, 30, MAX_MAX_POINTS);
+    const endAt = options.endAt || new Date();
+    const startAt = options.startAt || new Date(endAt.getTime() - hours * 60 * 60 * 1000);
+    const buckets = await TempestObservation.aggregate(buildRainfallPipeline({ stationId, deviceId, startAt, endAt, maxPoints }))
+      .option({ maxTimeMS: 15000, allowDiskUse: true });
+    return buildRainfallSeries(source, buckets, { hours, startAt, endAt, maxPoints });
   }
 
   async clearData({ sourceKey, sourceType, sourceId } = {}) {
@@ -3344,11 +3515,17 @@ module.exports.__private__ = {
   buildSourceSummaryFromSnapshot,
   buildMetricDescriptors,
   buildMetricStats,
+  buildRainfallPipeline,
+  buildRainfallSeries,
   downsamplePoints,
   extractDeviceMetrics,
   extractTempestMetrics,
   flattenMetricKeySets,
   inferRequestedHoursFromPrompt,
+  extractPromptKeywords,
+  scoreSourceForPrompt,
+  selectMetricKeysForPrompt,
+  promptSourceCandidates,
   inferMetricLabel,
   inferMetricUnit,
   isBinaryMetric,

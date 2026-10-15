@@ -49,6 +49,7 @@ import {
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card"
 import { Slider } from "@/components/ui/slider"
 import { WeatherGlyph } from "@/components/weather/WeatherGlyph"
+import { CumulativeRainfallChart } from "@/components/weather/CumulativeRainfallChart"
 import { useAuth } from "@/contexts/AuthContext"
 import { cn } from "@/lib/utils"
 
@@ -899,6 +900,8 @@ export function Weather() {
           </CardContent>
         </Card>
       </div>
+
+      {tempestsAvailable && station && <CumulativeRainfallChart sourceKey={`tempest_station:${station.id}`} />}
 
       <Card className="border-white/10 bg-white/5">
         <CardHeader>

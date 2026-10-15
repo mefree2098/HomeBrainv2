@@ -64,6 +64,10 @@ TempestObservationSchema.index(
   { name: 'tempest_observation_station_time_type' }
 );
 TempestObservationSchema.index(
+  { stationId: 1, deviceId: 1, observationType: 1, observedAt: 1 },
+  { name: 'tempest_rainfall_station_device_type_time' }
+);
+TempestObservationSchema.index(
   { observedAt: 1 },
   {
     expireAfterSeconds: retentionDays * 24 * 60 * 60,
