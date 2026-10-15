@@ -135,6 +135,17 @@ export interface TelemetrySeriesPayload {
   points: TelemetrySeriesPoint[]
   stats: TelemetryMetricStats[]
   events: TelemetryTimelineEvent[]
+  rainfall?: {
+    totalIn: number | null
+    observationCount: number
+    firstObservedAt: string | null
+    lastObservedAt: string | null
+  }
+}
+
+export const getRainfallSeries = async (options: { sourceKey?: string; hours: number; maxPoints?: number }) => {
+  const response = await api.get("/api/telemetry/rainfall", { params: options })
+  return response.data as { success: boolean; data: TelemetrySeriesPayload }
 }
 
 export const getTelemetryOverview = async () => {

@@ -31,6 +31,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { useAuth } from "@/contexts/AuthContext"
 import { useToast } from "@/hooks/useToast"
 import { cn } from "@/lib/utils"
+import { CumulativeRainfallChart } from "@/components/weather/CumulativeRainfallChart"
 
 const RANGE_OPTIONS = [
   { label: "24H", hours: 24 },
@@ -869,6 +870,14 @@ export default function DataPlatform() {
           </div>
         </div>
       </section>
+
+      {sources.some((source) => source.sourceType === "tempest_station") && (
+        <CumulativeRainfallChart
+          sourceKey={(selectedSource?.sourceType === "tempest_station" ? selectedSource : sources.find((source) => source.sourceType === "tempest_station"))?.sourceKey}
+          hours={rangeHours}
+          onHoursChange={setRangeHours}
+        />
+      )}
 
       <Card className="border-white/10 bg-background/80">
         <CardHeader>

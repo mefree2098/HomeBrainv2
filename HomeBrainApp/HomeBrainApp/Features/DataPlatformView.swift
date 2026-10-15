@@ -675,6 +675,19 @@ struct DataPlatformView: View {
                 }
 
                 sourceExplorerPanel
+                if let rainfallSource = selectedSource?.sourceType == "tempest_station"
+                    ? selectedSource
+                    : overview?.sources.first(where: { $0.sourceType == "tempest_station" }) {
+                    CumulativeRainfallView(
+                        sourceKey: rainfallSource.sourceKey,
+                        hours: selectedRange.hours,
+                        onHoursChange: { hours in
+                            if let range = TelemetryRangeOption.allCases.first(where: { $0.hours == hours }) {
+                                selectedRange = range
+                            }
+                        }
+                    )
+                }
                 if initialSourceKey == nil { storageFootprintPanel }
 
                 if isLoadingSeries, selectedSource != nil {
