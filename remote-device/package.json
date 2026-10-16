@@ -23,7 +23,7 @@
     "adm-zip": "0.6.1",
     "node-record-lpcm16": "^1.0.1",
     "node-wav": "^0.0.2",
-    "onnxruntime-node": "1.29.0",
+    "onnxruntime-node": "1.30.0",
     "tflite-node": "1.0.0",
     "ws": "^8.21.1",
     "yargs": "^17.7.2"
