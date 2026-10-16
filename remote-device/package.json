@@ -26,7 +26,7 @@
     "onnxruntime-node": "1.29.0",
     "tflite-node": "1.0.0",
     "ws": "^8.21.1",
-    "yargs": "^17.7.2"
+    "yargs": "^18.2.0"
   },
   "overrides": {
     "adm-zip": "0.6.1"
