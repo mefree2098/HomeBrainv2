@@ -5,11 +5,12 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-LAUNCHER_VERSION = "0.1.1"
+LAUNCHER_VERSION = "0.1.2"
 LAUNCHER_API = 1
 _DEPENDENCIES = "\n".join(
     (
-        "aiohttp>=3.14.3,<4",
+        "aiohttp>=3.14.5,<4",
+        "certifi>=2026.10.23",
         "numpy>=1.26,<3",
         "reachy-mini @ https://github.com/mefree2098/reachy_mini/archive/ac88bc8db34ff533ea67e034bea4b7ddd36439a1.zip",
         "websockets>=12,<17",

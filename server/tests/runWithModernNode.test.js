@@ -45,14 +45,13 @@ function waitForExit(child, timeoutMs = 5000) {
   });
 }
 
-test('run-with-modern-node enforces the dependency-compatible Node floor', () => {
-  assert.equal(isProjectSupported(parseVersion('20.18.9')), false);
-  assert.equal(isProjectSupported(parseVersion('20.19.0')), false);
-  assert.equal(isProjectSupported(parseVersion('22.12.0')), false);
-  assert.equal(isProjectSupported(parseVersion('22.13.0')), true);
-  assert.equal(isProjectSupported(parseVersion('23.0.0')), false);
-  assert.equal(isProjectSupported(parseVersion('24.0.0')), true);
-  assert.equal(isProjectSupported(parseVersion('26.0.0')), true);
+test('run-with-modern-node enforces patched supported Node tracks', () => {
+  for (const version of ['20.20.0', '22.13.0', '22.23.3', '23.11.0', '24.17.0', '24.22.0', '25.9.0', '26.12.0', '27.0.0']) {
+    assert.equal(isProjectSupported(parseVersion(version)), false, version);
+  }
+  for (const version of ['22.23.4', '22.24.0', '24.22.1', '24.23.0', '26.12.1', '26.13.0']) {
+    assert.equal(isProjectSupported(parseVersion(version)), true, version);
+  }
   assert.equal(isProjectSupported(null), false);
 });
 
@@ -106,7 +105,7 @@ test('run-with-modern-node can print the selected Node binary for exec launchers
     }
   });
 
-  assert.equal(result.status, 0);
+  assert.equal(result.status, 0, result.stderr);
   assert.ok(result.stdout.trim());
   assert.equal(fs.existsSync(result.stdout.trim()), true);
 });

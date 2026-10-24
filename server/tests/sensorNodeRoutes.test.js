@@ -83,6 +83,12 @@ test('Sensor Fleet HTTP boundaries separate administrators from device credentia
     assert.equal((await send(`/${id}/readings`, 'POST', {}, { readings: { temperature_c: 20 } })).status, 401);
     assert.equal((await send(`/${id}/readings`, 'POST', { Authorization: 'Sensor test-device-token' }, { readings: { temperature_c: 20 } })).status, 202);
   });
+  await t.test('sensor authorization rejects blank, oversized and ambiguous credentials', async () => {
+    for (const authorization of ['Sensor ' + ' '.repeat(8000), 'Sensor ' + 'x'.repeat(8000), 'Sensor test-device-token extra']) {
+      assert.equal((await send(`/${id}/config`, 'GET', { Authorization: authorization })).status, 401);
+    }
+    assert.equal((await send(`/${id}/config`, 'GET', { Authorization: 'sEnSoR\ttest-device-token' })).status, 200);
+  });
   await t.test('Bluetooth registration requires an administrator and is never cacheable', async () => {
     user.role = 'user';
     assert.equal((await send('/onboard', 'POST', adminHeaders, {})).status, 403);

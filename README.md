@@ -56,7 +56,7 @@ Before installing, have:
 - enough free storage for MongoDB, npm dependencies, speech models, Ollama models, logs, and backups
 - a browser on the same LAN for first-time setup
 
-The production installer supplies Node.js 22, MongoDB 6.0, application dependencies, and system services. The repository also supports Node `^20.19.0` or `>=22.13.0` for development; Node 22 is the intended production runtime.
+The production installer supplies Node.js 22, MongoDB 6.0, application dependencies, and system services. Development and production require a patched supported Node track: `^22.23.4`, `^24.22.1` or `^26.12.1`. Node 22 LTS is preferred; Node 20 is end of life. Wake-word training dependencies require Python 3.11 or newer; select it with `PYTHON_BIN` when creating the managed environment.
 
 ## Quick Install
 

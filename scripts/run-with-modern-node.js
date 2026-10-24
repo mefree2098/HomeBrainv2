@@ -24,11 +24,11 @@ function compareVersion(a, b) {
 }
 
 function isProjectSupported(version) {
-  // Matches strictest project dependencies:
-  // - Matter needs >=22.13.0; maintained HAP supports Node 22, 24 and 26.
+  // October 21, 2026 security releases; reject older patches on every track.
   if (!version) return false;
-  if (version.major === 22) return version.minor >= 13;
-  return version.major === 24 || version.major === 26;
+  const minimums = { 22: '22.23.4', 24: '24.22.1', 26: '26.12.1' };
+  const minimum = minimums[version.major];
+  return Boolean(minimum) && compareVersion(version, parseVersion(minimum)) >= 0;
 }
 
 function isExecutable(filePath) {
@@ -195,7 +195,7 @@ function main() {
   const { selected, inspected, bestAny, preferredMajor } = selectNodeBinary();
   if (!selected) {
     const latest = bestAny ? `${bestAny.version.raw} at ${bestAny.bin}` : 'none';
-    console.error('HomeBrain requires Node 22.13+ (22.x), 24.x or 26.x. Node 22 LTS is preferred.');
+    console.error('HomeBrain requires Node 22.23.4+, 24.22.1+ or 26.12.1+ on a supported track. Node 22 LTS is preferred.');
     if (Number.isFinite(preferredMajor)) {
       console.error(`Preferred major version: ${preferredMajor}.`);
     }

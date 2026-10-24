@@ -30,7 +30,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 22
+          node-version: 22.23.4
           cache: npm
           cache-dependency-path: ${{ matrix.project }}/package-lock.json
       - name: Install exact locked dependencies
@@ -55,7 +55,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 22
+          node-version: 22.23.4
       - run: node --test scripts/tests/*.test.js
       - run: bash scripts/check-secrets.sh
       - run: python3 scripts/test-validate-ios-app-store-archive.py
@@ -78,8 +78,13 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+      - name: Create isolated Python environment
+        run: |
+          python3 -m venv "$RUNNER_TEMP/homebrain-python"
+          echo "$RUNNER_TEMP/homebrain-python/bin" >> "$GITHUB_PATH"
       - name: Install Python unit-test dependencies from project constraints
         run: |
+          python3 -m pip install --upgrade 'pip>=26.2.2' 'setuptools>=84.1.0'
           python3 - <<'PYTHON'
           import subprocess, sys, tomllib
           with open('reachy-homebrain-app/pyproject.toml', 'rb') as source:
@@ -97,3 +102,7 @@ jobs:
         run: |
           python3 -m pip install -r server/python/appliance-requirements.txt
           python3 -m unittest discover -s server/python -p 'test_*.py'
+      - name: Audit resolved Python test and appliance dependencies
+        run: |
+          python3 -m pip install pip-audit
+          python3 -m pip_audit --progress-spinner off

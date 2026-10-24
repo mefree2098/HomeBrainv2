@@ -92,6 +92,8 @@ fi
 
 # Package installation contains no credentials. The stable managed launcher must
 # remain installable even when a native ARM wake-word wheel is temporarily absent.
+"$PYTHON_BIN" -m pip install --disable-pip-version-check --no-input --upgrade \
+  'pip>=26.2.2' 'setuptools>=84.1.0'
 "$PYTHON_BIN" -m pip install \
   --disable-pip-version-check \
   --no-input \

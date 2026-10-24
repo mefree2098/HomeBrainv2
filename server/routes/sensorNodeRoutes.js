@@ -47,7 +47,10 @@ function createSensorNodeRouter(sensorNodeService = require('../services/sensorN
 
   function extractDeviceToken(req) {
     const authorization = req.get('Authorization') || '';
-    const match = authorization.match(/^Sensor\s+(.+)$/i);
+    // Bound work before parsing and use disjoint whitespace/token character
+    // classes so a whitespace-only header cannot cause quadratic backtracking.
+    const match = authorization.length <= 4096
+      ? authorization.match(/^Sensor[\t ]+([^\s]+)$/i) : null;
     return req.get('X-HomeBrain-Sensor-Token') || match?.[1] || '';
   }
 

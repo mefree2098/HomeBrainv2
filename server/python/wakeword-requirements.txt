@@ -1,0 +1,17 @@
+# HomeBrain custom trainer, ONNX inference and Piper synthesis.
+# Optional TensorFlow/TFLite export requires a separately compatible installation.
+numpy>=1.26.4,<2
+scipy>=1.15.3,<2
+soundfile>=0.13.1,<1
+openwakeword==0.6.0
+onnxruntime>=1.23.2,<2
+onnx>=1.22.0,<2
+onnxscript>=0.7.0,<1
+piper-tts>=1.4.1,<2
+pathvalidate>=3.3.1,<4
+requests>=2.33.0,<3
+urllib3>=2.8.0,<3
+certifi>=2026.10.23
+filelock>=4.2.1,<5
+fsspec>=2026.6.0
+idna>=3.15,<4

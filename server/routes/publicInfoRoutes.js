@@ -422,7 +422,7 @@ async function updateSupportRequest(req, res) {
 function sendPublicPage(filename) {
   return (_req, res, next) => {
     res.setHeader('Cache-Control', 'public, max-age=300');
-    res.sendFile(path.join(publicInfoRoot, filename), (error) => {
+    res.sendFile(filename, { root: publicInfoRoot }, (error) => {
       if (error) {
         next(error);
       }
