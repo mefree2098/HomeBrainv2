@@ -7,16 +7,13 @@ const { spawnSync } = require('node:child_process');
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 
-test('setup-services writes a HomeBrain unit that starts from the repo root', () => {
-  const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
-
-  assert.match(script, /WorkingDirectory=\$\{HOMEBRAIN_DIR\}/);
-  assert.doesNotMatch(script, /WorkingDirectory=\$\{HOMEBRAIN_DIR\}\/server/);
-  assert.match(script, /EnvironmentFile=-\$\{HOMEBRAIN_DIR\}\/server\/\.env/);
-  assert.match(script, /Environment=HOMEBRAIN_BOOTSTRAP_NODE_BIN=\$\{node_bin\}/);
-  assert.match(script, /Environment=HOMEBRAIN_PORT=\$\{HOMEBRAIN_PORT\}/);
-  assert.match(script, /ExecStart=\$\{HOMEBRAIN_DIR\}\/scripts\/run-homebrain-server-with-modern-node\.sh/);
-  assert.doesNotMatch(script, /ExecStart=\$\{node_bin\} scripts\/run-with-modern-node\.js node server\/server\.js/);
+test('hardened HomeBrain unit starts from the repo root with the explicit environment', () => {
+  const script = fs.readFileSync(path.join(repoRoot, 'scripts/harden-homebrain-service.sh'), 'utf8');
+  assert.match(script, /WorkingDirectory=\$REPO/);
+  assert.doesNotMatch(script, /WorkingDirectory=\$REPO\/server/);
+  assert.match(script, /EnvironmentFile=-\$REPO\/server\/\.env/);
+  assert.match(script, /Environment=HOMEBRAIN_BOOTSTRAP_NODE_BIN=\/usr\/bin\/node/);
+  assert.match(script, /ExecStart=\$REPO\/scripts\/run-homebrain-server-with-modern-node\.sh/);
 });
 
 test('HomeBrain server loads server/.env independently of the process cwd', () => {
@@ -25,34 +22,30 @@ test('HomeBrain server loads server/.env independently of the process cwd', () =
   assert.match(server, /require\("dotenv"\)\.config\(\{ path: path\.join\(__dirname, "\.env"\) \}\)/);
 });
 
-test('setup-services waits for the app mount and avoids tight reboot crash loops', () => {
-  const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
-
+test('hardened service waits for its app mount and limits crash loops', () => {
+  const script = fs.readFileSync(path.join(repoRoot, 'scripts/harden-homebrain-service.sh'), 'utf8');
   assert.match(script, /After=local-fs\.target network-online\.target mongod\.service/);
-  assert.match(script, /RequiresMountsFor=\$\{HOMEBRAIN_DIR\}/);
+  assert.match(script, /RequiresMountsFor=\$REPO/);
   assert.match(script, /StartLimitIntervalSec=300/);
   assert.match(script, /StartLimitBurst=30/);
   assert.match(script, /RestartSec=10/);
 });
 
-test('setup-services grants the HomeBrain account persistent USB serial access', () => {
-  const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
-
-  assert.match(script, /ensure_homebrain_hardware_access\(\)/);
-  assert.match(script, /local hardware_groups=\(dialout plugdev\)/);
-  assert.match(script, /sudo usermod -aG "\$\{hardware_group\}" "\$\{HOMEBRAIN_USER\}"/);
-  assert.match(script, /User=\$\{HOMEBRAIN_USER\}\nSupplementaryGroups=dialout/);
-  assert.match(script, /install_service\(\) \{[\s\S]*?ensure_homebrain_hardware_access/);
-  assert.match(script, /refresh_privileges\(\) \{\n  ensure_homebrain_hardware_access/);
+test('dedicated service account retains hardware groups without administrative groups', () => {
+  const script = fs.readFileSync(path.join(repoRoot, 'scripts/harden-homebrain-service.sh'), 'utf8');
+  const groups = script.match(/for group in ([^;]+);/)[1].split(' ');
+  assert.ok(groups.includes('dialout'));
+  assert.ok(groups.includes('plugdev'));
+  assert.equal(groups.some((group) => ['sudo', 'adm', 'docker'].includes(group)), false);
+  assert.match(script, /usermod -G/);
+  assert.match(script, /User=homebrain/);
 });
 
-test('setup-services installs privileged Thread helpers and grants sudoers access', () => {
-  const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
-
-  assert.match(script, /homebrain-otbr-control\.sh/);
-  assert.match(script, /homebrain-jetson-kernel-control\.sh/);
-  assert.match(script, /install_thread_kernel_privileged_helper/);
-  assert.match(script, /\$\{THREAD_KERNEL_HELPER_INSTALL_PATH\} \*/);
+test('privileged Thread installation is absent from runtime service-control grants', () => {
+  const setup = fs.readFileSync(path.join(repoRoot, 'scripts/setup-services.sh'), 'utf8');
+  const control = fs.readFileSync(path.join(repoRoot, 'scripts/homebrain-host-control.py'), 'utf8');
+  assert.doesNotMatch(setup, /NOPASSWD:/);
+  assert.doesNotMatch(control, /homebrain-jetson-kernel-control|homebrain-otbr-control|shell=True/);
 });
 
 test('setup-services neutralizes legacy standalone discovery units', () => {
@@ -182,11 +175,12 @@ test('restart helper stops legacy standalone discovery before starting HomeBrain
 
 test('service helpers allow Z-Wave cache shutdown to finish before forced restart', () => {
   const setupScript = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
+  const unitInstaller = fs.readFileSync(path.join(repoRoot, 'scripts/harden-homebrain-service.sh'), 'utf8');
   const restartHelper = fs.readFileSync(path.join(repoRoot, 'scripts', 'restart-homebrain-service.sh'), 'utf8');
 
   assert.match(setupScript, /local wait_seconds="\$\{2:-90\}"/);
-  assert.match(setupScript, /TimeoutStopSec=90s/);
-  assert.match(setupScript, /TimeoutStartSec=120s/);
+  assert.match(unitInstaller, /TimeoutStopSec=90/);
+  assert.match(unitInstaller, /KillMode=control-group/);
   assert.match(restartHelper, /WAIT_SECONDS="\$\{HOMEBRAIN_RESTART_WAIT_SECONDS:-90\}"/);
 });
 
@@ -319,10 +313,11 @@ test('Thread kernel helper validate emits parseable JSON on failed preflight', (
   assert.equal(payload.checks[0].name, 'custom kernel image exists');
 });
 
-test('platform service update checks tolerate apt warnings and parse Pi-hole latest versions cleanly', () => {
+test('platform service update checks use the package cache and parse Pi-hole latest versions cleanly', () => {
   const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
 
-  assert.match(script, /sudo apt-get update -qq >\/dev\/null 2>\/dev\/null \|\| true/);
+  const check = script.split('check_apt_service_update() {')[1].split('check_pihole_update() {')[0];
+  assert.doesNotMatch(check, /sudo|apt-get update/);
   assert.match(script, /awk '\/Candidate:\/ \{candidate=\$2\} END \{print candidate\}'/);
   assert.match(script, /version_output="\$\(pihole version 2>\/dev\/null \|\| true\)"/);
   assert.match(script, /latest_version="\$\(printf '%s\\n' "\$\{version_output\}"[\s\S]+sed 's\/,\/, \/g'\)"/);

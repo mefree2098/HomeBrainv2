@@ -39,19 +39,14 @@ function createSpawnStub(calls, handlers = {}) {
   };
 }
 
-test('runSetupCommand uses the managed setup-services helper with sudo', async () => {
+test('host updates require an administrator while version checks stay unprivileged', async () => {
   const calls = [];
-  const manager = new PlatformManagedServiceManager({
-    projectRoot,
-    spawnProcess: createSpawnStub(calls)
-  });
-
-  await manager.runSetupCommand('update-platform-service', 'mqtt');
-
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].command, 'sudo');
-  assert.deepEqual(calls[0].args.slice(-2), ['update-platform-service', 'mqtt']);
-  assert.equal(calls[0].args[0], '-n');
+  const manager = new PlatformManagedServiceManager({ projectRoot, spawnProcess: createSpawnStub(calls) });
+  await assert.rejects(manager.runSetupCommand('update-platform-service', 'mqtt'), { code: 'HOST_ADMINISTRATOR_REQUIRED' });
+  await assert.rejects(manager.runSetupCommand('setup-caddy'), { code: 'HOST_ADMINISTRATOR_REQUIRED' });
+  assert.equal(calls.length, 0);
+  await manager.runSetupCommand('check-platform-service-updates', 'mqtt');
+  assert.deepEqual(calls, [{ command: '/bin/bash', args: [path.join(projectRoot, 'scripts/setup-services.sh'), 'check-platform-service-updates', 'mqtt'] }]);
 });
 
 test('managed service definitions expose Codex CLI as a non-daemon runtime', () => {

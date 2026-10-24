@@ -11,7 +11,7 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_HOMEBRAIN_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 HOMEBRAIN_DIR="${HOMEBRAIN_DIR:-$DEFAULT_HOMEBRAIN_DIR}"
-HOMEBRAIN_USER="${HOMEBRAIN_USER:-${SUDO_USER:-$USER}}"
+HOMEBRAIN_USER="${HOMEBRAIN_USER:-homebrain}"
 SERVICE_NAME="homebrain"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 SERVICE_DROPIN_DIR="/etc/systemd/system/${SERVICE_NAME}.service.d"
@@ -629,137 +629,13 @@ report_edge_port_owner() {
 
 install_service() {
   require_repo
-  ensure_homebrain_hardware_access
-
-  local node_bin
-  node_bin="$(resolve_node_bin)"
-  if [[ -z "$node_bin" ]]; then
-    print_error "Node.js is not installed."
-    exit 1
-  fi
-
-  local homebrain_home
-  homebrain_home="$(resolve_user_home "${HOMEBRAIN_USER}")"
-
-  print_status "Writing ${SERVICE_PATH}"
-  sudo tee "$SERVICE_PATH" >/dev/null <<EOF
-[Unit]
-Description=HomeBrain Smart Home Hub
-After=local-fs.target network-online.target mongod.service
-Wants=network-online.target
-Requires=mongod.service
-RequiresMountsFor=${HOMEBRAIN_DIR}
-StartLimitIntervalSec=300
-StartLimitBurst=30
-
-[Service]
-Type=simple
-User=${HOMEBRAIN_USER}
-SupplementaryGroups=dialout
-WorkingDirectory=${HOMEBRAIN_DIR}
-EnvironmentFile=-${HOMEBRAIN_DIR}/server/.env
-Environment=NODE_ENV=production
-Environment="HOME=${homebrain_home}"
-Environment="USER=${HOMEBRAIN_USER}"
-Environment="LOGNAME=${HOMEBRAIN_USER}"
-Environment=WAKEWORD_PIPER_EXEC=${HOMEBRAIN_DIR}/server/.wakeword-venv/bin/piper
-Environment=HOMEBRAIN_BOOTSTRAP_NODE_BIN=${node_bin}
-Environment=HOMEBRAIN_PORT=${HOMEBRAIN_PORT}
-ExecStart=${HOMEBRAIN_DIR}/scripts/run-homebrain-server-with-modern-node.sh
-Restart=always
-RestartSec=10
-TimeoutStopSec=90s
-# HomeBrain may own long-lived child services, such as managed Ollama.
-# Restart only the Node process so those children survive deploy restarts.
-KillMode=process
-NoNewPrivileges=false
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-  if [[ ! -f "${RESTART_HELPER_SOURCE_PATH}" ]]; then
-    print_error "HomeBrain restart helper not found at ${RESTART_HELPER_SOURCE_PATH}"
-    exit 1
-  fi
-
-  if [[ ! -f "${RESTORE_HELPER_SOURCE_PATH}" ]]; then
-    print_error "HomeBrain restore helper not found at ${RESTORE_HELPER_SOURCE_PATH}"
-    exit 1
-  fi
-
-  print_status "Installing the HomeBrain restart helper..."
-  sudo install -d -m 0755 "${HOMEBRAIN_HELPER_INSTALL_DIR}"
-  sudo install -m 0755 "${RESTART_HELPER_SOURCE_PATH}" "${RESTART_HELPER_INSTALL_PATH}"
-  sudo chown root:root "${RESTART_HELPER_INSTALL_PATH}"
-
-  print_status "Installing the HomeBrain restore helper..."
-  sudo install -m 0755 "${RESTORE_HELPER_SOURCE_PATH}" "${RESTORE_HELPER_INSTALL_PATH}"
-  sudo chown root:root "${RESTORE_HELPER_INSTALL_PATH}"
-
-  print_status "Writing ${RESTART_HELPER_SERVICE_PATH}"
-  sudo tee "${RESTART_HELPER_SERVICE_PATH}" >/dev/null <<EOF
-[Unit]
-Description=HomeBrain restart helper
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-Environment="HOMEBRAIN_SERVICE_NAME=${SERVICE_NAME}"
-Environment="HOMEBRAIN_DIR=${HOMEBRAIN_DIR}"
-ExecStart=${RESTART_HELPER_INSTALL_PATH}
-KillMode=process
-TimeoutStartSec=120s
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-  print_status "Writing ${RESTORE_HELPER_SERVICE_PATH}"
-  sudo tee "${RESTORE_HELPER_SERVICE_PATH}" >/dev/null <<EOF
-[Unit]
-Description=HomeBrain restore helper
-After=network-online.target mongod.service
-Wants=network-online.target
-Requires=mongod.service
-
-[Service]
-Type=oneshot
-User=${HOMEBRAIN_USER}
-Environment="HOMEBRAIN_SERVICE_NAME=${SERVICE_NAME}"
-Environment="HOMEBRAIN_DIR=${HOMEBRAIN_DIR}"
-Environment="HOMEBRAIN_PORT=${HOMEBRAIN_PORT}"
-ExecStart=${RESTORE_HELPER_INSTALL_PATH}
-KillMode=process
-TimeoutStartSec=30min
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-  configure_mongodb_resource_guard
-  install_backup_smb_tools
-  neutralize_legacy_discovery_backend_service
-  neutralize_legacy_direct_server_start_dropin
-
-  sudo systemctl daemon-reload
-  sudo systemctl enable "${SERVICE_NAME}"
-  install_otbr_privileged_helper
-  install_thread_kernel_privileged_helper
-  configure_deploy_sudoers
-  print_success "Service installed and enabled."
+  # Explicit SSH administrator action only; no passwordless grant invokes this.
+  sudo /bin/bash "${HOMEBRAIN_DIR}/scripts/harden-homebrain-service.sh" "${HOMEBRAIN_DIR}"
 }
 
 configure_homebrain_ollama_privilege_override() {
-  print_status "Allowing the HomeBrain service to invoke the Ollama helper..."
-  sudo install -d -m 0755 "${SERVICE_DROPIN_DIR}"
-  sudo tee "${OLLAMA_PRIVILEGE_OVERRIDE_PATH}" >/dev/null <<'EOF'
-[Service]
-NoNewPrivileges=false
-EOF
+  sudo rm -f "${OLLAMA_PRIVILEGE_OVERRIDE_PATH}"
   sudo systemctl daemon-reload
-  print_success "HomeBrain Ollama privilege override written to ${OLLAMA_PRIVILEGE_OVERRIDE_PATH}."
 }
 
 install_ollama_privileged_helper() {
@@ -868,66 +744,12 @@ EOF
 }
 
 configure_deploy_sudoers() {
-  local deploy_commands=(
-    "/usr/bin/systemctl"
-    "/bin/systemctl"
-    "${OLLAMA_HELPER_INSTALL_PATH} install"
-    "${OLLAMA_HELPER_INSTALL_PATH} update"
-    "${OLLAMA_HELPER_INSTALL_PATH} stop-system"
-    "${OLLAMA_HELPER_INSTALL_PATH} probe"
-    "${OTBR_HELPER_INSTALL_PATH} *"
-    "${THREAD_KERNEL_HELPER_INSTALL_PATH} *"
-    "/usr/sbin/reboot"
-    "/sbin/reboot"
-    "/usr/bin/reboot"
-    "/bin/reboot"
-  )
-  local setup_services_path="${HOMEBRAIN_DIR}/scripts/setup-services.sh"
-
-  if [[ -x /bin/bash ]]; then
-    deploy_commands+=("/bin/bash ${setup_services_path} install-service")
-    deploy_commands+=("/bin/bash ${setup_services_path} refresh-privileges")
-    deploy_commands+=("/bin/bash ${setup_services_path} configure-mongodb")
-    deploy_commands+=("/bin/bash ${setup_services_path} setup-caddy")
-    deploy_commands+=("/bin/bash ${setup_services_path} setup-mqtt")
-    deploy_commands+=("/bin/bash ${setup_services_path} setup-pihole")
-    deploy_commands+=("/bin/bash ${setup_services_path} setup-codex")
-    deploy_commands+=("/bin/bash ${setup_services_path} setup-platform-services")
-    deploy_commands+=("/bin/bash ${setup_services_path} check-platform-service-updates *")
-    deploy_commands+=("/bin/bash ${setup_services_path} update-platform-service *")
-  fi
-
-  if [[ -x /usr/bin/bash && ! /usr/bin/bash -ef /bin/bash ]]; then
-    deploy_commands+=("/usr/bin/bash ${setup_services_path} install-service")
-    deploy_commands+=("/usr/bin/bash ${setup_services_path} refresh-privileges")
-    deploy_commands+=("/usr/bin/bash ${setup_services_path} configure-mongodb")
-    deploy_commands+=("/usr/bin/bash ${setup_services_path} setup-caddy")
-    deploy_commands+=("/usr/bin/bash ${setup_services_path} setup-mqtt")
-    deploy_commands+=("/usr/bin/bash ${setup_services_path} setup-pihole")
-    deploy_commands+=("/usr/bin/bash ${setup_services_path} setup-codex")
-    deploy_commands+=("/usr/bin/bash ${setup_services_path} setup-platform-services")
-    deploy_commands+=("/usr/bin/bash ${setup_services_path} check-platform-service-updates *")
-    deploy_commands+=("/usr/bin/bash ${setup_services_path} update-platform-service *")
-  fi
-
-  print_status "Refreshing HomeBrain sudoers access for service management and Ollama updates..."
-  sudo tee "${DEPLOY_SUDOERS_PATH}" >/dev/null <<EOF
-${HOMEBRAIN_USER} ALL=(ALL) NOPASSWD:$(IFS=,; echo "${deploy_commands[*]}")
-EOF
-  sudo chmod 0440 "${DEPLOY_SUDOERS_PATH}"
-  print_success "sudoers file written to ${DEPLOY_SUDOERS_PATH}."
+  # Writable application code must never be an allowed root command.
+  sudo rm -f "${DEPLOY_SUDOERS_PATH}"
 }
 
 refresh_privileges() {
-  ensure_homebrain_hardware_access
-  configure_homebrain_ollama_privilege_override
-  install_ollama_privileged_helper
-  install_otbr_privileged_helper
-  install_thread_kernel_privileged_helper
-  install_backup_smb_tools
-  configure_ollama_resource_guard
-  configure_mongodb_resource_guard
-  configure_deploy_sudoers
+  install_service
 }
 
 start_services() {
@@ -1403,7 +1225,7 @@ check_apt_service_update() {
   local package_name="$2"
   local current_version candidate_version update_available
 
-  sudo apt-get update -qq >/dev/null 2>/dev/null || true
+  # Read the package cache; refreshing it is an SSH administrator operation.
   current_version="$(dpkg-query -W -f='${Version}' "${package_name}" 2>/dev/null || true)"
   candidate_version="$(apt-cache policy "${package_name}" 2>/dev/null | awk '/Candidate:/ {candidate=$2} END {print candidate}')"
   if [[ -n "${current_version}" && -n "${candidate_version}" && "${current_version}" != "${candidate_version}" ]]; then

@@ -2,6 +2,7 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const Settings = require('../models/Settings');
 const defaultEventStreamService = require('./eventStreamService');
+const { isHardenedService, administratorRequired } = require('../utils/hostControl');
 
 const MAX_TIMER_DELAY_MS = 24 * 60 * 60 * 1000;
 const TIMER_DUE_TOLERANCE_MS = 1000;
@@ -329,6 +330,7 @@ class DeviceRestartService {
   }
 
   async handleScheduledReboot(targetRunAt) {
+    if (isHardenedService()) throw administratorRequired();
     const settings = await this.settingsModel.getSettings();
     if (settings.deviceRestartScheduleEnabled !== true) {
       await this.configureFromSettings(settings);
@@ -353,6 +355,7 @@ class DeviceRestartService {
   }
 
   async requestManualReboot(options = {}) {
+    if (isHardenedService()) throw administratorRequired();
     const requestedAt = new Date();
     const actor = typeof options.actor === 'string' && options.actor.trim()
       ? options.actor.trim()
@@ -406,6 +409,7 @@ class DeviceRestartService {
   }
 
   async dispatchRebootCommand(options = {}) {
+    if (isHardenedService()) throw administratorRequired();
     const rebootBinary = this.resolveRebootBinary();
     const command = 'sudo';
     const args = ['-n', rebootBinary];

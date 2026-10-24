@@ -56,7 +56,7 @@ Before installing, have:
 - enough free storage for MongoDB, npm dependencies, speech models, Ollama models, logs, and backups
 - a browser on the same LAN for first-time setup
 
-The production installer supplies Node.js 22, MongoDB 6.0, application dependencies, and system services. Development and production require a patched supported Node track: `^22.23.4`, `^24.22.1` or `^26.12.1`. Node 22 LTS is preferred; Node 20 is end of life. Wake-word training dependencies require Python 3.11 or newer; select it with `PYTHON_BIN` when creating the managed environment.
+The production installer supplies Node.js 22, MongoDB 8.0, application dependencies, and system services. Development and production require a patched supported Node track: `^22.23.4`, `^24.22.1` or `^26.12.1`. Node 22 LTS is preferred; Node 20 is end of life. Wake-word training dependencies require Python 3.11 or newer; select it with `PYTHON_BIN` when creating the managed environment.
 
 ## Quick Install
 
@@ -85,7 +85,7 @@ The installation can take a while on a new system. It installs OS packages, Node
 The installer:
 
 - validates that it is running on an apt-based host as a non-root sudo user
-- installs Node.js 22.x and MongoDB 6.0
+- installs Node.js 22.x and MongoDB 8.0
 - creates `server/.env` and generates unique JWT/session secrets
 - installs dependencies from committed lockfiles and rebuilds native modules when needed
 - creates the production React build
@@ -96,7 +96,8 @@ The installer:
 - installs Caddy as the `caddy-api` public edge on ports `80/443`
 - installs a loopback-only Mosquitto broker as `homebrain-mqtt`
 - installs Pi-hole and moves its web interface to `8081/8444` so it can coexist with Caddy
-- writes narrow privileged helpers for deploys, restore operations, Ollama, OTBR, and Jetson Thread/kernel management
+- runs HomeBrain and restores as a dedicated `homebrain` account with no new privileges or capabilities
+- installs a root-owned socket service limited to fixed service-control operations; host software, kernel and permission changes require an SSH administrator
 - writes ARM64 resource guards for Ollama and MongoDB
 - bootstraps reverse-proxy, OIDC client, and optional default-admin database state
 - starts HomeBrain and checks `http://localhost:3000/ping`
