@@ -4,12 +4,10 @@
 # - Verifies CUDA availability
 # - Notes about optional TFLite/ONNX GPU
 #
-# Usage:
-#   ./server/scripts/enable-jetson-gpu.sh [--python PY] [--jetpack 62] [--torch 2.7.0] [--vision 0.22.0] [--audio 2.7.0]
-#
-# Examples:
-#   ./server/scripts/enable-jetson-gpu.sh --jetpack 62
-#   ./server/scripts/enable-jetson-gpu.sh --jetpack 62 --torch 2.7.0 --vision 0.22.0 --audio 2.7.0
+# Supply explicit, mutually compatible NVIDIA wheel versions. Torch must be
+# a patched stable release (2.13.0 or newer); the managed CPU runtime is retained
+# when these requirements cannot be met.
+# Usage: ./server/scripts/enable-jetson-gpu.sh --torch VERSION --vision VERSION --audio VERSION
 #
 set -euo pipefail
 
@@ -46,6 +44,19 @@ if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
   exit 1
 fi
 
+# Validate before creating an environment or uninstalling the working CPU stack.
+if [ -z "${TORCH_VER}" ] || [ -z "${VISION_VER}" ] || [ -z "${AUDIO_VER}" ]; then
+  echo "[jetson] ERROR: explicit patched Torch (2.13.0+) and compatible vision/audio versions are required." >&2
+  exit 2
+fi
+"${PYTHON_BIN}" - "${TORCH_VER}" <<'PYCODE'
+import re
+import sys
+match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:\+[A-Za-z0-9_.-]+)?", sys.argv[1])
+if not match or tuple(map(int, match.groups())) < (2, 13, 0):
+    raise SystemExit("[jetson] ERROR: refusing a vulnerable or unreviewed Torch release; retain the managed CPU runtime.")
+PYCODE
+
 # Create venv if missing
 if [ ! -d "${VENV_DIR}" ]; then
   echo "[jetson] Creating virtualenv: ${VENV_DIR}"
@@ -54,19 +65,10 @@ fi
 # shellcheck disable=SC1091
 source "${VENV_DIR}/bin/activate"
 
-python -m pip install --upgrade pip wheel setuptools
+python -m pip install --upgrade "pip>=26.2.2" wheel "setuptools>=84.1.0"
 
 # Uninstall any CPU-only torch
 python -m pip uninstall -y torch torchvision torchaudio || true
-
-# If versions not provided, pick reasonable defaults for JP 6.2
-if [ -z "${TORCH_VER}" ] && [ "${JP_VER}" = "62" ]; then
-  TORCH_VER="2.7.0"; VISION_VER="0.22.0"; AUDIO_VER="2.7.0"
-fi
-if [ -z "${TORCH_VER}" ] || [ -z "${VISION_VER}" ] || [ -z "${AUDIO_VER}" ]; then
-  echo "[jetson] ERROR: Torch/vision/audio versions are required. Try: --torch 2.7.0 --vision 0.22.0 --audio 2.7.0" >&2
-  exit 2
-fi
 
 # Install NVIDIA wheels
 echo "[jetson] Installing torch==${TORCH_VER} torchvision==${VISION_VER} torchaudio==${AUDIO_VER} from ${INDEX_URL}"
@@ -89,24 +91,15 @@ PYCODE
 
 verify_cuda
 
-# If still CPU-only, retry with a fallback version mapping for this JetPack
+# Never retry with the former vulnerable Torch 2.6/2.7 fallback mappings.
 CPU_ONLY=$(python - <<'PYCODE'
 import torch
 print('yes' if (not torch.cuda.is_available() or '+cpu' in torch.__version__) else 'no')
 PYCODE
 )
-if [ "$CPU_ONLY" = "yes" ]; then
-  echo "[jetson] Detected CPU-only torch. Retrying with NVIDIA index only and a fallback version set..."
-  python -m pip uninstall -y torch torchvision torchaudio || true
-  if [ "${JP_VER}" = "62" ]; then
-    # Fallback known-good mapping for JP 6.2
-    TORCH_FALLBACK="2.6.0"; VISION_FALLBACK="0.21.0"; AUDIO_FALLBACK="2.6.0"
-  else
-    TORCH_FALLBACK="${TORCH_VER}"; VISION_FALLBACK="${VISION_VER}"; AUDIO_FALLBACK="${AUDIO_VER}"
-  fi
-  pip install --no-cache-dir --index-url "${INDEX_URL}" --extra-index-url https://pypi.org/simple \
-    torch=="${TORCH_FALLBACK}" torchvision=="${VISION_FALLBACK}" torchaudio=="${AUDIO_FALLBACK}"
-  verify_cuda
+if [ "${CPU_ONLY}" = "yes" ]; then
+  echo "[jetson] ERROR: the selected patched wheels do not provide working CUDA; no older fallback will be installed." >&2
+  exit 1
 fi
 
 echo "[jetson] Done. If cuda available is False, ensure JetPack matches v${JP_VER} and that the NVIDIA index hosts the requested versions."
