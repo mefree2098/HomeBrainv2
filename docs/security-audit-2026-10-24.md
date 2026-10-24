@@ -8,7 +8,7 @@ The application update addresses 20 distinct npm advisories and the open CodeQL 
 
 The [October 21 Node.js security release](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases) fixes Brotli memory corruption, DNS validation, TLS hostname verification and HTTP connection reuse issues. HomeBrain performs outbound HTTPS requests and accepts compressed HTTP requests, so its runtime must be patched along with its npm dependencies. Every npm manifest and the Node launcher now require a supported security baseline: **22.23.4, 24.22.1 or 26.12.1**, or a newer patch/minor on the same track. The Linux installer rejects Node 20 and checks installed runtimes against the same policy. Deployment status exposes the running Node and OpenSSL versions.
 
-[PHP2Shell, CVE-2026-109618 and CVE-2026-109619](https://www.php.net/archive/2026.php#2026-10-21-5), requires PHP 8.2.35, 8.3.36, 8.4.27 or 8.5.12 on the corresponding maintained branch. HomeBrain contains no PHP application or Composer dependency. Freestone has no installed PHP runtime or PHP package. This repository assessment does not certify independent sites or appliances.
+[PHP2Shell, CVE-2026-109618 and CVE-2026-109619](https://www.php.net/archive/2026.php#2026-10-21-5), requires PHP 8.2.35, 8.3.36, 8.4.27 or 8.5.12 on the corresponding maintained branch. HomeBrain contains no PHP application or Composer dependency. Neither configured host has installed PHP packages. The October 23 PHP follow-up also identifies CVE-2026-115560 in an unusual session upload-progress configuration; it does not introduce a PHP dependency into HomeBrain. This repository assessment does not certify independent sites or appliances.
 
 The [Ubuntu CA trust-store update, USN-8944-1](https://ubuntu.com/security/notices/USN-8944-1), removes the root affected by the eMudhra intermediate CA compromise. Ubuntu 22.04 requires `ca-certificates` **20260816ubuntu0.22.04.1**. Node's security releases also update their bundled CA trust. Python environments that use certifi require its updated bundle independently of the OS trust store.
 
@@ -55,6 +55,10 @@ The live appliance environment contained vulnerable aiohttp, multidict, certifi,
 The live wake-word environment contained 14 packages with security findings, including its CPU Torch 2.10.0 build. The managed installer now uses an explicit runtime requirements file and the patched CPU Torch 2.14.1 build. HomeBrain uses its own DNN trainer; unused upstream training extras pinned an older torchaudio stack and brought in unrelated image parsers. A separately staged Python 3.11 environment permits the patched filelock version without altering the system Python. ONNX export explicitly retains the existing opset 13 exporter behavior. The offline acceptance test exercises a training step, export/prediction agreement, real audio features and cached Piper synthesis without playing audio.
 
 Python CI now uses an isolated environment and audits the resolved test/appliance dependencies. The existing JavaScript audit continues to fail on every advisory severity.
+
+## Database and host lifecycle findings
+
+Freestone runs MongoDB 6.0.26, which is affected by Mongobleed, CVE-2025-14847; the configured vendor repository offers patch 6.0.29. Selene already runs 6.0.29. A private database backup precedes the Freestone patch, with no feature-compatibility-version or data-format migration. MongoDB 6.0 reached [end of life on July 31, 2025](https://www.mongodb.com/legal/support-policy/lifecycles); applying the available security backport does not put the deployment on a supported major release. A backed-up, separately tested major-version migration remains required.
 
 ## Production verification
 
