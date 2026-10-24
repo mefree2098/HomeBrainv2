@@ -19,6 +19,14 @@
   "engines": {
     "node": "^22.23.4 || ^24.22.1 || ^26.12.1"
   },
+  "allowScripts": {
+    "@serialport/bindings-cpp@12.0.1 || 13.0.0 || 13.0.1": true,
+    "@stoprocent/bleno@0.13.1": true,
+    "@stoprocent/bluetooth-hci-socket@2.3.0": true,
+    "@stoprocent/noble@2.7.1": true,
+    "bcrypt@6.0.0": true,
+    "usb@2.18.0": true
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.123.0",
     "@harmonyhub/client-ws": "file:vendor/harmony-client-ws",

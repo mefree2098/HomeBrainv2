@@ -36,6 +36,8 @@ Both the direct dependency and ACME's transitive dependency instead use the immu
 
 The new regression test constructs a malformed, RSA-signed DigestInfo with an extra nested element and confirms rejection, while a normal signature still verifies. A separate HTTP regression test submits a compressed request with trailing bytes and verifies the server remains responsive. These checks supplement the registry scanner, which cannot prove a custom source patch is correct.
 
+npm 12 blocks remote archives and dependency install scripts by default. The server's project configuration permits only URL dependencies explicitly declared in its own manifest, including the immutable forge fix. Required native dependency scripts are approved by exact package version in each affected manifest. These approvals preserve npm's default restrictions for other dependencies. Clean npm 12 installs and native module loading are checked before production restart.
+
 ## Verification
 
 Local checks use the official Node 22.23.4 distribution with its published SHA-256 verified.
@@ -61,6 +63,8 @@ Python CI now uses an isolated environment and audits the resolved test/applianc
 Freestone runs MongoDB 6.0.26, which is affected by Mongobleed, CVE-2025-14847; the configured vendor repository offers patch 6.0.29. Selene already runs 6.0.29. A private database backup precedes the Freestone patch, with no feature-compatibility-version or data-format migration. MongoDB 6.0 reached [end of life on July 31, 2025](https://www.mongodb.com/legal/support-policy/lifecycles); applying the available security backport does not put the deployment on a supported major release. A backed-up, separately tested major-version migration remains required.
 
 The reported NVIDIA BSP versions are R36.4.4 on Freestone and R36.4.7 on Selene. Both precede the R36.5 fix listed in the [NVIDIA March 2026 Jetson security bulletin](https://nvidia.custhelp.com/app/answers/detail/a_id/5797). That platform update requires the supported NVIDIA OTA/recovery procedure and a coordinated host reboot; the ordinary Ubuntu application/package update does not replace it. The shared-host audit owns that separate maintenance investigation.
+
+Both hosts also retain Ubuntu's GStreamer Bad Plugins 1.20.3-0ubuntu1.1. The [H.265 parser fix, USN-7558-1](https://ubuntu.com/security/notices/USN-7558-1), requires the Ubuntu Pro ESM Apps build `1.20.3-0ubuntu1.1+esm2`; the [September WAV parser fix, USN-8855-1](https://ubuntu.com/security/notices/USN-8855-1), requires `+esm3`. Neither host has an attached Pro entitlement, and their enabled repositories do not supply those fixes. This remains a host media-parser exposure requiring ESM coverage or a tested removal/replacement of the affected codec stack. The OS scanner's kernel findings against `linux-libc-dev` headers are not evidence that each CVE applies to the running NVIDIA kernel; the BSP bulletin is assessed separately.
 
 ## Production verification
 
