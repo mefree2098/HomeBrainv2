@@ -788,7 +788,7 @@ class WakeWordTrainer:
 
     def export_onnx(self, path: Path) -> None:
         dummy = torch.randn(1, *self.model.input_shape, dtype=torch.float32, device=self.device)
-        torch.onnx.export(self.model, dummy, str(path), opset_version=13, do_constant_folding=True,
+        torch.onnx.export(self.model, dummy, str(path), opset_version=13, dynamo=False, do_constant_folding=True,
                           input_names=["audio"], output_names=["score"])
 
 

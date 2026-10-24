@@ -15,19 +15,16 @@ DEFAULT_REPO_URL="$(git -C "${PROJECT_ROOT}" config --get remote.origin.url 2>/d
 REPO_URL="${HOMEBRAIN_REPO_URL:-$DEFAULT_REPO_URL}"
 HOMEBRAIN_DIR="${HOMEBRAIN_DIR:-$PROJECT_ROOT}"
 NODE_MAJOR="${NODE_MAJOR:-22}"
-if [[ -z "${NODE_MIN_VERSION:-}" ]]; then
-  if [[ "${NODE_MAJOR}" == "20" ]]; then
-    NODE_MIN_VERSION="20.19.0"
-  else
-    NODE_MIN_VERSION="22.13.0"
-  fi
+if [[ "${NODE_MAJOR}" != "22" ]]; then
+  echo "The managed installer requires Node 22 LTS; Node 20 is end of life." >&2
+  exit 1
 fi
+NODE_MIN_VERSION="${NODE_MIN_VERSION:-22.23.4}"
 MONGODB_VERSION="${MONGODB_VERSION:-6.0}"
 INSTALL_WAKEWORD_DEPS="${INSTALL_WAKEWORD_DEPS:-1}"
 ENABLE_FIREWALL="${ENABLE_FIREWALL:-0}"
 MONGODB_SERVICE_DROPIN_DIR="/etc/systemd/system/mongod.service.d"
 MONGODB_RESOURCE_GUARD_PATH="${MONGODB_SERVICE_DROPIN_DIR}/10-homebrain-resource-guard.conf"
-NODESOURCE_SETUP_20_SHA256="2c4c6683a17b6f4128898a7b521e3c8bb725a99ffaf1b5e32ac97c6fa7d381be"
 NODESOURCE_SETUP_22_SHA256="575583bbac2fccc0b5edd0dbc03e222d9f9dc8d724da996d22754d6411104fd1"
 
 print_status() { echo -e "${BLUE}[INFO]${NC} $1"; }
@@ -184,14 +181,11 @@ version_ge() {
 run_verified_nodesource_setup() (
   local expected_sha setup_script setup_url
   case "${NODE_MAJOR}" in
-    20)
-      expected_sha="${NODESOURCE_SETUP_20_SHA256}"
-      ;;
     22)
       expected_sha="${NODESOURCE_SETUP_22_SHA256}"
       ;;
     *)
-      print_error "Unsupported NodeSource major version ${NODE_MAJOR}; supported versions are 20 and 22."
+      print_error "Unsupported NodeSource major version ${NODE_MAJOR}; the managed installer supports 22."
       exit 1
       ;;
   esac
@@ -225,11 +219,16 @@ install_node() {
     local major current_version
     current_version="$(node -p 'process.versions.node')"
     major="${current_version%%.*}"
-    if [[ "$major" =~ ^[0-9]+$ ]] && (( major >= NODE_MAJOR )) && version_ge "${current_version}" "${NODE_MIN_VERSION}"; then
+    if node -e 'const p = require(process.argv[1]); process.exit(p.isProjectSupported(p.parseVersion(process.versions.node)) ? 0 : 1)' \
+      "${PROJECT_ROOT}/scripts/run-with-modern-node.js" && version_ge "${current_version}" "${NODE_MIN_VERSION}"; then
       print_success "Node.js v${current_version} already satisfies the requirement."
       return
     fi
     print_warning "Node.js v${current_version} is installed, but HomeBrain now requires ${NODE_MIN_VERSION}+ for the selected ${NODE_MAJOR}.x track."
+    if [[ "${major}" != "${NODE_MAJOR}" ]]; then
+      print_error "Update the installed Node track to 22.23.4+, 24.22.1+ or 26.12.1+ before continuing."
+      exit 1
+    fi
   fi
 
   run_verified_nodesource_setup
@@ -243,7 +242,8 @@ install_node() {
 
   local installed_version
   installed_version="$("${node_bin}" -p 'process.versions.node')"
-  if ! version_ge "${installed_version}" "${NODE_MIN_VERSION}"; then
+  if ! "${node_bin}" -e 'const p = require(process.argv[1]); process.exit(p.isProjectSupported(p.parseVersion(process.versions.node)) ? 0 : 1)' \
+    "${PROJECT_ROOT}/scripts/run-with-modern-node.js" || ! version_ge "${installed_version}" "${NODE_MIN_VERSION}"; then
     print_error "Installed Node.js v${installed_version}, but HomeBrain requires ${NODE_MIN_VERSION}+."
     exit 1
   fi

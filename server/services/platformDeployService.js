@@ -222,6 +222,8 @@ class PlatformDeployService {
 
     return {
       ...snapshot,
+      nodeVersion: process.versions.node,
+      opensslVersion: process.versions.openssl,
       uptimeSeconds: Math.max(0, Math.floor(process.uptime())),
       repoMatchesRuntime
     };

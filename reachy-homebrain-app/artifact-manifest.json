@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "artifact": "reachy-homebrain-app",
   "appEntryPoint": "reachy-homebrain-app",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "protocol": {
     "name": "homebrain-reachy",
     "version": 1
@@ -23,8 +23,8 @@
   ],
   "compatibility": {
     "launcherApi": 1,
-    "dependencyFingerprint": "af6aaa8819c9f1bfb93a4c66a8044bd364307107831e50c9e9a358825a707a5f",
-    "launcherFingerprint": "fda87ab56fc890b5d9922220da77683882f0beb848cfbbdfcb44203be1de5d7d",
+    "dependencyFingerprint": "20af8beb506f44acb8b1bd8948d7537178f787c9dc8f1a6ae6f0ab87bdd2f235",
+    "launcherFingerprint": "39b9d9f9dc0edb073a793991ec3db5b139e09784572699cae05023beb14944a3",
     "requiresManualReinstall": false
   },
   "sourceLayout": "src/reachy_homebrain"

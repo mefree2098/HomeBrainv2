@@ -17,7 +17,7 @@
   "author": "",
   "license": "Apache-2.0",
   "engines": {
-    "node": "^22.13.0 || ^24.0.0 || ^26.0.0"
+    "node": "^22.23.4 || ^24.22.1 || ^26.12.1"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.123.0",
@@ -42,7 +42,7 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^9.9.4",
     "mqtt": "^5.15.2",
-    "node-forge": "^1.4.0",
+    "node-forge": "https://github.com/digitalbazaar/forge/archive/ceba34402e329f0365134f23fe19898756527d65.tar.gz",
     "openai": "^7.8.0",
     "q": "file:vendor/q-native-compat/q-1.5.2.tgz",
     "serialport": "^13.0.0",
@@ -51,7 +51,7 @@
     "yazl": "^3.3.1",
     "zigbee-herdsman": "^10.9.1",
     "zigbee-herdsman-converters": "^26.103.0",
-    "zod": "^4.5.4",
+    "zod": "^4.6.7",
     "zwave-js": "^15.28.0"
   },
   "overrides": {
@@ -61,6 +61,7 @@
     "home-controller": {
       "serialport": "13.0.0",
       "spark": "file:vendor/spark-stub"
-    }
+    },
+    "node-forge": "$node-forge"
   }
 }
