@@ -105,7 +105,7 @@ test('run-with-modern-node can print the selected Node binary for exec launchers
     }
   });
 
-  assert.equal(result.status, 0);
+  assert.equal(result.status, 0, result.stderr);
   assert.ok(result.stdout.trim());
   assert.equal(fs.existsSync(result.stdout.trim()), true);
 });

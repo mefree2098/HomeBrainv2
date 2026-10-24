@@ -30,7 +30,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 22
+          node-version: 22.23.4
           cache: npm
           cache-dependency-path: ${{ matrix.project }}/package-lock.json
       - name: Install exact locked dependencies
@@ -55,7 +55,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
-          node-version: 22
+          node-version: 22.23.4
       - run: node --test scripts/tests/*.test.js
       - run: bash scripts/check-secrets.sh
       - run: python3 scripts/test-validate-ios-app-store-archive.py

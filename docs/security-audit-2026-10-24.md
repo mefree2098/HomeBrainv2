@@ -6,7 +6,7 @@ The application update addresses 20 distinct npm advisories and the open CodeQL 
 
 ## Current advisories and applicability
 
-The [October 21 Node.js security release](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases) fixes Brotli memory corruption, DNS validation, TLS hostname verification and HTTP connection reuse issues. HomeBrain performs outbound HTTPS requests and accepts compressed HTTP requests, so its runtime must be patched along with its npm dependencies. Every npm manifest and the Node launcher now require a supported security baseline: **22.23.4, 24.22.1 or 26.12.1**, or a newer patch/minor on the same track. The Linux installer rejects Node 20 and checks installed runtimes against the same policy. Deployment status exposes the running Node and OpenSSL versions.
+The [October 21 Node.js security release](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases) fixes Brotli memory corruption, DNS validation, TLS hostname verification and HTTP connection reuse issues. HomeBrain performs outbound HTTPS requests and accepts compressed HTTP requests, so its runtime must be patched along with its npm dependencies. Every npm manifest and the Node launcher now require a supported security baseline: **22.23.4, 24.22.1 or 26.12.1**, or a newer patch/minor on the same track. The Linux installer rejects Node 20 and checks installed runtimes against the same policy. Deployment status exposes the running Node and OpenSSL versions. CI pins Node 22.23.4 explicitly so an older hosted-runner cache cannot select a vulnerable patch.
 
 [PHP2Shell, CVE-2026-109618 and CVE-2026-109619](https://www.php.net/archive/2026.php#2026-10-21-5), requires PHP 8.2.35, 8.3.36, 8.4.27 or 8.5.12 on the corresponding maintained branch. HomeBrain contains no PHP application or Composer dependency. Neither configured host has installed PHP packages. The October 23 PHP follow-up also identifies CVE-2026-115560 in an unusual session upload-progress configuration; it does not introduce a PHP dependency into HomeBrain. This repository assessment does not certify independent sites or appliances.
 
@@ -59,6 +59,8 @@ Python CI now uses an isolated environment and audits the resolved test/applianc
 ## Database and host lifecycle findings
 
 Freestone runs MongoDB 6.0.26, which is affected by Mongobleed, CVE-2025-14847; the configured vendor repository offers patch 6.0.29. Selene already runs 6.0.29. A private database backup precedes the Freestone patch, with no feature-compatibility-version or data-format migration. MongoDB 6.0 reached [end of life on July 31, 2025](https://www.mongodb.com/legal/support-policy/lifecycles); applying the available security backport does not put the deployment on a supported major release. A backed-up, separately tested major-version migration remains required.
+
+The reported NVIDIA BSP versions are R36.4.4 on Freestone and R36.4.7 on Selene. Both precede the R36.5 fix listed in the [NVIDIA March 2026 Jetson security bulletin](https://nvidia.custhelp.com/app/answers/detail/a_id/5797). That platform update requires the supported NVIDIA OTA/recovery procedure and a coordinated host reboot; the ordinary Ubuntu application/package update does not replace it. The shared-host audit owns that separate maintenance investigation.
 
 ## Production verification
 
