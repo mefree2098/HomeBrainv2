@@ -13,6 +13,11 @@ command -v setfacl >/dev/null || { echo 'Install the Ubuntu acl package first.' 
 RUNTIME_HOME=/var/lib/homebrain/runtime
 BACKUP=/var/lib/homebrain/security-hardening/$(date -u +%Y%m%dT%H%M%SZ)
 install -d -o root -g root -m 0700 "$BACKUP"
+if getent passwd homebrain >/dev/null; then
+  getent passwd homebrain > "$BACKUP/account-before.txt"
+  getent shadow homebrain > "$BACKUP/account-shadow-before.txt"
+  id homebrain > "$BACKUP/groups-before.txt"
+fi
 for old in /etc/systemd/system/homebrain.service /etc/systemd/system/homebrain.service.d /etc/systemd/system/homebrain-restore-helper.service /etc/sudoers.d/homebrain-deploy; do
   if [[ -e "$old" ]]; then cp -a --parents "$old" "$BACKUP/"; fi
 done

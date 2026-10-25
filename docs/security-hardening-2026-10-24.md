@@ -32,7 +32,7 @@ For production, stop HomeBrain, pause TTL deletion for the verification window, 
 
 ## Verification
 
-CI tests the controller's strict request parser, caller UID checks, denied execution/argument/environment/reboot operations, bounded responses and failures. Node regressions cover deployment, restores, and administrator-only actions. A pinned official MongoDB 8.0.34 CI container exercises actual HomeBrain models; the integration script accepts only the isolated fixture database name and port 33337.
+CI tests the controller's strict request parser, caller UID checks, denied execution/argument/environment/reboot operations, bounded responses and failures. Node regressions cover deployment, restores, and administrator-only actions. The unit-test bootstrap replaces any inherited production database URI and host-control socket before loading test modules, so a deploy's tests cannot dispatch real service operations. A pinned official MongoDB 8.0.34 CI container exercises actual HomeBrain models; the integration script accepts only the isolated fixture database name and port 33337.
 
 Native acceptance must measure the actual running process UID/groups/capabilities and no-new-privileges flag, prove sudo/Docker and protected-file writes fail, and verify the fixed control socket works. Complete a real application deployment, inspect its event stream and health, confirm live radio connections and cached inventory without device actuation, and verify identity issuer/client/signing-key continuity. No lock, siren, switch or robot actuation is part of this audit.
 
