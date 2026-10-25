@@ -9,6 +9,7 @@ const ReverseProxyRoute = require('../models/ReverseProxyRoute');
 const eventStreamService = require('./eventStreamService');
 const mqttPlatformService = require('./mqttPlatformService');
 const reverseProxyService = require('./reverseProxyService');
+const { administratorRequired } = require('../utils/hostControl');
 
 const SERVICE_DEFINITIONS = Object.freeze([
   {
@@ -264,17 +265,11 @@ class PlatformManagedServiceManager {
   }
 
   async runSetupCommand(commandName, target = null) {
-    const setupServicesPath = this.getSetupServicesPath();
-    if (!fs.existsSync(setupServicesPath)) {
-      throw new Error('scripts/setup-services.sh is missing');
-    }
-
-    const bashPath = fs.existsSync('/bin/bash') ? '/bin/bash' : 'bash';
-    const args = ['-n', bashPath, setupServicesPath, commandName];
-    if (target) {
-      args.push(target);
-    }
-    return this.runCommand('sudo', args);
+    if (commandName !== 'check-platform-service-updates') throw administratorRequired();
+    // Version checks read the existing package cache without host privileges.
+    const args = [this.getSetupServicesPath(), commandName];
+    if (target) args.push(target);
+    return this.runCommand('/bin/bash', args);
   }
 
   async getOrCreateRecord(definition) {

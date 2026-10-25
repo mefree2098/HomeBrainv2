@@ -17,6 +17,7 @@ const LOG_LINE_SPLIT_REGEX = /\r?\n/;
 const MAX_OPERATION_LOG_LINES = 4000;
 const VERSION_REGEX = /v?(\d+(?:\.\d+){1,3}(?:-[0-9A-Za-z.-]+)?)/i;
 const MAX_MANIFEST_SCAN_FILES = 5000;
+const { isHardenedService, requestHostControl, administratorRequired } = require('../utils/hostControl');
 const OLLAMA_LIBRARY_BASE_URL = 'https://ollama.com';
 const OLLAMA_SEARCH_MAX_PAGES = 100;
 const OLLAMA_SEARCH_CACHE_TTL_MS = 10 * 60 * 1000;
@@ -2149,6 +2150,7 @@ class OllamaService {
    * Install Ollama
    */
   async install({ sudoPassword = null } = {}) {
+    if (isHardenedService()) throw administratorRequired();
     try {
       console.log('Starting Ollama installation...');
 
@@ -2929,6 +2931,10 @@ class OllamaService {
   }
 
   async stopSystemService() {
+    if (isHardenedService()) {
+      await requestHostControl('ollama-stop');
+      return;
+    }
     const commands = [];
     const currentUser = this.getCurrentUser();
     const stopHint = getManualOllamaStopHint();
@@ -3088,6 +3094,7 @@ class OllamaService {
    * Update Ollama to latest version
    */
   async update({ sudoPassword = null } = {}) {
+    if (isHardenedService()) throw administratorRequired();
     let serviceWasRunning = false;
     let serviceStoppedForUpdate = false;
 

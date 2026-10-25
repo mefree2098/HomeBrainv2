@@ -20,7 +20,7 @@ if [[ "${NODE_MAJOR}" != "22" ]]; then
   exit 1
 fi
 NODE_MIN_VERSION="${NODE_MIN_VERSION:-22.23.4}"
-MONGODB_VERSION="${MONGODB_VERSION:-6.0}"
+MONGODB_VERSION="${MONGODB_VERSION:-8.0}"
 INSTALL_WAKEWORD_DEPS="${INSTALL_WAKEWORD_DEPS:-1}"
 ENABLE_FIREWALL="${ENABLE_FIREWALL:-0}"
 MONGODB_SERVICE_DROPIN_DIR="/etc/systemd/system/mongod.service.d"
@@ -167,7 +167,7 @@ install_base_packages() {
     curl wget git gnupg ca-certificates lsb-release \
     build-essential python3 python3-pip python3-venv \
     pkg-config libcap2-bin libudev-dev usbutils udev \
-    avahi-daemon avahi-utils smbclient
+    avahi-daemon avahi-utils smbclient acl
   print_success "Base packages installed."
 }
 
@@ -255,6 +255,12 @@ install_mongodb() {
   print_status "Ensuring MongoDB ${MONGODB_VERSION}..."
 
   if command -v mongod >/dev/null 2>&1; then
+    local current_major
+    current_major="$(mongod --version | sed -nE 's/^db version v([0-9]+)[.].*/\1/p' | head -n 1)"
+    if [[ -z "$current_major" || "$current_major" -lt 8 ]]; then
+      print_error "Existing MongoDB requires a backed-up, tested sequential major upgrade. See docs/security-hardening-2026-10-24.md."
+      exit 1
+    fi
     configure_mongodb_resource_guard
     sudo systemctl enable --now mongod
     print_success "MongoDB is already installed."
@@ -479,7 +485,7 @@ PYCODE
 
 install_service() {
   print_status "Installing the HomeBrain systemd service..."
-  env HOMEBRAIN_DIR="${HOMEBRAIN_DIR}" HOMEBRAIN_USER="${USER}" bash "${HOMEBRAIN_DIR}/scripts/setup-services.sh" install-service
+  env HOMEBRAIN_DIR="${HOMEBRAIN_DIR}" bash "${HOMEBRAIN_DIR}/scripts/setup-services.sh" install-service
 }
 
 configure_deploy_sudoers() {
@@ -575,12 +581,11 @@ main() {
   configure_env
   install_app
   bootstrap_wakeword
-  install_service
   bash "${HOMEBRAIN_DIR}/scripts/setup-services.sh" setup-platform-services
-  configure_deploy_sudoers
   configure_firewall
-  start_and_verify
   bootstrap_reverse_proxy_state
+  install_service
+  start_and_verify
   print_summary
 }
 

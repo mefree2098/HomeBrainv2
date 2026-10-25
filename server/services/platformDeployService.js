@@ -13,6 +13,7 @@ const adminBootstrapService = require('./adminBootstrapService');
 const alexaBrokerService = require('./alexaBrokerService');
 const mqttPlatformService = require('./mqttPlatformService');
 const platformManagedService = require('./platformManagedService');
+const { isHardenedService, hostControlInvocation, requestHostControl } = require('../utils/hostControl');
 
 const MAX_LOG_TAIL_BYTES = 64 * 1024;
 const MAX_CAPTURED_COMMAND_OUTPUT_BYTES = 4 * 1024 * 1024;
@@ -1475,6 +1476,14 @@ class PlatformDeployService {
   }
 
   buildServiceRestartCommand() {
+    if (isHardenedService()) {
+      const invocation = hostControlInvocation('restart');
+      const quote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+      return {
+        fullCommand: [invocation.command, ...invocation.args].map(quote).join(' '),
+        notes: ['Restart the administrator-owned HomeBrain unit through limited service control.']
+      };
+    }
     const commandParts = [];
     const notes = [];
 
@@ -2196,85 +2205,14 @@ class PlatformDeployService {
   }
 
   async installServiceHelpers(jobId) {
-    const setupServicesPath = path.join(this.projectRoot, 'scripts', 'setup-services.sh');
-    if (!fs.existsSync(setupServicesPath)) {
-      await this.appendJobLog(
-        jobId,
-        `[${new Date().toISOString()}] [Install service helpers] Skipped because scripts/setup-services.sh is missing.\n`
-      );
-      return { skipped: true };
-    }
-
-    const stepName = 'Install service helpers';
-    const bashPath = fs.existsSync('/bin/bash') ? '/bin/bash' : 'bash';
-    const args = ['-n', bashPath, setupServicesPath, 'install-service'];
-
-    await this.appendJobLog(
-      jobId,
-      `\n[${new Date().toISOString()}] [${stepName}] Running: sudo ${args.join(' ')}\n`
-    );
-
-    try {
-      const result = await this.runCommand('sudo', args);
-      await this.appendCapturedCommandOutput(jobId, stepName, result);
-      return { skipped: false };
-    } catch (error) {
-      await this.appendCapturedCommandOutput(jobId, stepName, error);
-
-      const failureOutput = `${error?.message || ''}\n${error?.stderr || ''}`;
-      if (this.isSudoPromptRequiredOutput(failureOutput) || this.isSudoPermissionDeniedOutput(failureOutput)) {
-        await this.appendJobLog(
-          jobId,
-          `[${new Date().toISOString()}] [${stepName}] `
-          + 'Skipped because passwordless sudo for helper installation is not configured on this host yet. '
-          + 'Run "bash scripts/setup-services.sh refresh-privileges" once to enable future automatic helper installs.\n'
-        );
-        return { skipped: true, reason: 'sudo-not-configured' };
-      }
-
-      throw error;
-    }
+    if (isHardenedService()) await requestHostControl('probe');
+    await this.appendJobLog(jobId, 'Administrator-owned service configuration retained; helper installation requires SSH administration.\n');
+    return { skipped: true, reason: 'administrator-managed' };
   }
 
   async provisionPlatformServices(jobId) {
-    const setupServicesPath = path.join(this.projectRoot, 'scripts', 'setup-services.sh');
-    if (!fs.existsSync(setupServicesPath)) {
-      await this.appendJobLog(
-        jobId,
-        `[${new Date().toISOString()}] [Provision platform services] Skipped because scripts/setup-services.sh is missing.\n`
-      );
-      return { skipped: true };
-    }
-
-    const stepName = 'Provision platform services';
-    const bashPath = fs.existsSync('/bin/bash') ? '/bin/bash' : 'bash';
-    const args = ['-n', bashPath, setupServicesPath, 'setup-platform-services'];
-
-    await this.appendJobLog(
-      jobId,
-      `\n[${new Date().toISOString()}] [${stepName}] Running: sudo ${args.join(' ')}\n`
-    );
-
-    try {
-      const result = await this.runCommand('sudo', args);
-      await this.appendCapturedCommandOutput(jobId, stepName, result);
-      return { skipped: false };
-    } catch (error) {
-      await this.appendCapturedCommandOutput(jobId, stepName, error);
-
-      const failureOutput = `${error?.message || ''}\n${error?.stderr || ''}`;
-      if (this.isSudoPromptRequiredOutput(failureOutput) || this.isSudoPermissionDeniedOutput(failureOutput)) {
-        await this.appendJobLog(
-          jobId,
-          `[${new Date().toISOString()}] [${stepName}] `
-          + 'Skipped because passwordless sudo for platform service provisioning is not configured on this host yet. '
-          + 'Run "bash scripts/setup-services.sh refresh-privileges" once to enable future automatic platform service installs.\n'
-        );
-        return { skipped: true, reason: 'sudo-not-configured' };
-      }
-
-      throw error;
-    }
+    await this.appendJobLog(jobId, 'Host packages remain administrator-managed; application deployment does not provision privileged services.\n');
+    return { skipped: true, reason: 'administrator-managed' };
   }
 
 }

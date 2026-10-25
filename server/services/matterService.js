@@ -3,6 +3,7 @@ const fsp = require('fs/promises');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
+const { isHardenedService, hostControlInvocation, administratorRequired } = require('../utils/hostControl');
 const axios = require('axios');
 const semver = require('semver');
 const Device = require('../models/Device');
@@ -2327,6 +2328,7 @@ class MatterService {
   }
 
   async startThreadKernelRebuild(payload = {}) {
+    if (isHardenedService()) throw administratorRequired();
     if (!isThreadKernelRebuildEnabled()) {
       const error = new Error('Automatic Jetson kernel rebuilds are disabled. HomeBrain will keep OTBR in the safe no-BBR fallback until a rollback-safe kernel installer is available.');
       error.status = 403;
@@ -2535,6 +2537,7 @@ class MatterService {
   }
 
   async startThreadBorderRouter(payload = {}) {
+    if (isHardenedService()) throw administratorRequired();
     if (!normalizeThreadOtbrConfirmation(payload.confirmOtbr || payload.confirm || payload.confirmStart)) {
       const error = new Error(`Type ${THREAD_OTBR_CONFIRMATION} to start HomeBrain-managed OTBR.`);
       error.status = 400;
@@ -2590,7 +2593,10 @@ class MatterService {
 
     const reason = normalizeString(payload.reason) || null;
     const output = await new Promise((resolve, reject) => {
-      const child = spawn('sudo', ['-n', THREAD_OTBR_HELPER_PATH, 'stop'], {
+      const invocation = isHardenedService()
+        ? hostControlInvocation('otbr-stop')
+        : { command: 'sudo', args: ['-n', THREAD_OTBR_HELPER_PATH, 'stop'] };
+      const child = spawn(invocation.command, invocation.args, {
         cwd: path.dirname(THREAD_OTBR_HELPER_PATH),
         stdio: ['ignore', 'pipe', 'pipe']
       });

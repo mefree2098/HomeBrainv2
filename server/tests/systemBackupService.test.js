@@ -103,7 +103,7 @@ test('createDisasterRecoveryBackup captures Mongo metadata and persisted filesys
   );
 });
 
-test('runRestoreJob restores filesystem state, uses the backup DATABASE_URL, and preserves system-backup workspace', { concurrency: false }, async (t) => {
+test('runRestoreJob restores filesystem state, preserves current database credentials and system-backup workspace', { concurrency: false }, async (t) => {
   const { projectRoot, serverRoot, tempRoot } = await createTempProject(t);
   const backupRoot = path.join(serverRoot, 'data', 'system-backup');
   const service = new SystemBackupService({
@@ -161,7 +161,9 @@ test('runRestoreJob restores filesystem state, uses the backup DATABASE_URL, and
     if (command === 'mongorestore') {
       mongorestoreCalls += 1;
       assert.equal(args.includes('--drop'), true);
-      assert.equal(args.includes('--uri=mongodb://restored-host/HomeBrain'), true);
+      assert.equal(args.some((arg) => arg.startsWith('--uri=')), false);
+      const configArg = args.find((arg) => arg.startsWith('--config='));
+      assert.equal(JSON.parse(await fsp.readFile(configArg.slice('--config='.length), 'utf8')).uri, 'mongodb://current-host/HomeBrain');
       assert.equal(fs.existsSync(getArchiveArg(args)), true);
       return { code: 0, stdout: '', stderr: '' };
     }
@@ -181,7 +183,7 @@ test('runRestoreJob restores filesystem state, uses the backup DATABASE_URL, and
   assert.match(String(result.message || ''), /start homebrain/i);
   assert.equal(
     await fsp.readFile(path.join(projectRoot, '.env'), 'utf8'),
-    'DATABASE_URL=mongodb://restored-host/HomeBrain\nRESTORED=1\n'
+    'DATABASE_URL="mongodb://current-host/HomeBrain"\nRESTORED=1\n'
   );
   assert.equal(
     await fsp.readFile(path.join(serverRoot, 'data', 'restored.json'), 'utf8'),

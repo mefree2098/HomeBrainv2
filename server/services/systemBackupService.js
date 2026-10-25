@@ -10,6 +10,8 @@ const dotenv = require('dotenv');
 const packageJson = require('../../package.json');
 const { getDataRetentionDays } = require('../config/dataRetention');
 const Settings = require('../models/Settings');
+const { isHardenedService, requestHostControl } = require('../utils/hostControl');
+const { withMongoToolsConfig } = require('../utils/mongoTools');
 
 const BACKUP_FORMAT_VERSION = 1;
 const DEFAULT_SERVICE_NAME = 'homebrain';
@@ -498,10 +500,9 @@ class SystemBackupService {
       await this.copyPath(sourcePath, targetPath, target);
     }
 
-    await this.runCommand('mongodump', [
-      `--uri=${this.databaseUrl}`,
-      ...buildArchivePathArgs(databaseArchivePath)
-    ]);
+    await withMongoToolsConfig(this.databaseUrl, (configArg) => this.runCommand('mongodump', [
+      configArg, ...buildArchivePathArgs(databaseArchivePath)
+    ]), this.tempRoot);
 
     manifest.database.archivePath = path.relative(bundleRoot, databaseArchivePath);
 
@@ -991,6 +992,10 @@ class SystemBackupService {
   }
 
   async launchRestoreHelper() {
+    if (isHardenedService()) {
+      await requestHostControl('restore');
+      return { serviceName: 'homebrain-restore-helper', launchStrategy: 'systemd-service' };
+    }
     try {
       await this.runCommand('sudo', ['-n', 'systemctl', 'start', this.restoreHelperServiceName], {
         captureStdout: false
@@ -1126,6 +1131,10 @@ class SystemBackupService {
 
   async queueServiceRestart() {
     try {
+      if (isHardenedService()) {
+        await requestHostControl('restart');
+        return;
+      }
       await this.runCommand('sudo', ['-n', 'systemctl', 'restart', this.serviceName], {
         captureStdout: false
       });
@@ -1169,8 +1178,24 @@ class SystemBackupService {
         await this.restoreFileTarget(extracted.extractRoot, target);
       }
 
+      if (this.databaseUrl) {
+        for (const relativePath of ['.env', path.join('server', '.env')]) {
+          const envPath = path.join(this.projectRoot, relativePath);
+          if (!(await this.pathExists(envPath))) continue;
+          const current = await fsp.readFile(envPath, 'utf8');
+          const assignment = `DATABASE_URL=${JSON.stringify(this.databaseUrl)}`;
+          const pattern = /^(?:export\s+)?DATABASE_URL\s*=.*$/gm;
+          const updated = pattern.test(current)
+            ? current.replace(pattern, () => assignment)
+            : `${current.trimEnd()}\n${assignment}\n`;
+          await fsp.writeFile(envPath, updated, { mode: 0o600 });
+          await fsp.chmod(envPath, 0o600);
+        }
+      }
+
       const envOverrides = this.loadEnvOverrides(extracted.extractRoot);
-      const databaseUrl = String(envOverrides.DATABASE_URL || this.databaseUrl || '').trim();
+      // Use this host's current credential when restoring an older archive.
+      const databaseUrl = String(this.databaseUrl || envOverrides.DATABASE_URL || '').trim();
       if (!databaseUrl) {
         throw new Error('DATABASE_URL is missing. HomeBrain cannot restore the database without it.');
       }
@@ -1185,11 +1210,9 @@ class SystemBackupService {
         manifest.database?.archivePath || path.join('database', 'homebrain.mongodb.archive.gz')
       );
 
-      await this.runCommand('mongorestore', [
-        `--uri=${databaseUrl}`,
-        '--drop',
-        ...buildArchivePathArgs(databaseArchivePath)
-      ]);
+      await withMongoToolsConfig(databaseUrl, (configArg) => this.runCommand('mongorestore', [
+        configArg, '--drop', ...buildArchivePathArgs(databaseArchivePath)
+      ]), this.tempRoot);
 
       if (restartOnComplete) {
         await this.updateRestoreJob(jobId, {

@@ -635,7 +635,7 @@ test('normalizeRestartCommandSegments adds --no-block to systemctl start and res
   ]);
 });
 
-test('installServiceHelpers runs setup-services install-service with non-interactive sudo when the helper script exists', { concurrency: false }, async (t) => {
+test('installServiceHelpers never elevates a writable checkout script', { concurrency: false }, async (t) => {
   const service = await createTempService(t);
   const scriptsDir = path.join(service.projectRoot, 'scripts');
   const setupServicesPath = path.join(scriptsDir, 'setup-services.sh');
@@ -652,14 +652,11 @@ test('installServiceHelpers runs setup-services install-service with non-interac
 
   const result = await service.installServiceHelpers('job-helpers');
 
-  assert.deepEqual(result, { skipped: false });
-  assert.deepEqual(call, {
-    command: 'sudo',
-    args: ['-n', '/bin/bash', setupServicesPath, 'install-service']
-  });
+  assert.deepEqual(result, { skipped: true, reason: 'administrator-managed' });
+  assert.equal(call, null);
 });
 
-test('provisionPlatformServices runs setup-services setup-platform-services with non-interactive sudo', { concurrency: false }, async (t) => {
+test('application deployment does not provision host software', { concurrency: false }, async (t) => {
   const service = await createTempService(t);
   const scriptsDir = path.join(service.projectRoot, 'scripts');
   const setupServicesPath = path.join(scriptsDir, 'setup-services.sh');
@@ -676,11 +673,8 @@ test('provisionPlatformServices runs setup-services setup-platform-services with
 
   const result = await service.provisionPlatformServices('job-platform-services');
 
-  assert.deepEqual(result, { skipped: false });
-  assert.deepEqual(call, {
-    command: 'sudo',
-    args: ['-n', '/bin/bash', setupServicesPath, 'setup-platform-services']
-  });
+  assert.deepEqual(result, { skipped: true, reason: 'administrator-managed' });
+  assert.equal(call, null);
 });
 
 test('platform deploy applies the reverse proxy config after bootstrapping routes', async () => {
@@ -704,18 +698,18 @@ test('platform deploy applies the reverse proxy config after bootstrapping route
   );
 });
 
-test('setup-services keeps HomeBrain-managed child services alive across restarts', async () => {
-  const setupServicesPath = path.resolve(__dirname, '..', '..', 'scripts', 'setup-services.sh');
-  const script = await fsp.readFile(setupServicesPath, 'utf8');
-  const serviceUnitStart = script.indexOf('Description=HomeBrain Smart Home Hub');
-  const serviceUnitEnd = script.indexOf('[Install]', serviceUnitStart);
-  const serviceUnit = script.slice(serviceUnitStart, serviceUnitEnd);
-
-  assert.match(serviceUnit, /Environment=HOMEBRAIN_BOOTSTRAP_NODE_BIN=\$\{node_bin\}/);
-  assert.match(serviceUnit, /ExecStart=\$\{HOMEBRAIN_DIR\}\/scripts\/run-homebrain-server-with-modern-node\.sh/);
-  assert.doesNotMatch(serviceUnit, /ExecStart=.*run-with-modern-node\.js node server\/server\.js/);
-  assert.match(serviceUnit, /KillMode=process/);
-  assert.doesNotMatch(serviceUnit, /KillMode=mixed/);
+test('service installation enforces the unprivileged runtime boundary', async () => {
+  const script = await fsp.readFile(path.resolve(__dirname, '../../scripts/harden-homebrain-service.sh'), 'utf8');
+  const unit = script.split('Description=HomeBrain Smart Home Hub')[1].split('[Install]')[0];
+  assert.match(unit, /User=homebrain/);
+  assert.match(unit, /Group=homebrain/);
+  assert.match(unit, /NoNewPrivileges=true/);
+  assert.match(unit, /CapabilityBoundingSet=\n/);
+  assert.match(unit, /ProtectSystem=strict/);
+  assert.match(unit, /ProtectHome=tmpfs/);
+  assert.match(unit, /BindPaths=\$REPO/);
+  assert.match(unit, /KillMode=control-group/);
+  assert.doesNotMatch(script, /NOPASSWD:/);
 });
 
 test('setup-services installs a MongoDB WiredTiger cache guard for Jetson hosts', async () => {
@@ -754,7 +748,7 @@ test('setup-services makes HomeBrain own the MQTT broker service', async () => {
   assert.match(script, /systemctl is-active --quiet "\$\{MQTT_SERVICE_NAME\}"/);
 });
 
-test('installServiceHelpers skips when helper installation lacks passwordless sudo', { concurrency: false }, async (t) => {
+test('helper installation remains administrator-managed regardless of legacy sudo availability', { concurrency: false }, async (t) => {
   const service = await createTempService(t);
   const scriptsDir = path.join(service.projectRoot, 'scripts');
   const setupServicesPath = path.join(scriptsDir, 'setup-services.sh');
@@ -774,9 +768,9 @@ test('installServiceHelpers skips when helper installation lacks passwordless su
 
   const result = await service.installServiceHelpers('job-helpers');
 
-  assert.deepEqual(result, { skipped: true, reason: 'sudo-not-configured' });
+  assert.deepEqual(result, { skipped: true, reason: 'administrator-managed' });
   assert.equal(
-    logs.some((entry) => entry.includes('Skipped because passwordless sudo for helper installation is not configured on this host yet')),
+    logs.some((entry) => entry.includes('helper installation requires SSH administration')),
     true
   );
 });

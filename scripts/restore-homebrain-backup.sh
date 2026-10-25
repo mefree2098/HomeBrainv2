@@ -24,6 +24,23 @@ if [[ -z "${HOMEBRAIN_DIR}" ]]; then
   exit 1
 fi
 
+if [[ "${HOMEBRAIN_HARDENED_SERVICE:-}" == 1 ]]; then
+  control=("${NODE_BIN}" "${HOMEBRAIN_DIR}/scripts/homebrain-host-control.js")
+  "${control[@]}" stop
+  for attempt in {1..90}; do
+    state="$("${SYSTEMCTL_BIN}" show -p ActiveState --value homebrain.service)"
+    if [[ "$state" == inactive || "$state" == failed ]]; then break; fi
+    if [[ "$attempt" == 90 ]]; then echo 'HomeBrain did not stop before restore.' >&2; exit 1; fi
+    sleep 1
+  done
+  trap '"${control[@]}" start' EXIT
+  cd "${HOMEBRAIN_DIR}"
+  "${NODE_BIN}" server/scripts/runQueuedRestoreJob.js --latest
+  "${control[@]}" start
+  trap - EXIT
+  exit 0
+fi
+
 canonicalize_path() {
   local target_path="${1:-}"
 
