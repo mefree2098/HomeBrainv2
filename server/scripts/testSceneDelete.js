@@ -9,6 +9,7 @@ require('dotenv').config();
 const mongoose = require('mongoose');
 const Scene = require('../models/Scene');
 const sceneService = require('../services/sceneService');
+const { describeDatabaseError } = require('../utils/databaseLogging');
 
 async function connectDatabase() {
   try {
@@ -16,9 +17,8 @@ async function connectDatabase() {
     const dbUrl = process.env.DATABASE_URL || 'mongodb://localhost/HomeBrain';
     await mongoose.connect(dbUrl);
     console.log('✅ Database connected successfully');
-    console.log(`   Database: ${dbUrl}\n`);
   } catch (error) {
-    console.error('❌ Database connection failed:', error.message);
+    console.error('❌ Database connection failed:', describeDatabaseError(error));
     process.exit(1);
   }
 }

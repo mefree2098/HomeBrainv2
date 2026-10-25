@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { describeDatabaseError } = require('../utils/databaseLogging');
 require('dotenv').config();
 
 mongoose.set('bufferCommands', false);
@@ -109,7 +110,7 @@ function attachShutdownHandler() {
       console.log('MongoDB connection closed through app termination');
       process.exit(0);
     } catch (error) {
-      console.error('Error during MongoDB shutdown:', error);
+      console.error('Error during MongoDB shutdown:', describeDatabaseError(error));
       process.exit(1);
     }
   });
@@ -123,7 +124,7 @@ function attachConnectionListeners() {
   listenersAttached = true;
 
   mongoose.connection.on('error', (error) => {
-    activeLogger.error(`MongoDB connection error: ${error}`);
+    activeLogger.error(`MongoDB connection error: ${describeDatabaseError(error)}`);
   });
 
   mongoose.connection.on('disconnected', () => {
@@ -179,7 +180,7 @@ async function connectDB(options = {}) {
         logger.log(`MongoDB Connected: ${conn.connection.host}`);
         return conn;
       } catch (error) {
-        logger.error(`MongoDB connection attempt ${attempt} failed: ${error.message}`);
+        logger.error(`MongoDB connection attempt ${attempt} failed: ${describeDatabaseError(error)}`);
 
         const retryDelayMs = Math.min(currentRetryDelayMs, retryConfig.maxDelayMs);
         logger.warn(`Retrying MongoDB connection in ${retryDelayMs}ms`);
