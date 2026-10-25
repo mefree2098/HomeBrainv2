@@ -89,20 +89,13 @@ function getRequestOrigin(req) {
 }
 
 function buildHomeBrainExtensionPatterns(req) {
-  const patterns = new Set([
-    'http://localhost/*',
-    'http://127.0.0.1/*'
-  ]);
   const origin = getRequestOrigin(req);
-  if (origin) {
-    try {
-      const parsed = new URL(origin);
-      patterns.add(`${parsed.protocol}//${parsed.hostname}/*`);
-    } catch (_error) {
-      // Keep the localhost fallbacks.
-    }
+  const parsed = new URL(origin);
+  if (parsed.username || parsed.password || (parsed.protocol !== 'https:'
+      && !(parsed.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(parsed.hostname)))) {
+    throw new Error('Download the Alexa helper from a secure HomeBrain origin.');
   }
-  return Array.from(patterns);
+  return [`${parsed.protocol}//${parsed.hostname}/*`];
 }
 
 function buildHelperManifest(req) {
@@ -916,3 +909,4 @@ router.post('/broker/link-account', brokerAuth, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.buildHelperManifest = buildHelperManifest;

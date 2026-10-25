@@ -11,3 +11,7 @@ Install once in Chrome or Edge:
 5. Select the unzipped `homebrain-alexa-session-helper` folder.
 
 After that, use HomeBrain's Alexa Broker page and click Capture Alexa Session.
+
+Download the helper from the HomeBrain site that will receive the session. Each downloaded helper is bound to that site's HTTPS host (or the actual loopback host for local development). It returns the session through that capture page, retaining HomeBrain's normal CORS policy and one-time capture-token checks. Cookie values stay in extension messages and the request to HomeBrain; page progress contains cookie names only.
+
+Version 1.0.1 reports missing session pieces and return errors on the capture page. Collection stops when that page closes or after ten minutes. After updating an unpacked helper, reload it in the browser's extensions page before starting a new capture.
