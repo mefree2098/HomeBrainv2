@@ -707,9 +707,16 @@ else:
 
 kernel_release = release_file.read_text().strip() if release_file.exists() else ""
 modules_dir = Path("/lib/modules") / kernel_release if kernel_release else Path("/lib/modules/__missing__")
+try:
+    modules_exist = modules_dir.exists()
+    module_dependencies_exist = (modules_dir / "modules.dep").exists()
+except PermissionError:
+    modules_exist = False
+    module_dependencies_exist = False
+    warnings.append("Kernel modules are inaccessible to this process.")
 add_check("kernel release recorded", bool(kernel_release), kernel_release or "missing")
-add_check("matching modules directory exists", modules_dir.exists(), str(modules_dir))
-add_check("module dependency index exists", (modules_dir / "modules.dep").exists(), str(modules_dir / "modules.dep"))
+add_check("matching modules directory exists", modules_exist, str(modules_dir))
+add_check("module dependency index exists", module_dependencies_exist, str(modules_dir / "modules.dep"))
 
 boot = parse_extlinux(extlinux)
 custom = boot.get("custom") or {}

@@ -289,29 +289,59 @@ test('Thread kernel helper validates the custom kernel before scheduling reboot'
   assert.doesNotMatch(script, /^\s+path\.write_text/m);
 });
 
-test('Thread kernel helper validate emits parseable JSON on failed preflight', (t) => {
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'homebrain-thread-kernel-test-'));
-  t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+for (const denyModuleAccess of [false, true]) {
+  test(`Thread kernel helper validate emits detailed JSON on failed preflight${denyModuleAccess ? ' with inaccessible kernel modules' : ''}`, (t) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'homebrain-thread-kernel-test-'));
+    t.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
 
-  const result = spawnSync('bash', [path.join(repoRoot, 'scripts', 'homebrain-jetson-kernel-control.sh'), 'validate'], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      HOMEBRAIN_THREAD_KERNEL_STATE_DIR: tempDir,
-      HOMEBRAIN_THREAD_KERNEL_EXTLINUX_CONF: path.join(tempDir, 'extlinux.conf'),
-      HOMEBRAIN_THREAD_KERNEL_IMAGE: path.join(tempDir, 'Image.homebrain-thread'),
-      HOMEBRAIN_THREAD_KERNEL_INITRD: path.join(tempDir, 'initrd.homebrain-thread'),
-      HOMEBRAIN_THREAD_KERNEL_CONFIG: path.join(tempDir, 'config.homebrain-thread'),
-      HOMEBRAIN_THREAD_KERNEL_SOURCE_DIR: path.join(tempDir, 'kernel-src')
+    const binDir = path.join(tempDir, 'bin');
+    if (denyModuleAccess) {
+      const python = spawnSync('python3', ['-c', 'import sys; print(sys.executable)'], { encoding: 'utf8' });
+      assert.equal(python.status, 0, python.stderr);
+      const wrapperPath = path.join(tempDir, 'deny-module-stat.py');
+      fs.mkdirSync(binDir);
+      fs.writeFileSync(wrapperPath, [
+        'import sys',
+        'from pathlib import Path',
+        'original_exists = Path.exists',
+        'def sandbox_exists(path):',
+        '    if str(path).startswith("/lib/modules/"):',
+        '        raise PermissionError("Simulated ProtectKernelModules")',
+        '    return original_exists(path)',
+        'Path.exists = sandbox_exists',
+        'exec(compile(sys.stdin.read(), "<preflight>", "exec"))',
+        ''
+      ].join('\n'));
+      const quote = (value) => `'${value.replace(/'/g, `'\\''`)}'`;
+      fs.writeFileSync(path.join(binDir, 'python3'), `#!/bin/sh\nexec ${quote(python.stdout.trim())} ${quote(wrapperPath)} "$@"\n`, { mode: 0o755 });
+    }
+
+    const result = spawnSync('bash', [path.join(repoRoot, 'scripts', 'homebrain-jetson-kernel-control.sh'), 'validate'], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binDir}${path.delimiter}${process.env.PATH || ''}`,
+        HOMEBRAIN_THREAD_KERNEL_STATE_DIR: tempDir,
+        HOMEBRAIN_THREAD_KERNEL_EXTLINUX_CONF: path.join(tempDir, 'extlinux.conf'),
+        HOMEBRAIN_THREAD_KERNEL_IMAGE: path.join(tempDir, 'Image.homebrain-thread'),
+        HOMEBRAIN_THREAD_KERNEL_INITRD: path.join(tempDir, 'initrd.homebrain-thread'),
+        HOMEBRAIN_THREAD_KERNEL_CONFIG: path.join(tempDir, 'config.homebrain-thread'),
+        HOMEBRAIN_THREAD_KERNEL_SOURCE_DIR: path.join(tempDir, 'kernel-src')
+      }
+    });
+
+    assert.equal(result.status, 1);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.ok, false);
+    assert.equal(payload.checks[0].name, 'custom kernel image exists');
+    if (denyModuleAccess) {
+      assert.ok(payload.warnings.includes('Kernel modules are inaccessible to this process.'));
+      assert.equal(payload.checks.find((check) => check.name === 'matching modules directory exists').ok, false);
+      assert.equal(payload.checks.find((check) => check.name === 'module dependency index exists').ok, false);
     }
   });
-
-  assert.equal(result.status, 1);
-  const payload = JSON.parse(result.stdout);
-  assert.equal(payload.ok, false);
-  assert.equal(payload.checks[0].name, 'custom kernel image exists');
-});
+}
 
 test('platform service update checks use the package cache and parse Pi-hole latest versions cleanly', () => {
   const script = fs.readFileSync(path.join(repoRoot, 'scripts', 'setup-services.sh'), 'utf8');
