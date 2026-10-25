@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HomeBrain Alexa Session Helper",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Captures a fresh Alexa web session for HomeBrain after an explicit admin login.",
   "permissions": [
     "cookies",

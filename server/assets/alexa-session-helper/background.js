@@ -1,4 +1,4 @@
-const HELPER_VERSION = '1.0.1';
+const HELPER_VERSION = '1.0.2';
 const REQUIRED_COOKIE_NAMES = ['session-id', 'session-token', 'csrf'];
 const IMPORTANT_COOKIE_NAMES = ['ubid-main', 'session-id-time', 'at-main', 'sess-at-main', 'x-main'];
 const MAX_CAPTURE_AGE_MS = 10 * 60 * 1000;
@@ -7,6 +7,7 @@ let activeCapture = null;
 let pollTimer = null;
 
 function stopCapture() {
+  activeCapture?.bootstrapAbort?.abort();
   clearInterval(pollTimer);
   pollTimer = null;
   activeCapture = null;
@@ -99,16 +100,22 @@ function cookieKey(cookie) {
 async function getCookiesForCapture(capture) {
   const urls = buildCaptureUrls(capture);
   const cookieMap = new Map();
+  const amazonPage = normalizeHost(capture.amazonPage || 'amazon.com');
+  const domain = AMAZON_DOMAINS.find((entry) => amazonPage === entry || amazonPage.endsWith(`.${entry}`));
   for (const url of urls) {
-    try {
-      const cookies = await chrome.cookies.getAll({ url });
-      for (const cookie of cookies) {
-        if (cookie && cookie.name && typeof cookie.value === 'string') {
-          cookieMap.set(cookieKey(cookie), cookie);
+    // Cookie APIs otherwise omit Partitioned cookies. Read only Amazon's own
+    // first-party partition, under the helper's existing host permissions.
+    for (const partitionKey of [null, { topLevelSite: `https://${domain}`, hasCrossSiteAncestor: false }]) {
+      try {
+        const cookies = await chrome.cookies.getAll({ url, ...(partitionKey ? { partitionKey } : {}) });
+        for (const cookie of cookies) {
+          if (cookie && cookie.name && typeof cookie.value === 'string' && !cookieMap.has(cookieKey(cookie))) {
+            cookieMap.set(cookieKey(cookie), cookie);
+          }
         }
+      } catch (_error) {
+        // Older browsers may not support partition keys. Keep ordinary cookies.
       }
-    } catch (_error) {
-      // Ignore hosts that the browser rejects for the current region/account.
     }
   }
   return Array.from(cookieMap.values()).sort((a, b) => {
@@ -142,18 +149,72 @@ function getCookieValue(cookies, name) {
   return match?.value || '';
 }
 
+async function bootstrapSession(capture, cookies) {
+  const names = getCookieNames(cookies);
+  if (!names.includes('session-id') || !names.includes('session-token') || names.includes('csrf')) return cookies;
+  const sessionMarker = cookies.filter((cookie) => /^(session-token|at-)/i.test(cookie.name)).map((cookie) => cookie.value).join('\n');
+  if (capture.bootstrapSessionMarker === sessionMarker) return cookies;
+  capture.bootstrapSessionMarker = sessionMarker;
+  await reportProgress(capture, 'Preparing the Alexa command session after Amazon sign-in.', ['csrf']);
+
+  const serviceHost = normalizeHost(capture.serviceHost || 'pitangui.amazon.com');
+  const amazonPage = normalizeHost(capture.amazonPage || 'amazon.com').replace(/^www\./i, '');
+  // These read-only endpoints are also used by alexa-cookie/alexapy to obtain
+  // Amazon's own CSRF cookie. Never create a token or submit a device command.
+  const origins = unique([`https://${serviceHost}`, `https://alexa.${amazonPage}`]);
+  for (const origin of origins) {
+    for (const path of ['/api/language', '/api/devices-v2/device?cached=false', '/api/strings']) {
+      if (activeCapture !== capture || Date.now() - capture.startedAt >= MAX_CAPTURE_AGE_MS) return cookies;
+      const controller = new AbortController();
+      capture.bootstrapAbort = controller;
+      const timer = setTimeout(() => controller.abort(), 8000);
+      try {
+        const response = await fetch(`${origin}${path}`, {
+          method: 'GET', credentials: 'include', cache: 'no-store', redirect: 'error',
+          headers: { Accept: 'application/json' }, signal: controller.signal
+        });
+        await response.body?.cancel();
+      } catch (_error) {
+        // A failed/retired endpoint cannot supply a cookie. Try the next one.
+      } finally {
+        clearTimeout(timer);
+        capture.bootstrapAbort = null;
+      }
+      if (activeCapture !== capture) return cookies;
+      cookies = await getCookiesForCapture(capture);
+      if (hasRequiredCookies(cookies)) return cookies;
+    }
+  }
+  return cookies;
+}
+
 async function submitCaptureIfReady(reason = 'poll') {
   const capture = activeCapture;
-  if (!capture || capture.submitted) {
-    return;
+  if (!capture || capture.checking) return;
+  capture.checking = true;
+  try {
+    await collectCapture(capture, reason);
+  } finally {
+    capture.checking = false;
   }
+}
+
+async function collectCapture(capture, reason) {
+  if (capture.submitted) return;
   if (Date.now() - capture.startedAt >= MAX_CAPTURE_AGE_MS) {
     await reportProgress(capture, 'Alexa session capture expired. Start a new capture in HomeBrain.');
     if (activeCapture === capture) stopCapture();
     return;
   }
-  const cookies = await getCookiesForCapture(capture);
+  let cookies = await getCookiesForCapture(capture);
+  if (activeCapture !== capture) return;
+  cookies = await bootstrapSession(capture, cookies);
   if (activeCapture !== capture || capture.submitted) return;
+  if (Date.now() - capture.startedAt >= MAX_CAPTURE_AGE_MS) {
+    await reportProgress(capture, 'Alexa session capture expired. Start a new capture in HomeBrain.');
+    if (activeCapture === capture) stopCapture();
+    return;
+  }
   if (!hasRequiredCookies(cookies)) {
     const names = getCookieNames(cookies);
     const missing = REQUIRED_COOKIE_NAMES.filter((name) => !names.includes(name));
