@@ -342,7 +342,7 @@ export default function AlexaBrokerManagement() {
 
     const interval = setInterval(() => {
       void poll();
-    }, 2500);
+    }, 5000);
     void poll();
 
     return () => {
