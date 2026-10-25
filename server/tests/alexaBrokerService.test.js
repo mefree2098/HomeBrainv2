@@ -1,6 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const {
   AlexaBrokerService,
@@ -8,6 +11,66 @@ const {
   parseListInput
 } = require('../services/alexaBrokerService');
 const AlexaBrokerConfig = require('../models/AlexaBrokerConfig');
+
+function hardenedStoreFixture(t) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'homebrain-alexa-store-'));
+  const projectRoot = path.join(directory, 'app');
+  const runtimeHome = path.join(directory, 'runtime');
+  const operatorHome = path.join(directory, 'operator');
+  for (const entry of [projectRoot, runtimeHome, operatorHome]) fs.mkdirSync(entry);
+  const previous = process.env.HOMEBRAIN_HARDENED_SERVICE;
+  process.env.HOMEBRAIN_HARDENED_SERVICE = '1';
+  t.mock.method(os, 'homedir', () => runtimeHome);
+  t.after(() => {
+    if (previous === undefined) delete process.env.HOMEBRAIN_HARDENED_SERVICE;
+    else process.env.HOMEBRAIN_HARDENED_SERVICE = previous;
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  return { projectRoot, runtimeHome, operatorHome, service: new AlexaBrokerService({ projectRoot }) };
+}
+
+test('hardened broker accepts persistent runtime and checkout stores, including new subdirectories', (t) => {
+  const { service, runtimeHome, projectRoot } = hardenedStoreFixture(t);
+  assert.doesNotThrow(() => service.validateStoreLocation({ storeFile: path.join(runtimeHome, '.homebrain', 'alexa-broker', 'store.json') }));
+  assert.doesNotThrow(() => service.validateStoreLocation({ storeFile: path.join(projectRoot, 'broker', 'data', 'store.json') }));
+  assert.doesNotThrow(() => service.validateStoreLocation({ storeFile: 'data/store.json' }));
+});
+
+test('hardened broker rejects a masked operator-home store before accepting a healthy empty process', async (t) => {
+  const { service, operatorHome } = hardenedStoreFixture(t);
+  let probes = 0;
+  service.getConfig = async () => ({ isInstalled: true, serviceStatus: 'running', storeFile: path.join(operatorHome, 'store.json') });
+  service.isManagedRuntimeAlive = () => true;
+  service.probeHealth = async () => { probes += 1; return { available: true, health: { hubs: 0 } }; };
+  await assert.rejects(service.startService(), /outside HomeBrain's persistent runtime home/);
+  assert.equal(probes, 0);
+});
+
+test('hardened store containment rejects sibling prefixes, traversal and escaping symlinks', (t) => {
+  const { service, runtimeHome, operatorHome } = hardenedStoreFixture(t);
+  fs.symlinkSync(operatorHome, path.join(runtimeHome, 'external'));
+  for (const storeFile of [runtimeHome + '-other/store.json', path.join(runtimeHome, '..', 'operator', 'store.json'), path.join(runtimeHome, 'external', 'store.json')]) {
+    assert.throws(() => service.buildRuntimeEnv({ storeFile }), /outside HomeBrain's persistent runtime home/);
+  }
+});
+
+test('hardened config updates reject transient storage before changing or saving the configured path', async (t) => {
+  const { service, runtimeHome, operatorHome } = hardenedStoreFixture(t);
+  const original = path.join(runtimeHome, 'store.json');
+  let saves = 0;
+  const config = { storeFile: original, async save() { saves += 1; } };
+  service.getConfig = async () => config;
+  service.isManagedRuntimeAlive = () => false;
+  await assert.rejects(service.updateConfig({ storeFile: path.join(operatorHome, 'store.json') }), /outside HomeBrain's persistent runtime home/);
+  assert.equal(config.storeFile, original);
+  assert.equal(saves, 0);
+});
+
+test('unhardened broker retains support for an explicitly configured external store', (t) => {
+  const { service, operatorHome } = hardenedStoreFixture(t);
+  process.env.HOMEBRAIN_HARDENED_SERVICE = '0';
+  assert.doesNotThrow(() => service.validateStoreLocation({ storeFile: path.join(operatorHome, 'store.json') }));
+});
 
 test('buildLocalBaseUrl uses loopback when broker binds all interfaces', () => {
   assert.equal(buildLocalBaseUrl('0.0.0.0', 4301), 'http://127.0.0.1:4301');
