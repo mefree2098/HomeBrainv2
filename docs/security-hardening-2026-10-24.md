@@ -28,6 +28,8 @@ The hardened runtime rejects configured store paths outside its runtime home or 
 
 The optional HomeBrain Native announcement bridge uses a separate Amazon web session. Check its read-only device-list test separately from broker health, OAuth refresh and proactive events. Amazon rejecting that session requires normal session renewal; migrating the broker store does not renew it. The capture helper must be installed in the browser, and its login opens Alexa's current website so Amazon selects the sign-in flow. Both capture pages poll at five-second intervals to stay within the existing shared 30-request-per-minute limit.
 
+The downloaded helper is bound to the HomeBrain host that serves it. Session return runs in the isolated content script on that origin, preserving the server's CORS allowlist and one-time capture-token authentication. The background process validates the sender, top-level capture page, receiver and Amazon login hosts. Cookie values never enter page messages; progress exposes missing cookie names only, and collection stops on page close or timeout. Managed broker initialization waits for the initial MongoDB connection before reading its persisted configuration.
+
 ## MongoDB upgrade and rollback
 
 New installs default to MongoDB 8.0. An existing older installation is rejected by the fresh installer rather than silently reused or upgraded across unsupported major-version boundaries.

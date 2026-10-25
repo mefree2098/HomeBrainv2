@@ -15,6 +15,7 @@
   const closeButton = document.getElementById('close-window');
   let helperAvailable = false;
   let started = false;
+  let helperProgress = false;
 
   function setStatus(title, copy, detail, tone) {
     statusTitle.textContent = title;
@@ -67,7 +68,7 @@
         setStatus('Alexa session capture failed', capture.message || 'Start a new capture from HomeBrain.', '', 'bad');
         return;
       }
-      if (capture.status && helperAvailable && started) {
+      if (capture.status && helperAvailable && started && !helperProgress) {
         setStatus('Waiting for Alexa login...', capture.message || 'Finish signing in to Amazon.', capture.status, '');
       }
     } catch (_error) {
@@ -83,6 +84,11 @@
       return;
     }
     const message = event.data || {};
+    if (message.type === 'homebrain-alexa-session-capture:progress') {
+      helperProgress = true;
+      const missing = Array.isArray(message.missingCookieNames) ? message.missingCookieNames : [];
+      setStatus('Alexa session capture progress', message.message || 'Waiting for Amazon sign-in.', missing.join(', '), '');
+    }
     if (message.type === 'homebrain-alexa-session-capture:helper-available') {
       helperAvailable = true;
       installHelp.classList.add('hidden');

@@ -75,3 +75,14 @@ test('a helper announcement from the same window and origin starts capture and u
   await page.timers.find((timer) => timer.delay !== 1400).callback();
   assert.equal(page.elements.get('status-title').textContent, 'Waiting for Alexa login...');
 });
+
+test('pending server polls retain nonsecret helper progress', async () => {
+  const page = renderCapturePage();
+  await new Promise(setImmediate);
+  const event = (data) => page.listeners.message({ source: page.window, origin: page.window.location.origin, data });
+  event({ type: 'homebrain-alexa-session-capture:helper-available' });
+  event({ type: 'homebrain-alexa-session-capture:progress', message: 'Waiting for Amazon session cookies: csrf.', missingCookieNames: ['csrf'] });
+  await page.timers.find((timer) => timer.delay !== 1400).callback();
+  assert.equal(page.elements.get('status-copy').textContent, 'Waiting for Amazon session cookies: csrf.');
+  assert.equal(page.elements.get('details').textContent, 'csrf');
+});

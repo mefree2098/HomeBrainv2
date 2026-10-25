@@ -756,6 +756,7 @@ void dbReady
 // Initialize managed Alexa broker service
 (async () => {
   try {
+    await dbReady;
     await alexaBrokerService.initialize();
     console.log('Alexa Broker Service initialized successfully');
   } catch (error) {
