@@ -54,6 +54,15 @@ test('hardened store containment rejects sibling prefixes, traversal and escapin
   }
 });
 
+test('hardened broker rejects outside paths before probing their filesystem metadata', (t) => {
+  const { service, operatorHome } = hardenedStoreFixture(t);
+  const probes = [];
+  t.mock.method(fs, 'existsSync', (candidate) => { probes.push(candidate); return false; });
+  t.mock.method(fs, 'realpathSync', (candidate) => { probes.push(candidate); return candidate; });
+  assert.throws(() => service.validateStoreLocation({ storeFile: path.join(operatorHome, 'store.json') }), /outside HomeBrain's persistent runtime home/);
+  assert.deepEqual(probes, []);
+});
+
 test('hardened config updates reject transient storage before changing or saving the configured path', async (t) => {
   const { service, runtimeHome, operatorHome } = hardenedStoreFixture(t);
   const original = path.join(runtimeHome, 'store.json');

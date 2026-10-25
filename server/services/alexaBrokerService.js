@@ -314,11 +314,15 @@ class AlexaBrokerService {
   validateStoreLocation(config) {
     if (!isHardenedService()) return;
     const storeFile = trimString(config.storeFile) || this.getDefaultStoreFile();
-    const storePath = resolvePersistentPath(path.resolve(this.brokerRoot, storeFile));
-    const roots = [this.projectRoot, os.homedir()].map(resolvePersistentPath);
-    if (!roots.some((root) => storePath.startsWith(`${root}${path.sep}`))) {
-      throw new Error('Alexa broker store is outside HomeBrain\'s persistent runtime home or app checkout. Migrate the existing store and backup before starting the broker.');
+    const storePath = path.resolve(this.brokerRoot, storeFile);
+    for (const root of [this.projectRoot, os.homedir()]) {
+      const allowedRoot = path.resolve(root);
+      if (!storePath.startsWith(`${allowedRoot}${path.sep}`)) continue;
+      const canonicalRoot = resolvePersistentPath(allowedRoot);
+      const canonicalStore = resolvePersistentPath(storePath);
+      if (canonicalStore.startsWith(`${canonicalRoot}${path.sep}`)) return;
     }
+    throw new Error('Alexa broker store is outside HomeBrain\'s persistent runtime home or app checkout. Migrate the existing store and backup before starting the broker.');
   }
 
   detectInstalled() {
