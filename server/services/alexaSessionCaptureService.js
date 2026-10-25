@@ -42,26 +42,15 @@ function normalizeServiceHost(value) {
   return normalizeHostname(value, DEFAULT_SERVICE_HOST) || DEFAULT_SERVICE_HOST;
 }
 
-function buildAlexaSpaUrl(amazonPage) {
+function buildAlexaWebUrl(amazonPage) {
   const host = normalizeAmazonPage(amazonPage);
-  if (host === DEFAULT_AMAZON_PAGE) {
-    return 'https://alexa.amazon.com/spa/index.html';
-  }
-  return `https://alexa.${host}/spa/index.html`;
+  return `https://alexa.${host}/`;
 }
 
 function buildAmazonLoginUrl(amazonPage) {
-  const host = normalizeAmazonPage(amazonPage);
-  const returnTo = buildAlexaSpaUrl(host);
-  const target = new URL(`https://www.${host}/ap/signin`);
-  target.searchParams.set('openid.pape.max_auth_age', '0');
-  target.searchParams.set('openid.return_to', returnTo);
-  target.searchParams.set('openid.assoc_handle', 'amzn_alexa_us');
-  target.searchParams.set('openid.mode', 'checkid_setup');
-  target.searchParams.set('openid.ns', 'http://specs.openid.net/auth/2.0');
-  target.searchParams.set('openid.identity', 'http://specs.openid.net/auth/2.0/identifier_select');
-  target.searchParams.set('openid.claimed_id', 'http://specs.openid.net/auth/2.0/identifier_select');
-  return target.toString();
+  // Let Alexa select its current Amazon sign-in flow. The legacy manually
+  // constructed OpenID request now returns Amazon's non-functioning-page error.
+  return buildAlexaWebUrl(amazonPage);
 }
 
 function parseCookieNames(cookie) {

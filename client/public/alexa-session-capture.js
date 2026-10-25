@@ -4,7 +4,7 @@
   const token = params.get('token') || '';
   const receiverUrl = params.get('receiver') || '';
   const statusUrl = params.get('status') || '';
-  const loginUrl = params.get('login') || 'https://alexa.amazon.com/spa/index.html';
+  const loginUrl = params.get('login') || 'https://alexa.amazon.com/';
   const serviceHost = params.get('serviceHost') || 'pitangui.amazon.com';
   const amazonPage = params.get('amazonPage') || 'amazon.com';
   const statusTitle = document.getElementById('status-title');
@@ -26,6 +26,11 @@
   function startCapture() {
     if (!captureId || !token || !receiverUrl) {
       setStatus('Capture link is incomplete', 'Go back to HomeBrain and start a new Alexa session capture.', '', 'bad');
+      return;
+    }
+    if (!helperAvailable) {
+      installHelp.classList.remove('hidden');
+      setStatus('Helper extension was not detected', 'Install or enable the helper, then reload this capture page.', '', 'bad');
       return;
     }
     started = true;
@@ -62,13 +67,15 @@
         setStatus('Alexa session capture failed', capture.message || 'Start a new capture from HomeBrain.', '', 'bad');
         return;
       }
-      if (capture.status) {
+      if (capture.status && helperAvailable && started) {
         setStatus('Waiting for Alexa login...', capture.message || 'Finish signing in to Amazon.', capture.status, '');
       }
     } catch (_error) {
       // The parent UI also polls. Keep this page quiet during transient restarts.
     }
-    setTimeout(pollStatus, 2000);
+    // The broker page also polls. Keep both streams below the shared capture
+    // limit of 30 requests per minute, leaving room for start/download/complete.
+    setTimeout(pollStatus, 5000);
   }
 
   window.addEventListener('message', (event) => {
@@ -100,7 +107,7 @@
   setTimeout(() => {
     if (!helperAvailable) {
       installHelp.classList.remove('hidden');
-      setStatus('Helper extension was not detected', 'Install or enable the helper, then click Open Alexa Login.', '', 'bad');
+      setStatus('Helper extension was not detected', 'Install or enable the helper, then reload this capture page.', '', 'bad');
     }
   }, 1400);
 

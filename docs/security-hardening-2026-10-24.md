@@ -26,6 +26,8 @@ Stop the broker, retain protected backups of the primary file and its `.bak`, an
 
 The hardened runtime rejects configured store paths outside its runtime home or bound application checkout, including escaping symlinks, before starting or adopting a broker. Verify that the existing paired hub, durable refresh tokens and event grants load, authenticated broker metrics and state sync succeed, and the state survives a HomeBrain restart. Existing stale household records are a separate diagnostic and should not be deleted as part of this repair.
 
+The optional HomeBrain Native announcement bridge uses a separate Amazon web session. Check its read-only device-list test separately from broker health, OAuth refresh and proactive events. Amazon rejecting that session requires normal session renewal; migrating the broker store does not renew it. The capture helper must be installed in the browser, and its login opens Alexa's current website so Amazon selects the sign-in flow. Both capture pages poll at five-second intervals to stay within the existing shared 30-request-per-minute limit.
+
 ## MongoDB upgrade and rollback
 
 New installs default to MongoDB 8.0. An existing older installation is rejected by the fresh installer rather than silently reused or upgraded across unsupported major-version boundaries.

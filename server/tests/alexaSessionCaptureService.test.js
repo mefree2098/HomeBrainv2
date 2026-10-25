@@ -85,11 +85,12 @@ test('AlexaSessionCaptureService rejects an invalid capture token', () => {
   );
 });
 
-test('buildAmazonLoginUrl sends the user directly to Amazon login with Alexa as the return target', () => {
+test('buildAmazonLoginUrl lets Alexa select the current sign-in flow for the configured region', () => {
   const loginUrl = buildAmazonLoginUrl('amazon.com');
   const parsed = new URL(loginUrl);
 
-  assert.equal(parsed.hostname, 'www.amazon.com');
-  assert.equal(parsed.pathname, '/ap/signin');
-  assert.equal(parsed.searchParams.get('openid.return_to'), 'https://alexa.amazon.com/spa/index.html');
+  assert.equal(parsed.origin, 'https://alexa.amazon.com');
+  assert.equal(parsed.pathname, '/');
+  assert.equal(parsed.search, '');
+  assert.equal(buildAmazonLoginUrl('amazon.co.uk'), 'https://alexa.amazon.co.uk/');
 });
