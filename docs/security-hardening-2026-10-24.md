@@ -16,7 +16,15 @@ Use a verified release and authenticated administrator session to install the re
 sudo bash scripts/harden-homebrain-service.sh /absolute/path/to/HomeBrainv2
 ```
 
-Before restarting, relocate external Python environments and cached models into the runtime home or provide narrowly scoped read access. Preserve the existing environment, identity signing keys, HomeKit pairing state and runtime data. The installer records the old service configuration under a root-only rollback directory. It does not migrate a database or update firmware.
+Before restarting, relocate external Python environments, cached models and persistent integration stores into the runtime home or provide narrowly scoped access. Preserve the existing environment, identity signing keys, HomeKit pairing state and runtime data. The installer records the old service configuration under a root-only rollback directory. It does not migrate a database or update firmware.
+
+### Alexa credential-store migration
+
+Inspect the database-backed Alexa Broker `storeFile` before changing the service identity. A legacy path such as `/home/matt/.homebrain/alexa-broker/store.json` is hidden by `ProtectHome=tmpfs`. The broker can otherwise create an empty store in that private filesystem view and report healthy while losing access to its existing hub, account links and refresh tokens. A running process alone is not Alexa connection acceptance.
+
+Stop the broker, retain protected backups of the primary file and its `.bak`, and copy both into `/var/lib/homebrain/runtime/.homebrain/alexa-broker/` on the same host. Compare their checksums before starting the broker. Set ownership to that host's dedicated HomeBrain UID/GID, directories to 0700 and files to 0600. Update only the database-backed `storeFile` through the existing administrator API or settings page, then restart the broker. Preserve the original files and account registrations; do not replace this migration with a new pairing or account revocation.
+
+The hardened runtime rejects configured store paths outside its runtime home or bound application checkout, including escaping symlinks, before starting or adopting a broker. Verify that the existing paired hub, durable refresh tokens and event grants load, authenticated broker metrics and state sync succeed, and the state survives a HomeBrain restart. Existing stale household records are a separate diagnostic and should not be deleted as part of this repair.
 
 ## MongoDB upgrade and rollback
 

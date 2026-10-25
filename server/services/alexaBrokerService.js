@@ -5,6 +5,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const axios = require('axios');
 const { parseServiceOrigin } = require('../utils/networkSafety');
+const { isHardenedService } = require('../utils/hostControl');
 const AlexaBrokerConfig = require('../models/AlexaBrokerConfig');
 const ReverseProxyRoute = require('../models/ReverseProxyRoute');
 const reverseProxyService = require('./reverseProxyService');
@@ -33,6 +34,18 @@ const MANAGED_REVERSE_PROXY_NOTES = 'Managed automatically by the HomeBrain Alex
 
 function trimString(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function resolvePersistentPath(value) {
+  let existing = path.resolve(value);
+  const remaining = [];
+  while (!fs.existsSync(existing)) {
+    const parent = path.dirname(existing);
+    if (parent === existing) break;
+    remaining.push(path.basename(existing));
+    existing = parent;
+  }
+  return path.join(fs.realpathSync(existing), ...remaining.reverse());
 }
 
 function isMaskedSecret(value) {
@@ -296,6 +309,20 @@ class AlexaBrokerService {
     }
 
     return path.join(this.projectRoot, 'server', 'data', 'alexa-broker', 'store.json');
+  }
+
+  validateStoreLocation(config) {
+    if (!isHardenedService()) return;
+    const storeFile = trimString(config.storeFile) || this.getDefaultStoreFile();
+    const storePath = path.resolve(this.brokerRoot, storeFile);
+    for (const root of [this.projectRoot, os.homedir()]) {
+      const allowedRoot = path.resolve(root);
+      if (!storePath.startsWith(`${allowedRoot}${path.sep}`)) continue;
+      const canonicalRoot = resolvePersistentPath(allowedRoot);
+      const canonicalStore = resolvePersistentPath(storePath);
+      if (canonicalStore.startsWith(`${canonicalRoot}${path.sep}`)) return;
+    }
+    throw new Error('Alexa broker store is outside HomeBrain\'s persistent runtime home or app checkout. Migrate the existing store and backup before starting the broker.');
   }
 
   detectInstalled() {
@@ -654,6 +681,7 @@ class AlexaBrokerService {
   }
 
   buildRuntimeEnv(config) {
+    this.validateStoreLocation(config);
     return {
       ...process.env,
       PORT: String(sanitizePositiveInteger(config.servicePort, DEFAULT_PORT, { min: 1, max: 65535 })),
@@ -1252,7 +1280,9 @@ class AlexaBrokerService {
     }
 
     if (Object.prototype.hasOwnProperty.call(updates, 'storeFile')) {
-      config.storeFile = trimString(updates.storeFile) || this.getDefaultStoreFile();
+      const storeFile = trimString(updates.storeFile) || this.getDefaultStoreFile();
+      this.validateStoreLocation({ storeFile });
+      config.storeFile = storeFile;
     }
 
     if (Object.prototype.hasOwnProperty.call(updates, 'authCodeTtlMs')) {
@@ -1427,6 +1457,7 @@ class AlexaBrokerService {
 
   async startService(options = {}) {
     const config = await this.getConfig();
+    this.validateStoreLocation(config);
     const actor = trimString(options.actor) || 'system';
     const automatic = options.automatic === true;
     const source = trimString(options.source) || (automatic ? 'automatic' : 'manual');
