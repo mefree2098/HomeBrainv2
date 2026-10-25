@@ -30,6 +30,8 @@ The optional HomeBrain Native announcement bridge uses a separate Amazon web ses
 
 The downloaded helper is bound to the HomeBrain host that serves it. Session return runs in the isolated content script on that origin, preserving the server's CORS allowlist and one-time capture-token authentication. The background process validates the sender, top-level capture page, receiver and Amazon login hosts. Cookie values never enter page messages; progress exposes missing cookie names only, and collection stops on page close or timeout. Managed broker initialization waits for the initial MongoDB connection before reading its persisted configuration.
 
+When the browser is signed in but no Alexa CSRF cookie exists, the helper requests the read-only session endpoints used by [alexa-cookie](https://github.com/Apollon77/alexa-cookie/blob/master/alexa-cookie.js) and [alexapy](https://gitlab.com/keatontaylor/alexapy/-/blob/dev/alexapy/alexalogin.py), with an eight-second request limit and no redirects. Each unchanged Amazon session gets one bounded pass. Closing the capture aborts an in-flight bootstrap. Cookie collection includes Amazon's own first-party partition because [Chrome's cookie API defaults to unpartitioned cookies](https://developer.chrome.com/docs/extensions/reference/api/cookies#partitioning). The helper neither invents a CSRF token nor relaxes the session requirements, capture receiver checks or host permissions.
+
 ## MongoDB upgrade and rollback
 
 New installs default to MongoDB 8.0. An existing older installation is rejected by the fresh installer rather than silently reused or upgraded across unsupported major-version boundaries.
