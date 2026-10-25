@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { describeDatabaseError } = require('../utils/databaseLogging');
 
 // Import all models to ensure they are registered
 require('./User');
@@ -75,7 +76,7 @@ async function ensureDeviceIdentityIndexes(model) {
         }
       );
     } catch (error) {
-      console.warn(`dbInit: skipped unique index ${index.name} (likely pre-existing duplicate device rows); it will apply on a later start once duplicates are cleaned. ${error.message}`);
+      console.warn(`dbInit: skipped unique index ${index.name} (likely pre-existing duplicate device rows); it will apply on a later start once duplicates are cleaned. ${describeDatabaseError(error)}`);
     }
   }
 }
@@ -85,12 +86,18 @@ const dbInit = async (options = {}) => {
 
   try {
     await mongoose.connect(mongoUrl, options);
-    console.log(`Connected to MongoDB at ${mongoUrl}`);
+    console.log('Connected to MongoDB');
     console.log('All models registered successfully');
     await ensureDeviceIdentityIndexes();
   } catch (err) {
-    console.error('%s', `Error connecting to database ${mongoUrl}:`, err);
-    throw err;
+    const description = describeDatabaseError(err);
+    console.error('Error connecting to database:', description);
+    // Bootstrap callers also log thrown errors. Do not forward credential-bearing
+    // messages, stack traces or causes into deployment output.
+    const safeError = new Error(`Database connection failed: ${description}`);
+    safeError.name = 'DatabaseConnectionError';
+    if (Number.isSafeInteger(err?.code)) safeError.code = err.code;
+    throw safeError;
   }
 };
 
