@@ -12,12 +12,14 @@ async function main() {
   if (parsed.port !== '33337' || !/^\/homebrain_security_fixture(?:_[a-z0-9]+)?$/.test(parsed.pathname)) {
     throw new Error('Integration test requires an isolated homebrain_security_fixture database');
   }
-  await mongoose.connect(uri, { serverSelectionTimeoutMS: 10_000, autoIndex: true });
+  await mongoose.connect(uri, { serverSelectionTimeoutMS: 10_000, autoCreate: false, autoIndex: false });
   const db = mongoose.connection.db;
   assert.match((await db.admin().serverInfo()).version, /^8\./);
   try {
     await db.dropDatabase();
-    await Promise.all([User.init(), Device.init(), Settings.init()]);
+    // Create indexes after dropping the fixture DB, without a connect-time race.
+    await Promise.all([User.createCollection(), Device.createCollection(), Settings.createCollection()]);
+    await Promise.all([User.createIndexes(), Device.createIndexes(), Settings.createIndexes()]);
     const user = await User.create({ email: 'security-fixture@example.invalid', name: 'Security fixture', password: await generatePasswordHash('OnlyForAnIsolatedTest-2026!') });
     assert.equal((await User.findOne({ email: user.email }).lean()).name, 'Security fixture');
     await assert.rejects(User.create({ email: user.email, password: user.password }), { code: 11000 });

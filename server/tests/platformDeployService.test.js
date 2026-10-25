@@ -706,7 +706,8 @@ test('service installation enforces the unprivileged runtime boundary', async ()
   assert.match(unit, /NoNewPrivileges=true/);
   assert.match(unit, /CapabilityBoundingSet=\n/);
   assert.match(unit, /ProtectSystem=strict/);
-  assert.match(unit, /ProtectHome=read-only/);
+  assert.match(unit, /ProtectHome=tmpfs/);
+  assert.match(unit, /BindPaths=\$REPO/);
   assert.match(unit, /KillMode=control-group/);
   assert.doesNotMatch(script, /NOPASSWD:/);
 });
