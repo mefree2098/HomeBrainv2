@@ -14,7 +14,8 @@ concurrency:
 
 jobs:
   mongodb-compatibility:
-    runs-on: ubuntu-latest
+    # MongoDB 8.0 rejects newer runner kernels affected by SERVER-121912.
+    runs-on: ubuntu-22.04
     timeout-minutes: 10
     services:
       mongodb:
