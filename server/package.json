@@ -28,7 +28,7 @@
     "usb@2.18.0": true
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.123.0",
+    "@anthropic-ai/sdk": "^0.135.0",
     "@harmonyhub/client-ws": "file:vendor/harmony-client-ws",
     "@harmonyhub/discover": "^1.0.9",
     "@homebridge/hap-nodejs": "2.2.3",
