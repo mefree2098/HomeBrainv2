@@ -92,7 +92,7 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/SiriIOS" -resultBundlePath "$RUNNER_TEMP/siri-evidence/apple-home-ui.xcresult" \
             -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO SWIFT_TREAT_WARNINGS_AS_ERRORS=YES test \
             2>&1 | tee "$RUNNER_TEMP/siri-evidence/apple-home-ui.txt"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: siri-native-${{ matrix.configuration }}
