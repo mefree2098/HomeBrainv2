@@ -64,7 +64,7 @@
   },
   "overrides": {
     "brace-expansion": "5.0.12",
-    "minimatch": "10.2.5",
+    "minimatch": "11.0.1",
     "q": "$q",
     "home-controller": {
       "serialport": "13.0.0",
