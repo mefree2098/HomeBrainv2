@@ -10,7 +10,7 @@
   "dependencies": {
     "axios": "^1.20.0",
     "express": "^5.2.1",
-    "express-rate-limit": "^8.7.0"
+    "express-rate-limit": "^8.7.1"
   },
   "engines": {
     "node": "^22.23.4 || ^24.22.1 || ^26.12.1"
