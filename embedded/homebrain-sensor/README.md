@@ -15,7 +15,7 @@ Verified build target: Seeed Studio XIAO ESP32-C6 using the Seeed platform pinne
 Current release build:
 
 - Firmware: 1.3.9 (Arduino-ESP32 security fixes, wireless updates with boot confirmation/rollback, native ESP-IDF download transport, Wi-Fi compatibility mode, Bluetooth recovery, full-profile telemetry)
-- Application: approximately 1.70 MiB of a 1.81 MiB OTA slot, including the image headers
+- Application: approximately 1.75 MiB of a 1.81 MiB OTA slot, including the image headers
 - Static RAM: approximately 46.4 KiB of 320 KiB
 - Reading schema: `homebrain.sensor.reading.v1`
 - Config schema: `homebrain.sensor.config.v1`
