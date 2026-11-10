@@ -36,6 +36,7 @@ server/data/direct-radios/
 server/data/device-library/
 server/data/matter/
 server/data/system-backup/
+/.homebrain-backup-work/
 server/data/wall-panel-ota/
 server/data/photo-frames/
 server/data/photo-frame-ota/

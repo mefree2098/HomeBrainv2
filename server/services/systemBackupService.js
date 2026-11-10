@@ -266,7 +266,7 @@ class SystemBackupService {
     this.latestRestoreJobRefPath = path.join(this.backupRoot, 'latest-restore-job.txt');
     this.spawnProcess = options.spawnProcess || spawn;
     this.settingsModel = options.settingsModel || Settings;
-    this.tempRoot = options.tempRoot || path.join(this.backupRoot, 'work');
+    this.tempRoot = options.tempRoot || path.join(this.projectRoot, '.homebrain-backup-work');
     this.databaseUrl = options.databaseUrl || process.env.DATABASE_URL || '';
     this.serviceName = options.serviceName || process.env.HOMEBRAIN_SERVICE_NAME || DEFAULT_SERVICE_NAME;
     this.restoreHelperServiceName = options.restoreHelperServiceName

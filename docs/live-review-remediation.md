@@ -21,7 +21,7 @@ This release follows the November 9, 2026 HomeBrain application and production r
 | Unconfigured INSTEON initialization produced errors | An explicit controller enable flag stops disabled connection/sync work and reports disabled state. |
 | Backup and TLS maintenance gaps | Scheduled backups support retained local storage as well as SMB. Backups include `server/.env` and the workflow credential key under `server/data`; backup files are excluded from recursive backups. Public certificate status reads the certificate actually served by Caddy. |
 
-Backup archive construction uses private scratch storage under the application's backup directory, rather than the system `/tmp` filesystem. Failed builds clean up their scratch data, disconnected downloads cancel remaining work, and overlapping archive exports are refused. This keeps Freestone's archive work on NVMe and limits resource pressure during maintenance.
+Backup archive construction uses private scratch storage at `.homebrain-backup-work` under the application checkout, outside every backed-up source tree and outside the system `/tmp` filesystem. Failed builds clean up their scratch data, disconnected downloads cancel remaining work, and overlapping archive exports are refused. This keeps Freestone's archive work on NVMe and limits resource pressure during maintenance. A regression test creates and inspects an archive using this default production directory layout.
 
 The TypeScript gate is registered as an experimental project machine. Its tests exercise real compiler diagnostics, duplicate errors, shrinking behavior and stability across line movement. It is a regression barrier, not a claim that the existing TypeScript backlog is resolved.
 

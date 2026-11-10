@@ -34,10 +34,25 @@ test('failed and cancelled archive creation cleans scratch files and refuses ove
   assert.equal(service.creatingArchive, false);
 });
 
-test('default backup scratch directory shares the application filesystem and is excluded from backups', () => {
-  const service = new SystemBackupService({ projectRoot: '/mnt/app' });
-  assert.equal(service.tempRoot, '/mnt/app/server/data/system-backup/work');
-  assert.ok(service.getBackupTargets().find((target) => target.relativePath === 'server/data').excludeNames.includes('system-backup'));
+test('default production scratch layout can create an archive without copying into its own source', async (t) => {
+  const { projectRoot } = await createTempProject(t);
+  await fsp.writeFile(path.join(projectRoot, 'server/data/device-cache.json'), '{"ok":true}');
+  const service = new SystemBackupService({ projectRoot, databaseUrl: 'mongodb://localhost/HomeBrain' });
+  const originalRun = service.runCommand.bind(service);
+  service.runCommand = async (command, args, options) => {
+    if (command === 'mongodump') {
+      await fsp.writeFile(getArchiveArg(args), 'fixture database dump');
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    return originalRun(command, args, options);
+  };
+  const backup = await service.createDisasterRecoveryBackup();
+  t.after(() => backup.cleanup());
+  const listed = await originalRun('tar', ['-tzf', backup.archivePath]);
+  assert.match(listed.stdout, /filesystem\/server\/data\/device-cache\.json/);
+  assert.match(listed.stdout, /database\/homebrain\.mongodb\.archive\.gz/);
+  assert.doesNotMatch(listed.stdout, /homebrain-backup-work|system-backup/);
+  assert.equal((await fsp.stat(service.tempRoot)).mode & 0o777, 0o700);
 });
 
 async function createTempProject(t) {
