@@ -719,9 +719,29 @@ class HomeBrainRemoteDevice {
     console.log(`Connecting to hub: ${wsUrl}`);
 
     return new Promise((resolve, reject) => {
-      this.ws = new WebSocket(wsUrl);
+      this.ws?.terminate();
+      this.isConnected = false;
+      this.isAuthenticated = false;
+      const socket = new WebSocket(wsUrl, { handshakeTimeout: 10000 });
+      this.ws = socket;
+      let settled = false;
+      const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        reject(error);
+      };
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        fail(new Error('Connection timeout'));
+        socket.terminate();
+        if (this.ws === socket) this.scheduleReconnect();
+      }, 10000);
 
-      this.ws.on('open', () => {
+      socket.on('open', () => {
+        if (this.ws !== socket || settled) { fail(new Error('Connection superseded')); socket.terminate(); return; }
+        settled = true;
+        clearTimeout(timeout);
         console.log('Connected to HomeBrain hub');
         this.isConnected = true;
         this.reconnectAttempts = 0;
@@ -731,7 +751,8 @@ class HomeBrainRemoteDevice {
         resolve();
       });
 
-      this.ws.on('message', (data) => {
+      socket.on('message', (data) => {
+        if (this.ws !== socket) return;
         this.handleMessage(data).catch((error) => {
           if (argv.verbose) {
             console.error('Failed to process hub message:', error.message);
@@ -739,27 +760,25 @@ class HomeBrainRemoteDevice {
         });
       });
 
-      this.ws.on('close', (code, reason) => {
+      socket.on('close', (code, reason) => {
+        clearTimeout(timeout);
+        fail(new Error(`Connection closed before opening: ${code}`));
+        if (this.ws !== socket) return;
         console.log(`Connection closed: ${code} - ${reason}`);
         this.isConnected = false;
         this.isAuthenticated = false;
         this.scheduleReconnect();
       });
 
-      this.ws.on('error', (error) => {
+      socket.on('error', (error) => {
+        fail(error);
+        if (this.ws !== socket) return;
         console.error('WebSocket error:', error.message);
         this.stats.errors++;
 
-        if (!this.isConnected) {
-          reject(error);
-        }
+        socket.terminate();
+        this.scheduleReconnect();
       });
-
-      setTimeout(() => {
-        if (!this.isConnected) {
-          reject(new Error('Connection timeout'));
-        }
-      }, 10000);
     });
   }
 
@@ -4351,6 +4370,7 @@ class HomeBrainRemoteDevice {
   }
 
   scheduleReconnect() {
+    if (this.shuttingDown || this.reconnectTimer) return;
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.error('Max reconnection attempts reached. Exiting...');
       process.exit(1);
@@ -4361,7 +4381,8 @@ class HomeBrainRemoteDevice {
 
     console.log(`Reconnecting in ${delay/1000} seconds... (attempt ${this.reconnectAttempts})`);
 
-    setTimeout(() => {
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
       this.connectToHub().catch((error) => {
         console.error('Reconnection failed:', error.message);
       });
@@ -4796,6 +4817,9 @@ class HomeBrainRemoteDevice {
 
   shutdown() {
     console.log('Shutting down HomeBrain Remote Device...');
+    this.shuttingDown = true;
+    clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
 
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);

@@ -274,6 +274,8 @@ router.get('/logs/stream', async (req, res) => {
   const protocol = normalizeLogProtocol(req.query.protocol);
 
   res.setHeader('Content-Type', 'text/event-stream');
+  const stopWatchingAuthorization = require('../utils/watchAuthorization').watchAuthorization(req, () => res.end());
+  res.once('close', stopWatchingAuthorization);
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');

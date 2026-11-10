@@ -50,6 +50,16 @@ async function resolveUserFromSubject(subject, allowedRoles = ALL_ROLES, options
   return assertResolvedUser(user, allowedRoles, options);
 }
 
+async function resolveTokenUser(decoded, allowedRoles, options) {
+  const user = await resolveUserFromSubject(decoded.sub, allowedRoles, options);
+  if ((Number(user.authVersion) || 0) !== (Number(decoded.av) || 0)) {
+    const error = new Error('Credentials changed; sign in again');
+    error.status = 401;
+    throw error;
+  }
+  return user;
+}
+
 function assertResolvedUser(user, allowedRoles = ALL_ROLES, options = {}) {
   if (!user) {
     const error = new Error('User not found');
@@ -108,7 +118,7 @@ async function verifyAccessToken(token, allowedRoles = ALL_ROLES, req = null, op
       if (req && typeof req === 'object') {
         req.authTokenClaims = decoded;
       }
-      return await resolveUserFromSubject(decoded.sub, allowedRoles, options);
+      return await resolveTokenUser(decoded, allowedRoles, options);
     } catch (err) {
       if (err?.name !== 'JsonWebTokenError' && err?.name !== 'TokenExpiredError') {
         throw err;
@@ -132,7 +142,7 @@ async function verifyAccessToken(token, allowedRoles = ALL_ROLES, req = null, op
     if (req && typeof req === 'object') {
       req.authTokenClaims = decoded;
     }
-    return await resolveUserFromSubject(decoded.sub, allowedRoles, options);
+    return await resolveTokenUser(decoded, allowedRoles, options);
   } catch (oidcError) {
     const shouldPreferJwtError = Boolean(
       jwtError

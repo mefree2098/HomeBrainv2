@@ -642,6 +642,31 @@ async startZigbeeOnce(serialPath) {
   },
 
 async repairZigbeeIasEnrollment(zigbeeDevice, options = {}) {
+    const address = trimString(zigbeeDevice?.ieeeAddr).toLowerCase();
+    if (!(this.zigbee.iasRepairBackoff instanceof Map)) this.zigbee.iasRepairBackoff = new Map();
+    const previous = this.zigbee.iasRepairBackoff.get(address) || {};
+    if (previous.pending) return previous.pending;
+    const automatic = options.trigger === 'ias_message' || options.reason === 'wake_window_recovery';
+    if (automatic && Date.now() < (previous.nextAttemptAt || 0)) {
+      return { attempted: false, ready: false, liveVerified: false, throttled: true, ieeeAddr: address };
+    }
+    const pending = this.performZigbeeIasEnrollmentRepair(zigbeeDevice, options);
+    this.zigbee.iasRepairBackoff.set(address, { ...previous, pending });
+    try {
+      const result = await pending;
+      const failures = result.liveVerified ? 0 : (previous.failures || 0) + 1;
+      this.zigbee.iasRepairBackoff.set(address, {
+        failures,
+        nextAttemptAt: result.liveVerified ? 0 : Date.now() + Math.min(1_800_000, 30_000 * (2 ** Math.min(6, failures)))
+      });
+      return result;
+    } catch (error) {
+      this.zigbee.iasRepairBackoff.set(address, { failures: (previous.failures || 0) + 1, nextAttemptAt: Date.now() + 120_000 });
+      throw error;
+    }
+  },
+
+async performZigbeeIasEnrollmentRepair(zigbeeDevice, options = {}) {
     const address = trimString(zigbeeDevice?.ieeeAddr);
     const coordinatorIeee = getZigbeeCoordinatorIeee(this.zigbee.controller);
     const endpoints = getZigbeeIasEndpoints(zigbeeDevice);

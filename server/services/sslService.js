@@ -59,6 +59,21 @@ class SSLService {
         status.warnings.push(`${expiringSoon.length} certificate(s) expiring within 30 days`);
       }
 
+      const served = await require('./reverseProxyService').getServedHomeBrainCertificate().catch(() => null);
+      if (served?.success && served.validTo) {
+        const daysUntilExpiry = Math.floor((new Date(served.validTo).getTime() - Date.now()) / 86400000);
+        status.sslEnabled = daysUntilExpiry >= 0;
+        status.activeCertificate = {
+          domain: served.domain, provider: 'caddy', status: daysUntilExpiry >= 0 ? 'active' : 'expired',
+          expiryDate: served.validTo, issuer: served.issuer, subject: served.subject,
+          daysUntilExpiry, checkedAt: served.checkedAt
+        };
+        status.expiringSoon = daysUntilExpiry <= 30 ? 1 : 0;
+        status.warnings = daysUntilExpiry <= 30 ? [`Public certificate expires in ${daysUntilExpiry} days`] : [];
+      } else if (served) {
+        status.warnings.push('The currently served public certificate could not be verified.');
+      }
+
       console.log('SSL status retrieved successfully');
       return status;
     } catch (error) {

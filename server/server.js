@@ -350,7 +350,9 @@ app.use('/api', rejectUnsafeRequestKeys);
 app.use('/api', databaseAvailabilityGuard);
 
 // Database connection
-const dbReady = connectDB();
+const dbReady = connectDB().then(async () => {
+  await require('./services/workflowCredentialService').migrate();
+});
 
 void dbReady
   .then(async () => {
@@ -880,6 +882,7 @@ async function gracefulShutdown(signal) {
   await runShutdownStep('device restart scheduler', () => deviceRestartService.stop());
   await runShutdownStep('SMB backup scheduler', () => smbBackupSchedulerService.stop());
   await runShutdownStep('Dynamic DNS scheduler', () => dynamicDnsService.stop());
+  await runShutdownStep('Axiom manifest watch', () => axiomIngressSyncService.stopManifestWatch());
   await runShutdownStep('platform update monitor service', () => platformUpdateMonitorService.stop({ disconnectInsteon: true }));
   await runShutdownStep('platform managed services monitor', () => platformManagedService.stop());
   await runShutdownStep('MQTT platform bridge', () => mqttPlatformService.shutdown());
@@ -974,6 +977,7 @@ httpServer.listen(port, bindHost, async () => {
         reason: 'server-startup'
       })
         .then((result) => {
+          axiomIngressSyncService.startManifestWatch(result.manifest);
           console.log(
             `Axiom ingress startup sync completed: hosts=${result.manifest.mailHosts.join(',') || 'none'} `
             + `routesCreated=${result.routes.created.join(',') || 'none'} `

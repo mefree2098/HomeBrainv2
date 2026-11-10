@@ -47,12 +47,8 @@ export const logout = async () => {
 };
 
 export const getCurrentUser = async (): Promise<User> => {
-  try {
-    const response = await api.get('/api/auth/me');
-    return response.data as User;
-  } catch (error) {
-    throw new Error(error?.response?.data?.message || error.message);
-  }
+  const response = await api.get('/api/auth/me');
+  return response.data as User;
 };
 
 export const getRegistrationStatus = async (): Promise<RegistrationStatus> => {

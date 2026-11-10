@@ -182,6 +182,11 @@ const workflowSchema = new mongoose.Schema({
 workflowSchema.pre('save', function preSave() {
   this.updatedAt = new Date();
 });
+workflowSchema.pre('validate', async function protectCredentials() {
+  const service = require('../services/workflowCredentialService');
+  this.actions = await service.protect(this.actions);
+  this.graph = await service.protect(this.graph);
+});
 
 workflowSchema.index({ enabled: 1, updatedAt: -1 });
 workflowSchema.index({ name: 1 }, { unique: true });

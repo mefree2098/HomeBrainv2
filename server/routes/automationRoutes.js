@@ -7,6 +7,7 @@ const auth = requireUser();
 const admin = requireAdmin();
 
 router.use(auth);
+router.use(require('../utils/redactSecrets').redactJsonResponses);
 
 /**
  * GET /api/automations

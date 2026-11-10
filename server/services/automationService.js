@@ -1287,6 +1287,7 @@ async function updateAutomation(id, updateData) {
     }
 
     // Update automation
+    updateData = await require('./workflowCredentialService').protect(updateData);
     const updatedAutomation = await Automation.findByIdAndUpdate(
       id,
       { ...updateData, updatedAt: Date.now() },
@@ -2756,9 +2757,11 @@ async function executeAutomation(id, options = {}) {
       hydrateWorkflowRuntimeState(history?.resumeState?.workflowRuntimeState || {});
     }
 
+    if (resumingExistingExecution && !Array.isArray(history?.resumeState?.pendingActions)) {
+      throw new Error('Cannot safely resume execution without a persisted action checkpoint; inspect the devices before running again.');
+    }
     const pendingActions = resumingExistingExecution
       && Array.isArray(history?.resumeState?.pendingActions)
-      && history.resumeState.pendingActions.length > 0
       ? history.resumeState.pendingActions
       : automation.actions;
 

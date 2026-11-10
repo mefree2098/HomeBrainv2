@@ -359,7 +359,11 @@ class PlatformDeployService {
       expectedShortCommit: pendingRestart?.expectedShortCommit || null
     };
 
-    const checks = { api, websocket, database, wakeWordWorker, reverseProxy, mqttBroker, deployment, ...this.getDirectRadioHealth() };
+    const operational = dbReadyState === 1
+      ? await require('./operationalHealthService').getOperationalHealth().catch(() => ({
+          operations: { status: 'degraded', message: 'Device and automation health could not be verified.' }
+        })) : {};
+    const checks = { api, websocket, database, wakeWordWorker, reverseProxy, mqttBroker, deployment, ...this.getDirectRadioHealth(), ...operational };
     const hasDegraded = Object.values(checks).some((item) => item.status !== 'healthy');
 
     return {

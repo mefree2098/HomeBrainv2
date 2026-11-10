@@ -825,11 +825,23 @@ function resolveActionRetryPolicy(action) {
   const parameters = action?.parameters && typeof action.parameters === 'object'
     ? action.parameters
     : {};
-  const disabled = parameters.disableActionRetry === true
+  // Only absolute device commands can safely be repeated after an uncertain result.
+  // Explicit retry settings must not turn a toggle, relative volume or IR command
+  // into multiple physical actions.
+  const safeDeviceAction = new Set([
+    'turnon', 'turnoff', 'on', 'off', 'setbrightness', 'settemperature',
+    'setcolor', 'setcolortemperature', 'setvolume', 'mute', 'unmute',
+    'lock', 'unlock', 'open', 'close', 'setposition', 'setmode', 'setfanspeed'
+  ]).has(normalizeActionToken(getActionName(action)));
+  const unsafeDeviceAction = action?.type === 'device_control' && !safeDeviceAction;
+  const unsafeHttpAction = action?.type === 'http_request'
+    && !['GET', 'HEAD', 'OPTIONS', 'PUT', 'DELETE'].includes(String(parameters.method || 'GET').toUpperCase());
+  const disabled = unsafeDeviceAction || unsafeHttpAction || parameters.disableActionRetry === true
     || readFirstBoolean(parameters, ['retryOnFailure', 'actionRetry', 'workflowRetry', 'retryable']) === false;
 
   if (disabled) {
     return {
+      requiresReconciliation: unsafeDeviceAction || unsafeHttpAction,
       enabled: false,
       retries: 0,
       maxAttempts: 1,
@@ -2437,7 +2449,7 @@ async function executeAlexaSpeak(action, context = {}) {
 }
 
 async function executeHttpRequest(action) {
-  const parameters = action?.parameters || {};
+  const parameters = await require('./workflowCredentialService').resolveParameters(action?.parameters || {});
   const method = String(parameters.method || 'GET').trim().toUpperCase();
   const allowedMethods = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
   if (!allowedMethods.has(method)) throw new Error('HTTP request method is not supported');
@@ -2543,14 +2555,14 @@ async function executeHttpRequest(action) {
       );
 
   if (!isExpected) {
-    const error = new Error(`HTTP ${method} ${url} returned unexpected status ${status}`);
+    const error = new Error(`HTTP ${method} ${parsedUrl.origin} returned unexpected status ${status}`);
     error.status = status;
     throw error;
   }
 
   return {
-    target: url,
-    message: `HTTP ${method} ${url} -> ${status}`,
+    target: parsedUrl.origin,
+    message: `HTTP ${method} ${parsedUrl.origin} -> ${status}`,
     status
   };
 }
@@ -3231,6 +3243,10 @@ async function executeActionWithRetry(action, context = {}, options = {}) {
       ));
 
       if (!shouldRetry) {
+        if (policy.requiresReconciliation && /timeout|timed out|connection.*(?:reset|closed)|socket hang up/i.test(error.message || '')) {
+          error.details = { ...(error.details || {}), outcome: 'unknown', requiresReconciliation: true };
+          error.message += ' Outcome is uncertain; check the device state before issuing another command.';
+        }
         attachRetryDetailsToError(error, {
           attempts: attempt,
           maxAttempts,

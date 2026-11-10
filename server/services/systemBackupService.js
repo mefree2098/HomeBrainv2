@@ -1,6 +1,5 @@
 const fs = require('fs');
 const fsp = fs.promises;
-const os = require('os');
 const path = require('path');
 const { randomUUID } = require('node:crypto');
 const { spawn } = require('child_process');
@@ -100,6 +99,7 @@ function buildBackupJobSummary(job) {
     message: job.message || null,
     remoteTarget: job.remoteTarget || null,
     source: job.source || 'manual',
+    destination: job.destination || 'smb',
     retention: job.retention || null,
     manifest: job.manifest || null
   };
@@ -266,7 +266,7 @@ class SystemBackupService {
     this.latestRestoreJobRefPath = path.join(this.backupRoot, 'latest-restore-job.txt');
     this.spawnProcess = options.spawnProcess || spawn;
     this.settingsModel = options.settingsModel || Settings;
-    this.tempRoot = options.tempRoot || os.tmpdir();
+    this.tempRoot = options.tempRoot || path.join(this.backupRoot, 'work');
     this.databaseUrl = options.databaseUrl || process.env.DATABASE_URL || '';
     this.serviceName = options.serviceName || process.env.HOMEBRAIN_SERVICE_NAME || DEFAULT_SERVICE_NAME;
     this.restoreHelperServiceName = options.restoreHelperServiceName
@@ -311,6 +311,7 @@ class SystemBackupService {
   }
 
   async initialize() {
+    await fsp.mkdir(this.tempRoot, { recursive: true, mode: 0o700 });
     await fsp.mkdir(this.backupJobsDir, { recursive: true });
     await fsp.mkdir(this.restoreJobsDir, { recursive: true });
     await fsp.mkdir(this.restoreArchivesDir, { recursive: true });
@@ -320,6 +321,11 @@ class SystemBackupService {
     return [
       {
         relativePath: '.env',
+        kind: 'file',
+        optional: true
+      },
+      {
+        relativePath: path.join('server', '.env'),
         kind: 'file',
         optional: true
       },
@@ -369,6 +375,7 @@ class SystemBackupService {
         cwd,
         env,
         detached: false,
+        ...(options.signal ? { signal: options.signal } : {}),
         stdio: ['ignore', 'pipe', 'pipe']
       });
 
@@ -413,6 +420,7 @@ class SystemBackupService {
         recursive: true,
         force: true,
         filter: (src) => {
+          options.signal?.throwIfAborted();
           const baseName = path.basename(src);
           return !Array.isArray(options.excludeNames) || !options.excludeNames.includes(baseName);
         }
@@ -469,59 +477,78 @@ class SystemBackupService {
     };
   }
 
-  async createDisasterRecoveryBackup() {
+  async createDisasterRecoveryBackup({ signal } = {}) {
     await this.initialize();
-
-    if (!String(this.databaseUrl || '').trim()) {
-      throw new Error('DATABASE_URL must be configured before creating a disaster recovery backup');
+    if (this.creatingArchive) {
+      const error = new Error('A disaster recovery archive is already being created');
+      error.code = 'BACKUP_RUNNING';
+      error.status = 409;
+      throw error;
     }
+    this.creatingArchive = true;
+    let tempRoot;
+    try {
+      signal?.throwIfAborted();
 
-    const tempRoot = await fsp.mkdtemp(path.join(this.tempRoot, 'homebrain-backup-'));
-    const bundleRoot = path.join(tempRoot, 'bundle');
-    const filesystemRoot = path.join(bundleRoot, 'filesystem');
-    const databaseRoot = path.join(bundleRoot, 'database');
-    const archiveFilename = `homebrain-backup-${timestampForFilename(this.now())}.tar.gz`;
-    const archivePath = path.join(tempRoot, archiveFilename);
-    const databaseArchivePath = path.join(databaseRoot, 'homebrain.mongodb.archive.gz');
-    const manifest = this.buildManifest();
-
-    await fsp.mkdir(filesystemRoot, { recursive: true });
-    await fsp.mkdir(databaseRoot, { recursive: true });
-
-    for (const target of this.getBackupTargets()) {
-      const sourcePath = path.join(this.projectRoot, target.relativePath);
-      const exists = await this.pathExists(sourcePath);
-
-      if (!exists) {
-        continue;
+      if (!String(this.databaseUrl || '').trim()) {
+        throw new Error('DATABASE_URL must be configured before creating a disaster recovery backup');
       }
 
-      const targetPath = path.join(filesystemRoot, target.relativePath);
-      await this.copyPath(sourcePath, targetPath, target);
-    }
+      tempRoot = await fsp.mkdtemp(path.join(this.tempRoot, 'homebrain-backup-'));
+      const bundleRoot = path.join(tempRoot, 'bundle');
+      const filesystemRoot = path.join(bundleRoot, 'filesystem');
+      const databaseRoot = path.join(bundleRoot, 'database');
+      const archiveFilename = `homebrain-backup-${timestampForFilename(this.now())}.tar.gz`;
+      const archivePath = path.join(tempRoot, archiveFilename);
+      const databaseArchivePath = path.join(databaseRoot, 'homebrain.mongodb.archive.gz');
+      const manifest = this.buildManifest();
 
-    await withMongoToolsConfig(this.databaseUrl, (configArg) => this.runCommand('mongodump', [
-      configArg, ...buildArchivePathArgs(databaseArchivePath)
-    ]), this.tempRoot);
+      await fsp.mkdir(filesystemRoot, { recursive: true });
+      await fsp.mkdir(databaseRoot, { recursive: true });
 
-    manifest.database.archivePath = path.relative(bundleRoot, databaseArchivePath);
+      for (const target of this.getBackupTargets()) {
+        const sourcePath = path.join(this.projectRoot, target.relativePath);
+        const exists = await this.pathExists(sourcePath);
 
-    await fsp.writeFile(
-      path.join(bundleRoot, 'manifest.json'),
-      `${JSON.stringify(manifest, null, 2)}\n`,
-      'utf8'
-    );
+        if (!exists) {
+          continue;
+        }
 
-    await this.runCommand('tar', ['-czf', archivePath, '-C', bundleRoot, '.']);
-
-    return {
-      archivePath,
-      archiveFilename,
-      manifest,
-      cleanup: async () => {
-        await fsp.rm(tempRoot, { recursive: true, force: true });
+        const targetPath = path.join(filesystemRoot, target.relativePath);
+        signal?.throwIfAborted();
+        await this.copyPath(sourcePath, targetPath, { ...target, signal });
       }
-    };
+
+      signal?.throwIfAborted();
+      await withMongoToolsConfig(this.databaseUrl, (configArg) => this.runCommand('mongodump', [
+        configArg, ...buildArchivePathArgs(databaseArchivePath)
+      ], { signal }), this.tempRoot);
+
+      manifest.database.archivePath = path.relative(bundleRoot, databaseArchivePath);
+
+      await fsp.writeFile(
+        path.join(bundleRoot, 'manifest.json'),
+        `${JSON.stringify(manifest, null, 2)}\n`,
+        'utf8'
+      );
+
+      await this.runCommand('tar', ['-czf', archivePath, '-C', bundleRoot, '.'], { signal });
+      signal?.throwIfAborted();
+
+      return {
+        archivePath,
+        archiveFilename,
+        manifest,
+        cleanup: async () => {
+          await fsp.rm(tempRoot, { recursive: true, force: true });
+        }
+      };
+    } catch (error) {
+      if (tempRoot) await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    } finally {
+      this.creatingArchive = false;
+    }
   }
 
   async writeBackupJob(job) {
@@ -766,6 +793,18 @@ class SystemBackupService {
     return this.startSmbBackupJobInternal(options, { requireConfirmation: true });
   }
 
+  async startLocalBackupJob(options = {}) {
+    if (options.confirmBackup !== 'BACKUP HOMEBRAIN LOCALLY') {
+      const error = new Error('Type BACKUP HOMEBRAIN LOCALLY to create a retained local backup.');
+      error.status = 400;
+      throw error;
+    }
+    const settings = await this.settingsModel.getSettings();
+    return this.startSmbBackupJobInternal({
+      actor: options.actor, source: 'manual', retentionCount: settings.smbBackupRetentionCount || 14
+    }, { requireConfirmation: false, local: true });
+  }
+
   async startScheduledSmbBackupJobFromSettings(settings = {}, options = {}) {
     const resolved = {
       ...this.buildSmbOptionsFromSettings(settings, options),
@@ -774,13 +813,13 @@ class SystemBackupService {
       targetRunAt: options.targetRunAt || null,
       onComplete: options.onComplete
     };
-    return this.startSmbBackupJobInternal(resolved, { requireConfirmation: false });
+    return this.startSmbBackupJobInternal(resolved, { requireConfirmation: false, local: settings.backupDestination === 'local' });
   }
 
   async startSmbBackupJobInternal(options = {}, control = {}) {
     await this.initialize();
     const requireConfirmation = control.requireConfirmation !== false;
-    const resolvedOptions = await this.resolveSmbOptions(options);
+    const resolvedOptions = control.local ? { ...options, storage: 'local' } : await this.resolveSmbOptions(options);
 
     if (requireConfirmation && String(resolvedOptions.confirmBackup || resolvedOptions.confirm || '').trim().toUpperCase() !== SMB_BACKUP_CONFIRMATION) {
       const error = new Error(`Type ${SMB_BACKUP_CONFIRMATION} to save a disaster recovery backup to SMB.`);
@@ -788,7 +827,8 @@ class SystemBackupService {
       throw error;
     }
 
-    const target = parseSmbShareTarget(resolvedOptions.shareUrl || resolvedOptions.sharePath, resolvedOptions.remoteDirectory);
+    const target = control.local ? { sharePath: null, remoteDirectory: null }
+      : parseSmbShareTarget(resolvedOptions.shareUrl || resolvedOptions.sharePath, resolvedOptions.remoteDirectory);
 
     const latestJob = await this.recoverInterruptedBackupJob(await this.readLatestBackupJobRecord());
     if ((latestJob && isBackupActiveStatus(latestJob.status)) || this._runningBackupPromise) {
@@ -801,6 +841,7 @@ class SystemBackupService {
       id: randomUUID(),
       actor: resolvedOptions.actor || 'unknown',
       source: resolvedOptions.source || 'manual',
+      destination: control.local ? 'local' : 'smb',
       archiveName: null,
       status: 'queued',
       phase: 'queued',
@@ -808,7 +849,7 @@ class SystemBackupService {
       updatedAt: this.now().toISOString(),
       completedAt: null,
       error: null,
-      message: 'SMB backup queued.',
+      message: control.local ? 'Local backup queued.' : 'SMB backup queued.',
       remoteTarget: null,
       smb: {
         sharePath: target.sharePath,
@@ -842,7 +883,7 @@ class SystemBackupService {
 
       await this.updateBackupJob(jobId, {
         status: 'uploading',
-        phase: 'uploading-smb',
+        phase: options.storage === 'local' ? 'saving-local' : 'uploading-smb',
         archiveName: backup.archiveFilename,
         manifest: {
           version: backup.manifest?.version || null,
@@ -850,10 +891,12 @@ class SystemBackupService {
           appVersion: backup.manifest?.appVersion || null,
           database: backup.manifest?.database || null
         },
-        message: 'Uploading backup archive to SMB share.'
+        message: options.storage === 'local' ? 'Saving retained local backup.' : 'Uploading backup archive to SMB share.'
       });
 
-      const uploaded = await this.uploadArchiveToSmb(backup.archivePath, {
+      const uploaded = options.storage === 'local'
+        ? await this.saveLocalArchive(backup.archivePath, backup.archiveFilename)
+        : await this.uploadArchiveToSmb(backup.archivePath, {
         ...options,
         remoteFilename: options.remoteFilename || backup.archiveFilename
       });
@@ -861,7 +904,9 @@ class SystemBackupService {
       let retention = null;
       const retentionCount = normalizeRetentionCount(options.retentionCount, null);
       if (retentionCount) {
-        retention = await this.pruneSmbBackups(options, retentionCount);
+        retention = options.storage === 'local'
+          ? await this.pruneLocalBackups(retentionCount)
+          : await this.pruneSmbBackups(options, retentionCount);
       }
 
       const completedJob = await this.updateBackupJob(jobId, {
@@ -881,7 +926,7 @@ class SystemBackupService {
         phase: 'failed',
         completedAt: this.now().toISOString(),
         error: error.message,
-        message: 'Backup failed before HomeBrain could save the archive to SMB.'
+        message: 'Backup failed before HomeBrain could save the archive.'
       }).catch(() => {});
       if (failedJob) {
         await options.onComplete?.(buildBackupJobSummary(failedJob));
@@ -889,6 +934,31 @@ class SystemBackupService {
     } finally {
       await backup?.cleanup?.().catch(() => {});
     }
+  }
+
+  async saveLocalArchive(archivePath, filename) {
+    if (!/^homebrain-backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.tar\.gz$/.test(filename)) throw new Error('Invalid backup archive filename');
+    const directory = path.join(this.backupRoot, 'local');
+    await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
+    const destination = path.join(directory, filename);
+    try {
+      await fsp.copyFile(archivePath, `${destination}.partial`);
+      await fsp.chmod(`${destination}.partial`, 0o600);
+      await fsp.rename(`${destination}.partial`, destination);
+    } catch (error) {
+      await fsp.rm(`${destination}.partial`, { force: true }).catch(() => {});
+      throw error;
+    }
+    return { remoteTarget: destination };
+  }
+
+  async pruneLocalBackups(keepCount) {
+    const directory = path.join(this.backupRoot, 'local');
+    const archives = (await fsp.readdir(directory)).filter((filename) => /^homebrain-backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.tar\.gz$/.test(filename)).sort().reverse();
+    const kept = archives.slice(0, keepCount);
+    const deleted = archives.slice(keepCount);
+    for (const filename of deleted) await fsp.unlink(path.join(directory, filename));
+    return { keepCount, matched: archives.length, kept, deleted, displayPath: directory };
   }
 
   async writeRestoreJob(job) {
@@ -1078,17 +1148,13 @@ class SystemBackupService {
   }
 
   loadEnvOverrides(extractedRoot) {
-    const envPath = path.join(extractedRoot, 'filesystem', '.env');
-    if (!fs.existsSync(envPath)) {
-      return {};
+    const overrides = {};
+    for (const relativePath of ['.env', path.join('server', '.env')]) {
+      const envPath = path.join(extractedRoot, 'filesystem', relativePath);
+      if (!fs.existsSync(envPath)) continue;
+      Object.assign(overrides, dotenv.parse(fs.readFileSync(envPath, 'utf8')));
     }
-
-    try {
-      const raw = fs.readFileSync(envPath, 'utf8');
-      return dotenv.parse(raw);
-    } catch (_error) {
-      return {};
-    }
+    return overrides;
   }
 
   async restoreFileTarget(extractedRoot, target) {

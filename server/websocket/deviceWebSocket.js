@@ -41,6 +41,11 @@ class DeviceWebSocket {
         }
         socket.user = user;
         socket.authenticated = true;
+        const stopWatching = require('../utils/watchAuthorization').watchAuthorization(request, () => {
+          socket.authenticated = false;
+          socket.close(4401, 'Session expired or access revoked');
+        });
+        socket.once('close', stopWatching);
       } catch (error) {
         console.warn('DeviceWebSocket: authentication failed:', error.message);
         socket.close(4401, 'Unauthorized');

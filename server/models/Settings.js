@@ -199,6 +199,7 @@ const SettingsSchema = new mongoose.Schema({
   },
   
   // Integration Settings
+  insteonEnabled: { type: Boolean, default: true },
   insteonPort: {
     type: String,
     default: ''
@@ -441,6 +442,7 @@ const SettingsSchema = new mongoose.Schema({
     type: String,
     default: '02:30'
   },
+  backupDestination: { type: String, enum: ['smb', 'local'], default: 'smb' },
   smbBackupRetentionCount: {
     type: Number,
     min: 1,

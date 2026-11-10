@@ -40,25 +40,6 @@ const mergeLiveSettingsInputValues = (url: string, data: any): any => {
   return merged;
 };
 
-declare global {
-  // Settings.tsx historically calls loadSettings() from a handler even though
-  // its local implementation is scoped to the mount effect. Keep a safe global
-  // fallback so successful maintenance actions can refresh instead of throwing.
-  var loadSettings: (() => Promise<void>) | undefined;
-}
-
-const installSettingsRefreshFallback = () => {
-  if (typeof window === 'undefined' || typeof globalThis.loadSettings === 'function') {
-    return;
-  }
-
-  globalThis.loadSettings = async () => {
-    window.location.reload();
-  };
-};
-
-installSettingsRefreshFallback();
-
 const localApi = axios.create({
   withCredentials: true,
   headers: {
@@ -175,6 +156,7 @@ const setupInterceptors = (apiInstance: AxiosInstance) => {
           const refreshStatus = axios.isAxiosError(err) ? err.response?.status : undefined;
           if (refreshStatus !== 401 && refreshStatus !== 403) {
             console.error('Token refresh failed:', err);
+            return Promise.reject(err);
           }
           clearClientAuthState();
           const currentPath = window.location.pathname;

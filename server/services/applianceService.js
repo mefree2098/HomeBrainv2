@@ -6,6 +6,7 @@ const ApplianceIntegration = require('../models/ApplianceIntegration');
 const Device = require('../models/Device');
 const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const notificationService = require('./notificationService');
+const HomeBrainNotification = require('../models/HomeBrainNotification');
 const { ApplianceWorker, ensureRuntime } = require('./applianceWorkerService');
 
 const PROVIDERS = ['midea', 'econet'];
@@ -199,12 +200,17 @@ class ApplianceService {
       const device = await Device.findOneAndUpdate(identity, { $set: changes, $setOnInsert: onInsert }, { upsert: true, returnDocument: 'after', runValidators: true });
       updated.push(device);
       const alert = state.online === false ? 'offline' : (state.errorCode ? `error ${state.errorCode}` : (state.alertCount > 0 ? `${state.alertCount} active heater alert(s)` : (state.filterAlert ? 'filter maintenance reminder' : '')));
-      const old = previous?.properties?.appliance || {};
-      const oldAlert = previous?.isOnline === false ? 'offline' : (old.errorCode ? `error ${old.errorCode}` : (old.alertCount > 0 ? `${old.alertCount} active heater alert(s)` : (old.filterAlert ? 'filter maintenance reminder' : '')));
-      if (alert && alert !== oldAlert) {
+      const eventKey = alert ? `appliance:${provider}:${state.id}:${alert}` : '';
+      // Resolve recovered conditions and superseded daily keys, including legacy
+      // offline alerts left open by older releases.
+      await HomeBrainNotification.updateMany({
+        deviceId: String(device._id), source: provider, eventType: 'appliance.alert',
+        clearedAt: null, resolvedAt: null, eventKey: { $ne: eventKey }
+      }, { $set: { resolvedAt: new Date(), resolvedReason: alert ? 'condition_changed' : 'appliance_recovered' } });
+      if (alert) {
         await notificationService.createSystemNotification({
           channel: 'normal', severity: 'warning', category: 'device', source: provider,
-          eventType: 'appliance.alert', eventKey: `${provider}:${state.id}:${alert}:${new Date().toISOString().slice(0, 10)}`,
+          eventType: 'appliance.alert', eventKey,
           deviceId: String(device._id), title: `${device.name}: ${alert}`,
           message: alert === 'offline' ? 'HomeBrain cannot reach this appliance. Check its Wi-Fi connection.' : (provider === 'econet' ? 'Open EcoNet for the active alert details and service instructions.' : 'Check the AC display or manufacturer app for details.'),
         });

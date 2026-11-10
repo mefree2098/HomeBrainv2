@@ -14,6 +14,32 @@ function getArchiveArg(args = []) {
   return match ? match.slice('--archive='.length) : null;
 }
 
+test('failed and cancelled archive creation cleans scratch files and refuses overlapping exports', async (t) => {
+  const { projectRoot, tempRoot } = await createTempProject(t);
+  const service = new SystemBackupService({ projectRoot, tempRoot, databaseUrl: 'mongodb://localhost/HomeBrain' });
+  let entered;
+  let release;
+  const started = new Promise((resolve) => { entered = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  service.copyPath = async () => { entered(); await gate; throw new Error('simulated archive failure'); };
+  const failed = assert.rejects(service.createDisasterRecoveryBackup(), /simulated archive failure/);
+  await started;
+  await assert.rejects(service.createDisasterRecoveryBackup(), { code: 'BACKUP_RUNNING' });
+  release();
+  await failed;
+  assert.deepEqual((await fsp.readdir(tempRoot)).filter((name) => name.startsWith('homebrain-backup-')), []);
+  assert.equal(service.creatingArchive, false);
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(service.createDisasterRecoveryBackup({ signal: controller.signal }), { name: 'AbortError' });
+  assert.equal(service.creatingArchive, false);
+});
+
+test('default backup scratch directory shares the application filesystem and is excluded from backups', () => {
+  const service = new SystemBackupService({ projectRoot: '/mnt/app' });
+  assert.equal(service.tempRoot, '/mnt/app/server/data/system-backup/work');
+  assert.ok(service.getBackupTargets().find((target) => target.relativePath === 'server/data').excludeNames.includes('system-backup'));
+});
+
 async function createTempProject(t) {
   const projectRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'homebrain-system-backup-'));
   const serverRoot = path.join(projectRoot, 'server');
@@ -39,6 +65,8 @@ test('createDisasterRecoveryBackup captures Mongo metadata and persisted filesys
   const { projectRoot, serverRoot, tempRoot } = await createTempProject(t);
 
   await fsp.writeFile(path.join(projectRoot, '.env'), 'DATABASE_URL=mongodb://localhost/HomeBrain\nTEST_VALUE=restored\n', 'utf8');
+  await fsp.mkdir(path.join(projectRoot, 'server'), { recursive: true });
+  await fsp.writeFile(path.join(projectRoot, 'server', '.env'), 'JWT_SECRET=backup-test-only\n', { mode: 0o600 });
   await fsp.writeFile(path.join(serverRoot, 'data', 'device-cache.json'), '{"ok":true}\n', 'utf8');
   await fsp.mkdir(path.join(serverRoot, 'data', 'system-backup'), { recursive: true });
   await fsp.writeFile(path.join(serverRoot, 'data', 'system-backup', 'skip-me.txt'), 'skip\n', 'utf8');
@@ -81,6 +109,8 @@ test('createDisasterRecoveryBackup captures Mongo metadata and persisted filesys
   assert.equal(manifest.version, 1);
   assert.equal(manifest.database.databaseName, 'HomeBrain');
   assert.equal(manifest.database.archivePath, 'database/homebrain.mongodb.archive.gz');
+  assert.equal(await fsp.readFile(path.join(extractRoot, 'filesystem', 'server', '.env'), 'utf8'), 'JWT_SECRET=backup-test-only\n');
+  assert.equal(service.loadEnvOverrides(extractRoot).JWT_SECRET, 'backup-test-only');
   assert.equal(
     await fsp.readFile(path.join(extractRoot, 'filesystem', '.env'), 'utf8'),
     'DATABASE_URL=mongodb://localhost/HomeBrain\nTEST_VALUE=restored\n'

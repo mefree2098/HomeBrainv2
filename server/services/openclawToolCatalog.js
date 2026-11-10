@@ -19,7 +19,7 @@ const voiceCommandService = require('./voiceCommandService');
 
 const jsonObjectSchema = z.record(z.string(), z.unknown());
 
-const SECRET_KEY_PATTERN = /(token|secret|password|apiKey|privateKey|certificate|credential)/i;
+const SECRET_KEY_PATTERN = /(authorization|cookie|token|secret|password|apiKey|privateKey|certificate|credential)/i;
 
 function normalizeText(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -74,10 +74,12 @@ function sanitizeForAudit(value, depth = 0) {
 }
 
 function toolSuccess(message, data = {}) {
+  const outcome = classifyOutcome(data);
   const payload = {
-    success: true,
+    success: outcome === 'success',
+    status: outcome,
     message,
-    data: toPlain(data)
+    data: require('../utils/redactSecrets').redactSecrets(toPlain(data))
   };
 
   return {
@@ -87,8 +89,26 @@ function toolSuccess(message, data = {}) {
         text: JSON.stringify(payload, null, 2)
       }
     ],
-    structuredContent: payload
+    structuredContent: payload,
+    ...(outcome !== 'success' ? { isError: true } : {})
   };
+}
+
+function classifyOutcome(result) {
+  if (result?.isError === true) return 'error';
+  if (result?.structuredContent) return classifyOutcome(result.structuredContent);
+  if (!result || typeof result !== 'object') return 'success';
+  const status = String(result.status || '').toLowerCase();
+  if (result.history?.status === 'partial_success' || (Number(result.failedActions) > 0 && Number(result.successfulActions) > 0)) return 'partial_failure';
+  if (['partial', 'partial_success', 'partial_failure', 'partial-failure'].includes(status)) return 'partial_failure';
+  if (result.success === false || ['failed', 'error', 'failure', 'unknown'].includes(status)) return 'error';
+  // Inspect execution envelopes, not arbitrary entity fields or historic logs.
+  const entries = Array.isArray(result) ? result : ['result', 'results', 'execution', 'actionResults', 'data']
+    .filter((key) => Object.hasOwn(result, key)).map((key) => result[key]);
+  const outcomes = entries.filter((entry) => entry && typeof entry === 'object').map(classifyOutcome);
+  if (outcomes.includes('partial_failure')) return 'partial_failure';
+  if (outcomes.includes('error')) return outcomes.includes('success') ? 'partial_failure' : 'error';
+  return 'success';
 }
 
 function toolError(error, fallbackMessage = 'Tool execution failed') {
@@ -136,11 +156,12 @@ async function withMutationAudit(context, metadata, run) {
 
   try {
     const result = await run(correlationId);
-    await publishMutationAudit(context, 'openclaw.mutation.succeeded', {
+    const outcome = classifyOutcome(result);
+    await publishMutationAudit(context, outcome === 'success' ? 'openclaw.mutation.succeeded' : 'openclaw.mutation.failed', {
       tool: metadata.tool,
       operation: metadata.operation,
-      result: metadata.auditResult ? metadata.auditResult(result) : { success: true }
-    }, 'info', correlationId);
+      result: metadata.auditResult ? metadata.auditResult(result) : { success: outcome === 'success', status: outcome }
+    }, outcome === 'success' ? 'info' : 'error', correlationId);
     return result;
   } catch (error) {
     await publishMutationAudit(context, 'openclaw.mutation.failed', {
