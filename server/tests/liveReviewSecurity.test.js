@@ -30,6 +30,9 @@ test('HTTP workflow credentials are encrypted, referenced, reusable and fail clo
   assert.equal((await service.resolveParameters(params)).headers.Authorization, 'Bearer private-value');
   assert.deepEqual(await service.protect(protectedValue), protectedValue);
   assert.equal(records.size, 1);
+  const withUrlSecret = await service.protect({ type: 'http_request', target: 'https://example.test/path/private-path-key' });
+  assert.doesNotMatch(JSON.stringify(withUrlSecret), /private-path-key/);
+  assert.equal((await service.resolveParameters(withUrlSecret.parameters)).url, 'https://example.test/path/private-path-key');
   assert.equal((await fs.stat(path.join(dir, 'key'))).mode & 0o777, 0o600);
   await fs.unlink(path.join(dir, 'key'));
   await assert.rejects(service.resolveParameters(params), { code: 'ENOENT' });
@@ -37,7 +40,7 @@ test('HTTP workflow credentials are encrypted, referenced, reusable and fail clo
 });
 
 test('workflow and history redaction covers headers, arbitrary HTTP bodies, URLs and nested action records', () => {
-  const value = redactSecrets({ actions: [{ type: 'http_request', parameters: { headers: { Custom: 'hidden' }, body: { arbitrary: 'hidden' } } }], history: [{ actionType: 'http_request', parameters: { auth: { password: 'hidden' } } }], message: 'https://user:secret@example.test/?api_key=hidden', token: 'hidden' });
+  const value = redactSecrets({ actions: [{ type: 'http_request', target: 'https://example.test/hidden', parameters: { url: 'https://example.test/hidden', headers: { Custom: 'hidden' }, body: { arbitrary: 'hidden' } } }], history: [{ actionType: 'http_request', parameters: { auth: { password: 'hidden' } }, error: 'HTTP GET https://example.test/hidden failed' }], message: 'https://user:secret@example.test/?api_key=hidden', token: 'hidden' });
   assert.doesNotMatch(JSON.stringify(value), /hidden|user:secret/);
 });
 

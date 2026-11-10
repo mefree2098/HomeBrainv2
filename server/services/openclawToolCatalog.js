@@ -99,6 +99,7 @@ function classifyOutcome(result) {
   if (result?.structuredContent) return classifyOutcome(result.structuredContent);
   if (!result || typeof result !== 'object') return 'success';
   const status = String(result.status || '').toLowerCase();
+  if (result.history?.status === 'partial_success' || (Number(result.failedActions) > 0 && Number(result.successfulActions) > 0)) return 'partial_failure';
   if (['partial', 'partial_success', 'partial_failure', 'partial-failure'].includes(status)) return 'partial_failure';
   if (result.success === false || ['failed', 'error', 'failure', 'unknown'].includes(status)) return 'error';
   // Inspect execution envelopes, not arbitrary entity fields or historic logs.

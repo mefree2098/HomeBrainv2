@@ -1,5 +1,5 @@
 const SECRET_KEY = /authorization|password|passwd|secret|token|api.?key|cookie|private.?key/i;
-const PRIVATE_HTTP_FIELDS = new Set(['headers', 'basicAuth', 'auth', 'body', 'data', 'query']);
+const PRIVATE_HTTP_FIELDS = new Set(['url', 'headers', 'basicAuth', 'auth', 'body', 'data', 'query']);
 
 function redactSecrets(value) {
   if (value == null) return value;
@@ -22,6 +22,10 @@ function redactSecrets(value) {
   if (value._bsontype === 'ObjectId') return value.toString();
   const http = value.type === 'http_request' || value.actionType === 'http_request';
   return Object.fromEntries(Object.entries(value).map(([key, entry]) => {
+    if (http && key === 'target') return [key, '[HTTP endpoint stored securely]'];
+    if (http && ['message', 'error'].includes(key) && typeof entry === 'string') {
+      return [key, entry.replace(/https?:\/\/[^\s"<>]+/gi, (url) => { try { return new URL(url).origin; } catch { return '[HTTP endpoint]'; } })];
+    }
     if (SECRET_KEY.test(key) && key !== 'credentialRef') return [key, '[REDACTED]'];
     if (http && key === 'parameters' && entry && typeof entry === 'object') {
       return [key, Object.fromEntries(Object.entries(entry).map(([name, field]) => [

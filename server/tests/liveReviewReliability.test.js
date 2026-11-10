@@ -71,7 +71,7 @@ test('local scheduled backups run without an SMB share and retain only verified 
 test('health distinguishes a running platform from device, enrollment, automation and backup readiness', () => {
   const now = Date.parse('2026-11-09T20:00:00Z');
   const health = summarizeOperationalHealth([
-    { _id: 'light', name: 'Offline light', isOnline: false },
+    { _id: 'light', name: 'Offline light', isOnline: false, properties: { homebrainDirect: { stateStale: true } } },
     { _id: 'motion', name: 'Motion', isOnline: true, properties: { homebrainDirect: { iasZone: { enrolled: false, cieMatchesCoordinator: true } } } }
   ], 3, [{ provider: 'midea', enabled: true, configured: true, connected: false }], {}, now);
   for (const check of Object.values(health)) assert.equal(check.status, 'degraded');

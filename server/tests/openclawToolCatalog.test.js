@@ -19,7 +19,7 @@ test('failed and partial MCP executions are returned and audited as failures', a
   t.mock.method(eventStreamService, 'publishSafe', async (event) => { events.push(event); });
   t.mock.method(workflowService, 'getWorkflowById', async () => ({ _id: '507f1f77bcf86cd799439011', name: 'Failed workflow' }));
   for (const status of ['failed', 'partial_success']) {
-    t.mock.method(workflowService, 'executeWorkflow', async () => ({ success: false, status, history: { status }, failedActions: 1 }));
+    t.mock.method(workflowService, 'executeWorkflow', async () => ({ success: false, history: { status }, successfulActions: status === 'partial_success' ? 1 : 0, failedActions: 1 }));
     const result = await findTool('homebrain_workflows').handler({ op: 'execute', workflowId: '507f1f77bcf86cd799439011' });
     assert.equal(result.isError, true);
     assert.equal(result.structuredContent.success, false);

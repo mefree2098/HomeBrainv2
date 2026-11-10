@@ -10,6 +10,7 @@ function summarizeOperationalHealth(devices, failedExecutions, integrations, set
     return ias && !(ias.enrolled === true && ias.cieMatchesCoordinator === true);
   });
   const unavailable = integrations.filter((integration) => integration.enabled && integration.configured && !integration.connected);
+  const stale = devices.filter((device) => device.properties?.homebrainDirect?.stateStale === true);
   const destination = settings.backupDestination === 'local' ? 'local' : 'smb';
   const completedAt = latestBackup?.status === 'completed' && latestBackup.destination === destination
     ? latestBackup.completedAt : settings.smbBackupScheduleLastCompletedAt;
@@ -27,6 +28,11 @@ function summarizeOperationalHealth(devices, failedExecutions, integrations, set
       status: unenrolled.length ? 'degraded' : 'healthy',
       message: `${unenrolled.length} Zigbee IAS device(s) need confirmed alarm enrollment.`,
       affectedDevices: unenrolled.map(({ _id, name }) => ({ id: String(_id), name }))
+    },
+    cachedState: {
+      status: stale.length ? 'degraded' : 'healthy',
+      message: `${stale.length} device(s) have cached state that needs a live query.`,
+      affectedDevices: stale.map(({ _id, name }) => ({ id: String(_id), name }))
     },
     automations: {
       status: failedExecutions ? 'degraded' : 'healthy',
@@ -49,7 +55,7 @@ function summarizeOperationalHealth(devices, failedExecutions, integrations, set
 
 async function getOperationalHealth() {
   const [devices, failed, integrations, settings, latestBackup] = await Promise.all([
-    Device.find({}).select('_id name isOnline properties.homebrainDirect.iasZone').lean(),
+    Device.find({}).select('_id name isOnline properties.homebrainDirect.iasZone properties.homebrainDirect.stateStale').lean(),
     AutomationHistory.countDocuments({ status: { $in: ['failed', 'partial_success'] }, executedAt: { $gte: new Date(Date.now() - 86400000) } }),
     ApplianceIntegration.find({ enabled: true, configured: true }).select('provider enabled configured connected').lean(),
     Settings.getSettings(),

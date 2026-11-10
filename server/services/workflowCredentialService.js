@@ -51,12 +51,16 @@ class WorkflowCredentialService {
     if (typeof value.toObject === 'function') value = value.toObject();
     const result = {};
     for (const [key, entry] of Object.entries(value)) result[key] = await this.protect(entry);
-    if ((result.type === 'http_request' || result.actionType === 'http_request') && result.parameters) {
-      const parameters = { ...result.parameters };
+    if (result.type === 'http_request' || result.actionType === 'http_request') {
+      const parameters = { ...(result.parameters || {}) };
       const privateFields = {};
+      if (typeof result.target === 'string' && /^https?:\/\//i.test(result.target)) {
+        privateFields.url = result.target;
+        result.target = null;
+      }
       for (const key of PRIVATE_HTTP_FIELDS) {
         if (Object.hasOwn(parameters, key)) {
-          if (parameters[key] !== '[REDACTED]') privateFields[key] = parameters[key];
+          if (parameters[key] !== '[REDACTED]' && (key !== 'url' || parameters[key] || !privateFields.url)) privateFields[key] = parameters[key];
           delete parameters[key];
         }
       }

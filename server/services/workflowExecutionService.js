@@ -2555,14 +2555,14 @@ async function executeHttpRequest(action) {
       );
 
   if (!isExpected) {
-    const error = new Error(`HTTP ${method} ${url} returned unexpected status ${status}`);
+    const error = new Error(`HTTP ${method} ${parsedUrl.origin} returned unexpected status ${status}`);
     error.status = status;
     throw error;
   }
 
   return {
-    target: url,
-    message: `HTTP ${method} ${url} -> ${status}`,
+    target: parsedUrl.origin,
+    message: `HTTP ${method} ${parsedUrl.origin} -> ${status}`,
     status
   };
 }
