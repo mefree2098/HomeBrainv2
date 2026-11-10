@@ -1522,11 +1522,11 @@ class MaintenanceService {
     }
   }
 
-  async createDisasterRecoveryBackup() {
+  async createDisasterRecoveryBackup(options = {}) {
     console.log('MaintenanceService: Creating full disaster recovery backup');
 
     try {
-      const backup = await systemBackupService.createDisasterRecoveryBackup();
+      const backup = await systemBackupService.createDisasterRecoveryBackup(options);
       return {
         success: true,
         message: 'Disaster recovery backup created successfully',
@@ -1535,7 +1535,10 @@ class MaintenanceService {
     } catch (error) {
       console.error('MaintenanceService: Error creating disaster recovery backup:', error.message);
       console.error(error.stack);
-      throw new Error(`Failed to create a disaster recovery backup: ${error.message}`);
+      const wrapped = new Error(`Failed to create a disaster recovery backup: ${error.message}`);
+      wrapped.code = error.code;
+      wrapped.status = error.status;
+      throw wrapped;
     }
   }
 

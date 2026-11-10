@@ -408,11 +408,14 @@ router.get('/export', async (req, res) => {
 
 router.get('/backup/full', async (req, res) => {
   let backup = null;
+  const controller = new AbortController();
+  res.once('close', () => controller.abort());
 
   try {
     console.log('MaintenanceRoutes: GET /backup/full - Creating full disaster recovery backup');
 
-    backup = await maintenanceService.createDisasterRecoveryBackup();
+    backup = await maintenanceService.createDisasterRecoveryBackup({ signal: controller.signal });
+    controller.signal.throwIfAborted();
 
     res.setHeader('Content-Type', 'application/gzip');
     res.setHeader('Content-Disposition', `attachment; filename="${backup.archiveFilename}"`);
@@ -436,6 +439,7 @@ router.get('/backup/full', async (req, res) => {
       void backup?.cleanup?.().catch(() => {});
     });
     res.on('close', () => {
+      stream.destroy();
       void backup?.cleanup?.().catch(() => {});
     });
 
@@ -444,7 +448,8 @@ router.get('/backup/full', async (req, res) => {
     console.error('MaintenanceRoutes: Error creating disaster recovery backup:', error.message);
     console.error(error.stack);
     await backup?.cleanup?.().catch(() => {});
-    res.status(500).json({
+    if (res.destroyed) return;
+    res.status(error.status || 500).json({
       success: false,
       error: error.message || 'Failed to create disaster recovery backup'
     });

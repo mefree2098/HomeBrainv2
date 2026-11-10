@@ -14,6 +14,32 @@ function getArchiveArg(args = []) {
   return match ? match.slice('--archive='.length) : null;
 }
 
+test('failed and cancelled archive creation cleans scratch files and refuses overlapping exports', async (t) => {
+  const { projectRoot, tempRoot } = await createTempProject(t);
+  const service = new SystemBackupService({ projectRoot, tempRoot, databaseUrl: 'mongodb://localhost/HomeBrain' });
+  let entered;
+  let release;
+  const started = new Promise((resolve) => { entered = resolve; });
+  const gate = new Promise((resolve) => { release = resolve; });
+  service.copyPath = async () => { entered(); await gate; throw new Error('simulated archive failure'); };
+  const failed = assert.rejects(service.createDisasterRecoveryBackup(), /simulated archive failure/);
+  await started;
+  await assert.rejects(service.createDisasterRecoveryBackup(), { code: 'BACKUP_RUNNING' });
+  release();
+  await failed;
+  assert.deepEqual((await fsp.readdir(tempRoot)).filter((name) => name.startsWith('homebrain-backup-')), []);
+  assert.equal(service.creatingArchive, false);
+  const controller = new AbortController(); controller.abort();
+  await assert.rejects(service.createDisasterRecoveryBackup({ signal: controller.signal }), { name: 'AbortError' });
+  assert.equal(service.creatingArchive, false);
+});
+
+test('default backup scratch directory shares the application filesystem and is excluded from backups', () => {
+  const service = new SystemBackupService({ projectRoot: '/mnt/app' });
+  assert.equal(service.tempRoot, '/mnt/app/server/data/system-backup/work');
+  assert.ok(service.getBackupTargets().find((target) => target.relativePath === 'server/data').excludeNames.includes('system-backup'));
+});
+
 async function createTempProject(t) {
   const projectRoot = await fsp.mkdtemp(path.join(os.tmpdir(), 'homebrain-system-backup-'));
   const serverRoot = path.join(projectRoot, 'server');

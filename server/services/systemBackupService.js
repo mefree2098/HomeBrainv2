@@ -1,6 +1,5 @@
 const fs = require('fs');
 const fsp = fs.promises;
-const os = require('os');
 const path = require('path');
 const { randomUUID } = require('node:crypto');
 const { spawn } = require('child_process');
@@ -267,7 +266,7 @@ class SystemBackupService {
     this.latestRestoreJobRefPath = path.join(this.backupRoot, 'latest-restore-job.txt');
     this.spawnProcess = options.spawnProcess || spawn;
     this.settingsModel = options.settingsModel || Settings;
-    this.tempRoot = options.tempRoot || os.tmpdir();
+    this.tempRoot = options.tempRoot || path.join(this.backupRoot, 'work');
     this.databaseUrl = options.databaseUrl || process.env.DATABASE_URL || '';
     this.serviceName = options.serviceName || process.env.HOMEBRAIN_SERVICE_NAME || DEFAULT_SERVICE_NAME;
     this.restoreHelperServiceName = options.restoreHelperServiceName
@@ -312,6 +311,7 @@ class SystemBackupService {
   }
 
   async initialize() {
+    await fsp.mkdir(this.tempRoot, { recursive: true, mode: 0o700 });
     await fsp.mkdir(this.backupJobsDir, { recursive: true });
     await fsp.mkdir(this.restoreJobsDir, { recursive: true });
     await fsp.mkdir(this.restoreArchivesDir, { recursive: true });
@@ -375,6 +375,7 @@ class SystemBackupService {
         cwd,
         env,
         detached: false,
+        ...(options.signal ? { signal: options.signal } : {}),
         stdio: ['ignore', 'pipe', 'pipe']
       });
 
@@ -419,6 +420,7 @@ class SystemBackupService {
         recursive: true,
         force: true,
         filter: (src) => {
+          options.signal?.throwIfAborted();
           const baseName = path.basename(src);
           return !Array.isArray(options.excludeNames) || !options.excludeNames.includes(baseName);
         }
@@ -475,59 +477,78 @@ class SystemBackupService {
     };
   }
 
-  async createDisasterRecoveryBackup() {
+  async createDisasterRecoveryBackup({ signal } = {}) {
     await this.initialize();
-
-    if (!String(this.databaseUrl || '').trim()) {
-      throw new Error('DATABASE_URL must be configured before creating a disaster recovery backup');
+    if (this.creatingArchive) {
+      const error = new Error('A disaster recovery archive is already being created');
+      error.code = 'BACKUP_RUNNING';
+      error.status = 409;
+      throw error;
     }
+    this.creatingArchive = true;
+    let tempRoot;
+    try {
+      signal?.throwIfAborted();
 
-    const tempRoot = await fsp.mkdtemp(path.join(this.tempRoot, 'homebrain-backup-'));
-    const bundleRoot = path.join(tempRoot, 'bundle');
-    const filesystemRoot = path.join(bundleRoot, 'filesystem');
-    const databaseRoot = path.join(bundleRoot, 'database');
-    const archiveFilename = `homebrain-backup-${timestampForFilename(this.now())}.tar.gz`;
-    const archivePath = path.join(tempRoot, archiveFilename);
-    const databaseArchivePath = path.join(databaseRoot, 'homebrain.mongodb.archive.gz');
-    const manifest = this.buildManifest();
-
-    await fsp.mkdir(filesystemRoot, { recursive: true });
-    await fsp.mkdir(databaseRoot, { recursive: true });
-
-    for (const target of this.getBackupTargets()) {
-      const sourcePath = path.join(this.projectRoot, target.relativePath);
-      const exists = await this.pathExists(sourcePath);
-
-      if (!exists) {
-        continue;
+      if (!String(this.databaseUrl || '').trim()) {
+        throw new Error('DATABASE_URL must be configured before creating a disaster recovery backup');
       }
 
-      const targetPath = path.join(filesystemRoot, target.relativePath);
-      await this.copyPath(sourcePath, targetPath, target);
-    }
+      tempRoot = await fsp.mkdtemp(path.join(this.tempRoot, 'homebrain-backup-'));
+      const bundleRoot = path.join(tempRoot, 'bundle');
+      const filesystemRoot = path.join(bundleRoot, 'filesystem');
+      const databaseRoot = path.join(bundleRoot, 'database');
+      const archiveFilename = `homebrain-backup-${timestampForFilename(this.now())}.tar.gz`;
+      const archivePath = path.join(tempRoot, archiveFilename);
+      const databaseArchivePath = path.join(databaseRoot, 'homebrain.mongodb.archive.gz');
+      const manifest = this.buildManifest();
 
-    await withMongoToolsConfig(this.databaseUrl, (configArg) => this.runCommand('mongodump', [
-      configArg, ...buildArchivePathArgs(databaseArchivePath)
-    ]), this.tempRoot);
+      await fsp.mkdir(filesystemRoot, { recursive: true });
+      await fsp.mkdir(databaseRoot, { recursive: true });
 
-    manifest.database.archivePath = path.relative(bundleRoot, databaseArchivePath);
+      for (const target of this.getBackupTargets()) {
+        const sourcePath = path.join(this.projectRoot, target.relativePath);
+        const exists = await this.pathExists(sourcePath);
 
-    await fsp.writeFile(
-      path.join(bundleRoot, 'manifest.json'),
-      `${JSON.stringify(manifest, null, 2)}\n`,
-      'utf8'
-    );
+        if (!exists) {
+          continue;
+        }
 
-    await this.runCommand('tar', ['-czf', archivePath, '-C', bundleRoot, '.']);
-
-    return {
-      archivePath,
-      archiveFilename,
-      manifest,
-      cleanup: async () => {
-        await fsp.rm(tempRoot, { recursive: true, force: true });
+        const targetPath = path.join(filesystemRoot, target.relativePath);
+        signal?.throwIfAborted();
+        await this.copyPath(sourcePath, targetPath, { ...target, signal });
       }
-    };
+
+      signal?.throwIfAborted();
+      await withMongoToolsConfig(this.databaseUrl, (configArg) => this.runCommand('mongodump', [
+        configArg, ...buildArchivePathArgs(databaseArchivePath)
+      ], { signal }), this.tempRoot);
+
+      manifest.database.archivePath = path.relative(bundleRoot, databaseArchivePath);
+
+      await fsp.writeFile(
+        path.join(bundleRoot, 'manifest.json'),
+        `${JSON.stringify(manifest, null, 2)}\n`,
+        'utf8'
+      );
+
+      await this.runCommand('tar', ['-czf', archivePath, '-C', bundleRoot, '.'], { signal });
+      signal?.throwIfAborted();
+
+      return {
+        archivePath,
+        archiveFilename,
+        manifest,
+        cleanup: async () => {
+          await fsp.rm(tempRoot, { recursive: true, force: true });
+        }
+      };
+    } catch (error) {
+      if (tempRoot) await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    } finally {
+      this.creatingArchive = false;
+    }
   }
 
   async writeBackupJob(job) {
