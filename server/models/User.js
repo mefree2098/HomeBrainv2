@@ -109,6 +109,7 @@ const schema = new mongoose.Schema({
     index: true,
     default: () => randomUUID(),
   },
+  authVersion: { type: Number, default: 0, min: 0 },
 }, {
   versionKey: false,
 });

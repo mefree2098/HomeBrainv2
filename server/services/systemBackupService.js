@@ -100,6 +100,7 @@ function buildBackupJobSummary(job) {
     message: job.message || null,
     remoteTarget: job.remoteTarget || null,
     source: job.source || 'manual',
+    destination: job.destination || 'smb',
     retention: job.retention || null,
     manifest: job.manifest || null
   };
@@ -320,6 +321,11 @@ class SystemBackupService {
     return [
       {
         relativePath: '.env',
+        kind: 'file',
+        optional: true
+      },
+      {
+        relativePath: path.join('server', '.env'),
         kind: 'file',
         optional: true
       },
@@ -766,6 +772,18 @@ class SystemBackupService {
     return this.startSmbBackupJobInternal(options, { requireConfirmation: true });
   }
 
+  async startLocalBackupJob(options = {}) {
+    if (options.confirmBackup !== 'BACKUP HOMEBRAIN LOCALLY') {
+      const error = new Error('Type BACKUP HOMEBRAIN LOCALLY to create a retained local backup.');
+      error.status = 400;
+      throw error;
+    }
+    const settings = await this.settingsModel.getSettings();
+    return this.startSmbBackupJobInternal({
+      actor: options.actor, source: 'manual', retentionCount: settings.smbBackupRetentionCount || 14
+    }, { requireConfirmation: false, local: true });
+  }
+
   async startScheduledSmbBackupJobFromSettings(settings = {}, options = {}) {
     const resolved = {
       ...this.buildSmbOptionsFromSettings(settings, options),
@@ -774,13 +792,13 @@ class SystemBackupService {
       targetRunAt: options.targetRunAt || null,
       onComplete: options.onComplete
     };
-    return this.startSmbBackupJobInternal(resolved, { requireConfirmation: false });
+    return this.startSmbBackupJobInternal(resolved, { requireConfirmation: false, local: settings.backupDestination === 'local' });
   }
 
   async startSmbBackupJobInternal(options = {}, control = {}) {
     await this.initialize();
     const requireConfirmation = control.requireConfirmation !== false;
-    const resolvedOptions = await this.resolveSmbOptions(options);
+    const resolvedOptions = control.local ? { ...options, storage: 'local' } : await this.resolveSmbOptions(options);
 
     if (requireConfirmation && String(resolvedOptions.confirmBackup || resolvedOptions.confirm || '').trim().toUpperCase() !== SMB_BACKUP_CONFIRMATION) {
       const error = new Error(`Type ${SMB_BACKUP_CONFIRMATION} to save a disaster recovery backup to SMB.`);
@@ -788,7 +806,8 @@ class SystemBackupService {
       throw error;
     }
 
-    const target = parseSmbShareTarget(resolvedOptions.shareUrl || resolvedOptions.sharePath, resolvedOptions.remoteDirectory);
+    const target = control.local ? { sharePath: null, remoteDirectory: null }
+      : parseSmbShareTarget(resolvedOptions.shareUrl || resolvedOptions.sharePath, resolvedOptions.remoteDirectory);
 
     const latestJob = await this.recoverInterruptedBackupJob(await this.readLatestBackupJobRecord());
     if ((latestJob && isBackupActiveStatus(latestJob.status)) || this._runningBackupPromise) {
@@ -801,6 +820,7 @@ class SystemBackupService {
       id: randomUUID(),
       actor: resolvedOptions.actor || 'unknown',
       source: resolvedOptions.source || 'manual',
+      destination: control.local ? 'local' : 'smb',
       archiveName: null,
       status: 'queued',
       phase: 'queued',
@@ -808,7 +828,7 @@ class SystemBackupService {
       updatedAt: this.now().toISOString(),
       completedAt: null,
       error: null,
-      message: 'SMB backup queued.',
+      message: control.local ? 'Local backup queued.' : 'SMB backup queued.',
       remoteTarget: null,
       smb: {
         sharePath: target.sharePath,
@@ -842,7 +862,7 @@ class SystemBackupService {
 
       await this.updateBackupJob(jobId, {
         status: 'uploading',
-        phase: 'uploading-smb',
+        phase: options.storage === 'local' ? 'saving-local' : 'uploading-smb',
         archiveName: backup.archiveFilename,
         manifest: {
           version: backup.manifest?.version || null,
@@ -850,10 +870,12 @@ class SystemBackupService {
           appVersion: backup.manifest?.appVersion || null,
           database: backup.manifest?.database || null
         },
-        message: 'Uploading backup archive to SMB share.'
+        message: options.storage === 'local' ? 'Saving retained local backup.' : 'Uploading backup archive to SMB share.'
       });
 
-      const uploaded = await this.uploadArchiveToSmb(backup.archivePath, {
+      const uploaded = options.storage === 'local'
+        ? await this.saveLocalArchive(backup.archivePath, backup.archiveFilename)
+        : await this.uploadArchiveToSmb(backup.archivePath, {
         ...options,
         remoteFilename: options.remoteFilename || backup.archiveFilename
       });
@@ -861,7 +883,9 @@ class SystemBackupService {
       let retention = null;
       const retentionCount = normalizeRetentionCount(options.retentionCount, null);
       if (retentionCount) {
-        retention = await this.pruneSmbBackups(options, retentionCount);
+        retention = options.storage === 'local'
+          ? await this.pruneLocalBackups(retentionCount)
+          : await this.pruneSmbBackups(options, retentionCount);
       }
 
       const completedJob = await this.updateBackupJob(jobId, {
@@ -881,7 +905,7 @@ class SystemBackupService {
         phase: 'failed',
         completedAt: this.now().toISOString(),
         error: error.message,
-        message: 'Backup failed before HomeBrain could save the archive to SMB.'
+        message: 'Backup failed before HomeBrain could save the archive.'
       }).catch(() => {});
       if (failedJob) {
         await options.onComplete?.(buildBackupJobSummary(failedJob));
@@ -889,6 +913,31 @@ class SystemBackupService {
     } finally {
       await backup?.cleanup?.().catch(() => {});
     }
+  }
+
+  async saveLocalArchive(archivePath, filename) {
+    if (!/^homebrain-backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.tar\.gz$/.test(filename)) throw new Error('Invalid backup archive filename');
+    const directory = path.join(this.backupRoot, 'local');
+    await fsp.mkdir(directory, { recursive: true, mode: 0o700 });
+    const destination = path.join(directory, filename);
+    try {
+      await fsp.copyFile(archivePath, `${destination}.partial`);
+      await fsp.chmod(`${destination}.partial`, 0o600);
+      await fsp.rename(`${destination}.partial`, destination);
+    } catch (error) {
+      await fsp.rm(`${destination}.partial`, { force: true }).catch(() => {});
+      throw error;
+    }
+    return { remoteTarget: destination };
+  }
+
+  async pruneLocalBackups(keepCount) {
+    const directory = path.join(this.backupRoot, 'local');
+    const archives = (await fsp.readdir(directory)).filter((filename) => /^homebrain-backup-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z\.tar\.gz$/.test(filename)).sort().reverse();
+    const kept = archives.slice(0, keepCount);
+    const deleted = archives.slice(keepCount);
+    for (const filename of deleted) await fsp.unlink(path.join(directory, filename));
+    return { keepCount, matched: archives.length, kept, deleted, displayPath: directory };
   }
 
   async writeRestoreJob(job) {
@@ -1078,17 +1127,13 @@ class SystemBackupService {
   }
 
   loadEnvOverrides(extractedRoot) {
-    const envPath = path.join(extractedRoot, 'filesystem', '.env');
-    if (!fs.existsSync(envPath)) {
-      return {};
+    const overrides = {};
+    for (const relativePath of ['.env', path.join('server', '.env')]) {
+      const envPath = path.join(extractedRoot, 'filesystem', relativePath);
+      if (!fs.existsSync(envPath)) continue;
+      Object.assign(overrides, dotenv.parse(fs.readFileSync(envPath, 'utf8')));
     }
-
-    try {
-      const raw = fs.readFileSync(envPath, 'utf8');
-      return dotenv.parse(raw);
-    } catch (_error) {
-      return {};
-    }
+    return overrides;
   }
 
   async restoreFileTarget(extractedRoot, target) {

@@ -1,5 +1,6 @@
 import { IndoorClimateSourceCard } from "@/components/settings/IndoorClimateSourceCard"
 import { useState, useEffect, ChangeEvent, forwardRef, type ComponentProps } from "react"
+import { applyDynamicDnsStatus } from "@/lib/dynamicDnsStatus"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -122,6 +123,7 @@ import {
   exportConfiguration,
   downloadDisasterRecoveryBackup,
   startSmbDisasterRecoveryBackup,
+  startLocalDisasterRecoveryBackup,
   testSmbDisasterRecoveryBackup,
   getSmbBackupScheduleStatus,
   getLatestDisasterRecoveryBackupJob,
@@ -816,6 +818,7 @@ export function Settings() {
       s2ProOutputFormat: "mp3",
       s2ProTimeoutMs: 30000,
       enableNotifications: true,
+      insteonEnabled: true,
       insteonPort: "",
       isyHost: "",
       isyPort: 443,
@@ -866,6 +869,7 @@ export function Settings() {
       smbBackupScheduleEnabled: false,
       smbBackupScheduleTime: "02:30",
       smbBackupRetentionCount: 3,
+      backupDestination: "smb",
       dynamicDnsEnabled: false,
       dynamicDnsProvider: "azure",
       dynamicDnsCheckIntervalSeconds: 60,
@@ -1122,6 +1126,8 @@ export function Settings() {
   const smbBackupPassword = (watch("smbBackupPassword") || "").toString()
   const smbBackupDomain = (watch("smbBackupDomain") || "").toString()
   const smbBackupScheduleEnabled = watch("smbBackupScheduleEnabled") === true
+  const isLocalBackup = watch("backupDestination") === "local"
+  const backupConfirmationPhrase = isLocalBackup ? "BACKUP HOMEBRAIN LOCALLY" : "BACKUP HOMEBRAIN TO SMB"
   const smbBackupRetentionCount = Math.max(
     1,
     Math.min(30, Number(watch("smbBackupRetentionCount") ?? 3) || 3)
@@ -1325,7 +1331,7 @@ export function Settings() {
                 setValue(key, CONFIGURED_SECRET_PLACEHOLDER); // Placeholder to show key is configured
                 return;
               }
-              setValue(key, value);
+              setValue(key as Parameters<typeof setValue>[0], value as Parameters<typeof setValue>[1]);
             }
           });
 
@@ -5137,7 +5143,11 @@ export function Settings() {
         title: "Dynamic DNS pushed",
         description: response.message || `Updated ${response.result?.records?.length || 0} DNS record(s).`,
       })
-      await loadSettings()
+      // Refresh status without resetting the form and losing unsaved edits.
+      const settingsResponse = await getSettings()
+      if (settingsResponse.success && settingsResponse.settings) {
+        applyDynamicDnsStatus(settingsResponse.settings, (key, value) => setValue(key, value))
+      }
     } catch (error: any) {
       toast({
         title: "Dynamic DNS push failed",
@@ -5200,7 +5210,7 @@ export function Settings() {
   }
 
   const handleCreateSmbBackup = async () => {
-    if (!smbBackupShareUrl.trim()) {
+    if (!isLocalBackup && !smbBackupShareUrl.trim()) {
       toast({
         title: "SMB Share Required",
         description: "Enter an SMB share like smb://server/share/HomeBrain or //server/share/HomeBrain.",
@@ -5211,7 +5221,9 @@ export function Settings() {
 
     setCreatingSmbBackup(true)
     try {
-      const response = await startSmbDisasterRecoveryBackup(buildSmbBackupPayload({ includeConfirmation: true }))
+      const response = isLocalBackup
+        ? await startLocalDisasterRecoveryBackup(smbBackupConfirm.trim().toUpperCase())
+        : await startSmbDisasterRecoveryBackup(buildSmbBackupPayload({ includeConfirmation: true }))
       setLatestBackupJob(response.job || null)
       setValue("smbBackupPassword", "")
       setSmbBackupConfirm("")
@@ -5222,8 +5234,8 @@ export function Settings() {
     } catch (error: any) {
       console.error("Failed to create SMB backup:", error)
       toast({
-        title: "SMB Backup Failed",
-        description: error?.message || "Unable to save the disaster recovery backup to SMB.",
+        title: "Backup Failed",
+        description: error?.message || "Unable to save the disaster recovery backup.",
         variant: "destructive"
       })
     } finally {
@@ -6790,6 +6802,10 @@ export function Settings() {
                   <CardContent className="space-y-4">
                 <div className="space-y-3">
                   <div>
+                    <label className="flex items-center gap-2 text-sm font-medium">
+                      <input type="checkbox" {...register("insteonEnabled")} />
+                      Enable INSTEON controller
+                    </label>
                     <label className="text-sm font-medium">INSTEON PLM Endpoint</label>
                     <Input
                       {...register("insteonPort")}
@@ -10482,14 +10498,21 @@ export function Settings() {
 
                   <div className="space-y-4 md:col-span-2 rounded-lg border border-border/60 bg-background/70 p-3">
                     <div>
-                      <h4 className="font-medium">SMB Backups</h4>
+                      <h4 className="font-medium">Scheduled Backups</h4>
                       <p className="text-sm text-muted-foreground">
-                        Save full disaster recovery archives to a network share and keep a rolling set of backups.
+                        Keep a rolling set of full disaster recovery archives. Local backups protect against application changes; use a network share for protection against disk failure.
                       </p>
                     </div>
 
                     <div className="grid gap-3 md:grid-cols-2">
                       <div className="md:col-span-2">
+                        <label className="text-sm font-medium">Backup destination</label>
+                        <select {...register("backupDestination")} className="mt-1 block w-full rounded-md border bg-background p-2">
+                          <option value="smb">Network share (SMB)</option>
+                          <option value="local">Local platform storage</option>
+                        </select>
+                      </div>
+                      {!isLocalBackup && <><div className="md:col-span-2">
                         <label className="text-sm font-medium">SMB share</label>
                         <Input
                           {...register("smbBackupShareUrl")}
@@ -10534,6 +10557,7 @@ export function Settings() {
                           className="mt-1"
                         />
                       </div>
+                      </>}
                     </div>
 
                     <div className="rounded-lg border border-border/60 bg-slate-50/80 p-3 dark:bg-slate-950/40">
@@ -10576,7 +10600,7 @@ export function Settings() {
                             {smbBackupScheduleEnabled && smbBackupScheduleNextRunAt
                               ? formatHarmonyTimestamp(smbBackupScheduleNextRunAt)
                               : smbBackupScheduleEnabled
-                                ? "Waiting for SMB share"
+                                ? "Waiting for backup schedule"
                                 : "Disabled"}
                           </p>
                         </div>
@@ -10608,7 +10632,7 @@ export function Settings() {
                     </div>
 
                     <div className="grid gap-2 md:grid-cols-2">
-                      <Button
+                      {!isLocalBackup && <Button
                         type="button"
                         variant="outline"
                         size="sm"
@@ -10627,12 +10651,12 @@ export function Settings() {
                             Test SMB Connection
                           </>
                         )}
-                      </Button>
+                      </Button>}
 
                       <Input
                         value={smbBackupConfirm}
                         onChange={(event) => setSmbBackupConfirm(event.target.value)}
-                        placeholder="Type BACKUP HOMEBRAIN TO SMB"
+                        placeholder={`Type ${backupConfirmationPhrase}`}
                       />
 
                       <Button
@@ -10640,18 +10664,18 @@ export function Settings() {
                         variant="outline"
                         size="sm"
                         onClick={handleCreateSmbBackup}
-                        disabled={creatingSmbBackup || !smbBackupShareUrl.trim() || smbBackupConfirm.trim().toUpperCase() !== "BACKUP HOMEBRAIN TO SMB"}
+                        disabled={creatingSmbBackup || (!isLocalBackup && !smbBackupShareUrl.trim()) || smbBackupConfirm.trim().toUpperCase() !== backupConfirmationPhrase}
                         className="w-full md:col-span-2"
                       >
                         {creatingSmbBackup || (latestBackupJob && ["queued", "creating", "uploading"].includes(latestBackupJob.status)) ? (
                           <>
                             <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-600 mr-2" />
-                            Saving to SMB...
+                            Saving backup...
                           </>
                         ) : (
                           <>
                             <HardDrive className="h-4 w-4 mr-2" />
-                            Save Full Backup to SMB
+                            {isLocalBackup ? "Save Full Backup Locally" : "Save Full Backup to SMB"}
                           </>
                         )}
                       </Button>

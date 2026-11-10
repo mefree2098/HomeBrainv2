@@ -87,8 +87,12 @@ jobs:
         run: |
           set -o pipefail
           SIMULATOR=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for k,v in sorted(d["devices"].items(),reverse=True) if "iOS" in k for x in v if "iPhone" in x["name"]))')
+          STATE=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["state"] for v in d["devices"].values() for x in v if x["udid"] == sys.argv[1]))' "$SIMULATOR")
+          if [ "$STATE" != Booted ]; then xcrun simctl boot "$SIMULATOR"; fi
+          xcrun simctl bootstatus "$SIMULATOR" -b
           xcodebuild -project HomeBrainApp/HomeBrainApp.xcodeproj -scheme HomeBrainAppleHomeUITests \
             -configuration Debug -destination "platform=iOS Simulator,id=$SIMULATOR" \
+            -destination-timeout 180 \
             -derivedDataPath "$RUNNER_TEMP/SiriIOS" -resultBundlePath "$RUNNER_TEMP/siri-evidence/apple-home-ui.xcresult" \
             -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO SWIFT_TREAT_WARNINGS_AS_ERRORS=YES test \
             2>&1 | tee "$RUNNER_TEMP/siri-evidence/apple-home-ui.txt"

@@ -80,7 +80,7 @@ class SettingsService {
       const allowedFields = [
         'location', 'timezone', 'wakeWordSensitivity', 'voiceVolume',
         'microphoneSensitivity', 'enableVoiceConfirmation', 'enableNotifications',
-        'insteonPort', 'isyHost', 'isyPort', 'isyUsername', 'isyPassword', 'isyUseHttps', 'isyIgnoreTlsErrors',
+        'insteonEnabled', 'insteonPort', 'isyHost', 'isyPort', 'isyUsername', 'isyPassword', 'isyUseHttps', 'isyIgnoreTlsErrors',
         'smartthingsToken', 'elevenlabsApiKey', 'elevenlabsDefaultVoiceId',
         'harmonyHubAddresses',
         'hardwareOrbWifiSsid', 'hardwareOrbWifiPassword',
@@ -107,7 +107,7 @@ class SettingsService {
         // SMB disaster recovery backup
         'smbBackupShareUrl', 'smbBackupRemoteDirectory', 'smbBackupUsername',
         'smbBackupPassword', 'smbBackupDomain', 'smbBackupScheduleEnabled',
-        'smbBackupScheduleTime', 'smbBackupRetentionCount',
+        'smbBackupScheduleTime', 'smbBackupRetentionCount', 'backupDestination',
         'dynamicDnsEnabled', 'dynamicDnsProvider', 'dynamicDnsCheckIntervalSeconds',
         'dynamicDnsPublicIpUrl', 'dynamicDnsPrimaryHostname',
         'dynamicDnsAzureTenantId', 'dynamicDnsAzureClientId', 'dynamicDnsAzureClientSecret',

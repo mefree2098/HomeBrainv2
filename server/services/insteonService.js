@@ -100,6 +100,7 @@ function clampInsteonTimeoutMs(value, fallback, minimum = 0, maximum = 5 * 60_00
 class InsteonService {
   constructor() {
     this.hub = null;
+    this.enabled = true;
     this.isConnected = false;
     this.devices = new Map(); // Cache of discovered devices
     this.connectionAttempts = 0;
@@ -1850,6 +1851,8 @@ class InsteonService {
 
   async _resolveRuntimeMonitoringContext() {
     const settings = await Settings.getSettings();
+    this.enabled = settings.insteonEnabled !== false;
+    if (!this.enabled) return { shouldConnect: false, reason: 'disabled' };
     const rawConfiguredTarget = typeof settings?.insteonPort === 'string'
       ? settings.insteonPort.trim()
       : '';
@@ -9476,6 +9479,11 @@ class InsteonService {
    * @returns {Promise<Object>} Connection status
    */
   async connect() {
+    const currentSettings = await Settings.getSettings();
+    this.enabled = currentSettings.insteonEnabled !== false;
+    if (currentSettings.insteonEnabled === false) {
+      return { connected: false, enabled: false, disabled: true, message: 'INSTEON is disabled in Settings.' };
+    }
     if (this._connectPromise) {
       return this._connectPromise;
     }
@@ -9797,6 +9805,7 @@ class InsteonService {
       let connectResult = null;
       if (!this.isConnected || !this.hub) {
         connectResult = await this.connect();
+        if (connectResult?.disabled) return { success: false, ...connectResult };
       }
 
       // Get PLM info to verify connection
@@ -9987,7 +9996,8 @@ class InsteonService {
           stage: 'connect',
           progress: 3
         });
-        await this.connect();
+        const connection = await this.connect();
+        if (connection?.disabled) return { disabled: true, linkedDeviceCount: 0, created: 0, updated: 0, skipped: 0, warnings: [], errors: [] };
       }
 
       reportProgress('Reading PLM metadata', {
@@ -13205,6 +13215,7 @@ class InsteonService {
   getStatus() {
     const commandDefaults = this._getCommandRetryOptions();
     return {
+      enabled: this.enabled,
       connected: this.isConnected,
       deviceCount: this.devices.size,
       connectionAttempts: this.connectionAttempts,

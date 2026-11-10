@@ -4,6 +4,7 @@ const workflowService = require('../services/workflowService');
 const { requireUser, requireAdmin } = require('./middlewares/auth');
 
 router.use(requireUser());
+router.use(require('../utils/redactSecrets').redactJsonResponses);
 const admin = requireAdmin();
 
 function parsePositiveInt(value, fallback, minimum = 1, maximum = Number.MAX_SAFE_INTEGER) {

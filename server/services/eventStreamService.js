@@ -22,6 +22,7 @@ class EventStreamService extends EventEmitter {
     );
     this.setMaxListeners(maxListeners);
     this.lastDisconnectedPublishWarningAt = 0;
+    this.publishQueue = Promise.resolve();
   }
 
   isDatabaseReady() {
@@ -71,7 +72,7 @@ class EventStreamService extends EventEmitter {
       source: event.source,
       category: event.category,
       severity: event.severity,
-      payload: event.payload || {},
+      payload: require('../utils/redactSecrets').redactSecrets(event.payload || {}),
       tags: Array.isArray(event.tags) ? event.tags : [],
       correlationId: event.correlationId || null,
       createdAt: event.createdAt
@@ -79,6 +80,13 @@ class EventStreamService extends EventEmitter {
   }
 
   async publish(input = {}) {
+    // Sequence allocation, persistence and notification must keep the same order.
+    const pending = this.publishQueue.then(() => this.persistEvent(input));
+    this.publishQueue = pending.catch(() => {});
+    return pending;
+  }
+
+  async persistEvent(input = {}) {
     const type = (input.type || '').toString().trim();
     if (!type) {
       throw new Error('Event type is required');

@@ -117,6 +117,7 @@ export interface SmbBackupScheduleStatusResponse {
   success: boolean;
   schedule?: {
     enabled?: boolean;
+    destination?: 'smb' | 'local';
     time?: string;
     timeZone?: string;
     retentionCount?: number;
@@ -436,6 +437,11 @@ export const testSmbDisasterRecoveryBackup = async (payload: SmbBackupConnection
     console.error(error);
     throw new Error(error?.response?.data?.error || error.message);
   }
+};
+
+export const startLocalDisasterRecoveryBackup = async (confirmBackup: string) => {
+  const response = await api.post('/api/maintenance/backup/local', { confirmBackup });
+  return response.data as { success: boolean; message?: string; job: DisasterRecoveryBackupJob };
 };
 
 export const getSmbBackupScheduleStatus = async () => {

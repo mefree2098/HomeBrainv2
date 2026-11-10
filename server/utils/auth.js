@@ -6,7 +6,8 @@ const REFRESH_TOKEN_TTL = process.env.AUTH_REFRESH_TOKEN_TTL || '30d';
 
 const generateAccessToken = (user, options = {}) => {
   const payload = {
-    sub: user._id
+    sub: user._id,
+    av: Number(user.authVersion) || 0
   };
 
   if (options.sessionId) {
@@ -21,6 +22,7 @@ const generateAccessToken = (user, options = {}) => {
 const generateRefreshToken = (user, options = {}) => {
   const payload = {
     sub: user._id,
+    av: Number(user.authVersion) || 0,
     jti: options.tokenId || randomUUID()
   };
 

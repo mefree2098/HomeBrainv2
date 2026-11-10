@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "typescript-regression-gate",
+  "summary": "Reject new TypeScript diagnostics and require a shrinking baseline for existing client errors.",
+  "scope": "project",
+  "tags": ["typescript", "ci", "validation"],
+  "entrypoint": ["npm", "--prefix", "client", "run", "typecheck"],
+  "inputs": ["client/src", "client/tsconfig.app.json", "client/tsconfig.node.json", "client/typecheck-baseline.json", "shared"],
+  "outputs": ["TypeScript diagnostic comparison and exit status; --update can only shrink the baseline."],
+  "side_effects": ["Default mode is read-only. --update removes resolved diagnostics from client/typecheck-baseline.json."],
+  "verify": [["node", "--test", "client/scripts/check-types.node-test.mjs"], ["npm", "--prefix", "client", "run", "typecheck"]],
+  "determinism": {
+    "environment": ["Supported Node.js", "locked client npm dependencies and TypeScript version"],
+    "network": "forbidden",
+    "clock": "forbidden",
+    "randomness": "forbidden"
+  },
+  "status": "experimental"
+}

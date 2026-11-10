@@ -7,6 +7,23 @@ const axiomIngressSyncService = require('../services/axiomIngressSyncService');
 const oidcService = require('../services/oidcService');
 const reverseProxyService = require('../services/reverseProxyService');
 
+test('local manifest watch preserves automatic sync without applying unchanged saved proxy edits', async (t) => {
+  const oldFingerprint = axiomIngressSyncService.watchedFingerprint;
+  t.after(() => { axiomIngressSyncService.watchedFingerprint = oldFingerprint; });
+  let hosts = ['mail.example.com'];
+  const redirects = ['https://mail.example.com/auth/callback'];
+  axiomIngressSyncService.watchedFingerprint = axiomIngressSyncService.manifestFingerprint({ mailHosts: hosts, redirectUris: redirects });
+  t.mock.method(global, 'fetch', async () => new Response(JSON.stringify({ mailHosts: hosts, homeBrainRedirectUris: redirects })));
+  let mutations = 0;
+  t.mock.method(axiomIngressSyncService, 'sync', async () => { mutations += 1; return { manifest: { mailHosts: hosts, redirectUris: redirects } }; });
+  assert.deepEqual(await axiomIngressSyncService.checkManifestChanges(), { changed: false });
+  assert.equal(mutations, 0);
+  hosts = ['mail.example.com', 'mail.example.net'];
+  assert.deepEqual(await axiomIngressSyncService.checkManifestChanges(), { changed: true });
+  assert.deepEqual(await axiomIngressSyncService.checkManifestChanges(), { changed: false });
+  assert.equal(mutations, 1);
+});
+
 function createRouteDocument(overrides = {}) {
   return {
     _id: overrides._id || 'route-id',

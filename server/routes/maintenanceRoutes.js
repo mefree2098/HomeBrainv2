@@ -496,6 +496,18 @@ router.post('/backup/smb/test', async (req, res) => {
   }
 });
 
+router.post('/backup/local', async (req, res) => {
+  try {
+    const job = await require('../services/systemBackupService').startLocalBackupJob({
+      confirmBackup: req.body?.confirmBackup,
+      actor: req.user?.email || String(req.user?._id || 'unknown')
+    });
+    return res.status(202).json({ success: true, message: 'Local disaster recovery backup queued.', job });
+  } catch (error) {
+    return res.status(error.code === 'BACKUP_RUNNING' ? 409 : error.status || 500).json({ success: false, error: error.message });
+  }
+});
+
 router.post('/backup/smb', async (req, res) => {
   try {
     const actor = req.user?.email || req.user?._id || 'unknown';

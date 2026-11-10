@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from "react";
+import axios from "axios";
 import { getCurrentUser as apiGetCurrentUser, login as apiLogin, logout as apiLogout, register as apiRegister } from "../api/auth";
 import { hasPlatformAccess, isAdminRole, type User, type UserPlatform, type UserRole } from "../../../shared/types/user";
 
@@ -79,8 +80,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         setStoredUser(userData);
-      } catch (_error) {
-        if (!cancelled) {
+      } catch (error) {
+        if (!cancelled && axios.isAxiosError(error) && [401, 403].includes(error.response?.status || 0)) {
           resetAuth();
         }
       } finally {

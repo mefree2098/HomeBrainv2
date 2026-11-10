@@ -573,6 +573,9 @@ function buildSiteBlock(route, settings) {
   if (route.stripPrefix) {
     lines.push(`    uri strip_prefix ${quoteCaddy(route.stripPrefix)}`);
   }
+  // Public proxies connect over loopback too. Never expose process-internal APIs.
+  lines.push('    @internal path /internal /internal/*');
+  lines.push('    respond @internal 404');
   lines.push(`    reverse_proxy ${quoteCaddy(buildUpstreamUrl(route))} {`);
   lines.push(`      health_uri ${quoteCaddy(normalizePath(route.healthCheckPath || '/', '/'))}`);
   if (route.useUpstreamHostHeader) {
@@ -1300,6 +1303,13 @@ class ReverseProxyService {
       servedNotAfter: route.certificateStatus?.servedNotAfter || null,
       lastCheckedAt: route.certificateStatus?.lastCheckedAt || null
     }));
+  }
+
+  async getServedHomeBrainCertificate() {
+    const route = await ReverseProxyRoute.findOne({ platformKey: 'homebrain', enabled: true }).sort({ hostname: 1 });
+    if (!route) return null;
+    const certificate = await probeServedCertificate(route.hostname);
+    return { ...certificate, domain: route.hostname, checkedAt: new Date().toISOString() };
   }
 
   async canIssueCertificate(domain) {

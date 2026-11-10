@@ -141,92 +141,72 @@ router.get('/replay', async (req, res) => {
 });
 
 router.get('/stream', async (req, res) => {
-  const types = parseTypes(req.query.types);
-  const source = typeof req.query.source === 'string' && req.query.source.trim()
-    ? req.query.source.trim()
-    : null;
-  const category = typeof req.query.category === 'string' && req.query.category.trim()
-    ? req.query.category.trim()
-    : null;
-  const correlationId = typeof req.query.correlationId === 'string' && req.query.correlationId.trim()
-    ? req.query.correlationId.trim()
-    : null;
-  let sinceSequence = parsePositiveInt(req.query.sinceSequence, 0);
-  const limit = parsePositiveInt(req.query.limit, 100);
+  const filters = {
+    types: parseTypes(req.query.types),
+    source: typeof req.query.source === 'string' ? req.query.source.trim() : null,
+    category: typeof req.query.category === 'string' ? req.query.category.trim() : null,
+    correlationId: typeof req.query.correlationId === 'string' ? req.query.correlationId.trim() : null
+  };
+  // EventSource sends this header automatically after a transport reconnect.
+  let cursor = parsePositiveInt(req.get('Last-Event-ID'), parsePositiveInt(req.query.sinceSequence, 0));
+  const limit = Math.min(500, parsePositiveInt(req.query.limit, 100));
+  let closed = false;
+  let replaying = true;
+  let buffer = [];
+  let heartbeat;
+  let stopWatching;
+  const cleanup = () => {
+    if (closed) return;
+    closed = true;
+    clearInterval(heartbeat);
+    stopWatching?.();
+    eventStreamService.removeListener('event', listener);
+    res.end();
+  };
+  const writeEvent = (event) => {
+    const sequence = Number(event?.sequence);
+    if (closed || !Number.isSafeInteger(sequence) || sequence <= cursor) return;
+    // Disconnect slow consumers; their durable cursor allows a later replay.
+    if (res.writableLength > 1024 * 1024) { cleanup(); return; }
+    res.write(`id: ${sequence}\nevent: event\ndata: ${JSON.stringify(event)}\n\n`);
+    cursor = sequence;
+  };
+  const listener = (event) => {
+    if (closed || !matchesFilters(event, filters)) return;
+    if (replaying) {
+      buffer.push(event);
+      if (buffer.length > 1000) cleanup();
+    } else writeEvent(event);
+  };
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   res.flushHeaders?.();
-
-  const writeEvent = (event) => {
-    try {
-      res.write(`id: ${event.sequence}\n`);
-      res.write('event: event\n');
-      res.write(`data: ${JSON.stringify(event)}\n\n`);
-      sinceSequence = Math.max(sinceSequence, Number(event.sequence) || sinceSequence);
-    } catch (error) {
-      console.warn('GET /api/events/stream - Failed to write event:', error.message);
-    }
-  };
-
-  try {
-    const replay = await eventStreamService.replay({
-      sinceSequence,
-      limit,
-      types,
-      source,
-      category,
-      correlationId
-    });
-    replay.events.forEach(writeEvent);
-  } catch (error) {
-    console.error('GET /api/events/stream - Failed initial replay:', error.message);
-  }
-
-  res.write('event: ready\n');
-  res.write(`data: ${JSON.stringify({ sinceSequence })}\n\n`);
-
-  const heartbeat = setInterval(() => {
-    try {
-      res.write(':\n\n');
-    } catch (error) {
-      clearInterval(heartbeat);
-    }
-  }, HEARTBEAT_MS);
-
-  const listener = (event) => {
-    if ((Number(event?.sequence) || 0) <= sinceSequence) {
-      return;
-    }
-    if (!matchesFilters(event, { types, source, category, correlationId })) {
-      return;
-    }
-    writeEvent(event);
-  };
-
+  // Subscribe before querying Mongo so inserts during replay cannot be lost.
   eventStreamService.on('event', listener);
-
-  let closed = false;
-  const cleanup = () => {
-    if (closed) {
-      return;
-    }
-    closed = true;
-    clearInterval(heartbeat);
-    eventStreamService.removeListener('event', listener);
-    try {
-      res.end();
-    } catch (error) {
-      // No-op.
-    }
-  };
-
   req.on('close', cleanup);
-  req.on('end', cleanup);
   res.on('close', cleanup);
   res.on('error', cleanup);
+  stopWatching = require('../utils/watchAuthorization').watchAuthorization(req, cleanup);
+  try {
+    while (!closed) {
+      const replay = await eventStreamService.replay({ ...filters, sinceSequence: cursor, limit });
+      replay.events.forEach(writeEvent);
+      if (replay.events.length < limit) break;
+    }
+    if (closed) return;
+    buffer.sort((a, b) => a.sequence - b.sequence).forEach(writeEvent);
+    buffer = [];
+    replaying = false;
+    res.write(`event: ready\ndata: ${JSON.stringify({ sinceSequence: cursor })}\n\n`);
+    heartbeat = setInterval(() => { if (!closed) res.write(':\n\n'); }, HEARTBEAT_MS);
+    heartbeat.unref?.();
+  } catch (error) {
+    console.error('GET /api/events/stream - Replay failed:', error.message);
+    cleanup();
+  }
 });
 
 module.exports = router;

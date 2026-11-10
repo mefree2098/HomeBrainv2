@@ -200,10 +200,16 @@ class UserService {
   static async setPassword(user, password) {
     if (!password) throw new Error('Password is required');
     user.password = await generatePasswordHash(password); // eslint-disable-line
+    user.authVersion = (Number(user.authVersion) || 0) + 1;
+    user.refreshToken = require('crypto').randomUUID();
 
     try {
       if (!user.isNew) {
         await user.save();
+        await require('../models/UserSession').updateMany(
+          { userId: user._id, revokedAt: null },
+          { $set: { revokedAt: new Date(), revokeReason: 'password-reset' } }
+        );
       }
 
       return user;

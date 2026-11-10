@@ -372,6 +372,9 @@ async function loadValidatedSession(refreshToken, req = null, options = {}) {
   if (!user.isActive) {
     throw buildSessionError('User account is inactive', 403);
   }
+  if ((Number(user.authVersion) || 0) !== (Number(decoded.av) || 0)) {
+    throw buildSessionError('Credentials changed; sign in again', 401);
+  }
 
   let session = null;
   const sessionId = trimString(decoded.sid);

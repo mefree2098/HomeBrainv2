@@ -609,7 +609,8 @@ async function issueTokens(req, client, authorizationCode, user) {
     scope: (authorizationCode.scopes || []).join(' '),
     role: user.role,
     auth_time: authTime,
-    token_use: 'access'
+    token_use: 'access',
+    av: Number(user.authVersion) || 0
   }, settings.signingPrivateKeyPem, signingOptions);
 
   const idTokenPayload = {

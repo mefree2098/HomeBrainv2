@@ -117,6 +117,11 @@ const schema = new mongoose.Schema({
 schema.pre('save', function() {
   this.updatedAt = Date.now();
 });
+schema.pre('validate', async function protectCredentials() {
+  const service = require('../services/workflowCredentialService');
+  this.actions = await service.protect(this.actions);
+  this.workflowGraph = await service.protect(this.workflowGraph);
+});
 
 // Indexes for better query performance
 schema.index({ enabled: 1 });

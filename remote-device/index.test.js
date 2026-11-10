@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const http = require('node:http');
 
 const {
   HomeBrainRemoteDevice,
@@ -12,6 +13,34 @@ const {
   getAudioPlaybackCommands,
   normalizeAudioCommand
 } = require('./index');
+
+test('a stalled WebSocket handshake is terminated and queues only one reconnect', async (t) => {
+  const sockets = new Set();
+  const server = http.createServer();
+  let accepted;
+  const upgrade = new Promise((resolve) => { accepted = resolve; });
+  server.on('upgrade', (_req, socket) => { sockets.add(socket); accepted(); });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const device = new HomeBrainRemoteDevice({ hubUrl: `http://127.0.0.1:${server.address().port}`, audio: {}, wakeWord: {} });
+  device.deviceId = 'handshake-test';
+  t.after(async () => {
+    device.shuttingDown = true;
+    clearTimeout(device.reconnectTimer);
+    device.ws?.terminate();
+    for (const socket of sockets) socket.destroy();
+    await new Promise((resolve) => server.close(resolve));
+  });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const rejected = assert.rejects(device.connectToHub(), /timeout|timed out|closed|established/i);
+  await upgrade;
+  t.mock.timers.tick(10_001);
+  await rejected;
+  assert.equal(device.isConnected, false);
+  assert.ok(device.reconnectTimer);
+  assert.equal(device.reconnectAttempts, 1);
+  device.scheduleReconnect();
+  assert.equal(device.reconnectAttempts, 1);
+});
 
 function createFakeSidecar() {
   const child = new EventEmitter();

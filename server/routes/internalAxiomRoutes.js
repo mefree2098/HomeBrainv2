@@ -1,6 +1,7 @@
 const express = require('express');
 
 const axiomIngressSyncService = require('../services/axiomIngressSyncService');
+const { requireAdmin } = require('./middlewares/auth');
 
 const router = express.Router();
 
@@ -9,7 +10,7 @@ function isLoopbackAddress(address) {
   return value === '127.0.0.1' || value === '::1';
 }
 
-router.post('/sync', async (req, res) => {
+router.post('/sync', requireAdmin(), async (req, res) => {
   const remoteAddress = req.socket?.remoteAddress || req.ip;
   if (!isLoopbackAddress(remoteAddress)) {
     return res.status(403).json({

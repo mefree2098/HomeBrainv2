@@ -143,6 +143,7 @@ function normalizeSmbBackupSchedule(settings = {}) {
 
   return {
     enabled: settings.smbBackupScheduleEnabled === true,
+    destination: settings.backupDestination === 'local' ? 'local' : 'smb',
     time: parsedTime.value,
     hour: parsedTime.hour,
     minute: parsedTime.minute,
@@ -169,7 +170,7 @@ function normalizeSmbBackupSchedule(settings = {}) {
 
 function computeNextSmbBackupRunAt(settings = {}, fromDate = new Date()) {
   const schedule = normalizeSmbBackupSchedule(settings);
-  if (!schedule.enabled || !schedule.shareUrlConfigured) {
+  if (!schedule.enabled || (schedule.destination !== 'local' && !schedule.shareUrlConfigured)) {
     return null;
   }
 
@@ -307,7 +308,7 @@ class SmbBackupSchedulerService {
   async handleScheduledBackup(targetRunAt) {
     const settings = await this.settingsModel.getSettings();
     const schedule = normalizeSmbBackupSchedule(settings);
-    if (!schedule.enabled || !schedule.shareUrlConfigured) {
+    if (!schedule.enabled || (schedule.destination !== 'local' && !schedule.shareUrlConfigured)) {
       await this.configureFromSettings(settings);
       return null;
     }
@@ -377,6 +378,7 @@ class SmbBackupSchedulerService {
         time: this.currentSchedule.time,
         timeZone: this.currentSchedule.timeZone,
         retentionCount: this.currentSchedule.retentionCount,
+        destination: this.currentSchedule.destination,
         shareUrlConfigured: this.currentSchedule.shareUrlConfigured,
         remoteDirectory: this.currentSchedule.remoteDirectory,
         usernameConfigured: this.currentSchedule.usernameConfigured,

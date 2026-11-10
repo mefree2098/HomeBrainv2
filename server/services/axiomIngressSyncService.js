@@ -109,6 +109,7 @@ function arraysEqual(left, right) {
 async function fetchAxiomManifest() {
   const manifestUrl = getManifestUrl();
   const response = await fetch(manifestUrl, {
+    signal: AbortSignal.timeout(5_000),
     headers: {
       Accept: 'application/json'
     }
@@ -265,6 +266,39 @@ async function syncAxiomRedirectUris(manifest, actor) {
 }
 
 class AxiomIngressSyncService {
+  manifestFingerprint(manifest) {
+    return JSON.stringify({ mailHosts: manifest.mailHosts, redirectUris: manifest.redirectUris });
+  }
+
+  startManifestWatch(initialManifest) {
+    this.stopManifestWatch();
+    this.watchedFingerprint = this.manifestFingerprint(initialManifest);
+    this.manifestWatch = setInterval(() => {
+      if (this.checkingManifest) return;
+      this.checkingManifest = true;
+      this.checkManifestChanges().catch((error) => {
+        if (Date.now() - (this.lastWatchWarningAt || 0) > 600_000) {
+          this.lastWatchWarningAt = Date.now();
+          console.warn(`Axiom manifest watch failed: ${error.message}`);
+        }
+      }).finally(() => { this.checkingManifest = false; });
+    }, 60_000);
+    this.manifestWatch.unref?.();
+  }
+
+  stopManifestWatch() {
+    clearInterval(this.manifestWatch);
+    this.manifestWatch = null;
+  }
+
+  async checkManifestChanges() {
+    const manifest = await fetchAxiomManifest();
+    if (this.manifestFingerprint(manifest) === this.watchedFingerprint) return { changed: false };
+    const result = await this.sync({ actor: 'system:axiom-manifest-watch', reason: 'manifest-changed' });
+    this.watchedFingerprint = this.manifestFingerprint(result.manifest);
+    return { changed: true };
+  }
+
   async sync({ actor = 'system:axiom-sync', reason = 'manual' } = {}) {
     const manifest = await fetchAxiomManifest();
     const routeSummary = await syncManagedRoutes(manifest, actor);

@@ -39,6 +39,8 @@ test('createDisasterRecoveryBackup captures Mongo metadata and persisted filesys
   const { projectRoot, serverRoot, tempRoot } = await createTempProject(t);
 
   await fsp.writeFile(path.join(projectRoot, '.env'), 'DATABASE_URL=mongodb://localhost/HomeBrain\nTEST_VALUE=restored\n', 'utf8');
+  await fsp.mkdir(path.join(projectRoot, 'server'), { recursive: true });
+  await fsp.writeFile(path.join(projectRoot, 'server', '.env'), 'JWT_SECRET=backup-test-only\n', { mode: 0o600 });
   await fsp.writeFile(path.join(serverRoot, 'data', 'device-cache.json'), '{"ok":true}\n', 'utf8');
   await fsp.mkdir(path.join(serverRoot, 'data', 'system-backup'), { recursive: true });
   await fsp.writeFile(path.join(serverRoot, 'data', 'system-backup', 'skip-me.txt'), 'skip\n', 'utf8');
@@ -81,6 +83,8 @@ test('createDisasterRecoveryBackup captures Mongo metadata and persisted filesys
   assert.equal(manifest.version, 1);
   assert.equal(manifest.database.databaseName, 'HomeBrain');
   assert.equal(manifest.database.archivePath, 'database/homebrain.mongodb.archive.gz');
+  assert.equal(await fsp.readFile(path.join(extractRoot, 'filesystem', 'server', '.env'), 'utf8'), 'JWT_SECRET=backup-test-only\n');
+  assert.equal(service.loadEnvOverrides(extractRoot).JWT_SECRET, 'backup-test-only');
   assert.equal(
     await fsp.readFile(path.join(extractRoot, 'filesystem', '.env'), 'utf8'),
     'DATABASE_URL=mongodb://localhost/HomeBrain\nTEST_VALUE=restored\n'
