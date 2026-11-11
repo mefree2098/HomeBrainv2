@@ -24,6 +24,7 @@ export function DecoIntegrationCard() {
   const [devices, setDevices] = useState<Appliance[]>([])
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState("")
+  const [confirmation, setConfirmation] = useState("")
   const load = useCallback(async () => {
     const [deco, ac] = await Promise.all([api.get("/api/deco/status"), api.get("/api/appliances/midea/status")])
     setStatus(deco.data.integration)
@@ -37,40 +38,61 @@ export function DecoIntegrationCard() {
   }, [load])
   useEffect(() => { if (status?.host) setHost(status.host) }, [status?.host])
   const run = async (operation: () => Promise<unknown>) => {
-    setBusy(true); setMessage("")
+    setBusy(true); setMessage(""); setConfirmation("")
     try { await operation() }
     catch (error: any) { setMessage(error.response?.data?.message || error.message || "Deco connection failed") }
     finally { await load().catch(() => {}); setBusy(false) }
   }
+  const connect = () => {
+    if (busy) return
+    void run(async () => {
+      const value = passwordInput.current?.value || password
+      if (!host.trim()) throw new Error("Enter the Deco router IP address.")
+      if (!value && !status?.configured) throw new Error("Enter the Deco network owner password.")
+      const saved = await api.post("/api/deco/configure", { host: host.trim(), enabled: true, ...(value ? { password: value } : {}) })
+      if (!saved.data.integration?.configured) throw new Error("The Deco credentials were not saved. Please try again.")
+      setPassword("")
+      if (passwordInput.current) passwordInput.current.value = ""
+      const { data } = await api.post("/api/deco/sync", {}, { timeout: 60000 })
+      setStatus(data.integration)
+      if (!data.integration?.connected) throw new Error(`Credentials saved, but Deco did not connect. ${data.integration?.lastError || "Check the router address and owner password."}`)
+      const count = data.integration.clients?.length || 0
+      setConfirmation(`Connected to Deco. ${count} network device${count === 1 ? "" : "s"} loaded.`)
+    })
+  }
   const rows = (status?.clients || []).filter((client) => `${client.name} ${client.ip} ${client.mac}`.toLowerCase().includes(filter.toLowerCase()))
-  return <Card>
+  return <Card onKeyDown={(event) => {
+    // The surrounding Settings page owns the only form. Enter in the device
+    // filter must not submit it; connection fields handle Enter themselves.
+    if (event.key === "Enter" && !event.nativeEvent.isComposing && event.target instanceof HTMLInputElement) {
+      event.preventDefault()
+      event.stopPropagation()
+    }
+  }}>
     <CardHeader>
       <CardTitle>TP-Link Deco</CardTitle>
       <CardDescription>Find devices on your network and follow their current DHCP addresses. HomeBrain reads the device list without changing router settings.</CardDescription>
     </CardHeader>
     <CardContent className="space-y-5">
       <p role="status">{status?.connected ? "Connected" : status?.enabled ? "Awaiting connection" : "Disabled"}{status?.lastSyncAt ? ` · Last successful read ${new Date(status.lastSyncAt).toLocaleString()}` : ""}</p>
-      <form className="grid gap-3" onSubmit={(event) => {
-        event.preventDefault()
-        void run(async () => {
-          const value = passwordInput.current?.value || password
-          if (!value && !status?.configured) throw new Error("Enter the Deco network owner password.")
-          await api.post("/api/deco/configure", { host: host.trim(), enabled: true, ...(value ? { password: value } : {}) })
-          setPassword("")
-          if (passwordInput.current) passwordInput.current.value = ""
-          await api.post("/api/deco/sync", {}, { timeout: 60000 })
-        })
+      <fieldset aria-label="Deco connection settings" className="grid gap-3" disabled={busy} onKeyDown={(event) => {
+        if (event.key === "Enter" && !event.nativeEvent.isComposing && event.target instanceof HTMLInputElement) {
+          event.preventDefault()
+          event.stopPropagation()
+          if (!event.repeat) connect()
+        }
       }}>
         <Label className="grid gap-1">Deco router IP address<Input required value={host} onChange={(event) => setHost(event.target.value)} disabled={busy} placeholder="192.168.1.1" /></Label>
-        <Label className="grid gap-1">Deco network owner password<Input ref={passwordInput} type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} disabled={busy} placeholder={status?.configured ? "Saved — leave blank to keep" : ""} /></Label>
+        <Label className="grid gap-1">Deco network owner password<Input ref={passwordInput} type="password" autoComplete="off" value={password} onChange={(event) => setPassword(event.target.value)} disabled={busy} placeholder={status?.configured ? "Saved — leave blank to keep" : ""} /></Label>
         <p className="text-xs text-muted-foreground">Use the password accepted by your Deco’s local web management page. It is stored encrypted on this HomeBrain hub. Your AC can continue using DHCP.</p>
-        <Button type="submit" disabled={busy}>{busy ? "Working…" : "Save and Connect"}</Button>
-      </form>
+        <Button type="button" disabled={busy} onClick={connect}>{busy ? "Working…" : "Save and Connect"}</Button>
+      </fieldset>
       {status?.configured && <div className="flex flex-wrap gap-2">
         <Button type="button" variant="outline" disabled={busy || !status.enabled} onClick={() => void run(() => api.post("/api/deco/sync", {}, { timeout: 60000 }))}>Refresh Device List</Button>
         <Button type="button" variant="outline" disabled={busy || !status.enabled} onClick={() => void run(() => api.post("/api/deco/check-appliances", {}, { timeout: 240000 }))}>Check AC Connection</Button>
         <Button type="button" variant="outline" disabled={busy} onClick={() => void run(() => api.post("/api/deco/configure", { enabled: !status.enabled }))}>{status.enabled ? "Disable" : "Enable"}</Button>
       </div>}
+      {confirmation && <p role="status" className="text-sm text-emerald-600 dark:text-emerald-400">{confirmation}</p>}
       {message || status?.lastError ? <p role="alert" className="text-sm text-destructive">{message || status?.lastError}</p> : null}
       {status?.nodes?.map((node) => <p key={node.mac} className="text-sm text-muted-foreground">{node.model} · {node.firmware || "Firmware details unavailable"}</p>)}
       {status?.metadataError && <p className="text-sm text-muted-foreground">{status.metadataError}</p>}
