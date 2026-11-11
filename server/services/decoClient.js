@@ -103,8 +103,14 @@ class DecoClient {
         // encrypted envelope body is URL-encoded (Connection.request in frame.js).
         headers: { 'Content-Type': 'application/json', Referer: `http://${this.host}/webpages/index.html`, ...(this.cookie ? { Cookie: this.cookie } : {}) }
       });
-    } catch {
-      throw new DecoError('transport', 'Cannot reach Deco on the local network');
+    } catch (error) {
+      const stages = { 'login?form=keys': 'password-key read', 'login?form=auth': 'session-key read', 'login?form=login': 'login', 'admin/client?form=client_list': 'client-list read', 'admin/device?form=device_list': 'mesh read' };
+      const stage = stages[path] || 'request';
+      const codes = new Set(['ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH', 'EACCES', 'EPERM', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET']);
+      const reason = error?.name === 'TimeoutError' ? 'timed out'
+        : error?.cause?.message === 'unexpected redirect' ? 'redirect blocked'
+          : codes.has(error?.cause?.code) ? error.cause.code : 'network request failed';
+      throw new DecoError('transport', `Cannot reach Deco during ${stage}: ${reason}`);
     }
     if (!response.ok) throw new DecoError(this.stok ? 'session' : 'protocol', `Deco returned HTTP ${response.status}`);
     const cookie = response.headers.get('set-cookie')?.match(/(?:^|[,;]\s*)sysauth=([^;,\s]+)/)?.[1];
