@@ -90,6 +90,25 @@ test('failed authentication and malformed responses never leak response bodies o
   });
 });
 
+test('transport errors identify the failed read or login without including raw exception data', async () => {
+  for (const [path, stage] of [['login?form=keys', 'password-key read'], ['login?form=auth', 'session-key read'], ['login?form=login', 'login'], ['admin/client?form=client_list', 'client-list read']]) {
+    for (const [failure, reason] of [
+      [Object.assign(new Error('owner-secret'), { name: 'TimeoutError' }), 'timed out'],
+      [new Error('owner-secret', { cause: { code: 'ECONNRESET', message: 'secret-cookie' } }), 'ECONNRESET'],
+      [new Error('owner-secret', { cause: { message: 'unexpected redirect' } }), 'redirect blocked'],
+      [new Error('owner-secret', { cause: { code: 'secret-code', message: 'secret-cookie' } }), 'network request failed']
+    ]) {
+      const client = new DecoClient('192.168.1.1', 'owner-secret', { fetchImpl: async () => { throw failure; } });
+      await assert.rejects(client.post(path), (error) => {
+        assert.equal(error.kind, 'transport');
+        assert.equal(error.message, `Cannot reach Deco during ${stage}: ${reason}`);
+        assert.doesNotMatch(error.message, /owner-secret|secret-cookie|secret-code/);
+        return true;
+      });
+    }
+  }
+});
+
 test('plaintext router errors distinguish credential rejection, lockout and protocol errors without exposing payloads', async () => {
   for (const [code, kind] of [[-5002, 'authentication'], [-5003, 'lockout'], [-5007, 'lockout'], [1, 'protocol']]) {
     const client = new DecoClient('192.168.1.1', 'owner-secret', { fetchImpl: async () => Response.json({
