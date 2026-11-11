@@ -2,7 +2,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const DecoIntegration = require('../models/DecoIntegration');
-const { DecoClient, normalizeHost, normalizeMac } = require('./decoClient');
+const { DecoClient, DecoError, normalizeHost, normalizeMac } = require('./decoClient');
 
 const keyPath = path.resolve(__dirname, '../data/deco/credentials.key');
 const MAX_AGE_MS = 180000;
@@ -59,6 +59,7 @@ class DecoService {
       if (typeof input.enabled === 'boolean') config.enabled = input.enabled;
       config.configured = Boolean(config.secrets);
       config.connected = false; config.lastError = ''; config.clients = []; config.nodes = []; config.lastSyncAt = null;
+      config.retryBlocked = false; config.lastFailure = null;
       await config.save();
       this.client = null; this.nextAttemptAt = 0;
       return this.getStatus();
@@ -69,6 +70,7 @@ class DecoService {
     return this.serial(async () => {
       const config = await this.model.findOne({ key: 'default' }).select('+secrets');
       if (!config?.enabled || !config.configured) return this.getStatus();
+      if (!force && config.retryBlocked) return this.getStatus();
       if (!force && Date.now() < this.nextAttemptAt) return this.getStatus();
       if (!force && fresh(config) && Date.now() - new Date(config.lastSyncAt).getTime() < 60000) return this.getStatus();
       try {
@@ -76,11 +78,14 @@ class DecoService {
         const snapshot = await this.client.snapshot();
         config.clients = snapshot.clients; config.nodes = snapshot.nodes; config.metadataError = snapshot.metadataError;
         config.connected = true; config.lastSyncAt = new Date(); config.lastError = '';
+        config.retryBlocked = false; config.lastFailure = null;
         this.nextAttemptAt = Date.now() + 60000;
       } catch (error) {
         this.client = null; config.connected = false;
         // Only fixed, sanitized client errors are saved. Never persist transport requests or secrets.
-        config.lastError = /^(Deco |Cannot reach Deco)/.test(error.message) ? error.message : 'Deco connection failed; check the address and saved password';
+        config.lastError = /^(Deco |Cannot reach Deco)/.test(error.message) ? error.message : 'Deco connection failed; a server error prevented the request';
+        config.lastFailure = error instanceof DecoError ? error.diagnostic() : { kind: 'internal', code: null, attemptsRemaining: null };
+        config.retryBlocked = !['transport', 'session'].includes(config.lastFailure.kind);
         this.nextAttemptAt = Date.now() + 15 * 60000;
       }
       await config.save();

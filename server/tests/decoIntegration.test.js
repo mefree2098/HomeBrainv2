@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
-const { DecoClient, normalizeHost, normalizeMac, normalizeClients } = require('../services/decoClient');
+const { DecoClient, DecoError, normalizeHost, normalizeMac, normalizeClients } = require('../services/decoClient');
 const { DecoService, fresh } = require('../services/decoService');
 
 function rsaPair(bits) {
@@ -28,6 +28,10 @@ test('BE63 encrypted handshake and client reads use the cookie, sequence signatu
   const fetchImpl = async (url, options) => {
     const parsed = new URL(url); seen.push(parsed.pathname + parsed.search);
     assert.equal(parsed.hostname, '192.168.1.1'); assert.equal(options.redirect, 'error');
+    // Contract read from the physical BE63 firmware's Connection.request and
+    // tpEncrypt.js, rather than accepting whatever our client happens to send.
+    assert.equal(options.headers['Content-Type'], 'application/json');
+    if (['keys', 'auth'].includes(parsed.searchParams.get('form'))) assert.deepEqual(JSON.parse(options.body), { operation: 'read' });
     if (parsed.searchParams.get('form') === 'keys') return Response.json({ error_code: 0, result: { password: pwd.wire } });
     if (parsed.searchParams.get('form') === 'auth') return Response.json({ error_code: 0, result: { key: sign.wire, seq: 123456 } });
     const wire = new URLSearchParams(options.body);
@@ -35,6 +39,7 @@ test('BE63 encrypted handshake and client reads use the cookie, sequence signatu
     const signatureParams = new URLSearchParams(signature);
     if (parsed.searchParams.get('form') === 'login') {
       logins++; aesKey = Buffer.from(signatureParams.get('k')); aesIv = Buffer.from(signatureParams.get('i'));
+      assert.match(aesKey.toString(), /^\d{16}$/); assert.match(aesIv.toString(), /^\d{16}$/);
     } else {
       assert.equal(options.headers.Cookie, 'sysauth=cookie-for-test');
       assert.match(parsed.pathname, /;stok=test-session\/admin\/(client|device)$/);
@@ -79,9 +84,35 @@ test('failed authentication and malformed responses never leak response bodies o
   const client = new DecoClient('192.168.1.1', 'owner-secret', { fetchImpl: async () => Response.json({ data: 'owner-secret' }) });
   client.aesKey = Buffer.alloc(16); client.aesIv = Buffer.alloc(16); client.seq = 1; client.signKey = { size: 64, key: rsaPair(512).publicKey };
   await assert.rejects(client.encrypted('login?form=login', {}, true), (error) => {
-    assert.match(error.message, /check the network owner password/);
+    assert.equal(error.kind, 'protocol');
+    assert.match(error.message, /response could not be decoded/);
     assert.doesNotMatch(error.message, /owner-secret|data=/); return true;
   });
+});
+
+test('plaintext router errors distinguish credential rejection, lockout and protocol errors without exposing payloads', async () => {
+  for (const [code, kind] of [[-5002, 'authentication'], [-5003, 'lockout'], [-5007, 'lockout'], [1, 'protocol']]) {
+    const client = new DecoClient('192.168.1.1', 'owner-secret', { fetchImpl: async () => Response.json({
+      error_code: code, msg: 'raw-owner-secret', result: { failureCount: 7, attemptsAllowed: 10, password: 'must-not-leak' }
+    }) });
+    client.aesKey = Buffer.alloc(16); client.aesIv = Buffer.alloc(16); client.seq = 1;
+    client.signKey = { size: 64, key: rsaPair(512).publicKey };
+    await assert.rejects(client.encrypted('login?form=login', {}, true), (error) => {
+      assert.equal(error.kind, kind); assert.equal(error.code, code);
+      assert.deepEqual(error.diagnostic(), { kind, code, attemptsRemaining: 3 });
+      assert.doesNotMatch(error.message + JSON.stringify(error.diagnostic()), /owner-secret|must-not-leak/);
+      return true;
+    });
+  }
+});
+
+test('firmware success envelopes accept the documented errorcode spelling', async () => {
+  const key = Buffer.from('1234567890123456'); const iv = Buffer.from('9876543210987654');
+  const cipher = crypto.createCipheriv('aes-128-cbc', key, iv);
+  const data = Buffer.concat([cipher.update(JSON.stringify({ errorcode: 0, result: { client_list: [] } })), cipher.final()]).toString('base64');
+  const client = new DecoClient('192.168.1.1', 'owner-secret', { fetchImpl: async () => Response.json({ data }) });
+  client.aesKey = key; client.aesIv = iv; client.seq = 1; client.signKey = { size: 64, key: rsaPair(512).publicKey };
+  assert.deepEqual(await client.encrypted('admin/client?form=client_list', { operation: 'read' }), { client_list: [] });
 });
 
 function memoryModel(initial) {
@@ -121,6 +152,38 @@ test('router failure preserves last inventory as stale and prevents repeated aut
   assert.equal(status.integration.stale, true); assert.equal(status.integration.connected, false);
   assert.equal(status.integration.clients[0].name, 'Old AC');
   assert.deepEqual(await service.addressHints([{ id: '123' }]), {});
+});
+
+test('protocol and rejected login responses stop automatic attempts across timer ticks and process restarts', async () => {
+  for (const kind of ['protocol', 'authentication', 'lockout']) {
+    const model = memoryModel({ host: '192.168.1.1', enabled: true, configured: true, secrets: 'ciphertext', clients: [] });
+    let attempts = 0;
+    const options = { model, vault: { decrypt: async () => 'secret' }, clientFactory: () => ({ snapshot: async () => {
+      attempts++; throw new DecoError(kind, 'Deco login exchange failed', { code: kind === 'authentication' ? -5002 : 1 });
+    } }) };
+    const service = new DecoService(options);
+    await service.sync(); service.nextAttemptAt = 0; await service.sync();
+    const restarted = new DecoService(options); await restarted.sync();
+    assert.equal(attempts, 1, kind);
+    const status = await restarted.getStatus();
+    assert.equal(status.integration.retryBlocked, true); assert.equal(status.integration.lastFailure.kind, kind);
+    assert.doesNotMatch(JSON.stringify(status), /ciphertext|secrets/);
+    await restarted.sync({ force: true }); assert.equal(attempts, 2, 'explicit manual refresh makes exactly one attempt');
+  }
+});
+
+test('a transient transport failure can recover automatically without resetting saved credentials', async () => {
+  const model = memoryModel({ host: '192.168.1.1', enabled: true, configured: true, secrets: 'ciphertext', clients: [] });
+  let attempts = 0;
+  const service = new DecoService({ model, vault: { decrypt: async () => 'secret' }, clientFactory: () => ({ snapshot: async () => {
+    if (++attempts === 1) throw new DecoError('transport', 'Cannot reach Deco on the local network');
+    return { clients: [], nodes: [], metadataError: '' };
+  } }) });
+  await service.sync(); assert.equal((await service.getStatus()).integration.retryBlocked, false);
+  service.nextAttemptAt = 0; await service.sync();
+  const status = await service.getStatus();
+  assert.equal(status.integration.connected, true); assert.equal(status.integration.configured, true);
+  assert.equal(status.integration.lastFailure, null); assert.equal(attempts, 2);
 });
 
 test('DHCP hints prefer the verified MAC, rotate bounded candidates, and never bind by router name or stale data', async () => {

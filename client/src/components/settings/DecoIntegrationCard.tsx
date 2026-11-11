@@ -9,6 +9,7 @@ type Client = { mac: string; name: string; ip: string; online: boolean | null; c
 type DecoStatus = {
   host: string; enabled: boolean; configured: boolean; connected: boolean; stale: boolean
   lastSyncAt?: string; lastError?: string; metadataError?: string
+  retryBlocked?: boolean
   clients: Client[]; nodes: { mac: string; model: string; firmware: string }[]
 }
 type Presence = { id: string; name: string; mac: string | null; routerOnline: boolean | null; ip: string | null; identityConfirmed: boolean }
@@ -94,6 +95,7 @@ export function DecoIntegrationCard() {
       </div>}
       {confirmation && <p role="status" className="text-sm text-emerald-600 dark:text-emerald-400">{confirmation}</p>}
       {message || status?.lastError ? <p role="alert" className="text-sm text-destructive">{message || status?.lastError}</p> : null}
+      {status?.retryBlocked && <p className="text-sm text-muted-foreground">Automatic login attempts are paused. Use Refresh Device List to retry after the connection issue is resolved.</p>}
       {status?.nodes?.map((node) => <p key={node.mac} className="text-sm text-muted-foreground">{node.model} · {node.firmware || "Firmware details unavailable"}</p>)}
       {status?.metadataError && <p className="text-sm text-muted-foreground">{status.metadataError}</p>}
       {devices.length > 0 && <section className="space-y-3" aria-label="Paired AC network status">
