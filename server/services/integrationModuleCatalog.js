@@ -32,6 +32,12 @@ const SHARED_DEVICE_TYPES = Object.freeze([
 
 const INTEGRATION_MODULE_DEFINITIONS = [
   {
+    id: 'deco', label: 'TP-Link Deco', provider: 'Deco LAN', category: 'Devices',
+    description: 'Read-only connected-device inventory and DHCP address discovery for paired appliances.',
+    settingsTab: 'deco', apiBasePath: '/api/deco', deviceSource: '',
+    capabilities: ['telemetry_source'], deviceTypes: [], telemetrySourceTypes: []
+  },
+  {
     id: 'homebrain-sensors',
     label: 'HomeBrain Sensors',
     provider: 'HomeBrain',

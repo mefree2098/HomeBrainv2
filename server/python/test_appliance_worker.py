@@ -121,6 +121,43 @@ class ApplianceTests(unittest.IsolatedAsyncioTestCase):
         heater = SimpleNamespace(serial_number='tankless', generic_type='eagleWaterHeater', enabled=True, mode=WaterHeaterOperationMode.ELECTRIC_MODE)
         self.assertEqual(self.worker.heater_snapshot(heater)['mode'], 'enabled')
 
+    async def test_deco_dhcp_candidates_recover_when_broadcasts_fail_and_verify_the_paired_id(self):
+        ac = FakeAC()
+        ac.ip, ac.port = '192.168.2.99', 6445
+        ac.authenticate, ac.get_capabilities = AsyncMock(), AsyncMock()
+        self.worker.config = {"devices": [{"id": "123", "ip": "192.168.2.63", "token": "saved-token", "key": "saved-key"}]}
+        self.worker.address_hints = {"123": ['192.168.2.70', '192.168.2.99']}
+        async def discover(ip, **kwargs):
+            if ip == ac.ip:
+                return SimpleNamespace(id=123, ip=ip, port=ac.port)
+            return SimpleNamespace(id=999, ip=ip, port=6444)
+        with patch('msmart.discover.Discover.discover_single', new=AsyncMock(side_effect=discover)), patch('msmart.discover.Discover.discover', new=AsyncMock(side_effect=OSError('broadcast unavailable'))), patch('msmart.device.AirConditioner', return_value=ac) as constructor:
+            self.assertIs(await self.worker.ac('123'), ac)
+        self.assertEqual(constructor.call_count, 1)
+        self.assertEqual(constructor.call_args.kwargs['ip'], ac.ip)
+        self.assertEqual(constructor.call_args.kwargs['port'], ac.port)
+        ac.authenticate.assert_awaited_once_with('saved-token', 'saved-key')
+        self.assertEqual(ac.writes, 0)
+
+    async def test_router_labels_and_ip_reuse_cannot_substitute_a_different_appliance(self):
+        self.worker.config = {"devices": [{"id": "123", "ip": "192.168.2.63"}]}
+        self.worker.address_hints = {"123": ['192.168.2.70', '8.8.8.8', '127.0.0.1', '169.254.169.254', 'bad']}
+        with patch('msmart.discover.Discover.discover_single', new=AsyncMock(return_value=SimpleNamespace(id=999))) as discover, patch('msmart.discover.Discover.discover', new=AsyncMock(return_value=[])), patch('msmart.device.AirConditioner') as constructor:
+            with self.assertRaisesRegex(CommandError, 'AC is offline'):
+                await self.worker.ac('123')
+        constructor.assert_not_called()
+        self.assertEqual([call.args[0] for call in discover.await_args_list], ['192.168.2.63', '192.168.2.70'])
+
+    async def test_changed_router_hints_bypass_broadcast_retry_backoff(self):
+        self.worker.rediscovery_at['123'] = __import__('time').monotonic()
+        self.worker.address_hints = {"123": ['192.168.2.99']}
+        with patch('msmart.discover.Discover.discover_single', new=AsyncMock(return_value=SimpleNamespace(id=123, ip='192.168.2.99'))) as discover:
+            self.assertIsNotNone(await self.worker.router_ac_discovery('123'))
+            self.assertIsNone(await self.worker.router_ac_discovery('123'))
+            self.worker.address_hints = {"123": ['192.168.2.100']}
+            self.assertIsNotNone(await self.worker.router_ac_discovery('123'))
+        self.assertEqual(discover.await_count, 2)
+
     async def test_heater_missing_values_remain_unknown_and_leak_capability_is_not_an_alarm(self):
         heater = SimpleNamespace(serial_number='rheem-123', connected=True, alert_count=0, leak_installed=True)
         result = self.worker.heater_snapshot(heater)

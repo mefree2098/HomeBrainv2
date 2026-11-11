@@ -513,6 +513,7 @@ app.use('/api/govee-air-quality', goveeAirQualityRoutes);
 app.use('/api/rainmachine', rainMachineRoutes);
 app.use('/api/sense', senseRoutes);
 app.use('/api/appliances', require('./routes/applianceRoutes'));
+app.use('/api/deco', require('./routes/decoRoutes'));
 // Security Alarm Routes
 app.use('/api/security-alarm', securityAlarmRoutes);
   // SmartThings Routes
@@ -855,6 +856,7 @@ void dbReady
 (async () => {
   try {
     await dbReady;
+    require('./services/decoService').initialize();
     await require('./services/applianceService').initialize();
   } catch (error) {
     console.error('Failed to initialize appliance integrations:', error.message);
@@ -915,6 +917,7 @@ async function gracefulShutdown(signal) {
   await runShutdownStep('RainMachine service', () => rainMachineService.shutdown());
   await runShutdownStep('Sense service', () => senseService.shutdown());
   await runShutdownStep('Appliance integrations', () => require('./services/applianceService').shutdown());
+  await runShutdownStep('Deco integration', () => require('./services/decoService').shutdown());
   await runShutdownStep('sensor node watchdog', () => sensorNodeService.shutdown());
   await runShutdownStep('telemetry listeners', () => telemetryService.shutdown());
   await runShutdownStep('Codex CLI sessions', () => shutdownCodexCliService());

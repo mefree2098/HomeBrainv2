@@ -80,6 +80,7 @@ temp_openwakeword/
 
 # Apple Home pairing identity and controller keys (private runtime state)
 server/data/apple-home/
+server/data/deco/
 
 # Local visual targets and screenshot evidence
 .dream-loop/
