@@ -97,13 +97,15 @@ class ApplianceTests(unittest.IsolatedAsyncioTestCase):
         self.worker.config = {"devices": [{"id": "123", "ip": "192.168.1.4", "port": 6444}]}
         cached = SimpleNamespace(id=123, ip='192.168.1.9', port=6445, online=True)
         self.worker.devices['123'] = cached
-        self.assertIs(await self.worker.ac('123'), cached)
+        with patch('msmart.discover.Discover.discover_single', new=AsyncMock(return_value=cached)) as discover:
+            self.assertIs(await self.worker.ac('123'), cached)
+        discover.assert_awaited_once_with(cached.ip, auto_connect=False, timeout=3)
         self.assertEqual(self.worker.config['devices'][0]['ip'], '192.168.1.9')
         self.assertEqual(self.worker.config['devices'][0]['port'], 6445)
 
-    async def test_offline_cached_connection_does_not_block_dhcp_rediscovery(self):
+    async def test_reassigned_online_cached_address_does_not_control_the_replacement_device(self):
         self.worker.config = {"devices": [{"id": "123", "ip": "192.168.1.4", "port": 6444}]}
-        self.worker.devices['123'] = SimpleNamespace(id=123, ip='192.168.1.4', port=6444, online=False)
+        self.worker.devices['123'] = SimpleNamespace(id=123, ip='192.168.1.4', port=6444, online=True)
         ac = FakeAC()
         ac.ip, ac.port = '192.168.1.9', 6445
         ac.get_capabilities = AsyncMock()
