@@ -1,6 +1,31 @@
 const crypto = require('node:crypto');
 const net = require('node:net');
 
+class DecoError extends Error {
+  constructor(kind, message, { code = null, attemptsRemaining = null } = {}) {
+    super(message);
+    this.name = 'DecoError'; this.kind = kind;
+    this.code = Number.isSafeInteger(code) ? code : null;
+    this.attemptsRemaining = Number.isSafeInteger(attemptsRemaining) ? attemptsRemaining : null;
+  }
+
+  diagnostic() { return { kind: this.kind, code: this.code, attemptsRemaining: this.attemptsRemaining }; }
+}
+
+function routerFailure(reply, login) {
+  const raw = reply?.error_code ?? reply?.errorcode;
+  const code = Number.isSafeInteger(raw) ? raw : null;
+  if (code === 0 || (code === null && reply?.success === true)) return null;
+  const failureCount = reply?.result?.failureCount;
+  const allowed = reply?.result?.attemptsAllowed;
+  const attemptsRemaining = Number.isSafeInteger(failureCount) && Number.isSafeInteger(allowed)
+    && failureCount >= 0 && allowed >= failureCount && allowed <= 1000 ? allowed - failureCount : null;
+  const detail = code === null ? '' : ` (code ${code})`;
+  if (login && [-5003, -5007].includes(code)) return new DecoError('lockout', `Deco login is temporarily locked${detail}; automatic attempts are paused`, { code, attemptsRemaining });
+  if (login && code === -5002) return new DecoError('authentication', `Deco rejected the login${detail}; automatic attempts are paused`, { code, attemptsRemaining });
+  return new DecoError(login ? 'protocol' : 'session', `Deco ${login ? 'login exchange' : 'read'} was rejected${detail}; this does not establish a password failure`, { code, attemptsRemaining });
+}
+
 // Protocol reference: jvreagan/deco, c81af352e8559b740f91a2f2b86c2b558fa0b899.
 // See docs/licenses/deco-MIT.txt. Only login and two read operations are exposed.
 function privateIp(value) {
@@ -22,7 +47,7 @@ function normalizeMac(value) {
 
 function publicKey(pair) {
   if (!Array.isArray(pair) || !/^[a-f0-9]{128,1024}$/i.test(pair[0]) || !/^0*10001$/i.test(pair[1])) {
-    throw new Error('Deco returned unsupported login keys');
+    throw new DecoError('protocol', 'Deco returned unsupported login keys');
   }
   const modulus = Buffer.from(pair[0], 'hex');
   return { size: modulus.length, key: crypto.createPublicKey({
@@ -63,35 +88,41 @@ class DecoClient {
     this.password = password;
     this.fetch = fetchImpl;
     this.stok = ''; this.cookie = ''; this.authAt = 0;
+    this.lastRequestAt = -Infinity;
   }
 
-  async post(path, body = '') {
+  async post(path, body = JSON.stringify({ operation: 'read' })) {
+    const delayMs = 100 - (performance.now() - this.lastRequestAt);
+    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    this.lastRequestAt = performance.now();
     let response;
     try {
       response = await this.fetch(`http://${this.host}/cgi-bin/luci/;stok=${this.stok}/${path}`, {
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(8000), body,
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Referer: `http://${this.host}/webpages/index.html`, ...(this.cookie ? { Cookie: this.cookie } : {}) }
+        // The firmware deliberately uses a JSON content type even when the
+        // encrypted envelope body is URL-encoded (Connection.request in frame.js).
+        headers: { 'Content-Type': 'application/json', Referer: `http://${this.host}/webpages/index.html`, ...(this.cookie ? { Cookie: this.cookie } : {}) }
       });
     } catch {
-      throw new Error('Cannot reach Deco on the local network');
+      throw new DecoError('transport', 'Cannot reach Deco on the local network');
     }
-    if (!response.ok) throw new Error(`Deco returned HTTP ${response.status}`);
+    if (!response.ok) throw new DecoError(this.stok ? 'session' : 'protocol', `Deco returned HTTP ${response.status}`);
     const cookie = response.headers.get('set-cookie')?.match(/(?:^|[,;]\s*)sysauth=([^;,\s]+)/)?.[1];
     if (cookie) this.cookie = `sysauth=${cookie}`;
     let bytes = 0; const parts = [];
     for await (const chunk of response.body) {
       bytes += chunk.length;
-      if (bytes > 2 * 1024 * 1024) throw new Error('Deco response exceeded the client-list limit');
+      if (bytes > 2 * 1024 * 1024) throw new DecoError('protocol', 'Deco response exceeded the client-list limit');
       parts.push(Buffer.from(chunk));
     }
     try { return JSON.parse(Buffer.concat(parts).toString('utf8')); }
-    catch { throw new Error('Deco returned an unsupported response'); }
+    catch { throw new DecoError('protocol', 'Deco returned an unsupported response'); }
   }
 
   async probe() {
-    const reply = await this.post('login?form=auth&operation=read');
+    const reply = await this.post('login?form=auth');
     publicKey(reply.result?.key);
-    if (reply.error_code !== 0 || !Number.isSafeInteger(reply.result?.seq)) throw new Error('Deco login protocol is unavailable');
+    if (reply.error_code !== 0 || !Number.isSafeInteger(reply.result?.seq)) throw new DecoError('protocol', 'Deco login protocol is unavailable');
     return { reachable: true, loginProtocol: 'deco-rsa-aes' };
   }
 
@@ -105,31 +136,35 @@ class DecoClient {
     const hash = crypto.createHash('md5').update(`admin${this.password}`).digest('hex');
     const sign = rsaEncrypt(`${login ? `k=${this.aesKey}&i=${this.aesIv}&` : ''}h=${hash}&s=${this.seq + data.length}`, this.signKey);
     const envelope = await this.post(path, new URLSearchParams({ sign, data }).toString());
+    if (typeof envelope?.data !== 'string') throw routerFailure(envelope, login)
+      || new DecoError('protocol', 'Deco returned no encrypted response; this does not establish a password failure');
     let reply;
     try {
       const decipher = crypto.createDecipheriv('aes-128-cbc', this.aesKey, this.aesIv);
       reply = JSON.parse(Buffer.concat([decipher.update(envelope.data, 'base64'), decipher.final()]).toString('utf8'));
     } catch {
       this.stok = '';
-      throw new Error(login ? 'Deco login failed; check the network owner password' : 'Deco session expired or its response was unsupported');
+      throw new DecoError('protocol', `Deco ${login ? 'login' : 'read'} response could not be decoded; this does not establish a password failure`);
     }
-    if (reply.error_code !== 0) {
+    const failure = routerFailure(reply, login);
+    if (failure) {
       this.stok = '';
-      throw new Error(login ? 'Deco login failed; check the network owner password' : `Deco read failed (code ${Number(reply.error_code) || 'unknown'})`);
+      throw failure;
     }
     return reply.result;
   }
 
   async login() {
     this.stok = ''; this.cookie = '';
-    this.aesKey = Buffer.from(crypto.randomBytes(8).toString('hex'));
-    this.aesIv = Buffer.from(crypto.randomBytes(8).toString('hex'));
-    const pwd = await this.post('login?form=keys&operation=read');
-    const auth = await this.post('login?form=auth&operation=read');
-    if (pwd.error_code !== 0 || auth.error_code !== 0 || !Number.isSafeInteger(auth.result?.seq)) throw new Error('Deco returned unsupported login parameters');
+    // Match the firmware's generateRandomIntString(16), including leading zeros.
+    const digits = () => Buffer.from(Array.from({ length: 16 }, () => crypto.randomInt(10)).join(''));
+    this.aesKey = digits(); this.aesIv = digits();
+    const pwd = await this.post('login?form=keys');
+    const auth = await this.post('login?form=auth');
+    if (pwd.error_code !== 0 || auth.error_code !== 0 || !Number.isSafeInteger(auth.result?.seq)) throw new DecoError('protocol', 'Deco returned unsupported login parameters');
     this.signKey = publicKey(auth.result.key); this.seq = auth.result.seq;
     const reply = await this.encrypted('login?form=login', { operation: 'login', params: { password: rsaEncrypt(this.password, publicKey(pwd.result?.password)) } }, true);
-    if (!/^[a-z0-9_-]{1,128}$/i.test(reply?.stok)) throw new Error('Deco did not establish a session');
+    if (!/^[a-z0-9_-]{1,128}$/i.test(reply?.stok)) throw new DecoError('protocol', 'Deco did not establish a session');
     this.stok = reply.stok; this.authAt = Date.now();
   }
 
@@ -150,4 +185,4 @@ class DecoClient {
   }
 }
 
-module.exports = { DecoClient, privateIp, normalizeHost, normalizeMac, normalizeClients };
+module.exports = { DecoClient, DecoError, privateIp, normalizeHost, normalizeMac, normalizeClients };

@@ -9,6 +9,8 @@ const schema = new mongoose.Schema({
   connected: { type: Boolean, default: false },
   lastSyncAt: { type: Date, default: null },
   lastError: { type: String, default: '' },
+  lastFailure: { type: mongoose.Schema.Types.Mixed, default: null },
+  retryBlocked: { type: Boolean, default: false },
   clients: { type: [mongoose.Schema.Types.Mixed], default: [] },
   nodes: { type: [mongoose.Schema.Types.Mixed], default: [] },
   metadataError: { type: String, default: '' }
