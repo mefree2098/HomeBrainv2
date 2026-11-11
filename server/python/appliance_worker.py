@@ -77,11 +77,17 @@ class Worker:
 
     async def ac(self, identifier):
         from msmart.device import AirConditioner
-        if identifier in self.devices:
-            return self.devices[identifier]
         saved = next((d for d in self.config.get("devices", []) if str(d["id"]) == identifier), None)
         if not saved:
             raise CommandError("The AC is not paired in HomeBrain")
+        cached = self.devices.get(identifier)
+        if cached and cached.online:
+            # Discovery can find a new DHCP address while the worker is running.
+            # Persist that verified identity's connection hint on the next poll.
+            saved["ip"], saved["port"] = cached.ip, cached.port
+            return cached
+        # A failed pre-command read must not pin every retry to a stale socket.
+        self.devices.pop(identifier, None)
         if int(saved.get("type", 172)) != 172:
             from msmart.device import CommercialAirConditioner
             AirConditioner = CommercialAirConditioner
@@ -90,7 +96,7 @@ class Worker:
             discovered = await Discover.discover_single(saved["ip"], auto_connect=False, timeout=3)
             if not discovered or str(discovered.id) != identifier:
                 raise CommandError("Saved address no longer belongs to this AC")
-            device = AirConditioner(ip=saved["ip"], port=int(saved.get("port", 6444)), device_id=int(identifier))
+            device = AirConditioner(ip=discovered.ip, port=discovered.port, device_id=int(identifier))
             if saved.get("token") and saved.get("key"):
                 await device.authenticate(saved["token"], saved["key"])
             await device.get_capabilities()
@@ -115,8 +121,7 @@ class Worker:
             await device.refresh()
             if not device.online:
                 raise CommandError("AC discovery succeeded but the AC did not respond")
-            saved["ip"] = match.ip
-            saved["port"] = match.port
+        saved["ip"], saved["port"] = device.ip, device.port
         self.devices[identifier] = device
         return device
 

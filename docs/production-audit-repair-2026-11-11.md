@@ -7,6 +7,7 @@ Verified production at https://freestonefamily.com using the `homebrain-live` sk
 - Operational health queried automation history by nonexistent `executedAt`. It now counts failed and partial executions by `completedAt`, including long-running work that finished in the last 24 hours. Production history showed TheaterAC and the interior-light shutdown failed while health reported zero failures.
 - Upstairs Motion Sensor reported IAS zone ID 255 (unassigned). Enrollment recovery echoed that reserved value, received transport success, and remained unenrolled. Recovery now assigns a valid zone ID and still requires live enrollment confirmation.
 - Z-Wave live refresh omitted Sound Switch playback. It now reads the siren's tone ID without sounding it, recognizes stopped/playing state, and retains the stale warning if the read fails. Sound Switch and Basic playback reports also normalize the displayed state correctly.
+- DHCP recovery now persists connection hints learned by discovery, discards cached connections already known to be offline, and uses the discovered port after verifying the immutable paired device ID. The old IP can be reassigned to a different device without being controlled.
 - Server dependencies now use patched Mongoose and the published `node-forge` 1.4.3 release instead of the old source archive, so ordinary registry audits cover Forge again.
 - Android builds use checksum-pinned Gradle 9.9.1 and Android Gradle Plugin 9.5.1, with targeted patched plugin dependencies. Wrapper files were regenerated using the verified distribution.
 
