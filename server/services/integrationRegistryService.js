@@ -551,6 +551,10 @@ async function loadReachyModule(definition, preferences) {
 async function loadModuleStatus(definition, preferences) {
   try {
     switch (definition.id) {
+      case 'deco': {
+        const { integration } = await require('./decoService').getStatus();
+        return buildModuleStatus(definition, { ...integration, supportsEnabledToggle: false });
+      }
       case 'midea':
       case 'econet': {
         const { integration, devices } = await require('./applianceService').getStatus(definition.id);

@@ -67,6 +67,42 @@ class Worker:
         self.econet = None
         self.usage_at = 0
         self.rediscovery_at = {}
+        self.address_hints = {}
+        self.router_attempts = {}
+
+    async def router_ac_discovery(self, identifier):
+        """Router addresses are candidates only. Discovery must prove the paired ID."""
+        import ipaddress
+        from msmart.discover import Discover
+        private = [ipaddress.ip_network(network) for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")]
+        hints = self.address_hints.get(identifier, [])
+        candidates = []
+        for value in hints[:32] if isinstance(hints, list) else []:
+            try:
+                address = ipaddress.ip_address(value)
+                if address.version == 4 and any(address in network for network in private) and str(address) not in candidates:
+                    candidates.append(str(address))
+            except (ValueError, TypeError):
+                continue
+        signature = tuple(candidates)
+        previous_at, previous_signature = self.router_attempts.get(identifier, (-30, ()))
+        if signature == previous_signature and time.monotonic() - previous_at < 30:
+            return None
+        self.router_attempts[identifier] = (time.monotonic(), signature)
+
+        async def probe(ip):
+            try:
+                device = await Discover.discover_single(ip, auto_connect=False, timeout=3)
+                return device if device and str(device.id) == identifier else None
+            except Exception:
+                return None
+
+        for offset in range(0, len(candidates), 8):
+            found = await asyncio.gather(*(probe(ip) for ip in candidates[offset:offset + 8]))
+            match = next((device for device in found if device is not None), None)
+            if match:
+                return match
+        return None
 
     async def close(self):
         if self.econet and self.econet._mqtt_client:
@@ -106,12 +142,17 @@ class Worker:
                 raise CommandError("AC is offline")
         except Exception:
             self.devices.pop(identifier, None)
-            if time.monotonic() - self.rediscovery_at.get(identifier, -120) < 120:
-                raise CommandError("AC is offline; HomeBrain will retry discovery") from None
-            self.rediscovery_at[identifier] = time.monotonic()
             from msmart.discover import Discover
-            discovered = await Discover.discover(auto_connect=False, timeout=3)
+            discovered = []
+            if time.monotonic() - self.rediscovery_at.get(identifier, -120) >= 120:
+                self.rediscovery_at[identifier] = time.monotonic()
+                try:
+                    discovered = await Discover.discover(auto_connect=False, timeout=3)
+                except Exception:
+                    pass  # Router-directed discovery can work when broadcasts fail.
             match = next((d for d in discovered if str(d.id) == identifier), None)
+            if not match:
+                match = await self.router_ac_discovery(identifier)
             if not match:
                 raise CommandError("AC is offline; check its Wi-Fi connection") from None
             # Use the saved authentication material and match the immutable ID,
@@ -264,6 +305,7 @@ class Worker:
             return {"configured": True}
         provider = self.config.get("provider")
         if provider == "midea":
+            self.address_hints = request.get("addressHints", {}) if isinstance(request.get("addressHints"), dict) else {}
             if op == "discover":
                 from msmart.discover import Discover
                 devices = await Discover.discover(target=request.get("ip") or "255.255.255.255", auto_connect=True, timeout=5)
@@ -293,7 +335,7 @@ class Worker:
                         states.append(self.ac_snapshot(d))
                     except Exception:
                         self.devices.pop(identifier, None)
-                        states.append({"id": identifier, "online": False, "error": "AC did not respond; check Wi-Fi and saved IP address"})
+                        states.append({"id": identifier, "online": False, "error": "AC did not respond; check its Wi-Fi connection"})
                 return {"devices": states, "connections": self.config.get("devices", [])}
         elif provider == "econet":
             if op != "poll":

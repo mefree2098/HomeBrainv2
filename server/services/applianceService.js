@@ -8,6 +8,7 @@ const deviceUpdateEmitter = require('./deviceUpdateEmitter');
 const notificationService = require('./notificationService');
 const HomeBrainNotification = require('../models/HomeBrainNotification');
 const { ApplianceWorker, ensureRuntime } = require('./applianceWorkerService');
+const decoService = require('./decoService');
 
 const PROVIDERS = ['midea', 'econet'];
 const keyPath = path.resolve(__dirname, '../data/appliances/credentials.key');
@@ -110,7 +111,8 @@ class ApplianceService {
     validateProvider(provider);
     const integration = await ApplianceIntegration.findOne({ provider }).lean();
     const devices = await Device.find({ 'properties.source': provider }).lean();
-    return { success: true, integration: integration || { provider, enabled: false, configured: false, connected: false, connections: [] }, devices: deviceUpdateEmitter.normalizeDevices(devices) };
+    const network = provider === 'midea' ? await decoService.appliancePresence(integration?.connections || []) : [];
+    return { success: true, integration: integration || { provider, enabled: false, configured: false, connected: false, connections: [] }, devices: deviceUpdateEmitter.normalizeDevices(devices), network };
   }
 
   async configure(provider, input) {
@@ -225,16 +227,20 @@ class ApplianceService {
       const integration = await this.integration(provider);
       const worker = await this.worker(provider, integration);
       try {
-        const result = await worker.request({ op: 'poll' });
+        const addressHints = provider === 'midea' ? await decoService.addressHints(integration.connections).catch(() => ({})) : {};
+        const result = await worker.request({ op: 'poll', addressHints });
         // DHCP recovery returns private connection data only to this service.
         if (result.connections?.length) {
           const secrets = await decrypt(integration.secrets);
           secrets.devices = result.connections;
           integration.secrets = await encrypt(secrets);
+          const networkMacs = provider === 'midea' ? await decoService.confirmedMacs(result.connections, result.devices).catch(() => ({})) : {};
           for (const connection of integration.connections) {
             const found = result.connections.find((d) => String(d.id) === String(connection.id));
             if (found) connection.ip = found.ip;
+            if (networkMacs[String(connection.id)]) connection.networkMac = networkMacs[String(connection.id)];
           }
+          integration.markModified('connections');
           await integration.save();
         }
         const devices = await this.persistStates(provider, result.devices, integration);
@@ -257,7 +263,8 @@ class ApplianceService {
       const integration = await this.integration(provider);
       const worker = await this.worker(provider, integration);
       try {
-        const result = await worker.request({ op: 'command', id: String(device.properties.applianceId), action: normalizeAction(action), value });
+        const addressHints = await decoService.addressHints(integration.connections).catch(() => ({}));
+        const result = await worker.request({ op: 'command', id: String(device.properties.applianceId), action: normalizeAction(action), value, addressHints });
         const [updated] = await this.persistStates(provider, result.devices, integration);
         return updated;
       } catch (error) {
