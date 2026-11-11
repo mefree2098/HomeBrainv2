@@ -134,6 +134,30 @@ test('firmware success envelopes accept the documented errorcode spelling', asyn
   assert.deepEqual(await client.encrypted('admin/client?form=client_list', { operation: 'read' }), { client_list: [] });
 });
 
+test('a slow mesh client-list read can finish after eight seconds without repeating login', async () => {
+  const key = Buffer.from('1234567890123456'); const iv = Buffer.from('9876543210987654');
+  let reads = 0;
+  const client = new DecoClient('192.168.1.1', 'owner-secret', { fetchImpl: async (url, options) => {
+    assert.match(new URL(url).pathname, /;stok=existing-session\/admin\//);
+    const isClients = new URL(url).searchParams.get('form') === 'client_list';
+    if (isClients) {
+      reads++;
+      await new Promise((resolve, reject) => {
+        const aborted = () => { clearTimeout(timer); reject(options.signal.reason); };
+        const timer = setTimeout(() => { options.signal.removeEventListener('abort', aborted); resolve(); }, 9000);
+        options.signal.addEventListener('abort', aborted, { once: true });
+      });
+    }
+    const cipher = crypto.createCipheriv('aes-128-cbc', key, iv);
+    const result = isClients ? { client_list: [] } : { device_list: [] };
+    return Response.json({ data: Buffer.concat([cipher.update(JSON.stringify({ error_code: 0, result })), cipher.final()]).toString('base64') });
+  } });
+  client.stok = 'existing-session'; client.authAt = Date.now();
+  client.aesKey = key; client.aesIv = iv; client.seq = 1; client.signKey = { size: 64, key: rsaPair(512).publicKey };
+  assert.deepEqual((await client.snapshot()).clients, []);
+  assert.equal(reads, 1);
+});
+
 function memoryModel(initial) {
   let stored = { ...initial };
   class Model {
@@ -203,6 +227,21 @@ test('a transient transport failure can recover automatically without resetting 
   const status = await service.getStatus();
   assert.equal(status.integration.connected, true); assert.equal(status.integration.configured, true);
   assert.equal(status.integration.lastFailure, null); assert.equal(attempts, 2);
+});
+
+test('a transport failure after login reuses that session when the inventory is retried', async () => {
+  const model = memoryModel({ host: '192.168.1.1', enabled: true, configured: true, secrets: 'ciphertext', clients: [] });
+  let attempts = 0; let logins = 0;
+  const service = new DecoService({ model, vault: { decrypt: async () => 'secret' }, clientFactory: () => {
+    logins++;
+    return { stok: 'authenticated-session', snapshot: async () => {
+      if (++attempts === 1) throw new DecoError('transport', 'Cannot reach Deco during client-list read: timed out');
+      return { clients: [], nodes: [], metadataError: '' };
+    } };
+  } });
+  await service.sync(); service.nextAttemptAt = 0; await service.sync();
+  assert.equal(logins, 1); assert.equal(attempts, 2);
+  assert.equal((await service.getStatus()).integration.connected, true);
 });
 
 test('DHCP hints prefer the verified MAC, rotate bounded candidates, and never bind by router name or stale data', async () => {

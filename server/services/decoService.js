@@ -81,7 +81,10 @@ class DecoService {
         config.retryBlocked = false; config.lastFailure = null;
         this.nextAttemptAt = Date.now() + 60000;
       } catch (error) {
-        this.client = null; config.connected = false;
+        // A slow inventory read does not invalidate an authenticated session.
+        // Reuse it after backoff rather than making another owner login.
+        if (!(error instanceof DecoError && error.kind === 'transport' && this.client?.stok)) this.client = null;
+        config.connected = false;
         // Only fixed, sanitized client errors are saved. Never persist transport requests or secrets.
         config.lastError = /^(Deco |Cannot reach Deco)/.test(error.message) ? error.message : 'Deco connection failed; a server error prevented the request';
         config.lastFailure = error instanceof DecoError ? error.diagnostic() : { kind: 'internal', code: null, attemptsRemaining: null };
