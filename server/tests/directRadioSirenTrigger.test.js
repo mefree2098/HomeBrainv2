@@ -261,3 +261,38 @@ test('siren with no supported trigger throws a clear error', async () => {
     /does not expose a supported on\/off trigger/
   );
 });
+
+for (const tone of [0, 7]) {
+  test(`Sound Switch live playback ${tone} is read and normalized without sounding the siren`, async () => {
+    const service = new DirectRadioService();
+    const writes = [], reads = [];
+    const node = nodeWithCommandClasses([SOUND_CC], writes);
+    const toneId = zwave.SoundSwitchCCValues.toneId.id;
+    node.getDefinedValueIDs = () => [toneId, zwave.SoundSwitchCCValues.volume.id];
+    node.valueDB.getValue = (id) => id.commandClass === SOUND_CC && id.property === 'toneId' ? tone : undefined;
+    node.valueDB.hasValue = (id) => id.commandClass === SOUND_CC && id.property === 'toneId';
+    node.pollValue = async (id) => { reads.push(id); return tone; };
+    service.getDirectNodeForDevice = () => node;
+    const normalized = service.normalizeZWaveNode(node);
+    assert.equal(normalized.update.status, tone > 0);
+    const refreshed = await service.refreshDirectDeviceState(sirenDevice(), { liveRead: true });
+    assert.equal(refreshed.status, tone > 0);
+    assert.equal(refreshed.__homebrainLiveRead.success, true);
+    assert.equal(refreshed.properties.homebrainDirect.stateStale, false);
+    assert.deepEqual(reads, [toneId]);
+    assert.deepEqual(writes, []);
+  });
+}
+
+test('missing and failed siren playback reads remain stale despite a cached OFF value', async () => {
+  for (const response of [null, undefined, new Error('radio timeout')]) {
+    const service = new DirectRadioService();
+    const node = nodeWithCommandClasses([SOUND_CC], []);
+    node.getDefinedValueIDs = () => [zwave.SoundSwitchCCValues.toneId.id];
+    node.pollValue = async () => { if (response instanceof Error) throw response; return response; };
+    service.getDirectNodeForDevice = () => node;
+    const refreshed = await service.refreshDirectDeviceState(sirenDevice(), { liveRead: true });
+    assert.equal(refreshed.__homebrainLiveRead.success, false);
+    assert.equal(refreshed.properties.homebrainDirect.stateStale, true);
+  }
+});

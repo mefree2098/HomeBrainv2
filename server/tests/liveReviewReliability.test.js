@@ -5,7 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { SystemBackupService } = require('../services/systemBackupService');
 const { computeNextSmbBackupRunAt } = require('../services/smbBackupSchedulerService');
-const { summarizeOperationalHealth } = require('../services/operationalHealthService');
+const { summarizeOperationalHealth, getOperationalHealth } = require('../services/operationalHealthService');
 const Device = require('../models/Device');
 const deviceService = require('../services/deviceService');
 const { executeActionSequence } = require('../services/workflowExecutionService');
@@ -96,4 +96,28 @@ test('appliance recovery resolves legacy alerts and recurring failures use one s
   await service.persistStates('econet', [{ id: '123', online: false }], {});
   await service.persistStates('econet', [{ id: '123', online: false }], {});
   assert.deepEqual(created.map((input) => input.eventKey), ['appliance:econet:123:offline', 'appliance:econet:123:offline']);
+});
+
+// Exercise the database query, not only the summary given a pre-counted value.
+test('operational health counts failed and partial histories using their actual completion timestamp', async (t) => {
+  const History = require('../models/AutomationHistory');
+  const Integration = require('../models/ApplianceIntegration');
+  const Settings = require('../models/Settings');
+  const backup = require('../services/systemBackupService');
+  t.mock.method(Device, 'find', () => ({ select: () => ({ lean: async () => [] }) }));
+  t.mock.method(Integration, 'find', () => ({ select: () => ({ lean: async () => [] }) }));
+  t.mock.method(Settings, 'getSettings', async () => ({}));
+  t.mock.method(backup, 'getLatestBackupJob', async () => null);
+  const before = Date.now();
+  t.mock.method(History, 'countDocuments', async (query) => {
+    assert.deepEqual(query.status.$in, ['failed', 'partial_success']);
+    assert.ok(History.schema.path('completedAt'));
+    assert.equal(query.executedAt, undefined);
+    assert.ok(query.completedAt.$gte.getTime() >= before - 86400000);
+    assert.ok(query.completedAt.$gte.getTime() <= Date.now() - 86400000);
+    return 2;
+  });
+  const health = await getOperationalHealth();
+  assert.equal(health.automations.failedExecutions, 2);
+  assert.equal(health.automations.status, 'degraded');
 });

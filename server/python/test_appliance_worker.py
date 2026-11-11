@@ -84,6 +84,7 @@ class ApplianceTests(unittest.IsolatedAsyncioTestCase):
         ac = FakeAC()
         ac.get_capabilities = AsyncMock()
         ac.authenticate = AsyncMock()
+        ac.ip, ac.port = '192.168.1.9', 6444
         self.worker.config = {"devices": [{"id": "123", "ip": "192.168.1.4", "token": "private-token", "key": "private-key"}]}
         found = [SimpleNamespace(id=999, ip='192.168.1.4', port=6444), SimpleNamespace(id=123, ip='192.168.1.9', port=6444)]
         with patch('msmart.device.AirConditioner', return_value=ac) as constructor, patch('msmart.discover.Discover.discover_single', new=AsyncMock(return_value=found[0])), patch('msmart.discover.Discover.discover', new=AsyncMock(return_value=found)):
@@ -91,6 +92,29 @@ class ApplianceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(constructor.call_args.kwargs['ip'], '192.168.1.9')
         ac.authenticate.assert_awaited_once_with('private-token', 'private-key')
         self.assertEqual(self.worker.config['devices'][0]['ip'], '192.168.1.9')
+
+    async def test_cached_discovery_persists_the_new_dhcp_connection_hint(self):
+        self.worker.config = {"devices": [{"id": "123", "ip": "192.168.1.4", "port": 6444}]}
+        cached = SimpleNamespace(id=123, ip='192.168.1.9', port=6445, online=True)
+        self.worker.devices['123'] = cached
+        with patch('msmart.discover.Discover.discover_single', new=AsyncMock(return_value=cached)) as discover:
+            self.assertIs(await self.worker.ac('123'), cached)
+        discover.assert_awaited_once_with(cached.ip, auto_connect=False, timeout=3)
+        self.assertEqual(self.worker.config['devices'][0]['ip'], '192.168.1.9')
+        self.assertEqual(self.worker.config['devices'][0]['port'], 6445)
+
+    async def test_reassigned_online_cached_address_does_not_control_the_replacement_device(self):
+        self.worker.config = {"devices": [{"id": "123", "ip": "192.168.1.4", "port": 6444}]}
+        self.worker.devices['123'] = SimpleNamespace(id=123, ip='192.168.1.4', port=6444, online=True)
+        ac = FakeAC()
+        ac.ip, ac.port = '192.168.1.9', 6445
+        ac.get_capabilities = AsyncMock()
+        found = [SimpleNamespace(id=999, ip='192.168.1.4', port=6444), SimpleNamespace(id=123, ip=ac.ip, port=ac.port)]
+        with patch('msmart.device.AirConditioner', return_value=ac) as constructor, patch('msmart.discover.Discover.discover_single', new=AsyncMock(return_value=found[0])), patch('msmart.discover.Discover.discover', new=AsyncMock(return_value=found)):
+            self.assertIs(await self.worker.ac('123'), ac)
+        self.assertEqual(constructor.call_args.kwargs['ip'], ac.ip)
+        self.assertEqual(constructor.call_args.kwargs['port'], ac.port)
+        self.assertEqual(self.worker.config['devices'][0]['ip'], ac.ip)
 
     async def test_tankless_family_is_not_mislabelled_as_electric(self):
         from pyeconet.equipment.water_heater import WaterHeaterOperationMode

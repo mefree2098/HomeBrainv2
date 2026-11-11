@@ -96,7 +96,7 @@ test('reinterviewZigbeeDevice repairs IAS enrollment directly for sleepy sensors
   const iasAttributes = {
     iasCieAddr: '0xffffffffffffffff',
     zoneState: 0,
-    zoneId: 23
+    zoneId: 255 // IAS uses 0xff to mean unassigned; it cannot be enrolled.
   };
   const endpoint = {
     ID: 1,
@@ -127,6 +127,8 @@ test('reinterviewZigbeeDevice repairs IAS enrollment directly for sleepy sensors
       assert.equal(cluster, 'ssIasZone');
       assert.equal(command, 'enrollRsp');
       assert.equal(payload.enrollrspcode, 0);
+      assert.equal(payload.zoneid, 23, 'assign a valid zone instead of echoing unassigned 255');
+      iasAttributes.zoneId = payload.zoneid;
       iasAttributes.zoneState = 1;
     }
   };

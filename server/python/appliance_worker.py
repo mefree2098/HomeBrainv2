@@ -77,20 +77,27 @@ class Worker:
 
     async def ac(self, identifier):
         from msmart.device import AirConditioner
-        if identifier in self.devices:
-            return self.devices[identifier]
         saved = next((d for d in self.config.get("devices", []) if str(d["id"]) == identifier), None)
         if not saved:
             raise CommandError("The AC is not paired in HomeBrain")
+        cached = self.devices.get(identifier)
+        candidate_ip = cached.ip if cached and cached.online else saved["ip"]
+        # A cached socket cannot prove identity after DHCP reassigns its address.
+        # Validate discovery before every read/control path and persist only a
+        # connection hint that still belongs to the immutable paired device ID.
         if int(saved.get("type", 172)) != 172:
             from msmart.device import CommercialAirConditioner
             AirConditioner = CommercialAirConditioner
         try:
             from msmart.discover import Discover
-            discovered = await Discover.discover_single(saved["ip"], auto_connect=False, timeout=3)
+            discovered = await Discover.discover_single(candidate_ip, auto_connect=False, timeout=3)
             if not discovered or str(discovered.id) != identifier:
                 raise CommandError("Saved address no longer belongs to this AC")
-            device = AirConditioner(ip=saved["ip"], port=int(saved.get("port", 6444)), device_id=int(identifier))
+            if cached and cached.online and cached.ip == discovered.ip and cached.port == discovered.port:
+                saved["ip"], saved["port"] = discovered.ip, discovered.port
+                return cached
+            self.devices.pop(identifier, None)
+            device = AirConditioner(ip=discovered.ip, port=discovered.port, device_id=int(identifier))
             if saved.get("token") and saved.get("key"):
                 await device.authenticate(saved["token"], saved["key"])
             await device.get_capabilities()
@@ -98,6 +105,7 @@ class Worker:
             if not device.online:
                 raise CommandError("AC is offline")
         except Exception:
+            self.devices.pop(identifier, None)
             if time.monotonic() - self.rediscovery_at.get(identifier, -120) < 120:
                 raise CommandError("AC is offline; HomeBrain will retry discovery") from None
             self.rediscovery_at[identifier] = time.monotonic()
@@ -115,8 +123,7 @@ class Worker:
             await device.refresh()
             if not device.online:
                 raise CommandError("AC discovery succeeded but the AC did not respond")
-            saved["ip"] = match.ip
-            saved["port"] = match.port
+        saved["ip"], saved["port"] = device.ip, device.port
         self.devices[identifier] = device
         return device
 

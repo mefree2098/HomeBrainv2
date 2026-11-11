@@ -1112,17 +1112,31 @@ async refreshDirectDeviceState(device, options = {}) {
     }
 
     let zwaveLiveFields = [];
+    const zwaveLiveState = {};
+    let statusPriority = -1;
     if (protocol === 'zwave' && options.liveRead === true && typeof node.pollValue === 'function') {
       const pollable = (node.getDefinedValueIDs?.() || []).filter((valueId) =>
         ([37, 38].includes(valueId.commandClass) && valueId.property === 'currentValue')
+        || (device.type === 'siren' && valueId.commandClass === 32 && valueId.property === 'currentValue')
+        || (device.type === 'siren' && valueId.commandClass === 121 && valueId.property === 'toneId')
         || (valueId.commandClass === 98 && valueId.property === 'currentMode')
       );
       for (const valueId of pollable) {
         try {
           const value = await withTimeout(node.pollValue(valueId), 8000, 'Z-Wave live state query timed out');
-          if (value !== undefined) {
+          if (typeof value === 'boolean' || Number.isFinite(value)) {
             zwaveLiveFields.push('status');
-            if (valueId.commandClass === 38) zwaveLiveFields.push('brightness');
+            const priority = ({ 98: 4, 121: 3, 37: 2, 38: 1, 32: 0 })[valueId.commandClass];
+            if (priority >= statusPriority) {
+              statusPriority = priority;
+              zwaveLiveState.status = valueId.commandClass === 98
+                ? value === 255 || value === true
+                : typeof value === 'boolean' ? value : value > 0;
+            }
+            if (valueId.commandClass === 38) {
+              zwaveLiveFields.push('brightness');
+              zwaveLiveState.brightness = clampPercent(value);
+            }
           }
         } catch (error) {
           this.log('warn', 'zwave', 'Z-Wave live state query failed', { nodeId: node.id, error: error.message });
@@ -1138,6 +1152,8 @@ async refreshDirectDeviceState(device, options = {}) {
 
     let refreshUpdate = normalized.update;
     if (protocol === 'zwave' && options.liveRead === true) {
+      Object.assign(refreshUpdate, zwaveLiveState);
+      refreshUpdate.properties.homebrainDirect.stateStale = zwaveLiveFields.length === 0;
       refreshUpdate.__homebrainLiveRead = { attempted: true, success: zwaveLiveFields.length > 0, fields: [...new Set(zwaveLiveFields)] };
     }
     if (protocol === 'zigbee' && options?.liveRead === true && typeof this.readZigbeeLiveRuntimeState === 'function') {
