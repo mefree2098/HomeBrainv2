@@ -98,7 +98,8 @@ class DecoClient {
     let response;
     try {
       response = await this.fetch(`http://${this.host}/cgi-bin/luci/;stok=${this.stok}/${path}`, {
-        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(8000), body,
+        // Aggregating clients across a mesh can outlast the login exchange.
+        method: 'POST', redirect: 'error', signal: AbortSignal.timeout(path === 'admin/client?form=client_list' ? 30000 : 8000), body,
         // The firmware deliberately uses a JSON content type even when the
         // encrypted envelope body is URL-encoded (Connection.request in frame.js).
         headers: { 'Content-Type': 'application/json', Referer: `http://${this.host}/webpages/index.html`, ...(this.cookie ? { Cookie: this.cookie } : {}) }
