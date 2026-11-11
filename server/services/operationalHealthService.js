@@ -56,7 +56,7 @@ function summarizeOperationalHealth(devices, failedExecutions, integrations, set
 async function getOperationalHealth() {
   const [devices, failed, integrations, settings, latestBackup] = await Promise.all([
     Device.find({}).select('_id name isOnline properties.homebrainDirect.iasZone properties.homebrainDirect.stateStale').lean(),
-    AutomationHistory.countDocuments({ status: { $in: ['failed', 'partial_success'] }, executedAt: { $gte: new Date(Date.now() - 86400000) } }),
+    AutomationHistory.countDocuments({ status: { $in: ['failed', 'partial_success'] }, completedAt: { $gte: new Date(Date.now() - 86400000) } }),
     ApplianceIntegration.find({ enabled: true, configured: true }).select('provider enabled configured connected').lean(),
     Settings.getSettings(),
     require('./systemBackupService').getLatestBackupJob().catch(() => null)

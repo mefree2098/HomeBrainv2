@@ -417,7 +417,7 @@ function zigbeeIasStateMatchesCoordinator(state = {}, coordinatorIeee) {
 
 function getZigbeeIasZoneId(state = {}) {
   const zoneId = Number(state.zoneId ?? state.zoneID ?? state.zoneid);
-  return Number.isFinite(zoneId) && zoneId >= 0 ? zoneId : 23;
+  return Number.isInteger(zoneId) && zoneId >= 0 && zoneId < 255 ? zoneId : 23;
 }
 
 module.exports = {

@@ -35,3 +35,5 @@ javac -d /tmp/homebrain-frame-trust \
   app/src/main/java/com/homebrain/photoframe/UpdateTrust.java tests/UpdateTrustCheck.java
 java -cp /tmp/homebrain-frame-trust com.homebrain.photoframe.UpdateTrustCheck
 ```
+
+Build dependency versions and the remaining upstream Gradle Guava advisory are documented in [the November 11 production audit repair](../../docs/production-audit-repair-2026-11-11.md). The plugin dependency constraints affect build tooling only.

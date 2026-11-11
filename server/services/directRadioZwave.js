@@ -2138,6 +2138,8 @@ normalizeZWaveNode(node, reason = 'sync') {
 
     const currentLockMode = getZWaveValue(node, zwave.DoorLockCCValues.currentMode);
     const binaryValue = getZWaveValue(node, zwave.BinarySwitchCCValues.currentValue);
+    const toneValue = getZWaveValue(node, zwave.SoundSwitchCCValues.toneId);
+    const basicValue = getZWaveValue(node, zwave.BasicCCValues.currentValue);
     const multilevelValue = getZWaveValue(node, zwave.MultilevelSwitchCCValues.currentValue);
     const brightness = clampPercent(multilevelValue);
     const locked = currentLockMode === zwave.DoorLockMode.Secured || currentLockMode === true || currentLockMode === 'Secured';
@@ -2154,6 +2156,8 @@ normalizeZWaveNode(node, reason = 'sync') {
       directRadioState.batteryLow = true;
     }
     const hasSwitch = features.has('switch');
+    const playbackStatus = Number.isFinite(toneValue) ? toneValue > 0
+      : Number.isFinite(basicValue) && features.has('alarm') ? basicValue > 0 : undefined;
     const nodeName = trimString(node.name)
       || trimString(node.deviceConfig?.label)
       || trimString(node.productLabel)
@@ -2178,7 +2182,8 @@ normalizeZWaveNode(node, reason = 'sync') {
           deviceConfig: node.deviceConfig
         }),
         room: trimString(node.location) || 'Unassigned',
-        status: hasLock ? locked : hasSwitch ? Boolean(binaryValue || (brightness && brightness > 0)) : false,
+        status: hasLock ? locked : playbackStatus !== undefined ? playbackStatus
+          : hasSwitch ? Boolean(binaryValue || (brightness && brightness > 0)) : false,
         brightness: brightness ?? undefined,
         isOnline: isZWaveNodeOnline(node),
         lastSeen: new Date(),
