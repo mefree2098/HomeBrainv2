@@ -98,7 +98,10 @@ class DecoClient {
   async encrypted(path, payload, login = false) {
     const cipher = crypto.createCipheriv('aes-128-cbc', this.aesKey, this.aesIv);
     const data = Buffer.concat([cipher.update(JSON.stringify(payload)), cipher.final()]).toString('base64');
-    // MD5 is required by Deco's LAN authentication protocol, not used for storage.
+    // Firmware requires MD5(admin + owner password) inside this RSA-encrypted
+    // LAN signature. Changing it breaks authentication; it is never persisted
+    // or used to verify HomeBrain passwords. At-rest credentials use AES-GCM.
+    // codeql[js/insufficient-password-hash, js/weak-cryptographic-algorithm] -- Deco wire-protocol compatibility only; see docs/deco-network-integration.md.
     const hash = crypto.createHash('md5').update(`admin${this.password}`).digest('hex');
     const sign = rsaEncrypt(`${login ? `k=${this.aesKey}&i=${this.aesIv}&` : ''}h=${hash}&s=${this.seq + data.length}`, this.signKey);
     const envelope = await this.post(path, new URLSearchParams({ sign, data }).toString());
