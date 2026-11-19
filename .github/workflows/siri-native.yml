@@ -44,6 +44,13 @@ jobs:
             shared/apple/HomeBrainSiriModels.swift shared/apple/HomeBrainAppleHomeModels.swift \
             scripts/tests/apple-home-sync-tests.swift -o "$RUNNER_TEMP/apple-home-sync-tests"
           "$RUNNER_TEMP/apple-home-sync-tests" | tee "$RUNNER_TEMP/siri-evidence/apple-home-sync-tests.txt"
+      - name: Test iOS device inventory and timestamp parsing
+        if: matrix.configuration == 'Debug'
+        run: |
+          swiftc -warnings-as-errors -default-isolation MainActor -parse-as-library \
+            HomeBrainApp/HomeBrainApp/Core/{JSONUtils,Models,DeviceInventory}.swift \
+            scripts/tests/ios-device-inventory-tests.swift -o "$RUNNER_TEMP/ios-device-tests"
+          "$RUNNER_TEMP/ios-device-tests"
       - name: Build iOS app and embedded Apple Watch app
         shell: bash
         run: |

@@ -131,7 +131,7 @@ nonisolated struct DeviceItem: Identifiable {
             status: JSON.bool(object, "status"),
             isOnline: JSON.bool(object, "isOnline", fallback: true),
             brightness: JSON.double(object, "brightness"),
-            color: normalizedHexColor(object["color"]),
+            color: normalizedHexColor(object["color"] as? String) ?? "#ffffff",
             colorTemperature: optionalDouble(object["colorTemperature"]),
             temperature: optionalDouble(object["temperature"]),
             targetTemperature: optionalDouble(object["targetTemperature"]),
@@ -153,17 +153,12 @@ nonisolated struct DeviceItem: Identifiable {
         return nil
     }
 
-    private nonisolated static func normalizedHexColor(_ value: Any?) -> String {
-        guard let raw = value as? String else {
-            return "#ffffff"
+    static func normalizedHexColor(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.utf8.count == 7, trimmed.first == "#",
+              trimmed.dropFirst().allSatisfy({ $0.isASCII && $0.isHexDigit }) else {
+            return nil
         }
-
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let regex = try? NSRegularExpression(pattern: "^#[0-9a-fA-F]{6}$"),
-              regex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) != nil else {
-            return "#ffffff"
-        }
-
         return trimmed.lowercased()
     }
 }

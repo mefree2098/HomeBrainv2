@@ -33,9 +33,9 @@ struct NotificationTrayItem: Identifiable, Equatable {
 final class NotificationTrayStore: ObservableObject {
     @Published private(set) var counts = NotificationTrayCounts()
     @Published private(set) var recentItems: [NotificationTrayItem] = []
-    @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
 
+    private var latestRefreshID: UUID?
     private weak var sessionStore: SessionStore?
 
     func bind(sessionStore: SessionStore) {
@@ -43,6 +43,7 @@ final class NotificationTrayStore: ObservableObject {
     }
 
     func clear() {
+        latestRefreshID = nil
         counts = NotificationTrayCounts()
         recentItems = []
         errorMessage = nil
@@ -54,22 +55,26 @@ final class NotificationTrayStore: ObservableObject {
             return
         }
 
-        isLoading = true
-        defer { isLoading = false }
+        let refreshID = UUID()
+        latestRefreshID = refreshID
 
         do {
             let response = try await sessionStore.apiClient.get("/api/notifications", query: [
                 URLQueryItem(name: "limit", value: "\(limit)")
             ])
+            guard !Task.isCancelled, latestRefreshID == refreshID else { return }
             let object = JSON.object(response)
             let countsObject = JSON.object(object["counts"])
-            counts = NotificationTrayCounts(
+            let updatedCounts = NotificationTrayCounts(
                 normal: JSON.int(countsObject, "normal", fallback: 0),
                 securityCritical: JSON.int(countsObject, "securityCritical", fallback: 0)
             )
-            recentItems = JSON.array(object["notifications"]).map(NotificationTrayItem.from)
-            errorMessage = nil
+            let items = JSON.array(object["notifications"]).map(NotificationTrayItem.from)
+            if counts != updatedCounts { counts = updatedCounts }
+            if recentItems != items { recentItems = items }
+            if errorMessage != nil { errorMessage = nil }
         } catch {
+            guard !Task.isCancelled, latestRefreshID == refreshID else { return }
             errorMessage = error.localizedDescription
         }
     }

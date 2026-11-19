@@ -883,7 +883,7 @@ struct DashboardView: View {
     @State private var securityStatusRefreshSequence = 0
     @State private var errorMessage: String?
 
-    @State private var devices: [DeviceItem] = []
+    @State private var inventory = DeviceInventory()
     @State private var scenes: [SceneItem] = []
     @State private var voiceDevices: [VoiceDeviceItem] = []
     @State private var securityStatus = "Unknown"
@@ -1049,6 +1049,7 @@ struct DashboardView: View {
     private var weatherInfoSheetHeaderTopPadding: CGFloat {
         isCompact ? 18 : 30
     }
+    private var devices: [DeviceItem] { inventory.ordered }
     private var currentDashboardView: DashboardViewItem? {
         dashboardViews.first(where: { $0.id == selectedDashboardViewID }) ?? dashboardViews.first
     }
@@ -1060,9 +1061,6 @@ struct DashboardView: View {
     }
     private var visibleDevicesWidgets: [DashboardWidgetItem] {
         currentDashboardWidgets.filter { $0.type == .devices }
-    }
-    private var sortedDevices: [DeviceItem] {
-        devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private var filteredPendingDevices: [DeviceItem] {
@@ -1258,9 +1256,7 @@ struct DashboardView: View {
     }
 
     private var featuredDevices: [DeviceItem] {
-        devices
-            .filter { favoriteDeviceIds.contains($0.id) }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        devices.filter { favoriteDeviceIds.contains($0.id) }
     }
 
     private var featuredFullWidthDevices: [DeviceItem] {
@@ -1836,7 +1832,7 @@ struct DashboardView: View {
                             .disableAutocorrection(true)
 
                         Picker("Source", selection: $pendingWidgetDeviceSource) {
-                            ForEach(DeviceItem.selectionSourceOptions(for: sortedDevices)) { option in
+                            ForEach(DeviceItem.selectionSourceOptions(for: devices)) { option in
                                 Text(option.label).tag(option.value)
                             }
                         }
@@ -1863,7 +1859,7 @@ struct DashboardView: View {
                             .disableAutocorrection(true)
 
                         Picker("Source", selection: $pendingWidgetDeviceSource) {
-                            ForEach(DeviceItem.selectionSourceOptions(for: sortedDevices)) { option in
+                            ForEach(DeviceItem.selectionSourceOptions(for: devices)) { option in
                                 Text(option.label).tag(option.value)
                             }
                         }
@@ -1972,7 +1968,7 @@ struct DashboardView: View {
                         .disableAutocorrection(true)
 
                     Picker("Source", selection: $editingWidgetDeviceSource) {
-                        ForEach(DeviceItem.selectionSourceOptions(for: sortedDevices)) { option in
+                        ForEach(DeviceItem.selectionSourceOptions(for: devices)) { option in
                             Text(option.label).tag(option.value)
                         }
                     }
@@ -2326,7 +2322,7 @@ struct DashboardView: View {
             return
         }
 
-        guard let device = devices.first(where: { $0.id == deviceID }), supportsEnergyMonitoring(device) else {
+        guard let device = inventory[deviceID], supportsEnergyMonitoring(device) else {
             deviceEnergySamplesByDeviceID[deviceID] = []
             return
         }
@@ -6617,7 +6613,7 @@ struct DashboardView: View {
     @ViewBuilder
     private func singleDeviceWidget(for widget: DashboardWidgetItem) -> some View {
         if let deviceId = widget.settings.deviceId,
-           let device = devices.first(where: { $0.id == deviceId }) {
+           let device = inventory[deviceId] {
             featuredDeviceCard(device, cardSize: deviceCardSize(for: widget.size), label: widget.title)
         } else {
             EmptyStateView(
@@ -6633,7 +6629,7 @@ struct DashboardView: View {
         pinnedDeviceIDs: [String]
     ) -> [DeviceItem] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let matches = sortedDevices.filter { device in
+        let matches = devices.filter { device in
             device.matchesSelectionFilters(searchText: query, sourceFilter: sourceFilter)
         }
 
@@ -6642,14 +6638,14 @@ struct DashboardView: View {
             return matches
         }
 
-        let pinnedDevices = sortedDevices.filter { device in
+        let pinnedDevices = devices.filter { device in
             pinnedIDs.contains(device.id) && !matches.contains(where: { $0.id == device.id })
         }
         return pinnedDevices + matches
     }
 
     private func orderedSelectedDeviceIDs(from selected: Set<String>, preservingUnknownFrom existing: [String]) -> [String] {
-        let sortedKnownIDs = sortedDevices.map(\.id).filter { selected.contains($0) }
+        let sortedKnownIDs = devices.map(\.id).filter { selected.contains($0) }
         let sortedKnownIDSet = Set(sortedKnownIDs)
         let unknownIDs = existing.filter { selected.contains($0) && !sortedKnownIDSet.contains($0) }
         return sortedKnownIDs + unknownIDs
@@ -6663,7 +6659,7 @@ struct DashboardView: View {
             selected.insert(deviceID)
         }
 
-        pendingWidgetDeviceIDs = sortedDevices
+        pendingWidgetDeviceIDs = devices
             .map(\.id)
             .filter { selected.contains($0) }
     }
@@ -6794,7 +6790,7 @@ struct DashboardView: View {
             return
         }
 
-        let selectedDevice = sortedDevices.first(where: { $0.id == pendingWidgetDeviceID })
+        let selectedDevice = inventory[pendingWidgetDeviceID]
         var settings = DashboardWidgetSettings()
 
         if pendingWidgetType == .device {
@@ -7027,7 +7023,7 @@ struct DashboardView: View {
             errorMessage = nil
             infoMessage = nil
             let previewDevices = Self.previewDashboardFocus()?.hasPrefix("lighting") == true ? UIPreviewData.theaterDevices : UIPreviewData.devices
-            devices = previewDevices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            inventory = DeviceInventory(previewDevices)
             scenes = UIPreviewData.scenes.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             voiceDevices = UIPreviewData.voiceDevices
             securityStatus = Self.previewSecurityAlarmState() ?? "Disarmed"
@@ -7189,7 +7185,7 @@ struct DashboardView: View {
             let voiceObject = JSON.object(voiceResponse)
             let voiceList = JSON.array(voiceObject["devices"]).map(VoiceDeviceItem.from)
 
-            devices = deviceList.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            inventory = DeviceInventory(deviceList)
             scenes = sceneList.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             voiceDevices = voiceList.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             if isCurrentSecurityStatusRefresh(securityLoadSequence) {
@@ -7455,9 +7451,7 @@ struct DashboardView: View {
             let data = JSON.object(root["data"])
             let lockDevices = JSON.array(data["devices"]).map(DeviceItem.from)
 
-            for lockDevice in lockDevices {
-                upsertDevice(lockDevice)
-            }
+            upsertDevices(lockDevices)
         } catch {
             // Keep the dashboard usable even if the lock-only reconciliation call fails.
         }
@@ -7473,7 +7467,7 @@ struct DashboardView: View {
             let object = JSON.object(response)
             let data = JSON.object(object["data"])
             let list = JSON.array(data["devices"]).map(DeviceItem.from)
-            devices = list.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            inventory = DeviceInventory(list)
             list.forEach(syncSecuritySummaries)
         } catch {
             // The device stream is still the fast path; this fallback should stay quiet on transient misses.
@@ -7634,7 +7628,7 @@ struct DashboardView: View {
 
         let updates = deviceObjects.map { DeviceItem.from(JSON.object($0)) }
         let shouldRefreshSecurity = updates.contains(where: deviceAffectsSecuritySummary)
-        updates.forEach(upsertDevice)
+        upsertDevices(updates)
         if shouldRefreshSecurity {
             await refreshSecurityStatus()
         }
@@ -7683,7 +7677,7 @@ struct DashboardView: View {
 
             if !updatedObject.isEmpty {
                 let updated = DeviceItem.from(updatedObject)
-                upsertDevice(updated)
+                upsertDevices([updated])
             } else {
                 applyControlLocally(deviceId: deviceId, action: action, value: value)
             }
@@ -7703,11 +7697,7 @@ struct DashboardView: View {
     }
 
     private func applyControlLocally(deviceId: String, action: String, value: Any?) {
-        guard let index = devices.firstIndex(where: { $0.id == deviceId }) else {
-            return
-        }
-
-        var updated = devices[index]
+        guard var updated = inventory[deviceId] else { return }
 
         switch action {
         case "turn_on":
@@ -7731,7 +7721,7 @@ struct DashboardView: View {
             }
 
         case "set_color":
-            if let color = normalizedDashboardHexColor(stringValue(value)) {
+            if let color = DeviceItem.normalizedHexColor(stringValue(value)) {
                 updated.color = color
                 updated.status = true
                 dashboardLightColorDrafts[deviceId] = color
@@ -7757,18 +7747,12 @@ struct DashboardView: View {
             break
         }
 
-        devices[index] = updated
-        syncSecuritySummaries(with: updated)
+        upsertDevices([updated])
     }
 
-    private func upsertDevice(_ updated: DeviceItem) {
-        if let index = devices.firstIndex(where: { $0.id == updated.id }) {
-            devices[index] = updated
-        } else {
-            devices.append(updated)
-        }
-        devices.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        syncSecuritySummaries(with: updated)
+    private func upsertDevices(_ updates: [DeviceItem]) {
+        inventory.upsert(updates)
+        updates.forEach(syncSecuritySummaries)
     }
 
     private func deviceAffectsSecuritySummary(_ device: DeviceItem) -> Bool {
@@ -7993,15 +7977,6 @@ struct DashboardView: View {
         min(100, max(0, value)).rounded()
     }
 
-    private func normalizedDashboardHexColor(_ value: String) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let regex = try? NSRegularExpression(pattern: "^#[0-9a-fA-F]{6}$"),
-              regex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) != nil else {
-            return nil
-        }
-        return trimmed.lowercased()
-    }
-
     private func currentDashboardLightBrightness(for device: DeviceItem) -> Double {
         if let draft = dashboardLightBrightnessDrafts[device.id] {
             return clampDashboardLightBrightness(draft)
@@ -8011,10 +7986,10 @@ struct DashboardView: View {
 
     private func currentDashboardLightColor(for device: DeviceItem) -> String {
         if let draft = dashboardLightColorDrafts[device.id],
-           let normalized = normalizedDashboardHexColor(draft) {
+           let normalized = DeviceItem.normalizedHexColor(draft) {
             return normalized
         }
-        if let normalized = normalizedDashboardHexColor(device.color) {
+        if let normalized = DeviceItem.normalizedHexColor(device.color) {
             return normalized
         }
         return "#ffffff"
@@ -8043,13 +8018,7 @@ struct DashboardView: View {
     }
 
     private func devicesForWidget(_ widget: DashboardWidgetItem) -> [DeviceItem] {
-        let deviceIDs = widget.settings.deviceIds
-        guard !deviceIDs.isEmpty else {
-            return []
-        }
-
-        let byID = Dictionary(uniqueKeysWithValues: devices.map { ($0.id, $0) })
-        return deviceIDs.compactMap { byID[$0] }
+        widget.settings.deviceIds.compactMap { inventory[$0] }
     }
 
     private func handleDenseDeviceToggle(_ device: DeviceItem) async {
