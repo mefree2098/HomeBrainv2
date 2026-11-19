@@ -62,7 +62,7 @@ struct DevicesView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    @State private var devices: [DeviceItem] = []
+    @State private var inventory = DeviceInventory()
     @State private var isLoading = true
     @State private var errorMessage: String?
 
@@ -159,6 +159,7 @@ struct DevicesView: View {
         case failure
     }
 
+    private var devices: [DeviceItem] { inventory.ordered }
     private var isCompact: Bool { horizontalSizeClass == .compact }
     private var isCompactHeight: Bool { verticalSizeClass == .compact }
     private var useLandscapeCompactLayout: Bool { isCompact && isCompactHeight }
@@ -170,11 +171,11 @@ struct DevicesView: View {
     private var addDeviceSheetSpacing: CGFloat { useLandscapeCompactLayout ? 12 : 16 }
     private var embeddedFocusedDevice: DeviceItem? {
         guard let embeddedFocusDeviceID else { return nil }
-        return devices.first(where: { $0.id == embeddedFocusDeviceID })
+        return inventory[embeddedFocusDeviceID]
     }
     private var controlSheetDevice: DeviceItem? {
         guard let controlSheetDeviceID else { return nil }
-        return devices.first(where: { $0.id == controlSheetDeviceID })
+        return inventory[controlSheetDeviceID]
     }
     private var availableRoomNames: [String] {
         var rooms = Set(["Unassigned"])
@@ -3343,7 +3344,7 @@ struct DevicesView: View {
 
     private func loadDevices(showLoading: Bool) async {
         if previewMode {
-            devices = UIPreviewData.devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            inventory = DeviceInventory(UIPreviewData.devices)
             roomRegistryNames = ["Unassigned", "Kitchen", "Living Room", "Main Bedroom", "Upstairs", "Vault"]
             if let previewTypeFilter = Self.previewDeviceTypeFilterFromLaunch() {
                 typeFilter = previewTypeFilter
@@ -3379,7 +3380,7 @@ struct DevicesView: View {
             let object = JSON.object(response)
             let data = JSON.object(object["data"])
             let list = JSON.array(data["devices"]).map(DeviceItem.from)
-            devices = list.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            inventory = DeviceInventory(list)
             if let roomsResponse = try? await roomsTask {
                 roomRegistryNames = roomNames(from: roomsResponse)
             }
@@ -3410,7 +3411,7 @@ struct DevicesView: View {
             let object = JSON.object(response)
             let data = JSON.object(object["data"])
             let list = JSON.array(data["devices"]).map(DeviceItem.from)
-            devices = list.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            inventory = DeviceInventory(list)
             if let roomsResponse = try? await roomsTask {
                 roomRegistryNames = roomNames(from: roomsResponse)
             }
@@ -3571,9 +3572,7 @@ struct DevicesView: View {
             return
         }
 
-        deviceObjects
-            .map { DeviceItem.from(JSON.object($0)) }
-            .forEach(upsertDevice)
+        inventory.upsert(deviceObjects.map(DeviceItem.from))
     }
 
     private func loadMatterStatus() async {
@@ -3680,7 +3679,7 @@ struct DevicesView: View {
 
     private func applyPendingDeviceFocus(using scrollProxy: ScrollViewProxy) {
         guard let request = deviceFocusState.request,
-              let targetDevice = devices.first(where: { $0.id == request.deviceID }) else {
+              let targetDevice = inventory[request.deviceID] else {
             return
         }
 
@@ -4483,11 +4482,7 @@ struct DevicesView: View {
     }
 
     private func applyControlOptimistically(deviceId: String, action: String, value: Any?) {
-        guard let index = devices.firstIndex(where: { $0.id == deviceId }) else {
-            return
-        }
-
-        var updated = devices[index]
+        guard var updated = inventory[deviceId] else { return }
 
         if updated.properties["source"] as? String == "midea" { return }
 
@@ -4513,7 +4508,7 @@ struct DevicesView: View {
             }
 
         case "set_color":
-            if let stringValue = value as? String, let normalized = normalizedHexColor(stringValue) {
+            if let stringValue = value as? String, let normalized = DeviceItem.normalizedHexColor(stringValue) {
                 updated.color = normalized
                 updated.status = true
                 lightColorDrafts[deviceId] = normalized
@@ -4561,16 +4556,11 @@ struct DevicesView: View {
             break
         }
 
-        devices[index] = updated
+        upsertDevice(updated)
     }
 
     private func upsertDevice(_ updated: DeviceItem) {
-        if let index = devices.firstIndex(where: { $0.id == updated.id }) {
-            devices[index] = updated
-        } else {
-            devices.append(updated)
-        }
-        devices.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        inventory.upsert([updated])
     }
 
     private func setControlFeedback(deviceId: String, status: ControlFeedback) {
@@ -4651,8 +4641,7 @@ struct DevicesView: View {
                 properties: newType == "thermostat" ? ["hvacMode": "auto"] : [:],
                 lastSeen: "Just now"
             )
-            devices.append(created)
-            devices.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            upsertDevice(created)
             showCreateSheet = false
             newName = ""
             newRoom = ""
@@ -4673,8 +4662,7 @@ struct DevicesView: View {
             let object = JSON.object(response)
             let data = JSON.object(object["data"])
             let created = DeviceItem.from(JSON.object(data["device"]))
-            devices.append(created)
-            devices.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            upsertDevice(created)
 
             showCreateSheet = false
             newName = ""
@@ -5136,7 +5124,7 @@ struct DevicesView: View {
 
     private func deleteDevice(_ device: DeviceItem) async {
         if previewMode {
-            devices.removeAll { $0.id == device.id }
+            inventory.remove(id: device.id)
             favoriteDeviceIds.remove(device.id)
             if controlSheetDeviceID == device.id {
                 controlSheetDeviceID = nil
@@ -5147,7 +5135,7 @@ struct DevicesView: View {
 
         do {
             _ = try await session.apiClient.delete("/api/devices/\(device.id)")
-            devices.removeAll { $0.id == device.id }
+            inventory.remove(id: device.id)
             favoriteDeviceIds.remove(device.id)
             if controlSheetDeviceID == device.id {
                 controlSheetDeviceID = nil
@@ -5251,15 +5239,6 @@ struct DevicesView: View {
 
     private func formatNumber(_ value: Double, digits: Int = 0) -> String {
         String(format: "%.\(digits)f", value)
-    }
-
-    private func normalizedHexColor(_ value: String) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let regex = try? NSRegularExpression(pattern: "^#[0-9a-fA-F]{6}$"),
-              regex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)) != nil else {
-            return nil
-        }
-        return trimmed.lowercased()
     }
 
     private func clampBrightness(_ value: Double) -> Double {
@@ -5516,10 +5495,10 @@ struct DevicesView: View {
     }
 
     private func currentLightColor(for device: DeviceItem) -> String {
-        if let draft = lightColorDrafts[device.id], let normalized = normalizedHexColor(draft) {
+        if let draft = lightColorDrafts[device.id], let normalized = DeviceItem.normalizedHexColor(draft) {
             return normalized
         }
-        if let normalized = normalizedHexColor(device.color) {
+        if let normalized = DeviceItem.normalizedHexColor(device.color) {
             return normalized
         }
         return "#ffffff"

@@ -97,6 +97,11 @@ nonisolated enum JSON {
             return date
         }
         if let stringValue = value as? String {
+            // Most device and telemetry responses use RFC 3339 timestamps with milliseconds.
+            if let match = stringValue.wholeMatch(of: Date.ISO8601FormatStyle()) {
+                return match.output
+            }
+
             let iso = ISO8601DateFormatter()
             if let parsed = iso.date(from: stringValue) {
                 return parsed

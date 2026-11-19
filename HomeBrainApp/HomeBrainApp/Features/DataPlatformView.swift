@@ -215,19 +215,10 @@ private nonisolated struct TelemetrySeriesRangeSnapshot {
     }
 }
 
-private nonisolated struct TelemetrySeriesPoint: Identifiable {
-    let observedAt: String
-    let values: [String: Double]
-
-    var id: String { observedAt }
-    var date: Date? { JSON.date(from: observedAt) }
-
-    static func from(_ object: [String: Any]) -> TelemetrySeriesPoint {
-        TelemetrySeriesPoint(
-            observedAt: JSON.string(object, "observedAt"),
-            values: telemetryNumericMap(object["values"])
-        )
-    }
+private nonisolated struct TelemetryChartPoint: Identifiable {
+    let id: Int
+    let date: Date
+    let value: Double
 }
 
 private nonisolated struct TelemetryMetricStats: Equatable {
@@ -249,19 +240,26 @@ private nonisolated struct TelemetryMetricStats: Equatable {
 }
 
 private nonisolated struct TelemetrySeriesSnapshot {
-    let source: TelemetrySourceSummary
-    let metrics: [TelemetryMetricDescriptor]
     let range: TelemetrySeriesRangeSnapshot
-    let points: [TelemetrySeriesPoint]
-    let stats: [TelemetryMetricStats]
+    let pointsByMetric: [String: [TelemetryChartPoint]]
+    let statsByKey: [String: TelemetryMetricStats]
 
     static func from(_ object: [String: Any]) -> TelemetrySeriesSnapshot {
-        TelemetrySeriesSnapshot(
-            source: TelemetrySourceSummary.from(JSON.object(object["source"])),
-            metrics: JSON.array(object["metrics"]).map(TelemetryMetricDescriptor.from),
+        var pointsByMetric: [String: [TelemetryChartPoint]] = [:]
+        for (index, point) in JSON.array(object["points"]).enumerated() {
+            guard let date = JSON.date(from: point["observedAt"]) else { continue }
+            for (key, value) in telemetryNumericMap(point["values"]) {
+                pointsByMetric[key, default: []].append(TelemetryChartPoint(id: index, date: date, value: value))
+            }
+        }
+        var statsByKey: [String: TelemetryMetricStats] = [:]
+        for stat in JSON.array(object["stats"]).map(TelemetryMetricStats.from) {
+            statsByKey[stat.key] = stat
+        }
+        return TelemetrySeriesSnapshot(
             range: TelemetrySeriesRangeSnapshot.from(JSON.object(object["range"])),
-            points: JSON.array(object["points"]).map(TelemetrySeriesPoint.from),
-            stats: JSON.array(object["stats"]).map(TelemetryMetricStats.from)
+            pointsByMetric: pointsByMetric,
+            statsByKey: statsByKey
         )
     }
 }
@@ -465,25 +463,8 @@ private nonisolated func telemetryFormatMetricValue(_ metric: TelemetryMetricDes
 private struct TelemetryMetricPanel: View {
     let metric: TelemetryMetricDescriptor
     let stats: TelemetryMetricStats?
-    let points: [TelemetrySeriesPoint]
+    let chartPoints: [TelemetryChartPoint]
     let color: Color
-
-    private struct ChartPoint: Identifiable {
-        let id = UUID()
-        let date: Date
-        let value: Double
-    }
-
-    private var chartPoints: [ChartPoint] {
-        points.compactMap { point in
-            guard let date = point.date,
-                  let value = point.values[metric.key] else {
-                return nil
-            }
-
-            return ChartPoint(date: date, value: value)
-        }
-    }
 
     var body: some View {
         HBPanel {
@@ -616,6 +597,7 @@ struct DataPlatformView: View {
         _selectedMetricKeys = State(initialValue: initialMetricKey.map { [$0] } ?? [])
     }
     @EnvironmentObject private var session: SessionStore
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var overview: TelemetryOverviewSnapshot?
     @State private var series: TelemetrySeriesSnapshot?
@@ -647,12 +629,9 @@ struct DataPlatformView: View {
 
     private var selectedMetricDescriptors: [TelemetryMetricDescriptor] {
         guard let selectedSource else { return [] }
-        let metricsByKey = Dictionary(uniqueKeysWithValues: selectedSource.availableMetrics.map { ($0.key, $0) })
-        return selectedMetricKeys.compactMap { metricsByKey[$0] }
-    }
-
-    private var statsByKey: [String: TelemetryMetricStats] {
-        Dictionary(uniqueKeysWithValues: (series?.stats ?? []).map { ($0.key, $0) })
+        return selectedMetricKeys.compactMap { key in
+            selectedSource.availableMetrics.first { $0.key == key }
+        }
     }
 
     private var storageCollections: [TelemetryStorageCollection] {
@@ -697,8 +676,8 @@ struct DataPlatformView: View {
                         ForEach(Array(selectedMetricDescriptors.enumerated()), id: \.element.id) { index, metric in
                             TelemetryMetricPanel(
                                 metric: metric,
-                                stats: statsByKey[metric.key],
-                                points: series?.points ?? [],
+                                stats: series?.statsByKey[metric.key],
+                                chartPoints: series?.pointsByMetric[metric.key] ?? [],
                                 color: metricColors[index % metricColors.count]
                             )
                         }
@@ -714,16 +693,35 @@ struct DataPlatformView: View {
         .refreshable {
             await loadOverview(showLoading: false)
         }
-        .task {
-            await loadOverview(showLoading: true)
+        .task(id: scenePhase == .active) {
+            guard scenePhase == .active else { return }
+            await loadOverview(showLoading: overview == nil)
             while !Task.isCancelled {
-                do { try await Task.sleep(for: .seconds(30)) } catch { break }
+                do { try await Task.sleep(for: .seconds(30)) } catch { return }
                 await loadOverview(showLoading: false)
-                await loadSeriesIfNeeded()
             }
         }
-        .task(id: seriesTaskKey) {
-            await loadSeriesIfNeeded()
+        .task(id: scenePhase == .active ? seriesTaskKey : nil) {
+            guard scenePhase == .active else { return }
+            guard let selectedSourceKey, !selectedMetricKeys.isEmpty else {
+                series = nil
+                isLoadingSeries = false
+                return
+            }
+
+            let query = [
+                URLQueryItem(name: "sourceKey", value: selectedSourceKey),
+                URLQueryItem(name: "metricKeys", value: selectedMetricKeys.joined(separator: ",")),
+                URLQueryItem(name: "hours", value: String(selectedRange.hours)),
+                URLQueryItem(name: "maxPoints", value: selectedRange.hours >= 24 * 90 ? "320" : "240")
+            ]
+            isLoadingSeries = true
+            while !Task.isCancelled {
+                await loadSeries(query: query)
+                guard !Task.isCancelled else { return }
+                isLoadingSeries = false
+                do { try await Task.sleep(for: .seconds(30)) } catch { return }
+            }
         }
         .confirmationDialog(
             "Clear the selected telemetry source?",
@@ -1133,11 +1131,13 @@ struct DataPlatformView: View {
 
         do {
             let response = try await session.apiClient.get("/api/telemetry/overview")
+            try Task.checkCancellation()
             let snapshot = TelemetryOverviewSnapshot.from(JSON.object(JSON.object(response)["data"]))
             overview = snapshot
             errorMessage = nil
             applySelection(using: snapshot)
         } catch {
+            guard !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
             if showLoading {
                 overview = nil
@@ -1177,22 +1177,14 @@ struct DataPlatformView: View {
         selectedMetricKeys = Array(resolvedSource.availableMetrics.prefix(4).map(\.key))
     }
 
-    private func loadSeriesIfNeeded() async {
-        guard let selectedSourceKey, !selectedMetricKeys.isEmpty else {
-            series = nil
-            return
-        }
-
-        isLoadingSeries = true
-        defer { isLoadingSeries = false }
-
+    private func loadSeries(query: [URLQueryItem]) async {
         do {
-            let metricQuery = selectedMetricKeys.joined(separator: ",")
-            let path = "/api/telemetry/series?sourceKey=\(selectedSourceKey.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? selectedSourceKey)&metricKeys=\(metricQuery.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? metricQuery)&hours=\(selectedRange.hours)&maxPoints=\(selectedRange.hours >= 24 * 90 ? 320 : 240)"
-            let response = try await session.apiClient.get(path)
+            let response = try await session.apiClient.get("/api/telemetry/series", query: query)
+            try Task.checkCancellation()
             series = TelemetrySeriesSnapshot.from(JSON.object(JSON.object(response)["data"]))
             errorMessage = nil
         } catch {
+            guard !Task.isCancelled else { return }
             errorMessage = error.localizedDescription
             series = nil
         }

@@ -255,6 +255,7 @@ struct AppShellView: View {
     @EnvironmentObject private var session: SessionStore
     @EnvironmentObject private var uiPreview: UIPreviewStore
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.verticalSizeClass) private var verticalSizeClass
 
     @State private var selection: AppSection? = .dashboard
@@ -266,8 +267,7 @@ struct AppShellView: View {
     @State private var resourceStripMetrics: [ResourceStripMetric] = defaultResourceStripMetrics()
     @State private var resourceStripLoading = true
     @State private var resourceStripRefreshing = false
-    @State private var headerSummaryRefreshInFlight = false
-    @State private var resourceStripRefreshInFlight = false
+    @State private var systemStatusRefreshCount = 0
     @State private var previewVoiceEnabled = false
     @State private var containerWidth: CGFloat = 0
     @StateObject private var dashboardChrome = DashboardChromeState()
@@ -356,6 +356,16 @@ struct AppShellView: View {
         }
         return "\(dashboardChrome.widgetCount) widgets"
     }
+    private struct SystemStatusRefresh: Equatable {
+        let manual: Int
+        let recovery: Int
+    }
+
+    private var systemStatusRefresh: SystemStatusRefresh? {
+        guard !previewMode, session.isAuthenticated, scenePhase == .active else { return nil }
+        return SystemStatusRefresh(manual: systemStatusRefreshCount, recovery: session.backendRecoveryGeneration)
+    }
+
     private var overflowNeedsSystemStatusMenu: Bool { !showsTopBarResourceStrip }
 
     init(previewMode: Bool = false) {
@@ -469,11 +479,6 @@ struct AppShellView: View {
                 return
             }
 
-            Task {
-                await refreshHeaderSummary()
-                await refreshResourceStrip(initialLoad: false)
-            }
-
             if shouldReloadActiveSectionAfterBackendRecovery {
                 detailRefreshGeneration = generation
             }
@@ -482,17 +487,17 @@ struct AppShellView: View {
                 voiceAssistant.bind(sessionStore: session)
             }
         }
-        .task(id: session.currentUser?.id ?? "guest") {
-            if !previewMode {
-                await refreshHeaderSummary()
-            }
+        .task(id: overflowNeedsSystemStatusMenu ? systemStatusRefresh : nil) {
+            guard overflowNeedsSystemStatusMenu, systemStatusRefresh != nil else { return }
+            await refreshHeaderSummary()
         }
-        .task(id: session.isAuthenticated) {
+        .task(id: systemStatusRefresh) {
             if previewMode {
                 resourceStripMetrics = previewResourceStripMetrics()
                 resourceStripLoading = false
                 resourceStripRefreshing = false
             } else if session.isAuthenticated {
+                guard scenePhase == .active else { return }
                 await runResourceStripLoop()
             } else {
                 resourceStripMetrics = Self.defaultResourceStripMetrics()
@@ -500,11 +505,12 @@ struct AppShellView: View {
                 resourceStripRefreshing = false
             }
         }
-        .task(id: "\(session.currentUser?.id ?? "guest")-\(session.isAuthenticated)") {
+        .task(id: "\(session.currentUser?.id ?? "guest")-\(session.isAuthenticated && scenePhase == .active)") {
             guard !previewMode, session.isAuthenticated else {
                 notificationTray.clear()
                 return
             }
+            guard scenePhase == .active else { return }
             notificationTray.bind(sessionStore: session)
             await runNotificationTrayLoop()
         }
@@ -787,10 +793,7 @@ struct AppShellView: View {
                     Divider()
 
                     Button {
-                        Task {
-                            await refreshHeaderSummary()
-                            await refreshResourceStrip(initialLoad: false)
-                        }
+                        systemStatusRefreshCount += 1
                     } label: {
                         Label("Refresh System Status", systemImage: "arrow.clockwise")
                     }
@@ -1289,9 +1292,6 @@ struct AppShellView: View {
     private var notificationBellButton: some View {
         Button {
             isNotificationTrayOpen.toggle()
-            Task {
-                await notificationTray.refresh()
-            }
         } label: {
             ZStack {
                 Image(systemName: notificationTray.counts.total > 0 ? "bell.badge.fill" : "bell")
@@ -1306,6 +1306,10 @@ struct AppShellView: View {
         .buttonStyle(.plain)
         .popover(isPresented: $isNotificationTrayOpen, attachmentAnchor: .point(.bottom), arrowEdge: .top) {
             notificationTrayPopover
+                .task {
+                    guard !previewMode else { return }
+                    await notificationTray.refresh()
+                }
                 .frame(width: 340)
                 .padding(16)
         }
@@ -1783,20 +1787,19 @@ struct AppShellView: View {
     }
 
     private func refreshHeaderSummary() async {
-        guard !headerSummaryRefreshInFlight else {
-            return
-        }
-        headerSummaryRefreshInFlight = true
-        defer { headerSummaryRefreshInFlight = false }
-
         do {
-            let response = try await session.apiClient.get("/api/devices")
-            let root = JSON.object(response)
-            let data = JSON.object(root["data"])
-            let devices = JSON.array(data["devices"]).map(DeviceItem.from)
-            let active = devices.filter { $0.status }.count
-            activeDevicesSummary = "\(active)/\(devices.count)"
+            let response = try await session.apiClient.get("/api/devices/stats")
+            try Task.checkCancellation()
+            let data = JSON.object(JSON.object(response)["data"])
+            let stats = JSON.object(data["stats"])
+            // Review sandbox instances use "on" for the active device count.
+            guard let total = stats["total"] as? Int,
+                  let active = (stats["active"] ?? stats["on"]) as? Int else {
+                throw APIError.invalidResponse
+            }
+            activeDevicesSummary = "\(active)/\(total)"
         } catch {
+            guard !Task.isCancelled else { return }
             activeDevicesSummary = "--/--"
         }
     }
@@ -1818,18 +1821,12 @@ struct AppShellView: View {
 
         while !Task.isCancelled && session.isAuthenticated {
             try? await Task.sleep(nanoseconds: 30_000_000_000)
-            guard session.isAuthenticated else { return }
+            guard !Task.isCancelled && session.isAuthenticated else { return }
             await notificationTray.refresh()
         }
     }
 
     private func refreshResourceStrip(initialLoad: Bool) async {
-        guard !resourceStripRefreshInFlight else {
-            return
-        }
-        resourceStripRefreshInFlight = true
-        defer { resourceStripRefreshInFlight = false }
-
         if initialLoad {
             resourceStripLoading = true
         } else {
@@ -1837,12 +1834,15 @@ struct AppShellView: View {
         }
 
         defer {
-            resourceStripLoading = false
-            resourceStripRefreshing = false
+            if !Task.isCancelled {
+                resourceStripLoading = false
+                resourceStripRefreshing = false
+            }
         }
 
         do {
             let response = try await session.apiClient.get("/api/resources/utilization")
+            try Task.checkCancellation()
             applyResourceSnapshot(response)
         } catch {
             // Keep last known values visible if refresh fails.
