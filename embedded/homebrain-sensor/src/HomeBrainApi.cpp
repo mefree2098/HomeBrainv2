@@ -1,4 +1,5 @@
 #include "HomeBrainApi.h"
+#include "ScopedWifiAwake.h"
 
 #include <HTTPClient.h>
 #include <WiFi.h>
@@ -61,6 +62,8 @@ int HomeBrainApi::request(
   String& responseBody,
   bool useSetupCode
 ) {
+  if (WiFi.status() != WL_CONNECTED) return -1;
+  ScopedWifiAwake awake;
   auto client = createHttpClient();
   if (!client) return -1;
   const String url = normalizedBaseUrl() + path;
@@ -71,7 +74,8 @@ int HomeBrainApi::request(
   if (!http.begin(*client, url)) return -1;
   http.addHeader("Accept", "application/json");
   http.addHeader("Content-Type", "application/json");
-  http.addHeader("User-Agent", String("HomeBrainSensor/") + HOMEBRAIN_SENSOR_FIRMWARE_VERSION);
+  http.setUserAgent(String("HomeBrainSensor/") + HOMEBRAIN_SENSOR_FIRMWARE_VERSION);
+  if (path.endsWith("/readings")) http.addHeader("Prefer", "return=minimal");
   if (useSetupCode) {
     http.addHeader("X-HomeBrain-Sensor-Setup", credentials_.setupCode);
   } else if (!credentials_.deviceToken.isEmpty()) {

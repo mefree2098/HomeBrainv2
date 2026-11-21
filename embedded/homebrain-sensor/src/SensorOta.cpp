@@ -1,4 +1,5 @@
 #include "SensorOta.h"
+#include "ScopedWifiAwake.h"
 #include <WiFi.h>
 #include <esp_crt_bundle.h>
 #include <esp_http_client.h>
@@ -34,13 +35,6 @@ esp_err_t receiveDownloadHeader(esp_http_client_event_t* event) {
   }
   return ESP_OK;
 }
-class OtaWifiPower {
- public:
-  OtaWifiPower() : previous_(WiFi.getSleep()) { WiFi.setSleep(false); }
-  ~OtaWifiPower() { WiFi.setSleep(previous_); }
- private:
-  wifi_ps_type_t previous_;
-};
 String hexDigest(const uint8_t* bytes) {
   char hex[65];
   for (size_t i = 0; i < 32; ++i) snprintf(hex + i * 2, 3, "%02x", bytes[i]);
@@ -158,7 +152,7 @@ void SensorOta::maybeApply(HomeBrainApi& api, const AppCredentials& credentials,
   if (!saveState("downloading")) { fail(api, "Cannot persist update recovery state."); return; }
   // Espressif's OTA examples disable modem power saving during the transfer.
   // Restore the normal policy when an update fails and reporting resumes.
-  OtaWifiPower wifiPower;
+  ScopedWifiAwake wifiPower;
   String base = credentials.hubUrl;
   while (base.endsWith("/")) base.remove(base.length() - 1);
   if (!base.startsWith("https://")) { fail(api, "OTA requires a trusted HTTPS connection to HomeBrain."); return; }
