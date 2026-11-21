@@ -559,6 +559,7 @@ test('recordSensorBatteryNotifications separates monitored security battery deat
 });
 
 test('recordOfflineDeviceNotifications marks configured security devices as security critical', async (t) => {
+  t.mock.method(HomeBrainNotification, 'find', () => makeQueryResult(created));
   const originalUserFind = User.find;
   const originalAlarmGetMainAlarm = SecurityAlarm.getMainAlarm;
   const originalDeviceFind = Device.find;
@@ -636,8 +637,9 @@ test('recordOfflineDeviceNotifications marks configured security devices as secu
   });
 
   await notificationService.recordOfflineDeviceNotifications();
-
-  assert.equal(created.length, 3);
+  const repeated = await notificationService.recordOfflineDeviceNotifications();
+  assert.equal(repeated.length, 3);
+  assert.equal(created.length, 3, 'unchanged active incidents do not write or trigger new delivery');
   assert.deepEqual(created.map((entry) => entry.channel), ['securityCritical', 'securityCritical', 'normal']);
   assert.deepEqual(created.map((entry) => entry.eventType), [
     'security.device.offline',
@@ -647,6 +649,7 @@ test('recordOfflineDeviceNotifications marks configured security devices as secu
 });
 
 test('recordOfflineDeviceNotifications resolves stale offline notifications when devices come online', async (t) => {
+  t.mock.method(HomeBrainNotification, 'find', () => makeQueryResult([]));
   const originalUserFind = User.find;
   const originalAlarmGetMainAlarm = SecurityAlarm.getMainAlarm;
   const originalDeviceFind = Device.find;
@@ -726,4 +729,24 @@ test('recordOfflineDeviceNotifications resolves stale offline notifications when
   const resolvedEvent = publishedEvents.find((event) => event.type === 'notifications.resolved');
   assert.equal(resolvedEvent.payload.resolvedCount, 2);
   assert.equal(resolvedEvent.payload.reason, 'device_online');
+});
+
+test('concurrent inbox and badge reads reconcile offline devices once and keep user data separate', async t => {
+  let inventories = 0;
+  let alarms = 0;
+  let resolves = 0;
+  const now = new Date();
+  t.mock.method(SecurityAlarm, 'getMainAlarm', async () => { alarms++; return {}; });
+  t.mock.method(Device, 'find', () => { inventories++; return makeQueryResult([]); });
+  t.mock.method(HomeBrainNotification, 'updateMany', async () => { resolves++; return { modifiedCount: 0 }; });
+  t.mock.method(HomeBrainNotification, 'find', query => makeQueryResult([{ _id: query.userId, occurredAt: now }]));
+  t.mock.method(HomeBrainNotification, 'countDocuments', async query => query.userId === 'one' ? 1 : 0);
+  const [one, two, badge] = await Promise.all([
+    notificationService.listNotifications('one'), notificationService.listNotifications('two'),
+    notificationService.getUnreadCounts('one')
+  ]);
+  assert.deepEqual([alarms, inventories, resolves], [1, 1, 1]);
+  assert.equal(one[0].id, 'one');
+  assert.equal(two[0].id, 'two');
+  assert.equal(badge.total, 2);
 });
