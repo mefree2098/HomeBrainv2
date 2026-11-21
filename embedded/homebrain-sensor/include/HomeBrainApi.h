@@ -17,6 +17,7 @@ enum class ApiResult : uint8_t {
 class HomeBrainApi {
  public:
   HomeBrainApi(AppCredentials& credentials, ConfigStore& store);
+  ~HomeBrainApi();
 
   ApiResult activate(RuntimeConfig& runtime);
   ApiResult fetchConfig(RuntimeConfig& runtime);
@@ -37,13 +38,16 @@ class HomeBrainApi {
     const String& path,
     const String& requestBody,
     String& responseBody,
-    bool useSetupCode
+    bool useSetupCode,
+    bool keepAlive = false
   );
   ApiResult classifyResponse(int statusCode, const String& body) const;
   bool parseConfigResponse(const String& body, RuntimeConfig& runtime) const;
   String normalizedBaseUrl() const;
   void addFloat(JsonObject target, const char* key, float value, uint8_t digits = 2) const;
 
+  struct RequestSession;
+  std::unique_ptr<RequestSession> session_;
   AppCredentials& credentials_;
   ConfigStore& store_;
 };
