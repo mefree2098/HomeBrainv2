@@ -9,7 +9,6 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Slider } from "@/components/ui/slider"
 import { 
   ArrowLeft,
   BarChart3,
@@ -26,9 +25,7 @@ import {
   Power,
   PowerOff,
   Heart,
-  Minus,
   Palette,
-  Plus,
   Loader2,
   CheckCircle2,
   AlertCircle,
@@ -50,7 +47,6 @@ import { useFavorites } from "@/hooks/useFavorites"
 import { useDeviceRealtime } from "@/hooks/useDeviceRealtime"
 import { useAuth } from "@/contexts/AuthContext"
 import {
-  getHarmonyControlCommands,
   getHarmonyPowerCommands,
   isHarmonyCommandDevice,
   isHarmonyExcludedFromHomeBrain
@@ -63,16 +59,7 @@ import {
   getDeviceSourceLabel
 } from "@/lib/deviceSources"
 
-import { ApplianceControls } from "@/components/appliances/ApplianceControls"
-const THERMOSTAT_MODES = ['auto', 'cool', 'heat', 'off'] as const
 const ALL_DEVICE_ROOMS_VALUE = '__all_rooms__'
-const HARMONY_CARD_COMMANDS = [
-  { key: 'volume_down', label: 'Vol -' },
-  { key: 'mute', label: 'Mute' },
-  { key: 'volume_up', label: 'Vol +' },
-  { key: 'play', label: 'Play' },
-  { key: 'pause', label: 'Pause' }
-] as const
 const SMARTTHINGS_CATEGORY_FILTER_PREFIX = 'smartthings-category:'
 const SMARTTHINGS_CAMERA_CAPABILITIES = [
   'videoStream',
@@ -1242,24 +1229,6 @@ const getDeviceControlSummary = (device: any): string => {
   return `${getDeviceDisplayTypeLabel(device)} control`
 }
 
-const getHarmonyQuickCardActions = (device: any) => {
-  const controlCommands = getHarmonyControlCommands(device)
-
-  return HARMONY_CARD_COMMANDS
-    .map((definition) => {
-      const command = controlCommands[definition.key]
-      if (!command) {
-        return null
-      }
-
-      return {
-        key: definition.key,
-        label: definition.label,
-        command
-      }
-    })
-    .filter((entry): entry is { key: string; label: string; command: string } => Boolean(entry))
-}
 
 interface DevicesProps {
   embedded?: boolean
@@ -1290,9 +1259,7 @@ export function Devices({
   const [showAddDeviceDialog, setShowAddDeviceDialog] = useState(false)
   const [highlightedDeviceId, setHighlightedDeviceId] = useState<string | null>(null)
   const [detailDeviceId, setDetailDeviceId] = useState<string | null>(null)
-  const [lightBrightnessDrafts, setLightBrightnessDrafts] = useState<Record<string, number>>({})
   const [lightColorDrafts, setLightColorDrafts] = useState<Record<string, string>>({})
-  const [lightColorTemperatureDrafts, setLightColorTemperatureDrafts] = useState<Record<string, number>>({})
   const [pendingControls, setPendingControls] = useState<Record<string, boolean>>({})
   const [controlFeedback, setControlFeedback] = useState<Record<string, 'success' | 'error'>>({})
   const [controlErrorMessages, setControlErrorMessages] = useState<Record<string, string>>({})
@@ -1396,17 +1363,7 @@ export function Devices({
       return nextDevices
     })
     setDetailDeviceId(current => current === deviceId ? null : current)
-    setLightBrightnessDrafts(current => {
-      const next = { ...current }
-      delete next[deviceId]
-      return next
-    })
     setLightColorDrafts(current => {
-      const next = { ...current }
-      delete next[deviceId]
-      return next
-    })
-    setLightColorTemperatureDrafts(current => {
       const next = { ...current }
       delete next[deviceId]
       return next
@@ -1730,22 +1687,8 @@ export function Devices({
         })))
       }
 
-      if (action === 'set_brightness') {
-        setLightBrightnessDrafts(prev => {
-          const next = { ...prev }
-          delete next[deviceId]
-          return next
-        })
-      }
       if (action === 'set_color') {
         setLightColorDrafts(prev => {
-          const next = { ...prev }
-          delete next[deviceId]
-          return next
-        })
-      }
-      if (action === 'set_color_temperature') {
-        setLightColorTemperatureDrafts(prev => {
           const next = { ...prev }
           delete next[deviceId]
           return next
@@ -1861,293 +1804,6 @@ export function Devices({
       default:
         return <Home className="h-5 w-5" />
     }
-  }
-
-  const renderThermostatControls = (device: any, compact = false) => {
-    if (device.properties?.source === 'midea') return <ApplianceControls device={device} />
-    const currentMode = getThermostatMode(device)
-    const onMode = getThermostatOnMode(device)
-    const targetTemperature = getThermostatTargetTemperature(device)
-    const currentTemperature = Number(device?.temperature)
-    const isModeOff = currentMode === 'off'
-    const isPending = !!pendingControls[device._id]
-
-    return (
-      <div className="space-y-3">
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">Setpoint</span>
-          <span className="font-medium">
-            {targetTemperature}°
-            {Number.isFinite(currentTemperature) ? ` • ${Math.round(currentTemperature)}°` : ''}
-          </span>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <Button
-            onClick={() => handleDeviceControl(device._id, 'set_temperature', Math.max(-50, targetTemperature - 1))}
-            variant="outline"
-            size="icon"
-            className={compact ? "h-8 w-8" : "h-9 w-9"}
-            disabled={isPending}
-          >
-            <Minus className={compact ? "h-3 w-3" : "h-4 w-4"} />
-          </Button>
-          <Button
-            onClick={() => handleDeviceControl(device._id, 'set_temperature', Math.min(150, targetTemperature + 1))}
-            variant="outline"
-            size="icon"
-            className={compact ? "h-8 w-8" : "h-9 w-9"}
-            disabled={isPending}
-          >
-            <Plus className={compact ? "h-3 w-3" : "h-4 w-4"} />
-          </Button>
-          <Select
-            value={currentMode}
-            onValueChange={(mode) => handleDeviceControl(device._id, 'set_mode', mode)}
-            disabled={isPending}
-          >
-            <SelectTrigger className="h-9">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {THERMOSTAT_MODES.map((mode) => (
-                <SelectItem key={mode} value={mode}>
-                  {mode.charAt(0).toUpperCase() + mode.slice(1)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <Button
-          onClick={() => handleDeviceControl(device._id, 'set_mode', isModeOff ? onMode : 'off')}
-          variant={isModeOff ? "outline" : "default"}
-          className="w-full"
-          size={compact ? "sm" : "default"}
-          disabled={isPending}
-        >
-          {isModeOff ? (
-            <>
-              <Power className={compact ? "h-3 w-3 mr-2" : "h-4 w-4 mr-2"} />
-              Turn On
-            </>
-          ) : (
-            <>
-              <PowerOff className={compact ? "h-3 w-3 mr-2" : "h-4 w-4 mr-2"} />
-              Turn Off
-            </>
-          )}
-        </Button>
-      </div>
-    )
-  }
-
-  const renderLightControls = (device: any, compact = false) => {
-    const draftBrightness = lightBrightnessDrafts[device._id]
-    const brightness = typeof draftBrightness === 'number'
-      ? clampBrightness(draftBrightness)
-      : getLightBrightness(device)
-    const supportsColor = supportsLightColor(device)
-    const color = lightColorDrafts[device._id] || getLightColor(device)
-    const supportsColorTemp = supportsLightColorTemperature(device)
-    const colorTemperature = lightColorTemperatureDrafts[device._id] ?? getLightColorTemperature(device)
-    const isPending = !!pendingControls[device._id]
-
-    return (
-      <div className="space-y-3">
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">Fade</span>
-          <span className="font-medium">{brightness}%</span>
-        </div>
-
-        <Slider
-          value={[brightness]}
-          onValueChange={(values) => {
-            const next = clampBrightness(values?.[0] ?? brightness)
-            setLightBrightnessDrafts(prev => ({ ...prev, [device._id]: next }))
-          }}
-          onValueCommit={(values) => {
-            const next = clampBrightness(values?.[0] ?? brightness)
-            setLightBrightnessDrafts(prev => ({ ...prev, [device._id]: next }))
-            handleDeviceControl(device._id, 'set_brightness', next)
-          }}
-          min={0}
-          max={100}
-          step={1}
-          className="w-full"
-          disabled={isPending}
-        />
-
-        <div className="grid grid-cols-2 gap-2">
-          <Button
-            onClick={() => handleDeviceControl(device._id, 'set_brightness', clampBrightness(brightness - 10))}
-            variant="outline"
-            size={compact ? "sm" : "default"}
-            disabled={isPending}
-          >
-            Fade Down
-          </Button>
-          <Button
-            onClick={() => handleDeviceControl(device._id, 'set_brightness', clampBrightness(brightness + 10))}
-            variant="outline"
-            size={compact ? "sm" : "default"}
-            disabled={isPending}
-          >
-            Fade Up
-          </Button>
-        </div>
-
-        {supportsColor && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Color</span>
-              <span className="font-mono text-xs uppercase">{color}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Input
-                type="color"
-                value={color}
-                onChange={(event) => {
-                  const nextColor = normalizeHexColor(event.target.value)
-                  setLightColorDrafts(prev => ({ ...prev, [device._id]: nextColor }))
-                }}
-                className="h-9 w-14 cursor-pointer p-1"
-                disabled={isPending}
-              />
-              <Button
-                onClick={() => handleDeviceControl(device._id, 'set_color', color)}
-                variant="outline"
-                className="flex-1"
-                size={compact ? "sm" : "default"}
-                disabled={isPending}
-              >
-                Apply Color
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {supportsColorTemp && (
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">White</span>
-              <span className="font-medium">{colorTemperature}K</span>
-            </div>
-            <Slider
-              value={[colorTemperature]}
-              onValueChange={(values) => {
-                const next = clampColorTemperature(values?.[0] ?? colorTemperature)
-                setLightColorTemperatureDrafts(prev => ({ ...prev, [device._id]: next }))
-              }}
-              onValueCommit={(values) => {
-                const next = clampColorTemperature(values?.[0] ?? colorTemperature)
-                setLightColorTemperatureDrafts(prev => ({ ...prev, [device._id]: next }))
-                handleDeviceControl(device._id, 'set_color_temperature', next)
-              }}
-              min={1500}
-              max={6500}
-              step={50}
-              className="w-full"
-              disabled={isPending}
-            />
-            <div className="grid grid-cols-3 gap-2">
-              {[
-                { label: 'Warm', value: 2700 },
-                { label: 'Neutral', value: 4000 },
-                { label: 'Cold', value: 5000 }
-              ].map((preset) => (
-                <Button
-                  key={preset.label}
-                  onClick={() => handleDeviceControl(device._id, 'set_color_temperature', preset.value)}
-                  variant={Math.abs(colorTemperature - preset.value) <= 75 ? "default" : "outline"}
-                  size={compact ? "sm" : "default"}
-                  disabled={isPending}
-                >
-                  {preset.label}
-                </Button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <Button
-          onClick={() => handleDeviceControl(device._id, device.status ? 'turn_off' : 'turn_on')}
-          variant={device.status ? "default" : "outline"}
-          className="w-full"
-          size={compact ? "sm" : "default"}
-          disabled={isPending}
-        >
-          {device.status ? (
-            <>
-              <PowerOff className={compact ? "h-3 w-3 mr-2" : "h-4 w-4 mr-2"} />
-              Turn Off
-            </>
-          ) : (
-            <>
-              <Power className={compact ? "h-3 w-3 mr-2" : "h-4 w-4 mr-2"} />
-              Turn On
-            </>
-          )}
-        </Button>
-      </div>
-    )
-  }
-
-  const renderHarmonyCommandDeviceControls = (device: any, compact = false) => {
-    const quickActions = getHarmonyQuickCardActions(device)
-    const powerAction = getHarmonyPowerAction(device)
-    const isPending = !!pendingControls[device._id]
-
-    return (
-      <div className="space-y-3">
-        {quickActions.length > 0 ? (
-          <div className="grid grid-cols-3 gap-2">
-            {quickActions.map((entry) => (
-              <Button
-                key={entry.key}
-                onClick={() => handleDeviceControl(device._id, 'harmony_command', { command: entry.command, holdMs: 0 })}
-                variant="outline"
-                size={compact ? "sm" : "default"}
-                disabled={isPending}
-              >
-                {entry.label}
-              </Button>
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-lg border border-dashed border-border/70 px-3 py-3 text-xs text-muted-foreground">
-            Harmony remote commands are available for this device in Details.
-          </div>
-        )}
-
-        {powerAction ? (
-          <Button
-            onClick={() => handleDeviceControl(device._id, powerAction)}
-            variant={device.status ? "default" : "outline"}
-            className="w-full"
-            size={compact ? "sm" : "default"}
-            disabled={isPending}
-          >
-            {powerAction === 'toggle' ? (
-              <>
-                <Power className={compact ? "h-3 w-3 mr-2" : "h-4 w-4 mr-2"} />
-                {getHarmonyPowerActionLabel(device)}
-              </>
-            ) : device.status ? (
-              <>
-                <PowerOff className={compact ? "h-3 w-3 mr-2" : "h-4 w-4 mr-2"} />
-                Turn Off
-              </>
-            ) : (
-              <>
-                <Power className={compact ? "h-3 w-3 mr-2" : "h-4 w-4 mr-2"} />
-                Turn On
-              </>
-            )}
-          </Button>
-        ) : null}
-      </div>
-    )
   }
 
   const sourceOptions = useMemo(

@@ -250,18 +250,6 @@ function prettifyTriggerSegment(value: string) {
     .trim()
 }
 
-function formatWorkflowTokenLabel(value: string, fallback = "Device") {
-  const normalized = value.trim()
-  if (!normalized) {
-    return fallback
-  }
-
-  return normalized
-    .split(/[\s._-]+/g)
-    .filter(Boolean)
-    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
-    .join(" ")
-}
 
 function getWorkflowDeviceType(device: DeviceLite | null | undefined) {
   const rawType = String(device?.type || "").trim().toLowerCase()
@@ -272,9 +260,6 @@ function getWorkflowDeviceType(device: DeviceLite | null | undefined) {
   return getDeviceSource(device) === "sense" ? "energy_monitor" : rawType
 }
 
-function getWorkflowDeviceTypeLabel(device: DeviceLite | null | undefined) {
-  return formatWorkflowTokenLabel(getWorkflowDeviceType(device) || String(device?.type || ""), "Device")
-}
 
 function isWorkflowEnergyMonitorDevice(device: DeviceLite | null | undefined) {
   return getWorkflowDeviceType(device) === "energy_monitor"

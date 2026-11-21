@@ -425,6 +425,8 @@ app.get('/api/devices/stream', requireUser(), (req, res) => {
   }, 30000);
 
   const sendUpdate = (devices) => {
+    if (res.destroyed || res.writableEnded) return;
+    if (res.writableLength > 1024 * 1024) { res.destroy(); return; }
     try {
       const normalized = deviceUpdateEmitter.normalizeDevices(devices);
       if (normalized.length === 0) {
@@ -460,8 +462,9 @@ app.get('/api/devices/stream', requireUser(), (req, res) => {
     }
   };
 
+  const stopWatching = require('./utils/watchAuthorization').watchAuthorization(req, cleanup);
+  res.once('close', stopWatching);
   req.on('close', cleanup);
-  req.on('end', cleanup);
   res.on('close', cleanup);
   res.on('error', cleanup);
 });
@@ -791,8 +794,9 @@ void dbReady
 })();
 
 // Initialize telemetry listeners
-(() => {
+(async () => {
   try {
+    await dbReady;
     telemetryService.initialize();
     console.log('Telemetry listeners initialized successfully');
   } catch (error) {
@@ -814,6 +818,7 @@ void dbReady
 // Initialize Tempest weather integration
 (async () => {
   try {
+    await dbReady;
     await tempestService.initialize();
     console.log('Tempest Service initialized successfully');
   } catch (error) {
@@ -824,6 +829,7 @@ void dbReady
 // Initialize Govee indoor air integration
 (async () => {
   try {
+    await dbReady;
     await goveeAirQualityService.initialize();
     console.log('Govee Indoor Air Service initialized successfully');
   } catch (error) {
@@ -834,6 +840,7 @@ void dbReady
 // Initialize RainMachine irrigation integration
 (async () => {
   try {
+    await dbReady;
     await rainMachineService.initialize();
     console.log('RainMachine Service initialized successfully');
   } catch (error) {

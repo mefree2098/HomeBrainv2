@@ -10,7 +10,6 @@ const Settings = require('../models/Settings');
 const elevenLabsService = require('../services/elevenLabsService');
 const voiceAcknowledgmentService = require('../services/voiceAcknowledgmentService');
 const { requireUser, requireAdmin } = require('./middlewares/auth');
-const voiceWs = require('../websocket/voiceWebSocket');
 const VoiceDevice = require('../models/VoiceDevice');
 const VoiceCommand = require('../models/VoiceCommand');
 const eventStreamService = require('../services/eventStreamService');

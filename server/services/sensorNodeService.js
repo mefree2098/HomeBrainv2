@@ -190,7 +190,7 @@ function readPath(source, ...keys) {
 }
 
 function addBoundedNumber(target, key, value, minimum, maximum, digits = 3) {
-  if (value === undefined || value === null || value === '') {
+  if (typeof value !== 'number' && !(typeof value === 'string' && value.trim())) {
     return;
   }
   const numeric = Number(value);
@@ -750,6 +750,7 @@ class SensorNodeService {
     }
 
     node.status = 'online';
+    node.markModified?.('status');
     node.lastSeen = now;
     node.lastReadingAt = now;
     node.lastError = '';
@@ -778,6 +779,8 @@ class SensorNodeService {
       device.status = reading.readings.presence_present !== undefined
         ? reading.readings.presence_present
         : node.profile === 'presence' ? undefined : true;
+      device.markModified?.('isOnline');
+      device.markModified?.('status');
       device.properties = buildDeviceProperties(node, device.properties, reading);
       await device.save();
       this.emitDevice(device);
@@ -809,19 +812,35 @@ class SensorNodeService {
   }
 
   async markStaleNodesOffline(now = Date.now()) {
-    const query = this.SensorNode.find({ status: 'online' });
-    const nodes = await resolveQuery(query);
-    const staleNodes = (Array.isArray(nodes) ? nodes : []).filter((node) => !nodeIsFresh(node, now));
-
-    for (const snapshot of staleNodes) {
-      const node = await this.SensorNode.findById(toId(snapshot));
-      if (!node || node.status !== 'online' || nodeIsFresh(node, now)) continue;
-      node.status = 'offline';
-      await node.save();
-      await this.markLinkedDeviceOffline(node);
+    const nodes = await this.SensorNode.find({
+      status: { $in: ['online', 'offline'] },
+      $or: [{ lastSeen: { $lt: new Date(now - 90_000) } }, { lastSeen: null }]
+    }).select('status lastSeen deviceId profile settings.reportingIntervalSeconds updatedAt').lean();
+    // Repair an interrupted transition (e.g. a restart between the two Mongo writes).
+    const offlineIds = nodes.filter((node) => node.status === 'offline' && node.deviceId).map((node) => node.deviceId);
+    const inconsistentIds = new Set(offlineIds.length
+      ? (await this.Device.distinct('_id', { _id: { $in: offlineIds }, isOnline: true })).map(String) : []);
+    let marked = 0;
+    for (const node of nodes) {
+      if (nodeIsFresh(node, now)) continue;
+      if (node.status === 'online') {
+        const filter = { _id: node._id, status: 'online', lastSeen: node.lastSeen ?? null, updatedAt: node.updatedAt ?? null };
+        const result = await this.SensorNode.updateOne(filter, { $set: { status: 'offline', updatedAt: new Date(now) } });
+        if (!result.modifiedCount) continue;
+        marked += 1;
+      } else if (!inconsistentIds.has(String(node.deviceId))) {
+        continue;
+      }
+      if (node.deviceId) {
+        // A report may have arrived between the node and linked-device updates.
+        const device = await this.Device.findOneAndUpdate({
+          _id: node.deviceId, isOnline: true,
+          $or: [{ lastSeen: { $lt: new Date(now - nodeFreshnessWindowMs(node)) } }, { lastSeen: null }]
+        }, { $set: { isOnline: false, status: false, updatedAt: new Date(now) } }, { new: true });
+        if (device) this.emitDevice(device);
+      }
     }
-
-    return staleNodes.length;
+    return marked;
   }
 
   initialize() {

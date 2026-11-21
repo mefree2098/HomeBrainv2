@@ -108,9 +108,8 @@ function compactSmartThingsValues(value) {
   return compacted;
 }
 
-function compactDeviceProperties(properties = {}, options = {}) {
+function compactOwnedProperties(compacted, options) {
   const includeRaw = options.includeRaw === true;
-  const compacted = clonePlain(properties) || {};
 
   if (includeRaw) {
     return compacted;
@@ -136,7 +135,7 @@ function serializeDevice(device, options = {}) {
     return null;
   }
 
-  plain.properties = compactDeviceProperties(plain.properties || {}, options);
+  plain.properties = compactOwnedProperties(plain.properties || {}, options);
   return plain;
 }
 
@@ -151,7 +150,7 @@ function serializeDevices(devices, options = {}) {
 }
 
 module.exports = {
-  compactDeviceProperties,
+  compactDeviceProperties: (properties, options = {}) => compactOwnedProperties(clonePlain(properties) || {}, options),
   serializeDevice,
   serializeDevices
 };

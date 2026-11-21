@@ -2,7 +2,7 @@ import React from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { CheckCircle2, AlertTriangle, XCircle, Calendar, Shield, RefreshCw } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, XCircle, Shield, RefreshCw } from 'lucide-react';
 import { format } from 'date-fns';
 
 interface Certificate {
@@ -37,7 +37,6 @@ const CertificateStatus: React.FC<CertificateStatusProps> = ({
   sslEnabled,
   activeCertificate,
   certificates,
-  expiringSoon,
   warnings,
   onActivate,
   onDeactivate,

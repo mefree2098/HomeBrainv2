@@ -76,7 +76,7 @@ export function Scenes() {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
   const [selectedScene, setSelectedScene] = useState<any>(null)
-  const { register, handleSubmit, reset, setValue } = useForm()
+  const { register, handleSubmit, reset } = useForm()
   const {
     favoriteSceneIds,
     toggleSceneFavorite,

@@ -91,28 +91,6 @@ const normaliseArch = (arch) => {
   return toAsciiSlug(arch) || null;
 };
 
-const buildCandidateFileNames = (slug, platform, arch) => {
-  const candidates = new Set();
-  const normalisedSlug = slugify(slug);
-  if (!normalisedSlug) return [];
-  const normalisedPlatform = normalisePlatform(platform);
-  const normalisedArch = normaliseArch(arch);
-
-  for (const extension of SUPPORTED_EXTENSIONS) {
-    if (normalisedPlatform && normalisedArch) {
-      candidates.add(`${normalisedSlug}_${normalisedPlatform}_${normalisedArch}${extension}`);
-    }
-    if (normalisedPlatform) {
-      candidates.add(`${normalisedSlug}_${normalisedPlatform}${extension}`);
-    }
-    if (normalisedArch) {
-      candidates.add(`${normalisedSlug}_${normalisedArch}${extension}`);
-    }
-    candidates.add(`${normalisedSlug}${extension}`);
-  }
-
-  return Array.from(candidates);
-};
 
 const findFileForWakeWord = (slug, platform, arch) => {
   const normalisedSlug = slugify(slug);

@@ -439,3 +439,10 @@ test('refreshRuntime coalesces concurrent refreshes and honors caller cooldowns'
   assert.equal(skipped.skipped, true);
   assert.equal(skipped.reason, 'refresh-cooldown');
 });
+
+
+test('an unconfigured station returns empty observation and event histories', async (t) => {
+  t.mock.method(tempestService, 'getSelectedStationSnapshot', async () => null);
+  assert.deepEqual(await tempestService.getObservations(), []);
+  assert.deepEqual(await tempestService.getEvents(), []);
+});

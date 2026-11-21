@@ -273,3 +273,36 @@ test('sensor readings update the linked device and reach normal device events wi
   }), { status: 409 });
   assert.equal(saves, 2);
 });
+
+
+test('watchdog skips refreshed nodes and retries an interrupted linked-device transition', async () => {
+  const now = Date.now();
+  const lastSeen = new Date(now - 900000);
+  const nodes = ['new-report', 'stale', 'interrupted'].map((_id, index) => ({
+    _id, deviceId: _id, lastSeen, updatedAt: lastSeen, status: index === 2 ? 'offline' : 'online',
+    settings: { reportingIntervalSeconds: 15 }
+  }));
+  const updates = [];
+  const service = new sensorNodeService.SensorNodeService({
+    SensorNodeModel: {
+      find: () => ({ select: () => ({ lean: async () => nodes }) }),
+      updateOne: async (filter) => {
+        assert.equal(filter.status, 'online');
+        assert.equal(filter.lastSeen, lastSeen);
+        assert.equal(filter.updatedAt, lastSeen);
+        return { modifiedCount: Number(filter._id !== 'new-report') };
+      }
+    },
+    DeviceModel: {
+      distinct: async () => ['interrupted'],
+      findOneAndUpdate: async (filter) => {
+        assert.equal(filter.isOnline, true);
+        assert.equal(filter.$or[0].lastSeen.$lt.getTime(), now - 90000);
+        updates.push(filter._id);
+        return null;
+      }
+    }
+  });
+  assert.equal(await service.markStaleNodesOffline(now), 1);
+  assert.deepEqual(updates, ['stale', 'interrupted']);
+});

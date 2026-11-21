@@ -306,26 +306,6 @@ function parseHostInput(value, fallbackProtocol = 'https', fallbackPort = 8080) 
   };
 }
 
-const mostRecentDate = (...values) => {
-  let latest = null;
-
-  values.forEach((value) => {
-    if (!value) {
-      return;
-    }
-
-    const candidate = value instanceof Date ? value : new Date(value);
-    if (Number.isNaN(candidate.getTime())) {
-      return;
-    }
-
-    if (!latest || candidate > latest) {
-      latest = candidate;
-    }
-  });
-
-  return latest;
-};
 
 const toIsoDate = (value) => {
   if (!value) {

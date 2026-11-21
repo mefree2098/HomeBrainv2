@@ -10,7 +10,6 @@ import {
   Shield,
   Info,
   RefreshCw,
-  Settings,
   Network
 } from "lucide-react";
 import {

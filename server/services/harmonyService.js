@@ -414,14 +414,6 @@ function mergeHubSources(...sources) {
   return ordered.filter((part) => parts.has(part)).join('+');
 }
 
-function normalizeHarmonyEntityType(value) {
-  const normalized = (value || '').toString().trim().toLowerCase();
-  if (normalized === HARMONY_ENTITY_TYPES.ACTIVITY || normalized === HARMONY_ENTITY_TYPES.DEVICE) {
-    return normalized;
-  }
-
-  return '';
-}
 
 function compactHarmonyCommandKey(value) {
   return normalizeCommandName(value).replace(/[^a-z0-9]/g, '');

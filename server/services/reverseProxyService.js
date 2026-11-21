@@ -1,7 +1,6 @@
 const crypto = require('crypto');
 const dns = require('dns').promises;
 const fs = require('fs');
-const http = require('http');
 const https = require('https');
 const net = require('net');
 const path = require('path');

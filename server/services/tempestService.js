@@ -21,7 +21,6 @@ const {
   normalizeDiscoveryResponse,
   normalizeEventPayload,
   normalizeObservationPayload,
-  roundNumber,
   summarizeLightningMetrics,
   toNumber
 } = require('./tempestData');
@@ -181,8 +180,8 @@ class TempestService {
     }
 
     this.initializing = (async () => {
-      await this.refreshRuntime({ reason: 'initialize' });
       this.startDiscoveryTimer();
+      await this.refreshRuntime({ reason: 'initialize' });
       this.initialized = true;
       this.initializing = null;
     })().catch((error) => {
@@ -798,7 +797,7 @@ class TempestService {
 
   startWebSocket(token, deviceIds) {
     const selectionKey = `${token}:${deviceIds.sort((a, b) => a - b).join(',')}`;
-    if (this.websocket && this.websocket.readyState === WebSocket.OPEN && this.websocketSelectionKey === selectionKey) {
+    if (this.websocket && [WebSocket.CONNECTING, WebSocket.OPEN].includes(this.websocket.readyState) && this.websocketSelectionKey === selectionKey) {
       return;
     }
 
@@ -806,9 +805,14 @@ class TempestService {
     this.websocketSelectionKey = selectionKey;
 
     const wsUrl = `${this.websocketUrlBase}?token=${encodeURIComponent(token)}`;
-    const socket = new WebSocket(wsUrl);
+    const socket = new WebSocket(wsUrl, { handshakeTimeout: 15_000 });
     this.websocket = socket;
 
+    // A half-open connection can stay OPEN for days without delivering observations.
+    const idleTimer = setTimeout(() => socket.terminate(), 5 * 60_000);
+    idleTimer.unref();
+    this.websocketIdleTimer = idleTimer;
+    let nextStatusWriteAt = 0;
     socket.on('open', () => {
       this.websocketReconnectAttempt = 0;
       void this.updateRealtimeState({
@@ -834,11 +838,11 @@ class TempestService {
 
     socket.on('message', (raw) => {
       const receivedAt = new Date();
-      void this.updateRealtimeState({
-        websocketConnected: true,
-        websocketLastMessageAt: receivedAt,
-        lastError: ''
-      }).catch(() => {});
+      idleTimer.refresh();
+      if (receivedAt.getTime() >= nextStatusWriteAt) {
+        nextStatusWriteAt = receivedAt.getTime() + 30_000;
+        void this.updateRealtimeState({ websocketConnected: true, websocketLastMessageAt: receivedAt, lastError: '' }).catch(() => {});
+      }
 
       let payload = null;
       try {
@@ -854,6 +858,7 @@ class TempestService {
     });
 
     socket.on('close', () => {
+      clearTimeout(idleTimer);
       void this.updateRealtimeState({
         websocketConnected: false
       }).catch(() => {});
@@ -885,11 +890,15 @@ class TempestService {
 
     this.websocketReconnectTimer = setTimeout(async () => {
       this.websocketReconnectTimer = null;
-      const integration = await TempestIntegration.getIntegration();
-      await this.updateRealtimeState({
-        websocketReconnectCount: this.websocketReconnectAttempt
-      }).catch(() => {});
-      await this.ensureRealtimeConnections(integration);
+      const selection = this.websocketSelectionKey;
+      try {
+        const integration = await TempestIntegration.getIntegration();
+        await this.updateRealtimeState({ websocketReconnectCount: this.websocketReconnectAttempt }).catch(() => {});
+        if (this.websocketSelectionKey === selection) await this.ensureRealtimeConnections(integration);
+      } catch (error) {
+        console.warn('TempestService: reconnect failed:', error.message);
+        if (this.websocketSelectionKey === selection) this.scheduleWebSocketReconnect();
+      }
     }, delay + jitter);
 
     if (typeof this.websocketReconnectTimer.unref === 'function') {
@@ -903,12 +912,16 @@ class TempestService {
       this.websocketReconnectTimer = null;
     }
 
+    clearTimeout(this.websocketIdleTimer);
+    this.websocketIdleTimer = null;
     const socket = this.websocket;
     this.websocket = null;
 
     if (socket) {
       try {
         socket.removeAllListeners();
+        // ws emits an asynchronous error when closed during the handshake.
+        socket.on('error', () => {});
         socket.close();
       } catch (error) {
         // Ignore close errors during shutdown.
@@ -948,12 +961,13 @@ class TempestService {
       }).catch(() => {});
     });
 
+    let nextStatusWriteAt = 0;
     socket.on('message', (buffer, rinfo) => {
       const receivedAt = new Date();
-      void this.updateRealtimeState({
-        udpListening: true,
-        udpLastMessageAt: receivedAt
-      }).catch(() => {});
+      if (receivedAt.getTime() >= nextStatusWriteAt) {
+        nextStatusWriteAt = receivedAt.getTime() + 30_000;
+        void this.updateRealtimeState({ udpListening: true, udpLastMessageAt: receivedAt }).catch(() => {});
+      }
 
       let payload = null;
       try {
@@ -1413,9 +1427,8 @@ class TempestService {
       query.stationId = resolvedStationId;
     } else {
       const station = await this.getSelectedStationSnapshot();
-      if (station?.stationId !== null) {
-        query.stationId = station.stationId;
-      }
+      if (station?.stationId == null) return [];
+      query.stationId = station.stationId;
     }
 
     const hoursBack = clampInteger(hours, 24, 1, 24 * 14);
@@ -1472,9 +1485,8 @@ class TempestService {
       query.stationId = resolvedStationId;
     } else {
       const station = await this.getSelectedStationSnapshot();
-      if (station?.stationId !== null) {
-        query.stationId = station.stationId;
-      }
+      if (station?.stationId == null) return [];
+      query.stationId = station.stationId;
     }
 
     const maxRecords = clampInteger(limit, 40, 1, 250);

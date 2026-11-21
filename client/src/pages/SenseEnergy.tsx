@@ -13,7 +13,7 @@ import {
   Zap
 } from "lucide-react"
 import { Area, CartesianGrid, ComposedChart, Line, XAxis, YAxis } from "recharts"
-import { getSenseDashboard, type SenseDashboardDevice, type SenseDashboardPayload } from "@/api/sense"
+import { getSenseDashboard, type SenseDashboardPayload } from "@/api/sense"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"

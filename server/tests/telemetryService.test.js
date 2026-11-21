@@ -6,14 +6,12 @@ const TelemetrySourceSummary = require('../models/TelemetrySourceSummary');
 const { TelemetryService } = telemetryService;
 
 const {
-  buildSourceTimelineEvents,
+  collectChartSeries,
   buildSourceSummaryFromSnapshot,
   buildMetricDescriptors,
-  downsamplePoints,
   extractDeviceMetrics,
   extractTempestMetrics,
   inferRequestedHoursFromPrompt,
-  mergePointsByTimestamp,
   normalizeDiskCapacity,
   pickFeaturedMetricKeys,
   resolveTelemetrySourceKey,
@@ -390,70 +388,21 @@ test('buildMetricDescriptors prioritizes featured metrics for default chart sele
   );
 });
 
-test('mergePointsByTimestamp and downsamplePoints collapse duplicate timestamps and preserve endpoints', () => {
-  const merged = mergePointsByTimestamp([
-    {
-      observedAt: '2026-04-01T00:00:00.000Z',
-      values: { temperature_f: 70 }
-    },
-    {
-      observedAt: '2026-04-01T00:00:00.000Z',
-      values: { humidity_pct: 40 }
-    },
-    {
-      observedAt: '2026-04-01T01:00:00.000Z',
-      values: { temperature_f: 71 }
-    },
-    {
-      observedAt: '2026-04-01T02:00:00.000Z',
-      values: { temperature_f: 72 }
-    },
-    {
-      observedAt: '2026-04-01T03:00:00.000Z',
-      values: { temperature_f: 73 }
-    }
-  ]);
-
-  assert.equal(merged.length, 4);
-  assert.deepEqual(merged[0].values, {
-    temperature_f: 70,
-    humidity_pct: 40
-  });
-
-  const downsampled = downsamplePoints(merged, 3);
-  assert.equal(downsampled.length, 3);
-  assert.equal(downsampled[0].observedAt, '2026-04-01T00:00:00.000Z');
-  assert.equal(downsampled[downsampled.length - 1].observedAt, '2026-04-01T03:00:00.000Z');
-});
-
-test('buildSourceTimelineEvents highlights binary state transitions for device history', () => {
-  const events = buildSourceTimelineEvents([
-    {
-      recordedAt: '2026-04-01T00:00:00.000Z',
-      metrics: {
-        status: 0,
-        online: 1
-      }
-    },
-    {
-      recordedAt: '2026-04-01T01:00:00.000Z',
-      metrics: {
-        status: 1,
-        online: 1
-      }
-    },
-    {
-      recordedAt: '2026-04-01T02:00:00.000Z',
-      metrics: {
-        status: 1,
-        online: 0
-      }
-    }
-  ], buildMetricDescriptors(['status', 'online']));
-
-  assert.equal(events.length, 2);
-  assert.equal(events[0].summary, 'Went Offline');
-  assert.equal(events[1].summary, 'Turned On');
+test('streamed charts bound output, merge simultaneous metrics, preserve endpoints and retain recent transitions', async () => {
+  const keys = ['status', 'humidity_pct'];
+  const date = (n) => new Date(1700000000000 + n * 1000);
+  async function* samples() {
+    yield { recordedAt: date(0), metrics: { humidity_pct: 40 } };
+    for (let i = 0; i < 10001; i++) yield { recordedAt: date(i), metrics: { status: i % 2 } };
+  }
+  const chart = await collectChartSeries(samples(), keys, buildMetricDescriptors(keys), 30);
+  assert.equal(chart.rawPointCount, 10001);
+  assert.equal(chart.points.length, 30);
+  assert.deepEqual(chart.points[0], { observedAt: date(0).toISOString(), values: { status: 0, humidity_pct: 40 } });
+  assert.equal(chart.points.at(-1).observedAt, date(10000).toISOString());
+  assert.equal(chart.events.length, 120);
+  assert.equal(chart.events[0].summary, 'Turned Off');
+  assert.equal(chart.events.at(-1).observedAt, date(9881).toISOString());
 });
 
 test('summarizeStorageCollections totals footprint across telemetry collections', () => {

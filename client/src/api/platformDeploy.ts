@@ -103,6 +103,7 @@ export interface DeployHealthResponse {
   runtime: DeployRuntimeStatus;
   pendingRestart: DeployPendingRestart | null;
   checks: {
+    [key: string]: DeployHealthCheck | undefined;
     api: DeployHealthCheck;
     websocket: DeployHealthCheck & { connectedDevices?: number };
     database: DeployHealthCheck & { state?: string };

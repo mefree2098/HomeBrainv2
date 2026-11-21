@@ -159,7 +159,7 @@ class DeviceWebSocket {
     if (!this.wss) {
       return;
     }
-    const message = JSON.stringify(payload);
+    let message;
 
     this.wss.clients.forEach((client) => {
       if (
@@ -167,6 +167,7 @@ class DeviceWebSocket {
         && client.authenticated === true
         && client.user?.isReviewSandbox !== true
       ) {
+        message ??= JSON.stringify(payload);
         this.send(client, message);
       }
     });

@@ -1,6 +1,7 @@
 const { deriveUsAqiFromPm25, describeAirQuality } = require('../utils/indoorAirQuality');
 const axios = require('axios');
 const dgram = require('dgram');
+const dns = require('node:dns');
 const os = require('os');
 const { randomUUID } = require('crypto');
 const mongoose = require('mongoose');
@@ -902,8 +903,10 @@ class GoveeAirQualityService {
       const lanTimeoutMs = normalizeLanTimeoutMs(timeoutMs);
       const scanTargets = buildLanDiscoveryTargets({ targets, localDeviceIp });
       let settled = false;
+      let timeout;
 
       const cleanup = () => {
+        clearTimeout(timeout);
         try {
           socket.close();
         } catch (_error) {
@@ -974,7 +977,7 @@ class GoveeAirQualityService {
         });
       });
 
-      setTimeout(finish, lanTimeoutMs);
+      timeout = setTimeout(finish, lanTimeoutMs);
     });
   }
 
@@ -989,8 +992,10 @@ class GoveeAirQualityService {
       const socket = dgram.createSocket({ type: 'udp4', reuseAddr: true });
       const lanTimeoutMs = normalizeLanTimeoutMs(timeoutMs);
       let settled = false;
+      let timeout;
 
       const cleanup = () => {
+        clearTimeout(timeout);
         try {
           socket.close();
         } catch (_error) {
@@ -1016,8 +1021,11 @@ class GoveeAirQualityService {
         reject(error);
       };
 
-      socket.on('message', (message) => {
+      let targetAddress;
+      socket.on('message', (message, remote) => {
+        if (remote.address !== targetAddress) return;
         const payload = parseLanMessagePayload(message);
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return;
         const command = trimString(payload?.msg?.cmd || payload?.cmd, '');
         if (command && command !== 'devStatus') {
           return;
@@ -1035,14 +1043,17 @@ class GoveeAirQualityService {
           }
         }));
 
-        socket.send(payload, port, host, (error) => {
-          if (error) {
-            fail(error);
-          }
+        dns.lookup(host, { family: 4 }, (error, address) => {
+          if (settled) return;
+          if (error) return fail(error);
+          targetAddress = address;
+          socket.send(payload, port, address, (sendError) => {
+            if (sendError) fail(sendError);
+          });
         });
       });
 
-      setTimeout(() => {
+      timeout = setTimeout(() => {
         fail(new Error(`No Govee LAN response from ${host}:${port}. Make sure the device supports LAN Control and is on the same network.`));
       }, lanTimeoutMs);
     });
@@ -1379,7 +1390,18 @@ class GoveeAirQualityService {
       return { success: false, skipped: true, reason: 'missing-api-key', connectionMode };
     }
 
-    const cloudResult = await this.syncFromCloud(integration, apiKey);
+    let cloudResult;
+    try {
+      cloudResult = await this.syncFromCloud(integration, apiKey);
+    } catch (error) {
+      const lastError = error.message || 'Govee cloud sync failed.';
+      if (integration.isConnected || integration.lastError !== lastError) {
+        integration.isConnected = false;
+        integration.lastError = lastError;
+        await integration.save();
+      }
+      throw error;
+    }
     const persisted = await this.persistSyncSample(integration, {
       ...cloudResult,
       sampleSource: 'cloud_api',

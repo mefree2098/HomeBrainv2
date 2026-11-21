@@ -99,7 +99,7 @@ function buildInstallScript() {
   return `#!/usr/bin/env bash
 set -euo pipefail
 
-BUNDLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BUNDLE_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
 CODEX_HOME_DIR="\${CODEX_HOME:-$HOME/.codex}"
 TARGET_DIR="$CODEX_HOME_DIR/skills/homebrain-live"
 
