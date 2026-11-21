@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const fs = require('fs/promises');
 const path = require('path');
+const { SqliteStore } = require('./sqliteStore');
 
 const DEFAULT_AUTH_CODE_TTL_MS = Math.max(60 * 1000, Number(process.env.HOMEBRAIN_ALEXA_AUTH_CODE_TTL_MS || 5 * 60 * 1000));
 const DEFAULT_AUTH_CODE_REPLAY_TTL_MS = Math.max(
@@ -494,8 +495,10 @@ class BrokerStore {
     this.filePath = options.filePath
       || trimString(process.env.HOMEBRAIN_BROKER_STORE_FILE)
       || path.join(__dirname, '..', 'data', 'store.json');
+    this.sqlite = path.extname(this.filePath) === '.sqlite'
+      ? new SqliteStore(this.filePath) : null;
     this.state = options.state ? normalizeStoreState(clone(options.state)) : null;
-    this.initialized = Boolean(options.state);
+    this.initialized = Boolean(options.state) && !this.sqlite;
     this.initializing = null;
     this.pending = Promise.resolve();
     this.lastPersistence = {
@@ -537,6 +540,26 @@ class BrokerStore {
       return;
     }
 
+    if (this.sqlite) {
+      this.state = normalizeStoreState(await this.sqlite.open(async () => {
+        const legacy = this.filePath.slice(0, -'.sqlite'.length) + '.json';
+        try {
+          return await this.readStateFile(legacy);
+        } catch (primaryError) {
+          try {
+            return await this.readStateFile(legacy + STORE_BACKUP_SUFFIX);
+          } catch (backupError) {
+            if (primaryError.code !== 'ENOENT') throw primaryError;
+            if (backupError.code !== 'ENOENT') throw backupError;
+            return this.state || defaultState();
+          }
+        }
+      }));
+      pruneExpiredEntries(this.state);
+      this.initialized = true;
+      return;
+    }
+
     try {
       this.state = await this.readStateFile(this.filePath);
     } catch (error) {
@@ -569,6 +592,23 @@ class BrokerStore {
   }
 
   async persist(options = {}) {
+    if (this.sqlite) {
+      await this.init();
+      const next = options.state || this.state;
+      if (shouldRefuseEmptyOverwrite(this.state, next)) {
+        throw new Error('Refusing to overwrite non-empty Alexa broker store with an empty hub state');
+      }
+      try {
+        this.sqlite.save(next);
+        this.lastPersistence.lastSuccessAt = new Date().toISOString();
+        this.lastPersistence.lastError = '';
+      } catch (error) {
+        this.lastPersistence.lastErrorAt = new Date().toISOString();
+        this.lastPersistence.lastError = error.message;
+        throw error;
+      }
+      return;
+    }
     const stateToPersist = normalizeStoreState(clone(options.state || this.state));
     await fs.mkdir(path.dirname(this.filePath), { recursive: true, mode: 0o700 });
 
@@ -648,9 +688,10 @@ class BrokerStore {
     return clone(await task(snapshot));
   }
 
-  async write(task) {
+  async write(task, shouldRun) {
     return this.runExclusive(async () => {
       await this.init();
+      if (shouldRun && !shouldRun(this.state)) return [];
       const workingState = normalizeStoreState(clone(this.state));
       pruneExpiredEntries(workingState);
       const result = await task(workingState);
@@ -666,7 +707,7 @@ class BrokerStore {
     const inspect = async (filePath) => {
       try {
         const [state, stat] = await Promise.all([
-          this.readStateFile(filePath),
+          this.sqlite ? this.sqlite.readSnapshot(filePath) : this.readStateFile(filePath),
           fs.stat(filePath)
         ]);
         return {
@@ -1314,18 +1355,21 @@ class BrokerStore {
   }
 
   async reserveQueuedEvents(options = {}) {
+    const leaseExpired = (entry, now) => {
+      const expiry = safeDateMs(entry.leaseExpiresAt)
+        || (safeDateMs(entry.processingStartedAt || entry.lastAttemptAt) + DEFAULT_EVENT_PROCESSING_LEASE_MS);
+      return entry.status === 'processing' && expiry <= now;
+    };
+    const eligible = (entry, now) => entry.status === 'queued'
+      && (!options.hubId || entry.hubId === options.hubId)
+      && !(entry.nextAttemptAt && new Date(entry.nextAttemptAt).getTime() > now);
     return this.write((state) => {
       const limit = Math.max(1, Number(options.limit || 25));
       const now = Date.now();
       const selected = [];
 
       for (const entry of Array.isArray(state.eventQueue) ? state.eventQueue : []) {
-        if (entry.status !== 'processing') {
-          continue;
-        }
-        const leaseExpiresAt = safeDateMs(entry.leaseExpiresAt)
-          || (safeDateMs(entry.processingStartedAt || entry.lastAttemptAt) + DEFAULT_EVENT_PROCESSING_LEASE_MS);
-        if (!leaseExpiresAt || leaseExpiresAt <= now) {
+        if (leaseExpired(entry, now)) {
           entry.status = 'queued';
           entry.processingStartedAt = null;
           entry.leaseExpiresAt = null;
@@ -1339,15 +1383,7 @@ class BrokerStore {
         if (selected.length >= limit) {
           break;
         }
-        if (entry.status !== 'queued') {
-          continue;
-        }
-        if (options.hubId && entry.hubId !== options.hubId) {
-          continue;
-        }
-        if (entry.nextAttemptAt && new Date(entry.nextAttemptAt).getTime() > now) {
-          continue;
-        }
+        if (!eligible(entry, now)) continue;
 
         entry.status = 'processing';
         entry.attempts = Math.max(0, Number(entry.attempts || 0)) + 1;
@@ -1358,6 +1394,9 @@ class BrokerStore {
       }
 
       return selected;
+    }, (state) => {
+      const now = Date.now();
+      return state.eventQueue.some((entry) => eligible(entry, now) || leaseExpired(entry, now));
     });
   }
 
@@ -1370,6 +1409,15 @@ class BrokerStore {
       }
 
       const timestamp = new Date().toISOString();
+      if (updates.status === 'delivered' && entry.permissionGrantId) {
+        const grant = state.permissionGrants[entry.permissionGrantId];
+        if (grant) {
+          grant.lastUsedAt = timestamp;
+          grant.lastError = '';
+          grant.updatedAt = timestamp;
+          grant.metadata = { ...grant.metadata, lastErrorCode: '', lastErrorStatus: 0, lastDeliveryAt: timestamp };
+        }
+      }
       Object.assign(entry, {
         status: Object.prototype.hasOwnProperty.call(updates, 'status') ? trimString(updates.status) : entry.status,
         deliveredAt: Object.prototype.hasOwnProperty.call(updates, 'deliveredAt') ? updates.deliveredAt : entry.deliveredAt,
