@@ -2261,36 +2261,49 @@ class SecurityAlarmService {
     }
   }
 
+  async refreshAlarmIfStale(alarm) {
+    const lastSync = new Date(alarm.lastSyncWithSmartThings || 0).getTime();
+    if (alarm.alarmState === 'arming'
+      || (alarm.isOnline && Date.now() - lastSync <= STATUS_STALE_THRESHOLD_MS)
+      || !await this.isSmartThingsConfiguredForSthm()) return alarm;
+    try {
+      return await this.syncWithSmartThings();
+    } catch (error) {
+      console.warn('SecurityAlarmService: SmartThings sync during status lookup failed:', error.message);
+      return SecurityAlarm.getMainAlarm();
+    }
+  }
+
+  refreshPanelSecurityInBackground(alarm) {
+    if (this.panelSecurityRefresh || Date.now() < (this.nextPanelSecurityRefresh || 0)) return;
+    this.panelSecurityRefresh = Promise.allSettled([
+      this.refreshAlarmIfStale(alarm),
+      deviceService.ensureSmartThingsState({ immediate: false })
+    ]).then(results => {
+      for (const result of results) {
+        if (result.status === 'rejected') console.warn('Wall panel security refresh failed:', result.reason?.message);
+      }
+    }).finally(() => {
+      this.panelSecurityRefresh = null;
+      this.nextPanelSecurityRefresh = Date.now() + 5000;
+    });
+  }
+
   /**
    * Get alarm status
    * @returns {Promise<Object>} Alarm status information
    */
   async getAlarmStatus(options = {}) {
     try {
-      console.log('SecurityAlarmService: Getting alarm status');
 
       let alarm = await SecurityAlarm.getMainAlarm();
       alarm = await this.finalizeExpiredPendingArm(alarm);
       const now = Date.now();
-      const lastSyncTimestamp = alarm.lastSyncWithSmartThings ? new Date(alarm.lastSyncWithSmartThings).getTime() : 0;
-      const timeSinceLastSync = lastSyncTimestamp ? now - lastSyncTimestamp : Number.POSITIVE_INFINITY;
       const enabledPlatforms = this.getEnabledPlatforms(alarm);
-
-      const isSmartThingsConfigured = enabledPlatforms.smartthings
-        ? await this.isSmartThingsConfiguredForSthm()
-        : false;
-      const shouldAttemptSync = enabledPlatforms.smartthings
-        && alarm.alarmState !== 'arming'
-        && isSmartThingsConfigured
-        && (timeSinceLastSync > STATUS_STALE_THRESHOLD_MS || !alarm.isOnline);
-
-      if (shouldAttemptSync) {
-        try {
-          alarm = await this.syncWithSmartThings();
-        } catch (syncError) {
-          console.warn('SecurityAlarmService: SmartThings sync during status lookup failed:', syncError.message);
-          alarm = await SecurityAlarm.getMainAlarm();
-        }
+      if (options.backgroundRefresh && enabledPlatforms.smartthings) {
+        this.refreshPanelSecurityInBackground(alarm);
+      } else if (enabledPlatforms.smartthings) {
+        alarm = await this.refreshAlarmIfStale(alarm);
       }
 
       const updatedLastSyncTimestamp = alarm.lastSyncWithSmartThings ? new Date(alarm.lastSyncWithSmartThings).getTime() : 0;
@@ -2304,7 +2317,7 @@ class SecurityAlarmService {
         await alarm.save();
       }
 
-      if (enabledPlatforms.smartthings) {
+      if (enabledPlatforms.smartthings && !options.backgroundRefresh) {
         try {
           await deviceService.ensureSmartThingsState({ immediate: false });
         } catch (deviceRefreshError) {
@@ -2387,7 +2400,6 @@ class SecurityAlarmService {
         signalStrength: alarm.signalStrength
       };
 
-      console.log('SecurityAlarmService: Successfully retrieved alarm status');
       notificationService.recordSensorBatteryNotifications(securitySensors).catch((error) => {
         console.warn('SecurityAlarmService: Failed to record sensor battery notifications:', error.message);
       });

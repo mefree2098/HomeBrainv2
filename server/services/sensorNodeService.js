@@ -389,8 +389,7 @@ function serializeNode(input, now = Date.now()) {
   };
 }
 
-function buildRuntimeConfig(node) {
-  const serialized = serializeNode(node);
+function buildRuntimeConfig(node, serialized = serializeNode(node)) {
   const firmwareUpdate = require('./sensorFirmwareService').firmwareCommand(node);
   return {
     schema: CONFIG_SCHEMA,
@@ -735,6 +734,7 @@ class SensorNodeService {
   }
 
   async ingestReading(nodeId, token, payload = {}, context = {}) {
+    context.onStage?.('authenticate');
     const node = await this.authenticateToken(nodeId, token);
     const reading = normalizeReadingPayload(payload);
     const now = new Date();
@@ -766,12 +766,12 @@ class SensorNodeService {
       ...reading,
       received_at: now.toISOString()
     };
-    await node.save();
-
-    let device = null;
-    if (node.deviceId) {
-      device = await this.Device.findById(node.deviceId);
-    }
+    context.onStage?.('persistReading');
+    // Start the independent device lookup while committing the authenticated reading.
+    const [, device] = await Promise.all([
+      node.save(),
+      node.deviceId ? this.Device.findById(node.deviceId) : null
+    ]);
     if (device) {
       device.isOnline = true;
       device.lastSeen = now;
@@ -782,15 +782,18 @@ class SensorNodeService {
       device.markModified?.('isOnline');
       device.markModified?.('status');
       device.properties = buildDeviceProperties(node, device.properties, reading);
+      context.onStage?.('persistDevice');
       await device.save();
       this.emitDevice(device);
     }
 
+    context.onStage?.('acknowledge');
+    const serialized = serializeNode(node);
     return {
       accepted: true,
       receivedAt: now,
-      node: serializeNode(node),
-      config: buildRuntimeConfig(node)
+      node: serialized,
+      config: buildRuntimeConfig(node, serialized)
     };
   }
 

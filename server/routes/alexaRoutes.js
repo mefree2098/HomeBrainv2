@@ -385,10 +385,10 @@ router.get('/', admin, async (_req, res) => {
 
 router.get('/activity', admin, async (_req, res) => {
   try {
-    const summary = await alexaBridgeService.getSummary();
+    const registration = await alexaBridgeService.ensureRegistration();
     return res.status(200).json({
       success: true,
-      activity: summary.recentActivity || []
+      activity: (registration.recentActivity || []).slice(-20).reverse()
     });
   } catch (error) {
     console.error('GET /api/alexa/activity - Error:', error.message);

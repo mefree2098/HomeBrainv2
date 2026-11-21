@@ -3691,6 +3691,20 @@ class WallPanelService {
     return this.serializePanelForResponse(panel);
   }
 
+  refreshPanelWeather() {
+    if (this.panelWeatherRefresh || Date.now() < (this.nextPanelWeatherRefresh || 0)) return;
+    this.panelWeatherRefresh = weatherService.fetchDashboardWeather()
+      .then(weather => {
+        this.panelWeather = weather?.current ? { current: weather.current } : null;
+        this.panelWeatherAt = Date.now();
+      })
+      .catch(() => {})
+      .finally(() => {
+        this.panelWeatherRefresh = null;
+        this.nextPanelWeatherRefresh = Date.now() + 30_000;
+      });
+  }
+
   async getPanelState(
     panelId,
     credentials = {},
@@ -3713,17 +3727,17 @@ class WallPanelService {
     const deviceFilter = configuredIds.length
       ? { $or: [roomFilter, { _id: { $in: configuredIds } }] }
       : roomFilter;
-    const [devices, securityStatus, weatherSnapshot] = await Promise.all([
+    this.refreshPanelWeather();
+    const [devices, securityStatus] = await Promise.all([
       Device.find(deviceFilter, '-properties.smartThingsStatus -properties.smartThingsComponents', {
         sort: { name: 1 }
       }),
-      securityAlarmService.getAlarmStatus({ refreshDoorLocks: false }).catch((error) => ({
+      securityAlarmService.getAlarmStatus({ refreshDoorLocks: false, backgroundRefresh: true }).catch((error) => ({
         alarmState: 'unknown',
         isArmed: false,
         isTriggered: false,
         error: error.message
-      })),
-      weatherService.fetchDashboardWeather().catch(() => null)
+      }))
     ]);
     const roomIds = new Set(devices.filter(device => device.room === panel.room).map(device => toId(device._id)));
     const liveDevices = deviceUpdateEmitter.mergeLatestDevices(devices);
@@ -3737,7 +3751,8 @@ class WallPanelService {
       buildQuietMode(panel)
     ]);
 
-    const thermostat = buildThermostatMode(panel, thermostatDevice, sensorDevice, weatherSnapshot);
+    const weather = Date.now() - this.panelWeatherAt <= 5 * 60_000 ? this.panelWeather : null;
+    const thermostat = buildThermostatMode(panel, thermostatDevice, sensorDevice, weather);
     const home = buildHomeMode(panel, securityStatus);
     const modeMap = { thermostat, room, home, media, quiet };
     const modeOrder = panel.settings.modeOrder.filter((mode) => modeMap[mode]);

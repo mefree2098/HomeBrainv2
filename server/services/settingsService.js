@@ -55,9 +55,7 @@ class SettingsService {
    */
   async getSettings() {
     try {
-      console.log('SettingsService: Fetching application settings');
       const settings = await Settings.getSettings();
-      console.log('SettingsService: Successfully retrieved settings');
       return settings;
     } catch (error) {
       console.error('SettingsService: Error fetching settings:', error.message);
@@ -381,10 +379,8 @@ class SettingsService {
    */
   async getSetting(key) {
     try {
-      console.log(`SettingsService: Getting specific setting: ${key}`);
       const settings = await this.getSettings();
       const value = settings[key];
-      console.log('%s', `SettingsService: Retrieved setting ${key}:`, value ? '[SET]' : '[NOT_SET]');
       return value;
     } catch (error) {
       console.error('%s', `SettingsService: Error getting setting ${key}:`, error.message);

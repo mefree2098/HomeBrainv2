@@ -597,7 +597,6 @@ class DeviceService {
    */
   async getDeviceById(deviceId) {
     try {
-      console.log('DeviceService: Fetching device by ID:', deviceId);
 
       this.scheduleIntegrationRefresh({ reason: 'getDeviceById' });
 
@@ -607,7 +606,6 @@ class DeviceService {
         throw new Error('Device not found');
       }
       
-      console.log('DeviceService: Successfully found device:', device.name);
       return device;
     } catch (error) {
       console.error('DeviceService: Error fetching device by ID:', error.message);

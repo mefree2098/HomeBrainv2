@@ -21,6 +21,22 @@ test('HTTP accounting excludes streams and counts failed or interrupted requests
   assert.equal(service.counts.byService.devices.failures, 2);
 });
 
+test('sensor abort measurements distinguish incomplete bodies from database work without identifiers', async () => {
+  const service = new PlatformMeasurementService();
+  for (const received of [false, true]) {
+    const req = Object.assign(new EventEmitter(), { originalUrl: '/api/sensor-nodes/private/readings', method: 'POST' });
+    const res = Object.assign(new EventEmitter(), { getHeader: () => '', writableFinished: false, locals: {} });
+    service.observe(req, res, () => {});
+    if (received) {
+      req.emit('end');
+      res.locals.sensorReadingStage = 'persistDevice';
+    }
+    res.emit('close');
+  }
+  assert.deepEqual(service.counts.requestPhases, { sensorAbortReceiving: 1, sensorAbortAfterBody_persistDevice: 1 });
+  assert.equal(service.counts.aborted, 2);
+});
+
 test('five-minute intervals retain restart gaps, counts, overflow latency and missing I/O', async () => {
   const start = new Date('2026-01-01T00:00:00Z');
   const period = 300000;

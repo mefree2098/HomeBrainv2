@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { isDeepStrictEqual } = require('node:util');
 const axios = require('axios');
 const AlexaLinkedAccount = require('../models/AlexaLinkedAccount');
 const ReverseProxyRoute = require('../models/ReverseProxyRoute');
@@ -345,6 +346,23 @@ function normalizeAlexaSpeechTarget(target, parameters = {}) {
   };
 }
 
+function stateFromEndpoint(endpoint) {
+  return {
+    endpointId: endpoint.endpointId,
+    entityType: endpoint.cookie?.entityType,
+    entityId: endpoint.cookie?.entityId,
+    properties: endpoint.state?.properties || [],
+    connectivity: endpoint.state?.connectivity || 'OK'
+  };
+}
+
+function reportedValues(state) {
+  return {
+    connectivity: state.connectivity,
+    properties: state.properties.map(({ namespace, name, instance, value }) => ({ namespace, name, instance, value }))
+  };
+}
+
 class AlexaBridgeService {
   constructor(options = {}) {
     this.started = false;
@@ -354,8 +372,11 @@ class AlexaBridgeService {
       DEFAULT_DEVICE_UPDATE_SYNC_DEBOUNCE_MS
     );
     this.pendingDeviceUpdateIds = new Set();
+    this.reportedDeviceValues = new Map();
+    this.reportedPairing = null;
     this.deviceUpdateSyncTimer = null;
     this.deviceUpdateSyncPromise = null;
+    this.deviceUpdateRetryMs = 0;
     this.handleDeviceUpdate = this.handleDeviceUpdate.bind(this);
   }
 
@@ -1034,13 +1055,7 @@ class AlexaBridgeService {
 
     const catalog = ids.length > 0
       ? await Promise.all(ids.map((endpointId) => alexaProjectionService.getStateForEndpoint(endpointId)))
-      : (await alexaProjectionService.buildCatalog()).endpoints.map((endpoint) => ({
-        endpointId: endpoint.endpointId,
-        entityType: endpoint.cookie?.entityType,
-        entityId: endpoint.cookie?.entityId,
-        properties: endpoint.state?.properties || [],
-        connectivity: endpoint.state?.connectivity || 'OK'
-      }));
+      : (await alexaProjectionService.buildCatalog()).endpoints.map(stateFromEndpoint);
 
     return {
       success: true,
@@ -1429,8 +1444,6 @@ class AlexaBridgeService {
         registration.lastStateSyncStatus = 'success';
         registration.lastStateSyncError = '';
       }
-      await registration.save();
-
       await this.appendActivity(registration, {
         direction: 'outbound',
         type: meta.type || 'broker_notify',
@@ -1480,8 +1493,6 @@ class AlexaBridgeService {
         registration.lastStateSyncStatus = 'failed';
         registration.lastStateSyncError = error.message;
       }
-      await registration.save();
-
       await this.appendActivity(registration, {
         direction: 'outbound',
         type: meta.type || 'broker_notify',
@@ -1867,12 +1878,12 @@ class AlexaBridgeService {
   }
 
   async pushStateChangesToBroker(endpointIds = [], reason = 'state_changed', options = {}) {
-    const snapshot = await this.getStateSnapshot(endpointIds);
+    const states = options.states ?? (await this.getStateSnapshot(endpointIds)).states;
     return this.notifyBroker('/api/alexa/hubs/state', {
-      hubId: (await this.ensureRegistration()).hubId,
+      hubId: options.hubId ?? (await this.ensureRegistration()).hubId,
       reason,
       timestamp: new Date().toISOString(),
-      states: snapshot.states
+      states
     }, {
       kind: 'state',
       type: 'state_sync',
@@ -1894,7 +1905,7 @@ class AlexaBridgeService {
     this.deviceUpdateSyncTimer = setTimeout(() => {
       this.deviceUpdateSyncTimer = null;
       void this.flushPendingDeviceUpdates();
-    }, this.deviceUpdateSyncDebounceMs);
+    }, Math.max(this.deviceUpdateSyncDebounceMs, this.deviceUpdateRetryMs));
 
     if (typeof this.deviceUpdateSyncTimer.unref === 'function') {
       this.deviceUpdateSyncTimer.unref();
@@ -1918,7 +1929,9 @@ class AlexaBridgeService {
     }
 
     this.deviceUpdateSyncPromise = this.syncDeviceUpdatesToBroker(deviceIds)
+      .then(() => { this.deviceUpdateRetryMs = 0; })
       .catch((error) => {
+        this.deviceUpdateRetryMs = Math.min(60_000, Math.max(1000, this.deviceUpdateRetryMs * 2));
         deviceIds.forEach((deviceId) => this.pendingDeviceUpdateIds.add(deviceId));
         console.warn(`AlexaBridgeService: Failed to process device update for broker sync: ${error.message}`);
       })
@@ -1936,37 +1949,39 @@ class AlexaBridgeService {
       return;
     }
 
-    const catalog = await alexaProjectionService.buildCatalog();
-    const endpointIdSet = new Set();
-    const changedDeviceIds = new Set((Array.isArray(deviceIds) ? deviceIds : [])
-      .map((deviceId) => String(deviceId || '').trim())
-      .filter(Boolean));
-
-    catalog.endpoints.forEach((endpoint) => {
-      const parsed = parseEndpointId(endpoint.endpointId);
-      if (!parsed) {
-        return;
-      }
-
-      if (parsed.entityType === 'device' && changedDeviceIds.has(parsed.entityId)) {
-        endpointIdSet.add(endpoint.endpointId);
-      }
-
-      if (parsed.entityType === 'device_group') {
-        const groupDeviceIds = Array.isArray(endpoint.cookie?.groupDeviceIds)
-          ? endpoint.cookie.groupDeviceIds
-          : [];
-        if (groupDeviceIds.some((deviceId) => changedDeviceIds.has(String(deviceId)))) {
-          endpointIdSet.add(endpoint.endpointId);
-        }
-      }
-    });
-
-    if (endpointIdSet.size === 0) {
-      return;
+    const pairing = JSON.stringify([registration.hubId, registration.brokerBaseUrl, registration.relayTokenHash]);
+    if (pairing !== this.reportedPairing) {
+      this.reportedDeviceValues.clear();
+      this.reportedPairing = pairing;
     }
-
-    await this.pushStateChangesToBroker(Array.from(endpointIdSet), 'device_update');
+    const catalog = await alexaProjectionService.buildCatalog({ deviceUpdatesOnly: true });
+    const changedIds = new Set(deviceIds.map(String));
+    const currentIds = new Set();
+    const states = [];
+    const delivered = new Map();
+    for (const endpoint of catalog.endpoints) {
+      currentIds.add(endpoint.endpointId);
+      const parsed = parseEndpointId(endpoint.endpointId);
+      const affected = parsed?.entityType === 'device' && changedIds.has(parsed.entityId)
+        || parsed?.entityType === 'device_group' && Array.isArray(endpoint.cookie?.groupDeviceIds)
+          && endpoint.cookie.groupDeviceIds.some(id => changedIds.has(String(id)));
+      if (!affected) continue;
+      const state = stateFromEndpoint(endpoint);
+      const values = reportedValues(state);
+      if (!isDeepStrictEqual(this.reportedDeviceValues.get(endpoint.endpointId), values)) {
+        states.push(state);
+        delivered.set(endpoint.endpointId, values);
+      }
+    }
+    for (const id of this.reportedDeviceValues.keys()) {
+      if (!currentIds.has(id)) this.reportedDeviceValues.delete(id);
+    }
+    if (states.length) {
+      const result = await this.pushStateChangesToBroker([...delivered.keys()], 'device_update', { states, hubId: catalog.hubId });
+      if (result?.success) {
+        for (const [id, values] of delivered) this.reportedDeviceValues.set(id, values);
+      }
+    }
   }
 
   handleDeviceUpdate(devices = []) {

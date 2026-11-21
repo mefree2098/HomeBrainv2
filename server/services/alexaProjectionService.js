@@ -1047,19 +1047,25 @@ class AlexaProjectionService {
     return registration;
   }
 
-  async loadContext() {
+  async loadContext({ deviceUpdatesOnly = false } = {}) {
     const registration = await this.ensureBrokerRegistration();
-    let [devices, groups, scenes, workflows, exposures] = await Promise.all([
-      Device.find().lean(),
-      deviceGroupService.listGroups(),
-      Scene.find().lean(),
-      Workflow.find().lean(),
-      AlexaExposure.find().lean()
+    const exposures = deviceUpdatesOnly
+      ? await AlexaExposure.find({ enabled: { $ne: false }, entityType: { $in: ['device', 'device_group'] } }).lean()
+      : await AlexaExposure.find().lean();
+    const needGroups = !deviceUpdatesOnly || exposures.some(exposure => exposure.entityType === 'device_group');
+    const deviceQuery = needGroups ? {} : {
+      _id: { $in: exposures.map(exposure => exposure.entityId).filter(id => /^[a-f0-9]{24}$/i.test(id)) }
+    };
+    let [devices, scenes, workflows] = await Promise.all([
+      Device.find(deviceQuery).lean(),
+      deviceUpdatesOnly ? [] : Scene.find().lean(),
+      deviceUpdatesOnly ? [] : Workflow.find().lean()
     ]);
-    const harmonyRefresh = await deviceService.refreshStaleHarmonyDevices(devices);
-    if (harmonyRefresh.refreshed) {
+    // Background change reports reflect ingested device state. Interactive discovery also refreshes Harmony.
+    if (!deviceUpdatesOnly && (await deviceService.refreshStaleHarmonyDevices(devices)).refreshed) {
       devices = await Device.find().lean();
     }
+    const groups = needGroups ? await deviceGroupService.listGroups({ devices, includeUsage: !deviceUpdatesOnly }) : [];
 
     const devicesById = new Map(devices.map((device) => [toObjectIdString(device._id), device]));
     const groupsById = new Map(groups.map((group) => [toObjectIdString(group._id), group]));
@@ -1224,7 +1230,7 @@ class AlexaProjectionService {
 
   async buildCatalog(options = {}) {
     const includeDisabled = options.includeDisabled === true;
-    const context = await this.loadContext();
+    const context = await this.loadContext({ deviceUpdatesOnly: options.deviceUpdatesOnly === true });
     const records = context.exposures.map((exposure) => this.buildRecordForExposure(exposure, context));
     const recordsWithCollisions = applyNamingCollisionWarnings(records);
     const filtered = recordsWithCollisions.filter((record) => includeDisabled || record.enabled);
