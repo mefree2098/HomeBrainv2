@@ -158,7 +158,27 @@ struct HBDeviceSymbol: View {
     }
 }
 
-/// A real button owns the entire color wheel hit area; the native picker owns color editing.
+extension Color {
+    init?(hex: String) {
+        guard let hex = DeviceItem.normalizedHexColor(hex),
+              let rgb = Int(hex.dropFirst(), radix: 16) else { return nil }
+        self.init(.sRGB,
+                  red: Double((rgb >> 16) & 255) / 255,
+                  green: Double((rgb >> 8) & 255) / 255,
+                  blue: Double(rgb & 255) / 255)
+    }
+
+    func toHexRGB() -> String? {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let rgb = UIColor(self).cgColor.converted(to: space, intent: .relativeColorimetric, options: nil),
+              let components = rgb.components, components.count == 4 else { return nil }
+        return "#" + components.prefix(3).map { component in
+            String(format: "%02X", Int((min(1, max(0, component)) * 255).rounded()))
+        }.joined()
+    }
+}
+
+/// The entire color wheel is tappable and opens the native color picker.
 struct HBDeviceColorPicker: View {
     let deviceName: String
     @Binding var selection: Color
@@ -214,15 +234,18 @@ private struct HBColorPickerController: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ picker: UIColorPickerViewController, context: Context) {
+        // UIKit owns the open picker while the user is editing. A device refresh
+        // can arrive before the last color command has been acknowledged.
         context.coordinator.selection = $selection
-        if picker.selectedColor != UIColor(selection) { picker.selectedColor = UIColor(selection) }
     }
 
     final class Coordinator: NSObject, UIColorPickerViewControllerDelegate {
         var selection: Binding<Color>
         init(selection: Binding<Color>) { self.selection = selection }
-        func colorPickerViewControllerDidSelectColor(_ viewController: UIColorPickerViewController) {
-            selection.wrappedValue = Color(uiColor: viewController.selectedColor)
+        func colorPickerViewController(_ viewController: UIColorPickerViewController, didSelect color: UIColor, continuously: Bool) {
+            // Let UIKit preview the drag and send the final choice to the device.
+            guard !continuously else { return }
+            selection.wrappedValue = Color(uiColor: color)
         }
     }
 }

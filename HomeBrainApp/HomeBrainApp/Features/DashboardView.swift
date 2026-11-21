@@ -7997,9 +7997,9 @@ struct DashboardView: View {
 
     private func dashboardColorBinding(for device: DeviceItem) -> Binding<Color> {
         Binding {
-            dashboardColor(from: currentDashboardLightColor(for: device))
+            Color(hex: currentDashboardLightColor(for: device)) ?? .white
         } set: { newColor in
-            if let hex = dashboardHexColor(from: newColor) {
+            if let hex = newColor.toHexRGB() {
                 let normalized = hex.lowercased()
                 let current = currentDashboardLightColor(for: device)
                 dashboardLightColorDrafts[device.id] = normalized
@@ -8289,42 +8289,6 @@ struct DashboardView: View {
         let attributeValues = JSON.object(device.properties["smartThingsAttributeValues"])
         return dashboardOptionalDouble(JSON.object(attributeValues["powerMeter"])["power"]) != nil
             || dashboardOptionalDouble(JSON.object(attributeValues["energyMeter"])["energy"]) != nil
-    }
-
-    private func dashboardColor(from hex: String) -> Color {
-        let trimmed = hex.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.hasPrefix("#"), trimmed.count == 7 else {
-            return .white
-        }
-
-        let hexValue = String(trimmed.dropFirst())
-        guard let intValue = Int(hexValue, radix: 16) else {
-            return .white
-        }
-
-        let red = Double((intValue >> 16) & 0xFF) / 255.0
-        let green = Double((intValue >> 8) & 0xFF) / 255.0
-        let blue = Double(intValue & 0xFF) / 255.0
-        return Color(red: red, green: green, blue: blue)
-    }
-
-    private func dashboardHexColor(from color: Color) -> String? {
-        let uiColor = UIColor(color)
-        var red: CGFloat = 0
-        var green: CGFloat = 0
-        var blue: CGFloat = 0
-        var alpha: CGFloat = 0
-
-        guard uiColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else {
-            return nil
-        }
-
-        return String(
-            format: "#%02X%02X%02X",
-            Int(red * 255.0),
-            Int(green * 255.0),
-            Int(blue * 255.0)
-        )
     }
 
     private func stringValue(_ value: Any?) -> String {

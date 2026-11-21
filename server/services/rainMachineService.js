@@ -1363,6 +1363,8 @@ class RainMachineService {
       };
     }
 
+    const pollStartedAt = new Date();
+    let receivedControllerState = false;
     try {
       const endpoint = await this.resolveEndpoint(persistedIntegration);
       const [
@@ -1401,6 +1403,7 @@ class RainMachineService {
         this.requestSafe(endpoint, { integration: persistedIntegration, path: 'watering/program' }, [])
       ]);
 
+      receivedControllerState = true;
       const rawProgramsList = findFirstArray(rawPrograms, ['programs', 'items']);
       const rawNextRunsList = findFirstArray(rawNextRuns, ['programs', 'items', 'nextRuns']);
       const nextRunMap = buildProgramNextRunMap(rawNextRunsList, rawProgramsList);
@@ -1506,10 +1509,42 @@ class RainMachineService {
         reports: reportSync
       };
     } catch (error) {
-      persistedIntegration.isConnected = false;
-      persistedIntegration.lastError = error.message || 'RainMachine sync failed';
-      await persistedIntegration.save();
+      const message = error.message || 'RainMachine sync failed';
+      if (persistedIntegration.isConnected !== receivedControllerState
+        || persistedIntegration.lastError !== message || persistedIntegration.isModified?.('isConnected')) {
+        persistedIntegration.isConnected = receivedControllerState;
+        persistedIntegration.lastError = message;
+        await persistedIntegration.save();
+      }
+      if (!receivedControllerState) {
+        await this.markControllerDevicesOffline(persistedIntegration, pollStartedAt);
+      }
       throw error;
+    }
+  }
+
+  async markControllerDevicesOffline(integration, pollStartedAt) {
+    const host = normalizeHost(integration.host);
+    const controllerId = trimString(integration.controllerId);
+    const byHost = { 'properties.rainmachine.host': host };
+    const identity = controllerId ? { $or: [
+      { 'properties.rainmachine.controllerId': controllerId },
+      { ...byHost, 'properties.rainmachine.controllerId': { $in: [null, ''] } }
+    ] } : byHost;
+    const scope = {
+      'properties.source': 'rainmachine',
+      $and: [
+        identity,
+        { $or: [{ lastSeen: null }, { lastSeen: { $lte: pollStartedAt } }] }
+      ]
+    };
+    const result = await Device.updateMany(
+      { ...scope, isOnline: { $ne: false } },
+      { $set: { isOnline: false, updatedAt: new Date() } }
+    );
+    if (result.modifiedCount) {
+      const offline = await Device.find({ ...scope, isOnline: false }).lean();
+      if (offline.length) deviceUpdateEmitter.emit('devices:update', deviceUpdateEmitter.normalizeDevices(offline));
     }
   }
 
