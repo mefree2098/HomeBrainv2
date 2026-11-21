@@ -87,13 +87,16 @@ router.use(notificationRateLimit, auth);
 
 router.get('/', async (req, res) => {
   try {
-    const notifications = await notificationService.listNotifications(getUserId(req), {
-      channel: req.query.channel,
-      includeCleared: req.query.includeCleared,
-      includeResolved: req.query.includeResolved,
-      limit: req.query.limit
-    });
-    const counts = await notificationService.getUnreadCounts(getUserId(req));
+    const userId = getUserId(req);
+    const [notifications, counts] = await Promise.all([
+      notificationService.listNotifications(userId, {
+        channel: req.query.channel,
+        includeCleared: req.query.includeCleared,
+        includeResolved: req.query.includeResolved,
+        limit: req.query.limit
+      }),
+      notificationService.getUnreadCounts(userId)
+    ]);
     res.status(200).json({
       success: true,
       notifications,

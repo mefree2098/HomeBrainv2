@@ -10,6 +10,7 @@ const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
 const OFFLINE_DEVICE_EVENT_TYPES = ['device.offline', 'security.device.offline'];
 const activeNotificationUpsertLocks = new Map();
+let offlineRefreshInFlight = null;
 
 function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -406,10 +407,27 @@ async function createSystemNotification(input = {}) {
       isReviewSandbox: { $ne: true }
     }).select('_id').lean()
     : await findHomeBrainUsers();
+  return deliverSystemNotification(input, users);
+}
 
+function sameOfflineIncident(existing, input) {
+  if (!existing || existing.title !== input.title || existing.message !== input.message
+    || existing.eventType !== input.eventType || existing.severity !== input.severity) return false;
+  const old = existing.metadata || {};
+  const next = input.metadata;
+  return old.type === next.type && old.room === next.room && old.isSecurityCritical === next.isSecurityCritical
+    && new Date(old.lastSeen || 0).getTime() === new Date(next.lastSeen || 0).getTime();
+}
+
+async function deliverSystemNotification(input, users, existingIncidents) {
   const notifications = [];
   let remoteForwardNotification = null;
   for (const user of users) {
+    const existing = existingIncidents?.get(String(user._id) + ':' + input.eventKey);
+    if (existing && sameOfflineIncident(existing, input)) {
+      notifications.push(toPublicNotification(existing));
+      continue;
+    }
     const { notification, created } = await upsertNotificationForUser(user._id, input);
     let publicNotification = toPublicNotification(notification);
 
@@ -479,9 +497,9 @@ async function resolveStaleOfflineDeviceNotifications(offlineDeviceIds) {
 
 async function recordOfflineDeviceNotifications() {
   const [alarm, offlineDevices] = await Promise.all([
-    SecurityAlarm.getMainAlarm().catch(() => null),
+    SecurityAlarm.getMainAlarm(),
     Device.find({ isOnline: false })
-      .select('name type room isOnline lastSeen properties')
+      .select('name type room lastSeen deviceId properties.smartThingsDeviceId properties.homebrainDeviceId properties.homebrainDirect.ieeeAddr properties.homebrainDirect.nodeId properties.matterNodeId')
       .lean()
   ]);
 
@@ -494,6 +512,16 @@ async function recordOfflineDeviceNotifications() {
 
   await resolveStaleOfflineDeviceNotifications(offlineDeviceIds);
 
+  if (!offlineDeviceIds.size) return [];
+  const users = await findHomeBrainUsers();
+  if (!users.length) return [];
+  const active = await HomeBrainNotification.find({
+    userId: { $in: users.map(user => user._id) },
+    eventType: { $in: OFFLINE_DEVICE_EVENT_TYPES },
+    deviceId: { $in: [...offlineDeviceIds] },
+    clearedAt: null, resolvedAt: null
+  }).lean();
+  const existingIncidents = new Map(active.map(row => [String(row.userId) + ':' + row.eventKey, row]));
   const securityDeviceIds = collectSecurityDeviceIds(alarm);
   const results = [];
 
@@ -506,7 +534,7 @@ async function recordOfflineDeviceNotifications() {
     const room = normalizeString(device.room);
     const location = room ? `${name} in ${room}` : name;
     const channel = isSecurityCritical ? 'securityCritical' : 'normal';
-    const notifications = await createSystemNotification({
+    const notifications = await deliverSystemNotification({
       channel,
       severity: isSecurityCritical ? 'critical' : 'warning',
       category: isSecurityCritical ? 'security' : 'device',
@@ -526,17 +554,24 @@ async function recordOfflineDeviceNotifications() {
       },
       collapseId: `device-offline-${deviceId}`,
       ttlSeconds: 60 * 30
-    });
+    }, users, existingIncidents);
     results.push(...notifications);
   }
 
   return results;
 }
 
+function refreshOfflineNotifications() {
+  if (!offlineRefreshInFlight) {
+    offlineRefreshInFlight = recordOfflineDeviceNotifications().catch(error => {
+      console.warn('NotificationService: failed to record offline device notifications:', error.message);
+    }).finally(() => { offlineRefreshInFlight = null; });
+  }
+  return offlineRefreshInFlight;
+}
+
 async function listNotifications(userId, options = {}) {
-  await recordOfflineDeviceNotifications().catch((error) => {
-    console.warn('NotificationService: failed to record offline device notifications:', error.message);
-  });
+  await refreshOfflineNotifications();
 
   const limit = normalizeLimit(options.limit);
   const channel = normalizeString(options.channel);
@@ -562,9 +597,7 @@ async function listNotifications(userId, options = {}) {
 }
 
 async function getUnreadCounts(userId) {
-  await recordOfflineDeviceNotifications().catch((error) => {
-    console.warn('NotificationService: failed to record offline device notifications:', error.message);
-  });
+  await refreshOfflineNotifications();
 
   const [normal, securityCritical] = await Promise.all([
     HomeBrainNotification.countDocuments({ userId, channel: 'normal', clearedAt: null, resolvedAt: null }),
