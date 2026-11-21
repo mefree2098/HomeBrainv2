@@ -217,6 +217,9 @@ function inferJetsonGpuTypeFromPath(filePath) {
 class ResourceMonitorService {
   constructor(dependencies = {}) {
     this.history = [];
+    this.cpus = dependencies.cpus || os.cpus;
+    this.previousCPU = this.readCPUTotals(this.cpus());
+    this.lastCpuPercent = null;
     this.maxHistorySize = 100; // Keep last 100 readings
     this.execAsync = dependencies.execAsync || execAsync;
     this.readFile = dependencies.readFile || fs.readFile.bind(fs);
@@ -229,29 +232,33 @@ class ResourceMonitorService {
   /**
    * Get CPU utilization percentage
    */
+  readCPUTotals(cpus) {
+    let idle = 0;
+    let total = 0;
+    for (const cpu of cpus) {
+      idle += cpu.times.idle;
+      for (const ticks of Object.values(cpu.times)) total += ticks;
+    }
+    return { idle, total, cores: cpus.length };
+  }
+
   async getCPUUsage() {
     try {
-      const cpus = os.cpus();
-      const numCpus = cpus.length;
-
-      // Calculate CPU usage
-      let totalIdle = 0;
-      let totalTick = 0;
-
-      cpus.forEach(cpu => {
-        for (const type in cpu.times) {
-          totalTick += cpu.times[type];
-        }
-        totalIdle += cpu.times.idle;
-      });
-
-      const idle = totalIdle / numCpus;
-      const total = totalTick / numCpus;
-      const usagePercent = 100 - ~~(100 * idle / total);
-
+      const cpus = this.cpus();
+      const current = this.readCPUTotals(cpus);
+      const previous = this.previousCPU;
+      const totalDelta = current.total - previous.total;
+      const idleDelta = current.idle - previous.idle;
+      if (previous.cores !== current.cores || totalDelta < 0 || idleDelta < 0) {
+        this.lastCpuPercent = null;
+      } else if (totalDelta > 0) {
+        this.lastCpuPercent = clampPercent(100 * (1 - idleDelta / totalDelta));
+      }
+      this.previousCPU = current;
       return {
-        usagePercent: parseFloat(usagePercent.toFixed(2)),
-        cores: numCpus,
+        usagePercent: this.lastCpuPercent ?? 0,
+        sampled: this.lastCpuPercent !== null,
+        cores: cpus.length,
         model: cpus[0]?.model || 'Unknown',
         speed: cpus[0]?.speed || 0
       };
@@ -501,7 +508,8 @@ class ResourceMonitorService {
         };
       }
 
-      const tegrastatsGpu = await this.readGPUUsageFromTegrastats();
+      const systemInfo = await this.getSystemInfo();
+      const tegrastatsGpu = systemInfo.isJetson ? await this.readGPUUsageFromTegrastats() : null;
       if (tegrastatsGpu) {
         return {
           available: true,
@@ -512,7 +520,6 @@ class ResourceMonitorService {
         };
       }
 
-      const systemInfo = await this.getSystemInfo();
       if (systemInfo.isJetson) {
         return {
           available: false,
@@ -633,8 +640,18 @@ class ResourceMonitorService {
    * Get system information
    */
   async getSystemInfo() {
+    if (!this.systemInfoPromise) {
+      this.systemInfoPromise = this.readSystemInfo().then(info => {
+        if (info.error) this.systemInfoPromise = null;
+        return info;
+      });
+    }
+    return this.systemInfoPromise;
+  }
+
+  async readSystemInfo() {
     try {
-      const platform = os.platform();
+      const platform = this.platform();
       const arch = os.arch();
       const hostname = os.hostname();
       const release = os.release();
@@ -645,7 +662,7 @@ class ResourceMonitorService {
       if (platform === 'linux') {
         try {
           // Get OS info
-          const { stdout: osInfo } = await this.execAsync('cat /etc/os-release 2>/dev/null || echo ""');
+          const osInfo = await this.readFile('/etc/os-release', 'utf8').catch(() => '');
           const osLines = osInfo.split('\n');
           const osName = osLines.find(l => l.startsWith('PRETTY_NAME='))?.split('=')[1]?.replace(/"/g, '') || 'Linux';
 
@@ -672,7 +689,7 @@ class ResourceMonitorService {
             // Release file is not available on this platform.
           }
 
-          if (jetsonModel?.toLowerCase().includes('jetson') || jetsonModel || jetsonRelease) {
+          if (jetsonModel?.toLowerCase().includes('jetson') || jetsonRelease) {
             isJetson = true;
           }
 
@@ -710,36 +727,22 @@ class ResourceMonitorService {
    * Get comprehensive system utilization
    */
   async getUtilization() {
-    try {
-      console.log('Collecting system resource utilization...');
-
-      const cpu = await this.getCPUUsage();
-      const memory = this.getMemoryUsage();
-      const disk = await this.getDiskUsage();
-      const gpu = await this.getGPUUsage();
-      const temperature = await this.getTemperature();
-      const uptime = this.getUptime();
-      const systemInfo = await this.getSystemInfo();
-
-      const snapshot = {
-        timestamp: new Date(),
-        cpu,
-        memory,
-        disk,
-        gpu,
-        temperature,
-        uptime,
-        systemInfo
-      };
-
-      // Add to history
-      this.addToHistory(snapshot);
-
-      return snapshot;
-    } catch (error) {
-      console.error('Error getting system utilization:', error);
-      throw error;
+    const latest = this.history.at(-1);
+    if (latest && Date.now() - latest.timestamp.getTime() < 2000) return latest;
+    if (!this.utilizationPending) {
+      this.utilizationPending = this.collectUtilization().finally(() => { this.utilizationPending = null; });
     }
+    return this.utilizationPending;
+  }
+
+  async collectUtilization() {
+    const [cpu, disk, gpu, temperature, systemInfo] = await Promise.all([
+      this.getCPUUsage(), this.getDiskUsage(), this.getGPUUsage(), this.getTemperature(), this.getSystemInfo()
+    ]);
+    const snapshot = { timestamp: new Date(), cpu, memory: this.getMemoryUsage(), disk, gpu, temperature,
+      uptime: this.getUptime(), systemInfo };
+    this.addToHistory(snapshot);
+    return snapshot;
   }
 
   /**

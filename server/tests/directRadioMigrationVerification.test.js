@@ -5674,3 +5674,25 @@ test('Z-Wave failed-node removal still succeeds when a matching HomeBrain record
     }
   ]);
 });
+
+test('cached inventory and a read response cannot manufacture a fresh Zigbee sensor observation', async () => {
+  const service = createService();
+  const helpers = require('../services/directRadioHelpers');
+  const older = new Date('2026-01-01');
+  const recent = new Date('2026-02-01');
+  let reads = 0;
+  const sensor = { ieeeAddr: '0x000d6f000b11f6e5', modelID: 'MCT-340 E', manufacturerName: 'Visonic',
+    interviewCompleted: true, lastSeen: +older, endpoints: [{ ID: 1, inputClusters: [1280],
+      getClusterAttributeValue: () => undefined, read: async () => { reads++; return {}; } }] };
+  const { update } = service.normalizeZigbeeDevice(sensor, 'sync');
+  assert.deepEqual(update.lastSeen, older);
+  assert.equal(helpers.resolveRadioLastSeen('sync', undefined), null);
+  const merged = helpers.mergeDirectDeviceUpdateForExisting({ lastSeen: recent, isOnline: false }, update);
+  assert.deepEqual(merged.lastSeen, recent);
+  assert.equal(merged.isOnline, false);
+  service.upsertDirectDevice = async (_id, state) => state;
+  service.recoverZigbeeSleepyDeviceOnWake = async () => {};
+  service.repairZigbeeIasEnrollmentIfNeeded = async () => {};
+  await service.handleZigbeeDeviceChanged(sensor, 'message', { message: { cluster: 'ssIasZone', type: 'readResponse', data: { zoneId: 255 } } });
+  assert.equal(reads, 0);
+});

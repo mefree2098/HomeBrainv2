@@ -16,7 +16,7 @@ if (!homebrainServerLock.acquired) {
 }
 
 const mongoose = require("mongoose");
-const { connectDB } = require("./config/database");
+const { connectDB, closeDB } = require("./config/database");
 const { databaseAvailabilityGuard } = require("./middleware/databaseAvailability");
 const { createApiRateLimit } = require('./middleware/apiRateLimit');
 const { rejectUnsafeRequestKeys } = require('./middleware/requestSafety');
@@ -98,6 +98,7 @@ const tempestService = require("./services/tempestService");
 const goveeAirQualityService = require("./services/goveeAirQualityService");
 const rainMachineService = require("./services/rainMachineService");
 const senseService = require("./services/senseService");
+const platformMeasurements = require('./services/platformMeasurementService');
 const platformDeployService = require("./services/platformDeployService");
 const deviceRestartService = require("./services/deviceRestartService");
 const smbBackupSchedulerService = require("./services/smbBackupSchedulerService");
@@ -336,6 +337,7 @@ app.use((req, res, next) => {
   next();
 });
 // Apply request-count limits before parsing potentially large JSON bodies.
+app.use('/api', (req, res, next) => platformMeasurements.observe(req, res, next));
 app.use('/api', createApiRateLimit());
 app.use(express.json({
   limit: '8mb',
@@ -350,7 +352,7 @@ app.use('/api', rejectUnsafeRequestKeys);
 app.use('/api', databaseAvailabilityGuard);
 
 // Database connection
-const dbReady = connectDB().then(async () => {
+const dbReady = connectDB({ handleSignals: false }).then(async () => {
   await require('./services/workflowCredentialService').migrate();
 });
 
@@ -892,6 +894,7 @@ async function gracefulShutdown(signal) {
   await runShutdownStep('SMB backup scheduler', () => smbBackupSchedulerService.stop());
   await runShutdownStep('Dynamic DNS scheduler', () => dynamicDnsService.stop());
   await runShutdownStep('Axiom manifest watch', () => axiomIngressSyncService.stopManifestWatch());
+  await runShutdownStep('platform measurements', () => platformMeasurements.stop());
   await runShutdownStep('platform update monitor service', () => platformUpdateMonitorService.stop({ disconnectInsteon: true }));
   await runShutdownStep('platform managed services monitor', () => platformManagedService.stop());
   await runShutdownStep('MQTT platform bridge', () => mqttPlatformService.shutdown());
@@ -930,6 +933,7 @@ async function gracefulShutdown(signal) {
   await runShutdownStep('Codex CLI sessions', () => shutdownCodexCliService());
   await runShutdownStep('HTTP server', () => closeServer(httpServer, 'HTTP server'), HTTP_CLOSE_TIMEOUT_MS + 1000);
 
+  await runShutdownStep('database', closeDB);
   process.exit(0);
 }
 
@@ -945,6 +949,9 @@ httpServer.listen(port, bindHost, async () => {
 
   try {
     const runtime = await platformDeployService.ensureRuntimeSnapshot();
+    void dbReady.then(() => platformMeasurements.start(runtime)).catch(error => {
+      console.error('Platform measurements could not start:', error.message);
+    });
     console.log(
       `Platform deploy runtime snapshot captured: commit=${runtime.loadedShortCommit || 'unknown'} pid=${runtime.pid}`
     );

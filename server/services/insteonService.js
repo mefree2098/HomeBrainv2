@@ -56,6 +56,7 @@ const DEFAULT_INSTEON_DEFAULT_VERIFICATION_MODE = 'ack';
 const DEFAULT_INSTEON_POST_COMMAND_SETTLE_MS = 700;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_INTERVAL_MS = 30000;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_STALE_AFTER_MS = 60000;
+const INSTEON_LAST_SEEN_CHECKPOINT_MS = 15 * 60_000;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_OFFLINE_STALE_AFTER_MS = 15000;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_BATCH_SIZE = 4;
 const DEFAULT_INSTEON_RUNTIME_MONITOR_COOLDOWN_MS = 6000;
@@ -2024,6 +2025,10 @@ class InsteonService {
       return left !== right;
     };
 
+    if (patch.isOnline === true && patch.lastSeen
+      && new Date(patch.lastSeen).getTime() - new Date(device.lastSeen || 0).getTime() >= INSTEON_LAST_SEEN_CHECKPOINT_MS) {
+      return true;
+    }
     return Object.entries(patch).some(([key, value]) => {
       if (key === 'lastSeen' || key === 'updatedAt') {
         return false;
@@ -8221,7 +8226,10 @@ class InsteonService {
       nextState.isOnline = Boolean(nextState.isOnline);
     }
 
-    if (nextState.lastSeen === undefined) {
+    if (nextState.isOnline === false) {
+      delete nextState.lastSeen;
+      if (!this._runtimeStatePatchWouldChange(device, nextState)) return device;
+    } else if (nextState.lastSeen === undefined) {
       nextState.lastSeen = new Date();
     }
 
@@ -12241,15 +12249,14 @@ class InsteonService {
       const devices = await Device.find({ 'properties.source': 'insteon', type: { $in: ['light', 'switch'] } }).select('_id').lean();
       for (const device of devices) {
         if (!this.isConnected) break;
-        await this.getDeviceStatus(device._id).catch(() => {});
+        await this.getDeviceStatus(device._id, { background: true }).catch(() => {});
       }
       this._logEngineInfo('INSTEON reconnect live state refresh finished', { deviceCount: devices.length });
     })().finally(() => { this.reconnectStateRefreshPromise = null; });
     return this.reconnectStateRefreshPromise;
   }
 
-  async getDeviceStatus(deviceId) {
-    console.log(`InsteonService: Getting status for device ${deviceId}`);
+  async getDeviceStatus(deviceId, { background = false } = {}) {
 
     let device = null;
     try {
@@ -12269,13 +12276,13 @@ class InsteonService {
 
       const address = this._normalizeInsteonAddress(device.properties.insteonAddress);
       const level = await this._queryDeviceLevelByAddress(address, 5000, {
-        priority: 'query',
+        priority: background ? 'poll' : 'query',
         kind: 'device_status_query'
       });
       const state = this._stateFromInsteonLevel(level);
-      await this._persistDeviceRuntimeState(device, state);
-
-      console.log(`InsteonService: Device ${address} status - Level: ${state.level}, Brightness: ${state.brightness}%`);
+      if (!background || this._runtimeStatePatchWouldChange(device, state)) {
+        await this._persistDeviceRuntimeState(device, state);
+      }
 
       return {
         status: state.status,

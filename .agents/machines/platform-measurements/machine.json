@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "id": "platform-measurements",
+  "summary": "Collect bounded local measurements and summarize production windows for per-home performance and reliability reviews.",
+  "scope": "project",
+  "tags": [
+    "monitoring",
+    "performance",
+    "reliability"
+  ],
+  "entrypoint": [
+    "node",
+    "server/server.js"
+  ],
+  "inputs": [
+    "Live API request completion events",
+    "Linux process and platform-volume counters",
+    "HomeBrain operational health, MongoDB, and runtime revision"
+  ],
+  "outputs": [
+    "Five-minute measurements and admin-only window summaries at /api/resources/measurements"
+  ],
+  "side_effects": [
+    "Writes one local MongoDB document per interval with 35-day expiry and probes paired local Alexa brokers."
+  ],
+  "verify": [
+    [
+      "node",
+      "--test",
+      "server/tests/platformMeasurement.test.js"
+    ],
+    [
+      "node",
+      "server/tests/mongodbCompatibility.integration.js"
+    ]
+  ],
+  "determinism": {
+    "environment": [
+      "Supported Node.js and locked server dependencies",
+      "MongoDB and optional Linux procfs/sysfs counters",
+      "Isolated MongoDB 8 fixture on port 33337 for integration verification"
+    ],
+    "network": "declared",
+    "clock": "declared",
+    "randomness": "declared"
+  },
+  "status": "experimental"
+}

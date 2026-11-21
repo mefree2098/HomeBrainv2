@@ -288,6 +288,7 @@ async function resolveZWaveJsLogFile() {
 const {
   ZWAVE_DIR,
   trimString,
+  resolveRadioLastSeen,
   isZWaveNodeOnline,
   isZWaveNodeCommandReady,
   isZWaveNodeCommandProbeCandidate,
@@ -2000,6 +2001,7 @@ normalizeZWaveNode(node, reason = 'sync') {
     const reachabilityProbe = effectiveRuntime.reachabilityProbe;
 
     const directFeatures = Array.from(features).sort();
+    const lastSeen = resolveRadioLastSeen(reason, node.lastSeen);
     return {
       identity: {
         protocol: 'zwave',
@@ -2019,7 +2021,7 @@ normalizeZWaveNode(node, reason = 'sync') {
           : hasSwitch ? Boolean(binaryValue || (brightness && brightness > 0)) : false,
         brightness: brightness ?? undefined,
         isOnline: isZWaveNodeOnline(node),
-        lastSeen: new Date(),
+        lastSeen,
         brand: trimString(node.deviceConfig?.manufacturer) || undefined,
         model: trimString(node.deviceConfig?.label || node.productLabel) || undefined,
         properties: {
@@ -2038,7 +2040,7 @@ normalizeZWaveNode(node, reason = 'sync') {
             isListening: node.isListening,
             isFrequentListening: node.isFrequentListening,
             lastReason: reason,
-            lastSeen: new Date().toISOString(),
+            lastSeen: lastSeen?.toISOString() ?? null,
             ...(reachabilityProbe ? {
               lastReachabilityProbeAt: new Date(reachabilityProbe.at).toISOString(),
               lastReachabilityProbeReason: reachabilityProbe.reason || null,

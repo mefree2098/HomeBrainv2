@@ -137,6 +137,7 @@ test('getGPUUsage falls back to tegrastats when sysfs probes are unavailable', a
     })
   });
 
+  service.getSystemInfo = async () => ({ isJetson: true });
   const gpu = await service.getGPUUsage();
 
   assert.equal(gpu.available, true);
@@ -190,6 +191,7 @@ test('getSystemInfo derives Jetson model from the device tree', async (t) => {
 
   const service = new ResourceMonitorService({
     readFile: async (filePath) => {
+      if (filePath === '/etc/os-release') return 'PRETTY_NAME="Ubuntu 22.04.4 LTS"';
       if (filePath === '/proc/device-tree/model') {
         return 'NVIDIA Jetson Orin Nano Developer Kit\0';
       }
@@ -248,4 +250,19 @@ test('getDiskUsage targets the platform storage path instead of the root filesys
   assert.equal(disk.available, '682Gi');
   assert.equal(disk.totalGB, 931.51);
   assert.equal(disk.availableGB, 681.51);
+});
+
+test('CPU load uses recent ticks and parallel dashboards share one hardware sample', async () => {
+  let user = 500, idle = 500;
+  const service = new ResourceMonitorService({ cpus: () => [{ times: { user, idle } }] });
+  user += 5;
+  idle += 95;
+  assert.equal((await service.getCPUUsage()).usagePercent, 5);
+  let probes = 0;
+  service.getDiskUsage = async () => { probes++; return {}; };
+  service.getGPUUsage = service.getTemperature = service.getSystemInfo = async () => ({});
+  await Promise.all([service.getUtilization(), service.getUtilization()]);
+  await service.getUtilization();
+  assert.equal(probes, 1);
+  assert.equal(service.history.length, 1);
 });

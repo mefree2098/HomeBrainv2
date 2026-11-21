@@ -15,6 +15,7 @@ const DEFAULT_MAX_CONNECTING = 2;
 let connectionLoopPromise = null;
 let listenersAttached = false;
 let shutdownHandlerAttached = false;
+let handleSignals = true;
 let isShuttingDown = false;
 let currentRetryDelayMs = DEFAULT_CONNECT_RETRY_DELAY_MS;
 let activeLogger = console;
@@ -95,6 +96,11 @@ function getRetryConfig(options = {}) {
   };
 }
 
+async function closeDB() {
+  isShuttingDown = true;
+  await mongoose.connection.close();
+}
+
 function attachShutdownHandler() {
   if (shutdownHandlerAttached) {
     return;
@@ -103,10 +109,8 @@ function attachShutdownHandler() {
   shutdownHandlerAttached = true;
 
   process.on('SIGINT', async () => {
-    isShuttingDown = true;
-
     try {
-      await mongoose.connection.close();
+      await closeDB();
       console.log('MongoDB connection closed through app termination');
       process.exit(0);
     } catch (error) {
@@ -157,7 +161,8 @@ async function connectDB(options = {}) {
     retryConfig.initialDelayMs
   );
 
-  attachShutdownHandler();
+  handleSignals = options.handleSignals ?? handleSignals;
+  if (handleSignals) attachShutdownHandler();
   attachConnectionListeners();
 
   if (isDatabaseReady()) {
@@ -200,6 +205,7 @@ async function connectDB(options = {}) {
 
 module.exports = {
   connectDB,
+  closeDB,
   getDatabaseStateLabel,
   isDatabaseReady
 };
