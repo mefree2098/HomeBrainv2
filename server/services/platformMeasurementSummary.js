@@ -17,7 +17,7 @@ function windowStats(start, end, bounds) {
     start, end, samples: 0, bins: Array(bounds.length + 1).fill(0), covered: 0, cpuMs: 0, cpuCoverage: 0,
     errors: 0, aborted: 0, healthChecks: 0, minMemory: null, rss: [], degraded: {}, healthMax: {}, alexaSamples: {},
     staleFeeds: new Set(), bootTimes: new Set(), commits: new Set(),
-    io: { processWriteBytes: { bytes: 0, ms: 0 }, volumeWriteBytes: { bytes: 0, ms: 0 } }
+    io: { processWriteBytes: { bytes: 0, ms: 0 }, serviceWriteBytes: { bytes: 0, ms: 0 }, volumeWriteBytes: { bytes: 0, ms: 0 } }
   };
 }
 
@@ -74,7 +74,7 @@ function finish(stats, bounds) {
     meanProcessCpuCores: stats.cpuCoverage ? round(stats.cpuMs / stats.cpuCoverage) : null,
     medianRssMiB: rss.length ? round((rss[(rss.length - 1) >> 1] + rss[rss.length >> 1]) / 2) : null,
     minAvailableMemoryPercent: stats.minMemory === null ? null : round(stats.minMemory),
-    processWrites: writes(stats.io.processWriteBytes), volumeWrites: writes(stats.io.volumeWriteBytes),
+    processWrites: writes(stats.io.processWriteBytes), serviceWrites: writes(stats.io.serviceWriteBytes), volumeWrites: writes(stats.io.volumeWriteBytes),
     bootTimes: [...stats.bootTimes], commits: [...stats.commits], healthChecks: stats.healthChecks,
     alexaSamples: stats.alexaSamples, degradedSamples: stats.degraded, peakHealthCounts: stats.healthMax, staleFeeds: [...stats.staleFeeds]
   };

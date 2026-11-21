@@ -20,13 +20,47 @@ function delta(current, previous) {
   return Number.isFinite(current) && Number.isFinite(previous) && current >= previous ? current - previous : null;
 }
 
+function parseServiceWriteCounters(text) {
+  const counters = new Map();
+  for (const line of text.trim().split('\n')) {
+    const device = /^(\d+:\d+)\s/.exec(line);
+    const written = /(?:^|\s)wbytes=(\d+)(?:\s|$)/.exec(line);
+    if (device && written) counters.set(device[1], Number(written[1]));
+  }
+  return counters.size ? counters : null;
+}
+
+async function readServiceWrites() {
+  const groups = await fs.readFile('/proc/self/cgroup', 'utf8');
+  const group = /^0::(\/[^\n]+)$/m.exec(groups)?.[1];
+  if (!group || group.split('/').includes('..')) return null;
+  const text = await fs.readFile('/sys/fs/cgroup' + group + '/io.stat', 'utf8');
+  const counters = parseServiceWriteCounters(text);
+  return counters ? { group, counters } : null;
+}
+
+function serviceWriteDelta(current, previous) {
+  if (!current || !previous || current.group !== previous.group) return null;
+  for (const device of previous.counters.keys()) {
+    if (!current.counters.has(device)) return null;
+  }
+  let total = 0;
+  for (const [device, bytes] of current.counters) {
+    const difference = delta(bytes, previous.counters.get(device) ?? 0);
+    if (difference === null) return null;
+    total += difference;
+  }
+  return total;
+}
+
 async function readWriteCounters() {
   if (process.platform !== 'linux') return {};
-  const [processBytes, volume] = await Promise.all([
+  const [processBytes, service, volume] = await Promise.all([
     fs.readFile('/proc/self/io', 'utf8').then(text => {
       const value = /^write_bytes:\s*(\d+)$/m.exec(text);
       return value ? Number(value[1]) : null;
     }).catch(() => null),
+    readServiceWrites().catch(() => null),
     (async () => {
       const path = await resources.resolveDiskUsageTargetPath();
       const { dev } = await fs.stat(path, { bigint: true });
@@ -37,7 +71,7 @@ async function readWriteCounters() {
       return { device, bytes: Number(stat.trim().split(/\s+/)[6]) * 512 };
     })().catch(() => null)
   ]);
-  return { processBytes, volume };
+  return { processBytes, service, volume };
 }
 
 async function readHealth() {
@@ -129,6 +163,7 @@ class PlatformMeasurementService {
       coveredMs: Math.round(Math.min(elapsed, PERIOD)), cpuCoresUsed,
       rssBytes: mem.rss, heapUsedBytes: mem.heapUsed,
       availableMemoryPercent: system.total ? 100 * system.available / system.total : null,
+      serviceWriteBytes: timely ? serviceWriteDelta(io.service, previous.service) : null,
       processWriteBytes: timely ? delta(io.processBytes, previous.processBytes) : null,
       volumeWriteBytes: timely && io.volume && io.volume.device === previous.volume?.device
         ? delta(io.volume.bytes, previous.volume.bytes) : null,
@@ -175,3 +210,5 @@ module.exports.PlatformMeasurementService = PlatformMeasurementService;
 module.exports.recordRequest = recordRequest;
 module.exports.BOUNDS = BOUNDS;
 module.exports.DAY = DAY;
+module.exports.parseServiceWriteCounters = parseServiceWriteCounters;
+module.exports.serviceWriteDelta = serviceWriteDelta;

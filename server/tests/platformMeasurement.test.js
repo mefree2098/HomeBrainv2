@@ -74,3 +74,16 @@ test('collector retries the same document IDs on a failed acknowledgment and bou
   await service.capture();
   assert.equal(service.pending.length, 0);
 });
+
+test('service I/O deltas count writes across block devices and reject reset or lost counters', () => {
+  const { parseServiceWriteCounters, serviceWriteDelta } = require('../services/platformMeasurementService');
+  const group = '/system.slice/homebrain.service';
+  const meter = text => ({ group, counters: parseServiceWriteCounters(text) });
+  const before = meter('259:0 rbytes=1024 wbytes=4096\n179:0 wbytes=512');
+  const after = meter('259:0 rbytes=1024 wbytes=8192\n179:0 wbytes=512\n1:2 wbytes=1024');
+  assert.equal(serviceWriteDelta(after, before), 5120);
+  assert.equal(serviceWriteDelta(before, after), null);
+  assert.equal(serviceWriteDelta(meter('259:0 wbytes=30\n179:0 wbytes=512'), before), null);
+  assert.equal(serviceWriteDelta({ ...after, group: '/other' }, before), null);
+  assert.equal(parseServiceWriteCounters(''), null);
+});

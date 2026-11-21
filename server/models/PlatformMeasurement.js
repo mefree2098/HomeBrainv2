@@ -13,6 +13,7 @@ const schema = new mongoose.Schema({
   heapUsedBytes: Number,
   availableMemoryPercent: Number,
   processWriteBytes: Number,
+  serviceWriteBytes: Number,
   volumeWriteBytes: Number,
   health: mongoose.Schema.Types.Mixed
 }, { versionKey: false });
