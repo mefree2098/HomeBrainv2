@@ -15,9 +15,9 @@ function percentileBound(bins, bounds, count, fraction) {
 function windowStats(start, end, bounds) {
   return {
     start, end, samples: 0, bins: Array(bounds.length + 1).fill(0), covered: 0, cpuMs: 0, cpuCoverage: 0,
-    errors: 0, aborted: 0, healthChecks: 0, minMemory: null, rss: [], degraded: {}, healthMax: {}, alexaSamples: {},
+    errors: 0, aborted: 0, healthChecks: 0, minMemory: null, rss: [], degraded: {}, healthMax: {}, alexaSamples: {}, byService: {},
     staleFeeds: new Set(), bootTimes: new Set(), commits: new Set(),
-    io: { processWriteBytes: { bytes: 0, ms: 0 }, volumeWriteBytes: { bytes: 0, ms: 0 } }
+    io: { processWriteBytes: { bytes: 0, ms: 0 }, serviceWriteBytes: { bytes: 0, ms: 0 }, volumeWriteBytes: { bytes: 0, ms: 0 } }
   };
 }
 
@@ -26,6 +26,10 @@ function addObservation(stats, row) {
   row.latency.forEach((n, i) => { stats.bins[i] += n; });
   stats.errors += row.serverErrors;
   stats.aborted += row.aborted;
+  for (const [service, values] of Object.entries(row.byService || {})) {
+    const group = stats.byService[service] ??= { requests: 0, over500Ms: 0, over2s: 0, failures: 0 };
+    for (const key of Object.keys(group)) group[key] += values[key] || 0;
+  }
   if (row.bootedAt) stats.bootTimes.add(new Date(row.bootedAt).toISOString());
   if (row.commit) stats.commits.add(row.commit);
   if (Number.isFinite(row.rssBytes)) stats.rss.push(row.rssBytes / MIB);
@@ -67,14 +71,14 @@ function finish(stats, bounds) {
     coveragePercent: round(100 * meter.ms / (end - start))
   });
   return {
-    samples: stats.samples, coveragePercent: round(100 * stats.covered / (end - start)),
+    samples: stats.samples, byService: stats.byService, coveragePercent: round(100 * stats.covered / (end - start)),
     requests, serverErrors: errors, aborted, failurePercent: requests ? round(100 * (errors + aborted) / requests) : null,
     p95MsUpperBound: percentileBound(bins, bounds, requests, .95),
     p99MsUpperBound: percentileBound(bins, bounds, requests, .99),
     meanProcessCpuCores: stats.cpuCoverage ? round(stats.cpuMs / stats.cpuCoverage) : null,
     medianRssMiB: rss.length ? round((rss[(rss.length - 1) >> 1] + rss[rss.length >> 1]) / 2) : null,
     minAvailableMemoryPercent: stats.minMemory === null ? null : round(stats.minMemory),
-    processWrites: writes(stats.io.processWriteBytes), volumeWrites: writes(stats.io.volumeWriteBytes),
+    processWrites: writes(stats.io.processWriteBytes), serviceWrites: writes(stats.io.serviceWriteBytes), volumeWrites: writes(stats.io.volumeWriteBytes),
     bootTimes: [...stats.bootTimes], commits: [...stats.commits], healthChecks: stats.healthChecks,
     alexaSamples: stats.alexaSamples, degradedSamples: stats.degraded, peakHealthCounts: stats.healthMax, staleFeeds: [...stats.staleFeeds]
   };
