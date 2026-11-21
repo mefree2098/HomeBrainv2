@@ -2,7 +2,6 @@ const EventEmitter = require('events');
 const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
-const os = require('os');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 const piperVoiceService = require('./piperVoiceService');

@@ -11,9 +11,9 @@ import {
   DeployPresetId,
   DeployStatusResponse,
   getDeployHealth,
-  getDeployJob,
   getDeployPresets,
   getDeployStatus,
+  getDeployJob,
   restartPlatformServices,
   startPlatformDeploy
 } from "@/api/platformDeploy";
@@ -224,29 +224,30 @@ export function PlatformDeploy() {
     void refreshAll();
   }, [refreshAll]);
 
+  const runningJob = activeJob?.status === "running" ? activeJob.id : null;
   useEffect(() => {
-    const interval = setInterval(() => {
-      void loadStatus();
-    }, 10_000);
-    return () => clearInterval(interval);
-  }, [loadStatus]);
-
-  useEffect(() => {
-    if (!activeJob || activeJob.status !== "running") {
-      return;
-    }
-
-    const interval = setInterval(async () => {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    let nextStatusAt = 0;
+    const poll = async () => {
       try {
-        const response = await getDeployJob(activeJob.id);
-        setActiveJob(response.job);
+        if (runningJob && Date.now() < nextStatusAt) {
+          const { job } = await getDeployJob(runningJob);
+          if (!stopped) setActiveJob(job);
+        } else {
+          await loadStatus();
+          nextStatusAt = Date.now() + 10_000;
+        }
       } catch {
-        // Keep polling status endpoint as fallback.
+        nextStatusAt = 0;
+      } finally {
+        if (!stopped) schedule();
       }
-    }, 3_000);
-
-    return () => clearInterval(interval);
-  }, [activeJob]);
+    };
+    const schedule = () => { timer = setTimeout(poll, runningJob ? 3_000 : 10_000); };
+    schedule();
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [runningJob, loadStatus]);
 
   useEffect(() => {
     const running = activeJob?.status === "running";
@@ -422,7 +423,15 @@ export function PlatformDeploy() {
       title: "Backend Runtime",
       message: health?.checks.deployment.message || "Unknown",
       status: health?.checks.deployment.status
-    }
+    },
+    ...Object.entries({
+      sensorReadings: "Sensor readings", devices: "Device connectivity", enrollment: "Sensor enrollment",
+      cachedState: "Cached device state", zigbee: "Zigbee", zwave: "Z-Wave", integrations: "Appliances",
+      automations: "Automations", backups: "Backups", operations: "Operational health"
+    }).flatMap(([key, title]) => {
+      const check = health?.checks[key];
+      return check ? [{ key, title, message: check.message, status: check.status }] : [];
+    })
   ] as const;
 
   const renderServiceActionButton = (

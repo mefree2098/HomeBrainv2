@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Button } from '../ui/button';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter } from '../ui/card';
 import { generatePackage, getPackageInfo, initiateUpdate, checkForUpdates } from '../../api/remoteUpdates';

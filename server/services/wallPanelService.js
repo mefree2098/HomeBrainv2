@@ -584,22 +584,6 @@ function actionForDevice(device = {}) {
   }
 }
 
-function accentForDevice(device = {}) {
-  switch (trimString(device?.type).toLowerCase()) {
-    case 'light':
-      return 'blue';
-    case 'switch':
-      return 'cyan';
-    case 'speaker':
-      return 'purple';
-    case 'lock':
-      return 'yellow';
-    case 'garage':
-      return 'orange';
-    default:
-      return 'slate';
-  }
-}
 
 function makeQuickAction(input = {}) {
   return {
@@ -1154,19 +1138,6 @@ function buildThermostatMode(panel, thermostatDevice, sensorDevice, weather = nu
   });
 }
 
-function pickRoomDevices(panel, roomDevices = [], allDevices = []) {
-  const explicitIds = uniqueIds(panel?.settings?.roomControl?.favoriteDeviceIds);
-  if (explicitIds.length > 0) {
-    const byId = new Map(
-      [...allDevices, ...roomDevices].map((device) => [toId(device._id), device])
-    );
-    return explicitIds.map((id) => byId.get(id)).filter(Boolean).slice(0, 4);
-  }
-
-  return roomDevices
-    .filter((device) => ROOM_DEVICE_TYPES.has(trimString(device?.type).toLowerCase()))
-    .slice(0, 4);
-}
 
 async function buildRoomMode(panel, roomDevices = [], allDevices = []) {
   const lightDevice = resolveRoomLightDevice(panel, roomDevices, allDevices);
@@ -1224,19 +1195,6 @@ async function buildRoomMode(panel, roomDevices = [], allDevices = []) {
   });
 }
 
-function alarmStateLabel(status = {}) {
-  switch (status.alarmState) {
-    case 'armedStay':
-      return 'ARMED STAY';
-    case 'armedAway':
-      return 'ARMED AWAY';
-    case 'triggered':
-      return 'TRIGGERED';
-    case 'disarmed':
-    default:
-      return 'DISARMED';
-  }
-}
 
 function alarmStateDisplayLabel(status = {}) {
   switch (status.alarmState) {

@@ -73,7 +73,11 @@ test('health distinguishes a running platform from device, enrollment, automatio
   const health = summarizeOperationalHealth([
     { _id: 'light', name: 'Offline light', isOnline: false, properties: { homebrainDirect: { stateStale: true } } },
     { _id: 'motion', name: 'Motion', isOnline: true, properties: { homebrainDirect: { iasZone: { enrolled: false, cieMatchesCoordinator: true } } } }
-  ], 3, [{ provider: 'midea', enabled: true, configured: true, connected: false }], {}, now);
+  ], 3, [{ provider: 'midea', enabled: true, configured: true, connected: false }], {}, now, null, [
+    { name: 'Tempest', lastReadingAt: new Date(now - 3_600_000), maxAgeMs: 900_000 },
+    { name: 'Govee', lastReadingAt: new Date(now - 30_000), maxAgeMs: 300_000 }
+  ]);
+  assert.deepEqual(health.sensorReadings.staleFeeds.map((feed) => feed.name), ['Tempest']);
   for (const check of Object.values(health)) assert.equal(check.status, 'degraded');
   assert.equal(health.devices.offlineCount, 1);
   assert.equal(health.enrollment.affectedDevices[0].name, 'Motion');
@@ -108,6 +112,9 @@ test('operational health counts failed and partial histories using their actual 
   t.mock.method(Integration, 'find', () => ({ select: () => ({ lean: async () => [] }) }));
   t.mock.method(Settings, 'getSettings', async () => ({}));
   t.mock.method(backup, 'getLatestBackupJob', async () => null);
+  for (const name of ['Tempest', 'Govee', 'Sense', 'RainMachine']) {
+    t.mock.method(require('../models/' + name + 'Integration'), 'findOne', () => ({ select: () => ({ lean: async () => null }) }));
+  }
   const before = Date.now();
   t.mock.method(History, 'countDocuments', async (query) => {
     assert.deepEqual(query.status.$in, ['failed', 'partial_success']);

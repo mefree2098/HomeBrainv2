@@ -68,8 +68,8 @@ const schema = new mongoose.Schema({
   // Thermostat-specific properties
   temperature: {
     type: Number,
-    min: -50,
-    max: 150,
+    min: -76,
+    max: 212,
   },
   targetTemperature: {
     type: Number,

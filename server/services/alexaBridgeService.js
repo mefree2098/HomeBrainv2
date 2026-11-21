@@ -1,6 +1,5 @@
 const crypto = require('crypto');
 const axios = require('axios');
-const AlexaBrokerRegistration = require('../models/AlexaBrokerRegistration');
 const AlexaLinkedAccount = require('../models/AlexaLinkedAccount');
 const ReverseProxyRoute = require('../models/ReverseProxyRoute');
 const ReverseProxySettings = require('../models/ReverseProxySettings');

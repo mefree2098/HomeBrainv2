@@ -233,17 +233,21 @@ function appendAuditRecord(state, payload = {}) {
 
 function compactEventQueue(state, { enforceLimit = false } = {}) {
   const queue = Array.isArray(state.eventQueue) ? state.eventQueue : [];
-  while (queue.length > MAX_EVENT_QUEUE) {
-    const terminalIndex = queue.findIndex((entry) => TERMINAL_EVENT_STATUSES.has(trimString(entry?.status)));
-    if (terminalIndex < 0) {
-      if (enforceLimit) {
-        throw new Error(`Alexa event queue capacity of ${MAX_EVENT_QUEUE} active events has been reached`);
-      }
-      break;
-    }
-    queue.splice(terminalIndex, 1);
+  let excess = queue.length - MAX_EVENT_QUEUE;
+  if (excess <= 0) {
+    state.eventQueue = queue;
+    return;
   }
-  state.eventQueue = queue;
+  state.eventQueue = queue.filter((entry) => {
+    if (excess > 0 && TERMINAL_EVENT_STATUSES.has(trimString(entry?.status))) {
+      excess -= 1;
+      return false;
+    }
+    return true;
+  });
+  if (excess > 0 && enforceLimit) {
+    throw new Error(`Alexa event queue capacity of ${MAX_EVENT_QUEUE} active events has been reached`);
+  }
 }
 
 function pruneExpiredEntries(state) {
@@ -1205,7 +1209,8 @@ class BrokerStore {
   }
 
   async listPermissionGrants(filters = {}) {
-    return this.read((state) => Object.values(state.permissionGrants || {})
+    await this.init();
+    return clone(Object.values(this.state.permissionGrants)
       .filter((entry) => (!filters.hubId || entry.hubId === filters.hubId))
       .filter((entry) => (!filters.brokerAccountId || entry.brokerAccountId === filters.brokerAccountId))
       .filter((entry) => (!filters.status || entry.status === filters.status))
@@ -1224,12 +1229,14 @@ class BrokerStore {
     } catch (_error) {
       return null;
     }
-    return this.read((state) => state.permissionGrants[key] || null);
+    await this.init();
+    return clone(this.state.permissionGrants[key] || null);
   }
 
   async findPermissionGrantByGrantCode(grantCode, filters = {}) {
     const grantCodeHash = sha256(trimString(grantCode));
-    return this.read((state) => Object.values(state.permissionGrants || {})
+    await this.init();
+    return clone(Object.values(this.state.permissionGrants)
       .find((entry) => entry.grantCodeHash === grantCodeHash
         && (!filters.brokerAccountId || entry.brokerAccountId === filters.brokerAccountId)
         && (!filters.hubId || entry.hubId === filters.hubId)) || null);

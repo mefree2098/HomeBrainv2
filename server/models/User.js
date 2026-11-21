@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 
-const { validatePassword, isPasswordHash } = require('../utils/password.js');
+const { isPasswordHash } = require('../utils/password.js');
 const {randomUUID} = require("crypto");
 const { ROLES } = require('../../shared/config/roles.js');
 const { DEFAULT_USER_PLATFORMS, normalizeUserPlatforms } = require('../utils/userPlatforms');

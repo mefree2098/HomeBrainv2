@@ -8,45 +8,17 @@ const fs = require('fs');
 const fsp = require('fs/promises');
 const mongoose = require('mongoose');
 const path = require('path');
-const Device = require('../models/Device');
-const EventStreamEvent = require('../models/EventStreamEvent');
-const deviceUpdateEmitter = require('./deviceUpdateEmitter');
-const directRadioEngineLogService = require('./directRadioEngineLogService');
-const eventStreamService = require('./eventStreamService');
 const {
   DIRECT_RADIO_SOURCES,
   buildDirectFeatureProperties,
   buildNormalizedCapabilities,
-  buildMigrationPlan,
   inferFeaturesFromSmartThings,
-  isDirectRadioDevice,
   normalizeFeature
 } = require('./directRadioDeviceCatalog');
-const directRadioProtocolCatalogService = require('./directRadioProtocolCatalogService');
-const {
-  inferDirectDeviceType,
-  isDirectLightContext
-} = require('./deviceTypeClassification');
-const {
-  resolveLocalSerialById,
-  resolveRealPath,
-  buildFallbackSerialPort,
-  hasPortCandidate,
-  listFallbackSerialDevicePaths,
-  addFallbackSerialPortCandidates,
-  normalizeSerialPort,
-  serialDescriptorSearchText,
-  enrichSerialPortForDirectRadios,
-  looksLikeSonoffMg24ThreadStick,
-  scorePortForProtocol,
-  choosePortForProtocol,
-  describeSerialEndpoints
-} = require('./directRadio/serialPorts');
+const { isDirectLightContext } = require('./deviceTypeClassification');
 const {
   toFiniteNumber,
   clampPercent,
-  normalizeZWaveBatteryReport,
-  hexToRgbPercent,
   kelvinToMired,
   miredToKelvin,
   roundTo,

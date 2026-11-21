@@ -1379,7 +1379,18 @@ class GoveeAirQualityService {
       return { success: false, skipped: true, reason: 'missing-api-key', connectionMode };
     }
 
-    const cloudResult = await this.syncFromCloud(integration, apiKey);
+    let cloudResult;
+    try {
+      cloudResult = await this.syncFromCloud(integration, apiKey);
+    } catch (error) {
+      const lastError = error.message || 'Govee cloud sync failed.';
+      if (integration.isConnected || integration.lastError !== lastError) {
+        integration.isConnected = false;
+        integration.lastError = lastError;
+        await integration.save();
+      }
+      throw error;
+    }
     const persisted = await this.persistSyncSample(integration, {
       ...cloudResult,
       sampleSource: 'cloud_api',

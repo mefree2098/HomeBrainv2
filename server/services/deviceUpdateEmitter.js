@@ -63,7 +63,7 @@ class DeviceUpdateEmitter extends EventEmitter {
 
       this.latestDevices.set(id, {
         receivedAt,
-        device: cloneDeviceSnapshot(device)
+        device
       });
     });
   }

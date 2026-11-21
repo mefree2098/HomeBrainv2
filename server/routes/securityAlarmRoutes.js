@@ -2,7 +2,6 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 const router = express.Router();
 const securityAlarmService = require('../services/securityAlarmService');
-const settingsService = require('../services/settingsService');
 const { requireUser } = require('./middlewares/auth');
 
 // Create auth middleware instance

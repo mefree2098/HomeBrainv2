@@ -209,7 +209,6 @@ export function DashboardWidget({
   onToggleFavorite,
   canToggleFavorite,
   isFavoritePending = false,
-  cardSize = "large",
   label = "Favorite Device",
   className
 }: DashboardWidgetProps) {

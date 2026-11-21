@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -85,10 +85,6 @@ export default function WhisperManagement() {
 
   const serviceHealthy = status?.serviceRunning && status.serviceStatus === 'running';
 
-  const installedModelNames = useMemo(
-    () => new Set((status?.installedModels || []).map((model) => model.name)),
-    [status?.installedModels]
-  );
 
   const loadStatus = useCallback(async () => {
     try {

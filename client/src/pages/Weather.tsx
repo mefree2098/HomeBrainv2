@@ -9,7 +9,6 @@ import {
   RadioTower,
   RefreshCw,
   SunMedium,
-  Wind,
   Zap
 } from "lucide-react"
 import {

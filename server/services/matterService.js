@@ -258,21 +258,6 @@ function normalizeOtbrRestUrl(value, fallback = DEFAULT_OTBR_REST_URL) {
   return `${parsed.protocol}//${parsed.host}${pathname ? `/${pathname}` : ''}`;
 }
 
-function normalizeBoolean(value, fallback = false) {
-  if (typeof value === 'boolean') {
-    return value;
-  }
-  if (typeof value === 'string') {
-    const normalized = value.trim().toLowerCase();
-    if (['1', 'true', 'yes', 'on'].includes(normalized)) {
-      return true;
-    }
-    if (['0', 'false', 'no', 'off'].includes(normalized)) {
-      return false;
-    }
-  }
-  return fallback;
-}
 
 function toNumber(value) {
   if (typeof value === 'number' && Number.isFinite(value)) {

@@ -1180,30 +1180,51 @@ function buildRainfallSeries(source, buckets, { hours, startAt, endAt, maxPoints
   };
 }
 
-function mergePointsByTimestamp(points = []) {
-  const merged = [];
-
-  points.forEach((point) => {
-    if (!point?.observedAt) {
+// Consume the time-ordered cursor once. Keep evenly spaced sample indices by
+// doubling the stride whenever the working set reaches twice the output limit.
+async function collectChartSeries(samples, metricKeys, descriptors, maxPoints, rainfallPoints = []) {
+  let retained = [];
+  let stride = 1;
+  let rawPointCount = 0;
+  let latest = null;
+  let rainIndex = 0;
+  let cumulative = null;
+  const timeline = createSourceTimeline(descriptors);
+  function addPoint(observedAt, values) {
+    if (latest?.observedAt === observedAt) {
+      Object.assign(latest.values, values);
       return;
     }
-
-    const previous = merged[merged.length - 1];
-    if (previous && previous.observedAt === point.observedAt) {
-      previous.values = {
-        ...previous.values,
-        ...point.values
-      };
-      return;
+    latest = { observedAt, values };
+    if (rawPointCount % stride === 0) retained.push(latest);
+    rawPointCount += 1;
+    if (retained.length > 2 * maxPoints) {
+      retained = retained.filter((_, index) => index % 2 === 0);
+      stride *= 2;
     }
-
-    merged.push({
-      observedAt: point.observedAt,
-      values: { ...point.values }
-    });
-  });
-
-  return merged;
+  }
+  function appendRain(point) {
+    cumulative = point.values[CUMULATIVE_RAINFALL_KEY];
+    addPoint(point.observedAt, { [CUMULATIVE_RAINFALL_KEY]: cumulative });
+  }
+  for await (const sample of samples) {
+    const observedAt = new Date(sample.recordedAt).toISOString();
+    const metrics = asPlainMetrics(sample.metrics);
+    timeline.observe(observedAt, metrics);
+    while (rainIndex < rainfallPoints.length && rainfallPoints[rainIndex].observedAt <= observedAt) {
+      appendRain(rainfallPoints[rainIndex++]);
+    }
+    const values = {};
+    for (const key of metricKeys) {
+      if (key === CUMULATIVE_RAINFALL_KEY) values[key] = cumulative;
+      else if (typeof metrics[key] === 'number') values[key] = metrics[key];
+      else if (latest?.observedAt !== observedAt || latest.values[key] == null) values[key] = null;
+    }
+    addPoint(observedAt, values);
+  }
+  while (rainIndex < rainfallPoints.length) appendRain(rainfallPoints[rainIndex++]);
+  if (latest && retained.at(-1) !== latest) retained.push(latest);
+  return { points: downsamplePoints(retained, maxPoints), rawPointCount, events: timeline.events };
 }
 
 function buildMetricStats(points = [], metricKeys = []) {
@@ -1537,22 +1558,12 @@ function buildWorkflowExecutionMetrics({
   return metrics;
 }
 
-function buildSourceTimelineEvents(samples = [], descriptors = []) {
+function createSourceTimeline(descriptors) {
   const descriptorMap = new Map((Array.isArray(descriptors) ? descriptors : []).map((descriptor) => [descriptor.key, descriptor]));
   const events = [];
   let previousMetrics = null;
 
-  samples.forEach((sample) => {
-    const metrics = asPlainMetrics(sample?.metrics);
-    const observedAt = sample?.recordedAt instanceof Date
-      ? sample.recordedAt.toISOString()
-      : parseOptionalDate(sample?.recordedAt)?.toISOString?.() || null;
-
-    if (!observedAt) {
-      previousMetrics = metrics;
-      return;
-    }
-
+  function observe(observedAt, metrics) {
     if (!previousMetrics) {
       previousMetrics = metrics;
       return;
@@ -1572,7 +1583,7 @@ function buildSourceTimelineEvents(samples = [], descriptors = []) {
       })
       .sort((left, right) => timelineMetricPriority(left) - timelineMetricPriority(right));
 
-    changedKeys.forEach((key) => {
+    const changes = changedKeys.map((key) => {
       const descriptor = descriptorMap.get(key) || {
         key,
         label: inferMetricLabel(key),
@@ -1582,7 +1593,7 @@ function buildSourceTimelineEvents(samples = [], descriptors = []) {
       const previousValue = typeof previousMetrics[key] === 'number' ? previousMetrics[key] : null;
       const nextValue = typeof metrics[key] === 'number' ? metrics[key] : null;
 
-      events.push({
+      return {
         id: `${observedAt}:${key}`,
         observedAt,
         key,
@@ -1592,15 +1603,15 @@ function buildSourceTimelineEvents(samples = [], descriptors = []) {
         previousValue,
         nextValue,
         summary: describeTimelineEvent(key, previousValue, nextValue)
-      });
+      };
     });
-
+    if (changes.length) {
+      events.unshift(...changes.slice(0, TIMELINE_EVENT_LIMIT));
+      if (events.length > TIMELINE_EVENT_LIMIT) events.length = TIMELINE_EVENT_LIMIT;
+    }
     previousMetrics = metrics;
-  });
-
-  return events
-    .sort((left, right) => new Date(right.observedAt).getTime() - new Date(left.observedAt).getTime())
-    .slice(0, TIMELINE_EVENT_LIMIT);
+  }
+  return { observe, events };
 }
 
 function normalizePromptText(value) {
@@ -2143,14 +2154,15 @@ class TelemetryService {
         metadataUpdates.sourceOrigin = payload.sourceOrigin;
       }
 
-      if (Object.keys(metadataUpdates).length > 0) {
+      const metadataChanged = Object.keys(metadataUpdates).length > 0;
+      if (metadataChanged) {
         await TelemetrySample.updateOne(
           { _id: latestSample._id },
           { $set: metadataUpdates }
         );
       }
 
-      await this.updateSourceSummaryMetadata(payload);
+      await this.updateSourceSummaryMetadata(payload, metadataChanged);
       return { inserted: false, skipped: true };
     }
 
@@ -2444,7 +2456,7 @@ class TelemetryService {
     return { inserted: true };
   }
 
-  async updateSourceSummaryMetadata(payload = {}) {
+  async updateSourceSummaryMetadata(payload = {}, metadataChanged = false) {
     const sourceKey = String(payload?.sourceKey || '').trim();
     if (!sourceKey) {
       return { updated: false };
@@ -2460,9 +2472,10 @@ class TelemetryService {
           sourceCategory: String(payload.sourceCategory || '').trim(),
           sourceRoom: String(payload.sourceRoom || '').trim(),
           sourceOrigin: String(payload.sourceOrigin || '').trim(),
-          updatedAt: new Date()
+          ...(metadataChanged ? { updatedAt: new Date() } : {})
         },
         $setOnInsert: {
+          ...(!metadataChanged ? { updatedAt: new Date() } : {}),
           sourceKey,
           sampleCount: 0,
           metricKeys: normalizeMetricKeys(payload.metricKeys || Object.keys(asPlainMetrics(payload.metrics))),
@@ -3300,42 +3313,16 @@ class TelemetryService {
       ? await this.getRainfallSeries({ source, hours, maxPoints, startAt, endAt })
       : null;
     if (rainfallSeries && effectiveMetricKeys.length === 1) return rainfallSeries;
-    const samples = await TelemetrySample.find({
+    const samples = TelemetrySample.find({
       sourceKey: source.sourceKey,
       recordedAt: { $gte: startAt, $lte: endAt }
     })
       .sort({ recordedAt: 1 })
       .select('recordedAt metrics')
-      .lean();
-
-    const mergedPoints = mergePointsByTimestamp(
-      samples.map((sample) => {
-        const metrics = asPlainMetrics(sample.metrics);
-        const values = {};
-
-        effectiveMetricKeys.forEach((key) => {
-          values[key] = typeof metrics[key] === 'number' ? metrics[key] : null;
-        });
-
-        return {
-          observedAt: sample.recordedAt instanceof Date
-            ? sample.recordedAt.toISOString()
-            : new Date(sample.recordedAt).toISOString(),
-          values
-        };
-      })
+      .lean().cursor({ batchSize: 256 });
+    const { points, rawPointCount, events } = await collectChartSeries(
+      samples, effectiveMetricKeys, source.availableMetrics, maxPoints, rainfallSeries?.points
     );
-    if (rainfallSeries) {
-      mergedPoints.push(...rainfallSeries.points);
-      mergedPoints.sort((left, right) => new Date(left.observedAt) - new Date(right.observedAt));
-      let cumulative = null;
-      mergedPoints.forEach((point) => {
-        if (point.values[CUMULATIVE_RAINFALL_KEY] != null) cumulative = point.values[CUMULATIVE_RAINFALL_KEY];
-        point.values[CUMULATIVE_RAINFALL_KEY] = cumulative;
-      });
-    }
-    const points = downsamplePoints(mergePointsByTimestamp(mergedPoints), maxPoints);
-    const events = buildSourceTimelineEvents(samples, source.availableMetrics);
 
     return {
       source,
@@ -3344,7 +3331,7 @@ class TelemetryService {
         hours,
         startAt,
         endAt,
-        rawPointCount: mergedPoints.length,
+        rawPointCount,
         pointCount: points.length,
         maxPoints
       },
@@ -3511,7 +3498,7 @@ const telemetryService = new TelemetryService();
 module.exports = telemetryService;
 module.exports.TelemetryService = TelemetryService;
 module.exports.__private__ = {
-  buildSourceTimelineEvents,
+  collectChartSeries,
   buildSourceSummaryFromSnapshot,
   buildMetricDescriptors,
   buildMetricStats,
@@ -3530,7 +3517,6 @@ module.exports.__private__ = {
   inferMetricUnit,
   isBinaryMetric,
   mapSettledWithConcurrency,
-  mergePointsByTimestamp,
   normalizeDiskCapacity,
   normalizeMetricKeys,
   normalizeTelemetryLookupText,

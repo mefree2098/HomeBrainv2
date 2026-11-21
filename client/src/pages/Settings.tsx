@@ -12,10 +12,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { WakeWordManager } from "@/components/voice/WakeWordManager"
 import {
-  Settings as SettingsIcon,
   Volume2,
   Mic,
-  MapPin,
   Key,
   Shield,
   Smartphone,
@@ -62,7 +60,6 @@ import {
   getCodexModels,
   getCodexAuthHealth,
   completeCodexLogin,
-  getSetting,
   getLLMPriorityList,
   updateLLMPriorityList
 } from "@/api/settings"
@@ -797,7 +794,7 @@ export function Settings() {
   const [loadingSecuritySirens, setLoadingSecuritySirens] = useState(false)
   const [securityMonitoringSensors, setSecurityMonitoringSensors] = useState<SecurityMonitoringSensor[]>([])
   const [loadingSecuritySensors, setLoadingSecuritySensors] = useState(false)
-  const { register, handleSubmit, setValue, watch, reset, getValues } = useForm({
+  const { register, handleSubmit, setValue, watch, getValues } = useForm({
     defaultValues: {
       location: "New York, NY",
       timezone: "America/New_York",

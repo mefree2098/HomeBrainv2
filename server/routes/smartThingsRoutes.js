@@ -3,7 +3,6 @@ const router = express.Router();
 const { requireAdmin } = require('./middlewares/auth');
 const smartThingsService = require('../services/smartThingsService');
 const SmartThingsIntegration = require('../models/SmartThingsIntegration');
-const Settings = require('../models/Settings');
 const { buildClientRedirectUrl } = require('../utils/publicOrigin');
 
 // Create auth middleware instance

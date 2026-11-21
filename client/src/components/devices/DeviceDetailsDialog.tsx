@@ -6,7 +6,6 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   type LucideIcon,
   Activity,
-  BarChart3,
   Battery,
   Clock3,
   Cpu,

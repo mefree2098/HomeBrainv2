@@ -309,6 +309,8 @@ router.get('/logs/stream', async (req, res) => {
   }, DIRECT_RADIO_LOG_HEARTBEAT_MS);
 
   const listener = (entry) => {
+    if (res.destroyed || res.writableEnded) return;
+    if (res.writableLength > 1024 * 1024) { res.destroy(); return; }
     if (!protocol || entry.protocol === protocol) {
       writeLog(entry);
     }

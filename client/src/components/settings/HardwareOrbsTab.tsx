@@ -218,7 +218,6 @@ const isTemperatureCapable = (device: DeviceRecord) => {
   ].some((value) => typeof value === "number")
 }
 
-const getDeviceId = (device: DeviceRecord) => normalizeString(device._id || device.id || "")
 
 const getDeviceLabel = (device: DeviceRecord) => {
   const room = normalizeString(device.room)
