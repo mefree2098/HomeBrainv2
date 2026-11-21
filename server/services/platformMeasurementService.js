@@ -7,13 +7,27 @@ const { getOperationalHealth } = require('./operationalHealthService');
 const PERIOD = 5 * 60_000;
 const DAY = 86400_000;
 const BOUNDS = [25, 50, 100, 250, 500, 1000, 2000, 5000, 15000];
-const emptyCounts = () => ({ latency: Array(BOUNDS.length + 1).fill(0), serverErrors: 0, aborted: 0 });
+// Limit cardinality to known API services. Never persist a URL, query string or device identifier.
+const SERVICES = new Set(('devices sensor-nodes telemetry tempest govee-air-quality sense weather alexa direct-radios '
+  + 'resources events insteon workflows automations platform-deploy platform-services remote-devices voice '
+  + 'smartthings ecobee harmony rooms apple-home notifications settings auth panels appliances').split(' '));
+const emptyCounts = () => ({ latency: Array(BOUNDS.length + 1).fill(0), serverErrors: 0, aborted: 0, byService: {} });
 
-function recordRequest(counts, duration, status, aborted) {
+function apiService(url) {
+  const service = /^\/api\/([a-z-]+)(?:[/?]|$)/.exec(url || '')?.[1];
+  return SERVICES.has(service) ? service : 'other';
+}
+
+function recordRequest(counts, duration, status, aborted, service) {
   const bin = BOUNDS.findIndex(limit => duration <= limit);
   counts.latency[bin < 0 ? BOUNDS.length : bin]++;
   if (aborted) counts.aborted++;
   else if (status >= 500) counts.serverErrors++;
+  const group = counts.byService[service] ??= { requests: 0, over500Ms: 0, over2s: 0, failures: 0 };
+  group.requests++;
+  if (duration > 500) group.over500Ms++;
+  if (duration > 2000) group.over2s++;
+  if (aborted || status >= 500) group.failures++;
 }
 
 function delta(current, previous) {
@@ -112,10 +126,11 @@ class PlatformMeasurementService {
 
   observe(req, res, next) {
     const start = performance.now();
+    const service = apiService(req.originalUrl);
     // Server-sent events represent an open stream, not an API response time.
     res.once('close', () => {
       if (!String(res.getHeader('Content-Type') || '').startsWith('text/event-stream')) {
-        recordRequest(this.counts, performance.now() - start, res.statusCode, !res.writableFinished);
+        recordRequest(this.counts, performance.now() - start, res.statusCode, !res.writableFinished, service);
       }
     });
     next();
@@ -207,7 +222,6 @@ class PlatformMeasurementService {
 
 module.exports = new PlatformMeasurementService();
 module.exports.PlatformMeasurementService = PlatformMeasurementService;
-module.exports.recordRequest = recordRequest;
 module.exports.BOUNDS = BOUNDS;
 module.exports.DAY = DAY;
 module.exports.parseServiceWriteCounters = parseServiceWriteCounters;

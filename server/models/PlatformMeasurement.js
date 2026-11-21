@@ -8,6 +8,7 @@ const schema = new mongoose.Schema({
   latency: [Number],
   serverErrors: Number,
   aborted: Number,
+  byService: mongoose.Schema.Types.Mixed,
   cpuCoresUsed: Number,
   rssBytes: Number,
   heapUsedBytes: Number,
