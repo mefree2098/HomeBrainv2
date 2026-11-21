@@ -210,6 +210,12 @@ function main() {
     return;
   }
 
+  const webBuild = args.join('\0') === ['npm', 'run', 'build', '--prefix', 'client'].join('\0')
+    ? require('./verified-client-build').prepareWebBuild(selected.version.raw) : null;
+  if (webBuild?.reusable) {
+    console.log('Reusing verified client build. Source files and all web assets match.');
+    return;
+  }
   const invocation = normalizeLaunchInvocation(resolveCommand(args[0], selected.bin), args.slice(1));
   const nodeDir = path.dirname(selected.bin);
   const env = {
@@ -277,6 +283,7 @@ function main() {
       process.exit(Number.isInteger(signalNumber) ? 128 + signalNumber : 1);
       return;
     }
+    if (code === 0 && webBuild) webBuild.record();
     process.exit(code == null ? 1 : code);
   });
 }
