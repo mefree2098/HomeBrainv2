@@ -199,10 +199,16 @@ final class DashboardVisualTests: XCTestCase {
         attachScreenshot("Small lighting widget", from: app)
         color.tap()
         XCTAssertTrue(app.buttons["Done"].waitForExistence(timeout: 5), "The native color picker must open")
-        app.buttons["Sliders"].tap()
-        // Green starts inside the track; the red thumb starts at the clipped landscape edge.
+        // The system picker can remember its last tab across presentations.
+        let slidersTab = app.buttons["Sliders"]
         let green = app.sliders["Green"]
-        XCTAssertTrue(green.waitForExistence(timeout: 5))
+        func showSliders() {
+            XCTAssertTrue(slidersTab.waitForExistence(timeout: 5))
+            if !slidersTab.isSelected { slidersTab.tap() }
+            XCTAssertTrue(green.waitForExistence(timeout: 5))
+        }
+        showSliders()
+        // Green starts inside the track in landscape.
         let originalGreen = green.value as? String
         green.adjust(toNormalizedSliderPosition: 0.2)
         let selectedGreen = green.value as? String
@@ -210,7 +216,7 @@ final class DashboardVisualTests: XCTestCase {
         attachScreenshot("Lighting color picker", from: app)
         app.buttons["Done"].tap()
         color.tap()
-        app.buttons["Sliders"].tap()
+        showSliders()
         let restoredPercent = try XCTUnwrap(Double((green.value as? String ?? "").replacingOccurrences(of: "%", with: "")))
         let selectedPercent = try XCTUnwrap(Double((selectedGreen ?? "").replacingOccurrences(of: "%", with: "")))
         // Device colors use 8-bit RGB, while the system slider reports rounded percentages.
