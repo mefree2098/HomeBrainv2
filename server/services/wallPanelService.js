@@ -3703,18 +3703,20 @@ class WallPanelService {
       console.warn(`WallPanelService: Failed to record panel state heartbeat for ${panelId}: ${error.message}`);
     });
     const panel = normalizePanelDocument(panelDoc);
-    const needsAllDevices = uniqueIds([
+    const configuredIds = uniqueIds([
       panel?.settings?.roomControl?.lightDeviceId,
       ...(Array.isArray(panel?.settings?.roomControl?.favoriteDeviceIds)
         ? panel.settings.roomControl.favoriteDeviceIds
         : [])
-    ]).length > 0;
-
-    const [roomDevices, allDevices, securityStatus, weatherSnapshot] = await Promise.all([
-      Device.find({ room: panel.room }).sort({ name: 1 }),
-      needsAllDevices
-        ? Device.find({}).sort({ room: 1, name: 1 })
-        : Promise.resolve([]),
+    ]).filter(id => /^[a-f0-9]{24}$/i.test(id));
+    const roomFilter = { room: panel.room };
+    const deviceFilter = configuredIds.length
+      ? { $or: [roomFilter, { _id: { $in: configuredIds } }] }
+      : roomFilter;
+    const [devices, securityStatus, weatherSnapshot] = await Promise.all([
+      Device.find(deviceFilter, '-properties.smartThingsStatus -properties.smartThingsComponents', {
+        sort: { name: 1 }
+      }),
       securityAlarmService.getAlarmStatus({ refreshDoorLocks: false }).catch((error) => ({
         alarmState: 'unknown',
         isArmed: false,
@@ -3723,15 +3725,14 @@ class WallPanelService {
       })),
       weatherService.fetchDashboardWeather().catch(() => null)
     ]);
-    const liveRoomDevices = deviceUpdateEmitter.mergeLatestDevices(roomDevices);
-    const liveAllDevices = needsAllDevices
-      ? deviceUpdateEmitter.mergeLatestDevices(allDevices)
-      : allDevices;
+    const roomIds = new Set(devices.filter(device => device.room === panel.room).map(device => toId(device._id)));
+    const liveDevices = deviceUpdateEmitter.mergeLatestDevices(devices);
+    const liveRoomDevices = liveDevices.filter(device => roomIds.has(toId(device._id)));
 
     const [thermostatDevice, sensorDevice, room, media, quiet] = await Promise.all([
       resolveThermostatDevice(panel.settings, liveRoomDevices).catch(() => null),
       resolveSensorDevice(panel.settings, liveRoomDevices).catch(() => null),
-      buildRoomMode(panel, liveRoomDevices, liveAllDevices),
+      buildRoomMode(panel, liveRoomDevices, liveDevices),
       buildMediaMode(panel),
       buildQuietMode(panel)
     ]);

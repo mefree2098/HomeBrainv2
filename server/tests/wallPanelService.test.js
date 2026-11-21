@@ -433,10 +433,10 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
     }
   };
   const bedroomLight = {
-    _id: 'light-1',
+    _id: '0123456789abcdef01234567',
     name: 'Bedroom Lamp',
     type: 'light',
-    room: 'Bedroom',
+    room: 'Landing',
     status: true,
     brightness: 35
   };
@@ -447,15 +447,8 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
     room: 'Bedroom',
     status: false
   };
-  const garage = {
-    _id: 'garage-1',
-    name: 'Main Garage',
-    type: 'garage',
-    room: 'Garage',
-    status: true
-  };
   const frontDoorLock = {
-    _id: 'lock-1',
+    _id: '0123456789abcdef01234568',
     name: 'Front Door',
     type: 'lock',
     room: 'Entry',
@@ -487,8 +480,8 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
         bedtimeSceneId: 'scene-bedtime'
       },
       roomControl: {
-        lightDeviceId: 'light-1',
-        favoriteDeviceIds: ['light-1', 'lock-1'],
+        lightDeviceId: bedroomLight._id,
+        favoriteDeviceIds: [bedroomLight._id, frontDoorLock._id],
         sceneIds: []
       },
       harmony: {
@@ -520,14 +513,14 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
 
   WallPanel.findById = async () => panelDoc;
   Device.findOne = async () => thermostat;
-  Device.find = (query = {}) => ({
-    sort: async () => {
-      if (query.room === 'Bedroom') {
-        return [bedroomLight, bedroomSpeaker];
-      }
-      return [thermostat, bedroomLight, bedroomSpeaker, garage, frontDoorLock];
-    }
-  });
+  let deviceReads = 0;
+  Device.find = async (filter, projection, options) => {
+    deviceReads++;
+    assert.deepEqual(filter, { $or: [{ room: 'Bedroom' }, { _id: { $in: [bedroomLight._id, frontDoorLock._id] } }] });
+    assert.match(projection, /-properties\.smartThingsStatus/);
+    assert.deepEqual(options, { sort: { name: 1 } });
+    return [bedroomLight, bedroomSpeaker, frontDoorLock];
+  };
   Scene.find = async () => sceneDocs;
   securityAlarmService.getAlarmStatus = async () => ({
     alarmState: 'disarmed',
@@ -540,7 +533,7 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
       { id: 'sensor-2', name: 'Master Window', isActive: true }
     ],
     doorLocks: [
-      { id: 'lock-1', name: 'Front Door', isLocked: true }
+      { id: '0123456789abcdef01234568', name: 'Front Door', isLocked: true }
     ]
   });
   deviceService.getDeviceById = async (id) => (id === 'thermo-1' ? thermostat : null);
@@ -564,6 +557,7 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
     registrationCode: 'HBWP-ABCD-EF12-3456'
   }, 'https://example.com');
 
+  assert.equal(deviceReads, 1);
   assert.deepEqual(result.modeOrder, ['thermostat', 'room', 'home', 'media', 'quiet']);
   assert.equal(result.transport.pollIntervalMs, 1000);
   assert.equal(result.orientation.mountOffsetTenths, 25);
@@ -577,10 +571,10 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
   assert.equal(result.modes.room.title, 'Bedroom');
   assert.equal(result.modes.room.centerValue, '35%');
   assert.equal(result.modes.room.secondaryValue, 'Lights');
-  assert.equal(result.modes.room.knob.pressAction.targetId, 'light-1');
+  assert.equal(result.modes.room.knob.pressAction.targetId, bedroomLight._id);
   assert.equal(result.modes.room.knob.pressAction.action, 'set_brightness');
   assert.equal(result.modes.room.knob.pressAction.value, 0);
-  assert.equal(result.modes.room.meta.deviceId, 'light-1');
+  assert.equal(result.modes.room.meta.deviceId, bedroomLight._id);
   assert.deepEqual(result.modes.room.quickActions, []);
   assert.equal(result.modes.home.title, 'Security');
   assert.equal(result.modes.home.centerValue, 'Disarmed');
@@ -645,9 +639,10 @@ test('getPanelState overlays recent realtime device updates for orb brightness',
   });
 
   WallPanel.findById = async () => panelDoc;
-  Device.find = () => ({
-    sort: async () => [staleLight]
-  });
+  Device.find = async filter => {
+    assert.deepEqual(filter, { room: 'Bedroom' });
+    return [staleLight];
+  };
   securityAlarmService.getAlarmStatus = async () => ({
     alarmState: 'disarmed',
     isArmed: false,
@@ -796,9 +791,7 @@ test('getPanelState uses the saved enabled category order', async (t) => {
 
   WallPanel.findById = async () => panelDoc;
   Device.findOne = async () => null;
-  Device.find = () => ({
-    sort: async () => []
-  });
+  Device.find = async () => [];
   Scene.find = async () => [];
   securityAlarmService.getAlarmStatus = async () => ({
     alarmState: 'disarmed',
@@ -867,9 +860,7 @@ test('getPanelState prefers a LAN OTA download URL when the panel and hub share 
 
   WallPanel.findById = async () => panelDoc;
   Device.findOne = async () => null;
-  Device.find = () => ({
-    sort: async () => []
-  });
+  Device.find = async () => [];
   Scene.find = async () => [];
   securityAlarmService.getAlarmStatus = async () => null;
   deviceService.getDeviceById = async () => null;
@@ -953,9 +944,7 @@ test('getPanelState hides stale OTA payloads when the panel is already on a newe
 
   WallPanel.findById = async () => panelDoc;
   Device.findOne = async () => null;
-  Device.find = () => ({
-    sort: async () => []
-  });
+  Device.find = async () => [];
   Scene.find = async () => [];
   securityAlarmService.getAlarmStatus = async () => null;
   deviceService.getDeviceById = async () => null;

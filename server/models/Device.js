@@ -126,6 +126,7 @@ schema.pre('save', function() {
 
 // Indexes for better query performance
 schema.index({ type: 1, room: 1 });
+schema.index({ room: 1, name: 1 });
 schema.index({ groups: 1 });
 schema.index({ status: 1 });
 schema.index({ isOnline: 1 });
