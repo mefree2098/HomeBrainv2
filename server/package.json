@@ -7,6 +7,7 @@
     "start": "node server.js",
     "dev": "node server.js",
     "test": "NODE_ENV=test node --require ./tests/isolateTestEnvironment.cjs --test tests/*.test.js",
+    "test:hub": "NODE_ENV=test node --require ./tests/isolateTestEnvironment.cjs --test --test-concurrency=1 tests/*.test.js",
     "ensure:native": "node scripts/ensureNativeModuleCompatibility.js",
     "bootstrap:admin": "node scripts/bootstrapAdminState.js",
     "seed:devices": "node scripts/seeds/deviceSeeds.js",

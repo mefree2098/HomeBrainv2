@@ -2,6 +2,8 @@ const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const crypto = require('crypto');
+const os = require('node:os');
+const { finished } = require('node:stream/promises');
 const { spawn } = require('child_process');
 const mongoose = require('mongoose');
 const wakeWordTrainingService = require('./wakeWordTrainingService');
@@ -494,58 +496,59 @@ class PlatformDeployService {
     const cwd = options.cwd || this.projectRoot;
     const env = { ...process.env, ...(options.env || {}) };
     const timeoutMs = normalizeCommandTimeout(options.timeoutMs, DEFAULT_LOGGED_COMMAND_TIMEOUT_MS);
-    const appendChunk = async (prefix, chunk) => {
-      const text = chunk.toString();
-      if (!text) return;
-      const timestamp = new Date().toISOString();
-      await this.appendJobLog(jobId, `[${timestamp}] [${stepName}] ${prefix}${text}`);
-    };
-
     await this.appendJobLog(
       jobId,
       `\n[${new Date().toISOString()}] [${stepName}] Running: ${invocation.command} ${invocation.args.join(' ')}\n`
     );
 
-    return new Promise((resolve, reject) => {
-      // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- executable and argv are validated above; shell execution is explicitly disabled.
-      const child = spawn(invocation.command, invocation.args, {
-        cwd,
-        env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        shell: false,
-        windowsHide: true
-      });
-      let settled = false;
-      const finish = (handler, value) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        handler(value);
-      };
-      const timer = setTimeout(() => {
-        child.kill('SIGTERM');
-        finish(reject, new Error(`Step "${stepName}" timed out after ${Math.round(timeoutMs / 1000)} seconds`));
-      }, timeoutMs);
-
-      child.stdout.on('data', (chunk) => {
-        void appendChunk('', chunk).catch(() => {});
-      });
-      child.stderr.on('data', (chunk) => {
-        void appendChunk('ERR: ', chunk).catch(() => {});
-      });
-
-      child.on('error', (error) => {
-        finish(reject, error);
-      });
-
-      child.on('close', (code) => {
-        if (code === 0) {
-          finish(resolve, { code });
-          return;
+    const log = fs.createWriteStream(this.getLogPath(jobId), { flags: 'a' });
+    const logFinished = finished(log);
+    // The open or a later write may fail before the subprocess emits close.
+    logFinished.catch(() => {});
+    try {
+      return await new Promise((resolve, reject) => {
+        // nosemgrep: javascript.lang.security.detect-child-process.detect-child-process -- validated executable and argv; no shell.
+        const child = spawn(invocation.command, invocation.args, {
+          cwd, env, stdio: ['ignore', 'pipe', 'pipe'], shell: false, windowsHide: true
+        });
+        if (options.background && child.pid) {
+          try { os.setPriority(child.pid, 10); } catch { /* Platform may not support child priorities. */ }
         }
-        finish(reject, new Error(`Step "${stepName}" failed with exit code ${code}`));
+        const stop = () => {
+          child.kill('SIGTERM');
+          child.stdout.resume();
+          child.stderr.resume();
+        };
+        const timer = setTimeout(() => {
+          stop();
+          reject(new Error(`Step "${stepName}" timed out after ${Math.round(timeoutMs / 1000)} seconds`));
+        }, timeoutMs);
+        const pipeChunk = (prefix, chunk) => {
+          if (log.destroyed || log.writableEnded) return;
+          if (!log.write(`[${new Date().toISOString()}] [${stepName}] ${prefix}${chunk}`)) {
+            child.stdout.pause();
+            child.stderr.pause();
+          }
+        };
+        log.on('drain', () => { child.stdout.resume(); child.stderr.resume(); });
+        log.once('error', error => {
+          clearTimeout(timer);
+          stop();
+          reject(error);
+        });
+        child.stdout.setEncoding('utf8').on('data', chunk => pipeChunk('', chunk));
+        child.stderr.setEncoding('utf8').on('data', chunk => pipeChunk('ERR: ', chunk));
+        child.once('error', error => { clearTimeout(timer); reject(error); });
+        child.once('close', code => {
+          clearTimeout(timer);
+          if (code === 0) resolve({ code });
+          else reject(new Error(`Step "${stepName}" failed with exit code ${code}`));
+        });
       });
-    });
+    } finally {
+      log.end();
+      await logFinished;
+    }
   }
 
   getSafeGitArgs(args = []) {
@@ -2009,10 +2012,10 @@ class PlatformDeployService {
         await runNpmStep('Run client lint', ['run', 'lint', '--prefix', 'client', '--', '--max-warnings=0']);
       }
 
-      await runNpmStep('Build client', ['run', 'build', '--prefix', 'client']);
+      await runNpmStep('Build client', ['run', 'build', '--prefix', 'client'], { background: true });
 
       if (job.options.runServerTests) {
-        await runNpmStep('Run server tests', ['test', '--prefix', 'server']);
+        await runNpmStep('Run server tests', ['run', 'test:hub', '--prefix', 'server'], { background: true });
       }
 
       await runCustomStep('Bootstrap reverse proxy state', async () => {

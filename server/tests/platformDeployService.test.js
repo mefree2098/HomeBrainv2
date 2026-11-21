@@ -789,3 +789,17 @@ test('isIgnorableDirtyEntry treats OTA artifacts as generated output', { concurr
   assert.equal(service.isIgnorableDirtyEntry('?? server/public/wake-words/notes.txt'), false);
   assert.equal(service.isIgnorableDirtyEntry('?? server/src/index.js'), false);
 });
+
+test('deploy logger drains large stdout and stderr before returning even on failure', async t => {
+  const service = await createTempService(t);
+  const jobId = 'logger-regression-test';
+  const script = "process.stdout.write('A'.repeat(256 * 1024) + 'stdout-end'); process.stderr.write('B'.repeat(128 * 1024) + 'stderr-end'); process.exitCode = 1;";
+  await assert.rejects(service.runLoggedCommand(jobId, 'Output', process.execPath, ['-e', script]), /exit code 1/);
+  const log = await fsp.readFile(service.getLogPath(jobId), 'utf8');
+  const output = log.slice(log.indexOf('\n', log.indexOf('Running:')) + 1);
+  assert.equal((output.match(/A/g) || []).length, 256 * 1024);
+  assert.match(output, /stdout-end/);
+  assert.equal((output.match(/B/g) || []).length, 128 * 1024);
+  assert.match(output, /ERR: B/);
+  assert.match(output, /stderr-end/);
+});
