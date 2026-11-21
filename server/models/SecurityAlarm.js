@@ -279,7 +279,6 @@ SecurityAlarmSchema.index({ 'sirenOutputs.deviceId': 1 });
 
 // Static method to get the main alarm system
 SecurityAlarmSchema.statics.getMainAlarm = async function() {
-  console.log('SecurityAlarm: Getting main alarm system');
   
   let alarm = await this.findOne();
   

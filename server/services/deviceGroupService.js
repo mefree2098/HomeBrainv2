@@ -492,8 +492,9 @@ class DeviceGroupService {
     };
   }
 
-  async listGroups() {
-    const context = await this._buildGroupContext();
+  async listGroups({ devices = null, includeUsage = true } = {}) {
+    const context = await this._buildGroupContext({ devices });
+    if (!includeUsage) return context.groups.map(group => this._buildGroupSummary(group, context));
     const [workflows, automations] = await Promise.all([
       Workflow.find().select('_id name actions graph').lean(),
       Automation.find({ workflowId: null }).select('_id name actions workflowGraph').lean()

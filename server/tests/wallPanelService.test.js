@@ -410,6 +410,24 @@ test('activatePanel fails an OTA when the orb reboots into a different firmware 
   assert.deepEqual(cleanupCalls, ['/tmp/job-rebooting.bin']);
 });
 
+test('concurrent panel polls refresh optional weather once and can render while the provider is pending', async t => {
+  const service = new WallPanelService();
+  let resolve, calls = 0;
+  t.mock.method(weatherService, 'fetchDashboardWeather', () => {
+    calls++;
+    return new Promise(done => { resolve = done; });
+  });
+  service.refreshPanelWeather();
+  service.refreshPanelWeather();
+  assert.equal(calls, 1);
+  assert.equal(service.panelWeather, undefined);
+  resolve({ current: { temperatureF: 54 }, forecast: ['unused'] });
+  await service.panelWeatherRefresh;
+  assert.deepEqual(service.panelWeather, { current: { temperatureF: 54 } });
+  service.refreshPanelWeather();
+  assert.equal(calls, 1);
+});
+
 test('getPanelState builds swipeable mode payloads for the firmware', async (t) => {
   const originalFindById = WallPanel.findById;
   const originalDeviceFind = Device.find;

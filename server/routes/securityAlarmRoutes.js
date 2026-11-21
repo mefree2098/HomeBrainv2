@@ -63,12 +63,10 @@ router.get('/', auth, async (req, res) => {
  */
 router.get('/status', auth, async (req, res) => {
   try {
-    console.log('GET /api/security-alarm/status - Fetching alarm status');
 
     const refreshDoorLocks = req.query.refreshDoorLocks === '1' || req.query.refreshDoorLocks === 'true';
     const status = await securityAlarmService.getAlarmStatus({ refreshDoorLocks });
     
-    console.log('Successfully retrieved alarm status');
     res.status(200).json({
       success: true,
       status: status

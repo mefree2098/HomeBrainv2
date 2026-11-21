@@ -9,6 +9,7 @@ const schema = new mongoose.Schema({
   serverErrors: Number,
   aborted: Number,
   byService: mongoose.Schema.Types.Mixed,
+  requestPhases: mongoose.Schema.Types.Mixed,
   cpuCoresUsed: Number,
   rssBytes: Number,
   heapUsedBytes: Number,

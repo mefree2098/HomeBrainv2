@@ -15,7 +15,7 @@ function percentileBound(bins, bounds, count, fraction) {
 function windowStats(start, end, bounds) {
   return {
     start, end, samples: 0, bins: Array(bounds.length + 1).fill(0), covered: 0, cpuMs: 0, cpuCoverage: 0,
-    errors: 0, aborted: 0, healthChecks: 0, minMemory: null, rss: [], degraded: {}, healthMax: {}, alexaSamples: {}, byService: {},
+    errors: 0, aborted: 0, healthChecks: 0, minMemory: null, rss: [], requestPhases: {}, degraded: {}, healthMax: {}, alexaSamples: {}, byService: {},
     staleFeeds: new Set(), bootTimes: new Set(), commits: new Set(),
     io: { processWriteBytes: { bytes: 0, ms: 0 }, serviceWriteBytes: { bytes: 0, ms: 0 }, volumeWriteBytes: { bytes: 0, ms: 0 } }
   };
@@ -29,6 +29,9 @@ function addObservation(stats, row) {
   for (const [service, values] of Object.entries(row.byService || {})) {
     const group = stats.byService[service] ??= { requests: 0, over500Ms: 0, over2s: 0, failures: 0 };
     for (const key of Object.keys(group)) group[key] += values[key] || 0;
+  }
+  for (const [phase, count] of Object.entries(row.requestPhases || {})) {
+    stats.requestPhases[phase] = (stats.requestPhases[phase] || 0) + count;
   }
   if (row.bootedAt) stats.bootTimes.add(new Date(row.bootedAt).toISOString());
   if (row.commit) stats.commits.add(row.commit);
@@ -71,7 +74,7 @@ function finish(stats, bounds) {
     coveragePercent: round(100 * meter.ms / (end - start))
   });
   return {
-    samples: stats.samples, byService: stats.byService, coveragePercent: round(100 * stats.covered / (end - start)),
+    samples: stats.samples, byService: stats.byService, requestPhases: stats.requestPhases, coveragePercent: round(100 * stats.covered / (end - start)),
     requests, serverErrors: errors, aborted, failurePercent: requests ? round(100 * (errors + aborted) / requests) : null,
     p95MsUpperBound: percentileBound(bins, bounds, requests, .95),
     p99MsUpperBound: percentileBound(bins, bounds, requests, .99),

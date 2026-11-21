@@ -818,6 +818,41 @@ test('device update bursts are coalesced into one serialized Alexa broker state 
   ]));
 });
 
+test('device reports skip identical values and retry changed values from the catalog after a broker failure', async t => {
+  const bridge = new AlexaBridgeService();
+  const registration = { status: 'paired', hubId: 'home', brokerBaseUrl: 'http://broker', relayTokenHash: 'first' };
+  bridge.ensureRegistration = async () => registration;
+  let value = 'ON', sample = 0, connectivity = 'OK', fail = false;
+  const pushes = [];
+  t.mock.method(alexaProjectionService, 'buildCatalog', async options => {
+    assert.equal(options.deviceUpdatesOnly, true);
+    return { hubId: 'home', endpoints: [{
+      endpointId: 'hb:home:device:id', cookie: { entityType: 'device', entityId: 'id' },
+      state: { connectivity, properties: [{ namespace: 'Alexa.PowerController', name: 'powerState', value, timeOfSample: ++sample }] }
+    }] };
+  });
+  t.mock.method(alexaProjectionService, 'getStateForEndpoint', () => assert.fail('redundant full catalog read'));
+  bridge.notifyBroker = async (_path, body) => {
+    if (fail) throw Error('offline');
+    pushes.push(body.states[0]);
+    return { success: true };
+  };
+  const update = () => bridge.syncDeviceUpdatesToBroker(['id']);
+  await update();
+  await update();
+  value = 'OFF';
+  fail = true;
+  await assert.rejects(update, /offline/);
+  fail = false;
+  await update();
+  connectivity = 'UNREACHABLE';
+  await update();
+  registration.relayTokenHash = 'second';
+  await update();
+  assert.deepEqual(pushes.map(state => state.properties[0].timeOfSample), [1, 4, 5, 6]);
+  assert.deepEqual(pushes.map(state => state.connectivity), ['OK', 'OK', 'UNREACHABLE', 'UNREACHABLE']);
+});
+
 test('device updates received during a slow broker push wait for the active push', async (t) => {
   const bridge = new AlexaBridgeService({ deviceUpdateSyncDebounceMs: 1 });
   const originalBuildCatalog = alexaProjectionService.buildCatalog;

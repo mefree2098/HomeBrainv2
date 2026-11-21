@@ -11,7 +11,7 @@ const BOUNDS = [25, 50, 100, 250, 500, 1000, 2000, 5000, 15000];
 const SERVICES = new Set(('devices sensor-nodes telemetry tempest govee-air-quality sense weather alexa direct-radios '
   + 'resources events insteon workflows automations platform-deploy platform-services remote-devices voice '
   + 'smartthings ecobee harmony rooms apple-home notifications settings auth panels appliances').split(' '));
-const emptyCounts = () => ({ latency: Array(BOUNDS.length + 1).fill(0), serverErrors: 0, aborted: 0, byService: {} });
+const emptyCounts = () => ({ latency: Array(BOUNDS.length + 1).fill(0), serverErrors: 0, aborted: 0, byService: {}, requestPhases: {} });
 
 function apiService(url) {
   const service = /^\/api\/([a-z-]+)(?:[/?]|$)/.exec(url || '')?.[1];
@@ -127,10 +127,28 @@ class PlatformMeasurementService {
   observe(req, res, next) {
     const start = performance.now();
     const service = apiService(req.originalUrl);
+    // Separate time spent receiving the sensor body from work after the body reached Express.
+    const sensorUpload = req.method === 'POST' && /^\/api\/sensor-nodes\/[^/?]+\/readings(?:[?]|$)/.test(req.originalUrl);
+    let bodyAt;
+    if (sensorUpload) req.once('end', () => { bodyAt = performance.now(); });
     // Server-sent events represent an open stream, not an API response time.
     res.once('close', () => {
       if (!String(res.getHeader('Content-Type') || '').startsWith('text/event-stream')) {
-        recordRequest(this.counts, performance.now() - start, res.statusCode, !res.writableFinished, service);
+        const now = performance.now();
+        const aborted = !res.writableFinished;
+        recordRequest(this.counts, now - start, res.statusCode, aborted, service);
+        const phases = this.counts.requestPhases;
+        const count = key => { phases[key] = (phases[key] || 0) + 1; };
+        if (sensorUpload) {
+          if ((bodyAt ?? now) - start > 2000) count('sensorSlowBody');
+          if (bodyAt !== undefined && now - bodyAt > 2000) count('sensorSlowHandler');
+          if (aborted) {
+            if (bodyAt === undefined) count('sensorAbortReceiving');
+            else count('sensorAbortAfterBody_' + (res.locals?.sensorReadingStage || 'routing'));
+          }
+        } else if (aborted && service === 'panels') {
+          count(res.headersSent ? 'panelAbortSending' : 'panelAbortBeforeHeaders');
+        }
       }
     });
     next();

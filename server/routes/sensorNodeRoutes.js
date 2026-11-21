@@ -251,7 +251,7 @@ function createSensorNodeRouter(sensorNodeService = require('../services/sensorN
         req.params.nodeId,
         extractDeviceToken(req),
         req.body || {},
-        { ipAddress: requestIp(req) }
+        { ipAddress: requestIp(req), onStage: stage => { res.locals.sensorReadingStage = stage; } }
       );
       return res.status(202).json({ success: true, ...result });
     } catch (error) {

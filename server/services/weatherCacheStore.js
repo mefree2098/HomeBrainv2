@@ -17,10 +17,6 @@ function getWeatherCacheFilePath() {
   return configuredPath || DEFAULT_WEATHER_CACHE_FILE;
 }
 
-function cloneStore(store = {}) {
-  return JSON.parse(JSON.stringify(store));
-}
-
 async function ensureStoreLoaded() {
   const filePath = getWeatherCacheFilePath();
   if (loadedStore && loadedFilePath === filePath) {
@@ -98,14 +94,14 @@ async function setEntry(kind, keys, value) {
     };
   });
 
-  const snapshot = cloneStore(store);
+  const snapshot = JSON.stringify(store);
   const filePath = getWeatherCacheFilePath();
   writePromise = writePromise
     .catch(() => {})
     .then(async () => {
       await fsp.mkdir(path.dirname(filePath), { recursive: true });
       const tempPath = `${filePath}.tmp`;
-      await fsp.writeFile(tempPath, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
+      await fsp.writeFile(tempPath, `${snapshot}\n`, 'utf8');
       await fsp.rename(tempPath, filePath);
     })
     .catch((error) => {
