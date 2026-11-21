@@ -17,6 +17,26 @@ const {
   normalizeStateResponse
 } = goveeAirQualityService.__testHooks;
 
+test('LAN polling waits for a valid reply from the selected sensor', async (t) => {
+  const socket = new (require('node:events').EventEmitter)();
+  const dgram = require('node:dgram');
+  t.mock.method(dgram, 'createSocket', () => socket);
+  socket.bind = (_port, ready) => ready();
+  socket.close = t.mock.fn();
+  const expected = { msg: { cmd: 'devStatus', data: { temperature: 23 } } };
+  socket.send = (_payload, _port, address, sent) => {
+    sent(null);
+    socket.emit('message', Buffer.from(JSON.stringify(expected)), { address: '192.0.2.2' });
+    socket.emit('message', Buffer.from('invalid JSON'), { address });
+    socket.emit('message', Buffer.from('{"msg":{"cmd":"scan"}}'), { address });
+    assert.equal(socket.close.mock.callCount(), 0);
+    socket.emit('message', Buffer.from(JSON.stringify(expected)), { address });
+  };
+  const result = await goveeAirQualityService.requestLocalDeviceState({ ip: '192.0.2.1' });
+  assert.deepEqual(result, expected);
+  assert.equal(socket.close.mock.callCount(), 1);
+});
+
 test('normalizes Govee connection modes safely', () => {
   assert.equal(normalizeConnectionMode('local'), 'local');
   assert.equal(normalizeConnectionMode('cloud'), 'cloud');
