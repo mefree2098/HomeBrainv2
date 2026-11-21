@@ -378,16 +378,6 @@ class AlexaEventGatewayService {
       }
     );
 
-    await this.store.updatePermissionGrant(activeGrant.permissionGrantId, {
-      lastUsedAt: new Date().toISOString(),
-      lastError: '',
-      metadata: {
-        lastErrorCode: '',
-        lastErrorStatus: 0,
-        lastDeliveryAt: new Date().toISOString()
-      }
-    });
-
     return response;
   }
 

@@ -237,7 +237,7 @@ HOMEBRAIN_ALEXA_EVENT_CLIENT_ID=
 HOMEBRAIN_ALEXA_EVENT_CLIENT_SECRET=
 
 # Put the broker state on persistent storage, not inside the repo.
-HOMEBRAIN_BROKER_STORE_FILE=/var/lib/homebrain-alexa/store.json
+HOMEBRAIN_BROKER_STORE_FILE=/var/lib/homebrain-alexa/store.sqlite
 
 # Use durable refresh tokens for Alexa account linking. 0 means no expiration.
 HOMEBRAIN_ALEXA_ACCESS_TOKEN_TTL_SECONDS=3600
@@ -273,6 +273,11 @@ python3 -c 'import secrets; print(secrets.token_urlsafe(48))'
 
 ### What the broker stores
 
+A broker store path ending in `.sqlite` keeps the queue, delivery leases, grant updates, and linked accounts in one transactional database. The broker updates the affected records in both the primary and its `.bak` mirror. An empty dispatch poll performs no writes.
+
+To migrate a JSON store, stop the broker, copy its existing `store.json` and `store.json.bak` into a private directory on the target volume, then configure `store.sqlite` in that directory and start the broker. The first start imports and verifies every record. Subsequent starts use the database or its mirror. Keep the original JSON pair as a cutover snapshot. Verify the paired hub, linked accounts, refresh tokens, queue, and a successful event delivery before retiring the snapshot.
+
+
 The broker store file contains:
 
 - paired hub registrations
@@ -300,7 +305,7 @@ HOMEBRAIN_ALEXA_ALLOWED_CLIENT_IDS=homebrain-alexa-skill \
 HOMEBRAIN_ALEXA_ALLOWED_REDIRECT_URIS=https://pitangui.amazon.com/api/skill/link/... \
 HOMEBRAIN_ALEXA_EVENT_CLIENT_ID= \
 HOMEBRAIN_ALEXA_EVENT_CLIENT_SECRET= \
-HOMEBRAIN_BROKER_STORE_FILE=/var/lib/homebrain-alexa/store.json \
+HOMEBRAIN_BROKER_STORE_FILE=/var/lib/homebrain-alexa/store.sqlite \
 HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS=0 \
 npm run broker
 ```
@@ -748,7 +753,7 @@ HOMEBRAIN_ALEXA_ALLOWED_CLIENT_IDS=homebrain-alexa-skill
 HOMEBRAIN_ALEXA_ALLOWED_REDIRECT_URIS=<all Alexa redirect URLs from the console>
 HOMEBRAIN_ALEXA_EVENT_CLIENT_ID=<copied from Send Alexa Events>
 HOMEBRAIN_ALEXA_EVENT_CLIENT_SECRET=<copied from Send Alexa Events>
-HOMEBRAIN_BROKER_STORE_FILE=/var/lib/homebrain-alexa/store.json
+HOMEBRAIN_BROKER_STORE_FILE=/var/lib/homebrain-alexa/store.sqlite
 HOMEBRAIN_ALEXA_ACCESS_TOKEN_TTL_SECONDS=3600
 HOMEBRAIN_ALEXA_REFRESH_TOKEN_TTL_SECONDS=0
 HOMEBRAIN_ALEXA_AUTH_CODE_TTL_MS=300000
