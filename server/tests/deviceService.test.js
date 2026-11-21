@@ -1717,3 +1717,13 @@ test('updateDevice rejects a duplicate Tempest station identity', async (t) => {
     /Tempest station ID already exists/i
   );
 });
+
+test('compact device inventory projects out raw SmartThings attributes only for normal reads', async (t) => {
+  const fields = [];
+  t.mock.method(Device, 'find', () => ({ sort() { return this; }, select(value) { fields.push(value); return this; },
+    then(resolve) { return resolve([]); } }));
+  t.mock.method(deviceService, 'scheduleIntegrationRefresh', () => {});
+  await deviceService.getAllDevices({}, { compactInventory: true });
+  await deviceService.getAllDevices();
+  assert.deepEqual(fields, ['-properties.smartThingsStatus -properties.smartThingsComponents']);
+});

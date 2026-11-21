@@ -64,7 +64,7 @@ function deviceActionStatusCode(error) {
  */
 router.get('/', async (req, res) => {
   try {
-    console.log('GET /api/devices - Query params:', req.query);
+    const includeRaw = shouldIncludeRawDevicePayload(req);
     
     const filters = {};
     const room = queryString(req.query.room);
@@ -83,13 +83,11 @@ router.get('/', async (req, res) => {
     const devices = await deviceService.getAllDevices(filters, {
       refreshSmartThings,
       refreshHarmony,
-      includeExcludedHarmony
+      includeExcludedHarmony,
+      compactInventory: !includeRaw
     });
-    const serializedDevices = serializeDevices(devices, {
-      includeRaw: shouldIncludeRawDevicePayload(req)
-    });
+    const serializedDevices = serializeDevices(devices, { includeRaw });
     
-    console.log(`GET /api/devices - Successfully returned ${serializedDevices.length} devices`);
     res.status(200).json({
       success: true,
       message: 'Devices fetched successfully',

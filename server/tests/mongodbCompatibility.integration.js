@@ -31,6 +31,22 @@ async function main() {
     assert.deepEqual(groups.map((g) => g.count), [1, 1]);
     const settings = await Settings.create({});
     assert.ok(await Settings.findById(settings._id).lean());
+    const { PlatformMeasurementService } = require('../services/platformMeasurementService');
+    const Measurement = require('../models/PlatformMeasurement');
+    const collector = new PlatformMeasurementService({ io: async () => ({}), health: async () => null });
+    const baseline = new Date(Date.now() - 1000);
+    await collector.start({ loadedShortCommit: 'fixture', bootedAt: baseline });
+    try {
+      collector.counts.latency[0] = 5;
+      await collector.capture();
+      const report = await collector.report(baseline);
+      assert.equal(report.totals.requests, 5);
+      assert.deepEqual(report.totals.commits, ['fixture']);
+      const indexes = await Measurement.collection.indexes();
+      assert.ok(indexes.some(index => index.key.recordedAt === 1 && index.expireAfterSeconds === 35 * 86400));
+    } finally {
+      await collector.stop();
+    }
     const observations = db.collection('security_query_fixture');
     await observations.createIndex({ stationId: 1, observedAt: -1 });
     const date = new Date('2026-10-24T12:00:00Z');

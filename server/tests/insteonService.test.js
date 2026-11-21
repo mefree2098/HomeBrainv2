@@ -6075,3 +6075,17 @@ test('_buildTopologyScenesFromISYGroups creates scene entries per controller', (
   assert.equal(scenes[0].responders[0].id, '112233');
   assert.ok(Number.isInteger(scenes[0].group));
 });
+
+test('failed Insteon checks retain last contact and repeated failures skip redundant persistence', async (t) => {
+  const lastSeen = new Date('2026-01-01T00:00:00Z');
+  let saves = 0;
+  const device = { lastSeen, isOnline: true, save: async () => { saves++; } };
+  t.mock.method(insteonService, '_emitDeviceRealtimeUpdate', () => {});
+  await insteonService._persistDeviceRuntimeState(device, { isOnline: false });
+  await insteonService._persistDeviceRuntimeState(device, { isOnline: false });
+  assert.equal(saves, 1);
+  assert.deepEqual(device.lastSeen, lastSeen);
+  device.isOnline = true;
+  assert.equal(insteonService._runtimeStatePatchWouldChange(device, { isOnline: true, lastSeen: new Date(+lastSeen + 60000) }), false);
+  assert.equal(insteonService._runtimeStatePatchWouldChange(device, { isOnline: true, lastSeen: new Date(+lastSeen + 900000) }), true);
+});

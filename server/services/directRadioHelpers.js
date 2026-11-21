@@ -563,6 +563,12 @@ function applyContactOpenDebounce(existing, update = {}, now = Date.now()) {
   });
 }
 
+function resolveRadioLastSeen(reason, lastSeen) {
+  if (reason !== 'sync') return new Date();
+  const timestamp = Number(lastSeen);
+  return timestamp > 0 && timestamp <= Date.now() ? new Date(timestamp) : null;
+}
+
 function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
   const existingProperties = existing?.properties && typeof existing.properties === 'object'
     ? existing.properties
@@ -721,6 +727,15 @@ function mergeDirectDeviceUpdateForExisting(existing, update = {}) {
       homebrainDirect: mergedDirect
     }
   };
+  if (existing && updateDirect.lastReason === 'sync') {
+    const existingTime = new Date(existing.lastSeen || existingDirect.lastSeen || 0).getTime();
+    if (existingTime > new Date(update.lastSeen || 0).getTime()) {
+      merged.lastSeen = new Date(existingTime);
+      mergedDirect.lastSeen = merged.lastSeen.toISOString();
+    }
+    if (updateProtocol === 'zigbee' && typeof existing.isOnline === 'boolean'
+      && (!update.lastSeen || existingTime >= Number(update.lastSeen))) merged.isOnline = existing.isOnline;
+  }
   if (!clearsIncompleteZigbeeRuntime
     && (updateProperties.directRadioCatalog === null || updateProperties.directRadioCatalog === undefined)
     && existingProperties.directRadioCatalog) {
@@ -2957,6 +2972,7 @@ function normalizeZigbeeClusterToken(value) {
       1: 'genpowercfg',
       6: 'genonoff',
       8: 'genlevelctrl',
+      32: 'genpollctrl',
       257: 'closuresdoorlock',
       768: 'lightingcolorctrl',
       1024: 'msilluminancemeasurement',
@@ -3722,6 +3738,7 @@ module.exports = {
   applyContactOpenDebounce,
   normalizeContactOpenDebounceSeconds,
   mergeDirectDeviceUpdateForExisting,
+  resolveRadioLastSeen,
   directFeatureCount,
   directRecordTimestamp,
   isGenericDirectRadioName,

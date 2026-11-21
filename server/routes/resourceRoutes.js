@@ -1,7 +1,8 @@
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const router = express.Router();
-const { requireUser } = require('./middlewares/auth');
+const measurements = require('../services/platformMeasurementService');
+const { requireUser, requireAdmin } = require('./middlewares/auth');
 const resourceMonitorService = require('../services/resourceMonitorService');
 
 // Create auth middleware instance
@@ -16,14 +17,33 @@ const processDiagnosticsRateLimit = rateLimit({
   }
 });
 
+const measurementReportRateLimit = rateLimit({ windowMs: 60_000, limit: 10, standardHeaders: true, legacyHeaders: false });
+
+router.get('/measurements', requireAdmin(), measurementReportRateLimit, async (req, res, next) => {
+  const { days = '21', since, until } = req.query;
+  if (typeof days !== 'string' || !/^(?:[1-9]|1[0-9]|2[0-8])$/.test(days)) {
+    return res.status(400).json({ error: 'Choose between one and 28 days.' });
+  }
+  const end = until === undefined ? new Date() : new Date(typeof until === 'string' ? until : NaN);
+  const start = since === undefined ? new Date(end - Number(days) * measurements.DAY)
+    : new Date(typeof since === 'string' ? since : NaN);
+  if (!(end > start) || end - start > 28 * measurements.DAY || end > Date.now() + 1000) {
+    return res.status(400).json({ error: 'Specify a past reporting window of up to 28 days.' });
+  }
+  try {
+    res.set('Cache-Control', 'no-store');
+    return res.json(await measurements.report(start, end));
+  } catch (error) {
+    return next(error);
+  }
+});
+
 // Description: Get current system resource utilization
 // Endpoint: GET /api/resources/utilization
 // Request: {}
 // Response: { cpu: object, memory: object, disk: object, gpu: object, temperature: object, uptime: object, systemInfo: object }
 router.get('/utilization', auth, async (req, res) => {
   try {
-    console.log('GET /api/resources/utilization - Fetching system utilization');
-
     const utilization = await resourceMonitorService.getUtilization();
 
     res.status(200).json(utilization);

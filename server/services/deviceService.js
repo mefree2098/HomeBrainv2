@@ -434,8 +434,6 @@ class DeviceService {
    */
   async getAllDevices(filters = {}, options = {}) {
     try {
-      console.log('DeviceService: Fetching all devices with filters:', filters);
-
       this.scheduleIntegrationRefresh({ reason: 'getAllDevices' });
 
       const query = {};
@@ -448,7 +446,12 @@ class DeviceService {
       }
       
       const visibilityQuery = buildVisibleDeviceQuery(query, options);
-      let devices = await Device.find(visibilityQuery).sort({ room: 1, name: 1 });
+      const inventory = Device.find(visibilityQuery).sort({ room: 1, name: 1 });
+      if (options.compactInventory && !options.refreshSmartThings && !options.refreshHarmony
+        && canonicalizeDeviceSource(filters.source) !== 'harmony') {
+        inventory.select('-properties.smartThingsStatus -properties.smartThingsComponents');
+      }
+      let devices = await inventory;
 
       if (options.refreshSmartThings) {
         await this.refreshSmartThingsDevices(devices);
@@ -463,8 +466,6 @@ class DeviceService {
         }
       }
 
-      console.log(`DeviceService: Found ${devices.length} devices`);
-      
       return devices;
     } catch (error) {
       console.error('DeviceService: Error fetching all devices:', error.message);

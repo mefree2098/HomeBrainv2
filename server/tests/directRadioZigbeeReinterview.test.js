@@ -396,3 +396,15 @@ test('wake-window recovery retries failed interviews and IAS enrollment while th
   const busyDevice = { ...sleepyDevice, interviewState: 'IN_PROGRESS' };
   assert.strictEqual(await directRadioService.recoverZigbeeSleepyDeviceOnWake(busyDevice, 'deviceAnnounce'), null);
 });
+
+test('partial live IAS values cannot verify cached enrollment', async (t) => {
+  const coordinator = '0x00124b003a12562a';
+  const cache = { iasCieAddr: coordinator, zoneState: 1, zoneId: 23 };
+  stubZigbee(t, { controller: { getDevicesByType: () => [{ ieeeAddr: coordinator }] }, started: true });
+  const result = await directRadioService.performZigbeeIasEnrollmentRepair({
+    ieeeAddr: '0x000d6f00057c378b', endpoints: [{ ID: 1, inputClusters: [1280],
+      getClusterAttributeValue: (_cluster, key) => cache[key], read: async () => ({ zoneState: 1 }) }]
+  });
+  assert.equal(result.ready, true);
+  assert.equal(result.liveVerified, false);
+});

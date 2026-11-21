@@ -106,6 +106,7 @@ const {
   endpointHasZigbeeCluster,
   readZigbeeAttributeFromResponse,
   readZigbeeLiveSensorState,
+  resolveRadioLastSeen,
   getZigbeeInterviewState,
   isZigbeeInterviewSuccessful,
   isZigbeeInterviewUsable,
@@ -541,6 +542,7 @@ async performZigbeeIasEnrollmentRepair(zigbeeDevice, options = {}) {
             'Timed out reading Zigbee IAS enrollment state'
           );
           result.liveReadBefore = true;
+          result.verifiedBefore = zigbeeIasStateMatchesCoordinator(mergeZigbeeIasState(readBefore), coordinatorIeee);
           result.before = mergeZigbeeIasState(result.before, readBefore);
           saveCachedZigbeeIasState(endpoint, result.before);
         } catch (error) {
@@ -594,6 +596,7 @@ async performZigbeeIasEnrollmentRepair(zigbeeDevice, options = {}) {
         }
       }
 
+      if (result.sentEnrollResponse) await delay(500);
       result.after = readCachedZigbeeIasState(endpoint);
       if (typeof endpoint?.read === 'function') {
         try {
@@ -603,6 +606,7 @@ async performZigbeeIasEnrollmentRepair(zigbeeDevice, options = {}) {
             'Timed out confirming Zigbee IAS enrollment state'
           );
           result.liveReadAfter = true;
+          result.verifiedAfter = zigbeeIasStateMatchesCoordinator(mergeZigbeeIasState(readAfter), coordinatorIeee);
           result.after = mergeZigbeeIasState(result.after, readAfter);
           saveCachedZigbeeIasState(endpoint, result.after);
         } catch (error) {
@@ -613,8 +617,7 @@ async performZigbeeIasEnrollmentRepair(zigbeeDevice, options = {}) {
       result.readyAfter = zigbeeIasStateMatchesCoordinator(result.after, coordinatorIeee);
       summary.ready = summary.ready || result.readyBefore || result.readyAfter;
       summary.liveVerified = summary.liveVerified
-        || (result.liveReadBefore && result.readyBefore)
-        || (result.liveReadAfter && result.readyAfter);
+        || (result.liveReadAfter ? result.verifiedAfter === true : result.verifiedBefore === true);
       summary.endpoints.push(result);
     }
 
@@ -681,6 +684,9 @@ async recoverZigbeeSleepyDeviceOnWake(zigbeeDevice, reason) {
       return null;
     }
 
+    if (!interviewNeeded && Date.now() < (this.zigbee.iasRepairBackoff?.get(address)?.nextAttemptAt || 0)) {
+      return null;
+    }
     if (!(this.zigbee.wakeRecoveryAttempts instanceof Map)) {
       this.zigbee.wakeRecoveryAttempts = new Map();
     }
@@ -1294,12 +1300,7 @@ async cleanupZigbeeAssociationEntry(ieeeAddr, options = {}) {
 readZigbeeIasEnrollment(device) {
     try {
       const endpoints = Array.isArray(device?.endpoints) ? device.endpoints : [];
-      let coordinatorIeee = null;
-      try {
-        coordinatorIeee = this.zigbee.controller?.getDevicesByType?.('Coordinator')?.[0]?.ieeeAddr || null;
-      } catch (_error) {
-        coordinatorIeee = null;
-      }
+      const coordinatorIeee = getZigbeeCoordinatorIeee(this.zigbee.controller);
       for (const endpoint of endpoints) {
         if (typeof endpoint?.getClusterAttributeValue !== 'function') {
           continue;
@@ -1314,7 +1315,7 @@ readZigbeeIasEnrollment(device) {
           zoneState: zoneState ?? null,
           cieAddr: cieAddr ?? null,
           coordinatorIeee,
-          cieMatchesCoordinator: Boolean(cieAddr && coordinatorIeee && String(cieAddr) === String(coordinatorIeee))
+          cieMatchesCoordinator: Boolean(cieAddr && coordinatorIeee && normalizeIeeeAddress(cieAddr) === coordinatorIeee)
         };
       }
     } catch (_error) {
@@ -1403,6 +1404,8 @@ normalizeZigbeeDevice(zigbeeDevice, reason = 'sync', options = {}) {
     const incompleteInterviewShell = !hasNativeIdentity && features.length === 0 && !hasRuntimeState;
     const status = isZigbeeInterviewUsable(zigbeeDevice) && !incompleteInterviewShell;
 
+    const lastSeen = resolveRadioLastSeen(reason, zigbeeDevice.lastSeen);
+
     return {
       identity: {
         protocol: 'zigbee',
@@ -1421,7 +1424,7 @@ normalizeZigbeeDevice(zigbeeDevice, reason = 'sync', options = {}) {
         room: 'Unassigned',
         ...runtimeUpdate,
         isOnline: status,
-        lastSeen: new Date(),
+        lastSeen,
         brand: trimString(catalogEntry?.vendor || definition?.vendor || zigbeeDevice.manufacturerName) || undefined,
         model: trimString(catalogEntry?.model || definition?.model || zigbeeDevice.modelID) || undefined,
         properties: {
@@ -1442,7 +1445,7 @@ normalizeZigbeeDevice(zigbeeDevice, reason = 'sync', options = {}) {
             lastMessageCluster: messageCluster || undefined,
             lastLiveSensorReadAt: hasLiveZoneStatus ? new Date().toISOString() : undefined,
             lastLiveZoneStatus: hasLiveZoneStatus ? liveZoneStatus : undefined,
-            lastSeen: new Date().toISOString(),
+            lastSeen: lastSeen?.toISOString() ?? null,
             catalog: directRadioProtocolCatalogService.buildCatalogReference(catalogEntry)
           },
           ...(directRadioState ? { directRadioState } : {}),
@@ -1466,20 +1469,15 @@ async handleZigbeeDeviceChanged(zigbeeDevice, reason, options = {}) {
         error: error?.message || String(error || 'Unknown wake recovery error')
       });
     });
-    await this.repairZigbeeIasEnrollmentIfNeeded(zigbeeDevice, reason, options.message).catch((error) => {
-      this.log('warn', 'zigbee', 'Zigbee IAS enrollment repair failed during live message handling', {
-        reason,
-        ieeeAddr: trimString(zigbeeDevice?.ieeeAddr) || null,
-        error: error?.message || String(error || 'Unknown Zigbee IAS repair error')
-      });
-    });
     const messageZoneStatus = readZigbeeIasMessageZoneStatus(options.message);
     const providedZoneStatus = options.liveSensorState?.zoneStatus;
     const hasMessageZoneStatus = messageZoneStatus !== undefined && messageZoneStatus !== null;
     const hasProvidedZoneStatus = providedZoneStatus !== undefined && providedZoneStatus !== null;
     const shouldReadLiveSensorState = !hasMessageZoneStatus
       && !hasProvidedZoneStatus
-      && ['message', 'deviceAnnounce', 'deviceInterview', 'refresh'].includes(reason);
+      && (['deviceAnnounce', 'deviceInterview', 'refresh'].includes(reason)
+        || (reason === 'message' && normalizeZigbeeClusterToken(options.message?.cluster) === 'genpollctrl'
+          && (!options.message?.type || options.message.type === 'commandCheckin')));
     const liveSensorState = hasMessageZoneStatus || hasProvidedZoneStatus
       ? {
           ...(options.liveSensorState && typeof options.liveSensorState === 'object'
@@ -1536,7 +1534,15 @@ async handleZigbeeDeviceChanged(zigbeeDevice, reason, options = {}) {
       return this.upsertDirectDevice(normalized.identity, normalized.update, { allowCreate: false });
     }
 
-    return this.upsertDirectDevice(normalized.identity, normalized.update);
+    const device = await this.upsertDirectDevice(normalized.identity, normalized.update);
+    await this.repairZigbeeIasEnrollmentIfNeeded(zigbeeDevice, reason, options.message).catch((error) => {
+      this.log('warn', 'zigbee', 'Zigbee IAS enrollment repair failed during live message handling', {
+        reason,
+        ieeeAddr: trimString(zigbeeDevice?.ieeeAddr) || null,
+        error: error?.message || String(error || 'Unknown Zigbee IAS repair error')
+      });
+    });
+    return device;
   },
 
 async readZigbeeOnOffState(endpoint, device, options = {}) {
