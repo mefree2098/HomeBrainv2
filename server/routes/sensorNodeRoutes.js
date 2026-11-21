@@ -253,6 +253,10 @@ function createSensorNodeRouter(sensorNodeService = require('../services/sensorN
         req.body || {},
         { ipAddress: requestIp(req), onStage: stage => { res.locals.sensorReadingStage = stage; } }
       );
+      if (req.get('Prefer')?.split(',').some(pref => pref.trim().toLowerCase() === 'return=minimal')) {
+        res.set('Preference-Applied', 'return=minimal');
+        return res.status(202).json({ success: true, accepted: result.accepted, receivedAt: result.receivedAt, config: result.config });
+      }
       return res.status(202).json({ success: true, ...result });
     } catch (error) {
       console.error('%s', `POST /api/sensor-nodes/${req.params.nodeId}/readings - Error:`, error.message);

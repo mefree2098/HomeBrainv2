@@ -37,7 +37,11 @@ test('Sensor Fleet HTTP boundaries separate administrators from device credentia
       return record('activate', nodeId);
     },
     getRuntimeConfig: async (nodeId, token) => { checkDevice(token); return record('config', nodeId); },
-    ingestReading: async (nodeId, token, payload) => { checkDevice(token); return record('readings', nodeId, payload); }
+    ingestReading: async (nodeId, token, payload) => {
+      checkDevice(token);
+      record('readings', nodeId, payload);
+      return { accepted: true, receivedAt: 'now', node: { id: nodeId }, config: { reporting_interval_seconds: 15 } };
+    }
   };
   const app = express();
   app.use(express.json());
@@ -81,7 +85,15 @@ test('Sensor Fleet HTTP boundaries separate administrators from device credentia
     assert.equal((await send(`/${id}/config?token=test-device-token`)).status, 401);
     assert.equal((await send(`/${id}/config`, 'GET', { Authorization: 'Sensor test-device-token' })).status, 200);
     assert.equal((await send(`/${id}/readings`, 'POST', {}, { readings: { temperature_c: 20 } })).status, 401);
-    assert.equal((await send(`/${id}/readings`, 'POST', { Authorization: 'Sensor test-device-token' }, { readings: { temperature_c: 20 } })).status, 202);
+    const headers = { Authorization: 'Sensor test-device-token' };
+    const payload = { readings: { temperature_c: 20 } };
+    const full = await send(`/${id}/readings`, 'POST', headers, payload);
+    assert.equal(full.status, 202);
+    assert.deepEqual((await full.json()).node, { id });
+    const compact = await send(`/${id}/readings`, 'POST', { ...headers, Prefer: 'return=minimal' }, payload);
+    assert.equal(compact.status, 202);
+    assert.equal(compact.headers.get('preference-applied'), 'return=minimal');
+    assert.deepEqual(await compact.json(), { success: true, accepted: true, receivedAt: 'now', config: { reporting_interval_seconds: 15 } });
   });
   await t.test('sensor authorization rejects blank, oversized and ambiguous credentials', async () => {
     for (const authorization of ['Sensor ' + ' '.repeat(8000), 'Sensor ' + 'x'.repeat(8000), 'Sensor test-device-token extra']) {
