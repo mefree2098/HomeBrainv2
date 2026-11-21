@@ -2012,7 +2012,9 @@ class PlatformDeployService {
         await runNpmStep('Run client lint', ['run', 'lint', '--prefix', 'client', '--', '--max-warnings=0']);
       }
 
-      await runNpmStep('Build client', ['run', 'build', '--prefix', 'client'], { background: true });
+      await runNpmStep('Build client', ['run', 'build', '--prefix', 'client'], {
+        background: true, env: { HOMEBRAIN_PLATFORM_CLIENT_BUILD: '1' }
+      });
 
       if (job.options.runServerTests) {
         await runNpmStep('Run server tests', ['run', 'test:hub', '--prefix', 'server'], { background: true });
