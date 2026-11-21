@@ -32,6 +32,13 @@ async function main() {
     const settings = await Settings.create({});
     assert.ok(await Settings.findById(settings._id).lean());
     const { PlatformMeasurementService } = require('../services/platformMeasurementService');
+    await Device.insertMany(Array.from({ length: 178 }, (_, index) => ({
+      name: 'Unrelated ' + index, type: 'light', room: 'Other room'
+    })));
+    const panelFilter = { $or: [{ room: 'Fixture room' }, { _id: { $in: [updated._id] } }] };
+    const panelPlan = await Device.find(panelFilter).sort({ name: 1 }).explain('executionStats');
+    assert.equal(panelPlan.executionStats.nReturned, 2);
+    assert.ok(panelPlan.executionStats.totalDocsExamined <= 3, 'panel poll should read only the room and configured device');
     const Measurement = require('../models/PlatformMeasurement');
     const collector = new PlatformMeasurementService({ io: async () => ({}), health: async () => null });
     const baseline = new Date(Date.now() - 1000);
