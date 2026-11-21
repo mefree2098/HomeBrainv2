@@ -553,6 +553,40 @@ test('getDashboardSafe returns cached dashboard payload when dashboard assembly 
   assert.deepEqual(dashboard.dailyStats, []);
 });
 
+test('failed RainMachine polls reconcile stale device availability without changing the last measurement', async (t) => {
+  const service = new rainMachineService.RainMachineService();
+  const Device = require('../models/Device');
+  const emitter = require('../services/deviceUpdateEmitter');
+  const integration = {
+    _id: 'fixture', enabled: true, host: 'rainmachine.local', controllerId: 'ABC',
+    password: 'fixture', isConnected: true, lastError: '', save: t.mock.fn(async () => {})
+  };
+  t.mock.method(RainMachineIntegration, 'getIntegration', async () => integration);
+  t.mock.method(service, 'resolveEndpoint', async () => { throw new Error('controller unreachable'); });
+  const writes = t.mock.method(Device, 'updateMany', async () => ({ modifiedCount: writes.mock.callCount() === 1 ? 2 : 0 }));
+  const read = t.mock.method(Device, 'find', () => ({ lean: async () => [
+    { _id: 'controller', isOnline: false }, { _id: 'zone', isOnline: false }
+  ] }));
+  const emit = t.mock.method(emitter, 'emit', () => true);
+  await assert.rejects(service.performSync(), /controller unreachable/);
+  await assert.rejects(service.performSync(), /controller unreachable/);
+  assert.equal(integration.isConnected, false);
+  assert.equal(integration.save.mock.callCount(), 1);
+  assert.equal(writes.mock.callCount(), 2);
+  assert.equal(read.mock.callCount(), 1);
+  assert.equal(emit.mock.callCount(), 1);
+  const [scope, update] = writes.mock.calls[0].arguments;
+  assert.equal(scope['properties.source'], 'rainmachine');
+  assert.deepEqual(scope.isOnline, { $ne: false });
+  assert.deepEqual(scope.$and[0].$or, [
+    { 'properties.rainmachine.controllerId': 'ABC' },
+    { 'properties.rainmachine.host': 'rainmachine.local', 'properties.rainmachine.controllerId': { $in: [null, ''] } }
+  ]);
+  assert.ok(scope.$and[1].$or[1].lastSeen.$lte instanceof Date);
+  assert.deepEqual(Object.keys(update.$set).sort(), ['isOnline', 'updatedAt']);
+  assert.equal(update.$set.isOnline, false);
+});
+
 test('performSync restores connectivity before synchronizing recovered RainMachine devices', async (t) => {
   const service = new rainMachineService.RainMachineService();
   const originalGetIntegration = RainMachineIntegration.getIntegration;
