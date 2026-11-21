@@ -10,13 +10,13 @@ See the complete [assembly, wiring, power, flashing, and commissioning guide](..
 pio run
 ```
 
-Verified build target: Seeed Studio XIAO ESP32-C6 using the Seeed platform pinned in `platformio.ini` (Arduino-ESP32 3.3.7).
+Verified build target: Seeed Studio XIAO ESP32-C6 using the Seeed platform pinned in `platformio.ini` (Arduino-ESP32 3.3.8 via explicit framework/package overrides).
 
 Current release build:
 
-- Firmware: 1.3.8 (wireless updates with boot confirmation/rollback, native ESP-IDF download transport, Wi-Fi compatibility mode, Bluetooth recovery, full-profile telemetry)
-- Application: approximately 1.74 MiB of a 1.81 MiB OTA slot, including the image headers
-- Static RAM: approximately 46 KB of 320 KB
+- Firmware: 1.3.9 (Arduino-ESP32 security fixes, wireless updates with boot confirmation/rollback, native ESP-IDF download transport, Wi-Fi compatibility mode, Bluetooth recovery, full-profile telemetry)
+- Application: approximately 1.75 MiB of a 1.81 MiB OTA slot, including the image headers
+- Static RAM: approximately 46.4 KiB of 320 KiB
 - Reading schema: `homebrain.sensor.reading.v1`
 - Config schema: `homebrain.sensor.config.v1`
 
