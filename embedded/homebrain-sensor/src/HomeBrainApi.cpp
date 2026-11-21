@@ -21,6 +21,19 @@ namespace {
 constexpr uint32_t HTTP_TIMEOUT_MS = 10000;
 }
 
+struct HomeBrainApi::RequestSession {
+  RequestSession(std::unique_ptr<WiFiClient> socket, const String& target)
+    : client(std::move(socket)), url(target), localIp(WiFi.localIP()) {}
+
+  // HTTPClient stops its borrowed socket in its destructor. Keep the socket alive until then.
+  std::unique_ptr<WiFiClient> client;
+  HTTPClient http;
+  String url;
+  IPAddress localIp;
+};
+
+HomeBrainApi::~HomeBrainApi() = default;
+
 HomeBrainApi::HomeBrainApi(AppCredentials& credentials, ConfigStore& store)
   : credentials_(credentials), store_(store) {}
 
@@ -60,18 +73,30 @@ int HomeBrainApi::request(
   const String& path,
   const String& requestBody,
   String& responseBody,
-  bool useSetupCode
+  bool useSetupCode,
+  bool keepAlive
 ) {
-  if (WiFi.status() != WL_CONNECTED) return -1;
+  if (WiFi.status() != WL_CONNECTED) {
+    session_.reset();
+    return -1;
+  }
   ScopedWifiAwake awake;
-  auto client = createHttpClient();
-  if (!client) return -1;
   const String url = normalizedBaseUrl() + path;
-
-  HTTPClient http;
+  if (session_ && (!keepAlive || session_->url != url || session_->localIp != WiFi.localIP()
+                   || !session_->http.connected())) session_.reset();
+  if (!session_) {
+    auto client = createHttpClient();
+    if (!client) return -1;
+    session_ = std::make_unique<RequestSession>(std::move(client), url);
+    if (!session_->http.begin(*session_->client, url)) {
+      session_.reset();
+      return -1;
+    }
+  }
+  auto& http = session_->http;
+  http.setReuse(keepAlive);
   http.setConnectTimeout(HTTP_TIMEOUT_MS);
   http.setTimeout(HTTP_TIMEOUT_MS);
-  if (!http.begin(*client, url)) return -1;
   http.addHeader("Accept", "application/json");
   http.addHeader("Content-Type", "application/json");
   http.setUserAgent(String("HomeBrainSensor/") + HOMEBRAIN_SENSOR_FIRMWARE_VERSION);
@@ -86,7 +111,10 @@ int HomeBrainApi::request(
   if (method == "GET") statusCode = http.GET();
   else statusCode = http.POST(requestBody);
   if (statusCode > 0) responseBody = http.getString();
+  const int size = http.getSize();
+  const bool complete = size >= 0 && responseBody.length() == static_cast<size_t>(size);
   http.end();
+  if (!keepAlive || statusCode != 202 || !complete || !http.connected()) session_.reset();
   return statusCode;
 }
 
@@ -242,10 +270,16 @@ ApiResult HomeBrainApi::publish(
   serializeJson(document, requestBody);
   String responseBody;
   const String path = String("/api/sensor-nodes/") + credentials_.nodeId + "/readings";
-  const int statusCode = request("POST", path, requestBody, responseBody, false);
+  const bool keepAlive = runtime.profile == Profile::Presence && runtime.reportingIntervalSeconds <= 60;
+  const int statusCode = request("POST", path, requestBody, responseBody, false, keepAlive);
   const ApiResult result = classifyResponse(statusCode, responseBody);
-  if (result != ApiResult::Success) return result;
+  if (result != ApiResult::Success) {
+    session_.reset();
+    return result;
+  }
   if (parseConfigResponse(responseBody, runtime)) store_.saveRuntime(runtime);
+  if (!runtime.firmwareUpdate.id.isEmpty() || runtime.profile != Profile::Presence
+      || runtime.reportingIntervalSeconds > 60) session_.reset();
   return ApiResult::Success;
 }
 
