@@ -2300,6 +2300,21 @@ test('listProvisioningUsbPorts ignores FTDI-style PLM serial ports when selectin
   assert.equal(resolved.path, '/dev/ttyACM0');
 });
 
+test('USB enumeration and explicit flashing preserve the identity of a home radio', async () => {
+  const service = new WallPanelService();
+  const usbPath = '/dev/ttyACM0';
+  const alias = '/dev/serial/by-id/usb-Zooz_800_Z-Wave_Stick-if00';
+  service._serialPortModule = { list: async () => [{ path: usbPath, manufacturer: 'Zooz' }] };
+  service.getSerialByIdEntries = async () => [{ resolvedPath: usbPath, symlinkPath: alias }];
+  service.scanFallbackSerialDevices = async () => [{ path: usbPath }];
+  const { selectedPort, ports } = await service.listProvisioningUsbPorts();
+  assert.equal(selectedPort, null);
+  assert.equal(ports[0].likelyPanel, false);
+  await assert.rejects(service.resolveProvisioningUsbPort(), /No hardware orb/);
+  await assert.rejects(service.resolveProvisioningUsbPort(alias), /belongs to another device/);
+  await assert.rejects(service.resolveProvisioningUsbPort(usbPath), /belongs to another device/);
+});
+
 test('flashPanelInitialFirmware uploads to the selected USB port with per-panel build env', async (t) => {
   withPanelWifiBuildSettings(t);
   withoutConfiguredPublicOrigin(t);
