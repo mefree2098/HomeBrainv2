@@ -442,6 +442,9 @@ function buildRuntimeConfig(node, serialized = serializeNode(node)) {
     },
     presence_hold_seconds: serialized.settings.presenceHoldSeconds,
     token_version: serialized.deviceTokenVersion,
+    ...(serialized.profile === 'presence' && serialized.powerSource === 'wired' &&
+      !serialized.settings.deepSleepEnabled && serialized.settings.reportingIntervalSeconds <= 60
+      ? { wifi_always_awake: true } : {}),
     ...(lanAddress ? { hub_lan_ipv4: lanAddress } : {}),
     ...(firmwareUpdate ? { firmware_update: firmwareUpdate } : {})
   };

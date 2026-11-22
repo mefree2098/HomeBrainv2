@@ -33,6 +33,27 @@ bool onWifiSubnet(const IPAddress& address) {
 
 class SensorHttpClient : public HTTPClient {
  public:
+  // A reading fits in a single TLS record. Deliver headers and JSON together so
+  // the hub never waits for a second Wi-Fi transmission to finish this request.
+  int postReading(const String& body) {
+    if (body.length() > 2048 || !_base64Authorization.isEmpty()) return POST(body);
+    String packet;
+    if (!packet.reserve(body.length() + _headers.length() + _uri.length() +
+                        _host.length() + _userAgent.length() + 160)) return POST(body);
+    packet = "POST " + _uri + " HTTP/1.1\r\nHost: " + _host;
+    if (_port != (_secure ? 443 : 80)) packet += ":" + String(_port);
+    packet += "\r\nUser-Agent: " + _userAgent;
+    packet += "\r\nConnection: keep-alive\r\nAccept-Encoding: identity\r\n";
+    packet += _headers;
+    packet += "Content-Length: " + String(body.length()) + "\r\n\r\n";
+    if (!packet.concat(body)) return POST(body);
+    if (!connect()) return returnError(HTTPC_ERROR_CONNECTION_REFUSED);
+    if (_client->write(reinterpret_cast<const uint8_t*>(packet.c_str()), packet.length()) != packet.length()) {
+      return returnError(HTTPC_ERROR_SEND_PAYLOAD_FAILED);
+    }
+    return returnError(handleHeaderResponse());
+  }
+
   bool connectLan(WiFiClientSecure& socket, const IPAddress& address) const {
     // HTTPClient parsed the configured HTTPS origin. Only the TCP destination changes.
 #ifdef HOMEBRAIN_SENSOR_CA_CERT
@@ -150,6 +171,7 @@ int HomeBrainApi::request(
 
   int statusCode = -1;
   if (method == "GET") statusCode = http.GET();
+  else if (keepAlive) statusCode = http.postReading(requestBody);
   else statusCode = http.POST(requestBody);
   if (statusCode > 0) responseBody = http.getString();
   const int size = http.getSize();
@@ -199,6 +221,11 @@ bool HomeBrainApi::parseConfigResponse(const String& body, RuntimeConfig& runtim
     }
   } else {
     lanOrigin_ = "";
+  }
+  if (config["wifi_always_awake"] | false) {
+    if (!wiredWifi_) wiredWifi_ = std::make_unique<ScopedWifiAwake>();
+  } else {
+    wiredWifi_.reset();
   }
   applyRuntimeConfig(config, runtime);
   const JsonVariantConst update = config["firmware_update"];

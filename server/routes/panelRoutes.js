@@ -1,4 +1,5 @@
 const express = require('express');
+const { createHash } = require('node:crypto');
 const rateLimit = require('express-rate-limit');
 
 const router = express.Router();
@@ -257,6 +258,17 @@ router.get('/:panelId/state', async (req, res) => {
       req.ip,
       getObservedRequestOrigin(req)
     );
+    res.vary('X-HomeBrain-Panel-State');
+    if (req.get('X-HomeBrain-Panel-State') === 'compact') {
+      // These two heartbeat timestamps change independently of the state an orb displays.
+      const { generatedAt, panel, ...displayState } = state;
+      const { lastSeen, ...displayPanel } = panel;
+      const body = JSON.stringify({ success: true, state: { ...displayState, panel: displayPanel } });
+      const etag = '"' + createHash('sha256').update(body).digest('base64url') + '"';
+      res.setHeader('ETag', etag);
+      if (req.get('If-None-Match') === etag) return res.status(304).end();
+      return res.type('json').send(body);
+    }
     return res.status(200).json({
       success: true,
       state

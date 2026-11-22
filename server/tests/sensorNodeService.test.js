@@ -177,6 +177,14 @@ test('sensor runtime config is stable and stale nodes serialize offline', () => 
   });
 });
 
+test('only a frequently reporting wired Presence node keeps its radio awake', () => {
+  const node = { profile: 'presence', powerSource: 'wired', settings: { reportingIntervalSeconds: 15, deepSleepEnabled: false } };
+  assert.equal(buildRuntimeConfig(node).wifi_always_awake, true);
+  assert.equal(buildRuntimeConfig({ ...node, powerSource: 'battery' }).wifi_always_awake, undefined);
+  assert.equal(buildRuntimeConfig({ ...node, settings: { ...node.settings, deepSleepEnabled: true } }).wifi_always_awake, undefined);
+  assert.equal(buildRuntimeConfig({ ...node, settings: { ...node.settings, reportingIntervalSeconds: 90 } }).wifi_always_awake, undefined);
+});
+
 test('Presence selects a private hub interface on the reported subnet and caches the interface scan', (t) => {
   const iface = (address, cidr, internal = false) => ({ address, cidr, internal });
   const scan = t.mock.method(require('node:os'), 'networkInterfaces', () => ({
