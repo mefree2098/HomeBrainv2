@@ -1864,6 +1864,21 @@ test('managed orb builds respect explicit PlatformIO storage and place a fresh c
   assert.equal(explicit.PLATFORMIO_PACKAGES_DIR, '/custom/packages');
 });
 
+test('an interrupted legacy framework is never selected for an orb build', (t) => {
+  const service = new WallPanelService({ panelOtaArtifactsDir: '/test/ota' });
+  const legacy = path.join(process.env.HOME, '.platformio');
+  const files = new Set([
+    path.join(legacy, 'platforms/espressif32/platform.json'),
+    path.join(legacy, 'packages/framework-arduinoespressif32/package.json'),
+    path.join(legacy, 'packages/framework-arduinoespressif32/.piopm')
+  ]);
+  t.mock.method(fs, 'existsSync', (file) => files.has(file));
+  const env = { PLATFORMIO_CORE_DIR: '', PLATFORMIO_PACKAGES_DIR: '', PLATFORMIO_PLATFORMS_DIR: '' };
+  assert.equal(service.createPlatformioEnv(env).PLATFORMIO_PACKAGES_DIR, '');
+  files.add(path.join(legacy, 'packages/framework-arduinoespressif32/tools/platformio-build.py'));
+  assert.equal(service.createPlatformioEnv(env).PLATFORMIO_PACKAGES_DIR, path.join(legacy, 'packages'));
+});
+
 test('runPanelFirmwareBuild refuses to build when orb Wi-Fi credentials are not configured', async (t) => {
   const service = new WallPanelService();
 

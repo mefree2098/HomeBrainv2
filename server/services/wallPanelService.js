@@ -2239,7 +2239,8 @@ class WallPanelService {
       const legacy = path.join(homeDir, '.platformio');
       if (homeDir && !fs.existsSync(path.join(core, 'platforms', 'espressif32', 'platform.json')) &&
           fs.existsSync(path.join(legacy, 'platforms', 'espressif32', 'platform.json')) &&
-          fs.existsSync(path.join(legacy, 'packages', 'framework-arduinoespressif32', 'package.json'))) {
+          fs.existsSync(path.join(legacy, 'packages', 'framework-arduinoespressif32', '.piopm')) &&
+          fs.existsSync(path.join(legacy, 'packages', 'framework-arduinoespressif32', 'tools', 'platformio-build.py'))) {
         // Reuse an installed toolchain without copying it or downloading it again.
         env.PLATFORMIO_PLATFORMS_DIR ||= path.join(legacy, 'platforms');
         env.PLATFORMIO_PACKAGES_DIR ||= path.join(legacy, 'packages');
@@ -2524,6 +2525,13 @@ class WallPanelService {
   async runPanelFirmwareBuild(panel, jobId, buildTarget, processEnv) {
     const missingCandidates = [];
     assertPanelWifiBuildConfig(getPanelWifiBuildConfigFromEnv(processEnv));
+    if (processEnv.PLATFORMIO_CORE_DIR === path.join(this.panelOtaArtifactsDir, '.platformio-core')) {
+      if (!processEnv.TMPDIR) {
+        processEnv.TMPDIR = path.join(processEnv.PLATFORMIO_CORE_DIR, 'tmp');
+        await fsp.mkdir(processEnv.TMPDIR, { recursive: true });
+      }
+      processEnv.PIP_CACHE_DIR ||= path.join(processEnv.PLATFORMIO_CORE_DIR, 'pip-cache');
+    }
     await this.cleanPanelFirmwareBuildOutput(buildTarget);
 
     for (const candidate of this.getPlatformioCandidates()) {
