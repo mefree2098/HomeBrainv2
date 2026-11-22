@@ -558,7 +558,7 @@ class PlatformDeployService {
   async getClientDistStatusLines() {
     const result = await this.runCommand(
       'git',
-      this.getSafeGitArgs(['status', '--porcelain', '--', 'client/dist'])
+      this.getSafeGitArgs(['--no-optional-locks', 'status', '--porcelain', '--', 'client/dist'])
     );
 
     return (result.stdout || '')
@@ -864,7 +864,8 @@ class PlatformDeployService {
       runGit(['rev-parse', '--short', 'HEAD'], ''),
       runGit(['config', '--get', 'remote.origin.url'], ''),
       runGit(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], ''),
-      runGit(['status', '--porcelain'], '')
+      // A dashboard status refresh must not hold the index lock needed by a deployment.
+      runGit(['--no-optional-locks', 'status', '--porcelain'], '')
     ]);
 
     const rawDirtyEntries = statusOutput
