@@ -1561,6 +1561,7 @@ test('buildPanelOtaArtifact falls back to Homebrew PlatformIO when pio is missin
   );
 
   assert.equal(commands[0].command, 'pio');
+  assert.deepEqual(commands[0].args.slice(-2), ['--jobs', '2']);
   assert.ok(commands.some((entry) => entry.command === '/opt/homebrew/bin/pio'));
   assert.ok(commands.some((entry) => entry.envPath.includes('/opt/homebrew/bin')));
   assert.ok(copiedArtifact.includes(Buffer.from(targetVersion)));
@@ -1853,6 +1854,14 @@ test('buildPanelOtaArtifact bootstraps a private PlatformIO toolchain when none 
   assert.ok(execCalls.some((entry) => entry.file === managedPython && entry.args[1] === 'pip'));
   assert.ok(spawnCommands.some((entry) => entry.command === managedPio));
   assert.ok(copiedArtifact.includes(Buffer.from(targetVersion)));
+});
+
+test('managed orb builds respect explicit PlatformIO storage and place a fresh cache beside OTA images', () => {
+  const service = new WallPanelService({ panelOtaArtifactsDir: '/test/ota' });
+  assert.equal(service.createPlatformioEnv({ PLATFORMIO_CORE_DIR: '' }).PLATFORMIO_CORE_DIR, path.join('/test/ota', '.platformio-core'));
+  const explicit = service.createPlatformioEnv({ PLATFORMIO_CORE_DIR: '/custom/core', PLATFORMIO_PACKAGES_DIR: '/custom/packages' });
+  assert.equal(explicit.PLATFORMIO_CORE_DIR, '/custom/core');
+  assert.equal(explicit.PLATFORMIO_PACKAGES_DIR, '/custom/packages');
 });
 
 test('runPanelFirmwareBuild refuses to build when orb Wi-Fi credentials are not configured', async (t) => {
@@ -2630,6 +2639,10 @@ test('pushFirmwareUpdate recovers a stale orb OTA build before queuing a new upd
   service.buildPanelOtaArtifact = async () => {};
   service.serializePanelForResponse = async (panel) => panel;
 
+  service.activePanelBuildJobs.add('job-stale-build');
+  await assert.rejects(service.pushFirmwareUpdate('panel-stale-build'), /already in progress/);
+  assert.equal(recoveredJobs.length, 0);
+  service.activePanelBuildJobs.clear();
   const result = await service.pushFirmwareUpdate('panel-stale-build');
 
   assert.equal(recoveredJobs.length, 1);
