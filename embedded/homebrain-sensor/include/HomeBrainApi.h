@@ -4,6 +4,7 @@
 #include "SensorSuite.h"
 #include <WiFiClient.h>
 #include <memory>
+#include <functional>
 
 namespace homebrain {
 
@@ -28,7 +29,7 @@ class HomeBrainApi {
     const String& error = "", const String& imageSha256 = "");
   ApiResult publish(
     const SensorReading& reading,
-    const SensorSuite& sensors,
+    SensorSuite& sensors,
     RuntimeConfig& runtime,
     uint64_t sequence,
     uint32_t wakeCount
@@ -41,7 +42,8 @@ class HomeBrainApi {
     const String& requestBody,
     String& responseBody,
     bool useSetupCode,
-    bool keepAlive = false
+    bool keepAlive = false,
+    const std::function<void()>& pollSensors = {}
   );
   ApiResult classifyResponse(int statusCode, const String& body) const;
   bool parseConfigResponse(const String& body, RuntimeConfig& runtime);
@@ -51,6 +53,8 @@ class HomeBrainApi {
   IPAddress lanAddress_;
   String lanOrigin_;
   uint32_t retryLanAt_ = 0;
+  uint32_t lastUploadMs_ = 0;
+  int lastUploadStatus_ = 0;
   std::unique_ptr<ScopedWifiAwake> wiredWifi_;
   struct RequestSession;
   std::unique_ptr<RequestSession> session_;

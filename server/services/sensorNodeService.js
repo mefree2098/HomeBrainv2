@@ -266,6 +266,9 @@ function normalizeReadingPayload(payload = {}) {
 
   addBoundedNumber(diagnostics, 'signal_rssi_dbm', readPath(sourceDiagnostics, 'signal_rssi_dbm', 'rssi_dbm', 'rssiDbm'), -150, 20, 0);
   addBoundedNumber(diagnostics, 'uptime_ms', readPath(sourceDiagnostics, 'uptime_ms', 'uptimeMs'), 0, Number.MAX_SAFE_INTEGER, 0);
+  addBoundedNumber(diagnostics, 'wifi_ps', sourceDiagnostics.wifi_ps, 0, 2, 0);
+  addBoundedNumber(diagnostics, 'last_upload_ms', sourceDiagnostics.last_upload_ms, 0, 3600000, 0);
+  addBoundedNumber(diagnostics, 'last_upload_status', sourceDiagnostics.last_upload_status, -128, 599, 0);
   addBoundedNumber(diagnostics, 'wake_count', readPath(sourceDiagnostics, 'wake_count', 'wakeCount'), 0, Number.MAX_SAFE_INTEGER, 0);
   addBoundedNumber(diagnostics, 'free_heap_bytes', readPath(sourceDiagnostics, 'free_heap_bytes', 'freeHeapBytes'), 0, Number.MAX_SAFE_INTEGER, 0);
   for (const module of ['bme680', 'scd41', 'veml7700', 'pms5003', 'ld2410', 'dht11']) {
