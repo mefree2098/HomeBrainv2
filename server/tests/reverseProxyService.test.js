@@ -113,10 +113,16 @@ test('local hub aliases share the HomeBrain recovery policy', async (t) => {
       hostname: 'download.example.com', platformKey: 'downloads',
       upstreamProtocol: 'http', upstreamHost: 'localhost', upstreamPort: 3000,
       healthCheckPath: '/ping', tlsMode: 'automatic'
+    }, {
+      hostname: 'tools.example.com', platformKey: 'homebrain',
+      upstreamProtocol: 'http', upstreamHost: 'localhost', upstreamPort: 4380,
+      healthCheckPath: '/api/health', tlsMode: 'automatic'
     }] })
   }));
   const result = await reverseProxyService.buildDesiredConfig();
-  assert.match(result.caddyfile, /health_fails 2/);
+  const [downloads, tools] = result.caddyfile.split('tools.example.com {');
+  assert.match(downloads, /health_fails 2/);
+  assert.doesNotMatch(tools, /health_fails|health_interval/);
 });
 
 test('buildDesiredConfig gives the managed Alexa broker a fast health recovery cadence', async (t) => {
