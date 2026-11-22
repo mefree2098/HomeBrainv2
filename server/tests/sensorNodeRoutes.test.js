@@ -93,6 +93,7 @@ test('Sensor Fleet HTTP boundaries separate administrators from device credentia
     const compact = await send(`/${id}/readings`, 'POST', { ...headers, Prefer: 'return=minimal' }, payload);
     assert.equal(compact.status, 202);
     assert.equal(compact.headers.get('preference-applied'), 'return=minimal');
+    assert.match(compact.headers.get('content-security-policy'), /default-src 'none'/);
     assert.deepEqual(await compact.json(), { success: true, accepted: true, receivedAt: 'now', config: { reporting_interval_seconds: 15 } });
   });
   await t.test('sensor authorization rejects blank, oversized and ambiguous credentials', async () => {

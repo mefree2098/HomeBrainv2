@@ -29,7 +29,7 @@ test('sensor reading contract accepts firmware field names and derives Fahrenhei
       presence_present: 0
     },
     power: { usb_powered: 1 },
-    diagnostics: { signal_rssi_dbm: -61, ip_address: '192.168.1.44' }
+    diagnostics: { signal_rssi_dbm: -61, wifi_ps: 0, last_upload_ms: 41004, last_upload_status: -11, ip_address: '192.168.1.44' }
   });
 
   assert.equal(reading.readings.temperature_f, 70.25);
@@ -37,6 +37,9 @@ test('sensor reading contract accepts firmware field names and derives Fahrenhei
   assert.equal(reading.power.usb_powered, true);
   assert.deepEqual(reading.capabilities, ['co2', 'particulate']);
   assert.equal(reading.sequence, 42);
+  assert.equal(reading.diagnostics.wifi_ps, 0);
+  assert.equal(reading.diagnostics.last_upload_ms, 41004);
+  assert.equal(reading.diagnostics.last_upload_status, -11);
 });
 
 test('sensor reading contract rejects unknown schemas and empty or out-of-range data', () => {

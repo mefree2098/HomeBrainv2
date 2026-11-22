@@ -3,6 +3,7 @@
 
 #include <HTTPClient.h>
 #include <WiFi.h>
+#include <esp_wifi.h>
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <memory>
@@ -19,6 +20,8 @@ namespace {
 #endif
 
 constexpr uint32_t HTTP_TIMEOUT_MS = 10000;
+// Allow a wired radar to keep sampling through observed 20–40 second WLAN stalls.
+constexpr uint32_t WIRED_ACK_TIMEOUT_MS = 45000;
 constexpr uint32_t LAN_RETRY_MS = 300000;
 
 bool onWifiSubnet(const IPAddress& address) {
@@ -35,7 +38,7 @@ class SensorHttpClient : public HTTPClient {
  public:
   // A reading fits in a single TLS record. Deliver headers and JSON together so
   // the hub never waits for a second Wi-Fi transmission to finish this request.
-  int postReading(const String& body) {
+  int postReading(const String& body, uint32_t ackTimeout, const std::function<void()>& pollSensors) {
     if (body.length() > 2048 || !_base64Authorization.isEmpty()) return POST(body);
     String packet;
     if (!packet.reserve(body.length() + _headers.length() + _uri.length() +
@@ -50,6 +53,12 @@ class SensorHttpClient : public HTTPClient {
     if (!connect()) return returnError(HTTPC_ERROR_CONNECTION_REFUSED);
     if (_client->write(reinterpret_cast<const uint8_t*>(packet.c_str()), packet.length()) != packet.length()) {
       return returnError(HTTPC_ERROR_SEND_PAYLOAD_FAILED);
+    }
+    const unsigned long sentAt = millis();
+    while (_client->available() == 0 && _client->connected()) {
+      if (millis() - sentAt >= ackTimeout) return returnError(HTTPC_ERROR_READ_TIMEOUT);
+      if (pollSensors) pollSensors();
+      delay(10);
     }
     return returnError(handleHeaderResponse());
   }
@@ -125,7 +134,8 @@ int HomeBrainApi::request(
   const String& requestBody,
   String& responseBody,
   bool useSetupCode,
-  bool keepAlive
+  bool keepAlive,
+  const std::function<void()>& pollSensors
 ) {
   if (WiFi.status() != WL_CONNECTED) {
     session_.reset();
@@ -171,8 +181,9 @@ int HomeBrainApi::request(
 
   int statusCode = -1;
   if (method == "GET") statusCode = http.GET();
-  else if (keepAlive) statusCode = http.postReading(requestBody);
+  else if (keepAlive) statusCode = http.postReading(requestBody, wiredWifi_ ? WIRED_ACK_TIMEOUT_MS : HTTP_TIMEOUT_MS, pollSensors);
   else statusCode = http.POST(requestBody);
+  if (pollSensors) lastUploadStatus_ = statusCode;
   if (statusCode > 0) responseBody = http.getString();
   const int size = http.getSize();
   const bool complete = size >= 0 && responseBody.length() == static_cast<size_t>(size);
@@ -302,7 +313,7 @@ void HomeBrainApi::addFloat(JsonObject target, const char* key, float value, uin
 
 ApiResult HomeBrainApi::publish(
   const SensorReading& reading,
-  const SensorSuite& sensors,
+  SensorSuite& sensors,
   RuntimeConfig& runtime,
   uint64_t sequence,
   uint32_t wakeCount
@@ -352,6 +363,14 @@ ApiResult HomeBrainApi::publish(
   diagnostics["wake_count"] = wakeCount;
   diagnostics["free_heap_bytes"] = ESP.getFreeHeap();
   diagnostics["ip_address"] = WiFi.localIP().toString();
+  if (runtime.profile == Profile::Presence) {
+    wifi_ps_type_t mode;
+    if (esp_wifi_get_ps(&mode) == ESP_OK) diagnostics["wifi_ps"] = static_cast<int>(mode);
+    if (lastUploadMs_) {
+      diagnostics["last_upload_ms"] = lastUploadMs_;
+      diagnostics["last_upload_status"] = lastUploadStatus_;
+    }
+  }
   sensors.addDiagnostics(diagnostics, reading);
 
   String requestBody;
@@ -359,7 +378,11 @@ ApiResult HomeBrainApi::publish(
   String responseBody;
   const String path = String("/api/sensor-nodes/") + credentials_.nodeId + "/readings";
   const bool keepAlive = runtime.profile == Profile::Presence && runtime.reportingIntervalSeconds <= 60;
-  const int statusCode = request("POST", path, requestBody, responseBody, false, keepAlive);
+  const unsigned long uploadStarted = millis();
+  lastUploadStatus_ = -1;
+  const int statusCode = request("POST", path, requestBody, responseBody, false, keepAlive,
+    [&]() { sensors.poll(runtime); });
+  lastUploadMs_ = millis() - uploadStarted;
   const ApiResult result = classifyResponse(statusCode, responseBody);
   if (result != ApiResult::Success) {
     if (session_ && session_->localRoute) retryLanAt_ = millis() + LAN_RETRY_MS;

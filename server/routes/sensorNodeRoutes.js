@@ -254,6 +254,9 @@ function createSensorNodeRouter(sensorNodeService = require('../services/sensorN
         { ipAddress: requestIp(req), onStage: stage => { res.locals.sensorReadingStage = stage; } }
       );
       if (req.get('Prefer')?.split(',').some(pref => pref.trim().toLowerCase() === 'return=minimal')) {
+        // An authenticated JSON acknowledgement needs no executable content.
+        // The dashboard CSP alone added 362 bytes to every small radio reply.
+        res.set('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
         res.set('Preference-Applied', 'return=minimal');
         return res.status(202).json({ success: true, accepted: result.accepted, receivedAt: result.receivedAt, config: result.config });
       }
