@@ -832,6 +832,7 @@ bool beginHttpRequest(
     gSecureHttpClients[channelIndex].reset(new WiFiClientSecure());
     WiFiClientSecure& secureClient = *gSecureHttpClients[channelIndex];
     secureClient.setCACertBundle(rootca_crt_bundle_start);
+    secureClient.setHandshakeTimeout((otaChannel ? kOtaHttpTimeoutMs : kPanelHttpTimeoutMs) / 1000);
     return http.begin(secureClient, url);
   }
 
@@ -2497,24 +2498,47 @@ bool enqueuePanelStateFetchJob(bool highPriority = false, bool dedupe = true) {
   return queued;
 }
 
+// Arduino 2.x loops on available() indefinitely if a peer sends headers and
+// leaves the body unfinished. Bound the transaction before the worker watchdog.
+template<typename Transport>
+class PollSocket : public Transport {
+ public:
+  void beginReadWindow() { deadline_ = millis() + 2 * kPanelHttpTimeoutMs; armed_ = true; }
+  void endReadWindow() { armed_ = false; }
+
+  int available() override {
+    if (armed_ && deadlineReached(millis(), deadline_)) {
+      armed_ = false;
+      this->stop();
+      return 0;
+    }
+    return Transport::available();
+  }
+
+ private:
+  unsigned long deadline_ = 0;
+  bool armed_ = false;
+};
+
 // Only the network worker owns this connection. OTA and commands keep separate
 // transports, and a command is never replayed on a stale polling socket.
 struct PollConnection {
-  std::unique_ptr<WiFiClientSecure> secure;
-  std::unique_ptr<WiFiClient> plain;
+  std::unique_ptr<PollSocket<WiFiClientSecure>> secure;
+  std::unique_ptr<PollSocket<WiFiClient>> plain;
   HTTPClient http;
   IPAddress localIp = WiFi.localIP();
 
   bool begin(const String& url) {
-    WiFiClient* socket = plain ? plain.get() : secure.get();
+    WiFiClient* socket = plain ? static_cast<WiFiClient*>(plain.get()) : static_cast<WiFiClient*>(secure.get());
     if (!socket) {
       if (url.startsWith("https://")) {
         if (!ensureTlsClockReady()) return false;
-        secure.reset(new WiFiClientSecure());
+        secure.reset(new PollSocket<WiFiClientSecure>());
+        secure->setHandshakeTimeout(kPanelHttpTimeoutMs / 1000);
         secure->setCACertBundle(rootca_crt_bundle_start);
         socket = secure.get();
       } else {
-        plain.reset(new WiFiClient());
+        plain.reset(new PollSocket<WiFiClient>());
         socket = plain.get();
       }
       const char* headers[] = {"ETag"};
@@ -2523,7 +2547,14 @@ struct PollConnection {
       http.setTimeout(kPanelHttpTimeoutMs);
       http.setReuse(true);
     }
+    if (secure) secure->beginReadWindow();
+    else plain->beginReadWindow();
     return http.begin(*socket, url);
+  }
+
+  void endReadWindow() {
+    if (secure) secure->endReadWindow();
+    else plain->endReadWindow();
   }
 };
 
@@ -2566,6 +2597,7 @@ void pollPanelState(std::unique_ptr<PollConnection>& connection, NetworkResult& 
     }
     if (!result.success || (size < 0 && !result.unchanged)) http.setReuse(false);
     http.end();
+    connection->endReadWindow();
     if (!http.connected() || !result.success) connection.reset();
     if (result.success || status > 0) return;
   }
@@ -3714,8 +3746,10 @@ bool performOtaUpdate() {
   int lastRenderedDownloadProgress = -1;
 
   while (!hasKnownContentLength || totalWritten < expectedBytes) {
-    const size_t availableBytes = stream->available();
-    if (availableBytes == 0) {
+    const int availableBytes = stream->available();
+    const size_t toRead = availableBytes > 0 ? min(static_cast<size_t>(availableBytes), sizeof(buffer)) : 0;
+    const int bytesRead = toRead ? stream->read(buffer, toRead) : 0;
+    if (bytesRead <= 0) {
       if (!http.connected()) {
         break;
       }
@@ -3733,12 +3767,6 @@ bool performOtaUpdate() {
       }
       pumpUiFrame();
       delay(10);
-      continue;
-    }
-
-    const size_t toRead = min(availableBytes, sizeof(buffer));
-    const size_t bytesRead = stream->readBytes(buffer, toRead);
-    if (bytesRead == 0) {
       continue;
     }
 
