@@ -41,7 +41,7 @@ const schema = new mongoose.Schema({
   },
   lastSeen: {
     type: Date,
-    default: Date.now
+    default: null
   },
   ota: {
     type: mongoose.Schema.Types.Mixed,
@@ -66,9 +66,6 @@ const schema = new mongoose.Schema({
 
 schema.pre('save', function updateTimestamps() {
   this.updatedAt = Date.now();
-  if (this.status === 'online') {
-    this.lastSeen = Date.now();
-  }
 });
 
 schema.index({ status: 1 });

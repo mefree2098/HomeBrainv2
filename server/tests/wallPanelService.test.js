@@ -83,11 +83,24 @@ test('registerPanel issues panel credentials and default mode order', async (t) 
   });
 
   assert.equal(result.name, 'Master Bedroom Orb');
+  assert.equal(result.lastSeen, null);
   assert.equal(result.room, 'Master Bedroom');
   assert.match(result.settings.registrationCode, /^HBWP-/);
   assert.ok(result.settings.claimToken);
   assert.deepEqual(result.settings.modeOrder, ['thermostat', 'room', 'home', 'media', 'quiet']);
   assert.equal(result.settings.mountAlignment.offsetTenths, 0);
+});
+
+test('saving an online panel from the hub preserves its physical heartbeat', async (t) => {
+  const lastSeen = new Date('2026-04-20T19:15:00Z');
+  const panel = new WallPanel({ name: 'Office Orb', room: 'Office', status: 'online', lastSeen });
+  t.mock.method(WallPanel.collection, 'insertOne', async () => ({ acknowledged: true, insertedId: panel._id }));
+  t.mock.method(WallPanel.collection, 'updateOne', async () => ({ acknowledged: true, matchedCount: 1, modifiedCount: 1 }));
+  await panel.save();
+  panel.room = 'Study';
+  await panel.save();
+  assert.equal(panel.lastSeen.getTime(), lastSeen.getTime());
+  assert.equal((await wallPanelService.serializePanelForResponse(panel)).status, 'offline');
 });
 
 test('activatePanel accepts the registration code and clears the claim token', async (t) => {
@@ -133,6 +146,7 @@ test('activatePanel accepts the registration code and clears the claim token', a
   assert.equal(result.status, 'online');
   assert.equal(result.ipAddress, '192.168.1.45');
   assert.equal(result.firmwareVersion, '0.1.0');
+  assert.ok(result.lastSeen instanceof Date);
   assert.equal(panelDoc.settings.registered, true);
   assert.equal(panelDoc.settings.claimToken, '');
 });
@@ -2539,6 +2553,7 @@ test('cancelPanelOtaJob cancels an active OTA and removes the staged artifact', 
 
   const panelDoc = {
     _id: 'panel-cancel',
+    lastSeen: new Date(Date.now() - 30 * 60_000),
     name: 'Office Orb',
     room: 'Office',
     hardwareProfile: 'elecrow-crowpanel-2.1-rotary',
@@ -2593,7 +2608,7 @@ test('cancelPanelOtaJob cancels an active OTA and removes the staged artifact', 
     reason: 'Cancelled from test.'
   });
 
-  assert.equal(result.status, 'online');
+  assert.equal(result.status, 'offline');
   assert.equal(result.ota.status, 'cancelled');
   assert.equal(result.ota.phase, 'cancelled');
   assert.equal(result.ota.progress, 0);
