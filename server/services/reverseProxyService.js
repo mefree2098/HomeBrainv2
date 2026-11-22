@@ -576,9 +576,6 @@ function buildSiteBlock(route, settings) {
   lines.push('    @internal path /internal /internal/*');
   lines.push('    respond @internal 404');
   lines.push(`    reverse_proxy ${quoteCaddy(buildUpstreamUrl(route))} {`);
-  if (route.useUpstreamHostHeader) {
-    lines.push('      header_up Host {upstream_hostport}');
-  }
   const hub = ROUTE_PRESETS.homebrain;
   const sameHost = route.upstreamHost === hub.upstreamHost ||
     (isLoopbackHost(route.upstreamHost) && isLoopbackHost(hub.upstreamHost));
@@ -588,10 +585,13 @@ function buildSiteBlock(route, settings) {
   // an outage on every alias, even after requests can already succeed again.
   if (!soleHub) {
     lines.push(`      health_uri ${quoteCaddy(normalizePath(route.healthCheckPath || '/', '/'))}`);
-    if (route.platformKey === 'alexa-broker') {
-      lines.push('      health_interval 5s');
-      lines.push('      health_timeout 2s');
-    }
+  }
+  if (route.useUpstreamHostHeader) {
+    lines.push('      header_up Host {upstream_hostport}');
+  }
+  if (!soleHub && route.platformKey === 'alexa-broker') {
+    lines.push('      health_interval 5s');
+    lines.push('      health_timeout 2s');
   }
   if (route.upstreamProtocol === 'https') {
     lines.push('      transport http {');
