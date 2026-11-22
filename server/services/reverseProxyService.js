@@ -580,9 +580,11 @@ function buildSiteBlock(route, settings) {
   if (route.useUpstreamHostHeader) {
     lines.push('      header_up Host {upstream_hostport}');
   }
-  const localHub = route.upstreamProtocol === 'http' && isLoopbackHost(route.upstreamHost)
-    && Number(route.upstreamPort) === DEFAULT_BIND_PORT && route.healthCheckPath === '/ping';
-  if (route.platformKey === 'homebrain' || localHub) {
+  const hub = ROUTE_PRESETS.homebrain;
+  const sameHost = route.upstreamHost === hub.upstreamHost ||
+    (isLoopbackHost(route.upstreamHost) && isLoopbackHost(hub.upstreamHost));
+  if (sameHost && route.upstreamProtocol === hub.upstreamProtocol &&
+      Number(route.upstreamPort) === hub.upstreamPort && route.healthCheckPath === hub.healthCheckPath) {
     // One delayed probe must not eject the sole hub upstream from every public alias.
     lines.push('      health_fails 2');
     lines.push('      health_interval 5s');
