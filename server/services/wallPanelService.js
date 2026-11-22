@@ -1662,6 +1662,7 @@ class WallPanelService {
       value: ''
     };
     this.panelFirmwareBuildQueue = Promise.resolve();
+    this.activePanelBuildJobs = new Set();
     this.panelMedia = new Map();
     this._serialPortModule = undefined;
     this._serialPortLoadError = null;
@@ -2229,11 +2230,22 @@ class WallPanelService {
       });
     });
 
-    return {
-      ...process.env,
-      ...extraEnv,
-      PATH: searchPaths.join(path.delimiter)
-    };
+    const env = { ...process.env, ...extraEnv, PATH: searchPaths.join(path.delimiter) };
+    if (!env.PLATFORMIO_CORE_DIR) {
+      // Packages and temporary downloads can occupy gigabytes. Keep a fresh
+      // installation beside the OTA artifacts on the application volume.
+      const core = path.join(this.panelOtaArtifactsDir, '.platformio-core');
+      env.PLATFORMIO_CORE_DIR = core;
+      const legacy = path.join(homeDir, '.platformio');
+      if (homeDir && !fs.existsSync(path.join(core, 'platforms', 'espressif32', 'platform.json')) &&
+          fs.existsSync(path.join(legacy, 'platforms', 'espressif32', 'platform.json')) &&
+          fs.existsSync(path.join(legacy, 'packages', 'framework-arduinoespressif32', 'package.json'))) {
+        // Reuse an installed toolchain without copying it or downloading it again.
+        env.PLATFORMIO_PLATFORMS_DIR ||= path.join(legacy, 'platforms');
+        env.PLATFORMIO_PACKAGES_DIR ||= path.join(legacy, 'packages');
+      }
+    }
+    return env;
   }
 
   getManagedPlatformioRootDir() {
@@ -2438,7 +2450,7 @@ class WallPanelService {
     await new Promise((resolve, reject) => {
       const child = this.spawnProcess(
         candidate.command,
-        [...candidate.args, 'run', '-e', buildTarget.env],
+        [...candidate.args, 'run', '-e', buildTarget.env, '--jobs', '2'],
         {
           cwd: this.panelFirmwareProjectDir,
           env: processEnv,
@@ -2446,7 +2458,16 @@ class WallPanelService {
         }
       );
 
+      child.once('spawn', () => {
+        if (process.platform !== 'linux' || !child.pid) return;
+        try {
+          os.setPriority(child.pid, 12);
+        } catch { /* A short-lived candidate may have already exited. */ }
+        // A child can lower its I/O priority without elevated permissions.
+        execFile('ionice', ['-c', '2', '-n', '7', '-p', String(child.pid)], { timeout: 2000 }, () => {});
+      });
       let stderr = '';
+      let sawInstalling = false;
       let sawCompiling = false;
       let sawLinking = false;
 
@@ -2454,6 +2475,13 @@ class WallPanelService {
         const text = chunk.toString();
         stderr = `${stderr}${text}`.slice(-4000);
 
+        if (!sawInstalling && !sawCompiling && /(?:Tool|Platform|Library) Manager: Installing|Unpacking/.test(text)) {
+          sawInstalling = true;
+          await this.updatePanelOtaState(panel.id, jobId, {
+            progress: 18,
+            message: 'Preparing cached firmware build dependencies...'
+          }, { allowMissingJob: true }).catch(() => null);
+        }
         if (!sawCompiling && /Compiling|Building/i.test(text)) {
           sawCompiling = true;
           await this.updatePanelOtaState(panel.id, jobId, {
@@ -2916,6 +2944,7 @@ class WallPanelService {
       this.cleanupOtaArtifactFile(previousTargetArtifact).catch(() => null)
     ]);
 
+    this.activePanelBuildJobs.add(jobId);
     void this.buildPanelIdentityRecoveryArtifact(
       normalizePanelDocument(sourceDoc),
       targetPanel,
@@ -2931,7 +2960,7 @@ class WallPanelService {
         lastError: error.message,
         completedAt: new Date()
       }, { allowMissingJob: true }).catch(() => null);
-    });
+    }).finally(() => this.activePanelBuildJobs.delete(jobId));
 
     void eventStreamService.publishSafe({
       type: 'wall_panel.ota_identity_recovery_requested',
@@ -3023,7 +3052,7 @@ class WallPanelService {
     }
 
     if (otaStatusIsActive(panel.ota.status)) {
-      if (panel.ota.jobId && otaBuildIsStale(panel.ota)) {
+      if (panel.ota.jobId && !this.activePanelBuildJobs.has(panel.ota.jobId) && otaBuildIsStale(panel.ota)) {
         await this.failPanelOtaJob(
           panel.id,
           panel.ota.jobId,
@@ -3090,10 +3119,11 @@ class WallPanelService {
       tags: ['wall-panel', 'ota']
     });
 
+    this.activePanelBuildJobs.add(jobId);
     void this.buildPanelOtaArtifact(normalizePanelDocument(panelDoc), { jobId, targetVersion, origin }).catch((error) => {
       console.error('Wall panel OTA build failed:', error.message);
       return this.failPanelOtaJob(panel.id, jobId, error);
-    });
+    }).finally(() => this.activePanelBuildJobs.delete(jobId));
 
     return this.serializePanelForResponse(panelDoc);
   }
@@ -3273,6 +3303,7 @@ class WallPanelService {
       tags: ['wall-panel', 'provisioning']
     });
 
+    this.activePanelBuildJobs.add(jobId);
     void this.flashPanelInitialFirmware(
       normalizePanelDocument(panelDoc),
       {
@@ -3284,7 +3315,7 @@ class WallPanelService {
     ).catch((error) => {
       console.error('Wall panel USB provisioning failed:', error.message);
       return this.failPanelOtaJob(toId(panelDoc._id), jobId, error);
-    });
+    }).finally(() => this.activePanelBuildJobs.delete(jobId));
 
     return {
       panel: await this.serializePanelForResponse(panelDoc, { includeSecrets: true }),
