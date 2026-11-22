@@ -49,6 +49,8 @@ const PANEL_STATE_HEARTBEAT_INTERVAL_MS = Math.max(
   5_000,
   Number(process.env.HOMEBRAIN_PANEL_STATE_HEARTBEAT_INTERVAL_MS || 30_000)
 );
+// Allow several persisted heartbeats to be missed before showing a panel as offline.
+const PANEL_OFFLINE_AFTER_MS = Math.max(120_000, 3 * PANEL_STATE_HEARTBEAT_INTERVAL_MS);
 const MAX_PANEL_OTA_ARTIFACT_BYTES = 64 * 1024 * 1024;
 const DEFAULT_PANEL_FIRMWARE_HUB_URL = 'http://homebrain.local:3000';
 
@@ -794,12 +796,14 @@ function normalizePanelDocument(panel) {
 
 function serializePanel(panel, { includeSecrets = false } = {}) {
   const normalized = normalizePanelDocument(panel);
+  const lastSeenTime = new Date(normalized.lastSeen).getTime();
+  const recentlySeen = Number.isFinite(lastSeenTime) && lastSeenTime > Date.now() - PANEL_OFFLINE_AFTER_MS;
   const payload = {
     id: normalized.id,
     name: normalized.name,
     room: normalized.room,
     hardwareProfile: normalized.hardwareProfile,
-    status: normalized.status,
+    status: normalized.status === 'online' && !recentlySeen ? 'offline' : normalized.status,
     powerSource: normalized.powerSource,
     connectionType: normalized.connectionType,
     ipAddress: normalized.ipAddress || '',
@@ -3635,6 +3639,7 @@ class WallPanelService {
 
   async activatePanel(panelId, credentials = {}, activation = {}) {
     const panel = await ensurePanelAccess(panelId, credentials);
+    panel.lastSeen = new Date();
     panel.ipAddress = trimString(activation.ipAddress || activation.ip || panel.ipAddress);
     panel.firmwareVersion = trimString(activation.firmwareVersion || panel.firmwareVersion);
     panel.settings = mergeSettings(panel.settings || {}, {
