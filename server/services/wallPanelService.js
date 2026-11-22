@@ -1282,7 +1282,7 @@ function buildHomeMode(panel, securityStatus = null, allDevices = []) {
   });
 }
 
-async function buildMediaMode(panel) {
+function buildMediaMode(panel, media) {
   const hubIp = trimString(panel?.settings?.harmony?.hubIp);
   if (!hubIp) {
     return makeModeSnapshot({
@@ -1298,15 +1298,13 @@ async function buildMediaMode(panel) {
     });
   }
 
-  let hub = null;
-  try {
-    hub = await harmonyService.getHubSnapshot(hubIp, { includeCommands: true });
-  } catch (error) {
+  const hub = media?.hub;
+  if (!hub) {
     return makeModeSnapshot({
       id: 'media',
       title: 'Media',
-      centerValue: 'Hub Offline',
-      secondaryValue: error.message || 'Harmony hub unavailable',
+      centerValue: media?.error ? 'Hub Offline' : 'Connecting',
+      secondaryValue: media?.error || 'Reading Harmony activities.',
       hint: 'Check the configured Harmony IP and power state.',
       accent: 'red',
       meta: {
@@ -1664,6 +1662,7 @@ class WallPanelService {
       value: ''
     };
     this.panelFirmwareBuildQueue = Promise.resolve();
+    this.panelMedia = new Map();
     this._serialPortModule = undefined;
     this._serialPortLoadError = null;
   }
@@ -3691,6 +3690,33 @@ class WallPanelService {
     return this.serializePanelForResponse(panel);
   }
 
+  getPanelMedia(hubIp) {
+    if (!hubIp) return null;
+    let entry = this.panelMedia.get(hubIp);
+    if (!entry) {
+      if (this.panelMedia.size >= 32) this.panelMedia.delete(this.panelMedia.keys().next().value);
+      entry = { hub: null, error: '', refreshAt: 0, pending: false };
+      this.panelMedia.set(hubIp, entry);
+    }
+    if (!entry.pending && Date.now() >= entry.refreshAt) {
+      entry.pending = true;
+      harmonyService.getHubSnapshot(hubIp, { includeDevices: false, persist: false, timeoutMs: 4000 })
+        .then(({ friendlyName, currentActivityId, activities }) => {
+          entry.hub = { friendlyName, currentActivityId, activities };
+          entry.error = '';
+        })
+        .catch(error => {
+          entry.hub = null;
+          entry.error = error.message || 'Harmony hub unavailable';
+        })
+        .finally(() => {
+          entry.pending = false;
+          entry.refreshAt = Date.now() + 5000;
+        });
+    }
+    return entry;
+  }
+
   refreshPanelWeather() {
     if (this.panelWeatherRefresh || Date.now() < (this.nextPanelWeatherRefresh || 0)) return;
     this.panelWeatherRefresh = weatherService.fetchDashboardWeather()
@@ -3747,7 +3773,7 @@ class WallPanelService {
       resolveThermostatDevice(panel.settings, liveRoomDevices).catch(() => null),
       resolveSensorDevice(panel.settings, liveRoomDevices).catch(() => null),
       buildRoomMode(panel, liveRoomDevices, liveDevices),
-      buildMediaMode(panel),
+      buildMediaMode(panel, this.getPanelMedia(trimString(panel.settings.harmony?.hubIp))),
       buildQuietMode(panel)
     ]);
 
@@ -3865,6 +3891,7 @@ class WallPanelService {
           throw createError(400, 'Harmony activity start requires a hub and activity ID');
         }
         result = await harmonyService.startActivity(hubIp, activityId);
+        this.panelMedia.delete(hubIp);
         break;
       }
 
@@ -3874,6 +3901,7 @@ class WallPanelService {
           throw createError(400, 'Harmony power off requires a hub IP');
         }
         result = await harmonyService.turnOffHub(hubIp);
+        this.panelMedia.delete(hubIp);
         break;
       }
 

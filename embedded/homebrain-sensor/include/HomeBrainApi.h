@@ -14,6 +14,8 @@ enum class ApiResult : uint8_t {
   InvalidResponse
 };
 
+class ScopedWifiAwake;
+
 class HomeBrainApi {
  public:
   HomeBrainApi(AppCredentials& credentials, ConfigStore& store);
@@ -49,6 +51,7 @@ class HomeBrainApi {
   IPAddress lanAddress_;
   String lanOrigin_;
   uint32_t retryLanAt_ = 0;
+  std::unique_ptr<ScopedWifiAwake> wiredWifi_;
   struct RequestSession;
   std::unique_ptr<RequestSession> session_;
   AppCredentials& credentials_;

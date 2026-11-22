@@ -555,13 +555,21 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
     ]
   });
   deviceService.getDeviceById = async (id) => (id === 'thermo-1' ? thermostat : null);
-  harmonyService.getHubSnapshot = async () => ({
+  let finishHarmony;
+  let mediaReads = 0;
+  harmonyService.getHubSnapshot = (ip, options) => {
+    mediaReads++;
+    assert.equal(options.persist, false);
+    assert.equal(options.includeDevices, false);
+    return new Promise(resolve => { finishHarmony = resolve; });
+  };
+  const mediaSnapshot = {
     friendlyName: 'Bedroom Hub',
     currentActivityId: 'activity-tv',
     activities: [
       { id: 'activity-tv', label: 'Watch TV', activityTypeDisplayName: 'TV' }
     ]
-  });
+  };
   weatherService.fetchDashboardWeather = async () => ({
     current: {
       icon: 'sunny',
@@ -571,11 +579,18 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
     }
   });
 
-  const result = await wallPanelService.getPanelState('panel-3', {
+  const poll = () => wallPanelService.getPanelState('panel-3', {
     registrationCode: 'HBWP-ABCD-EF12-3456'
   }, 'https://example.com');
-
+  const cold = await poll();
+  assert.equal(cold.modes.media.centerValue, 'Connecting');
+  assert.equal(cold.modes.home.centerValue, 'Disarmed');
   assert.equal(deviceReads, 1);
+  await poll();
+  finishHarmony(mediaSnapshot);
+  await new Promise(resolve => setImmediate(resolve));
+  const result = await poll();
+  assert.equal(mediaReads, 1);
   assert.deepEqual(result.modeOrder, ['thermostat', 'room', 'home', 'media', 'quiet']);
   assert.equal(result.transport.pollIntervalMs, 1000);
   assert.equal(result.orientation.mountOffsetTenths, 25);
@@ -612,6 +627,36 @@ test('getPanelState builds swipeable mode payloads for the firmware', async (t) 
   assert.equal(result.modes.quiet.quickActions[0].label, 'Bedtime');
   assert.equal(result.ota.available, false);
   assert.equal(result.ota.downloadUrl, '');
+});
+
+test('compact orb polls revalidate applied state while legacy polls retain timestamps', async (t) => {
+  const express = require('express');
+  const app = express();
+  app.use('/panels', require('../routes/panelRoutes'));
+  const server = app.listen(0, '127.0.0.1');
+  await require('node:events').once(server, 'listening');
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  let polls = 0;
+  let available = false;
+  t.mock.method(wallPanelService, 'getPanelState', async () => ({
+    generatedAt: ++polls, panel: { id: 'panel', lastSeen: polls }, ota: { available }
+  }));
+  const url = 'http://127.0.0.1:' + server.address().port + '/panels/panel/state';
+  const headers = { 'X-HomeBrain-Panel-State': 'compact' };
+  const first = await fetch(url, { headers });
+  assert.equal(first.status, 200);
+  assert.equal((await first.json()).state.panel.lastSeen, undefined);
+  headers['If-None-Match'] = first.headers.get('etag');
+  assert.ok(headers['If-None-Match']);
+  const same = await fetch(url, { headers });
+  assert.equal(same.status, 304);
+  assert.equal(await same.text(), '');
+  available = true;
+  const changed = await fetch(url, { headers });
+  assert.equal(changed.status, 200);
+  assert.equal((await changed.json()).state.ota.available, true);
+  const legacy = await fetch(url);
+  assert.equal((await legacy.json()).state.panel.lastSeen, 4);
 });
 
 test('getPanelState overlays recent realtime device updates for orb brightness', async (t) => {

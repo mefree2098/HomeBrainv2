@@ -1788,7 +1788,7 @@ class HarmonyService {
       ]);
 
       const activities = this.normalizeActivities(config);
-      const devices = this.normalizeDevices(config);
+      const devices = options.includeDevices === false ? [] : this.normalizeDevices(config);
       const currentActivity = currentActivityId != null ? currentActivityId.toString() : '-1';
       const currentActivityLabel = currentActivity === '-1'
         ? 'Off'
