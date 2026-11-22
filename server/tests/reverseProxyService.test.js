@@ -101,7 +101,22 @@ test('buildDesiredConfig renders Caddy global options and enabled routes', async
   assert.equal((result.caddyfile.match(/respond @internal 404/g) || []).length, 2);
   assert.ok(result.caddyfile.indexOf('@internal path /internal /internal/*') < result.caddyfile.indexOf('reverse_proxy'));
   assert.match(result.caddyfile, /tls \{\n    on_demand\n  \}/);
-  assert.doesNotMatch(result.caddyfile, /health_interval 5s/);
+  const [hub, other] = result.caddyfile.split('mail.example.com {');
+  assert.match(hub, /health_fails 2\n\s+health_interval 5s\n\s+health_timeout 3s/);
+  assert.doesNotMatch(other, /health_fails|health_interval/);
+});
+
+test('local hub aliases share the HomeBrain recovery policy', async (t) => {
+  t.mock.method(ReverseProxySettings, 'getSettings', async () => createSettings());
+  t.mock.method(ReverseProxyRoute, 'find', () => ({
+    sort: () => ({ lean: async () => [{
+      hostname: 'download.example.com', platformKey: 'downloads',
+      upstreamProtocol: 'http', upstreamHost: 'localhost', upstreamPort: 3000,
+      healthCheckPath: '/ping', tlsMode: 'automatic'
+    }] })
+  }));
+  const result = await reverseProxyService.buildDesiredConfig();
+  assert.match(result.caddyfile, /health_fails 2/);
 });
 
 test('buildDesiredConfig gives the managed Alexa broker a fast health recovery cadence', async (t) => {

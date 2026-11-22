@@ -580,7 +580,14 @@ function buildSiteBlock(route, settings) {
   if (route.useUpstreamHostHeader) {
     lines.push('      header_up Host {upstream_hostport}');
   }
-  if (route.platformKey === 'alexa-broker') {
+  const localHub = route.upstreamProtocol === 'http' && isLoopbackHost(route.upstreamHost)
+    && Number(route.upstreamPort) === DEFAULT_BIND_PORT && route.healthCheckPath === '/ping';
+  if (route.platformKey === 'homebrain' || localHub) {
+    // One delayed probe must not eject the sole hub upstream from every public alias.
+    lines.push('      health_fails 2');
+    lines.push('      health_interval 5s');
+    lines.push('      health_timeout 3s');
+  } else if (route.platformKey === 'alexa-broker') {
     lines.push('      health_interval 5s');
     lines.push('      health_timeout 2s');
   }
