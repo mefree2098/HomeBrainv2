@@ -1,4 +1,6 @@
 const crypto = require('crypto');
+const net = require('node:net');
+const os = require('node:os');
 
 const Device = require('../models/Device');
 const SensorNode = require('../models/SensorNode');
@@ -389,7 +391,43 @@ function serializeNode(input, now = Date.now()) {
   };
 }
 
+const privateLans = new net.BlockList();
+privateLans.addSubnet('10.0.0.0', 8);
+privateLans.addSubnet('172.16.0.0', 12);
+privateLans.addSubnet('192.168.0.0', 16);
+
+function sensorLanInterfaces(interfaces) {
+  const routes = [];
+  for (const records of Object.values(interfaces)) {
+    for (const iface of records || []) {
+      if (iface.internal || !net.isIPv4(iface.address) || !privateLans.check(iface.address)) continue;
+      const prefix = Number(iface.cidr?.split('/')[1]);
+      if (!Number.isInteger(prefix) || prefix < 1 || prefix > 32) continue;
+      const subnet = new net.BlockList();
+      subnet.addSubnet(iface.address, prefix);
+      routes.push({ address: iface.address, prefix, subnet });
+    }
+  }
+  return routes.sort((a, b) => b.prefix - a.prefix);
+}
+
+let lanRoutes = [];
+let refreshLanAt = 0;
+function sensorLanAddress(peer) {
+  if (!net.isIPv4(peer) || !privateLans.check(peer)) return '';
+  if (Date.now() >= refreshLanAt) {
+    refreshLanAt = Date.now() + 60_000;
+    try {
+      lanRoutes = sensorLanInterfaces(os.networkInterfaces());
+    } catch {
+      lanRoutes = [];
+    }
+  }
+  return lanRoutes.find(route => route.address !== peer && route.subnet.check(peer))?.address || '';
+}
+
 function buildRuntimeConfig(node, serialized = serializeNode(node)) {
+  const lanAddress = serialized.profile === 'presence' && sensorLanAddress(serialized.ipAddress);
   const firmwareUpdate = require('./sensorFirmwareService').firmwareCommand(node);
   return {
     schema: CONFIG_SCHEMA,
@@ -404,6 +442,7 @@ function buildRuntimeConfig(node, serialized = serializeNode(node)) {
     },
     presence_hold_seconds: serialized.settings.presenceHoldSeconds,
     token_version: serialized.deviceTokenVersion,
+    ...(lanAddress ? { hub_lan_ipv4: lanAddress } : {}),
     ...(firmwareUpdate ? { firmware_update: firmwareUpdate } : {})
   };
 }

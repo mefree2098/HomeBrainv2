@@ -42,10 +42,13 @@ class HomeBrainApi {
     bool keepAlive = false
   );
   ApiResult classifyResponse(int statusCode, const String& body) const;
-  bool parseConfigResponse(const String& body, RuntimeConfig& runtime) const;
+  bool parseConfigResponse(const String& body, RuntimeConfig& runtime);
   String normalizedBaseUrl() const;
   void addFloat(JsonObject target, const char* key, float value, uint8_t digits = 2) const;
 
+  IPAddress lanAddress_;
+  String lanOrigin_;
+  uint32_t retryLanAt_ = 0;
   struct RequestSession;
   std::unique_ptr<RequestSession> session_;
   AppCredentials& credentials_;

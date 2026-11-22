@@ -177,6 +177,24 @@ test('sensor runtime config is stable and stale nodes serialize offline', () => 
   });
 });
 
+test('Presence selects a private hub interface on the reported subnet and caches the interface scan', (t) => {
+  const iface = (address, cidr, internal = false) => ({ address, cidr, internal });
+  const scan = t.mock.method(require('node:os'), 'networkInterfaces', () => ({
+    lo: [iface('127.0.0.1', '127.0.0.1/8', true)],
+    uplink: [iface('203.0.113.2', '203.0.113.2/24')],
+    lan: [iface('192.168.7.21', '192.168.7.21/16')],
+    vlan: [iface('192.168.7.132', '192.168.7.132/25')]
+  }));
+  const config = (ipAddress, profile = 'presence') => buildRuntimeConfig({ profile, ipAddress });
+  assert.equal(config('192.168.7.253').hub_lan_ipv4, '192.168.7.132');
+  assert.equal(config('192.168.8.2').hub_lan_ipv4, '192.168.7.21');
+  for (const peer of ['10.14.0.5', '203.0.113.25', '127.0.0.1', '::1', '', 'bad']) {
+    assert.equal(config(peer).hub_lan_ipv4, undefined);
+  }
+  assert.equal(config('192.168.7.253', 'climate').hub_lan_ipv4, undefined);
+  assert.equal(scan.mock.callCount(), 1);
+});
+
 test('sensor secrets are node-bound and compared in constant-time compatible form', () => {
   const first = hashSecret('node-a', 'SECRET');
   assert.equal(secureEqual(first, hashSecret('node-a', 'SECRET')), true);

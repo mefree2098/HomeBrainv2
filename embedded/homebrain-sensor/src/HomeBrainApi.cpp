@@ -19,6 +19,35 @@ namespace {
 #endif
 
 constexpr uint32_t HTTP_TIMEOUT_MS = 10000;
+constexpr uint32_t LAN_RETRY_MS = 300000;
+
+bool onWifiSubnet(const IPAddress& address) {
+  const bool privateIp = address.type() == IPv4 && (address[0] == 10 ||
+    (address[0] == 172 && address[1] >= 16 && address[1] <= 31) ||
+    (address[0] == 192 && address[1] == 168));
+  const uint32_t local = WiFi.localIP();
+  const uint32_t mask = WiFi.subnetMask();
+  return privateIp && local && mask && uint32_t(address) != local &&
+    ((uint32_t(address) ^ local) & mask) == 0;
+}
+
+class SensorHttpClient : public HTTPClient {
+ public:
+  bool connectLan(WiFiClientSecure& socket, const IPAddress& address) const {
+    // HTTPClient parsed the configured HTTPS origin. Only the TCP destination changes.
+#ifdef HOMEBRAIN_SENSOR_CA_CERT
+    const char* ca = HOMEBRAIN_SENSOR_CA_CERT;
+#else
+    const char* ca = nullptr;  // createHttpClient installed the certificate bundle.
+#endif
+    socket.setConnectionTimeout(2500);
+    socket.setHandshakeTimeout(4);
+    const bool connected = socket.connect(address, _port, _host.c_str(), ca, nullptr, nullptr);
+    socket.setConnectionTimeout(HTTP_TIMEOUT_MS);
+    socket.setHandshakeTimeout(HTTP_TIMEOUT_MS / 1000);
+    return connected;
+  }
+};
 }
 
 struct HomeBrainApi::RequestSession {
@@ -27,7 +56,8 @@ struct HomeBrainApi::RequestSession {
 
   // HTTPClient stops its borrowed socket in its destructor. Keep the socket alive until then.
   std::unique_ptr<WiFiClient> client;
-  HTTPClient http;
+  SensorHttpClient http;
+  bool localRoute = false;
   String url;
   IPAddress localIp;
 };
@@ -81,8 +111,13 @@ int HomeBrainApi::request(
     return -1;
   }
   ScopedWifiAwake awake;
-  const String url = normalizedBaseUrl() + path;
+  const String origin = normalizedBaseUrl();
+  const String url = origin + path;
+  if (retryLanAt_ && static_cast<int32_t>(millis() - retryLanAt_) >= 0) retryLanAt_ = 0;
+  const bool tryLan = keepAlive && origin.startsWith("https://") && origin == lanOrigin_ &&
+    !retryLanAt_ && onWifiSubnet(lanAddress_);
   if (session_ && (!keepAlive || session_->url != url || session_->localIp != WiFi.localIP()
+                   || session_->localRoute != tryLan
                    || !session_->http.connected())) session_.reset();
   if (!session_) {
     auto client = createHttpClient();
@@ -91,6 +126,12 @@ int HomeBrainApi::request(
     if (!session_->http.begin(*session_->client, url)) {
       session_.reset();
       return -1;
+    }
+    if (tryLan) {
+      auto& tls = static_cast<WiFiClientSecure&>(*session_->client);
+      session_->localRoute = session_->http.connectLan(tls, lanAddress_);
+      // An unsuccessful handshake sent no HTTP data. HTTPClient can use normal DNS now.
+      if (!session_->localRoute) retryLanAt_ = millis() + LAN_RETRY_MS;
     }
   }
   auto& http = session_->http;
@@ -114,6 +155,13 @@ int HomeBrainApi::request(
   const int size = http.getSize();
   const bool complete = size >= 0 && responseBody.length() == static_cast<size_t>(size);
   http.end();
+  if (session_->localRoute && (statusCode != 202 || !complete)) {
+    // A failed POST may have reached the hub. Use normal DNS on the next cycle
+    // before treating an error from this route as a revoked credential.
+    retryLanAt_ = millis() + LAN_RETRY_MS;
+    session_.reset();
+    return -1;
+  }
   if (!keepAlive || statusCode != 202 || !complete || !http.connected()) session_.reset();
   return statusCode;
 }
@@ -132,13 +180,26 @@ ApiResult HomeBrainApi::classifyResponse(int statusCode, const String& body) con
   return ApiResult::Success;
 }
 
-bool HomeBrainApi::parseConfigResponse(const String& body, RuntimeConfig& runtime) const {
+bool HomeBrainApi::parseConfigResponse(const String& body, RuntimeConfig& runtime) {
   DynamicJsonDocument response(3072);
   StaticJsonDocument<64> filter;
   filter["config"] = true;
   if (deserializeJson(response, body, DeserializationOption::Filter(filter))) return false;
   JsonVariantConst config = response["config"];
   if (config.isNull()) return false;
+  const String origin = normalizedBaseUrl();
+  IPAddress address(0, 0, 0, 0);
+  if (origin.startsWith("https://") && address.fromString(config["hub_lan_ipv4"] | "") &&
+      onWifiSubnet(address)) {
+    if (lanAddress_ != address || lanOrigin_ != origin) {
+      lanAddress_ = address;
+      lanOrigin_ = origin;
+      retryLanAt_ = 0;
+      session_.reset();
+    }
+  } else {
+    lanOrigin_ = "";
+  }
   applyRuntimeConfig(config, runtime);
   const JsonVariantConst update = config["firmware_update"];
   runtime.firmwareUpdate.id = update["id"] | "";
@@ -274,6 +335,7 @@ ApiResult HomeBrainApi::publish(
   const int statusCode = request("POST", path, requestBody, responseBody, false, keepAlive);
   const ApiResult result = classifyResponse(statusCode, responseBody);
   if (result != ApiResult::Success) {
+    if (session_ && session_->localRoute) retryLanAt_ = millis() + LAN_RETRY_MS;
     session_.reset();
     return result;
   }
