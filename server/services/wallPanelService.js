@@ -110,8 +110,10 @@ const PANEL_USB_EXCLUDED_TEXT_PATTERNS = Object.freeze([
   /insteon/i,
   /powerlinc/i,
   /smartlabs/i,
+  /zooz|z[-_ ]?wave|zigbee|sonoff[-_ ]+dongle/i,
   /\bplm\b/i
 ]);
+const PANEL_USB_EXCLUDED_SCORE = -1;
 const ESPRESSIF_USB_VENDOR_ID = '303a';
 const PANEL_USB_LIKELY_SCORE_THRESHOLD = 25;
 const PANEL_USB_STRONG_AUTO_SELECT_SCORE = 70;
@@ -876,7 +878,7 @@ function scorePanelUsbPort(port = {}) {
   let score = 0;
 
   if (/bluetooth/i.test(text) || PANEL_USB_EXCLUDED_TEXT_PATTERNS.some((pattern) => pattern.test(text))) {
-    return 0;
+    return PANEL_USB_EXCLUDED_SCORE;
   }
 
   if (normalizeUsbVendorId(port.vendorId) === ESPRESSIF_USB_VENDOR_ID) {
@@ -913,10 +915,6 @@ function scorePanelUsbPort(port = {}) {
 }
 
 function selectProvisioningUsbPort(ports = []) {
-  if (ports.length === 1) {
-    return ports[0];
-  }
-
   const likelyPorts = ports.filter((port) => port.likelyPanel);
   if (likelyPorts.length === 1) {
     return likelyPorts[0];
@@ -1755,7 +1753,9 @@ class WallPanelService {
       }
 
       const existing = portMap.get(normalized.path);
-      if (!existing || normalized.score > existing.score) {
+      // A generic /dev fallback must never erase the known identity of a coordinator.
+      if (!existing || normalized.score === PANEL_USB_EXCLUDED_SCORE ||
+          (existing.score !== PANEL_USB_EXCLUDED_SCORE && normalized.score > existing.score)) {
         portMap.set(normalized.path, normalized);
       }
     };
@@ -1822,12 +1822,12 @@ class WallPanelService {
           || port.stablePath === requestedPath
           || aliases.includes(requestedPath);
       });
-      if (match) {
-        return match;
+      const candidate = match || normalizeSerialPortRecord({ path: requestedPath });
+      if (candidate.score === PANEL_USB_EXCLUDED_SCORE) {
+        throw createError(400, 'This serial port belongs to another device and cannot be used for orb firmware.');
       }
-
-      if (requestedPath.startsWith('/dev/') || /^[A-Z]+[0-9]+$/i.test(requestedPath)) {
-        return normalizeSerialPortRecord({ path: requestedPath });
+      if (match || requestedPath.startsWith('/dev/') || /^[A-Z]+[0-9]+$/i.test(requestedPath)) {
+        return candidate;
       }
 
       throw createError(400, `USB serial port "${requestedPath}" was not found on this HomeBrain host`);
