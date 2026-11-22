@@ -576,22 +576,22 @@ function buildSiteBlock(route, settings) {
   lines.push('    @internal path /internal /internal/*');
   lines.push('    respond @internal 404');
   lines.push(`    reverse_proxy ${quoteCaddy(buildUpstreamUrl(route))} {`);
-  lines.push(`      health_uri ${quoteCaddy(normalizePath(route.healthCheckPath || '/', '/'))}`);
   if (route.useUpstreamHostHeader) {
     lines.push('      header_up Host {upstream_hostport}');
   }
   const hub = ROUTE_PRESETS.homebrain;
   const sameHost = route.upstreamHost === hub.upstreamHost ||
     (isLoopbackHost(route.upstreamHost) && isLoopbackHost(hub.upstreamHost));
-  if (sameHost && route.upstreamProtocol === hub.upstreamProtocol &&
-      Number(route.upstreamPort) === hub.upstreamPort && route.healthCheckPath === hub.healthCheckPath) {
-    // One delayed probe must not eject the sole hub upstream from every public alias.
-    lines.push('      health_fails 2');
-    lines.push('      health_interval 5s');
-    lines.push('      health_timeout 3s');
-  } else if (route.platformKey === 'alexa-broker') {
-    lines.push('      health_interval 5s');
-    lines.push('      health_timeout 2s');
+  const soleHub = sameHost && route.upstreamProtocol === hub.upstreamProtocol &&
+    Number(route.upstreamPort) === hub.upstreamPort && route.healthCheckPath === hub.healthCheckPath;
+  // The hub has one destination. Ejecting it amplifies a transient stall into
+  // an outage on every alias, even after requests can already succeed again.
+  if (!soleHub) {
+    lines.push(`      health_uri ${quoteCaddy(normalizePath(route.healthCheckPath || '/', '/'))}`);
+    if (route.platformKey === 'alexa-broker') {
+      lines.push('      health_interval 5s');
+      lines.push('      health_timeout 2s');
+    }
   }
   if (route.upstreamProtocol === 'https') {
     lines.push('      transport http {');

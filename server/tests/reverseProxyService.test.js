@@ -102,7 +102,8 @@ test('buildDesiredConfig renders Caddy global options and enabled routes', async
   assert.ok(result.caddyfile.indexOf('@internal path /internal /internal/*') < result.caddyfile.indexOf('reverse_proxy'));
   assert.match(result.caddyfile, /tls \{\n    on_demand\n  \}/);
   const [hub, other] = result.caddyfile.split('mail.example.com {');
-  assert.match(hub, /health_fails 2\n\s+health_interval 5s\n\s+health_timeout 3s/);
+  assert.doesNotMatch(hub, /health_uri|health_fails|health_interval/);
+  assert.match(other, /health_uri/);
   assert.doesNotMatch(other, /health_fails|health_interval/);
 });
 
@@ -121,7 +122,8 @@ test('local hub aliases share the HomeBrain recovery policy', async (t) => {
   }));
   const result = await reverseProxyService.buildDesiredConfig();
   const [downloads, tools] = result.caddyfile.split('tools.example.com {');
-  assert.match(downloads, /health_fails 2/);
+  assert.doesNotMatch(downloads, /health_uri|health_fails/);
+  assert.match(tools, /health_uri/);
   assert.doesNotMatch(tools, /health_fails|health_interval/);
 });
 
