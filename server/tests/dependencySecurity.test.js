@@ -6,6 +6,10 @@ const http = require('node:http');
 const { gzipSync } = require('node:zlib');
 const express = require('express');
 const forge = require('node-forge');
+const vm = require('node:vm');
+const { once } = require('node:events');
+const { http: redirects } = require('follow-redirects');
+const { minimatch, Minimatch } = require('minimatch');
 
 test('RSA verification rejects extra nested DigestAlgorithm elements (CVE-2026-85393)', () => {
   const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -56,4 +60,45 @@ test('compressed request trailing bytes cannot crash the HTTP parser (CVE-2026-1
   assert.ok([200, 400].includes(status));
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(await send(Buffer.from('{}')), 200);
+});
+
+test('redirects strip cross-realm custom credentials and retain harmless headers', async (t) => {
+  const destination = http.createServer((req, res) => {
+    res.end(JSON.stringify(req.headers));
+  });
+  destination.listen(0, '127.0.0.1');
+  await once(destination, 'listening');
+  t.after(() => destination.close());
+  const origin = http.createServer((_req, res) => {
+    res.writeHead(302, { location: `http://127.0.0.1:${destination.address().port}/` });
+    res.end();
+  });
+  origin.listen(0, '127.0.0.1');
+  await once(origin, 'listening');
+  t.after(() => origin.close());
+  const headers = await new Promise((resolve, reject) => {
+    const request = redirects.get(`http://127.0.0.1:${origin.address().port}/`, {
+      headers: { 'X-API-Key': 'test-only-secret', 'X-Harmless': 'preserved' },
+      sensitiveHeaders: vm.runInNewContext("['X-API-Key']")
+    }, (response) => {
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk) => { body += chunk; });
+      response.on('end', () => resolve(JSON.parse(body)));
+      response.on('error', reject);
+    });
+    request.on('error', reject);
+    request.setTimeout(5000, () => request.destroy(new Error('Redirect test timed out')));
+  });
+  assert.equal(headers['x-api-key'], undefined);
+  assert.equal(headers['x-harmless'], 'preserved');
+});
+
+test('patched minimatch preserves lint file selection and optimized parent traversal', () => {
+  assert.equal(minimatch('src/pages/Home.tsx', '**/*.{ts,tsx}'), true);
+  assert.equal(minimatch('src/pages/Home.js', '**/*.{ts,tsx}'), false);
+  assert.equal(minimatch('node_modules/example/index.js', '**/node_modules/**'), true);
+  const pattern = new Minimatch('src/**/../pages/*.tsx', { optimizationLevel: 2 });
+  assert.equal(pattern.match('src/pages/Home.tsx'), true);
+  assert.equal(pattern.match('src/pages/Home.js'), false);
 });
